@@ -118,6 +118,26 @@ jobs:
           grep -o 'webgpu=[^"]*' /tmp/bridge.log | tail -1
           echo "--- microphone: the app's per-origin decision, then what the page got (informational)"
           grep "sidevoice: media" /tmp/bridge.log || echo "(WebKit did not ask the app)"
+      - name: Node mode in the real WKWebView (bundled interface, fake node on loopback)
+        run: |
+          set -euo pipefail
+          APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
+          CONF="$HOME/Library/Application Support/dev.sidevoice.desktop"
+          mkdir -p "$CONF"
+          printf '{"kind":"node","roomUrl":"http://127.0.0.1:8768/","muteShortcut":""}' > "$CONF/settings.json"
+          python3 -u test/fixtures/fake-node.py 8768 > /tmp/node.log 2>&1 &
+          SIDEVOICE_DEBUG=1 "$APP/Contents/MacOS/sidevoice-desktop" > /tmp/nodemode.log 2>&1 &
+          PID=$!
+          for i in $(seq 1 60); do grep -q "ready: true" /tmp/nodemode.log && grep -q "GET /api/rendezvous origin=tauri://localhost" /tmp/node.log && break; sleep 1; done
+          kill "$PID" || true
+          rm -rf "$CONF"
+          echo "--- app"; cat /tmp/nodemode.log
+          echo "--- fake node"; sort /tmp/node.log | uniq -c
+          # The bundled interface loaded from the app, its controller came up (the bridge attached to the real
+          # web UI's store and actions), and it asked its target cross-origin, as the contract says.
+          grep -q "page tauri://localhost/voice/index.html" /tmp/nodemode.log
+          grep -q "ready: true" /tmp/nodemode.log
+          grep -q "GET /api/rendezvous origin=tauri://localhost" /tmp/node.log
       - name: Make the .dmg
         run: |
           set -euo pipefail

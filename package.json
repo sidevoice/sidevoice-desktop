@@ -6,9 +6,12 @@
   "scripts": {
     "tauri": "tauri",
     "test": "node --test test/*.test.mjs",
-    "build:mac": "tauri build --target aarch64-apple-darwin --bundles app"
+    "build:mac": "tauri build --target aarch64-apple-darwin --bundles app",
+    "web-assets": "node scripts/web-assets.mjs"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "2.12.0"
+    "@tauri-apps/cli": "2.12.0",
+    "espeak-ng": "1.0.2",
+    "onnxruntime-web": "1.22.0-dev.20250409-89f8206ba4"
   }
 }

@@ -4,3 +4,4 @@ src-tauri/gen/schemas/
 dist/
 *.dmg
 .DS_Store
+ui/voice-browser/assets/

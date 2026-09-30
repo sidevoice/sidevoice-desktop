@@ -4,13 +4,15 @@
 //   page → app : invoke('bridge_state', { snapshot })  whenever the call state the tray shows changes
 //   app → page : window.__sidevoiceDesktop.run('toggle-mute' | 'hang-up')
 // It only reads the web UI's public seams (window.sidevoiceUI.store, window.sidevoiceActions) and
-// never touches the DOM. On any origin other than the configured room it does nothing at all.
+// never touches the DOM. On any origin other than the window's page (the room's, or the app's own for the
+// bundled interface) it does nothing at all.
 (function (factory) {
   if (typeof module === "object" && module.exports) module.exports = factory; // unit tests
   else factory(window, "__SIDEVOICE_ROOM_ORIGIN__");
 })(function installDesktopBridge(win, roomOrigin) {
   "use strict";
-  if (win.location.origin !== roomOrigin) return null;
+  // scheme://host rather than location.origin: the app's own pages (tauri://localhost) may have an opaque origin.
+  if (win.location.protocol + "//" + win.location.host !== roomOrigin) return null;
   if (win.__sidevoiceDesktop) return win.__sidevoiceDesktop;
 
   const BRIDGE_VERSION = 1;

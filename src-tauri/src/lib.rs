@@ -10,7 +10,7 @@ mod tray;
 
 use serde::Serialize;
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
-use sidevoice_desktop_core::settings::Settings;
+use sidevoice_desktop_core::settings::{Settings, TargetKind};
 use sidevoice_desktop_core::{media, settings};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -22,6 +22,9 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 const SETTINGS_LABEL: &str = "settings";
 const ROOM_PREFIX: &str = "room-";
+/// The web interface bundled in the app (vendored from rubasace/sidevoice, `scripts/vendor-web.mjs`), at the
+/// paths the room serves it from, so its absolute `/voice/…` and `/voice-browser/…` URLs resolve.
+const BUNDLED_INTERFACE: &str = "voice/index.html";
 
 /// Safari's own user agent. WKWebView's default one lacks the `Version/… Safari/…` tokens, and
 /// Google sign-in (behind the operator's room, via oauth2-proxy) refuses browsers it takes for an
@@ -42,6 +45,9 @@ struct AppState {
 #[serde(rename_all = "camelCase")]
 struct SettingsInfo {
     settings: Settings,
+    /// What each kind's address field starts with.
+    default_room_url: &'static str,
+    default_node_url: &'static str,
     first_run: bool,
     app_version: String,
 }
@@ -60,6 +66,8 @@ fn get_settings(app: AppHandle, state: State<'_, AppState>) -> SettingsInfo {
     SettingsInfo {
         first_run: stored.is_none(),
         settings: stored.unwrap_or_default(),
+        default_room_url: settings::DEFAULT_ROOM_URL,
+        default_node_url: settings::DEFAULT_NODE_URL,
         app_version: app.package_info().version.to_string(),
     }
 }
@@ -78,7 +86,8 @@ async fn save_settings(app: AppHandle, state: State<'_, AppState>, settings: Set
     let previous = state.settings.lock().unwrap().replace(settings.clone());
     let warning = apply_shortcut(&app, &settings.mute_shortcut).err();
 
-    let room_changed = previous.as_ref().map(|p| p.room_url != settings.room_url).unwrap_or(true);
+    let room_changed =
+        previous.as_ref().map(|p| p.room_url != settings.room_url || p.kind != settings.kind).unwrap_or(true);
     if room_changed || room_window(&app).is_none() {
         open_room(&app, &settings).map_err(|e| format!("No se pudo abrir la sala: {e}"))?;
     }
@@ -105,8 +114,8 @@ fn bridge_state(
         debug(&format!("bridge_state refused: window {}", webview.label()));
         return Err("not the room window".into());
     }
-    let expected = state.settings.lock().unwrap().as_ref().and_then(|s| settings::origin_of(&s.room_url).ok());
-    let actual = webview.url().map(|u| u.origin().ascii_serialization()).ok();
+    let expected = state.settings.lock().unwrap().as_ref().and_then(|s| settings::page_origin(s).ok());
+    let actual = webview.url().map(|u| settings::url_origin(&u)).ok();
     if expected.is_none() || expected != actual {
         debug(&format!("bridge_state refused: origin {actual:?}, expected {expected:?}"));
         return Err("not the configured room origin".into());
@@ -142,22 +151,28 @@ fn reset_call_state(app: &AppHandle) {
     tray::update(app, &snapshot);
 }
 
-/// (Re)creates the room window for `settings.room_url`, bound to that origin.
+/// (Re)creates the room window for the configured target: a room's own page, or — for a node — the interface
+/// bundled in the app, told its target. Either way bound to exactly one page origin.
 fn open_room(app: &AppHandle, settings: &Settings) -> tauri::Result<()> {
-    let origin = settings::origin_of(&settings.room_url).map_err(|e| tauri::Error::Anyhow(e.into()))?;
-    let pattern = settings::remote_pattern(&settings.room_url).map_err(|e| tauri::Error::Anyhow(e.into()))?;
-    let url: url::Url = settings.room_url.parse().map_err(|e: url::ParseError| tauri::Error::Anyhow(e.into()))?;
+    let fail = |e: settings::SettingsError| tauri::Error::Anyhow(e.into());
+    let origin = settings::page_origin(settings).map_err(fail)?;
+    let node = settings.kind == TargetKind::Node;
 
     let state = app.state::<AppState>();
     let label = format!("{ROOM_PREFIX}{}", state.room_counter.fetch_add(1, Ordering::SeqCst) + 1);
 
-    // The room page may report call state, and nothing else. Bound to this window and origin only.
-    app.add_capability(
-        CapabilityBuilder::new(format!("room-bridge-{label}"))
-            .remote(pattern)
-            .window(label.clone())
-            .permission("allow-bridge-state"),
-    )?;
+    // The page may report call state, and nothing else. Bound to this window and its page's origin only:
+    // the room's (a remote URL pattern), or the app's own pages (local, the default for a capability).
+    let capability = CapabilityBuilder::new(format!("room-bridge-{label}")).window(label.clone());
+    let capability =
+        if node { capability } else { capability.remote(settings::remote_pattern(&settings.room_url).map_err(fail)?) };
+    app.add_capability(capability.permission("allow-bridge-state"))?;
+
+    let page = if node {
+        WebviewUrl::App(BUNDLED_INTERFACE.into())
+    } else {
+        WebviewUrl::External(settings.room_url.parse().map_err(|e: url::ParseError| tauri::Error::Anyhow(e.into()))?)
+    };
 
     if let Some(old) = room_window(app) {
         old.destroy()?;
@@ -171,15 +186,23 @@ fn open_room(app: &AppHandle, settings: &Settings) -> tauri::Result<()> {
     let committed_for_load = committed_origin.clone();
     let page_app = app.clone();
     let room_origin = origin.clone();
-    let builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::External(url))
+    let navigation_origin = origin.clone();
+    let mut builder = WebviewWindowBuilder::new(app, &label, page)
         .title("Sidevoice")
         .inner_size(1100.0, 760.0)
         .min_inner_size(420.0, 560.0)
-        .initialization_script(bridge::script_for_origin(&origin))
+        .initialization_script(bridge::script_for_origin(&origin));
+    if let Some(target) = settings::target_script(settings) {
+        builder = builder.initialization_script(target);
+    }
+    let builder = builder
         // A hidden window still carries the call: never suspend or throttle its page.
         .background_throttling(BackgroundThrottlingPolicy::Disabled)
         // The room and its sign-in pages (oauth2-proxy, Google); never local files or app schemes.
-        .on_navigation(|url| media::navigation_allowed(url.scheme()))
+        // For a node, also the app's own pages (the bundled interface), and no other app page.
+        .on_navigation(move |url| {
+            media::navigation_allowed(url.scheme()) || (node && settings::url_origin(url) == navigation_origin)
+        })
         .on_permission_request(move |_webview, kind| {
             let capture = match kind {
                 PermissionKind::Microphone => media::Capture::Microphone,
@@ -197,7 +220,7 @@ fn open_room(app: &AppHandle, settings: &Settings) -> tauri::Result<()> {
         .on_page_load(move |_webview, payload| {
             // `Started` is WebKit's didCommitNavigation: after redirects, main frame only.
             if payload.event() == PageLoadEvent::Started {
-                *committed_for_load.lock().unwrap() = Some(payload.url().origin().ascii_serialization());
+                *committed_for_load.lock().unwrap() = Some(settings::url_origin(payload.url()));
                 debug(&format!("page {}", payload.url()));
                 reset_call_state(&page_app);
             }

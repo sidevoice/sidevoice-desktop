@@ -10,8 +10,28 @@ function say(text, isError) {
   $("message").className = isError ? "error" : "";
 }
 
+let defaults = {};
+const kind = () => document.querySelector('input[name="kind"]:checked').value;
+
+function showKind() {
+  $("url-label").textContent = kind() === "node" ? "Dirección de la máquina (su núcleo)" : "Dirección de la sala";
+  $("room-url").placeholder = kind() === "node" ? "http://127.0.0.1:8768" : "https://voice.example.com";
+}
+
+// Switching kind swaps an untouched default address for the other kind's.
+for (const radio of document.querySelectorAll('input[name="kind"]')) {
+  radio.addEventListener("change", () => {
+    const url = $("room-url").value.trim();
+    if (!url || url === defaults.room || url === defaults.node) $("room-url").value = defaults[kind()];
+    showKind();
+  });
+}
+
 async function load() {
-  const { settings, firstRun } = await invoke("get_settings");
+  const { settings, firstRun, defaultRoomUrl, defaultNodeUrl } = await invoke("get_settings");
+  defaults = { room: defaultRoomUrl, node: defaultNodeUrl };
+  document.querySelector(`input[name="kind"][value="${settings.kind}"]`).checked = true;
+  showKind();
   $("room-url").value = settings.roomUrl;
   $("mute-shortcut").value = settings.muteShortcut;
   if (!firstRun) {
@@ -28,7 +48,7 @@ $("settings").addEventListener("submit", async (event) => {
   say("Guardando…");
   try {
     const result = await invoke("save_settings", {
-      settings: { roomUrl: $("room-url").value, muteShortcut: $("mute-shortcut").value },
+      settings: { kind: kind(), roomUrl: $("room-url").value, muteShortcut: $("mute-shortcut").value },
     });
     $("room-url").value = result.settings.roomUrl;
     // The app opens (or reloads) the room itself; a shortcut that could not be registered is not fatal.

@@ -19,10 +19,18 @@
     <p class="lead">La ventana abre la sala (o el nodo) que pongas aquí. Puedes cambiarlo cuando quieras desde el icono de la barra de menús → <em>Ajustes…</em></p>
 
     <form id="settings" novalidate>
-      <label for="room-url">Dirección de la sala</label>
+      <fieldset id="kind">
+        <legend>Con qué hablas</legend>
+        <label class="choice"><input type="radio" name="kind" value="room" checked> Una sala
+          <span class="hint">La página de la sala (con su inicio de sesión y su panel de máquinas). Vale la sala actual y la nueva.</span></label>
+        <label class="choice"><input type="radio" name="kind" value="node"> Una máquina directamente
+          <span class="hint">El núcleo de una máquina (p. ej. este Mac en <code>http://127.0.0.1:8768</code>), sin sala; la app pone la interfaz.</span></label>
+      </fieldset>
+
+      <label for="room-url" id="url-label">Dirección de la sala</label>
       <input id="room-url" name="roomUrl" type="url" inputmode="url" autocomplete="url" spellcheck="false"
              placeholder="https://voice.example.com" required>
-      <p class="hint">Tiene que ir por <code>https://</code>. <code>http://localhost</code> vale para un nodo en este ordenador.</p>
+      <p class="hint">Tiene que ir por <code>https://</code>. <code>http://localhost</code> o <code>http://127.0.0.1</code> valen para algo en este ordenador.</p>
 
       <label for="mute-shortcut">Atajo global para silenciar</label>
       <input id="mute-shortcut" name="muteShortcut" type="text" spellcheck="false" placeholder="CmdOrCtrl+Shift+M">
@@ -30,7 +38,7 @@
 
       <p id="message" role="status" aria-live="polite"></p>
       <div class="actions">
-        <button type="submit" id="save">Guardar y abrir la sala</button>
+        <button type="submit" id="save">Guardar y abrir</button>
       </div>
     </form>
 

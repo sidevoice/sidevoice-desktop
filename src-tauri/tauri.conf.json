@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "identifier": "dev.sidevoice.desktop",
   "build": {
-    "frontendDist": "../ui"
+    "frontendDist": "../ui",
+    "beforeBuildCommand": "npm run web-assets"
   },
   "app": {
     "windows": [],
@@ -14,7 +15,13 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg", "deb", "appimage", "nsis"],
+    "targets": [
+      "app",
+      "dmg",
+      "deb",
+      "appimage",
+      "nsis"
+    ],
     "category": "Productivity",
     "shortDescription": "Voice calls with your agents",
     "icon": [

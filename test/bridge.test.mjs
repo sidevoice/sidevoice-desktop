@@ -33,7 +33,7 @@ function fakeWindow(origin) {
   const calls = [];
   const timers = [];
   const win = {
-    location: { origin },
+    location: { protocol: new URL(origin).protocol, host: new URL(origin).host },
     __TAURI_INTERNALS__: { invoke: (cmd, args) => (calls.push([cmd, structuredClone(args)]), Promise.resolve()) },
     setInterval: (fn) => (timers.push(fn), timers.length),
     clearInterval: (id) => (timers[id - 1] = null),
@@ -124,6 +124,14 @@ test("announces the host and the (empty) native-engine seam", () => {
   const api = install(win, ORIGIN);
   assert.equal(api.host.app, "sidevoice-desktop");
   assert.equal(api.host.nativeEngine, null);
+});
+
+test("works on the app's own pages, whose origin may be opaque", () => {
+  const install = loadFactory();
+  const { win } = fakeWindow("tauri://localhost");
+  assert.ok(install(win, "tauri://localhost"));
+  const other = fakeWindow("tauri://localhost");
+  assert.equal(install(other.win, ORIGIN), null);
 });
 
 test("the placeholder the app replaces is present exactly once", () => {
