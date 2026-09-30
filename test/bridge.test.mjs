@@ -118,6 +118,14 @@ test("installs once per page and survives a missing Tauri runtime", async () => 
   await flush();
 });
 
+test("announces the host and the (empty) native-engine seam", () => {
+  const install = loadFactory();
+  const { win } = fakeWindow(ORIGIN);
+  const api = install(win, ORIGIN);
+  assert.equal(api.host.app, "sidevoice-desktop");
+  assert.equal(api.host.nativeEngine, null);
+});
+
 test("the placeholder the app replaces is present exactly once", () => {
   assert.equal(source.split("__SIDEVOICE_ROOM_ORIGIN__").length, 2);
 });

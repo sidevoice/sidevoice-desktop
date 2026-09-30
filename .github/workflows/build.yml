@@ -93,6 +93,27 @@ jobs:
           sleep 20
           if ! kill -0 "$PID" 2>/dev/null; then echo "The app exited on its own:"; cat /tmp/app.log; exit 1; fi
           kill "$PID"; cat /tmp/app.log
+      - name: Bridge test in the real WKWebView (fake room on loopback)
+        run: |
+          set -euo pipefail
+          APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
+          CONF="$HOME/Library/Application Support/dev.sidevoice.desktop"
+          mkdir -p "$CONF"
+          printf '{"roomUrl":"http://127.0.0.1:8765/","muteShortcut":""}' > "$CONF/settings.json"
+          (cd test/fixtures && python3 -m http.server 8765 --bind 127.0.0.1 > /tmp/http.log 2>&1 &)
+          SIDEVOICE_DEBUG=1 "$APP/Contents/MacOS/sidevoice-desktop" > /tmp/bridge.log 2>&1 &
+          PID=$!
+          for i in $(seq 1 60); do grep -q "joined: true" /tmp/bridge.log && break; sleep 1; done
+          kill "$PID" || true
+          rm -rf "$CONF"
+          cat /tmp/bridge.log
+          # The page's injected script reached the app over IPC from a remote origin, the runtime
+          # capability let it through, and the store subscription follows the call.
+          grep -q "ready: true" /tmp/bridge.log
+          grep -q "joined: true" /tmp/bridge.log
+          grep -q "desktopHost=true" /tmp/bridge.log
+          echo "--- what this webview offers the in-browser models (macOS $(sw_vers -productVersion))"
+          grep -o 'webgpu=[^"]*' /tmp/bridge.log | head -1
       - name: Make the .dmg
         run: |
           set -euo pipefail

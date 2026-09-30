@@ -67,6 +67,9 @@
 
   const api = {
     version: BRIDGE_VERSION,
+    /** What this host offers the page besides the webview itself. The web UI may feature-detect it.
+     *  `nativeEngine` is the seam for a native STT/TTS sidecar (docs/MODELS.md): null until one exists. */
+    host: Object.freeze({ app: "sidevoice-desktop", nativeEngine: null }),
     snapshot,
     /** Runs one tray/shortcut command through the web UI's own actions. Returns whether it ran. */
     run(command) {

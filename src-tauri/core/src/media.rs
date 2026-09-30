@@ -1,4 +1,4 @@
-//! Who may capture media in the room window.
+//! Who may capture media in, and navigate, the room window.
 //!
 //! wry's WKWebView delegate grants every camera and microphone request from any page when the app
 //! sets no handler. The room window sets one: the microphone is granted without a WebKit prompt to
@@ -27,6 +27,13 @@ pub fn decide(capture: Capture, page_origin: Option<&str>, room_origin: &str) ->
     }
 }
 
+/// Which navigations the room window allows, by URL scheme. wry asks for every frame, so the
+/// schemes iframes use (sign-in widgets, the room's own blobs) must pass; `file:` and the app's
+/// own schemes must not, so a remote page cannot open local files or the app's bundled pages.
+pub fn navigation_allowed(scheme: &str) -> bool {
+    matches!(scheme, "https" | "http" | "about" | "blob" | "data")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -40,6 +47,16 @@ mod tests {
         assert_eq!(decide(Capture::Microphone, Some("https://voice.example.com:8443"), ROOM), Decision::Deny);
         assert_eq!(decide(Capture::Microphone, Some("http://voice.example.com"), ROOM), Decision::Deny);
         assert_eq!(decide(Capture::Microphone, None, ROOM), Decision::Deny);
+    }
+
+    #[test]
+    fn navigation_schemes() {
+        for ok in ["https", "http", "about", "blob", "data"] {
+            assert!(navigation_allowed(ok), "{ok}");
+        }
+        for no in ["file", "tauri", "ipc", "asset", "javascript", "ftp", ""] {
+            assert!(!navigation_allowed(no), "{no}");
+        }
     }
 
     #[test]

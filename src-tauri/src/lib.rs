@@ -101,16 +101,26 @@ fn bridge_state(
 ) -> Result<(), String> {
     let current_label = state.room_label.lock().unwrap().clone();
     if current_label.as_deref() != Some(webview.label()) {
+        debug(&format!("bridge_state refused: window {}", webview.label()));
         return Err("not the room window".into());
     }
     let expected = state.settings.lock().unwrap().as_ref().and_then(|s| settings::origin_of(&s.room_url).ok());
     let actual = webview.url().map(|u| u.origin().ascii_serialization()).ok();
     if expected.is_none() || expected != actual {
+        debug(&format!("bridge_state refused: origin {actual:?}, expected {expected:?}"));
         return Err("not the configured room origin".into());
     }
+    debug(&format!("bridge_state {snapshot:?}"));
     *state.call.lock().unwrap() = snapshot.clone();
     tray::update(&app, &snapshot);
     Ok(())
+}
+
+/// Diagnostics on stderr, only with `SIDEVOICE_DEBUG=1` (CI's smoke test reads them).
+fn debug(message: &str) {
+    if std::env::var_os("SIDEVOICE_DEBUG").is_some_and(|v| v == "1") {
+        eprintln!("sidevoice: {message}");
+    }
 }
 
 fn room_window(app: &AppHandle) -> Option<WebviewWindow> {
@@ -167,8 +177,8 @@ fn open_room(app: &AppHandle, settings: &Settings) -> tauri::Result<()> {
         .initialization_script(bridge::script_for_origin(&origin))
         // A hidden window still carries the call: never suspend or throttle its page.
         .background_throttling(BackgroundThrottlingPolicy::Disabled)
-        // The room, its sign-in pages (oauth2-proxy, Google) and nothing but http(s).
-        .on_navigation(|url| matches!(url.scheme(), "https" | "http"))
+        // The room and its sign-in pages (oauth2-proxy, Google); never local files or app schemes.
+        .on_navigation(|url| media::navigation_allowed(url.scheme()))
         .on_permission_request(move |_webview, kind| {
             let capture = match kind {
                 PermissionKind::Microphone => media::Capture::Microphone,
@@ -176,7 +186,9 @@ fn open_room(app: &AppHandle, settings: &Settings) -> tauri::Result<()> {
                 _ => media::Capture::Other,
             };
             let page = committed_origin.lock().unwrap().clone();
-            match media::decide(capture, page.as_deref(), &room_origin) {
+            let decision = media::decide(capture, page.as_deref(), &room_origin);
+            debug(&format!("media {capture:?} for {page:?}: {decision:?}"));
+            match decision {
                 media::Decision::Allow => PermissionResponse::Allow,
                 media::Decision::Deny => PermissionResponse::Deny,
             }
@@ -185,6 +197,7 @@ fn open_room(app: &AppHandle, settings: &Settings) -> tauri::Result<()> {
             // `Started` is WebKit's didCommitNavigation: after redirects, main frame only.
             if payload.event() == PageLoadEvent::Started {
                 *committed_for_load.lock().unwrap() = Some(payload.url().origin().ascii_serialization());
+                debug(&format!("page {}", payload.url()));
                 reset_call_state(&page_app);
             }
         });
