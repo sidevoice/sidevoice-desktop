@@ -25,6 +25,8 @@ pub struct NativeEngines {
     /// `cpu` or `coreml`; `SIDEVOICE_ENGINE_PROVIDER` overrides (CoreML is not the default until measured).
     provider: String,
     sherpa: Mutex<Option<Arc<Sherpa>>>,
+    /// One install at a time: two would download into the same staging paths and break each other.
+    installing: Mutex<()>,
     recognizers: Mutex<HashMap<(String, String), Arc<Recognizer>>>,
     voices: Mutex<HashMap<(String, String), Arc<Tts>>>,
 }
@@ -48,6 +50,7 @@ impl NativeEngines {
             store: Store::new(root),
             provider,
             sherpa: Mutex::default(),
+            installing: Mutex::default(),
             recognizers: Mutex::default(),
             voices: Mutex::default(),
         }
@@ -89,6 +92,7 @@ impl NativeEngines {
 
     /// Downloads what `model` on `engine` needs, reporting (done, total) bytes across both downloads.
     pub fn install(&self, model_id: &str, engine_id: &str, progress: &mut dyn FnMut(u64, u64)) -> Result<(), Error> {
+        let _one_at_a_time = self.installing.lock().map_err(|_| "poisoned")?;
         let engine = self.catalog.engines.iter().find(|e| e.id == engine_id).ok_or("unknown engine")?;
         let package = engines::package_for(engine, &self.device).ok_or("no package for this device")?;
         let model = self.model(model_id).ok_or("unknown model")?;
@@ -146,7 +150,10 @@ impl NativeEngines {
         sample_rate: i32,
     ) -> Result<String, Error> {
         let engine_id = "sherpa-onnx";
-        let key = (model_id.to_string(), language.to_string());
+        let language = engines::whisper_language(language)
+            .ok_or_else(|| format!("Whisper does not know the language {language:?}"))?
+            .to_string();
+        let key = (model_id.to_string(), language.clone());
         let existing = self.recognizers.lock().map_err(|_| "poisoned")?.get(&key).cloned();
         let recognizer = match existing {
             Some(r) => r,
@@ -154,7 +161,7 @@ impl NativeEngines {
                 let (dir, config) = self.ready_model(model_id, engine_id, Task::Stt)?;
                 let files: WhisperFiles = serde_json::from_value(config).map_err(|e| e.to_string())?;
                 let r =
-                    Arc::new(Recognizer::whisper(self.engine(engine_id)?, &dir, &files, language, &self.provider, 4)?);
+                    Arc::new(Recognizer::whisper(self.engine(engine_id)?, &dir, &files, &language, &self.provider, 4)?);
                 self.recognizers.lock().map_err(|_| "poisoned")?.insert(key, r.clone());
                 r
             }

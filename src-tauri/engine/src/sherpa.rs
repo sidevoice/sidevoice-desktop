@@ -65,11 +65,19 @@ fn symbol<T: Copy>(library: &Library, name: &str) -> Result<T, Error> {
 }
 
 impl Sherpa {
-    /// Opens the package's libraries (`libraries` relative to `root`, in order); the C API is the last one.
-    pub fn load(root: &Path, libraries: &[String]) -> Result<Sherpa, Error> {
+    /// Opens the package's libraries (relative to `root`, in order); the C API is the last one. Each file is
+    /// hashed right before it is opened and must match the catalog: the app loads libraries with library
+    /// validation off (an ad-hoc signed build), so this check is what stands between a file swapped on disk
+    /// and code running with the app's microphone permission.
+    pub fn load(root: &Path, libraries: &[sidevoice_desktop_core::engines::Library]) -> Result<Sherpa, Error> {
         let mut opened = Vec::new();
-        for relative in libraries {
-            let path = root.join(relative);
+        for library in libraries {
+            let path = root.join(&library.path);
+            let bytes = std::fs::read(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+            let got = crate::install::hex(&<sha2::Sha256 as sha2::Digest>::digest(&bytes));
+            if got != library.sha256.to_ascii_lowercase() {
+                return Err(format!("{} is not the engine the catalog names (SHA-256 {got}); remove the engines folder to download it again", path.display()));
+            }
             // SAFETY: loading a library runs its initialisers; these are the pinned, hash-checked engine's own.
             let library = unsafe { Library::new(&path) }.map_err(|e| format!("cannot load {}: {e}", path.display()))?;
             opened.push(library);

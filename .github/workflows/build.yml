@@ -119,7 +119,7 @@ jobs:
           # Headset buttons: a (simulated) call made the app the Now Playing app, and it let go after.
           grep -q 'probe-headset ok' /tmp/probe.log
           grep -q 'headset apply active=true in_call=true mic=true' /tmp/probe.log
-          grep -q 'headset apply active=false in_call=false' /tmp/probe.log
+          grep 'headset apply' /tmp/probe.log | tail -1 | grep -q 'active=false in_call=false .* gesture_on=false' 
           grep 'headset apply' /tmp/probe.log
       - name: With a target (a fake node on loopback)
         run: |
@@ -138,6 +138,8 @@ jobs:
           echo "--- app"; cat /tmp/target.log
           echo "--- fake node (what the interface asked, cross-origin)"; sort /tmp/node.log | uniq -c
           grep -q "ready: true" /tmp/target.log
+          # The interface asked its target from the app's own origin (cross-origin), with no pairing yet.
+          grep -q "origin=tauri://localhost" /tmp/node.log
       - name: Make the .dmg
         run: |
           set -euo pipefail

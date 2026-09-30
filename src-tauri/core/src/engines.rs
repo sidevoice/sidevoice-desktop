@@ -75,9 +75,16 @@ pub struct Package {
     #[serde(default)]
     pub accelerators: Vec<Capability>,
     pub download: Download,
-    /// Shared libraries to load, in order, relative to the unpacked root.
+    /// Shared libraries to load, in order, relative to the unpacked root, each with its own SHA-256: a library is
+    /// hashed again right before it is loaded, so a file swapped on disk after the download is never run.
     #[serde(default)]
-    pub libraries: Vec<String>,
+    pub libraries: Vec<Library>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Library {
+    pub path: String,
+    pub sha256: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -238,6 +245,23 @@ pub fn offers(catalog: &Catalog, device: &Device) -> Vec<Offer> {
     out
 }
 
+/// Whisper's language codes (openai/whisper `tokenizer.LANGUAGES`). sherpa-onnx ends the whole process on a code
+/// it does not know, so nothing else is ever handed to it.
+pub const WHISPER_LANGUAGES: &[&str] = &[
+    "en", "zh", "de", "es", "ru", "ko", "fr", "ja", "pt", "tr", "pl", "ca", "nl", "ar", "sv", "it", "id", "hi", "fi",
+    "vi", "he", "uk", "el", "ms", "cs", "ro", "da", "hu", "ta", "no", "th", "ur", "hr", "bg", "lt", "la", "mi", "ml",
+    "cy", "sk", "te", "fa", "lv", "bn", "sr", "az", "sl", "kn", "et", "mk", "br", "eu", "is", "hy", "ne", "mn", "bs",
+    "kk", "sq", "sw", "gl", "mr", "pa", "si", "km", "sn", "yo", "so", "af", "oc", "ka", "be", "tg", "sd", "gu", "am",
+    "yi", "lo", "uz", "fo", "ht", "ps", "tk", "nn", "mt", "sa", "lb", "my", "bo", "tl", "mg", "as", "tt", "haw", "ln",
+    "ha", "ba", "jw", "su", "yue",
+];
+
+/// A language to hand Whisper: its own code, or empty for "detect it". Anything else is refused here.
+pub fn whisper_language(language: &str) -> Option<&str> {
+    let language = language.trim();
+    (language.is_empty() || WHISPER_LANGUAGES.contains(&language)).then_some(language)
+}
+
 /// The catalog this app ships (docs/ENGINES.md: until nodes serve the shared one).
 pub const BUNDLED_CATALOG: &str = include_str!("../../../catalog/engines.json");
 
@@ -253,6 +277,14 @@ pub fn check(catalog: &Catalog) -> Vec<String> {
         for p in &engine.packages {
             if !hex(&p.download.sha256) || !p.download.url.starts_with("https://") {
                 problems.push(format!("{} {}/{}: download needs https and a sha256", engine.id, p.os, p.arch));
+            }
+            for library in &p.libraries {
+                if !hex(&library.sha256) || library.path.contains("..") || library.path.starts_with('/') {
+                    problems.push(format!(
+                        "{} {}/{}: library {} needs a sha256 and a relative path",
+                        engine.id, p.os, p.arch, library.path
+                    ));
+                }
             }
         }
         if engine.runs == Runs::Native && engine.packages.is_empty() {
@@ -355,6 +387,24 @@ mod tests {
         let problems = check(&catalog);
         assert!(problems.iter().any(|p| p.contains("unknown engine nope")));
         assert!(problems.iter().any(|p| p.contains("sha256")));
+    }
+
+    #[test]
+    fn whisper_languages_are_whisper_s_own() {
+        assert_eq!(WHISPER_LANGUAGES.len(), 100);
+        assert_eq!(whisper_language("es"), Some("es"));
+        assert_eq!(whisper_language(""), Some(""), "empty asks Whisper to detect it");
+        assert_eq!(whisper_language("auto"), None);
+        assert_eq!(whisper_language("es-ES"), None);
+        assert_eq!(whisper_language("xx"), None);
+    }
+
+    #[test]
+    fn a_library_without_its_hash_is_refused() {
+        let mut catalog = bundled_catalog();
+        catalog.engines[0].packages[0].libraries[0].sha256 = String::new();
+        catalog.engines[0].packages[0].libraries[1].path = "../evil.dylib".into();
+        assert_eq!(check(&catalog).iter().filter(|p| p.contains("library")).count(), 2);
     }
 
     #[test]

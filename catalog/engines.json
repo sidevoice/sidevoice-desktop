@@ -31,8 +31,14 @@
             "root": "sherpa-onnx-v1.13.8-osx-arm64-shared-lib"
           },
           "libraries": [
-            "lib/libonnxruntime.dylib",
-            "lib/libsherpa-onnx-c-api.dylib"
+            {
+              "path": "lib/libonnxruntime.dylib",
+              "sha256": "3567d114f7299d559993e536d605a6f46d7bc9d2542004accc80ee9bf5457f0b"
+            },
+            {
+              "path": "lib/libsherpa-onnx-c-api.dylib",
+              "sha256": "ee098d8b419d49b92101cde3c970a333b361066eb2d79a11ab480a116552b908"
+            }
           ]
         }
       ],

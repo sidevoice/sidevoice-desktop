@@ -101,15 +101,16 @@ pub(crate) fn on_media_command(app: &AppHandle, command: &str) {
     }
 }
 
-/// The AirPods gesture arrived (the system calls it on its own queue).
+/// The AirPods gesture arrived (the system calls it on its own queue). Returns whether the call's microphone is
+/// now as asked (what the system wants the handler to answer): false when there is no call to mute.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-pub(crate) fn on_mute_gesture(app: &AppHandle, muted: bool) {
+pub(crate) fn on_mute_gesture(app: &AppHandle, muted: bool) -> bool {
     let headset = app.state::<Headset>();
     let snapshot = headset.call.lock().unwrap().clone();
     let source = if muted { "airpods:mute" } else { "airpods:unmute" };
     if !(snapshot.ready && snapshot.joined) {
         headset.record(source, "sin llamada: solo registrado");
-        return;
+        return false;
     }
     match mute_gesture_action(muted, snapshot.mic_enabled) {
         Some(what) => {
@@ -121,6 +122,7 @@ pub(crate) fn on_mute_gesture(app: &AppHandle, muted: bool) {
         }
         None => headset.record(source, "ya estaba así"),
     }
+    true
 }
 
 /// Follows the call: Now Playing and the buttons while in a call (or testing), nothing otherwise.
@@ -169,10 +171,33 @@ mod platform {
     };
     use std::ptr::NonNull;
     use std::sync::Mutex;
+    use std::time::{Duration, Instant};
     use tauri::{AppHandle, Manager};
 
     /// Whether the gesture handler is installed now (only during a call or a test).
     static GESTURE_ON: Mutex<bool> = Mutex::new(false);
+    /// The state the app itself last set with `setInputMuted`, and when: the system calls the handler for that
+    /// too, and such an echo is neither a gesture to record nor one to act on.
+    static SET_BY_APP: Mutex<Option<(bool, Instant)>> = Mutex::new(None);
+
+    fn echo(muted: bool) -> bool {
+        let mut last = SET_BY_APP.lock().unwrap();
+        match *last {
+            Some((value, at)) if value == muted && at.elapsed() < Duration::from_secs(3) => {
+                *last = None;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn set_muted(shared: &AVAudioApplication, muted: bool) {
+        *SET_BY_APP.lock().unwrap() = Some((muted, Instant::now()));
+        // SAFETY: the class exists (the caller checked); plain property set.
+        if unsafe { shared.setInputMuted_error(muted) }.is_err() {
+            *SET_BY_APP.lock().unwrap() = None;
+        }
+    }
 
     fn commands() -> [(Retained<MPRemoteCommand>, &'static str); 3] {
         // SAFETY: the shared command center exists for the process's lifetime.
@@ -252,20 +277,22 @@ mod platform {
             if active && !*on {
                 let app = app.clone();
                 let handler = RcBlock::new(move |muted: Bool| -> Bool {
-                    on_mute_gesture(&app, muted.as_bool());
-                    Bool::YES
+                    if echo(muted.as_bool()) {
+                        return Bool::YES; // the app's own change, already done
+                    }
+                    Bool::new(on_mute_gesture(&app, muted.as_bool()))
                 });
                 if shared.setInputMuteStateChangeHandler_error(Some(&handler)).is_ok() {
                     *on = true;
                 }
             } else if !active && *on {
-                let _ = shared.setInputMuted_error(false);
                 let _ = shared.setInputMuteStateChangeHandler_error(None);
+                set_muted(&shared, false);
                 *on = false;
             }
             if *on && in_call && shared.isInputMuted() == mic_enabled {
                 // Keep the system's (and the AirPods') idea of "muted" in step with the call's.
-                let _ = shared.setInputMuted_error(!mic_enabled);
+                set_muted(&shared, !mic_enabled);
             }
         }
     }
