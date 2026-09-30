@@ -1,0 +1,22 @@
+Sidevoice para macOS (Apple Silicon) — primera apertura
+=======================================================
+
+Esta build no está firmada con un certificado de Apple ni notarizada (firma ad-hoc).
+macOS la bloquea la primera vez; se abre así:
+
+1. Abre el .dmg y arrastra Sidevoice a Aplicaciones.
+2. Quita la cuarentena (lo más fiable, en Terminal):
+       xattr -dr com.apple.quarantine /Applications/Sidevoice.app
+   Alternativa sin Terminal: abre Sidevoice una vez (macOS avisa y no la abre), ve a
+   Ajustes del Sistema → Privacidad y seguridad → baja hasta "Sidevoice se ha bloqueado…"
+   → "Abrir igualmente". En macOS 14 o anterior también vale clic derecho → Abrir.
+3. Abre Sidevoice. La primera vez pide la dirección de la sala (viene rellena con la tuya).
+4. Inicia sesión en la sala como en el navegador.
+5. Pulsa "Entrar en la sala": macOS pregunta por el micrófono → Permitir.
+
+Si el micrófono se denegó por error: Ajustes del Sistema → Privacidad y seguridad →
+Micrófono → activa Sidevoice (o, en Terminal: tccutil reset Microphone dev.sidevoice.desktop).
+
+Cerrar la ventana no cuelga: Sidevoice sigue en la barra de menús (icono de barras).
+Desde ahí: silenciar, colgar, mostrar la ventana, ajustes, salir.
+Atajo global para silenciar: ⌘⇧M (se cambia en Ajustes).

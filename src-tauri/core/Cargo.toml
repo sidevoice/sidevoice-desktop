@@ -1,0 +1,12 @@
+[package]
+name = "sidevoice-desktop-core"
+version = "0.1.0"
+description = "The desktop app's pure logic: settings, the bridge contract, media permissions. No Tauri, so it is tested anywhere."
+edition = "2021"
+rust-version = "1.80"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2.5"

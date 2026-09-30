@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Merged into the generated Info.plist by the Tauri bundler. Without this key macOS kills the
+       app the moment the room asks for the microphone. -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Sidevoice usa el micrófono para que hables con tus agentes durante una llamada.</string>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.productivity</string>
+</dict>
+</plist>

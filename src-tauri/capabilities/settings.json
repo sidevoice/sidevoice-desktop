@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "settings",
+  "description": "The bundled settings / first-run window: read and save this device's settings. The room window gets no static capability; its bridge permission is added at runtime for the configured origin only (src/lib.rs, open_room).",
+  "windows": ["settings"],
+  "permissions": ["allow-get-settings", "allow-save-settings"]
+}

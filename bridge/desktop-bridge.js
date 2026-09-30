@@ -1,0 +1,102 @@
+// Sidevoice desktop bridge — injected by the desktop app into every page its main window loads.
+//
+// The contract is documented in docs/BRIDGE.md. In short:
+//   page → app : invoke('bridge_state', { snapshot })  whenever the call state the tray shows changes
+//   app → page : window.__sidevoiceDesktop.run('toggle-mute' | 'hang-up')
+// It only reads the web UI's public seams (window.sidevoiceUI.store, window.sidevoiceActions) and
+// never touches the DOM. On any origin other than the configured room it does nothing at all.
+(function (factory) {
+  if (typeof module === "object" && module.exports) module.exports = factory; // unit tests
+  else factory(window, "__SIDEVOICE_ROOM_ORIGIN__");
+})(function installDesktopBridge(win, roomOrigin) {
+  "use strict";
+  if (win.location.origin !== roomOrigin) return null;
+  if (win.__sidevoiceDesktop) return win.__sidevoiceDesktop;
+
+  const BRIDGE_VERSION = 1;
+  let lastReported = "";
+
+  function invoke(command, args) {
+    const internals = win.__TAURI_INTERNALS__;
+    if (!internals || typeof internals.invoke !== "function") return;
+    // The app may be mid-reload or the capability may not match yet: never break the page for it.
+    Promise.resolve()
+      .then(() => internals.invoke(command, args))
+      .catch(() => {});
+  }
+
+  /** The few facts the tray needs, read from the web UI's own view model. */
+  function snapshot() {
+    const store = win.sidevoiceUI && win.sidevoiceUI.store;
+    const actions = win.sidevoiceActions;
+    if (!store || !actions) {
+      return { version: BRIDGE_VERSION, ready: false, joined: false, busy: false, micEnabled: true, micDisabled: false, title: "" };
+    }
+    const view = store.getState() || {};
+    const call = view.call || {};
+    const mic = view.mic || {};
+    return {
+      version: BRIDGE_VERSION,
+      ready: true,
+      joined: !!call.joined,
+      busy: !!call.busy,
+      micEnabled: mic.enabled !== false,
+      micDisabled: !!mic.disabled,
+      title: typeof view.title === "string" ? view.title : "",
+    };
+  }
+
+  function report() {
+    const state = snapshot();
+    const key = JSON.stringify(state);
+    if (key === lastReported) return; // the store ticks often (clocks, meters); the tray only cares about changes
+    lastReported = key;
+    invoke("bridge_state", { snapshot: state });
+  }
+
+  let attached = false;
+  function attach() {
+    if (attached) return true;
+    const store = win.sidevoiceUI && win.sidevoiceUI.store;
+    if (!store || typeof store.subscribe !== "function" || !win.sidevoiceActions) return false;
+    store.subscribe(report);
+    attached = true;
+    report();
+    return true;
+  }
+
+  const api = {
+    version: BRIDGE_VERSION,
+    snapshot,
+    /** Runs one tray/shortcut command through the web UI's own actions. Returns whether it ran. */
+    run(command) {
+      const actions = win.sidevoiceActions;
+      const state = snapshot();
+      if (!state.ready) return false;
+      switch (command) {
+        case "toggle-mute":
+          // The web UI disables its mute button in a call with no conversation selected; so do we.
+          if (state.micDisabled) return false;
+          actions.toggleMic();
+          report();
+          return true;
+        case "hang-up":
+          if (!state.joined) return false;
+          Promise.resolve(actions.toggleCall()).catch(() => {});
+          return true;
+        default:
+          return false;
+      }
+    },
+  };
+  win.__sidevoiceDesktop = api;
+
+  report(); // "not ready yet": the tray greys out until the room's controller exists
+  // The room builds its store and actions after its own scripts load; wait for them.
+  if (!attach()) {
+    const timer = win.setInterval(() => {
+      if (attach()) win.clearInterval(timer);
+    }, 250);
+  }
+  return api;
+});

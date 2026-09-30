@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self'; style-src 'self'; script-src 'self'">
+  <title>Sidevoice · Ajustes</title>
+  <link rel="stylesheet" href="settings.css">
+</head>
+<body>
+  <main>
+    <header>
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="mark-on-dark.svg">
+        <img src="mark.svg" alt="" width="40" height="40">
+      </picture>
+      <h1 id="heading">Conecta Sidevoice con tu sala</h1>
+    </header>
+    <p class="lead">La ventana abre la sala (o el nodo) que pongas aquí. Puedes cambiarlo cuando quieras desde el icono de la barra de menús → <em>Ajustes…</em></p>
+
+    <form id="settings" novalidate>
+      <label for="room-url">Dirección de la sala</label>
+      <input id="room-url" name="roomUrl" type="url" inputmode="url" autocomplete="url" spellcheck="false"
+             placeholder="https://voice.example.com" required>
+      <p class="hint">Tiene que ir por <code>https://</code>. <code>http://localhost</code> vale para un nodo en este ordenador.</p>
+
+      <label for="mute-shortcut">Atajo global para silenciar</label>
+      <input id="mute-shortcut" name="muteShortcut" type="text" spellcheck="false" placeholder="CmdOrCtrl+Shift+M">
+      <p class="hint">Funciona aunque Sidevoice esté en segundo plano. Vacío lo desactiva. Formato: <code>CmdOrCtrl+Shift+M</code>, <code>Alt+F9</code>…</p>
+
+      <p id="message" role="status" aria-live="polite"></p>
+      <div class="actions">
+        <button type="submit" id="save">Guardar y abrir la sala</button>
+      </div>
+    </form>
+
+    <section id="diagnostics" aria-labelledby="diag-heading">
+      <h2 id="diag-heading">Este ordenador</h2>
+      <dl id="diag"></dl>
+      <p class="hint">Los modelos del navegador (Whisper, Kokoro) usan WebGPU si esta vista web lo tiene y, si no, WebAssembly en la CPU: funcionan igual, más despacio.</p>
+    </section>
+  </main>
+  <script src="settings.js"></script>
+</body>
+</html>
