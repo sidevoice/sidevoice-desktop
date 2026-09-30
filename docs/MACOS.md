@@ -37,6 +37,30 @@ WKWebView implements it with the system voice-processing unit.
 None. The app shows its own bundled interface and a device is admitted by pairing with the node (a one-time code
 the node issues; docs/TARGETS.md). There is no oauth2-proxy or Google login in the app.
 
+## Headset buttons (src/headset.rs)
+
+What macOS offers a plain app, checked against Apple's documentation (2026-09-30):
+
+| Mechanism | What it is | Availability | Used |
+|---|---|---|---|
+| `MPRemoteCommandCenter` + `MPNowPlayingInfoCenter` | Play/pause from **any** headset (Bluetooth AVRCP, wired, media keys) goes to the "Now Playing" app. On macOS the app must set `playbackState` whenever playback starts or stops, "otherwise remote control functionality may not work as expected". | macOS 10.12.2+ | **Yes, primary.** During a call the app is Now Playing; play → unmute, pause/toggle → toggle (the web interface's rule). |
+| `AVAudioApplication.setInputMuteStateChangeHandler` | The system calls it "due to a Bluetooth audio accessory gesture (certain AirPods / Beats headphones)". macOS only. | macOS 14+ | **Yes, extra.** Installed during a call; the app keeps `isInputMuted` in step with its own mute. |
+| CallKit | System calling UI for VoIP apps. | macOS 13+ (per Apple's metadata) | **No.** Neither mechanism above needs it on macOS. |
+| Mic-in-use indicator | The orange dot in the menu bar. | always | Nothing to do: macOS shows it by itself whenever the app captures. |
+
+Not verified on a Mac (no headset in CI), and what can go wrong:
+- **HFP**: while the microphone is in use, a Bluetooth headset switches to the hands-free profile, and some headsets
+  then send their button as an HFP command instead of AVRCP play/pause; macOS may not turn it into a media command.
+  Wired headsets and the Mac's media keys are not affected.
+- **The AirPods gesture** is documented for "the process doing the call's audio I/O". Here that is WebKit's GPU
+  process (which captures for the page), not the app's own process, so the gesture may never reach the app.
+- Another app that plays audio after the call started (a video) can become Now Playing and take the buttons.
+
+To see what really arrives: Settings → "Botones del auricular" lists every button event the app receives (source
+and what it did), and "Probar botones (1 min)" makes the app the Now Playing app for a minute without a call.
+The page's own Media Session handlers are switched off in the app (`host.mediaKeys = "native"`), so one click never
+toggles twice. CI simulates a call on a macOS runner and checks the app becomes Now Playing and lets go after.
+
 ## Background behaviour
 
 - Closing the window hides it; the call continues. The app stays in the menu bar and the Dock.
