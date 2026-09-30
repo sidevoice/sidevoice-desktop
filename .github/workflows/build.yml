@@ -116,6 +116,11 @@ jobs:
           # through the page's IPC (Kokoro says a sentence, Whisper hears it).
           grep -q 'probe-engine ok' /tmp/probe.log
           grep -iq 'probe-engine ok.*prueba' /tmp/probe.log
+          # Headset buttons: a (simulated) call made the app the Now Playing app, and it let go after.
+          grep -q 'probe-headset ok' /tmp/probe.log
+          grep -q 'headset apply active=true in_call=true mic=true' /tmp/probe.log
+          grep -q 'headset apply active=false in_call=false' /tmp/probe.log
+          grep 'headset apply' /tmp/probe.log
       - name: With a target (a fake node on loopback)
         run: |
           set -euo pipefail

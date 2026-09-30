@@ -233,6 +233,11 @@ mod platform {
             }
         }
         gesture(app, active, in_call, mic_enabled);
+        crate::debug(&format!(
+            "headset apply active={active} in_call={in_call} mic={mic_enabled} gesture_api={} gesture_on={}",
+            gesture_api(),
+            *GESTURE_ON.lock().unwrap()
+        ));
     }
 
     /// AirPods / Beats mute gesture (macOS 14+): installed while active, kept in step with the microphone.

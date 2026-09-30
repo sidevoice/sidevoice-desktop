@@ -42,6 +42,19 @@ what the interface's own window offers — same origin, same permission rule —
   }
   await say(facts.join(" "));
 
+  // A call as the bridge reports one: the app becomes the Now Playing app and installs the AirPods handler
+  // (src/headset.rs), then the call ends. The log shows what was switched on; a wrong Objective-C call would crash.
+  const call = (joined, micEnabled) => window.__TAURI_INTERNALS__.invoke("bridge_state", { snapshot: {
+    version: 1, ready: true, joined, busy: false, micEnabled, micDisabled: false, title: "Sonda" } });
+  try {
+    await call(true, true); await new Promise((r) => setTimeout(r, 500));
+    await call(true, false); await new Promise((r) => setTimeout(r, 500));
+    await call(false, true); await new Promise((r) => setTimeout(r, 500));
+    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-headset ok" });
+  } catch (error) {
+    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-headset error " + String(error && (error.message || error)) });
+  }
+
   // The native engine through the app itself: hardened runtime, dlopen of the downloaded package, raw-byte IPC.
   const engine = window.__sidevoiceDesktop && window.__sidevoiceDesktop.host && window.__sidevoiceDesktop.host.nativeEngine;
   if (!engine) { await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-engine none" }); return; }
