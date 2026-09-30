@@ -156,7 +156,7 @@ jobs:
           grep -q "ready: true" /tmp/target.log
           # The interface asked its target from the app's own origin (cross-origin), with no pairing yet.
           grep -q "origin=tauri://localhost" /tmp/node.log
-      - name: Make the .dmg (the brand's window: background, icon layout, volume icon)
+      - name: Make the .dmg (the brand's window, with background, icon layout and volume icon)
         run: |
           set -euo pipefail
           VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
