@@ -1,7 +1,7 @@
 {
   "repository": "rubasace/sidevoice",
   "branch": "split/core-out-of-room",
-  "commit": "50344ac37c607a8a53c46a6dacf72d19f80328c8",
-  "uncommitted_changes": true,
-  "vendored_at": "2026-09-30T06:12:31.882Z"
+  "commit": "3c3ccc0e7bc23d67490474317960633fd9b40da2",
+  "uncommitted_changes": false,
+  "vendored_at": "2026-09-30T07:03:38.461Z"
 }

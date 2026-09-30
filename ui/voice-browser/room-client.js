@@ -431,13 +431,16 @@ class RoomVoice {
   // the fade is over; a cancel while the context is stopped pauses it at once so it cannot loop.
   if(this.output?.element&&this.context?.state!=='running'){try{this.output.element.pause()}catch{}}
   job.reject(new DOMException('Audio cancelado','AbortError'))}
- ensure(device){if(this.worker&&this.device===device)return;this.worker?.terminate();this.ready=false;this.device=device;this.worker=new Worker('/voice-browser/worker.js?v='+encodeURIComponent(globalThis.sidevoiceBuildId||'dev'),{type:'module'});this.worker.onmessage=({data})=>this.receive(data);this.worker.onerror=e=>this.fail(Error(e.message||'No se pudo iniciar el motor de voz'))}
+ ensure(device){if(this.worker&&this.device===device)return;this.worker?.terminate();this.ready=false;this.device=device;
+  // 'native': the desktop app's own engine (native-worker.js), same protocol as the Worker.
+  if(device==='native'){this.worker=globalThis.sidevoiceNativeWorkers?.voice?.()||null;if(!this.worker){this.device=null;throw Error('El motor nativo solo está en la app de escritorio de Sidevoice.')}}
+  else this.worker=new Worker('/voice-browser/worker.js?v='+encodeURIComponent(globalThis.sidevoiceBuildId||'dev'),{type:'module'});this.worker.onmessage=({data})=>this.receive(data);this.worker.onerror=e=>this.fail(Error(e.message||'No se pudo iniciar el motor de voz'))}
  fail(error){this.announce(error.message,this.ready?'inline':'error');this.ready=false;const job=this.job;this.note('fail',error?.message||'error');if(!job)return;this.job=null;this.stopProgress(job);this.stopClock(job);clearTimeout(job.timer);this.silence(job);this.worker?.terminate();this.worker=null;job.reject(error)}
  receive(d){const job=this.job;if(!job||d.id!==job.id)return;
   clearTimeout(job.timer);job.timer=setTimeout(()=>this.fail(Error('El modelo tardó demasiado. Vuelve a prepararlo.')),180000);
   if(d.type==='progress'){const p=d.progress;const text=p.status==='voice'?'Cargando la voz seleccionada…':p.status==='generating'?'Preparando el primer audio…':'Cargando modelo'+(p.file?' · '+p.file:'')+(p.progress!=null?' · '+Math.round(p.progress)+'%':'');job.status(text);if(!this.ready&&!job.playing)this.announce(text,'loading',p.progress??null)}
   if(d.type==='fallback'){job.status('GPU no disponible · Preparando CPU');this.announce('GPU no disponible · Preparando CPU')}
-  if(d.type==='ready'){this.ready=true;this.announce('','hidden');job.status('Modelo listo · '+(d.device==='webgpu'?'GPU':'CPU'));if(job.load)this.complete(job)}
+  if(d.type==='ready'){this.ready=true;this.announce('','hidden');job.status('Modelo listo · '+(d.device==='native'?'motor nativo':d.device==='webgpu'?'GPU':'CPU'));if(job.load)this.complete(job)}
   if(d.type==='error')this.fail(Error(d.error));
   if(d.type==='audio'){this.announce('','hidden');if(this.context.state!=='running'){this.note('audio-while-stopped',this.context.state);this.resumeOutput()}
    this.watchRate(d.sampleRate);
@@ -448,7 +451,7 @@ class RoomVoice {
    const range=chunkTextRange(job.text,d.text,job.textCursor);
    if(range){job.textCursor=range.to;job.cues.push({...range,start,end:start+buffer.duration,mode:'chunk'})}
    source.start(start);this.watchProgress(job);if(!job.playing){job.playing=true;job.onPlaying()}this.watchClock(job);
-   job.status('Voz en tu navegador · '+(d.device==='webgpu'?'GPU':'CPU'));
+   job.status(d.device==='native'?'Voz nativa en este equipo':'Voz en tu navegador · '+(d.device==='webgpu'?'GPU':'CPU'));
   }
   if(d.type==='done'){clearTimeout(job.timer);job.done=true;if(!job.sources.size)this.complete(job)}
  }
