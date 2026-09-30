@@ -103,7 +103,7 @@ jobs:
           (cd test/fixtures && python3 -m http.server 8765 --bind 127.0.0.1 > /tmp/http.log 2>&1 &)
           SIDEVOICE_DEBUG=1 "$APP/Contents/MacOS/sidevoice-desktop" > /tmp/bridge.log 2>&1 &
           PID=$!
-          for i in $(seq 1 60); do grep -q "joined: true" /tmp/bridge.log && break; sleep 1; done
+          for i in $(seq 1 60); do grep -q "mic=" /tmp/bridge.log && break; sleep 1; done
           kill "$PID" || true
           rm -rf "$CONF"
           cat /tmp/bridge.log
@@ -113,7 +113,9 @@ jobs:
           grep -q "joined: true" /tmp/bridge.log
           grep -q "desktopHost=true" /tmp/bridge.log
           echo "--- what this webview offers the in-browser models (macOS $(sw_vers -productVersion))"
-          grep -o 'webgpu=[^"]*' /tmp/bridge.log | head -1
+          grep -o 'webgpu=[^"]*' /tmp/bridge.log | tail -1
+          echo "--- microphone: the app's per-origin decision, then what the page got (informational)"
+          grep "sidevoice: media" /tmp/bridge.log || echo "(WebKit did not ask the app)"
       - name: Make the .dmg
         run: |
           set -euo pipefail

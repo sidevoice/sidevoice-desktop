@@ -32,8 +32,24 @@
     async toggleCall() { set({ call: { joined: !state.call.joined, busy: false } }); },
   };
   window.sidevoiceUI = { store };
-  // Then a call starts, as if the person had clicked "Entrar en la sala".
-  setTimeout(() => window.sidevoiceActions.toggleCall(), 1500);
+  // Then a call starts, as if the person had clicked "Entrar en la sala", and asks for the
+  // microphone the way the room does. On a CI runner nobody answers macOS's own prompt, so the
+  // outcome is informational; the app logs its own per-origin decision separately.
+  setTimeout(async () => {
+    await window.sidevoiceActions.toggleCall();
+    let mic;
+    try {
+      const stream = await Promise.race([
+        navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true }, video: false }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 15000)),
+      ]);
+      mic = "granted:" + stream.getAudioTracks().length;
+      stream.getTracks().forEach((t) => t.stop());
+    } catch (e) {
+      mic = (e && (e.name || e.message)) || String(e);
+    }
+    set({ title: diag + " mic=" + mic });
+  }, 1500);
 })();
 </script>
 </body>
