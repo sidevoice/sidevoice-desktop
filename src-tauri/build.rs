@@ -6,6 +6,11 @@ fn main() {
         "save_settings",
         "bridge_state",
         "debug_log",
+        "engine_available",
+        "engine_install",
+        "engine_progress",
+        "engine_transcribe",
+        "engine_synthesize",
     ])))
     .expect("failed to run tauri-build");
 }

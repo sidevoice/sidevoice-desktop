@@ -41,6 +41,24 @@ what the interface's own window offers — same origin, same permission rule —
     facts.push("mic=" + ((error && (error.name || error.message)) || String(error)));
   }
   await say(facts.join(" "));
+
+  // The native engine through the app itself: hardened runtime, dlopen of the downloaded package, raw-byte IPC.
+  const engine = window.__sidevoiceDesktop && window.__sidevoiceDesktop.host && window.__sidevoiceDesktop.host.nativeEngine;
+  if (!engine) { await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-engine none" }); return; }
+  try {
+    const info = await engine.available();
+    await engine.install("kokoro-82m-v1.0", "sherpa-onnx");
+    await engine.install("whisper-tiny", "sherpa-onnx");
+    const started = performance.now();
+    const audio = await engine.synthesize("kokoro-82m-v1.0", "ef_dora", 1, "Hola, esto es una prueba de voz.");
+    const spoken = performance.now() - started;
+    const text = await engine.transcribe("whisper-tiny", audio.samples, audio.sampleRate, "es");
+    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-engine ok offers=" + info.offers.length +
+      " audio=" + (audio.samples.length / audio.sampleRate).toFixed(2) + "s@" + audio.sampleRate + " synth_ms=" + Math.round(spoken) +
+      " text=" + JSON.stringify(text) });
+  } catch (error) {
+    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-engine error " + String(error && (error.message || error)) });
+  }
 })();
 </script>
 </body>

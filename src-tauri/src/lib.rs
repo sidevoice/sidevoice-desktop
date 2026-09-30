@@ -10,6 +10,7 @@
 //!   into it carry the current target. Closing it hides it; the app keeps running.
 //! - `settings`: bundled local page (`ui/index.html`): target, shortcut, diagnostics.
 
+mod engine_ipc;
 mod tray;
 
 use serde::Serialize;
@@ -264,10 +265,26 @@ pub fn run() {
                 .build(),
         )
         .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![get_settings, save_settings, bridge_state, debug_log])
+        .invoke_handler(tauri::generate_handler![
+            get_settings,
+            save_settings,
+            bridge_state,
+            debug_log,
+            engine_ipc::engine_available,
+            engine_ipc::engine_install,
+            engine_ipc::engine_progress,
+            engine_ipc::engine_transcribe,
+            engine_ipc::engine_synthesize
+        ])
         .setup(|app| {
             let handle = app.handle().clone();
             tray::create(&handle)?;
+            // Native engines and models are downloaded into the app's data directory, on demand (docs/ENGINES.md).
+            let engines_root = app.path().app_data_dir()?.join("engines");
+            app.manage(engine_ipc::EngineState::new(sidevoice_desktop_engine::NativeEngines::new(
+                sidevoice_desktop_core::engines::bundled_catalog(),
+                engines_root,
+            )));
             let stored = app.path().app_config_dir().ok().and_then(|dir| settings::load(&dir));
             *app.state::<AppState>().settings.lock().unwrap() = stored.clone();
             // First run too: the interface itself asks for a pairing code; nothing has to be set up first.

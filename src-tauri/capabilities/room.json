@@ -1,7 +1,15 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "room",
-  "description": "The room window shows only the interface bundled in the app (local pages). It may report call state to the tray, and (CI and diagnostics only, printed with SIDEVOICE_DEBUG=1) a debug line. Nothing else.",
+  "description": "The room window shows only the interface bundled in the app (local pages). It may report call state to the tray, use the native model engines (docs/ENGINES.md), and (CI and diagnostics only, printed with SIDEVOICE_DEBUG=1) print a debug line. Nothing else.",
   "windows": ["room-*"],
-  "permissions": ["allow-bridge-state", "allow-debug-log"]
+  "permissions": [
+    "allow-bridge-state",
+    "allow-debug-log",
+    "allow-engine-available",
+    "allow-engine-install",
+    "allow-engine-progress",
+    "allow-engine-transcribe",
+    "allow-engine-synthesize"
+  ]
 }

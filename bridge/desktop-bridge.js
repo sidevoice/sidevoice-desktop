@@ -27,6 +27,54 @@
       .catch(() => {});
   }
 
+  function call(command, args, options) {
+    const internals = win.__TAURI_INTERNALS__;
+    if (!internals || typeof internals.invoke !== "function") return Promise.reject(new Error("no desktop host"));
+    return Promise.resolve().then(() => internals.invoke(command, args, options));
+  }
+
+  /** Raw answers arrive as an ArrayBuffer (custom-protocol IPC) or, through the postMessage fallback, as bytes. */
+  function bufferOf(answer) {
+    if (Object.prototype.toString.call(answer) === "[object ArrayBuffer]") return answer;
+    if (ArrayBuffer.isView(answer)) return answer.buffer.slice(answer.byteOffset, answer.byteOffset + answer.byteLength);
+    if (Array.isArray(answer)) return Uint8Array.from(answer).buffer;
+    throw new Error("unexpected audio from the desktop host");
+  }
+
+  /** The app's native model engines: what this Mac can run, get it ready, run it. */
+  function nativeEngine() {
+    return {
+      version: 1,
+      /** `{device, offers: [{model, engine, task, label, languages, runs, downloadSize, accelerators, installed, voices}], pageIds}`. */
+      available: () => call("engine_available"),
+      /** Downloads the engine package and the model; `onProgress(done, total)` in bytes about twice a second. */
+      install(model, engine, onProgress) {
+        const running = call("engine_install", { model, engine: engine || "sherpa-onnx" });
+        if (typeof onProgress !== "function") return running;
+        let finished = false;
+        const poll = () => {
+          if (finished) return;
+          call("engine_progress").then(([done, total]) => { if (!finished) onProgress(done, total); }).catch(() => {});
+          win.setTimeout(poll, 500);
+        };
+        poll();
+        return running.finally(() => { finished = true; });
+      },
+      /** Mono Float32Array at `sampleRate` → text. `language` empty to detect. */
+      transcribe(model, samples, sampleRate, language) {
+        const bytes = new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength);
+        return call("engine_transcribe", bytes, {
+          headers: { "x-model": model, "x-language": language || "", "x-sample-rate": String(sampleRate) },
+        });
+      },
+      /** Text → `{samples: Float32Array, sampleRate}`. */
+      async synthesize(model, voice, speed, text) {
+        const buffer = bufferOf(await call("engine_synthesize", { model, voice, speed: speed || 1, text }));
+        return { sampleRate: new DataView(buffer).getUint32(0, true), samples: new Float32Array(buffer.slice(4)) };
+      },
+    };
+  }
+
   /** The few facts the tray needs, read from the web UI's own view model. */
   function snapshot() {
     const store = win.sidevoiceUI && win.sidevoiceUI.store;
@@ -69,9 +117,9 @@
 
   const api = {
     version: BRIDGE_VERSION,
-    /** What this host offers the page besides the webview itself. The web UI may feature-detect it.
-     *  `nativeEngine` is the seam for a native STT/TTS sidecar (docs/MODELS.md): null until one exists. */
-    host: Object.freeze({ app: "sidevoice-desktop", nativeEngine: null }),
+    /** What this host offers the page besides the webview itself. The web UI feature-detects it.
+     *  `nativeEngine`: models run natively by the app (docs/ENGINES.md). */
+    host: Object.freeze({ app: "sidevoice-desktop", nativeEngine: Object.freeze(nativeEngine()) }),
     snapshot,
     /** Runs one tray/shortcut command through the web UI's own actions. Returns whether it ran. */
     run(command) {

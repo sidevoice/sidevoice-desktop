@@ -82,6 +82,7 @@ jobs:
           codesign -d --entitlements - --xml "$APP" > /tmp/ent.xml
           cat /tmp/ent.xml; echo
           grep -q "com.apple.security.device.audio-input" /tmp/ent.xml
+          grep -q "com.apple.security.cs.disable-library-validation" /tmp/ent.xml
           echo "--- architecture"
           lipo -archs "$APP/Contents/MacOS/sidevoice-desktop" | tee /dev/stderr | grep -q arm64
       - name: First open (no settings) — the bundled interface comes up in the real WKWebView
@@ -104,13 +105,17 @@ jobs:
           APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
           SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_PAGE=probe.html "$APP/Contents/MacOS/sidevoice-desktop" > /tmp/probe.log 2>&1 &
           PID=$!
-          for i in $(seq 1 45); do grep -q "probe " /tmp/probe.log && break; sleep 1; done
+          for i in $(seq 1 240); do grep -q "probe-engine" /tmp/probe.log && break; sleep 1; done
           kill "$PID" || true
           cat /tmp/probe.log
           echo "--- macOS $(sw_vers -productVersion)"
           # Pairing needs a secure context and WebCrypto ECDSA P-256 on the app's own origin.
           grep -q "probe origin=tauri://localhost secure=true ecdsa=true" /tmp/probe.log
           grep "sidevoice: media" /tmp/probe.log || echo "(WebKit did not ask the app about the microphone)"
+          # The native engine inside the signed app: downloaded, loaded under the hardened runtime, and run
+          # through the page's IPC (Kokoro says a sentence, Whisper hears it).
+          grep -q 'probe-engine ok' /tmp/probe.log
+          grep -iq 'probe-engine ok.*prueba' /tmp/probe.log
       - name: With a target (a fake node on loopback)
         run: |
           set -euo pipefail

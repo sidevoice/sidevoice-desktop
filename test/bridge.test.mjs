@@ -37,6 +37,7 @@ function fakeWindow(origin) {
     __TAURI_INTERNALS__: { invoke: (cmd, args) => (calls.push([cmd, structuredClone(args)]), Promise.resolve()) },
     setInterval: (fn) => (timers.push(fn), timers.length),
     clearInterval: (id) => (timers[id - 1] = null),
+    setTimeout: (fn, ms) => setTimeout(fn, Math.min(ms, 5)),
   };
   return { win, calls, tick: () => timers.forEach((fn) => fn && fn()) };
 }
@@ -118,12 +119,47 @@ test("installs once per page and survives a missing Tauri runtime", async () => 
   await flush();
 });
 
-test("announces the host and the (empty) native-engine seam", () => {
+test("the native engine goes through the app's commands, audio as raw bytes", async () => {
   const install = loadFactory();
-  const { win } = fakeWindow(ORIGIN);
-  const api = install(win, ORIGIN);
-  assert.equal(api.host.app, "sidevoice-desktop");
-  assert.equal(api.host.nativeEngine, null);
+  const { win, calls } = fakeWindow(ORIGIN);
+  const answers = {
+    engine_available: { device: { os: "macos" }, offers: [], pageIds: {} },
+    engine_synthesize: (() => {
+      const buffer = new ArrayBuffer(4 + 8);
+      new DataView(buffer).setUint32(0, 24000, true);
+      new Float32Array(buffer, 4, 2).set([0.5, -0.25]);
+      return buffer;
+    })(),
+    engine_transcribe: "hola",
+    engine_install: null,
+    engine_progress: [5, 10],
+  };
+  win.__TAURI_INTERNALS__.invoke = (cmd, args, options) => {
+    calls.push([cmd, args, options]);
+    return Promise.resolve(answers[cmd]);
+  };
+  const engine = install(win, ORIGIN).host.nativeEngine;
+  assert.equal(install(win, ORIGIN).host.app, "sidevoice-desktop");
+
+  assert.equal((await engine.available()).device.os, "macos");
+
+  const samples = new Float32Array([0.1, 0.2, 0.3]);
+  assert.equal(await engine.transcribe("whisper-tiny", samples, 16000, "es"), "hola");
+  const [, body, options] = calls.find(([cmd]) => cmd === "engine_transcribe");
+  assert.ok(body.constructor.name === "Uint8Array" && body.byteLength === 12, "raw f32 bytes");
+  // (objects built inside the vm context: compare their JSON, not their prototypes)
+  assert.equal(JSON.stringify(options.headers), JSON.stringify({ "x-model": "whisper-tiny", "x-language": "es", "x-sample-rate": "16000" }));
+
+  const audio = await engine.synthesize("kokoro-82m-v1.0", "ef_dora", 1, "hola");
+  assert.equal(audio.sampleRate, 24000);
+  assert.deepEqual(Array.from(audio.samples), [0.5, -0.25]);
+
+  answers.engine_synthesize = Array.from(new Uint8Array(answers.engine_synthesize));
+  assert.equal((await engine.synthesize("kokoro-82m-v1.0", "ef_dora", 1, "x")).sampleRate, 24000, "postMessage fallback");
+
+  const seen = [];
+  await engine.install("whisper-tiny", undefined, (done, total) => seen.push([done, total]));
+  assert.equal(JSON.stringify(calls.find(([cmd]) => cmd === "engine_install")[1]), JSON.stringify({ model: "whisper-tiny", engine: "sherpa-onnx" }));
 });
 
 test("works on the app's own pages, whose origin may be opaque", () => {

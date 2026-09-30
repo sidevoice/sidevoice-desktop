@@ -5,5 +5,12 @@
   <!-- Hardened runtime: the microphone is only reachable with this entitlement. Not sandboxed. -->
   <key>com.apple.security.device.audio-input</key>
   <true/>
+  <!-- Native model engines are downloaded at run time (docs/ENGINES.md) and loaded with dlopen. Under the
+       hardened runtime, library validation only admits libraries signed by the app's own team, and this
+       build is ad-hoc signed (no team), so it is turned off. What limits what can be loaded instead: the app
+       only loads packages the catalog pins by SHA-256, from its own data directory. A Developer ID build
+       could keep validation on by re-signing the engine packages it ships (docs/MACOS.md). -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
 </dict>
 </plist>
