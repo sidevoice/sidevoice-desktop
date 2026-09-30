@@ -35,6 +35,8 @@ class BrowserTranscription{
  _ensureWorker(device){
   const native=device===undefined?!!this.native:device==='native';
   if(this.worker&&!!this.native===native)return;
+  // Whatever was waiting on the worker being replaced will never be answered: say so rather than hang.
+  for(const request of this.pending.values())request.reject(Error('Se cambió el motor de transcripción.'));this.pending.clear();
   this.worker?.terminate();this.worker=null;this.native=native;
   if(native){this.worker=globalThis.sidevoiceNativeWorkers?.transcription?.()||null;if(!this.worker){this.native=false;throw Error('El motor nativo solo está en la app de escritorio de Sidevoice.')}}
   else this.worker=new Worker('/voice-browser/stt-worker.js?v='+encodeURIComponent(globalThis.sidevoiceBuildId||'dev'),{type:'module'});
@@ -55,7 +57,14 @@ class BrowserTranscription{
   return new Promise((resolve,reject)=>{this.pending.set(id,{resolve,reject,progress});this.worker.postMessage({id,type,...data},transfer)});
  }
  /* What this browser can run in the page (never the native engine's list: that one is the app's). */
- async capabilities(){return this._request('capabilities',{device:'browser'})}
+ async capabilities(){
+  if(!this.native)return this._request('capabilities',{device:'browser'});
+  // The native engine is in use: ask the page's own engine in a Worker of its own, so a transcription in flight
+  // on the native one is never cut short by someone opening the settings.
+  const probe=new Worker('/voice-browser/stt-worker.js?v='+encodeURIComponent(globalThis.sidevoiceBuildId||'dev'),{type:'module'});
+  try{return await new Promise((resolve,reject)=>{probe.onmessage=({data})=>data.type==='error'?reject(Error(data.error)):data.type==='capabilities'&&resolve(data.capabilities);probe.onerror=e=>reject(Error(e.message||'capabilities'));probe.postMessage({id:1,type:'capabilities'})})}
+  finally{probe.terminate()}
+ }
  _preparation(data){window.dispatchEvent(new CustomEvent('voice-preparation',{detail:{kind:'transcription',...data}}))}
  _progress(value){
   const numeric=Number(value?.progress),file=String(value?.file||'').split('/').pop();
