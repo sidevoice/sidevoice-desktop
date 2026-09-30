@@ -7,9 +7,9 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 
 | Where | What |
 |---|---|
-| `bridge/desktop-bridge.js` | Injected by the app into every page of the room window, before the page's own scripts. Bound to one origin. |
+| `bridge/desktop-bridge.js` | Injected by the app into every page of the room window, before the page's own scripts. Bound to the app's own origin (the bundled interface). |
 | `src-tauri/core/src/bridge.rs` | The contract on the Rust side: `CallSnapshot`, `Command`, and how the tray renders a snapshot. Unit-tested. |
-| `src-tauri/src/lib.rs` | Wiring: the `bridge_state` command, `send(Command)`, the runtime capability. |
+| `src-tauri/src/lib.rs` | Wiring: the `bridge_state` command, `send(Command)`; `capabilities/room.json`. |
 | `src-tauri/src/tray.rs` | The menu-bar icon and its menu. |
 
 ## What the bridge reads and calls in the web UI
@@ -43,13 +43,11 @@ ticks often; unchanged snapshots are not re-sent). The app also resets to `ready
 every navigation of the room window.
 
 Who may call it:
-- A **runtime capability** (`room-bridge-<window>`) grants `allow-bridge-state` — and nothing
-  else — to the room window for the pattern `<configured origin>/*`. It is added when the room
-  window is created (`open_room`). There is no static capability for the room window.
-- The command re-checks that the caller is the current room window and that its URL's origin is
-  the configured one.
+- `capabilities/room.json` grants `allow-bridge-state` (and `allow-debug-log`, printed only with
+  `SIDEVOICE_DEBUG=1`) to the room windows (`room-*`), for the app's own (local) pages only.
+- The command re-checks that the caller is the current room window and that its page is the app's own origin.
 
-So the room page can report call state and cannot read or change settings.
+The room window never shows a remote page, so no remote origin can call it.
 
 ## App → page
 

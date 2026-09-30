@@ -19,8 +19,8 @@ A `getUserMedia` call in the room page has to pass four gates. Each one is handl
 
 | Gate | What it needs | Where |
 |---|---|---|
-| Secure context | The page is `https://` (or `http://localhost`) | Settings refuse any other URL (`core/src/settings.rs`) |
-| WebKit's per-origin decision | A `WKUIDelegate` answer for the origin | `on_permission_request` in `open_room` → `core/src/media.rs`: microphone **granted for the configured room origin only**, camera and every other origin denied. (wry's default, with no handler, grants everything to every page.) |
+| Secure context | The page is a secure context | The bundled interface on `tauri://localhost` is one (verified in CI) |
+| WebKit's per-origin decision | A `WKUIDelegate` answer for the origin | `on_permission_request` in `open_room` → `core/src/media.rs`: microphone **granted to the app's own pages only** (the bundled interface), camera and anything else denied. (wry's default, with no handler, grants everything to every page.) |
 | App privacy (TCC) | `NSMicrophoneUsageDescription` in `Info.plist` — without it macOS kills the app on first capture | `src-tauri/Info.plist`, merged by the bundler; CI checks it is in the built app |
 | Hardened runtime | `com.apple.security.device.audio-input` entitlement | `src-tauri/Entitlements.plist`; CI checks it is in the signature |
 
@@ -34,15 +34,8 @@ WKWebView implements it with the system voice-processing unit.
 
 ## Sign-in
 
-The operator's room sits behind oauth2-proxy with Google sign-in. Google refuses sign-in from
-browsers it takes for an embedded webview, and WKWebView's default user agent lacks Safari's
-`Version/… Safari/…` tokens. The room window therefore sends Safari's user agent
-(`MAC_USER_AGENT` in `src/lib.rs`). The login cookie lives in the webview's persistent store and
-survives restarts.
-
-If Google ever blocks it anyway, the fallback is to sign in with a flow that ends in the app —
-e.g. the room issuing a device token via pairing (the architecture's "auth = pairing"), not a
-browser cookie. Not built.
+None. The app shows its own bundled interface and a device is admitted by pairing with the node (a one-time code
+the node issues; docs/TARGETS.md). There is no oauth2-proxy or Google login in the app.
 
 ## Background behaviour
 

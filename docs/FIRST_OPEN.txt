@@ -11,10 +11,10 @@ macOS la bloquea la primera vez; se abre así:
    Ajustes del Sistema → Privacidad y seguridad → baja hasta "Sidevoice se ha bloqueado…"
    → "Abrir igualmente". En macOS 14 o anterior también vale clic derecho → Abrir.
 3. Abre Sidevoice desde Finder, Launchpad o Spotlight (no ejecutando el binario desde Terminal:
-   así macOS atribuiría el micrófono a Terminal). La primera vez pide la dirección de la sala
-   (viene rellena con la tuya) → "Guardar y abrir la sala". Si cierras esa ventana sin guardar,
-   la app se cierra.
-4. Inicia sesión en la sala como en el navegador.
+   así macOS atribuiría el micrófono a Terminal). Se abre la interfaz de Sidevoice.
+4. Empareja este Mac con tu máquina: pide a tu agente «empareja un dispositivo» (o ejecuta
+   `sidevoice pair-device` en la máquina). Te da un código de un solo uso (y un QR). En
+   Sidevoice → Configuración → Máquinas → Emparejar, pega el código.
 5. Pulsa "Entrar en la sala": macOS pregunta por el micrófono → Permitir.
 
 Si el micrófono se denegó por error: Ajustes del Sistema → Privacidad y seguridad →

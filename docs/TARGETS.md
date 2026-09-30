@@ -1,65 +1,52 @@
-# What the app talks to: a room, or a node
+# What the app shows, and what it talks to
 
-Since the client/server split (rubasace/sidevoice `docs/RENDEZVOUS.md`, sidevoice/sidevoice-core) a client
-talks to one of two things. Settings → "Con qué hablas" picks it.
+Operator's decisions of 2026-09-30:
+- The desktop app **bundles the web interface** (the client from rubasace/sidevoice's split branch). It never
+  loads a remote page. The interface is a secret-free static client; the same build is also a standalone static
+  site (rubasace/sidevoice `deploy/web-static/`) for people who cannot install the app.
+- **Auth is device pairing** with the node: the node issues a one-time code (its agent shows it with the MCP
+  tool `voice_pair_device`, or `sidevoice pair-device` on the machine), and the person pastes it in the
+  interface (Máquinas → Emparejar). The code carries the node's id, how to reach it (its own URLs and/or a
+  rendezvous room), a one-time secret and the fingerprint of the node's identity key, which the interface pins.
+  Contract: rubasace/sidevoice `docs/DEVICE_PAIRING.md`.
+- No oauth2-proxy / Google sign-in in the app. The deployed room at room.example.invalid is not a target any more.
 
-| Kind | Example | What the window shows | Target |
-|---|---|---|---|
-| **Room** | `https://room.example.invalid` (today's), a split room (rendezvous + relay) | The room's own page (`/voice/`), remote | The page's own origin |
-| **Node** | `http://127.0.0.1:8768` (the core the connector starts on this Mac), a reachable node over https | The interface bundled in the app (`ui/voice/`), local | `window.__SIDEVOICE_TARGET__` = the node's URL |
+## The window
 
-## Why a room opens the room's page
+`room-N` shows `tauri://localhost/voice/index.html` (Windows: `http://tauri.localhost/voice/index.html`), the
+interface vendored in `ui/voice/` and `ui/voice-browser/` in the layout rubasace/sidevoice's
+`scripts/assemble-static-web.mjs` defines (`scripts/vendor-web.mjs` here calls it; provenance in
+`ui/voice/web-source.json`). The in-browser models' WebAssembly (`ui/voice-browser/assets/`, 50 MB) comes from
+pinned npm packages at build time (`scripts/web-assets.mjs`), not from git.
 
-- It works with **every** room: the deployed one (before the split, no `/api/rendezvous`), and the split's
-  rendezvous room. The page it serves is the version that room expects.
-- Sign-in keeps working: the operator's room sits behind oauth2-proxy + Google, whose cookie belongs to the
-  room's origin. A bundled page on `tauri://localhost` calling the room cross-origin would carry no cookie
-  (WKWebView blocks third-party cookies) and every call would bounce to Google.
-- The pairing panel is the room's: "Emparejar máquina" shows a code from that room.
+The window only ever navigates within the app's own pages; the microphone is granted to them only; the bridge
+(`docs/BRIDGE.md`) is bound to them.
 
-`__SIDEVOICE_TARGET__` is not set for a room: a page served by its target resolves the target to its own
-origin (`resolveTarget` in the web client), which is the same thing.
+## The target (optional)
 
-## A node opens the bundled interface
+Settings → "Dónde mirar primero": a node (`http://127.0.0.1:8768` for the core on this Mac) or a rendezvous room
+(`https://…`). The app injects it as `window.__SIDEVOICE_TARGET__` (the web client contract) into the app's own
+pages only. Empty is fine: the pairing code says where the machine is. A standalone static deployment sets it by
+writing `/voice/target.js` (`SIDEVOICE_TARGET` in the nginx image).
 
-The node serves no page (by design: sidevoice-core's handover). The app ships the web interface, vendored
-from rubasace/sidevoice (`scripts/vendor-web.mjs`, provenance in `ui/voice/web-source.json`) at the paths
-the room serves it from (`/voice/`, `/voice-browser/`, `/voice/mic_capture.js`), and injects:
+`https://`, or `http://` only on this machine (a secure page may not call plain http elsewhere).
 
-```js
-if (location.protocol + '//' + location.host === "tauri://localhost") { window.__SIDEVOICE_TARGET__ = "http://127.0.0.1:8768"; }
-```
+## What the node and the room accept from the app
 
-The web client then asks `GET <target>/api/rendezvous` → `{kind: 'node', …}` and sends every request and the
-call socket to the node, cross-origin.
+- The node (sidevoice-core) accepts the app's origins (`tauri://localhost`, `http(s)://tauri.localhost`) in its
+  origin check without configuration and answers CORS for them, preflights included.
+- Everything the interface calls on a node requires the device token from pairing (`Authorization: Bearer …`;
+  the call socket carries it as a WebSocket subprotocol). Only discovery, redeeming a code and the identity
+  proof are open. The room relays requests and the socket to the node and passes the token through; it checks
+  nothing itself — the node does, end to end — and no longer lists nodes or machines to pages.
 
-What makes cross-origin work (sidevoice-core `c0060a3`):
-- the core accepts the app's own origins (`tauri://localhost`; Windows `http(s)://tauri.localhost`) in its
-  origin check without configuration — only an app installed on the machine carries them, and anything
-  installed there already reaches loopback;
-- the core answers CORS (and preflights, and Chromium's private-network preflight) for the origins it accepts;
-- the call socket is a WebSocket: the core's origin check is what applies.
+## Verified in CI (real WKWebView, macOS 14 runner)
 
-A node on another machine needs https (mixed content) and the node's `SIDEVOICE_ALLOWED_HOSTS`.
-
-### Pairing, pointed at a node
-
-In a room, "Emparejar máquina" pairs *another* machine with the room. Pointed at a node, the page is talking
-to the machine itself, so the panel pairs **this machine with a room** instead (room address + the code that
-room shows): `POST <node>/api/rendezvous/pair` → the core asks its connector (`pair.request`) → the connector
-does what `voice_pair` does and writes `credentials.json` → the core's rendezvous dials the new room at once.
-The panel also shows which room the machine is paired with and whether the link is up.
-
-## The app's side
-
-- `src-tauri/core/src/settings.rs`: `TargetKind`, `page_origin`, `target_script`, `url_origin` (the
-  WHATWG origin of `tauri://localhost` is opaque; pages report `scheme://host`, and so do these).
-- `src-tauri/src/lib.rs` `open_room`: remote URL vs `WebviewUrl::App("voice/index.html")`; the bridge
-  capability is remote (room origin) or local (app pages); the microphone rule and navigation follow the
-  page origin.
-- The bundled interface's in-browser models need ONNX Runtime and espeak-ng WebAssembly at
-  `/voice-browser/assets/`: `scripts/web-assets.mjs` copies them from the pinned npm packages before each
-  build (not committed; 50 MB).
+- First open with no settings: the bundled interface loads and its controller comes up (the bridge reports
+  `ready`).
+- The interface's window is a secure context; WebCrypto ECDSA P-256 (what pinning needs) works; the microphone
+  is granted to the app's origin (probe page, same window and rule).
+- With a target, the interface calls it cross-origin with `Origin: tauri://localhost` (fake node).
 
 ## Updating the bundled interface
 
@@ -69,5 +56,5 @@ W=<rubasace/sidevoice checkout>
 node scripts/vendor-web.mjs $W
 ```
 
-If `onnxruntime-web` or `espeak-ng` change version in `packages/browser-audio`, change the exact versions in
-this repo's `package.json` too.
+If `onnxruntime-web` or `espeak-ng` change version in `packages/browser-audio`, change the exact versions in this
+repo's `package.json` too.
