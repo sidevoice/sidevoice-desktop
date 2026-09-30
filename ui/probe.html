@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><title>Sidevoice · sonda (CI)</title></head>
+<body>
+<p>CI only: loaded into the room window with SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_PAGE=probe.html, to measure
+what the interface's own window offers — same origin, same permission rule — and print it through debug_log.</p>
+<script>
+(async () => {
+  const say = (line) => window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe " + line });
+  const facts = [];
+  facts.push("origin=" + location.protocol + "//" + location.host);
+  facts.push("secure=" + window.isSecureContext);
+  // Pairing verifies the node's identity with WebCrypto ECDSA P-256 (rubasace/sidevoice docs/DEVICE_PAIRING.md).
+  try {
+    const keys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+    const data = new TextEncoder().encode("sidevoice-node-identity:probe");
+    const signature = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, keys.privateKey, data);
+    const spki = await crypto.subtle.exportKey("spki", keys.publicKey);
+    const imported = await crypto.subtle.importKey("spki", spki, { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
+    const ok = await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, imported, signature, data);
+    facts.push("ecdsa=" + ok);
+  } catch (error) {
+    facts.push("ecdsa=error:" + (error && error.name));
+  }
+  try {
+    const adapter = navigator.gpu ? await navigator.gpu.requestAdapter() : null;
+    facts.push("webgpu=" + (adapter ? "adapter" : navigator.gpu ? "api-without-adapter" : "none"));
+  } catch (error) {
+    facts.push("webgpu=error");
+  }
+  facts.push("wasm=" + (typeof WebAssembly === "object"));
+  facts.push("audioWorklet=" + (typeof AudioWorkletNode === "function"));
+  try {
+    const stream = await Promise.race([
+      navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true }, video: false }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 15000)),
+    ]);
+    facts.push("mic=granted:" + stream.getAudioTracks().length);
+    stream.getTracks().forEach((t) => t.stop());
+  } catch (error) {
+    facts.push("mic=" + ((error && (error.name || error.message)) || String(error)));
+  }
+  await say(facts.join(" "));
+})();
+</script>
+</body>
+</html>

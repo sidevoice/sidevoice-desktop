@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "room",
+  "description": "The room window shows only the interface bundled in the app (local pages). It may report call state to the tray, and (CI and diagnostics only, printed with SIDEVOICE_DEBUG=1) a debug line. Nothing else.",
+  "windows": ["room-*"],
+  "permissions": ["allow-bridge-state", "allow-debug-log"]
+}

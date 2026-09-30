@@ -1,20 +1,23 @@
-//! Sidevoice desktop: a Tauri shell whose main window loads the configured room (or node) and
-//! whose tray drives the call through the web UI's own actions (docs/BRIDGE.md).
+//! Sidevoice desktop: a Tauri shell around the Sidevoice web interface, bundled in the app, whose tray drives
+//! the call through the interface's own actions (docs/BRIDGE.md).
+//!
+//! The interface is a secret-free client: it talks to a node or a rendezvous room it was paired with (the node
+//! issues a one-time code; rubasace/sidevoice docs/DEVICE_PAIRING.md), told where to look first through
+//! `window.__SIDEVOICE_TARGET__` (docs/TARGETS.md). No remote page is ever loaded.
 //!
 //! Windows:
-//! - `room-N`: the room page, remote. Created per configured URL (N grows), so the bridge script
-//!   injected into it is bound to exactly one origin. Closing it hides it; the app keeps running.
-//! - `settings`: bundled local page (`ui/`), first run and "Ajustes…".
+//! - `room-N`: the bundled interface. Created again when the target changes (N grows), so the scripts injected
+//!   into it carry the current target. Closing it hides it; the app keeps running.
+//! - `settings`: bundled local page (`ui/index.html`): target, shortcut, diagnostics.
 
 mod tray;
 
 use serde::Serialize;
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
-use sidevoice_desktop_core::settings::{Settings, TargetKind};
+use sidevoice_desktop_core::settings::{Settings, APP_ORIGIN};
 use sidevoice_desktop_core::{media, settings};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
-use tauri::ipc::CapabilityBuilder;
 use tauri::utils::config::BackgroundThrottlingPolicy;
 use tauri::webview::{PageLoadEvent, PermissionKind, PermissionResponse};
 use tauri::{AppHandle, Manager, State, Webview, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
@@ -23,15 +26,8 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 const SETTINGS_LABEL: &str = "settings";
 const ROOM_PREFIX: &str = "room-";
 /// The web interface bundled in the app (vendored from rubasace/sidevoice, `scripts/vendor-web.mjs`), at the
-/// paths the room serves it from, so its absolute `/voice/…` and `/voice-browser/…` URLs resolve.
+/// paths a room serves it from, so its absolute `/voice/…` and `/voice-browser/…` URLs resolve.
 const BUNDLED_INTERFACE: &str = "voice/index.html";
-
-/// Safari's own user agent. WKWebView's default one lacks the `Version/… Safari/…` tokens, and
-/// Google sign-in (behind the operator's room, via oauth2-proxy) refuses browsers it takes for an
-/// embedded webview. See docs/MACOS.md → "Inicio de sesión".
-#[cfg(target_os = "macos")]
-const MAC_USER_AGENT: &str =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
 
 #[derive(Default)]
 struct AppState {
@@ -45,10 +41,9 @@ struct AppState {
 #[serde(rename_all = "camelCase")]
 struct SettingsInfo {
     settings: Settings,
-    /// What each kind's address field starts with.
-    default_room_url: &'static str,
-    default_node_url: &'static str,
     first_run: bool,
+    /// Diagnostics on (`SIDEVOICE_DEBUG=1`): the settings page then also reports what its webview offers.
+    debug: bool,
     app_version: String,
 }
 
@@ -65,9 +60,8 @@ fn get_settings(app: AppHandle, state: State<'_, AppState>) -> SettingsInfo {
     debug(&format!("get_settings (first run: {})", stored.is_none()));
     SettingsInfo {
         first_run: stored.is_none(),
-        settings: stored.unwrap_or_default(),
-        default_room_url: settings::DEFAULT_ROOM_URL,
-        default_node_url: settings::DEFAULT_NODE_URL,
+        settings: stored.unwrap_or_else(Settings::first_run),
+        debug: debugging(),
         app_version: app.package_info().version.to_string(),
     }
 }
@@ -86,10 +80,9 @@ async fn save_settings(app: AppHandle, state: State<'_, AppState>, settings: Set
     let previous = state.settings.lock().unwrap().replace(settings.clone());
     let warning = apply_shortcut(&app, &settings.mute_shortcut).err();
 
-    let room_changed =
-        previous.as_ref().map(|p| p.room_url != settings.room_url || p.kind != settings.kind).unwrap_or(true);
-    if room_changed || room_window(&app).is_none() {
-        open_room(&app, &settings).map_err(|e| format!("No se pudo abrir la sala: {e}"))?;
+    let target_changed = previous.as_ref().map(|p| p.target != settings.target).unwrap_or(true);
+    if target_changed || room_window(&app).is_none() {
+        open_room(&app, &settings).map_err(|e| format!("No se pudo abrir la ventana: {e}"))?;
     }
     show_room(&app);
     if warning.is_none() {
@@ -100,8 +93,8 @@ async fn save_settings(app: AppHandle, state: State<'_, AppState>, settings: Set
     Ok(SaveResult { settings, warning })
 }
 
-/// Called by the bridge script in the room page. Only the room window, on the configured origin,
-/// may call it (runtime capability + the check below).
+/// Called by the bridge script in the interface. Only the current room window, on the app's own pages, may
+/// call it (capabilities/room.json + the check below).
 #[tauri::command]
 fn bridge_state(
     app: AppHandle,
@@ -114,11 +107,10 @@ fn bridge_state(
         debug(&format!("bridge_state refused: window {}", webview.label()));
         return Err("not the room window".into());
     }
-    let expected = state.settings.lock().unwrap().as_ref().and_then(|s| settings::page_origin(s).ok());
     let actual = webview.url().map(|u| settings::url_origin(&u)).ok();
-    if expected.is_none() || expected != actual {
-        debug(&format!("bridge_state refused: origin {actual:?}, expected {expected:?}"));
-        return Err("not the configured room origin".into());
+    if actual.as_deref() != Some(APP_ORIGIN) {
+        debug(&format!("bridge_state refused: origin {actual:?}"));
+        return Err("not the app's own page".into());
     }
     debug(&format!("bridge_state {snapshot:?}"));
     *state.call.lock().unwrap() = snapshot.clone();
@@ -126,11 +118,21 @@ fn bridge_state(
     Ok(())
 }
 
-/// Diagnostics on stderr, only with `SIDEVOICE_DEBUG=1` (CI's smoke test reads them).
+fn debugging() -> bool {
+    std::env::var_os("SIDEVOICE_DEBUG").is_some_and(|v| v == "1")
+}
+
+/// Diagnostics on stderr, only with `SIDEVOICE_DEBUG=1` (CI's smoke tests read them).
 fn debug(message: &str) {
-    if std::env::var_os("SIDEVOICE_DEBUG").is_some_and(|v| v == "1") {
+    if debugging() {
         eprintln!("sidevoice: {message}");
     }
+}
+
+/// A line from a page's diagnostics (the settings page, the CI probe), printed only with `SIDEVOICE_DEBUG=1`.
+#[tauri::command]
+fn debug_log(line: String) {
+    debug(&format!("page says: {}", line.chars().take(2000).collect::<String>()));
 }
 
 fn room_window(app: &AppHandle) -> Option<WebviewWindow> {
@@ -151,27 +153,15 @@ fn reset_call_state(app: &AppHandle) {
     tray::update(app, &snapshot);
 }
 
-/// (Re)creates the room window for the configured target: a room's own page, or — for a node — the interface
-/// bundled in the app, told its target. Either way bound to exactly one page origin.
+/// (Re)creates the room window: the bundled interface, told its target, bound to the app's own pages.
 fn open_room(app: &AppHandle, settings: &Settings) -> tauri::Result<()> {
-    let fail = |e: settings::SettingsError| tauri::Error::Anyhow(e.into());
-    let origin = settings::page_origin(settings).map_err(fail)?;
-    let node = settings.kind == TargetKind::Node;
-
     let state = app.state::<AppState>();
     let label = format!("{ROOM_PREFIX}{}", state.room_counter.fetch_add(1, Ordering::SeqCst) + 1);
-
-    // The page may report call state, and nothing else. Bound to this window and its page's origin only:
-    // the room's (a remote URL pattern), or the app's own pages (local, the default for a capability).
-    let capability = CapabilityBuilder::new(format!("room-bridge-{label}")).window(label.clone());
-    let capability =
-        if node { capability } else { capability.remote(settings::remote_pattern(&settings.room_url).map_err(fail)?) };
-    app.add_capability(capability.permission("allow-bridge-state"))?;
-
-    let page = if node {
-        WebviewUrl::App(BUNDLED_INTERFACE.into())
-    } else {
-        WebviewUrl::External(settings.room_url.parse().map_err(|e: url::ParseError| tauri::Error::Anyhow(e.into()))?)
+    // CI only: `SIDEVOICE_DEBUG_PAGE=probe.html` loads the probe page into this same window, to measure what the
+    // interface's window offers (secure context, WebCrypto, microphone) with this window's own permission rule.
+    let page = match std::env::var("SIDEVOICE_DEBUG_PAGE") {
+        Ok(probe) if debugging() && probe == "probe.html" => probe,
+        _ => BUNDLED_INTERFACE.to_string(),
     };
 
     if let Some(old) = room_window(app) {
@@ -180,29 +170,24 @@ fn open_room(app: &AppHandle, settings: &Settings) -> tauri::Result<()> {
     *state.room_label.lock().unwrap() = Some(label.clone());
     reset_call_state(app);
 
-    // The origin of the page the room window has committed to, kept from the page-load events so
-    // the permission handler never has to query the webview re-entrantly from WebKit's delegate.
+    // The origin of the page the window has committed to, kept from the page-load events so the permission
+    // handler never has to query the webview re-entrantly from WebKit's delegate.
     let committed_origin: Arc<Mutex<Option<String>>> = Arc::default();
     let committed_for_load = committed_origin.clone();
     let page_app = app.clone();
-    let room_origin = origin.clone();
-    let navigation_origin = origin.clone();
-    let mut builder = WebviewWindowBuilder::new(app, &label, page)
+    let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(page.into()))
         .title("Sidevoice")
         .inner_size(1100.0, 760.0)
         .min_inner_size(420.0, 560.0)
-        .initialization_script(bridge::script_for_origin(&origin));
+        .initialization_script(bridge::script_for_origin(APP_ORIGIN));
     if let Some(target) = settings::target_script(settings) {
         builder = builder.initialization_script(target);
     }
-    let builder = builder
+    builder
         // A hidden window still carries the call: never suspend or throttle its page.
         .background_throttling(BackgroundThrottlingPolicy::Disabled)
-        // The room and its sign-in pages (oauth2-proxy, Google); never local files or app schemes.
-        // For a node, also the app's own pages (the bundled interface), and no other app page.
-        .on_navigation(move |url| {
-            media::navigation_allowed(url.scheme()) || (node && settings::url_origin(url) == navigation_origin)
-        })
+        // Only the app's own pages: the interface never navigates away (a link elsewhere goes nowhere).
+        .on_navigation(|url| media::navigation_allowed(url.scheme(), &settings::url_origin(url), APP_ORIGIN))
         .on_permission_request(move |_webview, kind| {
             let capture = match kind {
                 PermissionKind::Microphone => media::Capture::Microphone,
@@ -210,7 +195,7 @@ fn open_room(app: &AppHandle, settings: &Settings) -> tauri::Result<()> {
                 _ => media::Capture::Other,
             };
             let page = committed_origin.lock().unwrap().clone();
-            let decision = media::decide(capture, page.as_deref(), &room_origin);
+            let decision = media::decide(capture, page.as_deref(), APP_ORIGIN);
             debug(&format!("media {capture:?} for {page:?}: {decision:?}"));
             match decision {
                 media::Decision::Allow => PermissionResponse::Allow,
@@ -224,10 +209,8 @@ fn open_room(app: &AppHandle, settings: &Settings) -> tauri::Result<()> {
                 debug(&format!("page {}", payload.url()));
                 reset_call_state(&page_app);
             }
-        });
-    #[cfg(target_os = "macos")]
-    let builder = builder.user_agent(MAC_USER_AGENT);
-    builder.build()?;
+        })
+        .build()?;
     Ok(())
 }
 
@@ -281,21 +264,18 @@ pub fn run() {
                 .build(),
         )
         .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![get_settings, save_settings, bridge_state])
+        .invoke_handler(tauri::generate_handler![get_settings, save_settings, bridge_state, debug_log])
         .setup(|app| {
             let handle = app.handle().clone();
             tray::create(&handle)?;
             let stored = app.path().app_config_dir().ok().and_then(|dir| settings::load(&dir));
             *app.state::<AppState>().settings.lock().unwrap() = stored.clone();
-            match stored {
-                Some(s) => {
-                    if let Err(e) = apply_shortcut(&handle, &s.mute_shortcut) {
-                        eprintln!("sidevoice: {e}");
-                    }
-                    open_room(&handle, &s)?;
-                }
-                None => open_settings(&handle),
+            // First run too: the interface itself asks for a pairing code; nothing has to be set up first.
+            let current = stored.unwrap_or_else(Settings::first_run);
+            if let Err(e) = apply_shortcut(&handle, &current.mute_shortcut) {
+                eprintln!("sidevoice: {e}");
             }
+            open_room(&handle, &current)?;
             Ok(())
         })
         .on_window_event(|window, event| {

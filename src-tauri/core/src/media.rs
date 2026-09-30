@@ -1,9 +1,8 @@
-//! Who may capture media in, and navigate, the room window.
+//! Who may capture media in, and navigate, the room window (the bundled interface).
 //!
 //! wry's WKWebView delegate grants every camera and microphone request from any page when the app
 //! sets no handler. The room window sets one: the microphone is granted without a WebKit prompt to
-//! the configured room origin only; the camera, and every other origin (sign-in pages, anything a
-//! link leads to), are denied. macOS still asks the person once for the app itself (TCC, with
+//! the app's own pages only (the bundled interface); the camera, and anything else, are denied. macOS still asks the person once for the app itself (TCC, with
 //! `NSMicrophoneUsageDescription`); that prompt cannot and should not be skipped.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,18 +26,18 @@ pub fn decide(capture: Capture, page_origin: Option<&str>, room_origin: &str) ->
     }
 }
 
-/// Which navigations the room window allows, by URL scheme. wry asks for every frame, so the
-/// schemes iframes use (sign-in widgets, the room's own blobs) must pass; `file:` and the app's
-/// own schemes must not, so a remote page cannot open local files or the app's bundled pages.
-pub fn navigation_allowed(scheme: &str) -> bool {
-    matches!(scheme, "https" | "http" | "about" | "blob" | "data")
+/// Which navigations the room window allows: the app's own pages, and the schemes a page's own frames and
+/// objects use. wry asks for every frame. Never another site, a local file or another app scheme: the window
+/// only ever shows the bundled interface.
+pub fn navigation_allowed(scheme: &str, origin: &str, app_origin: &str) -> bool {
+    origin == app_origin || matches!(scheme, "about" | "blob" | "data")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const ROOM: &str = "https://voice.example.com";
+    const ROOM: &str = "tauri://localhost";
 
     #[test]
     fn microphone_only_for_the_room() {
@@ -50,12 +49,21 @@ mod tests {
     }
 
     #[test]
-    fn navigation_schemes() {
-        for ok in ["https", "http", "about", "blob", "data"] {
-            assert!(navigation_allowed(ok), "{ok}");
+    fn navigation_stays_on_the_app_s_pages() {
+        const APP: &str = "tauri://localhost";
+        assert!(navigation_allowed("tauri", APP, APP));
+        for (scheme, origin) in [("about", "null"), ("blob", "null"), ("data", "null")] {
+            assert!(navigation_allowed(scheme, origin, APP), "{scheme}");
         }
-        for no in ["file", "tauri", "ipc", "asset", "javascript", "ftp", ""] {
-            assert!(!navigation_allowed(no), "{no}");
+        for (scheme, origin) in [
+            ("https", "https://evil.example"),
+            ("http", "http://127.0.0.1:8768"),
+            ("file", "null"),
+            ("tauri", "tauri://other"),
+            ("ipc", "ipc://localhost"),
+            ("javascript", "null"),
+        ] {
+            assert!(!navigation_allowed(scheme, origin, APP), "{scheme} {origin}");
         }
     }
 

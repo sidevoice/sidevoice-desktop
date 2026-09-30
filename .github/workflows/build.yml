@@ -84,60 +84,50 @@ jobs:
           grep -q "com.apple.security.device.audio-input" /tmp/ent.xml
           echo "--- architecture"
           lipo -archs "$APP/Contents/MacOS/sidevoice-desktop" | tee /dev/stderr | grep -q arm64
-      - name: Smoke test (the app starts and stays up)
+      - name: First open (no settings) — the bundled interface comes up in the real WKWebView
         run: |
           set -euo pipefail
           APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
           SIDEVOICE_DEBUG=1 "$APP/Contents/MacOS/sidevoice-desktop" > /tmp/app.log 2>&1 &
           PID=$!
-          sleep 20
+          for i in $(seq 1 45); do grep -q "ready: true" /tmp/app.log && break; sleep 1; done
+          sleep 5
           if ! kill -0 "$PID" 2>/dev/null; then echo "The app exited on its own:"; cat /tmp/app.log; exit 1; fi
           kill "$PID"; cat /tmp/app.log
-          # First run: the bundled settings window loaded and reached the app over IPC.
-          grep -q "get_settings (first run: true)" /tmp/app.log
-      - name: Bridge test in the real WKWebView (fake room on loopback)
+          # The interface loaded from the app itself, and its controller came up: the bridge attached to the
+          # real web UI's store and actions, and reached the app over IPC.
+          grep -q "page tauri://localhost/voice/index.html" /tmp/app.log
+          grep -q "ready: true" /tmp/app.log
+      - name: What the interface's window offers (probe page, same origin and permission rule)
         run: |
           set -euo pipefail
           APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
-          CONF="$HOME/Library/Application Support/dev.sidevoice.desktop"
-          mkdir -p "$CONF"
-          printf '{"roomUrl":"http://127.0.0.1:8765/","muteShortcut":""}' > "$CONF/settings.json"
-          (cd test/fixtures && python3 -m http.server 8765 --bind 127.0.0.1 > /tmp/http.log 2>&1 &)
-          SIDEVOICE_DEBUG=1 "$APP/Contents/MacOS/sidevoice-desktop" > /tmp/bridge.log 2>&1 &
+          SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_PAGE=probe.html "$APP/Contents/MacOS/sidevoice-desktop" > /tmp/probe.log 2>&1 &
           PID=$!
-          for i in $(seq 1 60); do grep -q "mic=" /tmp/bridge.log && break; sleep 1; done
+          for i in $(seq 1 45); do grep -q "probe " /tmp/probe.log && break; sleep 1; done
           kill "$PID" || true
-          rm -rf "$CONF"
-          cat /tmp/bridge.log
-          # The page's injected script reached the app over IPC from a remote origin, the runtime
-          # capability let it through, and the store subscription follows the call.
-          grep -q "ready: true" /tmp/bridge.log
-          grep -q "joined: true" /tmp/bridge.log
-          grep -q "desktopHost=true" /tmp/bridge.log
-          echo "--- what this webview offers the in-browser models (macOS $(sw_vers -productVersion))"
-          grep -o 'webgpu=[^"]*' /tmp/bridge.log | tail -1
-          echo "--- microphone: the app's per-origin decision, then what the page got (informational)"
-          grep "sidevoice: media" /tmp/bridge.log || echo "(WebKit did not ask the app)"
-      - name: Node mode in the real WKWebView (bundled interface, fake node on loopback)
+          cat /tmp/probe.log
+          echo "--- macOS $(sw_vers -productVersion)"
+          # Pairing needs a secure context and WebCrypto ECDSA P-256 on the app's own origin.
+          grep -q "probe origin=tauri://localhost secure=true ecdsa=true" /tmp/probe.log
+          grep "sidevoice: media" /tmp/probe.log || echo "(WebKit did not ask the app about the microphone)"
+      - name: With a target (a fake node on loopback)
         run: |
           set -euo pipefail
           APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
           CONF="$HOME/Library/Application Support/dev.sidevoice.desktop"
           mkdir -p "$CONF"
-          printf '{"kind":"node","roomUrl":"http://127.0.0.1:8768/","muteShortcut":""}' > "$CONF/settings.json"
+          printf '{"target":"http://127.0.0.1:8768","muteShortcut":""}' > "$CONF/settings.json"
           python3 -u test/fixtures/fake-node.py 8768 > /tmp/node.log 2>&1 &
-          SIDEVOICE_DEBUG=1 "$APP/Contents/MacOS/sidevoice-desktop" > /tmp/nodemode.log 2>&1 &
+          SIDEVOICE_DEBUG=1 "$APP/Contents/MacOS/sidevoice-desktop" > /tmp/target.log 2>&1 &
           PID=$!
-          for i in $(seq 1 60); do grep -q "ready: true" /tmp/nodemode.log && grep -q "GET /api/rendezvous origin=tauri://localhost" /tmp/node.log && break; sleep 1; done
+          for i in $(seq 1 45); do grep -q "ready: true" /tmp/target.log && break; sleep 1; done
+          sleep 5
           kill "$PID" || true
           rm -rf "$CONF"
-          echo "--- app"; cat /tmp/nodemode.log
-          echo "--- fake node"; sort /tmp/node.log | uniq -c
-          # The bundled interface loaded from the app, its controller came up (the bridge attached to the real
-          # web UI's store and actions), and it asked its target cross-origin, as the contract says.
-          grep -q "page tauri://localhost/voice/index.html" /tmp/nodemode.log
-          grep -q "ready: true" /tmp/nodemode.log
-          grep -q "GET /api/rendezvous origin=tauri://localhost" /tmp/node.log
+          echo "--- app"; cat /tmp/target.log
+          echo "--- fake node (what the interface asked, cross-origin)"; sort /tmp/node.log | uniq -c
+          grep -q "ready: true" /tmp/target.log
       - name: Make the .dmg
         run: |
           set -euo pipefail

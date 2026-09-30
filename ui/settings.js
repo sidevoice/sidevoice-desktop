@@ -10,36 +10,12 @@ function say(text, isError) {
   $("message").className = isError ? "error" : "";
 }
 
-let defaults = {};
-const kind = () => document.querySelector('input[name="kind"]:checked').value;
-
-function showKind() {
-  $("url-label").textContent = kind() === "node" ? "Dirección de la máquina (su núcleo)" : "Dirección de la sala";
-  $("room-url").placeholder = kind() === "node" ? "http://127.0.0.1:8768" : "https://voice.example.com";
-}
-
-// Switching kind swaps an untouched default address for the other kind's.
-for (const radio of document.querySelectorAll('input[name="kind"]')) {
-  radio.addEventListener("change", () => {
-    const url = $("room-url").value.trim();
-    if (!url || url === defaults.room || url === defaults.node) $("room-url").value = defaults[kind()];
-    showKind();
-  });
-}
-
 async function load() {
-  const { settings, firstRun, defaultRoomUrl, defaultNodeUrl } = await invoke("get_settings");
-  defaults = { room: defaultRoomUrl, node: defaultNodeUrl };
-  document.querySelector(`input[name="kind"][value="${settings.kind}"]`).checked = true;
-  showKind();
-  $("room-url").value = settings.roomUrl;
+  const { settings, debug } = await invoke("get_settings");
+  $("target").value = settings.target;
   $("mute-shortcut").value = settings.muteShortcut;
-  if (!firstRun) {
-    $("heading").textContent = "Ajustes de Sidevoice";
-    $("save").textContent = "Guardar";
-  }
-  $("room-url").focus();
-  $("room-url").select();
+  $("target").focus();
+  return debug;
 }
 
 $("settings").addEventListener("submit", async (event) => {
@@ -48,9 +24,9 @@ $("settings").addEventListener("submit", async (event) => {
   say("Guardando…");
   try {
     const result = await invoke("save_settings", {
-      settings: { kind: kind(), roomUrl: $("room-url").value, muteShortcut: $("mute-shortcut").value },
+      settings: { target: $("target").value, muteShortcut: $("mute-shortcut").value },
     });
-    $("room-url").value = result.settings.roomUrl;
+    $("target").value = result.settings.target;
     // The app opens (or reloads) the room itself; a shortcut that could not be registered is not fatal.
     say(result.warning || "Guardado.", !!result.warning);
   } catch (error) {
@@ -62,7 +38,7 @@ $("settings").addEventListener("submit", async (event) => {
 
 // What this webview offers the in-browser models. The room page runs in the same engine, so this
 // is what it will find too (docs/MODELS.md).
-async function diagnostics() {
+async function diagnostics(debug) {
   const rows = [];
   let gpu = "no (usará WebAssembly en la CPU)";
   try {
@@ -76,6 +52,9 @@ async function diagnostics() {
     const info = await invoke("get_settings");
     rows.push(["Versión", info.appVersion]);
   } catch { /* optional */ }
+  rows.push(["Contexto seguro", window.isSecureContext ? "sí" : "no"]);
+  rows.push(["WebCrypto (emparejamiento)", window.crypto && window.crypto.subtle ? "sí" : "no"]);
+  if (debug) invoke("debug_log", { line: "settings " + rows.map(([k, v]) => k + "=" + v).join(" | ") });
   const dl = $("diag");
   for (const [k, v] of rows) {
     const dt = document.createElement("dt");
@@ -86,5 +65,6 @@ async function diagnostics() {
   }
 }
 
-load().catch((error) => say(String(error), true));
-diagnostics();
+load()
+  .then((debug) => diagnostics(debug))
+  .catch((error) => say(String(error), true));
