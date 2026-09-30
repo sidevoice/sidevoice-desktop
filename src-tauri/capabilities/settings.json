@@ -3,5 +3,5 @@
   "identifier": "settings",
   "description": "The bundled settings / first-run window: read and save this device's settings. The room window has its own (room.json).",
   "windows": ["settings"],
-  "permissions": ["allow-get-settings", "allow-save-settings", "allow-debug-log"]
+  "permissions": ["allow-get-settings", "allow-save-settings", "allow-debug-log", "allow-headset-report", "allow-headset-test"]
 }

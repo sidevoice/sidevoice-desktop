@@ -6,6 +6,8 @@ fn main() {
         "save_settings",
         "bridge_state",
         "debug_log",
+        "headset_report",
+        "headset_test",
         "engine_available",
         "engine_install",
         "engine_progress",

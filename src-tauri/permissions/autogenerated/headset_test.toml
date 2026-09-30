@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-headset-test"
+description = "Enables the headset_test command without any pre-configured scope."
+commands.allow = ["headset_test"]
+
+[[permission]]
+identifier = "deny-headset-test"
+description = "Denies the headset_test command without any pre-configured scope."
+commands.deny = ["headset_test"]

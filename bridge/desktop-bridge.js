@@ -8,8 +8,8 @@
 // bundled interface) it does nothing at all.
 (function (factory) {
   if (typeof module === "object" && module.exports) module.exports = factory; // unit tests
-  else factory(window, "__SIDEVOICE_ROOM_ORIGIN__");
-})(function installDesktopBridge(win, roomOrigin) {
+  else factory(window, "__SIDEVOICE_ROOM_ORIGIN__", "__SIDEVOICE_MEDIA_KEYS__");
+})(function installDesktopBridge(win, roomOrigin, mediaKeys) {
   "use strict";
   // scheme://host rather than location.origin: the app's own pages (tauri://localhost) may have an opaque origin.
   if (win.location.protocol + "//" + win.location.host !== roomOrigin) return null;
@@ -119,7 +119,13 @@
     version: BRIDGE_VERSION,
     /** What this host offers the page besides the webview itself. The web UI feature-detects it.
      *  `nativeEngine`: models run natively by the app (docs/ENGINES.md). */
-    host: Object.freeze({ app: "sidevoice-desktop", nativeEngine: Object.freeze(nativeEngine()) }),
+    host: Object.freeze({
+      app: "sidevoice-desktop",
+      nativeEngine: Object.freeze(nativeEngine()),
+      /** `"native"`: the app answers headset buttons / media keys in a call, so the page must not register its
+       *  own Media Session handlers (both would toggle the microphone on one click). `null`: the page does. */
+      mediaKeys: mediaKeys === "native" ? "native" : null,
+    }),
     snapshot,
     /** Runs one tray/shortcut command through the web UI's own actions. Returns whether it ran. */
     run(command) {

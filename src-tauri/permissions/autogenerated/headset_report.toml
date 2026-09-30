@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-headset-report"
+description = "Enables the headset_report command without any pre-configured scope."
+commands.allow = ["headset_report"]
+
+[[permission]]
+identifier = "deny-headset-report"
+description = "Denies the headset_report command without any pre-configured scope."
+commands.deny = ["headset_report"]

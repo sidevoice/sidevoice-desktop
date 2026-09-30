@@ -11,6 +11,7 @@
 //! - `settings`: bundled local page (`ui/index.html`): target, shortcut, diagnostics.
 
 mod engine_ipc;
+mod headset;
 mod tray;
 
 use serde::Serialize;
@@ -116,6 +117,7 @@ fn bridge_state(
     debug(&format!("bridge_state {snapshot:?}"));
     *state.call.lock().unwrap() = snapshot.clone();
     tray::update(&app, &snapshot);
+    headset::update(&app, &snapshot);
     Ok(())
 }
 
@@ -124,10 +126,22 @@ fn debugging() -> bool {
 }
 
 /// Diagnostics on stderr, only with `SIDEVOICE_DEBUG=1` (CI's smoke tests read them).
-fn debug(message: &str) {
+pub(crate) fn debug(message: &str) {
     if debugging() {
         eprintln!("sidevoice: {message}");
     }
+}
+
+/// The headset diagnostic in the settings window: the last button events and whether they are being listened for.
+#[tauri::command]
+fn headset_report(app: AppHandle) -> headset::Report {
+    app.state::<headset::Headset>().report()
+}
+
+/// "Probar botones": the app listens for a headset's buttons for a minute, without a call.
+#[tauri::command]
+fn headset_test(app: AppHandle) {
+    headset::test(&app, 60);
 }
 
 /// A line from a page's diagnostics (the settings page, the CI probe), printed only with `SIDEVOICE_DEBUG=1`.
@@ -152,6 +166,7 @@ fn reset_call_state(app: &AppHandle) {
     let snapshot = CallSnapshot::default();
     *app.state::<AppState>().call.lock().unwrap() = snapshot.clone();
     tray::update(app, &snapshot);
+    headset::update(app, &snapshot);
 }
 
 /// (Re)creates the room window: the bundled interface, told its target, bound to the app's own pages.
@@ -226,7 +241,7 @@ fn show_room(app: &AppHandle) {
     }
 }
 
-fn open_settings(app: &AppHandle) {
+pub(crate) fn open_settings(app: &AppHandle) {
     if let Some(w) = app.get_webview_window(SETTINGS_LABEL) {
         let _ = w.show();
         let _ = w.set_focus();
@@ -270,6 +285,8 @@ pub fn run() {
             save_settings,
             bridge_state,
             debug_log,
+            headset_report,
+            headset_test,
             engine_ipc::engine_available,
             engine_ipc::engine_install,
             engine_ipc::engine_progress,
@@ -279,6 +296,7 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             tray::create(&handle)?;
+            headset::setup(&handle);
             // Native engines and models are downloaded into the app's data directory, on demand (docs/ENGINES.md).
             let engines_root = app.path().app_data_dir()?.join("engines");
             app.manage(engine_ipc::EngineState::new(sidevoice_desktop_engine::NativeEngines::new(

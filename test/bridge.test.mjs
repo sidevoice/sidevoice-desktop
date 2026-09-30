@@ -170,6 +170,13 @@ test("works on the app's own pages, whose origin may be opaque", () => {
   assert.equal(install(other.win, ORIGIN), null);
 });
 
-test("the placeholder the app replaces is present exactly once", () => {
+test("the placeholders the app replaces are present exactly once", () => {
   assert.equal(source.split("__SIDEVOICE_ROOM_ORIGIN__").length, 2);
+  assert.equal(source.split("__SIDEVOICE_MEDIA_KEYS__").length, 2);
+});
+
+test("says who answers the media keys", () => {
+  const install = loadFactory();
+  assert.equal(install(fakeWindow(ORIGIN).win, ORIGIN, "native").host.mediaKeys, "native");
+  assert.equal(install(fakeWindow(ORIGIN).win, ORIGIN, "__SIDEVOICE_MEDIA_KEYS__").host.mediaKeys, null);
 });

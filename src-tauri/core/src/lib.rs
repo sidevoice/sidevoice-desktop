@@ -3,5 +3,6 @@
 
 pub mod bridge;
 pub mod engines;
+pub mod headset;
 pub mod media;
 pub mod settings;

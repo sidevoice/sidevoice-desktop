@@ -68,3 +68,40 @@ async function diagnostics(debug) {
 load()
   .then((debug) => diagnostics(debug))
   .catch((error) => say(String(error), true));
+
+// Headset buttons: what reaches the app, refreshed every second while this window is open.
+const SOURCES = {
+  "remote:play": "Reproducir (botón o tecla)",
+  "remote:pause": "Pausa (botón o tecla)",
+  "remote:toggle": "Reproducir/pausa (botón o tecla)",
+  "airpods:mute": "Gesto de silencio de los AirPods",
+  "airpods:unmute": "Gesto de los AirPods: activar",
+  prueba: "Prueba",
+};
+const ACTIONS = { mute: "micrófono silenciado", unmute: "micrófono activado" };
+
+async function headset() {
+  let report;
+  try { report = await invoke("headset_report"); } catch { return; }
+  const state = !report.platformSupported
+    ? "En este sistema la app no escucha los botones (lo hace la propia página)."
+    : report.inCall ? "En llamada: los botones actúan sobre el micrófono."
+    : report.testing ? "Escuchando botones (prueba)… pulsa el botón de tu auricular."
+    : "Fuera de llamada: no se escuchan botones.";
+  const gesture = report.platformSupported
+    ? (report.muteGestureApi ? " Gesto de silencio de AirPods: disponible (macOS 14+)." : " Gesto de silencio de AirPods: no disponible en esta versión de macOS.")
+    : "";
+  $("headset-state").textContent = state + gesture;
+  $("headset-test").disabled = !report.platformSupported || report.testing;
+  const list = $("headset-events");
+  list.replaceChildren(...report.events.map((event) => {
+    const li = document.createElement("li");
+    const time = document.createElement("time");
+    time.textContent = new Date(event.at).toLocaleTimeString();
+    li.append(time, (SOURCES[event.source] || event.source) + " → " + (ACTIONS[event.action] || event.action));
+    return li;
+  }));
+}
+$("headset-test").addEventListener("click", () => invoke("headset_test").then(headset));
+headset();
+setInterval(headset, 1000);

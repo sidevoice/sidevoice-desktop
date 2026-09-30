@@ -9,11 +9,23 @@ use serde::{Deserialize, Serialize};
 /// The bridge script, with its room-origin placeholder still in place.
 pub const SCRIPT_TEMPLATE: &str = include_str!("../../../bridge/desktop-bridge.js");
 const ORIGIN_PLACEHOLDER: &str = "\"__SIDEVOICE_ROOM_ORIGIN__\"";
+const MEDIA_KEYS_PLACEHOLDER: &str = "\"__SIDEVOICE_MEDIA_KEYS__\"";
 
-/// The script injected into the main window, bound to one room origin.
+/// Who answers the headset's buttons and media keys in a call: `native` where the app does (macOS,
+/// `src/headset.rs`), so the page does not answer them too; `None` elsewhere (the page's Media Session does).
+pub fn media_keys() -> Option<&'static str> {
+    if cfg!(target_os = "macos") {
+        Some("native")
+    } else {
+        None
+    }
+}
+
+/// The script injected into the main window, bound to one page origin.
 pub fn script_for_origin(origin: &str) -> String {
     let literal = serde_json::to_string(origin).expect("a string serialises");
-    SCRIPT_TEMPLATE.replacen(ORIGIN_PLACEHOLDER, &literal, 1)
+    let keys = serde_json::to_string(&media_keys()).expect("serialises");
+    SCRIPT_TEMPLATE.replacen(ORIGIN_PLACEHOLDER, &literal, 1).replacen(MEDIA_KEYS_PLACEHOLDER, &keys, 1)
 }
 
 /// What the tray shows. Mirrors the web UI's own `call` and `mic` views.
@@ -121,8 +133,10 @@ mod tests {
     #[test]
     fn script_binds_the_origin_as_a_js_string() {
         let s = script_for_origin("https://voice.example.com");
-        assert!(s.contains(r#"factory(window, "https://voice.example.com")"#));
         assert!(!s.contains("__SIDEVOICE_ROOM_ORIGIN__"));
+        assert!(!s.contains("__SIDEVOICE_MEDIA_KEYS__"));
+        let keys = if cfg!(target_os = "macos") { r#""native")"# } else { "null)" };
+        assert!(s.contains(&format!(r#"factory(window, "https://voice.example.com", {keys}"#)), "{keys}");
         // A hostile value cannot break out of the string literal.
         let evil = script_for_origin("\"); alert(1); (\"");
         assert!(evil.contains(r#""\"); alert(1); (\"""#));
