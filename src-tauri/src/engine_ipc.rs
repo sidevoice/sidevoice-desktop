@@ -42,7 +42,7 @@ pub fn engine_available(state: State<'_, EngineState>) -> EngineInfo {
         .models
         .iter()
         .filter_map(|m| {
-            let repository = m.builds.get("transformers-js")?.config.get("repository")?.as_str()?;
+            let repository = m.build("transformers-js")?.config.get("repository")?.as_str()?;
             Some((repository.to_string(), m.id.clone()))
         })
         .collect();

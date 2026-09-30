@@ -14,10 +14,10 @@ fn main() {
     for offer in &available {
         println!(
             "offer: {} on {} ({:?}), {} MB, installed={}",
-            offer.offer.model,
-            offer.offer.engine,
-            offer.offer.task,
-            offer.offer.download_size / 1_000_000,
+            offer.model,
+            offer.engine,
+            offer.task,
+            offer.download_size / 1_000_000,
             offer.installed
         );
     }
