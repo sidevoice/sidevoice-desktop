@@ -85,7 +85,8 @@ The room window (pairing, calls, first open) is the web interface, bundled from 
    ground, the lockup centred on top, the app and Applications on a shelf with a white arrow between them. The
    icons' names are Finder's own text over the picture, and it is not certain it keeps them black in dark mode,
    so the shelf is a lilac that holds black and white text alike at 4.5 : 1 (`#7e6bab`: black 4.58, white 4.59).
-   On CI (macOS 14) the names stayed black in both appearances. It is not a palette colour: it sits between berenjena and lila in the brand's hue, for this one
+   On CI (macOS 14) the names stayed black in both appearances: `docs/brand-screens/dmg-finder-ci-{light,dark}.png`
+   are Finder's real window on the runner (the `dmg-window-*-labels.png` beside them are the local mock-ups). It is not a palette colour: it sits between berenjena and lila in the brand's hue, for this one
    purpose. The window is written by dmgbuild (no Finder scripting on CI); the background is one TIFF with the 1x
    and 2x drawings.
 8. **Settings window spacing**: an 8 px rhythm (8/16/24/32), 10 px field radius, pill buttons as in the brand
