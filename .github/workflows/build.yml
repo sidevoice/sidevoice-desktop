@@ -175,7 +175,8 @@ jobs:
           # Check the app as shipped, inside the image, not the one in the build tree.
           MNT=$(mktemp -d)
           hdiutil attach -readonly -nobrowse -mountpoint "$MNT" "$DMG"
-          ls -la "$MNT" "$MNT/.background"
+          ls -la "$MNT"
+          test -s "$MNT/.background.tiff"
           test -L "$MNT/Applications"
           test -s "$MNT/.DS_Store"
           test -s "$MNT/.VolumeIcon.icns"
