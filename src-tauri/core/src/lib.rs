@@ -2,5 +2,6 @@
 //! machine (the shell needs a webview toolkit to even link).
 
 pub mod bridge;
+pub mod engines;
 pub mod media;
 pub mod settings;

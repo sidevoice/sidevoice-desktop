@@ -1,0 +1,363 @@
+{
+  "version": 1,
+  "engines": [
+    {
+      "id": "sherpa-onnx",
+      "label": "sherpa-onnx (ONNX Runtime)",
+      "version": "1.13.8",
+      "runs": "native",
+      "formats": [
+        "onnx"
+      ],
+      "tasks": [
+        "stt",
+        "tts"
+      ],
+      "needs_any": [],
+      "packages": [
+        {
+          "os": "macos",
+          "arch": "aarch64",
+          "requires": [],
+          "accelerators": [
+            "coreml",
+            "cpu"
+          ],
+          "download": {
+            "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-osx-arm64-shared-lib.tar.bz2",
+            "sha256": "ae77050cdae565496059d96f5ab33d77b397a0864282a4e4a26e3b3b3effb948",
+            "size": 8773198,
+            "archive": "tar.bz2",
+            "root": "sherpa-onnx-v1.13.8-osx-arm64-shared-lib"
+          },
+          "libraries": [
+            "lib/libonnxruntime.dylib",
+            "lib/libsherpa-onnx-c-api.dylib"
+          ]
+        }
+      ],
+      "license": "Apache-2.0",
+      "homepage": "https://github.com/k2-fsa/sherpa-onnx"
+    },
+    {
+      "id": "transformers-js",
+      "label": "transformers.js (en la página)",
+      "version": "3.8.1",
+      "runs": "browser",
+      "formats": [
+        "onnx"
+      ],
+      "tasks": [
+        "stt",
+        "tts"
+      ],
+      "needs_any": [
+        "wasm",
+        "webgpu"
+      ],
+      "packages": [],
+      "license": "Apache-2.0",
+      "homepage": "https://github.com/huggingface/transformers.js"
+    }
+  ],
+  "models": [
+    {
+      "id": "whisper-tiny",
+      "label": "Whisper tiny",
+      "task": "stt",
+      "languages": [
+        "multi"
+      ],
+      "builds": {
+        "sherpa-onnx": {
+          "format": "onnx",
+          "download": {
+            "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.tar.bz2",
+            "sha256": "c46116994e539aa165266d96b325252728429c12535eb9d8b6a2b10f129e66b1",
+            "size": 116204861,
+            "archive": "tar.bz2",
+            "root": "sherpa-onnx-whisper-tiny"
+          },
+          "config": {
+            "kind": "whisper",
+            "encoder": "tiny-encoder.int8.onnx",
+            "decoder": "tiny-decoder.int8.onnx",
+            "tokens": "tiny-tokens.txt"
+          }
+        },
+        "transformers-js": {
+          "format": "onnx",
+          "requires": [],
+          "config": {
+            "repository": "onnx-community/whisper-tiny",
+            "revision": "ff4177021cc41f7db950912b73ea4fdf7d01d8e7",
+            "dtype": {
+              "webgpu": "fp32",
+              "wasm": "q8"
+            }
+          }
+        }
+      },
+      "voices": [],
+      "license": "MIT (OpenAI Whisper)"
+    },
+    {
+      "id": "whisper-base",
+      "label": "Whisper base",
+      "task": "stt",
+      "languages": [
+        "multi"
+      ],
+      "builds": {
+        "sherpa-onnx": {
+          "format": "onnx",
+          "download": {
+            "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-base.tar.bz2",
+            "sha256": "911b2083efd7c0dca2ac3b358b75222660dc09fb716d64fbfc417ba6c99ff3de",
+            "size": 207557382,
+            "archive": "tar.bz2",
+            "root": "sherpa-onnx-whisper-base"
+          },
+          "config": {
+            "kind": "whisper",
+            "encoder": "base-encoder.int8.onnx",
+            "decoder": "base-decoder.int8.onnx",
+            "tokens": "base-tokens.txt"
+          }
+        },
+        "transformers-js": {
+          "format": "onnx",
+          "requires": [],
+          "config": {
+            "repository": "onnx-community/whisper-base",
+            "revision": "1846881b6b3a3024392c1eea3ad983695bc23925",
+            "dtype": {
+              "webgpu": "fp32",
+              "wasm": "q8"
+            }
+          }
+        }
+      },
+      "voices": [],
+      "license": "MIT (OpenAI Whisper)"
+    },
+    {
+      "id": "whisper-small",
+      "label": "Whisper small",
+      "task": "stt",
+      "languages": [
+        "multi"
+      ],
+      "builds": {
+        "sherpa-onnx": {
+          "format": "onnx",
+          "download": {
+            "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-small.tar.bz2",
+            "sha256": "486a46afbb7ba798507190ffe02fea2dd726049af212e774537efac6afb210a6",
+            "size": 639387718,
+            "archive": "tar.bz2",
+            "root": "sherpa-onnx-whisper-small"
+          },
+          "config": {
+            "kind": "whisper",
+            "encoder": "small-encoder.int8.onnx",
+            "decoder": "small-decoder.int8.onnx",
+            "tokens": "small-tokens.txt"
+          }
+        },
+        "transformers-js": {
+          "format": "onnx",
+          "requires": [
+            "webgpu"
+          ],
+          "config": {
+            "repository": "onnx-community/whisper-small",
+            "revision": "36050c46d777d46dc4b5f43f6d90574fc38f8732",
+            "dtype": {
+              "webgpu": "q4"
+            }
+          }
+        }
+      },
+      "voices": [],
+      "license": "MIT (OpenAI Whisper)"
+    },
+    {
+      "id": "whisper-large-v3-turbo",
+      "label": "Whisper large v3 turbo",
+      "task": "stt",
+      "languages": [
+        "multi"
+      ],
+      "builds": {
+        "sherpa-onnx": {
+          "format": "onnx",
+          "download": {
+            "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-turbo.tar.bz2",
+            "sha256": "b11acbbcd660b44a8e0df33724feb5aaa709cf65668f2823d59f656312544f22",
+            "size": 563790207,
+            "archive": "tar.bz2",
+            "root": "sherpa-onnx-whisper-turbo"
+          },
+          "config": {
+            "kind": "whisper",
+            "encoder": "turbo-encoder.int8.onnx",
+            "decoder": "turbo-decoder.int8.onnx",
+            "tokens": "turbo-tokens.txt"
+          }
+        },
+        "transformers-js": {
+          "format": "onnx",
+          "requires": [
+            "webgpu",
+            "webgpu-f16"
+          ],
+          "config": {
+            "repository": "onnx-community/whisper-large-v3-turbo",
+            "revision": "360ebcde2559d60bb474678be3c1de9ef347d01a",
+            "dtype": {
+              "webgpu": "q4f16"
+            }
+          }
+        }
+      },
+      "voices": [],
+      "license": "MIT (OpenAI Whisper)"
+    },
+    {
+      "id": "kokoro-82m-v1.0",
+      "label": "Kokoro 82M v1.0",
+      "task": "tts",
+      "languages": [
+        "en-gb",
+        "en-us",
+        "es",
+        "fr-fr",
+        "hi",
+        "it",
+        "pt-br"
+      ],
+      "builds": {
+        "sherpa-onnx": {
+          "format": "onnx",
+          "download": {
+            "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-int8-multi-lang-v1_0.tar.bz2",
+            "sha256": "4c3052abaa60943a341f193888cf6abd68787dae6ab8ae5c925a706caa247e4e",
+            "size": 132303094,
+            "archive": "tar.bz2",
+            "root": "kokoro-int8-multi-lang-v1_0"
+          },
+          "config": {
+            "kind": "kokoro",
+            "model": "model.int8.onnx",
+            "voices": "voices.bin",
+            "tokens": "tokens.txt",
+            "data_dir": "espeak-ng-data",
+            "dict_dir": "dict",
+            "lexicon": "lexicon-us-en.txt,lexicon-zh.txt"
+          }
+        },
+        "transformers-js": {
+          "format": "onnx",
+          "requires": [],
+          "config": {
+            "repository": "onnx-community/Kokoro-82M-v1.0-ONNX",
+            "revision": "1939ad2a8e416c0acfeecc08a694d14ef25f2231",
+            "dtype": {
+              "webgpu": "fp32",
+              "wasm": "q8"
+            }
+          }
+        }
+      },
+      "voices": [
+        {
+          "id": "ef_dora",
+          "sid": 28,
+          "language": "es"
+        },
+        {
+          "id": "em_alex",
+          "sid": 29,
+          "language": "es"
+        },
+        {
+          "id": "em_santa",
+          "sid": 53,
+          "language": "es"
+        },
+        {
+          "id": "af_heart",
+          "sid": 3,
+          "language": "en-us"
+        },
+        {
+          "id": "af_bella",
+          "sid": 2,
+          "language": "en-us"
+        },
+        {
+          "id": "bf_emma",
+          "sid": 21,
+          "language": "en-gb"
+        },
+        {
+          "id": "bm_george",
+          "sid": 26,
+          "language": "en-gb"
+        },
+        {
+          "id": "ff_siwis",
+          "sid": 30,
+          "language": "fr-fr"
+        },
+        {
+          "id": "if_sara",
+          "sid": 35,
+          "language": "it"
+        },
+        {
+          "id": "im_nicola",
+          "sid": 36,
+          "language": "it"
+        },
+        {
+          "id": "pf_dora",
+          "sid": 42,
+          "language": "pt-br"
+        },
+        {
+          "id": "pm_alex",
+          "sid": 43,
+          "language": "pt-br"
+        },
+        {
+          "id": "pm_santa",
+          "sid": 44,
+          "language": "pt-br"
+        },
+        {
+          "id": "hf_alpha",
+          "sid": 31,
+          "language": "hi"
+        },
+        {
+          "id": "hf_beta",
+          "sid": 32,
+          "language": "hi"
+        },
+        {
+          "id": "hm_omega",
+          "sid": 33,
+          "language": "hi"
+        },
+        {
+          "id": "hm_psi",
+          "sid": 34,
+          "language": "hi"
+        }
+      ],
+      "license": "Apache-2.0 (hexgrad/Kokoro-82M)"
+    }
+  ]
+}

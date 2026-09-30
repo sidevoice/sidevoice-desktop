@@ -157,6 +157,28 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
+  engine:
+    name: Native engine on Apple Silicon (download, Kokoro → Whisper round trip)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Round trip on the CPU
+        working-directory: src-tauri
+        run: cargo run --release -p sidevoice-desktop-engine --example roundtrip -- "$RUNNER_TEMP/engines"
+      - name: Round trip with Core ML (informational)
+        continue-on-error: true
+        working-directory: src-tauri
+        env:
+          SIDEVOICE_ENGINE_PROVIDER: coreml
+        run: cargo run --release -p sidevoice-desktop-engine --example roundtrip -- "$RUNNER_TEMP/engines"
+      - name: The engine's libraries (for the record)
+        run: |
+          find "$RUNNER_TEMP/engines/engines" -name "*.dylib" -exec sh -c 'echo "== $1"; otool -L "$1" | head -8; codesign -dv "$1" 2>&1 | head -3' _ {} \;
+
   linux:
     name: Linux (.deb, .AppImage)
     runs-on: ubuntu-22.04
