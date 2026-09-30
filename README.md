@@ -21,9 +21,11 @@ client/server split (2026-09-30).
 
 ## Get it
 
-Builds come from GitHub Actions (`.github/workflows/build.yml`): open the latest green run of
-**build** on `main` → *Artifacts* → `Sidevoice-macOS-AppleSilicon-dmg` (also Linux and Windows).
-The macOS build is ad-hoc signed, not notarized: read `docs/FIRST_OPEN.txt` before opening it.
+Builds come from GitHub Actions (`.github/workflows/build.yml`): open the latest run of **build**
+on `main` whose macOS job is green (a newer push cancels an older run) → *Artifacts* →
+`Sidevoice-macOS-AppleSilicon-dmg` (also Linux and Windows). The repo is private: downloading
+needs a GitHub account with read access. The macOS build is ad-hoc signed, not notarized: read
+`docs/FIRST_OPEN.txt` before opening it.
 
 ## Layout
 

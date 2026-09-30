@@ -88,11 +88,13 @@ jobs:
         run: |
           set -euo pipefail
           APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
-          "$APP/Contents/MacOS/sidevoice-desktop" > /tmp/app.log 2>&1 &
+          SIDEVOICE_DEBUG=1 "$APP/Contents/MacOS/sidevoice-desktop" > /tmp/app.log 2>&1 &
           PID=$!
           sleep 20
           if ! kill -0 "$PID" 2>/dev/null; then echo "The app exited on its own:"; cat /tmp/app.log; exit 1; fi
           kill "$PID"; cat /tmp/app.log
+          # First run: the bundled settings window loaded and reached the app over IPC.
+          grep -q "get_settings (first run: true)" /tmp/app.log
       - name: Bridge test in the real WKWebView (fake room on loopback)
         run: |
           set -euo pipefail
@@ -127,8 +129,17 @@ jobs:
           DMG="dist/Sidevoice_${VERSION}_aarch64.dmg"
           hdiutil create -volname "Sidevoice" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
           hdiutil verify "$DMG"
+          # Check the app as shipped, inside the image, not the one in the build tree.
+          MNT=$(mktemp -d)
+          hdiutil attach -readonly -nobrowse -mountpoint "$MNT" "$DMG"
+          ls -la "$MNT"
+          test -L "$MNT/Applications"
+          codesign --verify --deep --strict --verbose=2 "$MNT/Sidevoice.app"
+          codesign -d --entitlements - --xml "$MNT/Sidevoice.app" | grep -q "com.apple.security.device.audio-input"
+          plutil -extract NSMicrophoneUsageDescription raw "$MNT/Sidevoice.app/Contents/Info.plist"
+          hdiutil detach "$MNT"
           cp docs/FIRST_OPEN.txt dist/LEEME-primera-apertura.txt
-          shasum -a 256 "$DMG" | tee dist/SHA256SUMS.txt
+          (cd dist && shasum -a 256 *.dmg | tee SHA256SUMS.txt)
       - uses: actions/upload-artifact@v4
         with:
           name: Sidevoice-macOS-AppleSilicon-dmg

@@ -56,6 +56,7 @@ struct SaveResult {
 #[tauri::command]
 fn get_settings(app: AppHandle, state: State<'_, AppState>) -> SettingsInfo {
     let stored = state.settings.lock().unwrap().clone();
+    debug(&format!("get_settings (first run: {})", stored.is_none()));
     SettingsInfo {
         first_run: stored.is_none(),
         settings: stored.unwrap_or_default(),

@@ -10,7 +10,10 @@ macOS la bloquea la primera vez; se abre así:
    Alternativa sin Terminal: abre Sidevoice una vez (macOS avisa y no la abre), ve a
    Ajustes del Sistema → Privacidad y seguridad → baja hasta "Sidevoice se ha bloqueado…"
    → "Abrir igualmente". En macOS 14 o anterior también vale clic derecho → Abrir.
-3. Abre Sidevoice. La primera vez pide la dirección de la sala (viene rellena con la tuya).
+3. Abre Sidevoice desde Finder, Launchpad o Spotlight (no ejecutando el binario desde Terminal:
+   así macOS atribuiría el micrófono a Terminal). La primera vez pide la dirección de la sala
+   (viene rellena con la tuya) → "Guardar y abrir la sala". Si cierras esa ventana sin guardar,
+   la app se cierra.
 4. Inicia sesión en la sala como en el navegador.
 5. Pulsa "Entrar en la sala": macOS pregunta por el micrófono → Permitir.
 
