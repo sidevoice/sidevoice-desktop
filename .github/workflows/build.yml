@@ -36,6 +36,11 @@ jobs:
       - run: npm ci
       - name: Bridge script tests
         run: npm test
+      - name: The icons, tray and .dmg window are what the brand files draw (npm run icons)
+        run: |
+          npm run icons
+          git status --porcelain -- src-tauri/icons src-tauri/dmg ui/brand
+          git diff --quiet --exit-code -- src-tauri/icons src-tauri/dmg ui/brand
       - name: rustfmt
         working-directory: src-tauri
         run: cargo fmt --all --check
@@ -83,6 +88,15 @@ jobs:
           cat /tmp/ent.xml; echo
           grep -q "com.apple.security.device.audio-input" /tmp/ent.xml
           grep -q "com.apple.security.cs.disable-library-validation" /tmp/ent.xml
+          echo "--- icon"
+          test "$(plutil -extract CFBundleIconFile raw "$APP/Contents/Info.plist")" = "icon.icns"
+          iconutil --convert iconset --output /tmp/icon.iconset "$APP/Contents/Resources/icon.icns"
+          ls /tmp/icon.iconset
+          for f in 16x16 16x16@2x 32x32 32x32@2x 128x128 128x128@2x 256x256 256x256@2x 512x512 512x512@2x; do
+            test -s "/tmp/icon.iconset/icon_$f.png"
+          done
+          sips -g pixelWidth /tmp/icon.iconset/icon_512x512@2x.png | grep -q 1024
+          test "$(plutil -extract CFBundleName raw "$APP/Contents/Info.plist")" = "Sidevoice"
           echo "--- architecture"
           lipo -archs "$APP/Contents/MacOS/sidevoice-desktop" | tee /dev/stderr | grep -q arm64
       - name: First open (no settings) — the bundled interface comes up in the real WKWebView
@@ -142,28 +156,66 @@ jobs:
           grep -q "ready: true" /tmp/target.log
           # The interface asked its target from the app's own origin (cross-origin), with no pairing yet.
           grep -q "origin=tauri://localhost" /tmp/node.log
-      - name: Make the .dmg
+      - name: Make the .dmg (the brand's window: background, icon layout, volume icon)
         run: |
           set -euo pipefail
           VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          STAGE=$(mktemp -d)
-          cp -R src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app "$STAGE/"
-          ln -s /Applications "$STAGE/Applications"
+          APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
+          python3 -m venv "$RUNNER_TEMP/dmgbuild"
+          "$RUNNER_TEMP/dmgbuild/bin/pip" install --quiet dmgbuild==1.6.7
+          # One TIFF with the 1x and 2x drawings: Finder picks the one for the screen.
+          tiffutil -cathidpicheck src-tauri/dmg/background.png src-tauri/dmg/background@2x.png -out "$RUNNER_TEMP/background.tiff"
           mkdir -p dist
           DMG="dist/Sidevoice_${VERSION}_aarch64.dmg"
-          hdiutil create -volname "Sidevoice" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+          "$RUNNER_TEMP/dmgbuild/bin/dmgbuild" -s scripts/dmg-settings.py \
+            -D app="$APP" -D background="$RUNNER_TEMP/background.tiff" \
+            -D layout=src-tauri/dmg/layout.json -D icon=src-tauri/icons/icon.icns \
+            Sidevoice "$DMG"
           hdiutil verify "$DMG"
           # Check the app as shipped, inside the image, not the one in the build tree.
           MNT=$(mktemp -d)
           hdiutil attach -readonly -nobrowse -mountpoint "$MNT" "$DMG"
-          ls -la "$MNT"
+          ls -la "$MNT" "$MNT/.background"
           test -L "$MNT/Applications"
+          test -s "$MNT/.DS_Store"
+          test -s "$MNT/.VolumeIcon.icns"
           codesign --verify --deep --strict --verbose=2 "$MNT/Sidevoice.app"
           codesign -d --entitlements - --xml "$MNT/Sidevoice.app" | grep -q "com.apple.security.device.audio-input"
           plutil -extract NSMicrophoneUsageDescription raw "$MNT/Sidevoice.app/Contents/Info.plist"
           hdiutil detach "$MNT"
           cp docs/FIRST_OPEN.txt dist/LEEME-primera-apertura.txt
           (cd dist && shasum -a 256 *.dmg | tee SHA256SUMS.txt)
+      - name: The .dmg window as Finder shows it (screenshots, light and dark; informational)
+        continue-on-error: true
+        timeout-minutes: 4
+        run: |
+          set -uo pipefail
+          osa() { perl -e 'alarm shift; exec @ARGV' 30 osascript "$@"; }  # a permission prompt must not hang the job
+          mkdir -p dmg-screens
+          DMG=$(ls dist/*.dmg)
+          hdiutil attach -readonly "$DMG" | tee /tmp/attach.txt
+          VOL=$(grep -o '/Volumes/.*' /tmp/attach.txt | head -1)
+          for mode in false true; do
+            osa -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $mode" || true
+            osa -e "tell application \"Finder\" to close every window" \
+                      -e "tell application \"Finder\" to open (POSIX file \"$VOL\" as alias)" \
+                      -e "tell application \"Finder\" to activate" || true
+            sleep 4
+            B=$(osa -e 'tell application "Finder" to get bounds of front window' | tr -d ' ')
+            echo "window bounds ($mode): $B"
+            IFS=, read -r X1 Y1 X2 Y2 <<< "${B:-0,28,1440,900}"
+            screencapture -x -R"$X1,$((Y1 - 28)),$((X2 - X1)),$((Y2 - Y1 + 28))" "dmg-screens/dmg-dark-$mode.png" || screencapture -x "dmg-screens/dmg-dark-$mode-full.png"
+          done
+          osa -e 'tell application "Finder" to close every window' || true
+          hdiutil detach "$VOL" || true
+          ls -la dmg-screens
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dmg-window-screenshots
+          path: dmg-screens/
+          retention-days: 30
+          if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         with:
           name: Sidevoice-macOS-AppleSilicon-dmg

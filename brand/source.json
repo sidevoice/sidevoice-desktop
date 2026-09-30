@@ -1,0 +1,17 @@
+{
+  "repository": "sidevoice/brand-resources",
+  "commit": "506fcc1a26b0b7b68bc9674a1ab79e3f1473469f",
+  "uncommitted_changes": false,
+  "files": [
+    "logo/mark/sidevoice-mark.svg",
+    "logo/mark/sidevoice-mark-on-dark.svg",
+    "logo/mark/sidevoice-mark-black.svg",
+    "logo/mark/sidevoice-mark-white.svg",
+    "logo/tile/sidevoice-tile.svg",
+    "logo/lockup/sidevoice-lockup.svg",
+    "logo/lockup/sidevoice-lockup-on-dark.svg",
+    "color/palette.json",
+    "fonts/DMSans-Variable-latin.woff2",
+    "fonts/OFL.txt"
+  ]
+}

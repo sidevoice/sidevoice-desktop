@@ -10,10 +10,23 @@ use tauri::{AppHandle, Manager, Wry};
 
 const TRAY_ID: &str = "sidevoice";
 
-// Template images (black + alpha): macOS tints them for light/dark menu bars.
-const ICON_IDLE: &[u8] = include_bytes!("../icons/tray/idle.png");
-const ICON_LIVE: &[u8] = include_bytes!("../icons/tray/live.png");
-const ICON_MUTED: &[u8] = include_bytes!("../icons/tray/muted.png");
+// Drawn by scripts/make-icons.mjs (docs/BRAND.md). macOS: template images (black + alpha), which it tints
+// for light and dark menu bars. Windows and Linux do not tint tray icons, so they get the brand's tile in
+// colour, which reads on light and dark bars alike.
+#[cfg(target_os = "macos")]
+mod art {
+    pub const IDLE: &[u8] = include_bytes!("../icons/tray/idle.png");
+    pub const LIVE: &[u8] = include_bytes!("../icons/tray/live.png");
+    pub const MUTED: &[u8] = include_bytes!("../icons/tray/muted.png");
+    pub const TEMPLATE: bool = true;
+}
+#[cfg(not(target_os = "macos"))]
+mod art {
+    pub const IDLE: &[u8] = include_bytes!("../icons/tray/color-idle.png");
+    pub const LIVE: &[u8] = include_bytes!("../icons/tray/color-live.png");
+    pub const MUTED: &[u8] = include_bytes!("../icons/tray/color-muted.png");
+    pub const TEMPLATE: bool = false;
+}
 
 struct TrayItems {
     status: MenuItem<Wry>,
@@ -24,9 +37,9 @@ struct TrayItems {
 
 fn icon(which: TrayIcon) -> tauri::Result<Image<'static>> {
     Image::from_bytes(match which {
-        TrayIcon::Idle => ICON_IDLE,
-        TrayIcon::Live => ICON_LIVE,
-        TrayIcon::Muted => ICON_MUTED,
+        TrayIcon::Idle => art::IDLE,
+        TrayIcon::Live => art::LIVE,
+        TrayIcon::Muted => art::MUTED,
     })
 }
 
@@ -55,7 +68,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
 
     TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon(initial.icon)?)
-        .icon_as_template(true)
+        .icon_as_template(art::TEMPLATE)
         .tooltip("Sidevoice")
         .menu(&menu)
         .show_menu_on_left_click(true)
@@ -85,7 +98,7 @@ pub fn update(app: &AppHandle, snapshot: &CallSnapshot) {
     if *last != Some(view.icon) {
         if let (Some(tray), Ok(image)) = (app.tray_by_id(TRAY_ID), icon(view.icon)) {
             let _ = tray.set_icon(Some(image));
-            let _ = tray.set_icon_as_template(true);
+            let _ = tray.set_icon_as_template(art::TEMPLATE);
             let _ = tray.set_tooltip(Some(&view.status));
         }
         *last = Some(view.icon);

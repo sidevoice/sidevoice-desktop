@@ -33,12 +33,14 @@ needs a GitHub account with read access. The macOS build is ad-hoc signed, not n
 ```
 bridge/desktop-bridge.js   script injected into the room page (the page side of the bridge)
 ui/                        the local settings / first-run window (plain HTML, no build step)
+brand/                     the Sidevoice brand files the app is drawn from (scripts/vendor-brand.mjs)
+src-tauri/icons/, src-tauri/dmg/, ui/brand/   generated from brand/ by `npm run icons` (docs/BRAND.md)
 src-tauri/src/             the shell: windows, tray, shortcut, commands
 src-tauri/core/            pure logic (settings, bridge contract, media rules) — no Tauri, tested anywhere
 ui/voice/, ui/voice-browser/  the web interface, vendored (scripts/vendor-web.mjs)
 src-tauri/Info.plist       macOS usage descriptions (merged into the bundle's Info.plist)
 src-tauri/Entitlements.plist
-docs/                      TARGETS.md, BRIDGE.md, MACOS.md, MODELS.md, FIRST_OPEN.txt
+docs/                      TARGETS.md, BRIDGE.md, MACOS.md, MODELS.md, BRAND.md, FIRST_OPEN.txt
 ```
 
 ## Develop
@@ -51,6 +53,11 @@ cargo test -p sidevoice-desktop-core       # settings, bridge contract, media ru
 cargo clippy --workspace --all-targets -- -D warnings
 npx tauri dev                              # needs a desktop (macOS, Windows, or Linux with WebKitGTK 4.1)
 ```
+
+## Updating the brand
+
+`node scripts/vendor-brand.mjs <brand-resources checkout>`, then `npm run icons`. docs/BRAND.md says what is
+drawn from what, and what was decided where the brand's guidelines are silent.
 
 ## Updating the bundled interface
 

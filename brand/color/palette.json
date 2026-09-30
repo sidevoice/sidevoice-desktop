@@ -1,0 +1,30 @@
+{
+  "berenjena": {
+    "hex": "#4a2f6b",
+    "use": "Brand colour. The mark on light grounds."
+  },
+  "lila": {
+    "hex": "#c9b6ec",
+    "use": "The mark on dark grounds; accent of dark interfaces."
+  },
+  "mostaza": {
+    "hex": "#e0a82e",
+    "use": "The fourth bar: the other voice."
+  },
+  "noche": {
+    "hex": "#2a1a40",
+    "use": "Text on lila."
+  },
+  "tinta": {
+    "hex": "#1b1d24",
+    "use": "Text and one-ink work on light grounds."
+  },
+  "crema": {
+    "hex": "#f7f1e6",
+    "use": "Warm light ground."
+  },
+  "bruma": {
+    "hex": "#f3eefa",
+    "use": "Cool light ground in the brand hue."
+  }
+}
