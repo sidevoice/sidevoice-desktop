@@ -121,6 +121,8 @@ jobs:
           grep -q 'headset apply active=true in_call=true mic=true' /tmp/probe.log
           grep 'headset apply' /tmp/probe.log | tail -1 | grep -q 'active=false in_call=false .* gesture_on=false' 
           grep 'headset apply' /tmp/probe.log
+          # The app's own mute is not mistaken for an AirPods gesture.
+          if grep -q 'headset airpods' /tmp/probe.log; then echo 'echo recorded as a gesture'; exit 1; fi
       - name: With a target (a fake node on loopback)
         run: |
           set -euo pipefail
