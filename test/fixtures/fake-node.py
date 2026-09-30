@@ -25,18 +25,22 @@ class Node(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def log_request_line(self):
-        print(f'request {self.command} {self.path} origin={self.headers.get("Origin", "-")}', flush=True)
+        print(f'request {self.command} {self.path} origin={self.headers.get("Origin", "-")} '
+              f'auth={"yes" if self.headers.get("Authorization") else "no"}', flush=True)
 
     def do_OPTIONS(self):
         self.log_request_line()
         self.send_response(204)
         self.cors()
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE')
-        self.send_header('Access-Control-Allow-Headers', 'content-type, accept')
+        self.send_header('Access-Control-Allow-Headers', 'content-type, accept, authorization')
         self.end_headers()
 
     def do_GET(self):
         self.log_request_line()
+        if self.path.split('?')[0] == '/api/presentation/echo':
+            # What a paired interface sends a local node: its device token, cross-origin (the real core checks it).
+            return self.answer(200, {'authorization': self.headers.get('Authorization', '')})
         if self.path.split('?')[0] == '/api/rendezvous':
             return self.answer(200, {'kind': 'node', 'id': 'ci-node', 'host': 'ci-runner', 'room': None})
         self.answer(404, {'detail': 'not in this stand-in'})

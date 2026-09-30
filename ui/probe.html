@@ -42,6 +42,18 @@ what the interface's own window offers — same origin, same permission rule —
   }
   await say(facts.join(" "));
 
+  // A node on this machine, as a paired interface reaches it: cross-origin from the app's origin to plain http on
+  // loopback, with the device token in Authorization (which makes WebKit send a CORS preflight first).
+  try {
+    const answer = await fetch("http://127.0.0.1:8768/api/presentation/echo", {
+      headers: { Authorization: "Bearer probe-token", accept: "application/json" },
+    });
+    const echoed = await answer.json();
+    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-loopback " + answer.status + " " + echoed.authorization });
+  } catch (error) {
+    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-loopback error " + String(error && (error.name || error)) });
+  }
+
   // A call as the bridge reports one: the app becomes the Now Playing app and installs the AirPods handler
   // (src/headset.rs), then the call ends. The log shows what was switched on; a wrong Objective-C call would crash.
   const call = (joined, micEnabled) => window.__TAURI_INTERNALS__.invoke("bridge_state", { snapshot: {

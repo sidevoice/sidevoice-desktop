@@ -103,6 +103,8 @@ jobs:
         run: |
           set -euo pipefail
           APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
+          python3 -u test/fixtures/fake-node.py 8768 > /tmp/probe-node.log 2>&1 &
+          NODE=$!
           SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_PAGE=probe.html "$APP/Contents/MacOS/sidevoice-desktop" > /tmp/probe.log 2>&1 &
           PID=$!
           for i in $(seq 1 240); do grep -q "probe-engine" /tmp/probe.log && break; sleep 1; done
@@ -111,6 +113,10 @@ jobs:
           echo "--- macOS $(sw_vers -productVersion)"
           # Pairing needs a secure context and WebCrypto ECDSA P-256 on the app's own origin.
           grep -q "probe origin=tauri://localhost secure=true ecdsa=true" /tmp/probe.log
+          # A local node (http://127.0.0.1:8768) reached from the app's origin with a device token: preflight + CORS.
+          kill "$NODE" || true
+          grep -q 'probe-loopback 200 Bearer probe-token' /tmp/probe.log
+          grep -q 'request OPTIONS /api/presentation/echo origin=tauri://localhost' /tmp/probe-node.log
           grep "sidevoice: media" /tmp/probe.log || echo "(WebKit did not ask the app about the microphone)"
           # The native engine inside the signed app: downloaded, loaded under the hardened runtime, and run
           # through the page's IPC (Kokoro says a sentence, Whisper hears it).
