@@ -96,6 +96,8 @@ jobs:
             test -s "/tmp/icon.iconset/icon_$f.png"
           done
           sips -g pixelWidth /tmp/icon.iconset/icon_512x512@2x.png | grep -q 1024
+          # How macOS itself decodes every entry, for the record (uploaded with the .dmg window screenshots).
+          mkdir -p dmg-screens && cp -R /tmp/icon.iconset dmg-screens/
           test "$(plutil -extract CFBundleName raw "$APP/Contents/Info.plist")" = "Sidevoice"
           echo "--- architecture"
           lipo -archs "$APP/Contents/MacOS/sidevoice-desktop" | tee /dev/stderr | grep -q arm64

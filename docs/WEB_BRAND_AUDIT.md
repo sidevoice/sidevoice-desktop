@@ -5,26 +5,29 @@ README and brand sheet), with `213790b` as the reference for how tokens were map
 at `7565663`, relative to the rubasace/sidevoice root.
 
 Then, by the operator's extension of the task, the fixes that stay inside tokens, CSS and assets were applied on
-**`brand/web`** (pushed; not merged): `536fa0f`, `3be4bec`. A trial merge of `brand/web` over
+**`brand/web`** (pushed; not merged): `536fa0f`, `3be4bec`, `8f5995a` (the last one fixes what the adversarial
+review found in the first two). A trial merge of `brand/web` over
 `integrate/cursor-on-split` (`7b677bf`) is clean and builds; the pairing dialog of that merge is
 `docs/brand-screens/web-pairing-brand-web-over-split.png`. Verified on the **built** CSS (the room serves a
 build, and `react.css` beats `room.css` at equal weight): every changed rule was read back from
 `dist/assets/index-*.css` with its competitors, and the page was rendered headless
 (`docs/brand-screens/web-room-brand-web.png`, `web-header-brand-web.png`: DM Sans loaded, the lockup in the header).
+The review caught that one verification had read a build older than the last commit; everything was re-checked on
+a fresh build of `8f5995a` (computed styles in headless Chromium: fields in DM Sans, "Enviar" `#e4dbf6` on `#3a2f52`).
 
 ## Status at a glance
 
 | ID | Finding (short) | Severity | Status |
 |---|---|---|---|
 | L1 | Header "Sidevoice" is typed text in lila, not the lockup | high | **fixed** — the outlined `sidevoice-lockup-on-dark.svg` at 26 px (`RoomHeader.tsx`, `.brand img`) |
-| T1 | DM Sans never loaded; "Inter" named but not loaded either | high | **fixed** — `DMSans-Variable-latin.woff2` + `OFL.txt` in `src/assets/brand/`, `@font-face` and `--sv-font` in `tokens.css`, `:root` uses it |
+| T1 | DM Sans never loaded; "Inter" named but not loaded either | high | **fixed** — `DMSans-Variable-latin.woff2` + `OFL.txt` in `src/assets/brand/`, `@font-face` and `--sv-font` in `tokens.css`, `:root` uses it; form fields `font-family: inherit` (they kept the browser's font) |
 | C1 | "Enviar": noche on plum, 1.29 : 1 | high | **fixed** — soft lila text (9.2 : 1) and a visible hover, in `react.css` (kept off the line the functional branch changes) |
 | M1 | Favicons 404 on the production server (`/voice/favicon.svg` not routed) | high | **fixed** — moved to `src/assets/brand/`; the build emits them under `/voice/assets/` (checked in `dist/index.html`) |
 | C2 | Primary buttons turn grey on hover (1.44 : 1) | medium | **fixed** — `.ui-button--primary:hover` = `--sv-primary-soft` (11.9 : 1 with noche) |
 | C3 | White on `#ea4335` danger button, 3.92 : 1 | medium | **fixed** — new `--sv-danger-fill: #c7392d` (5.18 : 1); `--sv-danger` itself unchanged (see S1) |
 | F1 | Fields get the platform's blue focus ring | medium | **fixed** — lila `:focus-visible` outline on input/select/textarea |
 | S3 | The call button is Meet green | medium (question) | **open — brand owner** |
-| F2 | No `::selection` (system blue) | low | **fixed** — `--sv-primary-muted` ground, text colour kept (10.4 : 1) |
+| F2 | No `::selection` (system blue) | low | **fixed** — lila with noche (8.6 : 1). A first try on the plum ground vanished on the chat bubbles (1.1–1.2 : 1) |
 | F3 | No root `accent-color` | nit | **fixed** — `:root { accent-color: var(--sv-primary) }` |
 | B1–B3 | Blue-tinted greys in stats headers, loading dialog, language rows | low | **fixed** — through `--sv-muted`, `--sv-text`, `--sv-border` |
 | L2 | `SidevoiceMark` in any ink other than lila gives a look the kit lacks | low | not changed — the header no longer uses it; nothing else does |

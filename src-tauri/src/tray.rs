@@ -11,21 +11,49 @@ use tauri::{AppHandle, Manager, Wry};
 const TRAY_ID: &str = "sidevoice";
 
 // Drawn by scripts/make-icons.mjs (docs/BRAND.md). macOS: template images (black + alpha), which it tints
-// for light and dark menu bars. Windows and Linux do not tint tray icons, so they get the brand's tile in
-// colour, which reads on light and dark bars alike.
+// for light and dark menu bars. Windows and Linux do not tint tray icons, so the mark comes in the brand's
+// two looks, berenjena for light bars and lila for dark ones, and the app picks by the bar's colour.
 #[cfg(target_os = "macos")]
 mod art {
-    pub const IDLE: &[u8] = include_bytes!("../icons/tray/idle.png");
-    pub const LIVE: &[u8] = include_bytes!("../icons/tray/live.png");
-    pub const MUTED: &[u8] = include_bytes!("../icons/tray/muted.png");
+    use sidevoice_desktop_core::bridge::TrayIcon;
     pub const TEMPLATE: bool = true;
+    pub fn bytes(which: TrayIcon) -> &'static [u8] {
+        match which {
+            TrayIcon::Idle => include_bytes!("../icons/tray/idle.png"),
+            TrayIcon::Live => include_bytes!("../icons/tray/live.png"),
+            TrayIcon::Muted => include_bytes!("../icons/tray/muted.png"),
+        }
+    }
 }
 #[cfg(not(target_os = "macos"))]
 mod art {
-    pub const IDLE: &[u8] = include_bytes!("../icons/tray/color-idle.png");
-    pub const LIVE: &[u8] = include_bytes!("../icons/tray/color-live.png");
-    pub const MUTED: &[u8] = include_bytes!("../icons/tray/color-muted.png");
+    use sidevoice_desktop_core::bridge::TrayIcon;
     pub const TEMPLATE: bool = false;
+    pub fn bytes(which: TrayIcon) -> &'static [u8] {
+        match (bar_is_light(), which) {
+            (true, TrayIcon::Idle) => include_bytes!("../icons/tray/light-idle.png"),
+            (true, TrayIcon::Live) => include_bytes!("../icons/tray/light-live.png"),
+            (true, TrayIcon::Muted) => include_bytes!("../icons/tray/light-muted.png"),
+            (false, TrayIcon::Idle) => include_bytes!("../icons/tray/dark-idle.png"),
+            (false, TrayIcon::Live) => include_bytes!("../icons/tray/dark-live.png"),
+            (false, TrayIcon::Muted) => include_bytes!("../icons/tray/dark-muted.png"),
+        }
+    }
+    /// Windows says whether its taskbar is light (Settings → Personalisation → Colours → "Windows mode").
+    /// Read at every icon change, so a switch shows by the next change of call state.
+    #[cfg(windows)]
+    fn bar_is_light() -> bool {
+        winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
+            .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
+            .and_then(|key| key.get_value::<u32, _>("SystemUsesLightTheme"))
+            .map(|light| light == 1)
+            .unwrap_or(false)
+    }
+    /// Linux panels do not say; most (GNOME's top bar among them) are dark.
+    #[cfg(not(windows))]
+    fn bar_is_light() -> bool {
+        false
+    }
 }
 
 struct TrayItems {
@@ -36,11 +64,7 @@ struct TrayItems {
 }
 
 fn icon(which: TrayIcon) -> tauri::Result<Image<'static>> {
-    Image::from_bytes(match which {
-        TrayIcon::Idle => art::IDLE,
-        TrayIcon::Live => art::LIVE,
-        TrayIcon::Muted => art::MUTED,
-    })
+    Image::from_bytes(art::bytes(which))
 }
 
 pub fn create(app: &AppHandle) -> tauri::Result<()> {

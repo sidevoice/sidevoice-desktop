@@ -3393,6 +3393,7 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-single-instance",
  "url",
+ "winreg",
 ]
 
 [[package]]

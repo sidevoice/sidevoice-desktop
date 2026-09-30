@@ -18,7 +18,10 @@ symlinks = {"Applications": "/Applications"}
 icon = defines["icon"]  # noqa: F821  the volume's own icon
 background = defines["background"]  # noqa: F821  1x + 2x in one TIFF
 
-window_rect = ((200, 140), (layout["width"], layout["height"]))
+# Finder's window bounds include its 28 pt title bar (measured on CI: a 400 pt window showed 372 of the
+# drawing), so the window is that much taller than the picture.
+TITLE_BAR = 28
+window_rect = ((200, 140), (layout["width"], layout["height"] + TITLE_BAR))
 default_view = "icon-view"
 show_status_bar = False
 show_tab_view = False

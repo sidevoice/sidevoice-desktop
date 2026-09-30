@@ -10,6 +10,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { encodePng } from "./png.mjs";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const shots = path.join(root, "docs/brand-screens");
@@ -58,9 +59,30 @@ function readIco(buf) {
   });
 }
 const pngSize = (data) => [data.readUInt32BE(16), data.readUInt32BE(20)];
-const ICNS_POINTS = { icp4: "16 pt @1x", ic11: "16 pt @2x", icp5: "32 pt @1x", ic12: "32 pt @2x", ic07: "128 pt @1x", ic13: "128 pt @2x", ic08: "256 pt @1x", ic14: "256 pt @2x", ic09: "512 pt @1x", ic10: "512 pt @2x" };
+const ICNS_POINTS = { is32: "16 pt @1x", ic11: "16 pt @2x", il32: "32 pt @1x", ic12: "32 pt @2x", ic07: "128 pt @1x", ic13: "128 pt @2x", ic08: "256 pt @1x", ic14: "256 pt @2x", ic09: "512 pt @1x", ic10: "512 pt @2x" };
 
-const icns = readIcns(readFileSync(path.join(root, "src-tauri/icons/icon.icns")));
+// The classic 16/32 px entries (RLE RGB + 8-bit mask) are decoded back into PNGs to be shown like the rest.
+function unpackbits(data, count) {
+  const out = [];
+  for (let i = 0; out.length < count; ) {
+    const n = data[i++];
+    if (n >= 0x80) out.push(...Array(n - 0x80 + 3).fill(data[i++]));
+    else for (let j = 0; j <= n; j++) out.push(data[i++]);
+  }
+  return out;
+}
+function classicToPng(rgb, mask, width) {
+  const n = width * width;
+  const planes = unpackbits(rgb, 3 * n);
+  const pixels = Buffer.alloc(4 * n);
+  for (let i = 0; i < n; i++) pixels.set([planes[i], planes[n + i], planes[2 * n + i], mask[i]], 4 * i);
+  return encodePng({ width, height: width, pixels });
+}
+const rawIcns = new Map(readIcns(readFileSync(path.join(root, "src-tauri/icons/icon.icns"))));
+const icns = [...rawIcns].filter(([type]) => !["s8mk", "l8mk"].includes(type)).map(([type, data]) =>
+  type === "is32" ? [type, classicToPng(data, rawIcns.get("s8mk"), 16)]
+  : type === "il32" ? [type, classicToPng(data, rawIcns.get("l8mk"), 32)]
+  : [type, data]);
 const ico = readIco(readFileSync(path.join(root, "src-tauri/icons/icon.ico")));
 const img = (name, data) => {
   writeFileSync(path.join(work, name), data);
@@ -81,7 +103,7 @@ const small = icns.filter(([, d]) => pngSize(d)[0] <= 64).map(([type, data]) => 
   return `<figure><div class="ground"><img class="px" src="icns-${type}.png" width="${w * 4}" height="${w * 4}"></div><figcaption>${type} · ${w} px ×4</figcaption></figure>`;
 }).join("");
 
-for (const f of ["idle", "live", "muted", "color-idle", "color-live", "color-muted"]) {
+for (const f of ["idle", "live", "muted", "light-idle", "light-live", "light-muted", "dark-idle", "dark-live", "dark-muted"]) {
   cpSync(path.join(root, `src-tauri/icons/tray/${f}.png`), path.join(work, `tray-${f}.png`));
 }
 cpSync(path.join(root, "src-tauri/dmg/background@2x.png"), path.join(work, "dmg@2x.png"));
@@ -92,12 +114,12 @@ const layout = JSON.parse(readFileSync(path.join(root, "src-tauri/dmg/layout.jso
 const bar = (dark, heightPt) => {
   const ink = dark ? "#ffffffe6" : "#000000d9";
   const items = ["idle", "live", "muted"].map((s) => {
-    const w = (heightPt * 32) / 24;
+    const w = (heightPt * 54) / 36;
     return `<span class="tpl" style="width:${w}px;height:${heightPt}px;background:${ink};-webkit-mask-image:url(tray-${s}.png)"></span>`;
   }).join("");
   return `<div class="menubar ${dark ? "dark" : "light"}"><span class="clock">idle · live · muted</span>${items}<span class="clock">14:05</span></div>`;
 };
-const taskbar = (dark, size) => `<div class="taskbar ${dark ? "dark" : "light"}">${["idle", "live", "muted"].map((s) => `<img src="tray-color-${s}.png" width="${size}" height="${size}">`).join("")}<span>${size} px</span></div>`;
+const taskbar = (dark, size) => `<div class="taskbar ${dark ? "dark" : "light"}">${["idle", "live", "muted"].map((s) => `<img src="tray-${dark ? "dark" : "light"}-${s}.png" width="${size}" height="${size}">`).join("")}<span>${size} px</span></div>`;
 
 const css = `
 @font-face { font-family: "DM Sans"; src: url("${path.join(root, "ui/brand/DMSans-Variable-latin.woff2")}"); font-weight: 100 1000; }
@@ -131,7 +153,7 @@ shot("icons@1x.png", path.join(work, "icons.html"), 1180, 1000, 1);
 writeFileSync(path.join(work, "tray.html"), `<!doctype html><meta charset="utf-8"><style>${css}</style>
 <h2>Menu bar (macOS template images, as macOS tints them) · 18 pt as drawn, and 16 / 22 pt</h2>
 <div class="row"><div class="stack">${bar(false, 18)}${bar(true, 18)}</div><div class="stack">${bar(false, 16)}${bar(true, 16)}</div><div class="stack">${bar(false, 22)}${bar(true, 22)}</div></div>
-<h2>Windows / Linux tray (colour) · idle, live, muted</h2>
+<h2>Windows / Linux tray · berenjena on light bars, lila on dark · idle, live, muted</h2>
 <div class="row"><div class="stack">${taskbar(false, 16)}${taskbar(true, 16)}</div><div class="stack">${taskbar(false, 24)}${taskbar(true, 24)}</div><div class="stack">${taskbar(false, 32)}${taskbar(true, 32)}</div></div>
 `);
 shot("tray@2x.png", path.join(work, "tray.html"), 900, 330, 2);
