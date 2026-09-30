@@ -11,7 +11,7 @@ pub mod sherpa_ffi;
 
 use install::Store;
 use sherpa::{KokoroFiles, Recognizer, Sherpa, Tts, WhisperFiles};
-use sidevoice_desktop_core::engines::{self, Capability, Catalog, Device, Model, Offer, Runs, Task};
+use sidevoice_desktop_core::engines::{self, Capability, Catalog, Device, Model, Runs, Task};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -31,12 +31,23 @@ pub struct NativeEngines {
     voices: Mutex<HashMap<(String, String), Arc<Tts>>>,
 }
 
-/// An offer, plus whether its downloads are already on this device.
+/// A native offer as the page reads it (docs/ENGINES.md → "The page's side"): the model, its best build and
+/// accelerator, plus whether its downloads are already on this device.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Available {
-    #[serde(flatten)]
-    pub offer: Offer,
+    pub model: String,
+    pub engine: String,
+    pub task: Task,
+    pub label: String,
+    pub languages: Vec<String>,
+    pub runs: Runs,
+    /// Bytes to download before first use: the engine package plus the model's files.
+    pub download_size: u64,
+    /// The one the resolver chose, and every one this build can use here, best first.
+    pub accelerator: Capability,
+    pub accelerators: Vec<Capability>,
+    pub reason: String,
     pub installed: bool,
     pub voices: Vec<engines::Voice>,
 }
@@ -56,36 +67,52 @@ impl NativeEngines {
         }
     }
 
-    /// Native offers only: the page knows its own browser engines.
+    /// What this app runs natively: a native device is never offered a page engine's builds (the page knows its own).
     pub fn available(&self) -> Vec<Available> {
-        engines::offers(&self.catalog, &self.device)
+        engines::offers(&self.catalog, &self.device, "device")
+            .unwrap_or_default()
             .into_iter()
-            .filter(|o| o.runs == Runs::Native)
-            .map(|offer| {
+            .filter_map(|offer| {
+                let model = self.model(&offer.model)?;
                 let installed = self.paths(&offer.model, &offer.engine).map(|(e, m)| e.1 && m.1).unwrap_or(false);
-                let voices = self.model(&offer.model).map(|m| m.voices.clone()).unwrap_or_default();
-                Available { offer, installed, voices }
+                let accelerators = std::iter::once(offer.accelerator)
+                    .chain(offer.alternatives.iter().filter(|a| a.engine == offer.engine).map(|a| a.accelerator))
+                    .collect();
+                Some(Available {
+                    label: model.label.clone(),
+                    languages: model.languages.clone(),
+                    runs: Runs::Native,
+                    voices: model.voices.clone(),
+                    installed,
+                    accelerators,
+                    model: offer.model,
+                    engine: offer.engine,
+                    task: offer.task,
+                    download_size: offer.download_size,
+                    accelerator: offer.accelerator,
+                    reason: offer.reason,
+                })
             })
             .collect()
     }
 
     fn model(&self, id: &str) -> Option<&Model> {
-        self.catalog.models.iter().find(|m| m.id == id)
+        self.catalog.model(id)
     }
 
     /// ((engine dir, installed), (model dir, installed)) for a native model on an engine this device runs.
     #[allow(clippy::type_complexity)]
     fn paths(&self, model_id: &str, engine_id: &str) -> Result<((PathBuf, bool), (PathBuf, bool)), Error> {
-        let engine = self.catalog.engines.iter().find(|e| e.id == engine_id).ok_or("unknown engine")?;
+        let engine = self.catalog.engine(engine_id).ok_or("unknown engine")?;
         let package = engines::package_for(engine, &self.device).ok_or("this engine has no package for this device")?;
         let model = self.model(model_id).ok_or("unknown model")?;
-        let build = model.builds.get(engine_id).ok_or("this model does not run on that engine")?;
+        let build = model.build(engine_id).ok_or("this model does not run on that engine")?;
         let download = build.download.as_ref().ok_or("this build has nothing to download")?;
-        let engine_dir =
-            self.store.engine_dir(&engine.id, &engine.version, &package.os, &package.arch, &package.download);
+        let (arch, package_download) = downloaded(package)?;
+        let engine_dir = self.store.engine_dir(&engine.id, &engine.version, &package.os, arch, package_download);
         let model_dir = self.store.model_dir(&engine.id, &model.id, download);
         Ok((
-            (engine_dir.clone(), Store::installed(&engine_dir, &package.download)),
+            (engine_dir.clone(), Store::installed(&engine_dir, package_download)),
             (model_dir.clone(), Store::installed(&model_dir, download)),
         ))
     }
@@ -93,16 +120,17 @@ impl NativeEngines {
     /// Downloads what `model` on `engine` needs, reporting (done, total) bytes across both downloads.
     pub fn install(&self, model_id: &str, engine_id: &str, progress: &mut dyn FnMut(u64, u64)) -> Result<(), Error> {
         let _one_at_a_time = self.installing.lock().map_err(|_| "poisoned")?;
-        let engine = self.catalog.engines.iter().find(|e| e.id == engine_id).ok_or("unknown engine")?;
+        let engine = self.catalog.engine(engine_id).ok_or("unknown engine")?;
         let package = engines::package_for(engine, &self.device).ok_or("no package for this device")?;
         let model = self.model(model_id).ok_or("unknown model")?;
-        let download = model.builds.get(engine_id).and_then(|b| b.download.as_ref()).ok_or("nothing to download")?;
+        let download = model.build(engine_id).and_then(|b| b.download.as_ref()).ok_or("nothing to download")?;
+        let (_, package_download) = downloaded(package)?;
         let ((engine_dir, engine_ok), (model_dir, model_ok)) = self.paths(model_id, engine_id)?;
-        let total = if engine_ok { 0 } else { package.download.size } + if model_ok { 0 } else { download.size };
+        let total = if engine_ok { 0 } else { package_download.size } + if model_ok { 0 } else { download.size };
         let mut base = 0;
         if !engine_ok {
-            self.store.fetch(&package.download, &engine_dir, &mut |done, _| progress(done, total))?;
-            base = package.download.size;
+            self.store.fetch(package_download, &engine_dir, &mut |done, _| progress(done, total))?;
+            base = package_download.size;
         }
         if !model_ok {
             self.store.fetch(download, &model_dir, &mut |done, _| progress(base + done, total))?;
@@ -118,10 +146,11 @@ impl NativeEngines {
         if let Some(engine) = loaded.as_ref() {
             return Ok(engine.clone());
         }
-        let engine = self.catalog.engines.iter().find(|e| e.id == engine_id).ok_or("unknown engine")?;
+        let engine = self.catalog.engine(engine_id).ok_or("unknown engine")?;
         let package = engines::package_for(engine, &self.device).ok_or("no package for this device")?;
-        let dir = self.store.engine_dir(&engine.id, &engine.version, &package.os, &package.arch, &package.download);
-        if !Store::installed(&dir, &package.download) {
+        let (arch, package_download) = downloaded(package)?;
+        let dir = self.store.engine_dir(&engine.id, &engine.version, &package.os, arch, package_download);
+        if !Store::installed(&dir, package_download) {
             return Err("the engine is not downloaded yet".into());
         }
         let sherpa = Arc::new(Sherpa::load(&dir, &package.libraries)?);
@@ -131,14 +160,14 @@ impl NativeEngines {
 
     fn ready_model(&self, model_id: &str, engine_id: &str, task: Task) -> Result<(PathBuf, serde_json::Value), Error> {
         let model = self.model(model_id).ok_or("unknown model")?;
-        if model.task != task {
+        if self.catalog.task_of(model) != Some(task) {
             return Err(format!("{model_id} is not a {task:?} model"));
         }
         let (_, (dir, ok)) = self.paths(model_id, engine_id)?;
         if !ok {
             return Err(format!("{model_id} is not downloaded yet"));
         }
-        Ok((dir, model.builds[engine_id].config.clone()))
+        Ok((dir, model.build(engine_id).ok_or("this model does not run on that engine")?.config.clone()))
     }
 
     /// Mono f32 samples at `sample_rate` → text. `language`: Whisper's code, or empty to detect it.
@@ -193,5 +222,14 @@ impl NativeEngines {
 
     pub fn accelerators(&self) -> Vec<Capability> {
         self.device.capabilities.clone()
+    }
+}
+
+/// A downloaded package's architecture and download. This app downloads its engines; a bundled one (mobile) has
+/// neither, and is not this app's to install.
+fn downloaded(package: &engines::Package) -> Result<(&str, &engines::Download), Error> {
+    match (package.arch.as_deref(), package.download.as_ref()) {
+        (Some(arch), Some(download)) if !package.bundled => Ok((arch, download)),
+        _ => Err("this engine package is bundled, not downloaded".into()),
     }
 }

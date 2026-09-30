@@ -1,27 +1,25 @@
 {
-  "version": 1,
+  "version": 2,
   "engines": [
     {
       "id": "sherpa-onnx",
       "label": "sherpa-onnx (ONNX Runtime)",
       "version": "1.13.8",
       "runs": "native",
+      "families": [
+        "whisper",
+        "kokoro"
+      ],
       "formats": [
         "onnx"
       ],
-      "tasks": [
-        "stt",
-        "tts"
-      ],
-      "needs_any": [],
       "packages": [
         {
           "os": "macos",
           "arch": "aarch64",
-          "requires": [],
           "accelerators": [
-            "coreml",
-            "cpu"
+            "cpu",
+            "coreml"
           ],
           "download": {
             "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-osx-arm64-shared-lib.tar.bz2",
@@ -47,35 +45,125 @@
     },
     {
       "id": "transformers-js",
-      "label": "transformers.js (en la página)",
+      "label": "transformers.js",
       "version": "3.8.1",
-      "runs": "browser",
+      "runs": "page",
+      "families": [
+        "whisper",
+        "kokoro"
+      ],
       "formats": [
         "onnx"
       ],
-      "tasks": [
-        "stt",
-        "tts"
+      "accelerators": [
+        "webgpu",
+        "wasm"
       ],
-      "needs_any": [
-        "wasm",
-        "webgpu"
-      ],
-      "packages": [],
       "license": "Apache-2.0",
       "homepage": "https://github.com/huggingface/transformers.js"
+    }
+  ],
+  "ranking": {
+    "default": [
+      "sherpa-onnx",
+      "transformers-js"
+    ]
+  },
+  "families": {
+    "whisper": {
+      "task": "stt",
+      "options": [
+        {
+          "id": "language",
+          "kind": "language",
+          "values": [
+            "es",
+            "en",
+            "fr",
+            "it",
+            "pt",
+            "hi"
+          ],
+          "auto": true,
+          "default": "en"
+        },
+        {
+          "id": "context",
+          "kind": "text"
+        }
+      ]
+    },
+    "kokoro": {
+      "task": "tts",
+      "options": [
+        {
+          "id": "voice",
+          "kind": "voice",
+          "from": "model.voices",
+          "per_language": true
+        },
+        {
+          "id": "speed",
+          "kind": "range",
+          "min": 0.5,
+          "max": 2,
+          "step": 0.05,
+          "default": 1
+        }
+      ]
+    }
+  },
+  "providers": [
+    {
+      "id": "openai",
+      "label": "OpenAI",
+      "tasks": [
+        "stt"
+      ],
+      "key": true,
+      "stt": {
+        "models": "remote"
+      }
+    },
+    {
+      "id": "elevenlabs",
+      "label": "ElevenLabs",
+      "tasks": [
+        "tts"
+      ],
+      "key": true,
+      "tts": {
+        "models": "remote",
+        "options": [
+          {
+            "id": "voice",
+            "kind": "voice",
+            "from": "remote.voices",
+            "per_language": true
+          },
+          {
+            "id": "speed",
+            "kind": "range",
+            "min": 0.7,
+            "max": 1.2,
+            "step": 0.05,
+            "default": 1
+          }
+        ]
+      }
     }
   ],
   "models": [
     {
       "id": "whisper-tiny",
+      "family": "whisper",
       "label": "Whisper tiny",
-      "task": "stt",
       "languages": [
         "multi"
       ],
-      "builds": {
-        "sherpa-onnx": {
+      "builds": [
+        {
+          "engine": "sherpa-onnx",
           "format": "onnx",
           "download": {
             "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.tar.bz2",
@@ -85,15 +173,14 @@
             "root": "sherpa-onnx-whisper-tiny"
           },
           "config": {
-            "kind": "whisper",
             "encoder": "tiny-encoder.int8.onnx",
             "decoder": "tiny-decoder.int8.onnx",
             "tokens": "tiny-tokens.txt"
           }
         },
-        "transformers-js": {
+        {
+          "engine": "transformers-js",
           "format": "onnx",
-          "requires": [],
           "config": {
             "repository": "onnx-community/whisper-tiny",
             "revision": "ff4177021cc41f7db950912b73ea4fdf7d01d8e7",
@@ -103,19 +190,19 @@
             }
           }
         }
-      },
-      "voices": [],
+      ],
       "license": "MIT (OpenAI Whisper)"
     },
     {
       "id": "whisper-base",
+      "family": "whisper",
       "label": "Whisper base",
-      "task": "stt",
       "languages": [
         "multi"
       ],
-      "builds": {
-        "sherpa-onnx": {
+      "builds": [
+        {
+          "engine": "sherpa-onnx",
           "format": "onnx",
           "download": {
             "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-base.tar.bz2",
@@ -125,15 +212,14 @@
             "root": "sherpa-onnx-whisper-base"
           },
           "config": {
-            "kind": "whisper",
             "encoder": "base-encoder.int8.onnx",
             "decoder": "base-decoder.int8.onnx",
             "tokens": "base-tokens.txt"
           }
         },
-        "transformers-js": {
+        {
+          "engine": "transformers-js",
           "format": "onnx",
-          "requires": [],
           "config": {
             "repository": "onnx-community/whisper-base",
             "revision": "1846881b6b3a3024392c1eea3ad983695bc23925",
@@ -143,19 +229,19 @@
             }
           }
         }
-      },
-      "voices": [],
+      ],
       "license": "MIT (OpenAI Whisper)"
     },
     {
       "id": "whisper-small",
+      "family": "whisper",
       "label": "Whisper small",
-      "task": "stt",
       "languages": [
         "multi"
       ],
-      "builds": {
-        "sherpa-onnx": {
+      "builds": [
+        {
+          "engine": "sherpa-onnx",
           "format": "onnx",
           "download": {
             "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-small.tar.bz2",
@@ -165,15 +251,15 @@
             "root": "sherpa-onnx-whisper-small"
           },
           "config": {
-            "kind": "whisper",
             "encoder": "small-encoder.int8.onnx",
             "decoder": "small-decoder.int8.onnx",
             "tokens": "small-tokens.txt"
           }
         },
-        "transformers-js": {
+        {
+          "engine": "transformers-js",
           "format": "onnx",
-          "requires": [
+          "accelerators": [
             "webgpu"
           ],
           "config": {
@@ -184,19 +270,19 @@
             }
           }
         }
-      },
-      "voices": [],
+      ],
       "license": "MIT (OpenAI Whisper)"
     },
     {
       "id": "whisper-large-v3-turbo",
+      "family": "whisper",
       "label": "Whisper large v3 turbo",
-      "task": "stt",
       "languages": [
         "multi"
       ],
-      "builds": {
-        "sherpa-onnx": {
+      "builds": [
+        {
+          "engine": "sherpa-onnx",
           "format": "onnx",
           "download": {
             "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-turbo.tar.bz2",
@@ -206,16 +292,18 @@
             "root": "sherpa-onnx-whisper-turbo"
           },
           "config": {
-            "kind": "whisper",
             "encoder": "turbo-encoder.int8.onnx",
             "decoder": "turbo-decoder.int8.onnx",
             "tokens": "turbo-tokens.txt"
           }
         },
-        "transformers-js": {
+        {
+          "engine": "transformers-js",
           "format": "onnx",
-          "requires": [
-            "webgpu",
+          "accelerators": [
+            "webgpu"
+          ],
+          "needs": [
             "webgpu-f16"
           ],
           "config": {
@@ -226,14 +314,13 @@
             }
           }
         }
-      },
-      "voices": [],
+      ],
       "license": "MIT (OpenAI Whisper)"
     },
     {
       "id": "kokoro-82m-v1.0",
+      "family": "kokoro",
       "label": "Kokoro 82M v1.0",
-      "task": "tts",
       "languages": [
         "en-gb",
         "en-us",
@@ -243,8 +330,96 @@
         "it",
         "pt-br"
       ],
-      "builds": {
-        "sherpa-onnx": {
+      "voices": [
+        {
+          "id": "ef_dora",
+          "language": "es",
+          "sid": 28
+        },
+        {
+          "id": "em_alex",
+          "language": "es",
+          "sid": 29
+        },
+        {
+          "id": "em_santa",
+          "language": "es",
+          "sid": 53
+        },
+        {
+          "id": "af_heart",
+          "language": "en-us",
+          "sid": 3
+        },
+        {
+          "id": "af_bella",
+          "language": "en-us",
+          "sid": 2
+        },
+        {
+          "id": "bf_emma",
+          "language": "en-gb",
+          "sid": 21
+        },
+        {
+          "id": "bm_george",
+          "language": "en-gb",
+          "sid": 26
+        },
+        {
+          "id": "ff_siwis",
+          "language": "fr-fr",
+          "sid": 30
+        },
+        {
+          "id": "if_sara",
+          "language": "it",
+          "sid": 35
+        },
+        {
+          "id": "im_nicola",
+          "language": "it",
+          "sid": 36
+        },
+        {
+          "id": "pf_dora",
+          "language": "pt-br",
+          "sid": 42
+        },
+        {
+          "id": "pm_alex",
+          "language": "pt-br",
+          "sid": 43
+        },
+        {
+          "id": "pm_santa",
+          "language": "pt-br",
+          "sid": 44
+        },
+        {
+          "id": "hf_alpha",
+          "language": "hi",
+          "sid": 31
+        },
+        {
+          "id": "hf_beta",
+          "language": "hi",
+          "sid": 32
+        },
+        {
+          "id": "hm_omega",
+          "language": "hi",
+          "sid": 33
+        },
+        {
+          "id": "hm_psi",
+          "language": "hi",
+          "sid": 34
+        }
+      ],
+      "builds": [
+        {
+          "engine": "sherpa-onnx",
           "format": "onnx",
           "download": {
             "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-int8-multi-lang-v1_0.tar.bz2",
@@ -254,7 +429,6 @@
             "root": "kokoro-int8-multi-lang-v1_0"
           },
           "config": {
-            "kind": "kokoro",
             "model": "model.int8.onnx",
             "voices": "voices.bin",
             "tokens": "tokens.txt",
@@ -263,9 +437,9 @@
             "lexicon": "lexicon-us-en.txt,lexicon-zh.txt"
           }
         },
-        "transformers-js": {
+        {
+          "engine": "transformers-js",
           "format": "onnx",
-          "requires": [],
           "config": {
             "repository": "onnx-community/Kokoro-82M-v1.0-ONNX",
             "revision": "1939ad2a8e416c0acfeecc08a694d14ef25f2231",
@@ -274,93 +448,6 @@
               "wasm": "q8"
             }
           }
-        }
-      },
-      "voices": [
-        {
-          "id": "ef_dora",
-          "sid": 28,
-          "language": "es"
-        },
-        {
-          "id": "em_alex",
-          "sid": 29,
-          "language": "es"
-        },
-        {
-          "id": "em_santa",
-          "sid": 53,
-          "language": "es"
-        },
-        {
-          "id": "af_heart",
-          "sid": 3,
-          "language": "en-us"
-        },
-        {
-          "id": "af_bella",
-          "sid": 2,
-          "language": "en-us"
-        },
-        {
-          "id": "bf_emma",
-          "sid": 21,
-          "language": "en-gb"
-        },
-        {
-          "id": "bm_george",
-          "sid": 26,
-          "language": "en-gb"
-        },
-        {
-          "id": "ff_siwis",
-          "sid": 30,
-          "language": "fr-fr"
-        },
-        {
-          "id": "if_sara",
-          "sid": 35,
-          "language": "it"
-        },
-        {
-          "id": "im_nicola",
-          "sid": 36,
-          "language": "it"
-        },
-        {
-          "id": "pf_dora",
-          "sid": 42,
-          "language": "pt-br"
-        },
-        {
-          "id": "pm_alex",
-          "sid": 43,
-          "language": "pt-br"
-        },
-        {
-          "id": "pm_santa",
-          "sid": 44,
-          "language": "pt-br"
-        },
-        {
-          "id": "hf_alpha",
-          "sid": 31,
-          "language": "hi"
-        },
-        {
-          "id": "hf_beta",
-          "sid": 32,
-          "language": "hi"
-        },
-        {
-          "id": "hm_omega",
-          "sid": 33,
-          "language": "hi"
-        },
-        {
-          "id": "hm_psi",
-          "sid": 34,
-          "language": "hi"
         }
       ],
       "license": "Apache-2.0 (hexgrad/Kokoro-82M)"
