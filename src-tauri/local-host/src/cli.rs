@@ -41,10 +41,16 @@ impl Cli {
         let prefix = command(&install).ok_or_else(|| {
             Refusal::new("install.unreadable", format!("{} names no command of absolute paths.", record.display()))
         })?;
+        // What runs is exactly what was checked: each path resolved once, and `D` as its descriptor was checked.
+        let mut verified = Vec::with_capacity(prefix.len());
         for path in &prefix {
-            checked(trusted::executable(std::path::Path::new(path)))?;
+            let resolved = checked(trusted::executable(std::path::Path::new(path)))?;
+            let resolved = resolved.into_os_string().into_string().map_err(|_| {
+                Refusal::new("install.unreadable", format!("{} names a path that is not UTF-8.", record.display()))
+            })?;
+            verified.push(resolved);
         }
-        Ok(Cli { prefix, data: dirs.data.clone() })
+        Ok(Cli { prefix: verified, data: dir.path().to_path_buf() })
     }
 
     /// Runs `prefix + args` and waits at most `timeout` — for the process to exit **and** for both its output streams
@@ -308,6 +314,38 @@ mod tests {
     }
 
     #[test]
+    fn what_runs_is_what_was_checked_even_if_a_link_is_retargeted() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let program = |name: &str| {
+            let path = tmp.path().join(name);
+            std::fs::write(
+                &path,
+                format!(
+                    "#!/bin/sh\necho '{{\"ok\":true,\"which\":\"{name}\",\"data\":\"'\"$SIDEVOICE_DATA_DIR\"'\"}}'\n"
+                ),
+            )
+            .unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            path
+        };
+        let (genuine, replacement) = (program("genuine"), program("replacement"));
+        let link = tmp.path().join("sidevoice");
+        std::os::unix::fs::symlink(&genuine, &link).unwrap();
+        let dirs = DataDirs::new(tmp.path());
+        std::fs::write(dirs.install_record(), format!(r#"{{"command":["{}"]}}"#, link.display())).unwrap();
+        std::fs::set_permissions(dirs.install_record(), std::fs::Permissions::from_mode(0o600)).unwrap();
+        let cli = Cli::installed(&dirs).unwrap();
+        // Between the check and the run, the link is pointed elsewhere.
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(&replacement, &link).unwrap();
+        let answer = cli.run(&["x"], Duration::from_secs(5)).unwrap();
+        assert_eq!(answer["which"], "genuine", "the checked target runs, not the link's new one");
+        let canonical_data = std::fs::canonicalize(tmp.path()).unwrap();
+        assert_eq!(answer["data"], canonical_data.display().to_string(), "SIDEVOICE_DATA_DIR is the checked directory");
+    }
+
+    #[test]
     fn only_an_install_record_of_absolute_paths_names_the_cli() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -322,7 +360,8 @@ mod tests {
         let record = format!(r#"{{"command":["/bin/sh","{}"]}}"#, script.display());
         write(&record, 0o600);
         let cli = Cli::installed(&dirs).unwrap();
-        assert_eq!(cli.prefix, ["/bin/sh".to_string(), script.display().to_string()]);
+        let canonical = |p: &str| std::fs::canonicalize(p).unwrap().display().to_string();
+        assert_eq!(cli.prefix, [canonical("/bin/sh"), canonical(&script.display().to_string())]);
         // What the command names must be root's or this user's and closed to others too.
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o666)).unwrap();
         assert_eq!(Cli::installed(&dirs).unwrap_err().key, "install.unsafe");

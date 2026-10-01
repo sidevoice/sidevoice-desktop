@@ -49,8 +49,10 @@ pub fn ancestry(path: &Path, key: &str) -> Result<PathBuf, Check> {
     Ok(resolved)
 }
 
-/// A program the app runs: safe ancestry, a regular file of root's or this user's that others cannot write.
-pub fn executable(path: &Path) -> Result<(), Check> {
+/// A program the app runs: safe ancestry, a regular file of root's or this user's that others cannot write. Returns the
+/// path with every link resolved — the one that was checked, and the one to run: a link on the way (a system one
+/// such as `/usr/bin/node`, or one in a directory others can change) is never followed again after the check.
+pub fn executable(path: &Path) -> Result<PathBuf, Check> {
     let resolved = ancestry(path, "install.unsafe")?;
     let meta = std::fs::metadata(&resolved).map_err(|e| unsafe_path("install.unsafe", path, &e.to_string()))?;
     if !meta.is_file() || changeable_by_others(&meta) || meta.mode() & 0o1000 != 0 {
@@ -60,7 +62,7 @@ pub fn executable(path: &Path) -> Result<(), Check> {
             &format!("uid {} mode {:o}", meta.uid(), meta.mode() & 0o7777),
         ));
     }
-    Ok(())
+    Ok(resolved)
 }
 
 fn c_path(path: &Path) -> io::Result<CString> {
@@ -115,7 +117,12 @@ impl Dir {
         // SAFETY: `raw` is a freshly opened descriptor nobody else owns.
         let fd = unsafe { OwnedFd::from_raw_fd(raw) };
         check_fd(&fd, true, mask, key, path)?;
-        Ok(Dir { fd, path: path.to_path_buf(), key: key.to_string() })
+        Ok(Dir { fd, path: resolved, key: key.to_string() })
+    }
+
+    /// The directory as checked: every link resolved.
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
     fn openat(&self, name: &str, flags: libc::c_int, mode: libc::mode_t) -> io::Result<OwnedFd> {
@@ -287,13 +294,17 @@ mod tests {
         let program = bin.join("node");
         std::fs::write(&program, b"#!/bin/sh\n").unwrap();
         chmod(&program, 0o755);
-        assert_eq!(executable(&program), Ok(()));
+        assert_eq!(executable(&program), Ok(std::fs::canonicalize(&program).unwrap()));
         chmod(&program, 0o777);
         assert!(executable(&program).is_err());
         chmod(&program, 0o755);
         chmod(&bin, 0o777);
         assert!(executable(&program).is_err());
         chmod(&bin, 0o755);
-        assert_eq!(executable(Path::new("/bin/sh")), Ok(()));
+        assert_eq!(
+            executable(Path::new("/bin/sh")),
+            Ok(std::fs::canonicalize("/bin/sh").unwrap()),
+            "a system link resolved"
+        );
     }
 }
