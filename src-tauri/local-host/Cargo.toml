@@ -10,7 +10,7 @@ publish = false
 [features]
 # A stand-in core on a Unix socket (HTTP + a WebSocket echo), for this crate's tests, its CI example and the app's CI
 # probe. Never in the app.
-fake-core = []
+fake-core = ["dep:sha1"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -27,6 +27,8 @@ base64 = "0.22"
 getrandom = "0.3"
 # The proxy's secret compared in constant time.
 subtle = "2.6"
+# The stand-in core's WebSocket handshake (fake-core only).
+sha1 = { version = "0.10", optional = true }
 
 [dev-dependencies]
 # The tests and the CI example use the stand-in core.
