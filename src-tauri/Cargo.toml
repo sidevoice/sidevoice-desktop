@@ -33,6 +33,10 @@ serde_json = "1"
 sys-locale = "0.3"
 url = "2.5"
 
+# This computer's own core, its pairing and the page's proxy (src/local_host.rs; docs/LOCAL_HOST.md). Unix sockets.
+[target.'cfg(unix)'.dependencies]
+sidevoice-local-host = { path = "local-host" }
+
 [target.'cfg(windows)'.dependencies]
 # The taskbar's colour, to draw the tray mark in the brand's look for it (src/tray.rs).
 winreg = "0.55"

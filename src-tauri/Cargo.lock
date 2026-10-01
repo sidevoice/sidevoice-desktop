@@ -3606,6 +3606,7 @@ dependencies = [
  "serde_json",
  "sidevoice-desktop-core",
  "sidevoice-desktop-engine",
+ "sidevoice-local-host",
  "sys-locale",
  "tauri",
  "tauri-build",
