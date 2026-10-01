@@ -10,7 +10,8 @@ use crate::paths::DataDirs;
 use crate::trusted;
 use crate::Refusal;
 use serde_json::Value;
-use std::io::Read;
+use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -46,9 +47,15 @@ impl Cli {
         Ok(Cli { prefix, data: dirs.data.clone() })
     }
 
-    /// Runs `prefix + args` and waits at most `timeout`: its JSON answer when it says `ok`, else its `{key, message}`.
+    /// Runs `prefix + args` and waits at most `timeout` — for the process to exit **and** for both its output streams
+    /// to close: its JSON answer when it says `ok`, else its `{key, message}`.
+    ///
+    /// The run is a process group of its own. Whatever is left in it once the program exits (a child still holding
+    /// the pipes) is killed, and on a timeout the whole group is. What the program hands to the service manager
+    /// (`service start` → launchd) or starts detached in a session of its own is not in the group, and stays.
     pub fn run(&self, args: &[&str], timeout: Duration) -> Result<Value, Refusal> {
         let failed = |why: String| Refusal::new("cli.failed", why);
+        let deadline = Instant::now() + timeout;
         let mut command = Command::new(&self.prefix[0]);
         command
             .args(&self.prefix[1..])
@@ -56,7 +63,8 @@ impl Cli {
             .env("SIDEVOICE_DATA_DIR", &self.data)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            .process_group(0);
         // A program being written at that instant (an update, or any process that forked while holding it open for
         // writing) cannot be run yet: ETXTBSY, tried again shortly.
         let mut tries = 0;
@@ -69,34 +77,43 @@ impl Cli {
                 spawned => break spawned.map_err(|e| failed(format!("{} could not start: {e}", self.prefix[0])))?,
             }
         };
-        let drain = |pipe: Option<Box<dyn Read + Send>>| {
-            thread::spawn(move || {
-                let mut out = Vec::new();
-                if let Some(pipe) = pipe {
-                    let _ = pipe.take(OUTPUT_LIMIT).read_to_end(&mut out);
-                }
-                out
-            })
+        let group = child.id() as libc::pid_t;
+        let kill_group = || {
+            // SAFETY: signals the process group this run created; ESRCH (nobody left) is fine.
+            unsafe { libc::killpg(group, libc::SIGKILL) };
         };
-        let stdout = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-        let stderr = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-        let deadline = Instant::now() + timeout;
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break status,
-                Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(25)),
-                Ok(None) | Err(_) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(Refusal::new(
-                        "cli.timeout",
-                        format!("`{}` did not answer within {} s.", args.join(" "), timeout.as_secs()),
-                    ));
+        let mut streams =
+            [Stream::new(child.stdout.take().map(OwnedFd::from)), Stream::new(child.stderr.take().map(OwnedFd::from))];
+        let mut status = None;
+        loop {
+            if status.is_none() {
+                status = child.try_wait().ok().flatten();
+                if status.is_some() {
+                    // The program answered and left: anything of its own still running only holds the pipes open.
+                    kill_group();
                 }
             }
+            let open = streams.iter().any(Stream::is_open);
+            if status.is_some() && !open {
+                break;
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            drain(&mut streams, left.min(Duration::from_millis(50)));
+        }
+        let Some(status) = status else {
+            kill_group();
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(Refusal::new(
+                "cli.timeout",
+                format!("`{}` did not answer within {} s.", args.join(" "), timeout.as_secs()),
+            ));
         };
-        let stdout = stdout.join().unwrap_or_default();
-        let stderr = String::from_utf8_lossy(&stderr.join().unwrap_or_default()).into_owned();
+        let [stdout, stderr] = streams.map(|s| s.bytes);
+        let stderr = String::from_utf8_lossy(&stderr).into_owned();
         let tail =
             || stderr.lines().rev().take(5).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join(" | ");
         let answer: Value = serde_json::from_slice(&stdout)
@@ -107,6 +124,53 @@ impl Cli {
             return Ok(answer);
         }
         Err(refusal_of(&answer).unwrap_or_else(|| failed(format!("`{}` exited {status}: {}", args.join(" "), tail()))))
+    }
+}
+
+/// One of the program's output pipes, read without blocking past the deadline.
+struct Stream {
+    fd: Option<OwnedFd>,
+    bytes: Vec<u8>,
+}
+
+impl Stream {
+    fn new(fd: Option<OwnedFd>) -> Self {
+        Stream { fd, bytes: Vec::new() }
+    }
+
+    fn is_open(&self) -> bool {
+        self.fd.is_some()
+    }
+}
+
+/// Waits at most `wait` for any open stream to have something, and reads what there is. End of file, or an error,
+/// closes the stream; beyond [`OUTPUT_LIMIT`] bytes are read and dropped.
+fn drain(streams: &mut [Stream], wait: Duration) {
+    let mut polled: Vec<libc::pollfd> = streams
+        .iter()
+        .filter_map(|s| s.fd.as_ref())
+        .map(|fd| libc::pollfd { fd: fd.as_raw_fd(), events: libc::POLLIN, revents: 0 })
+        .collect();
+    let millis = wait.as_millis().clamp(1, 1000) as libc::c_int;
+    // SAFETY: `polled` is a valid array of its length; with none, poll only sleeps.
+    let ready = unsafe { libc::poll(polled.as_mut_ptr(), polled.len() as libc::nfds_t, millis) };
+    if ready <= 0 {
+        return;
+    }
+    let mut events = polled.iter().map(|p| p.revents);
+    for stream in streams.iter_mut().filter(|s| s.fd.is_some()) {
+        if events.next().unwrap_or(0) == 0 {
+            continue;
+        }
+        let fd = stream.fd.as_ref().expect("open").as_raw_fd();
+        let mut chunk = [0u8; 16 * 1024];
+        // SAFETY: `chunk` is writable for its length; the fd is open. poll said it would not block.
+        let n = unsafe { libc::read(fd, chunk.as_mut_ptr() as *mut libc::c_void, chunk.len()) };
+        if n <= 0 {
+            stream.fd = None;
+        } else if (stream.bytes.len() as u64) < OUTPUT_LIMIT {
+            stream.bytes.extend_from_slice(&chunk[..n as usize]);
+        }
     }
 }
 
@@ -180,6 +244,67 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(5));
         let missing = Cli { prefix: vec!["/nonexistent/sidevoice".into()], data: tmp.path().into() };
         assert_eq!(missing.run(&["x"], Duration::from_secs(1)).unwrap_err().key, "cli.failed");
+    }
+
+    /// Whether `pid` is still running (a zombie waiting for its reaper is not).
+    fn alive(pid: i32) -> bool {
+        // SAFETY: signal 0 only asks whether the process exists.
+        let exists = unsafe { libc::kill(pid, 0) } == 0;
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+        exists && !stat.rsplit_once(')').is_some_and(|(_, rest)| rest.trim_start().starts_with('Z'))
+    }
+
+    fn dead_soon(pid: i32) -> bool {
+        (0..100).any(|_| {
+            !alive(pid) || {
+                thread::sleep(Duration::from_millis(20));
+                false
+            }
+        })
+    }
+
+    fn pid_in(path: &std::path::Path) -> i32 {
+        std::fs::read_to_string(path).unwrap().trim().parse().unwrap()
+    }
+
+    #[test]
+    fn a_child_left_holding_the_pipes_neither_delays_the_answer_nor_survives() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pid = tmp.path().join("pid");
+        let cli = fake(tmp.path(), &format!("sleep 30 & echo $! > '{}'\necho '{{\"ok\":true}}'", pid.display()));
+        let started = Instant::now();
+        assert_eq!(cli.run(&["x"], Duration::from_secs(10)).unwrap()["ok"], true);
+        assert!(started.elapsed() < Duration::from_secs(3), "{:?}", started.elapsed());
+        assert!(dead_soon(pid_in(&pid)), "the leftover child was killed");
+    }
+
+    #[test]
+    fn a_timeout_kills_the_whole_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pid = tmp.path().join("pid");
+        let cli = fake(tmp.path(), &format!("sleep 30 & echo $! > '{}'\nsleep 30", pid.display()));
+        let started = Instant::now();
+        assert_eq!(cli.run(&["x"], Duration::from_millis(500)).unwrap_err().key, "cli.timeout");
+        assert!(started.elapsed() < Duration::from_secs(3), "{:?}", started.elapsed());
+        assert!(dead_soon(pid_in(&pid)), "the child was killed with the program");
+    }
+
+    #[test]
+    fn what_the_program_detaches_into_its_own_session_stays() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pid = tmp.path().join("pid");
+        // As the connector's detached spawn: a session of its own before the program goes on, its output elsewhere.
+        let detach = format!(
+            "perl -e 'use POSIX; POSIX::setsid(); open F, \">{p}\"; print F $$; close F; exec \"sleep\", \"30\"' </dev/null >/dev/null 2>&1 &\nwhile [ ! -s '{p}' ]; do sleep 0.05; done\necho '{{\"ok\":true}}'",
+            p = pid.display()
+        );
+        let cli = fake(tmp.path(), &detach);
+        assert_eq!(cli.run(&["service", "start", "--json"], Duration::from_secs(10)).unwrap()["ok"], true);
+        let pid = pid_in(&pid);
+        thread::sleep(Duration::from_millis(200));
+        assert!(alive(pid), "a service the program started on its own stays");
+        // SAFETY: the test's own process.
+        unsafe { libc::kill(pid, libc::SIGKILL) };
     }
 
     #[test]
