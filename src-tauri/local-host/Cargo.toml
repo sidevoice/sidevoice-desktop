@@ -1,0 +1,38 @@
+[package]
+name = "sidevoice-local-host"
+version = "0.1.0"
+description = "The local host (docs/LOCAL_HOST.md): this computer's core reached over its private Unix socket, paired by the app, its state, and the proxy the bundled page talks to. Blocking IO, no Tauri, so it is tested anywhere Unix."
+edition = "2021"
+rust-version = "1.80"
+license = "Apache-2.0"
+publish = false
+
+[features]
+# A stand-in core on a Unix socket (HTTP + a WebSocket echo), for this crate's tests, its CI example and the app's CI
+# probe. Never in the app.
+fake-core = []
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(unix)'.dependencies]
+# The socket peer's uid (`getpeereid` / `SO_PEERCRED`), the effective uid, the host name.
+libc = "0.2"
+# The core's identity: ECDSA P-256 over `sidevoice-node-identity:<nonce>`, IEEE P1363 signatures.
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "pkcs8", "std"] }
+sha2 = "0.10"
+base64 = "0.22"
+# Nonces and the proxy's per-launch secret.
+getrandom = "0.3"
+# The proxy's secret compared in constant time.
+subtle = "2.6"
+
+[dev-dependencies]
+# The tests and the CI example use the stand-in core.
+sidevoice-local-host = { path = ".", features = ["fake-core"] }
+tempfile = "3"
+
+[[example]]
+name = "local-host-ci"
+required-features = ["fake-core"]

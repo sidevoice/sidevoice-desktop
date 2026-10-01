@@ -12,7 +12,7 @@ name = "sidevoice_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [workspace]
-members = ["core", "engine"]
+members = ["core", "engine", "local-host"]
 
 [features]
 # CI only (src/probe.rs): the probe page and the switch that loads it. Never in a release build.
