@@ -615,17 +615,22 @@ fn a_head_still_arriving_survives_connection_churn() {
         "GET /api/x HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: tauri://localhost\r\nAuthorization: Bearer {secret}\r\n"
     );
     page.write_all(head.as_bytes()).unwrap();
-    // Churn: far more unauthenticated connections than there are head slots, each sending a byte.
-    let mut churn = Vec::new();
-    for _ in 0..200 {
-        if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) {
-            let _ = stream.write_all(b"G");
-            churn.push(stream);
+    // Churn meanwhile: far more unauthenticated connections than there are head slots, each sending a byte. The page
+    // finishes its head 300 ms in (well within the idle second), whatever the churn has reached by then.
+    let churn = std::thread::spawn(move || {
+        let mut churn = Vec::new();
+        for _ in 0..200 {
+            if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) {
+                let _ = stream.write_all(b"G");
+                churn.push(stream);
+            }
         }
-    }
+        churn
+    });
     std::thread::sleep(Duration::from_millis(300));
     page.write_all(b"\r\n").unwrap();
     let mut answer = String::new();
     let _ = page.read_to_string(&mut answer);
+    drop(churn.join());
     assert!(answer.starts_with("HTTP/1.1 200"), "{answer:?}");
 }
