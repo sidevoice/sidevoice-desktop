@@ -39,7 +39,7 @@ class BrowserTranscription{
   this.worker?.terminate();this.worker=null;
   this.worker=this.candidate(native);this.native=native;this._listen(this.worker);
  }
- /* A worker of its own for a model check (#124 §6): the same protocol as this client's, loaded and checked apart
+ /* A worker of its own for a model check (sidevoice/sidevoice-core#21): the same protocol as this client's, loaded and checked apart
   * from the one a call is using, which keeps transcribing until the checked model takes its place (adopt). */
  candidate(native=false){
   if(!native)return new Worker('/voice-browser/stt-worker.js?v='+encodeURIComponent(globalThis.sidevoiceBuildId||'dev'),{type:'module'});
@@ -81,7 +81,7 @@ class BrowserTranscription{
   };
  }
  /* A worker that is no longer the one in use (nor held) goes once nothing waits on it; until then it is kept here, so
-  * clearing what it was doing (stop) or its late answer lets it go too (review R06). */
+  * clearing what it was doing (stop) or its late answer lets it go too. */
  _retire(worker){
   if(!worker||worker===this.worker||worker===this.held?.worker)return;
   if([...this.pending.values()].some(request=>request.worker===worker)){this.retired.add(worker);return}

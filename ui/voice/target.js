@@ -1,4 +1,4 @@
-/* Where this page talks to (docs/RENDEZVOUS.md, docs/DEVICE_PAIRING.md).
+/* Where this page talks to (the node side: sidevoice-core `server/rendezvous.py`, `server/devices.py`).
  *
  * A no-op on purpose. The page talks to the node this device is paired with; the target only adds one more
  * place to look for it. Whoever serves this build may say where it points:
