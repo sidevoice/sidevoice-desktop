@@ -317,7 +317,7 @@ jobs:
           grep -Eq 'probe-engine ok .* progress_calls=[1-9]' /tmp/probe.log
           grep -q 'probe-engine ok .* refused=yes ' /tmp/probe.log
           grep -iq 'probe-engine ok.*prueba' /tmp/probe.log
-          # Load → transcribe → unload (rubasace/sidevoice#124 phase 3): loaded once, one model in memory each for every
+          # Load → transcribe → unload (sidevoice/sidevoice-core#21 phase 3): loaded once, one model in memory each for every
           # language (Spanish, then English), freed on unload; the OS's memory and what is available of it.
           grep -q 'probe-engine ok .* before_load=kokoro-82m-v1.0@sherpa-onnx/cpu load_ms=' /tmp/probe.log
           grep -q 'probe-engine ok .* load_ms=\([0-9]*\) load_again_ms=\1 ' /tmp/probe.log

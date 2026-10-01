@@ -1,7 +1,7 @@
 //! The model catalog's shape, and whether one of its native builds runs on this device (docs/ENGINES.md).
 //!
 //! One catalog for every client (browser, desktop app, host, later mobile), owned by `sidevoice/sidevoice-core`
-//! (rubasace/sidevoice#124 §3): `catalog/engines.json` is a copy generated from it, never edited here. An
+//! (sidevoice/sidevoice-core#21 §3): `catalog/engines.json` is a copy generated from it, never edited here. An
 //! **engine** loads a build and runs it: in a page (`runs: page`, transformers.js) or as a package downloaded at
 //! run time for one OS/architecture (`runs: native`, sherpa-onnx). A **family** (whisper, kokoro) says the task
 //! and the options; a **model** (Whisper tiny, Kokoro 82M) has one **build** per engine it runs on: its files in
@@ -275,7 +275,7 @@ pub fn package_for<'a>(engine: &'a Engine, device: &Device) -> Option<&'a Packag
 /// clients' resolvers pick; `None` when the build does not run here: not a native engine's, no package of it
 /// for this OS/architecture, a feature it needs missing, or no accelerator both usable and present. The narrow
 /// check the app makes at its trust boundary before it installs or runs what a page asks for; choosing among
-/// models is the client's resolver (rubasace/sidevoice#124 §4), never the app's.
+/// models is the client's resolver (sidevoice/sidevoice-core#21 §4), never the app's.
 pub fn accelerators_for(catalog: &Catalog, build: &Build, device: &Device) -> Option<Vec<Capability>> {
     let engine = catalog.engine(&build.engine)?;
     if engine.runs != Runs::Native || device.runs != Runs::Native {

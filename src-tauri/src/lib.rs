@@ -2,7 +2,7 @@
 //! the call through the interface's own actions (docs/BRIDGE.md).
 //!
 //! The interface is a secret-free client: it talks to a node or a rendezvous room it was paired with (the node
-//! issues a one-time code; rubasace/sidevoice docs/DEVICE_PAIRING.md), told where to look first through
+//! issues a one-time code; sidevoice-core `control/devices.py`), told where to look first through
 //! `window.__SIDEVOICE_TARGET__` (docs/TARGETS.md). No remote page is ever loaded.
 //!
 //! Windows:
@@ -29,7 +29,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 const SETTINGS_LABEL: &str = "settings";
 const ROOM_PREFIX: &str = "room-";
-/// The web interface bundled in the app (vendored from rubasace/sidevoice, `scripts/vendor-web.mjs`), at the
+/// The web interface bundled in the app (vendored from sidevoice-web, `scripts/vendor-web.mjs`), at the
 /// paths a room serves it from, so its absolute `/voice/…` and `/voice-browser/…` URLs resolve.
 const BUNDLED_INTERFACE: &str = "voice/index.html";
 
@@ -331,7 +331,7 @@ pub fn run() {
                 engines.faults = probe::faults();
             }
             let engines = engine_ipc::EngineState::new(engines);
-            // A model stays in memory during a call and for ten minutes after the last use (#124 D13).
+            // A model stays in memory during a call and for ten minutes after the last use (sidevoice-core#21 D13).
             engine_ipc::unload_when_idle(engines.engines.clone());
             app.manage(engines);
             let stored = app.path().app_config_dir().ok().and_then(|dir| settings::load(&dir));

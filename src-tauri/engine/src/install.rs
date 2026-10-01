@@ -5,7 +5,7 @@
 //! fails or is stopped (a cancelled install) removes what it had written: nothing partial stays on disk.
 //!
 //! A stop does not wait for the network: the request is awaited — its headers, then each chunk — against the stop,
-//! and a stop drops it, closing the connection, however long the server has gone quiet (#124 review N04).
+//! and a stop drops it, closing the connection, however long the server has gone quiet (sidevoice-core#21 review N04).
 
 use crate::error::{self, Error};
 use sha2::{Digest, Sha256};

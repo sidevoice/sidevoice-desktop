@@ -121,8 +121,8 @@ pub fn url_origin(url: &Url) -> String {
     }
 }
 
-/// The script that tells the bundled interface its target (the web client contract, rubasace/sidevoice
-/// docs/RENDEZVOUS.md and docs/DEVICE_PAIRING.md). Only on the app's own pages; `None` without a target.
+/// The script that tells the bundled interface its target (sidevoice-web's `window.__SIDEVOICE_TARGET__`
+/// contract). Only on the app's own pages; `None` without a target.
 pub fn target_script(settings: &Settings) -> Option<String> {
     if settings.target.is_empty() {
         return None;

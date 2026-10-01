@@ -5,7 +5,7 @@
 //! (`engine_on_disk`, capabilities/settings.json). Engine work runs on blocking threads, never the main one.
 //! Audio crosses as raw bytes: little-endian f32 samples (transcribe's body; synthesize's answer, after a
 //! 4-byte little-endian sample rate). A refusal is the engine's keyed `Error` (docs/BRIDGE.md → "Refusals").
-//! What stays in memory follows rubasace/sidevoice#124 D13 (`call_changed`, `unload_when_idle`).
+//! What stays in memory follows sidevoice/sidevoice-core#21 D13 (`call_changed`, `unload_when_idle`).
 
 use sidevoice_desktop_core::engines::{self, Capability, Device};
 use sidevoice_desktop_engine::error::{bad_request, internal};
@@ -167,7 +167,7 @@ pub fn engine_memory(state: State<'_, EngineState>) -> Memory {
     state.engines.memory()
 }
 
-/// rubasace/sidevoice#124 D13, from the room's call state (`bridge_state`): as a call connects, what the app
+/// sidevoice/sidevoice-core#21 D13, from the room's call state (`bridge_state`): as a call connects, what the app
 /// unloaded while idle is loaded again, off the main thread.
 pub fn call_changed(app: &AppHandle, joined: bool) {
     let Some(state) = app.try_state::<EngineState>() else { return };

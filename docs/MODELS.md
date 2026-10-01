@@ -1,7 +1,7 @@
 # Models in the desktop app: native, never in the webview
 
 In the app, speech-to-text and text-to-speech run only in its **native engine** (docs/ENGINES.md), never in the
-page: a native runtime is never offered a page engine's builds (rubasace/sidevoice#124 D5). The bundled interface
+page: a native runtime is never offered a page engine's builds (sidevoice/sidevoice-core#21 D5). The bundled interface
 asks the engine what this device is (`nativeEngine.capabilities()`, docs/BRIDGE.md), resolves its offers from
 that and the catalogue, and runs the chosen build through the engine. The same interface in a browser offers the
 page's own engines instead (transformers.js on WebGPU or WebAssembly).

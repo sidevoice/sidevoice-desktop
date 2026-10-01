@@ -15,7 +15,7 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 
 ## What the bridge reads and calls in the web UI
 
-Both are globals the web UI (`rubasace/sidevoice` → `apps/web`) already defines:
+Both are globals the web UI (sidevoice-web → `apps/web`) already defines:
 
 - `window.sidevoiceUI.store` — the room's view-model store (`apps/web/src/state/room-store.ts`,
   `installRoomBridge`). The bridge calls `getState()` and `subscribe()` and reads only
@@ -72,7 +72,7 @@ feature-detects the desktop app by it.
 
 ## The native engine
 
-In the app, speech models run only in its native engine, never in the page (rubasace/sidevoice#124 D5). The page
+In the app, speech models run only in its native engine, never in the page (sidevoice/sidevoice-core#21 D5). The page
 resolves its offers itself — `offers(catalog, capabilities, place)` over the catalogue it carries — from what the
 engine reports, and runs the build it chose through it. `window.__sidevoiceDesktop.host.nativeEngine`:
 
@@ -133,7 +133,7 @@ engine reports, and runs the build it chose through it. `window.__sidevoiceDeskt
   `engine_loaded`, `engine_memory`. Granted to the room window (`capabilities/room.json`). The settings window may read `engine_capabilities` and
   `engine_on_disk` (what is on disk and its size), and nothing else of the engine.
 
-### What stays in memory (rubasace/sidevoice#124 D13)
+### What stays in memory (sidevoice/sidevoice-core#21 D13)
 
 The app enforces it itself, from the call state the room already reports (`bridge_state`, `joined`):
 

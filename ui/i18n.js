@@ -1,6 +1,6 @@
 // Keyed messages for the settings window (AGENTS.md): one bundle per language in i18n/<language>.js, English the
 // fallback for a missing key or a language without a bundle; the system's language when there is a bundle for it.
-// Only the texts written since that rule use it; the window's older literals await rubasace/sidevoice#128.
+// Only the texts written since that rule use it; the window's older literals await sidevoice/sidevoice-web#17.
 "use strict";
 
 const i18n = (() => {
