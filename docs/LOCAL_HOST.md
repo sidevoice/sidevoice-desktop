@@ -23,7 +23,8 @@ writes in neither. Its own file is `local-host.json` (0600) in its config direct
 
 The boundary is the OS user. Before any connect to `C/local.sock` the app checks that `C` is a directory (not a
 link) owned by this user with mode & 077 = 0 (`identity.unsafe-directory`), and after connecting that the socket's peer
-is this user (`getpeereid` / `SO_PEERCRED`, `peer.uid-mismatch`). Files are checked as they are used, not by path and reopened (`src-tauri/local-host/src/trusted.rs`): every
+is this user (`getpeereid` / `SO_PEERCRED`, `peer.uid-mismatch`).
+Files are checked as they are used, not by path and reopened (`src-tauri/local-host/src/trusted.rs`): every
 directory above `D` and above the app's config directory must be root's or this user's and not writable by others
 (sticky, as `/tmp`, is fine) — the default `~/.sidevoice` passes, a `SIDEVOICE_DATA_DIR` under a directory others can
 write does not; `install.json` is read through `D`'s opened and `fstat`-checked descriptor, opened without following a
