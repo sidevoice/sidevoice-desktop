@@ -8,10 +8,14 @@
 //! | a core answers with an `api` outside [`API`] (or the service reports one) | `incompatible` |
 //! | a core answers; the app's token is refused (same fingerprint) | `refused` (until `reconnect()`) |
 //! | a core answers; pairing or storing the token failed | `failed` with that cause (`app.storage`, `identity.mismatch`) |
+//! | a core answers, and the service reports `not-installed`, `stopped-by-person` or `service-failed` | that state, with the service's `failure`: the service condition wins over reachability (F6) |
 //! | a core answers; the app is paired and the core accepts the token | `running` |
 //! | a core answers; the app has not paired yet | `starting` |
 //! | no core: the service's state | `absent`, `not-installed`, `stopped-by-person`, `starting`, `backoff`, `failed`, `service-failed` as reported; `running` or `stopped` → `starting` (a core is on its way or going; the next poll tells) |
 //! | no core, no connector, no install | `absent` |
+//!
+//! `reachable` (always present) is whether a core answers and the app's pairing with it works — then the page can use
+//! the host (`pairing()` is non-null) whatever `state` says, as SEAMS §5 pins.
 //!
 //! `installing` is R4's.
 
@@ -39,7 +43,7 @@ pub enum State {
     Incompatible,
 }
 
-/// `{state, failure?, core?, service?, calls?}`.
+/// `{state, failure?, core?, service?, calls?, reachable}`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Report {
     pub state: State,
@@ -51,11 +55,13 @@ pub struct Report {
     pub service: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub calls: Option<u64>,
+    /// A core answers and the app's pairing with it works.
+    pub reachable: bool,
 }
 
 impl Report {
     pub fn new(state: State) -> Self {
-        Report { state, failure: None, core: None, service: None, calls: None }
+        Report { state, failure: None, core: None, service: None, calls: None, reachable: false }
     }
 }
 
@@ -113,8 +119,20 @@ pub fn report(observed: Observed<'_>) -> Report {
                     report.failure = Some(json!(refusal));
                     State::Failed
                 }
-                Link::Paired => State::Running,
-                Link::Unpaired => State::Starting,
+                _ => {
+                    report.reachable = *observed.link == Link::Paired;
+                    match field("state").and_then(Value::as_str) {
+                        // The service condition wins: a core may answer without being kept up at login (F6).
+                        Some("not-installed") => State::NotInstalled,
+                        Some("stopped-by-person") => State::StoppedByPerson,
+                        Some("service-failed") => {
+                            report.failure = field("failure").cloned();
+                            State::ServiceFailed
+                        }
+                        _ if report.reachable => State::Running,
+                        _ => State::Starting,
+                    }
+                }
             };
         }
         Err(answer) => {
@@ -184,6 +202,34 @@ mod tests {
         assert_eq!(running.service.as_deref(), Some("launchd"));
         assert_eq!(running.calls, Some(1), "the core's own count wins");
         assert_eq!(running.core.unwrap()["launch_id"], "L1");
+    }
+
+    #[test]
+    fn the_service_condition_wins_over_a_healthy_core() {
+        let h = health(Some(1));
+        let not_installed = json!({"state": "not-installed", "service": "none", "installed": false});
+        let got = state(Some(not_installed.clone()), Ok(&h), &Link::Paired);
+        assert_eq!((got.state, got.reachable), (State::NotInstalled, true));
+        assert_eq!(got.service.as_deref(), Some("none"));
+        let got = state(Some(not_installed), Ok(&h), &Link::Unpaired);
+        assert_eq!((got.state, got.reachable), (State::NotInstalled, false));
+
+        let failed = json!({"state": "service-failed", "service": "launchd", "failure": {"key": "start-limit"}});
+        let got = state(Some(failed), Ok(&h), &Link::Paired);
+        assert_eq!((got.state, got.reachable), (State::ServiceFailed, true));
+        assert_eq!(got.failure.unwrap()["key"], "start-limit");
+
+        let stopped = json!({"state": "stopped-by-person", "service": "launchd"});
+        let got = state(Some(stopped), Ok(&h), &Link::Paired);
+        assert_eq!((got.state, got.reachable), (State::StoppedByPerson, true));
+
+        // What the app itself knows still comes first.
+        let failed = json!({"state": "service-failed"});
+        assert_eq!(state(Some(failed.clone()), Ok(&h), &Link::Refused).state, State::Refused);
+        assert!(!state(Some(failed), Ok(&h), &Link::Refused).reachable);
+        // A supervisor that says the core failed while it answers: it answers.
+        let got = state(Some(json!({"state": "backoff"})), Ok(&h), &Link::Paired);
+        assert_eq!((got.state, got.reachable), (State::Running, true));
     }
 
     #[test]
@@ -265,6 +311,6 @@ mod tests {
                 "incompatible"
             ]
         );
-        assert_eq!(json!(Report::new(State::Running)), json!({"state": "running"}));
+        assert_eq!(json!(Report::new(State::Running)), json!({"state": "running", "reachable": false}));
     }
 }

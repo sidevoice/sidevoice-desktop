@@ -57,12 +57,20 @@ process) and right after each action; the core's health; the token check. The br
 | a core with an `api` outside the app's range (1–1), or the service reports one | `incompatible` |
 | a core answers; its token refused, same fingerprint | `refused` |
 | a core answers; pairing or storing failed | `failed` (`app.storage`, `identity.mismatch`, …) |
+| a core answers; the service reports `not-installed`, `stopped-by-person` or `service-failed` | that state (and its `failure`): the service condition wins (F6), with `reachable: true` when the pairing works |
 | a core answers; paired, token accepted | `running` |
 | a core answers; not paired yet | `starting` |
 | no core: the service's own state | `absent`, `not-installed`, `stopped-by-person`, `starting`, `backoff`, `failed`, `service-failed` as reported; `running` and `stopped` → `starting` |
 | no core, no connector, no `install.json` | `absent` |
 
-`state()` → `{state, failure?, core?, service?, calls?}`: `failure` as the service reports it (`{key, step, detail,
+The service's state is `node.status` when a supervisor answers. A plain connector (no service) answers with
+`supervisor: false`, speaking only for the core it started on demand: the service's state is then
+`service status --json`'s.
+
+`reachable` is whether a core answers and the app's pairing with it works; `pairing()` is non-null exactly then,
+whatever `state` says — the page uses the host when `pairing()` is non-null (SEAMS §5).
+
+`state()` → `{state, failure?, core?, service?, calls?, reachable}`: `failure` as the service reports it (`{key, step, detail,
 attempts, at, log_tail, …}`) or the app's own `{key, message}`; `core` `{pid, version, api, launch_id}`.
 
 ## Actions

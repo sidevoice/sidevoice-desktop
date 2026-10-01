@@ -361,7 +361,7 @@ fn an_unsafe_core_directory_is_never_connected_to() {
 fn with_nothing_installed_the_host_is_absent() {
     let world = World::new();
     let host = world.host();
-    assert_eq!(serde_json::to_value(host.poll()).unwrap(), json!({"state": "absent"}));
+    assert_eq!(serde_json::to_value(host.poll()).unwrap(), json!({"state": "absent", "reachable": false}));
     assert_eq!(host.act(Action::Start).unwrap_err().key, "cli.unavailable");
 }
 
@@ -403,7 +403,7 @@ fn without_a_connector_the_cli_says_and_actions_run_through_it() {
     );
     let host = world.host();
     let report = serde_json::to_value(host.poll()).unwrap();
-    assert_eq!(report, json!({"state": "stopped-by-person", "service": "launchd", "calls": 0}));
+    assert_eq!(report, json!({"state": "stopped-by-person", "service": "launchd", "calls": 0, "reachable": false}));
     host.poll();
     assert_eq!(calls(&log), ["service status --json"], "the fallback is not re-run on every poll");
 
@@ -473,4 +473,63 @@ fn shutdown_closes_every_tunnel() {
     assert!(rest.is_empty());
     std::thread::sleep(Duration::from_millis(100));
     assert!(TcpStream::connect(("127.0.0.1", port)).map(|mut s| s.read(&mut [0u8; 1]).unwrap_or(0)).unwrap_or(0) == 0);
+}
+
+/// A core that answers while the service is not what it should be (F6): the state says the service's condition, and
+/// the host stays usable (`reachable`, `pairing()`, the proxy).
+#[test]
+fn a_healthy_core_keeps_the_services_condition_and_stays_usable() {
+    for (reported, expected) in [
+        (
+            r#"{"ok":true,"state":"not-installed","service":"none","installed":false,"failure":null,"calls":0,"core":null}"#,
+            "not-installed",
+        ),
+        (
+            r#"{"ok":true,"state":"service-failed","service":"launchd","installed":true,"failure":{"key":"start-limit"},"calls":0,"core":null}"#,
+            "service-failed",
+        ),
+    ] {
+        let world = World::new();
+        let _core = world.core(1);
+        install_fake_cli(&world.dirs, reported);
+        let host = world.host();
+        let report = serde_json::to_value(host.poll()).unwrap();
+        assert_eq!(report["state"], expected, "{report}");
+        assert_eq!(report["reachable"], true);
+        if expected == "service-failed" {
+            assert_eq!(report["failure"]["key"], "start-limit");
+        }
+        let pairing = host.pairing().expect("usable whatever the state says");
+        let port = host.proxy().port();
+        let bearer = format!("Bearer {}", pairing["token"].as_str().unwrap());
+        let host_field = format!("127.0.0.1:{port}");
+        let fields =
+            [("Host", host_field.as_str()), ("Origin", "tauri://localhost"), ("Authorization", bearer.as_str())];
+        assert_eq!(request(port, "GET", "/api/x", &fields, "").0, 200);
+    }
+}
+
+/// A plain connector (no service) answers `node.status` for the core it started; the service's state is the CLI's.
+#[test]
+fn a_plain_connector_leaves_the_service_state_to_the_cli() {
+    let world = World::new();
+    let _core = world.core(1);
+    let log = install_fake_cli(
+        &world.dirs,
+        r#"{"ok":true,"state":"not-installed","service":"none","installed":false,"failure":null,"calls":0,"core":null}"#,
+    );
+    let listener = UnixListener::bind(world.dirs.connector_socket()).unwrap();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let mut line = String::new();
+            let _ = std::io::BufRead::read_line(&mut std::io::BufReader::new(&stream), &mut line);
+            let result = json!({"ok": true, "supervisor": false, "state": "running", "service": "none", "calls": 0});
+            let _ = writeln!(stream, "{}", json!({"id": 1, "ok": true, "result": result}));
+        }
+    });
+    let host = world.host();
+    let report = serde_json::to_value(host.poll()).unwrap();
+    assert_eq!((report["state"].as_str(), report["reachable"].as_bool()), (Some("not-installed"), Some(true)));
+    assert_eq!(calls(&log), ["service status --json"]);
 }

@@ -130,7 +130,7 @@
 
   /** This computer's own core, the local host (docs/LOCAL_HOST.md): its state, the pairing the page uses to reach it
    *  (through the app's proxy, with this launch's secret — never the device token), and the service's actions. Each
-   *  action resolves the state after it (`{state, failure?, core?, service?, calls?}`) or rejects `{key, message}`.
+   *  action resolves the state after it (`{state, failure?, core?, service?, calls?, reachable}`) or rejects `{key, message}`.
    *  Only where the app offers a local host (macOS). */
   function localHost() {
     const listeners = new Set();
@@ -149,7 +149,7 @@
         .catch(() => {});
     const action = (name) => () => call("local_host_action", { action: name });
     return {
-      /** `{state, failure?, core?, service?, calls?}`; `state` one of `absent`, `not-installed`, `stopped-by-person`,
+      /** `{state, failure?, core?, service?, calls?, reachable}`; `state` one of `absent`, `not-installed`, `stopped-by-person`,
        *  `starting`, `backoff`, `running`, `failed`, `service-failed`, `refused`, `incompatible`. */
       state: () => call("local_host_state"),
       /** `listener(state)` with the state now, then on every change (polled every 2 s while anyone listens).
@@ -171,8 +171,9 @@
           }
         };
       },
-      /** `{fp, public_key, device_id, token, urls: ["http://127.0.0.1:<port>"], rv: null, host, local: true}` while
-       *  `running`, else `null`. `token` is the app's proxy secret for this launch. */
+      /** `{fp, public_key, device_id, token, urls: ["http://127.0.0.1:<port>"], rv: null, host, local: true}`
+       *  whenever a core answers and the app is paired (`reachable`), whatever `state` says; else `null`. `token` is
+       *  the app's proxy secret for this launch. */
       pairing: () => call("local_host_pairing"),
       start: action("start"),
       stop: action("stop"),

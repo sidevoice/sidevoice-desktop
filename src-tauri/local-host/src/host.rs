@@ -168,10 +168,11 @@ impl LocalHost {
     }
 
     /// The local host as the page uses it (design §4.1): the pinned identity, the proxy's URL and this launch's
-    /// secret in place of a token. `None` unless the host is `running`.
+    /// secret in place of a token. Whenever a core answers and the pairing works (`reachable`), whatever `state`
+    /// says (a core with no service is `not-installed` and still usable); `None` otherwise.
     pub fn pairing(&self) -> Option<Value> {
         let inner = self.inner.lock().unwrap();
-        let pairing = inner.pairing.as_ref().filter(|_| inner.report.state == State::Running)?;
+        let pairing = inner.pairing.as_ref().filter(|_| inner.report.reachable)?;
         Some(json!({
             "fp": pairing.fp,
             "public_key": pairing.public_key,
@@ -187,7 +188,13 @@ impl LocalHost {
     /// One pass: observe, keep the pairing, decide the state.
     pub fn poll(&self) -> Report {
         let _pass = self.passes.lock().unwrap();
-        let status = connector::node_status(&self.config.dirs).or_else(|| self.fallback_status());
+        // A supervisor's `node.status` is the service's state. A plain connector (`supervisor: false`) speaks only for the
+        // core it started on demand: the service's state is then the CLI's (SEAMS §5).
+        let status = match connector::node_status(&self.config.dirs) {
+            Some(status) if status.get("supervisor") == Some(&Value::Bool(false)) => self.fallback_status(),
+            Some(status) => Some(status),
+            None => self.fallback_status(),
+        };
         let health = self.core.health();
         if let Ok(health) = &health {
             self.keep_link(health);
