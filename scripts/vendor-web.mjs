@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Copies the Sidevoice web interface from a rubasace/sidevoice checkout into ui/, in the layout that repo
+// Copies the Sidevoice web interface from a sidevoice/sidevoice-web checkout into ui/, in the layout that repo
 // defines for a static deployment (its scripts/assemble-static-web.mjs: /voice/, /voice-browser/), so the app
 // serves exactly what a standalone static site serves. Records where it came from in ui/voice/web-source.json.
 //
@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const source = process.argv[2];
 if (!source) {
-  console.error("usage: node scripts/vendor-web.mjs <rubasace/sidevoice checkout, built>");
+  console.error("usage: node scripts/vendor-web.mjs <sidevoice/sidevoice-web checkout, built>");
   process.exit(2);
 }
 const site = mkdtempSync(path.join(os.tmpdir(), "sidevoice-site-"));
@@ -38,8 +38,12 @@ for (const entry of readdirSync(path.join(site, "voice-browser"))) {
 rmSync(site, { recursive: true, force: true });
 
 const git = (...args) => execFileSync("git", ["-C", source, ...args], { encoding: "utf8" }).trim();
+// owner/name from the checkout's own remote, never assumed: the record says where the bytes came from.
+const remote = git("remote", "get-url", "origin");
+const repository = remote.replace(/\.git$/, "").match(/[/:]([^/:]+\/[^/]+)$/)?.[1];
+if (!repository) throw new Error(`cannot tell the repository from the remote ${remote}`);
 const record = {
-  repository: "rubasace/sidevoice",
+  repository,
   branch: git("rev-parse", "--abbrev-ref", "HEAD"),
   commit: git("rev-parse", "HEAD"),
   uncommitted_changes: git("status", "--porcelain", "--", "apps/web", "packages/browser-audio") !== "",

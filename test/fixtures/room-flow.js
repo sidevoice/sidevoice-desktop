@@ -1,106 +1,182 @@
 // CI only, injected only by the app built with the `probe` feature (src-tauri/src/probe.rs) when
-// SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_ROOM_FLOW=1: the native flow through the ACTUAL vendored room (ui/voice), with
-// the room's own code — its controller, store, transcription client and native worker — and the app's bridge:
-// capabilities → the offers the room's panes show → install a model → load it → speak → transcribe → unload it (the
-// load and unload through the app's bridge, as the room's select flow calls them). Prints one line through
-// debug_log: "room-flow ok …" or "room-flow error …". Nothing here is a stand-in for the room; it only drives it.
+// SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_ROOM_FLOW=1: model selection (rubasace/sidevoice#124 §6, D11–D12) through the
+// ACTUAL vendored room (ui/voice) — its settings actions, the ones its Transcripción pane calls, its controller,
+// selection state machine, native worker and storage — over this app's bridge and native engine, with real models.
+// Nothing here stands in for the room: it pairs the device with CI's stand-in machine (test/fixtures/fake-node.py,
+// whose key it pins) so the room stores its choices, then only calls the room's actions and reads what they did.
+//
+//   1. consent → download → load → check twice → in effect, stored            (whisper-base)
+//   2. cancel mid-download: nothing stored, loaded or left installed           (whisper-small)
+//   3. a failure (the load, refused: SIDEVOICE_DEBUG_REFUSE_LOAD) rolls back   (whisper-tiny)
+//   4. slow (SIDEVOICE_DEBUG_SLOW_TRANSCRIBE): "elegir otro" keeps the old one, "usar igualmente" takes the new one
+//      — and only one copy of the model stays in memory either way             (whisper-base on Core ML, Avanzado)
+//   5. the page reloads: settings show the stored choice, and the next selection starts from it.
+//
+// Prints one line through debug_log: "room-flow ok …" or "room-flow error …".
 (function () {
   "use strict";
   if (location.pathname !== "/voice/index.html" && location.pathname !== "/voice/") return;
+  const FLOW = "sidevoice-room-flow";
+  // CI's stand-in machine (test/fixtures/fake-node.py --key): a throwaway key that signs nothing but CI's nonces.
+  const MACHINE = "XO8Z6hj1_KrQXjxM2FXpBPd6qOyC__Dfc4zLn-4dOwI";
+  const MACHINE_KEY = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEe+HC+jHE39mN/AXjcJyjxUr/FeJ335haZ4Kgjoj6ZhZm90SXgy1EH2nNFOxZTXr4P892sl5p+eiDv8sLhAOywg==";
+  const part = sessionStorage.getItem(FLOW) || "select";
+  if (part === "select") {
+    // A device paired with that machine and nothing chosen yet; set before the room's own scripts read storage.
+    localStorage.removeItem("sidevoice.stages");
+    localStorage.removeItem("sidevoice.settings");
+    localStorage.setItem("sidevoice.pairings", JSON.stringify({ in_use: MACHINE, pairings: [{ fp: MACHINE, token: "ci-token",
+      public_key: MACHINE_KEY, device_id: "ci-device", urls: ["http://127.0.0.1:8768"], rv: null, host: "ci-runner", paired_at: Date.now() }] }));
+  }
+
   const say = (line) => window.__TAURI_INTERNALS__.invoke("debug_log", { line: "room-flow " + line });
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   async function until(check, ms, what) {
     const end = Date.now() + ms;
     for (;;) {
-      const value = check();
+      const value = await check();
       if (value) return value;
       if (Date.now() > end) throw new Error("timed out waiting for " + what);
-      await sleep(200);
+      await sleep(100);
     }
-  }
-  // The room's native voice worker, spoken to in its own protocol (packages/browser-audio/native-worker.js).
-  function speak(worker, message) {
-    return new Promise((resolve, reject) => {
-      const chunks = [];
-      let sampleRate = 0;
-      worker.onmessage = ({ data }) => {
-        if (data.type === "audio") { chunks.push(data.samples); sampleRate = data.sampleRate; }
-        else if (data.type === "done") resolve({ chunks, sampleRate });
-        else if (data.type === "error") reject(data.error);
-      };
-      worker.postMessage(message);
-    });
-  }
-  function joined(chunks) {
-    const out = new Float32Array(chunks.reduce((n, c) => n + c.length, 0));
-    let at = 0;
-    for (const c of chunks) { out.set(c, at); at += c.length; }
-    return out;
-  }
-  // Whisper takes 16 kHz; the room's own capture resamples before it sends, so this does too (linear).
-  function to16k(samples, rate) {
-    const out = new Float32Array(Math.floor((samples.length * 16000) / rate));
-    for (let i = 0; i < out.length; i++) {
-      const x = (i * rate) / 16000, j = Math.floor(x), f = x - j;
-      out[i] = samples[j] * (1 - f) + (samples[Math.min(j + 1, samples.length - 1)] || 0) * f;
-    }
-    return out;
   }
   const describe = (error) => (error && (error.key ? error.key + ": " + error.message : error.message)) || JSON.stringify(error);
+  const store = () => window.sidevoiceUI.store;
+  const facts = () => store().getState().facts;
+  const check = (task) => (facts().stageChecks || {})[task] || null;
+  /** The selection of `task` at one of `phases`; a failure nobody waits for ends the flow with its step and reason. */
+  const reach = (task, phases, ms) => until(() => {
+    const now = check(task);
+    if (now && now.phase === "failed" && !phases.includes("failed"))
+      throw new Error("selection failed at " + now.step + ": " + JSON.stringify(now.reason));
+    return now && phases.includes(now.phase) && now;
+  }, ms, task + " " + phases.join("/"));
+  const stored = () => {
+    const stt = (JSON.parse(localStorage.getItem("sidevoice.stages") || "{}")[MACHINE] || {}).stt;
+    return stt ? stt.model + "/" + ((stt.build && stt.build.accelerator) || "auto") : "none";
+  };
+  const engine = () => window.__sidevoiceDesktop.host.nativeEngine;
+  const resident = async () => (await engine().loaded()).map((l) => l.model + "@" + l.engine + "/" + l.accelerator).sort().join(",");
+  const settles = (want, what) => until(async () => (await resident()) === want, 15000, what + " = " + want);
+  const room = () => until(() => window.sidevoiceActions && window.sidevoiceUI && window.roomTranscription
+    && globalThis.sidevoiceNativeWorkers && globalThis.sidevoiceNativeWorkers.available(), 60000, "the room");
 
+  async function select() {
+    await room();
+    const actions = window.sidevoiceActions;
+    const out = {};
+    // What the room makes of this device: the app's capabilities, and the offers its panes show.
+    await actions.retryGpu();
+    const offers = await until(() => (facts().deviceOffers || []).length && facts().deviceOffers, 30000, "offers");
+    const shown = (task) => ((store().getState().stages || {})[task] || {}).models || [];
+    const ids = (task) => offers.filter((o) => o.task === task).map((o) => o.model).join(",");
+    out.capabilities = JSON.stringify(facts().deviceCapabilities);
+    out.engines = [...new Set(offers.map((o) => o.engine + "/" + o.accelerator))].join(",");
+    out.offers_stt = ids("stt");
+    out.offers_tts = ids("tts");
+    out.shown_stt = shown("stt").map((m) => m.id).join(",");
+    out.shown_tts = shown("tts").map((m) => m.id).join(",");
+    out.where = ((store().getState().stages || {}).stt || {}).where;
+
+    // 1. A model not on disk: its size asked for, then downloaded, loaded, checked twice, in effect and stored.
+    actions.chooseStageModel("stt", "whisper-base");
+    const consent = await reach("stt", ["consent"], 30000);
+    out.consent_size = consent.size;
+    out.stored_before = stored();
+    actions.decideStage("stt", true);
+    await reach("stt", ["done"], 300000);
+    const diagnostics = (facts().stageDiagnostics || {}).stt || {};
+    out.chosen = stored();
+    out.chosen_resident = await resident();
+    out.chosen_passes = (diagnostics.passes || []).length;
+    out.chosen_latency_ms = (diagnostics.passes || []).map((p) => p.latency_ms).join("/");
+    out.chosen_load_ms = diagnostics.load_ms;
+
+    // 2. Cancel mid-download: the selection stops, nothing is stored, the app's install is cancelled, nothing loads.
+    actions.chooseStageModel("stt", "whisper-small");
+    await reach("stt", ["consent"], 30000);
+    actions.decideStage("stt", true);
+    const downloading = await until(() => {
+      const now = check("stt");
+      return now && now.phase === "running" && now.progress && now.progress.step === "download" && now.progress.done > 0 && now;
+    }, 120000, "whisper-small downloading");
+    out.cancel_at = downloading.progress.done + "/" + downloading.progress.total;
+    actions.cancelStage("stt");
+    await until(() => check("stt") === null, 30000, "the selection to end");
+    await sleep(3000); // a late load would show by now (review R04)
+    const row = (facts().downloads || []).find((d) => String(d.id).includes("whisper-small")) || {};
+    out.cancel_download = row.state || "none";
+    out.cancel_stored = stored();
+    out.cancel_resident = await resident();
+    out.cancel_installed = (await engine().installed()).some((b) => b.model === "whisper-small");
+
+    // 3. A model that fails (its load refused): the step and cause shown, the one in use stays in use and loaded.
+    actions.chooseStageModel("stt", "whisper-tiny");
+    await reach("stt", ["consent"], 30000);
+    actions.decideStage("stt", true);
+    const failed = await reach("stt", ["failed"], 300000);
+    out.fail_step = failed.step;
+    out.fail_key = failed.reason && failed.reason.key;
+    out.fail_stored = stored();
+    out.fail_resident = await resident();
+
+    // 4. Avanzado → Core ML, which checks slow: "elegir otro" leaves everything as it was, the candidate's copy
+    // freed; "usar igualmente" puts it in effect and frees the copy it replaced (review R05).
+    actions.chooseStageBuild("stt", "sherpa-onnx/coreml");
+    const slow = await reach("stt", ["slow"], 300000);
+    out.slow_latency_ms = slow.result && slow.result.latency_ms;
+    actions.decideStage("stt", false);
+    await until(() => check("stt") === null, 30000, "the slow one declined");
+    out.declined_stored = stored();
+    await settles("whisper-base@sherpa-onnx/cpu", "declined");
+    out.declined_resident = await resident();
+    actions.chooseStageBuild("stt", "sherpa-onnx/coreml");
+    await reach("stt", ["slow"], 300000);
+    actions.decideStage("stt", true);
+    await reach("stt", ["done"], 60000);
+    out.accepted_stored = stored();
+    await settles("whisper-base@sherpa-onnx/coreml", "accepted");
+    out.accepted_resident = await resident();
+    return out;
+  }
+
+  // 5. After a reload: settings read the choice back from storage, and the next selection starts from it.
+  async function reloaded() {
+    await room();
+    const actions = window.sidevoiceActions;
+    const out = {};
+    await until(() => facts().nodeReach === "ok", 60000, "the machine");
+    out.reach = facts().nodeReach;
+    document.getElementById("settings-open").click();
+    const preferences = await until(() => facts().voicePreferences && facts().voicePreferences.stt, 30000, "the settings");
+    out.restored = preferences.model + "/" + ((preferences.build && preferences.build.accelerator) || "auto");
+    const pane = (store().getState().stages || {}).stt || {};
+    out.restored_pane = pane.model + "/" + ((pane.advanced && pane.advanced.value) || "");
+    actions.chooseStageBuild("stt", "auto");
+    await reach("stt", ["done"], 120000);
+    out.after_stored = stored();
+    await settles("whisper-base@sherpa-onnx/cpu", "after the reload");
+    out.after_resident = await resident();
+    return out;
+  }
+
+  const line = (out) => Object.entries(out).map(([key, value]) => key + "=" + (typeof value === "string" ? value : JSON.stringify(value))).join(" ");
   (async () => {
     try {
-      await until(() => window.sidevoiceActions && window.sidevoiceUI && window.roomTranscription
-        && globalThis.sidevoiceNativeWorkers && globalThis.sidevoiceNativeWorkers.available(), 60000, "the room");
-      const store = window.sidevoiceUI.store;
-      // 1. The room asks the app what this device is and resolves its own offers (retryGpu re-measures the device).
-      await window.sidevoiceActions.retryGpu();
-      const offers = await until(() => store.facts.deviceOffers && store.facts.deviceOffers.length && store.facts.deviceOffers, 30000, "offers");
-      const capabilities = store.facts.deviceCapabilities;
-      // 2. What the Transcripción / Voz panes show: the stage views the settings render.
-      const shown = (task) => ((store.getState().stages || {})[task] || {}).models || [];
-      const where = ((store.getState().stages || {}).stt || {}).where;
-      const ids = (task) => offers.filter((o) => o.task === task).map((o) => o.model).join(",");
-      // 3. Install through the room: its transcription client loads the native build (the worker installs it).
-      const tiny = offers.find((o) => o.task === "stt" && o.model === "whisper-tiny");
-      const kokoro = offers.find((o) => o.task === "tts");
-      if (!tiny || !kokoro) throw new Error("no whisper-tiny or no voice offer: " + JSON.stringify(offers));
-      const runtime = await window.roomTranscription.prepare({ model: tiny.model, engine: tiny.engine, accelerator: tiny.accelerator, native: true });
-      // Loaded into memory before the room runs it (#124 phase 3: select = download → load → check).
-      const engine = window.__sidevoiceDesktop.host.nativeEngine;
-      const resident = async () => (await engine.loaded()).map((l) => l.model + "@" + l.engine + "/" + l.accelerator).sort().join(",");
-      const load = await engine.load(runtime.model, runtime.engine, runtime.accelerator);
-      const loaded = await resident();
-      // 4. Speak with the room's native voice worker, then transcribe that with the room's transcription client.
-      const voice = globalThis.sidevoiceNativeWorkers.voice();
-      const started = performance.now();
-      const spoken = await speak(voice, { id: 1, type: "speak", model: kokoro.model, engine: kokoro.engine,
-        accelerator: kokoro.accelerator, text: "Hola, esto es una prueba de voz.", voice: "ef_dora", speed: 1 });
-      const speakMs = Math.round(performance.now() - started);
-      voice.terminate();
-      const audio = to16k(joined(spoken.chunks), spoken.sampleRate);
-      const seconds = (audio.length / 16000).toFixed(2);
-      const result = await window.roomTranscription._request("transcribe", { audio: audio.buffer, model: runtime.model,
-        engine: runtime.engine, accelerator: runtime.accelerator, native: true, language: "es" }, null, [audio.buffer]);
-      const loadedAfter = await resident(); // the room's transcription ran on the loaded model: nothing new for it
-      await engine.unload(runtime.model, runtime.engine);
-      const unloaded = await resident();
-      // 5. The room sees what is now on disk, and its pane marks it.
-      await window.sidevoiceActions.retryGpu();
-      const installed = await until(() => (store.facts.installedBuilds || []).length >= 2 && store.facts.installedBuilds, 30000, "installed");
-      const tinyShown = shown("stt").find((m) => m.id === "whisper-tiny") || {};
-      await say("ok capabilities=" + JSON.stringify(capabilities)
-        + " engines=" + [...new Set(offers.map((o) => o.engine + "/" + o.accelerator))].join(",")
-        + " offers_stt=" + ids("stt") + " offers_tts=" + ids("tts")
-        + " shown_stt=" + shown("stt").map((m) => m.id).join(",") + " shown_tts=" + shown("tts").map((m) => m.id).join(",")
-        + " where=" + where
-        + " installed=" + installed.map((b) => b.model + "@" + b.engine).sort().join(",")
-        + " tiny_detail=" + JSON.stringify(tinyShown.detail || "")
-        + " runtime=" + runtime.model + "@" + runtime.engine + "/" + runtime.accelerator
-        + " load_ms=" + load.load_ms + " loaded=" + loaded + " loaded_after=" + loadedAfter + " unloaded=" + unloaded
-        + " audio=" + seconds + "s speak_ms=" + speakMs + " text=" + JSON.stringify(result.text));
+      if (part === "select") {
+        const out = await select();
+        sessionStorage.setItem(FLOW, "reloaded");
+        sessionStorage.setItem(FLOW + "-select", line(out));
+        await say("selected " + line(out));
+        location.reload();
+        return;
+      }
+      const out = await reloaded();
+      await say("ok " + sessionStorage.getItem(FLOW + "-select") + " reload_" + line(out).replace(/ (?=[a-z_]+=)/g, " reload_"));
     } catch (error) {
-      await say("error " + describe(error));
+      await say("error (" + part + ") " + describe(error));
+    } finally {
+      if (part !== "select") { sessionStorage.removeItem(FLOW); sessionStorage.removeItem(FLOW + "-select"); }
     }
   })();
 })();

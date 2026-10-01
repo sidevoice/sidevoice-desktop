@@ -326,6 +326,10 @@ pub fn run() {
             if let Some(idle) = probe::idle_unload() {
                 engines.idle_unload = idle;
             }
+            #[cfg(feature = "probe")]
+            {
+                engines.faults = probe::faults();
+            }
             let engines = engine_ipc::EngineState::new(engines);
             // A model stays in memory during a call and for ten minutes after the last use (#124 D13).
             engine_ipc::unload_when_idle(engines.engines.clone());

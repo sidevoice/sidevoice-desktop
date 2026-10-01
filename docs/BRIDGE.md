@@ -192,8 +192,11 @@ one is added there and here.
 - Tests: `npm test` (the script against a fake window; the vendored room's native worker against this bridge,
   `test/room-bundle.test.mjs`), `cargo test -p sidevoice-desktop-core` and
   `cargo test -p sidevoice-desktop-engine` (the engine against a fake runtime adapter). In the real app, CI's macOS
-  job drives the native flow through the vendored room itself (`test/fixtures/room-flow.js`, probe build): capabilities
-  → the offers its panes show → install → load → speak → transcribe → unload; the probe page
-  (`test/fixtures/probe.html`) loads, runs two languages on one build, unloads, reads `memory()`, watches D13
+  job selects models through the vendored room itself (`test/fixtures/room-flow.js`, probe build), paired with CI's
+  stand-in machine (`test/fixtures/fake-node.py`, which proves its identity): the room's own settings actions, with
+  real models, for consent → download → load → two checks → in effect; a cancel mid-download; a failure (a load
+  refused, `SIDEVOICE_DEBUG_REFUSE_LOAD`); a slow model declined and accepted (`SIDEVOICE_DEBUG_SLOW_TRANSCRIBE`);
+  and, after a reload, the stored choice read back — asserting what is stored, in memory and on disk each time. The
+  probe page (`test/fixtures/probe.html`) loads, runs two languages on one build, unloads, reads `memory()`, watches D13
   with the idle time shortened (`SIDEVOICE_DEBUG_IDLE_UNLOAD_SECS`, probe build only), and cancels a download
   mid-way (CI then checks nothing of it is on disk).

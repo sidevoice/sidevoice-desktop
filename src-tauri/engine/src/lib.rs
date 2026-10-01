@@ -263,6 +263,13 @@ impl Jobs {
     }
 }
 
+/// Faults to inject, for CI's probe build only (see `NativeEngines::faults`).
+#[derive(Debug, Clone, Default)]
+pub struct Faults {
+    pub refuse_load: Vec<String>,
+    pub slow_transcribe: Vec<(String, Capability, Duration)>,
+}
+
 /// A model in memory: (engine, model, accelerator).
 type Key = (String, String, Capability);
 
@@ -318,6 +325,9 @@ pub struct NativeEngines {
     pub device: Device,
     /// How long a model stays in memory unused once no call is on (D13): `IDLE_UNLOAD`.
     pub idle_unload: Duration,
+    /// CI's probe build only (`src/probe.rs`): faults the room flow needs to see the interface handle — models whose
+    /// load is refused, and transcriptions made slower by a delay (model, accelerator, delay). Empty in a release.
+    pub faults: Faults,
     store: Store,
     adapters: Vec<Adapter>,
     /// One loaded runtime per engine.
@@ -405,6 +415,7 @@ impl NativeEngines {
             catalog,
             device,
             idle_unload: IDLE_UNLOAD,
+            faults: Faults::default(),
             store: Store::new(root),
             adapters: ADAPTERS.to_vec(),
             runtimes: Mutex::default(),
@@ -647,6 +658,9 @@ impl NativeEngines {
         let (family, dir, config) = (&located.model.family, &located.model_dir, &located.build.config);
         let task =
             self.catalog.task_of(located.model).ok_or_else(|| error::family_unsupported(&located.engine.id, family))?;
+        if self.faults.refuse_load.contains(&located.model.id) {
+            return Err(error::runtime_failed(&located.engine.id, "refused by a fault the CI probe injected"));
+        }
         let started = Instant::now();
         let runtime = self.runtime(located)?;
         let instance = match task {
@@ -814,6 +828,10 @@ impl NativeEngines {
             return Err(error::internal("a voice model loaded for transcription"));
         };
         let text = recognizer.transcribe(samples, sample_rate, language.trim());
+        let slow = self.faults.slow_transcribe.iter().find(|(m, a, _)| m == model_id && *a == accelerator);
+        if let Some((_, _, delay)) = slow {
+            std::thread::sleep(*delay);
+        }
         self.touch(&(engine_id.to_string(), model_id.to_string(), accelerator));
         text
     }
