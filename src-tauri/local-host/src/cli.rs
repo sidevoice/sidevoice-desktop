@@ -49,15 +49,26 @@ impl Cli {
     /// Runs `prefix + args` and waits at most `timeout`: its JSON answer when it says `ok`, else its `{key, message}`.
     pub fn run(&self, args: &[&str], timeout: Duration) -> Result<Value, Refusal> {
         let failed = |why: String| Refusal::new("cli.failed", why);
-        let mut child = Command::new(&self.prefix[0])
+        let mut command = Command::new(&self.prefix[0]);
+        command
             .args(&self.prefix[1..])
             .args(args)
             .env("SIDEVOICE_DATA_DIR", &self.data)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| failed(format!("{} could not start: {e}", self.prefix[0])))?;
+            .stderr(Stdio::piped());
+        // A program being written at that instant (an update, or any process that forked while holding it open for
+        // writing) cannot be run yet: ETXTBSY, tried again shortly.
+        let mut tries = 0;
+        let mut child = loop {
+            match command.spawn() {
+                Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) && tries < 5 => {
+                    tries += 1;
+                    thread::sleep(Duration::from_millis(50));
+                }
+                spawned => break spawned.map_err(|e| failed(format!("{} could not start: {e}", self.prefix[0])))?,
+            }
+        };
         let drain = |pipe: Option<Box<dyn Read + Send>>| {
             thread::spawn(move || {
                 let mut out = Vec::new();
@@ -86,7 +97,8 @@ impl Cli {
         };
         let stdout = stdout.join().unwrap_or_default();
         let stderr = String::from_utf8_lossy(&stderr.join().unwrap_or_default()).into_owned();
-        let tail = || stderr.lines().rev().take(5).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join(" | ");
+        let tail =
+            || stderr.lines().rev().take(5).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join(" | ");
         let answer: Value = serde_json::from_slice(&stdout)
             .ok()
             .filter(Value::is_object)
@@ -140,8 +152,7 @@ mod tests {
     #[test]
     fn a_refusal_carries_its_key() {
         let tmp = tempfile::tempdir().unwrap();
-        let cli =
-            fake(tmp.path(), r#"echo '{"ok":false,"error":{"key":"service.not-loaded","message":"m"}}'; exit 1"#);
+        let cli = fake(tmp.path(), r#"echo '{"ok":false,"error":{"key":"service.not-loaded","message":"m"}}'; exit 1"#);
         let refusal = cli.run(&["service", "start", "--json"], Duration::from_secs(5)).unwrap_err();
         assert_eq!(refusal, Refusal::new("service.not-loaded", "m"));
     }
@@ -176,7 +187,8 @@ mod tests {
         write(r#"{"command":["/usr/bin/node","/home/u/.sidevoice/copies/1/dist/cli.mjs"]}"#, 0o600);
         let cli = Cli::installed(&dirs).unwrap();
         assert_eq!(cli.prefix, ["/usr/bin/node", "/home/u/.sidevoice/copies/1/dist/cli.mjs"]);
-        for bad in [r#"{"command":["node","cli.mjs"]}"#, r#"{"command":[]}"#, r#"{"command":"/bin/sh"}"#, "{}", "nope"] {
+        for bad in [r#"{"command":["node","cli.mjs"]}"#, r#"{"command":[]}"#, r#"{"command":"/bin/sh"}"#, "{}", "nope"]
+        {
             write(bad, 0o600);
             let key = Cli::installed(&dirs).unwrap_err().key;
             assert_eq!(key, "install.unreadable", "{bad}");

@@ -225,7 +225,8 @@ impl FakeCore {
                 state.devices.insert(token.clone(), device_id.clone());
                 state.local = Some(device_id.clone());
                 drop(state);
-                let node = json!({"fingerprint": self.fingerprint, "public_key": self.public_key, "host": "fake-machine"});
+                let node =
+                    json!({"fingerprint": self.fingerprint, "public_key": self.public_key, "host": "fake-machine"});
                 reply(&mut stream, 200, json!({"device_id": device_id, "token": token, "node": node}))
             }
             ("DELETE", "/api/device/local") => {

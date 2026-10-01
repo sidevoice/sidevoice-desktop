@@ -29,7 +29,10 @@ pub struct Pairing {
 impl Pairing {
     /// The token, kept out of `{:?}`.
     pub fn redacted(&self) -> String {
-        format!("{{fp: {}, device_id: {}, host: {}, paired_at: {}}}", self.fp, self.device_id, self.host, self.paired_at)
+        format!(
+            "{{fp: {}, device_id: {}, host: {}, paired_at: {}}}",
+            self.fp, self.device_id, self.host, self.paired_at
+        )
     }
 }
 

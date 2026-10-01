@@ -120,11 +120,7 @@ pub fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
 
 /// Connects to `socket` in `dir` after checking `dir` with `dir_check`, and refuses a peer that is not this user.
 /// A socket nobody listens on (absent, refused) is [`Check::Missing`].
-pub fn connect(
-    dir: &Path,
-    socket: &Path,
-    dir_check: fn(&Path) -> Result<(), Check>,
-) -> Result<UnixStream, Check> {
+pub fn connect(dir: &Path, socket: &Path, dir_check: fn(&Path) -> Result<(), Check>) -> Result<UnixStream, Check> {
     dir_check(dir)?;
     let stream = match UnixStream::connect(socket) {
         Ok(stream) => stream,

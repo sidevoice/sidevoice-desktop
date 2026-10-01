@@ -130,7 +130,9 @@ pub fn report(observed: Observed<'_>) -> Report {
                 Some("failed") => State::Failed,
                 Some("service-failed") => State::ServiceFailed,
                 Some(other) => {
-                    report.failure = Some(json!({ "key": "status.unknown", "message": format!("The service reported state {other:?}.") }));
+                    report.failure = Some(
+                        json!({ "key": "status.unknown", "message": format!("The service reported state {other:?}.") }),
+                    );
                     State::Failed
                 }
                 // Neither a connector nor the CLI could say; a socket that answered nonsense is a failure.
@@ -221,7 +223,10 @@ mod tests {
         assert_eq!(state(None, Err(&CoreError::Absent), &Link::Unpaired), Report::new(State::Absent));
         let unsafe_dir = CoreError::Unsafe(Refusal::new("identity.unsafe-directory", "m"));
         let got = state(Some(json!({"state": "running"})), Err(&unsafe_dir), &Link::Paired);
-        assert_eq!((got.state, got.failure.unwrap()["key"].clone()), (State::Failed, json!("identity.unsafe-directory")));
+        assert_eq!(
+            (got.state, got.failure.unwrap()["key"].clone()),
+            (State::Failed, json!("identity.unsafe-directory"))
+        );
         let peer = CoreError::Unsafe(Refusal::new("peer.uid-mismatch", "m"));
         assert_eq!(state(None, Err(&peer), &Link::Unpaired).state, State::Failed);
         let garbled = CoreError::Failed(Refusal::new("core.unexpected", "m"));

@@ -48,10 +48,11 @@ pub fn script_for_origin(origin: &str) -> String {
     let literal = serde_json::to_string(origin).expect("a string serialises");
     let keys = serde_json::to_string(&media_keys()).expect("serialises");
     let local_host = if local_host_offered() { "true" } else { "false" };
-    SCRIPT_TEMPLATE
-        .replacen(ORIGIN_PLACEHOLDER, &literal, 1)
-        .replacen(MEDIA_KEYS_PLACEHOLDER, &keys, 1)
-        .replacen(LOCAL_HOST_PLACEHOLDER, local_host, 1)
+    SCRIPT_TEMPLATE.replacen(ORIGIN_PLACEHOLDER, &literal, 1).replacen(MEDIA_KEYS_PLACEHOLDER, &keys, 1).replacen(
+        LOCAL_HOST_PLACEHOLDER,
+        local_host,
+        1,
+    )
 }
 
 /// The bridge's version: the room page sends it in every snapshot (bridge/desktop-bridge.js).

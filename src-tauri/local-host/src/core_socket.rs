@@ -94,7 +94,10 @@ impl CoreSocket {
     /// A connection to the core, after the directory and peer checks, with `timeout` on reads and writes.
     pub fn connect(&self, timeout: Option<Duration>) -> Result<UnixStream, CoreError> {
         let stream = checks::connect(&self.dir, &self.socket, checks::private_dir)?;
-        stream.set_read_timeout(timeout).and_then(|_| stream.set_write_timeout(timeout)).map_err(|e| failed(e.to_string()))?;
+        stream
+            .set_read_timeout(timeout)
+            .and_then(|_| stream.set_write_timeout(timeout))
+            .map_err(|e| failed(e.to_string()))?;
         Ok(stream)
     }
 

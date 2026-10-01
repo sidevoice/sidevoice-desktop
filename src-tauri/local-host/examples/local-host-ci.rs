@@ -56,10 +56,13 @@ fn serve(data: &str, app: &str, port_file: &str) {
     // The first user can: the secret it holds opens the proxy.
     let secret = host.pairing().expect("a pairing")["token"].as_str().unwrap().to_string();
     let port = host.proxy().port();
-    let status = status_of(&format!(
-        "GET /api/device/devices HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: tauri://localhost\r\n\
+    let status = status_of(
+        &format!(
+            "GET /api/device/devices HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: tauri://localhost\r\n\
          Authorization: Bearer {secret}\r\n\r\n"
-    ), port);
+        ),
+        port,
+    );
     println!("serve: the first user through the proxy with the secret -> {status}");
     if status != 200 {
         exit(1);
@@ -111,18 +114,25 @@ fn attack(data: &str, app: &str, port: u16) {
     let host = format!("127.0.0.1:{port}");
     for (what, path, auth) in [
         ("proxy without the secret", "/api/device/devices", ""),
-        ("proxy with a guessed secret", "/api/device/devices", "Authorization: Bearer AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\r\n"),
+        (
+            "proxy with a guessed secret",
+            "/api/device/devices",
+            "Authorization: Bearer AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\r\n",
+        ),
         ("the connector link through the proxy", "/api/connectors/link/?EIO=4&transport=polling", ""),
         ("local pairing through the proxy", "/api/device/local/pair", ""),
     ] {
         let status = status_of(&format!("POST {path} HTTP/1.1\r\nHost: {host}\r\nOrigin: tauri://localhost\r\n{auth}Content-Length: 2\r\n\r\n{{}}"), port);
         report(what, (200..300).contains(&status), format!("HTTP {status}"));
     }
-    let status = status_of(&format!(
-        "GET /api/browser/call HTTP/1.1\r\nHost: {host}\r\nOrigin: tauri://localhost\r\nUpgrade: websocket\r\n\
+    let status = status_of(
+        &format!(
+            "GET /api/browser/call HTTP/1.1\r\nHost: {host}\r\nOrigin: tauri://localhost\r\nUpgrade: websocket\r\n\
          Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\
          Sec-WebSocket-Protocol: sidevoice, sidevoice.token.guess\r\n\r\n"
-    ), port);
+        ),
+        port,
+    );
     report("a WebSocket through the proxy without the secret", status == 101, format!("HTTP {status}"));
 
     if breaches > 0 {

@@ -361,7 +361,10 @@ mod tests {
     fn the_client_reads_length_chunked_and_closed_bodies() {
         for (answer, expected) in [
             (&b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi"[..], &b"hi"[..]),
-            (b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2;x=y\r\nhi\r\n3\r\n th\r\n0\r\nT: v\r\n\r\n", b"hi th"),
+            (
+                b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2;x=y\r\nhi\r\n3\r\n th\r\n0\r\nT: v\r\n\r\n",
+                b"hi th",
+            ),
             (b"HTTP/1.1 404 Not Found\r\n\r\nall of it", b"all of it"),
         ] {
             let mut stream = Duplex { input: Cursor::new(answer.to_vec()), output: Vec::new() };

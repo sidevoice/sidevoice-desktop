@@ -602,13 +602,23 @@ mod tests {
         assert_eq!(status(&decision), 421, "no Host");
         let decision = decide_with("GET", "/api/x", &[HOST, HOST, ORIGIN, ("Authorization", &auth)]);
         assert_eq!(status(&decision), 400, "two Hosts");
-        assert_eq!(decide_with("GET", "/api/x", &[HOST, ORIGIN, ("Authorization", &auth)]), Decision::Forward { length: 0 });
+        assert_eq!(
+            decide_with("GET", "/api/x", &[HOST, ORIGIN, ("Authorization", &auth)]),
+            Decision::Forward { length: 0 }
+        );
     }
 
     #[test]
     fn origin_must_be_the_apps_and_present() {
         let auth = bearer();
-        for origin in ["", "null", "https://evil.example", "tauri://localhost.evil", "TAURI://LOCALHOST", "http://127.0.0.1:41234"] {
+        for origin in [
+            "",
+            "null",
+            "https://evil.example",
+            "tauri://localhost.evil",
+            "TAURI://LOCALHOST",
+            "http://127.0.0.1:41234",
+        ] {
             let decision = decide_with("GET", "/api/x", &[HOST, ("Origin", origin), ("Authorization", &auth)]);
             assert_eq!(status(&decision), 403, "{origin:?}");
             let Decision::Answer { headers, .. } = decision else { unreachable!() };
@@ -621,7 +631,8 @@ mod tests {
             assert_eq!(decision, Decision::Forward { length: 0 }, "{origin}");
         }
         // The Origin rule holds for preflights and sockets too.
-        let preflight = decide_with("OPTIONS", "/api/x", &[HOST, ("Origin", "null"), ("Access-Control-Request-Method", "GET")]);
+        let preflight =
+            decide_with("OPTIONS", "/api/x", &[HOST, ("Origin", "null"), ("Access-Control-Request-Method", "GET")]);
         assert_eq!(status(&preflight), 403);
         let protocol = format!("sidevoice, {TOKEN_PROTOCOL}{SECRET}");
         let socket = ws(&[HOST, ("Origin", "https://evil.example"), ("Sec-WebSocket-Protocol", &protocol)]);
@@ -649,7 +660,8 @@ mod tests {
         assert_eq!(headers.first("access-control-max-age"), Some("600"));
         assert_eq!(headers.first("access-control-allow-private-network"), Some("true"));
         // Not asked, not granted; a preflight to a native-only path is still only a preflight.
-        let plain = decide_with("OPTIONS", "/api/local/health", &[HOST, ORIGIN, ("Access-Control-Request-Method", "GET")]);
+        let plain =
+            decide_with("OPTIONS", "/api/local/health", &[HOST, ORIGIN, ("Access-Control-Request-Method", "GET")]);
         let Decision::Answer { status: 204, headers, .. } = plain else { panic!("{plain:?}") };
         assert!(!headers.has("access-control-allow-private-network"));
     }
@@ -682,7 +694,15 @@ mod tests {
         let short = "Bearer s3cr3t".to_string();
         let token_like = "Bearer the-device-token".to_string();
         let basic = format!("Basic {SECRET}");
-        for auth in [None, Some(wrong.as_str()), Some(short.as_str()), Some(token_like.as_str()), Some(basic.as_str()), Some(""), Some("Bearer")] {
+        for auth in [
+            None,
+            Some(wrong.as_str()),
+            Some(short.as_str()),
+            Some(token_like.as_str()),
+            Some(basic.as_str()),
+            Some(""),
+            Some("Bearer"),
+        ] {
             let mut fields = vec![HOST, ORIGIN];
             if let Some(auth) = auth {
                 fields.push(("Authorization", auth));
@@ -693,9 +713,15 @@ mod tests {
             assert_eq!(headers.first("vary"), Some("Origin"));
         }
         let auth = bearer();
-        assert_eq!(status(&decide_with("GET", "/api/x", &[HOST, ORIGIN, ("Authorization", &auth), ("Authorization", &auth)])), 401);
+        assert_eq!(
+            status(&decide_with("GET", "/api/x", &[HOST, ORIGIN, ("Authorization", &auth), ("Authorization", &auth)])),
+            401
+        );
         let lower = format!("bearer {SECRET}");
-        assert_eq!(decide_with("GET", "/api/x", &[HOST, ORIGIN, ("Authorization", &lower)]), Decision::Forward { length: 0 });
+        assert_eq!(
+            decide_with("GET", "/api/x", &[HOST, ORIGIN, ("Authorization", &lower)]),
+            Decision::Forward { length: 0 }
+        );
     }
 
     #[test]
@@ -731,7 +757,15 @@ mod tests {
             let decision = decide_with("POST", target, &[HOST, ORIGIN, ("Authorization", &auth)]);
             assert_eq!(status(&decision), 404, "{target}");
         }
-        for target in ["/api//local/health", "/api/x/../local/health", "/api/./local", "/api\\local", "/api/%2e%2e/x", "/a%zz", "/a%2"] {
+        for target in [
+            "/api//local/health",
+            "/api/x/../local/health",
+            "/api/./local",
+            "/api\\local",
+            "/api/%2e%2e/x",
+            "/a%zz",
+            "/a%2",
+        ] {
             let decision = decide_with("GET", target, &[HOST, ORIGIN, ("Authorization", &auth)]);
             assert_eq!(status(&decision), 400, "{target}");
         }
@@ -739,11 +773,19 @@ mod tests {
             let decision = decide_with("GET", target, &[HOST, ORIGIN, ("Authorization", &auth)]);
             assert_eq!(decision, Decision::Forward { length: 0 }, "{target}");
         }
-        assert_eq!(status(&decide_with("GET", "http://127.0.0.1:41234/api/x", &[HOST, ORIGIN, ("Authorization", &auth)])), 400);
+        assert_eq!(
+            status(&decide_with("GET", "http://127.0.0.1:41234/api/x", &[HOST, ORIGIN, ("Authorization", &auth)])),
+            400
+        );
     }
 
     fn ws(fields: &[(&str, &str)]) -> Decision {
-        let mut all = vec![("Upgrade", "websocket"), ("Connection", "Upgrade"), ("Sec-WebSocket-Key", "k"), ("Sec-WebSocket-Version", "13")];
+        let mut all = vec![
+            ("Upgrade", "websocket"),
+            ("Connection", "Upgrade"),
+            ("Sec-WebSocket-Key", "k"),
+            ("Sec-WebSocket-Version", "13"),
+        ];
         all.extend_from_slice(fields);
         decide_with("GET", "/api/call", &all)
     }
@@ -760,7 +802,10 @@ mod tests {
             }
             assert_eq!(status(&ws(&fields)), 401, "{offered:?}");
         }
-        assert_eq!(status(&ws(&[HOST, ORIGIN, ("Sec-WebSocket-Protocol", &good), ("Sec-WebSocket-Protocol", &good)])), 400);
+        assert_eq!(
+            status(&ws(&[HOST, ORIGIN, ("Sec-WebSocket-Protocol", &good), ("Sec-WebSocket-Protocol", &good)])),
+            400
+        );
         assert_eq!(status(&ws(&[HOST, ("Sec-WebSocket-Protocol", &good)])), 403, "no Origin");
         assert_eq!(status(&ws(&[("Host", "localhost:41234"), ORIGIN, ("Sec-WebSocket-Protocol", &good)])), 421);
         // The connector link is a socket too: never through the proxy.
@@ -779,7 +824,11 @@ mod tests {
     #[test]
     fn the_core_gets_the_token_and_never_the_secret() {
         let auth = bearer();
-        let request = head("POST", "/api/x?a=1", &[HOST, ORIGIN, ("Authorization", &auth), ("Connection", "keep-alive"), ("Content-Length", "2")]);
+        let request = head(
+            "POST",
+            "/api/x?a=1",
+            &[HOST, ORIGIN, ("Authorization", &auth), ("Connection", "keep-alive"), ("Content-Length", "2")],
+        );
         let sent = String::from_utf8(upstream_head(&request, "TOKEN", false)).unwrap();
         assert!(sent.starts_with("POST /api/x?a=1 HTTP/1.1\r\n"), "{sent}");
         assert!(sent.contains("origin: tauri://localhost\r\n"), "Origin unchanged: {sent}");
@@ -789,7 +838,18 @@ mod tests {
         assert!(!sent.contains(SECRET));
 
         let offered = format!("sidevoice, {TOKEN_PROTOCOL}{SECRET}, {TOKEN_PROTOCOL}other");
-        let socket = head("GET", "/api/call", &[HOST, ORIGIN, ("Upgrade", "websocket"), ("Connection", "Upgrade"), ("Sec-WebSocket-Protocol", &offered), ("Authorization", "x")]);
+        let socket = head(
+            "GET",
+            "/api/call",
+            &[
+                HOST,
+                ORIGIN,
+                ("Upgrade", "websocket"),
+                ("Connection", "Upgrade"),
+                ("Sec-WebSocket-Protocol", &offered),
+                ("Authorization", "x"),
+            ],
+        );
         let sent = String::from_utf8(upstream_head(&socket, "TOKEN", true)).unwrap();
         assert!(sent.contains("sec-websocket-protocol: sidevoice, sidevoice.token.TOKEN\r\n"), "{sent}");
         assert!(sent.contains("connection: Upgrade\r\n") && sent.contains("upgrade: websocket\r\n"));

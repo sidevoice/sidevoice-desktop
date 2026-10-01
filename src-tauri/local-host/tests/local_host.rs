@@ -142,7 +142,12 @@ fn the_proxy_forwards_with_the_token_and_answers_preflights_itself() {
         port,
         "POST",
         "/api/presentation/echo?x=1",
-        &[("Host", &host_field), ("Origin", "tauri://localhost"), ("Authorization", &bearer), ("Connection", "keep-alive")],
+        &[
+            ("Host", &host_field),
+            ("Origin", "tauri://localhost"),
+            ("Authorization", &bearer),
+            ("Connection", "keep-alive"),
+        ],
         r#"{"hello":"core"}"#,
     );
     assert_eq!(status, 200, "{head}");
@@ -173,7 +178,8 @@ fn the_proxy_refuses_what_the_table_refuses_and_the_core_never_sees_it() {
     assert_eq!(get(&hostile, "/api/x"), 403, "hostile");
     let wrong_host = [("Host", "localhost"), ("Origin", "tauri://localhost"), ("Authorization", bearer.as_str())];
     assert_eq!(get(&wrong_host, "/api/x"), 421);
-    let (status, head, _) = request(port, "GET", "/api/x", &[("Host", &host_field), ("Origin", "tauri://localhost")], "");
+    let (status, head, _) =
+        request(port, "GET", "/api/x", &[("Host", &host_field), ("Origin", "tauri://localhost")], "");
     assert_eq!(status, 401, "no secret");
     assert!(head.contains("access-control-allow-origin: tauri://localhost"), "a 401 the page can read: {head}");
     let app = [("Host", host_field.as_str()), ("Origin", "tauri://localhost"), ("Authorization", bearer.as_str())];
@@ -209,7 +215,8 @@ fn a_websocket_is_spliced_both_ways_and_closed_by_a_new_pairing() {
     let host = world.host();
     let (port, secret) = running(&host);
 
-    let (mut socket, status, protocol) = ws_handshake(port, &format!("sidevoice, sidevoice.token.{secret}"), "tauri://localhost");
+    let (mut socket, status, protocol) =
+        ws_handshake(port, &format!("sidevoice, sidevoice.token.{secret}"), "tauri://localhost");
     assert_eq!(status, 101);
     assert_eq!(protocol, "sidevoice");
     assert!(core.requests().iter().any(|r| r.starts_with("GET /api/browser/call") && r.ends_with("auth=device")));
@@ -255,7 +262,8 @@ fn a_revoked_token_is_refused_until_reconnect_and_its_tunnels_close() {
     }
     assert_eq!(core.local_device(), None);
     let bearer = format!("Bearer {secret}");
-    let fields = [("Host", format!("127.0.0.1:{port}")), ("Origin", "tauri://localhost".into()), ("Authorization", bearer)];
+    let fields =
+        [("Host", format!("127.0.0.1:{port}")), ("Origin", "tauri://localhost".into()), ("Authorization", bearer)];
     let fields: Vec<(&str, &str)> = fields.iter().map(|(n, v)| (*n, v.as_str())).collect();
     assert_eq!(request(port, "GET", "/api/x", &fields, "").0, 503, "nothing carried while refused");
 
@@ -313,7 +321,8 @@ fn a_pairing_that_cannot_be_stored_is_revoked_and_failed() {
     assert!(core.requests().iter().any(|r| r.starts_with("DELETE /api/device/local")));
     assert_eq!(host.pairing(), None);
     // Not retried on every poll.
-    let pairs = |core: &FakeCore| core.requests().iter().filter(|r| r.starts_with("POST /api/device/local/pair")).count();
+    let pairs =
+        |core: &FakeCore| core.requests().iter().filter(|r| r.starts_with("POST /api/device/local/pair")).count();
     let before = pairs(&core);
     host.poll();
     assert_eq!(pairs(&core), before);
@@ -401,7 +410,9 @@ fn without_a_connector_the_cli_says_and_actions_run_through_it() {
     host.act(Action::ServiceUninstall).unwrap();
     assert_eq!(host.pairing_code().unwrap(), json!({"code": "SV1-CODE", "expires_in": 600, "reach": "local-only"}));
     assert_eq!(host.pair_room("https://room.example", "ROOM-CODE").unwrap(), json!({"room": "https://room.example"}));
-    for (url, code) in [("-x", "c"), ("ftp://a", "c"), ("https://a", "--force"), ("https://a b", "c"), ("https://a", "")] {
+    for (url, code) in
+        [("-x", "c"), ("ftp://a", "c"), ("https://a", "--force"), ("https://a b", "c"), ("https://a", "")]
+    {
         assert_eq!(host.pair_room(url, code).unwrap_err().key, "bad_request", "{url} {code}");
     }
     let ran = calls(&log);

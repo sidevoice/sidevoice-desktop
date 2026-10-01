@@ -369,7 +369,10 @@ impl LocalHost {
     /// `pair <room-url> <code> --json`: this machine paired with a room (the connector restarts the core): `{room}`.
     pub fn pair_room(&self, url: &str, code: &str) -> Result<Value, Refusal> {
         let plain = |text: &str, limit: usize| {
-            !text.is_empty() && text.len() <= limit && text.chars().all(|c| c.is_ascii_graphic()) && !text.starts_with('-')
+            !text.is_empty()
+                && text.len() <= limit
+                && text.chars().all(|c| c.is_ascii_graphic())
+                && !text.starts_with('-')
         };
         if !plain(url, 2048) || !(url.starts_with("https://") || url.starts_with("http://")) {
             return Err(Refusal::new("bad_request", "The room's address is not an http(s) URL."));

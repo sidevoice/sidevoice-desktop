@@ -14,6 +14,7 @@
 mod call_controls;
 mod engine_ipc;
 mod headset;
+mod local_host;
 #[cfg(feature = "probe")]
 mod probe;
 mod tray;
@@ -209,15 +210,23 @@ fn bridge_state(
 /// The microphone's level during a call (the bridge script, at most every 80 ms), for the call controls card. Same
 /// caller rule as `bridge_state`.
 #[tauri::command]
-fn bridge_level(app: AppHandle, webview: Webview, state: State<'_, AppState>, level: f64) -> Result<(), String> {
-    let current_label = state.room_label.lock().unwrap().clone();
+fn bridge_level(app: AppHandle, webview: Webview, level: f64) -> Result<(), String> {
+    room_page(&app, &webview)?;
+    call_controls::level(&app, level.clamp(0.0, 100.0).round() as u8);
+    Ok(())
+}
+
+/// Whether `webview` is the current room window showing the app's own page: the only caller the room's commands
+/// accept (`bridge_level`, `local_host_*`; capabilities/room.json grants them to `room-*`, this narrows to the current
+/// one and its origin).
+pub(crate) fn room_page(app: &AppHandle, webview: &Webview) -> Result<(), String> {
+    let current_label = app.state::<AppState>().room_label.lock().unwrap().clone();
     if current_label.as_deref() != Some(webview.label()) {
         return Err("not the room window".into());
     }
     if webview.url().map(|u| settings::url_origin(&u)).ok().as_deref() != Some(APP_ORIGIN) {
         return Err("not the app's own page".into());
     }
-    call_controls::level(&app, level.clamp(0.0, 100.0).round() as u8);
     Ok(())
 }
 
@@ -428,7 +437,12 @@ pub fn run() {
             engine_ipc::engine_load,
             engine_ipc::engine_unload,
             engine_ipc::engine_loaded,
-            engine_ipc::engine_memory
+            engine_ipc::engine_memory,
+            local_host::local_host_state,
+            local_host::local_host_pairing,
+            local_host::local_host_action,
+            local_host::local_host_pairing_code,
+            local_host::local_host_pair_room
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -453,6 +467,8 @@ pub fn run() {
             // A model stays in memory during a call and for ten minutes after the last use (sidevoice-core#21 D13).
             engine_ipc::unload_when_idle(engines.engines.clone());
             app.manage(engines);
+            // This computer's own core, if any (macOS): found, paired, proxied for the page (docs/LOCAL_HOST.md).
+            local_host::setup(&handle);
             let stored = app.path().app_config_dir().ok().and_then(|dir| settings::load(&dir));
             *app.state::<AppState>().settings.lock().unwrap() = stored.clone();
             // First run too: the interface itself asks for a pairing code; nothing has to be set up first.
@@ -485,6 +501,10 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { has_visible_windows: false, .. } = event {
                 show_room(app);
+            }
+            // Quitting: the local host's proxy stops and closes every tunnel.
+            if let tauri::RunEvent::Exit = event {
+                local_host::shutdown(app);
             }
             let _ = (app, event);
         });
