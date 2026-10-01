@@ -263,6 +263,11 @@ impl Jobs {
     }
 }
 
+/// The key a located build is kept in memory under, on `accelerator`.
+fn located_key(located: &Located, accelerator: Capability) -> Key {
+    (located.engine.id.clone(), located.model.id.clone(), accelerator)
+}
+
 /// Faults to inject, for CI's probe build only (see `NativeEngines::faults`).
 #[derive(Debug, Clone, Default)]
 pub struct Faults {
@@ -566,13 +571,16 @@ impl NativeEngines {
         let result = self
             .install_until(model_id, engine_id, &mut |done, total| jobs.set(job, done, total), &|| jobs.cancelled(job));
         match (result, jobs.finish(job)) {
+            (result, true) => result.map(|_| ()),
             (Ok(downloaded), false) => {
                 if downloaded {
                     self.forget(model_id, engine_id);
                 }
                 Err(error::install_cancelled())
             }
-            (result, _) => result.map(|_| ()),
+            // Whatever the transport said after the cancel (a connection reset by it, say), the page asked to stop:
+            // a cancel, never a failure (#124 review N04). What it wrote is already gone.
+            (Err(_), false) => Err(error::install_cancelled()),
         }
     }
 
@@ -696,9 +704,13 @@ impl NativeEngines {
         since: u64,
     ) -> Result<Load, Error> {
         let (located, accelerator) = self.ready(model_id, engine_id, None, accelerator)?;
-        match self.instance(&located, accelerator, since)? {
-            (_, load_ms, true) => Ok(Load { load_ms }),
-            (_, _, false) => Err(error::load_cancelled(model_id, engine_id, &engines::capability_name(accelerator))),
+        let cancelled = || error::load_cancelled(model_id, engine_id, &engines::capability_name(accelerator));
+        match self.instance(&located, accelerator, since) {
+            Ok((_, load_ms, true)) => Ok(Load { load_ms }),
+            Ok((_, _, false)) => Err(cancelled()),
+            // A load the page unloaded while it ran is cancelled, however it ended: never a failure to show (N03).
+            Err(_) if self.residency().unloaded_since(&located_key(&located, accelerator), since) => Err(cancelled()),
+            Err(e) => Err(e),
         }
     }
 
@@ -888,6 +900,8 @@ mod tests {
     /// A model whose load the fake runtime holds at `GATE`: it waits there once (loading), then again (finishing).
     const GATED: &str = "whisper-large-v3-turbo";
     static GATE: std::sync::Barrier = std::sync::Barrier::new(2);
+    /// Whether the gated load fails once let through (only the test that holds `GATE` sets it).
+    static GATED_FAILS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
     impl Runtime for Fake {
         fn recognizer(
@@ -903,6 +917,9 @@ mod tests {
             if leaf(dir) == GATED {
                 GATE.wait(); // loading
                 GATE.wait(); // … until the test lets it finish
+                if GATED_FAILS.load(std::sync::atomic::Ordering::SeqCst) {
+                    return Err(error::runtime_failed("sherpa-onnx", "this model failed to load"));
+                }
             }
             let what = format!("{family} {} {}", leaf(dir), engines::capability_name(accelerator));
             LOADED.lock().unwrap().push((dir.to_path_buf(), what.clone()));
@@ -971,24 +988,70 @@ mod tests {
     }
 
     /// The bytes the fake download source serves, by URL; any other URL fails as if nothing listened.
-    static SERVED: Mutex<Vec<(String, Vec<u8>)>> = Mutex::new(Vec::new());
+    static SERVED: Mutex<Vec<(String, Served)>> = Mutex::new(Vec::new());
+
+    /// What the fake source does at a URL: its bytes, then what comes after them.
+    #[derive(Clone)]
+    struct Served {
+        bytes: Vec<u8>,
+        /// How many of `bytes` arrive before `after`.
+        upto: usize,
+        after: After,
+    }
+
+    #[derive(Clone)]
+    enum After {
+        /// The end of the download.
+        End,
+        /// Nothing more, ever, on a connection that stays open.
+        Stall,
+        /// No answer at all, not even its headers.
+        NoHeaders,
+        /// Nothing until `.0` is set, then the connection fails (what a cancel's own reset looks like).
+        FailWhen(Arc<std::sync::atomic::AtomicBool>),
+    }
 
     /// Serves in 16 KiB chunks, 15 ms apart: slow enough to cancel mid-download.
-    struct Slow(std::io::Cursor<Vec<u8>>);
+    struct Slow {
+        url: String,
+        served: Served,
+        at: usize,
+    }
 
-    impl std::io::Read for Slow {
-        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-            std::thread::sleep(Duration::from_millis(15));
-            let at = buffer.len().min(16 * 1024);
-            self.0.read(&mut buffer[..at])
+    impl install::Body for Slow {
+        fn chunk(&mut self) -> install::BoxFuture<'_, Result<Option<Vec<u8>>, Error>> {
+            Box::pin(async move {
+                let upto = self.served.upto.min(self.served.bytes.len());
+                if self.at < upto {
+                    tokio::time::sleep(Duration::from_millis(15)).await;
+                    let end = (self.at + 16 * 1024).min(upto);
+                    let chunk = self.served.bytes[self.at..end].to_vec();
+                    self.at = end;
+                    return Ok(Some(chunk));
+                }
+                match &self.served.after {
+                    After::End | After::NoHeaders => Ok(None),
+                    After::Stall => std::future::pending().await,
+                    After::FailWhen(now) => {
+                        while !now.load(std::sync::atomic::Ordering::SeqCst) {
+                            tokio::time::sleep(Duration::from_millis(2)).await;
+                        }
+                        Err(error::download_failed(&self.url, "connection reset"))
+                    }
+                }
+            })
         }
     }
 
-    fn served(url: &str) -> Result<Box<dyn std::io::Read + Send>, Error> {
-        let served = SERVED.lock().unwrap();
-        let bytes = served.iter().find(|(u, _)| u == url).map(|(_, b)| b.clone());
-        let bytes = bytes.ok_or_else(|| error::download_failed(url, "nothing listens here"))?;
-        Ok(Box::new(Slow(std::io::Cursor::new(bytes))))
+    fn served(url: String) -> install::BoxFuture<'static, Result<Box<dyn install::Body>, Error>> {
+        Box::pin(async move {
+            let found = SERVED.lock().unwrap().iter().find(|(u, _)| *u == url).map(|(_, s)| s.clone());
+            let served = found.ok_or_else(|| error::download_failed(&url, "nothing listens here"))?;
+            if matches!(served.after, After::NoHeaders) {
+                std::future::pending::<()>().await;
+            }
+            Ok(Box::new(Slow { url, served, at: 0 }) as Box<dyn install::Body>)
+        })
     }
 
     /// A tar.bz2 with `root/model.onnx` (what the fake adapter needs) of `size` bytes bzip2 cannot shrink.
@@ -1013,13 +1076,19 @@ mod tests {
 
     /// `model`'s sherpa-onnx build downloads `bytes` from `url`, served by the fake source.
     fn serve(catalog: &mut Catalog, model: &str, url: &str, bytes: Vec<u8>) {
+        let upto = bytes.len();
+        serve_then(catalog, model, url, bytes, upto, After::End);
+    }
+
+    /// `serve`, the first `upto` bytes only, then `after`.
+    fn serve_then(catalog: &mut Catalog, model: &str, url: &str, bytes: Vec<u8>, upto: usize, after: After) {
         let build = catalog.models.iter_mut().find(|m| m.id == model).unwrap();
         let download = build.builds.iter_mut().find(|b| b.engine == "sherpa-onnx").unwrap().download.as_mut().unwrap();
         download.url = url.to_string();
         download.sha256 = install::hex(&<sha2::Sha256 as sha2::Digest>::digest(&bytes));
         download.size = bytes.len() as u64;
         download.root = "served".into();
-        SERVED.lock().unwrap().push((url.to_string(), bytes));
+        SERVED.lock().unwrap().push((url.to_string(), Served { bytes, upto, after }));
     }
 
     /// Every file under `root`, relative to it.
@@ -1519,6 +1588,86 @@ mod tests {
         });
         kept.unwrap();
         assert!(in_memory(&engines));
+
+        // A load the page unloads while it runs, and which then fails: cancelled, not a failure to show (N03).
+        engines.unload(GATED, "sherpa-onnx", None);
+        GATED_FAILS.store(true, std::sync::atomic::Ordering::SeqCst);
+        let failed = std::thread::scope(|scope| {
+            let load = scope.spawn(|| engines.load(GATED, "sherpa-onnx", Some(Capability::Cpu)));
+            GATE.wait();
+            engines.unload(GATED, "sherpa-onnx", Some(Capability::Cpu));
+            GATE.wait();
+            load.join().unwrap().unwrap_err()
+        });
+        assert_eq!(failed.key, "load_cancelled");
+        let failed = std::thread::scope(|scope| {
+            let load = scope.spawn(|| engines.load(GATED, "sherpa-onnx", Some(Capability::Cpu)));
+            GATE.wait();
+            GATE.wait();
+            load.join().unwrap().unwrap_err()
+        });
+        assert_eq!(failed.key, "runtime_failed", "nobody unloaded it: a failure");
+        GATED_FAILS.store(false, std::sync::atomic::Ordering::SeqCst);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn n04_a_cancel_interrupts_a_download_the_network_stopped_answering() {
+        let body = "https://127.0.0.1:9/stall/whisper-base.tar.bz2";
+        let headers = "https://127.0.0.1:9/stall/whisper-small.tar.bz2";
+        let next = "https://127.0.0.1:9/stall/whisper-large-v3-turbo.tar.bz2";
+        let (engines, root) = mac("stall", |catalog| {
+            serve_then(catalog, "whisper-base", body, archive("served", 400_000), 40_000, After::Stall);
+            serve_then(catalog, "whisper-small", headers, archive("served", 1000), 0, After::NoHeaders);
+            serve(catalog, GATED, next, archive("served", 1000));
+        });
+        let before = files_under(&root);
+        let jobs = Jobs::default();
+        for (job, model) in [("stalled-body", "whisper-base"), ("stalled-headers", "whisper-small")] {
+            std::thread::scope(|scope| {
+                let install = scope.spawn(|| engines.install_job(&jobs, job, model, "sherpa-onnx"));
+                let waiting = |p: &Progress| if model == "whisper-base" { p.done >= 40_000 } else { true };
+                while !jobs.get(job).is_some_and(|p| waiting(&p)) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                std::thread::sleep(Duration::from_millis(300));
+                assert!(!install.is_finished(), "{job}: the network says nothing more");
+                let asked = Instant::now();
+                assert!(jobs.cancel(job));
+                let result = install.join().unwrap();
+                assert!(asked.elapsed() < Duration::from_secs(2), "{job}: interrupted, not waited out");
+                assert_eq!(result.unwrap_err().key, "install_cancelled", "{job}");
+            });
+            assert_eq!(files_under(&root), before, "{job}: nothing of it on disk");
+            assert_eq!(jobs.get(job), None, "{job}: the job is gone");
+            assert!(engines.installing.try_lock().is_ok(), "{job}: the install lock is free");
+        }
+        engines.install_job(&jobs, "next", GATED, "sherpa-onnx").unwrap();
+        assert!(engines.installed().iter().any(|b| b.model == GATED), "the next install runs");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn n04_a_transport_error_after_an_accepted_cancel_is_still_a_cancel() {
+        let url = "https://127.0.0.1:9/reset/whisper-base.tar.bz2";
+        let reset = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let after = After::FailWhen(reset.clone());
+        let (engines, root) =
+            mac("reset", |catalog| serve_then(catalog, "whisper-base", url, archive("served", 400_000), 40_000, after));
+        let before = files_under(&root);
+        let jobs = Jobs::default();
+        let result = std::thread::scope(|scope| {
+            let install = scope.spawn(|| engines.install_job(&jobs, "reset", "whisper-base", "sherpa-onnx"));
+            while !jobs.get("reset").is_some_and(|p| p.done >= 40_000) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            // The connection fails as the cancel lands, before the download next looks at its stop.
+            assert!(jobs.cancel("reset"));
+            reset.store(true, std::sync::atomic::Ordering::SeqCst);
+            install.join().unwrap()
+        });
+        assert_eq!(result.unwrap_err().key, "install_cancelled", "not download_failed");
+        assert_eq!(files_under(&root), before);
         std::fs::remove_dir_all(root).unwrap();
     }
 

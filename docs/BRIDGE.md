@@ -115,12 +115,15 @@ engine reports, and runs the build it chose through it. `window.__sidevoiceDeskt
   `total` comes from the catalogue, so it is known from the first report (0 when nothing is left to fetch).
   `bytes_per_s` is `null` until the first second is measured, then the speed sampled each second, each sample
   weighing half against the speed before it; time left is `(total - done) / bytes_per_s`.
-- A cancelled install stops while it waits for another, or at the next downloaded chunk or archive entry; it frees
-  the install lock, removes what it was downloading (the partial file, the unpacking directory, the unmarked slot)
-  and rejects with `install_cancelled`. A download it had already completed — the engine package before the model —
-  is whole and verified, and stays. A cancel the app accepted always wins: one that lands as the files are moved
-  into place removes the model again, and the install still rejects. Any other failed download is cleaned up the
-  same way.
+- A cancelled install stops within a moment, whatever it is doing: waiting for another install, waiting on the
+  network — for the answer's headers or its next chunk, however long the server has gone quiet: the request is
+  dropped and its connection closed — or unpacking (at the next archive entry). It frees the install lock, removes
+  what it was downloading (the partial file, the unpacking directory, the unmarked slot) and rejects with
+  `install_cancelled`. A download it had already completed — the engine package before the model — is whole and
+  verified, and stays. A cancel the app accepted always wins: one that lands as the files are moved into place
+  removes the model again, and a transport error that follows it (the connection it closed) is still
+  `install_cancelled`, never `download_failed`. Any other failed download is cleaned up the same way. There is no
+  overall download timeout: a slow line is not a failure, and the cancel is how a person stops one.
 - Commands behind it (`src-tauri/src/engine_ipc.rs`): `engine_capabilities`, `engine_installed`,
   `engine_install {model, engine, job}` with `engine_progress {job}` (the report above, or `null` while the job
   waits or after it ends) and `engine_cancel {job}` (`true`/`false` as `cancel`), `engine_transcribe` (raw f32 body; `x-model`, `x-engine`, `x-accelerator`, `x-language`,
@@ -179,7 +182,7 @@ one is added there and here.
 | `download_corrupt` | `url` | the bytes are not the ones the catalogue names (SHA-256) |
 | `install_failed` | — | unpacking or moving the download into place failed (disk, permissions, an archive without its files) |
 | `install_cancelled` | — | the page cancelled the install (`cancel(job)`): not a failure, nothing to show as an error |
-| `load_cancelled` | `model`, `engine`, `accelerator` | the page unloaded the build while it was loading: not a failure |
+| `load_cancelled` | `model`, `engine`, `accelerator` | the page unloaded the build while it was loading — also when the load then failed: not a failure |
 | `runtime_failed` | `engine` | the engine refused to load (a library failing its hash), to load the model into memory, or to run it |
 | `bad_request` | — | a malformed call (a missing header): a bug in the caller |
 | `internal` | — | something inside the app failed |

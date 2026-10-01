@@ -15,7 +15,9 @@ libloading = "0.9"
 sha2 = "0.10"
 tar = "0.4"
 bzip2 = "0.6"
-reqwest = { version = "0.13", default-features = false, features = ["blocking", "native-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["native-tls"] }
+# Downloads awaited against a cancel, which drops them mid-wait (src/install.rs).
+tokio = { version = "1", features = ["rt", "time", "macros", "net"] }
 
 # The machine's total memory (src/memory.rs).
 [target.'cfg(unix)'.dependencies]

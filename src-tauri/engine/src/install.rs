@@ -3,13 +3,19 @@
 //! when its `.sidevoice-complete` marker names the hash it came from **and** its root and every file the engine
 //! needs from it are there; one that lost a file is not installed, and fetching it again repairs it. A fetch that
 //! fails or is stopped (a cancelled install) removes what it had written: nothing partial stays on disk.
+//!
+//! A stop does not wait for the network: the request is awaited — its headers, then each chunk — against the stop,
+//! and a stop drops it, closing the connection, however long the server has gone quiet (#124 review N04).
 
 use crate::error::{self, Error};
 use sha2::{Digest, Sha256};
 use sidevoice_desktop_core::engines::Download;
 use std::fs;
-use std::io::{Read, Write};
+use std::future::Future;
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
+use std::pin::Pin;
+use std::time::Duration;
 
 pub(crate) const MARKER: &str = ".sidevoice-complete";
 
@@ -21,8 +27,19 @@ pub struct Store {
     pub(crate) open: Open,
 }
 
-/// Opens the bytes behind a download's https URL.
-pub type Open = fn(&str) -> Result<Box<dyn Read + Send>, Error>;
+pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// Opens the bytes behind a download's https URL (its answer, once its headers are in).
+pub type Open = fn(String) -> BoxFuture<'static, Result<Box<dyn Body>, Error>>;
+
+/// A download's bytes as they arrive.
+pub trait Body: Send {
+    /// The next chunk; `None` at the end.
+    fn chunk(&mut self) -> BoxFuture<'_, Result<Option<Vec<u8>>, Error>>;
+}
+
+/// How often a download in progress looks at its stop while it waits for the network.
+const STOP_EVERY: Duration = Duration::from_millis(50);
 
 /// Progress: bytes so far, bytes expected.
 pub type OnProgress<'a> = &'a mut dyn FnMut(u64, u64);
@@ -132,43 +149,70 @@ impl Store {
     }
 }
 
-/// The app's source of downloads: the URL over HTTPS.
-fn https(url: &str) -> Result<Box<dyn Read + Send>, Error> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(None)
-        .connect_timeout(std::time::Duration::from_secs(20))
-        .build()
-        .map_err(|e| error::download_failed(url, e))?;
-    let response = client.get(url).send().map_err(|e| error::download_failed(url, e))?;
-    if !response.status().is_success() {
-        return Err(error::download_failed(url, format!("HTTP {}", response.status())));
+/// The app's source of downloads: the URL over HTTPS. No overall timeout: a big model on a slow line takes what it
+/// takes, and a stop is what ends a download nobody wants any more.
+fn https(url: String) -> BoxFuture<'static, Result<Box<dyn Body>, Error>> {
+    Box::pin(async move {
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(20))
+            .build()
+            .map_err(|e| error::download_failed(&url, e))?;
+        let response = client.get(&url).send().await.map_err(|e| error::download_failed(&url, e))?;
+        if !response.status().is_success() {
+            return Err(error::download_failed(&url, format!("HTTP {}", response.status())));
+        }
+        Ok(Box::new(Https { url, response }) as Box<dyn Body>)
+    })
+}
+
+struct Https {
+    url: String,
+    response: reqwest::Response,
+}
+
+impl Body for Https {
+    fn chunk(&mut self) -> BoxFuture<'_, Result<Option<Vec<u8>>, Error>> {
+        Box::pin(async move {
+            let chunk = self.response.chunk().await.map_err(|e| error::download_failed(&self.url, e))?;
+            Ok(chunk.map(|bytes| bytes.to_vec()))
+        })
     }
-    Ok(Box::new(response))
+}
+
+/// `work`, unless `stop` says so first: then `install_cancelled`, and `work` is dropped where it was waiting.
+async fn unless_stopped<T>(stop: Stop<'_>, work: impl Future<Output = Result<T, Error>>) -> Result<T, Error> {
+    let stopped = async {
+        while !stop() {
+            tokio::time::sleep(STOP_EVERY).await;
+        }
+    };
+    tokio::select! {
+        biased;
+        () = stopped => Err(error::install_cancelled()),
+        done = work => done,
+    }
 }
 
 fn download_to(download: &Download, open: Open, path: &Path, progress: OnProgress, stop: Stop) -> Result<(), Error> {
     if !download.url.starts_with("https://") {
         return Err(error::download_refused(&download.url));
     }
-    let mut response = open(&download.url)?;
+    let network = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(error::internal)?;
     let expected = download.size;
     let mut file = fs::File::create(path).map_err(error::install_failed)?;
     let mut hasher = Sha256::new();
-    let mut buffer = vec![0u8; 1 << 16];
     let mut done = 0u64;
-    loop {
-        let read = response.read(&mut buffer).map_err(|e| error::download_failed(&download.url, e))?;
-        if read == 0 {
-            break;
+    // Dropped on any way out, the answer closes its connection with it.
+    network.block_on(async {
+        let mut body = unless_stopped(stop, open(download.url.clone())).await?;
+        while let Some(chunk) = unless_stopped(stop, body.chunk()).await? {
+            hasher.update(&chunk);
+            file.write_all(&chunk).map_err(error::install_failed)?;
+            done += chunk.len() as u64;
+            progress(done, expected);
         }
-        hasher.update(&buffer[..read]);
-        file.write_all(&buffer[..read]).map_err(error::install_failed)?;
-        done += read as u64;
-        progress(done, expected);
-        if stop() {
-            return Err(error::install_cancelled());
-        }
-    }
+        Ok::<(), Error>(())
+    })?;
     file.flush().map_err(error::install_failed)?;
     let got = hex(&hasher.finalize());
     if got != download.sha256.to_ascii_lowercase() {
