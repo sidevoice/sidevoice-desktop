@@ -73,6 +73,16 @@
         poll();
         return running.finally(() => { finished = true; });
       },
+      /** Loads the build into memory on `accelerator` (optional): `{load_ms}`. One already loaded is not loaded again
+       *  (its `load_ms` is the time its load took). The app unloads it 10 minutes after its last use once no call is
+       *  on, and loads it again as the next call connects (#124 D13). */
+      load: (model, engine, accelerator) => call("engine_load", { model, engine, accelerator: accelerator || null }),
+      /** Frees the build's memory; nothing to do when it is not loaded. */
+      unload: (model, engine) => call("engine_unload", { model, engine }),
+      /** `[{model, engine, accelerator, since, last_used}]`: what is in memory (times in ms since the epoch). */
+      loaded: () => call("engine_loaded"),
+      /** `{total_mb, available_mb}` (each null when unknown). */
+      memory: () => call("engine_memory"),
       /** Mono Float32Array at `sampleRate` → text. `language` empty to detect. */
       transcribe(model, engine, samples, sampleRate, language, accelerator) {
         const bytes = new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength);

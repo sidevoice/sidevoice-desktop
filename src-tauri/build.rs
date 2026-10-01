@@ -16,6 +16,10 @@ fn main() {
         "engine_progress",
         "engine_transcribe",
         "engine_synthesize",
+        "engine_load",
+        "engine_unload",
+        "engine_loaded",
+        "engine_memory",
     ])))
     .expect("failed to run tauri-build");
 }

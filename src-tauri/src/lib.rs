@@ -120,6 +120,7 @@ fn bridge_state(
     *state.call.lock().unwrap() = snapshot.clone();
     tray::update(&app, &snapshot);
     headset::update(&app, &snapshot);
+    engine_ipc::call_changed(&app, snapshot.joined);
     Ok(())
 }
 
@@ -169,6 +170,7 @@ fn reset_call_state(app: &AppHandle) {
     *app.state::<AppState>().call.lock().unwrap() = snapshot.clone();
     tray::update(app, &snapshot);
     headset::update(app, &snapshot);
+    engine_ipc::call_changed(app, snapshot.joined);
 }
 
 /// (Re)creates the room window: the bundled interface, told its target, bound to the app's own pages.
@@ -302,7 +304,11 @@ pub fn run() {
             engine_ipc::engine_install,
             engine_ipc::engine_progress,
             engine_ipc::engine_transcribe,
-            engine_ipc::engine_synthesize
+            engine_ipc::engine_synthesize,
+            engine_ipc::engine_load,
+            engine_ipc::engine_unload,
+            engine_ipc::engine_loaded,
+            engine_ipc::engine_memory
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -310,10 +316,19 @@ pub fn run() {
             headset::setup(&handle);
             // Native engines and models are downloaded into the app's data directory, on demand (docs/ENGINES.md).
             let engines_root = app.path().app_data_dir()?.join("engines");
-            app.manage(engine_ipc::EngineState::new(sidevoice_desktop_engine::NativeEngines::new(
+            #[allow(unused_mut)] // the probe build may shorten the idle time
+            let mut engines = sidevoice_desktop_engine::NativeEngines::new(
                 sidevoice_desktop_core::engines::bundled_catalog(),
                 engines_root,
-            )));
+            );
+            #[cfg(feature = "probe")]
+            if let Some(idle) = probe::idle_unload() {
+                engines.idle_unload = idle;
+            }
+            let engines = engine_ipc::EngineState::new(engines);
+            // A model stays in memory during a call and for ten minutes after the last use (#124 D13).
+            engine_ipc::unload_when_idle(engines.engines.clone());
+            app.manage(engines);
             let stored = app.path().app_config_dir().ok().and_then(|dir| settings::load(&dir));
             *app.state::<AppState>().settings.lock().unwrap() = stored.clone();
             // First run too: the interface itself asks for a pairing code; nothing has to be set up first.

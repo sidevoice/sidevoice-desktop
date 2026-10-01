@@ -8,6 +8,11 @@
 //! at this trust boundary, that the build runs here: an adapter this app has (`ADAPTERS`), a package for this
 //! device, the build's needs and accelerators, the model's memory. Anything else is refused with a keyed `Error`,
 //! never replaced by another build.
+//!
+//! A model in memory is one per (engine, model, accelerator); the language is each call's. The page loads and unloads
+//! them (`load`, `unload`), and running one loads it if it is not. The app keeps them by rubasace/sidevoice#124 D13:
+//! loaded while a call is on and for `idle_unload` after the last use once no call is (`unload_idle`); a model it
+//! unloaded that way is loaded again as the next call connects (`call_changed`, `preload`).
 
 pub mod error;
 pub mod install;
@@ -22,6 +27,11 @@ use sidevoice_desktop_core::engines::{Runs, Task};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+/// rubasace/sidevoice#124 D13: how long a model stays in memory after its last use, or after the last call ended if
+/// that is later. Never while a call is on.
+pub const IDLE_UNLOAD: Duration = Duration::from_secs(10 * 60);
 
 /// Mono audio in [-1, 1].
 pub struct Audio {
@@ -32,17 +42,17 @@ pub struct Audio {
 /// A native engine as this app runs it, loaded from its unpacked package: it turns a model build (its files in
 /// `dir`, the engine's `config` from the catalogue) into something that runs, on the accelerator it is given.
 pub trait Runtime: Send + Sync {
-    /// Speech to text. `language`: the model family's code, or empty to detect it.
+    /// Speech to text, loaded into memory; each transcription names its language.
     fn recognizer(
         &self,
         family: &str,
         dir: &Path,
         config: &serde_json::Value,
-        language: &str,
         accelerator: Capability,
     ) -> Result<Box<dyn Recognize>, Error>;
 
-    /// Text to speech. `language`: the chosen voice's, for the phonemizer.
+    /// Text to speech, loaded into memory. `language`: the phonemizer's until a synthesis names its own (the model's
+    /// first voice's).
     fn voice(
         &self,
         family: &str,
@@ -54,13 +64,13 @@ pub trait Runtime: Send + Sync {
 }
 
 pub trait Recognize: Send + Sync {
-    /// Mono samples at `sample_rate` → text.
-    fn transcribe(&self, samples: &[f32], sample_rate: i32) -> Result<String, Error>;
+    /// Mono samples at `sample_rate` → text. `language`: the model family's code, or empty to detect it.
+    fn transcribe(&self, samples: &[f32], sample_rate: i32, language: &str) -> Result<String, Error>;
 }
 
 pub trait Speak: Send + Sync {
-    /// Text → audio, with the model's speaker `sid`.
-    fn synthesize(&self, text: &str, sid: i32, speed: f32) -> Result<Audio, Error>;
+    /// Text → audio, with the model's speaker `sid`. `language`: the voice's, for the phonemizer.
+    fn synthesize(&self, text: &str, sid: i32, speed: f32, language: &str) -> Result<Audio, Error>;
 }
 
 /// Loads an engine's runtime from the root of its unpacked package.
@@ -140,21 +150,74 @@ impl Jobs {
     }
 }
 
-/// A loaded model: (engine, model, accelerator, language).
-type Key = (String, String, Capability, String);
+/// A model in memory: (engine, model, accelerator).
+type Key = (String, String, Capability);
+
+#[derive(Clone)]
+enum Instance {
+    Stt(Arc<dyn Recognize>),
+    Tts(Arc<dyn Speak>),
+}
+
+struct Resident {
+    instance: Instance,
+    task: Task,
+    load_ms: u64,
+    since: SystemTime,
+    /// The last use, for the idle rule (monotonic) and for the page (wall clock).
+    used: Instant,
+    used_at: SystemTime,
+}
+
+/// A model in memory, as `loaded()` reports it; `since` and `last_used` in milliseconds since the Unix epoch.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Loaded {
+    pub model: String,
+    pub engine: String,
+    pub accelerator: String,
+    pub since: u64,
+    pub last_used: u64,
+}
+
+/// What `load` answers: how long loading the model took.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct Load {
+    pub load_ms: u64,
+}
+
+/// What `memory()` answers: the machine's memory and what is available of it now, in MiB, `None` when unknown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct Memory {
+    pub total_mb: Option<u64>,
+    pub available_mb: Option<u64>,
+}
+
+/// Whether a call is on, as the room reports it, and when the last one ended.
+#[derive(Default)]
+struct Calls {
+    active: bool,
+    ended: Option<Instant>,
+}
 
 pub struct NativeEngines {
     pub catalog: Catalog,
     /// What `capabilities()` reports: this process's OS, architecture and accelerators, and the OS's memory.
     pub device: Device,
+    /// How long a model stays in memory unused once no call is on (D13): `IDLE_UNLOAD`.
+    pub idle_unload: Duration,
     store: Store,
     adapters: Vec<Adapter>,
     /// One loaded runtime per engine.
     runtimes: Mutex<HashMap<String, Arc<dyn Runtime>>>,
     /// One install at a time: two would download into the same staging paths and break each other.
     installing: Mutex<()>,
-    recognizers: Mutex<HashMap<Key, Arc<dyn Recognize>>>,
-    voices: Mutex<HashMap<Key, Arc<dyn Speak>>>,
+    /// One load at a time: the page's and the app's would otherwise load the same model twice.
+    loading: Mutex<()>,
+    resident: Mutex<HashMap<Key, Resident>>,
+    /// What `unload_idle` took out of memory (the newest of each task), to load again as the next call connects unless
+    /// the page has unloaded it, or has another model of that task in memory by then.
+    evicted: Mutex<Vec<(Key, Task)>>,
+    calls: Mutex<Calls>,
 }
 
 /// Where a build lives on this device, once it is known this app can run it here.
@@ -190,6 +253,15 @@ fn lock<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>, Error> {
     mutex.lock().map_err(|_| error::internal("a lock was poisoned"))
 }
 
+/// For state every change leaves whole (one insert or removal at a time): a panic elsewhere does not spoil it.
+fn guard<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn epoch_ms(time: SystemTime) -> u64 {
+    time.duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
 impl NativeEngines {
     pub fn new(catalog: Catalog, root: impl Into<PathBuf>) -> Self {
         let mut device = engines::native_device();
@@ -197,12 +269,15 @@ impl NativeEngines {
         NativeEngines {
             catalog,
             device,
+            idle_unload: IDLE_UNLOAD,
             store: Store::new(root),
             adapters: ADAPTERS.to_vec(),
             runtimes: Mutex::default(),
             installing: Mutex::default(),
-            recognizers: Mutex::default(),
-            voices: Mutex::default(),
+            loading: Mutex::default(),
+            resident: Mutex::default(),
+            evicted: Mutex::default(),
+            calls: Mutex::default(),
         }
     }
 
@@ -320,17 +395,17 @@ impl NativeEngines {
         result
     }
 
-    /// `model` on `engine`, downloaded and of `task`, with the accelerator it runs on: the one asked for, which must
-    /// be one this build can use here, or the first it can.
+    /// `model` on `engine`, downloaded (and of `task`, when one is asked for), with the accelerator it runs on: the
+    /// one asked for, which must be one this build can use here, or the first it can.
     fn ready(
         &self,
         model_id: &str,
         engine_id: &str,
-        task: Task,
+        task: Option<Task>,
         accelerator: Option<Capability>,
     ) -> Result<(Located<'_>, Capability), Error> {
         let located = self.locate(model_id, engine_id)?;
-        if self.catalog.task_of(located.model) != Some(task) {
+        if let Some(task) = task.filter(|task| self.catalog.task_of(located.model) != Some(*task)) {
             let task = if task == Task::Stt { "speech-to-text" } else { "text-to-speech" };
             return Err(error::model_wrong_task(model_id, task));
         }
@@ -361,8 +436,149 @@ impl NativeEngines {
         Ok(runtime)
     }
 
-    /// Mono f32 samples at `sample_rate` → text, with `model` on `engine`. `language`: the family's code, or empty
-    /// to detect it.
+    /// The model in memory under `key`, marked used now, with the time its load took.
+    fn touch(&self, key: &Key) -> Option<(Instance, u64)> {
+        let mut resident = guard(&self.resident);
+        let found = resident.get_mut(key)?;
+        (found.used, found.used_at) = (Instant::now(), SystemTime::now());
+        Some((found.instance.clone(), found.load_ms))
+    }
+
+    /// The located build in memory on `accelerator`, loaded now if it is not, with the time its load took.
+    fn instance(&self, located: &Located, accelerator: Capability) -> Result<(Instance, u64), Error> {
+        let key = (located.engine.id.clone(), located.model.id.clone(), accelerator);
+        if let Some(found) = self.touch(&key) {
+            return Ok(found);
+        }
+        let _one_at_a_time = lock(&self.loading)?;
+        if let Some(found) = self.touch(&key) {
+            return Ok(found); // loaded while this call waited
+        }
+        let (family, dir, config) = (&located.model.family, &located.model_dir, &located.build.config);
+        let task =
+            self.catalog.task_of(located.model).ok_or_else(|| error::family_unsupported(&located.engine.id, family))?;
+        let started = Instant::now();
+        let runtime = self.runtime(located)?;
+        let instance = match task {
+            Task::Stt => Instance::Stt(Arc::from(runtime.recognizer(family, dir, config, accelerator)?)),
+            Task::Tts => {
+                let language = located.model.voices.first().map_or("", |v| v.language.as_str());
+                Instance::Tts(Arc::from(runtime.voice(family, dir, config, language, accelerator)?))
+            }
+        };
+        let load_ms = started.elapsed().as_millis() as u64;
+        let (since, used) = (SystemTime::now(), Instant::now());
+        let resident = Resident { instance: instance.clone(), task, load_ms, since, used, used_at: since };
+        guard(&self.resident).insert(key, resident);
+        Ok((instance, load_ms))
+    }
+
+    /// Loads `model` on `engine` into memory, on the accelerator asked for (else the first it can use here): what a
+    /// call runs, ready before it does. One already in memory is not loaded again; its `load_ms` is the time its
+    /// load took.
+    pub fn load(&self, model_id: &str, engine_id: &str, accelerator: Option<Capability>) -> Result<Load, Error> {
+        let (located, accelerator) = self.ready(model_id, engine_id, None, accelerator)?;
+        let (_, load_ms) = self.instance(&located, accelerator)?;
+        Ok(Load { load_ms })
+    }
+
+    /// Frees `model` on `engine`, on whatever accelerators it is loaded; nothing to do when it is not. A call running
+    /// it finishes first.
+    pub fn unload(&self, model_id: &str, engine_id: &str) {
+        let ours = |(engine, model, _): &Key| engine == engine_id && model == model_id;
+        guard(&self.resident).retain(|key, _| !ours(key));
+        // The page unloads what it no longer uses: not loaded again for it as a call connects.
+        guard(&self.evicted).retain(|(key, _)| !ours(key));
+    }
+
+    /// The models in memory, oldest first.
+    pub fn loaded(&self) -> Vec<Loaded> {
+        let resident = guard(&self.resident);
+        let mut loaded: Vec<(SystemTime, Loaded)> = resident
+            .iter()
+            .map(|((engine, model, accelerator), r)| {
+                let loaded = Loaded {
+                    model: model.clone(),
+                    engine: engine.clone(),
+                    accelerator: engines::capability_name(*accelerator),
+                    since: epoch_ms(r.since),
+                    last_used: epoch_ms(r.used_at),
+                };
+                (r.since, loaded)
+            })
+            .collect();
+        loaded.sort_by(|a, b| {
+            a.0.cmp(&b.0).then_with(|| (&a.1.model, &a.1.accelerator).cmp(&(&b.1.model, &b.1.accelerator)))
+        });
+        loaded.into_iter().map(|(_, l)| l).collect()
+    }
+
+    /// This machine's memory and what is available of it now.
+    pub fn memory(&self) -> Memory {
+        Memory { total_mb: self.device.memory_mb, available_mb: memory::available_mb() }
+    }
+
+    /// The room says whether a call is on (joining counts). True when one has just started: the moment to `preload`.
+    pub fn call_changed(&self, active: bool, now: Instant) -> bool {
+        let mut calls = guard(&self.calls);
+        let started = active && !calls.active;
+        if calls.active && !active {
+            calls.ended = Some(now);
+        }
+        calls.active = active;
+        started
+    }
+
+    /// D13: with no call on, frees every model unused for `idle_unload` — counted from its last use, or from when the
+    /// last call ended if that is later — and remembers it for the next call. Answers what it freed.
+    pub fn unload_idle(&self, now: Instant) -> Vec<Loaded> {
+        let calls = guard(&self.calls);
+        if calls.active {
+            return Vec::new();
+        }
+        let idle = |r: &Resident| {
+            let from = calls.ended.map_or(r.used, |ended| ended.max(r.used));
+            now.saturating_duration_since(from) >= self.idle_unload
+        };
+        let mut resident = guard(&self.resident);
+        let mut keys: Vec<(SystemTime, Key)> =
+            resident.iter().filter(|(_, r)| idle(r)).map(|(k, r)| (r.since, k.clone())).collect();
+        keys.sort_by_key(|k| k.0); // oldest first: of two of one task, the newer is the one remembered
+        let keys = keys.into_iter().map(|(_, k)| k);
+        let mut freed = Vec::new();
+        for key in keys {
+            let Some(r) = resident.remove(&key) else { continue };
+            let (engine, model, accelerator) = key.clone();
+            let accelerator_name = engines::capability_name(accelerator);
+            let since = epoch_ms(r.since);
+            freed.push(Loaded { model, engine, accelerator: accelerator_name, since, last_used: epoch_ms(r.used_at) });
+            let mut evicted = guard(&self.evicted);
+            evicted.retain(|(k, task)| *k != key && *task != r.task);
+            evicted.push((key, r.task));
+        }
+        freed
+    }
+
+    /// Loads again what `unload_idle` freed, as a call connects, each with what its load answered — unless the page
+    /// has another model of that task in memory by then. One it loaded to check while this stayed its choice, and
+    /// unloaded when the check failed (#124 D11), does not count: this one comes back.
+    pub fn preload(&self) -> Vec<(Loaded, Result<Load, Error>)> {
+        let evicted = std::mem::take(&mut *guard(&self.evicted));
+        let replaced: Vec<Task> = guard(&self.resident).values().map(|r| r.task).collect();
+        evicted
+            .into_iter()
+            .filter(|(_, task)| !replaced.contains(task))
+            .map(|((engine, model, accelerator), _)| {
+                let result = self.load(&model, &engine, Some(accelerator));
+                let now = epoch_ms(SystemTime::now());
+                let accelerator = engines::capability_name(accelerator);
+                (Loaded { model, engine, accelerator, since: now, last_used: now }, result)
+            })
+            .collect()
+    }
+
+    /// Mono f32 samples at `sample_rate` → text, with `model` on `engine` (loaded now if it is not in memory).
+    /// `language`: the family's code, or empty to detect it.
     pub fn transcribe(
         &self,
         model_id: &str,
@@ -372,28 +588,17 @@ impl NativeEngines {
         samples: &[f32],
         sample_rate: i32,
     ) -> Result<String, Error> {
-        let (located, accelerator) = self.ready(model_id, engine_id, Task::Stt, accelerator)?;
-        let key = (engine_id.to_string(), model_id.to_string(), accelerator, language.trim().to_string());
-        let existing = lock(&self.recognizers)?.get(&key).cloned();
-        let recognizer = match existing {
-            Some(r) => r,
-            None => {
-                let r: Arc<dyn Recognize> = Arc::from(self.runtime(&located)?.recognizer(
-                    &located.model.family,
-                    &located.model_dir,
-                    &located.build.config,
-                    &key.3,
-                    accelerator,
-                )?);
-                lock(&self.recognizers)?.insert(key, r.clone());
-                r
-            }
+        let (located, accelerator) = self.ready(model_id, engine_id, Some(Task::Stt), accelerator)?;
+        let Instance::Stt(recognizer) = self.instance(&located, accelerator)?.0 else {
+            return Err(error::internal("a voice model loaded for transcription"));
         };
-        recognizer.transcribe(samples, sample_rate)
+        let text = recognizer.transcribe(samples, sample_rate, language.trim());
+        self.touch(&(engine_id.to_string(), model_id.to_string(), accelerator));
+        text
     }
 
-    /// Text → mono f32 samples, with `model` on `engine`. `voice`: a voice id the catalogue lists for the model
-    /// (its language picks the phonemizer).
+    /// Text → mono f32 samples, with `model` on `engine` (loaded now if it is not in memory). `voice`: a voice id the
+    /// catalogue lists for the model (its language picks the phonemizer's).
     pub fn synthesize(
         &self,
         model_id: &str,
@@ -403,26 +608,15 @@ impl NativeEngines {
         speed: f32,
         text: &str,
     ) -> Result<Audio, Error> {
-        let (located, accelerator) = self.ready(model_id, engine_id, Task::Tts, accelerator)?;
+        let (located, accelerator) = self.ready(model_id, engine_id, Some(Task::Tts), accelerator)?;
         let chosen = located.model.voices.iter().find(|v| v.id == voice);
         let chosen = chosen.ok_or_else(|| error::voice_unknown(model_id, voice))?;
-        let key = (engine_id.to_string(), model_id.to_string(), accelerator, chosen.language.clone());
-        let existing = lock(&self.voices)?.get(&key).cloned();
-        let speaker = match existing {
-            Some(s) => s,
-            None => {
-                let s: Arc<dyn Speak> = Arc::from(self.runtime(&located)?.voice(
-                    &located.model.family,
-                    &located.model_dir,
-                    &located.build.config,
-                    &chosen.language,
-                    accelerator,
-                )?);
-                lock(&self.voices)?.insert(key, s.clone());
-                s
-            }
+        let Instance::Tts(speaker) = self.instance(&located, accelerator)?.0 else {
+            return Err(error::internal("a transcription model loaded for speech"));
         };
-        speaker.synthesize(text, chosen.sid, if speed > 0.0 { speed } else { 1.0 })
+        let audio = speaker.synthesize(text, chosen.sid, if speed > 0.0 { speed } else { 1.0 }, &chosen.language);
+        self.touch(&(engine_id.to_string(), model_id.to_string(), accelerator));
+        audio
     }
 }
 
@@ -440,13 +634,18 @@ mod tests {
     use super::*;
     use sidevoice_desktop_core::engines::bundled_catalog;
 
-    /// What the fake runtime was asked to load, in order, by every test: (model directory, "family model language
+    /// What the fake runtime was asked to load, in order, by every test: (model directory, "family model
     /// accelerator").
     static LOADED: Mutex<Vec<(PathBuf, String)>> = Mutex::new(Vec::new());
+    /// What the fake voices said, by every test: (model directory, "language text").
+    static SPOKEN: Mutex<Vec<(PathBuf, String)>> = Mutex::new(Vec::new());
 
     struct Fake;
     struct Heard(String);
-    struct Said;
+    struct Said(PathBuf);
+
+    /// A model the fake runtime cannot load: what a build that does not load on this machine looks like.
+    const BROKEN: &str = "whisper-base";
 
     impl Runtime for Fake {
         fn recognizer(
@@ -454,10 +653,12 @@ mod tests {
             family: &str,
             dir: &Path,
             _config: &serde_json::Value,
-            language: &str,
             accelerator: Capability,
         ) -> Result<Box<dyn Recognize>, Error> {
-            let what = format!("{family} {} {language} {}", leaf(dir), engines::capability_name(accelerator));
+            if leaf(dir) == BROKEN {
+                return Err(error::runtime_failed("sherpa-onnx", "this model does not load here"));
+            }
+            let what = format!("{family} {} {}", leaf(dir), engines::capability_name(accelerator));
             LOADED.lock().unwrap().push((dir.to_path_buf(), what.clone()));
             Ok(Box::new(Heard(what)))
         }
@@ -467,27 +668,33 @@ mod tests {
             family: &str,
             dir: &Path,
             _config: &serde_json::Value,
-            language: &str,
+            _language: &str,
             accelerator: Capability,
         ) -> Result<Box<dyn Speak>, Error> {
-            LOADED.lock().unwrap().push((
-                dir.to_path_buf(),
-                format!("{family} {} {language} {}", leaf(dir), engines::capability_name(accelerator)),
-            ));
-            Ok(Box::new(Said))
+            LOADED
+                .lock()
+                .unwrap()
+                .push((dir.to_path_buf(), format!("{family} {} {}", leaf(dir), engines::capability_name(accelerator))));
+            Ok(Box::new(Said(dir.to_path_buf())))
         }
     }
 
     impl Recognize for Heard {
-        fn transcribe(&self, _samples: &[f32], _rate: i32) -> Result<String, Error> {
-            Ok(self.0.clone())
+        fn transcribe(&self, _samples: &[f32], _rate: i32, language: &str) -> Result<String, Error> {
+            Ok(format!("{} {language}", self.0))
         }
     }
 
     impl Speak for Said {
-        fn synthesize(&self, text: &str, sid: i32, _speed: f32) -> Result<Audio, Error> {
+        fn synthesize(&self, text: &str, sid: i32, _speed: f32, language: &str) -> Result<Audio, Error> {
+            SPOKEN.lock().unwrap().push((self.0.clone(), format!("{language} {text}")));
             Ok(Audio { samples: vec![0.0; text.len()], sample_rate: sid })
         }
+    }
+
+    /// The entries of `log` made under `root` (each test has its own).
+    fn ours(log: &Mutex<Vec<(PathBuf, String)>>, root: &Path) -> Vec<String> {
+        log.lock().unwrap().iter().filter(|(dir, _)| dir.starts_with(root)).map(|(_, l)| l.clone()).collect()
     }
 
     fn leaf(dir: &Path) -> String {
@@ -543,28 +750,154 @@ mod tests {
     }
 
     #[test]
-    fn runs_the_build_and_accelerator_it_is_asked_for_and_keys_its_cache_by_them() {
+    fn runs_the_build_and_accelerator_it_is_asked_for_one_model_in_memory_for_every_language() {
         let (engines, root) = mac("choice", |_| {});
         let heard = engines.transcribe("whisper-tiny", "sherpa-onnx", None, "es", &[0.0], 16_000).unwrap();
-        assert_eq!(heard, "whisper whisper-tiny es cpu", "no accelerator named: the first the build can use here");
+        assert_eq!(heard, "whisper whisper-tiny cpu es", "no accelerator named: the first the build can use here");
         let heard = engines.transcribe("whisper-tiny", "sherpa-onnx", Some(Capability::Coreml), "es", &[], 16_000);
-        assert_eq!(heard.unwrap(), "whisper whisper-tiny es coreml", "the one asked for");
-        engines.transcribe("whisper-tiny", "sherpa-onnx", None, "es", &[], 16_000).unwrap();
+        assert_eq!(heard.unwrap(), "whisper whisper-tiny coreml es", "the one asked for");
+        let heard = engines.transcribe("whisper-tiny", "sherpa-onnx", None, " en ", &[], 16_000).unwrap();
+        assert_eq!(heard, "whisper whisper-tiny cpu en", "another language, the same model in memory");
         let metal = engines.transcribe("whisper-tiny", "sherpa-onnx", Some(Capability::Metal), "es", &[], 16_000);
         let metal = metal.unwrap_err();
         assert_eq!(metal.key, "accelerator_unusable");
         assert_eq!(metal.params["accelerator"], "metal");
         assert_eq!(metal.params["usable"], serde_json::json!(["cpu", "coreml"]));
         let audio = engines.synthesize("kokoro-82m-v1.0", "sherpa-onnx", None, "ef_dora", 1.0, "hola").unwrap();
-        assert_eq!(audio.samples.len(), 4);
-        let loaded = LOADED.lock().unwrap().clone(); // every test's: this one's are under its own root
-        let ours: Vec<&String> = loaded.iter().filter(|(dir, _)| dir.starts_with(&root)).map(|(_, l)| l).collect();
+        assert_eq!((audio.samples.len(), audio.sample_rate), (4, 28), "ef_dora's speaker");
+        engines.synthesize("kokoro-82m-v1.0", "sherpa-onnx", None, "af_heart", 1.0, "hello").unwrap();
+        assert_eq!(ours(&SPOKEN, &root), ["es hola", "en-us hello"], "each voice's language, per call");
         assert_eq!(
-            ours,
-            ["whisper whisper-tiny es cpu", "whisper whisper-tiny es coreml", "kokoro kokoro-82m-v1.0 es cpu"],
-            "each choice loaded once"
+            ours(&LOADED, &root),
+            ["whisper whisper-tiny cpu", "whisper whisper-tiny coreml", "kokoro kokoro-82m-v1.0 cpu"],
+            "each (model, accelerator) loaded once"
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn load_puts_a_model_in_memory_once_loaded_lists_it_and_unload_frees_it() {
+        let (engines, root) = mac("load", |_| {});
+        assert!(engines.loaded().is_empty(), "nothing is loaded before it is asked for");
+        let first = engines.load("whisper-tiny", "sherpa-onnx", Some(Capability::Cpu)).unwrap();
+        let again = engines.load("whisper-tiny", "sherpa-onnx", None).unwrap();
+        assert_eq!(again, first, "already in memory (the resolver's accelerator is cpu): its load time, not a reload");
+        engines.transcribe("whisper-tiny", "sherpa-onnx", None, "es", &[], 16_000).unwrap();
+        engines.load("kokoro-82m-v1.0", "sherpa-onnx", None).unwrap();
+        assert_eq!(ours(&LOADED, &root), ["whisper whisper-tiny cpu", "kokoro kokoro-82m-v1.0 cpu"]);
+
+        let loaded = engines.loaded();
+        let names: Vec<String> = loaded.iter().map(|l| format!("{}@{}/{}", l.model, l.engine, l.accelerator)).collect();
+        assert_eq!(names, ["whisper-tiny@sherpa-onnx/cpu", "kokoro-82m-v1.0@sherpa-onnx/cpu"], "oldest first");
+        let now = epoch_ms(SystemTime::now());
+        assert!(loaded.iter().all(|l| l.since <= l.last_used && l.last_used <= now && now - l.since < 60_000));
+        let json = serde_json::to_value(&loaded[0]).unwrap();
+        let fields: Vec<&String> = json.as_object().unwrap().keys().collect();
+        assert_eq!(fields, ["accelerator", "engine", "last_used", "model", "since"]);
+
+        engines.unload("whisper-tiny", "sherpa-onnx");
+        engines.unload("whisper-tiny", "sherpa-onnx"); // nothing left to free: not an error
+        engines.unload("whisper-nope", "sherpa-onnx");
+        assert_eq!(engines.loaded().iter().map(|l| l.model.as_str()).collect::<Vec<_>>(), ["kokoro-82m-v1.0"]);
+        engines.transcribe("whisper-tiny", "sherpa-onnx", None, "es", &[], 16_000).unwrap();
+        assert_eq!(ours(&LOADED, &root).len(), 3, "running an unloaded model loads it again");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_load_that_fails_is_refused_by_key_and_leaves_what_is_loaded_as_it_was() {
+        let (engines, root) = mac("fail", |_| {});
+        let base = engines.locate(BROKEN, "sherpa-onnx").unwrap();
+        mark(&base.model_dir, base.model_download, &base.model_files);
+        engines.load("whisper-tiny", "sherpa-onnx", None).unwrap();
+        let failed = engines.load(BROKEN, "sherpa-onnx", None).unwrap_err();
+        assert_eq!((failed.key, failed.params["engine"].clone()), ("runtime_failed", "sherpa-onnx".into()));
+        assert_eq!(engines.load("whisper-small", "sherpa-onnx", None).unwrap_err().key, "not_installed");
+        assert_eq!(
+            engines.load("whisper-tiny", "sherpa-onnx", Some(Capability::Metal)).unwrap_err().key,
+            "accelerator_unusable"
+        );
+        assert_eq!(engines.load("whisper-tiny", "transformers-js", None).unwrap_err().key, "engine_unsupported");
+        let loaded: Vec<String> = engines.loaded().into_iter().map(|l| l.model).collect();
+        assert_eq!(loaded, ["whisper-tiny"], "the previous model is still in memory, nothing half-loaded beside it");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn d13_no_unload_during_a_call_then_ten_minutes_after_the_last_use_or_the_call_s_end() {
+        let (engines, root) = mac("idle", |_| {});
+        assert_eq!(engines.idle_unload, Duration::from_secs(600));
+        // No call yet: ten minutes after its last use.
+        engines.load("whisper-tiny", "sherpa-onnx", None).unwrap();
+        let used = Instant::now();
+        assert!(engines.unload_idle(used + Duration::from_secs(9 * 60)).is_empty());
+        assert_eq!(engines.unload_idle(used + Duration::from_secs(10 * 60 + 1)).len(), 1);
+
+        let start = Instant::now();
+        let minutes = |m: u64| start + Duration::from_secs(m * 60);
+        engines.load("whisper-tiny", "sherpa-onnx", None).unwrap();
+        engines.load("kokoro-82m-v1.0", "sherpa-onnx", None).unwrap();
+        assert!(engines.call_changed(true, minutes(1)), "a call connects");
+        assert!(!engines.call_changed(true, minutes(2)), "still the same call");
+        assert!(engines.unload_idle(minutes(45)).is_empty(), "never during a call, however long since the last use");
+        assert!(!engines.call_changed(false, minutes(50)), "the last one leaves");
+        assert!(engines.unload_idle(minutes(59)).is_empty(), "nine minutes after the call ended");
+        let freed: Vec<String> =
+            engines.unload_idle(minutes(60) + Duration::from_secs(1)).into_iter().map(|l| l.model).collect();
+        assert_eq!(freed, ["whisper-tiny", "kokoro-82m-v1.0"], "ten minutes after the call ended, oldest first");
+        assert!(engines.loaded().is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn what_an_idle_unload_freed_is_loaded_again_as_the_next_call_connects_unless_the_page_moved_on() {
+        let (engines, root) = mac("preload", |_| {});
+        let base = engines.locate(BROKEN, "sherpa-onnx").unwrap();
+        mark(&base.model_dir, base.model_download, &base.model_files);
+        let small = engines.locate("whisper-small", "sherpa-onnx").unwrap();
+        mark(&small.model_dir, small.model_download, &small.model_files);
+        let later = || Instant::now() + Duration::from_secs(11 * 60);
+        let models = |engines: &NativeEngines| -> Vec<String> {
+            engines.loaded().into_iter().map(|l| format!("{}/{}", l.model, l.accelerator)).collect()
+        };
+        engines.load("whisper-tiny", "sherpa-onnx", Some(Capability::Coreml)).unwrap();
+        engines.load("kokoro-82m-v1.0", "sherpa-onnx", None).unwrap();
+        assert_eq!(engines.unload_idle(later()).len(), 2);
+        assert!(engines.call_changed(true, Instant::now()));
+        let preloaded = engines.preload();
+        let names: Vec<String> =
+            preloaded.iter().map(|(l, r)| format!("{}/{} {}", l.model, l.accelerator, r.is_ok())).collect();
+        assert_eq!(names, ["whisper-tiny/coreml true", "kokoro-82m-v1.0/cpu true"], "on the accelerator it had");
+        assert_eq!(models(&engines), ["whisper-tiny/coreml", "kokoro-82m-v1.0/cpu"]);
+        assert!(engines.preload().is_empty(), "loaded again once");
+
+        // The page tries another transcription model, which fails to load: its choice is still whisper-tiny.
+        engines.call_changed(false, Instant::now());
+        assert_eq!(engines.unload_idle(later()).len(), 2);
+        assert!(engines.load(BROKEN, "sherpa-onnx", None).is_err());
+        engines.unload(BROKEN, "sherpa-onnx");
+        engines.call_changed(true, Instant::now());
+        assert_eq!(engines.preload().len(), 2);
+        assert_eq!(models(&engines), ["whisper-tiny/coreml", "kokoro-82m-v1.0/cpu"]);
+
+        // It unloads its voice, and swaps whisper-tiny for whisper-small: neither freed one comes back.
+        engines.call_changed(false, Instant::now());
+        assert_eq!(engines.unload_idle(later()).len(), 2);
+        engines.unload("kokoro-82m-v1.0", "sherpa-onnx");
+        engines.load("whisper-small", "sherpa-onnx", None).unwrap();
+        engines.call_changed(true, Instant::now());
+        assert!(engines.preload().is_empty());
+        assert_eq!(models(&engines), ["whisper-small/cpu"]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn memory_is_the_machine_s_total_and_what_is_available_now() {
+        let engines = NativeEngines::new(bundled_catalog(), std::env::temp_dir());
+        let memory = serde_json::to_value(engines.memory()).unwrap();
+        let (total, available) = (memory["total_mb"].as_u64().unwrap(), memory["available_mb"].as_u64().unwrap());
+        assert_eq!(Some(total), engines.device.memory_mb);
+        assert!(available <= total);
     }
 
     #[test]

@@ -158,6 +158,7 @@ jobs:
           if grep -q "probe-engine" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the probe page is in the release app"; exit 1; fi
           if grep -q "SIDEVOICE_DEBUG_ROOM_FLOW" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the room-flow switch is in the release app"; exit 1; fi
           if grep -q "room-flow" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the room-flow script is in the release app"; exit 1; fi
+          if grep -q "SIDEVOICE_DEBUG_IDLE_UNLOAD_SECS" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the idle-time switch is in the release app"; exit 1; fi
       - name: First open (no settings) — the bundled interface comes up in the real WKWebView
         if: needs.changes.outputs.installers == 'true'
         run: |
@@ -280,13 +281,16 @@ jobs:
           grep -q "probe-engine" "$BIN"
           grep -q "SIDEVOICE_DEBUG_ROOM_FLOW" "$BIN"
           grep -q "room-flow" "$BIN"
+          grep -q "SIDEVOICE_DEBUG_IDLE_UNLOAD_SECS" "$BIN"
       - name: What the interface's window offers (probe page, same origin and permission rule)
         run: |
           set -euo pipefail
           APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
           python3 -u test/fixtures/fake-node.py 8768 > /tmp/probe-node.log 2>&1 &
           NODE=$!
-          SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_PAGE=probe.html "$APP/Contents/MacOS/sidevoice-desktop" > /tmp/probe.log 2>&1 &
+          # A model stays in memory 5 s unused here (10 minutes in a release), so the probe sees D13 happen.
+          SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_PAGE=probe.html SIDEVOICE_DEBUG_IDLE_UNLOAD_SECS=5 \
+            "$APP/Contents/MacOS/sidevoice-desktop" > /tmp/probe.log 2>&1 &
           PID=$!
           for i in $(seq 1 240); do grep -q "probe-engine" /tmp/probe.log && break; sleep 1; done
           kill "$PID" || true
@@ -310,6 +314,18 @@ jobs:
           grep -Eq 'probe-engine ok .* progress_calls=[1-9]' /tmp/probe.log
           grep -q 'probe-engine ok .* refused=yes ' /tmp/probe.log
           grep -iq 'probe-engine ok.*prueba' /tmp/probe.log
+          # Load → transcribe → unload (rubasace/sidevoice#124 phase 3): loaded once, one model in memory each for every
+          # language (Spanish, then English), freed on unload; the OS's memory and what is available of it.
+          grep -q 'probe-engine ok .* before_load=kokoro-82m-v1.0@sherpa-onnx/cpu load_ms=' /tmp/probe.log
+          grep -q 'probe-engine ok .* load_ms=\([0-9]*\) load_again_ms=\1 ' /tmp/probe.log
+          grep -q 'probe-engine ok .* loaded=kokoro-82m-v1.0@sherpa-onnx/cpu,whisper-tiny@sherpa-onnx/cpu since_ok=true same_models=true unloaded=kokoro-82m-v1.0@sherpa-onnx/cpu ' /tmp/probe.log
+          grep -Eq 'probe-engine ok .* memory=\{"total_mb":[1-9][0-9]{3,},"available_mb":[1-9][0-9]*\}' /tmp/probe.log
+          grep -Eiq 'probe-engine ok .* text_en="[^"]*(test|voice)' /tmp/probe.log
+          # D13: after the call, unused for the idle time, both unloaded by the app; loaded again as the next call connects.
+          grep -q 'sidevoice: engine unloaded idle whisper-tiny@sherpa-onnx/cpu' /tmp/probe.log
+          grep -q 'sidevoice: engine unloaded idle kokoro-82m-v1.0@sherpa-onnx/cpu' /tmp/probe.log
+          grep -q 'sidevoice: engine preload whisper-tiny@sherpa-onnx/cpu load_ms=' /tmp/probe.log
+          grep -q 'probe-engine ok .* preloaded=kokoro-82m-v1.0@sherpa-onnx/cpu,whisper-tiny@sherpa-onnx/cpu ' /tmp/probe.log
           # Headset buttons: a (simulated) call made the app the Now Playing app, and it let go after.
           grep -q 'probe-headset ok' /tmp/probe.log
           grep -q 'headset apply active=true in_call=true mic=true' /tmp/probe.log
@@ -317,7 +333,7 @@ jobs:
           grep 'headset apply' /tmp/probe.log
           # The app's own mute is not mistaken for an AirPods gesture.
           if grep -q 'headset airpods' /tmp/probe.log; then echo 'echo recorded as a gesture'; exit 1; fi
-      - name: The native flow through the vendored room itself (capabilities → offers shown → install → speak → transcribe)
+      - name: The native flow through the vendored room itself (capabilities → offers shown → install → load → speak → transcribe → unload)
         run: |
           set -euo pipefail
           APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
@@ -349,6 +365,12 @@ jobs:
           echo "$LINE" | grep -q ' installed=kokoro-82m-v1.0@sherpa-onnx,whisper-tiny@sherpa-onnx '
           echo "$LINE" | grep -q 'tiny_detail="[^"]*descargado'
           echo "$LINE" | grep -q ' runtime=whisper-tiny@sherpa-onnx/cpu '
+          # Loaded through the app's bridge before the room ran it; the room's transcription used that model; unloaded.
+          echo "$LINE" | grep -Eq ' load_ms=[0-9]+ loaded=whisper-tiny@sherpa-onnx/cpu '
+          echo "$LINE" | grep -Eq ' loaded_after=[^ ]*whisper-tiny@sherpa-onnx/cpu'
+          if echo "$LINE" | grep -Eq ' loaded_after=[^ ]*whisper-tiny@sherpa-onnx/(coreml|unknown)'; then echo "a second Whisper in memory"; exit 1; fi
+          echo "$LINE" | grep -Eq ' unloaded=[^ ]* '
+          if echo "$LINE" | grep -Eq ' unloaded=[^ ]*whisper-tiny'; then echo "still loaded after unload"; exit 1; fi
           # Kokoro spoke the sentence and Whisper heard it back.
           echo "$LINE" | grep -iq 'text=".*prueba'
 

@@ -1,7 +1,8 @@
 // CI only, injected only by the app built with the `probe` feature (src-tauri/src/probe.rs) when
 // SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_ROOM_FLOW=1: the native flow through the ACTUAL vendored room (ui/voice), with
 // the room's own code — its controller, store, transcription client and native worker — and the app's bridge:
-// capabilities → the offers the room's panes show → install a model → speak → transcribe. Prints one line through
+// capabilities → the offers the room's panes show → install a model → load it → speak → transcribe → unload it (the
+// load and unload through the app's bridge, as the room's select flow calls them). Prints one line through
 // debug_log: "room-flow ok …" or "room-flow error …". Nothing here is a stand-in for the room; it only drives it.
 (function () {
   "use strict";
@@ -65,6 +66,11 @@
       const kokoro = offers.find((o) => o.task === "tts");
       if (!tiny || !kokoro) throw new Error("no whisper-tiny or no voice offer: " + JSON.stringify(offers));
       const runtime = await window.roomTranscription.prepare({ model: tiny.model, engine: tiny.engine, accelerator: tiny.accelerator, native: true });
+      // Loaded into memory before the room runs it (#124 phase 3: select = download → load → check).
+      const engine = window.__sidevoiceDesktop.host.nativeEngine;
+      const resident = async () => (await engine.loaded()).map((l) => l.model + "@" + l.engine + "/" + l.accelerator).sort().join(",");
+      const load = await engine.load(runtime.model, runtime.engine, runtime.accelerator);
+      const loaded = await resident();
       // 4. Speak with the room's native voice worker, then transcribe that with the room's transcription client.
       const voice = globalThis.sidevoiceNativeWorkers.voice();
       const started = performance.now();
@@ -76,6 +82,9 @@
       const seconds = (audio.length / 16000).toFixed(2);
       const result = await window.roomTranscription._request("transcribe", { audio: audio.buffer, model: runtime.model,
         engine: runtime.engine, accelerator: runtime.accelerator, native: true, language: "es" }, null, [audio.buffer]);
+      const loadedAfter = await resident(); // the room's transcription ran on the loaded model: nothing new for it
+      await engine.unload(runtime.model, runtime.engine);
+      const unloaded = await resident();
       // 5. The room sees what is now on disk, and its pane marks it.
       await window.sidevoiceActions.retryGpu();
       const installed = await until(() => (store.facts.installedBuilds || []).length >= 2 && store.facts.installedBuilds, 30000, "installed");
@@ -88,6 +97,7 @@
         + " installed=" + installed.map((b) => b.model + "@" + b.engine).sort().join(",")
         + " tiny_detail=" + JSON.stringify(tinyShown.detail || "")
         + " runtime=" + runtime.model + "@" + runtime.engine + "/" + runtime.accelerator
+        + " load_ms=" + load.load_ms + " loaded=" + loaded + " loaded_after=" + loadedAfter + " unloaded=" + unloaded
         + " audio=" + seconds + "s speak_ms=" + speakMs + " text=" + JSON.stringify(result.text));
     } catch (error) {
       await say("error " + describe(error));

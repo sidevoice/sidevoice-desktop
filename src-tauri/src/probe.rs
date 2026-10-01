@@ -3,9 +3,12 @@
 //!   instead of the interface when `SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_PAGE=probe.html`: what the interface's window
 //!   offers with that window's own origin and permission rule;
 //! - the room-flow script (`test/fixtures/room-flow.js`), injected into the room window with
-//!   `SIDEVOICE_DEBUG_ROOM_FLOW=1`: the native engine driven through the vendored room itself.
+//!   `SIDEVOICE_DEBUG_ROOM_FLOW=1`: the native engine driven through the vendored room itself;
+//! - `SIDEVOICE_DEBUG_IDLE_UNLOAD_SECS`: how long a model stays in memory unused (D13), shortened so the probe page
+//!   sees the app unload a model and load it again as a call connects.
 //!
-//! Both run in CI's macOS job (.github/workflows/build.yml). A release app has neither, nor the switches; CI checks.
+//! All run in CI's macOS job (.github/workflows/build.yml). A release app has none of them, nor the switches; CI
+//! checks.
 
 use std::borrow::Cow;
 use tauri::utils::assets::{AssetKey, AssetsIter, CspHash};
@@ -28,6 +31,13 @@ pub fn page(interface: &str) -> String {
 pub fn room_flow() -> Option<&'static str> {
     let asked = std::env::var("SIDEVOICE_DEBUG_ROOM_FLOW").is_ok_and(|v| v == "1");
     (crate::debugging() && asked).then_some(ROOM_FLOW)
+}
+
+/// How long a model stays in memory unused (D13), shortened with `SIDEVOICE_DEBUG_IDLE_UNLOAD_SECS` so the probe
+/// can watch the app unload it and load it again as a call connects. Ten minutes otherwise, as in a release.
+pub fn idle_unload() -> Option<std::time::Duration> {
+    let seconds = std::env::var("SIDEVOICE_DEBUG_IDLE_UNLOAD_SECS").ok()?.parse().ok()?;
+    crate::debugging().then(|| std::time::Duration::from_secs(seconds))
 }
 
 /// The app's own assets, plus the probe page.

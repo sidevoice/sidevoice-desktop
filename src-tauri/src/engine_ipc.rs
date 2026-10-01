@@ -5,13 +5,15 @@
 //! (`engine_on_disk`, capabilities/settings.json). Engine work runs on blocking threads, never the main one.
 //! Audio crosses as raw bytes: little-endian f32 samples (transcribe's body; synthesize's answer, after a
 //! 4-byte little-endian sample rate). A refusal is the engine's keyed `Error` (docs/BRIDGE.md → "Refusals").
+//! What stays in memory follows rubasace/sidevoice#124 D13 (`call_changed`, `unload_when_idle`).
 
 use sidevoice_desktop_core::engines::{self, Capability, Device};
 use sidevoice_desktop_engine::error::{bad_request, internal};
-use sidevoice_desktop_engine::{Error, Installed, Jobs, NativeEngines, OnDisk};
+use sidevoice_desktop_engine::{Error, Installed, Jobs, Load, Loaded, Memory, NativeEngines, OnDisk};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tauri::ipc::{InvokeBody, Request, Response};
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 pub struct EngineState {
     pub engines: Arc<NativeEngines>,
@@ -122,4 +124,65 @@ pub async fn engine_synthesize(
         bytes.extend_from_slice(&sample.to_le_bytes());
     }
     Ok(Response::new(bytes))
+}
+
+/// Loads `model` on `engine` into memory, on `accelerator` (else the first it can use here): `{load_ms}`.
+#[tauri::command]
+pub async fn engine_load(
+    state: State<'_, EngineState>,
+    model: String,
+    engine: String,
+    accelerator: Option<String>,
+) -> Result<Load, Error> {
+    let engines = state.engines.clone();
+    let accelerator = self::accelerator(accelerator.as_deref());
+    tauri::async_runtime::spawn_blocking(move || engines.load(&model, &engine, accelerator)).await.map_err(internal)?
+}
+
+/// Frees `model` on `engine`; nothing to do when it is not loaded.
+#[tauri::command]
+pub fn engine_unload(state: State<'_, EngineState>, model: String, engine: String) {
+    state.engines.unload(&model, &engine);
+}
+
+/// `[{model, engine, accelerator, since, last_used}]`: the models in memory.
+#[tauri::command]
+pub fn engine_loaded(state: State<'_, EngineState>) -> Vec<Loaded> {
+    state.engines.loaded()
+}
+
+/// `{total_mb, available_mb}`.
+#[tauri::command]
+pub fn engine_memory(state: State<'_, EngineState>) -> Memory {
+    state.engines.memory()
+}
+
+/// rubasace/sidevoice#124 D13, from the room's call state (`bridge_state`): as a call connects, what the app
+/// unloaded while idle is loaded again, off the main thread.
+pub fn call_changed(app: &AppHandle, joined: bool) {
+    let Some(state) = app.try_state::<EngineState>() else { return };
+    let engines = state.engines.clone();
+    if !engines.call_changed(joined, Instant::now()) {
+        return;
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        for (model, result) in engines.preload() {
+            let what = format!("{}@{}/{}", model.model, model.engine, model.accelerator);
+            match result {
+                Ok(load) => crate::debug(&format!("engine preload {what} load_ms={}", load.load_ms)),
+                Err(e) => crate::debug(&format!("engine preload {what} refused: {}", e.key)),
+            }
+        }
+    });
+}
+
+/// D13: with no call on, unloads what has gone unused for `idle_unload`; checked a few times per period.
+pub fn unload_when_idle(engines: Arc<NativeEngines>) {
+    let every = (engines.idle_unload / 4).clamp(Duration::from_secs(1), Duration::from_secs(30));
+    std::thread::spawn(move || loop {
+        std::thread::sleep(every);
+        for model in engines.unload_idle(Instant::now()) {
+            crate::debug(&format!("engine unloaded idle {}@{}/{}", model.model, model.engine, model.accelerator));
+        }
+    });
 }

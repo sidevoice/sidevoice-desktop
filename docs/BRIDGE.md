@@ -83,6 +83,10 @@ engine reports, and runs the build it chose through it. `window.__sidevoiceDeskt
 | `install(model, engine, onProgress)` | downloads the engine package and the model's build, whichever is missing or incomplete (a download that lost a file is fetched again); `onProgress(doneBytes, totalBytes)` about twice a second, only with this call's own bytes |
 | `transcribe(model, engine, samples, sampleRate, language, accelerator?)` | text; `samples` a mono `Float32Array`, `language` empty to detect |
 | `synthesize(model, engine, voice, speed, text, accelerator?)` | `{samples: Float32Array, sampleRate}` |
+| `load(model, engine, accelerator?)` | loads the build into memory and resolves `{load_ms}`: how long loading it took. One already in memory is not loaded again, and answers the time its load took |
+| `unload(model, engine)` | frees that build's memory, on whatever accelerator it is loaded; resolves `null`, also when it was not loaded. A transcription or synthesis already running on it finishes first |
+| `loaded()` | `[{model, engine, accelerator, since, last_used}]`: what is in memory, oldest first; `since` and `last_used` are milliseconds since the Unix epoch |
+| `memory()` | `{total_mb, available_mb}`: the machine's memory and what is available of it now, each `null` when the OS does not say. On macOS `available_mb` is the share the kernel's memory-pressure level reports free (`kern.memorystatus_level`): a gauge, not a limit, since macOS compresses and swaps rather than fail |
 
 - `model` is the catalogue id (`whisper-small`, `kokoro-82m-v1.0`), `engine` the build's engine id
   (`sherpa-onnx`). The app runs exactly that build or refuses it (below), and never another build instead. Before
@@ -91,17 +95,37 @@ engine reports, and runs the build it chose through it. `window.__sidevoiceDeskt
   `requires.memory_mb` against the machine's memory (unknown memory is not a refusal).
 - `accelerator` (optional, `cpu`, `coreml`…): the one the page chose for that build (the resolver's, or the
   person's in *Avanzado*). It must be one the build can use here, or the call is refused. Without it the app uses
-  the first the build can use on this device, which is what the resolver picks. Loaded models are kept per engine,
-  model, accelerator and language.
+  the first the build can use on this device, which is what the resolver picks.
+- A build is in memory once per engine, model and accelerator. The language is each call's (`transcribe`'s, the
+  voice's), so `load` takes none and one loaded Whisper or Kokoro serves every language. `transcribe` and
+  `synthesize` on a build that is not in memory load it first, as before: `load` is how the page has it ready before
+  the first call, and measures it. A `load` that fails rejects with a refusal (below) and leaves what is in memory as
+  it was.
 - Installs run one at a time. Each `install` call is its own job (`job`, an id the bridge makes); the app keeps
   progress per job from the moment the job starts — after any install ahead of it — until it ends, so a call that
   waits reports nothing and no call ever reports another's bytes.
 - Commands behind it (`src-tauri/src/engine_ipc.rs`): `engine_capabilities`, `engine_installed`,
   `engine_install {model, engine, job}` with `engine_progress {job}` (`[done, total]`, or `null` while the job
   waits or after it ends), `engine_transcribe` (raw f32 body; `x-model`, `x-engine`, `x-accelerator`, `x-language`,
-  `x-sample-rate` headers), `engine_synthesize` (answer: raw bytes, a u32 sample rate then f32 samples). Granted
-  to the room window (`capabilities/room.json`). The settings window may read `engine_capabilities` and
+  `x-sample-rate` headers), `engine_synthesize` (answer: raw bytes, a u32 sample rate then f32 samples),
+  `engine_load {model, engine, accelerator}` (`accelerator` `null` for the resolver's), `engine_unload {model, engine}`,
+  `engine_loaded`, `engine_memory`. Granted to the room window (`capabilities/room.json`). The settings window may read `engine_capabilities` and
   `engine_on_disk` (what is on disk and its size), and nothing else of the engine.
+
+### What stays in memory (rubasace/sidevoice#124 D13)
+
+The app enforces it itself, from the call state the room already reports (`bridge_state`, `joined`):
+
+- While a call is on (joining counts), nothing is unloaded but what the page unloads.
+- With no call on, a build unused for 10 minutes — counted from its last load or run, or from when the last call
+  ended if that is later — is unloaded (`IDLE_UNLOAD`, `src-tauri/engine/src/lib.rs`).
+- As the next call connects, what the app unloaded that way is loaded again, on the accelerator it had, unless the
+  page has unloaded it since or has another build of that task (transcription, voice) in memory by then. A build the
+  page loaded to check and unloaded when the check failed does not count: the one it kept comes back.
+- What the app has never had in memory since it started (a fresh launch) it cannot preload: the page's choice is the
+  page's. The page calls `load` as a call connects, or the first `transcribe` / `synthesize` loads it.
+
+With `SIDEVOICE_DEBUG=1` the app prints `engine unloaded idle …` and `engine preload … load_ms=…`.
 
 ### Refusals
 
@@ -135,7 +159,7 @@ one is added there and here.
 | `download_failed` | `url` | the network failed, or answered with an error |
 | `download_corrupt` | `url` | the bytes are not the ones the catalogue names (SHA-256) |
 | `install_failed` | — | unpacking or moving the download into place failed (disk, permissions, an archive without its files) |
-| `runtime_failed` | `engine` | the engine refused to load (a library failing its hash) or to run the model |
+| `runtime_failed` | `engine` | the engine refused to load (a library failing its hash), to load the model into memory, or to run it |
 | `bad_request` | — | a malformed call (a missing header): a bug in the caller |
 | `internal` | — | something inside the app failed |
 
@@ -148,4 +172,6 @@ one is added there and here.
   `test/room-bundle.test.mjs`), `cargo test -p sidevoice-desktop-core` and
   `cargo test -p sidevoice-desktop-engine` (the engine against a fake runtime adapter). In the real app, CI's macOS
   job drives the native flow through the vendored room itself (`test/fixtures/room-flow.js`, probe build): capabilities
-  → the offers its panes show → install → speak → transcribe.
+  → the offers its panes show → install → load → speak → transcribe → unload; the probe page
+  (`test/fixtures/probe.html`) loads, runs two languages on one build, unloads, reads `memory()`, and watches D13
+  with the idle time shortened (`SIDEVOICE_DEBUG_IDLE_UNLOAD_SECS`, probe build only).
