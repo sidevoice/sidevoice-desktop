@@ -157,9 +157,10 @@ pairing the proxy answers 503; without a core, 502.
   stand-in core (`src/fake_core.rs`: HTTP, a WebSocket echo, the core's socket rules) — pairing, forwarding with the
   token swapped in, a socket spliced, the refusals, every startup case, revocation, the fallback and the actions;
   the service condition over a healthy core; 256 clients trickling partial heads while the page gets through, the
-  head deadline, a valid head arriving in pieces through connection churn; data before an upgrade's 101; the CLI's deadline with a child holding its pipes, a command link retargeted after the check, a timeout with a
-  live child, a detached service kept; a directory swapped between check and read, links, loose modes and an
-  ancestry others can write.
+  head deadline, a valid head arriving in pieces through connection churn; data before an upgrade's 101; the CLI's
+  deadline with a child holding its pipes, a timeout with a live child, a detached service kept, a command link
+  retargeted after the check; a directory swapped between check and read, links, loose modes and an ancestry others
+  can write.
 - `tests/real_core.rs`: pairing, the proxy and upgrade framing (101; chunked, a body, early data refused) against
   sidevoice-core itself when `SIDEVOICE_CORE_PYTHON` names a Python that imports it (skipped otherwise).
 - CI, Linux (`test` job): `examples/local-host-ci.rs serve` as the runner and `attack` as a second user — it cannot
