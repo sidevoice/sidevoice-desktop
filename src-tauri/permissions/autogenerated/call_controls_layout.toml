@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-call-controls-layout"
+description = "Enables the call_controls_layout command without any pre-configured scope."
+commands.allow = ["call_controls_layout"]
+
+[[permission]]
+identifier = "deny-call-controls-layout"
+description = "Denies the call_controls_layout command without any pre-configured scope."
+commands.deny = ["call_controls_layout"]

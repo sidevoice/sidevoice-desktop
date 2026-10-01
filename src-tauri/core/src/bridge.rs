@@ -21,6 +21,21 @@ pub fn media_keys() -> Option<&'static str> {
     }
 }
 
+/// The call controls card's bridge script, with its origin placeholder still in place.
+pub const CALL_CONTROLS_SCRIPT_TEMPLATE: &str = include_str!("../../../bridge/call-controls-bridge.js");
+const APP_ORIGIN_PLACEHOLDER: &str = "\"__SIDEVOICE_APP_ORIGIN__\"";
+
+/// The script injected into the call controls card's window, bound to the app's own origin.
+pub fn call_controls_script(origin: &str) -> String {
+    let literal = serde_json::to_string(origin).expect("a string serialises");
+    CALL_CONTROLS_SCRIPT_TEMPLATE.replacen(APP_ORIGIN_PLACEHOLDER, &literal, 1)
+}
+
+/// What the app pushes to the card: any subset of `{call, level, pointerInside, alwaysExpanded, muteShortcut}`.
+pub fn call_controls_push(patch: &serde_json::Value) -> String {
+    format!("window.__sidevoiceDesktop && window.__sidevoiceDesktop.receive({patch});")
+}
+
 /// The script injected into the main window, bound to one page origin.
 pub fn script_for_origin(origin: &str) -> String {
     let literal = serde_json::to_string(origin).expect("a string serialises");
@@ -28,8 +43,23 @@ pub fn script_for_origin(origin: &str) -> String {
     SCRIPT_TEMPLATE.replacen(ORIGIN_PLACEHOLDER, &literal, 1).replacen(MEDIA_KEYS_PLACEHOLDER, &keys, 1)
 }
 
-/// What the tray shows. Mirrors the web UI's own `call` and `mic` views.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// The bridge's version: the room page sends it in every snapshot (bridge/desktop-bridge.js).
+pub const VERSION: u32 = 2;
+
+/// What the agent is doing, as the room's view model says (its `session`): the card's avatar shows it, and only it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentState {
+    #[default]
+    Idle,
+    Working,
+    Speaking,
+}
+
+/// The call as the room page reports it: what the tray and the headset need, and what the call controls card shows.
+/// Mirrors the web UI's own views; `participants` and `devices` are relayed to the card as the room wrote them (the
+/// web UI owns their shape: `ParticipantView`, `AudioDevices`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CallSnapshot {
     pub version: u32,
@@ -44,25 +74,57 @@ pub struct CallSnapshot {
     pub mic_disabled: bool,
     /// The conversation being looked at.
     pub title: String,
+    pub agent: AgentState,
+    /// The person is speaking (a turn is open).
+    pub you_talking: bool,
+    /// Something is playing that "skip" stops.
+    pub can_skip: bool,
+    /// When the call was joined, in milliseconds since the Unix epoch; `None` outside a call.
+    pub since: Option<f64>,
+    pub participants: Vec<serde_json::Value>,
+    pub devices: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// What the app asks the room page to do (tray, global shortcut, headset, call controls card).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "command", rename_all = "kebab-case")]
 pub enum Command {
     ToggleMute,
     HangUp,
+    SkipReply,
+    #[serde(rename_all = "camelCase")]
+    SelectParticipant {
+        thread_id: String,
+    },
+    SelectAudioDevice {
+        kind: DeviceKind,
+        id: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DeviceKind {
+    Input,
+    Output,
 }
 
 impl Command {
-    pub fn name(self) -> &'static str {
+    pub fn name(&self) -> &'static str {
         match self {
             Command::ToggleMute => "toggle-mute",
             Command::HangUp => "hang-up",
+            Command::SkipReply => "skip-reply",
+            Command::SelectParticipant { .. } => "select-participant",
+            Command::SelectAudioDevice { .. } => "select-audio-device",
         }
     }
 
-    /// The JavaScript the app evaluates in the room page. A page without the bridge ignores it.
-    pub fn script(self) -> String {
-        format!("window.__sidevoiceDesktop && window.__sidevoiceDesktop.run({:?});", self.name())
+    /// The JavaScript the app evaluates in the room page. A page without the bridge ignores it. The command travels
+    /// as JSON, so no value it carries can break out of the call.
+    pub fn script(&self) -> String {
+        let json = serde_json::to_string(self).expect("a command serialises");
+        format!("window.__sidevoiceDesktop && window.__sidevoiceDesktop.run({json});")
     }
 }
 
@@ -74,7 +136,7 @@ pub enum TrayIcon {
     Muted,
 }
 
-/// Everything the tray displays, derived from one snapshot.
+/// Everything the tray displays, derived from one snapshot, in the app's language.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrayView {
     pub icon: TrayIcon,
@@ -84,22 +146,23 @@ pub struct TrayView {
     pub hang_up_enabled: bool,
 }
 
-pub fn tray_view(s: &CallSnapshot) -> TrayView {
+pub fn tray_view(s: &CallSnapshot, language: &str) -> TrayView {
+    let t = |key: &str| crate::i18n::t(language, key);
     if !s.ready {
         return TrayView {
             icon: TrayIcon::Idle,
-            status: "Sidevoice · sala sin cargar".into(),
-            mute_label: "Silenciar micrófono",
+            status: t("tray.not_loaded").into(),
+            mute_label: t("tray.mute"),
             mute_enabled: false,
             hang_up_enabled: false,
         };
     }
-    let mute_label = if s.mic_enabled { "Silenciar micrófono" } else { "Activar micrófono" };
+    let mute_label = if s.mic_enabled { t("tray.mute") } else { t("tray.unmute") };
     let (icon, status) = match (s.joined, s.mic_enabled) {
-        (false, _) => (TrayIcon::Idle, "Sin llamada".to_string()),
-        (true, _) if s.busy => (TrayIcon::Live, "Reconectando…".to_string()),
-        (true, true) => (TrayIcon::Live, with_title("En llamada", &s.title)),
-        (true, false) => (TrayIcon::Muted, with_title("En llamada · silenciado", &s.title)),
+        (false, _) => (TrayIcon::Idle, t("tray.no_call").to_string()),
+        (true, _) if s.busy => (TrayIcon::Live, t("tray.reconnecting").to_string()),
+        (true, true) => (TrayIcon::Live, with_title(t("tray.in_call"), &s.title)),
+        (true, false) => (TrayIcon::Muted, with_title(t("tray.in_call_muted"), &s.title)),
     };
     TrayView { icon, status, mute_label, mute_enabled: !s.mic_disabled, hang_up_enabled: s.joined }
 }
@@ -121,7 +184,7 @@ mod tests {
 
     fn live(mic_enabled: bool) -> CallSnapshot {
         CallSnapshot {
-            version: 1,
+            version: VERSION,
             ready: true,
             joined: true,
             mic_enabled,
@@ -143,54 +206,92 @@ mod tests {
     }
 
     #[test]
-    fn commands_are_fixed_strings() {
+    fn the_card_s_script_binds_the_app_s_origin() {
+        let s = call_controls_script("tauri://localhost");
+        assert!(!s.contains("__SIDEVOICE_APP_ORIGIN__"));
+        assert!(s.contains(r#"factory(window, "tauri://localhost")"#));
+        let push = call_controls_push(&serde_json::json!({"level": 3, "title": "\"); alert(1); (\""}));
+        assert!(push.contains(r#"receive({"level":3,"title":"\"); alert(1); (\""});"#), "{push}");
+    }
+
+    #[test]
+    fn commands_travel_as_json() {
         assert_eq!(
             Command::ToggleMute.script(),
-            r#"window.__sidevoiceDesktop && window.__sidevoiceDesktop.run("toggle-mute");"#
+            r#"window.__sidevoiceDesktop && window.__sidevoiceDesktop.run({"command":"toggle-mute"});"#
         );
         assert_eq!(Command::HangUp.name(), "hang-up");
+        let pick = Command::SelectParticipant { thread_id: "t\"); alert(1); (\"".into() };
+        assert_eq!(pick.name(), "select-participant");
+        assert!(
+            pick.script().contains(r#"{"command":"select-participant","threadId":"t\"); alert(1); (\""}"#),
+            "{}",
+            pick.script()
+        );
+        let device = Command::SelectAudioDevice { kind: DeviceKind::Input, id: "mbp".into() };
+        assert!(device.script().contains(r#"{"command":"select-audio-device","kind":"input","id":"mbp"}"#));
+    }
+
+    #[test]
+    fn the_card_s_commands_parse_and_nothing_else_does() {
+        let parse = |json: &str| serde_json::from_str::<Command>(json);
+        assert_eq!(parse(r#"{"command":"skip-reply"}"#).unwrap(), Command::SkipReply);
+        assert_eq!(
+            parse(r#"{"command":"select-participant","threadId":"abc"}"#).unwrap(),
+            Command::SelectParticipant { thread_id: "abc".into() }
+        );
+        assert!(parse(r#"{"command":"select-audio-device","kind":"camera","id":"x"}"#).is_err());
+        assert!(parse(r#"{"command":"close-participant","threadId":"abc"}"#).is_err());
+        assert!(parse(r#"{"command":"select-participant"}"#).is_err());
     }
 
     #[test]
     fn snapshot_parses_what_the_script_sends() {
-        let json = r#"{"version":1,"ready":true,"joined":true,"busy":false,"micEnabled":false,"micDisabled":false,"title":"x","extra":1}"#;
+        let json = r#"{"version":2,"ready":true,"joined":true,"busy":false,"micEnabled":false,"micDisabled":false,"title":"x",
+            "agent":"speaking","youTalking":false,"canSkip":true,"since":1759300000000,
+            "participants":[{"threadId":"a","title":"x","selected":true}],"devices":{"inputs":[]},"extra":1}"#;
         let s: CallSnapshot = serde_json::from_str(json).unwrap();
-        assert!(s.ready && s.joined && !s.mic_enabled);
+        assert!(s.ready && s.joined && !s.mic_enabled && s.can_skip);
+        assert_eq!(s.agent, AgentState::Speaking);
+        assert_eq!(s.since, Some(1_759_300_000_000.0));
+        assert_eq!(s.participants.len(), 1);
         let partial: CallSnapshot = serde_json::from_str(r#"{"ready":false}"#).unwrap();
         assert!(!partial.ready);
+        assert_eq!(partial.agent, AgentState::Idle);
     }
 
     #[test]
     fn tray_states() {
-        let not_ready = tray_view(&CallSnapshot::default());
+        let not_ready = tray_view(&CallSnapshot::default(), "en");
         assert_eq!(not_ready.icon, TrayIcon::Idle);
         assert!(!not_ready.mute_enabled && !not_ready.hang_up_enabled);
 
-        let idle = tray_view(&CallSnapshot { ready: true, mic_enabled: true, ..Default::default() });
-        assert_eq!((idle.icon, idle.status.as_str()), (TrayIcon::Idle, "Sin llamada"));
+        let idle = tray_view(&CallSnapshot { ready: true, mic_enabled: true, ..Default::default() }, "en");
+        assert_eq!((idle.icon, idle.status.as_str()), (TrayIcon::Idle, "No call"));
         assert!(idle.mute_enabled, "mute before joining sets the preference, as in the web UI");
         assert!(!idle.hang_up_enabled);
 
-        let on = tray_view(&live(true));
+        let on = tray_view(&live(true), "en");
         assert_eq!(
             (on.icon, on.status.as_str(), on.mute_label),
-            (TrayIcon::Live, "En llamada · Claude", "Silenciar micrófono")
+            (TrayIcon::Live, "In a call · Claude", "Mute microphone")
         );
         assert!(on.hang_up_enabled);
 
-        let muted = tray_view(&live(false));
+        let muted = tray_view(&live(false), "es");
         assert_eq!((muted.icon, muted.mute_label), (TrayIcon::Muted, "Activar micrófono"));
+        assert_eq!(muted.status, "En llamada · silenciado · Claude");
 
-        let busy = tray_view(&CallSnapshot { busy: true, ..live(true) });
-        assert_eq!(busy.status, "Reconectando…");
+        let busy = tray_view(&CallSnapshot { busy: true, ..live(true) }, "en");
+        assert_eq!(busy.status, "Reconnecting…");
 
-        let no_conversation = tray_view(&CallSnapshot { mic_disabled: true, ..live(true) });
+        let no_conversation = tray_view(&CallSnapshot { mic_disabled: true, ..live(true) }, "en");
         assert!(!no_conversation.mute_enabled);
     }
 
     #[test]
     fn long_titles_are_cut() {
-        let s = tray_view(&CallSnapshot { title: "a".repeat(100), ..live(true) });
+        let s = tray_view(&CallSnapshot { title: "a".repeat(100), ..live(true) }, "en");
         assert!(s.status.ends_with('…'));
         assert!(s.status.chars().count() < 70);
     }

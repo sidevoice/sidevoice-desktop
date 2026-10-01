@@ -8,7 +8,7 @@ const source = readFileSync(new URL("../bridge/desktop-bridge.js", import.meta.u
 
 function loadFactory() {
   const module = { exports: {} };
-  vm.runInNewContext(source, { module, Promise, JSON });
+  vm.runInNewContext(source, { module, Promise, JSON, Date });
   return module.exports;
 }
 
@@ -59,16 +59,17 @@ test("reports not-ready first, then the real state once the room's controller ex
   const api = install(win, ORIGIN);
   await flush();
   assert.deepEqual(calls.map(([cmd, args]) => [cmd, args.snapshot.ready]), [["bridge_state", false]]);
-  assert.equal(api.run("toggle-mute"), false, "nothing to drive yet");
+  assert.equal(api.run({ command: "toggle-mute" }), false, "nothing to drive yet");
 
-  const store = fakeStore({ call: { joined: false, busy: false }, mic: { enabled: true, disabled: false }, title: "Claude" });
+  const store = fakeStore({ call: { joined: false, busy: false }, mic: { enabled: true, disabled: false }, title: "Viewed", callCard: { title: "Claude" } });
   win.sidevoiceUI = { store };
   win.sidevoiceActions = { toggleMic() {}, toggleCall: async () => {} };
   tick();
   await flush();
   assert.equal(calls.length, 2);
   assert.deepEqual(calls[1][1].snapshot, {
-    version: 1, ready: true, joined: false, busy: false, micEnabled: true, micDisabled: false, title: "Claude",
+    version: 2, ready: true, joined: false, busy: false, micEnabled: true, micDisabled: false, title: "Claude",
+    agent: "idle", youTalking: false, canSkip: false, since: null, participants: [], devices: null,
   });
 
   store.set({ now: 123 }); // unrelated ticks are not reported
@@ -94,20 +95,108 @@ test("toggle-mute and hang-up go through the web UI's actions", async () => {
   };
   const api = install(win, ORIGIN);
 
-  assert.equal(api.run("hang-up"), false, "no call to hang up");
+  assert.equal(api.run({ command: "hang-up" }), false, "no call to hang up");
   assert.equal(calls, 0);
-  assert.equal(api.run("toggle-mute"), true);
+  assert.equal(api.run({ command: "toggle-mute" }), true);
   assert.equal(mics, 1);
   assert.equal(api.snapshot().micEnabled, false);
 
   store.set({ call: { joined: true } });
-  assert.equal(api.run("hang-up"), true);
+  assert.equal(api.run({ command: "hang-up" }), true);
   assert.equal(calls, 1);
 
   store.set({ mic: { enabled: true, disabled: true } });
-  assert.equal(api.run("toggle-mute"), false, "disabled in the web UI, disabled here");
+  assert.equal(api.run({ command: "toggle-mute" }), false, "disabled in the web UI, disabled here");
   assert.equal(mics, 1);
-  assert.equal(api.run("rm -rf"), false);
+  assert.equal(api.run({ command: "rm -rf" }), false);
+  assert.equal(api.run("toggle-mute"), false, "a command is an object");
+});
+
+test("the call controls card's view: the agent, you, the clock, the conversations and the devices", async () => {
+  const install = loadFactory();
+  const { win, calls } = fakeWindow(ORIGIN);
+  const participants = [
+    { threadId: "a", title: "mini", selected: true, reach: "listening", machine: "daimon", harness: "claude", working: false, subtitle: "", karaoke: "not relayed" },
+    { threadId: "b", title: "web", selected: false, reach: "holding", machine: "nas", harness: "codex", working: true, subtitle: "2 sin leer" },
+  ];
+  const audioDevices = { inputs: [{ id: "default", label: "x" }], outputs: [], inputId: "default", outputId: "default", available: true, outputAvailable: false, busy: false, extra: 1 };
+  const store = fakeStore({ call: { joined: false }, mic: { enabled: true }, title: "a browsed transcript", participants, audioDevices,
+    callCard: { agent: "idle", youTalking: false, canSkip: false, title: "mini" } });
+  win.sidevoiceUI = { store };
+  win.sidevoiceActions = { toggleMic() {}, toggleCall: async () => {} };
+  const api = install(win, ORIGIN);
+  await flush();
+
+  let s = api.snapshot();
+  assert.equal(s.since, null, "no clock outside a call");
+  const plain = (value) => JSON.parse(JSON.stringify(value)); // objects made in the bridge's own realm
+  assert.deepEqual(plain(s.participants[0]), { threadId: "a", title: "mini", selected: true, reach: "listening", machine: "daimon", harness: "claude", working: false, subtitle: "" });
+  assert.deepEqual(plain(s.devices), { inputs: [{ id: "default", label: "x" }], outputs: [], inputId: "default", outputId: "default", available: true, outputAvailable: false, busy: false });
+
+  assert.equal(s.title, "mini", "the conversation the call is on, not the transcript being browsed");
+  const before = Date.now();
+  store.set({ call: { joined: true }, callCard: { agent: "working", youTalking: true, canSkip: false, title: "mini" } });
+  s = api.snapshot();
+  assert.ok(s.since >= before, "the clock starts when the call is joined");
+  assert.equal(api.snapshot().since, s.since, "and keeps that start");
+  assert.deepEqual([s.agent, s.youTalking], ["working", true]);
+
+  // Relayed as the room projects it: both can speak at once.
+  store.set({ callCard: { agent: "speaking", youTalking: true, canSkip: true, title: "mini" } });
+  s = api.snapshot();
+  assert.deepEqual([s.agent, s.youTalking, s.canSkip], ["speaking", true, true]);
+  store.set({ callCard: { agent: "dancing", title: "mini" } });
+  assert.equal(api.snapshot().agent, "idle", "only the states the card knows");
+
+  store.set({ call: { joined: false } });
+  assert.equal(api.snapshot().since, null);
+  await flush();
+  assert.ok(calls.every(([cmd]) => cmd === "bridge_state"));
+});
+
+test("the card's commands: skip, switch conversation and choose a device, each only when it can", async () => {
+  const install = loadFactory();
+  const { win } = fakeWindow(ORIGIN);
+  const did = [];
+  const store = fakeStore({ call: { joined: true }, mic: { enabled: true }, participants: [{ threadId: "a" }, { threadId: "b" }, { threadId: "c", available: false }],
+    callCard: { canSkip: false } });
+  win.sidevoiceUI = { store };
+  win.sidevoiceActions = {
+    toggleMic() {}, toggleCall: async () => {},
+    skipReply: async () => did.push("skip"),
+    selectParticipant: (id) => did.push("select " + id),
+    selectAudioDevice: async (kind, id) => did.push("device " + kind + " " + id),
+  };
+  const api = install(win, ORIGIN);
+  assert.equal(api.run({ command: "skip-reply" }), false, "nothing playing");
+  store.set({ callCard: { canSkip: true } });
+  assert.equal(api.run({ command: "skip-reply" }), true);
+  assert.equal(api.run({ command: "select-participant", threadId: "b" }), true);
+  assert.equal(api.run({ command: "select-participant", threadId: "zzz" }), false, "only a conversation the room lists");
+  assert.equal(api.run({ command: "select-participant", threadId: "c" }), false, "and one the call can go to");
+  assert.equal(api.run({ command: "select-audio-device", kind: "input", id: "mbp" }), true);
+  assert.equal(api.run({ command: "select-audio-device", kind: "camera", id: "x" }), false);
+  await flush();
+  assert.deepEqual(did, ["skip", "select b", "device input mbp"]);
+});
+
+test("the microphone's level reaches the app during a call only, throttled, and 0 when it stops", async () => {
+  const install = loadFactory();
+  const { win, calls } = fakeWindow(ORIGIN);
+  let publish = null;
+  const store = fakeStore({ call: { joined: false }, mic: { enabled: true } });
+  win.sidevoiceUI = { store, micLevel: { subscribe(fn) { publish = fn; return () => {}; } } };
+  win.sidevoiceActions = { toggleMic() {}, toggleCall: async () => {} };
+  install(win, ORIGIN);
+  publish(40);
+  await flush();
+  assert.equal(calls.filter(([cmd]) => cmd === "bridge_level").length, 0, "no call, no level");
+  store.set({ call: { joined: true } });
+  publish(40.4);
+  publish(55); // within 80 ms of the last: dropped
+  publish(0); // a stop always goes
+  await flush();
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "bridge_level").map(([, args]) => args.level), [40, 0]);
 });
 
 test("installs once per page and survives a missing Tauri runtime", async () => {

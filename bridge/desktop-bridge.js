@@ -1,9 +1,10 @@
 // Sidevoice desktop bridge — injected by the desktop app into every page its main window loads.
 //
 // The contract is documented in docs/BRIDGE.md. In short:
-//   page → app : invoke('bridge_state', { snapshot })  whenever the call state the tray shows changes
-//   app → page : window.__sidevoiceDesktop.run('toggle-mute' | 'hang-up')
-// It only reads the web UI's public seams (window.sidevoiceUI.store, window.sidevoiceActions) and
+//   page → app : invoke('bridge_state', { snapshot })  whenever the call state the app shows changes (tray, card)
+//                invoke('bridge_level', { level })     the microphone's level during a call, for the card's wave
+//   app → page : window.__sidevoiceDesktop.run({ command: 'toggle-mute' | 'hang-up' | 'skip-reply' | … })
+// It only reads the web UI's public seams (window.sidevoiceUI.store and .micLevel, window.sidevoiceActions) and
 // never touches the DOM. On any origin other than the window's page (the room's, or the app's own for the
 // bundled interface) it does nothing at all.
 (function (factory) {
@@ -15,8 +16,20 @@
   if (win.location.protocol + "//" + win.location.host !== roomOrigin) return null;
   if (win.__sidevoiceDesktop) return win.__sidevoiceDesktop;
 
-  const BRIDGE_VERSION = 1;
+  const BRIDGE_VERSION = 2;
   let lastReported = "";
+  let reportedJoined = false;
+  /** When the call being reported was joined (ms since the epoch), for the card's clock; null outside a call. */
+  let joinedAt = null;
+  /** The fields of the room's conversation rows the card shows (the web UI's ParticipantView). */
+  const PARTICIPANT_FIELDS = ["threadId", "title", "selected", "available", "switching", "unread", "reach", "stateLabel",
+    "activityNote", "detail", "subtitle", "working", "machine", "harness", "route"];
+  const DEVICE_FIELDS = ["inputs", "outputs", "inputId", "outputId", "available", "outputAvailable", "busy"];
+  const pick = (object, fields) => {
+    const picked = {};
+    for (const field of fields) if (object && object[field] !== undefined) picked[field] = object[field];
+    return picked;
+  };
 
   function invoke(command, args) {
     const internals = win.__TAURI_INTERNALS__;
@@ -115,24 +128,37 @@
     };
   }
 
-  /** The few facts the tray needs, read from the web UI's own view model. */
+  /** The call as the app shows it (tray, headset, call controls card), read from the web UI's own view model. */
   function snapshot() {
     const store = win.sidevoiceUI && win.sidevoiceUI.store;
     const actions = win.sidevoiceActions;
     if (!store || !actions) {
-      return { version: BRIDGE_VERSION, ready: false, joined: false, busy: false, micEnabled: true, micDisabled: false, title: "" };
+      return { version: BRIDGE_VERSION, ready: false, joined: false, busy: false, micEnabled: true, micDisabled: false, title: "",
+        agent: "idle", youTalking: false, canSkip: false, since: null, participants: [], devices: null };
     }
     const view = store.getState() || {};
     const call = view.call || {};
     const mic = view.mic || {};
+    // The card's own view, projected by the room from its facts (state/room-session-state.js callCardView): the agent
+    // independent of the person, and the conversation the call is on.
+    const card = view.callCard || {};
+    const joined = !!call.joined;
+    if (!joined) joinedAt = null;
+    else if (joinedAt === null) joinedAt = Date.now();
     return {
       version: BRIDGE_VERSION,
       ready: true,
-      joined: !!call.joined,
+      joined,
       busy: !!call.busy,
       micEnabled: mic.enabled !== false,
       micDisabled: !!mic.disabled,
-      title: typeof view.title === "string" ? view.title : "",
+      title: typeof card.title === "string" ? card.title : "",
+      agent: ["idle", "working", "speaking"].includes(card.agent) ? card.agent : "idle",
+      youTalking: !!card.youTalking,
+      canSkip: !!card.canSkip,
+      since: joinedAt,
+      participants: Array.isArray(view.participants) ? view.participants.map((row) => pick(row, PARTICIPANT_FIELDS)) : [],
+      devices: view.audioDevices ? pick(view.audioDevices, DEVICE_FIELDS) : null,
     };
   }
 
@@ -141,7 +167,21 @@
     const key = JSON.stringify(state);
     if (key === lastReported) return; // the store ticks often (clocks, meters); the tray only cares about changes
     lastReported = key;
+    reportedJoined = state.joined;
     invoke("bridge_state", { snapshot: state });
+  }
+
+  // The microphone's level, for the card's wave: during a call, at most every 80 ms, and only when it changes.
+  let lastLevel = -1;
+  let lastLevelAt = 0;
+  function reportLevel(value) {
+    if (!reportedJoined) return;
+    const level = Math.round(Math.max(0, Math.min(100, Number(value) || 0)));
+    const now = Date.now();
+    if (level === lastLevel || (level !== 0 && now - lastLevelAt < 80)) return;
+    lastLevel = level;
+    lastLevelAt = now;
+    invoke("bridge_level", { level });
   }
 
   let attached = false;
@@ -150,6 +190,8 @@
     const store = win.sidevoiceUI && win.sidevoiceUI.store;
     if (!store || typeof store.subscribe !== "function" || !win.sidevoiceActions) return false;
     store.subscribe(report);
+    const level = win.sidevoiceUI.micLevel;
+    if (level && typeof level.subscribe === "function") level.subscribe(reportLevel);
     attached = true;
     report();
     return true;
@@ -167,12 +209,14 @@
       mediaKeys: mediaKeys === "native" ? "native" : null,
     }),
     snapshot,
-    /** Runs one tray/shortcut command through the web UI's own actions. Returns whether it ran. */
-    run(command) {
+    /** Runs one command from the app (tray, shortcut, headset, call controls card) through the web UI's own actions:
+     *  `{command, …arguments}`. Returns whether it ran. */
+    run(request) {
       const actions = win.sidevoiceActions;
       const state = snapshot();
-      if (!state.ready) return false;
-      switch (command) {
+      if (!state.ready || !request || typeof request !== "object") return false;
+      const settle = (result) => Promise.resolve(result).catch(() => {});
+      switch (request.command) {
         case "toggle-mute":
           // The web UI disables its mute button in a call with no conversation selected; so do we.
           if (state.micDisabled) return false;
@@ -181,7 +225,22 @@
           return true;
         case "hang-up":
           if (!state.joined) return false;
-          Promise.resolve(actions.toggleCall()).catch(() => {});
+          settle(actions.toggleCall());
+          return true;
+        case "skip-reply":
+          if (!state.canSkip || typeof actions.skipReply !== "function") return false;
+          settle(actions.skipReply());
+          return true;
+        case "select-participant":
+          if (typeof request.threadId !== "string" || typeof actions.selectParticipant !== "function") return false;
+          // Only a conversation the room lists and the call can go to; the room browses the others itself.
+          if (!state.participants.some((row) => row.threadId === request.threadId && row.available !== false)) return false;
+          actions.selectParticipant(request.threadId);
+          return true;
+        case "select-audio-device":
+          if (!["input", "output"].includes(request.kind) || typeof request.id !== "string") return false;
+          if (typeof actions.selectAudioDevice !== "function") return false;
+          settle(actions.selectAudioDevice(request.kind, request.id));
           return true;
         default:
           return false;

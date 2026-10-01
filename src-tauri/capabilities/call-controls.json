@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "call-controls",
+  "description": "The call controls card (src/call_controls.rs) shows only the page bundled for it (voice/call-controls.html, a local page). It may ask for the call's state, carry one of its commands to the room, size itself and move. Nothing else.",
+  "windows": ["call-controls"],
+  "permissions": ["allow-call-controls-ready", "allow-call-controls-run", "allow-call-controls-layout", "allow-call-controls-drag"]
+}

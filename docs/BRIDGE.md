@@ -1,6 +1,7 @@
 # The desktop bridge
 
-How the native app (tray, global shortcut) talks to the Sidevoice web UI loaded in its window.
+How the native app (tray, global shortcut, headset, the call controls card) talks to the Sidevoice web UI loaded in
+its window.
 It uses the seams the web UI already publishes for itself, and never reads or clicks the DOM.
 
 ## Pieces
@@ -12,16 +13,22 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 | `src-tauri/src/lib.rs` | Wiring: the `bridge_state` command, `send(Command)`; `capabilities/room.json`. |
 | `src-tauri/src/engine_ipc.rs` | The native engine's commands, behind `nativeEngine` (below). |
 | `src-tauri/src/tray.rs` | The menu-bar icon and its menu. |
+| `bridge/call-controls-bridge.js` | Injected into the call controls card's window (below). |
+| `src-tauri/src/call_controls.rs`, `src-tauri/core/src/call_controls.rs` | The card's window, and when it shows, where it sits and how it moves (unit-tested). |
 
 ## What the bridge reads and calls in the web UI
 
 Both are globals the web UI (sidevoice-web → `apps/web`) already defines:
 
 - `window.sidevoiceUI.store` — the room's view-model store (`apps/web/src/state/room-store.ts`,
-  `installRoomBridge`). The bridge calls `getState()` and `subscribe()` and reads only
-  `call.joined`, `call.busy`, `mic.enabled`, `mic.disabled` and `title`.
-- `window.sidevoiceActions` — the room's actions (`apps/web/src/state/room-types.ts`,
-  `SidevoiceActions`). The bridge calls only `toggleMic()` and `toggleCall()`.
+  `installRoomBridge`). The bridge calls `getState()` and `subscribe()` and reads only `call.joined`, `call.busy`,
+  `mic.enabled`, `mic.disabled`, `callCard` (the room's own view for the card: the call's conversation title, the
+  agent's state, `youTalking`, `canSkip`), `participants` (the rows' public fields) and `audioDevices`.
+- `window.sidevoiceUI.micLevel` — the microphone's level, 0–100, from the room's capture, whether or not the room is
+  painted (`apps/web/src/state/mic-level.ts`). The bridge subscribes to it.
+- `window.sidevoiceActions` — the room's actions (`apps/web/src/state/room-types.ts`, `SidevoiceActions`). The
+  bridge calls only `toggleMic()`, `toggleCall()`, `skipReply()`, `selectParticipant(threadId)` and
+  `selectAudioDevice(kind, id)`.
 
 If the web UI renames either, the tray greys out ("sala sin cargar") and nothing else breaks.
 Keeping these two names stable is the web UI's side of the contract.
@@ -32,43 +39,128 @@ Keeping these two names stable is the web UI's side of the contract.
 window.__TAURI_INTERNALS__.invoke("bridge_state", { snapshot })
 ```
 
-`snapshot` (version 1):
+`snapshot` (version 2):
 
 ```json
-{ "version": 1, "ready": true, "joined": true, "busy": false,
-  "micEnabled": true, "micDisabled": false, "title": "Claude" }
+{ "version": 2, "ready": true, "joined": true, "busy": false,
+  "micEnabled": true, "micDisabled": false, "title": "Claude",
+  "agent": "idle | working | speaking", "youTalking": false, "canSkip": false, "since": 1759300000000,
+  "participants": [{ "threadId": "…", "title": "…", "selected": true, "reach": "listening", "working": false,
+                     "machine": "daimon", "harness": "claude", "subtitle": "", "…": "…" }],
+  "devices": { "inputs": [{ "id": "default", "label": "…" }], "outputs": [], "inputId": "default",
+               "outputId": "default", "available": true, "outputAvailable": false, "busy": false } }
 ```
+
+- `agent`: what the agent does — `speaking` while its voice plays (it wins over its work), else `working` while the
+  conversation works on a turn, else `idle`. `youTalking`: a turn of the person's is open.
+- `since`: when this page saw the call joined (ms since the epoch), for the card's clock; `null` outside a call.
+- `participants` and `devices` are relayed to the card as the room wrote them: the web UI owns their shape
+  (`ParticipantView`, `AudioDevices`).
 
 Sent once on page start (`ready: false`), then on every change of those fields (the store
 ticks often; unchanged snapshots are not re-sent). The app also resets to `ready: false` on
 every navigation of the room window.
 
+```js
+window.__TAURI_INTERNALS__.invoke("bridge_level", { level })   // 0–100, during a call, at most every 80 ms
+```
+
+The microphone's level for the card's wave: only during a call, only when it changes (a drop to 0 always goes).
+
 Who may call it:
-- `capabilities/room.json` grants `allow-bridge-state` (and `allow-debug-log`, printed only with
-  `SIDEVOICE_DEBUG=1`) to the room windows (`room-*`), for the app's own (local) pages only.
-- The command re-checks that the caller is the current room window and that its page is the app's own origin.
+- `capabilities/room.json` grants `allow-bridge-state` and `allow-bridge-level` (and `allow-debug-log`, printed only
+  with `SIDEVOICE_DEBUG=1`) to the room windows (`room-*`), for the app's own (local) pages only.
+- Both commands re-check that the caller is the current room window and that its page is the app's own origin.
 
 The room window never shows a remote page, so no remote origin can call it.
 
 ## App → page
 
 ```js
-window.__sidevoiceDesktop.run("toggle-mute")   // tray "Silenciar/Activar micrófono", global shortcut
-window.__sidevoiceDesktop.run("hang-up")       // tray "Colgar"
+window.__sidevoiceDesktop.run({ command: "toggle-mute" })     // tray, global shortcut, headset, card
+window.__sidevoiceDesktop.run({ command: "hang-up" })         // tray, card
+window.__sidevoiceDesktop.run({ command: "skip-reply" })      // card
+window.__sidevoiceDesktop.run({ command: "select-participant", threadId: "…" })            // card
+window.__sidevoiceDesktop.run({ command: "select-audio-device", kind: "input", id: "…" })  // card
 ```
 
-Evaluated by the app with `webview.eval` (works with the window hidden). `run` returns whether it
-did something:
+Evaluated by the app with `webview.eval` (works with the window hidden); the command travels as JSON (core
+`bridge::Command`), so nothing it carries can break out of the call. `run` returns whether it did something:
 - `toggle-mute` → `sidevoiceActions.toggleMic()`, unless the web UI's own mute is disabled
   (in a call with no conversation selected). Before joining it sets the preference, as the web
   UI's button does.
 - `hang-up` → `sidevoiceActions.toggleCall()`, only while joined.
+- `skip-reply` → `sidevoiceActions.skipReply()`, only while something plays.
+- `select-participant` → `sidevoiceActions.selectParticipant(threadId)`, only for a conversation the room lists.
+- `select-audio-device` → `sidevoiceActions.selectAudioDevice(kind, id)`, `kind` `input` or `output`: the room's own
+  choice, so the card and the room never disagree.
 
 Joining is deliberately **not** a tray command: joining unlocks audio output, which the webview
 only allows from a click in the page. "Mostrar Sidevoice" opens the window for that.
 
 `window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", nativeEngine, mediaKeys }`: the web UI
 feature-detects the desktop app by it.
+
+## The call controls card
+
+During a call, while the room's window is not in front and focused, a small card floats over the person's other apps
+(sidevoice/sidevoice-desktop#4): the agent, the conversation, the person's microphone, and near the pointer the call's
+controls. Hidden from the tray ("Hide call controls") it stays hidden for that call; "Show the call controls always"
+in the settings keeps its controls in view.
+
+- **The window** (`src/call_controls.rs`, label `call-controls`) loads `voice/call-controls.html`, a second page of
+  the vendored web build (`apps/web/src/call-controls/`), which reuses the room's conversation list and icons.
+  macOS: a non-activating `NSPanel` (tauri-nspanel) at the status level (25), on every Space and over full-screen
+  apps, never the key window: clicking it leaves the person's app active. Windows and Linux X11: borderless,
+  transparent, always on top, never focused, no taskbar button. Wayland (a Wayland display, and `GDK_BACKEND` not
+  `x11`): an ordinary small window — the compositor decides where and above what, and moves it when dragged
+  (`start_dragging`); nothing is remembered there. Transparency needs `macOSPrivateApi` (tauri.conf.json): the app is not distributed
+  through the Mac App Store.
+- **The pointer**: a window that never takes focus may get no hover events, so while the card shows one app thread
+  polls the cursor (every 80 ms; asleep while it is hidden) and tells the card when it is over it; on Wayland, where
+  the app cannot see the pointer, `pointerInside` is `null` and the card's own events decide. Hiding the card resets
+  it (`pointerInside: false`, `level: 0`).
+- **Clicks elsewhere**: `outsideClicks` counts clicks in other apps while the card shows; each closes a panel the card
+  has open. macOS: an AppKit global monitor (mouse buttons only, no Accessibility permission). Windows: the pointer
+  thread reads the mouse buttons. Linux: not detected (a panel closes 2.5 s after the pointer leaves). Escape is not:
+  a card that never takes the keyboard cannot hear it without taking focus or reading every key system-wide.
+- **No capture**: the card's webview denies every permission request (microphone, camera, …): the microphone is the
+  room's.
+- **Its place**: the top-right corner of the display the first time; dragged, it is dropped free with a magnet (an
+  edge or corner within 56 px snaps), remembered per display (`call-controls.json` in the config directory, keyed by
+  the display's name and position, in that display's own logical pixels from its work area's corner). The app moves
+  it on the desktop's own coordinates (physical pixels on Windows and X11, points on macOS), so displays of different
+  scales agree. The controls always open below; when they do not fit, the window rises while expanded and returns
+  after (core `call_controls::fit`); where it rests is always worked out from the card at rest.
+
+The card's page talks to the app only through `window.__sidevoiceDesktop.host.callControls`, which
+`bridge/call-controls-bridge.js` defines (injected, bound to the app's own origin):
+
+| Card → app | |
+|---|---|
+| `subscribe(listener)` → `stop` | the whole state now, then on every change (`call_controls_ready` asks the app for it) |
+| `run({command, …})` | `call_controls_run`: `open-app` (the app shows the room), or one of the room commands above, which the app parses (`bridge::Command`) before it carries it to the room |
+| `layout({width, height})` | `call_controls_layout`: the card's size with its shadow margin; the window takes it and is placed to fit |
+| `drag(phase)` | `call_controls_drag`: `start`, `move`, `end`; the window follows the pointer (the app reads it) and is dropped, snapped and remembered |
+
+App → card: `window.__sidevoiceDesktop.receive(patch)` (`webview.eval`), any subset of
+`{call, level, pointerInside, outsideClicks, alwaysExpanded, muteShortcut}` — `call` is the room's snapshot above, `muteShortcut` the
+global shortcut as the person reads it (⌃⌥M, Ctrl+Alt+M). `capabilities/call-controls.json` grants the four commands
+to that window only, and each re-checks the caller's label and origin.
+
+CI's macOS job (probe build, `SIDEVOICE_DEBUG_PAGE=card-probe.html`) walks a call through the card's states with an
+editor full screen in its own Space (`test/fixtures/fullscreen-editor.swift`), acting as the person with the system's
+own input events (`test/fixtures/card-ci.swift`). It checks the panel AppKit reports (non-activating, level 25, all
+Spaces, full-screen auxiliary, not key, app not active); that the window server has the card on screen in front of the
+full-screen editor; that the card's page was refused the microphone; that hovering, a click on the title (its
+conversations open), a click in the editor (they close: `outsideClicks`), a drag (dropped elsewhere), and mute twice
+reach the app and the room while the app never becomes active, and the editor keeps both the activation and the
+keyboard (it gets what is typed before and after); and that the card's hang-up ends the call and the card hides after
+it. Screenshots of each state are uploaded (`call-controls-screenshots`).
+
+What it does not show: switching between ordinary Spaces (the full-screen editor's own Space stands for one), a real
+room and microphone (the probe page stands in for the room; the room's projection and its level are unit-tested in the
+web repo), other displays and scales, and any platform but macOS.
 
 ## The native engine
 

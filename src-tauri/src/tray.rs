@@ -1,7 +1,9 @@
-//! The menu-bar (tray) icon: call state at a glance, mute, hang up, show the window, settings, quit.
-//! What it shows comes from [`bridge::tray_view`]; what it does goes through the bridge.
+//! The menu-bar (tray) icon: call state at a glance, mute, hang up, hide the call controls card, show the window,
+//! settings, quit. What it shows comes from [`bridge::tray_view`], in the app's language; what it does goes through
+//! the bridge.
 
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command, TrayIcon};
+use sidevoice_desktop_core::i18n::t;
 use std::sync::Mutex;
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -60,6 +62,7 @@ struct TrayItems {
     status: MenuItem<Wry>,
     mute: MenuItem<Wry>,
     hang_up: MenuItem<Wry>,
+    call_controls: MenuItem<Wry>,
     last_icon: Mutex<Option<TrayIcon>>,
 }
 
@@ -68,13 +71,17 @@ fn icon(which: TrayIcon) -> tauri::Result<Image<'static>> {
 }
 
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
-    let initial = bridge::tray_view(&CallSnapshot::default());
+    let language = app.state::<crate::AppState>().language;
+    let initial = bridge::tray_view(&CallSnapshot::default(), language);
     let status = MenuItem::with_id(app, "status", &initial.status, false, None::<&str>)?;
     let mute = MenuItem::with_id(app, "mute", initial.mute_label, initial.mute_enabled, None::<&str>)?;
-    let hang_up = MenuItem::with_id(app, "hang-up", "Colgar", initial.hang_up_enabled, None::<&str>)?;
-    let show = MenuItem::with_id(app, "show", "Mostrar Sidevoice", true, None::<&str>)?;
-    let settings = MenuItem::with_id(app, "settings", "Ajustes…", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Salir de Sidevoice", true, None::<&str>)?;
+    let hang_up =
+        MenuItem::with_id(app, "hang-up", t(language, "tray.hang_up"), initial.hang_up_enabled, None::<&str>)?;
+    let call_controls =
+        MenuItem::with_id(app, "call-controls", t(language, "tray.hide_call_controls"), false, None::<&str>)?;
+    let show = MenuItem::with_id(app, "show", t(language, "tray.show"), true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", t(language, "tray.settings"), true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", t(language, "tray.quit"), true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
         &[
@@ -82,6 +89,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             &PredefinedMenuItem::separator(app)?,
             &mute,
             &hang_up,
+            &call_controls,
             &PredefinedMenuItem::separator(app)?,
             &show,
             &settings,
@@ -99,6 +107,11 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id().as_ref() {
             "mute" => crate::send(app, Command::ToggleMute),
             "hang-up" => crate::send(app, Command::HangUp),
+            "call-controls" => {
+                crate::call_controls::toggle_hidden(app);
+                let call = app.state::<crate::AppState>().call.lock().unwrap().clone();
+                update(app, &call);
+            }
             "show" => crate::show_room(app),
             "settings" => crate::open_settings(app),
             "quit" => app.exit(0),
@@ -106,17 +119,23 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         })
         .build(app)?;
 
-    app.manage(TrayItems { status, mute, hang_up, last_icon: Mutex::new(Some(initial.icon)) });
+    app.manage(TrayItems { status, mute, hang_up, call_controls, last_icon: Mutex::new(Some(initial.icon)) });
     Ok(())
 }
 
 pub fn update(app: &AppHandle, snapshot: &CallSnapshot) {
     let Some(items) = app.try_state::<TrayItems>() else { return };
-    let view = bridge::tray_view(snapshot);
+    let language = app.state::<crate::AppState>().language;
+    let view = bridge::tray_view(snapshot, language);
     let _ = items.status.set_text(&view.status);
     let _ = items.mute.set_text(view.mute_label);
     let _ = items.mute.set_enabled(view.mute_enabled);
     let _ = items.hang_up.set_enabled(view.hang_up_enabled);
+    // Hiding the card lasts for the call that is on: only offered during one.
+    let hidden = crate::call_controls::hidden_for_call(app);
+    let label = if hidden { "tray.show_call_controls" } else { "tray.hide_call_controls" };
+    let _ = items.call_controls.set_text(t(language, label));
+    let _ = items.call_controls.set_enabled(snapshot.joined);
 
     let mut last = items.last_icon.lock().unwrap();
     if *last != Some(view.icon) {

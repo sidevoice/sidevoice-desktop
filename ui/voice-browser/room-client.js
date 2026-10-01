@@ -26,12 +26,12 @@ function chunkTextRange(text,chunk,from=0){
 }
 /* Local synthesis and playout. A canceled job can never emit late audio. */
 /* iPhone and iPad (which reports itself as a Mac with a touch screen). Only there does a page that goes away
- * have to let go of its output: elsewhere a background tab keeps sounding, like any call or music tab (#96). */
+ * have to let go of its output: elsewhere a background tab keeps sounding, like any call or music tab. */
 function pausesWhileHidden(){
  const nav=typeof navigator!=='undefined'?navigator:null;if(!nav)return true;
  return /iPad|iPhone|iPod/.test(nav.userAgent||'')||(nav.platform==='MacIntel'&&nav.maxTouchPoints>1);
 }
-/* How the room's voice reaches the speaker, per platform (#80). iPhone and iPad need it to leave through a
+/* How the room's voice reaches the speaker, per platform. iPhone and iPad need it to leave through a
  * media element: only that is part of their echo-cancellation reference. Everywhere else the element is a
  * liability — Chrome on the Mac keeps the context's clock and the element's device clock in step by
  * resampling slightly faster or slower, which is heard as the voice going deep, normal, then high — so the
@@ -45,11 +45,11 @@ class RoomVoice {
  constructor(){this.worker=null;this.context=null;this.output=null;this.job=null;this.serial=0;this.device=null;this.ready=false;this.outputDeviceId='default';this.resuming=null;
   // What the output did lately, for the stats dialog: a stuck buzz on a phone is otherwise invisible from here.
   this.events=[];this.stalls=0;this.stallCheckMs=500;this.stallAfterMs=700;this.stallLimit=3;this.awayLimitMs=30000;this.pausesByDefault=pausesWhileHidden();this.outputStrategy=outputStrategy();this.master=null;this.pauseWhileHidden=this.pausesByDefault;this.audible=true;this.keepAlive=null;this.keepAliveWanted=false;this.keepAliveLevel=1e-4;this.tailSeconds=1.5;
-  // The ambient bed (#42) is a loop of its own, and never the first thing a fresh output renders.
+  // The ambient bed is a loop of its own, and never the first thing a fresh output renders.
   this.greetSeconds=1.8;this.greetedAt=0;this.rendered=false;
   this.presence=null;this.presencePulseSeconds=3.6;
   /* Phrases of breaths with silence between them, as [breaths, seconds of silence after]: a bed that never
-   * stops becomes noise over a long turn (#91). Uneven on purpose, so the loop does not read as a metronome. */
+   * stops becomes noise over a long turn. Uneven on purpose, so the loop does not read as a metronome. */
   this.presencePhrases=[[2,3],[1,4],[2,2.5]];
   // Many silences are a second or two long: a breath that starts from nothing is gone before it is heard,
   // so the bed begins a third of the way into its first swell (2026-09-26, in the car).
@@ -145,13 +145,13 @@ class RoomVoice {
   // microphone takes the audio route over — which is what an interruption while we speak looks
   // like in a car. An element left playing through that comes back as a stuck buzz, so it is
   // paused while the page is away, and everything is put back together when it returns. A desktop tab
-  // in the background is not that: it keeps playing (#96).
+  // in the background is not that: it keeps playing.
   const settle=event=>{
    const hidden=typeof document!=='undefined'&&document.hidden;
    this.note(event?.type||'settle',(hidden?'hidden':'visible')+' · '+this.context.state);
    if((hidden&&this.pauseWhileHidden)||this.context.state!=='running')element.pause();
    this.ensureKeepAlive();
-   // With the screen locked on purpose (#59), the end of an interruption — a phone call hung up — must put the
+   // With the screen locked on purpose (sidevoice/sidevoice-web#4), the end of an interruption — a phone call hung up — must put the
    // output back without waiting for the page to be shown: iOS already restarted the context, and a call
    // that stays paused until somebody unlocks the phone is a call nobody hears (2026-09-26).
    if(!hidden||(!this.pauseWhileHidden&&this.context.state==='running'))this.resumeOutput();
@@ -186,7 +186,7 @@ class RoomVoice {
  }
  get destination(){return this.output?.sink||this.master||this.context.destination}
  /* The direct path's own last stage: one gain before the context's destination, so this engine can still mute
-  * a tab that is not the one sounding (#96) without an element to mute. */
+  * a tab that is not the one sounding without an element to mute. */
  ensureMaster(){
   if(this.master||!this.context||typeof this.context.createGain!=='function')return this.master;
   try{this.master=this.context.createGain();this.master.gain.value=this.audible?1:0;this.master.connect(this.context.destination);this.note('output','context · '+(this.context.sampleRate||'?')+' Hz')}
@@ -243,7 +243,7 @@ class RoomVoice {
    source.start(this.context.currentTime+.05);this.note('tail',reason);
   }catch(error){this.note('tail-failed',error?.message||reason)}
  }
- /* ----- the ambient bed: the conversation is working on the turn this browser sent (#42) -----
+ /* ----- the ambient bed: the conversation is working on the turn this browser sent -----
   * One loop, generated here, no asset: a band of noise between roughly 110 and 420 Hz mixed with two
   * quiet partials a fifth apart (220 and 330 Hz), the whole thing breathing once every two seconds.
   * The loop is four seconds long so both partials close a whole number of cycles at the seam, and the
@@ -319,7 +319,7 @@ class RoomVoice {
   return true;
  }
  get supportsOutputSelection(){return typeof this.output?.element?.setSinkId==='function'||typeof (this.context||AudioContext.prototype).setSinkId==='function'}
- /* Experimental, per device (#59): keep the call going with the screen locked. iOS keeps a page running
+ /* Experimental, per device (sidevoice/sidevoice-web#4): keep the call going with the screen locked. iOS keeps a page running
   * while it is audible and freezes it a few seconds after it goes quiet, so pausing our own output on lock
   * is probably what ends the call. With this on, the element is paused only when the context really stops,
   * and the clock is watched as on the desktop. Off, each platform does what it always did. */
@@ -351,7 +351,7 @@ class RoomVoice {
    source.start(this.context.currentTime);this.keepAlive=source;this.note('keep-alive','start');return true;
   }catch(error){this.note('keep-alive-failed',error?.message||'keep-alive');return false}
  }
- /* Whether this page is the one that sounds, when the same browser has the room open in several tabs (#96).
+ /* Whether this page is the one that sounds, when the same browser has the room open in several tabs.
   * A tab that is not is muted, never paused: its playback, receipts and karaoke go on exactly as before, so
   * taking the sound back is instant and nothing it was playing is lost. */
  setAudible(on){
@@ -398,7 +398,7 @@ class RoomVoice {
    // A page that went away is not a stuck device: the element is paused on purpose while the page is hidden
    // (see the settle handler), so nothing can advance. Counting it as a stall declared perfectly good replies
    // failed when the phone's screen locked mid-utterance (2026-09-20, read from the room's audio reports).
-   // A background tab whose clock still moves is playing, not away: it is watched like a visible one (#96).
+   // A background tab whose clock still moves is playing, not away: it is watched like a visible one.
    if(typeof document!=='undefined'&&document.hidden&&(this.pauseWhileHidden||advanced<.05)){
     if(!job.clock.away){job.clock.away=now;this.note('clock-away',this.context.state)}
     // A page that never comes back must not leave the room waiting for a receipt that will never arrive:
@@ -436,7 +436,7 @@ class RoomVoice {
  ensure({native=false,model,accelerator}={}){const kind=native?'native':'page',build=model+'/'+accelerator;if(this.worker&&this.kind===kind){if(this.build!==build){this.ready=false;this.build=build}return}this.worker?.terminate();this.ready=false;this.kind=kind;this.build=build;
   try{this.worker=this.candidate(native)}catch(error){this.worker=null;this.kind=null;throw error}this.listen()}
  listen(){this.worker.onmessage=({data})=>this.receive(data);this.worker.onerror=e=>this.fail(Error(e.message||'No se pudo iniciar el motor de voz'))}
- /* A worker of its own for a model check (#124 §6): the same protocol, loaded and checked apart from the voice in
+ /* A worker of its own for a model check (sidevoice/sidevoice-core#21): the same protocol, loaded and checked apart from the voice in
   * use, which keeps speaking until the checked model takes its place (adopt). */
  candidate(native=false){
   if(!native)return new Worker('/voice-browser/worker.js?v='+encodeURIComponent(globalThis.sidevoiceBuildId||'dev'),{type:'module'});
