@@ -533,3 +533,68 @@ fn a_plain_connector_leaves_the_service_state_to_the_cli() {
     assert_eq!((report["state"].as_str(), report["reachable"].as_bool()), (Some("not-installed"), Some(true)));
     assert_eq!(calls(&log), ["service status --json"]);
 }
+
+/// Clients that never finish a head — no secret, no Origin needed to open a connection — cannot hold every slot, and
+/// none of them keeps its connection past the head deadline (review R1-c #3).
+#[test]
+fn slow_clients_cannot_starve_the_page() {
+    let world = World::new();
+    let _core = world.core(1);
+    let host = world.host();
+    let (port, secret) = running(&host);
+    let mut slow = Vec::new();
+    for _ in 0..256 {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        stream.write_all(b"GET /api/x HTTP/1.1\r\nHost: 127").unwrap();
+        slow.push(stream);
+    }
+    // Each trickles one more byte, as one that dodges a per-read timeout would.
+    for stream in &mut slow {
+        let _ = stream.write_all(b".");
+    }
+    let started = std::time::Instant::now();
+    let host_field = format!("127.0.0.1:{port}");
+    let bearer = format!("Bearer {secret}");
+    let fields = [("Host", host_field.as_str()), ("Origin", "tauri://localhost"), ("Authorization", bearer.as_str())];
+    assert_eq!(request(port, "GET", "/api/x", &fields, "").0, 200, "the page gets through");
+    assert!(started.elapsed() < Duration::from_secs(3), "{:?}", started.elapsed());
+    drop(slow);
+
+    // One that keeps trickling is closed at the head deadline (5 s), not kept alive byte by byte.
+    let mut trickler = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    trickler.set_read_timeout(Some(Duration::from_millis(400))).unwrap();
+    let started = std::time::Instant::now();
+    let closed = loop {
+        if trickler.write_all(b"x").is_err() {
+            break started.elapsed();
+        }
+        match trickler.read(&mut [0u8; 64]) {
+            Ok(0) => break started.elapsed(),
+            Ok(_) => {}
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {}
+            Err(_) => break started.elapsed(),
+        }
+        assert!(started.elapsed() < Duration::from_secs(9), "never closed");
+    };
+    assert!(closed >= Duration::from_secs(4) && closed < Duration::from_secs(8), "{closed:?}");
+}
+
+/// A socket's bytes go to the core only after its 101: data sent behind the upgrade head is refused here, and the
+/// core never sees the request (review R1-c #4).
+#[test]
+fn data_before_the_upgrade_is_refused() {
+    let world = World::new();
+    let core = world.core(1);
+    let host = world.host();
+    let (port, secret) = running(&host);
+    let seen = core.requests().len();
+    let raw = format!(
+        "GET /api/browser/call HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: tauri://localhost\r\nUpgrade: websocket\r\n\
+         Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\
+         Sec-WebSocket-Protocol: sidevoice.token.{secret}\r\n\r\nGET /api/x HTTP/1.1\r\n\r\n"
+    );
+    assert_eq!(send(port, &raw).0, 400);
+    let chunked = raw.replace("\r\n\r\nGET /api/x HTTP/1.1\r\n\r\n", "\r\nTransfer-Encoding: chunked\r\n\r\n");
+    assert_eq!(send(port, &chunked).0, 411);
+    assert_eq!(core.requests().len(), seen, "{:?}", core.requests());
+}

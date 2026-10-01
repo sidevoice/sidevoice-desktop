@@ -28,13 +28,14 @@ use crate::core_socket::CoreSocket;
 use crate::http::{self, Headers, RequestHead};
 use crate::identity;
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
 
 /// The bundled page's origins (`sidevoice_desktop_core::settings::APP_ORIGIN`, per platform): either is the app.
@@ -46,11 +47,17 @@ pub const NATIVE_ONLY: [&str; 3] = ["/api/local", "/api/device/local", "/api/con
 /// How a page names its token on a socket (sidevoice-core `server/devices.py`, `TOKEN_SUBPROTOCOL`).
 pub const TOKEN_PROTOCOL: &str = "sidevoice.token.";
 
-/// How long a client has to send its head (and a body to keep flowing); how long the core may stay silent mid-answer.
+/// How long a client has to send its whole head; then how long an authenticated body may pause; how long the core may
+/// stay silent mid-answer; how long a refused client's leftover input is read before closing.
+const HEAD_DEADLINE: Duration = Duration::from_secs(5);
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
+const LINGER: Duration = Duration::from_secs(1);
 const CORE_TIMEOUT: Duration = Duration::from_secs(300);
 /// Connections served at once; beyond that a new one is closed at once.
 const MAX_CONNECTIONS: usize = 256;
+/// Connections still sending their head (none of them authenticated yet). A new one beyond this closes the oldest of
+/// them, so clients that never finish a head cannot hold every slot (review R1-c #3).
+const MAX_PENDING: usize = 64;
 
 /// What to do with one request head.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,6 +115,20 @@ pub fn decide(head: &RequestHead, port: u16, secret: &str) -> Decision {
         return preflight(headers, origin);
     }
 
+    // Framing, for every request that is not a preflight, before choosing between HTTP and a socket (review R1-c
+    // #4): one length, never chunked, and no body on an upgrade.
+    if headers.has("transfer-encoding") {
+        return refuse_cors(411, origin, "chunked request body");
+    }
+    let length = match headers.one("content-length") {
+        Err(_) => return refuse_cors(400, origin, "two Content-Length headers"),
+        Ok(None) => 0,
+        Ok(Some(value)) => match value.parse::<u64>() {
+            Ok(length) if value.bytes().all(|b| b.is_ascii_digit()) => length,
+            _ => return refuse_cors(400, origin, "bad Content-Length"),
+        },
+    };
+
     let upgrade = match headers.one("upgrade") {
         Err(_) => return refuse(400, "two Upgrade headers"),
         Ok(value) => value.is_some_and(|v| v.eq_ignore_ascii_case("websocket")),
@@ -115,6 +136,9 @@ pub fn decide(head: &RequestHead, port: u16, secret: &str) -> Decision {
     if upgrade {
         if head.method != "GET" || !headers.lists("connection", "upgrade") {
             return refuse(400, "malformed upgrade");
+        }
+        if length != 0 {
+            return refuse(400, "a body on an upgrade");
         }
         let offered = match headers.one("sec-websocket-protocol") {
             Err(_) => return refuse(400, "two Sec-WebSocket-Protocol headers"),
@@ -144,17 +168,6 @@ pub fn decide(head: &RequestHead, port: u16, secret: &str) -> Decision {
     if !authorized {
         return refuse_cors(401, origin, "no secret");
     }
-    if headers.has("transfer-encoding") {
-        return refuse_cors(411, origin, "chunked request body");
-    }
-    let length = match headers.one("content-length") {
-        Err(_) => return refuse_cors(400, origin, "two Content-Length headers"),
-        Ok(None) => 0,
-        Ok(Some(value)) => match value.parse::<u64>() {
-            Ok(length) if value.bytes().all(|b| b.is_ascii_digit()) => length,
-            _ => return refuse_cors(400, origin, "bad Content-Length"),
-        },
-    };
     match native_only(&head.target) {
         Err(why) => refuse_cors(400, origin, why),
         Ok(true) => refuse_cors(404, origin, "native-only route"),
@@ -289,6 +302,8 @@ struct Inner {
 
 struct Shared {
     inner: Mutex<Inner>,
+    /// Connections still sending their head, oldest first.
+    pending: Mutex<VecDeque<(u64, TcpStream)>>,
     core: CoreSocket,
     next: AtomicU64,
     active: AtomicUsize,
@@ -297,6 +312,28 @@ struct Shared {
 }
 
 impl Shared {
+    /// A new connection joins the pending ones; beyond [`MAX_PENDING`] the oldest is closed.
+    fn pend(&self, id: u64, stream: &TcpStream) {
+        let Ok(clone) = stream.try_clone() else { return };
+        let mut pending = self.pending.lock().unwrap();
+        while pending.len() >= MAX_PENDING {
+            if let Some((_, oldest)) = pending.pop_front() {
+                let _ = oldest.shutdown(Shutdown::Both);
+            }
+        }
+        pending.push_back((id, clone));
+    }
+
+    /// Closes the oldest connection still sending its head; false when there is none.
+    fn evict_oldest(&self) -> bool {
+        let oldest = self.pending.lock().unwrap().pop_front();
+        oldest.map(|(_, stream)| stream.shutdown(Shutdown::Both)).is_some()
+    }
+
+    fn unpend(&self, id: u64) {
+        self.pending.lock().unwrap().retain(|(pending, _)| *pending != id);
+    }
+
     fn track(&self, id: u64, closer: Closer) {
         self.inner.lock().unwrap().tunnels.entry(id).or_default().push(closer);
     }
@@ -324,6 +361,7 @@ impl Proxy {
         let secret = identity::random(32);
         let shared = Arc::new(Shared {
             inner: Mutex::default(),
+            pending: Mutex::default(),
             core,
             next: AtomicU64::new(1),
             active: AtomicUsize::new(0),
@@ -338,16 +376,20 @@ impl Proxy {
                     break;
                 }
                 let Ok(stream) = stream else { continue };
-                if accepting.active.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
+                // Full: a connection still sending its head makes room; with none, the new one is closed.
+                if accepting.active.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS && !accepting.evict_oldest() {
                     accepting.active.fetch_sub(1, Ordering::SeqCst);
                     continue;
                 }
+                let id = accepting.next.fetch_add(1, Ordering::SeqCst);
+                accepting.pend(id, &stream);
                 let (shared, secret) = (accepting.clone(), accept_secret.clone());
                 let spawned = thread::Builder::new().name("local-host-tunnel".into()).spawn(move || {
-                    serve(&shared, stream, port, &secret);
+                    serve(&shared, stream, id, port, &secret);
                     shared.active.fetch_sub(1, Ordering::SeqCst);
                 });
                 if spawned.is_err() {
+                    accepting.unpend(id);
                     accepting.active.fetch_sub(1, Ordering::SeqCst);
                 }
             }
@@ -420,8 +462,7 @@ fn path_of(target: &str) -> &str {
     target.split('?').next().unwrap_or("")
 }
 
-fn serve(shared: &Shared, mut client: TcpStream, port: u16, secret: &str) {
-    let id = shared.next.fetch_add(1, Ordering::SeqCst);
+fn serve(shared: &Shared, mut client: TcpStream, id: u64, port: u16, secret: &str) {
     let _ = client.set_read_timeout(Some(CLIENT_TIMEOUT));
     let _ = client.set_write_timeout(Some(CORE_TIMEOUT));
     let _ = client.set_nodelay(true);
@@ -429,6 +470,7 @@ fn serve(shared: &Shared, mut client: TcpStream, port: u16, secret: &str) {
         shared.track(id, Closer::Tcp(clone));
     }
     tunnel(shared, &mut client, id, port, secret);
+    shared.unpend(id);
     linger_close(&mut client);
     if let Some(closers) = shared.inner.lock().unwrap().tunnels.remove(&id) {
         closers.iter().for_each(Closer::close);
@@ -437,16 +479,36 @@ fn serve(shared: &Shared, mut client: TcpStream, port: u16, secret: &str) {
 
 /// Ends our side, then reads what the client still sends (a body behind a refused head) for a moment before closing:
 /// closing with unread input resets the connection, and the page would see a network error instead of the answer.
+/// Reads with one deadline for the whole of it, not for each read.
+struct Deadline<'a> {
+    stream: &'a TcpStream,
+    until: Instant,
+}
+
+impl Read for Deadline<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let left = self.until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        self.stream.set_read_timeout(Some(left))?;
+        let mut stream = self.stream;
+        stream.read(buf)
+    }
+}
+
 fn linger_close(client: &mut TcpStream) {
     let _ = client.shutdown(Shutdown::Write);
-    let _ = client.set_read_timeout(Some(Duration::from_secs(1)));
-    let _ = io::copy(&mut (&*client).take(1024 * 1024), &mut io::sink());
+    let mut leftover = Deadline { stream: client, until: Instant::now() + LINGER };
+    let _ = io::copy(&mut (&mut leftover).take(1024 * 1024), &mut io::sink());
     let _ = client.shutdown(Shutdown::Both);
 }
 
 fn tunnel(shared: &Shared, client: &mut TcpStream, id: u64, port: u16, secret: &str) {
     let mut buf = Vec::new();
-    let end = match http::read_head(client, &mut buf) {
+    let head_read = http::read_head(&mut Deadline { stream: client, until: Instant::now() + HEAD_DEADLINE }, &mut buf);
+    shared.unpend(id);
+    let end = match head_read {
         Ok(end) => end,
         Err(e) if e.kind() == io::ErrorKind::InvalidData => {
             (shared.log)("proxy refused 431 (head too large)");
@@ -454,6 +516,8 @@ fn tunnel(shared: &Shared, client: &mut TcpStream, id: u64, port: u16, secret: &
         }
         Err(_) => return,
     };
+    // The head is in: from here an authenticated body may pause up to its own timeout.
+    let _ = client.set_read_timeout(Some(CLIENT_TIMEOUT));
     let head = match http::parse_request(&buf[..end]) {
         Ok(head) => head,
         Err(why) => {
@@ -471,6 +535,12 @@ fn tunnel(shared: &Shared, client: &mut TcpStream, id: u64, port: u16, secret: &
         Decision::Forward { length } => (false, length),
         Decision::Upgrade => (true, 0),
     };
+    // A socket's own bytes go to the core only once it has accepted the socket (101): anything a client sent behind its
+    // upgrade head, before that, is refused here.
+    if upgrade && buf.len() > end {
+        (shared.log)(&format!("proxy refused 400 {} {path} (data before the upgrade)", head.method));
+        return answer(client, 400, Headers::default());
+    }
     let origin = head.headers.first("origin").unwrap_or_default().to_string();
 
     let upstream = match shared.core.connect(Some(CORE_TIMEOUT)) {
@@ -499,7 +569,7 @@ fn tunnel(shared: &Shared, client: &mut TcpStream, id: u64, port: u16, secret: &
     let mut upstream = upstream;
     let mut out = upstream_head(&head, &token, upgrade);
     let early = &buf[end..];
-    let early = if upgrade { early } else { &early[..early.len().min(length as usize)] };
+    let early = &early[..early.len().min(length as usize)];
     out.extend_from_slice(early);
     if upstream.write_all(&out).is_err() {
         return answer(client, 502, cors(&origin));
@@ -828,6 +898,23 @@ mod tests {
             SECRET,
         );
         assert_eq!(status(&link), 404);
+    }
+
+    #[test]
+    fn an_upgrade_is_framed_like_any_request() {
+        let good = format!("sidevoice, {TOKEN_PROTOCOL}{SECRET}");
+        let socket = [HOST, ORIGIN, ("Sec-WebSocket-Protocol", good.as_str())];
+        let with = |extra: &[(&str, &str)]| {
+            let mut fields = socket.to_vec();
+            fields.extend_from_slice(extra);
+            ws(&fields)
+        };
+        assert_eq!(status(&with(&[("Transfer-Encoding", "chunked")])), 411);
+        assert_eq!(status(&with(&[("Content-Length", "5")])), 400, "a body on an upgrade");
+        assert_eq!(status(&with(&[("Content-Length", "0"), ("Content-Length", "0")])), 400);
+        assert_eq!(status(&with(&[("Content-Length", "x")])), 400);
+        assert_eq!(with(&[("Content-Length", "0")]), Decision::Upgrade);
+        assert_eq!(with(&[]), Decision::Upgrade);
     }
 
     #[test]
