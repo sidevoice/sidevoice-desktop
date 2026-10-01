@@ -25,8 +25,15 @@
       <p class="hint">Un nodo (el núcleo de una máquina) o una sala de encuentro. Vacío está bien: el código de emparejamiento lleva sus direcciones. <code>https://</code>, o <code>http://</code> solo en este ordenador.</p>
 
       <label for="mute-shortcut">Atajo global para silenciar</label>
-      <input id="mute-shortcut" name="muteShortcut" type="text" spellcheck="false" placeholder="CmdOrCtrl+Shift+M">
+      <input id="mute-shortcut" name="muteShortcut" type="text" spellcheck="false" placeholder="Ctrl+Alt+M">
       <p class="hint">Funciona aunque Sidevoice esté en segundo plano. Vacío lo desactiva. Formato: <code>CmdOrCtrl+Shift+M</code>, <code>Alt+F9</code>…</p>
+      <div id="shortcut-status" class="notice" role="status" aria-live="polite" hidden>
+        <p id="shortcut-status-text"></p>
+        <button type="button" id="shortcut-alternative" class="secondary" hidden></button>
+      </div>
+
+      <label class="check" for="call-controls-always"><input id="call-controls-always" name="callControlsAlways" type="checkbox"> <span id="call-controls-always-label"></span></label>
+      <p id="call-controls-always-hint" class="hint"></p>
 
       <p id="message" role="status" aria-live="polite"></p>
       <div class="actions">

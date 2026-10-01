@@ -13,4 +13,10 @@
   "engine.task.stt": "transcripción",
   "engine.task.tts": "voz",
   "engine.error": "El motor nativo no respondió: {error}",
+  "callControls.always": "Mostrar siempre los controles de llamada",
+  "callControls.alwaysHint": "Durante una llamada, cuando Sidevoice no está delante, una pequeña tarjeta flota sobre tus otras apps. Sus controles de llamada aparecen al acercar el puntero; con esto activado, se quedan a la vista.",
+  "shortcut.refused": "El sistema no aceptó {shortcut} (quizá lo usa otra aplicación), así que el atajo para silenciar está desactivado.",
+  "shortcut.noAlternative": "Escribe otra combinación y guarda.",
+  "shortcut.useAlternative": "Usar {shortcut}",
+  "shortcut.voiceOver": "VoiceOver está activado y usa Control+Opción para sus propias órdenes: {shortcut} puede llegar a VoiceOver en vez de a Sidevoice. Si pasa, elige un atajo sin Control y Opción a la vez.",
 };

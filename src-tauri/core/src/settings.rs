@@ -1,4 +1,5 @@
-//! What this device remembers: where the bundled interface looks first (its target), and the mute shortcut.
+//! What this device remembers: where the bundled interface looks first (its target), the mute shortcut, and how the
+//! call controls card shows its controls.
 //!
 //! The window always shows the web interface bundled in the app (docs/TARGETS.md). Which machine it talks to,
 //! and how to reach it, comes from pairing (the code the node issues carries the node's addresses); the target
@@ -13,8 +14,9 @@ use std::fs;
 use std::path::Path;
 use url::Url;
 
-/// Global mute toggle. ⌘⇧M on macOS, Ctrl+Shift+M elsewhere; editable in settings.
-pub const DEFAULT_MUTE_SHORTCUT: &str = "CmdOrCtrl+Shift+M";
+/// Global mute toggle: ⌃⌥M on macOS, Ctrl+Alt+M elsewhere; editable in settings. Not ⌘⇧M: a global shortcut takes the
+/// keys from every app, and ⌘⇧M is the Problems panel of VS Code (sidevoice/sidevoice-desktop#4).
+pub const DEFAULT_MUTE_SHORTCUT: &str = "Ctrl+Alt+M";
 
 pub const FILE_NAME: &str = "settings.json";
 
@@ -34,16 +36,53 @@ pub struct Settings {
     /// A Tauri accelerator string; empty disables the global shortcut.
     #[serde(default = "default_shortcut")]
     pub mute_shortcut: String,
+    /// "Show the call controls always": the card keeps its controls in view instead of showing them near the pointer.
+    #[serde(default)]
+    pub call_controls_always: bool,
 }
 
 fn default_shortcut() -> String {
     DEFAULT_MUTE_SHORTCUT.to_string()
 }
 
+/// What the app offers, in this order, when the system refuses the mute shortcut: the first of these it can register
+/// (checked against the systems' default lists: docs/SHORTCUTS.md).
+pub const SHORTCUT_ALTERNATIVES: [&str; 2] = ["Ctrl+Alt+Shift+M", "Ctrl+Alt+Shift+K"];
+
+/// The alternatives to offer for `refused`: never the refused one itself.
+pub fn shortcut_alternatives(refused: &str) -> impl Iterator<Item = &'static str> + '_ {
+    let refused = shortcut_keys(refused);
+    SHORTCUT_ALTERNATIVES.into_iter().filter(move |a| shortcut_keys(a) != refused)
+}
+
+/// Whether the shortcut holds Control and Option together: VoiceOver's own keys on macOS (its "VO" modifier), so with
+/// VoiceOver on it may get the keys first.
+pub fn uses_voice_over_keys(accelerator: &str) -> bool {
+    let keys = shortcut_keys(accelerator);
+    keys.iter().any(|k| k == "ctrl") && keys.iter().any(|k| k == "alt")
+}
+
+/// An accelerator's keys, lower case, with each modifier under one name, in a stable order.
+fn shortcut_keys(accelerator: &str) -> Vec<String> {
+    let mut keys: Vec<String> = accelerator
+        .split('+')
+        .map(|k| k.trim().to_ascii_lowercase())
+        .filter(|k| !k.is_empty())
+        .map(|k| match k.as_str() {
+            "control" => "ctrl".to_string(),
+            "option" => "alt".to_string(),
+            "command" | "cmd" | "super" | "meta" => "super".to_string(),
+            _ => k,
+        })
+        .collect();
+    keys.sort();
+    keys
+}
+
 impl Settings {
     /// First run: no target (pairing will say where the machine is), the default shortcut.
     pub fn first_run() -> Self {
-        Settings { target: String::new(), mute_shortcut: default_shortcut() }
+        Settings { target: String::new(), mute_shortcut: default_shortcut(), call_controls_always: false }
     }
 }
 
@@ -136,7 +175,11 @@ pub fn target_script(settings: &Settings) -> Option<String> {
 
 /// Validates and normalises a whole settings object coming from the settings window.
 pub fn validate(input: Settings) -> Result<Settings, SettingsError> {
-    Ok(Settings { target: normalize_target(&input.target)?, mute_shortcut: input.mute_shortcut.trim().to_string() })
+    Ok(Settings {
+        target: normalize_target(&input.target)?,
+        mute_shortcut: input.mute_shortcut.trim().to_string(),
+        call_controls_always: input.call_controls_always,
+    })
 }
 
 /// `None` when there is no file yet (first run) or it cannot be read as valid settings.
@@ -156,6 +199,21 @@ pub fn save(dir: &Path, settings: &Settings) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_refused_shortcut_has_alternatives_but_never_itself() {
+        let offered: Vec<_> = shortcut_alternatives("Control+Option+Shift+M").collect();
+        assert_eq!(offered, ["Ctrl+Alt+Shift+K"]);
+        assert_eq!(shortcut_alternatives(DEFAULT_MUTE_SHORTCUT).next(), Some("Ctrl+Alt+Shift+M"));
+    }
+
+    #[test]
+    fn control_and_option_together_are_voice_overs_keys() {
+        assert!(uses_voice_over_keys(DEFAULT_MUTE_SHORTCUT));
+        assert!(uses_voice_over_keys("Option+Control+Shift+M"));
+        assert!(!uses_voice_over_keys("CmdOrCtrl+Shift+M"));
+        assert!(!uses_voice_over_keys(""));
+    }
 
     #[test]
     fn empty_is_no_target() {
@@ -214,7 +272,11 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         assert_eq!(load(&dir), None, "first run: nothing stored");
 
-        let s = Settings { target: "https://room.example.com".into(), mute_shortcut: "Alt+M".into() };
+        let s = Settings {
+            target: "https://room.example.com".into(),
+            mute_shortcut: "Alt+M".into(),
+            call_controls_always: true,
+        };
         save(&dir, &s).unwrap();
         assert_eq!(load(&dir), Some(s));
 
@@ -231,7 +293,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             load(&dir),
-            Some(Settings { target: String::new(), mute_shortcut: "Alt+M".into() }),
+            Some(Settings { target: String::new(), mute_shortcut: "Alt+M".into(), call_controls_always: false }),
             "a file from the room-page days keeps its shortcut and forgets the room"
         );
         fs::remove_dir_all(&dir).unwrap();

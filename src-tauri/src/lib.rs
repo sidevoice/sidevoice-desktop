@@ -9,7 +9,9 @@
 //! - `room-N`: the bundled interface. Created again when the target changes (N grows), so the scripts injected
 //!   into it carry the current target. Closing it hides it; the app keeps running.
 //! - `settings`: bundled local page (`ui/index.html`): target, shortcut, diagnostics.
+//! - `call-controls`: the call controls card (`src/call_controls.rs`), floating over other apps during a call.
 
+mod call_controls;
 mod engine_ipc;
 mod headset;
 #[cfg(feature = "probe")]
@@ -33,18 +35,94 @@ const ROOM_PREFIX: &str = "room-";
 /// paths a room serves it from, so its absolute `/voice/…` and `/voice-browser/…` URLs resolve.
 const BUNDLED_INTERFACE: &str = "voice/index.html";
 
-#[derive(Default)]
-struct AppState {
-    settings: Mutex<Option<Settings>>,
-    call: Mutex<CallSnapshot>,
+pub(crate) struct AppState {
+    pub(crate) settings: Mutex<Option<Settings>>,
+    pub(crate) call: Mutex<CallSnapshot>,
     room_label: Mutex<Option<String>>,
     room_counter: AtomicU32,
+    /// The language of the app's native texts (tray, …), the system's when there is a bundle for it (core `i18n`).
+    pub(crate) language: &'static str,
+    /// The mute shortcut as the system took it, from startup and from every save (the settings window shows it).
+    shortcut: Mutex<ShortcutStatus>,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        let preferred: Vec<String> = sys_locale::get_locales().collect();
+        AppState {
+            settings: Mutex::default(),
+            call: Mutex::default(),
+            room_label: Mutex::default(),
+            room_counter: AtomicU32::default(),
+            language: sidevoice_desktop_core::i18n::language(&preferred),
+            shortcut: Mutex::default(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum Registration {
+    /// None set.
+    #[default]
+    Off,
+    On,
+    /// The system would not register it: another app may hold it.
+    Refused,
+}
+
+/// The mute shortcut as the system took it, for the settings window, which says it in its own language.
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ShortcutStatus {
+    state: Registration,
+    /// How it reads on this system: ⌃⌥M, Ctrl+Alt+M.
+    label: String,
+    /// Refused: one the system does take, to offer instead.
+    alternative: Option<ShortcutAlternative>,
+    /// macOS: VoiceOver is on, and the shortcut holds its keys (Control and Option together).
+    voice_over: bool,
+}
+
+#[derive(Clone, Serialize)]
+struct ShortcutAlternative {
+    accelerator: String,
+    label: String,
+}
+
+fn shortcut_label(accelerator: &str) -> String {
+    sidevoice_desktop_core::call_controls::shortcut_label(accelerator, cfg!(target_os = "macos"))
+}
+
+/// The shortcut's status now: VoiceOver can be turned on or off at any time.
+fn shortcut_status(state: &AppState) -> ShortcutStatus {
+    let mut status = state.shortcut.lock().unwrap().clone();
+    let accelerator = state.settings.lock().unwrap().as_ref().map(|s| s.mute_shortcut.clone());
+    let accelerator = accelerator.unwrap_or_else(|| settings::DEFAULT_MUTE_SHORTCUT.to_string());
+    status.voice_over =
+        status.state == Registration::On && settings::uses_voice_over_keys(&accelerator) && voice_over_on();
+    status
+}
+
+/// Whether VoiceOver is running (macOS 10.13+).
+fn voice_over_on() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::{class, msg_send, runtime::AnyObject};
+        unsafe {
+            let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
+            msg_send![workspace, isVoiceOverEnabled]
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    false
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SettingsInfo {
     settings: Settings,
+    shortcut: ShortcutStatus,
     first_run: bool,
     /// Diagnostics on (`SIDEVOICE_DEBUG=1`): the settings page then also reports what its webview offers.
     debug: bool,
@@ -55,7 +133,7 @@ struct SettingsInfo {
 #[serde(rename_all = "camelCase")]
 struct SaveResult {
     settings: Settings,
-    warning: Option<String>,
+    shortcut: ShortcutStatus,
 }
 
 #[tauri::command]
@@ -65,6 +143,7 @@ fn get_settings(app: AppHandle, state: State<'_, AppState>) -> SettingsInfo {
     SettingsInfo {
         first_run: stored.is_none(),
         settings: stored.unwrap_or_else(Settings::first_run),
+        shortcut: shortcut_status(&state),
         debug: debugging(),
         app_version: app.package_info().version.to_string(),
     }
@@ -82,19 +161,21 @@ async fn save_settings(app: AppHandle, state: State<'_, AppState>, settings: Set
     settings::save(&dir, &settings).map_err(|e| format!("No se pudo guardar: {e}"))?;
 
     let previous = state.settings.lock().unwrap().replace(settings.clone());
-    let warning = apply_shortcut(&app, &settings.mute_shortcut).err();
+    apply_shortcut(&app, &settings.mute_shortcut);
+    let shortcut = shortcut_status(&state);
+    call_controls::update(&app);
 
     let target_changed = previous.as_ref().map(|p| p.target != settings.target).unwrap_or(true);
     if target_changed || room_window(&app).is_none() {
         open_room(&app, &settings).map_err(|e| format!("No se pudo abrir la ventana: {e}"))?;
     }
     show_room(&app);
-    if warning.is_none() {
+    if shortcut.state != Registration::Refused {
         if let Some(w) = app.get_webview_window(SETTINGS_LABEL) {
             let _ = w.close();
         }
     }
-    Ok(SaveResult { settings, warning })
+    Ok(SaveResult { settings, shortcut })
 }
 
 /// Called by the bridge script in the interface. Only the current room window, on the app's own pages, may
@@ -121,6 +202,22 @@ fn bridge_state(
     tray::update(&app, &snapshot);
     headset::update(&app, &snapshot);
     engine_ipc::call_changed(&app, snapshot.joined);
+    call_controls::update(&app);
+    Ok(())
+}
+
+/// The microphone's level during a call (the bridge script, at most every 80 ms), for the call controls card. Same
+/// caller rule as `bridge_state`.
+#[tauri::command]
+fn bridge_level(app: AppHandle, webview: Webview, state: State<'_, AppState>, level: f64) -> Result<(), String> {
+    let current_label = state.room_label.lock().unwrap().clone();
+    if current_label.as_deref() != Some(webview.label()) {
+        return Err("not the room window".into());
+    }
+    if webview.url().map(|u| settings::url_origin(&u)).ok().as_deref() != Some(APP_ORIGIN) {
+        return Err("not the app's own page".into());
+    }
+    call_controls::level(&app, level.clamp(0.0, 100.0).round() as u8);
     Ok(())
 }
 
@@ -153,7 +250,7 @@ fn debug_log(line: String) {
     debug(&format!("page says: {}", line.chars().take(2000).collect::<String>()));
 }
 
-fn room_window(app: &AppHandle) -> Option<WebviewWindow> {
+pub(crate) fn room_window(app: &AppHandle) -> Option<WebviewWindow> {
     let label = app.state::<AppState>().room_label.lock().unwrap().clone()?;
     app.get_webview_window(&label)
 }
@@ -171,6 +268,7 @@ fn reset_call_state(app: &AppHandle) {
     tray::update(app, &snapshot);
     headset::update(app, &snapshot);
     engine_ipc::call_changed(app, snapshot.joined);
+    call_controls::update(app);
 }
 
 /// (Re)creates the room window: the bundled interface, told its target, bound to the app's own pages.
@@ -238,7 +336,7 @@ fn open_room(app: &AppHandle, settings: &Settings) -> tauri::Result<()> {
     Ok(())
 }
 
-fn show_room(app: &AppHandle) {
+pub(crate) fn show_room(app: &AppHandle) {
     match room_window(app) {
         Some(w) => {
             let _ = w.show();
@@ -262,23 +360,39 @@ pub(crate) fn open_settings(app: &AppHandle) {
         .build();
 }
 
-/// Registers the global mute shortcut, replacing any previous one. Errors are for the person.
-fn apply_shortcut(app: &AppHandle, accelerator: &str) -> Result<(), String> {
+/// Registers the global mute shortcut, replacing any previous one, and keeps how it went for the settings window. A
+/// refused one comes with the first alternative the system does take.
+fn apply_shortcut(app: &AppHandle, accelerator: &str) {
     let shortcuts = app.global_shortcut();
     let _ = shortcuts.unregister_all();
-    if accelerator.is_empty() {
-        return Ok(());
-    }
-    shortcuts.register(accelerator).map_err(|e| {
-        format!("Guardado, pero el atajo «{accelerator}» no se pudo activar (¿lo usa otra aplicación?): {e}")
-    })
+    let status = if accelerator.is_empty() {
+        ShortcutStatus::default()
+    } else if let Err(e) = shortcuts.register(accelerator) {
+        debug(&format!("shortcut {accelerator} refused: {e}"));
+        let alternative = settings::shortcut_alternatives(accelerator)
+            .find(|a| shortcuts.register(*a).is_ok() && shortcuts.unregister(*a).is_ok())
+            .map(|a| ShortcutAlternative { accelerator: a.to_string(), label: shortcut_label(a) });
+        ShortcutStatus {
+            state: Registration::Refused,
+            label: shortcut_label(accelerator),
+            alternative,
+            voice_over: false,
+        }
+    } else {
+        ShortcutStatus { state: Registration::On, label: shortcut_label(accelerator), ..Default::default() }
+    };
+    *app.state::<AppState>().shortcut.lock().unwrap() = status;
 }
 
 pub fn run() {
     let context = tauri::generate_context!();
     #[cfg(feature = "probe")]
     let context = probe::with_page(context);
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // The call controls card is a non-activating panel on macOS (src/call_controls.rs).
+    #[cfg(target_os = "macos")]
+    let builder = builder.plugin(tauri_nspanel::init());
+    builder
         // A second launch (Finder, Spotlight) brings the running one forward instead.
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| show_room(app)))
         .plugin(
@@ -295,6 +409,11 @@ pub fn run() {
             get_settings,
             save_settings,
             bridge_state,
+            bridge_level,
+            call_controls::call_controls_ready,
+            call_controls::call_controls_run,
+            call_controls::call_controls_layout,
+            call_controls::call_controls_drag,
             debug_log,
             headset_report,
             headset_test,
@@ -338,19 +457,25 @@ pub fn run() {
             *app.state::<AppState>().settings.lock().unwrap() = stored.clone();
             // First run too: the interface itself asks for a pairing code; nothing has to be set up first.
             let current = stored.unwrap_or_else(Settings::first_run);
-            if let Err(e) = apply_shortcut(&handle, &current.mute_shortcut) {
-                eprintln!("sidevoice: {e}");
-            }
+            apply_shortcut(&handle, &current.mute_shortcut);
             open_room(&handle, &current)?;
+            call_controls::create(&handle)?;
             Ok(())
         })
         .on_window_event(|window, event| {
-            // Closing the room window hides it: the call and the tray stay alive. Quit from the tray or ⌘Q.
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                if window.label().starts_with(ROOM_PREFIX) {
+            if !window.label().starts_with(ROOM_PREFIX) {
+                return;
+            }
+            match event {
+                // Closing the room window hides it: the call and the tray stay alive. Quit from the tray or ⌘Q.
+                WindowEvent::CloseRequested { api, .. } => {
                     api.prevent_close();
                     let _ = window.hide();
+                    call_controls::update(window.app_handle());
                 }
+                // In front, the room has the call's controls; behind, the card does.
+                WindowEvent::Focused(_) => call_controls::update(window.app_handle()),
+                _ => {}
             }
         })
         .build(context)

@@ -13,4 +13,10 @@
   "engine.task.stt": "transcription",
   "engine.task.tts": "voice",
   "engine.error": "The native engine did not answer: {error}",
+  "callControls.always": "Show the call controls always",
+  "callControls.alwaysHint": "During a call, when Sidevoice is not in front, a small card floats over your other apps. Its call controls appear when the pointer is near; with this on, they stay in view.",
+  "shortcut.refused": "The system did not accept {shortcut} (another app may be using it), so the mute shortcut is off.",
+  "shortcut.noAlternative": "Type another combination and save.",
+  "shortcut.useAlternative": "Use {shortcut} instead",
+  "shortcut.voiceOver": "VoiceOver is on, and it uses Control+Option for its own commands: {shortcut} may reach VoiceOver instead of Sidevoice. If it does, choose a shortcut without Control and Option together.",
 };

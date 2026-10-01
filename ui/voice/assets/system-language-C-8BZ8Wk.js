@@ -1,0 +1,1 @@
+const t=["es","en"],o=["es","en","fr","it","pt","hi"];function r(n,a=globalThis.navigator?.languages??[globalThis.navigator?.language]){for(const s of a??[]){const e=String(s??"").toLowerCase().split(/[-_]/)[0];if(n.includes(e))return e}return"en"}function g(n){return{ui_language:r(t,n)}}export{o as S,g as a,r as s};

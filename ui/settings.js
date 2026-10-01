@@ -10,10 +10,40 @@ function say(text, isError) {
   $("message").className = isError ? "error" : "";
 }
 
+// The call controls card (src/call_controls.rs): whether it keeps its controls in view.
+$("call-controls-always-label").textContent = i18n.t("callControls.always");
+$("call-controls-always-hint").textContent = i18n.t("callControls.alwaysHint");
+
+// The mute shortcut as the system took it (src/lib.rs `ShortcutStatus`): refused, with an alternative the system does
+// take; or on, but sharing its keys with VoiceOver while VoiceOver is on.
+function showShortcut(status) {
+  const { t } = i18n;
+  const lines = [];
+  if (status.state === "refused") {
+    lines.push(t("shortcut.refused", { shortcut: status.label }));
+    if (!status.alternative) lines.push(t("shortcut.noAlternative"));
+  }
+  if (status.voiceOver) lines.push(t("shortcut.voiceOver", { shortcut: status.label }));
+  const alternative = status.state === "refused" && status.alternative;
+  $("shortcut-status-text").textContent = lines.join(" ");
+  $("shortcut-alternative").hidden = !alternative;
+  if (alternative) {
+    $("shortcut-alternative").textContent = t("shortcut.useAlternative", { shortcut: alternative.label });
+    $("shortcut-alternative").onclick = () => {
+      $("mute-shortcut").value = alternative.accelerator;
+      $("settings").requestSubmit();
+    };
+  }
+  $("shortcut-status").hidden = lines.length === 0;
+  $("shortcut-status").className = status.state === "refused" ? "notice error" : "notice";
+}
+
 async function load() {
-  const { settings, debug } = await invoke("get_settings");
+  const { settings, shortcut, debug } = await invoke("get_settings");
   $("target").value = settings.target;
   $("mute-shortcut").value = settings.muteShortcut;
+  $("call-controls-always").checked = !!settings.callControlsAlways;
+  showShortcut(shortcut);
   $("target").focus();
   return debug;
 }
@@ -24,11 +54,16 @@ $("settings").addEventListener("submit", async (event) => {
   say("Guardando…");
   try {
     const result = await invoke("save_settings", {
-      settings: { target: $("target").value, muteShortcut: $("mute-shortcut").value },
+      settings: {
+        target: $("target").value,
+        muteShortcut: $("mute-shortcut").value,
+        callControlsAlways: $("call-controls-always").checked,
+      },
     });
     $("target").value = result.settings.target;
-    // The app opens (or reloads) the room itself; a shortcut that could not be registered is not fatal.
-    say(result.warning || "Guardado.", !!result.warning);
+    // The app opens (or reloads) the room itself; a shortcut the system refused is not fatal, and is said above.
+    showShortcut(result.shortcut);
+    say("Guardado.");
   } catch (error) {
     say(String(error), true);
   } finally {

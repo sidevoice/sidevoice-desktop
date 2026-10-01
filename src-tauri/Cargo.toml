@@ -24,17 +24,25 @@ tauri-build = { version = "2.7", features = [] }
 [dependencies]
 sidevoice-desktop-core = { path = "core" }
 sidevoice-desktop-engine = { path = "engine" }
-tauri = { version = "2.12", features = ["tray-icon", "image-png"] }
+tauri = { version = "2.12", features = ["tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-global-shortcut = "2.4"
 tauri-plugin-single-instance = "2.5"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The system's preferred languages, for the app's native texts (core i18n).
+sys-locale = "0.3"
 url = "2.5"
 
 [target.'cfg(windows)'.dependencies]
 # The taskbar's colour, to draw the tray mark in the brand's look for it (src/tray.rs).
 winreg = "0.55"
+# Whether a mouse button went down elsewhere, to close the call controls card's panels (src/call_controls.rs).
+windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+# The call controls card as a non-activating panel: over full-screen apps, on every Space, never taking focus
+# (src/call_controls.rs).
+tauri-nspanel = "2.1"
 # Headset buttons and the AirPods mute gesture (src/headset.rs).
 objc2 = "0.6"
 block2 = "0.6"

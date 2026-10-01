@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Sidevoice · call controls probe (CI)</title></head>
+<body>
+<p>CI only, served only by the app built with the <code>probe</code> feature (src-tauri/src/probe.rs): loaded into the
+room window with SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_PAGE=card-probe.html. It reports a call through the bridge, as the
+room does, and walks it through the states the call controls card shows (sidevoice/sidevoice-desktop#4), one phase at
+a time: the first long enough for CI to click, drag and type around the card, the others for a screenshot each. It is
+the room for the card's buttons too: it answers mute and hang-up as the room would, and says each command it gets.</p>
+<script>
+(async () => {
+  const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
+  const say = (line) => invoke("debug_log", { line: "probe-card " + line });
+  const since = Date.now();
+  const participants = [
+    { threadId: "a", title: "Sidevoice: mini call", selected: true, available: true, switching: false, unread: 0, reach: "listening",
+      stateLabel: "", subtitle: "", working: false, machine: "daimon", harness: "claude" },
+    { threadId: "b", title: "brand/web", selected: false, available: true, switching: false, unread: 2, reach: "listening",
+      stateLabel: "", subtitle: "2 unread", working: true, machine: "daimon", harness: "claude" },
+    { threadId: "c", title: "homelab", selected: false, available: true, switching: false, unread: 0, reach: "holding",
+      stateLabel: "", subtitle: "", working: false, machine: "nas", harness: "codex" },
+  ];
+  const devices = { inputs: [{ id: "default", label: "Predeterminado del sistema" }, { id: "mbp", label: "MacBook Pro Microphone" }],
+    outputs: [{ id: "default", label: "Predeterminado del sistema" }], inputId: "default", outputId: "default",
+    available: true, outputAvailable: true, busy: false };
+  // The microphone as the card's mute button leaves it (a phase may still say otherwise).
+  let mic = true;
+  let mutes = 0;
+  let mutedTwice;
+  const clickedMuteTwice = new Promise((resolve) => { mutedTwice = resolve; });
+  let over = {};
+  const call = () => invoke("bridge_state", { snapshot: Object.assign({
+    version: 2, ready: true, joined: true, busy: false, micEnabled: mic, micDisabled: false, title: "Sidevoice: mini call",
+    agent: "idle", youTalking: false, canSkip: false, since, participants, devices }, over) });
+  // The card's buttons arrive as the app's commands to the room (bridge::Command → window.__sidevoiceDesktop.run).
+  let hangUp;
+  const hungUp = new Promise((resolve) => { hangUp = resolve; });
+  window.__sidevoiceDesktop.run = (request) => {
+    say("command " + request.command);
+    if (request.command === "toggle-mute") {
+      mic = !mic;
+      if (++mutes === 2) mutedTwice();
+      call();
+    }
+    if (request.command === "hang-up") hangUp("hung-up");
+    return true;
+  };
+  const wait = (ms) => Promise.race([hungUp, new Promise((resolve) => setTimeout(resolve, ms))]);
+  // Your voice while you talk: a level that moves, as the room's meter would publish it.
+  let talking = false;
+  const levels = setInterval(() => {
+    invoke("bridge_level", { level: talking && mic ? 25 + Math.round(60 * Math.abs(Math.sin(Date.now() / 180))) : 0 }).catch(() => {});
+  }, 90);
+  const phases = [
+    ["talking", { youTalking: true }, true, 60000],
+    ["working", { agent: "working" }, false, 8000],
+    ["speaking", { agent: "speaking", canSkip: true }, false, 8000],
+    ["muted", { micEnabled: false, agent: "speaking", canSkip: true }, false, 8000],
+    ["reconnecting", { busy: true }, false, 8000],
+  ];
+  try {
+    // CI moves on by clicking the card's mute twice (talking), and ends the call with its hang-up button (last phase).
+    let ended = false;
+    for (const [name, phase, voice, ms] of phases) {
+      talking = voice;
+      over = phase;
+      await call();
+      await say("phase=" + name);
+      const next = name === "talking" ? Promise.race([clickedMuteTwice, wait(ms)]) : wait(ms);
+      if (await next === "hung-up") {
+        ended = true;
+        break;
+      }
+    }
+    if (!ended) await wait(30000);
+    clearInterval(levels);
+    await invoke("bridge_state", { snapshot: { version: 2, ready: true, joined: false, micEnabled: true, title: "" } });
+    await say("done");
+  } catch (error) {
+    await say("error " + String(error && (error.message || error)));
+  }
+})();
+</script>
+</body>
+</html>
