@@ -7,6 +7,7 @@
 
 <p>
   <a href="https://github.com/sidevoice/sidevoice-desktop/actions/workflows/build.yml"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/github/ci/sidevoice/sidevoice-desktop.svg?variant=secondary&size=sm&workflow=build.yml&branch=main&mode=dark" /><img alt="CI status" src="https://shieldcn.dev/github/ci/sidevoice/sidevoice-desktop.svg?variant=secondary&size=sm&workflow=build.yml&branch=main&mode=light" /></picture></a>
+  <a href="LICENSE"><picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/github/license/sidevoice/sidevoice-desktop.svg?variant=secondary&size=sm&mode=dark" /><img alt="licence" src="https://shieldcn.dev/github/license/sidevoice/sidevoice-desktop.svg?variant=secondary&size=sm&mode=light" /></picture></a>
   <picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/built_with-Tauri_2.svg?variant=secondary&size=sm&logo=tauri&mode=dark" /><img alt="built with Tauri 2" src="https://shieldcn.dev/badge/built_with-Tauri_2.svg?variant=secondary&size=sm&logo=tauri&mode=light" /></picture>
   <picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/status-beta.svg?variant=secondary&size=sm&mode=dark" /><img alt="status: beta" src="https://shieldcn.dev/badge/status-beta.svg?variant=secondary&size=sm&mode=light" /></picture>
 </p>
@@ -103,9 +104,10 @@ which release notes are written ([`RELEASING.md`](RELEASING.md)).
 
 ## Licence
 
-To be decided — [sidevoice/.github#11](https://github.com/sidevoice/.github/issues/11).
+[Apache-2.0](LICENSE). The Sidevoice name and logo are trademarks: forks are welcome under their own name — see
+[`TRADEMARKS.md`](TRADEMARKS.md).
 
 ## Third-party components
 
 The app bundles third-party components under their own licences, among them eSpeak NG (GPL) inside the speech
-workers of the bundled interface.
+workers of the bundled interface: see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
