@@ -47,9 +47,9 @@ impl DataDirs {
         self.data.join("install.json")
     }
 
-    /// The log "Ver registro" shows: the supervisor's when there is one, else the core's.
+    /// The log "Ver registro" shows: the core's, else the connector's.
     pub fn log(&self) -> Option<PathBuf> {
-        ["node-service.log", "core.log"].iter().map(|name| self.data.join(name)).find(|p| is_file(p))
+        ["core.log", "connector.log"].iter().map(|name| self.data.join(name)).find(|p| is_file(p))
     }
 }
 

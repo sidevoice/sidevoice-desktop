@@ -110,14 +110,14 @@ docs/LOCAL_HOST.md.
 
 | Call | Returns / does |
 |---|---|
-| `state()` | `{state, failure?, core?, service?, calls?, reachable}`; `state` one of `absent`, `not-installed`, `stopped-by-person`, `starting`, `backoff`, `running`, `failed`, `service-failed`, `refused`, `incompatible` |
+| `state()` | `{state, failure?, core?, service?, calls?, attempts?, limit?, reachable}` (`limit` only where the service manager has one: «(2 de 5)» only then); `state` one of `absent`, `not-installed`, `stopped-by-person`, `starting`, `backoff`, `running`, `failed`, `service-failed`, `refused`, `incompatible` |
 | `subscribe(listener)` → `stop` | the state now, then on every change (polled every 2 s while anyone listens) |
 | `pairing()` | `{fp, public_key, device_id, token, urls: ["http://127.0.0.1:<port>"], rv: null, host, local: true}` whenever a core answers and the app is paired (`reachable`), whatever `state` says, else `null`; `token` is the app's proxy secret for this launch, never the device token |
 | `start()` / `stop()` / `restart()` / `serviceInstall()` / `serviceUninstall()` | the connector's `service …`; resolve the state after it |
 | `reconnect()` | pairs the app with the core again (after `refused`; never done on its own) |
-| `revealLog()` | shows the service's log in Finder |
+| `revealLog()` | shows the core's log in Finder (`~/.sidevoice/core.log`, else `connector.log`) |
 | `pairingCode()` | `{code, expires_in, reach}`, on the person's click only: shown, never sent — the page's convention; native authorises the caller, not a person (docs/LOCAL_HOST.md → Trust) |
-| `pairRoom(url, code)` | pairs this machine with a room: `{room}` |
+| `pairRoom(url, code)` | pairs this machine with a room (`pair … --json` only): `{room}` |
 
 Actions reject `{key, message}`. Commands behind it (`src-tauri/src/local_host.rs`): `local_host_state`,
 `local_host_pairing`, `local_host_action {action}` (`start`, `stop`, `restart`, `service-install`,

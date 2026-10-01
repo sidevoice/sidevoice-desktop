@@ -68,7 +68,7 @@ impl Action {
         ["service", verb, "--json"]
     }
 
-    /// The launcher waits ≤ 10 s for a socket; stop and uninstall wait ≤ 15 s for the supervisor and core, then kill.
+    /// Start and restart wait for the manager; stop and uninstall wait for the jobs to exit (≤ 15 s), then kill.
     fn timeout(self) -> Duration {
         match self {
             Action::Start | Action::Restart => Duration::from_secs(30),
@@ -188,13 +188,8 @@ impl LocalHost {
     /// One pass: observe, keep the pairing, decide the state.
     pub fn poll(&self) -> Report {
         let _pass = self.passes.lock().unwrap();
-        // A supervisor's `node.status` is the service's state. A plain connector (`supervisor: false`) speaks only for the
-        // core it started on demand: the service's state is then the CLI's (SEAMS §5).
-        let status = match connector::node_status(&self.config.dirs) {
-            Some(status) if status.get("supervisor") == Some(&Value::Bool(false)) => self.fallback_status(),
-            Some(status) => Some(status),
-            None => self.fallback_status(),
-        };
+        // Any connector's `node.status` is the derived service status (SEAMS rev. 2 §4); the CLI's only when none answers.
+        let status = connector::node_status(&self.config.dirs).or_else(|| self.fallback_status());
         let health = self.core.health();
         if let Ok(health) = &health {
             self.keep_link(health);
@@ -373,7 +368,8 @@ impl LocalHost {
         Ok(json!({ "code": answer["code"], "expires_in": answer["expires_in"], "reach": answer["reach"] }))
     }
 
-    /// `pair <room-url> <code> --json`: this machine paired with a room (the connector restarts the core): `{room}`.
+    /// `pair <room-url> <code> --json`: this machine paired with a room: `{room}`. Nothing else runs after it (the core
+    /// follows the new credentials; SEAMS rev. 2 §3).
     pub fn pair_room(&self, url: &str, code: &str) -> Result<Value, Refusal> {
         let plain = |text: &str, limit: usize| {
             !text.is_empty()

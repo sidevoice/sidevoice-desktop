@@ -11,7 +11,7 @@
 //! | a core answers, and the service reports `not-installed`, `stopped-by-person` or `service-failed` | that state, with the service's `failure`: the service condition wins over reachability (F6) |
 //! | a core answers; the app is paired and the core accepts the token | `running` |
 //! | a core answers; the app has not paired yet | `starting` |
-//! | no core: the service's state | `absent`, `not-installed`, `stopped-by-person`, `starting`, `backoff`, `failed`, `service-failed` as reported; `running` or `stopped` → `starting` (a core is on its way or going; the next poll tells) |
+//! | no core: the service's state | `absent`, `not-installed`, `stopped-by-person`, `starting`, `backoff`, `failed`, `service-failed` as reported; `running` → `starting` (the app cannot reach that core yet; the next poll tells) |
 //! | no core, no connector, no install | `absent` |
 //!
 //! `reachable` (always present) is whether a core answers and the app's pairing with it works — then the page can use
@@ -43,7 +43,7 @@ pub enum State {
     Incompatible,
 }
 
-/// `{state, failure?, core?, service?, calls?, reachable}`.
+/// `{state, failure?, core?, service?, calls?, attempts?, limit?, reachable}`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Report {
     pub state: State,
@@ -53,15 +53,31 @@ pub struct Report {
     pub core: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service: Option<String>,
+    /// `null` from the service means unknown (no core answering), not zero: then absent here.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub calls: Option<u64>,
+    /// The manager's restarts so far, and its limit when it has one (systemd; launchd has none): «(2 de 5)» only with
+    /// `limit`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attempts: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u64>,
     /// A core answers and the app's pairing with it works.
     pub reachable: bool,
 }
 
 impl Report {
     pub fn new(state: State) -> Self {
-        Report { state, failure: None, core: None, service: None, calls: None, reachable: false }
+        Report {
+            state,
+            failure: None,
+            core: None,
+            service: None,
+            calls: None,
+            attempts: None,
+            limit: None,
+            reachable: false,
+        }
     }
 }
 
@@ -102,6 +118,8 @@ pub fn report(observed: Observed<'_>) -> Report {
     let mut report = Report::new(State::Absent);
     report.service = field("service").and_then(Value::as_str).map(str::to_string);
     report.calls = field("calls").and_then(Value::as_u64);
+    report.attempts = field("attempts").and_then(Value::as_u64);
+    report.limit = field("limit").and_then(Value::as_u64);
     report.core = field("core").cloned();
 
     match observed.core {
@@ -143,7 +161,7 @@ pub fn report(observed: Observed<'_>) -> Report {
                 Some("absent") => State::Absent,
                 Some("not-installed") => State::NotInstalled,
                 Some("stopped-by-person") => State::StoppedByPerson,
-                Some("starting" | "running" | "stopped") => State::Starting,
+                Some("starting" | "running") => State::Starting,
                 Some("backoff") => State::Backoff,
                 Some("failed") => State::Failed,
                 Some("service-failed") => State::ServiceFailed,
@@ -227,7 +245,7 @@ mod tests {
         let failed = json!({"state": "service-failed"});
         assert_eq!(state(Some(failed.clone()), Ok(&h), &Link::Refused).state, State::Refused);
         assert!(!state(Some(failed), Ok(&h), &Link::Refused).reachable);
-        // A supervisor that says the core failed while it answers: it answers.
+        // A service that says the core failed while it answers: it answers.
         let got = state(Some(json!({"state": "backoff"})), Ok(&h), &Link::Paired);
         assert_eq!((got.state, got.reachable), (State::Running, true));
     }
@@ -250,7 +268,6 @@ mod tests {
             ("stopped-by-person", State::StoppedByPerson),
             ("starting", State::Starting),
             ("running", State::Starting),
-            ("stopped", State::Starting),
             ("backoff", State::Backoff),
             ("failed", State::Failed),
             ("service-failed", State::ServiceFailed),
@@ -262,6 +279,25 @@ mod tests {
         }
         let odd = state(Some(json!({"state": "dancing"})), Err(&CoreError::Absent), &Link::Unpaired);
         assert_eq!((odd.state, odd.failure.unwrap()["key"].clone()), (State::Failed, json!("status.unknown")));
+    }
+
+    #[test]
+    fn the_derived_status_passes_attempts_and_limit_and_tolerates_nulls() {
+        // SEAMS rev. 2 §4: timing fields null, `calls` null when unknown, `limit` only where the manager has one.
+        let systemd = json!({"ok": true, "state": "backoff", "service": "systemd", "installed": true, "core": null,
+            "calls": null, "failure": {"key": "launch.exited"}, "attempts": 2, "limit": 5, "since": null,
+            "window_started": null, "next_retry_at": null, "reachable": false, "connector": {"running": true}});
+        let got = state(Some(systemd), Err(&CoreError::Absent), &Link::Unpaired);
+        assert_eq!(
+            json!(got),
+            json!({"state": "backoff", "service": "systemd", "failure": {"key": "launch.exited"}, "attempts": 2,
+                "limit": 5, "reachable": false})
+        );
+        let launchd = json!({"state": "backoff", "service": "launchd", "attempts": 3, "limit": null, "calls": null});
+        let got = state(Some(launchd), Err(&CoreError::Absent), &Link::Unpaired);
+        assert_eq!((got.attempts, got.limit, got.calls), (Some(3), None, None));
+        let gone = state(Some(json!({"state": "stopped"})), Err(&CoreError::Absent), &Link::Unpaired);
+        assert_eq!(gone.failure.unwrap()["key"], "status.unknown", "rev. 2 has no `stopped`");
     }
 
     #[test]

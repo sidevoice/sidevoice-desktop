@@ -399,11 +399,15 @@ fn without_a_connector_the_cli_says_and_actions_run_through_it() {
     let world = World::new();
     let log = install_fake_cli(
         &world.dirs,
-        r#"{"ok":true,"state":"stopped-by-person","service":"launchd","installed":true,"failure":null,"calls":0,"core":null}"#,
+        r#"{"ok":true,"state":"stopped-by-person","service":"launchd","installed":true,"core":null,"calls":null,"failure":null,"attempts":null,"limit":null,"since":null,"window_started":null,"next_retry_at":null,"reachable":false,"connector":{"running":false}}"#,
     );
     let host = world.host();
     let report = serde_json::to_value(host.poll()).unwrap();
-    assert_eq!(report, json!({"state": "stopped-by-person", "service": "launchd", "calls": 0, "reachable": false}));
+    assert_eq!(
+        report,
+        json!({"state": "stopped-by-person", "service": "launchd", "reachable": false}),
+        "calls null: unknown"
+    );
     host.poll();
     assert_eq!(calls(&log), ["service status --json"], "the fallback is not re-run on every poll");
 
@@ -447,8 +451,11 @@ fn a_connector_that_answers_is_asked_first() {
             let _ = std::io::BufRead::read_line(&mut std::io::BufReader::new(&stream), &mut line);
             let asked: Value = serde_json::from_str(&line).unwrap();
             assert_eq!(asked["method"], "node.status");
-            let result = json!({"ok": true, "state": "backoff", "attempts": 2, "service": "launchd", "calls": 0,
-                "failure": {"key": "import.missing-module", "detail": "soxr"}, "core": null});
+            // SEAMS rev. 2 §4: the derived status, as any connector answers it.
+            let result = json!({"ok": true, "state": "backoff", "service": "systemd", "installed": true, "core": null,
+                "calls": null, "failure": {"key": "import.missing-module", "detail": "soxr"}, "attempts": 2, "limit": 5,
+                "since": null, "window_started": null, "next_retry_at": null, "reachable": false,
+                "connector": {"running": true}});
             let _ = writeln!(stream, "{}", json!({"id": asked["id"], "ok": true, "result": result}));
         }
     });
@@ -456,6 +463,8 @@ fn a_connector_that_answers_is_asked_first() {
     let report = serde_json::to_value(host.poll()).unwrap();
     assert_eq!(report["state"], "backoff");
     assert_eq!(report["failure"]["detail"], "soxr");
+    assert_eq!((report["attempts"].as_u64(), report["limit"].as_u64()), (Some(2), Some(5)));
+    assert!(report.get("calls").is_none(), "calls null: unknown");
     assert!(calls(&log).is_empty(), "no CLI while the connector answers");
 }
 
@@ -509,29 +518,45 @@ fn a_healthy_core_keeps_the_services_condition_and_stays_usable() {
     }
 }
 
-/// A plain connector (no service) answers `node.status` for the core it started; the service's state is the CLI's.
+/// Any connector's `node.status` is the derived service status (SEAMS rev. 2 §4), with or without a service: the CLI is
+/// not asked, and the service condition still wins over a core that answers.
 #[test]
-fn a_plain_connector_leaves_the_service_state_to_the_cli() {
+fn a_connector_status_is_the_service_status() {
     let world = World::new();
     let _core = world.core(1);
-    let log = install_fake_cli(
-        &world.dirs,
-        r#"{"ok":true,"state":"not-installed","service":"none","installed":false,"failure":null,"calls":0,"core":null}"#,
-    );
+    let log = install_fake_cli(&world.dirs, r#"{"ok":true,"state":"absent"}"#);
     let listener = UnixListener::bind(world.dirs.connector_socket()).unwrap();
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
             let mut line = String::new();
             let _ = std::io::BufRead::read_line(&mut std::io::BufReader::new(&stream), &mut line);
-            let result = json!({"ok": true, "supervisor": false, "state": "running", "service": "none", "calls": 0});
+            let result = json!({"ok": true, "state": "not-installed", "service": "none", "installed": false,
+                "core": {"pid": 1, "version": "0.0.0-fake", "api": 1, "launch_id": null}, "calls": 0, "failure": null,
+                "attempts": null, "limit": null, "since": null, "window_started": null, "next_retry_at": null,
+                "reachable": true, "connector": {"running": true}});
             let _ = writeln!(stream, "{}", json!({"id": 1, "ok": true, "result": result}));
         }
     });
     let host = world.host();
     let report = serde_json::to_value(host.poll()).unwrap();
     assert_eq!((report["state"].as_str(), report["reachable"].as_bool()), (Some("not-installed"), Some(true)));
-    assert_eq!(calls(&log), ["service status --json"]);
+    assert!(host.pairing().is_some());
+    assert!(calls(&log).is_empty(), "no CLI while a connector answers");
+}
+
+/// «Ver registro»: the core's log, else the connector's; the old supervisor log is not one of them.
+#[test]
+fn the_log_shown_is_the_cores_then_the_connectors() {
+    let world = World::new();
+    std::fs::create_dir_all(&world.dirs.data).unwrap();
+    let host = world.host();
+    std::fs::write(world.dirs.data.join("node-service.log"), b"old").unwrap();
+    assert_eq!(host.log_path(), None);
+    std::fs::write(world.dirs.data.join("connector.log"), b"c").unwrap();
+    assert_eq!(host.log_path(), Some(world.dirs.data.join("connector.log")));
+    std::fs::write(world.dirs.data.join("core.log"), b"k").unwrap();
+    assert_eq!(host.log_path(), Some(world.dirs.data.join("core.log")));
 }
 
 /// Clients that never finish a head — no secret, no Origin needed to open a connection — cannot hold every slot, and

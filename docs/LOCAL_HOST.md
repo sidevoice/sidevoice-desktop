@@ -75,18 +75,21 @@ process) and right after each action; the core's health; the token check. The br
 | a core answers; the service reports `not-installed`, `stopped-by-person` or `service-failed` | that state (and its `failure`): the service condition wins (F6), with `reachable: true` when the pairing works |
 | a core answers; paired, token accepted | `running` |
 | a core answers; not paired yet | `starting` |
-| no core: the service's own state | `absent`, `not-installed`, `stopped-by-person`, `starting`, `backoff`, `failed`, `service-failed` as reported; `running` and `stopped` → `starting` |
+| no core: the service's own state | `absent`, `not-installed`, `stopped-by-person`, `starting`, `backoff`, `failed`, `service-failed` as reported; `running` → `starting` (the app cannot reach that core yet) |
 | no core, no connector, no `install.json` | `absent` |
 
-The service's state is `node.status` when a supervisor answers. A plain connector (no service) answers with
-`supervisor: false`, speaking only for the core it started on demand: the service's state is then
-`service status --json`'s.
+The service's state is the connector's derived status (SEAMS rev. 2 §4: the service manager's view of the core and
+connector jobs, `core-failure.json` and the core's health, read fresh): `node.status` from any connector that answers,
+else `service status --json`, which computes the same object.
 
 `reachable` is whether a core answers and the app's pairing with it works; `pairing()` is non-null exactly then,
 whatever `state` says — the page uses the host when `pairing()` is non-null (SEAMS §5).
 
-`state()` → `{state, failure?, core?, service?, calls?, reachable}`: `failure` as the service reports it (`{key, step, detail,
-attempts, at, log_tail, …}`) or the app's own `{key, message}`; `core` `{pid, version, api, launch_id}`.
+`state()` → `{state, failure?, core?, service?, calls?, attempts?, limit?, reachable}`: `failure` as the service
+reports it (`{key, step, message, at, log_tail, …}`) or the app's own `{key, message}`; `core` `{pid, version, api,
+launch_id}`; `calls` absent when unknown (the service says `null` with no core answering); `attempts` the manager's
+restarts so far and `limit` its limit when it has one (systemd; launchd has none) — «(2 de 5)» only with `limit`. The
+service's `since`, `window_started` and `next_retry_at` are null in rev. 2 and not passed on.
 
 ## Actions
 
@@ -102,9 +105,9 @@ the group and stays.
 | `start()` / `stop()` / `restart()` | `service start\|stop\|restart --json` | 30 / 45 / 30 s |
 | `serviceInstall()` / `serviceUninstall()` | `service install\|uninstall --json` | 45 s |
 | `pairingCode()` | `pair-device --json` → `{code, expires_in, reach}` | 30 s |
-| `pairRoom(url, code)` | `pair <url> <code> --json` → `{room}` (the connector restarts the core) | 60 s |
+| `pairRoom(url, code)` | `pair <url> <code> --json` → `{room}`, nothing else (the core follows the new credentials) | 60 s |
 | `reconnect()` | a new local pairing over the socket | — |
-| `revealLog()` | `/usr/bin/open -R D/node-service.log` (else `D/core.log`) | — |
+| `revealLog()` | `/usr/bin/open -R D/core.log` (else `D/connector.log`) | — |
 
 `pairRoom` refuses (`bad_request`) a URL that is not `http(s)://…` or a code with blanks or starting with `-`, so neither
 can become an option. A CLI refusal is its `{key, message}`; the app's own: `cli.unavailable`, `cli.failed`,
