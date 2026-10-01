@@ -5,8 +5,9 @@
 //! [`Cli::installed`] is the one place that decides what runs the CLI. Until R4 that is the `npx`-installed
 //! connector; R4 adds the executable the app ships here, and no caller changes.
 
-use crate::checks::{self, Check};
+use crate::checks::Check;
 use crate::paths::DataDirs;
+use crate::trusted;
 use crate::Refusal;
 use serde_json::Value;
 use std::io::Read;
@@ -15,6 +16,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const OUTPUT_LIMIT: u64 = 1024 * 1024;
+const RECORD_LIMIT: u64 = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cli {
@@ -25,24 +27,22 @@ pub struct Cli {
 }
 
 impl Cli {
-    /// The CLI the install recorded: `D` and `install.json` this user's and not writable by others, and `command` a
-    /// non-empty array of absolute paths. No install, no CLI (`cli.unavailable`).
+    /// The CLI the install recorded. `D`'s ancestry safe from other users, `D` itself this user's and not writable by
+    /// others, `install.json` read through `D`'s checked descriptor (a regular file, not a link, this user's, not
+    /// writable by others), and `command` a non-empty array of absolute paths, each a program or file only root or
+    /// this user can change. No install, no CLI (`cli.unavailable`).
     pub fn installed(dirs: &DataDirs) -> Result<Cli, Refusal> {
-        let unavailable = || Refusal::new("cli.unavailable", "Sidevoice is not installed on this computer.");
+        let dir = checked(trusted::Dir::open(&dirs.data, 0o022, "install.unsafe"))?;
+        let text = checked(dir.read("install.json", 0o022, RECORD_LIMIT))?;
         let record = dirs.install_record();
-        for path in [&dirs.data, &record] {
-            match checks::owned_not_writable(path) {
-                Ok(()) => {}
-                Err(Check::Missing) => return Err(unavailable()),
-                Err(Check::Unsafe(refusal)) => return Err(refusal),
-            }
-        }
-        let text = std::fs::read(&record).map_err(|_| unavailable())?;
         let install: Value = serde_json::from_slice(&text)
             .map_err(|e| Refusal::new("install.unreadable", format!("{} is not JSON: {e}", record.display())))?;
         let prefix = command(&install).ok_or_else(|| {
             Refusal::new("install.unreadable", format!("{} names no command of absolute paths.", record.display()))
         })?;
+        for path in &prefix {
+            checked(trusted::executable(std::path::Path::new(path)))?;
+        }
         Ok(Cli { prefix, data: dirs.data.clone() })
     }
 
@@ -108,6 +108,14 @@ impl Cli {
         }
         Err(refusal_of(&answer).unwrap_or_else(|| failed(format!("`{}` exited {status}: {}", args.join(" "), tail()))))
     }
+}
+
+/// A check's outcome for the CLI: missing is "not installed".
+fn checked<T>(result: Result<T, Check>) -> Result<T, Refusal> {
+    result.map_err(|check| match check {
+        Check::Missing => Refusal::new("cli.unavailable", "Sidevoice is not installed on this computer."),
+        Check::Unsafe(refusal) => refusal,
+    })
 }
 
 /// `install.json`'s `command`: every element an absolute path.
@@ -184,18 +192,27 @@ mod tests {
             std::fs::write(dirs.install_record(), text).unwrap();
             std::fs::set_permissions(dirs.install_record(), std::fs::Permissions::from_mode(mode)).unwrap();
         };
-        write(r#"{"command":["/usr/bin/node","/home/u/.sidevoice/copies/1/dist/cli.mjs"]}"#, 0o600);
+        let script = tmp.path().join("cli.mjs");
+        std::fs::write(&script, b"").unwrap();
+        let record = format!(r#"{{"command":["/bin/sh","{}"]}}"#, script.display());
+        write(&record, 0o600);
         let cli = Cli::installed(&dirs).unwrap();
-        assert_eq!(cli.prefix, ["/usr/bin/node", "/home/u/.sidevoice/copies/1/dist/cli.mjs"]);
+        assert_eq!(cli.prefix, ["/bin/sh".to_string(), script.display().to_string()]);
+        // What the command names must be root's or this user's and closed to others too.
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o666)).unwrap();
+        assert_eq!(Cli::installed(&dirs).unwrap_err().key, "install.unsafe");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o644)).unwrap();
+        write(r#"{"command":["/nonexistent/node"]}"#, 0o600);
+        assert_eq!(Cli::installed(&dirs).unwrap_err().key, "cli.unavailable");
         for bad in [r#"{"command":["node","cli.mjs"]}"#, r#"{"command":[]}"#, r#"{"command":"/bin/sh"}"#, "{}", "nope"]
         {
             write(bad, 0o600);
             let key = Cli::installed(&dirs).unwrap_err().key;
             assert_eq!(key, "install.unreadable", "{bad}");
         }
-        write(r#"{"command":["/usr/bin/node"]}"#, 0o666);
+        write(r#"{"command":["/bin/sh"]}"#, 0o666);
         assert_eq!(Cli::installed(&dirs).unwrap_err().key, "install.unsafe");
-        write(r#"{"command":["/usr/bin/node"]}"#, 0o600);
+        write(r#"{"command":["/bin/sh"]}"#, 0o600);
         std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o777)).unwrap();
         assert_eq!(Cli::installed(&dirs).unwrap_err().key, "install.unsafe");
         std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();

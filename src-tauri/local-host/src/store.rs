@@ -2,10 +2,13 @@
 //! copy of its device token. Written 0600, atomically; one writer, the app's native side. A file that is missing or
 //! unreadable is no pairing: the app pairs again (which revokes the previous local device in the core).
 
+use crate::checks::Check;
+use crate::trusted::Dir;
+use crate::Refusal;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::{self, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::io;
+use std::os::unix::fs::DirBuilderExt;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -36,31 +39,31 @@ impl Pairing {
     }
 }
 
-pub fn load(dir: &Path) -> Option<Pairing> {
-    serde_json::from_slice(&fs::read(dir.join(FILE_NAME)).ok()?).ok()
+/// The app's config directory, checked as opened: its ancestry safe from other users, itself this user's and not
+/// writable by others (review R1-c #5).
+fn open(dir: &Path) -> Result<Dir, Check> {
+    Dir::open(dir, 0o022, "app.storage")
 }
 
-/// Writes the pairing next to the file, 0600, synced, then renames it over: a crash leaves the old file or the new.
+/// The stored pairing, read through the checked directory: a regular private file (0600), not a link.
+pub fn load(dir: &Path) -> Option<Pairing> {
+    let bytes = open(dir).ok()?.read(FILE_NAME, 0o077, 64 * 1024).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// Writes the pairing next to the file, 0600, synced, then renames it over and syncs the directory: a crash leaves
+/// the old file or the new. A directory whose ancestry others can change is refused.
 pub fn save(dir: &Path, pairing: &Pairing) -> io::Result<()> {
     fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
-    let staged = dir.join(format!(".{FILE_NAME}.{}", std::process::id()));
-    let written = (|| {
-        let _ = fs::remove_file(&staged);
-        let mut file = fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&staged)?;
-        file.write_all(&serde_json::to_vec_pretty(pairing).map_err(io::Error::other)?)?;
-        file.sync_all()?;
-        fs::rename(&staged, dir.join(FILE_NAME))
-    })();
-    if written.is_err() {
-        let _ = fs::remove_file(&staged);
-    }
-    written
+    let dir = open(dir).map_err(|check| io::Error::other(Refusal::from(check)))?;
+    dir.write(FILE_NAME, &serde_json::to_vec_pretty(pairing).map_err(io::Error::other)?)
 }
 
 pub fn remove(dir: &Path) -> io::Result<()> {
-    match fs::remove_file(dir.join(FILE_NAME)) {
-        Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
-        _ => Ok(()),
+    match open(dir) {
+        Ok(dir) => dir.remove(FILE_NAME),
+        Err(Check::Missing) => Ok(()),
+        Err(check) => Err(io::Error::other(Refusal::from(check))),
     }
 }
 
@@ -131,6 +134,23 @@ mod tests {
         let blocked = tmp.path().join("config");
         fs::write(&blocked, b"a file where the directory should be").unwrap();
         assert!(save(&blocked, &pairing()).is_err());
+    }
+
+    #[test]
+    fn a_config_directory_others_can_change_holds_no_credential() {
+        let tmp = tempfile::tempdir().unwrap();
+        let shared = tmp.path().join("shared");
+        fs::create_dir(&shared).unwrap();
+        fs::set_permissions(&shared, fs::Permissions::from_mode(0o777)).unwrap();
+        let dir = shared.join("dev.sidevoice.desktop");
+        assert!(save(&dir, &pairing()).is_err(), "refused under a directory others can rename in");
+        assert_eq!(load(&dir), None);
+        fs::set_permissions(&shared, fs::Permissions::from_mode(0o755)).unwrap();
+        save(&dir, &pairing()).unwrap();
+        assert!(load(&dir).is_some());
+        // A credential others can read is not one.
+        fs::set_permissions(dir.join(FILE_NAME), fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(load(&dir), None);
     }
 
     #[test]

@@ -33,6 +33,7 @@ pub mod paths;
 pub mod proxy;
 pub mod state;
 pub mod store;
+pub mod trusted;
 
 use serde::Serialize;
 use std::fmt;
