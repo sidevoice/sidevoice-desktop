@@ -23,10 +23,22 @@ writes in neither. Its own file is `local-host.json` (0600) in its config direct
 
 The boundary is the OS user. Before any connect to `C/local.sock` the app checks that `C` is a directory (not a
 link) owned by this user with mode & 077 = 0 (`identity.unsafe-directory`), and after connecting that the socket's peer
-is this user (`getpeereid` / `SO_PEERCRED`, `peer.uid-mismatch`). It reads `D/install.json` only if `D` and the file
-are this user's and nobody else can write them (`install.unsafe`).
+is this user (`getpeereid` / `SO_PEERCRED`, `peer.uid-mismatch`). Files are checked as they are used, not by path and reopened (`src-tauri/local-host/src/trusted.rs`): every
+directory above `D` and above the app's config directory must be root's or this user's and not writable by others
+(sticky, as `/tmp`, is fine) — the default `~/.sidevoice` passes, a `SIDEVOICE_DATA_DIR` under a directory others can
+write does not; `install.json` is read through `D`'s opened and `fstat`-checked descriptor, opened without following a
+link and checked as opened (a regular file, this user's, not writable by others; `install.unsafe`); each path in its
+`command` must be root's or this user's, closed to others, with a safe ancestry too. `local-host.json` is read and
+written the same way (the file private, 0600; written beside, synced, renamed, the directory synced).
 
 The device token travels only over the socket. The page never holds it: it gets the proxy's secret.
+
+**What the native side does not check: a person.** The room page's commands are authorised by who calls them (the
+current room window, on the app's own page), not by a person's presence. A compromised room page can therefore operate
+the service, call `pairingCode()` without a click and send the code anywhere (redeeming it issues a separate, durable
+device token), or call `pairRoom()` with a room and code of its choosing. "On the person's click" and "shown, never
+sent" are the page's conventions, not security properties enforced here; the page's integrity (bundled, local, no
+navigation away) is what they rest on.
 
 ## Pairing (startup cases)
 
@@ -76,7 +88,11 @@ attempts, at, log_tail, …}`) or the app's own `{key, message}`; `core` `{pid, 
 ## Actions
 
 Through `install.json` `command` only — an array of absolute paths, then the subcommand; never a shell, never a PATH
-lookup, always a deadline (`Cli::installed` is the one place R4 extends with the bundled executable):
+lookup, always a deadline (`Cli::installed` is the one place R4 extends with the bundled executable). The deadline
+covers the program's exit and both its output streams. Each run is a process group of its own: once the program has
+exited, whatever of its group still runs (a child holding the pipes) is killed, and on a timeout the whole group is.
+What it hands to the service manager (`service start` → launchd) or starts detached in a session of its own is not in
+the group and stays.
 
 | Bridge | Runs | Deadline |
 |---|---|---|
@@ -120,6 +136,13 @@ the answer (`Connection: close` both ways). The proxy never has to find where on
 where an unchecked request could ride behind a checked one — and keeps no state between requests; the cost is a
 loopback handshake per request.
 
+A client has 5 s for its whole head (one deadline, not one per read). At most 64 connections may be still sending
+their head — none of them authenticated yet; a new one beyond that, or any new one when all 256 slots are taken, closes
+the oldest of them, so clients that never finish a head cannot keep the page out. A refused client's leftover input
+is read for at most 1 s before closing. An upgrade is framed like any request (no `Transfer-Encoding`, one
+`Content-Length`, and no body: 400 / 411), and nothing the client sent behind its upgrade head goes to the core before
+the core's 101 — bytes already sent with the head are refused (400).
+
 Every tunnel closes when the app quits, when the core refuses the token, and when a new pairing replaces it. Without a
 pairing the proxy answers 503; without a core, 502.
 
@@ -128,9 +151,13 @@ pairing the proxy answers 503; without a core, 502.
 - `cargo test -p sidevoice-local-host`: the checks, strict HTTP, the identity proof (also a high-S signature), the
   store, the CLI runner, the state table, every row of the ingress table; end to end over a real socket against a
   stand-in core (`src/fake_core.rs`: HTTP, a WebSocket echo, the core's socket rules) — pairing, forwarding with the
-  token swapped in, a socket spliced, the refusals, every startup case, revocation, the fallback and the actions.
-- `tests/real_core.rs`: the same against sidevoice-core itself when `SIDEVOICE_CORE_PYTHON` names a Python that
-  imports it (skipped otherwise).
+  token swapped in, a socket spliced, the refusals, every startup case, revocation, the fallback and the actions;
+  the service condition over a healthy core; 256 clients trickling partial heads while the page gets through, and the
+  head deadline; data before an upgrade's 101; the CLI's deadline with a child holding its pipes, a timeout with a
+  live child, a detached service kept; a directory swapped between check and read, links, loose modes and an
+  ancestry others can write.
+- `tests/real_core.rs`: pairing, the proxy and upgrade framing (101; chunked, a body, early data refused) against
+  sidevoice-core itself when `SIDEVOICE_CORE_PYTHON` names a Python that imports it (skipped otherwise).
 - CI, Linux (`test` job): `examples/local-host-ci.rs serve` as the runner and `attack` as a second user — it cannot
   open `local.sock` (so neither pair nor link as a connector), read the app's pairing, or use the proxy without the
   secret; the same attempts as the first user, as a control, do get through.

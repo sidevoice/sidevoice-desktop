@@ -83,6 +83,26 @@ fn pairs_with_the_real_core_and_carries_a_page_request() {
     assert_eq!(get(port, "/api/local/health", &secret).0, 404);
     assert_eq!(get(port, "/api/device/devices", "wrong").0, 401);
 
+    // Sockets: the real core accepts one through the proxy; framing the proxy refuses never reaches it, nor stalls.
+    let upgrade = |extra: &str, after: &str| {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        let raw = format!(
+            "GET /api/presentation/ws HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: tauri://localhost\r\n\
+             Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+             Sec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: sidevoice, sidevoice.token.{secret}\r\n{extra}\r\n{after}"
+        );
+        stream.write_all(raw.as_bytes()).unwrap();
+        let mut answer = [0u8; 512];
+        let n = stream.read(&mut answer).unwrap_or(0);
+        String::from_utf8_lossy(&answer[..n]).split(' ').nth(1).and_then(|s| s.parse::<u16>().ok()).unwrap_or(0)
+    };
+    assert_eq!(upgrade("", ""), 101);
+    assert_eq!(upgrade("Transfer-Encoding: chunked\r\n", "5\r\nhello\r\n0\r\n\r\n"), 411);
+    assert_eq!(upgrade("Content-Length: 5\r\n", "hello"), 400);
+    assert_eq!(upgrade("Content-Length: 0\r\nContent-Length: 0\r\n", ""), 400);
+    assert_eq!(upgrade("", "GET /api/device/devices HTTP/1.1\r\n\r\n"), 400, "data before the 101");
+
     // The app again: the stored pairing is proven and reused, no new device.
     host.shutdown();
     let again = LocalHost::start(config, |_| {}).unwrap();

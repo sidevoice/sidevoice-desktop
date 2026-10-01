@@ -116,7 +116,7 @@ docs/LOCAL_HOST.md.
 | `start()` / `stop()` / `restart()` / `serviceInstall()` / `serviceUninstall()` | the connector's `service …`; resolve the state after it |
 | `reconnect()` | pairs the app with the core again (after `refused`; never done on its own) |
 | `revealLog()` | shows the service's log in Finder |
-| `pairingCode()` | `{code, expires_in, reach}`, on the person's click only: shown, never sent |
+| `pairingCode()` | `{code, expires_in, reach}`, on the person's click only: shown, never sent — the page's convention; native authorises the caller, not a person (docs/LOCAL_HOST.md → Trust) |
 | `pairRoom(url, code)` | pairs this machine with a room: `{room}` |
 
 Actions reject `{key, message}`. Commands behind it (`src-tauri/src/local_host.rs`): `local_host_state`,
