@@ -44,9 +44,12 @@
   const store = () => window.sidevoiceUI.store;
   const facts = () => store().getState().facts;
   const check = (task) => (facts().stageChecks || {})[task] || null;
-  /** The selection of `task` at one of `phases`; a failure nobody waits for ends the flow with its step and reason. */
-  const reach = (task, phases, ms) => until(() => {
+  /** The selection of `task` at one of `phases`; a failure nobody waits for ends the flow with its step and reason.
+   *  What the pane said before the action (`stale`, the last selection's outcome) is not an answer to it: it stays
+   *  until the new selection publishes its first step. */
+  const reach = (task, phases, ms, stale) => until(() => {
     const now = check(task);
+    if (now && now === stale) return false;
     if (now && now.phase === "failed" && !phases.includes("failed"))
       throw new Error("selection failed at " + now.step + ": " + JSON.stringify(now.reason));
     return now && phases.includes(now.phase) && now;
@@ -79,8 +82,9 @@
     out.where = ((store().getState().stages || {}).stt || {}).where;
 
     // 1. A model not on disk: its size asked for, then downloaded, loaded, checked twice, in effect and stored.
+    let stale = check("stt");
     actions.chooseStageModel("stt", "whisper-base");
-    const consent = await reach("stt", ["consent"], 30000);
+    const consent = await reach("stt", ["consent"], 30000, stale);
     out.consent_size = consent.size;
     out.stored_before = stored();
     actions.decideStage("stt", true);
@@ -93,8 +97,9 @@
     out.chosen_load_ms = diagnostics.load_ms;
 
     // 2. Cancel mid-download: the selection stops, nothing is stored, the app's install is cancelled, nothing loads.
+    stale = check("stt");
     actions.chooseStageModel("stt", "whisper-small");
-    await reach("stt", ["consent"], 30000);
+    await reach("stt", ["consent"], 30000, stale);
     actions.decideStage("stt", true);
     const downloading = await until(() => {
       const now = check("stt");
@@ -111,8 +116,9 @@
     out.cancel_installed = (await engine().installed()).some((b) => b.model === "whisper-small");
 
     // 3. A model that fails (its load refused): the step and cause shown, the one in use stays in use and loaded.
+    stale = check("stt");
     actions.chooseStageModel("stt", "whisper-tiny");
-    await reach("stt", ["consent"], 30000);
+    await reach("stt", ["consent"], 30000, stale);
     actions.decideStage("stt", true);
     const failed = await reach("stt", ["failed"], 300000);
     out.fail_step = failed.step;
@@ -122,16 +128,18 @@
 
     // 4. Avanzado → Core ML, which checks slow: "elegir otro" leaves everything as it was, the candidate's copy
     // freed; "usar igualmente" puts it in effect and frees the copy it replaced (review R05).
+    stale = check("stt");
     actions.chooseStageBuild("stt", "sherpa-onnx/coreml");
-    const slow = await reach("stt", ["slow"], 300000);
+    const slow = await reach("stt", ["slow"], 300000, stale);
     out.slow_latency_ms = slow.result && slow.result.latency_ms;
     actions.decideStage("stt", false);
     await until(() => check("stt") === null, 30000, "the slow one declined");
     out.declined_stored = stored();
     await settles("whisper-base@sherpa-onnx/cpu", "declined");
     out.declined_resident = await resident();
+    stale = check("stt");
     actions.chooseStageBuild("stt", "sherpa-onnx/coreml");
-    await reach("stt", ["slow"], 300000);
+    await reach("stt", ["slow"], 300000, stale);
     actions.decideStage("stt", true);
     await reach("stt", ["done"], 60000);
     out.accepted_stored = stored();
@@ -152,8 +160,9 @@
     out.restored = preferences.model + "/" + ((preferences.build && preferences.build.accelerator) || "auto");
     const pane = (store().getState().stages || {}).stt || {};
     out.restored_pane = pane.model + "/" + ((pane.advanced && pane.advanced.value) || "");
+    const stale = check("stt");
     actions.chooseStageBuild("stt", "auto");
-    await reach("stt", ["done"], 120000);
+    await reach("stt", ["done"], 120000, stale);
     out.after_stored = stored();
     await settles("whisper-base@sherpa-onnx/cpu", "after the reload");
     out.after_resident = await resident();
