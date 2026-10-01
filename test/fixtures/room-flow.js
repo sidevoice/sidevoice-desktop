@@ -158,8 +158,12 @@
     document.getElementById("settings-open").click();
     const preferences = await until(() => facts().voicePreferences && facts().voicePreferences.stt, 30000, "the settings");
     out.restored = preferences.model + "/" + ((preferences.build && preferences.build.accelerator) || "auto");
-    const pane = (store().getState().stages || {}).stt || {};
-    out.restored_pane = pane.model + "/" + ((pane.advanced && pane.advanced.value) || "");
+    // The pane draws the build once the room has measured this device again (after the reload): wait for it.
+    const pane = await until(() => {
+      const stt = (store().getState().stages || {}).stt;
+      return stt && stt.model && stt.advanced && stt.advanced.value && stt;
+    }, 30000, "the pane's build");
+    out.restored_pane = pane.model + "/" + pane.advanced.value;
     const stale = check("stt");
     actions.chooseStageBuild("stt", "auto");
     await reach("stt", ["done"], 120000, stale);
