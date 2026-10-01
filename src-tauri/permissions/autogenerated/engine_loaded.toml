@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-engine-loaded"
+description = "Enables the engine_loaded command without any pre-configured scope."
+commands.allow = ["engine_loaded"]
+
+[[permission]]
+identifier = "deny-engine-loaded"
+description = "Denies the engine_loaded command without any pre-configured scope."
+commands.deny = ["engine_loaded"]

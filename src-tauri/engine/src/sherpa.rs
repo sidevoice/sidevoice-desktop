@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 pub type Error = String;
 
 type CreateRecognizer = unsafe extern "C" fn(*const ffi::SherpaOnnxOfflineRecognizerConfig) -> *const c_void;
+type SetRecognizerConfig = unsafe extern "C" fn(*const c_void, *const ffi::SherpaOnnxOfflineRecognizerConfig);
 type DestroyRecognizer = unsafe extern "C" fn(*const c_void);
 type CreateStream = unsafe extern "C" fn(*const c_void) -> *const c_void;
 type DestroyStream = unsafe extern "C" fn(*const c_void);
@@ -41,6 +42,7 @@ type Version = unsafe extern "C" fn() -> *const c_char;
 /// The loaded engine. Keeps its libraries open for as long as it lives.
 pub struct Sherpa {
     create_recognizer: CreateRecognizer,
+    set_recognizer_config: SetRecognizerConfig,
     destroy_recognizer: DestroyRecognizer,
     create_stream: CreateStream,
     destroy_stream: DestroyStream,
@@ -96,6 +98,7 @@ impl Sherpa {
         }
         Ok(Sherpa {
             create_recognizer: symbol(api, "SherpaOnnxCreateOfflineRecognizer")?,
+            set_recognizer_config: symbol(api, "SherpaOnnxOfflineRecognizerSetConfig")?,
             destroy_recognizer: symbol(api, "SherpaOnnxDestroyOfflineRecognizer")?,
             create_stream: symbol(api, "SherpaOnnxCreateOfflineStream")?,
             destroy_stream: symbol(api, "SherpaOnnxDestroyOfflineStream")?,
@@ -160,19 +163,26 @@ pub struct KokoroFiles {
 pub struct Recognizer {
     engine: Arc<Sherpa>,
     handle: *const c_void,
-    lock: Mutex<()>,
+    /// The config it was made with, kept to change its language between calls (one call at a time).
+    config: Mutex<WhisperConfig>,
+}
+
+/// A recognizer's config, the strings it points at, and the language it names now.
+struct WhisperConfig {
+    config: ffi::SherpaOnnxOfflineRecognizerConfig,
+    _strings: Strings,
+    language: CString,
 }
 
 unsafe impl Send for Recognizer {}
 unsafe impl Sync for Recognizer {}
 
 impl Recognizer {
-    /// `language`: Whisper's code (`es`, `en`…) or empty for auto-detection. `provider`: sherpa-onnx's (`cpu`, `coreml`…).
+    /// Loads the model, detecting the language until a call names one. `provider`: sherpa-onnx's (`cpu`, `coreml`…).
     pub fn whisper(
         engine: Arc<Sherpa>,
         dir: &Path,
         files: &WhisperFiles,
-        language: &str,
         provider: &str,
         threads: i32,
     ) -> Result<Self, Error> {
@@ -182,7 +192,8 @@ impl Recognizer {
         config.feat_config.feature_dim = 80;
         config.model_config.whisper.encoder = s.path(dir, &files.encoder)?;
         config.model_config.whisper.decoder = s.path(dir, &files.decoder)?;
-        config.model_config.whisper.language = s.keep(language)?;
+        let language = CString::default();
+        config.model_config.whisper.language = language.as_ptr();
         config.model_config.whisper.task = s.keep("transcribe")?;
         config.model_config.whisper.tail_paddings = -1;
         config.model_config.tokens = s.path(dir, &files.tokens)?;
@@ -195,12 +206,20 @@ impl Recognizer {
         if handle.is_null() {
             return Err(format!("sherpa-onnx refused the Whisper model in {} ({provider})", dir.display()));
         }
-        Ok(Recognizer { engine, handle, lock: Mutex::new(()) })
+        let config = WhisperConfig { config, _strings: s, language };
+        Ok(Recognizer { engine, handle, config: Mutex::new(config) })
     }
 
-    /// Mono samples in [-1, 1] at `sample_rate` (resampled by the engine) → text.
-    pub fn transcribe(&self, samples: &[f32], sample_rate: i32) -> Result<String, Error> {
-        let _one_at_a_time = self.lock.lock().map_err(|_| "recognizer poisoned")?;
+    /// Mono samples in [-1, 1] at `sample_rate` (resampled by the engine) → text. `language`: Whisper's code (`es`,
+    /// `en`…), or empty to detect it; the loaded model switches to it (sherpa-onnx's `SetConfig`), nothing reloads.
+    pub fn transcribe(&self, samples: &[f32], sample_rate: i32, language: &str) -> Result<String, Error> {
+        let mut current = self.config.lock().map_err(|_| "recognizer poisoned")?;
+        if current.language.to_bytes() != language.as_bytes() {
+            current.language = CString::new(language).map_err(|_| "NUL in the language")?;
+            current.config.model_config.whisper.language = current.language.as_ptr();
+            // SAFETY: a live handle; the config and every string it points at outlive the call, which copies them.
+            unsafe { (self.engine.set_recognizer_config)(self.handle, &current.config) };
+        }
         let length = i32::try_from(samples.len()).map_err(|_| "audio too long")?;
         // SAFETY: handles come from this engine and are destroyed below; `samples` outlives the calls.
         unsafe {
@@ -241,7 +260,7 @@ unsafe impl Send for Tts {}
 unsafe impl Sync for Tts {}
 
 impl Tts {
-    /// `language`: the phonemizer's language for this model (Kokoro multi-lang: `es`, `en-us`…).
+    /// `language`: the phonemizer's language until a synthesis names its own (Kokoro multi-lang: `es`, `en-us`…).
     pub fn kokoro(
         engine: Arc<Sherpa>,
         dir: &Path,
@@ -283,11 +302,16 @@ impl Tts {
         unsafe { (self.engine.tts_sample_rate)(self.handle) }
     }
 
-    pub fn synthesize(&self, text: &str, sid: i32, speed: f32) -> Result<Audio, Error> {
+    /// `language`: the voice's, for the phonemizer (sherpa-onnx's `extra.lang`): one loaded model speaks them all.
+    pub fn synthesize(&self, text: &str, sid: i32, speed: f32, language: &str) -> Result<Audio, Error> {
         let _one_at_a_time = self.lock.lock().map_err(|_| "tts poisoned")?;
         let text = CString::new(text).map_err(|_| "NUL in text")?;
-        let config = ffi::SherpaOnnxGenerationConfig { sid, speed, silence_scale: 0.2, ..Default::default() };
-        // SAFETY: live handle; `text` and `config` outlive the call; the audio is copied, then destroyed.
+        let extra = CString::new(serde_json::json!({ "lang": language }).to_string()).map_err(|_| "NUL in language")?;
+        let mut config = ffi::SherpaOnnxGenerationConfig { sid, speed, silence_scale: 0.2, ..Default::default() };
+        if !language.is_empty() {
+            config.extra = extra.as_ptr();
+        }
+        // SAFETY: live handle; `text`, `extra` and `config` outlive the call; the audio is copied, then destroyed.
         unsafe {
             let audio = (self.engine.generate)(self.handle, text.as_ptr(), &config, None, std::ptr::null_mut());
             if audio.is_null() {
@@ -360,17 +384,14 @@ impl crate::Runtime for Runtime {
         family: &str,
         dir: &Path,
         config: &serde_json::Value,
-        language: &str,
         accelerator: Capability,
     ) -> Result<Box<dyn Recognize>, crate::Error> {
         if family != "whisper" {
             return Err(error::family_unsupported(ENGINE, family));
         }
-        // sherpa-onnx ends the whole process on a language Whisper does not know: refused here first.
-        let language = engines::whisper_language(language).ok_or_else(|| error::language_unsupported(language))?;
         let files: WhisperFiles =
             serde_json::from_value(config.clone()).map_err(|e| error::runtime_failed(ENGINE, e))?;
-        let recognizer = Recognizer::whisper(self.0.clone(), dir, &files, language, provider(accelerator)?, 4)
+        let recognizer = Recognizer::whisper(self.0.clone(), dir, &files, provider(accelerator)?, 4)
             .map_err(|e| error::runtime_failed(ENGINE, e))?;
         Ok(Box::new(recognizer))
     }
@@ -395,14 +416,16 @@ impl crate::Runtime for Runtime {
 }
 
 impl Recognize for Recognizer {
-    fn transcribe(&self, samples: &[f32], sample_rate: i32) -> Result<String, crate::Error> {
-        Recognizer::transcribe(self, samples, sample_rate).map_err(|e| error::runtime_failed(ENGINE, e))
+    fn transcribe(&self, samples: &[f32], sample_rate: i32, language: &str) -> Result<String, crate::Error> {
+        // sherpa-onnx ends the whole process on a language Whisper does not know: refused here first.
+        let language = engines::whisper_language(language).ok_or_else(|| error::language_unsupported(language))?;
+        Recognizer::transcribe(self, samples, sample_rate, language).map_err(|e| error::runtime_failed(ENGINE, e))
     }
 }
 
 impl Speak for Tts {
-    fn synthesize(&self, text: &str, sid: i32, speed: f32) -> Result<Audio, crate::Error> {
-        Tts::synthesize(self, text, sid, speed).map_err(|e| error::runtime_failed(ENGINE, e))
+    fn synthesize(&self, text: &str, sid: i32, speed: f32, language: &str) -> Result<Audio, crate::Error> {
+        Tts::synthesize(self, text, sid, speed, language).map_err(|e| error::runtime_failed(ENGINE, e))
     }
 }
 

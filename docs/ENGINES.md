@@ -73,10 +73,13 @@ web interface cannot render (tested against the bundled catalog).
   temporary directory and moved into place only when complete (`src-tauri/engine/src/install.rs`). A download counts
   as installed while its marker names its hash and its root and every file the engine needs are there (the
   package's libraries; the files the model's config names); one that lost a file is not, and installing fetches it
-  again.
+  again. A download that fails or is cancelled (`cancel(job)`, docs/BRIDGE.md) leaves nothing of itself on disk.
 - Loaded with `dlopen` (`libloading`), never linked: ONNX Runtime first, then the C API. The `#[repr(C)]`
   structs are **generated** from that exact version's `c-api.h` (`scripts/gen-sherpa-ffi.py`), and the library's
   own version string is checked against the bindings' before anything is called.
+- One model in memory serves every language: Whisper's is switched per call on the loaded recognizer
+  (`SherpaOnnxOfflineRecognizerSetConfig`, which only replaces its Whisper settings) and Kokoro's per synthesis
+  (`extra.lang`). What is loaded, and for how long, is docs/BRIDGE.md → "What stays in memory".
 - Accelerator: the one the page chose for the build, else the first it can use here — **CPU**, which the catalogue
   ranks first for sherpa-onnx on Apple Silicon: Core ML was measured slower on the CI runner for these models
   (Kokoro 3.1 s vs

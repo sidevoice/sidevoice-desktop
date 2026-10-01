@@ -10,7 +10,12 @@
     "allow-engine-installed",
     "allow-engine-install",
     "allow-engine-progress",
+    "allow-engine-cancel",
     "allow-engine-transcribe",
-    "allow-engine-synthesize"
+    "allow-engine-synthesize",
+    "allow-engine-load",
+    "allow-engine-unload",
+    "allow-engine-loaded",
+    "allow-engine-memory"
   ]
 }

@@ -54,25 +54,45 @@
       capabilities: () => call("engine_capabilities"),
       /** `[{model, engine}]`: the builds already on disk. */
       installed: () => call("engine_installed"),
-      /** Downloads the engine package (if missing) and the model's build; `onProgress(done, total)` in bytes about
-       *  twice a second. */
+      /** Downloads the engine package (if missing) and the model's build. Returns a promise that also carries this
+       *  install's job id, `promise.job`, from the start: `cancel(job)` stops it, and it then rejects with
+       *  `{key: "install_cancelled", message}`. `onProgress({job, model, engine, done, total, bytes_per_s})` about
+       *  twice a second once the job starts (after any install ahead of it); `bytes_per_s` is null until measured. */
       install(model, engine, onProgress) {
-        // This call's own job: the app reports progress per job, from when it starts (after any install ahead of
-        // it) until it ends — never another call's bytes.
+        // This call's own job: the app reports progress per job, from when it starts until it ends — never another
+        // call's bytes.
         const job = "install-" + ++installs + "-" + Date.now().toString(36);
         const running = call("engine_install", { model, engine, job });
-        if (typeof onProgress !== "function") return running;
         let finished = false;
         const poll = () => {
           if (finished) return;
           call("engine_progress", { job })
-            .then((progress) => { if (!finished && Array.isArray(progress)) onProgress(progress[0], progress[1]); })
+            .then((progress) => { if (!finished && progress && typeof progress === "object") onProgress(progress); })
             .catch(() => {});
           win.setTimeout(poll, 500);
         };
-        poll();
-        return running.finally(() => { finished = true; });
+        if (typeof onProgress === "function") poll();
+        const promise = running.finally(() => { finished = true; });
+        promise.job = job;
+        return promise;
       },
+      /** Cancels install `job` (`install(…).job`), waiting or running: its install rejects with
+       *  `{key: "install_cancelled", message}` and the model is not on disk (unless it already was). Resolves true
+       *  when the install will reject so (also when it has not reached the app yet: it is refused as it arrives);
+       *  false when it had already ended. */
+      cancel: (job) => call("engine_cancel", { job }),
+      /** Loads the build into memory on `accelerator` (optional): `{load_ms}`. One already loaded is not loaded again
+       *  (its `load_ms` is the time its load took). The app unloads it 10 minutes after its last use once no call is
+       *  on, and loads it again as the next call connects (#124 D13). */
+      load: (model, engine, accelerator) => call("engine_load", { model, engine, accelerator: accelerator || null }),
+      /** Frees the build's memory on `accelerator`, or on every accelerator when none is named; nothing to do when it
+       *  is not loaded. A `load` of it still under way then rejects with `{key: "load_cancelled", …}`, and the app
+       *  does not load it again as a call connects. */
+      unload: (model, engine, accelerator) => call("engine_unload", { model, engine, accelerator: accelerator || null }),
+      /** `[{model, engine, accelerator, since, last_used}]`: what is in memory (times in ms since the epoch). */
+      loaded: () => call("engine_loaded"),
+      /** `{total_mb, available_mb}` (each null when unknown). */
+      memory: () => call("engine_memory"),
       /** Mono Float32Array at `sampleRate` → text. `language` empty to detect. */
       transcribe(model, engine, samples, sampleRate, language, accelerator) {
         const bytes = new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength);

@@ -434,15 +434,35 @@ class RoomVoice {
  /* The worker for a build: the desktop app's own engine (native-worker.js) for a native one, the page's Worker
   * otherwise — the same protocol either way. Another model or accelerator on the same worker is loaded afresh. */
  ensure({native=false,model,accelerator}={}){const kind=native?'native':'page',build=model+'/'+accelerator;if(this.worker&&this.kind===kind){if(this.build!==build){this.ready=false;this.build=build}return}this.worker?.terminate();this.ready=false;this.kind=kind;this.build=build;
-  if(native){this.worker=globalThis.sidevoiceNativeWorkers?.voice?.()||null;if(!this.worker){this.kind=null;throw Error('El motor nativo solo está en la app de escritorio de Sidevoice.')}}
-  else this.worker=new Worker('/voice-browser/worker.js?v='+encodeURIComponent(globalThis.sidevoiceBuildId||'dev'),{type:'module'});this.worker.onmessage=({data})=>this.receive(data);this.worker.onerror=e=>this.fail(Error(e.message||'No se pudo iniciar el motor de voz'))}
- fail(error){this.announce(error.message,this.ready?'inline':'error');this.ready=false;const job=this.job;this.note('fail',error?.message||'error');if(!job)return;this.job=null;this.stopProgress(job);this.stopClock(job);clearTimeout(job.timer);this.silence(job);this.worker?.terminate();this.worker=null;job.reject(error)}
+  try{this.worker=this.candidate(native)}catch(error){this.worker=null;this.kind=null;throw error}this.listen()}
+ listen(){this.worker.onmessage=({data})=>this.receive(data);this.worker.onerror=e=>this.fail(Error(e.message||'No se pudo iniciar el motor de voz'))}
+ /* A worker of its own for a model check (#124 §6): the same protocol, loaded and checked apart from the voice in
+  * use, which keeps speaking until the checked model takes its place (adopt). */
+ candidate(native=false){
+  if(!native)return new Worker('/voice-browser/worker.js?v='+encodeURIComponent(globalThis.sidevoiceBuildId||'dev'),{type:'module'});
+  const worker=globalThis.sidevoiceNativeWorkers?.voice?.()||null;
+  if(!worker)throw Error('El motor nativo solo está en la app de escritorio de Sidevoice.');
+  return worker;
+ }
+ /* A checked voice takes the place of the one in use, already loaded: the next utterance is spoken with it. One that
+  * is sounding now finishes on the old worker, which is let go when the next utterance starts. */
+ adopt(worker,{native=false,model,accelerator}){
+  if(this.adopting&&this.adopting.worker!==worker)this.adopting.worker.terminate();
+  this.adopting={worker,take:()=>{if(this.worker!==worker)this.worker?.terminate();this.worker=worker;this.kind=native?'native':'page';this.build=model+'/'+accelerator;this.ready=true;this.listen()}};
+  if(!this.job)this.adopted();
+ }
+ adopted(){const adopting=this.adopting;if(!adopting)return;this.adopting=null;adopting.take()}
+ /* A cancel — this page's, or the desktop app's (install_cancelled, load_cancelled) — ends the job without a failure
+  * to show (N03); anything else is said where the person is looking. */
+ fail(error){const cancelled=error?.name==='AbortError'||['install_cancelled','load_cancelled'].includes(error?.reason?.key);
+  this.announce(cancelled?'':error.message,cancelled?'hidden':this.ready?'inline':'error');this.ready=false;const job=this.job;this.note('fail',error?.message||'error');if(!job)return;this.job=null;this.stopProgress(job);this.stopClock(job);clearTimeout(job.timer);this.silence(job);this.worker?.terminate();this.worker=null;job.reject(error)}
  receive(d){const job=this.job;if(!job||d.id!==job.id)return;
   clearTimeout(job.timer);job.timer=setTimeout(()=>this.fail(Error('El modelo tardó demasiado. Vuelve a prepararlo.')),180000);
-  if(d.type==='progress'){const p=d.progress;const text=p.status==='voice'?'Cargando la voz seleccionada…':p.status==='generating'?'Preparando el primer audio…':'Cargando modelo'+(p.file?' · '+p.file:'')+(p.progress!=null?' · '+Math.round(p.progress)+'%':'');job.status(text);if(!this.ready&&!job.playing)this.announce(text,'loading',p.progress??null)}
+  if(d.type==='progress'){const p=d.progress;this.loadProgress?.(p);const text=p.status==='voice'?'Cargando la voz seleccionada…':p.status==='generating'?'Preparando el primer audio…':'Cargando modelo'+(p.file?' · '+p.file:'')+(p.progress!=null?' · '+Math.round(p.progress)+'%':'');job.status(text);if(!this.ready&&!job.playing)this.announce(text,'loading',p.progress??null)}
   if(d.type==='fallback'){job.status('GPU no disponible · Preparando CPU');this.announce('GPU no disponible · Preparando CPU')}
   if(d.type==='ready'){this.ready=true;this.announce('','hidden');job.status('Modelo listo · '+(this.kind==='native'?'en este dispositivo':d.accelerator==='webgpu'?'GPU':'CPU'));if(job.load)this.complete(job)}
-  if(d.type==='error')this.fail(Error(d.error));
+  // The step and the keyed refusal travel with the error, so whoever waits can tell a cancel from a failure (N03).
+  if(d.type==='error')this.fail(Object.assign(Error(d.error),{step:d.step,reason:d.reason}));
   if(d.type==='audio'){this.announce('','hidden');if(this.context.state!=='running'){this.note('audio-while-stopped',this.context.state);this.resumeOutput()}
    this.watchRate(d.sampleRate);
    const buffer=this.context.createBuffer(1,d.samples.length,d.sampleRate);buffer.copyToChannel(d.samples,0);
@@ -461,7 +481,7 @@ class RoomVoice {
   * So the end of the voice gets the same silent tail the cut has had since 2026-09-19. */
  complete(job){if(this.job!==job)return;this.stopProgress(job);this.stopClock(job);this.note('complete');this.announce('','hidden');clearTimeout(job.timer);this.job=null;if(job.playing)this.quiet('complete');if(job.gain){const gain=job.gain;setTimeout(()=>{try{gain.disconnect()}catch{}},200)}job.resolve()}
  run(type,options={},status=()=>{},onPlaying=()=>{},onProgress){
-  this.cancel();this.ensure(options);const message=type==='load'?'Cargando modelo…':'Preparando voz…';status(message);if(!this.ready)this.announce(message);
+  this.cancel();this.adopted();this.ensure(options);const message=type==='load'?'Cargando modelo…':'Preparando voz…';status(message);if(!this.ready)this.announce(message);
   return new Promise((resolve,reject)=>{const id=++this.serial;this.job={id,resolve,reject,status,onPlaying,onProgress,text:options.text||'',textCursor:0,cues:[],load:type==='load',sources:new Set(),end:0,done:false};this.job.timer=setTimeout(()=>this.fail(Error('No se pudo preparar el modelo a tiempo.')),180000);this.worker.postMessage({type,id,...options})})
  }
  playEncoded({audio_base64,text='',alignment},status=()=>{},onPlaying=()=>{},onProgress){
@@ -487,7 +507,10 @@ class RoomVoice {
    })().catch(error=>{if(this.job===job)this.fail(error)});
   });
  }
- prepare(options,status){return this.run('load',options,status)}
+ /* `progress` hears the engine's own progress events while it loads (what the room's downloads count in bytes). */
+ prepare(options,status,progress){this.loadProgress=progress||null;const loading=this.run('load',options,status);const done=()=>{if(this.loadProgress===progress)this.loadProgress=null};loading.then(done,done);return loading}
+ /* What the worker was loading is dropped, download included: the worker goes, and the next utterance makes another. */
+ abandon(){this.cancel();const worker=this.worker;this.worker=null;this.kind=null;this.ready=false;this.loadProgress=null;worker?.terminate()}
  speak(options,status,onPlaying,onProgress){return this.run('speak',options,status,onPlaying,onProgress)}
 }
 window.roomVoice=new RoomVoice();

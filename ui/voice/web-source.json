@@ -1,7 +1,7 @@
 {
-  "repository": "rubasace/sidevoice",
-  "branch": "main",
-  "commit": "a94fd12978ddcb920407d310d8d909fa77f80204",
+  "repository": "sidevoice/sidevoice-web",
+  "branch": "feat/load-and-verify",
+  "commit": "e391c0bfd549f427b8fad628adea1d41977fa879",
   "uncommitted_changes": false,
-  "vendored_at": "2026-10-01T07:10:15.850Z"
+  "vendored_at": "2026-10-01T10:15:58.930Z"
 }
