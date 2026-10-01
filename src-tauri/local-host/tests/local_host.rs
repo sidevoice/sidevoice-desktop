@@ -189,6 +189,11 @@ fn the_proxy_refuses_what_the_table_refuses_and_the_core_never_sees_it() {
     let twice = [app[0], app[1], app[1], app[2]];
     assert_eq!(get(&twice, "/api/x"), 403, "two Origins");
     assert_eq!(send(port, "GET /api/x HTTP/1.1\r\nHost: a\nOrigin: b\r\n\r\n").0, 400, "malformed head");
+    // Refused with a body still on its way: the page reads the 401, not a reset connection.
+    let big = "x".repeat(300_000);
+    let (status, head, _) =
+        request(port, "POST", "/api/x", &[("Host", &host_field), ("Origin", "tauri://localhost")], &big);
+    assert_eq!(status, 401, "{head}");
     assert_eq!(core.requests().len(), seen_before, "{:?}", core.requests());
 }
 

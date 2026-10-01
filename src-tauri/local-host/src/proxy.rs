@@ -429,10 +429,19 @@ fn serve(shared: &Shared, mut client: TcpStream, port: u16, secret: &str) {
         shared.track(id, Closer::Tcp(clone));
     }
     tunnel(shared, &mut client, id, port, secret);
-    let _ = client.shutdown(Shutdown::Both);
+    linger_close(&mut client);
     if let Some(closers) = shared.inner.lock().unwrap().tunnels.remove(&id) {
         closers.iter().for_each(Closer::close);
     }
+}
+
+/// Ends our side, then reads what the client still sends (a body behind a refused head) for a moment before closing:
+/// closing with unread input resets the connection, and the page would see a network error instead of the answer.
+fn linger_close(client: &mut TcpStream) {
+    let _ = client.shutdown(Shutdown::Write);
+    let _ = client.set_read_timeout(Some(Duration::from_secs(1)));
+    let _ = io::copy(&mut (&*client).take(1024 * 1024), &mut io::sink());
+    let _ = client.shutdown(Shutdown::Both);
 }
 
 fn tunnel(shared: &Shared, client: &mut TcpStream, id: u64, port: u16, secret: &str) {
