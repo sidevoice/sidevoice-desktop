@@ -15,7 +15,8 @@ libloading = "0.9"
 sha2 = "0.10"
 tar = "0.4"
 bzip2 = "0.6"
-reqwest = { version = "0.13", default-features = false, features = ["blocking", "native-tls"] }
+# SPIKE: rustls so the engine crate builds in the pod (no OpenSSL headers there); main keeps native-tls.
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"] }
 
 # The machine's total memory (src/memory.rs).
 [target.'cfg(unix)'.dependencies]

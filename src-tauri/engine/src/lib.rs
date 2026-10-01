@@ -12,6 +12,7 @@
 pub mod error;
 pub mod install;
 pub mod memory;
+pub mod runanywhere;
 pub mod sherpa;
 pub mod sherpa_ffi;
 
@@ -82,7 +83,11 @@ pub struct Adapter {
 
 /// The native engines this app has an adapter for. Adding one is the one compiled part of adding an engine
 /// (docs/ENGINES.md).
-pub const ADAPTERS: &[Adapter] = &[Adapter { engine: "sherpa-onnx", load: sherpa::load, files: sherpa::files }];
+pub const ADAPTERS: &[Adapter] = &[
+    Adapter { engine: "sherpa-onnx", load: sherpa::load, files: sherpa::files },
+    // SPIKE (spike/runanywhere): RunAnywhere's RACommons, see runanywhere.rs.
+    Adapter { engine: runanywhere::ENGINE, load: runanywhere::load, files: runanywhere::files },
+];
 
 /// A build on disk, as the page names it: catalogue model id + engine id.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -372,23 +377,7 @@ impl NativeEngines {
         samples: &[f32],
         sample_rate: i32,
     ) -> Result<String, Error> {
-        let (located, accelerator) = self.ready(model_id, engine_id, Task::Stt, accelerator)?;
-        let key = (engine_id.to_string(), model_id.to_string(), accelerator, language.trim().to_string());
-        let existing = lock(&self.recognizers)?.get(&key).cloned();
-        let recognizer = match existing {
-            Some(r) => r,
-            None => {
-                let r: Arc<dyn Recognize> = Arc::from(self.runtime(&located)?.recognizer(
-                    &located.model.family,
-                    &located.model_dir,
-                    &located.build.config,
-                    &key.3,
-                    accelerator,
-                )?);
-                lock(&self.recognizers)?.insert(key, r.clone());
-                r
-            }
-        };
+        let recognizer = self.recognizer_for(model_id, engine_id, accelerator, language)?;
         recognizer.transcribe(samples, sample_rate)
     }
 
@@ -403,26 +392,96 @@ impl NativeEngines {
         speed: f32,
         text: &str,
     ) -> Result<Audio, Error> {
+        let (speaker, sid) = self.voice_for(model_id, engine_id, accelerator, voice)?;
+        speaker.synthesize(text, sid, if speed > 0.0 { speed } else { 1.0 })
+    }
+
+    /// SPIKE: the phase-3 bridge's `load` — the recognizer (STT, `option` = language) or voice (TTS, `option` = voice
+    /// id) in memory, ready for the first call. Returns how long loading took.
+    pub fn load(
+        &self,
+        model_id: &str,
+        engine_id: &str,
+        accelerator: Option<Capability>,
+        option: &str,
+    ) -> Result<std::time::Duration, Error> {
+        let started = std::time::Instant::now();
+        let model = self.catalog.model(model_id).ok_or_else(|| error::model_unknown(model_id))?;
+        if self.catalog.task_of(model) == Some(Task::Stt) {
+            self.recognizer_for(model_id, engine_id, accelerator, option)?;
+        } else {
+            self.voice_for(model_id, engine_id, accelerator, option)?;
+        }
+        Ok(started.elapsed())
+    }
+
+    /// SPIKE: the phase-3 bridge's `unload` — drops every loaded instance of `model` on `engine` (a call holding one
+    /// keeps it until it returns). Returns how many were dropped.
+    pub fn unload(&self, model_id: &str, engine_id: &str) -> Result<usize, Error> {
+        let matches = |k: &Key| k.0 == engine_id && k.1 == model_id;
+        let mut recognizers = lock(&self.recognizers)?;
+        let mut voices = lock(&self.voices)?;
+        let before = recognizers.len() + voices.len();
+        recognizers.retain(|k, _| !matches(k));
+        voices.retain(|k, _| !matches(k));
+        Ok(before - recognizers.len() - voices.len())
+    }
+
+    /// SPIKE: the phase-3 bridge's `loaded` — what is in memory, by model and engine.
+    pub fn loaded(&self) -> Vec<Installed> {
+        let mut keys: Vec<Key> = lock(&self.recognizers).map(|m| m.keys().cloned().collect()).unwrap_or_default();
+        keys.extend(lock(&self.voices).map(|m| m.keys().cloned().collect::<Vec<_>>()).unwrap_or_default());
+        let mut out: Vec<Installed> = keys.into_iter().map(|k| Installed { model: k.1, engine: k.0 }).collect();
+        out.dedup();
+        out
+    }
+
+    fn recognizer_for(
+        &self,
+        model_id: &str,
+        engine_id: &str,
+        accelerator: Option<Capability>,
+        language: &str,
+    ) -> Result<Arc<dyn Recognize>, Error> {
+        let (located, accelerator) = self.ready(model_id, engine_id, Task::Stt, accelerator)?;
+        let key = (engine_id.to_string(), model_id.to_string(), accelerator, language.trim().to_string());
+        if let Some(r) = lock(&self.recognizers)?.get(&key).cloned() {
+            return Ok(r);
+        }
+        let r: Arc<dyn Recognize> = Arc::from(self.runtime(&located)?.recognizer(
+            &located.model.family,
+            &located.model_dir,
+            &located.build.config,
+            &key.3,
+            accelerator,
+        )?);
+        lock(&self.recognizers)?.insert(key, r.clone());
+        Ok(r)
+    }
+
+    fn voice_for(
+        &self,
+        model_id: &str,
+        engine_id: &str,
+        accelerator: Option<Capability>,
+        voice: &str,
+    ) -> Result<(Arc<dyn Speak>, i32), Error> {
         let (located, accelerator) = self.ready(model_id, engine_id, Task::Tts, accelerator)?;
         let chosen = located.model.voices.iter().find(|v| v.id == voice);
         let chosen = chosen.ok_or_else(|| error::voice_unknown(model_id, voice))?;
         let key = (engine_id.to_string(), model_id.to_string(), accelerator, chosen.language.clone());
-        let existing = lock(&self.voices)?.get(&key).cloned();
-        let speaker = match existing {
-            Some(s) => s,
-            None => {
-                let s: Arc<dyn Speak> = Arc::from(self.runtime(&located)?.voice(
-                    &located.model.family,
-                    &located.model_dir,
-                    &located.build.config,
-                    &chosen.language,
-                    accelerator,
-                )?);
-                lock(&self.voices)?.insert(key, s.clone());
-                s
-            }
-        };
-        speaker.synthesize(text, chosen.sid, if speed > 0.0 { speed } else { 1.0 })
+        if let Some(s) = lock(&self.voices)?.get(&key).cloned() {
+            return Ok((s, chosen.sid));
+        }
+        let s: Arc<dyn Speak> = Arc::from(self.runtime(&located)?.voice(
+            &located.model.family,
+            &located.model_dir,
+            &located.build.config,
+            &chosen.language,
+            accelerator,
+        )?);
+        lock(&self.voices)?.insert(key, s.clone());
+        Ok((s, chosen.sid))
     }
 }
 
