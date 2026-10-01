@@ -452,13 +452,17 @@ class RoomVoice {
   if(!this.job)this.adopted();
  }
  adopted(){const adopting=this.adopting;if(!adopting)return;this.adopting=null;adopting.take()}
- fail(error){this.announce(error.message,this.ready?'inline':'error');this.ready=false;const job=this.job;this.note('fail',error?.message||'error');if(!job)return;this.job=null;this.stopProgress(job);this.stopClock(job);clearTimeout(job.timer);this.silence(job);this.worker?.terminate();this.worker=null;job.reject(error)}
+ /* A cancel — this page's, or the desktop app's (install_cancelled, load_cancelled) — ends the job without a failure
+  * to show (N03); anything else is said where the person is looking. */
+ fail(error){const cancelled=error?.name==='AbortError'||['install_cancelled','load_cancelled'].includes(error?.reason?.key);
+  this.announce(cancelled?'':error.message,cancelled?'hidden':this.ready?'inline':'error');this.ready=false;const job=this.job;this.note('fail',error?.message||'error');if(!job)return;this.job=null;this.stopProgress(job);this.stopClock(job);clearTimeout(job.timer);this.silence(job);this.worker?.terminate();this.worker=null;job.reject(error)}
  receive(d){const job=this.job;if(!job||d.id!==job.id)return;
   clearTimeout(job.timer);job.timer=setTimeout(()=>this.fail(Error('El modelo tardó demasiado. Vuelve a prepararlo.')),180000);
   if(d.type==='progress'){const p=d.progress;this.loadProgress?.(p);const text=p.status==='voice'?'Cargando la voz seleccionada…':p.status==='generating'?'Preparando el primer audio…':'Cargando modelo'+(p.file?' · '+p.file:'')+(p.progress!=null?' · '+Math.round(p.progress)+'%':'');job.status(text);if(!this.ready&&!job.playing)this.announce(text,'loading',p.progress??null)}
   if(d.type==='fallback'){job.status('GPU no disponible · Preparando CPU');this.announce('GPU no disponible · Preparando CPU')}
   if(d.type==='ready'){this.ready=true;this.announce('','hidden');job.status('Modelo listo · '+(this.kind==='native'?'en este dispositivo':d.accelerator==='webgpu'?'GPU':'CPU'));if(job.load)this.complete(job)}
-  if(d.type==='error')this.fail(Error(d.error));
+  // The step and the keyed refusal travel with the error, so whoever waits can tell a cancel from a failure (N03).
+  if(d.type==='error')this.fail(Object.assign(Error(d.error),{step:d.step,reason:d.reason}));
   if(d.type==='audio'){this.announce('','hidden');if(this.context.state!=='running'){this.note('audio-while-stopped',this.context.state);this.resumeOutput()}
    this.watchRate(d.sampleRate);
    const buffer=this.context.createBuffer(1,d.samples.length,d.sampleRate);buffer.copyToChannel(d.samples,0);

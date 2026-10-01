@@ -111,7 +111,12 @@ class BrowserTranscription{
  async prepare({model,engine,accelerator,native=false},progress){
   this._preparation({phase:'loading',title:'Preparando transcripcion',text:'Comprobando el motor local...',progress:null});
   try{this.runtime=await this._request('load',{model,engine,accelerator,native},value=>{this._progress(value);progress?.(value)});this._preparation({phase:'ready'});return this.runtime}
-  catch(error){this._preparation({phase:'error',title:'No se pudo preparar la transcripcion',text:error.message,progress:null});throw error}
+  catch(error){
+   // A cancel — this page's, or the desktop app's (install_cancelled, load_cancelled) — ends the preparation; it is
+   // not a failure to show (N03).
+   const cancelled=error?.name==='AbortError'||['install_cancelled','load_cancelled'].includes(error?.reason?.key);
+   this._preparation(cancelled?{phase:'hidden'}:{phase:'error',title:'No se pudo preparar la transcripcion',text:error.message,progress:null});throw error;
+  }
  }
  /* What the worker was loading is dropped, download included: the worker goes, and the next request makes another. */
  abandon(){
