@@ -2,7 +2,7 @@
 
 ## Install and first open (unsigned build)
 
-See `FIRST_OPEN.txt` (it ships next to the `.dmg` in the CI artifact). Short version:
+See `FIRST_OPEN.txt` (in this directory). Short version:
 
 ```sh
 # after dragging Sidevoice.app to /Applications

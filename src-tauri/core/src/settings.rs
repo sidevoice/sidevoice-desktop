@@ -226,7 +226,7 @@ mod tests {
 
         fs::write(
             dir.join(FILE_NAME),
-            r#"{"kind":"room","roomUrl":"https://room.example.invalid/","muteShortcut":"Alt+M"}"#,
+            r#"{"kind":"room","roomUrl":"https://room.example.com/","muteShortcut":"Alt+M"}"#,
         )
         .unwrap();
         assert_eq!(

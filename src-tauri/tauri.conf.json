@@ -40,6 +40,8 @@
       "entitlements": "Entitlements.plist",
       "infoPlist": "Info.plist"
     },
-    "longDescription": "Sidevoice: give your coding agent a voice. Keep the conversation."
+    "longDescription": "Sidevoice: give your coding agent a voice. Keep the conversation.",
+    "license": "MIT",
+    "copyright": "Copyright (c) 2026 rubasace"
   }
 }

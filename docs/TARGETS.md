@@ -9,7 +9,7 @@ Operator's decisions of 2026-09-30:
   interface (Máquinas → Emparejar). The code carries the node's id, how to reach it (its own URLs and/or a
   rendezvous room), a one-time secret and the fingerprint of the node's identity key, which the interface pins.
   Contract: rubasace/sidevoice `docs/DEVICE_PAIRING.md`.
-- No oauth2-proxy / Google sign-in in the app. The deployed room at room.example.invalid is not a target any more.
+- No oauth2-proxy / Google sign-in in the app.
 
 ## The window
 

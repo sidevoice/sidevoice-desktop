@@ -2,8 +2,7 @@
 
 The Sidevoice desktop client: a [Tauri 2](https://tauri.app) shell around the Sidevoice web UI,
 so a voice call with your agent lives in its own app, with a menu-bar icon, a global mute shortcut,
-and the microphone set up properly. Private while it takes shape. Part of the Sidevoice
-client/server split (2026-09-30).
+and the microphone set up properly.
 
 ## What it does
 
@@ -22,10 +21,11 @@ client/server split (2026-09-30).
 
 ## Get it
 
-From the repository's **Releases**: a `vX.Y.Z` release, or `nightly`, the snapshot of the latest
-green `main` (`RELEASING.md`). Each has the Apple-Silicon `.dmg`, the Windows installer, the
-`.deb`/`.AppImage` and `SHA256SUMS`. The repo is private: downloading needs a GitHub account with
-read access. The macOS build is ad-hoc signed, not notarized: read `docs/FIRST_OPEN.txt` before
+From the repository's [**Releases**](https://github.com/sidevoice/sidevoice-desktop/releases): a `vX.Y.Z`
+release, or the [`nightly`](https://github.com/sidevoice/sidevoice-desktop/releases/tag/nightly) pre-release,
+the snapshot of the latest green `main` (`RELEASING.md`). Each has the Apple-Silicon `.dmg`, the Windows
+installer, the `.deb`/`.AppImage` and `SHA256SUMS`. Builds attached to CI runs are for debugging only and are
+not a way to get the app. The macOS build is ad-hoc signed, not notarized: read `docs/FIRST_OPEN.txt` before
 opening it.
 
 ## Layout
@@ -62,3 +62,7 @@ drawn from what, and what was decided where the brand's guidelines are silent.
 ## Updating the bundled interface
 
 See docs/TARGETS.md → "Updating the bundled interface".
+
+## Licence
+
+MIT — see [`LICENSE`](LICENSE).

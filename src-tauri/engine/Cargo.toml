@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Native model engines, downloaded at run time (docs/ENGINES.md): fetch, verify, unpack, load, run."
 edition = "2021"
 rust-version = "1.80"
+license = "MIT"
 publish = false
 
 [dependencies]
