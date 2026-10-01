@@ -189,6 +189,22 @@ impl FakeCore {
             stream.write_all(&out)
         };
 
+        // As the core on its socket (SEAMS §2): loopback names only, and what only the socket serves is refused to
+        // anything carrying an Origin — native's own calls carry none.
+        let host = headers.first("host").unwrap_or("");
+        let name = match host.rsplit_once(':') {
+            Some((name, port)) if !host.starts_with('[') && port.bytes().all(|b| b.is_ascii_digit()) => name,
+            _ => host.trim_start_matches('[').split(']').next().unwrap_or(""),
+        };
+        if !["localhost", "127.0.0.1", "::1"].contains(&name.to_ascii_lowercase().as_str()) {
+            return reply(&mut stream, 421, json!({"detail": "This node answers to its own name only."}));
+        }
+        let socket_only =
+            ["/api/local", "/api/device/local", "/api/connectors/link"].iter().any(|p| path.starts_with(p));
+        if socket_only && headers.has("origin") {
+            return reply(&mut stream, 404, json!({"detail": "Not Found"}));
+        }
+
         let upgrade = headers.first("upgrade").is_some_and(|v| v.eq_ignore_ascii_case("websocket"));
         match (head.method.as_str(), path) {
             ("GET", "/api/local/health") => {

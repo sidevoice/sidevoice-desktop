@@ -373,6 +373,8 @@ mod tests {
             let sent = String::from_utf8(stream.output).unwrap();
             assert!(sent.starts_with("POST /p HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n"), "{sent}");
             assert!(sent.ends_with("content-length: 2\r\n\r\n{}"), "{sent}");
+            // Native's own calls carry no Origin: the core refuses its socket-only routes to anything that does.
+            assert!(!sent.contains("origin"), "{sent}");
         }
     }
 
