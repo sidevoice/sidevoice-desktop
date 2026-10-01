@@ -1,4 +1,4 @@
-// The vendored room's native worker (ui/voice-browser/native-worker.js, built from rubasace/sidevoice) and this
+// The vendored room's native worker (ui/voice-browser/native-worker.js, built from sidevoice-web) and this
 // app's bridge (bridge/desktop-bridge.js) in one page context, with only Tauri's IPC faked: the bundle the app ships
 // and the bridge it injects speak the same contract. CI's macOS job runs the same flow in the real app
 // (test/fixtures/room-flow.js).

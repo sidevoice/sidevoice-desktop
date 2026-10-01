@@ -10,7 +10,7 @@
 //! never replaced by another build.
 //!
 //! A model in memory is one per (engine, model, accelerator); the language is each call's. The page loads and unloads
-//! them (`load`, `unload`), and running one loads it if it is not. The app keeps them by rubasace/sidevoice#124 D13:
+//! them (`load`, `unload`), and running one loads it if it is not. The app keeps them by sidevoice/sidevoice-core#21 D13:
 //! loaded while a call is on and for `idle_unload` after the last use once no call is (`unload_idle`); a model it
 //! unloaded that way is loaded again as the next call connects (`call_changed`, `preload`).
 
@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-/// rubasace/sidevoice#124 D13: how long a model stays in memory after its last use, or after the last call ended if
+/// sidevoice/sidevoice-core#21 D13: how long a model stays in memory after its last use, or after the last call ended if
 /// that is later. Never while a call is on.
 pub const IDLE_UNLOAD: Duration = Duration::from_secs(10 * 60);
 
@@ -354,7 +354,7 @@ struct Residency {
     /// the page has unloaded it, or has another model of that task in memory by then.
     evicted: Vec<(Key, Task)>,
     /// How many unloads the page has made. A load (or preload) started before an unload of its build is not kept in
-    /// memory: the unload is the page's later word (#124 review R07).
+    /// memory: the unload is the page's later word (sidevoice-core#21 review R07).
     unloads: u64,
     /// The last unload of each build, per accelerator (`None`: all of them), with the count at it.
     retired: Vec<(u64, String, String, Option<Capability>)>,
@@ -562,7 +562,7 @@ impl NativeEngines {
 
     /// `install` as the page's job `job`: known to `jobs` until it ends — its progress once it starts, cancellable
     /// throughout (`Jobs::cancel`). A cancel the job accepted always wins: one that lands after the last download
-    /// check removes the model this job installed, so a cancelled install never leaves a model to load (#124 review
+    /// check removes the model this job installed, so a cancelled install never leaves a model to load (sidevoice-core#21 review
     /// R04).
     pub fn install_job(&self, jobs: &Jobs, job: &str, model_id: &str, engine_id: &str) -> Result<(), Error> {
         if !jobs.begin(job, model_id, engine_id) {
@@ -579,7 +579,7 @@ impl NativeEngines {
                 Err(error::install_cancelled())
             }
             // Whatever the transport said after the cancel (a connection reset by it, say), the page asked to stop:
-            // a cancel, never a failure (#124 review N04). What it wrote is already gone.
+            // a cancel, never a failure (sidevoice-core#21 review N04). What it wrote is already gone.
             (Err(_), false) => Err(error::install_cancelled()),
         }
     }
@@ -801,7 +801,7 @@ impl NativeEngines {
 
     /// Loads again what `unload_idle` freed, as a call connects, each with what its load answered — unless the page
     /// has another model of that task in memory by then. One it loaded to check while this stayed its choice, and
-    /// unloaded when the check failed (#124 D11), does not count: this one comes back. One the page unloads while this
+    /// unloaded when the check failed (sidevoice-core#21 D11), does not count: this one comes back. One the page unloads while this
     /// runs is not kept (`load_cancelled`).
     pub fn preload(&self) -> Vec<(Loaded, Result<Load, Error>)> {
         let (evicted, since) = {

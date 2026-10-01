@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Copies the model catalog from a sidevoice/sidevoice-core checkout into catalog/engines.json, byte for byte. The
-// core owns it (rubasace/sidevoice#124 §3); this copy is what the app bundles, and it is never edited here.
+// core owns it (sidevoice/sidevoice-core#21 §3); this copy is what the app bundles, and it is never edited here.
 //
 //   node scripts/copy-core-catalog.mjs <sidevoice-core checkout>
 import { copyFileSync, existsSync } from "node:fs";

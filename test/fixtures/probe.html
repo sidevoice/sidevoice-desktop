@@ -11,7 +11,7 @@ what the interface's own window offers — same origin, same permission rule —
   const facts = [];
   facts.push("origin=" + location.protocol + "//" + location.host);
   facts.push("secure=" + window.isSecureContext);
-  // Pairing verifies the node's identity with WebCrypto ECDSA P-256 (rubasace/sidevoice docs/DEVICE_PAIRING.md).
+  // Pairing verifies the node's identity with WebCrypto ECDSA P-256 (sidevoice-core `control/devices.py`).
   try {
     const keys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
     const data = new TextEncoder().encode("sidevoice-node-identity:probe");
@@ -86,7 +86,7 @@ what the interface's own window offers — same origin, same permission rule —
     const refused = await engine.transcribe("whisper-tiny", "transformers-js", audio.samples, audio.sampleRate, "es")
       .then(() => "no", (error) => (error && error.key === "engine_unsupported" ? "yes" : "other:" + JSON.stringify(error)));
 
-    // Load → transcribe → unload, as the interface selects a model (#124 phase 3), then D13 with this app's idle time
+    // Load → transcribe → unload, as the interface selects a model (sidevoice-core#21 phase 3), then D13 with this app's idle time
     // shortened (SIDEVOICE_DEBUG_IDLE_UNLOAD_SECS): unloaded once the call ends and the time passes, loaded again as
     // the next call connects. In a call meanwhile, so nothing is unloaded under the checks.
     const names = (list) => list.map((l) => l.model + "@" + l.engine + "/" + l.accelerator).sort().join(",");

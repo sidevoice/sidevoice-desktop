@@ -11,7 +11,7 @@
 //
 //   npm run icons
 //
-// The rules it follows are the brand's (brand-resources README), and where they are silent, docs/BRAND.md.
+// The rules it follows are the brand's (the brand kit's README), and where they are silent, docs/BRAND.md.
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

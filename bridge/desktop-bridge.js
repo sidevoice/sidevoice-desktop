@@ -83,7 +83,7 @@
       cancel: (job) => call("engine_cancel", { job }),
       /** Loads the build into memory on `accelerator` (optional): `{load_ms}`. One already loaded is not loaded again
        *  (its `load_ms` is the time its load took). The app unloads it 10 minutes after its last use once no call is
-       *  on, and loads it again as the next call connects (#124 D13). */
+       *  on, and loads it again as the next call connects (sidevoice-core#21 D13). */
       load: (model, engine, accelerator) => call("engine_load", { model, engine, accelerator: accelerator || null }),
       /** Frees the build's memory on `accelerator`, or on every accelerator when none is named; nothing to do when it
        *  is not loaded. A `load` of it still under way then rejects with `{key: "load_cancelled", …}`, and the app

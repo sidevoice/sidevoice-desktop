@@ -10,7 +10,7 @@ One version for the whole app, tagged `vX.Y.Z`. It lives in `src-tauri/tauri.con
 |---|---|---|
 | Open / update a PR | anyone | **Lint and unit tests** (Linux) and **PR title is a conventional commit**. The macOS native flow (engine round trip, probe page, room flow) only when the engine, the bridge, the catalogue or the CI probes change. No installers. |
 | Squash-merge into `main` | reviewer | The PR title becomes the commit. `build` runs everything, installers included; when it is green, the `nightly` pre-release is replaced. release-please opens or updates the **release PR** ("chore(main): release X.Y.Z"). Nothing versioned is published. |
-| Merge the release PR | the operator | **This is the release.** release-please tags `vX.Y.Z` and creates a draft GitHub Release whose notes are that version's changelog; `build` builds from the tag, attaches the assets and publishes the Release. |
+| Merge the release PR | a maintainer | **This is the release.** release-please tags `vX.Y.Z` and creates a draft GitHub Release whose notes are that version's changelog; `build` builds from the tag, attaches the assets and publishes the Release. |
 
 Assets of a release: `Sidevoice_X.Y.Z_aarch64.dmg` (Apple Silicon, ad-hoc signed: `docs/FIRST_OPEN.txt`),
 `Sidevoice_X.Y.Z_x64-setup.exe`, `Sidevoice_X.Y.Z_amd64.deb`, `Sidevoice_X.Y.Z_amd64.AppImage`, `SHA256SUMS`.
@@ -56,7 +56,7 @@ Build artifacts on Actions runs are kept 7 days, for debugging only. Download fr
   the failed jobs of that `release-please` run (Actions). Nothing is published until every job passed.
 - A `nightly` run fails: the previous snapshot stays. The next green push replaces it.
 
-## What this needs from the repository settings (the operator's, `GITHUB-SETUP.md`)
+## What this needs from the repository settings
 
 - Settings → Actions → General → **Allow GitHub Actions to create and approve pull requests**: without it
   release-please cannot open its PR (off as of 2026-10-01).

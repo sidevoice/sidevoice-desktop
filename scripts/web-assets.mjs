@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Puts the in-browser models' runtime files where the bundled interface looks for them
-// (/voice-browser/assets/, see packages/browser-audio in rubasace/sidevoice), from the npm packages pinned in
+// (/voice-browser/assets/, see packages/browser-audio in sidevoice-web), from the npm packages pinned in
 // this repo's package.json — the same versions the room serves. Run before every build (tauri.conf.json
 // beforeBuildCommand); the files are not committed.
 import { copyFileSync, mkdirSync, readdirSync } from "node:fs";

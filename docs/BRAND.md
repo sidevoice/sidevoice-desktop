@@ -1,6 +1,6 @@
 # The Sidevoice brand in the desktop app
 
-The brand lives in [sidevoice/brand-resources](https://github.com/sidevoice/brand-resources) and its README
+The brand lives in the Sidevoice brand kit (`brand-resources`) and its README
 holds the rules. This app copies the files it draws from into `brand/` (`scripts/vendor-brand.mjs`, provenance
 in `brand/source.json`) and generates everything else from them with `npm run icons` (`scripts/make-icons.mjs`).
 CI fails if the committed icons are not what the script draws. `scripts/brand-screens.mjs` renders
@@ -22,7 +22,7 @@ dark interfaces, and the one-ink variant "Tono" (the fourth bar at 45 % of the i
 | `.dmg` volume icon | the `.icns` above | CI |
 | Settings window | lockups (light and dark), DM Sans, palette | `ui/brand/`, `ui/settings.css` |
 
-The room window (pairing, calls, first open) is the web interface, bundled from rubasace/sidevoice
+The room window (pairing, calls, first open) is the web interface, bundled from sidevoice-web
 (`ui/voice/`, docs/TARGETS.md). Its brand is that repo's; it reaches the app the next time it is vendored.
 
 ## Rules followed as written
@@ -101,6 +101,6 @@ The room window (pairing, calls, first open) is the web interface, bundled from 
 - **macOS 26 (Tahoe)** may draw legacy `.icns` icons inside a grey rounded square unless the app ships an Icon
   Composer asset (`Assets.car` with `CFBundleIconName`), which needs Xcode 26; the CI runner is macOS 14. Not
   checked on a real macOS 26.
-- **Copyright / publisher** for the About panel and installers: the operator's to name.
+- **Copyright / publisher** for the About panel and installers: still to be named.
 - **NSIS installer artwork** (header and sidebar bitmaps): the installer uses the app icon only.
-- The room window's brand fixes (rubasace/sidevoice `brand/web`) reach the app when it is vendored again.
+- The room window's brand fixes (in sidevoice-web) reach the app when it is vendored again.

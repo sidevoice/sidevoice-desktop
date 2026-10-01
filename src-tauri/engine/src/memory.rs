@@ -1,5 +1,5 @@
 //! This machine's memory, as its OS reports it: the total is what a catalogue model's `requires.memory_mb` is
-//! weighed against when the page resolves its offers (rubasace/sidevoice#124 §4); what is available now goes with
+//! weighed against when the page resolves its offers (sidevoice/sidevoice-core#21 §4); what is available now goes with
 //! it to the page (`memory()`), which shows both and decides. `None` when the OS does not say.
 
 /// Total physical memory in MiB.

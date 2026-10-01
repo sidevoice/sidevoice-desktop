@@ -1,20 +1,20 @@
 # What the app shows, and what it talks to
 
-Operator's decisions of 2026-09-30:
-- The desktop app **bundles the web interface** (the client from rubasace/sidevoice's split branch). It never
+By design:
+- The desktop app **bundles the web interface** (the sidevoice-web client). It never
   loads a remote page. The interface is a secret-free static client; the same build is also a standalone static
-  site (rubasace/sidevoice `deploy/web-static/`) for people who cannot install the app.
+  site (sidevoice-web `deploy/web-static/`) for people who cannot install the app.
 - **Auth is device pairing** with the node: the node issues a one-time code (its agent shows it with the MCP
   tool `voice_pair_device`, or `sidevoice pair-device` on the machine), and the person pastes it in the
   interface (Máquinas → Emparejar). The code carries the node's id, how to reach it (its own URLs and/or a
   rendezvous room), a one-time secret and the fingerprint of the node's identity key, which the interface pins.
-  Contract: rubasace/sidevoice `docs/DEVICE_PAIRING.md`.
+  The node side of the contract is sidevoice-core's `server/devices.py`.
 - No oauth2-proxy / Google sign-in in the app.
 
 ## The window
 
 `room-N` shows `tauri://localhost/voice/index.html` (Windows: `http://tauri.localhost/voice/index.html`), the
-interface vendored in `ui/voice/` and `ui/voice-browser/` in the layout rubasace/sidevoice's
+interface vendored in `ui/voice/` and `ui/voice-browser/` in the layout sidevoice-web's
 `scripts/assemble-static-web.mjs` defines (`scripts/vendor-web.mjs` here calls it; provenance in
 `ui/voice/web-source.json`). The in-browser models' WebAssembly (`ui/voice-browser/assets/`, 50 MB) comes from
 pinned npm packages at build time (`scripts/web-assets.mjs`), not from git.
@@ -51,7 +51,7 @@ writing `/voice/target.js` (`SIDEVOICE_TARGET` in the nginx image).
 ## Updating the bundled interface
 
 ```sh
-W=<rubasace/sidevoice checkout>
+W=<sidevoice-web checkout>
 (cd $W && npm run build -w @sidevoice/protocol && npm run build -w @sidevoice/browser-audio && npm run build -w @sidevoice/web)
 node scripts/vendor-web.mjs $W
 ```

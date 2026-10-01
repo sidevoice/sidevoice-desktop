@@ -1,6 +1,6 @@
 # Model engines: one catalog, chosen at run time
 
-Operator's direction (2026-09-30): engines are **downloadable packages chosen at run time**, not compiled into
+Engines are **downloadable packages chosen at run time**, not compiled into
 a build. One catalog serves every client (browser, desktop app, node, later mobile). Each client detects what it
 can do and offers only the engines and models that fit; picking one downloads the engine (if missing) and the
 model. The experience is the same wherever it runs. Bring-your-own-model later = one more model entry in a format
@@ -8,7 +8,7 @@ some engine reads.
 
 ## The catalog (`catalog/engines.json`, shape in `src-tauri/core/src/engines.rs`)
 
-**Owner: `sidevoice/sidevoice-core`** (`src/sidevoice_core/models/catalog.json`), as rubasace/sidevoice#124 §3
+**Owner: `sidevoice/sidevoice-core`** (`src/sidevoice_core/models/catalog.json`), as sidevoice/sidevoice-core#21 §3
 decided. `catalog/engines.json` is a copy generated from it and never edited here. To change it, change the core,
 then:
 
@@ -51,7 +51,7 @@ catalog names and this app does not know is never had. A `Device` is what a plac
 `cpu`, `coreml`, `metal`, `mlx`) with the machine's total memory from the OS (`src-tauri/engine/src/memory.rs`); it is
 what the page gets from `nativeEngine.capabilities()` (docs/BRIDGE.md).
 
-The resolver of #124 §4 — one offer per model a place can run, on its best build and accelerator — has one
+The resolver of sidevoice-core#21 — one offer per model a place can run, on its best build and accelerator — has one
 implementation per side: the web's TypeScript for a client (in the app too: the page resolves from what
 `nativeEngine.capabilities()` reports) and the core's Python for a host. This app has none. At its trust boundary
 it only checks that the build a page asks for runs here before it downloads or runs it (`src-tauri/engine`,
@@ -97,9 +97,9 @@ signed app's IPC.
 The page reaches the engine through `window.__sidevoiceDesktop.host.nativeEngine` — `capabilities()`,
 `installed()`, `install(model, engine, onProgress)`, `transcribe(…)`, `synthesize(…)`, keyed by catalogue model id +
 engine id; the contract is in docs/BRIDGE.md → "The native engine". In the app the native engine is the only
-engine *Este dispositivo* has: the page's own engines (WebGPU, WebAssembly) are never offered there (#124 D5). The
+engine *Este dispositivo* has: the page's own engines (WebGPU, WebAssembly) are never offered there (sidevoice-core#21 D5). The
 web's transcription and voice clients talk to their engines through a worker message protocol; for a native offer
-they get a stand-in with the same protocol backed by `nativeEngine` (rubasace/sidevoice
+they get a stand-in with the same protocol backed by `nativeEngine` (sidevoice-web
 `packages/browser-audio/native-worker.js`).
 
 The app's settings window shows the engine's side: what `capabilities()` reports, and the engine packages and model

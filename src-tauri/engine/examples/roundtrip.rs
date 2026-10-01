@@ -36,7 +36,7 @@ fn main() {
     assert!(installed.iter().any(|b| b.model == "whisper-tiny" && b.engine == "sherpa-onnx"));
     assert!(installed.iter().any(|b| b.model == "kokoro-82m-v1.0" && b.engine == "sherpa-onnx"));
     println!("accelerator: {}", accelerator.map(|a| format!("{a:?}")).unwrap_or_else(|| "the resolver's".into()));
-    // Loaded before use, as the page does on select and the app as a call connects (rubasace/sidevoice#124 D11, D13).
+    // Loaded before use, as the page does on select and the app as a call connects (sidevoice/sidevoice-core#21 D11, D13).
     for model in ["kokoro-82m-v1.0", "whisper-tiny"] {
         let load = engines.load(model, "sherpa-onnx", accelerator).unwrap_or_else(|e| panic!("loading {model}: {e}"));
         println!("loaded {model} in {} ms", load.load_ms);
