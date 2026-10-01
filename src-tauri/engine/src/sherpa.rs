@@ -5,8 +5,10 @@
 //! structs come from `sherpa_ffi.rs`, generated from the same version's header.
 
 use crate::sherpa_ffi as ffi;
+use crate::{error, Audio, Recognize, Speak};
 use libloading::Library;
 use serde::Deserialize;
+use sidevoice_desktop_core::engines::{self, Capability, Package};
 use std::ffi::{c_void, CStr, CString};
 use std::os::raw::c_char;
 use std::path::{Path, PathBuf};
@@ -165,7 +167,7 @@ unsafe impl Send for Recognizer {}
 unsafe impl Sync for Recognizer {}
 
 impl Recognizer {
-    /// `language`: Whisper's code (`es`, `en`…) or empty for auto-detection. `provider`: `cpu` or `coreml`.
+    /// `language`: Whisper's code (`es`, `en`…) or empty for auto-detection. `provider`: sherpa-onnx's (`cpu`, `coreml`…).
     pub fn whisper(
         engine: Arc<Sherpa>,
         dir: &Path,
@@ -227,11 +229,6 @@ impl Drop for Recognizer {
         // SAFETY: created by this engine, destroyed once.
         unsafe { (self.engine.destroy_recognizer)(self.handle) }
     }
-}
-
-pub struct Audio {
-    pub samples: Vec<f32>,
-    pub sample_rate: i32,
 }
 
 pub struct Tts {
@@ -313,5 +310,117 @@ impl Drop for Tts {
     fn drop(&mut self) {
         // SAFETY: created by this engine, destroyed once.
         unsafe { (self.engine.destroy_tts)(self.handle) }
+    }
+}
+
+/// This app's runtime for sherpa-onnx: the families it has a pipeline for here (Whisper, Kokoro) and the
+/// accelerators it maps to sherpa-onnx's `provider`.
+struct Runtime(Arc<Sherpa>);
+
+const ENGINE: &str = "sherpa-onnx";
+
+/// Loads the package unpacked at `root` (its libraries, hash-checked, in the catalog's order).
+pub fn load(root: &Path, package: &Package) -> Result<Arc<dyn crate::Runtime>, crate::Error> {
+    let sherpa = Sherpa::load(root, &package.libraries).map_err(|e| error::runtime_failed(ENGINE, e))?;
+    Ok(Arc::new(Runtime(Arc::new(sherpa))))
+}
+
+/// The files a model build of `family` must have in its directory, from its catalogue `config`.
+pub fn files(family: &str, config: &serde_json::Value) -> Result<Vec<String>, crate::Error> {
+    let bad = |e: serde_json::Error| error::runtime_failed(ENGINE, format!("the catalogue's {family} config: {e}"));
+    match family {
+        "whisper" => {
+            let f: WhisperFiles = serde_json::from_value(config.clone()).map_err(bad)?;
+            Ok(vec![f.encoder, f.decoder, f.tokens])
+        }
+        "kokoro" => {
+            let f: KokoroFiles = serde_json::from_value(config.clone()).map_err(bad)?;
+            let mut files = vec![f.model, f.voices, f.tokens, f.data_dir];
+            files.extend(f.dict_dir);
+            files.extend(f.lexicon.iter().flat_map(|l| l.split(',').map(|s| s.trim().to_string())));
+            Ok(files)
+        }
+        other => Err(error::family_unsupported(ENGINE, other)),
+    }
+}
+
+/// sherpa-onnx's name for an accelerator.
+fn provider(accelerator: Capability) -> Result<&'static str, crate::Error> {
+    match accelerator {
+        Capability::Cpu => Ok("cpu"),
+        Capability::Coreml => Ok("coreml"),
+        Capability::Cuda => Ok("cuda"),
+        other => Err(error::runtime_failed(ENGINE, format!("no provider for {}", engines::capability_name(other)))),
+    }
+}
+
+impl crate::Runtime for Runtime {
+    fn recognizer(
+        &self,
+        family: &str,
+        dir: &Path,
+        config: &serde_json::Value,
+        language: &str,
+        accelerator: Capability,
+    ) -> Result<Box<dyn Recognize>, crate::Error> {
+        if family != "whisper" {
+            return Err(error::family_unsupported(ENGINE, family));
+        }
+        // sherpa-onnx ends the whole process on a language Whisper does not know: refused here first.
+        let language = engines::whisper_language(language).ok_or_else(|| error::language_unsupported(language))?;
+        let files: WhisperFiles =
+            serde_json::from_value(config.clone()).map_err(|e| error::runtime_failed(ENGINE, e))?;
+        let recognizer = Recognizer::whisper(self.0.clone(), dir, &files, language, provider(accelerator)?, 4)
+            .map_err(|e| error::runtime_failed(ENGINE, e))?;
+        Ok(Box::new(recognizer))
+    }
+
+    fn voice(
+        &self,
+        family: &str,
+        dir: &Path,
+        config: &serde_json::Value,
+        language: &str,
+        accelerator: Capability,
+    ) -> Result<Box<dyn Speak>, crate::Error> {
+        if family != "kokoro" {
+            return Err(error::family_unsupported(ENGINE, family));
+        }
+        let files: KokoroFiles =
+            serde_json::from_value(config.clone()).map_err(|e| error::runtime_failed(ENGINE, e))?;
+        let tts = Tts::kokoro(self.0.clone(), dir, &files, language, provider(accelerator)?, 4)
+            .map_err(|e| error::runtime_failed(ENGINE, e))?;
+        Ok(Box::new(tts))
+    }
+}
+
+impl Recognize for Recognizer {
+    fn transcribe(&self, samples: &[f32], sample_rate: i32) -> Result<String, crate::Error> {
+        Recognizer::transcribe(self, samples, sample_rate).map_err(|e| error::runtime_failed(ENGINE, e))
+    }
+}
+
+impl Speak for Tts {
+    fn synthesize(&self, text: &str, sid: i32, speed: f32) -> Result<Audio, crate::Error> {
+        Tts::synthesize(self, text, sid, speed).map_err(|e| error::runtime_failed(ENGINE, e))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sidevoice_desktop_core::engines::bundled_catalog;
+
+    #[test]
+    fn the_files_a_build_needs_come_from_its_catalogue_config() {
+        let catalog = bundled_catalog();
+        let config = |model: &str| &catalog.model(model).unwrap().build(ENGINE).unwrap().config;
+        let whisper = files("whisper", config("whisper-tiny")).unwrap();
+        assert_eq!(whisper.len(), 3);
+        let kokoro = files("kokoro", config("kokoro-82m-v1.0")).unwrap();
+        assert!(kokoro.len() >= 4 && kokoro.iter().all(|f| !f.is_empty()), "{kokoro:?}");
+        assert_eq!(files("parakeet", config("whisper-tiny")).unwrap_err().key, "family_unsupported");
+        assert_eq!(provider(Capability::Metal).unwrap_err().key, "runtime_failed");
+        assert_eq!(provider(Capability::Coreml), Ok("coreml"));
     }
 }

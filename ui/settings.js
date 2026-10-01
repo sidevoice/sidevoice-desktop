@@ -36,26 +36,8 @@ $("settings").addEventListener("submit", async (event) => {
   }
 });
 
-// What this webview offers the in-browser models. The room page runs in the same engine, so this
-// is what it will find too (docs/MODELS.md).
-async function diagnostics(debug) {
-  const rows = [];
-  let gpu = "no (usará WebAssembly en la CPU)";
-  try {
-    const adapter = navigator.gpu ? await navigator.gpu.requestAdapter() : null;
-    if (adapter) gpu = adapter.features && adapter.features.has("shader-f16") ? "sí (con fp16)" : "sí";
-  } catch { /* stays "no" */ }
-  rows.push(["WebGPU", gpu]);
-  rows.push(["WebAssembly", typeof WebAssembly === "object" ? "sí" : "no"]);
-  rows.push(["Micrófono (API)", navigator.mediaDevices && navigator.mediaDevices.getUserMedia ? "sí" : "no"]);
-  try {
-    const info = await invoke("get_settings");
-    rows.push(["Versión", info.appVersion]);
-  } catch { /* optional */ }
-  rows.push(["Contexto seguro", window.isSecureContext ? "sí" : "no"]);
-  rows.push(["WebCrypto (emparejamiento)", window.crypto && window.crypto.subtle ? "sí" : "no"]);
-  if (debug) invoke("debug_log", { line: "settings " + rows.map(([k, v]) => k + "=" + v).join(" | ") });
-  const dl = $("diag");
+/** Fills a <dl> with [term, description] rows. */
+function rowsInto(dl, rows) {
   for (const [k, v] of rows) {
     const dt = document.createElement("dt");
     dt.textContent = k;
@@ -65,9 +47,66 @@ async function diagnostics(debug) {
   }
 }
 
+// What this webview offers the room's page (it runs in the same engine). Models run in the app's native engine,
+// never in the webview (below).
+async function diagnostics(debug) {
+  const rows = [];
+  rows.push(["Micrófono (API)", navigator.mediaDevices && navigator.mediaDevices.getUserMedia ? "sí" : "no"]);
+  try {
+    const info = await invoke("get_settings");
+    rows.push(["Versión", info.appVersion]);
+  } catch { /* optional */ }
+  rows.push(["Contexto seguro", window.isSecureContext ? "sí" : "no"]);
+  rows.push(["WebCrypto (emparejamiento)", window.crypto && window.crypto.subtle ? "sí" : "no"]);
+  if (debug) invoke("debug_log", { line: "settings " + rows.map(([k, v]) => k + "=" + v).join(" | ") });
+  rowsInto($("diag"), rows);
+}
+
+/** A quantity in `unit` (megabyte, gigabyte), in the window's language. */
+function quantity(value, unit, digits) {
+  return new Intl.NumberFormat(i18n.language, { style: "unit", unit, maximumFractionDigits: digits }).format(value);
+}
+
+/** Bytes on disk, decimal, as downloads are sized. */
+function size(bytes) {
+  return bytes >= 1e9 ? quantity(bytes / 1e9, "gigabyte", 1) : quantity(bytes / 1e6, "megabyte", 0);
+}
+
+// The app's native engine (docs/ENGINES.md): what this device reports to the room's page, and what is on disk.
+async function engine() {
+  const { t } = i18n;
+  $("engine").lang = i18n.language;
+  $("engine-heading").textContent = t("engine.heading");
+  $("engine-hint").textContent = t("engine.hint");
+  try {
+    const [device, disk] = await Promise.all([invoke("engine_capabilities"), invoke("engine_on_disk")]);
+    rowsInto($("engine-device"), [
+      [t("engine.system"), device.os + " · " + device.arch],
+      [t("engine.accelerators"), device.has.join(", ")],
+      // Binary gigabytes, as memory is sold (16 GB).
+      [t("engine.memory"), device.memory_mb ? quantity(device.memory_mb / 1024, "gigabyte", 1) : t("engine.unknown")],
+    ]);
+    const lines = [
+      ...disk.engines.map((e) => t("engine.package", { engine: e.label || e.engine, version: e.version, size: size(e.bytes) })),
+      ...disk.builds.map((b) => t("engine.build", {
+        model: b.label || b.model, task: t("engine.task." + b.task), engine: b.engine, size: size(b.bytes),
+      })),
+    ];
+    $("engine-downloaded").textContent = lines.length ? t("engine.downloaded") : t("engine.none");
+    $("engine-builds").replaceChildren(...lines.map((text) => {
+      const li = document.createElement("li");
+      li.textContent = text;
+      return li;
+    }));
+  } catch (error) {
+    $("engine-downloaded").textContent = t("engine.error", { error: String((error && error.message) || error) });
+  }
+}
+
 load()
   .then((debug) => diagnostics(debug))
   .catch((error) => say(String(error), true));
+engine();
 
 // Headset buttons: what reaches the app, refreshed every second while this window is open.
 const SOURCES = {

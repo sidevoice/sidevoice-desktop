@@ -10,6 +10,7 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 | `bridge/desktop-bridge.js` | Injected by the app into every page of the room window, before the page's own scripts. Bound to the app's own origin (the bundled interface). |
 | `src-tauri/core/src/bridge.rs` | The contract on the Rust side: `CallSnapshot`, `Command`, and how the tray renders a snapshot. Unit-tested. |
 | `src-tauri/src/lib.rs` | Wiring: the `bridge_state` command, `send(Command)`; `capabilities/room.json`. |
+| `src-tauri/src/engine_ipc.rs` | The native engine's commands, behind `nativeEngine` (below). |
 | `src-tauri/src/tray.rs` | The menu-bar icon and its menu. |
 
 ## What the bridge reads and calls in the web UI
@@ -66,13 +67,85 @@ did something:
 Joining is deliberately **not** a tray command: joining unlocks audio output, which the webview
 only allows from a click in the page. "Mostrar Sidevoice" opens the window for that.
 
-`window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", nativeEngine: null }`: the web UI
-can feature-detect the desktop app; `nativeEngine` is the seam for a native STT/TTS engine
-(see `MODELS.md`).
+`window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", nativeEngine, mediaKeys }`: the web UI
+feature-detects the desktop app by it.
+
+## The native engine
+
+In the app, speech models run only in its native engine, never in the page (rubasace/sidevoice#124 D5). The page
+resolves its offers itself — `offers(catalog, capabilities, place)` over the catalogue it carries — from what the
+engine reports, and runs the build it chose through it. `window.__sidevoiceDesktop.host.nativeEngine`:
+
+| Call | Returns / does |
+|---|---|
+| `capabilities()` | `{runs: "native", os: "macos"\|"windows"\|"linux", arch: "aarch64"\|"x86_64", has: ["cpu", "coreml", …], memory_mb: number\|null}` — `memory_mb` is the machine's total, from the OS |
+| `installed()` | `[{model, engine}]` — builds whose engine package and model files are on disk and whole: the download's marker names its hash, and its root and every file the engine needs from it are there |
+| `install(model, engine, onProgress)` | downloads the engine package and the model's build, whichever is missing or incomplete (a download that lost a file is fetched again); `onProgress(doneBytes, totalBytes)` about twice a second, only with this call's own bytes |
+| `transcribe(model, engine, samples, sampleRate, language, accelerator?)` | text; `samples` a mono `Float32Array`, `language` empty to detect |
+| `synthesize(model, engine, voice, speed, text, accelerator?)` | `{samples: Float32Array, sampleRate}` |
+
+- `model` is the catalogue id (`whisper-small`, `kokoro-82m-v1.0`), `engine` the build's engine id
+  (`sherpa-onnx`). The app runs exactly that build or refuses it (below), and never another build instead. Before
+  it downloads or runs anything it checks, at this trust boundary, that the build runs here: an adapter for the
+  engine, a package for this OS/architecture, the build's needs and accelerators, and the model's
+  `requires.memory_mb` against the machine's memory (unknown memory is not a refusal).
+- `accelerator` (optional, `cpu`, `coreml`…): the one the page chose for that build (the resolver's, or the
+  person's in *Avanzado*). It must be one the build can use here, or the call is refused. Without it the app uses
+  the first the build can use on this device, which is what the resolver picks. Loaded models are kept per engine,
+  model, accelerator and language.
+- Installs run one at a time. Each `install` call is its own job (`job`, an id the bridge makes); the app keeps
+  progress per job from the moment the job starts — after any install ahead of it — until it ends, so a call that
+  waits reports nothing and no call ever reports another's bytes.
+- Commands behind it (`src-tauri/src/engine_ipc.rs`): `engine_capabilities`, `engine_installed`,
+  `engine_install {model, engine, job}` with `engine_progress {job}` (`[done, total]`, or `null` while the job
+  waits or after it ends), `engine_transcribe` (raw f32 body; `x-model`, `x-engine`, `x-accelerator`, `x-language`,
+  `x-sample-rate` headers), `engine_synthesize` (answer: raw bytes, a u32 sample rate then f32 samples). Granted
+  to the room window (`capabilities/room.json`). The settings window may read `engine_capabilities` and
+  `engine_on_disk` (what is on disk and its size), and nothing else of the engine.
+
+### Refusals
+
+A call the engine refuses, or one that fails, rejects with the shape of sidevoice-core's refusals: a stable `key`
+the page translates, the parameters its message needs beside it, and `message`, the sentence in English for a
+client that does not know the key:
+
+```json
+{ "key": "not_installed", "model": "whisper-small", "engine": "sherpa-onnx",
+  "message": "whisper-small on sherpa-onnx is not downloaded yet." }
+```
+
+The page renders by `key` and falls back to `message`. Every key is made in `src-tauri/engine/src/error.rs`; a new
+one is added there and here.
+
+| `key` | Parameters | When |
+|---|---|---|
+| `engine_unsupported` | `engine` | no runtime in this app for that engine: unknown, a page's engine, or one a newer catalogue added |
+| `engine_no_package` | `engine`, `platform` | the engine has no package for this OS/architecture (`macos-aarch64`) |
+| `family_unsupported` | `engine`, `family` | the engine's adapter here has no pipeline for the model's family |
+| `model_unknown` | `model` | not in the app's catalogue |
+| `build_missing` | `model`, `engine` | the model has no build for that engine |
+| `build_unfit` | `model`, `engine` | the build needs a feature, or an accelerator, this device lacks |
+| `model_needs_memory` | `model`, `needed_mb`, `memory_mb` | the model needs more memory than this machine has |
+| `model_wrong_task` | `model`, `task` | transcribing with a voice model, or speaking with a transcription one |
+| `accelerator_unusable` | `model`, `engine`, `accelerator`, `usable` (list) | the accelerator asked for is not one this build can use here |
+| `not_installed` | `model`, `engine` | run before `install` finished, or after a download lost a file |
+| `voice_unknown` | `model`, `voice` | the model has no such voice |
+| `language_unsupported` | `language` | the model does not know that language code |
+| `download_refused` | `url` | a download that is not https |
+| `download_failed` | `url` | the network failed, or answered with an error |
+| `download_corrupt` | `url` | the bytes are not the ones the catalogue names (SHA-256) |
+| `install_failed` | — | unpacking or moving the download into place failed (disk, permissions, an archive without its files) |
+| `runtime_failed` | `engine` | the engine refused to load (a library failing its hash) or to run the model |
+| `bad_request` | — | a malformed call (a missing header): a bug in the caller |
+| `internal` | — | something inside the app failed |
 
 ## Changing the bridge
 
 - Add a command: a variant in `Command` (Rust), a `case` in `run` (JS), a test on each side.
 - Add a field: `CallSnapshot` uses `#[serde(default)]`, so old and new scripts interoperate;
   bump `version` only for a breaking change.
-- Tests: `npm test` (the script against a fake window) and `cargo test -p sidevoice-desktop-core`.
+- Tests: `npm test` (the script against a fake window; the vendored room's native worker against this bridge,
+  `test/room-bundle.test.mjs`), `cargo test -p sidevoice-desktop-core` and
+  `cargo test -p sidevoice-desktop-engine` (the engine against a fake runtime adapter). In the real app, CI's macOS
+  job drives the native flow through the vendored room itself (`test/fixtures/room-flow.js`, probe build): capabilities
+  → the offers its panes show → install → speak → transcribe.

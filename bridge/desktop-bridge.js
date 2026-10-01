@@ -41,35 +41,55 @@
     throw new Error("unexpected audio from the desktop host");
   }
 
-  /** The app's native model engines: what this Mac can run, get it ready, run it. */
+  let installs = 0; // numbers each install call's job
+
+  /** The app's native model engines (docs/BRIDGE.md → "The native engine"): what this device is, which builds are on
+   *  disk, get one ready, run it. A build is a catalogue model id + an engine id; the page resolves its offers itself
+   *  from `capabilities()` and the catalogue. `accelerator` (optional): the one the page chose, else the app uses the
+   *  resolver's first for that build here. A refusal rejects with `{key, message, …params}`: a stable key the page
+   *  translates, and an English sentence for one it does not know (docs/BRIDGE.md → "Refusals"). */
   function nativeEngine() {
     return {
-      version: 1,
-      /** `{device, offers: [{model, engine, task, label, languages, runs, downloadSize, accelerators, installed, voices}], pageIds}`. */
-      available: () => call("engine_available"),
-      /** Downloads the engine package and the model; `onProgress(done, total)` in bytes about twice a second. */
+      /** `{runs: "native", os, arch, has: ["cpu", "coreml", …], memory_mb}` (`memory_mb` null when unknown). */
+      capabilities: () => call("engine_capabilities"),
+      /** `[{model, engine}]`: the builds already on disk. */
+      installed: () => call("engine_installed"),
+      /** Downloads the engine package (if missing) and the model's build; `onProgress(done, total)` in bytes about
+       *  twice a second. */
       install(model, engine, onProgress) {
-        const running = call("engine_install", { model, engine: engine || "sherpa-onnx" });
+        // This call's own job: the app reports progress per job, from when it starts (after any install ahead of
+        // it) until it ends — never another call's bytes.
+        const job = "install-" + ++installs + "-" + Date.now().toString(36);
+        const running = call("engine_install", { model, engine, job });
         if (typeof onProgress !== "function") return running;
         let finished = false;
         const poll = () => {
           if (finished) return;
-          call("engine_progress").then(([done, total]) => { if (!finished) onProgress(done, total); }).catch(() => {});
+          call("engine_progress", { job })
+            .then((progress) => { if (!finished && Array.isArray(progress)) onProgress(progress[0], progress[1]); })
+            .catch(() => {});
           win.setTimeout(poll, 500);
         };
         poll();
         return running.finally(() => { finished = true; });
       },
       /** Mono Float32Array at `sampleRate` → text. `language` empty to detect. */
-      transcribe(model, samples, sampleRate, language) {
+      transcribe(model, engine, samples, sampleRate, language, accelerator) {
         const bytes = new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength);
         return call("engine_transcribe", bytes, {
-          headers: { "x-model": model, "x-language": language || "", "x-sample-rate": String(sampleRate) },
+          headers: {
+            "x-model": model,
+            "x-engine": engine,
+            "x-accelerator": accelerator || "",
+            "x-language": language || "",
+            "x-sample-rate": String(sampleRate),
+          },
         });
       },
       /** Text → `{samples: Float32Array, sampleRate}`. */
-      async synthesize(model, voice, speed, text) {
-        const buffer = bufferOf(await call("engine_synthesize", { model, voice, speed: speed || 1, text }));
+      async synthesize(model, engine, voice, speed, text, accelerator) {
+        const args = { model, engine, accelerator: accelerator || null, voice, speed: speed || 1, text };
+        const buffer = bufferOf(await call("engine_synthesize", args));
         return { sampleRate: new DataView(buffer).getUint32(0, true), samples: new Float32Array(buffer.slice(4)) };
       },
     };

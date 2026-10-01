@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "settings",
-  "description": "The bundled settings / first-run window: read and save this device's settings. The room window has its own (room.json).",
+  "description": "The bundled settings / first-run window: read and save this device's settings, and show what the native engine is and has on disk (docs/ENGINES.md). The room window has its own (room.json).",
   "windows": ["settings"],
-  "permissions": ["allow-get-settings", "allow-save-settings", "allow-debug-log", "allow-headset-report", "allow-headset-test"]
+  "permissions": ["allow-get-settings", "allow-save-settings", "allow-debug-log", "allow-headset-report", "allow-headset-test", "allow-engine-capabilities", "allow-engine-on-disk"]
 }

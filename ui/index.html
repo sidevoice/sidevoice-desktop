@@ -42,12 +42,22 @@
       <ol id="headset-events" class="events"></ol>
     </section>
 
+    <section id="engine" aria-labelledby="engine-heading">
+      <h2 id="engine-heading"></h2>
+      <p id="engine-hint" class="hint"></p>
+      <dl id="engine-device"></dl>
+      <p id="engine-downloaded" class="hint"></p>
+      <ul id="engine-builds" class="events"></ul>
+    </section>
+
     <section id="diagnostics" aria-labelledby="diag-heading">
       <h2 id="diag-heading">Este ordenador</h2>
       <dl id="diag"></dl>
-      <p class="hint">Los modelos del navegador (Whisper, Kokoro) usan WebGPU si esta vista web lo tiene y, si no, WebAssembly en la CPU: funcionan igual, más despacio.</p>
     </section>
   </main>
+  <script src="i18n/en.js"></script>
+  <script src="i18n/es.js"></script>
+  <script src="i18n.js"></script>
   <script src="settings.js"></script>
 </body>
 </html>

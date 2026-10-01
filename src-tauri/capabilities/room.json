@@ -6,7 +6,8 @@
   "permissions": [
     "allow-bridge-state",
     "allow-debug-log",
-    "allow-engine-available",
+    "allow-engine-capabilities",
+    "allow-engine-installed",
     "allow-engine-install",
     "allow-engine-progress",
     "allow-engine-transcribe",

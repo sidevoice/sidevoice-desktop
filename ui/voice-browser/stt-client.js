@@ -17,7 +17,7 @@ function decodeWav(base64){
   else if(id==='data'){data=bytes.subarray(body,Math.min(bytes.length,body+size));break}
   offset=body+size+(size%2);
  }
- if(!data||bits!==16)throw Error('La sala envió un WAV que este navegador no entiende.');
+ if(!data||bits!==16)throw Error('La sala envió un WAV que este dispositivo no entiende.');
  const frames=Math.floor(data.length/(2*channels)),mono=new Float32Array(frames),samples=new Int16Array(data.buffer,data.byteOffset,frames*channels);
  for(let i=0;i<frames;i++){let sum=0;for(let c=0;c<channels;c++)sum+=samples[i*channels+c];mono[i]=sum/channels/32768}
  if(rate===16000)return mono;
@@ -31,9 +31,8 @@ class BrowserTranscription{
   this.worker=null;this.pending=new Map();this.nextId=0;this.runtime=null;this.socket=null;
   this.language='auto';this.enabled=false;this.generation=0;
  }
- /* device 'native': the desktop app's own engine (native-worker.js), same protocol; anything else: Whisper in a Worker. */
- _ensureWorker(device){
-  const native=device===undefined?!!this.native:device==='native';
+ /* A native build: the desktop app's own engine (native-worker.js), same protocol; a page one: Whisper in a Worker. */
+ _ensureWorker(native=!!this.native){
   if(this.worker&&!!this.native===native)return;
   // Whatever was waiting on the worker being replaced will never be answered: say so rather than hang.
   for(const request of this.pending.values())request.reject(Error('Se cambió el motor de transcripción.'));this.pending.clear();
@@ -53,12 +52,12 @@ class BrowserTranscription{
   };
  }
  _request(type,data={},progress,transfer=[]){
-  this._ensureWorker(data.device);const id=++this.nextId;
+  this._ensureWorker(data.native);const id=++this.nextId;
   return new Promise((resolve,reject)=>{this.pending.set(id,{resolve,reject,progress});this.worker.postMessage({id,type,...data},transfer)});
  }
  /* What this browser can run in the page (never the native engine's list: that one is the app's). */
  async capabilities(){
-  if(!this.native)return this._request('capabilities',{device:'browser'});
+  if(!this.native)return this._request('capabilities',{native:false});
   // The native engine is in use: ask the page's own engine in a Worker of its own, so a transcription in flight
   // on the native one is never cut short by someone opening the settings.
   const probe=new Worker('/voice-browser/stt-worker.js?v='+encodeURIComponent(globalThis.sidevoiceBuildId||'dev'),{type:'module'});
@@ -71,9 +70,10 @@ class BrowserTranscription{
   const downloading=value?.status==='progress'||value?.status==='download';
   this._preparation({phase:'loading',title:'Preparando transcripcion',text:(downloading?'Descargando':'Preparando')+(file?' - '+file:''),progress:Number.isFinite(numeric)?numeric:null});
  }
- async prepare({model,device}){
+ /* The build an offer chose: a catalogue model, its engine and accelerator, and whether that engine is native. */
+ async prepare({model,engine,accelerator,native=false}){
   this._preparation({phase:'loading',title:'Preparando transcripcion',text:'Comprobando el motor local...',progress:null});
-  try{this.runtime=await this._request('load',{model,device},value=>this._progress(value));this._preparation({phase:'ready'});return this.runtime}
+  try{this.runtime=await this._request('load',{model,engine,accelerator,native},value=>this._progress(value));this._preparation({phase:'ready'});return this.runtime}
   catch(error){this._preparation({phase:'error',title:'No se pudo preparar la transcripcion',text:error.message,progress:null});throw error}
  }
  start({socket,language='auto'}){
@@ -94,12 +94,12 @@ class BrowserTranscription{
   const started=performance.now();
   try{
    const audio=decodeWav(request.audio_base64),audio_ms=Math.round(audio.length/16);
-   this._preparation({phase:'inline',text:'Transcribiendo en este navegador...'});
+   this._preparation({phase:'inline',text:'Transcribiendo en este dispositivo...'});
    const language=request.language||(this.language==='auto'?null:this.language);
-   const result=await this._request('transcribe',{audio:audio.buffer,model:this.runtime.model,device:this.runtime.device,language:language||'auto'},null,[audio.buffer]);
+   const result=await this._request('transcribe',{audio:audio.buffer,model:this.runtime.model,engine:this.runtime.engine,accelerator:this.runtime.accelerator,native:!!this.native,language:language||'auto'},null,[audio.buffer]);
    if(generation!==this.generation)return;
    if(!usefulTranscript(result.text))throw Error('El modelo produjo una transcripción degenerada. Inténtalo de nuevo.');
-   this._send('voice-transcript',{session_id,request_id,text:result.text,metrics:{audio_ms,recognition_ms:Math.round(result.elapsed_ms),request_to_transcript_ms:Math.round(performance.now()-started),device:result.device,model:result.model}});
+   this._send('voice-transcript',{session_id,request_id,text:result.text,metrics:{audio_ms,recognition_ms:Math.round(result.elapsed_ms),request_to_transcript_ms:Math.round(performance.now()-started),accelerator:result.accelerator,model:result.model}});
    this._preparation({phase:'hidden'});
   }catch(error){
    if(generation!==this.generation)return;

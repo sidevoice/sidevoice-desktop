@@ -1,12 +1,13 @@
-//! The model catalog's shape, and which of its models this device can run (docs/ENGINES.md).
+//! The model catalog's shape, and whether one of its native builds runs on this device (docs/ENGINES.md).
 //!
 //! One catalog for every client (browser, desktop app, host, later mobile), owned by `sidevoice/sidevoice-core`
 //! (rubasace/sidevoice#124 §3): `catalog/engines.json` is a copy generated from it, never edited here. An
 //! **engine** loads a build and runs it: in a page (`runs: page`, transformers.js) or as a package downloaded at
 //! run time for one OS/architecture (`runs: native`, sherpa-onnx). A **family** (whisper, kokoro) says the task
 //! and the options; a **model** (Whisper tiny, Kokoro 82M) has one **build** per engine it runs on: its files in
-//! that engine's format and the engine's configuration. `offers()` is the resolver (§4); the core's Python and
-//! the web's TypeScript implement the same function, and all three pass the core's `catalog/vectors.json`.
+//! that engine's format and the engine's configuration. Choosing among models is the resolver's (§4): the web's
+//! TypeScript for a client, the core's Python for a host. This app has no resolver; it only checks, at its trust
+//! boundary, that the build a page asks for runs here (`accelerators_for`).
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -130,9 +131,6 @@ pub struct Build {
     /// Capabilities it needs beyond an accelerator (e.g. `webgpu-f16` for a half-precision quantization).
     #[serde(default)]
     pub needs: Vec<Capability>,
-    /// Per platform (`macos-aarch64`, `page`): lower wins over the catalog's default engine order.
-    #[serde(default)]
-    pub rank: BTreeMap<String, u32>,
     /// Files a native engine downloads; a page engine fetches its own (`config` says from where).
     #[serde(default)]
     pub download: Option<Download>,
@@ -189,13 +187,6 @@ pub struct Family {
     pub options: Vec<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Ranking {
-    /// Which engine wins when several builds of a model fit, best first.
-    #[serde(default)]
-    pub default: Vec<String>,
-}
-
 /// An external service a host calls with its own key. The app never calls one; it only knows the place exists.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Provider {
@@ -208,8 +199,6 @@ pub struct Provider {
 pub struct Catalog {
     pub version: u32,
     pub engines: Vec<Engine>,
-    #[serde(default)]
-    pub ranking: Ranking,
     pub families: BTreeMap<String, Family>,
     #[serde(default)]
     pub providers: Vec<Provider>,
@@ -242,7 +231,8 @@ pub struct Device {
     pub arch: String,
     #[serde(rename = "has")]
     pub capabilities: Vec<Capability>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Total memory; `null` when unknown.
+    #[serde(default)]
     pub memory_mb: Option<u64>,
 }
 
@@ -250,17 +240,11 @@ impl Device {
     pub fn has(&self, capability: Capability) -> bool {
         self.capabilities.contains(&capability)
     }
-
-    fn platform(&self) -> String {
-        match self.runs {
-            Runs::Native => format!("{}-{}", self.os, self.arch),
-            Runs::Page => "page".into(),
-        }
-    }
 }
 
 /// This native process's device: OS and architecture as compiled, and what they imply. Apple Silicon always has
-/// Metal, Core ML (with the Neural Engine) and can run MLX; nothing here probes for CUDA or memory.
+/// Metal, Core ML (with the Neural Engine) and can run MLX; nothing here probes for CUDA. Memory is the OS's to
+/// report (the engine crate asks it); this pure logic leaves it unknown.
 pub fn native_device() -> Device {
     let os = std::env::consts::OS.to_string();
     let arch = std::env::consts::ARCH.to_string();
@@ -274,33 +258,9 @@ pub fn native_device() -> Device {
     Device { runs: Runs::Native, os, arch, capabilities, memory_mb: None }
 }
 
-/// Places a model runs in besides a provider: this client, or the host it is paired with.
+/// Places a model runs in besides a provider: this client, or the host it is paired with. A provider id must not
+/// be one (`check`).
 pub const PLACES: &[&str] = &["device", "host"];
-
-/// A build and the accelerator it runs with.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Choice {
-    pub engine: String,
-    pub accelerator: Capability,
-}
-
-/// One model this place can run, on its best build, with every other build × accelerator ranked behind it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Offer {
-    pub model: String,
-    pub task: Task,
-    pub engine: String,
-    pub accelerator: Capability,
-    /// Bytes the first use downloads: the native engine's package unless bundled, plus the build's own files.
-    pub download_size: u64,
-    /// For diagnostics: why this build and accelerator.
-    pub reason: String,
-    /// What *Avanzado* offers instead, best first.
-    pub alternatives: Vec<Choice>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnknownPlace(pub String);
 
 /// The engine package for this device, if the engine has one it can run.
 pub fn package_for<'a>(engine: &'a Engine, device: &Device) -> Option<&'a Package> {
@@ -311,108 +271,39 @@ pub fn package_for<'a>(engine: &'a Engine, device: &Device) -> Option<&'a Packag
     })
 }
 
-/// (accelerators best first, package) when `build` runs on this device; None when it does not.
-fn fit<'a>(build: &Build, engine: &'a Engine, device: &Device) -> Option<(Vec<Capability>, Option<&'a Package>)> {
-    // A page engine only in a page, a native one only in a native runtime (D5).
-    if engine.runs != device.runs {
+/// The accelerators a native `build` can use on this native device, best first — the first is the one the
+/// clients' resolvers pick; `None` when the build does not run here: not a native engine's, no package of it
+/// for this OS/architecture, a feature it needs missing, or no accelerator both usable and present. The narrow
+/// check the app makes at its trust boundary before it installs or runs what a page asks for; choosing among
+/// models is the client's resolver (rubasace/sidevoice#124 §4), never the app's.
+pub fn accelerators_for(catalog: &Catalog, build: &Build, device: &Device) -> Option<Vec<Capability>> {
+    let engine = catalog.engine(&build.engine)?;
+    if engine.runs != Runs::Native || device.runs != Runs::Native {
         return None;
     }
-    let (usable, package) = match device.runs {
-        Runs::Native => {
-            let package = package_for(engine, device)?;
-            (&package.accelerators, Some(package))
-        }
-        Runs::Page => (&engine.accelerators, None),
-    };
+    let package = package_for(engine, device)?;
     if !build.needs.iter().all(|c| device.has(*c)) {
         return None;
     }
     let accelerators: Vec<Capability> = build
         .accelerators
         .as_ref()
-        .unwrap_or(usable)
+        .unwrap_or(&package.accelerators)
         .iter()
         .copied()
-        .filter(|c| usable.contains(c) && device.has(*c))
+        .filter(|c| package.accelerators.contains(c) && device.has(*c))
         .collect();
-    (!accelerators.is_empty()).then_some((accelerators, package))
-}
-
-fn size_of(build: &Build, package: Option<&Package>) -> u64 {
-    let engine = match package {
-        Some(p) if !p.bundled => p.download.as_ref().map(|d| d.size).unwrap_or(0),
-        _ => 0,
-    };
-    engine + build.download.as_ref().map(|d| d.size).unwrap_or(0)
-}
-
-/// One offer per model `place` can run on this device, in catalog order (rubasace/sidevoice#124 §4). A provider's
-/// models are the provider's to list, so a provider place gets none here; an unknown place is refused.
-pub fn offers(catalog: &Catalog, device: &Device, place: &str) -> Result<Vec<Offer>, UnknownPlace> {
-    if !PLACES.contains(&place) {
-        if catalog.providers.iter().any(|p| p.id == place) {
-            return Ok(Vec::new());
-        }
-        return Err(UnknownPlace(format!("unknown place {place:?}")));
-    }
-    let order = &catalog.ranking.default;
-    let platform = device.platform();
-    let mut out = Vec::new();
-    for model in &catalog.models {
-        if let (Some(needed), Some(memory)) = (model.requires.memory_mb, device.memory_mb) {
-            if memory < needed {
-                continue;
-            }
-        }
-        let Some(task) = catalog.task_of(model) else { continue };
-        let mut fitting: Vec<(usize, &Build, Vec<Capability>, Option<&Package>)> = model
-            .builds
-            .iter()
-            .enumerate()
-            .filter_map(|(index, build)| {
-                let (accelerators, package) = fit(build, catalog.engine(&build.engine)?, device)?;
-                Some((index, build, accelerators, package))
-            })
-            .collect();
-        if fitting.is_empty() {
-            continue;
-        }
-        fitting.sort_by_key(|(index, build, _, _)| {
-            let own = build.rank.get(&platform).copied();
-            let default = order.iter().position(|e| *e == build.engine).unwrap_or(order.len());
-            (own.is_none(), own.unwrap_or(0), default, *index)
-        });
-        let (_, best, accelerators, package) = &fitting[0];
-        let why = if fitting.len() == 1 {
-            "the only build that runs here".to_string()
-        } else if best.rank.contains_key(&platform) {
-            format!("this model ranks it first on {platform}")
-        } else {
-            "first in the catalogue's engine order".to_string()
-        };
-        let accelerator = accelerators[0];
-        let pairs: Vec<Choice> = fitting
-            .iter()
-            .flat_map(|(_, build, usable, _)| {
-                usable.iter().map(|a| Choice { engine: build.engine.clone(), accelerator: *a })
-            })
-            .collect();
-        out.push(Offer {
-            model: model.id.clone(),
-            task,
-            engine: best.engine.clone(),
-            accelerator,
-            download_size: size_of(best, *package),
-            reason: format!("{} ({}): {why}", best.engine, capability_name(accelerator)),
-            alternatives: pairs[1..].to_vec(),
-        });
-    }
-    Ok(out)
+    (!accelerators.is_empty()).then_some(accelerators)
 }
 
 /// A capability as the catalog writes it.
 pub fn capability_name(capability: Capability) -> String {
     serde_json::to_value(capability).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()
+}
+
+/// The capability the catalog names `name`; `Unknown` (which no device has) for a name this app does not know.
+pub fn capability_named(name: &str) -> Capability {
+    serde_json::from_value(serde_json::Value::String(name.to_string())).unwrap_or(Capability::Unknown)
 }
 
 /// Whisper's language codes (openai/whisper `tokenizer.LANGUAGES`). sherpa-onnx ends the whole process on a code
@@ -491,11 +382,6 @@ pub fn check(catalog: &Catalog) -> Vec<String> {
             _ => {}
         }
     }
-    for id in &catalog.ranking.default {
-        if catalog.engine(id).is_none() {
-            problems.push(format!("ranking: unknown engine {id}"));
-        }
-    }
     for (name, family) in &catalog.families {
         for option in &family.options {
             let kind = option.get("kind").and_then(|k| k.as_str()).unwrap_or("");
@@ -566,27 +452,6 @@ pub fn check(catalog: &Catalog) -> Vec<String> {
 mod tests {
     use super::*;
 
-    /// sidevoice-core's shared resolver vectors (a copy, like the catalog): capabilities in, offers out.
-    const VECTORS: &str = include_str!("../../../catalog/vectors.json");
-
-    #[derive(Deserialize)]
-    struct Vectors {
-        fixture: Catalog,
-        vectors: Vec<Vector>,
-    }
-
-    #[derive(Deserialize)]
-    struct Vector {
-        name: String,
-        catalog: String,
-        capabilities: Device,
-        place: String,
-        #[serde(default)]
-        offers: Option<Vec<Offer>>,
-        #[serde(default)]
-        error: Option<String>,
-    }
-
     fn mac() -> Device {
         Device {
             runs: Runs::Native,
@@ -597,8 +462,8 @@ mod tests {
         }
     }
 
-    fn offers_of(device: &Device) -> Vec<Offer> {
-        offers(&bundled_catalog(), device, "device").unwrap()
+    fn build<'a>(catalog: &'a Catalog, model: &str, engine: &str) -> &'a Build {
+        catalog.model(model).unwrap().build(engine).unwrap()
     }
 
     #[test]
@@ -612,85 +477,59 @@ mod tests {
     }
 
     #[test]
-    fn the_shared_vectors() {
-        let shared: Vectors = serde_json::from_str(VECTORS).expect("the vectors parse");
-        assert_eq!(check(&shared.fixture), Vec::<String>::new(), "the fixture is a sound catalog itself");
-        let shipped = bundled_catalog();
-        for vector in &shared.vectors {
-            let catalog = if vector.catalog == "fixture" { &shared.fixture } else { &shipped };
-            let got = offers(catalog, &vector.capabilities, &vector.place);
-            match (&vector.error, &vector.offers) {
-                (Some(_), _) => assert!(got.is_err(), "{}: should be refused", vector.name),
-                (None, Some(expected)) => assert_eq!(got.as_ref().unwrap(), expected, "{}", vector.name),
-                (None, None) => panic!("{}: neither offers nor an error", vector.name),
-            }
-        }
-        assert!(
-            shared.vectors.iter().any(|v| v.catalog == "fixture") && shared.vectors.iter().any(|v| v.error.is_some())
-        );
+    fn a_native_build_runs_on_an_apple_silicon_mac_with_its_package_accelerators_best_first() {
+        let catalog = bundled_catalog();
+        let tiny = build(&catalog, "whisper-tiny", "sherpa-onnx");
+        assert_eq!(accelerators_for(&catalog, tiny, &mac()), Some(vec![Capability::Cpu, Capability::Coreml]));
+        let mut no_coreml = mac();
+        no_coreml.capabilities.retain(|c| *c != Capability::Coreml);
+        assert_eq!(accelerators_for(&catalog, tiny, &no_coreml), Some(vec![Capability::Cpu]), "only what is present");
     }
 
     #[test]
-    fn an_apple_silicon_mac_gets_the_native_engine_and_no_page_models() {
-        let offers = offers_of(&mac());
-        assert_eq!(offers.len(), 5);
-        assert!(offers.iter().all(|o| o.engine == "sherpa-onnx"));
-        let tiny = offers.iter().find(|o| o.model == "whisper-tiny").unwrap();
-        assert!(tiny.download_size > 100_000_000, "engine package + model");
-        assert_eq!(tiny.accelerator, Capability::Cpu, "Core ML measured slower for these models");
-        assert_eq!(tiny.alternatives, vec![Choice { engine: "sherpa-onnx".into(), accelerator: Capability::Coreml }]);
+    fn a_page_build_never_runs_natively_nor_a_native_build_in_a_page() {
+        let catalog = bundled_catalog();
+        assert_eq!(accelerators_for(&catalog, build(&catalog, "whisper-tiny", "transformers-js"), &mac()), None);
+        let page = Device { runs: Runs::Page, capabilities: vec![Capability::Wasm, Capability::Cpu], ..mac() };
+        assert_eq!(accelerators_for(&catalog, build(&catalog, "whisper-tiny", "sherpa-onnx"), &page), None);
     }
 
     #[test]
-    fn a_page_gets_the_page_engine_and_webgpu_only_builds_need_webgpu() {
-        let page = |has: Vec<Capability>| Device {
-            runs: Runs::Page,
-            os: String::new(),
-            arch: String::new(),
-            capabilities: has,
-            memory_mb: None,
-        };
-        let wasm = offers_of(&page(vec![Capability::Wasm]));
-        assert!(wasm.iter().all(|o| o.engine == "transformers-js" && o.accelerator == Capability::Wasm));
-        assert!(!wasm.iter().any(|o| o.model == "whisper-large-v3-turbo"), "a WebGPU-only build needs WebGPU");
-        let full = offers_of(&page(vec![Capability::Webgpu, Capability::WebgpuF16, Capability::Wasm]));
-        assert!(full.iter().any(|o| o.model == "whisper-large-v3-turbo" && o.accelerator == Capability::Webgpu));
-    }
-
-    #[test]
-    fn other_platforms_get_nothing_native_tonight() {
+    fn no_package_for_this_platform_means_it_does_not_run() {
+        let catalog = bundled_catalog();
+        let tiny = build(&catalog, "whisper-tiny", "sherpa-onnx");
         for (os, arch) in [("linux", "x86_64"), ("windows", "x86_64"), ("macos", "x86_64")] {
-            let device = Device {
-                runs: Runs::Native,
-                os: os.into(),
-                arch: arch.into(),
-                capabilities: vec![Capability::Cpu],
-                memory_mb: None,
-            };
-            assert!(offers_of(&device).is_empty(), "{os}/{arch}");
+            let device = Device { os: os.into(), arch: arch.into(), capabilities: vec![Capability::Cpu], ..mac() };
+            assert_eq!(accelerators_for(&catalog, tiny, &device), None, "{os}/{arch}");
         }
     }
 
     #[test]
-    fn requirements_are_enforced() {
+    fn package_requirements_build_needs_and_build_accelerators_are_enforced() {
         let mut catalog = bundled_catalog();
         catalog.engines[0].packages[0].requires = vec![Capability::Cuda];
-        assert!(offers(&catalog, &mac(), "device").unwrap().is_empty(), "a CUDA build on a Mac: no");
+        assert_eq!(accelerators_for(&catalog, build(&catalog, "whisper-tiny", "sherpa-onnx"), &mac()), None, "CUDA");
+
+        let mut catalog = bundled_catalog();
+        let tiny = catalog.models.iter_mut().find(|m| m.id == "whisper-tiny").unwrap();
+        tiny.builds.iter_mut().find(|b| b.engine == "sherpa-onnx").unwrap().needs = vec![Capability::Unknown];
+        let needs_unknown = build(&catalog, "whisper-tiny", "sherpa-onnx");
+        assert_eq!(accelerators_for(&catalog, needs_unknown, &mac()), None, "a capability this app does not know");
+
+        let mut catalog = bundled_catalog();
+        let tiny = catalog.models.iter_mut().find(|m| m.id == "whisper-tiny").unwrap();
+        tiny.builds.iter_mut().find(|b| b.engine == "sherpa-onnx").unwrap().accelerators =
+            Some(vec![Capability::Coreml]);
+        let coreml_only = build(&catalog, "whisper-tiny", "sherpa-onnx");
+        assert_eq!(accelerators_for(&catalog, coreml_only, &mac()), Some(vec![Capability::Coreml]));
     }
 
     #[test]
-    fn a_capability_this_app_does_not_know_is_never_had() {
-        let catalog: Catalog =
-            serde_json::from_str(&BUNDLED_CATALOG.replacen("\"webgpu-f16\"", "\"webgpu-f32-someday\"", 1)).unwrap();
-        assert!(catalog.models.iter().any(|m| m.builds.iter().any(|b| b.needs.contains(&Capability::Unknown))));
-        let page = Device {
-            runs: Runs::Page,
-            os: String::new(),
-            arch: String::new(),
-            capabilities: vec![Capability::Webgpu, Capability::WebgpuF16],
-            memory_mb: None,
-        };
-        assert!(!offers(&catalog, &page, "device").unwrap().iter().any(|o| o.model == "whisper-large-v3-turbo"));
+    fn capabilities_by_name() {
+        assert_eq!(capability_named("coreml"), Capability::Coreml);
+        assert_eq!(capability_named("webgpu-f16"), Capability::WebgpuF16);
+        assert_eq!(capability_named("warp-drive"), Capability::Unknown);
+        assert_eq!(capability_name(Capability::Coreml), "coreml");
     }
 
     #[test]
@@ -728,12 +567,6 @@ mod tests {
         catalog.engines[0].packages[0].libraries[0].sha256 = String::new();
         catalog.engines[0].packages[0].libraries[1].path = "../evil.dylib".into();
         assert_eq!(check(&catalog).iter().filter(|p| p.contains("library")).count(), 2);
-    }
-
-    #[test]
-    fn an_unknown_place_is_refused_and_a_provider_offers_nothing_here() {
-        assert!(offers(&bundled_catalog(), &mac(), "nowhere").is_err());
-        assert_eq!(offers(&bundled_catalog(), &mac(), "openai"), Ok(Vec::new()));
     }
 
     #[test]

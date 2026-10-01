@@ -1,13 +1,28 @@
 name: build
 
+# What runs when (RELEASING.md):
+# - pull request: lint + unit tests on Linux; the Apple-Silicon native-engine jobs only when the engine, the bridge,
+#   the catalogue or the CI probes change (`changes` below).
+# - push to main, manual run: everything, installers included; a green run on main replaces the `nightly` pre-release.
+# - a release (called by release-please.yml with the tag it created): everything, attached to that release.
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      release-tag:
+        description: The draft release release-please created (vX.Y.Z); its assets are built from that tag.
+        type: string
+        required: true
+
+permissions:
+  contents: read
 
 concurrency:
-  group: build-${{ github.ref }}
+  # Per ref. A release (github.workflow is the caller's, release-please) never shares a group with a push.
+  group: build-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -19,6 +34,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release-tag }}
       - name: Webview toolkit (the shell links against it even to lint)
         run: |
           sudo apt-get update
@@ -46,16 +63,49 @@ jobs:
         run: cargo fmt --all --check
       - name: clippy
         working-directory: src-tauri
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Rust unit tests
         working-directory: src-tauri
         run: cargo test --workspace
 
+  changes:
+    name: What this run builds
+    runs-on: ubuntu-24.04
+    permissions:
+      pull-requests: read
+    outputs:
+      # The Apple-Silicon engine round trip, the probe page and the room flow.
+      native: ${{ github.event_name != 'pull_request' || steps.filter.outputs.native == 'true' }}
+      # .dmg, Windows installer, .deb/.AppImage: never on a pull request.
+      installers: ${{ github.event_name != 'pull_request' }}
+      # Where the installers go: the release that called this, or the rolling `nightly` pre-release on a push to main.
+      publish: ${{ inputs.release-tag && 'release' || (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'nightly' || '' }}
+    steps:
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        if: github.event_name == 'pull_request'
+        id: filter
+        with:
+          filters: |
+            native:
+              - 'src-tauri/engine/**'
+              - 'src-tauri/src/engine_ipc.rs'
+              - 'src-tauri/src/probe.rs'
+              - 'src-tauri/core/src/engines.rs'
+              - 'src-tauri/core/src/bridge.rs'
+              - 'bridge/**'
+              - 'catalog/**'
+              - 'test/fixtures/**'
+              - 'ui/voice/**'
+
   macos:
-    name: macOS (Apple Silicon) .dmg
+    name: macOS (Apple Silicon) .dmg and native flow
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release-tag }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
@@ -68,8 +118,10 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Build the app bundle (ad-hoc signed, hardened runtime, entitlements)
+        if: needs.changes.outputs.installers == 'true'
         run: npx tauri build --target aarch64-apple-darwin --bundles app
       - name: Check what a first open depends on
+        if: needs.changes.outputs.installers == 'true'
         run: |
           set -euo pipefail
           APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
@@ -101,11 +153,18 @@ jobs:
           test "$(plutil -extract CFBundleName raw "$APP/Contents/Info.plist")" = "Sidevoice"
           echo "--- architecture"
           lipo -archs "$APP/Contents/MacOS/sidevoice-desktop" | tee /dev/stderr | grep -q arm64
+          echo "--- no CI probe in a release (src-tauri/src/probe.rs is behind the probe feature)"
+          if grep -q "SIDEVOICE_DEBUG_PAGE" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the probe switch is in the release app"; exit 1; fi
+          if grep -q "probe-engine" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the probe page is in the release app"; exit 1; fi
+          if grep -q "SIDEVOICE_DEBUG_ROOM_FLOW" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the room-flow switch is in the release app"; exit 1; fi
+          if grep -q "room-flow" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the room-flow script is in the release app"; exit 1; fi
       - name: First open (no settings) — the bundled interface comes up in the real WKWebView
+        if: needs.changes.outputs.installers == 'true'
         run: |
           set -euo pipefail
           APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
-          SIDEVOICE_DEBUG=1 "$APP/Contents/MacOS/sidevoice-desktop" > /tmp/app.log 2>&1 &
+          # Asking for the probe page changes nothing in a release: the interface loads (checked below).
+          SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_PAGE=probe.html SIDEVOICE_DEBUG_ROOM_FLOW=1 "$APP/Contents/MacOS/sidevoice-desktop" > /tmp/app.log 2>&1 &
           PID=$!
           for i in $(seq 1 45); do grep -q "ready: true" /tmp/app.log && break; sleep 1; done
           sleep 5
@@ -114,38 +173,10 @@ jobs:
           # The interface loaded from the app itself, and its controller came up: the bridge attached to the
           # real web UI's store and actions, and reached the app over IPC.
           grep -q "page tauri://localhost/voice/index.html" /tmp/app.log
+          if grep -Eq "probe.html|room-flow" /tmp/app.log; then echo "a release ran a CI probe"; exit 1; fi
           grep -q "ready: true" /tmp/app.log
-      - name: What the interface's window offers (probe page, same origin and permission rule)
-        run: |
-          set -euo pipefail
-          APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
-          python3 -u test/fixtures/fake-node.py 8768 > /tmp/probe-node.log 2>&1 &
-          NODE=$!
-          SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_PAGE=probe.html "$APP/Contents/MacOS/sidevoice-desktop" > /tmp/probe.log 2>&1 &
-          PID=$!
-          for i in $(seq 1 240); do grep -q "probe-engine" /tmp/probe.log && break; sleep 1; done
-          kill "$PID" || true
-          cat /tmp/probe.log
-          echo "--- macOS $(sw_vers -productVersion)"
-          # Pairing needs a secure context and WebCrypto ECDSA P-256 on the app's own origin.
-          grep -q "probe origin=tauri://localhost secure=true ecdsa=true" /tmp/probe.log
-          # A local node (http://127.0.0.1:8768) reached from the app's origin with a device token: preflight + CORS.
-          kill "$NODE" || true
-          grep -q 'probe-loopback 200 Bearer probe-token' /tmp/probe.log
-          grep -q 'request OPTIONS /api/presentation/echo origin=tauri://localhost' /tmp/probe-node.log
-          grep "sidevoice: media" /tmp/probe.log || echo "(WebKit did not ask the app about the microphone)"
-          # The native engine inside the signed app: downloaded, loaded under the hardened runtime, and run
-          # through the page's IPC (Kokoro says a sentence, Whisper hears it).
-          grep -q 'probe-engine ok' /tmp/probe.log
-          grep -iq 'probe-engine ok.*prueba' /tmp/probe.log
-          # Headset buttons: a (simulated) call made the app the Now Playing app, and it let go after.
-          grep -q 'probe-headset ok' /tmp/probe.log
-          grep -q 'headset apply active=true in_call=true mic=true' /tmp/probe.log
-          grep 'headset apply' /tmp/probe.log | tail -1 | grep -q 'active=false in_call=false .* gesture_on=false' 
-          grep 'headset apply' /tmp/probe.log
-          # The app's own mute is not mistaken for an AirPods gesture.
-          if grep -q 'headset airpods' /tmp/probe.log; then echo 'echo recorded as a gesture'; exit 1; fi
       - name: With a target (a fake node on loopback)
+        if: needs.changes.outputs.installers == 'true'
         run: |
           set -euo pipefail
           APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
@@ -153,11 +184,13 @@ jobs:
           mkdir -p "$CONF"
           printf '{"target":"http://127.0.0.1:8768","muteShortcut":""}' > "$CONF/settings.json"
           python3 -u test/fixtures/fake-node.py 8768 > /tmp/node.log 2>&1 &
+          NODE=$!
           SIDEVOICE_DEBUG=1 "$APP/Contents/MacOS/sidevoice-desktop" > /tmp/target.log 2>&1 &
           PID=$!
           for i in $(seq 1 45); do grep -q "ready: true" /tmp/target.log && break; sleep 1; done
           sleep 5
           kill "$PID" || true
+          kill "$NODE" || true  # the probe below starts its own on the same port
           rm -rf "$CONF"
           echo "--- app"; cat /tmp/target.log
           echo "--- fake node (what the interface asked, cross-origin)"; sort /tmp/node.log | uniq -c
@@ -165,6 +198,7 @@ jobs:
           # The interface asked its target from the app's own origin (cross-origin), with no pairing yet.
           grep -q "origin=tauri://localhost" /tmp/node.log
       - name: Make the .dmg (the brand's window, with background, icon layout and volume icon)
+        if: needs.changes.outputs.installers == 'true'
         run: |
           set -euo pipefail
           VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
@@ -195,6 +229,7 @@ jobs:
           cp docs/FIRST_OPEN.txt dist/LEEME-primera-apertura.txt
           (cd dist && shasum -a 256 *.dmg | tee SHA256SUMS.txt)
       - name: The .dmg window as Finder shows it (screenshots, light and dark; informational)
+        if: needs.changes.outputs.installers == 'true'
         continue-on-error: true
         timeout-minutes: 4
         run: |
@@ -219,46 +254,137 @@ jobs:
           hdiutil detach "$VOL" || true
           ls -la dmg-screens
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && needs.changes.outputs.installers == 'true'
         with:
           name: dmg-window-screenshots
           path: dmg-screens/
-          retention-days: 30
+          retention-days: 7
           if-no-files-found: warn
       - uses: actions/upload-artifact@v4
+        if: needs.changes.outputs.installers == 'true'
         with:
           name: Sidevoice-macOS-AppleSilicon-dmg
           path: dist/
-          retention-days: 30
+          retention-days: 7
           if-no-files-found: error
+      # CI only from here: the same app built with the `probe` feature (src-tauri/src/probe.rs), which adds the
+      # probe page and the switch that loads it into the room window. The release app above has neither. On a pull
+      # request (engine, bridge, catalogue or probe changes) only this part runs.
+      - name: Build the CI probe app (feature probe; never shipped)
+        run: |
+          set -euo pipefail
+          npx tauri build --target aarch64-apple-darwin --bundles app --features probe
+          # The check on the release app means something: this build does carry the page and its switch.
+          BIN="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app/Contents/MacOS/sidevoice-desktop"
+          grep -q "SIDEVOICE_DEBUG_PAGE" "$BIN"
+          grep -q "probe-engine" "$BIN"
+          grep -q "SIDEVOICE_DEBUG_ROOM_FLOW" "$BIN"
+          grep -q "room-flow" "$BIN"
+      - name: What the interface's window offers (probe page, same origin and permission rule)
+        run: |
+          set -euo pipefail
+          APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
+          python3 -u test/fixtures/fake-node.py 8768 > /tmp/probe-node.log 2>&1 &
+          NODE=$!
+          SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_PAGE=probe.html "$APP/Contents/MacOS/sidevoice-desktop" > /tmp/probe.log 2>&1 &
+          PID=$!
+          for i in $(seq 1 240); do grep -q "probe-engine" /tmp/probe.log && break; sleep 1; done
+          kill "$PID" || true
+          cat /tmp/probe.log
+          echo "--- macOS $(sw_vers -productVersion)"
+          grep -q "page tauri://localhost/probe.html" /tmp/probe.log
+          # Pairing needs a secure context and WebCrypto ECDSA P-256 on the app's own origin.
+          grep -q "probe origin=tauri://localhost secure=true ecdsa=true" /tmp/probe.log
+          # A local node (http://127.0.0.1:8768) reached from the app's origin with a device token: preflight + CORS.
+          kill "$NODE" || true
+          grep -q 'probe-loopback 200 Bearer probe-token' /tmp/probe.log
+          grep -q 'request OPTIONS /api/presentation/echo origin=tauri://localhost' /tmp/probe-node.log
+          grep "sidevoice: media" /tmp/probe.log || echo "(WebKit did not ask the app about the microphone)"
+          # The native engine inside the signed app, through the bridge the interface uses (docs/BRIDGE.md):
+          # capabilities with the OS's real memory, downloads with progress, the builds on disk by model + engine,
+          # Kokoro says a sentence and Whisper hears it, and a page engine is refused rather than replaced.
+          grep -q 'probe-engine ok' /tmp/probe.log
+          grep -q 'probe-engine ok capabilities={"runs":"native","os":"macos","arch":"aarch64","has":\["cpu","coreml"' /tmp/probe.log
+          grep -Eq 'probe-engine ok .*"memory_mb":[1-9][0-9]{3,}' /tmp/probe.log
+          grep -q 'probe-engine ok .* installed=kokoro-82m-v1.0@sherpa-onnx,whisper-tiny@sherpa-onnx ' /tmp/probe.log
+          grep -Eq 'probe-engine ok .* progress_calls=[1-9]' /tmp/probe.log
+          grep -q 'probe-engine ok .* refused=yes ' /tmp/probe.log
+          grep -iq 'probe-engine ok.*prueba' /tmp/probe.log
+          # Headset buttons: a (simulated) call made the app the Now Playing app, and it let go after.
+          grep -q 'probe-headset ok' /tmp/probe.log
+          grep -q 'headset apply active=true in_call=true mic=true' /tmp/probe.log
+          grep 'headset apply' /tmp/probe.log | tail -1 | grep -q 'active=false in_call=false .* gesture_on=false' 
+          grep 'headset apply' /tmp/probe.log
+          # The app's own mute is not mistaken for an AirPods gesture.
+          if grep -q 'headset airpods' /tmp/probe.log; then echo 'echo recorded as a gesture'; exit 1; fi
+      - name: The native flow through the vendored room itself (capabilities → offers shown → install → speak → transcribe)
+        run: |
+          set -euo pipefail
+          APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
+          # From nothing on disk, so the room installs what it runs (the probe above downloaded into the same place).
+          rm -rf "$HOME/Library/Application Support/dev.sidevoice.desktop/engines"
+          SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_ROOM_FLOW=1 "$APP/Contents/MacOS/sidevoice-desktop" > /tmp/room.log 2>&1 &
+          PID=$!
+          for i in $(seq 1 300); do grep -Eq "room-flow (ok|error)" /tmp/room.log && break; sleep 1; done
+          kill "$PID" || true
+          cat /tmp/room.log
+          cat ui/voice/web-source.json
+          # The actual vendored room (ui/voice), not a test page, driven through its own controller, store,
+          # transcription client and native worker, over this app's bridge (test/fixtures/room-flow.js).
+          grep -q "page tauri://localhost/voice/index.html" /tmp/room.log
+          grep -q 'room-flow ok' /tmp/room.log
+          LINE=$(grep 'room-flow ok' /tmp/room.log)
+          # What the room asked the app, and the offers it resolved from it: the five native models, nothing of the page's.
+          echo "$LINE" | grep -q 'capabilities={"runs":"native","os":"macos","arch":"aarch64","has":\["cpu","coreml"'
+          echo "$LINE" | grep -Eq '"memory_mb":[1-9][0-9]{3,}'
+          echo "$LINE" | grep -Eq ' engines=(sherpa-onnx/[a-z]+,?)+ '
+          for model in whisper-tiny whisper-base whisper-small whisper-large-v3-turbo; do echo "$LINE" | grep -Eq " offers_stt=[^ ]*$model"; done
+          echo "$LINE" | grep -q ' offers_tts=kokoro-82m-v1.0 '
+          if echo "$LINE" | grep -Eq 'transformers-js|webgpu|wasm'; then echo "a page engine in the app"; exit 1; fi
+          # What its Transcripción / Voz panes show, in the app ("Este dispositivo" runs in the app).
+          echo "$LINE" | grep -Eq ' shown_stt=[^ ]*whisper-tiny'
+          echo "$LINE" | grep -Eq ' shown_tts=[^ ]*kokoro-82m-v1.0'
+          echo "$LINE" | grep -q ' where=app '
+          # Installed through the room, and marked downloaded in its pane.
+          echo "$LINE" | grep -q ' installed=kokoro-82m-v1.0@sherpa-onnx,whisper-tiny@sherpa-onnx '
+          echo "$LINE" | grep -q 'tiny_detail="[^"]*descargado'
+          echo "$LINE" | grep -q ' runtime=whisper-tiny@sherpa-onnx/cpu '
+          # Kokoro spoke the sentence and Whisper heard it back.
+          echo "$LINE" | grep -iq 'text=".*prueba'
 
   engine:
     name: Native engine on Apple Silicon (download, Kokoro → Whisper round trip)
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release-tag }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-      - name: Round trip on the CPU
+      - name: Round trip on the accelerator the resolver picks (CPU)
         working-directory: src-tauri
         run: cargo run --release -p sidevoice-desktop-engine --example roundtrip -- "$RUNNER_TEMP/engines"
       - name: Round trip with Core ML (informational)
         continue-on-error: true
         working-directory: src-tauri
-        env:
-          SIDEVOICE_ENGINE_PROVIDER: coreml
-        run: cargo run --release -p sidevoice-desktop-engine --example roundtrip -- "$RUNNER_TEMP/engines"
+        run: cargo run --release -p sidevoice-desktop-engine --example roundtrip -- "$RUNNER_TEMP/engines" coreml
       - name: The engine's libraries (for the record)
         run: |
           find "$RUNNER_TEMP/engines/engines" -name "*.dylib" -exec sh -c 'echo "== $1"; otool -L "$1" | head -8; codesign -dv "$1" 2>&1 | head -3' _ {} \;
 
   linux:
     name: Linux (.deb, .AppImage)
+    needs: changes
+    if: needs.changes.outputs.installers == 'true'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release-tag }}
       - run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
@@ -278,14 +404,18 @@ jobs:
           path: |
             src-tauri/target/release/bundle/deb/*.deb
             src-tauri/target/release/bundle/appimage/*.AppImage
-          retention-days: 30
+          retention-days: 7
           if-no-files-found: error
 
   windows:
     name: Windows (installer)
+    needs: changes
+    if: needs.changes.outputs.installers == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release-tag }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -300,5 +430,75 @@ jobs:
         with:
           name: Sidevoice-Windows-x64
           path: src-tauri/target/release/bundle/nsis/*.exe
-          retention-days: 30
+          retention-days: 7
           if-no-files-found: error
+
+  # Only after every job above passed: the installers of this run go to the release that called it, or replace the
+  # rolling `nightly` pre-release (RELEASING.md). Pull requests never get here.
+  publish:
+    name: Publish (release or nightly)
+    needs: [changes, test, macos, engine, linux, windows]
+    if: needs.changes.outputs.publish != ''
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      KIND: ${{ needs.changes.outputs.publish }}
+      TAG: ${{ inputs.release-tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release-tag }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Sidevoice-*
+          path: artifacts
+      - name: The assets and their SHA256SUMS
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          mkdir assets
+          find artifacts -type f \( -name '*.dmg' -o -name '*-setup.exe' -o -name '*.deb' -o -name '*.AppImage' \) \
+            -exec cp {} assets/ \;
+          if [ "$KIND" = nightly ]; then
+            # Stable names, so a link to the nightly .dmg keeps working; the app inside still says $VERSION.
+            for f in assets/*; do mv "$f" "${f/_${VERSION}_/_nightly_}"; done
+          fi
+          for ext in dmg exe deb AppImage; do ls assets/*."$ext" >/dev/null; done
+          (cd assets && sha256sum -- * > SHA256SUMS)
+          ls -la assets; cat assets/SHA256SUMS
+      - name: Attach to the release, then publish it (a version with -rc.N is a pre-release, never latest)
+        if: env.KIND == 'release'
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" assets/* --clobber
+          if [[ "$TAG" == *-* ]]; then
+            gh release edit "$TAG" --draft=false --prerelease --latest=false
+          else
+            gh release edit "$TAG" --draft=false --prerelease=false --latest
+          fi
+      - name: Replace the nightly pre-release (move its tag here, replace every asset)
+        if: env.KIND == 'nightly'
+        env:
+          WHEN: ${{ github.event.head_commit.timestamp }}
+        run: |
+          set -euo pipefail
+          if gh api "repos/$GH_REPO/git/ref/tags/nightly" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$GH_REPO/git/refs/tags/nightly" -f sha="$GITHUB_SHA" -F force=true >/dev/null
+          else
+            gh api -X POST "repos/$GH_REPO/git/refs" -f ref=refs/tags/nightly -f sha="$GITHUB_SHA" >/dev/null
+          fi
+          NOTES="Snapshot of \`main\` at $GITHUB_SHA (committed $WHEN). Not a versioned release: the \`nightly\` tag moves to every commit on \`main\` whose CI passes, and these assets are replaced each time. Versioned releases are the \`vX.Y.Z\` ones."
+          if gh release view nightly >/dev/null 2>&1; then
+            gh release edit nightly --title "Nightly (main)" --notes "$NOTES" --prerelease --latest=false
+            gh release upload nightly assets/* --clobber
+            # Anything left from an older snapshot that this one did not replace.
+            gh release view nightly --json assets -q '.assets[].name' | while read -r name; do
+              [ -e "assets/$name" ] || gh release delete-asset nightly "$name" --yes
+            done
+          else
+            gh release create nightly assets/* --verify-tag --title "Nightly (main)" --notes "$NOTES" \
+              --prerelease --latest=false
+          fi

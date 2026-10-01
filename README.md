@@ -17,16 +17,16 @@ client/server split (2026-09-30).
   settings, quit; global mute shortcut (default ⌘⇧M / Ctrl+Shift+M); closing the window keeps the call and the
   app running; no notifications.
 - The tray drives the web UI through a small **explicit bridge** (`docs/BRIDGE.md`), not the DOM.
-- The web UI's in-browser models (Whisper, Kokoro) run in the system webview: WebGPU where it has it,
-  WebAssembly otherwise (`docs/MODELS.md`).
+- Speech models (Whisper, Kokoro) run in the app's native engine, downloaded when first chosen, never in the
+  webview (`docs/MODELS.md`, `docs/ENGINES.md`).
 
 ## Get it
 
-Builds come from GitHub Actions (`.github/workflows/build.yml`): open the latest run of **build**
-on `main` whose macOS job is green (a newer push cancels an older run) → *Artifacts* →
-`Sidevoice-macOS-AppleSilicon-dmg` (also Linux and Windows). The repo is private: downloading
-needs a GitHub account with read access. The macOS build is ad-hoc signed, not notarized: read
-`docs/FIRST_OPEN.txt` before opening it.
+From the repository's **Releases**: a `vX.Y.Z` release, or `nightly`, the snapshot of the latest
+green `main` (`RELEASING.md`). Each has the Apple-Silicon `.dmg`, the Windows installer, the
+`.deb`/`.AppImage` and `SHA256SUMS`. The repo is private: downloading needs a GitHub account with
+read access. The macOS build is ad-hoc signed, not notarized: read `docs/FIRST_OPEN.txt` before
+opening it.
 
 ## Layout
 

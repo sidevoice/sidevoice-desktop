@@ -2,7 +2,8 @@
 <html lang="es">
 <head><meta charset="utf-8"><title>Sidevoice · sonda (CI)</title></head>
 <body>
-<p>CI only: loaded into the room window with SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_PAGE=probe.html, to measure
+<p>CI only, served only by the app built with the <code>probe</code> feature (src-tauri/src/probe.rs): loaded into
+the room window with SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_PAGE=probe.html, to measure
 what the interface's own window offers — same origin, same permission rule — and print it through debug_log.</p>
 <script>
 (async () => {
@@ -67,18 +68,25 @@ what the interface's own window offers — same origin, same permission rule —
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-headset error " + String(error && (error.message || error)) });
   }
 
-  // The native engine through the app itself: hardened runtime, dlopen of the downloaded package, raw-byte IPC.
+  // The native engine through the app itself, as the interface calls it (docs/BRIDGE.md): capabilities, install,
+  // run by catalogue model id + engine — hardened runtime, dlopen of the downloaded package, raw-byte IPC.
   const engine = window.__sidevoiceDesktop && window.__sidevoiceDesktop.host && window.__sidevoiceDesktop.host.nativeEngine;
   if (!engine) { await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-engine none" }); return; }
   try {
-    const info = await engine.available();
-    await engine.install("kokoro-82m-v1.0", "sherpa-onnx");
+    const capabilities = await engine.capabilities();
+    let progress = 0;
+    await engine.install("kokoro-82m-v1.0", "sherpa-onnx", () => { progress++; });
     await engine.install("whisper-tiny", "sherpa-onnx");
+    const installed = (await engine.installed()).map((b) => b.model + "@" + b.engine).sort().join(",");
     const started = performance.now();
-    const audio = await engine.synthesize("kokoro-82m-v1.0", "ef_dora", 1, "Hola, esto es una prueba de voz.");
+    const audio = await engine.synthesize("kokoro-82m-v1.0", "sherpa-onnx", "ef_dora", 1, "Hola, esto es una prueba de voz.");
     const spoken = performance.now() - started;
-    const text = await engine.transcribe("whisper-tiny", audio.samples, audio.sampleRate, "es");
-    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-engine ok offers=" + info.offers.length +
+    const text = await engine.transcribe("whisper-tiny", "sherpa-onnx", audio.samples, audio.sampleRate, "es", "cpu");
+    // A page engine is never run natively, nor replaced by another: refused, by key (docs/BRIDGE.md → "Refusals").
+    const refused = await engine.transcribe("whisper-tiny", "transformers-js", audio.samples, audio.sampleRate, "es")
+      .then(() => "no", (error) => (error && error.key === "engine_unsupported" ? "yes" : "other:" + JSON.stringify(error)));
+    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-engine ok capabilities=" + JSON.stringify(capabilities) +
+      " installed=" + installed + " progress_calls=" + progress + " refused=" + refused +
       " audio=" + (audio.samples.length / audio.sampleRate).toFixed(2) + "s@" + audio.sampleRate + " synth_ms=" + Math.round(spoken) +
       " text=" + JSON.stringify(text) });
   } catch (error) {

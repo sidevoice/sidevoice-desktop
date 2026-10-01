@@ -9,8 +9,8 @@ some engine reads.
 ## The catalog (`catalog/engines.json`, shape in `src-tauri/core/src/engines.rs`)
 
 **Owner: `sidevoice/sidevoice-core`** (`src/sidevoice_core/models/catalog.json`), as rubasace/sidevoice#124 §3
-decided. `catalog/engines.json` is a copy generated from it and never edited here; so is `catalog/vectors.json`,
-the resolver's shared test vectors. To change either, change the core, then:
+decided. `catalog/engines.json` is a copy generated from it and never edited here. To change it, change the core,
+then:
 
     node scripts/copy-core-catalog.mjs <sidevoice-core checkout>
 
@@ -43,22 +43,25 @@ Every node serves the same file at `GET /api/models/catalog`; the web build carr
 ```
 
 A build may be limited to some `accelerators` (Whisper small's page build: WebGPU only), may `need` a feature
-(`webgpu-f16`), and may carry a per-platform `rank` that beats the default engine order.
+(`webgpu-f16`), and may carry a per-platform `rank` that beats the default engine order (the resolvers' concern).
 
 Capabilities (`Capability`): `cpu`, `wasm`, `webgpu`, `webgpu-f16`, `metal`, `coreml`, `mlx`, `cuda`; one a newer
 catalog names and this app does not know is never had. A `Device` is what a place reports: `runs` (`page` or
 `native`), OS/arch, what it `has`, and memory when known. This app's is `native_device()` (an Apple Silicon Mac has
-`cpu`, `coreml`, `metal`, `mlx`).
+`cpu`, `coreml`, `metal`, `mlx`) with the machine's total memory from the OS (`src-tauri/engine/src/memory.rs`); it is
+what the page gets from `nativeEngine.capabilities()` (docs/BRIDGE.md).
 
-`offers(catalog, device, place)` is the resolver of #124 §4: one offer per model the place can run, on its best
-build (the build's `rank` for this platform, else the default order) and best accelerator, with the reason and every
-other build × accelerator ranked behind it. A native runtime is never offered a page engine's builds, and a page
-never a native one. The core's Python is the reference and the web's TypeScript the third implementation; all
-three pass `catalog/vectors.json`.
+The resolver of #124 §4 — one offer per model a place can run, on its best build and accelerator — has one
+implementation per side: the web's TypeScript for a client (in the app too: the page resolves from what
+`nativeEngine.capabilities()` reports) and the core's Python for a host. This app has none. At its trust boundary
+it only checks that the build a page asks for runs here before it downloads or runs it (`src-tauri/engine`,
+`locate`): an adapter for the engine, a package for this device, the build's needs and accelerators
+(`accelerators_for` in `src-tauri/core/src/engines.rs`) and the model's `requires.memory_mb` (unknown memory is not
+a refusal). The accelerator the page names must be one of those; with none named, the first is used.
 
 `check(catalog)` refuses a catalog with an unknown engine or family, a build its engine does not run (family,
 format, accelerator), a native download without https + SHA-256, a library without its hash, or an option kind the
-web interface cannot render (tested against the bundled one and the vectors' fixture).
+web interface cannot render (tested against the bundled catalog).
 
 ## The native engine shipped tonight: sherpa-onnx on Apple Silicon
 
@@ -67,12 +70,17 @@ web interface cannot render (tested against the bundled one and the vectors' fix
   `em_alex`, `em_santa`, plus English, French, Italian, Portuguese, Hindi — the same voice ids the web uses).
 - Downloaded on demand into `~/Library/Application Support/dev.sidevoice.desktop/engines/` (the package 8.8 MB,
   Whisper tiny 116 MB … turbo 564 MB, Kokoro 132 MB), each checked against the catalog's SHA-256, unpacked into a
-  temporary directory and moved into place only when complete (`src-tauri/engine/src/install.rs`).
+  temporary directory and moved into place only when complete (`src-tauri/engine/src/install.rs`). A download counts
+  as installed while its marker names its hash and its root and every file the engine needs are there (the
+  package's libraries; the files the model's config names); one that lost a file is not, and installing fetches it
+  again.
 - Loaded with `dlopen` (`libloading`), never linked: ONNX Runtime first, then the C API. The `#[repr(C)]`
   structs are **generated** from that exact version's `c-api.h` (`scripts/gen-sherpa-ffi.py`), and the library's
   own version string is checked against the bindings' before anything is called.
-- Provider: **CPU** by default. Core ML was measured slower on the CI runner for these models (Kokoro 3.1 s vs
-  2.4 s for 2.7 s of speech; Whisper tiny 2.0 s vs 0.3 s); `SIDEVOICE_ENGINE_PROVIDER=coreml` switches it.
+- Accelerator: the one the page chose for the build, else the first it can use here — **CPU**, which the catalogue
+  ranks first for sherpa-onnx on Apple Silicon: Core ML was measured slower on the CI runner for these models
+  (Kokoro 3.1 s vs
+  2.4 s for 2.7 s of speech; Whisper tiny 2.0 s vs 0.3 s). The CI round trip also runs it with `coreml`.
 - macOS: the app is hardened-runtime, ad-hoc signed; library validation would refuse a downloaded library, so
   the app carries `com.apple.security.cs.disable-library-validation` (Entitlements.plist explains the trade).
 
@@ -83,19 +91,16 @@ signed app's IPC.
 
 ## The page's side
 
-`window.__sidevoiceDesktop.host.nativeEngine` (bridge/desktop-bridge.js):
+The page reaches the engine through `window.__sidevoiceDesktop.host.nativeEngine` — `capabilities()`,
+`installed()`, `install(model, engine, onProgress)`, `transcribe(…)`, `synthesize(…)`, keyed by catalogue model id +
+engine id; the contract is in docs/BRIDGE.md → "The native engine". In the app the native engine is the only
+engine *Este dispositivo* has: the page's own engines (WebGPU, WebAssembly) are never offered there (#124 D5). The
+web's transcription and voice clients talk to their engines through a worker message protocol; for a native offer
+they get a stand-in with the same protocol backed by `nativeEngine` (rubasace/sidevoice
+`packages/browser-audio/native-worker.js`).
 
-| Call | Does |
-|---|---|
-| `available()` | `{device, offers:[{model, engine, task, label, languages, downloadSize, accelerator, accelerators, reason, installed, voices}], pageIds}` — one offer per model, on its best build; `pageIds` maps the page's model ids (`onnx-community/whisper-small`) to the catalog's (`whisper-small`) |
-| `install(model, engine, onProgress)` | downloads engine + model; `onProgress(doneBytes, totalBytes)` |
-| `transcribe(model, Float32Array, sampleRate, language)` | text |
-| `synthesize(model, voice, speed, text)` | `{samples: Float32Array, sampleRate}` |
-
-In the web interface the native engine is one more **device** next to WebGPU and WebAssembly for the same model:
-"where does this model run". The web's transcription and voice clients talk to their engines through a worker
-message protocol; with the native device chosen they get a stand-in with the same protocol backed by
-`nativeEngine` (rubasace/sidevoice `packages/browser-audio/native-worker.js`).
+The app's settings window shows the engine's side: what `capabilities()` reports, and the engine packages and model
+builds on disk with their sizes.
 
 ## Adding an engine or a model
 
@@ -103,5 +108,7 @@ message protocol; with the native device chosen they get a stand-in with the sam
   its download (native) or its repository (page) and the engine's config keys; then copy the catalog here. Nothing
   is compiled.
 - A native engine: a catalog entry in the core with packages per OS/arch, and — the one compiled part — its runtime adapter
-  in `src-tauri/engine/src/` (load the package, map the model's config to the engine's API). An engine whose
-  adapter the app does not have is simply not offered.
+  in `src-tauri/engine/src/` (a `Runtime`: load the package, map the model's config to the engine's API) and a line in
+  `ADAPTERS`. The app refuses to install or run a build on an engine it has no adapter for; it never substitutes
+  another. The page resolves offers from the capabilities alone, which do not say which engines the app runs: a
+  catalogue with a second native engine for this platform and no adapter here would be offered, then refused.

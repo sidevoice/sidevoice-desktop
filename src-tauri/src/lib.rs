@@ -12,6 +12,8 @@
 
 mod engine_ipc;
 mod headset;
+#[cfg(feature = "probe")]
+mod probe;
 mod tray;
 
 use serde::Serialize;
@@ -173,12 +175,11 @@ fn reset_call_state(app: &AppHandle) {
 fn open_room(app: &AppHandle, settings: &Settings) -> tauri::Result<()> {
     let state = app.state::<AppState>();
     let label = format!("{ROOM_PREFIX}{}", state.room_counter.fetch_add(1, Ordering::SeqCst) + 1);
-    // CI only: `SIDEVOICE_DEBUG_PAGE=probe.html` loads the probe page into this same window, to measure what the
-    // interface's window offers (secure context, WebCrypto, microphone) with this window's own permission rule.
-    let page = match std::env::var("SIDEVOICE_DEBUG_PAGE") {
-        Ok(probe) if debugging() && probe == "probe.html" => probe,
-        _ => BUNDLED_INTERFACE.to_string(),
-    };
+    #[cfg(not(feature = "probe"))]
+    let page = BUNDLED_INTERFACE;
+    // CI's probe build only (src/probe.rs): the probe page may take the interface's place in this same window.
+    #[cfg(feature = "probe")]
+    let page = probe::page(BUNDLED_INTERFACE);
 
     if let Some(old) = room_window(app) {
         old.destroy()?;
@@ -198,6 +199,11 @@ fn open_room(app: &AppHandle, settings: &Settings) -> tauri::Result<()> {
         .initialization_script(bridge::script_for_origin(APP_ORIGIN));
     if let Some(target) = settings::target_script(settings) {
         builder = builder.initialization_script(target);
+    }
+    // CI's probe build only (src/probe.rs): the native flow driven through the vendored room itself.
+    #[cfg(feature = "probe")]
+    if let Some(flow) = probe::room_flow() {
+        builder = builder.initialization_script(flow);
     }
     builder
         // A hidden window still carries the call: never suspend or throttle its page.
@@ -267,6 +273,9 @@ fn apply_shortcut(app: &AppHandle, accelerator: &str) -> Result<(), String> {
 }
 
 pub fn run() {
+    let context = tauri::generate_context!();
+    #[cfg(feature = "probe")]
+    let context = probe::with_page(context);
     tauri::Builder::default()
         // A second launch (Finder, Spotlight) brings the running one forward instead.
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| show_room(app)))
@@ -287,7 +296,9 @@ pub fn run() {
             debug_log,
             headset_report,
             headset_test,
-            engine_ipc::engine_available,
+            engine_ipc::engine_capabilities,
+            engine_ipc::engine_installed,
+            engine_ipc::engine_on_disk,
             engine_ipc::engine_install,
             engine_ipc::engine_progress,
             engine_ipc::engine_transcribe,
@@ -322,7 +333,7 @@ pub fn run() {
                 }
             }
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building the Sidevoice app")
         .run(|app, event| {
             // macOS: clicking the Dock icon with no visible window.

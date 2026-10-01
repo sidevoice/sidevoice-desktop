@@ -1,96 +1,101 @@
-//! The native engine, as the bundled interface reaches it (docs/ENGINES.md → "The page's side").
+//! The native engine, as the bundled interface reaches it (docs/BRIDGE.md → "The native engine").
 //!
 //! The bridge script exposes these as `window.__sidevoiceDesktop.host.nativeEngine`. Only the room window's own
-//! pages may call them (capabilities/room.json). Engine work runs on blocking threads, never the main one.
+//! pages may call them (capabilities/room.json); the settings window may read what is on disk
+//! (`engine_on_disk`, capabilities/settings.json). Engine work runs on blocking threads, never the main one.
 //! Audio crosses as raw bytes: little-endian f32 samples (transcribe's body; synthesize's answer, after a
-//! 4-byte little-endian sample rate).
+//! 4-byte little-endian sample rate). A refusal is the engine's keyed `Error` (docs/BRIDGE.md → "Refusals").
 
-use sidevoice_desktop_engine::{Available, NativeEngines};
-use std::sync::atomic::{AtomicU64, Ordering};
+use sidevoice_desktop_core::engines::{self, Capability, Device};
+use sidevoice_desktop_engine::error::{bad_request, internal};
+use sidevoice_desktop_engine::{Error, Installed, Jobs, NativeEngines, OnDisk};
 use std::sync::Arc;
 use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::State;
 
 pub struct EngineState {
     pub engines: Arc<NativeEngines>,
-    /// Bytes downloaded and expected by the install in progress (one at a time is enough for a person).
-    done: Arc<AtomicU64>,
-    total: Arc<AtomicU64>,
+    /// Progress of each install in flight, by the page's job id.
+    jobs: Arc<Jobs>,
 }
 
 impl EngineState {
     pub fn new(engines: NativeEngines) -> Self {
-        EngineState { engines: Arc::new(engines), done: Arc::default(), total: Arc::default() }
+        EngineState { engines: Arc::new(engines), jobs: Arc::default() }
     }
 }
 
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EngineInfo {
-    device: sidevoice_desktop_core::engines::Device,
-    offers: Vec<Available>,
-    /// Model ids as the page's browser engine names them (`builds["transformers-js"].config.repository`), so the
-    /// page can say "this same model, natively".
-    page_ids: std::collections::BTreeMap<String, String>,
-}
-
+/// `{runs: "native", os, arch, has, memory_mb}`: what the page resolves its offers from.
 #[tauri::command]
-pub fn engine_available(state: State<'_, EngineState>) -> EngineInfo {
-    let engines = &state.engines;
-    let page_ids = engines
-        .catalog
-        .models
-        .iter()
-        .filter_map(|m| {
-            let repository = m.build("transformers-js")?.config.get("repository")?.as_str()?;
-            Some((repository.to_string(), m.id.clone()))
-        })
-        .collect();
-    EngineInfo { device: engines.device.clone(), offers: engines.available(), page_ids }
+pub fn engine_capabilities(state: State<'_, EngineState>) -> Device {
+    state.engines.device.clone()
 }
 
+/// `[{model, engine}]`: the builds on disk.
 #[tauri::command]
-pub async fn engine_install(state: State<'_, EngineState>, model: String, engine: String) -> Result<(), String> {
-    let engines = state.engines.clone();
-    let (done, total) = (state.done.clone(), state.total.clone());
-    done.store(0, Ordering::Relaxed);
-    total.store(0, Ordering::Relaxed);
-    tauri::async_runtime::spawn_blocking(move || {
-        engines.install(&model, &engine, &mut |d, t| {
-            done.store(d, Ordering::Relaxed);
-            total.store(t, Ordering::Relaxed);
-        })
-    })
-    .await
-    .map_err(|e| e.to_string())?
+pub fn engine_installed(state: State<'_, EngineState>) -> Vec<Installed> {
+    state.engines.installed()
 }
 
-/// `[done, total]` bytes of the install in progress.
+/// For the settings window: engine packages and model builds on disk, with their sizes.
 #[tauri::command]
-pub fn engine_progress(state: State<'_, EngineState>) -> [u64; 2] {
-    [state.done.load(Ordering::Relaxed), state.total.load(Ordering::Relaxed)]
+pub fn engine_on_disk(state: State<'_, EngineState>) -> OnDisk {
+    state.engines.on_disk()
 }
 
-fn header<'a>(request: &'a Request<'_>, name: &str) -> Result<&'a str, String> {
-    request.headers().get(name).and_then(|v| v.to_str().ok()).ok_or_else(|| format!("missing header {name}"))
+/// Installs `model` on `engine`; its progress is `job`'s (the page's id for this call) while it runs.
+#[tauri::command]
+pub async fn engine_install(
+    state: State<'_, EngineState>,
+    model: String,
+    engine: String,
+    job: String,
+) -> Result<(), Error> {
+    let (engines, jobs) = (state.engines.clone(), state.jobs.clone());
+    tauri::async_runtime::spawn_blocking(move || engines.install_job(&jobs, &job, &model, &engine))
+        .await
+        .map_err(internal)?
+}
+
+/// `[done, total]` bytes of install `job` once it has started, `null` while it waits or after it ends.
+#[tauri::command]
+pub fn engine_progress(state: State<'_, EngineState>, job: String) -> Option<[u64; 2]> {
+    state.jobs.get(&job)
+}
+
+fn header<'a>(request: &'a Request<'_>, name: &str) -> Result<&'a str, Error> {
+    let value = request.headers().get(name).and_then(|v| v.to_str().ok());
+    value.ok_or_else(|| bad_request(format!("missing header {name}")))
+}
+
+/// An accelerator as the catalogue names it (`cpu`, `coreml`…); empty or absent for the resolver's choice. One
+/// this app does not know parses as unknown, which no build can use: refused where the choice is checked.
+fn accelerator(name: Option<&str>) -> Option<Capability> {
+    let name = name.map(str::trim).filter(|n| !n.is_empty())?;
+    Some(engines::capability_named(name))
 }
 
 fn samples_of(bytes: &[u8]) -> Vec<f32> {
     bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
 }
 
-/// Body: f32 samples. Headers: `x-model`, `x-language` (empty = detect), `x-sample-rate`. Answer: the text.
+/// Body: f32 samples. Headers: `x-model`, `x-engine`, `x-accelerator` (optional), `x-language` (empty = detect),
+/// `x-sample-rate`. Answer: the text.
 #[tauri::command]
-pub async fn engine_transcribe(state: State<'_, EngineState>, request: Request<'_>) -> Result<String, String> {
-    let InvokeBody::Raw(bytes) = request.body() else { return Err("send the audio as raw bytes".into()) };
+pub async fn engine_transcribe(state: State<'_, EngineState>, request: Request<'_>) -> Result<String, Error> {
+    let InvokeBody::Raw(bytes) = request.body() else { return Err(bad_request("send the audio as raw bytes")) };
     let samples = samples_of(bytes);
     let model = header(&request, "x-model")?.to_string();
+    let engine = header(&request, "x-engine")?.to_string();
+    let accelerator = accelerator(header(&request, "x-accelerator").ok());
     let language = header(&request, "x-language").unwrap_or("").to_string();
-    let rate: i32 = header(&request, "x-sample-rate")?.parse().map_err(|_| "bad x-sample-rate")?;
+    let rate: i32 = header(&request, "x-sample-rate")?.parse().map_err(|_| bad_request("bad x-sample-rate"))?;
     let engines = state.engines.clone();
-    tauri::async_runtime::spawn_blocking(move || engines.transcribe(&model, &language, &samples, rate))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        engines.transcribe(&model, &engine, accelerator, &language, &samples, rate)
+    })
+    .await
+    .map_err(internal)?
 }
 
 /// Answer: 4 bytes of sample rate (u32 LE), then f32 LE samples.
@@ -98,14 +103,19 @@ pub async fn engine_transcribe(state: State<'_, EngineState>, request: Request<'
 pub async fn engine_synthesize(
     state: State<'_, EngineState>,
     model: String,
+    engine: String,
+    accelerator: Option<String>,
     voice: String,
     speed: f32,
     text: String,
-) -> Result<Response, String> {
+) -> Result<Response, Error> {
     let engines = state.engines.clone();
-    let audio = tauri::async_runtime::spawn_blocking(move || engines.synthesize(&model, &voice, speed, &text))
-        .await
-        .map_err(|e| e.to_string())??;
+    let accelerator = self::accelerator(accelerator.as_deref());
+    let audio = tauri::async_runtime::spawn_blocking(move || {
+        engines.synthesize(&model, &engine, accelerator, &voice, speed, &text)
+    })
+    .await
+    .map_err(internal)??;
     let mut bytes = Vec::with_capacity(4 + audio.samples.len() * 4);
     bytes.extend_from_slice(&(audio.sample_rate as u32).to_le_bytes());
     for sample in audio.samples {
