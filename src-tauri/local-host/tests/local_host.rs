@@ -548,10 +548,12 @@ fn slow_clients_cannot_starve_the_page() {
         stream.write_all(b"GET /api/x HTTP/1.1\r\nHost: 127").unwrap();
         slow.push(stream);
     }
-    // Each trickles one more byte, as one that dodges a per-read timeout would.
+    // Each trickles one more byte, as one that dodges a per-read timeout would; then they go quiet. Once idle for a
+    // second they are what makes room.
     for stream in &mut slow {
         let _ = stream.write_all(b".");
     }
+    std::thread::sleep(Duration::from_millis(1300));
     let started = std::time::Instant::now();
     let host_field = format!("127.0.0.1:{port}");
     let bearer = format!("Bearer {secret}");
@@ -597,4 +599,33 @@ fn data_before_the_upgrade_is_refused() {
     let chunked = raw.replace("\r\n\r\nGET /api/x HTTP/1.1\r\n\r\n", "\r\nTransfer-Encoding: chunked\r\n\r\n");
     assert_eq!(send(port, &chunked).0, 411);
     assert_eq!(core.requests().len(), seen, "{:?}", core.requests());
+}
+
+/// A valid head that arrives in pieces is never cut short to admit newcomers: connection churn by clients with no
+/// secret is refused instead (review R1-c #3, re-check).
+#[test]
+fn a_head_still_arriving_survives_connection_churn() {
+    let world = World::new();
+    let _core = world.core(1);
+    let host = world.host();
+    let (port, secret) = running(&host);
+    let mut page = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    page.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    let head = format!(
+        "GET /api/x HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: tauri://localhost\r\nAuthorization: Bearer {secret}\r\n"
+    );
+    page.write_all(head.as_bytes()).unwrap();
+    // Churn: far more unauthenticated connections than there are head slots, each sending a byte.
+    let mut churn = Vec::new();
+    for _ in 0..200 {
+        if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) {
+            let _ = stream.write_all(b"G");
+            churn.push(stream);
+        }
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    page.write_all(b"\r\n").unwrap();
+    let mut answer = String::new();
+    let _ = page.read_to_string(&mut answer);
+    assert!(answer.starts_with("HTTP/1.1 200"), "{answer:?}");
 }

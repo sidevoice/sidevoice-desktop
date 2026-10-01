@@ -55,9 +55,11 @@ const LINGER: Duration = Duration::from_secs(1);
 const CORE_TIMEOUT: Duration = Duration::from_secs(300);
 /// Connections served at once; beyond that a new one is closed at once.
 const MAX_CONNECTIONS: usize = 256;
-/// Connections still sending their head (none of them authenticated yet). A new one beyond this closes the oldest of
-/// them, so clients that never finish a head cannot hold every slot (review R1-c #3).
+/// Connections still sending their head (none of them authenticated yet). Room for a new one is made only by closing
+/// one that is past its head deadline or has sent nothing for [`HEAD_IDLE`]; a head still arriving is never cut short
+/// to admit a newcomer, which is refused instead (review R1-c #3).
 const MAX_PENDING: usize = 64;
+const HEAD_IDLE: Duration = Duration::from_secs(1);
 
 /// What to do with one request head.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -300,10 +302,21 @@ struct Inner {
     tunnels: HashMap<u64, Vec<Closer>>,
 }
 
+/// A connection still sending its head.
+struct Pending {
+    id: u64,
+    stream: TcpStream,
+    since: Instant,
+    /// When its last byte arrived, in ms from [`Shared::epoch`].
+    progress: Arc<AtomicU64>,
+}
+
 struct Shared {
     inner: Mutex<Inner>,
     /// Connections still sending their head, oldest first.
-    pending: Mutex<VecDeque<(u64, TcpStream)>>,
+    pending: Mutex<VecDeque<Pending>>,
+    /// What [`Pending::progress`] counts from.
+    epoch: Instant,
     core: CoreSocket,
     next: AtomicU64,
     active: AtomicUsize,
@@ -312,26 +325,42 @@ struct Shared {
 }
 
 impl Shared {
-    /// A new connection joins the pending ones; beyond [`MAX_PENDING`] the oldest is closed.
-    fn pend(&self, id: u64, stream: &TcpStream) {
-        let Ok(clone) = stream.try_clone() else { return };
-        let mut pending = self.pending.lock().unwrap();
-        while pending.len() >= MAX_PENDING {
-            if let Some((_, oldest)) = pending.pop_front() {
-                let _ = oldest.shutdown(Shutdown::Both);
-            }
-        }
-        pending.push_back((id, clone));
+    fn now_ms(&self) -> u64 {
+        self.epoch.elapsed().as_millis() as u64
     }
 
-    /// Closes the oldest connection still sending its head; false when there is none.
-    fn evict_oldest(&self) -> bool {
-        let oldest = self.pending.lock().unwrap().pop_front();
-        oldest.map(|(_, stream)| stream.shutdown(Shutdown::Both)).is_some()
+    /// Closes one connection still sending its head that is past its deadline or idle for [`HEAD_IDLE`]; false when
+    /// every one of them is still arriving.
+    fn evict_one(&self, pending: &mut VecDeque<Pending>) -> bool {
+        let (now, now_ms) = (Instant::now(), self.now_ms());
+        let stale = pending.iter().position(|p| {
+            now.duration_since(p.since) >= HEAD_DEADLINE
+                || now_ms.saturating_sub(p.progress.load(Ordering::SeqCst)) >= HEAD_IDLE.as_millis() as u64
+        });
+        match stale.and_then(|at| pending.remove(at)) {
+            Some(evicted) => {
+                let _ = evicted.stream.shutdown(Shutdown::Both);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// A new connection among those sending their head: its progress counter, or `None` when there is no room (every
+    /// one of them still arriving).
+    fn admit(&self, id: u64, stream: &TcpStream) -> Option<Arc<AtomicU64>> {
+        let clone = stream.try_clone().ok()?;
+        let mut pending = self.pending.lock().unwrap();
+        if pending.len() >= MAX_PENDING && !self.evict_one(&mut pending) {
+            return None;
+        }
+        let progress = Arc::new(AtomicU64::new(self.now_ms()));
+        pending.push_back(Pending { id, stream: clone, since: Instant::now(), progress: progress.clone() });
+        Some(progress)
     }
 
     fn unpend(&self, id: u64) {
-        self.pending.lock().unwrap().retain(|(pending, _)| *pending != id);
+        self.pending.lock().unwrap().retain(|p| p.id != id);
     }
 
     fn track(&self, id: u64, closer: Closer) {
@@ -362,6 +391,7 @@ impl Proxy {
         let shared = Arc::new(Shared {
             inner: Mutex::default(),
             pending: Mutex::default(),
+            epoch: Instant::now(),
             core,
             next: AtomicU64::new(1),
             active: AtomicUsize::new(0),
@@ -376,16 +406,21 @@ impl Proxy {
                     break;
                 }
                 let Ok(stream) = stream else { continue };
-                // Full: a connection still sending its head makes room; with none, the new one is closed.
-                if accepting.active.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS && !accepting.evict_oldest() {
+                // Full: a stale head (past its deadline, or idle) makes room; with none, the new connection is closed.
+                let full = accepting.active.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS;
+                if full && !accepting.evict_one(&mut accepting.pending.lock().unwrap()) {
                     accepting.active.fetch_sub(1, Ordering::SeqCst);
                     continue;
                 }
                 let id = accepting.next.fetch_add(1, Ordering::SeqCst);
-                accepting.pend(id, &stream);
+                let Some(progress) = accepting.admit(id, &stream) else {
+                    (accepting.log)("proxy refused a connection (every head slot still arriving)");
+                    accepting.active.fetch_sub(1, Ordering::SeqCst);
+                    continue;
+                };
                 let (shared, secret) = (accepting.clone(), accept_secret.clone());
                 let spawned = thread::Builder::new().name("local-host-tunnel".into()).spawn(move || {
-                    serve(&shared, stream, id, port, &secret);
+                    serve(&shared, stream, id, &progress, port, &secret);
                     shared.active.fetch_sub(1, Ordering::SeqCst);
                 });
                 if spawned.is_err() {
@@ -462,14 +497,14 @@ fn path_of(target: &str) -> &str {
     target.split('?').next().unwrap_or("")
 }
 
-fn serve(shared: &Shared, mut client: TcpStream, id: u64, port: u16, secret: &str) {
+fn serve(shared: &Shared, mut client: TcpStream, id: u64, progress: &AtomicU64, port: u16, secret: &str) {
     let _ = client.set_read_timeout(Some(CLIENT_TIMEOUT));
     let _ = client.set_write_timeout(Some(CORE_TIMEOUT));
     let _ = client.set_nodelay(true);
     if let Ok(clone) = client.try_clone() {
         shared.track(id, Closer::Tcp(clone));
     }
-    tunnel(shared, &mut client, id, port, secret);
+    tunnel(shared, &mut client, id, progress, port, secret);
     shared.unpend(id);
     linger_close(&mut client);
     if let Some(closers) = shared.inner.lock().unwrap().tunnels.remove(&id) {
@@ -477,12 +512,12 @@ fn serve(shared: &Shared, mut client: TcpStream, id: u64, port: u16, secret: &st
     }
 }
 
-/// Ends our side, then reads what the client still sends (a body behind a refused head) for a moment before closing:
-/// closing with unread input resets the connection, and the page would see a network error instead of the answer.
 /// Reads with one deadline for the whole of it, not for each read.
 struct Deadline<'a> {
     stream: &'a TcpStream,
     until: Instant,
+    /// Where to note when a byte last arrived (ms from the epoch given), while a head is read.
+    progress: Option<(&'a AtomicU64, Instant)>,
 }
 
 impl Read for Deadline<'_> {
@@ -493,20 +528,28 @@ impl Read for Deadline<'_> {
         }
         self.stream.set_read_timeout(Some(left))?;
         let mut stream = self.stream;
-        stream.read(buf)
+        let n = stream.read(buf)?;
+        if let (Some((progress, epoch)), true) = (self.progress, n > 0) {
+            progress.store(epoch.elapsed().as_millis() as u64, Ordering::SeqCst);
+        }
+        Ok(n)
     }
 }
 
+/// Ends our side, then reads what the client still sends (a body behind a refused head) for a moment before closing:
+/// closing with unread input resets the connection, and the page would see a network error instead of the answer.
 fn linger_close(client: &mut TcpStream) {
     let _ = client.shutdown(Shutdown::Write);
-    let mut leftover = Deadline { stream: client, until: Instant::now() + LINGER };
+    let mut leftover = Deadline { stream: client, until: Instant::now() + LINGER, progress: None };
     let _ = io::copy(&mut (&mut leftover).take(1024 * 1024), &mut io::sink());
     let _ = client.shutdown(Shutdown::Both);
 }
 
-fn tunnel(shared: &Shared, client: &mut TcpStream, id: u64, port: u16, secret: &str) {
+fn tunnel(shared: &Shared, client: &mut TcpStream, id: u64, progress: &AtomicU64, port: u16, secret: &str) {
     let mut buf = Vec::new();
-    let head_read = http::read_head(&mut Deadline { stream: client, until: Instant::now() + HEAD_DEADLINE }, &mut buf);
+    let until = Instant::now() + HEAD_DEADLINE;
+    let mut reading = Deadline { stream: client, until, progress: Some((progress, shared.epoch)) };
+    let head_read = http::read_head(&mut reading, &mut buf);
     shared.unpend(id);
     let end = match head_read {
         Ok(end) => end,

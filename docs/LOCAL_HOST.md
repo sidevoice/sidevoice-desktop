@@ -28,7 +28,9 @@ directory above `D` and above the app's config directory must be root's or this 
 (sticky, as `/tmp`, is fine) — the default `~/.sidevoice` passes, a `SIDEVOICE_DATA_DIR` under a directory others can
 write does not; `install.json` is read through `D`'s opened and `fstat`-checked descriptor, opened without following a
 link and checked as opened (a regular file, this user's, not writable by others; `install.unsafe`); each path in its
-`command` must be root's or this user's, closed to others, with a safe ancestry too. `local-host.json` is read and
+`command` must be root's or this user's, closed to others, with a safe ancestry too — and what runs is exactly the
+path that was checked, links resolved once (a system link such as `/usr/bin/node` works; a link retargeted after the
+check is not followed), with `SIDEVOICE_DATA_DIR` set to `D` as checked. `local-host.json` is read and
 written the same way (the file private, 0600; written beside, synced, renamed, the directory synced).
 
 The device token travels only over the socket. The page never holds it: it gets the proxy's secret.
@@ -137,8 +139,10 @@ where an unchecked request could ride behind a checked one — and keeps no stat
 loopback handshake per request.
 
 A client has 5 s for its whole head (one deadline, not one per read). At most 64 connections may be still sending
-their head — none of them authenticated yet; a new one beyond that, or any new one when all 256 slots are taken, closes
-the oldest of them, so clients that never finish a head cannot keep the page out. A refused client's leftover input
+their head — none of them authenticated yet. Room for a new one (beyond that, or when all 256 slots are taken) is
+made only by closing one past its head deadline or silent for 1 s; a head still arriving is never cut short to admit a
+newcomer, which is refused instead. Clients that never finish a head therefore hold a slot for at most 5 s, and only
+while they keep sending. A refused client's leftover input
 is read for at most 1 s before closing. An upgrade is framed like any request (no `Transfer-Encoding`, one
 `Content-Length`, and no body: 400 / 411), and nothing the client sent behind its upgrade head goes to the core before
 the core's 101 — bytes already sent with the head are refused (400).
@@ -152,8 +156,8 @@ pairing the proxy answers 503; without a core, 502.
   store, the CLI runner, the state table, every row of the ingress table; end to end over a real socket against a
   stand-in core (`src/fake_core.rs`: HTTP, a WebSocket echo, the core's socket rules) — pairing, forwarding with the
   token swapped in, a socket spliced, the refusals, every startup case, revocation, the fallback and the actions;
-  the service condition over a healthy core; 256 clients trickling partial heads while the page gets through, and the
-  head deadline; data before an upgrade's 101; the CLI's deadline with a child holding its pipes, a timeout with a
+  the service condition over a healthy core; 256 clients trickling partial heads while the page gets through, the
+  head deadline, a valid head arriving in pieces through connection churn; data before an upgrade's 101; the CLI's deadline with a child holding its pipes, a command link retargeted after the check, a timeout with a
   live child, a detached service kept; a directory swapped between check and read, links, loose modes and an
   ancestry others can write.
 - `tests/real_core.rs`: pairing, the proxy and upgrade framing (101; chunked, a body, early data refused) against
