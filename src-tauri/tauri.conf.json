@@ -41,7 +41,7 @@
       "infoPlist": "Info.plist"
     },
     "longDescription": "Sidevoice: give your coding agent a voice. Keep the conversation.",
-    "license": "MIT",
-    "copyright": "Copyright (c) 2026 rubasace"
+    "license": "Apache-2.0",
+    "copyright": "Copyright 2026 Ruben Pahino"
   }
 }
