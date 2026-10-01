@@ -12,6 +12,7 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 | `src-tauri/core/src/bridge.rs` | The contract on the Rust side: `CallSnapshot`, `Command`, and how the tray renders a snapshot. Unit-tested. |
 | `src-tauri/src/lib.rs` | Wiring: the `bridge_state` command, `send(Command)`; `capabilities/room.json`. |
 | `src-tauri/src/engine_ipc.rs` | The native engine's commands, behind `nativeEngine` (below). |
+| `src-tauri/src/local_host.rs`, `src-tauri/local-host/` | This computer's own core, behind `localHost` (below; docs/LOCAL_HOST.md). |
 | `src-tauri/src/tray.rs` | The menu-bar icon and its menu. |
 | `bridge/call-controls-bridge.js` | Injected into the call controls card's window (below). |
 | `src-tauri/src/call_controls.rs`, `src-tauri/core/src/call_controls.rs` | The card's window, and when it shows, where it sits and how it moves (unit-tested). |
@@ -98,8 +99,31 @@ Evaluated by the app with `webview.eval` (works with the window hidden); the com
 Joining is deliberately **not** a tray command: joining unlocks audio output, which the webview
 only allows from a click in the page. "Mostrar Sidevoice" opens the window for that.
 
-`window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", nativeEngine, mediaKeys }`: the web UI
-feature-detects the desktop app by it.
+`window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", version, nativeEngine, mediaKeys, localHost? }`: the
+web UI feature-detects the desktop app by it, and each capability by its presence. `version` is the bridge's (2).
+
+## The local host
+
+`host.localHost` is there only where the app offers this computer's own core (macOS, design O2); elsewhere it is
+absent and the page hides what needs it. Nothing runs until the page calls it. Contract, states and actions:
+docs/LOCAL_HOST.md.
+
+| Call | Returns / does |
+|---|---|
+| `state()` | `{state, failure?, core?, service?, calls?}`; `state` one of `absent`, `not-installed`, `stopped-by-person`, `starting`, `backoff`, `running`, `failed`, `service-failed`, `refused`, `incompatible` |
+| `subscribe(listener)` → `stop` | the state now, then on every change (polled every 2 s while anyone listens) |
+| `pairing()` | `{fp, public_key, device_id, token, urls: ["http://127.0.0.1:<port>"], rv: null, host, local: true}` while `running`, else `null`; `token` is the app's proxy secret for this launch, never the device token |
+| `start()` / `stop()` / `restart()` / `serviceInstall()` / `serviceUninstall()` | the connector's `service …`; resolve the state after it |
+| `reconnect()` | pairs the app with the core again (after `refused`; never done on its own) |
+| `revealLog()` | shows the service's log in Finder |
+| `pairingCode()` | `{code, expires_in, reach}`, on the person's click only: shown, never sent |
+| `pairRoom(url, code)` | pairs this machine with a room: `{room}` |
+
+Actions reject `{key, message}`. Commands behind it (`src-tauri/src/local_host.rs`): `local_host_state`,
+`local_host_pairing`, `local_host_action {action}` (`start`, `stop`, `restart`, `service-install`,
+`service-uninstall`, `reconnect`, `reveal-log`), `local_host_pairing_code`, `local_host_pair_room {url, code}`.
+Granted to the room window (`capabilities/room.json`); each re-checks that the caller is the current room window on
+the app's own page.
 
 ## The call controls card
 
@@ -286,7 +310,8 @@ one is added there and here.
   bump `version` only for a breaking change.
 - Tests: `npm test` (the script against a fake window; the vendored room's native worker against this bridge,
   `test/room-bundle.test.mjs`), `cargo test -p sidevoice-desktop-core` and
-  `cargo test -p sidevoice-desktop-engine` (the engine against a fake runtime adapter). In the real app, CI's macOS
+  `cargo test -p sidevoice-desktop-engine` (the engine against a fake runtime adapter), `cargo test -p
+  sidevoice-local-host` (the local host against a stand-in core; docs/LOCAL_HOST.md → Tests). In the real app, CI's macOS
   job selects models through the vendored room itself (`test/fixtures/room-flow.js`, probe build), paired with CI's
   stand-in machine (`test/fixtures/fake-node.py`, which proves its identity): the room's own settings actions, with
   real models, for consent → download → load → two checks → in effect; a cancel mid-download; a failure (a load
