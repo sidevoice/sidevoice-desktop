@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sidevoice · mini llamada — maquetas</title>
+<link rel="stylesheet" href="mini.css">
+</head>
+<body>
+<div class="page">
+  <div class="top"><img src="assets/sidevoice-lockup-on-dark.svg" alt="Sidevoice"><h1>Mini llamada · maquetas para decidir</h1></div>
+  <p class="lead">Cuando Sidevoice no está delante, la llamada sigue y hace falta un mando pequeño: ver el estado, silenciar, colgar,
+    cambiar de conversación. Cuatro formas de hacerlo, cada una en macOS, Windows y Linux. Todo es simulado: pulsa los botones
+    de la maqueta o prueba los atajos (<kbd id="keys-mod">⌃⌥</kbd><kbd>M</kbd> silenciar, <kbd>H</kbd> dos veces colgar,
+    <kbd>Espacio</kbd> mando, <kbd>←</kbd><kbd>→</kbd> conversación, <kbd>V</kbd> esconder).</p>
+
+  <div class="options">
+    <button class="opt" data-opt="A"><b>A · Píldora flotante <span class="rec">recomendada</span></b><span>Ventanita propia siempre encima, sin robar el foco, en una esquina. Se despliega y se esconde al borde.</span></button>
+    <button class="opt" data-opt="B"><b>B · Isla (notch)</b><span>Píldora negra fundida con el notch del Mac que crece cuando pasa algo. Fuera del Mac, arriba en el centro.</span></button>
+    <button class="opt" data-opt="C"><b>C · Solo la barra</b><span>Nada flota: el icono de la barra da estado y tiempo; al pulsarlo, un panel con los controles.</span></button>
+    <button class="opt" data-opt="D"><b>D · Controles del sistema</b><span>Sin ventana propia: el reproductor del sistema (Centro de control, panel multimedia) hace de mando.</span></button>
+  </div>
+
+  <div class="controls">
+    <div class="group"><span class="label">Sistema</span><div class="seg">
+      <button data-plat="mac">macOS · notch</button><button data-plat="macnonotch">macOS · sin notch</button><button data-plat="win">Windows 11</button><button data-plat="x11">Linux · X11</button><button data-plat="wayland">Linux · GNOME Wayland</button>
+    </div></div>
+    <div class="group"><span class="label">Estado</span><div class="seg">
+      <button data-state="listening">Escuchando</button><button data-state="transcribing">Transcribiendo</button><button data-state="thinking">Trabajando</button><button data-state="speaking">Habla el agente</button><button data-state="muted">Silenciado</button><button data-state="reconnecting">Reconectando</button><button data-state="idle">Sin llamada</button>
+    </div></div>
+    <div class="group"><span class="label">Vista</span><div class="seg">
+      <button data-mode="compact">Compacta</button><button data-mode="expanded">Desplegada</button><button data-mode="hidden">Escondida</button>
+    </div></div>
+    <div class="group" id="corner-group"><span class="label">Esquina</span><div class="seg">
+      <button data-corner="tl">↖</button><button data-corner="tr">↗</button><button data-corner="bl">↙</button><button data-corner="br">↘</button>
+    </div></div>
+    <div class="group"><div class="seg"><button data-hints aria-pressed="true">Notas técnicas</button></div></div>
+  </div>
+
+  <div class="stagewrap" id="stagewrap"><div class="stage" id="stage"></div></div>
+
+  <div class="gallery" id="gallery"></div>
+
+  <div class="below">
+    <div class="card" id="notes"></div>
+    <div class="card">
+      <h2>Lo que es igual en las cuatro</h2>
+      <h3>Estados (salen de la web, ya existen)</h3>
+      <table>
+        <tr><th>Estado</th><th>Cómo se ve</th></tr>
+        <tr><td>Escuchando</td><td>Barras lila que se mueven con tu voz</td></tr>
+        <tr><td>Transcribiendo · Trabajando</td><td>Barras que laten despacio; «Claude está trabajando…»</td></tr>
+        <tr><td>Habla el agente</td><td>Se mueve <b style="color:var(--mostaza)">la cuarta barra, la mostaza</b>: en la marca es «la otra voz». Botón «Saltar»</td></tr>
+        <tr><td>Silenciado</td><td>Marca en gris tachada, botón de micro en rojo; también en la barra de menús</td></tr>
+        <tr><td>Reconectando</td><td>Barras apagadas que laten; silenciar desactivado, colgar sí</td></tr>
+        <tr><td>Sin llamada</td><td>El mando desaparece; queda el icono de la barra</td></tr>
+      </table>
+      <h3>Atajos propuestos (globales, configurables)</h3>
+      <table>
+        <tr><th>Acción</th><th>macOS</th><th>Windows · Linux</th></tr>
+        <tr><td>Silenciar / activar</td><td><kbd>⌃⌥M</kbd> (hoy <kbd>⌘⇧M</kbd>)</td><td><kbd>Ctrl+Alt+M</kbd></td></tr>
+        <tr><td>Colgar (pulsar dos veces)</td><td><kbd>⌃⌥H</kbd> ×2</td><td><kbd>Ctrl+Alt+H</kbd> ×2</td></tr>
+        <tr><td>Abrir el mando</td><td><kbd>⌃⌥Espacio</kbd></td><td><kbd>Ctrl+Alt+Espacio</kbd></td></tr>
+        <tr><td>Conversación anterior / siguiente</td><td><kbd>⌃⌥←</kbd> <kbd>⌃⌥→</kbd></td><td><kbd>Ctrl+Alt+←/→</kbd></td></tr>
+        <tr><td>Esconder / mostrar la mini</td><td><kbd>⌃⌥V</kbd></td><td><kbd>Ctrl+Alt+V</kbd></td></tr>
+        <tr><td colspan="3" style="color:var(--muted)">Con el mando abierto (toma el foco hasta <kbd>Esc</kbd> y lo devuelve): <kbd>M</kbd> silenciar · <kbd>S</kbd> saltar respuesta · <kbd>1–9</kbd> conversación · <kbd>H</kbd> colgar · <kbd>A</kbd> abrir la app.</td></tr>
+      </table>
+      <p style="color:var(--muted);font-size:12.5px">Por qué ⌃⌥: un atajo global se lo quita a todas las apps, y ⌘⇧M/⌘⇧H ya son de VS Code (Problemas, Reemplazar en archivos) y del Finder. En Windows/Linux, Ctrl+Alt es AltGr en el teclado español: con M, H, V y Espacio no escribe nada, pero hay que comprobarlo por distribución. En GNOME/KDE sobre Wayland los atajos globales van por el portal GlobalShortcuts (el plugin de Tauri hoy solo sabe X11).</p>
+      <h3>Con el icono de la barra</h3>
+      <p>El icono de hoy se queda (reposo, en llamada, silenciado) y su menú también. La mini es un extra que se puede apagar en Ajustes; su menú gana «Mostrar/Esconder mini llamada». Sin llamada no hay mini: solo el icono.</p>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:20px">
+    <h2>Qué ofrece cada sistema (resumen de la investigación)</h2>
+    <table>
+      <tr><th>Capacidad</th><th>macOS</th><th>Windows</th><th>Linux X11</th><th>Linux Wayland (GNOME / KDE)</th></tr>
+      <tr><td>Ventana flotante encima, sin robar el foco</td><td class="ok">Sí (NSPanel, también sobre pantalla completa)</td><td class="ok">Sí (topmost + no-activate)</td><td class="ok">Sí</td><td class="no">No la pone la app; la persona la fija (GNOME: menú de ventana; KDE: regla)</td></tr>
+      <tr><td>Colocarla en una esquina</td><td class="ok">Sí</td><td class="ok">Sí</td><td class="ok">Sí</td><td class="no">No (la coloca el compositor)</td></tr>
+      <tr><td>Icono en la barra + menú</td><td class="ok">Sí (hecho)</td><td class="ok">Sí (hecho)</td><td class="meh">AppIndicator: solo menú</td><td class="meh">GNOME: con extensión AppIndicator · KDE: sí</td></tr>
+      <tr><td>Texto junto al icono</td><td class="ok">Sí</td><td class="no">No (tooltip)</td><td class="meh">Según el panel</td><td class="meh">Según el panel</td></tr>
+      <tr><td>Panel propio anclado al icono</td><td class="ok">Sí</td><td class="ok">Sí</td><td class="no">No (sin clic izquierdo)</td><td class="no">No</td></tr>
+      <tr><td>Controles multimedia del sistema</td><td class="ok">Ahora suena (hecho, para auriculares)</td><td class="meh">SMTC vía WebView2 (a verificar)</td><td class="meh">MPRIS (a verificar)</td><td class="meh">MPRIS (a verificar)</td></tr>
+      <tr><td>Botones en la miniatura de la barra de tareas</td><td>—</td><td class="ok">Sí (ITaskbarList3, como Teams)</td><td>—</td><td>—</td></tr>
+      <tr><td>Atajos globales</td><td class="ok">Sí (sin permisos extra)</td><td class="ok">Sí</td><td class="ok">Sí</td><td class="meh">Portal GlobalShortcuts: KDE sí, GNOME reciente; el plugin de Tauri aún no</td></tr>
+      <tr><td>Interfaz de llamada del sistema (CallKit)</td><td class="no">No: CXProvider no existe en apps de Mac</td><td class="no">No para apps normales</td><td class="no">No</td><td class="no">No</td></tr>
+      <tr><td>Live Activity propia en la barra</td><td class="no">No: macOS 26 solo refleja las del iPhone</td><td>—</td><td>—</td><td>—</td></tr>
+      <tr><td>Widgets del escritorio</td><td class="no">WidgetKit: no sirve para algo en vivo</td><td class="no">Widgets de Windows 11: app empaquetada + Adaptive Cards, no en vivo</td><td class="no">—</td><td class="no">—</td></tr>
+      <tr><td>Indicador de micrófono en uso</td><td class="ok">Automático (punto naranja)</td><td class="ok">Automático (icono en la bandeja)</td><td class="meh">Según escritorio</td><td class="ok">Automático (GNOME/KDE)</td></tr>
+    </table>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+<script src="mini.js"></script>
+</body>
+</html>
