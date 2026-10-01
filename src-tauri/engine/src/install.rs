@@ -1,7 +1,8 @@
 //! Downloading an engine package or a model's files: streamed to disk, SHA-256 checked against the catalog,
 //! unpacked into a temporary directory and moved into place only when whole. A download counts as installed only
 //! when its `.sidevoice-complete` marker names the hash it came from **and** its root and every file the engine
-//! needs from it are there; one that lost a file is not installed, and fetching it again repairs it.
+//! needs from it are there; one that lost a file is not installed, and fetching it again repairs it. A fetch that
+//! fails or is stopped (a cancelled install) removes what it had written: nothing partial stays on disk.
 
 use crate::error::{self, Error};
 use sha2::{Digest, Sha256};
@@ -16,10 +17,18 @@ pub(crate) const MARKER: &str = ".sidevoice-complete";
 #[derive(Debug, Clone)]
 pub struct Store {
     pub root: PathBuf,
+    /// Where a download's bytes come from: HTTPS in the app, served from memory in tests.
+    pub(crate) open: Open,
 }
+
+/// Opens the bytes behind a download's https URL.
+pub type Open = fn(&str) -> Result<Box<dyn Read + Send>, Error>;
 
 /// Progress: bytes so far, bytes expected.
 pub type OnProgress<'a> = &'a mut dyn FnMut(u64, u64);
+
+/// Asked between chunks and archive entries: true stops the fetch with `install_cancelled`.
+pub type Stop<'a> = &'a dyn Fn() -> bool;
 
 /// `file` names something inside a download's root: relative, no `..`, nothing absolute.
 fn inside(file: &str) -> bool {
@@ -28,7 +37,7 @@ fn inside(file: &str) -> bool {
 
 impl Store {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Store { root: root.into() }
+        Store { root: root.into(), open: https }
     }
 
     /// The unpacked root of an engine package, e.g. `engines/sherpa-onnx-1.13.8-macos-aarch64/<root>`.
@@ -63,8 +72,16 @@ impl Store {
 
     /// Downloads and unpacks `download` so that `dir` (as returned above) holds it with all of `files`. Idempotent:
     /// nothing to do when it is installed. A slot that is marked but incomplete loses its marker first, so it is
-    /// never taken for complete again, even if this download fails.
-    pub fn fetch(&self, download: &Download, dir: &Path, files: &[String], progress: OnProgress) -> Result<(), Error> {
+    /// never taken for complete again. On failure, or when `stop` says so, the slot, the partial download and the
+    /// unpacking directory are removed: what is left on disk is what was whole before.
+    pub fn fetch(
+        &self,
+        download: &Download,
+        dir: &Path,
+        files: &[String],
+        progress: OnProgress,
+        stop: Stop,
+    ) -> Result<(), Error> {
         if Self::installed(dir, download, files) {
             return Ok(());
         }
@@ -72,13 +89,33 @@ impl Store {
         let parent = slot.parent().ok_or_else(|| error::internal("a download directory without a parent"))?;
         let _ = fs::remove_file(slot.join(MARKER));
         fs::create_dir_all(parent).map_err(error::install_failed)?;
-        let partial = slot.with_extension("partial");
-        download_to(download, &partial, progress)?;
-        let staging = slot.with_extension("unpacking");
-        let _ = fs::remove_dir_all(&staging);
-        let unpacked = unpack(&partial, &staging, &download.archive);
+        let (partial, staging) = (slot.with_extension("partial"), slot.with_extension("unpacking"));
+        let fetched = self.fetch_into(download, &partial, &staging, files, progress, stop);
         let _ = fs::remove_file(&partial);
-        unpacked?;
+        if let Err(e) = fetched {
+            let _ = fs::remove_dir_all(&staging);
+            let _ = fs::remove_dir_all(&slot); // unmarked: an incomplete download nothing can use
+            let _ = fs::remove_dir(parent); // only when nothing else is in it
+            return Err(e);
+        }
+        let _ = fs::remove_dir_all(&slot);
+        fs::rename(&staging, &slot).map_err(error::install_failed)?;
+        Ok(())
+    }
+
+    /// Downloads into `partial` and unpacks it into `staging`, marked complete, ready to move into place.
+    fn fetch_into(
+        &self,
+        download: &Download,
+        partial: &Path,
+        staging: &Path,
+        files: &[String],
+        progress: OnProgress,
+        stop: Stop,
+    ) -> Result<(), Error> {
+        download_to(download, self.open, partial, progress, stop)?;
+        let _ = fs::remove_dir_all(staging);
+        unpack(partial, staging, &download.archive, stop)?;
         let root = staging.join(&download.root);
         let missing = if root.is_dir() {
             files.iter().find(|f| !inside(f) || !root.join(f).exists()).map(|f| format!("{}/{f}", download.root))
@@ -86,29 +123,34 @@ impl Store {
             Some(format!("{}/", download.root))
         };
         if let Some(missing) = missing {
-            let _ = fs::remove_dir_all(&staging);
             return Err(error::install_failed(format!("the archive has no {missing}")));
         }
-        fs::write(staging.join(MARKER), &download.sha256).map_err(error::install_failed)?;
-        let _ = fs::remove_dir_all(&slot);
-        fs::rename(&staging, &slot).map_err(error::install_failed)?;
-        Ok(())
+        if stop() {
+            return Err(error::install_cancelled());
+        }
+        fs::write(staging.join(MARKER), &download.sha256).map_err(error::install_failed)
     }
 }
 
-fn download_to(download: &Download, path: &Path, progress: OnProgress) -> Result<(), Error> {
-    if !download.url.starts_with("https://") {
-        return Err(error::download_refused(&download.url));
-    }
+/// The app's source of downloads: the URL over HTTPS.
+fn https(url: &str) -> Result<Box<dyn Read + Send>, Error> {
     let client = reqwest::blocking::Client::builder()
         .timeout(None)
         .connect_timeout(std::time::Duration::from_secs(20))
         .build()
-        .map_err(|e| error::download_failed(&download.url, e))?;
-    let mut response = client.get(&download.url).send().map_err(|e| error::download_failed(&download.url, e))?;
+        .map_err(|e| error::download_failed(url, e))?;
+    let response = client.get(url).send().map_err(|e| error::download_failed(url, e))?;
     if !response.status().is_success() {
-        return Err(error::download_failed(&download.url, format!("HTTP {}", response.status())));
+        return Err(error::download_failed(url, format!("HTTP {}", response.status())));
     }
+    Ok(Box::new(response))
+}
+
+fn download_to(download: &Download, open: Open, path: &Path, progress: OnProgress, stop: Stop) -> Result<(), Error> {
+    if !download.url.starts_with("https://") {
+        return Err(error::download_refused(&download.url));
+    }
+    let mut response = open(&download.url)?;
     let expected = download.size;
     let mut file = fs::File::create(path).map_err(error::install_failed)?;
     let mut hasher = Sha256::new();
@@ -123,11 +165,13 @@ fn download_to(download: &Download, path: &Path, progress: OnProgress) -> Result
         file.write_all(&buffer[..read]).map_err(error::install_failed)?;
         done += read as u64;
         progress(done, expected);
+        if stop() {
+            return Err(error::install_cancelled());
+        }
     }
     file.flush().map_err(error::install_failed)?;
     let got = hex(&hasher.finalize());
     if got != download.sha256.to_ascii_lowercase() {
-        let _ = fs::remove_file(path);
         return Err(error::download_corrupt(&download.url));
     }
     Ok(())
@@ -137,8 +181,9 @@ pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Unpacks `archive` into `into`. `tar`'s `unpack_in` refuses entries that would land outside `into`.
-pub fn unpack(archive: &Path, into: &Path, kind: &str) -> Result<(), Error> {
+/// Unpacks `archive` into `into`, asking `stop` before each entry. `tar`'s `unpack_in` refuses entries that would
+/// land outside `into`.
+pub fn unpack(archive: &Path, into: &Path, kind: &str, stop: Stop) -> Result<(), Error> {
     if kind != "tar.bz2" {
         return Err(error::install_failed(format!("unsupported archive {kind}")));
     }
@@ -147,6 +192,9 @@ pub fn unpack(archive: &Path, into: &Path, kind: &str) -> Result<(), Error> {
     let mut tar = tar::Archive::new(bzip2::read::BzDecoder::new(std::io::BufReader::new(file)));
     tar.set_preserve_permissions(false);
     for entry in tar.entries().map_err(error::install_failed)? {
+        if stop() {
+            return Err(error::install_cancelled());
+        }
         let mut entry = entry.map_err(error::install_failed)?;
         let kind = entry.header().entry_type();
         if !(kind.is_file() || kind.is_dir()) {
@@ -184,9 +232,11 @@ mod tests {
         let _ = fs::remove_dir_all(&temp);
         fs::create_dir_all(&temp).unwrap();
         let archive = tarball(&temp, &[("model/a.onnx", b"abc"), ("model/sub/b.txt", b"hello")]);
-        unpack(&archive, &temp.join("out"), "tar.bz2").unwrap();
+        unpack(&archive, &temp.join("out"), "tar.bz2", &|| false).unwrap();
         assert_eq!(fs::read(temp.join("out/model/sub/b.txt")).unwrap(), b"hello");
-        assert!(unpack(&archive, &temp.join("x"), "zip").is_err());
+        assert!(unpack(&archive, &temp.join("x"), "zip", &|| false).is_err());
+        let stopped = unpack(&archive, &temp.join("y"), "tar.bz2", &|| true).unwrap_err();
+        assert_eq!(stopped.key, "install_cancelled");
         fs::remove_dir_all(&temp).unwrap();
     }
 
@@ -239,9 +289,10 @@ mod tests {
         fs::write(dir.parent().unwrap().join(MARKER), "ab".repeat(32)).unwrap();
         let files = vec!["model.onnx".to_string()];
         let mut progress = |_, _| {};
-        let failed = store.fetch(&download, &dir, &files, &mut progress).unwrap_err();
+        let failed = store.fetch(&download, &dir, &files, &mut progress, &|| false).unwrap_err();
         assert_eq!(failed.key, "download_failed", "it tried to download it again");
         assert!(!dir.parent().unwrap().join(MARKER).exists(), "and the slot is no longer marked complete");
+        assert!(!dir.parent().unwrap().exists(), "nor kept: an unmarked download nothing can use");
         fs::remove_dir_all(&temp).unwrap();
     }
 
@@ -255,10 +306,8 @@ mod tests {
             root: "x".into(),
         };
         let mut progress = |_, _| {};
-        assert_eq!(
-            download_to(&download, Path::new("/nonexistent"), &mut progress).unwrap_err().key,
-            "download_refused"
-        );
+        let refused = download_to(&download, https, Path::new("/nonexistent"), &mut progress, &|| false);
+        assert_eq!(refused.unwrap_err().key, "download_refused");
     }
 
     #[test]

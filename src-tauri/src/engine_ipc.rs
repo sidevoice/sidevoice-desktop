@@ -9,7 +9,7 @@
 
 use sidevoice_desktop_core::engines::{self, Capability, Device};
 use sidevoice_desktop_engine::error::{bad_request, internal};
-use sidevoice_desktop_engine::{Error, Installed, Jobs, Load, Loaded, Memory, NativeEngines, OnDisk};
+use sidevoice_desktop_engine::{Error, Installed, Jobs, Load, Loaded, Memory, NativeEngines, OnDisk, Progress};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::ipc::{InvokeBody, Request, Response};
@@ -17,7 +17,7 @@ use tauri::{AppHandle, Manager, State};
 
 pub struct EngineState {
     pub engines: Arc<NativeEngines>,
-    /// Progress of each install in flight, by the page's job id.
+    /// Each install in flight, by the page's job id: its progress, and its cancel.
     jobs: Arc<Jobs>,
 }
 
@@ -45,7 +45,8 @@ pub fn engine_on_disk(state: State<'_, EngineState>) -> OnDisk {
     state.engines.on_disk()
 }
 
-/// Installs `model` on `engine`; its progress is `job`'s (the page's id for this call) while it runs.
+/// Installs `model` on `engine` as `job` (the page's id for this call): its progress while it runs, cancellable with
+/// `engine_cancel` until it ends.
 #[tauri::command]
 pub async fn engine_install(
     state: State<'_, EngineState>,
@@ -59,10 +60,18 @@ pub async fn engine_install(
         .map_err(internal)?
 }
 
-/// `[done, total]` bytes of install `job` once it has started, `null` while it waits or after it ends.
+/// `{job, model, engine, done, total, bytes_per_s}` of install `job` once it has started; `null` while it waits or
+/// after it ends.
 #[tauri::command]
-pub fn engine_progress(state: State<'_, EngineState>, job: String) -> Option<[u64; 2]> {
+pub fn engine_progress(state: State<'_, EngineState>, job: String) -> Option<Progress> {
     state.jobs.get(&job)
+}
+
+/// Cancels install `job`, waiting or running: it removes what it was downloading and rejects with
+/// `install_cancelled`. True when the job was running or waiting here.
+#[tauri::command]
+pub fn engine_cancel(state: State<'_, EngineState>, job: String) -> bool {
+    state.jobs.cancel(&job)
 }
 
 fn header<'a>(request: &'a Request<'_>, name: &str) -> Result<&'a str, Error> {
@@ -139,10 +148,11 @@ pub async fn engine_load(
     tauri::async_runtime::spawn_blocking(move || engines.load(&model, &engine, accelerator)).await.map_err(internal)?
 }
 
-/// Frees `model` on `engine`; nothing to do when it is not loaded.
+/// Frees `model` on `engine` on `accelerator`, or on every accelerator when it is `null`; nothing to do when it is not
+/// loaded. A load of it still under way is not kept.
 #[tauri::command]
-pub fn engine_unload(state: State<'_, EngineState>, model: String, engine: String) {
-    state.engines.unload(&model, &engine);
+pub fn engine_unload(state: State<'_, EngineState>, model: String, engine: String, accelerator: Option<String>) {
+    state.engines.unload(&model, &engine, self::accelerator(accelerator.as_deref()));
 }
 
 /// `[{model, engine, accelerator, since, last_used}]`: the models in memory.

@@ -326,6 +326,13 @@ jobs:
           grep -q 'sidevoice: engine unloaded idle kokoro-82m-v1.0@sherpa-onnx/cpu' /tmp/probe.log
           grep -q 'sidevoice: engine preload whisper-tiny@sherpa-onnx/cpu load_ms=' /tmp/probe.log
           grep -q 'probe-engine ok .* preloaded=kokoro-82m-v1.0@sherpa-onnx/cpu,whisper-tiny@sherpa-onnx/cpu ' /tmp/probe.log
+          # Cancel: a download stopped mid-way rejects with install_cancelled; progress events carry the job, the build
+          # and the speed; nothing of it is left on disk.
+          grep -q 'probe-engine ok .* cancel=true/install_cancelled/false cancel_gone=true progress_event=bytes_per_s+done+engine+job+model+total:true ' /tmp/probe.log
+          grep -Eq 'probe-engine ok .* speed=[1-9][0-9]* ' /tmp/probe.log
+          MODELS="$HOME/Library/Application Support/dev.sidevoice.desktop/engines/models/sherpa-onnx"
+          ls -la "$MODELS"
+          if ls "$MODELS" | grep -q whisper-small; then echo "a cancelled download left files"; exit 1; fi
           # Headset buttons: a (simulated) call made the app the Now Playing app, and it let go after.
           grep -q 'probe-headset ok' /tmp/probe.log
           grep -q 'headset apply active=true in_call=true mic=true' /tmp/probe.log

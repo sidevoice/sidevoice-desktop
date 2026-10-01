@@ -14,6 +14,7 @@ fn main() {
         "engine_on_disk",
         "engine_install",
         "engine_progress",
+        "engine_cancel",
         "engine_transcribe",
         "engine_synthesize",
         "engine_load",

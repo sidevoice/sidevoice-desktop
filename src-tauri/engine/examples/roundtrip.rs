@@ -71,8 +71,8 @@ fn main() {
         assert!(expected.iter().any(|w| heard.contains(w)), "Whisper did not hear the sentence: {text:?}");
     }
     assert_eq!(engines.loaded().len(), 2, "still one instance each: the language changed, nothing was loaded again");
-    engines.unload("whisper-tiny", "sherpa-onnx");
-    engines.unload("kokoro-82m-v1.0", "sherpa-onnx");
+    engines.unload("whisper-tiny", "sherpa-onnx", None);
+    engines.unload("kokoro-82m-v1.0", "sherpa-onnx", None);
     assert!(engines.loaded().is_empty(), "unloaded");
     println!("ROUNDTRIP OK");
 }

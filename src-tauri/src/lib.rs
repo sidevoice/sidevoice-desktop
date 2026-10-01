@@ -303,6 +303,7 @@ pub fn run() {
             engine_ipc::engine_on_disk,
             engine_ipc::engine_install,
             engine_ipc::engine_progress,
+            engine_ipc::engine_cancel,
             engine_ipc::engine_transcribe,
             engine_ipc::engine_synthesize,
             engine_ipc::engine_load,

@@ -122,6 +122,19 @@ what the interface's own window offers — same origin, same permission rule —
     const preloaded = await until(async () => { const r = await resident(); return r.split(",").length === 2 && r; }, 60000);
     await call(false, true);
 
+    // Cancel: a big download, cancelled once its speed is measured; the install rejects by key and leaves nothing
+    // (CI then checks the disk).
+    let measured = null;
+    let ended = false;
+    const small = engine.install("whisper-small", "sherpa-onnx", (p) => { if (p.bytes_per_s && !measured) measured = p; });
+    small.then(() => { ended = true; }, () => { ended = true; });
+    await until(() => measured || ended, 120000);
+    const cancelled = await engine.cancel(small.job);
+    const outcome = await small.then(() => "installed", (error) => error && error.key);
+    const cancelAgain = await engine.cancel(small.job);
+    const smallGone = !(await engine.installed()).some((b) => b.model === "whisper-small");
+    const event = measured ? Object.keys(measured).sort().join("+") + ":" + (measured.job === small.job && measured.model === "whisper-small") : "none";
+
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-engine ok capabilities=" + JSON.stringify(capabilities) +
       " installed=" + installed + " progress_calls=" + progress + " refused=" + refused +
       " audio=" + (audio.samples.length / audio.sampleRate).toFixed(2) + "s@" + audio.sampleRate + " synth_ms=" + Math.round(spoken) +
@@ -129,6 +142,8 @@ what the interface's own window offers — same origin, same permission rule —
       " since_ok=" + loaded.every((l) => l.since > 1.7e12 && l.last_used >= l.since) +
       " same_models=" + sameModels + " unloaded=" + afterUnload + " memory=" + JSON.stringify(memory) +
       " idle_unloaded_ms=" + idleMs + " preloaded=" + preloaded +
+      " cancel=" + cancelled + "/" + outcome + "/" + cancelAgain + " cancel_gone=" + smallGone + " progress_event=" + event +
+      " speed=" + (measured ? measured.bytes_per_s : 0) + " cancelled_at=" + (measured ? measured.done + "/" + measured.total : "") +
       " text=" + JSON.stringify(text) + " text_en=" + JSON.stringify(heardEnglish) });
   } catch (error) {
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-engine error " + String(error && (error.message || error)) });
