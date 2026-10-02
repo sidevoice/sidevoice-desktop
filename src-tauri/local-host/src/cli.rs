@@ -190,7 +190,7 @@ impl Cli {
     /// the pipes) is killed, and on a timeout the whole group is. What the program hands to the service manager
     /// (`service start` → launchd) or starts detached in a session of its own is not in the group, and stays.
     pub fn run(&self, args: &[&str], timeout: Duration) -> Result<Value, Refusal> {
-        self.run_inner(args, timeout, None, |_| {})
+        self.run_inner(args, timeout, None, Duration::from_secs(15), |_| {})
     }
 
     /// Runs an installer with the R4-b JSON-lines progress adapter. Both pipes are drained concurrently and output,
@@ -203,7 +203,7 @@ impl Cli {
         cancel: &CancelToken,
         on_progress: impl FnMut(ProgressEvent),
     ) -> Result<Value, Refusal> {
-        self.run_inner(args, timeout, Some(cancel), on_progress)
+        self.run_inner(args, timeout, Some(cancel), Duration::from_secs(15), on_progress)
     }
 
     fn run_inner(
@@ -211,6 +211,7 @@ impl Cli {
         args: &[&str],
         timeout: Duration,
         cancel: Option<&CancelToken>,
+        cancel_grace: Duration,
         mut on_progress: impl FnMut(ProgressEvent),
     ) -> Result<Value, Refusal> {
         let failed = || Refusal::new("cli.failed", "The connector did not return a valid result.");
@@ -247,8 +248,9 @@ impl Cli {
             [Stream::new(child.stdout.take().map(OwnedFd::from)), Stream::new(child.stderr.take().map(OwnedFd::from))];
         let mut status = None;
         let mut cancel_sent = false;
-        let cancel_deadline = timeout.min(Duration::from_secs(15));
+        let cancel_deadline = timeout.min(cancel_grace);
         let mut cancel_at = None;
+        let mut transaction_finalizing = false;
         loop {
             if !cancel_sent && cancel.is_some_and(CancelToken::is_requested) {
                 // SAFETY: this is the process group created for this CLI invocation.
@@ -256,7 +258,10 @@ impl Cli {
                 cancel_sent = true;
                 cancel_at = Some(Instant::now());
             }
-            if cancel_at.is_some_and(|at| at.elapsed() >= cancel_deadline) && status.is_none() {
+            if cancel_at.is_some_and(|at| at.elapsed() >= cancel_deadline)
+                && status.is_none()
+                && !transaction_finalizing
+            {
                 kill_group();
             }
             if status.is_none() {
@@ -274,7 +279,12 @@ impl Cli {
             if left.is_zero() {
                 break;
             }
-            drain(&mut streams, left.min(Duration::from_millis(50)), &mut on_progress);
+            drain(&mut streams, left.min(Duration::from_millis(50)), &mut |event| {
+                if matches!(event.step.as_str(), "commit" | "rollback") {
+                    transaction_finalizing = true;
+                }
+                on_progress(event);
+            });
         }
         let Some(status) = status else {
             kill_group();
@@ -646,6 +656,14 @@ mod tests {
         );
         let untrusted_check = unsafe_cli.run(&["install", "--json"], Duration::from_secs(5)).unwrap_err();
         assert_eq!(untrusted_check.params, None);
+
+        let redirect_cli = fake(
+            tmp.path(),
+            r#"echo '{"ok":false,"error":{"key":"install.authenticity","message":"redirect prose","params":{"check":"redirect"}}}'; exit 1"#,
+        );
+        let redirect = redirect_cli.run(&["install", "--json"], Duration::from_secs(5)).unwrap_err();
+        assert_eq!(redirect.key, "install.authenticity");
+        assert_eq!(redirect.params.as_ref().map(|params| params.check.as_str()), Some("redirect"));
     }
 
     #[test]
@@ -672,6 +690,34 @@ echo '{"ok":true}'"#,
                 ProgressEvent { step: "verify".into(), done: None, total: None },
             ]
         );
+    }
+
+    #[test]
+    fn cancellation_does_not_kill_an_installer_after_commit_progress() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cli = fake(
+            tmp.path(),
+            r#"echo '{"type":"progress","step":"commit","done":null,"total":null}' >&2
+trap '' INT
+sleep 0.25
+echo '{"ok":true}'"#,
+        );
+        let cancel = CancelToken::default();
+        let answer = cli
+            .run_inner(
+                &["install", "--json", "--progress=jsonl"],
+                Duration::from_secs(3),
+                Some(&cancel),
+                Duration::from_millis(75),
+                |event| {
+                    if event.step == "commit" {
+                        cancel.request();
+                    }
+                },
+            )
+            .unwrap();
+        assert_eq!(answer["ok"], true);
+        assert!(cancel.is_requested());
     }
 
     #[test]

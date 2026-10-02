@@ -88,6 +88,7 @@ fn safe_connector_check(check: &str) -> bool {
             | "platform"
             | "download"
             | "download-size"
+            | "redirect"
             | "archive-path"
             | "archive-link"
             | "archive-size"
