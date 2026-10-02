@@ -1,7 +1,7 @@
 {
   "repository": "sidevoice/sidevoice-web",
-  "branch": "feat/r4-local-install-cta",
-  "commit": "8d56c1bb93a8c6e0b9a1f06d521d0413e721c572",
+  "branch": "main",
+  "commit": "4ae0911d4946db84f9523489966f18d1b137be51",
   "uncommitted_changes": false,
-  "vendored_at": "2026-10-02T12:17:58.089Z"
+  "vendored_at": "2026-10-02T13:44:47.000Z"
 }
