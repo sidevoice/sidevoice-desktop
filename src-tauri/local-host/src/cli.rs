@@ -501,10 +501,7 @@ fn refusal_of(answer: &Value) -> Option<Refusal> {
             "install.rollback-registration",
             "The connector restored the previous installation but could not restore its service registration.",
         ),
-        "install.incompatible" => (
-            "install.incompatible",
-            "The installed core is not compatible with this connector.",
-        ),
+        "install.incompatible" => ("install.incompatible", "The installed core is not compatible with this connector."),
         "service.not-loaded" => ("service.not-loaded", "The local service is not loaded."),
         "service.failed" => ("service.failed", "The local service did not start."),
         "service.start.failed" => ("service.start.failed", "The local service could not be started."),
