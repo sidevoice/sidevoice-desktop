@@ -505,7 +505,17 @@ fn command(install: &Value) -> Option<Vec<String>> {
 fn refusal_of(answer: &Value) -> Option<Refusal> {
     let error = answer.get("error")?;
     let key = error.get("key")?.as_str()?;
-    let refusal = refusal_for_key(key);
+    let refusal = if key == "install.verify" {
+        answer
+            .get("failure")
+            .and_then(|failure| failure.get("key"))
+            .and_then(Value::as_str)
+            .map(refusal_for_key)
+            .filter(|cause| cause.key != "cli.failed")
+            .unwrap_or_else(|| refusal_for_key(key))
+    } else {
+        refusal_for_key(key)
+    };
     let check = error.get("params").and_then(|params| params.get("check")).and_then(Value::as_str);
     Some(match check {
         Some(check) => refusal.with_check(check),
@@ -523,6 +533,7 @@ pub(crate) fn refusal_for_key(key: &str) -> Refusal {
         "install.no-bundle" => ("install.no-bundle", "No compatible core bundle is available."),
         "install.authenticity" => ("install.authenticity", "The connector could not verify the core's authenticity."),
         "install.self-test" => ("install.self-test", "The installed core did not pass its self-test."),
+        "install.verify" => ("install.verify", "The connector could not verify the installed core."),
         "install.rollback" => ("install.rollback", "The connector rolled back the installation after a failure."),
         "install.rollback-failed" => {
             ("install.rollback-failed", "The connector could not restore the previous installation.")
@@ -853,6 +864,34 @@ echo '{{"ok":true}}'"#
             assert!(!refusal.message.contains("untrusted"));
             assert!(!refusal.message.contains("secret"));
         }
+    }
+
+    #[test]
+    fn connector_install_verify_failure_preserves_only_a_known_nested_cause() {
+        const ANSWER: &str = include_str!("../test-fixtures/connector-install-verify-failure.json");
+        let answer: Value = serde_json::from_str(ANSWER).unwrap();
+        let refusal = refusal_of(&answer).unwrap();
+        assert_eq!(refusal.key, "launch.exited");
+        assert_eq!(refusal.message, "The local core exited unexpectedly.");
+        assert!(!refusal.message.contains("untrusted"));
+        assert!(!refusal.message.contains("secret"));
+
+        let incompatible = refusal_of(&serde_json::json!({
+            "ok": false,
+            "error": {"key":"install.verify"},
+            "failure": {"key":"install.incompatible"}
+        }))
+        .unwrap();
+        assert_eq!(incompatible.key, "install.incompatible");
+
+        let unknown = refusal_of(&serde_json::json!({
+            "ok": false,
+            "error": {"key":"install.verify","message":"untrusted outer detail"},
+            "failure": {"key":"remote.arbitrary","message":"untrusted nested detail"}
+        }))
+        .unwrap();
+        assert_eq!(unknown.key, "install.verify");
+        assert!(!unknown.message.contains("untrusted"));
     }
 
     #[test]
