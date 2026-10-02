@@ -240,6 +240,10 @@ impl ConnectorPin {
                 return Err(mismatch(field));
             }
         }
+        let pinned_assets = serde_json::to_value(&self.core_assets).unwrap_or(Value::Null);
+        if core.get("assets") != Some(&pinned_assets) {
+            return Err(mismatch("embedded core assets"));
+        }
         if protocol.get("metadata").and_then(Value::as_str) != self.metadata_protocol.as_deref()
             || protocol.get("progress").and_then(Value::as_str) != self.progress_protocol.as_deref()
         {
@@ -381,7 +385,7 @@ pub(crate) mod test_support {
             "connector_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "build_seq":42});
         let metadata = serde_json::json!({"connector":{"version":"1.2.3", "sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "channel":"nightly", "build_seq":42, "link_min":1, "link_max":1}, "embedded_core":{"version":"0.9.0",
-            "manifest_sha256":pin.core_manifest_sha256,
+            "manifest_sha256":pin.core_manifest_sha256, "assets":pin.core_assets,
             "api":1, "link":1},
             "protocols":{"metadata":"sidevoice-metadata-v1", "progress":"sidevoice-progress-jsonl-v1"}});
         pin.verify_metadata(&version, &metadata).unwrap();

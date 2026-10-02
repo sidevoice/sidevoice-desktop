@@ -516,6 +516,18 @@ test("a refused action rejects with the app's {key, message}", async () => {
   await assert.rejects(install(win, ORIGIN, null, true).host.localHost.start(), { key: "service.not-loaded", message: "m" });
 });
 
+test("localHost passes the safe connector authenticity check through to web i18n", async () => {
+  const install = loadFactory();
+  const refusal = { key: "install.authenticity", message: "The connector could not verify the core's authenticity.",
+    params: { check: "repository-id" } };
+  const failed = Object.assign(new Error("refused"), { refusal });
+  const { win } = localHostWindow({ local_host_install: failed });
+  await assert.rejects(install(win, ORIGIN, null, true).host.localHost.install(), (error) => {
+    assert.deepEqual(error, refusal);
+    return true;
+  });
+});
+
 test("agents capability is explicit and unavailable until connector R2", async () => {
   const install = loadFactory();
   const refused = Object.assign(new Error("unavailable"), { refusal: { key: "agents.unavailable", message: "m" } });

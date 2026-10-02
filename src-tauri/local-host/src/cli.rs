@@ -160,7 +160,7 @@ impl Cli {
         cancel: Option<&CancelToken>,
         mut on_progress: impl FnMut(ProgressEvent),
     ) -> Result<Value, Refusal> {
-        let failed = |why: String| Refusal::new("cli.failed", why);
+        let failed = || Refusal::new("cli.failed", "The connector did not return a valid result.");
         let deadline = Instant::now() + timeout;
         let mut command = Command::new(&self.prefix[0]);
         command
@@ -180,7 +180,9 @@ impl Cli {
                     tries += 1;
                     thread::sleep(Duration::from_millis(50));
                 }
-                spawned => break spawned.map_err(|e| failed(format!("{} could not start: {e}", self.prefix[0])))?,
+                spawned => {
+                    break spawned.map_err(|_| Refusal::new("cli.failed", "The connector could not be started."))?
+                }
             }
         };
         let group = child.id() as libc::pid_t;
@@ -230,18 +232,12 @@ impl Cli {
                 format!("`{}` did not answer within {} s.", args.join(" "), timeout.as_secs()),
             ));
         };
-        let [stdout, stderr] = streams.map(|s| s.bytes);
-        let stderr = String::from_utf8_lossy(&stderr).into_owned();
-        let tail =
-            || stderr.lines().rev().take(5).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join(" | ");
-        let answer: Value = serde_json::from_slice(&stdout)
-            .ok()
-            .filter(Value::is_object)
-            .ok_or_else(|| failed(format!("`{}` exited {status} without a JSON answer: {}", args.join(" "), tail())))?;
+        let [stdout, _stderr] = streams.map(|s| s.bytes);
+        let answer: Value = serde_json::from_slice(&stdout).ok().filter(Value::is_object).ok_or_else(failed)?;
         if answer.get("ok") == Some(&Value::Bool(true)) && status.success() {
             return Ok(answer);
         }
-        Err(refusal_of(&answer).unwrap_or_else(|| failed(format!("`{}` exited {status}: {}", args.join(" "), tail()))))
+        Err(refusal_of(&answer).unwrap_or_else(failed))
     }
 }
 
@@ -394,12 +390,34 @@ fn command(install: &Value) -> Option<Vec<String>> {
     (!prefix.is_empty() && prefix.iter().all(absolute)).then_some(prefix)
 }
 
-/// `{ok: false, error: {key, message}}` (SEAMS §3).
+/// `{ok: false, error: {key, params?: {check}}}`. Never forward connector prose, log tails or arbitrary parameters.
 fn refusal_of(answer: &Value) -> Option<Refusal> {
     let error = answer.get("error")?;
     let key = error.get("key")?.as_str()?;
-    let message = error.get("message").and_then(Value::as_str).unwrap_or(key);
-    Some(Refusal::new(key, message))
+    let (safe_key, message) = match key {
+        "install.network" => ("install.network", "The connector could not download the core."),
+        "install.proxy" => ("install.proxy", "The connector could not reach the core through the network proxy."),
+        "install.disk" => ("install.disk", "There is not enough disk space to install the core."),
+        "install.checksum" => ("install.checksum", "The downloaded core did not match its pinned checksum."),
+        "install.no-bundle" => ("install.no-bundle", "No compatible core bundle is available."),
+        "install.authenticity" => ("install.authenticity", "The connector could not verify the core's authenticity."),
+        "install.self-test" => ("install.self-test", "The installed core did not pass its self-test."),
+        "install.rollback" => ("install.rollback", "The connector rolled back the installation after a failure."),
+        "install.rollback-failed" => {
+            ("install.rollback-failed", "The connector could not restore the previous installation.")
+        }
+        "service.not-loaded" => ("service.not-loaded", "The local service is not loaded."),
+        "service.failed" => ("service.failed", "The local service did not start."),
+        "service.start.failed" => ("service.start.failed", "The local service could not be started."),
+        "launch.failed" => ("launch.failed", "The local service could not be launched."),
+        "install.cancelled" => ("install.cancelled", "The install was cancelled before commit."),
+        _ => return Some(Refusal::new("cli.failed", "The connector returned an unrecognized failure.")),
+    };
+    let check = error.get("params").and_then(|params| params.get("check")).and_then(Value::as_str);
+    Some(match check {
+        Some(check) => Refusal::new(safe_key, message).with_check(check),
+        None => Refusal::new(safe_key, message),
+    })
 }
 
 #[cfg(test)]
@@ -428,9 +446,35 @@ mod tests {
     #[test]
     fn a_refusal_carries_its_key() {
         let tmp = tempfile::tempdir().unwrap();
-        let cli = fake(tmp.path(), r#"echo '{"ok":false,"error":{"key":"service.not-loaded","message":"m"}}'; exit 1"#);
+        let cli = fake(
+            tmp.path(),
+            r#"echo '{"ok":false,"error":{"key":"service.failed","message":"token=secret"}}'; exit 1"#,
+        );
         let refusal = cli.run(&["service", "start", "--json"], Duration::from_secs(5)).unwrap_err();
-        assert_eq!(refusal, Refusal::new("service.not-loaded", "m"));
+        assert_eq!(refusal, Refusal::new("service.failed", "The local service did not start."));
+    }
+
+    #[test]
+    fn connector_authenticity_refusal_forwards_only_the_allowlisted_check() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cli = fake(
+            tmp.path(),
+            r#"echo '{"ok":false,"error":{"key":"install.authenticity","message":"secret token prose","params":{"check":"repository-id","secret":"ignored"},"log_tail":"ignored"}}'; exit 1"#,
+        );
+        let refusal = cli.run(&["install", "--json"], Duration::from_secs(5)).unwrap_err();
+        assert_eq!(refusal.key, "install.authenticity");
+        assert_eq!(refusal.message, "The connector could not verify the core's authenticity.");
+        assert_eq!(refusal.params.as_ref().map(|params| params.check.as_str()), Some("repository-id"));
+        let serialized = serde_json::to_string(&refusal).unwrap();
+        assert!(!serialized.contains("secret"));
+        assert!(!serialized.contains("log_tail"));
+
+        let unsafe_cli = fake(
+            tmp.path(),
+            r#"echo '{"ok":false,"error":{"key":"install.authenticity","message":"ignored","params":{"check":"/private/token"}}}'; exit 1"#,
+        );
+        let untrusted_check = unsafe_cli.run(&["install", "--json"], Duration::from_secs(5)).unwrap_err();
+        assert_eq!(untrusted_check.params, None);
     }
 
     #[test]
@@ -465,14 +509,15 @@ echo '{"ok":true}'"#,
         let executable = tmp.path().join("sidevoice");
         let mut pin = crate::pin::test_support::fixture_pin();
         let manifest_sha = pin.core_manifest_sha256.as_deref().unwrap();
+        let assets_json = serde_json::to_string(&pin.core_assets).unwrap();
         let script = r##"#!/bin/sh
 if [ "$1" = "--version" ]; then
   echo '{"ok":true,"version":"1.2.3","target":"macos-aarch64","channel":"nightly","connector_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","build_seq":42}'
 elif [ "$1" = "metadata" ]; then
-  echo '{"ok":true,"connector":{"version":"1.2.3","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","channel":"nightly","build_seq":42,"link_min":1,"link_max":1},"embedded_core":{"version":"0.9.0","manifest_sha256":"MANIFEST_SHA","api":1,"link":1},"protocols":{"metadata":"sidevoice-metadata-v1","progress":"sidevoice-progress-jsonl-v1"}}'
+  echo '{"ok":true,"connector":{"version":"1.2.3","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","channel":"nightly","build_seq":42,"link_min":1,"link_max":1},"embedded_core":{"version":"0.9.0","manifest_sha256":"MANIFEST_SHA","assets":CORE_ASSETS,"api":1,"link":1},"protocols":{"metadata":"sidevoice-metadata-v1","progress":"sidevoice-progress-jsonl-v1"}}'
 fi
 "##;
-        let script = script.replace("MANIFEST_SHA", manifest_sha);
+        let script = script.replace("MANIFEST_SHA", manifest_sha).replace("CORE_ASSETS", &assets_json);
         std::fs::write(&executable, &script).unwrap();
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
         pin.executable_size = Some(script.len() as u64);
@@ -504,7 +549,7 @@ fi
         let cli = fake(tmp.path(), "echo boom >&2; exit 3");
         let refusal = cli.run(&["x"], Duration::from_secs(5)).unwrap_err();
         assert_eq!(refusal.key, "cli.failed");
-        assert!(refusal.message.contains("boom"), "{}", refusal.message);
+        assert_eq!(refusal.message, "The connector did not return a valid result.");
         let cli = fake(tmp.path(), r#"echo '{"ok":true}'; exit 2"#);
         assert_eq!(cli.run(&["x"], Duration::from_secs(5)).unwrap_err().key, "cli.failed");
         let cli = fake(tmp.path(), "sleep 30");

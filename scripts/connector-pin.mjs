@@ -63,10 +63,13 @@ export function validatePin(pin) {
   catch { throw new Error("connector-pin.json core manifest bytes are not JSON."); }
   requirePin(parsedManifest?.version === pin.core_version, "core manifest version does not match the pin.");
   requirePin(Array.isArray(pin.core_assets) && pin.core_assets.length > 0, "has no pinned core assets.");
+  const assetNames = new Set();
   for (const asset of pin.core_assets) {
-    requirePin(asset && typeof asset.name === "string" && asset.name.length > 0 && typeof asset.url === "string"
+    requirePin(asset && typeof asset.name === "string" && /^[A-Za-z0-9._-]+$/.test(asset.name)
+      && !assetNames.has(asset.name) && typeof asset.url === "string"
       && asset.url.startsWith("https://") && SHA256.test(asset.sha256 || "")
       && Number.isSafeInteger(asset.size) && asset.size > 0, "has an invalid core asset pin.");
+    assetNames.add(asset.name);
   }
   requirePin(SHA256.test(pin.executable_sha256 || ""), "has no valid SEA SHA-256.");
   requirePin(Number.isSafeInteger(pin.executable_size) && pin.executable_size > 0, "has no SEA byte size.");
@@ -119,6 +122,13 @@ export function verifyMetadata(pin, version, metadata) {
     api: pin.core_api,
     link: pin.core_link,
   })) requirePin(metadata?.embedded_core?.[key] === expected, `embedded_core.${key} does not match the pin.`);
+  const embeddedAssets = metadata?.embedded_core?.assets;
+  requirePin(Array.isArray(embeddedAssets) && embeddedAssets.length === pin.core_assets.length
+    && pin.core_assets.every((expected, index) => {
+      const actual = embeddedAssets[index];
+      return actual?.name === expected.name && actual?.url === expected.url
+        && actual?.sha256 === expected.sha256 && actual?.size === expected.size;
+    }), "embedded_core.assets do not match the pinned manifest assets.");
   requirePin(metadata?.protocols?.metadata === pin.metadata_protocol
     && metadata?.protocols?.progress === pin.progress_protocol, "metadata/progress protocols do not match the pin.");
   return true;

@@ -41,17 +41,58 @@ use serde::Serialize;
 use std::fmt;
 
 /// A refusal or failure with a stable `key` the page translates and `message`, an English sentence for a client that
-/// does not know the key (the shape of the native engine's refusals, docs/BRIDGE.md).
+/// does not know the key (the shape of the native engine's refusals, docs/BRIDGE.md). Connector refusals may carry
+/// only the allowlisted `params.check` identifier used by the web's translated authenticity message.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Refusal {
     pub key: String,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub params: Option<RefusalParams>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RefusalParams {
+    pub check: String,
 }
 
 impl Refusal {
     pub fn new(key: &str, message: impl Into<String>) -> Self {
-        Refusal { key: key.to_string(), message: message.into() }
+        Refusal { key: key.to_string(), message: message.into(), params: None }
     }
+
+    pub fn with_check(mut self, check: &str) -> Self {
+        if self.key == "install.authenticity" && safe_connector_check(check) {
+            self.params = Some(RefusalParams { check: check.to_string() });
+        }
+        self
+    }
+}
+
+fn safe_connector_check(check: &str) -> bool {
+    matches!(
+        check,
+        "sha256"
+            | "sigstore"
+            | "sigstore-bundle"
+            | "issuer"
+            | "workflow"
+            | "source"
+            | "repository-id"
+            | "runner"
+            | "build-config"
+            | "predicate"
+            | "subject"
+            | "manifest"
+            | "developer-override"
+            | "platform"
+            | "download"
+            | "download-size"
+            | "archive-path"
+            | "archive-link"
+            | "archive-size"
+            | "archive-type"
+    )
 }
 
 impl fmt::Display for Refusal {

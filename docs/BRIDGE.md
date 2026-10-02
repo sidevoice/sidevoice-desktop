@@ -293,6 +293,10 @@ client that does not know the key:
 The page renders by `key` and falls back to `message`. Every key is made in `src-tauri/engine/src/error.rs`; a new
 one is added there and here.
 
+The local connector's `install.authenticity` refusal may include `params: {"check": "repository-id"}`. Native
+forwards only a check identifier in the web bundle's fixed allowlist and replaces connector-provided prose with a
+stable English fallback. It never forwards connector logs or arbitrary error parameters.
+
 | `key` | Parameters | When |
 |---|---|---|
 | `engine_unsupported` | `engine` | no runtime in this app for that engine: unknown, a page's engine, or one a newer catalogue added |

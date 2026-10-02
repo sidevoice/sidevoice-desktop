@@ -74,9 +74,12 @@ test("SEA version and embedded core metadata must match the pin", () => {
     connector: { version: pin.connector_version, sha: pin.connector_sha, channel: pin.channel, build_seq: pin.build_seq,
       link_min: pin.link_min, link_max: pin.link_max },
     embedded_core: { version: pin.core_version, manifest_sha256: pin.core_manifest_sha256,
-      api: pin.core_api, link: pin.core_link },
+      assets: pin.core_assets.map((asset) => ({ ...asset })), api: pin.core_api, link: pin.core_link },
     protocols: { metadata: pin.metadata_protocol, progress: pin.progress_protocol } };
   assert.equal(verifyMetadata(pin, version, metadata), true);
   metadata.embedded_core.manifest_sha256 = "0".repeat(64);
   assert.throws(() => verifyMetadata(pin, version, metadata), /embedded_core.manifest_sha256/);
+  metadata.embedded_core.manifest_sha256 = pin.core_manifest_sha256;
+  metadata.embedded_core.assets[0].sha256 = "0".repeat(64);
+  assert.throws(() => verifyMetadata(pin, version, metadata), /embedded_core.assets/);
 });

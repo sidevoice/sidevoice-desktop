@@ -195,7 +195,7 @@ exit 1"#,
 
     let failure = host.install_bundled(cli, "job-rollback".into(), true).unwrap_err();
     assert_eq!(failure.key, "install.rollback");
-    assert_eq!(failure.message, "the previous release was restored");
+    assert_eq!(failure.message, "The connector rolled back the installation after a failure.");
     assert_eq!(host.state().state, State::Running, "the selected old core remains usable after rollback");
 }
 
