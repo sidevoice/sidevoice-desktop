@@ -20,12 +20,13 @@
   // CI's stand-in machine (test/fixtures/fake-node.py --key): a throwaway key that signs nothing but CI's nonces.
   const MACHINE = "XO8Z6hj1_KrQXjxM2FXpBPd6qOyC__Dfc4zLn-4dOwI";
   const MACHINE_KEY = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEe+HC+jHE39mN/AXjcJyjxUr/FeJ335haZ4Kgjoj6ZhZm90SXgy1EH2nNFOxZTXr4P892sl5p+eiDv8sLhAOywg==";
+  const MACHINE_TOKEN = "ci-agents-device-token"; // The fake host uses this token for its authenticated Agents route.
   const part = sessionStorage.getItem(FLOW) || "select";
   if (part === "select") {
     // A device paired with that machine and nothing chosen yet; set before the room's own scripts read storage.
     localStorage.removeItem("sidevoice.stages");
     localStorage.removeItem("sidevoice.settings");
-    localStorage.setItem("sidevoice.pairings", JSON.stringify({ in_use: MACHINE, pairings: [{ fp: MACHINE, token: "ci-token",
+    localStorage.setItem("sidevoice.pairings", JSON.stringify({ in_use: MACHINE, pairings: [{ fp: MACHINE, token: MACHINE_TOKEN,
       public_key: MACHINE_KEY, device_id: "ci-device", urls: ["http://127.0.0.1:8768"], rv: null, host: "ci-runner", paired_at: Date.now() }] }));
   }
 
@@ -55,7 +56,8 @@
     return now && phases.includes(now.phase) && now;
   }, ms, task + " " + phases.join("/"));
   const stored = () => {
-    const stt = (JSON.parse(localStorage.getItem("sidevoice.stages") || "{}")[MACHINE] || {}).stt;
+    const scope = JSON.parse(localStorage.getItem("sidevoice.stages") || "{}");
+    const stt = (scope.hosts && scope.hosts[MACHINE] || {}).stt;
     return stt ? stt.model + "/" + ((stt.build && stt.build.accelerator) || "auto") : "none";
   };
   const engine = () => window.__sidevoiceDesktop.host.nativeEngine;
@@ -153,7 +155,17 @@
     await room();
     const actions = window.sidevoiceActions;
     const out = {};
-    await until(() => facts().nodeReach === "ok", 60000, "the machine");
+    try {
+      await until(() => facts().nodeReach === "ok", 60000, "the machine");
+    } catch (error) {
+      const current = facts();
+      const remote = current.remoteHostStatus && current.remoteHostStatus[MACHINE];
+      throw new Error(error.message + " (reach=" + (current.nodeReach || "none")
+        + " selected=" + (current.pairingInUse || "none") + " node=" + (current.node || "none")
+        + " remote=" + (remote && remote.state || "none")
+        + " local_selected=" + (current.localHostSelected === true)
+        + " local=" + (current.localHostStatus && current.localHostStatus.state || "none") + ")");
+    }
     out.reach = facts().nodeReach;
     document.getElementById("settings-open").click();
     const preferences = await until(() => facts().voicePreferences && facts().voicePreferences.stt, 30000, "the settings");

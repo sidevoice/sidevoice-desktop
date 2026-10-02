@@ -86,8 +86,9 @@ else `service status --json`, which computes the same object.
 `reachable` is whether a core answers and the app's pairing with it works; `pairing()` is non-null exactly then,
 whatever `state` says — the page uses the host when `pairing()` is non-null (SEAMS §5).
 
-`version()` reports `capabilities.agents: false`, and `agents()` returns `agents.unavailable` until connector R2 supplies
-discovery. R4 installation always uses `--no-agents`.
+`version()` reports `capabilities.agents: false`, and the direct native `agents()` bridge remains unavailable. With the
+R2 connector pin, the bundled page uses the host-scoped `/api/host/agents` route through the authenticated local proxy;
+R4 installation continues to use `--no-agents` so it does not register agents on the app's machine.
 
 `state()` → `{state, failure?, core?, service?, calls?, attempts?, limit?, reachable}`: `failure` as the service
 reports it (`{key, step, message, at, log_tail, …}`) or the app's own `{key, message}`; `core` `{pid, version, api,
@@ -115,7 +116,7 @@ the group and stays.
 | `revealLog()` | `/usr/bin/open -R D/core.log` (else `D/connector.log`) | — |
 | `install(onProgress)` | bundled `install --no-agents --service --json --progress=jsonl`; resolves after the core is reachable and paired | 45 min |
 | `update()` | eligible bundled connector transaction; never downgrades | 45 min |
-| `version()` / `agents()` | pinned/installed metadata; agents rejects with `agents.unavailable` until connector R2 | — |
+| `version()` / `agents()` | pinned/installed metadata; the direct native Agents bridge remains unavailable while the bundled page uses the R2 host API through the proxy | — |
 
 R4's install job emits bounded progress frames from stderr while the connector's one final JSON answer remains on stdout.
 Progress is ordered per job (`download`, `verify`, `stage`, `service-start`, `wait-calls`, `wait-lock`, `commit`,

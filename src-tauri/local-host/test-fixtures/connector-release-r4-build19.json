@@ -1,0 +1,10 @@
+{
+  "id": "0.6.0-nightly.19-sea",
+  "connector": "0.6.0",
+  "connector_sha": "86a0ab1a5363af303b25f77fc7254aef5db1fea3",
+  "core": "0.1.0",
+  "core_manifest_sha256": "2b71c746af06bee1f22cb3ac13ee09fa50b9ba254d1f54137d9ee22df447b0e1",
+  "channel": "nightly",
+  "build_seq": 19,
+  "format": "sea"
+}

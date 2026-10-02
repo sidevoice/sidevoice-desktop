@@ -180,6 +180,34 @@ mod tests {
     }
 
     #[test]
+    fn reviewed_r4_build_19_is_eligible_for_the_bundled_build_25() {
+        let pin = ConnectorPin::from_json(include_str!("../../connector-pin.json")).unwrap();
+        assert_eq!(pin.connector_version.as_deref(), Some("0.6.0"));
+        assert_eq!(pin.channel.as_deref(), Some("nightly"));
+        assert_eq!(pin.build_seq, Some(25));
+
+        let previous_record: serde_json::Value =
+            serde_json::from_str(include_str!("../test-fixtures/connector-release-r4-build19.json")).unwrap();
+        let previous = InstalledBuild::from_release_record(&previous_record, Some(1), None);
+        assert_eq!(previous.connector_version.as_deref(), Some("0.6.0"));
+        assert_eq!(previous.connector_sha.as_deref(), Some("86a0ab1a5363af303b25f77fc7254aef5db1fea3"));
+        assert_eq!(previous.core_version.as_deref(), Some("0.1.0"));
+        assert_eq!(previous.channel.as_deref(), Some("nightly"));
+        assert_eq!(previous.build_seq, Some(19));
+        assert_eq!(update_status(Some(&pin), Some(&previous)), UpdateStatus::Available);
+
+        let current_record = serde_json::json!({
+            "connector": pin.connector_version,
+            "core": pin.core_version,
+            "channel": pin.channel,
+            "build_seq": pin.build_seq,
+            "format": "sea"
+        });
+        let current = InstalledBuild::from_release_record(&current_record, Some(1), None);
+        assert_eq!(update_status(Some(&pin), Some(&current)), UpdateStatus::Current);
+    }
+
+    #[test]
     fn a_newer_installed_core_is_never_downgraded_by_a_connector_update() {
         let pin = crate::pin::test_support::fixture_pin();
         let mut installed = installed("1.2.2", "release", 41, Some(1), Some(1));

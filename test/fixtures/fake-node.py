@@ -2,7 +2,8 @@
 (`GET /api/rendezvous` → a node), proves its identity to a page paired with it (`GET /api/device/identity`,
 ECDSA P-256 with a throwaway key whose public half test/fixtures/room-flow.js pins), serves the presentation
 defaults settings read (`GET /api/presentation/languages`), all with the CORS the real core sends to a desktop
-shell; 404s the rest, and prints every request with its Origin so CI can check the interface talked to it."""
+shell. The remote Agents probe has a token-checked `/api/host/agents` list/action seam and a test-only pairing revoke
+switch; other unknown paths return 404. It prints request paths and Origins, never authorization values."""
 import base64
 import hashlib
 import json
@@ -59,6 +60,27 @@ def sign(message):
             return r.to_bytes(32, 'big') + s.to_bytes(32, 'big')
 
 ACCEPTED = {'tauri://localhost', 'http://tauri.localhost', 'https://tauri.localhost'}
+HOST_AGENT_TOKEN = 'ci-agents-device-token'
+AGENTS_CI_REVOKED = False
+AGENT_ROWS = {
+    'codex': {
+        'id': 'codex', 'label': 'Codex', 'present': True, 'evidence': 'ci-probe', 'version': '1.0',
+        'registration': 'foreign', 'connect': 'manual',
+        'instructions': {'command': "# Replace the existing Sidevoice entry by running these Codex commands:\n"
+                                   "'/opt/homebrew/bin/codex' 'mcp' 'remove' 'sidevoice'\n"
+                                   "'/opt/homebrew/bin/codex' 'mcp' 'add' 'sidevoice' '--' '/opt/homebrew/bin/node' "
+                                   "'/Users/ci/.local/share/sidevoice/connector/cli.mjs' 'mcp'",
+                         'file': None, 'snippet': None},
+        'dismissed': False, 'actionable': False,
+    },
+    'cursor': {
+        'id': 'cursor', 'label': 'Cursor', 'present': True, 'evidence': 'ci-probe', 'version': '1.0',
+        'registration': 'not-connected', 'connect': 'auto',
+        'instructions': {'command': 'sidevoice agents connect cursor', 'file': '~/.cursor/mcp.json',
+                         'snippet': '{"mcpServers":{"sidevoice":{"command":"sidevoice"}}}'},
+        'dismissed': False, 'actionable': True,
+    },
+}
 
 
 class Node(BaseHTTPRequestHandler):
@@ -91,7 +113,17 @@ class Node(BaseHTTPRequestHandler):
 
     def do_GET(self):
         self.log_request_line()
-        if self.path.split('?')[0] == '/api/presentation/echo':
+        self.dispatch_request()
+
+    def dispatch_request(self):
+        route = self.path.split('?')[0]
+        if route == '/__ci/revoke-host':
+            global AGENTS_CI_REVOKED
+            AGENTS_CI_REVOKED = True
+            return self.answer(200, {'ok': True})
+        if route == '/api/host/agents' or route.startswith('/api/host/agents/'):
+            return self.host_agents()
+        if route == '/api/presentation/echo':
             # What a paired interface sends a local node: its device token, cross-origin (the real core checks it).
             return self.answer(200, {'authorization': self.headers.get('Authorization', '')})
         if self.path.split('?')[0] == '/api/rendezvous':
@@ -105,7 +137,26 @@ class Node(BaseHTTPRequestHandler):
             return self.answer(200, {})
         self.answer(404, {'detail': 'not in this stand-in'})
 
-    do_POST = do_PUT = do_DELETE = do_GET
+    def do_POST(self):
+        self.log_request_line()
+        if self.path.split('?')[0] == '/api/host/agents/cursor/connect':
+            return self.host_agents(action='connect')
+        self.dispatch_request()
+
+    do_PUT = do_DELETE = do_GET
+
+    def host_agents(self, action=None):
+        if self.headers.get('Authorization') != f'Bearer {HOST_AGENT_TOKEN}' or AGENTS_CI_REVOKED:
+            return self.answer(401, {'error': {'key': 'unreachable'}})
+        if action == 'connect':
+            AGENT_ROWS['cursor']['registration'] = 'connected'
+            AGENT_ROWS['cursor']['actionable'] = False
+        rows = [dict(row, instructions=dict(row['instructions'])) for row in AGENT_ROWS.values()]
+        return self.answer(200, {
+            'agents': rows,
+            'scanned_at': 1780360000,
+            'custom': {'command': 'sidevoice agents connect --custom', 'snippet': '{"mcpServers":{}}', 'version': '1.0'},
+        })
 
     def log_message(self, *args):
         pass

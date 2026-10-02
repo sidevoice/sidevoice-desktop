@@ -21,6 +21,10 @@ ls -la "$MODELS"
 # The actual vendored room (ui/voice), not a test page: its settings actions, controller, selection, native
 # worker and storage, over this app's bridge and engine (test/fixtures/room-flow.js).
 grep -q "page tauri://localhost/voice/index.html" /tmp/room.log
+if ! grep -q 'room-flow ok' /tmp/room.log; then
+  echo "fake-node request paths (identity nonces redacted; auth values are never logged):"
+  sed -E 's#(/api/device/identity)\?nonce=[^ ]+#\1?nonce=<redacted>#g' /tmp/room-node.log
+fi
 grep -q 'room-flow ok' /tmp/room.log
 LINE=$(grep 'room-flow ok' /tmp/room.log)
 # What the room asked the app, and the offers it resolved from it: the five native models, nothing of the page's.
