@@ -790,11 +790,7 @@ echo '{{"ok":true}}'"#
             assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
             let reader = unsafe { OwnedFd::from_raw_fd(fds[0]) };
             let mut writer = unsafe { std::fs::File::from_raw_fd(fds[1]) };
-            writeln!(
-                writer,
-                "{{\"type\":\"progress\",\"step\":\"{step}\",\"done\":null,\"total\":null}}"
-            )
-            .unwrap();
+            writeln!(writer, "{{\"type\":\"progress\",\"step\":\"{step}\",\"done\":null,\"total\":null}}").unwrap();
             drop(writer);
             let mut streams = [Stream::new(None), Stream::new(Some(reader))];
             let finalizing = std::cell::Cell::new(false);

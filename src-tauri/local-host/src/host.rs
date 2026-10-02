@@ -613,7 +613,7 @@ impl LocalHost {
 
 fn install_failure_refusal(failure: &Value) -> Refusal {
     let key = failure.get("key").and_then(Value::as_str).unwrap_or("install.pairing");
-    Cli::refusal_for_key(key)
+    crate::cli::refusal_for_key(key)
 }
 
 impl Drop for LocalHost {
