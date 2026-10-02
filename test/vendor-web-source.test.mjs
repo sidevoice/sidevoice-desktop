@@ -8,7 +8,7 @@ const connectorPin = readFileSync(new URL("../src-tauri/connector-pin.json", imp
 
 test("the bundled production web is the exact reviewed R2/R3 head", () => {
   assert.equal(webSource.repository, "sidevoice/sidevoice-web");
-  assert.equal(webSource.commit, "a0436e143ed5e29a81e86830f5902afde0df3786");
+  assert.equal(webSource.commit, "c2cc354f9b00dac1b0cad5fb70bb043751190103");
   assert.equal(webSource.uncommitted_changes, false);
 });
 
