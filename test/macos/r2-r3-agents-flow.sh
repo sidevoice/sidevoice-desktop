@@ -27,7 +27,7 @@ for _ in $(seq 1 120); do
   sleep 1
 done
 grep -E 'page tauri://localhost/voice/index.html|r2-r3-agents-flow' "$AGENTS_APP_LOG" || true
-grep 'request .* /api/host/agents' "$AGENTS_NODE_LOG" || true
+grep -E 'request (OPTIONS|GET|POST) /api/(host/agents|presentation/languages)' "$AGENTS_NODE_LOG" || true
 grep -q 'page tauri://localhost/voice/index.html' "$AGENTS_APP_LOG"
 grep -Eq 'r2-r3-agents-flow ok settings=machines host=agents gear=marked get=authorized cursor-connect=authorized codex-replace=manual-visible codex-copy=(available|not-permitted|unavailable|unconfirmed) revoked=status' "$AGENTS_APP_LOG"
 grep -Eq 'request GET /api/host/agents\?rescan=1 origin=tauri://localhost auth=yes' "$AGENTS_NODE_LOG"

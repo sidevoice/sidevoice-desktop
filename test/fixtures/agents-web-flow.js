@@ -61,11 +61,14 @@
       const settingsDialog = document.getElementById("language-settings");
       const settingsError = document.getElementById("settings-error");
       if (!settingsDialog || !settingsError) throw new Error("settings-dialog-controls-missing");
-      await until(() => settingsDialog.open || !!settingsError.textContent.trim(), 15000, "settings-dialog");
+      await sleep(750);
       if (!settingsDialog.open) {
         const requiredSettings = ["ui-language", "audio-grace-seconds", "replay-on-return-seconds", "turn-patience", "presence-sound", "locked-call"];
         const missing = requiredSettings.filter((id) => !document.getElementById(id));
-        await say(`settings-state dialog=closed missing-fields=${missing.join(",") || "none"} error=yes agent-request=${store()?.facts?.settingsAgentRequest?.id ? "yes" : "no"}`);
+        await say(`settings-state dialog=closed connected=${settingsDialog.isConnected ? "yes" : "no"} click-handler=${typeof gear.onclick === "function" ? "yes" : "no"} missing-fields=${missing.join(",") || "none"} error=${settingsError.textContent.trim() ? "yes" : "no"} agent-request=${store()?.facts?.settingsAgentRequest?.id ? "yes" : "no"}`);
+      }
+      await until(() => settingsDialog.open || !!settingsError.textContent.trim(), 15000, "settings-dialog");
+      if (!settingsDialog.open) {
         throw new Error("settings-dialog-error");
       }
       const machinesTab = document.getElementById("settings-machines");
