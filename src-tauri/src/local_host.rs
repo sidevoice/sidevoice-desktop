@@ -133,7 +133,7 @@ mod imp {
     use super::{refusal, unsupported, Answer};
     use serde_json::{json, Value};
     use sidevoice_local_host::cli::Cli;
-    use sidevoice_local_host::host::{computer_name, Action, Config, LocalHost};
+    use sidevoice_local_host::host::{computer_name, Action, Config, InstallAction, LocalHost};
     use sidevoice_local_host::paths::DataDirs;
     use sidevoice_local_host::pin::{ConnectorPin, InstalledBuild};
     use sidevoice_local_host::state::Report;
@@ -247,13 +247,13 @@ mod imp {
         format!("{prefix}-{now:x}-{:x}", JOBS.fetch_add(1, Ordering::Relaxed))
     }
 
-    fn noop_update_response(report: &Report) -> Answer {
+    fn update_response(report: &Report, action: InstallAction) -> Answer {
         let mut response = serde_json::to_value(report)
             .map_err(|_| refusal("internal", "The local-host status could not be serialized."))?;
         let Some(fields) = response.as_object_mut() else {
             return Err(refusal("internal", "The local-host status could not be serialized."));
         };
-        fields.insert("result".into(), json!("noop"));
+        fields.insert("result".into(), json!(action.as_str()));
         Ok(response)
     }
 
@@ -261,7 +261,9 @@ mod imp {
         let host = host(app)?;
         let pin = pin()?;
         let cli = bundled_cli(app, &host, &pin)?;
-        host.install_bundled(cli, job.to_string(), false).map(|report| json!(report)).map_err(|error| json!(error))
+        host.install_bundled(cli, job.to_string(), false)
+            .map(|outcome| json!(outcome.report))
+            .map_err(|error| json!(error))
     }
 
     pub fn install_progress(app: &AppHandle, job: &str, after_sequence: u64) -> Answer {
@@ -305,11 +307,12 @@ mod imp {
         match versioning::update_status(Some(&pin), installed.as_ref()) {
             UpdateStatus::Available => {
                 let cli = bundled_cli(app, &host, &pin)?;
-                host.install_bundled(cli, next_job("local-update"), true)
-                    .map(|report| json!(report))
-                    .map_err(|error| json!(error))
+                match host.install_bundled(cli, next_job("local-update"), true) {
+                    Ok(outcome) => update_response(&outcome.report, outcome.action),
+                    Err(error) => Err(json!(error)),
+                }
             }
-            UpdateStatus::Current => noop_update_response(&report),
+            UpdateStatus::Current => update_response(&report, InstallAction::Noop),
             UpdateStatus::NewerInstalled => Err(refusal(
                 "update.newer-installed",
                 "A newer connector is already installed; the app will not downgrade it.",
@@ -327,12 +330,13 @@ mod imp {
 
     #[cfg(test)]
     mod tests {
-        use super::noop_update_response;
+        use super::update_response;
         use serde_json::json;
+        use sidevoice_local_host::host::InstallAction;
         use sidevoice_local_host::state::{Report, State};
 
         #[test]
-        fn update_noop_preserves_the_complete_local_host_status() {
+        fn update_response_preserves_the_complete_local_host_status_and_action() {
             let mut report = Report::new(State::Running);
             report.failure = Some(json!({"key":"service.warning"}));
             report.core = Some(json!({"version":"0.1.0","api":1}));
@@ -343,7 +347,7 @@ mod imp {
             report.progress = Some(json!({"job":"job-1","sequence":3,"step":"pairing","cancellable":false}));
             report.reachable = true;
 
-            let response = noop_update_response(&report).unwrap();
+            let response = update_response(&report, InstallAction::Noop).unwrap();
             assert_eq!(
                 response,
                 json!({
@@ -353,6 +357,8 @@ mod imp {
                     "reachable":true, "result":"noop"
                 })
             );
+
+            assert_eq!(update_response(&report, InstallAction::Upgrade).unwrap()["result"], "upgrade");
         }
     }
 }

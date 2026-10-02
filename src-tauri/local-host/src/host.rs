@@ -46,6 +46,39 @@ pub enum Action {
     ServiceUninstall,
 }
 
+/// Successful R4 connector transaction action, preserved for the bridge's update result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallAction {
+    Install,
+    Upgrade,
+    Noop,
+}
+
+impl InstallAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Install => "install",
+            Self::Upgrade => "upgrade",
+            Self::Noop => "noop",
+        }
+    }
+
+    fn from_answer(answer: &Value) -> Result<Self, Refusal> {
+        match answer.get("action").and_then(Value::as_str) {
+            Some("install") => Ok(Self::Install),
+            Some("upgrade") => Ok(Self::Upgrade),
+            Some("noop") => Ok(Self::Noop),
+            _ => Err(crate::cli::refusal_for_key("cli.failed")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InstallOutcome {
+    pub report: Report,
+    pub action: InstallAction,
+}
+
 impl Action {
     pub fn parse(name: &str) -> Option<Action> {
         Some(match name {
@@ -343,7 +376,7 @@ impl LocalHost {
 
     /// Runs the bundled R4 installer for an explicit install/update request. The caller has already verified the
     /// resource and pin; an existing R1 install is observed instead of being replaced by the install CTA.
-    pub fn install_bundled(&self, cli: Cli, job_id: String, update: bool) -> Result<Report, Refusal> {
+    pub fn install_bundled(&self, cli: Cli, job_id: String, update: bool) -> Result<InstallOutcome, Refusal> {
         if job_id.is_empty()
             || job_id.len() > 96
             || !job_id.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b))
@@ -353,7 +386,7 @@ impl LocalHost {
         if !update && Cli::install_record(&self.config.dirs)?.is_some() {
             let report = self.poll();
             if report.reachable && report.state != State::Incompatible {
-                return Ok(report);
+                return Ok(InstallOutcome { report, action: InstallAction::Noop });
             }
             return Err(Refusal::new(
                 "install.already-installed",
@@ -384,26 +417,26 @@ impl LocalHost {
                 *active = None;
             }
         }
-        result.map(|_| self.inner.lock().unwrap().report.clone())
+        result.map(|action| InstallOutcome { report: self.inner.lock().unwrap().report.clone(), action })
     }
 
-    fn run_bundled_install(&self, cli: &Cli, job: &Arc<InstallJob>) -> Result<Report, Refusal> {
+    fn run_bundled_install(&self, cli: &Cli, job: &Arc<InstallJob>) -> Result<InstallAction, Refusal> {
         let answer = run_connector_install(cli, job)?;
+        let action = InstallAction::from_answer(&answer)?;
         self.inner.lock().unwrap().fallback = None;
         let report = self.poll();
         if report.state == State::Incompatible {
             return Err(Refusal::new("install.incompatible", "The installed core API is not supported by this app."));
         }
         if report.reachable {
-            return Ok(report);
+            return Ok(action);
         }
         if let Some(failure) = report.failure.as_ref() {
             return Err(install_failure_refusal(failure));
         }
-        let outcome = answer.get("result").and_then(Value::as_str).unwrap_or("installed");
         Err(Refusal::new(
             "install.pairing",
-            format!("The connector reported {outcome}, but its compatible core is not paired and reachable yet."),
+            format!("The connector reported {}, but its compatible core is not paired and reachable yet.", action.as_str()),
         ))
     }
 
@@ -710,7 +743,7 @@ mod tests {
 if [ "$1" = "install" ]; then
   echo '{"type":"progress","step":"wait-lock","done":null,"total":null}' >&2
   : > "$SIDEVOICE_DATA_DIR/install-command-ran"
-  echo '{"ok":true,"result":"installed"}'
+  echo '{"ok":true,"action":"install"}'
 else
   exit 2
 fi

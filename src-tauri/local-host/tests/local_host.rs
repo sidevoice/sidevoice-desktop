@@ -6,7 +6,7 @@
 use serde_json::{json, Value};
 use sidevoice_local_host::cli::Cli;
 use sidevoice_local_host::fake_core::{self, FakeCore};
-use sidevoice_local_host::host::{Action, Config, LocalHost};
+use sidevoice_local_host::host::{Action, Config, InstallAction, LocalHost};
 use sidevoice_local_host::http;
 use sidevoice_local_host::paths::DataDirs;
 use sidevoice_local_host::state::State;
@@ -93,7 +93,7 @@ fn install_script(delay: &str, progress: &str) -> String {
     {progress}
     {delay}
     printf '{{"command":["%s"]}}\n' "$0" > "$SIDEVOICE_DATA_DIR/install.json"
-    echo '{{"ok":true,"result":"installed"}}'
+    echo '{{"ok":true,"action":"install"}}'
     ;;
   service:status)
     echo '{{"ok":true,"state":"running","service":"launchd","calls":0}}'
@@ -134,7 +134,9 @@ echo '{"type":"progress","step":"commit","done":null,"total":null}' >&2"#;
     assert!(!host.cancel_install("job-a"), "a committed transaction is allowed to finish");
     assert_eq!(host.install_bundled(cli, "job-b".into(), false).unwrap_err().key, "install.busy");
 
-    let report = worker.join().unwrap().unwrap();
+    let outcome = worker.join().unwrap().unwrap();
+    assert_eq!(outcome.action, InstallAction::Install);
+    let report = outcome.report;
     assert_eq!(report.state, State::Running);
     assert!(report.reachable);
     assert!(host.pairing().is_some(), "the existing R1 poll projects the local pairing");
@@ -176,6 +178,36 @@ if ($ARGV[0] eq 'install') {
     assert!(host.cancel_install("job-cancel"), "true follows the connector's install.cancelled response");
     assert_eq!(worker.join().unwrap().unwrap_err().key, "install.cancelled");
     assert!(!world.dirs.install_record().exists(), "the fixture did not select an install after cancellation");
+}
+
+#[test]
+fn bundled_update_preserves_connector_noop_when_a_racing_release_is_already_current() {
+    let world = World::new();
+    let _core = world.core(1);
+    let host = world.host();
+    let cli = bundled_fixture(
+        &world,
+        r#"case "$1:$2" in
+  install:*)
+    echo '{"type":"progress","step":"wait-lock","done":null,"total":null}' >&2
+    sleep 0.1
+    echo '{"ok":true,"action":"noop","installed":"current"}'
+    ;;
+  service:status)
+    echo '{"ok":true,"state":"running","service":"launchd","calls":0}'
+    ;;
+  *) echo '{"ok":false,"error":{"key":"fixture.bad-request","message":"bad request"}}'; exit 1 ;;
+esac"#,
+    );
+
+    // The desktop selected the Available path; the lock-wait fixture then reports a transaction no-op, as when a
+    // second installer selects the same build. Preserve that connector result instead of reporting an applied update.
+    let outcome = host.install_bundled(cli, "job-update-race".into(), true).unwrap();
+    assert_eq!(outcome.action, InstallAction::Noop);
+    assert_eq!(outcome.report.state, State::Running);
+    assert!(outcome.report.reachable);
+    let progress = host.install_progress("job-update-race", 0).unwrap();
+    assert_eq!(progress[0].step, "wait-lock");
 }
 
 #[test]
