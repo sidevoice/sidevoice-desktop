@@ -86,6 +86,7 @@ do not remove verification or regenerate a digest from arbitrary downloaded byte
 | Resource wiring while pin is pending | `npm run build:mac:fixture` | Explicit shell fixture, in `target/packages/fixture`; never a production artifact |
 | Native integration | `npm run build:mac:probe`, `test/macos/*.sh` | WKWebView/local-host proxy, native engine, room model flow and card behavior |
 | Product packaging | `npm run build:mac`, optional `npm run package:mac` | Real verified connector, production app and evidence JSON |
+| Hosted clean-account dogfood smoke | `python3 test/macos/r4-dogfood-smoke.py` after a trusted ready-pin build | Real bundled SEA installs the pinned core under launchd, reports reachable, issues an unlogged local pairing code, returns same-version `noop`, and uninstalls |
 | Local R4 acceptance | Clean macOS arm64 account, real app | Install/start/pair/update-or-rollback results, recorded separately |
 
 Native integration scripts run from the repository root on a **disposable macOS test account**. The engine/room
@@ -94,6 +95,12 @@ the local packaging command. Actions gates the macOS jobs on fast tests; engine/
 filters so local-host transport changes do not always download and exercise speech models. Existing security and
 WebView assertions remain. The native engine belongs to Desktop; moving those tests to Connector would test the
 wrong product boundary.
+
+Trusted manual/main/release builds with a ready connector pin run the hosted dogfood smoke after production
+packaging and before the UI probes. It requires the hosted account's launchd GUI domain, refuses a pre-existing
+Sidevoice service or data directory, strips inherited credentials from connector subprocesses, never logs the
+pairing code, and traps interruption to uninstall. A pending-pin fixture never runs it. This focused SEA/service
+check does not replace launching the app and completing the actual UI pairing flow on a clean Mac.
 
 Do not compile on the shared agent node. Use GitHub Actions for native builds. A manual run builds and uploads
 artifacts without publishing; no merge or release is necessary to exercise this workflow. A manual run with

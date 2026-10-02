@@ -216,6 +216,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SIDEVOICE_GITHUB_TOKEN: ${{ github.event_name != 'pull_request' && secrets.SIDEVOICE_CONNECTOR_ACTIONS_READ || '' }}
         run: npm run build:mac
+      - name: Fresh-account R4 connector install, pairing code, no-op and uninstall
+        if: ${{ github.event_name != 'pull_request' && !inputs.fixture && steps.connector.outputs.status == 'ready' }}
+        timeout-minutes: 65
+        env:
+          APP: src-tauri/target/packages/production/Sidevoice.app
+        run: python3 test/macos/r4-dogfood-smoke.py
       - name: First open (no settings) — the bundled interface comes up in the real WKWebView
         if: needs.changes.outputs.installers == 'true'
         run: bash test/macos/first-open.sh
