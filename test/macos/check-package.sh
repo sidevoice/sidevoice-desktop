@@ -50,3 +50,4 @@ if grep -q "SIDEVOICE_DEBUG_IDLE_UNLOAD_SECS" "$APP/Contents/MacOS/sidevoice-des
 if grep -Eq "SIDEVOICE_DEBUG_(REFUSE_LOAD|SLOW_TRANSCRIBE)" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "a fault switch is in the release app"; exit 1; fi
 if grep -Eq "SIDEVOICE_DEBUG_LOCAL_HOST_FLOW|local-host-flow" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the local-host flow is in the release app"; exit 1; fi
 if grep -Eq "SIDEVOICE_DEBUG_LOCAL_HOST_DOGFOOD|local-host-dogfood" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the genuine-core dogfood flow is in the release app"; exit 1; fi
+if grep -Eq "SIDEVOICE_DEBUG_AGENTS_WEB_FLOW|r2-r3-agents-flow" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the remote Agents flow is in the release app"; exit 1; fi

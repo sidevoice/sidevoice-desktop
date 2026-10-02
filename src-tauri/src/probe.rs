@@ -11,6 +11,8 @@
 //!   `SIDEVOICE_DEBUG_LOCAL_HOST_FLOW=1`: the local host and its proxy as the vendored room's page reaches them;
 //! - the genuine-core dogfood flow (`test/fixtures/local-host-dogfood-flow.js`), injected with
 //!   `SIDEVOICE_DEBUG_LOCAL_HOST_DOGFOOD=1`: the vendored page's paired-device projection and safe same-version update;
+//! - the remote Agents flow (`test/fixtures/agents-web-flow.js`), injected with
+//!   `SIDEVOICE_DEBUG_AGENTS_WEB_FLOW=1`: the vendored page's marked gear → host Agents route and authenticated host action;
 //! - `SIDEVOICE_DEBUG_IDLE_UNLOAD_SECS`: how long a model stays in memory unused (D13), shortened so the probe page
 //!   sees the app unload a model and load it again as a call connects;
 //! - `SIDEVOICE_DEBUG_REFUSE_LOAD`, `SIDEVOICE_DEBUG_SLOW_TRANSCRIBE`: faults the room flow selects models against.
@@ -29,6 +31,7 @@ const CARD_HTML: &[u8] = include_bytes!("../../test/fixtures/card-probe.html");
 const ROOM_FLOW: &str = include_str!("../../test/fixtures/room-flow.js");
 const LOCAL_HOST_FLOW: &str = include_str!("../../test/fixtures/local-host-flow.js");
 const LOCAL_HOST_DOGFOOD_FLOW: &str = include_str!("../../test/fixtures/local-host-dogfood-flow.js");
+const AGENTS_WEB_FLOW: &str = include_str!("../../test/fixtures/agents-web-flow.js");
 
 /// The page the room window loads: a probe when asked for, else `interface`.
 pub fn page(interface: &str) -> String {
@@ -80,6 +83,12 @@ pub fn local_host_flow() -> Option<&'static str> {
 pub fn local_host_dogfood_flow() -> Option<&'static str> {
     let asked = std::env::var("SIDEVOICE_DEBUG_LOCAL_HOST_DOGFOOD").is_ok_and(|v| v == "1");
     (crate::debugging() && asked).then_some(LOCAL_HOST_DOGFOOD_FLOW)
+}
+
+/// The R2/R3 remote Agents flow, driven through the production page and the authenticated remote host API.
+pub fn agents_web_flow() -> Option<&'static str> {
+    let asked = std::env::var("SIDEVOICE_DEBUG_AGENTS_WEB_FLOW").is_ok_and(|v| v == "1");
+    (crate::debugging() && asked).then_some(AGENTS_WEB_FLOW)
 }
 
 /// How long a model stays in memory unused (D13), shortened with `SIDEVOICE_DEBUG_IDLE_UNLOAD_SECS` so the probe

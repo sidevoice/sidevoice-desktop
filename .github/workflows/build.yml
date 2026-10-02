@@ -237,6 +237,8 @@ jobs:
           grep -q "local-host-flow" "$BIN"
           grep -q "SIDEVOICE_DEBUG_LOCAL_HOST_DOGFOOD" "$BIN"
           grep -q "local-host-dogfood" "$BIN"
+          grep -q "SIDEVOICE_DEBUG_AGENTS_WEB_FLOW" "$BIN"
+          grep -q "r2-r3-agents-flow" "$BIN"
       - name: Fresh-account R4 install, production app launch, projected host, update no-op and uninstall
         if: ${{ github.event_name != 'pull_request' && !inputs.fixture && steps.connector.outputs.status == 'ready' }}
         timeout-minutes: 65
@@ -324,6 +326,8 @@ jobs:
           # The token, stored by the app alone: 0600 in its config directory.
           STORE="$HOME/Library/Application Support/dev.sidevoice.desktop/local-host.json"
           test "$(stat -f %Lp "$STORE")" = 600
+      - name: Settings to host Agents through the bundled page and authenticated remote route
+        run: bash test/macos/r2-r3-agents-flow.sh
       - name: What the interface's window offers (probe page, same origin and permission rule)
         if: needs.changes.outputs.engine == 'true'
         run: bash test/macos/engine-probe.sh
