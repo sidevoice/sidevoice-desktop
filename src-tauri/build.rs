@@ -1,7 +1,8 @@
 fn main() {
     // The app's own commands, declared so capabilities can grant them per window/origin:
     // the settings window gets the settings commands (and reads the native engine's state), the room window
-    // `bridge_state` and `bridge_level` (+ `debug_log`) and the native engine, the call controls card its own four.
+    // `bridge_state` and `bridge_level` (+ `debug_log`), the native engine and the local host (`local_host_*`), the
+    // call controls card its own four.
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
         "get_settings",
         "save_settings",
@@ -26,6 +27,11 @@ fn main() {
         "engine_unload",
         "engine_loaded",
         "engine_memory",
+        "local_host_state",
+        "local_host_pairing",
+        "local_host_action",
+        "local_host_pairing_code",
+        "local_host_pair_room",
     ])))
     .expect("failed to run tauri-build");
 }

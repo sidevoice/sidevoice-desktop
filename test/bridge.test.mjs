@@ -409,3 +409,115 @@ test("says who answers the media keys", () => {
   assert.equal(install(fakeWindow(ORIGIN).win, ORIGIN, "native").host.mediaKeys, "native");
   assert.equal(install(fakeWindow(ORIGIN).win, ORIGIN, "__SIDEVOICE_MEDIA_KEYS__").host.mediaKeys, null);
 });
+
+// ---- host.localHost: this computer's own core (docs/LOCAL_HOST.md) ----
+
+function localHostWindow(answers = {}) {
+  const { win, calls, tick } = fakeWindow(ORIGIN);
+  const cleared = [];
+  win.clearInterval = (id) => cleared.push(id);
+  win.__TAURI_INTERNALS__.invoke = (cmd, args) => {
+    calls.push([cmd, args === undefined ? undefined : structuredClone(args)]);
+    const answer = answers[cmd];
+    if (answer instanceof Error) return Promise.reject(answer.refusal);
+    return Promise.resolve(typeof answer === "function" ? answer(args) : answer);
+  };
+  return { win, calls, tick, cleared };
+}
+
+test("host carries the bridge version; localHost only where the app offers it", () => {
+  const install = loadFactory();
+  for (const offered of [undefined, false, "__SIDEVOICE_LOCAL_HOST__", "true"]) {
+    const { win } = fakeWindow(ORIGIN);
+    const api = install(win, ORIGIN, null, offered);
+    assert.equal(api.host.version, 2);
+    assert.equal(api.host.app, "sidevoice-desktop");
+    assert.ok(api.host.nativeEngine, "the rest of the host is untouched");
+    assert.equal("localHost" in api.host, false, String(offered));
+  }
+  const { win } = fakeWindow(ORIGIN);
+  const api = install(win, ORIGIN, "native", true);
+  assert.deepEqual(Object.keys(api.host.localHost).sort(), [
+    "pairRoom", "pairing", "pairingCode", "reconnect", "restart", "revealLog", "serviceInstall", "serviceUninstall",
+    "start", "state", "stop", "subscribe",
+  ]);
+  assert.ok(Object.isFrozen(api.host.localHost));
+});
+
+test("localHost calls go to their native commands and resolve what the app answers", async () => {
+  const install = loadFactory();
+  const pairing = { fp: "fp", public_key: "k", device_id: "d", token: "secret", urls: ["http://127.0.0.1:5"], rv: null, host: "Mac", local: true };
+  const { win, calls } = localHostWindow({
+    local_host_state: { state: "running", service: "launchd", calls: 0 },
+    local_host_pairing: pairing,
+    local_host_action: (args) => ({ state: args.action === "stop" ? "stopped-by-person" : "running" }),
+    local_host_pairing_code: { code: "SV1", expires_in: 600, reach: "room" },
+    local_host_pair_room: { room: "https://room.example" },
+  });
+  const local = install(win, ORIGIN, null, true).host.localHost;
+  assert.deepEqual(await local.state(), { state: "running", service: "launchd", calls: 0 });
+  assert.deepEqual(await local.pairing(), pairing);
+  assert.deepEqual(await local.stop(), { state: "stopped-by-person" });
+  for (const name of ["start", "restart", "serviceInstall", "serviceUninstall", "reconnect", "revealLog"]) await local[name]();
+  assert.deepEqual(await local.pairingCode(), { code: "SV1", expires_in: 600, reach: "room" });
+  assert.deepEqual(await local.pairRoom("https://room.example", "CODE"), { room: "https://room.example" });
+  assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("local_host")), [
+    ["local_host_state", undefined],
+    ["local_host_pairing", undefined],
+    ["local_host_action", { action: "stop" }],
+    ["local_host_action", { action: "start" }],
+    ["local_host_action", { action: "restart" }],
+    ["local_host_action", { action: "service-install" }],
+    ["local_host_action", { action: "service-uninstall" }],
+    ["local_host_action", { action: "reconnect" }],
+    ["local_host_action", { action: "reveal-log" }],
+    ["local_host_pairing_code", undefined],
+    ["local_host_pair_room", { url: "https://room.example", code: "CODE" }],
+  ]);
+});
+
+test("a refused action rejects with the app's {key, message}", async () => {
+  const install = loadFactory();
+  const refused = Object.assign(new Error("refused"), { refusal: { key: "service.not-loaded", message: "m" } });
+  const { win } = localHostWindow({ local_host_action: refused });
+  await assert.rejects(install(win, ORIGIN, null, true).host.localHost.start(), { key: "service.not-loaded", message: "m" });
+});
+
+test("subscribe: the state now, then only changes; polling stops with the last listener", async () => {
+  const install = loadFactory();
+  let state = { state: "starting" };
+  const { win, calls, tick, cleared } = localHostWindow({ local_host_state: () => state });
+  const local = install(win, ORIGIN, null, true).host.localHost;
+  const seen = [];
+  const stop = local.subscribe((s) => seen.push(s.state));
+  await flush();
+  assert.deepEqual(seen, ["starting"]);
+  tick();
+  await flush();
+  assert.deepEqual(seen, ["starting"], "unchanged: not delivered again");
+  state = { state: "running", calls: 0 };
+  tick();
+  await flush();
+  assert.deepEqual(seen, ["starting", "running"]);
+  const late = [];
+  const stopLate = local.subscribe((s) => late.push(s.state));
+  assert.deepEqual(late, ["running"], "a later listener gets the state at once");
+  stop();
+  assert.deepEqual(cleared, [], "still one listener");
+  stopLate();
+  assert.equal(cleared.length, 1, "no listener, no polling");
+  const polls = calls.filter(([cmd]) => cmd === "local_host_state").length;
+  tick();
+  await flush();
+  assert.throws(() => local.subscribe("nope"), { name: "TypeError" });
+  assert.ok(polls >= 3);
+});
+
+test("nothing of localHost runs until the page asks", async () => {
+  const install = loadFactory();
+  const { win, calls, tick } = localHostWindow({ local_host_state: { state: "running" } });
+  install(win, ORIGIN, null, true);
+  tick();
+  await flush();
+  assert.equal(calls.filter(([cmd]) => cmd.startsWith("local_host")).length, 0);
+});

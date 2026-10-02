@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 pub const SCRIPT_TEMPLATE: &str = include_str!("../../../bridge/desktop-bridge.js");
 const ORIGIN_PLACEHOLDER: &str = "\"__SIDEVOICE_ROOM_ORIGIN__\"";
 const MEDIA_KEYS_PLACEHOLDER: &str = "\"__SIDEVOICE_MEDIA_KEYS__\"";
+const LOCAL_HOST_PLACEHOLDER: &str = "\"__SIDEVOICE_LOCAL_HOST__\"";
 
 /// Who answers the headset's buttons and media keys in a call: `native` where the app does (macOS,
 /// `src/headset.rs`), so the page does not answer them too; `None` elsewhere (the page's Media Session does).
@@ -19,6 +20,12 @@ pub fn media_keys() -> Option<&'static str> {
     } else {
         None
     }
+}
+
+/// Whether the app offers this computer's own core, the local host (`window.__sidevoiceDesktop.host.localHost`,
+/// docs/LOCAL_HOST.md): on macOS only, the beta's app platform (design O2). Elsewhere the app is a remote client.
+pub fn local_host_offered() -> bool {
+    cfg!(target_os = "macos")
 }
 
 /// The call controls card's bridge script, with its origin placeholder still in place.
@@ -40,7 +47,12 @@ pub fn call_controls_push(patch: &serde_json::Value) -> String {
 pub fn script_for_origin(origin: &str) -> String {
     let literal = serde_json::to_string(origin).expect("a string serialises");
     let keys = serde_json::to_string(&media_keys()).expect("serialises");
-    SCRIPT_TEMPLATE.replacen(ORIGIN_PLACEHOLDER, &literal, 1).replacen(MEDIA_KEYS_PLACEHOLDER, &keys, 1)
+    let local_host = if local_host_offered() { "true" } else { "false" };
+    SCRIPT_TEMPLATE.replacen(ORIGIN_PLACEHOLDER, &literal, 1).replacen(MEDIA_KEYS_PLACEHOLDER, &keys, 1).replacen(
+        LOCAL_HOST_PLACEHOLDER,
+        local_host,
+        1,
+    )
 }
 
 /// The bridge's version: the room page sends it in every snapshot (bridge/desktop-bridge.js).
@@ -198,7 +210,8 @@ mod tests {
         let s = script_for_origin("https://voice.example.com");
         assert!(!s.contains("__SIDEVOICE_ROOM_ORIGIN__"));
         assert!(!s.contains("__SIDEVOICE_MEDIA_KEYS__"));
-        let keys = if cfg!(target_os = "macos") { r#""native")"# } else { "null)" };
+        assert!(!s.contains("__SIDEVOICE_LOCAL_HOST__"));
+        let keys = if cfg!(target_os = "macos") { r#""native", true)"# } else { "null, false)" };
         assert!(s.contains(&format!(r#"factory(window, "https://voice.example.com", {keys}"#)), "{keys}");
         // A hostile value cannot break out of the string literal.
         let evil = script_for_origin("\"); alert(1); (\"");

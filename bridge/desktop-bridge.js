@@ -9,8 +9,8 @@
 // bundled interface) it does nothing at all.
 (function (factory) {
   if (typeof module === "object" && module.exports) module.exports = factory; // unit tests
-  else factory(window, "__SIDEVOICE_ROOM_ORIGIN__", "__SIDEVOICE_MEDIA_KEYS__");
-})(function installDesktopBridge(win, roomOrigin, mediaKeys) {
+  else factory(window, "__SIDEVOICE_ROOM_ORIGIN__", "__SIDEVOICE_MEDIA_KEYS__", "__SIDEVOICE_LOCAL_HOST__");
+})(function installDesktopBridge(win, roomOrigin, mediaKeys, localHostOffered) {
   "use strict";
   // scheme://host rather than location.origin: the app's own pages (tauri://localhost) may have an opaque origin.
   if (win.location.protocol + "//" + win.location.host !== roomOrigin) return null;
@@ -128,6 +128,69 @@
     };
   }
 
+  /** This computer's own core, the local host (docs/LOCAL_HOST.md): its state, the pairing the page uses to reach it
+   *  (through the app's proxy, with this launch's secret — never the device token), and the service's actions. Each
+   *  action resolves the state after it (`{state, failure?, core?, service?, calls?, attempts?, limit?, reachable}`) or rejects `{key, message}`.
+   *  Only where the app offers a local host (macOS). */
+  function localHost() {
+    const listeners = new Set();
+    let last = null; // the state last delivered, as JSON
+    let timer = null;
+    const poll = () =>
+      call("local_host_state")
+        .then((state) => {
+          const key = JSON.stringify(state);
+          if (key === last) return;
+          last = key;
+          for (const listener of listeners) {
+            try { listener(state); } catch (_) { /* a listener's error is the page's own */ }
+          }
+        })
+        .catch(() => {});
+    const action = (name) => () => call("local_host_action", { action: name });
+    return {
+      /** `{state, failure?, core?, service?, calls?, attempts?, limit?, reachable}`; `state` one of `absent`, `not-installed`, `stopped-by-person`,
+       *  `starting`, `backoff`, `running`, `failed`, `service-failed`, `refused`, `incompatible`. */
+      state: () => call("local_host_state"),
+      /** `listener(state)` with the state now, then on every change (polled every 2 s while anyone listens).
+       *  Returns `stop`. */
+      subscribe(listener) {
+        if (typeof listener !== "function") throw new TypeError("subscribe(listener)");
+        listeners.add(listener);
+        if (last !== null) {
+          try { listener(JSON.parse(last)); } catch (_) { /* the page's own */ }
+        }
+        poll();
+        if (timer === null) timer = win.setInterval(poll, 2000);
+        return () => {
+          listeners.delete(listener);
+          if (listeners.size === 0 && timer !== null) {
+            win.clearInterval(timer);
+            timer = null;
+            last = null;
+          }
+        };
+      },
+      /** `{fp, public_key, device_id, token, urls: ["http://127.0.0.1:<port>"], rv: null, host, local: true}`
+       *  whenever a core answers and the app is paired (`reachable`), whatever `state` says; else `null`. `token` is
+       *  the app's proxy secret for this launch. */
+      pairing: () => call("local_host_pairing"),
+      start: action("start"),
+      stop: action("stop"),
+      restart: action("restart"),
+      serviceInstall: action("service-install"),
+      serviceUninstall: action("service-uninstall"),
+      /** Pairs this app with the core again (after `refused`): never done on its own. */
+      reconnect: action("reconnect"),
+      /** Shows the core's log in Finder (else the connector's). */
+      revealLog: action("reveal-log"),
+      /** A code for another device, on the person's click only: `{code, expires_in, reach}`. Shown, never sent. */
+      pairingCode: () => call("local_host_pairing_code"),
+      /** Pairs this machine with a room (`sidevoice pair <url> <code>`): `{room}`. */
+      pairRoom: (url, code) => call("local_host_pair_room", { url, code }),
+    };
+  }
+
   /** The call as the app shows it (tray, headset, call controls card), read from the web UI's own view model. */
   function snapshot() {
     const store = win.sidevoiceUI && win.sidevoiceUI.store;
@@ -203,10 +266,14 @@
      *  `nativeEngine`: models run natively by the app (docs/ENGINES.md). */
     host: Object.freeze({
       app: "sidevoice-desktop",
+      /** The bridge's version: what the page may rely on (docs/BRIDGE.md). */
+      version: BRIDGE_VERSION,
       nativeEngine: Object.freeze(nativeEngine()),
       /** `"native"`: the app answers headset buttons / media keys in a call, so the page must not register its
        *  own Media Session handlers (both would toggle the microphone on one click). `null`: the page does. */
       mediaKeys: mediaKeys === "native" ? "native" : null,
+      // Only where the app offers this computer's own core (O2: macOS): the page hides what is not there.
+      ...(localHostOffered === true ? { localHost: Object.freeze(localHost()) } : {}),
     }),
     snapshot,
     /** Runs one command from the app (tray, shortcut, headset, call controls card) through the web UI's own actions:

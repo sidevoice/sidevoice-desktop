@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-local-host-pair-room"
+description = "Enables the local_host_pair_room command without any pre-configured scope."
+commands.allow = ["local_host_pair_room"]
+
+[[permission]]
+identifier = "deny-local-host-pair-room"
+description = "Denies the local_host_pair_room command without any pre-configured scope."
+commands.deny = ["local_host_pair_room"]

@@ -68,6 +68,30 @@ jobs:
       - name: Rust unit tests
         working-directory: src-tauri
         run: cargo test --workspace
+      - name: The local host with two users (a second uid cannot open local.sock, link as a connector, or use the proxy)
+        working-directory: src-tauri
+        run: |
+          set -euo pipefail
+          # src-tauri/local-host/examples/local-host-ci.rs: `serve` as this user (a stand-in core on local.sock, the
+          # app's side paired with it, the proxy), `attack` as another.
+          cargo build -p sidevoice-local-host --example local-host-ci
+          mkdir -p /tmp/svci && chmod 755 /tmp/svci
+          TOOL=/tmp/svci/local-host-ci
+          cp target/debug/examples/local-host-ci "$TOOL" && chmod 755 "$TOOL"
+          sudo useradd --create-home sidevoice-other
+          "$TOOL" serve /tmp/svci/d /tmp/svci/app /tmp/svci/port > /tmp/svci/serve.log 2>&1 &
+          SERVE=$!
+          for i in $(seq 1 50); do [ -s /tmp/svci/port ] && break; sleep 0.2; done
+          PORT=$(cat /tmp/svci/port)
+          ls -la /tmp/svci /tmp/svci/d
+          echo "--- the second user"
+          sudo -u sidevoice-other "$TOOL" attack /tmp/svci/d /tmp/svci/app "$PORT"
+          echo "--- the same attempts as the first user (control: the socket and the files are open to it)"
+          if "$TOOL" attack /tmp/svci/d /tmp/svci/app "$PORT"; then echo "the control got nowhere"; exit 1; fi
+          kill "$SERVE"
+          echo "--- serve"; cat /tmp/svci/serve.log
+          # The second user's attempts never reached the core: it saw only the first user's requests.
+          if grep -q "auth=other" /tmp/svci/serve.log; then echo "the core saw a foreign token"; exit 1; fi
 
   changes:
     name: What this run builds
@@ -89,6 +113,8 @@ jobs:
           filters: |
             native:
               - 'src-tauri/engine/**'
+              - 'src-tauri/local-host/**'
+              - 'src-tauri/src/local_host.rs'
               - 'src-tauri/src/engine_ipc.rs'
               - 'src-tauri/src/probe.rs'
               - 'src-tauri/src/call_controls.rs'
@@ -167,6 +193,7 @@ jobs:
           if grep -q "room-flow" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the room-flow script is in the release app"; exit 1; fi
           if grep -q "SIDEVOICE_DEBUG_IDLE_UNLOAD_SECS" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the idle-time switch is in the release app"; exit 1; fi
           if grep -Eq "SIDEVOICE_DEBUG_(REFUSE_LOAD|SLOW_TRANSCRIBE)" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "a fault switch is in the release app"; exit 1; fi
+          if grep -Eq "SIDEVOICE_DEBUG_LOCAL_HOST_FLOW|local-host-flow" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the local-host flow is in the release app"; exit 1; fi
       - name: First open (no settings) — the bundled interface comes up in the real WKWebView
         if: needs.changes.outputs.installers == 'true'
         run: |
@@ -293,6 +320,60 @@ jobs:
           grep -q "SIDEVOICE_DEBUG_IDLE_UNLOAD_SECS" "$BIN"
           grep -q "SIDEVOICE_DEBUG_REFUSE_LOAD" "$BIN"
           grep -q "SIDEVOICE_DEBUG_SLOW_TRANSCRIBE" "$BIN"
+          grep -q "SIDEVOICE_DEBUG_LOCAL_HOST_FLOW" "$BIN"
+          grep -q "local-host-flow" "$BIN"
+      - name: The local host from the bundled page (stand-in core on local.sock, pairing, proxy, refusals)
+        run: |
+          set -euo pipefail
+          APP="$PWD/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
+          (cd src-tauri && cargo build --release -p sidevoice-local-host --example local-host-ci)
+          TOOL="$PWD/src-tauri/target/release/examples/local-host-ci"
+          # A home of its own and short (a Unix socket's path is at most 104 bytes): ~/.sidevoice and the app's config.
+          export HOME=/tmp/svhome
+          rm -rf "$HOME" && mkdir -p "$HOME"
+          "$TOOL" core "$HOME/.sidevoice" > /tmp/lh-core.log 2>&1 &
+          CORE=$!
+          for i in $(seq 1 50); do [ -S "$HOME/.sidevoice/core/local.sock" ] && break; sleep 0.2; done
+          SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_LOCAL_HOST_FLOW=1 "$APP/Contents/MacOS/sidevoice-desktop" > /tmp/lh.log 2>&1 &
+          PID=$!
+          for i in $(seq 1 120); do grep -Eq "local-host-flow (ok|error)" /tmp/lh.log && break; sleep 1; done
+          PORT=$(sed -nE 's|.*local-host proxy on http://127\.0\.0\.1:([0-9]+).*|\1|p' /tmp/lh.log | head -1)
+          # What a page cannot send, from outside the app: each refused by the proxy, none reaching the core.
+          code() { curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$@" "http://127.0.0.1:$PORT/api/presentation/echo"; }
+          FAILED=""
+          expect() { got=$(code "${@:3}"); echo "$1: $got"; [ "$got" = "$2" ] || FAILED="$FAILED $1=$got"; }
+          expect hostile-origin 403 -H "Origin: https://evil.example" -H "Authorization: Bearer x"
+          expect no-origin 403 -H "Authorization: Bearer x"
+          expect empty-origin 403 -H "Origin;" -H "Authorization: Bearer x"
+          expect null-origin 403 -H "Origin: null" -H "Authorization: Bearer x"
+          expect wrong-host 421 -H "Host: localhost:$PORT" -H "Origin: tauri://localhost"
+          expect rebound-host 421 -H "Host: evil.example:$PORT" -H "Origin: tauri://localhost"
+          expect no-secret 401 -H "Origin: tauri://localhost"
+          expect guessed-secret 401 -H "Origin: tauri://localhost" -H "Authorization: Bearer AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          kill "$PID" || true
+          sleep 1
+          kill "$CORE" || true
+          echo "--- app"; grep -E "local-host|proxy|page says" /tmp/lh.log || true
+          echo "--- stand-in core"; cat /tmp/lh-core.log
+          [ -z "$FAILED" ] || { echo "not refused as the table says:$FAILED"; exit 1; }
+          # The bundled page: running, the pairing object, preflight → authenticated fetch with the token swapped in
+          # and its Origin kept, 401 without the secret, 404 for native's own routes, a WebSocket spliced and refused.
+          grep -q "local-host-flow ok" /tmp/lh.log
+          LINE=$(grep "local-host-flow ok" /tmp/lh.log)
+          for fact in version=2 state=running/api=1 subscribed=running pairing=ok host=fake-machine \
+              fetch=200/device/tauri://localhost/the_bundled_page no_secret=401 native_only=404 \
+              ws=open/sidevoice/ping_from_the_page ws_no_secret=refused; do
+            echo "$LINE" | grep -q " $fact" || { echo "missing $fact"; exit 1; }
+          done
+          grep -q "proxy answered 204 OPTIONS /api/presentation/echo (preflight)" /tmp/lh.log
+          # Only the page's authenticated requests reached the core, each with the device token.
+          test "$(grep -c '/api/presentation/echo' /tmp/lh-core.log)" = 1
+          grep -q "fake-core POST /api/presentation/echo origin=tauri://localhost auth=device" /tmp/lh-core.log
+          grep -q "fake-core GET /api/browser/call origin=tauri://localhost auth=device" /tmp/lh-core.log
+          if grep -Eq "auth=other|/api/local/health origin=tauri" /tmp/lh-core.log; then echo "the core saw what it should not"; exit 1; fi
+          # The token, stored by the app alone: 0600 in its config directory.
+          STORE="$HOME/Library/Application Support/dev.sidevoice.desktop/local-host.json"
+          test "$(stat -f %Lp "$STORE")" = 600
       - name: What the interface's window offers (probe page, same origin and permission rule)
         run: |
           set -euo pipefail

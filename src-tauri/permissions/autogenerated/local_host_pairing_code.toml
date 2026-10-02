@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-local-host-pairing-code"
+description = "Enables the local_host_pairing_code command without any pre-configured scope."
+commands.allow = ["local_host_pairing_code"]
+
+[[permission]]
+identifier = "deny-local-host-pairing-code"
+description = "Denies the local_host_pairing_code command without any pre-configured scope."
+commands.deny = ["local_host_pairing_code"]
