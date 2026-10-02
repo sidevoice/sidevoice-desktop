@@ -86,7 +86,9 @@ WebView assertions remain. The native engine belongs to Desktop; moving those te
 wrong product boundary.
 
 Do not compile on the shared agent node. Use GitHub Actions for native builds. A manual run builds and uploads
-artifacts without publishing; no merge or release is necessary to exercise this workflow.
+artifacts without publishing; no merge or release is necessary to exercise this workflow. A manual run with
+`fixture=true` explicitly checks a pending-pin fixture and native integration, and never uploads installers.
+Leave it false for the genuine product gate; it cannot turn a missing signed dependency into a passing product build.
 
 ## Clean-account acceptance record
 
