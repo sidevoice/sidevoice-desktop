@@ -124,17 +124,12 @@ impl Cli {
             Err(crate::checks::Check::Missing) => return Err(unreadable_selected_release()),
             Err(crate::checks::Check::Unsafe(refusal)) => return Err(refusal),
         };
-        let bytes = release
-            .read("release.json", 0o022, RECORD_LIMIT)
-            .map_err(|check| match check {
-                crate::checks::Check::Missing => unreadable_selected_release(),
-                crate::checks::Check::Unsafe(refusal) => refusal,
-            })?;
+        let bytes = release.read("release.json", 0o022, RECORD_LIMIT).map_err(|check| match check {
+            crate::checks::Check::Missing => unreadable_selected_release(),
+            crate::checks::Check::Unsafe(refusal) => refusal,
+        })?;
         let record: Value = serde_json::from_slice(&bytes).map_err(|error| {
-            Refusal::new(
-                "install.unreadable",
-                format!("The selected connector release metadata is not JSON: {error}"),
-            )
+            Refusal::new("install.unreadable", format!("The selected connector release metadata is not JSON: {error}"))
         })?;
         if record.get("id").and_then(Value::as_str) != Some(id) {
             return Err(unreadable_selected_release());

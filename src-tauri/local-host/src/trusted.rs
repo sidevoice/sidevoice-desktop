@@ -150,9 +150,8 @@ impl Dir {
         if !one_component(name) {
             return Err(unsafe_path(&self.key, &path, "the child name is not one directory component"));
         }
-        let fd = self
-            .openat(name, libc::O_RDONLY | libc::O_DIRECTORY, 0)
-            .map_err(|e| open_error(e, &self.key, &path))?;
+        let fd =
+            self.openat(name, libc::O_RDONLY | libc::O_DIRECTORY, 0).map_err(|e| open_error(e, &self.key, &path))?;
         check_fd(&fd, true, mask, &self.key, &path)?;
         Ok(Dir { fd, path, key: self.key.clone() })
     }
@@ -168,12 +167,7 @@ impl Dir {
         let mut bytes = vec![0u8; 4096];
         // SAFETY: `c_name` is NUL-terminated and `bytes` is a writable buffer for the supplied size.
         let count = unsafe {
-            libc::readlinkat(
-                self.fd.as_raw_fd(),
-                c_name.as_ptr(),
-                bytes.as_mut_ptr() as *mut libc::c_char,
-                bytes.len(),
-            )
+            libc::readlinkat(self.fd.as_raw_fd(), c_name.as_ptr(), bytes.as_mut_ptr() as *mut libc::c_char, bytes.len())
         };
         if count < 0 {
             return Err(open_error(io::Error::last_os_error(), &self.key, &path));

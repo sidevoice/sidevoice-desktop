@@ -12,11 +12,8 @@ use sha2::{Digest, Sha256};
 
 const SHA256_LEN: usize = 64;
 const CORE_RELEASE_PREFIX: &str = "https://github.com/sidevoice/sidevoice-core/releases/download/";
-const CORE_TARGETS: [(&str, &str, &str); 3] = [
-    ("macos", "aarch64", "macos-aarch64"),
-    ("linux", "x86_64", "linux-x86_64"),
-    ("linux", "aarch64", "linux-aarch64"),
-];
+const CORE_TARGETS: [(&str, &str, &str); 3] =
+    [("macos", "aarch64", "macos-aarch64"), ("linux", "x86_64", "linux-x86_64"), ("linux", "aarch64", "linux-aarch64")];
 
 fn invalid_pin(why: &str) -> Refusal {
     Refusal::new("install.pin-invalid", format!("The connector build pin {why}."))
