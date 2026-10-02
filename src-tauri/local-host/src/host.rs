@@ -16,7 +16,7 @@
 //! starts a process); the core's health; and while paired, whether the core still accepts the token — refused, the
 //! proxy stops carrying it and closes its tunnels.
 
-use crate::cli::Cli;
+use crate::cli::{CancelToken, Cli, ProgressEvent};
 use crate::connector;
 use crate::core_socket::{CoreError, CoreSocket, Health, Paired};
 use crate::identity;
@@ -26,10 +26,11 @@ use crate::state::{self, Link, Observed, Report, State};
 use crate::store::{self, Pairing};
 use crate::Refusal;
 use serde_json::{json, Value};
+use std::collections::VecDeque;
 use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 pub const POLL_EVERY: Duration = Duration::from_secs(2);
@@ -43,6 +44,39 @@ pub enum Action {
     Restart,
     ServiceInstall,
     ServiceUninstall,
+}
+
+/// Successful R4 connector transaction action, preserved for the bridge's update result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallAction {
+    Install,
+    Upgrade,
+    Noop,
+}
+
+impl InstallAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Install => "install",
+            Self::Upgrade => "upgrade",
+            Self::Noop => "noop",
+        }
+    }
+
+    fn from_answer(answer: &Value) -> Result<Self, Refusal> {
+        match answer.get("action").and_then(Value::as_str) {
+            Some("install") => Ok(Self::Install),
+            Some("upgrade") => Ok(Self::Upgrade),
+            Some("noop") => Ok(Self::Noop),
+            _ => Err(crate::cli::refusal_for_key("cli.failed")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InstallOutcome {
+    pub report: Report,
+    pub action: InstallAction,
 }
 
 impl Action {
@@ -80,6 +114,9 @@ impl Action {
 const STATUS_TIMEOUT: Duration = Duration::from_secs(10);
 const PAIR_DEVICE_TIMEOUT: Duration = Duration::from_secs(30);
 const PAIR_ROOM_TIMEOUT: Duration = Duration::from_secs(60);
+const INSTALL_TIMEOUT: Duration = Duration::from_secs(45 * 60);
+const MAX_PROGRESS_EVENTS: usize = 512;
+const MAX_COMPLETED_INSTALL_JOBS: usize = 4;
 
 /// Where the app keeps its side, and what it calls itself.
 #[derive(Debug, Clone)]
@@ -111,8 +148,103 @@ pub struct LocalHost {
     inner: Mutex<Inner>,
     /// One pass at a time: the poll thread's and an action's.
     passes: Mutex<()>,
+    install_job: Mutex<Option<Arc<InstallJob>>>,
+    completed_install_jobs: Mutex<VecDeque<Arc<InstallJob>>>,
     stopped: AtomicBool,
     log: Arc<dyn Fn(&str) + Send + Sync>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallProgress {
+    pub job: String,
+    pub sequence: u64,
+    pub step: String,
+    pub done: Option<u64>,
+    pub total: Option<u64>,
+    pub cancellable: bool,
+}
+
+struct InstallJob {
+    id: String,
+    cancel: CancelToken,
+    cancellable: AtomicBool,
+    sequence: Mutex<u64>,
+    events: Mutex<VecDeque<InstallProgress>>,
+    outcome: Mutex<Option<bool>>,
+    finished: Condvar,
+}
+
+impl InstallJob {
+    fn new(id: String) -> Self {
+        InstallJob {
+            id,
+            cancel: CancelToken::default(),
+            cancellable: AtomicBool::new(true),
+            sequence: Mutex::new(0),
+            events: Mutex::new(VecDeque::new()),
+            outcome: Mutex::new(None),
+            finished: Condvar::new(),
+        }
+    }
+
+    fn progress(&self, event: ProgressEvent) {
+        if event.step == "commit" || event.step == "rollback" {
+            self.cancellable.store(false, Ordering::SeqCst);
+        }
+        let sequence = {
+            let mut sequence = self.sequence.lock().unwrap();
+            *sequence += 1;
+            *sequence
+        };
+        let progress = InstallProgress {
+            job: self.id.clone(),
+            sequence,
+            step: event.step,
+            done: event.done,
+            total: event.total,
+            cancellable: self.cancellable.load(Ordering::SeqCst),
+        };
+        let mut events = self.events.lock().unwrap();
+        events.push_back(progress);
+        while events.len() > MAX_PROGRESS_EVENTS {
+            events.pop_front();
+        }
+    }
+
+    fn latest(&self) -> Option<InstallProgress> {
+        self.events.lock().unwrap().back().cloned()
+    }
+
+    fn after(&self, sequence: u64) -> Vec<InstallProgress> {
+        self.events.lock().unwrap().iter().filter(|event| event.sequence > sequence).cloned().collect()
+    }
+
+    fn complete(&self, cancelled: bool) {
+        *self.outcome.lock().unwrap() = Some(cancelled);
+        self.finished.notify_all();
+    }
+
+    fn cancel_and_wait(&self) -> bool {
+        if !self.cancellable.load(Ordering::SeqCst) {
+            return false;
+        }
+        self.cancel.request();
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let mut outcome = self.outcome.lock().unwrap();
+        while outcome.is_none() {
+            let wait = deadline.saturating_duration_since(Instant::now());
+            if wait.is_zero() {
+                return false;
+            }
+            let (next, timeout) = self.finished.wait_timeout(outcome, wait).unwrap();
+            outcome = next;
+            if timeout.timed_out() && outcome.is_none() {
+                return false;
+            }
+        }
+        outcome.unwrap_or(false)
+    }
 }
 
 impl LocalHost {
@@ -137,6 +269,8 @@ impl LocalHost {
                 force_pair: false,
             }),
             passes: Mutex::new(()),
+            install_job: Mutex::new(None),
+            completed_install_jobs: Mutex::new(VecDeque::new()),
             stopped: AtomicBool::new(false),
             log,
         }))
@@ -163,8 +297,12 @@ impl LocalHost {
         &self.proxy
     }
 
+    pub fn data_dirs(&self) -> &DataDirs {
+        &self.config.dirs
+    }
+
     pub fn state(&self) -> Report {
-        self.inner.lock().unwrap().report.clone()
+        self.project_install(self.inner.lock().unwrap().report.clone())
     }
 
     /// The local host as the page uses it (design §4.1): the pinned identity, the proxy's URL and this launch's
@@ -203,7 +341,106 @@ impl LocalHost {
             (self.log)(&format!("local-host state {}", json!(report.state).as_str().unwrap_or("?")));
         }
         inner.report = report.clone();
+        self.project_install(report)
+    }
+
+    fn project_install(&self, mut report: Report) -> Report {
+        if let Some(job) = self.install_job.lock().unwrap().as_ref() {
+            report.state = State::Installing;
+            if let Some(progress) = job.latest() {
+                report.progress =
+                    Some(json!({"job": progress.job, "sequence": progress.sequence, "step": progress.step,
+                    "done": progress.done, "total": progress.total, "cancellable": progress.cancellable}));
+            }
+        }
         report
+    }
+
+    /// Progress frames after `sequence`, scoped to one active or recently completed install job.
+    pub fn install_progress(&self, job_id: &str, sequence: u64) -> Result<Vec<InstallProgress>, Refusal> {
+        let active = self.install_job.lock().unwrap().clone();
+        let completed = self.completed_install_jobs.lock().unwrap();
+        let job = find_install_job(job_id, active, &completed)?;
+        Ok(job.after(sequence))
+    }
+
+    /// Requests cancellation only for the matching job and returns true only when the connector's final result
+    /// acknowledges `install.cancelled`. A transaction already at commit is allowed to finish or roll back.
+    pub fn cancel_install(&self, job_id: &str) -> bool {
+        let Some(job) = self.install_job.lock().unwrap().clone() else { return false };
+        if job.id != job_id {
+            return false;
+        }
+        job.cancel_and_wait()
+    }
+
+    /// Runs the bundled R4 installer for an explicit install/update request. The caller has already verified the
+    /// resource and pin; an existing R1 install is observed instead of being replaced by the install CTA.
+    pub fn install_bundled(&self, cli: Cli, job_id: String, update: bool) -> Result<InstallOutcome, Refusal> {
+        if job_id.is_empty()
+            || job_id.len() > 96
+            || !job_id.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b))
+        {
+            return Err(Refusal::new("bad_request", "The install job identifier is invalid."));
+        }
+        if !update && Cli::install_record(&self.config.dirs)?.is_some() {
+            let report = self.poll();
+            if report.reachable && report.state != State::Incompatible {
+                return Ok(InstallOutcome { report, action: InstallAction::Noop });
+            }
+            return Err(Refusal::new(
+                "install.already-installed",
+                "This computer already has a Sidevoice installation.",
+            ));
+        }
+        let job = Arc::new(InstallJob::new(job_id));
+        {
+            let mut active = self.install_job.lock().unwrap();
+            if active.is_some() {
+                return Err(Refusal::new("install.busy", "Another Sidevoice install or update is already running."));
+            }
+            *active = Some(job.clone());
+        }
+        let result = self.run_bundled_install(&cli, &job);
+        job.complete(result.as_ref().err().is_some_and(|error| error.key == "install.cancelled"));
+        {
+            let mut completed = self.completed_install_jobs.lock().unwrap();
+            completed.retain(|finished| finished.id != job.id);
+            completed.push_back(job.clone());
+            while completed.len() > MAX_COMPLETED_INSTALL_JOBS {
+                completed.pop_front();
+            }
+        }
+        {
+            let mut active = self.install_job.lock().unwrap();
+            if active.as_ref().is_some_and(|current| Arc::ptr_eq(current, &job)) {
+                *active = None;
+            }
+        }
+        result.map(|action| InstallOutcome { report: self.inner.lock().unwrap().report.clone(), action })
+    }
+
+    fn run_bundled_install(&self, cli: &Cli, job: &Arc<InstallJob>) -> Result<InstallAction, Refusal> {
+        let answer = run_connector_install(cli, job)?;
+        let action = InstallAction::from_answer(&answer)?;
+        self.inner.lock().unwrap().fallback = None;
+        let report = self.poll();
+        if report.state == State::Incompatible {
+            return Err(Refusal::new("install.incompatible", "The installed core API is not supported by this app."));
+        }
+        if report.reachable {
+            return Ok(action);
+        }
+        if let Some(failure) = report.failure.as_ref() {
+            return Err(install_failure_refusal(failure));
+        }
+        Err(Refusal::new(
+            "install.pairing",
+            format!(
+                "The connector reported {}, but its compatible core is not paired and reachable yet.",
+                action.as_str()
+            ),
+        ))
     }
 
     /// `service status --json` when no connector answers, reused for [`FALLBACK_EVERY`]. No install, no answer.
@@ -394,6 +631,41 @@ impl LocalHost {
     }
 }
 
+fn find_install_job(
+    job_id: &str,
+    active: Option<Arc<InstallJob>>,
+    completed: &VecDeque<Arc<InstallJob>>,
+) -> Result<Arc<InstallJob>, Refusal> {
+    if let Some(job) = active.as_ref().filter(|job| job.id == job_id) {
+        return Ok(job.clone());
+    }
+    if let Some(job) = completed.iter().find(|job| job.id == job_id) {
+        return Ok(job.clone());
+    }
+    let (key, message) = if active.is_some() {
+        ("install.job-mismatch", "That install job does not belong to this request.")
+    } else {
+        ("install.job-ended", "That install job has ended.")
+    };
+    Err(Refusal::new(key, message))
+}
+
+/// The connector owns `D/install.lock` as a permanent inode and reports actual flock waits over progress JSONL.
+/// Always start it; checking whether the path exists would mistake every completed install for an active lock holder.
+fn run_connector_install(cli: &Cli, job: &InstallJob) -> Result<Value, Refusal> {
+    cli.run_with_progress(
+        &["install", "--no-agents", "--service", "--json", "--progress=jsonl"],
+        INSTALL_TIMEOUT,
+        &job.cancel,
+        |event| job.progress(event),
+    )
+}
+
+fn install_failure_refusal(failure: &Value) -> Refusal {
+    let key = failure.get("key").and_then(Value::as_str).unwrap_or("install.pairing");
+    crate::cli::refusal_for_key(key)
+}
+
 impl Drop for LocalHost {
     fn drop(&mut self) {
         self.shutdown();
@@ -416,5 +688,83 @@ pub fn computer_name() -> String {
         "Sidevoice".into()
     } else {
         name
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn install_report_failures_keep_only_a_known_key_and_safe_message() {
+        let refusal = install_failure_refusal(&serde_json::json!({
+            "key": "launch.exited",
+            "message": "untrusted connector details",
+            "log_tail": ["private output"],
+        }));
+        assert_eq!(refusal.key, "launch.exited");
+        assert!(!refusal.message.contains("untrusted"));
+        assert!(!refusal.message.contains("private"));
+
+        let refusal = install_failure_refusal(&serde_json::json!({"key":"remote.arbitrary", "message":"untrusted"}));
+        assert_eq!(refusal.key, "cli.failed");
+        assert!(!refusal.message.contains("untrusted"));
+
+        let refusal = install_failure_refusal(&serde_json::json!({"message":"untrusted"}));
+        assert_eq!(refusal.key, "install.pairing");
+        assert!(!refusal.message.contains("untrusted"));
+    }
+
+    #[test]
+    fn completed_install_progress_remains_available_for_the_final_bridge_poll() {
+        let job = Arc::new(InstallJob::new("completed-job".into()));
+        job.progress(ProgressEvent { step: "pairing".into(), done: None, total: None });
+        job.complete(false);
+        let mut completed = VecDeque::new();
+        completed.push_back(job);
+
+        let frames = find_install_job("completed-job", None, &completed).unwrap().after(0);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].step, "pairing");
+        assert_eq!(find_install_job("other-job", None, &completed).err().unwrap().key, "install.job-ended");
+    }
+
+    #[test]
+    fn a_permanent_install_lock_inode_does_not_block_the_connector_or_its_wait_progress() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = DataDirs::new(tmp.path().join("data"));
+        std::fs::create_dir(&dirs.data).unwrap();
+        std::fs::set_permissions(&dirs.data, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::write(dirs.data.join("install.lock"), b"").unwrap();
+
+        let executable = dirs.data.join("sidevoice");
+        std::fs::write(
+            &executable,
+            r##"#!/bin/sh
+if [ "$1" = "install" ]; then
+  echo '{"type":"progress","step":"wait-lock","done":null,"total":null}' >&2
+  : > "$SIDEVOICE_DATA_DIR/install-command-ran"
+  echo '{"ok":true,"action":"install"}'
+else
+  exit 2
+fi
+"##,
+        )
+        .unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let install = serde_json::json!({ "command": [executable.to_string_lossy().to_string()] });
+        std::fs::write(dirs.install_record(), serde_json::to_vec(&install).unwrap()).unwrap();
+        std::fs::set_permissions(dirs.install_record(), std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let cli = Cli::installed(&dirs).unwrap();
+        let job = InstallJob::new("lock-fixture".into());
+        let answer = run_connector_install(&cli, &job).unwrap();
+        assert_eq!(answer["action"], "install");
+        assert!(dirs.data.join("install-command-ran").exists());
+        let events = job.events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].step, "wait-lock");
     }
 }

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "room",
-  "description": "The room window shows only the interface bundled in the app (local pages). It may report call state (and the microphone level) to the tray and the call controls card, use the native model engines (docs/ENGINES.md), reach this computer's own core through the app (the local host: its state, its pairing and the service's actions, docs/LOCAL_HOST.md), and (CI and diagnostics only, printed with SIDEVOICE_DEBUG=1) print a debug line. Nothing else.",
+  "description": "The room window shows only the interface bundled in the app (local pages). It may report call state (and the microphone level) to the tray and the call controls card, use the native model engines (docs/ENGINES.md), reach this computer's own core through the app (the local host: its state, pairing, actions and explicit connector install/update, docs/LOCAL_HOST.md), and (CI and diagnostics only, printed with SIDEVOICE_DEBUG=1) print a debug line. Nothing else.",
   "windows": ["room-*"],
   "permissions": [
     "allow-bridge-state",
@@ -22,6 +22,12 @@
     "allow-local-host-pairing",
     "allow-local-host-action",
     "allow-local-host-pairing-code",
-    "allow-local-host-pair-room"
+    "allow-local-host-pair-room",
+    "allow-local-host-install",
+    "allow-local-host-install-progress",
+    "allow-local-host-cancel",
+    "allow-local-host-update",
+    "allow-local-host-version",
+    "allow-local-host-agents"
   ]
 }

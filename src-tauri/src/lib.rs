@@ -446,7 +446,13 @@ pub fn run() {
             local_host::local_host_pairing,
             local_host::local_host_action,
             local_host::local_host_pairing_code,
-            local_host::local_host_pair_room
+            local_host::local_host_pair_room,
+            local_host::local_host_install,
+            local_host::local_host_install_progress,
+            local_host::local_host_cancel,
+            local_host::local_host_update,
+            local_host::local_host_version,
+            local_host::local_host_agents
         ])
         .setup(|app| {
             let handle = app.handle().clone();

@@ -40,10 +40,10 @@ Keeping these two names stable is the web UI's side of the contract.
 window.__TAURI_INTERNALS__.invoke("bridge_state", { snapshot })
 ```
 
-`snapshot` (version 2):
+`snapshot` (version 3):
 
 ```json
-{ "version": 2, "ready": true, "joined": true, "busy": false,
+{ "version": 3, "ready": true, "joined": true, "busy": false,
   "micEnabled": true, "micDisabled": false, "title": "Claude",
   "agent": "idle | working | speaking", "youTalking": false, "canSkip": false, "since": 1759300000000,
   "participants": [{ "threadId": "…", "title": "…", "selected": true, "reach": "listening", "working": false,
@@ -100,17 +100,25 @@ Joining is deliberately **not** a tray command: joining unlocks audio output, wh
 only allows from a click in the page. "Mostrar Sidevoice" opens the window for that.
 
 `window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", version, nativeEngine, mediaKeys, localHost? }`: the
-web UI feature-detects the desktop app by it, and each capability by its presence. `version` is the bridge's (2).
+web UI feature-detects the desktop app by it, and each capability by its presence. `version` is the bridge's (3).
+R4's install, progress/cancel, update, version and agents methods exist only on macOS arm64. `install()` is explicit and always
+invokes the bundled connector with `--no-agents`; it does not register an agent. The app verifies the connector
+resource against `src-tauri/connector-pin.json`, including the embedded core manifest identity, before running it.
+Until R4-a/b publishes the signed asset and stable CLI metadata/progress contract, the checked-in pin remains pending
+and macOS production packaging fails closed. Test fixtures use a stand-in executable and are not package resources.
+`version()` reports update eligibility; incomplete installed R1 metadata reports `unknown`, and a newer installed
+connector reports `newer-installed` without invoking the bundled installer. `version().capabilities.agents` is false,
+and `agents()` rejects with `agents.unavailable` until connector R2 supplies discovery.
 
 ## The local host
 
-`host.localHost` is there only where the app offers this computer's own core (macOS, design O2); elsewhere it is
+`host.localHost` is there only where the app offers this computer's own core (macOS arm64, design O2); elsewhere it is
 absent and the page hides what needs it. Nothing runs until the page calls it. Contract, states and actions:
 docs/LOCAL_HOST.md.
 
 | Call | Returns / does |
 |---|---|
-| `state()` | `{state, failure?, core?, service?, calls?, attempts?, limit?, reachable}` (`limit` only where the service manager has one: «(2 de 5)» only then); `state` one of `absent`, `not-installed`, `stopped-by-person`, `starting`, `backoff`, `running`, `failed`, `service-failed`, `refused`, `incompatible` |
+| `state()` | `{state, failure?, core?, service?, calls?, attempts?, limit?, reachable}` (`limit` only where the service manager has one: «(2 de 5)» only then); `state` one of `absent`, `installing`, `not-installed`, `stopped-by-person`, `starting`, `backoff`, `running`, `failed`, `service-failed`, `refused`, `incompatible` |
 | `subscribe(listener)` → `stop` | the state now, then on every change (polled every 2 s while anyone listens) |
 | `pairing()` | `{fp, public_key, device_id, token, urls: ["http://127.0.0.1:<port>"], rv: null, host, local: true}` whenever a core answers and the app is paired (`reachable`), whatever `state` says, else `null`; `token` is the app's proxy secret for this launch, never the device token |
 | `start()` / `stop()` / `restart()` / `serviceInstall()` / `serviceUninstall()` | the connector's `service …`; resolve the state after it |
@@ -118,10 +126,16 @@ docs/LOCAL_HOST.md.
 | `revealLog()` | shows the core's log in Finder (`~/.sidevoice/core.log`, else `connector.log`) |
 | `pairingCode()` | `{code, expires_in, reach}`, on the person's click only: shown, never sent — the page's convention; native authorises the caller, not a person (docs/LOCAL_HOST.md → Trust) |
 | `pairRoom(url, code)` | pairs this machine with a room (`pair … --json` only): `{room}` |
+| `install(onProgress)` | explicit `--no-agents` install; ordered `{step, done, total, cancellable}` events; promise has `.job` |
+| `cancel(job)` | true only after the connector acknowledges cancellation before commit |
+| `update()` / `version()` | apply an eligible bundled update / read pinned and installed metadata plus capability status |
+| `agents()` | rejects with `agents.unavailable` until connector R2 supplies discovery |
 
 Actions reject `{key, message}`. Commands behind it (`src-tauri/src/local_host.rs`): `local_host_state`,
 `local_host_pairing`, `local_host_action {action}` (`start`, `stop`, `restart`, `service-install`,
-`service-uninstall`, `reconnect`, `reveal-log`), `local_host_pairing_code`, `local_host_pair_room {url, code}`.
+`service-uninstall`, `reconnect`, `reveal-log`), `local_host_pairing_code`, `local_host_pair_room {url, code}`,
+`local_host_install`, `local_host_install_progress`, `local_host_cancel`, `local_host_update`, `local_host_version`,
+`local_host_agents`.
 Granted to the room window (`capabilities/room.json`); each re-checks that the caller is the current room window on
 the app's own page.
 
@@ -278,6 +292,10 @@ client that does not know the key:
 
 The page renders by `key` and falls back to `message`. Every key is made in `src-tauri/engine/src/error.rs`; a new
 one is added there and here.
+
+The local connector's `install.authenticity` refusal may include `params: {"check": "repository-id"}`. Native
+forwards only a check identifier in the web bundle's fixed allowlist and replaces connector-provided prose with a
+stable English fallback. It never forwards connector logs or arbitrary error parameters.
 
 | `key` | Parameters | When |
 |---|---|---|

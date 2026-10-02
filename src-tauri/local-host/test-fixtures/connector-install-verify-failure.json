@@ -1,0 +1,12 @@
+{
+  "ok": false,
+  "error": {
+    "key": "install.verify",
+    "message": "untrusted connector verification prose"
+  },
+  "failure": {
+    "key": "launch.exited",
+    "message": "untrusted connector failure prose",
+    "log_tail": ["secret connector output"]
+  }
+}

@@ -1,8 +1,8 @@
 # The local host
 
 The core on the computer where the app runs, as the app finds it, pairs with it and lets the bundled page talk to it
-(sidevoice design "Onboarding, hosts and settings" rev. 3, §4.1, §4.2, §4.7; release R1). Offered on macOS only
-(decision O2); the code builds and is tested on Linux too. Until R4 the app ships no connector: the machine was
+(sidevoice design "Onboarding, hosts and settings" rev. 4, §§4.1, 4.2, 4.3, 4.5, 4.7; releases R1 and R4). Offered on
+macOS arm64 only; the code builds and is tested on Linux too. Until R4 the app ships no connector: the machine was
 installed with `npx @sidevoice/uplink install`, and the app runs that installation's CLI.
 
 ## Pieces
@@ -77,6 +77,7 @@ process) and right after each action; the core's health; the token check. The br
 | a core answers; not paired yet | `starting` |
 | no core: the service's own state | `absent`, `not-installed`, `stopped-by-person`, `starting`, `backoff`, `failed`, `service-failed` as reported; `running` → `starting` (the app cannot reach that core yet) |
 | no core, no connector, no `install.json` | `absent` |
+| the app's explicit bundled install/update job is active | `installing`, with its latest progress event |
 
 The service's state is the connector's derived status (SEAMS rev. 2 §4: the service manager's view of the core and
 connector jobs, `core-failure.json` and the core's health, read fresh): `node.status` from any connector that answers,
@@ -84,6 +85,9 @@ else `service status --json`, which computes the same object.
 
 `reachable` is whether a core answers and the app's pairing with it works; `pairing()` is non-null exactly then,
 whatever `state` says — the page uses the host when `pairing()` is non-null (SEAMS §5).
+
+`version()` reports `capabilities.agents: false`, and `agents()` returns `agents.unavailable` until connector R2 supplies
+discovery. R4 installation always uses `--no-agents`.
 
 `state()` → `{state, failure?, core?, service?, calls?, attempts?, limit?, reachable}`: `failure` as the service
 reports it (`{key, step, message, at, log_tail, …}`) or the app's own `{key, message}`; `core` `{pid, version, api,
@@ -94,7 +98,8 @@ service's `since`, `window_started` and `next_retry_at` are null in rev. 2 and n
 ## Actions
 
 Through `install.json` `command` only — an array of absolute paths, then the subcommand; never a shell, never a PATH
-lookup, always a deadline (`Cli::installed` is the one place R4 extends with the bundled executable). The deadline
+lookup, always a deadline (`Cli::installed` remains the path for an existing install; `Cli::bundled` is the verified
+R4 install/update path). The deadline
 covers the program's exit and both its output streams. Each run is a process group of its own: once the program has
 exited, whatever of its group still runs (a child holding the pipes) is killed, and on a timeout the whole group is.
 What it hands to the service manager (`service start` → launchd) or starts detached in a session of its own is not in
@@ -108,10 +113,22 @@ the group and stays.
 | `pairRoom(url, code)` | `pair <url> <code> --json` → `{room}`, nothing else (the core follows the new credentials) | 60 s |
 | `reconnect()` | a new local pairing over the socket | — |
 | `revealLog()` | `/usr/bin/open -R D/core.log` (else `D/connector.log`) | — |
+| `install(onProgress)` | bundled `install --no-agents --service --json --progress=jsonl`; resolves after the core is reachable and paired | 45 min |
+| `update()` | eligible bundled connector transaction; never downgrades | 45 min |
+| `version()` / `agents()` | pinned/installed metadata; agents rejects with `agents.unavailable` until connector R2 | — |
+
+R4's install job emits bounded progress frames from stderr while the connector's one final JSON answer remains on stdout.
+Progress is ordered per job (`download`, `verify`, `stage`, `service-start`, `wait-calls`, `wait-lock`, `commit`,
+`pairing`, `rollback`), reports byte counts only when known and includes `cancellable`. `cancel(job)` sends SIGINT and
+returns true only after the connector acknowledges cancellation before commit; after commit begins it completes or
+rolls back. Test fixtures use a stand-in executable and never enter the app package.
 
 `pairRoom` refuses (`bad_request`) a URL that is not `http(s)://…` or a code with blanks or starting with `-`, so neither
-can become an option. A CLI refusal is its `{key, message}`; the app's own: `cli.unavailable`, `cli.failed`,
-`cli.timeout`, `install.unsafe`, `install.unreadable`, `log.missing`, `reveal.failed`, `unsupported`.
+can become an option. A CLI refusal is its `{key, message}`; the app's own install refusals include `cli.unavailable`,
+`cli.failed`, `cli.timeout`, `install.unsafe`, `install.pin-invalid`, `install.pin-mismatch`,
+`install.executable-missing`, `install.busy`, `install.cancelled`, `install.incompatible`, `install.rollback`,
+`install.pairing`, `update.unknown`, `update.newer-installed`, `agents.unavailable`, `install.unreadable`, `log.missing`,
+`reveal.failed`, `unsupported`.
 
 ## The proxy
 

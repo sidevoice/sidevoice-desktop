@@ -91,6 +91,8 @@ brand/               the brand files the icons and installer art are generated f
 docs/                the bridge, the engines and models, targets, macOS notes, the brand
 ```
 
+Build the macOS arm64 app with `npm run build:mac` after `npm ci`. The same command runs in CI and requires a genuine ready connector pin; see [`docs/BUILD.md`](docs/BUILD.md) for inputs, artifact credentials, test gates and package evidence.
+
 The bundled interface is a build of [sidevoice-web](https://github.com/sidevoice/sidevoice-web), vendored with
 `scripts/vendor-web.mjs`, which records the commit it came from in `ui/voice/web-source.json` ([`docs/TARGETS.md`](docs/TARGETS.md)). The app drives it only through an explicit bridge
 ([`docs/BRIDGE.md`](docs/BRIDGE.md)), never through its DOM.

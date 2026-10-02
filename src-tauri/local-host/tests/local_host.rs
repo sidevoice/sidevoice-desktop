@@ -4,8 +4,9 @@
 //! connector and CLI.
 
 use serde_json::{json, Value};
+use sidevoice_local_host::cli::Cli;
 use sidevoice_local_host::fake_core::{self, FakeCore};
-use sidevoice_local_host::host::{Action, Config, LocalHost};
+use sidevoice_local_host::host::{Action, Config, InstallAction, LocalHost};
 use sidevoice_local_host::http;
 use sidevoice_local_host::paths::DataDirs;
 use sidevoice_local_host::state::State;
@@ -76,6 +77,160 @@ fn running(host: &LocalHost) -> (u16, String) {
     assert_eq!(report.state, State::Running, "{report:?}");
     let pairing = host.pairing().expect("a pairing while running");
     (host.proxy().port(), pairing["token"].as_str().unwrap().to_string())
+}
+
+fn bundled_fixture(world: &World, body: &str) -> Cli {
+    let executable = world._tmp.path().join("bundled-sidevoice-fixture");
+    std::fs::write(&executable, format!("#!/bin/sh\n{body}\n")).unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+    Cli { prefix: vec![executable.to_string_lossy().into_owned()], data: world.dirs.data.clone() }
+}
+
+fn install_script(delay: &str, progress: &str) -> String {
+    format!(
+        r#"case "$1:$2" in
+  install:*)
+    {progress}
+    {delay}
+    printf '{{"command":["%s"]}}\n' "$0" > "$SIDEVOICE_DATA_DIR/install.json"
+    echo '{{"ok":true,"action":"install"}}'
+    ;;
+  service:status)
+    echo '{{"ok":true,"state":"running","service":"launchd","calls":0}}'
+    ;;
+  *) echo '{{"ok":false,"error":{{"key":"fixture.bad-request","message":"bad request"}}}}'; exit 1 ;;
+esac"#,
+        progress = progress,
+        delay = delay,
+    )
+}
+
+#[test]
+fn bundled_install_has_one_job_progress_and_a_commit_cancellation_boundary() {
+    let world = World::new();
+    let _core = world.core(1);
+    let host = world.host();
+    let progress = r#"echo '{"type":"progress","step":"download","done":5,"total":10}' >&2
+echo '{"type":"progress","step":"commit","done":null,"total":null}' >&2"#;
+    let cli = bundled_fixture(&world, &install_script("sleep 0.6", progress));
+    let worker_host = host.clone();
+    let worker_cli = cli.clone();
+    let worker = std::thread::spawn(move || worker_host.install_bundled(worker_cli, "job-a".into(), false));
+
+    let mut frames = Vec::new();
+    for _ in 0..30 {
+        if let Ok(next) = host.install_progress("job-a", 0) {
+            if !next.is_empty() {
+                frames = next;
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(host.state().state, State::Installing);
+    assert_eq!(frames.iter().map(|frame| frame.step.as_str()).collect::<Vec<_>>(), ["download", "commit"]);
+    assert_eq!((frames[0].done, frames[0].total), (Some(5), Some(10)));
+    assert!(!frames[1].cancellable, "commit is the cancellation boundary");
+    assert!(!host.cancel_install("job-a"), "a committed transaction is allowed to finish");
+    assert_eq!(host.install_bundled(cli, "job-b".into(), false).unwrap_err().key, "install.busy");
+
+    let outcome = worker.join().unwrap().unwrap();
+    assert_eq!(outcome.action, InstallAction::Install);
+    let report = outcome.report;
+    assert_eq!(report.state, State::Running);
+    assert!(report.reachable);
+    assert!(host.pairing().is_some(), "the existing R1 poll projects the local pairing");
+    let completed = host.install_progress("job-a", 0).unwrap();
+    assert_eq!(completed.iter().map(|frame| frame.step.as_str()).collect::<Vec<_>>(), ["download", "commit"]);
+    assert!(!completed[1].cancellable, "completed progress remains available for the bridge's final poll");
+}
+
+#[test]
+fn bundled_install_cancellation_is_acknowledged_as_a_keyed_connector_result() {
+    let world = World::new();
+    let _core = world.core(1);
+    let host = world.host();
+    let executable = world._tmp.path().join("cancellable-sidevoice-fixture");
+    let body = r#"#!/usr/bin/perl
+$| = 1;
+if ($ARGV[0] eq 'install') {
+  $SIG{INT} = sub { print qq({"ok":false,"error":{"key":"install.cancelled","message":"cancelled"}}\n); exit 1; };
+  print STDERR qq({"type":"progress","step":"stage","done":null,"total":null}\n);
+  sleep 30;
+} elsif ($ARGV[0] eq 'service' && $ARGV[1] eq 'status') {
+  print qq({"ok":true,"state":"running","service":"launchd","calls":0}\n);
+} else {
+  print qq({"ok":false,"error":{"key":"fixture.bad-request","message":"bad request"}}\n);
+  exit 1;
+}
+"#;
+    std::fs::write(&executable, body).unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let cli = Cli { prefix: vec![executable.to_string_lossy().into_owned()], data: world.dirs.data.clone() };
+    let worker_host = host.clone();
+    let worker = std::thread::spawn(move || worker_host.install_bundled(cli, "job-cancel".into(), false));
+    for _ in 0..30 {
+        if host.install_progress("job-cancel", 0).is_ok_and(|frames| !frames.is_empty()) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(host.cancel_install("job-cancel"), "true follows the connector's install.cancelled response");
+    assert_eq!(worker.join().unwrap().unwrap_err().key, "install.cancelled");
+    assert!(!world.dirs.install_record().exists(), "the fixture did not select an install after cancellation");
+}
+
+#[test]
+fn bundled_update_preserves_connector_noop_when_a_racing_release_is_already_current() {
+    let world = World::new();
+    let _core = world.core(1);
+    let host = world.host();
+    let cli = bundled_fixture(
+        &world,
+        r#"case "$1:$2" in
+  install:*)
+    echo '{"type":"progress","step":"wait-lock","done":null,"total":null}' >&2
+    sleep 0.1
+    echo '{"ok":true,"action":"noop","installed":"current"}'
+    ;;
+  service:status)
+    echo '{"ok":true,"state":"running","service":"launchd","calls":0}'
+    ;;
+  *) echo '{"ok":false,"error":{"key":"fixture.bad-request","message":"bad request"}}'; exit 1 ;;
+esac"#,
+    );
+
+    // The desktop selected the Available path; the lock-wait fixture then reports a transaction no-op, as when a
+    // second installer selects the same build. Preserve that connector result instead of reporting an applied update.
+    let outcome = host.install_bundled(cli, "job-update-race".into(), true).unwrap();
+    assert_eq!(outcome.action, InstallAction::Noop);
+    assert_eq!(outcome.report.state, State::Running);
+    assert!(outcome.report.reachable);
+    let progress = host.install_progress("job-update-race", 0).unwrap();
+    assert_eq!(progress[0].step, "wait-lock");
+}
+
+#[test]
+fn bundled_update_keeps_the_connector_rollback_error_even_when_the_old_core_is_live() {
+    let world = World::new();
+    let _core = world.core(1);
+    let host = world.host();
+    assert_eq!(host.poll().state, State::Running);
+    let cli = bundled_fixture(
+        &world,
+        r#"if [ "$1" = install ]; then
+  echo '{"type":"progress","step":"rollback","done":null,"total":null}' >&2
+  echo '{"ok":false,"error":{"key":"install.rollback","message":"the previous release was restored"}}'
+  exit 1
+fi
+echo '{"ok":false,"error":{"key":"fixture.unexpected","message":"unexpected command"}}'
+exit 1"#,
+    );
+
+    let failure = host.install_bundled(cli, "job-rollback".into(), true).unwrap_err();
+    assert_eq!(failure.key, "install.rollback");
+    assert_eq!(failure.message, "The connector rolled back the installation after a failure.");
+    assert_eq!(host.state().state, State::Running, "the selected old core remains usable after rollback");
 }
 
 #[test]

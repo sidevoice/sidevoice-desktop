@@ -23,9 +23,14 @@ pub fn media_keys() -> Option<&'static str> {
 }
 
 /// Whether the app offers this computer's own core, the local host (`window.__sidevoiceDesktop.host.localHost`,
-/// docs/LOCAL_HOST.md): on macOS only, the beta's app platform (design O2). Elsewhere the app is a remote client.
+/// docs/LOCAL_HOST.md): only on macOS arm64, where R4 ships the verified connector resource.
 pub fn local_host_offered() -> bool {
-    cfg!(target_os = "macos")
+    local_host_offered_for(std::env::consts::OS, std::env::consts::ARCH)
+}
+
+/// Platform rule kept pure so CI can exercise every target combination on any runner.
+pub fn local_host_offered_for(os: &str, arch: &str) -> bool {
+    os == "macos" && arch == "aarch64"
 }
 
 /// The call controls card's bridge script, with its origin placeholder still in place.
@@ -56,7 +61,7 @@ pub fn script_for_origin(origin: &str) -> String {
 }
 
 /// The bridge's version: the room page sends it in every snapshot (bridge/desktop-bridge.js).
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
 /// What the agent is doing, as the room's view model says (its `session`): the card's avatar shows it, and only it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -206,6 +211,15 @@ mod tests {
     }
 
     #[test]
+    fn local_host_is_offered_only_on_macos_arm64() {
+        assert!(local_host_offered_for("macos", "aarch64"));
+        for (os, arch) in [("macos", "x86_64"), ("linux", "aarch64"), ("windows", "aarch64")] {
+            assert!(!local_host_offered_for(os, arch), "{os}/{arch}");
+        }
+        assert_eq!(VERSION, 3);
+    }
+
+    #[test]
     fn script_binds_the_origin_as_a_js_string() {
         let s = script_for_origin("https://voice.example.com");
         assert!(!s.contains("__SIDEVOICE_ROOM_ORIGIN__"));
@@ -260,7 +274,7 @@ mod tests {
 
     #[test]
     fn snapshot_parses_what_the_script_sends() {
-        let json = r#"{"version":2,"ready":true,"joined":true,"busy":false,"micEnabled":false,"micDisabled":false,"title":"x",
+        let json = r#"{"version":3,"ready":true,"joined":true,"busy":false,"micEnabled":false,"micDisabled":false,"title":"x",
             "agent":"speaking","youTalking":false,"canSkip":true,"since":1759300000000,
             "participants":[{"threadId":"a","title":"x","selected":true}],"devices":{"inputs":[]},"extra":1}"#;
         let s: CallSnapshot = serde_json::from_str(json).unwrap();

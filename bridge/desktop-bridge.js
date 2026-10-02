@@ -16,7 +16,7 @@
   if (win.location.protocol + "//" + win.location.host !== roomOrigin) return null;
   if (win.__sidevoiceDesktop) return win.__sidevoiceDesktop;
 
-  const BRIDGE_VERSION = 2;
+  const BRIDGE_VERSION = 3;
   let lastReported = "";
   let reportedJoined = false;
   /** When the call being reported was joined (ms since the epoch), for the card's clock; null outside a call. */
@@ -55,6 +55,7 @@
   }
 
   let installs = 0; // numbers each install call's job
+  let hostInstalls = 0;
 
   /** The app's native model engines (docs/BRIDGE.md → "The native engine"): what this device is, which builds are on
    *  disk, get one ready, run it. A build is a catalogue model id + an engine id; the page resolves its offers itself
@@ -148,6 +149,38 @@
         })
         .catch(() => {});
     const action = (name) => () => call("local_host_action", { action: name });
+    function install(onProgress) {
+      const job = "local-install-" + ++hostInstalls + "-" + Date.now().toString(36);
+      let sequence = 0;
+      let polling = false;
+      let inFlight = Promise.resolve();
+      const poll = () => {
+        if (typeof onProgress !== "function") return Promise.resolve();
+        if (polling) return inFlight;
+        polling = true;
+        inFlight = call("local_host_install_progress", { job, afterSequence: sequence })
+          .then((frames) => {
+            if (!Array.isArray(frames)) return;
+            for (const frame of frames) {
+              if (!frame || !Number.isSafeInteger(frame.sequence) || frame.sequence <= sequence) continue;
+              sequence = frame.sequence;
+              try { onProgress({ step: frame.step, done: frame.done ?? null, total: frame.total ?? null,
+                cancellable: frame.cancellable === true }); }
+              catch (_) { /* progress listeners cannot break the install */ }
+            }
+          })
+          .catch(() => {})
+          .finally(() => { polling = false; });
+        return inFlight;
+      };
+      const timer = typeof onProgress === "function" ? win.setInterval(poll, 150) : null;
+      const promise = call("local_host_install", { job }).finally(() => {
+        if (timer !== null) win.clearInterval(timer);
+        return inFlight.then(() => poll());
+      });
+      promise.job = job;
+      return promise;
+    }
     return {
       /** `{state, failure?, core?, service?, calls?, attempts?, limit?, reachable}`; `state` one of `absent`, `not-installed`, `stopped-by-person`,
        *  `starting`, `backoff`, `running`, `failed`, `service-failed`, `refused`, `incompatible`. */
@@ -175,6 +208,16 @@
        *  whenever a core answers and the app is paired (`reachable`), whatever `state` says; else `null`. `token` is
        *  the app's proxy secret for this launch. */
       pairing: () => call("local_host_pairing"),
+      /** Capability and pinned connector metadata; this never changes the host. */
+      version: () => call("local_host_version"),
+      /** Explicit install only: always asks the connector to install without registering agents. */
+      install,
+      /** `true` only when the connector acknowledges cancellation before its commit point. */
+      cancel: (job) => call("local_host_cancel", { job }),
+      /** Applies an explicitly eligible bundled connector update. */
+      update: () => call("local_host_update"),
+      /** Agent discovery is unavailable until connector R2 provides the command. */
+      agents: () => call("local_host_agents"),
       start: action("start"),
       stop: action("stop"),
       restart: action("restart"),

@@ -7,7 +7,7 @@
 //!   directory pass in the ordinary layout; a `SIDEVOICE_DATA_DIR` under a directory others can write does not.
 //! - [`executable`]: a program the app runs (`install.json` `command`): its ancestry, and the file itself root's or
 //!   this user's and not writable by others.
-//! - [`Dir`]: a checked directory descriptor; [`Dir::read`] / [`Dir::write`] work on names inside it.
+//! - [`Dir`]: a checked directory descriptor; reads, links, child directories and writes stay bound to it.
 
 use crate::checks::{uid, Check};
 use crate::Refusal;
@@ -16,6 +16,7 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
@@ -143,6 +144,42 @@ impl Dir {
         Ok(unsafe { OwnedFd::from_raw_fd(raw) })
     }
 
+    /// Opens a checked child directory relative to this descriptor, without following the final component.
+    pub fn open_child(&self, name: &str, mask: u32) -> Result<Dir, Check> {
+        let path = self.path.join(name);
+        if !one_component(name) {
+            return Err(unsafe_path(&self.key, &path, "the child name is not one directory component"));
+        }
+        let fd =
+            self.openat(name, libc::O_RDONLY | libc::O_DIRECTORY, 0).map_err(|e| open_error(e, &self.key, &path))?;
+        check_fd(&fd, true, mask, &self.key, &path)?;
+        Ok(Dir { fd, path, key: self.key.clone() })
+    }
+
+    /// Reads one symbolic link by name from this checked directory descriptor. Its target is returned verbatim;
+    /// callers must validate the target before opening anything it names.
+    pub fn read_link(&self, name: &str) -> Result<PathBuf, Check> {
+        let path = self.path.join(name);
+        if !one_component(name) {
+            return Err(unsafe_path(&self.key, &path, "the link name is not one directory component"));
+        }
+        let c_name = CString::new(name).map_err(|e| unsafe_path(&self.key, &path, &e.to_string()))?;
+        let mut bytes = vec![0u8; 4096];
+        // SAFETY: `c_name` is NUL-terminated and `bytes` is a writable buffer for the supplied size.
+        let count = unsafe {
+            libc::readlinkat(self.fd.as_raw_fd(), c_name.as_ptr(), bytes.as_mut_ptr() as *mut libc::c_char, bytes.len())
+        };
+        if count < 0 {
+            return Err(open_error(io::Error::last_os_error(), &self.key, &path));
+        }
+        let count = count as usize;
+        if count == bytes.len() {
+            return Err(unsafe_path(&self.key, &path, "the symbolic link target is too long"));
+        }
+        bytes.truncate(count);
+        Ok(PathBuf::from(std::ffi::OsString::from_vec(bytes)))
+    }
+
     /// The regular file `name` in this directory, not a link, this user's with no permission bit in `mask`, read to
     /// at most `limit` bytes.
     pub fn read(&self, name: &str, mask: u32, limit: u64) -> Result<Vec<u8>, Check> {
@@ -199,6 +236,10 @@ impl Dir {
         }
         Ok(())
     }
+}
+
+fn one_component(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains('/') && !name.contains('\0')
 }
 
 #[cfg(test)]

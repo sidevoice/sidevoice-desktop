@@ -11,6 +11,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      fixture:
+        description: Check resource wiring with a pending-pin fixture; never publish or upload installers.
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       release-tag:
@@ -41,7 +46,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.0
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
@@ -49,11 +54,13 @@ jobs:
           workspaces: src-tauri
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .node-version
           cache: npm
       - run: npm ci
       - name: Bridge script tests
         run: npm test
+      - name: Real GitHub verifier CLI rejects unsigned connector provenance
+        run: node --test test/attestation-cli.mjs
       - name: The icons, tray and .dmg window are what the brand files draw (npm run icons)
         run: |
           npm run icons
@@ -64,17 +71,17 @@ jobs:
         run: cargo fmt --all --check
       - name: clippy
         working-directory: src-tauri
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - name: Rust unit tests
         working-directory: src-tauri
-        run: cargo test --workspace
+        run: cargo test --locked --workspace
       - name: The local host with two users (a second uid cannot open local.sock, link as a connector, or use the proxy)
         working-directory: src-tauri
         run: |
           set -euo pipefail
           # src-tauri/local-host/examples/local-host-ci.rs: `serve` as this user (a stand-in core on local.sock, the
           # app's side paired with it, the proxy), `attack` as another.
-          cargo build -p sidevoice-local-host --example local-host-ci
+          cargo build --locked -p sidevoice-local-host --example local-host-ci
           mkdir -p /tmp/svci && chmod 755 /tmp/svci
           TOOL=/tmp/svci/local-host-ci
           cp target/debug/examples/local-host-ci "$TOOL" && chmod 755 "$TOOL"
@@ -101,8 +108,10 @@ jobs:
     outputs:
       # The Apple-Silicon engine round trip, the probe page and the room flow.
       native: ${{ github.event_name != 'pull_request' || steps.filter.outputs.native == 'true' }}
+      engine: ${{ github.event_name != 'pull_request' || steps.filter.outputs.engine == 'true' }}
+      card: ${{ github.event_name != 'pull_request' || steps.filter.outputs.card == 'true' }}
       # The .dmg: never on a pull request. (Windows and Linux build their installers on every run.)
-      installers: ${{ github.event_name != 'pull_request' }}
+      installers: ${{ github.event_name != 'pull_request' && !inputs.fixture }}
       # Where the installers go: the release that called this, or the rolling `nightly` pre-release on a push to main.
       publish: ${{ inputs.release-tag && 'release' || (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'nightly' || '' }}
     steps:
@@ -115,30 +124,74 @@ jobs:
               - 'src-tauri/engine/**'
               - 'src-tauri/local-host/**'
               - 'src-tauri/src/local_host.rs'
+              - 'src-tauri/src/headset.rs'
               - 'src-tauri/src/engine_ipc.rs'
               - 'src-tauri/src/probe.rs'
               - 'src-tauri/src/call_controls.rs'
               - 'src-tauri/core/src/call_controls.rs'
               - 'src-tauri/src/lib.rs'
+              - 'src-tauri/build.rs'
               - 'src-tauri/capabilities/**'
+              - 'src-tauri/permissions/**'
+              - 'src-tauri/connector-pin.json'
+              - 'src-tauri/tauri.macos-aarch64.conf.json'
               - 'src-tauri/tauri.conf.json'
               - 'src-tauri/core/src/engines.rs'
               - 'src-tauri/core/src/bridge.rs'
               - 'bridge/**'
+              - 'scripts/**'
+              - 'test/macos/**'
+              - '.node-version'
+              - 'rust-toolchain.toml'
+              - 'src-tauri/Cargo.lock'
+              - 'src-tauri/Cargo.toml'
+              - 'package-lock.json'
+              - 'package.json'
+              - '.github/workflows/build.yml'
               - 'catalog/**'
+              - 'test/connector-fixture.test.mjs'
               - 'test/fixtures/**'
               - 'ui/voice/**'
+            engine:
+              - 'src-tauri/engine/**'
+              - 'src-tauri/core/src/engines.rs'
+              - 'src-tauri/src/engine_ipc.rs'
+              - 'src-tauri/src/headset.rs'
+              - 'src-tauri/src/lib.rs'
+              - 'src-tauri/src/probe.rs'
+              - 'src-tauri/Cargo*'
+              - 'bridge/**'
+              - 'catalog/**'
+              - 'ui/voice/**'
+              - 'test/fixtures/**'
+              - 'test/macos/**'
+              - 'scripts/build*'
+              - 'rust-toolchain.toml'
+              - '.github/workflows/build.yml'
+            card:
+              - 'src-tauri/src/call_controls.rs'
+              - 'src-tauri/core/src/call_controls.rs'
+              - 'src-tauri/src/lib.rs'
+              - 'src-tauri/src/probe.rs'
+              - 'src-tauri/Cargo*'
+              - 'bridge/**'
+              - 'ui/voice/**'
+              - 'test/fixtures/**'
+              - 'test/macos/**'
+              - 'scripts/build*'
+              - 'rust-toolchain.toml'
+              - '.github/workflows/build.yml'
 
   macos:
-    name: macOS (Apple Silicon) .dmg and native flow
-    needs: changes
+    name: macOS (Apple Silicon) package and focused integration
+    needs: [changes, test]
     if: needs.changes.outputs.native == 'true'
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.release-tag }}
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.0
         with:
           targets: aarch64-apple-darwin
       - uses: Swatinem/rust-cache@v2
@@ -146,149 +199,37 @@ jobs:
           workspaces: src-tauri
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .node-version
           cache: npm
       - run: npm ci
-      - name: Build the app bundle (ad-hoc signed, hardened runtime, entitlements)
-        if: needs.changes.outputs.installers == 'true'
-        run: npx tauri build --target aarch64-apple-darwin --bundles app
-      - name: Check what a first open depends on
-        if: needs.changes.outputs.installers == 'true'
-        run: |
-          set -euo pipefail
-          APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
-          test -d "$APP"
-          echo "--- Info.plist"
-          plutil -p "$APP/Contents/Info.plist"
-          plutil -extract NSMicrophoneUsageDescription raw "$APP/Contents/Info.plist"
-          test "$(plutil -extract LSMinimumSystemVersion raw "$APP/Contents/Info.plist")" = "13.0"
-          echo "--- signature"
-          codesign --verify --deep --strict --verbose=2 "$APP"
-          codesign -dvvv "$APP" 2>&1 | tee /tmp/sig.txt
-          grep -q "Signature=adhoc" /tmp/sig.txt
-          grep -q "runtime" /tmp/sig.txt
-          echo "--- entitlements"
-          codesign -d --entitlements - --xml "$APP" > /tmp/ent.xml
-          cat /tmp/ent.xml; echo
-          grep -q "com.apple.security.device.audio-input" /tmp/ent.xml
-          grep -q "com.apple.security.cs.disable-library-validation" /tmp/ent.xml
-          echo "--- icon"
-          test "$(plutil -extract CFBundleIconFile raw "$APP/Contents/Info.plist")" = "icon.icns"
-          iconutil --convert iconset --output /tmp/icon.iconset "$APP/Contents/Resources/icon.icns"
-          ls /tmp/icon.iconset
-          for f in 16x16 16x16@2x 32x32 32x32@2x 128x128 128x128@2x 256x256 256x256@2x 512x512 512x512@2x; do
-            test -s "/tmp/icon.iconset/icon_$f.png"
-          done
-          sips -g pixelWidth /tmp/icon.iconset/icon_512x512@2x.png | grep -q 1024
-          # How macOS itself decodes every entry, for the record (uploaded with the .dmg window screenshots).
-          mkdir -p dmg-screens && cp -R /tmp/icon.iconset dmg-screens/
-          test "$(plutil -extract CFBundleName raw "$APP/Contents/Info.plist")" = "Sidevoice"
-          echo "--- architecture"
-          lipo -archs "$APP/Contents/MacOS/sidevoice-desktop" | tee /dev/stderr | grep -q arm64
-          echo "--- no CI probe in a release (src-tauri/src/probe.rs is behind the probe feature)"
-          if grep -q "SIDEVOICE_DEBUG_PAGE" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the probe switch is in the release app"; exit 1; fi
-          if grep -q "probe-engine" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the probe page is in the release app"; exit 1; fi
-          if grep -q "probe-card" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the call controls probe is in the release app"; exit 1; fi
-          if grep -q "SIDEVOICE_DEBUG_ROOM_FLOW" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the room-flow switch is in the release app"; exit 1; fi
-          if grep -q "room-flow" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the room-flow script is in the release app"; exit 1; fi
-          if grep -q "SIDEVOICE_DEBUG_IDLE_UNLOAD_SECS" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the idle-time switch is in the release app"; exit 1; fi
-          if grep -Eq "SIDEVOICE_DEBUG_(REFUSE_LOAD|SLOW_TRANSCRIBE)" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "a fault switch is in the release app"; exit 1; fi
-          if grep -Eq "SIDEVOICE_DEBUG_LOCAL_HOST_FLOW|local-host-flow" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the local-host flow is in the release app"; exit 1; fi
+      - name: Read the declared connector input
+        id: connector
+        run: node -e 'const fs = require("node:fs"); fs.appendFileSync(process.env.GITHUB_OUTPUT, "status=" + require("./src-tauri/connector-pin.json").status + "\n")'
+      - name: Build the explicit fixture package (resource wiring only)
+        if: (github.event_name == 'pull_request' || inputs.fixture) && steps.connector.outputs.status == 'pending'
+        run: npm run build:mac:fixture
+      - name: Build and verify the real app (the same command as a developer Mac)
+        if: (github.event_name != 'pull_request' && !inputs.fixture) || steps.connector.outputs.status != 'pending'
+        env:
+          # The built-in token is restricted to this repository. A trusted manual/main run may use the
+          # narrowly scoped cross-repository Actions: read token; never expose it to PR code.
+          GH_TOKEN: ${{ github.token }}
+          SIDEVOICE_GITHUB_TOKEN: ${{ github.event_name != 'pull_request' && secrets.SIDEVOICE_CONNECTOR_ACTIONS_READ || '' }}
+        run: npm run build:mac
       - name: First open (no settings) — the bundled interface comes up in the real WKWebView
         if: needs.changes.outputs.installers == 'true'
-        run: |
-          set -euo pipefail
-          APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
-          # Asking for the probe page changes nothing in a release: the interface loads (checked below).
-          SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_PAGE=probe.html SIDEVOICE_DEBUG_ROOM_FLOW=1 "$APP/Contents/MacOS/sidevoice-desktop" > /tmp/app.log 2>&1 &
-          PID=$!
-          for i in $(seq 1 45); do grep -q "ready: true" /tmp/app.log && break; sleep 1; done
-          sleep 5
-          if ! kill -0 "$PID" 2>/dev/null; then echo "The app exited on its own:"; cat /tmp/app.log; exit 1; fi
-          kill "$PID"; cat /tmp/app.log
-          # The interface loaded from the app itself, and its controller came up: the bridge attached to the
-          # real web UI's store and actions, and reached the app over IPC.
-          grep -q "page tauri://localhost/voice/index.html" /tmp/app.log
-          if grep -Eq "probe.html|room-flow" /tmp/app.log; then echo "a release ran a CI probe"; exit 1; fi
-          grep -q "ready: true" /tmp/app.log
+        run: bash test/macos/first-open.sh
       - name: With a target (a fake node on loopback)
         if: needs.changes.outputs.installers == 'true'
-        run: |
-          set -euo pipefail
-          APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
-          CONF="$HOME/Library/Application Support/dev.sidevoice.desktop"
-          mkdir -p "$CONF"
-          printf '{"target":"http://127.0.0.1:8768","muteShortcut":""}' > "$CONF/settings.json"
-          python3 -u test/fixtures/fake-node.py 8768 > /tmp/node.log 2>&1 &
-          NODE=$!
-          SIDEVOICE_DEBUG=1 "$APP/Contents/MacOS/sidevoice-desktop" > /tmp/target.log 2>&1 &
-          PID=$!
-          for i in $(seq 1 45); do grep -q "ready: true" /tmp/target.log && break; sleep 1; done
-          sleep 5
-          kill "$PID" || true
-          kill "$NODE" || true  # the probe below starts its own on the same port
-          rm -rf "$CONF"
-          echo "--- app"; cat /tmp/target.log
-          echo "--- fake node (what the interface asked, cross-origin)"; sort /tmp/node.log | uniq -c
-          grep -q "ready: true" /tmp/target.log
-          # The interface asked its target from the app's own origin (cross-origin), with no pairing yet.
-          grep -q "origin=tauri://localhost" /tmp/node.log
+        run: bash test/macos/target.sh
       - name: Make the .dmg (the brand's window, with background, icon layout and volume icon)
         if: needs.changes.outputs.installers == 'true'
-        run: |
-          set -euo pipefail
-          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
-          python3 -m venv "$RUNNER_TEMP/dmgbuild"
-          "$RUNNER_TEMP/dmgbuild/bin/pip" install --quiet dmgbuild==1.6.7
-          # One TIFF with the 1x and 2x drawings: Finder picks the one for the screen.
-          tiffutil -cathidpicheck src-tauri/dmg/background.png src-tauri/dmg/background@2x.png -out "$RUNNER_TEMP/background.tiff"
-          mkdir -p dist
-          DMG="dist/Sidevoice_${VERSION}_aarch64.dmg"
-          "$RUNNER_TEMP/dmgbuild/bin/dmgbuild" -s scripts/dmg-settings.py \
-            -D app="$APP" -D background="$RUNNER_TEMP/background.tiff" \
-            -D layout=src-tauri/dmg/layout.json -D icon=src-tauri/icons/icon.icns \
-            Sidevoice "$DMG"
-          hdiutil verify "$DMG"
-          # Check the app as shipped, inside the image, not the one in the build tree.
-          MNT=$(mktemp -d)
-          hdiutil attach -readonly -nobrowse -mountpoint "$MNT" "$DMG"
-          ls -la "$MNT"
-          test -s "$MNT/.background.tiff"
-          test -L "$MNT/Applications"
-          test -s "$MNT/.DS_Store"
-          test -s "$MNT/.VolumeIcon.icns"
-          codesign --verify --deep --strict --verbose=2 "$MNT/Sidevoice.app"
-          codesign -d --entitlements - --xml "$MNT/Sidevoice.app" | grep -q "com.apple.security.device.audio-input"
-          plutil -extract NSMicrophoneUsageDescription raw "$MNT/Sidevoice.app/Contents/Info.plist"
-          hdiutil detach "$MNT"
-          cp docs/FIRST_OPEN.txt dist/LEEME-primera-apertura.txt
-          (cd dist && shasum -a 256 *.dmg | tee SHA256SUMS.txt)
+        run: bash test/macos/package-dmg.sh
       - name: The .dmg window as Finder shows it (screenshots, light and dark; informational)
         if: needs.changes.outputs.installers == 'true'
         continue-on-error: true
         timeout-minutes: 4
-        run: |
-          set -uo pipefail
-          osa() { perl -e 'alarm shift; exec @ARGV' 30 osascript "$@"; }  # a permission prompt must not hang the job
-          mkdir -p dmg-screens
-          DMG=$(ls dist/*.dmg)
-          hdiutil attach -readonly "$DMG" | tee /tmp/attach.txt
-          VOL=$(grep -o '/Volumes/.*' /tmp/attach.txt | head -1)
-          for mode in false true; do
-            osa -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $mode" || true
-            osa -e "tell application \"Finder\" to close every window" \
-                      -e "tell application \"Finder\" to open (POSIX file \"$VOL\" as alias)" \
-                      -e "tell application \"Finder\" to activate" || true
-            sleep 4
-            B=$(osa -e 'tell application "Finder" to get bounds of front window' | tr -d ' ')
-            echo "window bounds ($mode): $B"
-            IFS=, read -r X1 Y1 X2 Y2 <<< "${B:-0,28,1440,900}"
-            screencapture -x -R"$X1,$((Y1 - 28)),$((X2 - X1)),$((Y2 - Y1 + 28))" "dmg-screens/dmg-dark-$mode.png" || screencapture -x "dmg-screens/dmg-dark-$mode-full.png"
-          done
-          osa -e 'tell application "Finder" to close every window' || true
-          hdiutil detach "$VOL" || true
-          ls -la dmg-screens
+        run: bash test/macos/dmg-screens.sh
       - uses: actions/upload-artifact@v4
         if: always() && needs.changes.outputs.installers == 'true'
         with:
@@ -305,13 +246,13 @@ jobs:
           if-no-files-found: error
       # CI only from here: the same app built with the `probe` feature (src-tauri/src/probe.rs), which adds the
       # probe page and the switch that loads it into the room window. The release app above has neither. On a pull
-      # request (engine, bridge, catalogue or probe changes) only this part runs.
+      # request, the explicit fixture package above and relevant integration checks run.
       - name: Build the CI probe app (feature probe; never shipped)
         run: |
           set -euo pipefail
-          npx tauri build --target aarch64-apple-darwin --bundles app --features probe
+          npm run build:mac:probe
           # The check on the release app means something: this build does carry the page and its switch.
-          BIN="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app/Contents/MacOS/sidevoice-desktop"
+          BIN="src-tauri/target/packages/probe/Sidevoice.app/Contents/MacOS/sidevoice-desktop"
           grep -q "SIDEVOICE_DEBUG_PAGE" "$BIN"
           grep -q "probe-engine" "$BIN"
           grep -q "probe-card" "$BIN"
@@ -325,8 +266,8 @@ jobs:
       - name: The local host from the bundled page (stand-in core on local.sock, pairing, proxy, refusals)
         run: |
           set -euo pipefail
-          APP="$PWD/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
-          (cd src-tauri && cargo build --release -p sidevoice-local-host --example local-host-ci)
+          APP="$PWD/src-tauri/target/packages/probe/Sidevoice.app"
+          (cd src-tauri && cargo build --locked --release -p sidevoice-local-host --example local-host-ci)
           TOOL="$PWD/src-tauri/target/release/examples/local-host-ci"
           # A home of its own and short (a Unix socket's path is at most 104 bytes): ~/.sidevoice and the app's config.
           export HOME=/tmp/svhome
@@ -360,7 +301,7 @@ jobs:
           # and its Origin kept, 401 without the secret, 404 for native's own routes, a WebSocket spliced and refused.
           grep -q "local-host-flow ok" /tmp/lh.log
           LINE=$(grep "local-host-flow ok" /tmp/lh.log)
-          for fact in version=2 state=running/api=1 subscribed=running pairing=ok host=fake-machine \
+          for fact in version=3 state=running/api=1 subscribed=running pairing=ok host=fake-machine \
               fetch=200/device/tauri://localhost/the_bundled_page no_secret=401 native_only=404 \
               ws=open/sidevoice/ping_from_the_page ws_no_secret=refused; do
             echo "$LINE" | grep -q " $fact" || { echo "missing $fact"; exit 1; }
@@ -375,207 +316,11 @@ jobs:
           STORE="$HOME/Library/Application Support/dev.sidevoice.desktop/local-host.json"
           test "$(stat -f %Lp "$STORE")" = 600
       - name: What the interface's window offers (probe page, same origin and permission rule)
-        run: |
-          set -euo pipefail
-          APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
-          python3 -u test/fixtures/fake-node.py 8768 > /tmp/probe-node.log 2>&1 &
-          NODE=$!
-          # A model stays in memory 5 s unused here (10 minutes in a release), so the probe sees D13 happen.
-          SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_PAGE=probe.html SIDEVOICE_DEBUG_IDLE_UNLOAD_SECS=5 \
-            "$APP/Contents/MacOS/sidevoice-desktop" > /tmp/probe.log 2>&1 &
-          PID=$!
-          for i in $(seq 1 240); do grep -q "probe-engine" /tmp/probe.log && break; sleep 1; done
-          kill "$PID" || true
-          cat /tmp/probe.log
-          echo "--- macOS $(sw_vers -productVersion)"
-          grep -q "page tauri://localhost/probe.html" /tmp/probe.log
-          # Pairing needs a secure context and WebCrypto ECDSA P-256 on the app's own origin.
-          grep -q "probe origin=tauri://localhost secure=true ecdsa=true" /tmp/probe.log
-          # A local node (http://127.0.0.1:8768) reached from the app's origin with a device token: preflight + CORS.
-          kill "$NODE" || true
-          grep -q 'probe-loopback 200 Bearer probe-token' /tmp/probe.log
-          grep -q 'request OPTIONS /api/presentation/echo origin=tauri://localhost' /tmp/probe-node.log
-          grep "sidevoice: media" /tmp/probe.log || echo "(WebKit did not ask the app about the microphone)"
-          # The native engine inside the signed app, through the bridge the interface uses (docs/BRIDGE.md):
-          # capabilities with the OS's real memory, downloads with progress, the builds on disk by model + engine,
-          # Kokoro says a sentence and Whisper hears it, and a page engine is refused rather than replaced.
-          grep -q 'probe-engine ok' /tmp/probe.log
-          grep -q 'probe-engine ok capabilities={"runs":"native","os":"macos","arch":"aarch64","has":\["cpu","coreml"' /tmp/probe.log
-          grep -Eq 'probe-engine ok .*"memory_mb":[1-9][0-9]{3,}' /tmp/probe.log
-          grep -q 'probe-engine ok .* installed=kokoro-82m-v1.0@sherpa-onnx,whisper-tiny@sherpa-onnx ' /tmp/probe.log
-          grep -Eq 'probe-engine ok .* progress_calls=[1-9]' /tmp/probe.log
-          grep -q 'probe-engine ok .* refused=yes ' /tmp/probe.log
-          grep -iq 'probe-engine ok.*prueba' /tmp/probe.log
-          # Load → transcribe → unload (sidevoice/sidevoice-core#21 phase 3): loaded once, one model in memory each for every
-          # language (Spanish, then English), freed on unload; the OS's memory and what is available of it.
-          grep -q 'probe-engine ok .* before_load=kokoro-82m-v1.0@sherpa-onnx/cpu load_ms=' /tmp/probe.log
-          grep -q 'probe-engine ok .* load_ms=\([0-9]*\) load_again_ms=\1 ' /tmp/probe.log
-          grep -q 'probe-engine ok .* loaded=kokoro-82m-v1.0@sherpa-onnx/cpu,whisper-tiny@sherpa-onnx/cpu since_ok=true same_models=true unloaded=kokoro-82m-v1.0@sherpa-onnx/cpu ' /tmp/probe.log
-          grep -Eq 'probe-engine ok .* memory=\{"total_mb":[1-9][0-9]{3,},"available_mb":[1-9][0-9]*\}' /tmp/probe.log
-          grep -Eiq 'probe-engine ok .* text_en="[^"]*(test|voice)' /tmp/probe.log
-          # D13: after the call, unused for the idle time, both unloaded by the app; loaded again as the next call connects.
-          grep -q 'sidevoice: engine unloaded idle whisper-tiny@sherpa-onnx/cpu' /tmp/probe.log
-          grep -q 'sidevoice: engine unloaded idle kokoro-82m-v1.0@sherpa-onnx/cpu' /tmp/probe.log
-          grep -q 'sidevoice: engine preload whisper-tiny@sherpa-onnx/cpu load_ms=' /tmp/probe.log
-          grep -q 'probe-engine ok .* preloaded=kokoro-82m-v1.0@sherpa-onnx/cpu,whisper-tiny@sherpa-onnx/cpu ' /tmp/probe.log
-          # Cancel: a download stopped mid-way rejects with install_cancelled; progress events carry the job, the build
-          # and the speed; nothing of it is left on disk.
-          grep -q 'probe-engine ok .* cancel=true/install_cancelled/false cancel_gone=true progress_event=bytes_per_s+done+engine+job+model+total:true ' /tmp/probe.log
-          grep -Eq 'probe-engine ok .* speed=[1-9][0-9]* ' /tmp/probe.log
-          MODELS="$HOME/Library/Application Support/dev.sidevoice.desktop/engines/models/sherpa-onnx"
-          ls -la "$MODELS"
-          if ls "$MODELS" | grep -q whisper-small; then echo "a cancelled download left files"; exit 1; fi
-          # Headset buttons: a (simulated) call made the app the Now Playing app, and it let go after.
-          grep -q 'probe-headset ok' /tmp/probe.log
-          grep -q 'headset apply active=true in_call=true mic=true' /tmp/probe.log
-          grep 'headset apply' /tmp/probe.log | tail -1 | grep -q 'active=false in_call=false .* gesture_on=false' 
-          grep 'headset apply' /tmp/probe.log
-          # The app's own mute is not mistaken for an AirPods gesture.
-          if grep -q 'headset airpods' /tmp/probe.log; then echo 'echo recorded as a gesture'; exit 1; fi
+        if: needs.changes.outputs.engine == 'true'
+        run: bash test/macos/engine-probe.sh
       - name: The call controls card over a full-screen editor (never activating, clicks, drag, typing, states)
-        run: |
-          set -euo pipefail
-          APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
-          mkdir -p card-shots
-          swiftc -O -o /tmp/card-ci test/fixtures/card-ci.swift
-          # The editor as an app of its own, so LaunchServices opens and activates it as it would the person's.
-          mkdir -p /tmp/Editor.app/Contents/MacOS
-          swiftc -O -o /tmp/Editor.app/Contents/MacOS/Editor test/fixtures/fullscreen-editor.swift
-          printf '%s' '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>Editor</string><key>CFBundleIdentifier</key><string>dev.sidevoice.ci-editor</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleName</key><string>Editor</string></dict></plist>' > /tmp/Editor.app/Contents/Info.plist
-          /tmp/card-ci trusted
-          trap 'echo "--- app"; grep -E "call-controls|probe-card" /tmp/card.log || true; echo "--- editor"; cat /tmp/editor.log || true' EXIT
-          # Every check runs, and the step fails at the end with each that did not hold.
-          FAILED=""
-          fail() { echo "::error::$*"; FAILED="$FAILED"$'\n'"$*"; }
-          # wait_for <log> <pattern> [after line]: the pattern appears in the log, after that line if given.
-          wait_for() {
-            for i in $(seq 1 60); do tail -n +"$((${3:-0} + 1))" "$1" | grep -q -- "$2" && return 0; sleep 1; done
-            return 1
-          }
-          expect() { wait_for "$@" || fail "never saw in $1: $2"; }
-          line() { wc -l < "$1" | tr -d ' '; }
-          # The card's window as the window server has it on screen (global points): it must be in front of the editor.
-          card() {
-            /tmp/card-ci windows "$PID" "$EDITOR" | tee /tmp/windows.txt || true
-            grep -q "card onscreen=true above_editor=true editor_onscreen=true" /tmp/windows.txt \
-              || fail "the card is not on screen in front of the editor: $(head -1 /tmp/windows.txt)"
-            if grep -q " x=" /tmp/windows.txt; then
-              read -r X Y W H < <(sed -E 's/.* x=(-?[0-9]+) y=(-?[0-9]+) w=([0-9]+) h=([0-9]+).*/\1 \2 \3 \4/' /tmp/windows.txt)
-            fi
-          }
-          editor_active() {
-            tail -1 < <(grep "editor active=" /tmp/editor.log) | grep -q "active=true" || fail "the editor is not the active app ($1)"
-          }
-
-          # A call walked through the card's states (test/fixtures/card-probe.html); this page answers its buttons.
-          # Each line with the time, to order it against the editor's and the input's.
-          SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_PAGE=card-probe.html "$APP/Contents/MacOS/sidevoice-desktop" \
-            > >(perl -MTime::HiRes=time -ne '$|=1; printf "%.2f %s", time, $_' > /tmp/card.log) 2>&1 &
-          PID=$!
-          wait_for /tmp/card.log "probe-card phase=talking" || { fail "the probe never started"; exit 1; }
-          # The person's editor, full screen in its own Space: the room's window loses focus and the card shows over it,
-          # a non-activating panel at the status level, on every Space and over full-screen apps, never the key window.
-          : > /tmp/editor.log
-          open --stdout /tmp/editor.log --stderr /tmp/editor.log /tmp/Editor.app
-          wait_for /tmp/editor.log "editor ready pid=" || { fail "the editor never started"; exit 1; }
-          EDITOR=$(sed -nE 's/.*editor ready pid=([0-9]+).*/\1/p' /tmp/editor.log | head -1)
-          expect /tmp/editor.log "editor fullscreen=true key=true"
-          wait_for /tmp/card.log "call-controls shown" || { fail "the card never showed"; exit 1; }
-          expect /tmp/card.log "call-controls panel "
-          grep "call-controls panel " /tmp/card.log | tail -1 \
-            | grep -q "nonactivating=true level=25 all_spaces=true fullscreen_auxiliary=true key=false visible=true .* app_active=false" \
-            || fail "the panel is not what #4 asks: $(grep 'call-controls panel ' /tmp/card.log | tail -1)"
-          expect /tmp/card.log "call-controls watching clicks elsewhere: true"
-          expect /tmp/card.log "call-controls prevents activation: true"
-          sleep 3
-          card
-          [ -n "${X:-}" ] || { fail "the card's window was never found"; exit 1; }
-          screencapture -x card-shots/1-over-fullscreen-you-talking.png
-          # The card's page may not capture: it asked for the microphone (probe build) and was refused.
-          expect /tmp/card.log 'call-controls refused {"capture":"[A-Za-z-]*","command":"probe-capture"}'
-          grep 'call-controls refused {"capture"' /tmp/card.log | tail -1 | grep -q '"capture":"NotAllowedError"' \
-            || fail "the card's page was not refused the microphone"
-          grep -q "call-controls permission Microphone denied" /tmp/card.log || fail "the app did not deny the card's request"
-          # The editor has the keyboard.
-          /tmp/card-ci type "abc"
-          expect /tmp/editor.log "editor text=abc"
-
-          # The pointer over the card (the app polls it: a panel that is never key gets no hover): its controls appear
-          # below it, and the window grows to hold them.
-          /tmp/card-ci move $((X + 160)) $((Y + 30))
-          expect /tmp/card.log "call-controls pointer inside=Some(true) app_active=false"
-          sleep 1.5
-          card
-          [ "$H" -ge 110 ] || fail "the card did not grow with its controls (h=$H)"
-          screencapture -x card-shots/2-near-you-talking.png
-
-          # A click on the title (no move) opens the conversations below the controls; a click in the editor closes it.
-          /tmp/card-ci click $((X + 90)) $((Y + 31))
-          sleep 1.5
-          card
-          [ "$H" -ge 200 ] || fail "the conversations did not open (h=$H)"
-          screencapture -x card-shots/3-conversations.png
-          FROM=$(line /tmp/card.log)
-          /tmp/card-ci click 200 700
-          expect /tmp/card.log "call-controls outside click" "$FROM"
-          editor_active "after a click in it"
-
-          # A drag from the card (not a button) moves it; let go, it is dropped and remembered. The app stays inactive.
-          /tmp/card-ci move $((X + 160)) $((Y + 30))
-          expect /tmp/card.log "call-controls pointer inside=Some(true)" "$FROM"
-          sleep 1
-          card
-          BEFORE="$X $Y"
-          FROM=$(line /tmp/card.log)
-          /tmp/card-ci drag $((X + 40)) $((Y + 39)) -300 200
-          expect /tmp/card.log "call-controls dropped at .* app_active=false" "$FROM"
-          sleep 1
-          card
-          [ "$X $Y" != "$BEFORE" ] || fail "the card did not move"
-          screencapture -x card-shots/4-dragged.png
-          editor_active "after a drag"
-
-          # Its mute button, clicked: the command reaches the room, the app never becomes active, and typing still
-          # reaches the editor. Muted, then unmuted again (the probe then moves on).
-          for state in muted unmuted; do
-            /tmp/card-ci move $((X + 160)) $((Y + 30)); sleep 1; card
-            FROM=$(line /tmp/card.log)
-            /tmp/card-ci click $((X + 66)) $((Y + H - 37))
-            expect /tmp/card.log "call-controls run toggle-mute app_active=false" "$FROM"
-            expect /tmp/card.log "probe-card command toggle-mute" "$FROM"
-            sleep 1
-            screencapture -x "card-shots/5-$state.png"
-            editor_active "after mute ($state)"
-          done
-          /tmp/card-ci type "def"
-          expect /tmp/editor.log "editor text=abc.*def"
-          editor_active "at the end of the clicks"
-
-          # The other states, near (controls) and away (at rest).
-          expect /tmp/card.log "probe-card phase=working"; sleep 2; screencapture -x card-shots/6-near-agent-working.png
-          expect /tmp/card.log "probe-card phase=speaking"; sleep 2; screencapture -x card-shots/7-near-agent-speaking.png
-          FROM=$(line /tmp/card.log)
-          /tmp/card-ci move 200 700
-          expect /tmp/card.log "call-controls pointer inside=Some(false) app_active=false" "$FROM"
-          expect /tmp/card.log "probe-card phase=muted"; sleep 2; screencapture -x card-shots/8-rest-muted-agent-speaking.png
-          expect /tmp/card.log "probe-card phase=reconnecting"; sleep 2; screencapture -x card-shots/9-rest-reconnecting.png
-          # Its hang-up button ends the call; the card goes with it (after that, not from an earlier hide).
-          if grep -q "call-controls hidden" /tmp/card.log; then fail "the card hid before the call ended"; fi
-          card
-          /tmp/card-ci move $((X + 160)) $((Y + 30)); sleep 1.5; card
-          FROM=$(line /tmp/card.log)
-          /tmp/card-ci click $((X + W - 45)) $((Y + H - 37))
-          expect /tmp/card.log "probe-card command hang-up" "$FROM"
-          HUNG_UP=$(grep -n "probe-card command hang-up" /tmp/card.log | tail -1 | cut -d: -f1)
-          expect /tmp/card.log "call-controls hidden" "${HUNG_UP:-$FROM}"
-          expect /tmp/card.log "probe-card done" "$FROM"
-          if grep -q "editor active=false" /tmp/editor.log; then fail "the editor stopped being the active app"; fi
-          # Nor the keyboard: its window stays key from full screen on (a loss put right later still counts).
-          if sed -n '/editor fullscreen=true key=true/,$p' /tmp/editor.log | grep -q "editor key=false"; then
-            fail "the editor's window lost the keyboard: $(grep 'editor key=false' /tmp/editor.log | head -1)"
-          fi
-          kill "$PID" "$EDITOR" || true
-          if [ -n "$FAILED" ]; then echo "failed:$FAILED"; exit 1; fi
+        if: needs.changes.outputs.card == 'true'
+        run: bash test/macos/card.sh
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -584,82 +329,36 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
       - name: Selecting models through the vendored room itself (consent, cancel, failure, slow, persistence)
-        run: |
-          set -euo pipefail
-          APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
-          # From nothing on disk, so the room downloads what it selects (the probe above downloaded into the same place).
-          rm -rf "$HOME/Library/Application Support/dev.sidevoice.desktop/engines"
-          # The machine the room is paired with (its identity proven; it stores the choices per machine).
-          python3 -u test/fixtures/fake-node.py 8768 > /tmp/room-node.log 2>&1 &
-          NODE=$!
-          # Real models; only a refused load (whisper-tiny) and a slow transcription (whisper-base on Core ML) injected.
-          SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_ROOM_FLOW=1 SIDEVOICE_DEBUG_REFUSE_LOAD=whisper-tiny \
-            SIDEVOICE_DEBUG_SLOW_TRANSCRIBE=whisper-base/coreml:2500 \
-            "$APP/Contents/MacOS/sidevoice-desktop" > /tmp/room.log 2>&1 &
-          PID=$!
-          for i in $(seq 1 600); do grep -Eq "room-flow (ok|error)" /tmp/room.log && break; sleep 1; done
-          kill "$PID" "$NODE" || true
-          cat /tmp/room.log
-          cat ui/voice/web-source.json
-          MODELS="$HOME/Library/Application Support/dev.sidevoice.desktop/engines/models/sherpa-onnx"
-          ls -la "$MODELS"
-          # The actual vendored room (ui/voice), not a test page: its settings actions, controller, selection, native
-          # worker and storage, over this app's bridge and engine (test/fixtures/room-flow.js).
-          grep -q "page tauri://localhost/voice/index.html" /tmp/room.log
-          grep -q 'room-flow ok' /tmp/room.log
-          LINE=$(grep 'room-flow ok' /tmp/room.log)
-          # What the room asked the app, and the offers it resolved from it: the five native models, nothing of the page's.
-          echo "$LINE" | grep -q 'capabilities={"runs":"native","os":"macos","arch":"aarch64","has":\["cpu","coreml"'
-          echo "$LINE" | grep -Eq '"memory_mb":[1-9][0-9]{3,}'
-          echo "$LINE" | grep -Eq ' engines=(sherpa-onnx/[a-z]+,?)+ '
-          for model in whisper-tiny whisper-base whisper-small whisper-large-v3-turbo; do echo "$LINE" | grep -Eq " offers_stt=[^ ]*$model"; done
-          echo "$LINE" | grep -q ' offers_tts=kokoro-82m-v1.0 '
-          if echo "$LINE" | grep -Eq 'transformers-js|webgpu|wasm'; then echo "a page engine in the app"; exit 1; fi
-          echo "$LINE" | grep -Eq ' shown_stt=[^ ]*whisper-tiny'
-          echo "$LINE" | grep -Eq ' shown_tts=[^ ]*kokoro-82m-v1.0'
-          echo "$LINE" | grep -q ' where=app '
-          # 1. Consent with the size, then download → load → two passes → in effect, stored, loaded.
-          echo "$LINE" | grep -Eq ' consent_size=[1-9][0-9]{7,} stored_before=none chosen=whisper-base/auto chosen_resident=whisper-base@sherpa-onnx/cpu chosen_passes=2 '
-          # 2. Cancelled mid-download: nothing stored, nothing loaded, nothing installed, the download row cancelled.
-          echo "$LINE" | grep -Eq ' cancel_at=[1-9][0-9]*/[1-9][0-9]* cancel_download=cancelled cancel_stored=whisper-base/auto cancel_resident=whisper-base@sherpa-onnx/cpu cancel_installed=false '
-          if ls "$MODELS" | grep -q whisper-small; then echo "a cancelled download left files"; exit 1; fi
-          # 3. A failed load: its step and cause, the model in use still in use and alone in memory.
-          echo "$LINE" | grep -Eq ' fail_step=load fail_key=(runtime_failed|load_failed) fail_stored=whisper-base/auto fail_resident=whisper-base@sherpa-onnx/cpu '
-          # 4. Slow on Core ML: declined, nothing changes and its copy goes; accepted, it is stored and the old copy goes.
-          echo "$LINE" | grep -Eq ' slow_latency_ms=(2[0-9]{3}|[3-9][0-9]{3}) declined_stored=whisper-base/auto declined_resident=whisper-base@sherpa-onnx/cpu '
-          echo "$LINE" | grep -q ' accepted_stored=whisper-base/coreml accepted_resident=whisper-base@sherpa-onnx/coreml '
-          # 5. After a reload, with the machine reached: settings show the stored choice; the next selection starts from it.
-          echo "$LINE" | grep -q ' reload_reach=ok reload_restored=whisper-base/coreml reload_restored_pane=whisper-base/sherpa-onnx/coreml '
-          echo "$LINE" | grep -q ' reload_after_stored=whisper-base/auto reload_after_resident=whisper-base@sherpa-onnx/cpu'
-          grep -q 'request GET /api/device/identity' /tmp/room-node.log
-
+        if: needs.changes.outputs.engine == 'true'
+        run: bash test/macos/room-flow.sh
   engine:
     name: Native engine on Apple Silicon (download, Kokoro → Whisper round trip)
-    needs: changes
-    if: needs.changes.outputs.native == 'true'
+    needs: [changes, test]
+    if: needs.changes.outputs.engine == 'true'
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.release-tag }}
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.0
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
       - name: Round trip on the accelerator the resolver picks (CPU)
         working-directory: src-tauri
-        run: cargo run --release -p sidevoice-desktop-engine --example roundtrip -- "$RUNNER_TEMP/engines"
+        run: cargo run --locked --release -p sidevoice-desktop-engine --example roundtrip -- "$RUNNER_TEMP/engines"
       - name: Round trip with Core ML (informational)
         continue-on-error: true
         working-directory: src-tauri
-        run: cargo run --release -p sidevoice-desktop-engine --example roundtrip -- "$RUNNER_TEMP/engines" coreml
+        run: cargo run --locked --release -p sidevoice-desktop-engine --example roundtrip -- "$RUNNER_TEMP/engines" coreml
       - name: The engine's libraries (for the record)
         run: |
           find "$RUNNER_TEMP/engines/engines" -name "*.dylib" -exec sh -c 'echo "== $1"; otool -L "$1" | head -8; codesign -dv "$1" 2>&1 | head -3' _ {} \;
 
   linux:
     name: Linux (.deb, .AppImage)
-    needs: changes
+    needs: [changes, test]
+    if: ${{ !inputs.fixture }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -668,16 +367,16 @@ jobs:
       - run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.0
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .node-version
           cache: npm
       - run: npm ci
-      - run: npx tauri build --bundles deb,appimage
+      - run: npx tauri build --bundles deb,appimage -- --locked
       - uses: actions/upload-artifact@v4
         with:
           name: Sidevoice-Linux-x64
@@ -689,22 +388,23 @@ jobs:
 
   windows:
     name: Windows (installer)
-    needs: changes
+    needs: [changes, test]
+    if: ${{ !inputs.fixture }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.release-tag }}
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.0
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .node-version
           cache: npm
       - run: npm ci
-      - run: npx tauri build --bundles nsis
+      - run: npx tauri build --bundles nsis -- --locked
       - uses: actions/upload-artifact@v4
         with:
           name: Sidevoice-Windows-x64
