@@ -130,11 +130,15 @@ jobs:
               - 'src-tauri/core/src/bridge.rs'
               - 'bridge/**'
               - 'scripts/connector-pin.mjs'
+              - 'scripts/connector-package-fixture.mjs'
               - 'scripts/fetch-connector.mjs'
+              - 'scripts/prepare-ci-connector.mjs'
               - 'scripts/verify-packaged-connector.mjs'
+              - 'scripts/verify-packaged-connector-fixture.mjs'
               - 'package.json'
               - '.github/workflows/build.yml'
               - 'catalog/**'
+              - 'test/connector-fixture.test.mjs'
               - 'test/fixtures/**'
               - 'ui/voice/**'
 
@@ -158,18 +162,18 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Compile the Apple Silicon app on pull requests without packaging a connector
-        if: needs.changes.outputs.installers != 'true'
-        working-directory: src-tauri
-        run: cargo check --target aarch64-apple-darwin --all-features
+      - name: Prepare the pinned connector or an explicit pending-pin CI fixture
+        if: github.event_name == 'pull_request'
+        id: connector
+        run: node scripts/prepare-ci-connector.mjs "$RUNNER_TEMP/connector-fixture-expected.json"
       - name: Fetch and verify the immutable macOS arm64 connector pin
         if: needs.changes.outputs.installers == 'true'
         run: node scripts/fetch-connector.mjs
-      - name: Build the app bundle (ad-hoc signed, hardened runtime, entitlements)
-        if: needs.changes.outputs.installers == 'true'
+      - name: Build the Apple Silicon app bundle (ad-hoc signed, hardened runtime, entitlements)
+        if: needs.changes.outputs.installers == 'true' || github.event_name == 'pull_request'
         run: npx tauri build --target aarch64-apple-darwin --bundles app --config src-tauri/tauri.macos-aarch64.conf.json
-      - name: Check what a first open depends on
-        if: needs.changes.outputs.installers == 'true'
+      - name: Check the resource-bearing app package
+        if: needs.changes.outputs.installers == 'true' || github.event_name == 'pull_request'
         run: |
           set -euo pipefail
           APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
@@ -183,7 +187,11 @@ jobs:
           SEA="$APP/Contents/Resources/resources/sidevoice"
           test -x "$SEA"
           cmp src-tauri/connector-pin.json "$APP/Contents/Resources/resources/connector-pin.json"
-          node scripts/verify-packaged-connector.mjs "$SEA"
+          if [ "${{ steps.connector.outputs.fixture }}" = "true" ]; then
+            node scripts/verify-packaged-connector-fixture.mjs "$SEA" "$RUNNER_TEMP/connector-fixture-expected.json"
+          else
+            node scripts/verify-packaged-connector.mjs "$SEA"
+          fi
           codesign -dvvv "$APP" 2>&1 | tee /tmp/sig.txt
           grep -q "Signature=adhoc" /tmp/sig.txt
           grep -q "runtime" /tmp/sig.txt

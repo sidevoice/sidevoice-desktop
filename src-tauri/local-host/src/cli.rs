@@ -184,10 +184,12 @@ impl Cli {
     }
 
     /// Runs `prefix + args` and waits at most `timeout` — for the process to exit **and** for both its output streams
-    /// to close: its JSON answer when it says `ok`, else its `{key, message}`.
+    /// to close: its JSON answer when it says `ok`, else its `{key, message}`. Once an R4 install reports `commit` or
+    /// `rollback`, the deadline stops applying so the connector can report the completed or restored transaction.
     ///
     /// The run is a process group of its own. Whatever is left in it once the program exits (a child still holding
-    /// the pipes) is killed, and on a timeout the whole group is. What the program hands to the service manager
+    /// the pipes) is killed, and on a timeout before a transaction is finalizing the whole group is. What the program
+    /// hands to the service manager
     /// (`service start` → launchd) or starts detached in a session of its own is not in the group, and stays.
     pub fn run(&self, args: &[&str], timeout: Duration) -> Result<Value, Refusal> {
         self.run_inner(args, timeout, None, Duration::from_secs(15), |_| {})
@@ -276,10 +278,11 @@ impl Cli {
                 break;
             }
             let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
+            if left.is_zero() && !transaction_finalizing {
                 break;
             }
-            drain(&mut streams, left.min(Duration::from_millis(50)), &mut |event| {
+            let poll_for = if left.is_zero() { Duration::from_millis(50) } else { left.min(Duration::from_millis(50)) };
+            drain(&mut streams, poll_for, &mut |event| {
                 if matches!(event.step.as_str(), "commit" | "rollback") {
                     transaction_finalizing = true;
                 }
@@ -494,10 +497,19 @@ fn refusal_of(answer: &Value) -> Option<Refusal> {
         "install.rollback-failed" => {
             ("install.rollback-failed", "The connector could not restore the previous installation.")
         }
+        "install.rollback-registration" => (
+            "install.rollback-registration",
+            "The connector restored the previous installation but could not restore its service registration.",
+        ),
+        "install.incompatible" => (
+            "install.incompatible",
+            "The installed core is not compatible with this connector.",
+        ),
         "service.not-loaded" => ("service.not-loaded", "The local service is not loaded."),
         "service.failed" => ("service.failed", "The local service did not start."),
         "service.start.failed" => ("service.start.failed", "The local service could not be started."),
         "launch.failed" => ("launch.failed", "The local service could not be launched."),
+        "launch.exited" => ("launch.exited", "The local core exited unexpectedly."),
         "install.cancelled" => ("install.cancelled", "The install was cancelled before commit."),
         _ => return Some(Refusal::new("cli.failed", "The connector returned an unrecognized failure.")),
     };
@@ -722,6 +734,47 @@ echo '{{"ok":true}}'"#,
         assert_eq!(answer["ok"], true);
         assert!(cancel.is_requested());
         assert!(signal_seen.exists(), "the installer received the requested SIGINT");
+    }
+
+    #[test]
+    fn overall_timeout_does_not_kill_a_finalizing_install() {
+        for step in ["commit", "rollback"] {
+            let tmp = tempfile::tempdir().unwrap();
+            let cli = fake(
+                tmp.path(),
+                &format!(
+                    r#"echo '{{"type":"progress","step":"{step}","done":null,"total":null}}' >&2
+sleep 0.25
+echo '{{"ok":true}}'"#
+                ),
+            );
+            let started = Instant::now();
+            let answer = cli
+                .run_inner(
+                    &["install", "--json", "--progress=jsonl"],
+                    Duration::from_millis(100),
+                    None,
+                    Duration::from_millis(20),
+                    |_| {},
+                )
+                .expect("a finalizing transaction must finish and return its final result");
+            assert_eq!(answer["ok"], true, "{step}");
+            assert!(started.elapsed() >= Duration::from_millis(250), "{step}");
+        }
+    }
+
+    #[test]
+    fn connector_refusal_keys_are_preserved_without_forwarding_connector_prose() {
+        for key in ["install.rollback-registration", "install.incompatible", "launch.exited"] {
+            let refusal = refusal_of(&serde_json::json!({
+                "ok": false,
+                "error": { "key": key, "message": "untrusted connector detail", "params": { "log_tail": ["secret"] } }
+            }))
+            .unwrap();
+            assert_eq!(refusal.key, key);
+            assert!(!refusal.message.contains("untrusted"));
+            assert!(!refusal.message.contains("secret"));
+        }
     }
 
     #[test]
