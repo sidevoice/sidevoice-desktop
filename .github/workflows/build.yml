@@ -355,7 +355,8 @@ jobs:
 
   linux:
     name: Linux (.deb, .AppImage)
-    needs: changes
+    needs: [changes, test]
+    if: ${{ !inputs.fixture }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -385,7 +386,8 @@ jobs:
 
   windows:
     name: Windows (installer)
-    needs: changes
+    needs: [changes, test]
+    if: ${{ !inputs.fixture }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
