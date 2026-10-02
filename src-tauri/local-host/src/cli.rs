@@ -544,7 +544,7 @@ mod tests {
         let mut install: Value = serde_json::from_str(install_fixture).unwrap();
         install["releases"] = Value::String(root.to_string_lossy().into_owned());
         std::fs::write(dirs.install_record(), serde_json::to_vec(&install).unwrap()).unwrap();
-        std::fs::set_permissions(&dirs.install_record(), std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::set_permissions(dirs.install_record(), std::fs::Permissions::from_mode(0o600)).unwrap();
         Cli::selected_release_record(&dirs).unwrap().unwrap()
     }
 
@@ -600,7 +600,7 @@ mod tests {
             serde_json::from_str(include_str!("../test-fixtures/connector-install-r1.json")).unwrap();
         install["releases"] = Value::String(root.to_string_lossy().into_owned());
         std::fs::write(dirs.install_record(), serde_json::to_vec(&install).unwrap()).unwrap();
-        std::fs::set_permissions(&dirs.install_record(), std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::set_permissions(dirs.install_record(), std::fs::Permissions::from_mode(0o600)).unwrap();
         std::os::unix::fs::symlink("../../outside", root.join("current")).unwrap();
         assert_eq!(Cli::selected_release_record(&dirs).unwrap_err().key, "install.unsafe");
     }
