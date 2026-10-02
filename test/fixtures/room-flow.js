@@ -55,7 +55,8 @@
     return now && phases.includes(now.phase) && now;
   }, ms, task + " " + phases.join("/"));
   const stored = () => {
-    const stt = (JSON.parse(localStorage.getItem("sidevoice.stages") || "{}")[MACHINE] || {}).stt;
+    const scope = JSON.parse(localStorage.getItem("sidevoice.stages") || "{}");
+    const stt = (scope.hosts && scope.hosts[MACHINE] || {}).stt;
     return stt ? stt.model + "/" + ((stt.build && stt.build.accelerator) || "auto") : "none";
   };
   const engine = () => window.__sidevoiceDesktop.host.nativeEngine;
@@ -153,7 +154,17 @@
     await room();
     const actions = window.sidevoiceActions;
     const out = {};
-    await until(() => facts().nodeReach === "ok", 60000, "the machine");
+    try {
+      await until(() => facts().nodeReach === "ok", 60000, "the machine");
+    } catch (error) {
+      const current = facts();
+      const remote = current.remoteHostStatus && current.remoteHostStatus[MACHINE];
+      throw new Error(error.message + " (reach=" + (current.nodeReach || "none")
+        + " selected=" + (current.pairingInUse || "none") + " node=" + (current.node || "none")
+        + " remote=" + (remote && remote.state || "none")
+        + " local_selected=" + (current.localHostSelected === true)
+        + " local=" + (current.localHostStatus && current.localHostStatus.state || "none") + ")");
+    }
     out.reach = facts().nodeReach;
     document.getElementById("settings-open").click();
     const preferences = await until(() => facts().voicePreferences && facts().voicePreferences.stt, 30000, "the settings");
