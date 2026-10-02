@@ -9,6 +9,7 @@ import { pipeline } from "node:stream/promises";
 
 import { t } from "./build-i18n.mjs";
 import { artifactId, download, verifyRemoteProvenance } from "./github-artifact.mjs";
+import { verifyConnectorAttestation } from "./connector-attestation.mjs";
 
 const execFile = promisify(execFileCallback);
 const SHA256 = /^[0-9a-f]{64}$/i;
@@ -118,13 +119,16 @@ export function validatePin(pin) {
   requirePin(Number.isSafeInteger(pin.link_min) && Number.isSafeInteger(pin.link_max)
     && pin.link_min > 0 && pin.link_min <= pin.core_link && pin.core_link <= pin.link_max,
   "has an invalid connector/core link range.");
-  requirePin(Array.isArray(pin.provenance?.sidecars), t("pin.connectorSidecars"));
+  requirePin(Array.isArray(pin.provenance?.sidecars) && pin.provenance.sidecars.length === 1
+    && pin.provenance.sidecars[0]?.name === "sidevoice-provenance.zip"
+    && artifactId(pin.provenance.sidecars[0]?.url)
+    && pin.provenance.sidecars[0].url !== pin.asset_url, t("pin.connectorSidecars"));
   const provenance = pin.provenance;
   requirePin(provenance?.repository === "sidevoice/sidevoice-connector"
     && typeof provenance.repository_id === "string" && /^[1-9][0-9]*$/.test(provenance.repository_id)
-    && typeof provenance.workflow === "string" && /^\.github\/workflows\/r4-sea\.yml@refs\/heads\/[A-Za-z0-9._/-]+$/.test(provenance.workflow)
+    && provenance.workflow === ".github/workflows/r4-sea.yml@refs/heads/main"
     && Number.isSafeInteger(provenance.run_id) && provenance.run_id > 0
-    && typeof provenance.artifact_name === "string" && provenance.artifact_name.length > 0,
+    && provenance.artifact_name === "sidevoice-connector-macos-aarch64-r4b",
   "has incomplete provenance.");
   requirePin(Array.isArray(pin.core_manifest_sidecars) && pin.core_manifest_sidecars.length > 0,
     "has no pinned core manifest attestation sidecars.");
@@ -132,7 +136,7 @@ export function validatePin(pin) {
   requirePin(sidecars.length > 0, "has no pinned attestation sidecars.");
   for (const sidecar of sidecars) {
     requirePin(sidecar && typeof sidecar.name === "string" && /^[A-Za-z0-9._-]+$/.test(sidecar.name)
-      && ![".", "..", "sidevoice", "connector-artifact.zip"].includes(sidecar.name)
+      && ![".", "..", "sidevoice", "connector-artifact.zip", "sidevoice.sigstore.json"].includes(sidecar.name)
       && githubAssetUrl(sidecar.url)
       && SHA256.test(sidecar.sha256 || "") && Number.isSafeInteger(sidecar.size) && sidecar.size > 0,
     "has an invalid pinned attestation sidecar.");
@@ -270,6 +274,7 @@ export async function fetchConnector({
     await verifySidecars(pin, scratch, { token });
     await download(pin.asset_url, archive, Math.min(MAX_ARTIFACT_BYTES, pin.executable_size + 16 * 1024 * 1024), { token });
     await extractPinnedExecutable(archive, staged, pin.executable_size);
+    await verifyConnectorAttestation(staged, resolve(scratch, "sidevoice-provenance.zip"), pin, { token });
     await chmod(staged, 0o755);
     await verifyArtifact(staged, pin, { platform, arch });
     await rename(staged, outputPath);

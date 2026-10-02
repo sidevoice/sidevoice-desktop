@@ -53,6 +53,7 @@ try {
       schema: 1, kind: "production-package", desktop_sha: git("rev-parse", "HEAD"),
       tracked_changes: git("status", "--porcelain", "--untracked-files=no"), web,
       node: process.version, rustc,
+      github_cli: execFileSync("gh", ["--version"], { encoding: "utf8" }).trim(),
       app, app_executable_sha256: sha256(await readFile(resolve(app, "Contents/MacOS/sidevoice-desktop"))),
       connector_sha: pin.connector_sha, connector_sha256: pin.executable_sha256,
       core_manifest_sha256: pin.core_manifest_sha256, provenance: pin.provenance,

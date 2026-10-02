@@ -59,6 +59,8 @@ jobs:
       - run: npm ci
       - name: Bridge script tests
         run: npm test
+      - name: Real GitHub verifier CLI rejects unsigned connector provenance
+        run: node --test test/attestation-cli.mjs
       - name: The icons, tray and .dmg window are what the brand files draw (npm run icons)
         run: |
           npm run icons

@@ -15,7 +15,9 @@
   "build.node": "Use Node.js {version}, as pinned in .node-version.",
   "build.fixture": "The fixture build requires an explicitly pending connector pin.",
   "build.rust": "Use Rust {version}, as pinned in rust-toolchain.toml.",
-  "pin.connectorSidecars": "has no connector sidecar list.",
+  "pin.connectorSidecars": "requires one immutable sidevoice-provenance.zip artifact containing the connector Sigstore attestation.",
+  "pin.attestationArchive": "Connector provenance archive must contain only a nonempty root sidevoice.sigstore.json bundle (at most 1 MiB).",
+  "pin.attestationFailed": "Connector Sigstore verification failed. Install a current GitHub CLI with attestation verification, check network access, and verify the pinned main workflow and commit; do not bypass this check.",
   "pin.duplicateSidecars": "has duplicate sidecar names.",
   "build.existingResource": "The existing connector resource is not this fixture; refusing to replace it."
 }

@@ -116,5 +116,16 @@ export async function verifyRemoteProvenance(pin, options = {}) {
   if (!id) throw new Error(t("artifact.artifactUrl"));
   const artifact = await apiJson(`${API}/actions/artifacts/${id}`, options);
   const run = await apiJson(`${API}/actions/runs/${pin.provenance.run_id}`, options);
-  return verifyArtifactProvenance(pin, artifact, run);
+  const evidence = verifyArtifactProvenance(pin, artifact, run);
+  const sidecar = pin.provenance.sidecars[0];
+  const sidecarId = artifactId(sidecar.url);
+  if (!sidecarId) throw new Error(t("artifact.artifactUrl"));
+  const attestation = await apiJson(`${API}/actions/artifacts/${sidecarId}`, options);
+  verifyArtifactProvenance({ ...pin, asset_url: sidecar.url,
+    provenance: { ...pin.provenance, artifact_name: `${pin.provenance.artifact_name}-provenance` },
+  }, attestation, run);
+  if (attestation.digest !== `sha256:${sidecar.sha256}` || attestation.size_in_bytes !== sidecar.size) {
+    throw new Error(t("artifact.provenanceMismatch"));
+  }
+  return { ...evidence, provenance_artifact_id: sidecarId };
 }

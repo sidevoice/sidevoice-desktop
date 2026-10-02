@@ -7,7 +7,8 @@ package is only evidence that Tauri carries the resource. It is not an installab
 ## Inputs and commands
 
 Use an Apple Silicon Mac with Xcode Command Line Tools and Tauri's macOS prerequisites, Node **22.23.3**
-(`.node-version`) and Rust **1.99.0** (`rust-toolchain.toml`). These are the versions used by CI. npm and Cargo
+(`.node-version`), Rust **1.99.0** (`rust-toolchain.toml`), and GitHub CLI with `gh attestation verify` (including
+`--signer-digest`, `--source-digest` and `--deny-self-hosted-runners`). Node/Rust versions are shared with CI. npm and Cargo
 use the committed lockfiles; the build passes `--locked` to Cargo. The web interface is already vendored into
 `ui/`; its exact upstream commit is `ui/voice/web-source.json`. Build it in sidevoice-web before vendoring;
 the desktop build does not silently update it or fetch an upstream branch.
@@ -15,6 +16,8 @@ the desktop build does not silently update it or fetch an upstream branch.
 ```sh
 npm ci
 npm test
+# Optional network-capable negative check of the real GitHub verifier (also run in CI):
+node --test test/attestation-cli.mjs
 npm run build:mac
 # Optional branded disk image, including the same app build and verification:
 npm run package:mac
@@ -25,7 +28,7 @@ The app is `src-tauri/target/packages/production/Sidevoice.app`. The optional di
 macOS, icons, absence of probe code, bundled pin and the bundled connector's digest and metadata. The disk image
 check verifies the mounted app and its connector after copying it out of the image.
 
-`dist/build-evidence.json` records the desktop commit, tracked working-tree changes, web provenance, Node/Rust,
+`dist/build-evidence.json` records the desktop commit, tracked working-tree changes, web provenance, Node/Rust/GitHub CLI,
 lockfile digests, app executable digest, connector digest/SHA and core manifest digest. A dirty checkout is
 explicitly recorded. Keep this evidence with the app tested. It does **not** assert the clean-account smoke below.
 The build shares Cargo's dependency cache, then copies each finished app into a separate production/fixture/probe
@@ -41,11 +44,16 @@ The reviewed pin is the trust root for the connector executable's exact bytes. B
 
 1. Validates the manifest bytes, their digest/size, core asset identities and protocol metadata in the pin.
 2. Fetches the artifact and workflow-run records from GitHub's authenticated API; checks the repository IDs,
-   connector SHA, workflow/ref, build sequence, successful production run, artifact name/ID and expiry.
+   connector SHA, main workflow/ref, build sequence, successful production run, artifact name/ID and expiry.
+   The mandatory `sidevoice-provenance.zip` artifact must belong to that same run and match its pinned size/digest.
 3. Downloads through bounded HTTPS requests. Authorization goes only to the initial GitHub API request,
    never to a redirect host. Tokens and signed redirect URLs are excluded from diagnostics.
-4. Checks each pinned sidecar's size/digest, extracts only the single root `sidevoice` executable, checks its
-   size/digest, native architecture, macOS signature, `--version --json` and `metadata --json`, then atomically
+4. Checks each pinned sidecar's size/digest and extracts only the single root `sidevoice` executable. The provenance
+   ZIP must contain only `sidevoice.sigstore.json`, bounded to 1 MiB after extraction. Before making the SEA
+   executable, `gh attestation verify` verifies its signature, transparency evidence, SLSA subject digest and
+   GitHub Actions issuer against connector's `r4-sea.yml@refs/heads/main`, pinned signer/source commit, and GitHub
+   hosted runners. Missing CLI, network/trust-root failure or signature/policy mismatch fails closed.
+5. Checks the SEA's pinned size/digest, native architecture, macOS signature, `--version --json` and `metadata --json`, then atomically
    replaces the resource. A failure leaves the existing resource untouched and fails the build.
 
 The canonical download endpoint is `/repos/sidevoice/sidevoice-connector/actions/artifacts/{artifact_id}/zip`.
@@ -61,8 +69,10 @@ appropriate read access or a trusted manual run; they must not silently substitu
 The connector producer must emit this canonical URL and a SEA built against the genuine signed core manifest.
 Connector `build.mjs` verifies the core manifest's Sigstore identity before embedding it; the installer verifies
 core payloads before installation. Desktop preserves those checks and verifies that it packages the reviewed SEA.
-Desktop's sidecar **hash** check is not independent signature verification, and an ad-hoc macOS signature is not
-publisher authentication. Do not substitute a synthetic manifest or a manifest-less PR SEA.
+Desktop independently verifies the SEA's Sigstore claim using the [official GitHub CLI verifier](https://cli.github.com/manual/gh_attestation_verify),
+without duplicating the connector's core-manifest verifier. An ad-hoc macOS signature alone is not publisher
+authentication. Do not substitute a synthetic manifest or a manifest-less PR SEA. The verifier needs network
+access for trusted root material; this is not an offline build guarantee.
 
 Actions artifacts and mutable nightly URLs are **temporary dogfood inputs**, not durable dependencies for a
 versioned release. Expiry or nightly replacement fails closed. Obtain fresh genuine inputs and review a new pin;
