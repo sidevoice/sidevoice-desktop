@@ -216,6 +216,34 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SIDEVOICE_GITHUB_TOKEN: ${{ github.event_name != 'pull_request' && secrets.SIDEVOICE_CONNECTOR_ACTIONS_READ || '' }}
         run: npm run build:mac
+      # CI only from here: the same app built with the `probe` feature (src-tauri/src/probe.rs), which adds the
+      # probe page and the switch that loads it into the room window. The release app above has neither. On a pull
+      # request, the explicit fixture package above and relevant integration checks run.
+      - name: Build the CI probe app (feature probe; never shipped)
+        run: |
+          set -euo pipefail
+          npm run build:mac:probe
+          # The release app's package check excludes this fixture; confirm this build carries it.
+          BIN="src-tauri/target/packages/probe/Sidevoice.app/Contents/MacOS/sidevoice-desktop"
+          grep -q "SIDEVOICE_DEBUG_PAGE" "$BIN"
+          grep -q "probe-engine" "$BIN"
+          grep -q "probe-card" "$BIN"
+          grep -q "SIDEVOICE_DEBUG_ROOM_FLOW" "$BIN"
+          grep -q "room-flow" "$BIN"
+          grep -q "SIDEVOICE_DEBUG_IDLE_UNLOAD_SECS" "$BIN"
+          grep -q "SIDEVOICE_DEBUG_REFUSE_LOAD" "$BIN"
+          grep -q "SIDEVOICE_DEBUG_SLOW_TRANSCRIBE" "$BIN"
+          grep -q "SIDEVOICE_DEBUG_LOCAL_HOST_FLOW" "$BIN"
+          grep -q "local-host-flow" "$BIN"
+          grep -q "SIDEVOICE_DEBUG_LOCAL_HOST_DOGFOOD" "$BIN"
+          grep -q "local-host-dogfood" "$BIN"
+      - name: Fresh-account R4 install, production app launch, projected host, update no-op and uninstall
+        if: ${{ github.event_name != 'pull_request' && !inputs.fixture && steps.connector.outputs.status == 'ready' }}
+        timeout-minutes: 65
+        env:
+          APP: src-tauri/target/packages/production/Sidevoice.app
+          PROBE_APP: src-tauri/target/packages/probe/Sidevoice.app
+        run: python3 test/macos/r4-dogfood-smoke.py
       - name: First open (no settings) — the bundled interface comes up in the real WKWebView
         if: needs.changes.outputs.installers == 'true'
         run: bash test/macos/first-open.sh
@@ -244,25 +272,6 @@ jobs:
           path: dist/
           retention-days: 7
           if-no-files-found: error
-      # CI only from here: the same app built with the `probe` feature (src-tauri/src/probe.rs), which adds the
-      # probe page and the switch that loads it into the room window. The release app above has neither. On a pull
-      # request, the explicit fixture package above and relevant integration checks run.
-      - name: Build the CI probe app (feature probe; never shipped)
-        run: |
-          set -euo pipefail
-          npm run build:mac:probe
-          # The check on the release app means something: this build does carry the page and its switch.
-          BIN="src-tauri/target/packages/probe/Sidevoice.app/Contents/MacOS/sidevoice-desktop"
-          grep -q "SIDEVOICE_DEBUG_PAGE" "$BIN"
-          grep -q "probe-engine" "$BIN"
-          grep -q "probe-card" "$BIN"
-          grep -q "SIDEVOICE_DEBUG_ROOM_FLOW" "$BIN"
-          grep -q "room-flow" "$BIN"
-          grep -q "SIDEVOICE_DEBUG_IDLE_UNLOAD_SECS" "$BIN"
-          grep -q "SIDEVOICE_DEBUG_REFUSE_LOAD" "$BIN"
-          grep -q "SIDEVOICE_DEBUG_SLOW_TRANSCRIBE" "$BIN"
-          grep -q "SIDEVOICE_DEBUG_LOCAL_HOST_FLOW" "$BIN"
-          grep -q "local-host-flow" "$BIN"
       - name: The local host from the bundled page (stand-in core on local.sock, pairing, proxy, refusals)
         run: |
           set -euo pipefail

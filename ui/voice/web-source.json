@@ -1,7 +1,7 @@
 {
   "repository": "sidevoice/sidevoice-web",
-  "branch": "feat/local-host-r1d",
-  "commit": "fe369dd87393a56ebc0e64155ca4a82cc8abd91d",
+  "branch": "main",
+  "commit": "4ae0911d4946db84f9523489966f18d1b137be51",
   "uncommitted_changes": false,
-  "vendored_at": "2026-10-02T02:53:22.392Z"
+  "vendored_at": "2026-10-02T13:44:47.000Z"
 }
