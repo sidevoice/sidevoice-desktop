@@ -34,6 +34,36 @@ explicitly recorded. Keep this evidence with the app tested. It does **not** ass
 The build shares Cargo's dependency cache, then copies each finished app into a separate production/fixture/probe
 location so a later probe build cannot replace the installable app.
 
+## Fast macOS development preview
+
+On an Apple Silicon Mac with the prerequisites above, the local preview command is the same production build and
+archive procedure used by Actions:
+
+```sh
+npm ci && npm run build:mac && bash scripts/archive-mac-preview.sh
+```
+
+It writes `src-tauri/target/previews/Sidevoice-dev-macos-arm64.zip` and a SHA-256 sidecar beside it. The archive
+script requires the verified production `.app` and `dist/build-evidence.json`, extracts its own ZIP into a temporary
+directory, verifies the app signature, and checks the packaged executable digest against the evidence. Archives are
+not promised to be byte-identical across machines because SDK and archive metadata can differ.
+
+For a PR preview, download `development-macos-arm64-app-<source-sha>` from that exact commit's Actions run. The
+artifact contains the ZIP, sidecar, and `build-evidence.json`; confirm the checksum before extracting:
+
+```sh
+shasum -a 256 -c Sidevoice-dev-macos-arm64.zip.sha256
+ditto -x -k Sidevoice-dev-macos-arm64.zip ./preview
+```
+
+The app is ad-hoc signed and may need quarantine removed using the first-open instructions in `MACOS.md`. Its bundle
+ID is the same as the nightly app: quit Sidevoice and replace any existing copy before testing. The archive's source
+SHA and build evidence identify what was packaged; they do not represent the overall PR status. A preview can be
+downloadable while a later probe or required test fails. The app is therefore a development preview only. The
+existing test, native integration, installer, and publish gates still run, and publish still requires all required
+jobs to succeed. A pending-pin fixture is never uploaded as a working preview; missing or invalid provenance still
+fails the real product build before archive creation.
+
 This is a repeatable build from pinned source/dependency inputs, not a claim of bit-identical signed bundles:
 macOS SDK/runner image and packaging timestamps are not locked. The optional DMG retains the existing
 `dmgbuild==1.6.7` installation; fully hashed transitive Python dependencies remain a distribution follow-up.

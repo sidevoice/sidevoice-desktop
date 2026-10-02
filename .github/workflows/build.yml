@@ -152,6 +152,11 @@ jobs:
               - 'test/connector-fixture.test.mjs'
               - 'test/fixtures/**'
               - 'ui/voice/**'
+              - 'ui/index.html'
+              - 'ui/settings.js'
+              - 'ui/settings.css'
+              - 'ui/i18n.js'
+              - 'ui/i18n/**'
             engine:
               - 'src-tauri/engine/**'
               - 'src-tauri/core/src/engines.rs'
@@ -184,7 +189,7 @@ jobs:
 
   macos:
     name: macOS (Apple Silicon) package and focused integration
-    needs: [changes, test]
+    needs: [changes]
     if: needs.changes.outputs.native == 'true'
     runs-on: macos-14
     steps:
@@ -216,6 +221,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SIDEVOICE_GITHUB_TOKEN: ${{ github.event_name != 'pull_request' && secrets.SIDEVOICE_CONNECTOR_ACTIONS_READ || '' }}
         run: npm run build:mac
+      - name: Archive verified development app
+        if: (github.event_name != 'pull_request' && !inputs.fixture) || steps.connector.outputs.status != 'pending'
+        run: bash scripts/archive-mac-preview.sh
+      - name: Upload development app preview
+        id: upload_development_preview
+        if: (github.event_name != 'pull_request' && !inputs.fixture) || steps.connector.outputs.status != 'pending'
+        uses: actions/upload-artifact@v4
+        with:
+          name: development-macos-arm64-app-${{ github.sha }}
+          path: |
+            src-tauri/target/previews/Sidevoice-dev-macos-arm64.zip
+            src-tauri/target/previews/Sidevoice-dev-macos-arm64.zip.sha256
+            dist/build-evidence.json
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: error
       # CI only from here: the same app built with the `probe` feature (src-tauri/src/probe.rs), which adds the
       # probe page and the switch that loads it into the room window. The release app above has neither. On a pull
       # request, the explicit fixture package above and relevant integration checks run.
