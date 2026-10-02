@@ -1,25 +1,65 @@
 {
   "schema": 1,
-  "status": "pending",
+  "status": "ready",
   "target": "macos-aarch64",
-  "connector_sha": null,
-  "connector_version": null,
-  "channel": null,
-  "build_seq": null,
-  "core_version": null,
-  "core_manifest_sha256": null,
-  "core_manifest_size": null,
-  "core_manifest_bytes_base64": null,
-  "core_assets": [],
-  "core_manifest_sidecars": [],
-  "executable_sha256": null,
-  "executable_size": null,
-  "asset_url": null,
-  "metadata_protocol": null,
-  "progress_protocol": null,
-  "core_api": null,
-  "core_link": null,
-  "link_min": null,
-  "link_max": null,
-  "provenance": null
+  "connector_sha": "86a0ab1a5363af303b25f77fc7254aef5db1fea3",
+  "connector_version": "0.6.0",
+  "channel": "nightly",
+  "build_seq": 19,
+  "core_version": "0.1.0",
+  "core_manifest_sha256": "2b71c746af06bee1f22cb3ac13ee09fa50b9ba254d1f54137d9ee22df447b0e1",
+  "core_manifest_size": 1129,
+  "core_manifest_bytes_base64": "ewogICJidW5kbGVzIjogWwogICAgewogICAgICAib3MiOiAibWFjb3MiLAogICAgICAiYXJjaCI6ICJhYXJjaDY0IiwKICAgICAgInVybCI6ICJodHRwczovL2dpdGh1Yi5jb20vc2lkZXZvaWNlL3NpZGV2b2ljZS1jb3JlL3JlbGVhc2VzL2Rvd25sb2FkL25pZ2h0bHkvc2lkZXZvaWNlLWNvcmUtMC4xLjAtbWFjb3MtYWFyY2g2NC50YXIuenN0IiwKICAgICAgInNoYTI1NiI6ICI2NGUwNTc3Y2ZmZWQ4NDU3ZjdkNmM3NGVjNTY0Y2ExMGE5YjcwMmNlZDYyN2Q4ZTk0MWUzYmJmYjIxYWMwZWI5IiwKICAgICAgInNpemUiOiAxNDc0OTUyNzkKICAgIH0sCiAgICB7CiAgICAgICJvcyI6ICJsaW51eCIsCiAgICAgICJhcmNoIjogIng4Nl82NCIsCiAgICAgICJ1cmwiOiAiaHR0cHM6Ly9naXRodWIuY29tL3NpZGV2b2ljZS9zaWRldm9pY2UtY29yZS9yZWxlYXNlcy9kb3dubG9hZC9uaWdodGx5L3NpZGV2b2ljZS1jb3JlLTAuMS4wLWxpbnV4LXg4Nl82NC50YXIuenN0IiwKICAgICAgInNoYTI1NiI6ICI1YzI0OTE1ZWE0YjZjYTAwMDg4NzljZDFlYmE3M2U1MzhiOTFkMTM0MmQ2ZjQyNWEyOWZmNzMzNjBhZjZhOTBkIiwKICAgICAgInNpemUiOiAyMTcyMjkwMjAKICAgIH0sCiAgICB7CiAgICAgICJvcyI6ICJsaW51eCIsCiAgICAgICJhcmNoIjogImFhcmNoNjQiLAogICAgICAidXJsIjogImh0dHBzOi8vZ2l0aHViLmNvbS9zaWRldm9pY2Uvc2lkZXZvaWNlLWNvcmUvcmVsZWFzZXMvZG93bmxvYWQvbmlnaHRseS9zaWRldm9pY2UtY29yZS0wLjEuMC1saW51eC1hYXJjaDY0LnRhci56c3QiLAogICAgICAic2hhMjU2IjogIjY0M2M0N2E3ZGUxNWYwNzgwZjRkYTVhMTA0ODlmZGFjNjdmMGMxZGRmNzRmYzdmNGVmYjQyMWU5ZDVjYTE3YjgiLAogICAgICAic2l6ZSI6IDIwNTcxNTc1NwogICAgfQogIF0sCiAgIndoZWVsIjogewogICAgInVybCI6ICJodHRwczovL2dpdGh1Yi5jb20vc2lkZXZvaWNlL3NpZGV2b2ljZS1jb3JlL3JlbGVhc2VzL2Rvd25sb2FkL25pZ2h0bHkvc2lkZXZvaWNlX2NvcmUtMC4xLjAtcHkzLW5vbmUtYW55LndobCIsCiAgICAic2hhMjU2IjogIjhhNGZmZGNmODU3NTdlNzYxOTMzNzExOGFkYzhkNTBhNTNlMzliNTFkM2U3NjgwNDZiZTk0NDhiMTI5NjBlNzQiCiAgfQp9Cg==",
+  "core_assets": [
+    {
+      "name": "sidevoice-core-0.1.0-macos-aarch64.tar.zst",
+      "url": "https://github.com/sidevoice/sidevoice-core/releases/download/nightly/sidevoice-core-0.1.0-macos-aarch64.tar.zst",
+      "sha256": "64e0577cffed8457f7d6c74ec564ca10a9b702ced627d8e941e3bbfb21ac0eb9",
+      "size": 147495279
+    },
+    {
+      "name": "sidevoice-core-0.1.0-linux-x86_64.tar.zst",
+      "url": "https://github.com/sidevoice/sidevoice-core/releases/download/nightly/sidevoice-core-0.1.0-linux-x86_64.tar.zst",
+      "sha256": "5c24915ea4b6ca0008879cd1eba73e538b91d1342d6f425a29ff73360af6a90d",
+      "size": 217229020
+    },
+    {
+      "name": "sidevoice-core-0.1.0-linux-aarch64.tar.zst",
+      "url": "https://github.com/sidevoice/sidevoice-core/releases/download/nightly/sidevoice-core-0.1.0-linux-aarch64.tar.zst",
+      "sha256": "643c47a7de15f0780f4da5a10489fdac67f0c1ddf74fc7f4efb421e9d5ca17b8",
+      "size": 205715757
+    }
+  ],
+  "core_manifest_sidecars": [
+    {
+      "name": "core-manifest.json.sigstore.json",
+      "url": "https://github.com/sidevoice/sidevoice-core/releases/download/nightly/core-manifest.json.sigstore.json",
+      "sha256": "baa2f650b2a1e484e11d879e357405ad1299327a1f610ad91620370e442e2f2d",
+      "size": 11064
+    }
+  ],
+  "executable_sha256": "08def2a80b1b520e86eb41bb4998c98a8b9b3e56cffe542d5c5d7c9dbfb559d5",
+  "executable_size": 115315360,
+  "asset_url": "https://api.github.com/repos/sidevoice/sidevoice-connector/actions/artifacts/11230505464/zip",
+  "metadata_protocol": "sidevoice-metadata-v1",
+  "progress_protocol": "sidevoice-progress-jsonl-v1",
+  "core_api": 1,
+  "core_link": 2,
+  "link_min": 2,
+  "link_max": 2,
+  "provenance": {
+    "repository": "sidevoice/sidevoice-connector",
+    "repository_id": "1398692208",
+    "workflow": ".github/workflows/r4-sea.yml@refs/heads/main",
+    "run_id": 37016262715,
+    "artifact_name": "sidevoice-connector-macos-aarch64-r4b",
+    "sidecars": [
+      {
+        "name": "sidevoice-provenance.zip",
+        "url": "https://api.github.com/repos/sidevoice/sidevoice-connector/actions/artifacts/11229574025/zip",
+        "sha256": "1b6ea1556a6e4e7ad5290090b54cb196bd9dddb44b88fc6da247bb781a4f275e",
+        "size": 11283
+      }
+    ]
+  }
 }
