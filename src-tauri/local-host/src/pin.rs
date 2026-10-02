@@ -78,6 +78,7 @@ pub struct CoreAssetPin {
 pub struct InstalledBuild {
     pub connector_version: Option<String>,
     pub connector_sha: Option<String>,
+    pub format: Option<String>,
     pub core_version: Option<String>,
     pub core_build: Option<String>,
     pub core_manifest_sha256: Option<String>,
@@ -289,6 +290,11 @@ impl ConnectorPin {
                 format!("The bundled connector's {field} does not match its build pin."),
             )
         };
+        if version.get("format").and_then(Value::as_str) != Some("sea")
+            || version.get("sea").and_then(Value::as_bool) != Some(true)
+        {
+            return Err(mismatch("SEA executable identity"));
+        }
         let expected = [
             ("version", self.connector_version.as_deref()),
             ("target", Some("macos-aarch64")),
@@ -306,6 +312,11 @@ impl ConnectorPin {
         let connector = metadata.get("connector").ok_or_else(|| mismatch("connector metadata"))?;
         let core = metadata.get("embedded_core").ok_or_else(|| mismatch("embedded core manifest"))?;
         let protocol = metadata.get("protocols").ok_or_else(|| mismatch("CLI protocols"))?;
+        if connector.get("format").and_then(Value::as_str) != Some("sea")
+            || connector.get("sea").and_then(Value::as_bool) != Some(true)
+        {
+            return Err(mismatch("SEA metadata identity"));
+        }
         for (field, value) in [
             ("sha", self.connector_sha.as_deref()),
             ("version", self.connector_version.as_deref()),
@@ -390,6 +401,7 @@ impl InstalledBuild {
         InstalledBuild {
             connector_version: text("connector"),
             connector_sha: text("connector_sha"),
+            format: text("format"),
             core_version: text("core"),
             core_build: text("core_build"),
             core_manifest_sha256: text("core_manifest_sha256"),
@@ -470,13 +482,19 @@ pub(crate) mod test_support {
     fn metadata_must_match_both_the_executable_and_embedded_manifest() {
         let pin = fixture_pin();
         let version = serde_json::json!({"version":"1.2.3", "target":"macos-aarch64", "channel":"nightly",
-            "connector_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "build_seq":42});
+            "connector_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "build_seq":42, "format":"sea", "sea":true});
         let metadata = serde_json::json!({"connector":{"version":"1.2.3", "sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "channel":"nightly", "build_seq":42, "link_min":1, "link_max":1}, "embedded_core":{"version":"0.1.0",
+            "channel":"nightly", "build_seq":42, "format":"sea", "sea":true, "link_min":1, "link_max":1}, "embedded_core":{"version":"0.1.0",
             "manifest_sha256":pin.core_manifest_sha256, "assets":pin.core_assets,
             "api":1, "link":1},
             "protocols":{"metadata":"sidevoice-metadata-v1", "progress":"sidevoice-progress-jsonl-v1"}});
         pin.verify_metadata(&version, &metadata).unwrap();
+        let mut wrong_format = version.clone();
+        wrong_format["format"] = Value::String("esm".into());
+        assert_eq!(pin.verify_metadata(&wrong_format, &metadata).unwrap_err().key, "install.pin-mismatch");
+        let mut wrong_sea_flag = metadata.clone();
+        wrong_sea_flag["connector"]["sea"] = Value::Bool(false);
+        assert_eq!(pin.verify_metadata(&version, &wrong_sea_flag).unwrap_err().key, "install.pin-mismatch");
         let mut wrong = metadata;
         wrong["embedded_core"]["manifest_sha256"] = Value::String("0".repeat(64));
         assert_eq!(pin.verify_metadata(&version, &wrong).unwrap_err().key, "install.pin-mismatch");

@@ -414,10 +414,7 @@ impl LocalHost {
             return Ok(report);
         }
         if let Some(failure) = report.failure.as_ref() {
-            let key = failure.get("key").and_then(Value::as_str).unwrap_or("install.pairing");
-            let message =
-                failure.get("message").and_then(Value::as_str).unwrap_or("The local core did not become reachable.");
-            return Err(Refusal::new(key, message));
+            return Err(install_failure_refusal(failure));
         }
         let outcome = answer.get("result").and_then(Value::as_str).unwrap_or("installed");
         Err(Refusal::new(
@@ -614,6 +611,11 @@ impl LocalHost {
     }
 }
 
+fn install_failure_refusal(failure: &Value) -> Refusal {
+    let key = failure.get("key").and_then(Value::as_str).unwrap_or("install.pairing");
+    Cli::refusal_for_key(key)
+}
+
 impl Drop for LocalHost {
     fn drop(&mut self) {
         self.shutdown();
@@ -636,5 +638,30 @@ pub fn computer_name() -> String {
         "Sidevoice".into()
     } else {
         name
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn install_report_failures_keep_only_a_known_key_and_safe_message() {
+        let refusal = install_failure_refusal(&serde_json::json!({
+            "key": "launch.exited",
+            "message": "untrusted connector details",
+            "log_tail": ["private output"],
+        }));
+        assert_eq!(refusal.key, "launch.exited");
+        assert!(!refusal.message.contains("untrusted"));
+        assert!(!refusal.message.contains("private"));
+
+        let refusal = install_failure_refusal(&serde_json::json!({"key":"remote.arbitrary", "message":"untrusted"}));
+        assert_eq!(refusal.key, "cli.failed");
+        assert!(!refusal.message.contains("untrusted"));
+
+        let refusal = install_failure_refusal(&serde_json::json!({"message":"untrusted"}));
+        assert_eq!(refusal.key, "install.pairing");
+        assert!(!refusal.message.contains("untrusted"));
     }
 }

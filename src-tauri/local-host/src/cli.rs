@@ -252,7 +252,13 @@ impl Cli {
         let mut cancel_sent = false;
         let cancel_deadline = timeout.min(cancel_grace);
         let mut cancel_at = None;
-        let mut transaction_finalizing = false;
+        let transaction_finalizing = std::cell::Cell::new(false);
+        let mut receive_progress = |event: ProgressEvent| {
+            if matches!(event.step.as_str(), "commit" | "rollback") {
+                transaction_finalizing.set(true);
+            }
+            on_progress(event);
+        };
         loop {
             if !cancel_sent && cancel.is_some_and(CancelToken::is_requested) {
                 // SAFETY: this is the process group created for this CLI invocation.
@@ -260,11 +266,12 @@ impl Cli {
                 cancel_sent = true;
                 cancel_at = Some(Instant::now());
             }
-            if cancel_at.is_some_and(|at| at.elapsed() >= cancel_deadline)
-                && status.is_none()
-                && !transaction_finalizing
-            {
-                kill_group();
+            let cancel_expired = cancel_at.is_some_and(|at| at.elapsed() >= cancel_deadline) && status.is_none();
+            if cancel_expired && !transaction_finalizing.get() {
+                drain_pending_progress(&mut streams, &mut receive_progress);
+                if !transaction_finalizing.get() {
+                    kill_group();
+                }
             }
             if status.is_none() {
                 status = child.try_wait().ok().flatten();
@@ -278,16 +285,14 @@ impl Cli {
                 break;
             }
             let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() && !transaction_finalizing {
-                break;
+            if left.is_zero() && !transaction_finalizing.get() {
+                drain_pending_progress(&mut streams, &mut receive_progress);
+                if !transaction_finalizing.get() {
+                    break;
+                }
             }
             let poll_for = if left.is_zero() { Duration::from_millis(50) } else { left.min(Duration::from_millis(50)) };
-            drain(&mut streams, poll_for, &mut |event| {
-                if matches!(event.step.as_str(), "commit" | "rollback") {
-                    transaction_finalizing = true;
-                }
-                on_progress(event);
-            });
+            drain(&mut streams, poll_for, &mut receive_progress);
         }
         let Some(status) = status else {
             kill_group();
@@ -391,6 +396,11 @@ fn drain(streams: &mut [Stream], wait: Duration, on_progress: &mut impl FnMut(Pr
     }
 }
 
+/// Progress already written by the connector must be consumed before a timeout or cancellation can kill its process.
+fn drain_pending_progress(streams: &mut [Stream], on_progress: &mut impl FnMut(ProgressEvent)) {
+    drain(streams, Duration::ZERO, on_progress);
+}
+
 fn progress_record(bytes: &[u8]) -> Option<ProgressEvent> {
     let record: Value = serde_json::from_slice(bytes).ok()?;
     if record.get("type")?.as_str()? != "progress" {
@@ -485,6 +495,16 @@ fn command(install: &Value) -> Option<Vec<String>> {
 fn refusal_of(answer: &Value) -> Option<Refusal> {
     let error = answer.get("error")?;
     let key = error.get("key")?.as_str()?;
+    let refusal = refusal_for_key(key);
+    let check = error.get("params").and_then(|params| params.get("check")).and_then(Value::as_str);
+    Some(match check {
+        Some(check) => refusal.with_check(check),
+        None => refusal,
+    })
+}
+
+/// A stable keyed refusal for a connector status record. Connector messages, details and log tails are never trusted.
+pub(crate) fn refusal_for_key(key: &str) -> Refusal {
     let (safe_key, message) = match key {
         "install.network" => ("install.network", "The connector could not download the core."),
         "install.proxy" => ("install.proxy", "The connector could not reach the core through the network proxy."),
@@ -502,19 +522,16 @@ fn refusal_of(answer: &Value) -> Option<Refusal> {
             "The connector restored the previous installation but could not restore its service registration.",
         ),
         "install.incompatible" => ("install.incompatible", "The installed core is not compatible with this connector."),
+        "install.pairing" => ("install.pairing", "The local core did not become reachable and paired."),
         "service.not-loaded" => ("service.not-loaded", "The local service is not loaded."),
         "service.failed" => ("service.failed", "The local service did not start."),
         "service.start.failed" => ("service.start.failed", "The local service could not be started."),
         "launch.failed" => ("launch.failed", "The local service could not be launched."),
         "launch.exited" => ("launch.exited", "The local core exited unexpectedly."),
         "install.cancelled" => ("install.cancelled", "The install was cancelled before commit."),
-        _ => return Some(Refusal::new("cli.failed", "The connector returned an unrecognized failure.")),
+        _ => return Refusal::new("cli.failed", "The connector returned an unrecognized failure."),
     };
-    let check = error.get("params").and_then(|params| params.get("check")).and_then(Value::as_str);
-    Some(match check {
-        Some(check) => Refusal::new(safe_key, message).with_check(check),
-        None => Refusal::new(safe_key, message),
-    })
+    Refusal::new(safe_key, message)
 }
 
 #[cfg(test)]
@@ -571,12 +588,14 @@ mod tests {
     fn r1_and_r4_install_records_resolve_metadata_from_the_selected_release() {
         let r1 = selected_release_fixture("r1");
         assert_eq!(r1["connector"], "0.5.0");
+        assert_eq!(r1["format"], "esm");
         assert_eq!(r1["channel"], "release");
         assert_eq!(r1["build_seq"], 14);
         assert_eq!(r1["core_build"], "0.1.0-macos-aarch64-2026-09-28");
 
         let r4 = selected_release_fixture("r4");
         assert_eq!(r4["connector"], "1.2.3");
+        assert_eq!(r4["format"], "sea");
         assert_eq!(r4["channel"], "nightly");
         assert_eq!(r4["build_seq"], 42);
         assert_eq!(r4["core_build"], "0.1.0-macos-aarch64-2026-10-02");
@@ -761,6 +780,34 @@ echo '{{"ok":true}}'"#
     }
 
     #[test]
+    fn pending_commit_or_rollback_progress_is_drained_before_a_kill_decision() {
+        use std::io::Write;
+        use std::os::fd::FromRawFd;
+
+        for step in ["commit", "rollback"] {
+            let mut fds = [-1; 2];
+            // SAFETY: `fds` points to two writable integers for the pipe descriptors.
+            assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+            let reader = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+            let mut writer = unsafe { std::fs::File::from_raw_fd(fds[1]) };
+            writeln!(
+                writer,
+                "{{\"type\":\"progress\",\"step\":\"{step}\",\"done\":null,\"total\":null}}"
+            )
+            .unwrap();
+            drop(writer);
+            let mut streams = [Stream::new(None), Stream::new(Some(reader))];
+            let finalizing = std::cell::Cell::new(false);
+            drain_pending_progress(&mut streams, &mut |event| {
+                if matches!(event.step.as_str(), "commit" | "rollback") {
+                    finalizing.set(true);
+                }
+            });
+            assert!(finalizing.get(), "the pending {step} record must win over timeout/cancellation kill");
+        }
+    }
+
+    #[test]
     fn connector_refusal_keys_are_preserved_without_forwarding_connector_prose() {
         for key in ["install.rollback-registration", "install.incompatible", "launch.exited"] {
             let refusal = refusal_of(&serde_json::json!({
@@ -783,9 +830,9 @@ echo '{{"ok":true}}'"#
         let assets_json = serde_json::to_string(&pin.core_assets).unwrap();
         let script = r##"#!/bin/sh
 if [ "$1" = "--version" ]; then
-  echo '{"ok":true,"version":"1.2.3","target":"macos-aarch64","channel":"nightly","connector_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","build_seq":42}'
+  echo '{"ok":true,"version":"1.2.3","target":"macos-aarch64","channel":"nightly","connector_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","build_seq":42,"format":"sea","sea":true}'
 elif [ "$1" = "metadata" ]; then
-  echo '{"ok":true,"connector":{"version":"1.2.3","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","channel":"nightly","build_seq":42,"link_min":1,"link_max":1},"embedded_core":{"version":"0.1.0","manifest_sha256":"MANIFEST_SHA","assets":CORE_ASSETS,"api":1,"link":1},"protocols":{"metadata":"sidevoice-metadata-v1","progress":"sidevoice-progress-jsonl-v1"}}'
+  echo '{"ok":true,"connector":{"version":"1.2.3","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","channel":"nightly","build_seq":42,"format":"sea","sea":true,"link_min":1,"link_max":1},"embedded_core":{"version":"0.1.0","manifest_sha256":"MANIFEST_SHA","assets":CORE_ASSETS,"api":1,"link":1},"protocols":{"metadata":"sidevoice-metadata-v1","progress":"sidevoice-progress-jsonl-v1"}}'
 fi
 "##;
         let script = script.replace("MANIFEST_SHA", manifest_sha).replace("CORE_ASSETS", &assets_json);

@@ -1,7 +1,8 @@
 //! Version and compatibility decisions for the explicit R4 update action.
 //!
 //! Missing R4 metadata is `unknown`: an older `npx` connector remains usable, but the app never guesses that an update
-//! is safe. All ordering uses connector versions and nightly build sequence, never the desktop app's version.
+//! is safe. Ordering mirrors the connector's `release.decide`: connector semver, nightly build sequence, then the SEA
+//! format tie-breaker within the same release ordering. The desktop app's version is never involved.
 
 use crate::pin::{ConnectorPin, InstalledBuild};
 use semver::Version;
@@ -65,11 +66,25 @@ pub fn update_status(pin: Option<&ConnectorPin>, installed: Option<&InstalledBui
             };
             let nightly_candidate = candidate_channel == "nightly";
             let same_channel = candidate_channel == installed_channel;
-            match candidate.cmp(&current) {
-                std::cmp::Ordering::Greater if nightly_candidate || same_channel => UpdateStatus::Available,
-                std::cmp::Ordering::Less if nightly_candidate || same_channel => UpdateStatus::NewerInstalled,
-                std::cmp::Ordering::Equal if same_channel => UpdateStatus::Current,
-                // A same-version cross-channel change is not implied by semver. Do not guess that it is safe.
+            if nightly_candidate && candidate > current {
+                return UpdateStatus::Available;
+            }
+            if nightly_candidate && candidate < current {
+                return UpdateStatus::NewerInstalled;
+            }
+            if !same_channel {
+                // Match connector `decide`: a release never replaces a same-version nightly, and a nightly whose
+                // sequence is not newer never replaces another channel. Both cases are no-ops, never updates.
+                return UpdateStatus::Current;
+            }
+            if nightly_candidate && candidate != current {
+                return UpdateStatus::Unknown;
+            }
+            // The candidate is always a verified SEA. R1 selected records may omit `format`; the connector treats
+            // that as ESM. A same-ordering ESM → SEA change is an upgrade even when release build_seq differs.
+            match installed.format.as_deref().unwrap_or("esm") {
+                "esm" => UpdateStatus::Available,
+                "sea" => UpdateStatus::Current,
                 _ => UpdateStatus::Unknown,
             }
         }
@@ -84,6 +99,7 @@ mod tests {
         InstalledBuild {
             connector_version: Some(version.into()),
             connector_sha: Some("a".repeat(64)),
+            format: Some("sea".into()),
             core_version: Some("0.1.0".into()),
             core_build: Some("0.8.0-macos-aarch64-fixture".into()),
             core_manifest_sha256: Some("b".repeat(64)),
@@ -119,15 +135,34 @@ mod tests {
         );
         assert_eq!(
             update_status(Some(&pin), Some(&installed("1.2.3", "release", 41, Some(1), Some(1)))),
-            UpdateStatus::Available
+            UpdateStatus::Available,
+            "a newer same-version nightly build replaces an older release regardless of format"
         );
         assert_eq!(
             update_status(Some(&pin), Some(&installed("1.2.3", "release", 42, Some(1), Some(1)))),
-            UpdateStatus::Unknown
+            UpdateStatus::Current,
+            "a same-sequence cross-channel decision is a connector no-op"
         );
         assert_eq!(
             update_status(Some(&pin), Some(&installed("1.2.3", "release", 43, Some(1), Some(1)))),
             UpdateStatus::NewerInstalled
+        );
+    }
+
+    #[test]
+    fn release_build_sequence_is_ignored_but_same_version_esm_upgrades_to_sea() {
+        let mut pin = crate::pin::test_support::fixture_pin();
+        pin.channel = Some("release".into());
+        pin.build_seq = Some(99);
+        let mut installed = installed("1.2.3", "release", 1, Some(1), Some(1));
+        installed.format = Some("esm".into());
+        assert_eq!(update_status(Some(&pin), Some(&installed)), UpdateStatus::Available);
+        installed.format = Some("sea".into());
+        installed.build_seq = Some(100);
+        assert_eq!(
+            update_status(Some(&pin), Some(&installed)),
+            UpdateStatus::Current,
+            "release build_seq cannot make a same-version release look newer"
         );
     }
 

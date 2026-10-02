@@ -146,6 +146,7 @@ export function validatePin(pin) {
 
 export function verifyMetadata(pin, version, metadata) {
   validatePin(pin);
+  requirePin(version?.format === "sea" && version?.sea === true, "version output is not the required SEA build.");
   for (const [key, expected] of Object.entries({
     version: pin.connector_version,
     target: "macos-aarch64",
@@ -153,6 +154,8 @@ export function verifyMetadata(pin, version, metadata) {
     connector_sha: pin.connector_sha,
   })) requirePin(version?.[key] === expected, `version output ${key} does not match the pin.`);
   requirePin(version?.build_seq === pin.build_seq, "version output build_seq does not match the pin.");
+  requirePin(metadata?.connector?.format === "sea" && metadata?.connector?.sea === true,
+    "metadata connector identity is not the required SEA build.");
   for (const [key, expected] of Object.entries({
     version: pin.connector_version,
     sha: pin.connector_sha,
