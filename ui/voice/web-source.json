@@ -1,7 +1,7 @@
 {
   "repository": "sidevoice/sidevoice-web",
-  "branch": "feat/local-host-r1d",
-  "commit": "fe369dd87393a56ebc0e64155ca4a82cc8abd91d",
+  "branch": "feat/r4-local-install-cta",
+  "commit": "8d56c1bb93a8c6e0b9a1f06d521d0413e721c572",
   "uncommitted_changes": false,
-  "vendored_at": "2026-10-02T02:53:22.392Z"
+  "vendored_at": "2026-10-02T12:17:58.089Z"
 }
