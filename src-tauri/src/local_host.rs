@@ -370,8 +370,8 @@ mod imp {
     #[cfg(test)]
     mod tests {
         use super::noop_update_response;
-        use sidevoice_local_host::state::{Report, State};
         use serde_json::json;
+        use sidevoice_local_host::state::{Report, State};
 
         #[test]
         fn update_noop_preserves_the_complete_local_host_status() {
@@ -386,12 +386,15 @@ mod imp {
             report.reachable = true;
 
             let response = noop_update_response(&report).unwrap();
-            assert_eq!(response, json!({
-                "state":"running", "failure":{"key":"service.warning"}, "core":{"version":"0.1.0","api":1},
-                "service":"launchd", "calls":4, "attempts":2, "limit":5,
-                "progress":{"job":"job-1","sequence":3,"step":"pairing","cancellable":false},
-                "reachable":true, "result":"noop"
-            }));
+            assert_eq!(
+                response,
+                json!({
+                    "state":"running", "failure":{"key":"service.warning"}, "core":{"version":"0.1.0","api":1},
+                    "service":"launchd", "calls":4, "attempts":2, "limit":5,
+                    "progress":{"job":"job-1","sequence":3,"step":"pairing","cancellable":false},
+                    "reachable":true, "result":"noop"
+                })
+            );
         }
     }
 }
