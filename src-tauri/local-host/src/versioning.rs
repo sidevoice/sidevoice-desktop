@@ -190,10 +190,7 @@ mod tests {
             serde_json::from_str(include_str!("../test-fixtures/connector-release-r4-build19.json")).unwrap();
         let previous = InstalledBuild::from_release_record(&previous_record, Some(1), None);
         assert_eq!(previous.connector_version.as_deref(), Some("0.6.0"));
-        assert_eq!(
-            previous.connector_sha.as_deref(),
-            Some("86a0ab1a5363af303b25f77fc7254aef5db1fea3")
-        );
+        assert_eq!(previous.connector_sha.as_deref(), Some("86a0ab1a5363af303b25f77fc7254aef5db1fea3"));
         assert_eq!(previous.core_version.as_deref(), Some("0.1.0"));
         assert_eq!(previous.channel.as_deref(), Some("nightly"));
         assert_eq!(previous.build_seq, Some(19));
