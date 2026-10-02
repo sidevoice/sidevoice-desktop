@@ -1,6 +1,6 @@
 [package]
 name = "sidevoice-desktop-engine"
-version = "0.1.0"
+version = "0.2.0"
 description = "Native model engines, downloaded at run time (docs/ENGINES.md): fetch, verify, unpack, load, run."
 edition = "2021"
 rust-version = "1.80"
