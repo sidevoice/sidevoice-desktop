@@ -68,7 +68,7 @@ test("reports not-ready first, then the real state once the room's controller ex
   await flush();
   assert.equal(calls.length, 2);
   assert.deepEqual(calls[1][1].snapshot, {
-    version: 2, ready: true, joined: false, busy: false, micEnabled: true, micDisabled: false, title: "Claude",
+    version: 3, ready: true, joined: false, busy: false, micEnabled: true, micDisabled: false, title: "Claude",
     agent: "idle", youTalking: false, canSkip: false, since: null, participants: [], devices: null,
   });
 
@@ -430,7 +430,7 @@ test("host carries the bridge version; localHost only where the app offers it", 
   for (const offered of [undefined, false, "__SIDEVOICE_LOCAL_HOST__", "true"]) {
     const { win } = fakeWindow(ORIGIN);
     const api = install(win, ORIGIN, null, offered);
-    assert.equal(api.host.version, 2);
+    assert.equal(api.host.version, 3);
     assert.equal(api.host.app, "sidevoice-desktop");
     assert.ok(api.host.nativeEngine, "the rest of the host is untouched");
     assert.equal("localHost" in api.host, false, String(offered));
@@ -438,10 +438,43 @@ test("host carries the bridge version; localHost only where the app offers it", 
   const { win } = fakeWindow(ORIGIN);
   const api = install(win, ORIGIN, "native", true);
   assert.deepEqual(Object.keys(api.host.localHost).sort(), [
-    "pairRoom", "pairing", "pairingCode", "reconnect", "restart", "revealLog", "serviceInstall", "serviceUninstall",
-    "start", "state", "stop", "subscribe",
+    "agents", "cancel", "install", "pairRoom", "pairing", "pairingCode", "reconnect", "restart", "revealLog",
+    "serviceInstall", "serviceUninstall", "start", "state", "stop", "subscribe", "update", "version",
   ]);
   assert.ok(Object.isFrozen(api.host.localHost));
+});
+
+test("localHost install progress and cancellation stay scoped to their job", async () => {
+  const install = loadFactory();
+  const calls = [];
+  let resolveInstall;
+  const { win, tick, cleared } = localHostWindow({
+    local_host_install: () => new Promise((resolve) => { resolveInstall = resolve; }),
+    local_host_install_progress: ({ job, afterSequence }) => [
+      { job, sequence: afterSequence + 1, step: "download", done: 4, total: 12, cancellable: true },
+      { job, sequence: afterSequence + 2, step: "verify", done: null, total: null, cancellable: false },
+    ],
+    local_host_cancel: ({ job }) => (calls.push(job), true),
+    local_host_update: { state: "running", reachable: true },
+    local_host_version: { bridge: 3, update: "available", capabilities: { agents: false } },
+  });
+  const local = install(win, ORIGIN, null, true).host.localHost;
+  const progress = [];
+  const pending = local.install((event) => progress.push(event));
+  assert.match(pending.job, /^local-install-/);
+  tick();
+  await flush();
+  assert.deepEqual(JSON.parse(JSON.stringify(progress)), [
+    { step: "download", done: 4, total: 12, cancellable: true },
+    { step: "verify", done: null, total: null, cancellable: false },
+  ]);
+  assert.equal(await local.cancel(pending.job), true);
+  assert.deepEqual(await local.version(), { bridge: 3, update: "available", capabilities: { agents: false } });
+  assert.deepEqual(await local.update(), { state: "running", reachable: true });
+  resolveInstall({ state: "running", reachable: true });
+  assert.deepEqual(await pending, { state: "running", reachable: true });
+  assert.equal(cleared.length, 1);
+  assert.deepEqual(calls, [pending.job]);
 });
 
 test("localHost calls go to their native commands and resolve what the app answers", async () => {
@@ -481,6 +514,14 @@ test("a refused action rejects with the app's {key, message}", async () => {
   const refused = Object.assign(new Error("refused"), { refusal: { key: "service.not-loaded", message: "m" } });
   const { win } = localHostWindow({ local_host_action: refused });
   await assert.rejects(install(win, ORIGIN, null, true).host.localHost.start(), { key: "service.not-loaded", message: "m" });
+});
+
+test("agents capability is explicit and unavailable until connector R2", async () => {
+  const install = loadFactory();
+  const refused = Object.assign(new Error("unavailable"), { refusal: { key: "agents.unavailable", message: "m" } });
+  const { win, calls } = localHostWindow({ local_host_agents: refused });
+  await assert.rejects(install(win, ORIGIN, null, true).host.localHost.agents(), { key: "agents.unavailable", message: "m" });
+  assert.deepEqual(calls.filter(([command]) => command.startsWith("local_host")), [["local_host_agents", undefined]]);
 });
 
 test("subscribe: the state now, then only changes; polling stops with the last listener", async () => {

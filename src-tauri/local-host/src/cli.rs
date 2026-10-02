@@ -7,12 +7,17 @@
 
 use crate::checks::Check;
 use crate::paths::DataDirs;
+use crate::pin::ConnectorPin;
 use crate::trusted;
 use crate::Refusal;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -27,17 +32,38 @@ pub struct Cli {
     pub data: std::path::PathBuf,
 }
 
+/// The structured progress event emitted by R4-b on stderr. Text is never parsed as progress.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgressEvent {
+    pub step: String,
+    pub done: Option<u64>,
+    pub total: Option<u64>,
+}
+
+/// Shared cancellation request. The CLI gets SIGINT and must acknowledge cancellation in its final JSON result;
+/// if it has crossed its commit point it completes or rolls back instead.
+#[derive(Debug, Clone, Default)]
+pub struct CancelToken(Arc<AtomicBool>);
+
+impl CancelToken {
+    pub fn request(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_requested(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
 impl Cli {
     /// The CLI the install recorded. `D`'s ancestry safe from other users, `D` itself this user's and not writable by
     /// others, `install.json` read through `D`'s checked descriptor (a regular file, not a link, this user's, not
     /// writable by others), and `command` a non-empty array of absolute paths, each a program or file only root or
     /// this user can change. No install, no CLI (`cli.unavailable`).
     pub fn installed(dirs: &DataDirs) -> Result<Cli, Refusal> {
-        let dir = checked(trusted::Dir::open(&dirs.data, 0o022, "install.unsafe"))?;
-        let text = checked(dir.read("install.json", 0o022, RECORD_LIMIT))?;
         let record = dirs.install_record();
-        let install: Value = serde_json::from_slice(&text)
-            .map_err(|e| Refusal::new("install.unreadable", format!("{} is not JSON: {e}", record.display())))?;
+        let (dir, install) = open_install_record(dirs)?
+            .ok_or_else(|| Refusal::new("cli.unavailable", "Sidevoice is not installed on this computer."))?;
         let prefix = command(&install).ok_or_else(|| {
             Refusal::new("install.unreadable", format!("{} names no command of absolute paths.", record.display()))
         })?;
@@ -53,6 +79,57 @@ impl Cli {
         Ok(Cli { prefix: verified, data: dir.path().to_path_buf() })
     }
 
+    /// Reads the trusted R1 install record without exposing its command to the page.
+    pub fn install_record(dirs: &DataDirs) -> Result<Option<Value>, Refusal> {
+        open_install_record(dirs).map(|record| record.map(|(_, value)| value))
+    }
+
+    /// The app-bundled executable, after its checked resource path, executable mode, pinned bytes and R4-b embedded
+    /// metadata are all verified. This path is independent of the installed R1 command and never consults `PATH`.
+    pub fn bundled(resource: &std::path::Path, dirs: &DataDirs, pin: &ConnectorPin) -> Result<Cli, Refusal> {
+        pin.validate_ready()?;
+        let missing =
+            || Refusal::new("install.executable-missing", "The app's bundled connector executable is missing.");
+        let unsafe_resource =
+            |why: &str| Refusal::new("install.unsafe", format!("The bundled connector resource is unsafe: {why}"));
+        let meta = std::fs::symlink_metadata(resource).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                missing()
+            } else {
+                unsafe_resource(&e.to_string())
+            }
+        })?;
+        if !meta.file_type().is_file() || meta.mode() & 0o111 == 0 || meta.mode() & 0o022 != 0 {
+            return Err(unsafe_resource(&format!("mode {:o} is not a private executable file", meta.mode() & 0o7777)));
+        }
+        if meta.uid() != 0 && meta.uid() != unsafe { libc::geteuid() } {
+            return Err(unsafe_resource("the resource has an unexpected owner"));
+        }
+        let path = std::fs::canonicalize(resource).map_err(|e| unsafe_resource(&e.to_string()))?;
+        if path != resource {
+            return Err(unsafe_resource("the resource path is not canonical"));
+        }
+        let expected_size = pin.executable_size.ok_or_else(missing)?;
+        if meta.len() != expected_size {
+            return Err(Refusal::new(
+                "install.pin-mismatch",
+                "The bundled connector size does not match its build pin.",
+            ));
+        }
+        let actual_sha = sha256_file(resource).map_err(|e| unsafe_resource(&e.to_string()))?;
+        if Some(actual_sha.as_str()) != pin.executable_sha256.as_deref() {
+            return Err(Refusal::new(
+                "install.pin-mismatch",
+                "The bundled connector SHA-256 does not match its build pin.",
+            ));
+        }
+        let cli = Cli { prefix: vec![path.to_string_lossy().into_owned()], data: dirs.data.clone() };
+        let version = cli.run(&["--version", "--json"], Duration::from_secs(10))?;
+        let metadata = cli.run(&["metadata", "--json"], Duration::from_secs(10))?;
+        pin.verify_metadata(&version, &metadata)?;
+        Ok(cli)
+    }
+
     /// Runs `prefix + args` and waits at most `timeout` — for the process to exit **and** for both its output streams
     /// to close: its JSON answer when it says `ok`, else its `{key, message}`.
     ///
@@ -60,6 +137,29 @@ impl Cli {
     /// the pipes) is killed, and on a timeout the whole group is. What the program hands to the service manager
     /// (`service start` → launchd) or starts detached in a session of its own is not in the group, and stays.
     pub fn run(&self, args: &[&str], timeout: Duration) -> Result<Value, Refusal> {
+        self.run_inner(args, timeout, None, |_| {})
+    }
+
+    /// Runs an installer with the R4-b JSON-lines progress adapter. Both pipes are drained concurrently and output,
+    /// including unfinished progress records, remains bounded. Cancellation is a request to the connector, not a
+    /// claim that the transaction was cancelled; only its final keyed answer decides that.
+    pub fn run_with_progress(
+        &self,
+        args: &[&str],
+        timeout: Duration,
+        cancel: &CancelToken,
+        on_progress: impl FnMut(ProgressEvent),
+    ) -> Result<Value, Refusal> {
+        self.run_inner(args, timeout, Some(cancel), on_progress)
+    }
+
+    fn run_inner(
+        &self,
+        args: &[&str],
+        timeout: Duration,
+        cancel: Option<&CancelToken>,
+        mut on_progress: impl FnMut(ProgressEvent),
+    ) -> Result<Value, Refusal> {
         let failed = |why: String| Refusal::new("cli.failed", why);
         let deadline = Instant::now() + timeout;
         let mut command = Command::new(&self.prefix[0]);
@@ -91,7 +191,19 @@ impl Cli {
         let mut streams =
             [Stream::new(child.stdout.take().map(OwnedFd::from)), Stream::new(child.stderr.take().map(OwnedFd::from))];
         let mut status = None;
+        let mut cancel_sent = false;
+        let cancel_deadline = timeout.min(Duration::from_secs(15));
+        let mut cancel_at = None;
         loop {
+            if !cancel_sent && cancel.is_some_and(CancelToken::is_requested) {
+                // SAFETY: this is the process group created for this CLI invocation.
+                unsafe { libc::killpg(group, libc::SIGINT) };
+                cancel_sent = true;
+                cancel_at = Some(Instant::now());
+            }
+            if cancel_at.is_some_and(|at| at.elapsed() >= cancel_deadline) && status.is_none() {
+                kill_group();
+            }
             if status.is_none() {
                 status = child.try_wait().ok().flatten();
                 if status.is_some() {
@@ -107,7 +219,7 @@ impl Cli {
             if left.is_zero() {
                 break;
             }
-            drain(&mut streams, left.min(Duration::from_millis(50)));
+            drain(&mut streams, left.min(Duration::from_millis(50)), &mut on_progress);
         }
         let Some(status) = status else {
             kill_group();
@@ -133,15 +245,32 @@ impl Cli {
     }
 }
 
+fn sha256_file(path: &std::path::Path) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut chunk = [0u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&chunk[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
 /// One of the program's output pipes, read without blocking past the deadline.
 struct Stream {
     fd: Option<OwnedFd>,
     bytes: Vec<u8>,
+    record: Vec<u8>,
+    skipping_record: bool,
 }
 
 impl Stream {
     fn new(fd: Option<OwnedFd>) -> Self {
-        Stream { fd, bytes: Vec::new() }
+        Stream { fd, bytes: Vec::new(), record: Vec::new(), skipping_record: false }
     }
 
     fn is_open(&self) -> bool {
@@ -151,7 +280,7 @@ impl Stream {
 
 /// Waits at most `wait` for any open stream to have something, and reads what there is. End of file, or an error,
 /// closes the stream; beyond [`OUTPUT_LIMIT`] bytes are read and dropped.
-fn drain(streams: &mut [Stream], wait: Duration) {
+fn drain(streams: &mut [Stream], wait: Duration, on_progress: &mut impl FnMut(ProgressEvent)) {
     let mut polled: Vec<libc::pollfd> = streams
         .iter()
         .filter_map(|s| s.fd.as_ref())
@@ -164,7 +293,7 @@ fn drain(streams: &mut [Stream], wait: Duration) {
         return;
     }
     let mut events = polled.iter().map(|p| p.revents);
-    for stream in streams.iter_mut().filter(|s| s.fd.is_some()) {
+    for (index, stream) in streams.iter_mut().enumerate().filter(|(_, s)| s.fd.is_some()) {
         if events.next().unwrap_or(0) == 0 {
             continue;
         }
@@ -177,7 +306,59 @@ fn drain(streams: &mut [Stream], wait: Duration) {
         } else if (stream.bytes.len() as u64) < OUTPUT_LIMIT {
             stream.bytes.extend_from_slice(&chunk[..n as usize]);
         }
+        if index == 1 && n > 0 {
+            for byte in &chunk[..n as usize] {
+                if *byte == b'\n' {
+                    if !stream.skipping_record {
+                        if let Some(event) = progress_record(&stream.record) {
+                            on_progress(event);
+                        }
+                    }
+                    stream.record.clear();
+                    stream.skipping_record = false;
+                } else if !stream.skipping_record {
+                    if stream.record.len() < RECORD_LIMIT as usize {
+                        stream.record.push(*byte);
+                    } else {
+                        stream.record.clear();
+                        stream.skipping_record = true;
+                    }
+                }
+            }
+        }
     }
+}
+
+fn progress_record(bytes: &[u8]) -> Option<ProgressEvent> {
+    let record: Value = serde_json::from_slice(bytes).ok()?;
+    if record.get("type")?.as_str()? != "progress" {
+        return None;
+    }
+    let step = record.get("step")?.as_str()?;
+    if !matches!(
+        step,
+        "download"
+            | "verify"
+            | "stage"
+            | "service-start"
+            | "wait-calls"
+            | "wait-lock"
+            | "commit"
+            | "pairing"
+            | "rollback"
+    ) {
+        return None;
+    }
+    let number = |field: &str| match record.get(field) {
+        None | Some(Value::Null) => Some(None),
+        Some(value) => value.as_u64().map(Some),
+    };
+    let done = number("done")?;
+    let total = number("total")?;
+    if done.zip(total).is_some_and(|(done, total)| done > total) {
+        return None;
+    }
+    Some(ProgressEvent { step: step.into(), done, total })
 }
 
 /// A check's outcome for the CLI: missing is "not installed".
@@ -186,6 +367,23 @@ fn checked<T>(result: Result<T, Check>) -> Result<T, Refusal> {
         Check::Missing => Refusal::new("cli.unavailable", "Sidevoice is not installed on this computer."),
         Check::Unsafe(refusal) => refusal,
     })
+}
+
+fn open_install_record(dirs: &DataDirs) -> Result<Option<(trusted::Dir, Value)>, Refusal> {
+    let dir = match trusted::Dir::open(&dirs.data, 0o022, "install.unsafe") {
+        Ok(dir) => dir,
+        Err(Check::Missing) => return Ok(None),
+        Err(Check::Unsafe(refusal)) => return Err(refusal),
+    };
+    let text = match dir.read("install.json", 0o022, RECORD_LIMIT) {
+        Ok(text) => text,
+        Err(Check::Missing) => return Ok(None),
+        Err(Check::Unsafe(refusal)) => return Err(refusal),
+    };
+    let record = dirs.install_record();
+    let install: Value = serde_json::from_slice(&text)
+        .map_err(|e| Refusal::new("install.unreadable", format!("{} is not JSON: {e}", record.display())))?;
+    Ok(Some((dir, install)))
 }
 
 /// `install.json`'s `command`: every element an absolute path.
@@ -233,6 +431,71 @@ mod tests {
         let cli = fake(tmp.path(), r#"echo '{"ok":false,"error":{"key":"service.not-loaded","message":"m"}}'; exit 1"#);
         let refusal = cli.run(&["service", "start", "--json"], Duration::from_secs(5)).unwrap_err();
         assert_eq!(refusal, Refusal::new("service.not-loaded", "m"));
+    }
+
+    #[test]
+    fn progress_jsonl_is_delivered_in_order_and_prose_is_ignored() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cli = fake(
+            tmp.path(),
+            r#"echo 'localized words are not progress' >&2
+echo '{"type":"progress","step":"download","done":5,"total":12}' >&2
+echo '{"type":"progress","step":"verify","done":null,"total":null}' >&2
+echo '{"ok":true}'"#,
+        );
+        let mut events = Vec::new();
+        let answer = cli
+            .run_with_progress(&["install", "--json"], Duration::from_secs(5), &CancelToken::default(), |event| {
+                events.push(event)
+            })
+            .unwrap();
+        assert_eq!(answer["ok"], true);
+        assert_eq!(
+            events,
+            [
+                ProgressEvent { step: "download".into(), done: Some(5), total: Some(12) },
+                ProgressEvent { step: "verify".into(), done: None, total: None },
+            ]
+        );
+    }
+
+    #[test]
+    fn bundled_constructor_checks_file_identity_mode_and_embedded_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        let executable = tmp.path().join("sidevoice");
+        let mut pin = crate::pin::test_support::fixture_pin();
+        let manifest_sha = pin.core_manifest_sha256.as_deref().unwrap();
+        let script = r##"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo '{"ok":true,"version":"1.2.3","target":"macos-aarch64","channel":"nightly","connector_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","build_seq":42}'
+elif [ "$1" = "metadata" ]; then
+  echo '{"ok":true,"connector":{"version":"1.2.3","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","channel":"nightly","build_seq":42,"link_min":1,"link_max":1},"embedded_core":{"version":"0.9.0","manifest_sha256":"MANIFEST_SHA","api":1,"link":1},"protocols":{"metadata":"sidevoice-metadata-v1","progress":"sidevoice-progress-jsonl-v1"}}'
+fi
+"##;
+        let script = script.replace("MANIFEST_SHA", manifest_sha);
+        std::fs::write(&executable, &script).unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        pin.executable_size = Some(script.len() as u64);
+        pin.executable_sha256 = Some(sha256_file(&executable).unwrap());
+        let cli = Cli::bundled(&executable, &DataDirs::new(tmp.path()), &pin).unwrap();
+        assert_eq!(cli.prefix, [executable.to_string_lossy().to_string()]);
+
+        pin.executable_sha256 = Some("0".repeat(64));
+        assert_eq!(
+            Cli::bundled(&executable, &DataDirs::new(tmp.path()), &pin).unwrap_err().key,
+            "install.pin-mismatch"
+        );
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(Cli::bundled(&executable, &DataDirs::new(tmp.path()), &pin).unwrap_err().key, "install.unsafe");
+    }
+
+    #[test]
+    fn bundled_constructor_refuses_a_pending_production_pin_before_running_anything() {
+        let tmp = tempfile::tempdir().unwrap();
+        let executable = tmp.path().join("missing");
+        let mut pin = crate::pin::test_support::fixture_pin();
+        pin.status = "pending".into();
+        assert_eq!(Cli::bundled(&executable, &DataDirs::new(tmp.path()), &pin).unwrap_err().key, "install.pin-invalid");
     }
 
     #[test]

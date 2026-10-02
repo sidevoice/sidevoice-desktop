@@ -16,7 +16,7 @@
 //! starts a process); the core's health; and while paired, whether the core still accepts the token — refused, the
 //! proxy stops carrying it and closes its tunnels.
 
-use crate::cli::Cli;
+use crate::cli::{CancelToken, Cli, ProgressEvent};
 use crate::connector;
 use crate::core_socket::{CoreError, CoreSocket, Health, Paired};
 use crate::identity;
@@ -26,10 +26,11 @@ use crate::state::{self, Link, Observed, Report, State};
 use crate::store::{self, Pairing};
 use crate::Refusal;
 use serde_json::{json, Value};
+use std::collections::VecDeque;
 use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 pub const POLL_EVERY: Duration = Duration::from_secs(2);
@@ -80,6 +81,9 @@ impl Action {
 const STATUS_TIMEOUT: Duration = Duration::from_secs(10);
 const PAIR_DEVICE_TIMEOUT: Duration = Duration::from_secs(30);
 const PAIR_ROOM_TIMEOUT: Duration = Duration::from_secs(60);
+const INSTALL_TIMEOUT: Duration = Duration::from_secs(45 * 60);
+const INSTALL_LOCK_WAIT: Duration = Duration::from_secs(10 * 60);
+const MAX_PROGRESS_EVENTS: usize = 512;
 
 /// Where the app keeps its side, and what it calls itself.
 #[derive(Debug, Clone)]
@@ -111,8 +115,102 @@ pub struct LocalHost {
     inner: Mutex<Inner>,
     /// One pass at a time: the poll thread's and an action's.
     passes: Mutex<()>,
+    install_job: Mutex<Option<Arc<InstallJob>>>,
     stopped: AtomicBool,
     log: Arc<dyn Fn(&str) + Send + Sync>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallProgress {
+    pub job: String,
+    pub sequence: u64,
+    pub step: String,
+    pub done: Option<u64>,
+    pub total: Option<u64>,
+    pub cancellable: bool,
+}
+
+struct InstallJob {
+    id: String,
+    cancel: CancelToken,
+    cancellable: AtomicBool,
+    sequence: Mutex<u64>,
+    events: Mutex<VecDeque<InstallProgress>>,
+    outcome: Mutex<Option<bool>>,
+    finished: Condvar,
+}
+
+impl InstallJob {
+    fn new(id: String) -> Self {
+        InstallJob {
+            id,
+            cancel: CancelToken::default(),
+            cancellable: AtomicBool::new(true),
+            sequence: Mutex::new(0),
+            events: Mutex::new(VecDeque::new()),
+            outcome: Mutex::new(None),
+            finished: Condvar::new(),
+        }
+    }
+
+    fn progress(&self, event: ProgressEvent) {
+        if event.step == "commit" || event.step == "rollback" {
+            self.cancellable.store(false, Ordering::SeqCst);
+        }
+        let sequence = {
+            let mut sequence = self.sequence.lock().unwrap();
+            *sequence += 1;
+            *sequence
+        };
+        let progress = InstallProgress {
+            job: self.id.clone(),
+            sequence,
+            step: event.step,
+            done: event.done,
+            total: event.total,
+            cancellable: self.cancellable.load(Ordering::SeqCst),
+        };
+        let mut events = self.events.lock().unwrap();
+        events.push_back(progress);
+        while events.len() > MAX_PROGRESS_EVENTS {
+            events.pop_front();
+        }
+    }
+
+    fn latest(&self) -> Option<InstallProgress> {
+        self.events.lock().unwrap().back().cloned()
+    }
+
+    fn after(&self, sequence: u64) -> Vec<InstallProgress> {
+        self.events.lock().unwrap().iter().filter(|event| event.sequence > sequence).cloned().collect()
+    }
+
+    fn complete(&self, cancelled: bool) {
+        *self.outcome.lock().unwrap() = Some(cancelled);
+        self.finished.notify_all();
+    }
+
+    fn cancel_and_wait(&self) -> bool {
+        if !self.cancellable.load(Ordering::SeqCst) {
+            return false;
+        }
+        self.cancel.request();
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let mut outcome = self.outcome.lock().unwrap();
+        while outcome.is_none() {
+            let wait = deadline.saturating_duration_since(Instant::now());
+            if wait.is_zero() {
+                return false;
+            }
+            let (next, timeout) = self.finished.wait_timeout(outcome, wait).unwrap();
+            outcome = next;
+            if timeout.timed_out() && outcome.is_none() {
+                return false;
+            }
+        }
+        outcome.unwrap_or(false)
+    }
 }
 
 impl LocalHost {
@@ -137,6 +235,7 @@ impl LocalHost {
                 force_pair: false,
             }),
             passes: Mutex::new(()),
+            install_job: Mutex::new(None),
             stopped: AtomicBool::new(false),
             log,
         }))
@@ -163,8 +262,12 @@ impl LocalHost {
         &self.proxy
     }
 
+    pub fn data_dirs(&self) -> &DataDirs {
+        &self.config.dirs
+    }
+
     pub fn state(&self) -> Report {
-        self.inner.lock().unwrap().report.clone()
+        self.project_install(self.inner.lock().unwrap().report.clone())
     }
 
     /// The local host as the page uses it (design §4.1): the pinned identity, the proxy's URL and this launch's
@@ -203,7 +306,124 @@ impl LocalHost {
             (self.log)(&format!("local-host state {}", json!(report.state).as_str().unwrap_or("?")));
         }
         inner.report = report.clone();
+        self.project_install(report)
+    }
+
+    fn project_install(&self, mut report: Report) -> Report {
+        if let Some(job) = self.install_job.lock().unwrap().as_ref() {
+            report.state = State::Installing;
+            if let Some(progress) = job.latest() {
+                report.progress =
+                    Some(json!({"job": progress.job, "sequence": progress.sequence, "step": progress.step,
+                    "done": progress.done, "total": progress.total, "cancellable": progress.cancellable}));
+            }
+        }
         report
+    }
+
+    /// Progress frames after `sequence`, scoped to exactly one active install job.
+    pub fn install_progress(&self, job_id: &str, sequence: u64) -> Result<Vec<InstallProgress>, Refusal> {
+        let job = self
+            .install_job
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| Refusal::new("install.job-ended", "That install job has ended."))?;
+        if job.id != job_id {
+            return Err(Refusal::new("install.job-mismatch", "That install job does not belong to this request."));
+        }
+        Ok(job.after(sequence))
+    }
+
+    /// Requests cancellation only for the matching job and returns true only when the connector's final result
+    /// acknowledges `install.cancelled`. A transaction already at commit is allowed to finish or roll back.
+    pub fn cancel_install(&self, job_id: &str) -> bool {
+        let Some(job) = self.install_job.lock().unwrap().clone() else { return false };
+        if job.id != job_id {
+            return false;
+        }
+        job.cancel_and_wait()
+    }
+
+    /// Runs the bundled R4 installer for an explicit install/update request. The caller has already verified the
+    /// resource and pin; an existing R1 install is observed instead of being replaced by the install CTA.
+    pub fn install_bundled(&self, cli: Cli, job_id: String, update: bool) -> Result<Report, Refusal> {
+        if job_id.is_empty()
+            || job_id.len() > 96
+            || !job_id.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b))
+        {
+            return Err(Refusal::new("bad_request", "The install job identifier is invalid."));
+        }
+        if !update && Cli::install_record(&self.config.dirs)?.is_some() {
+            let report = self.poll();
+            if report.reachable && report.state != State::Incompatible {
+                return Ok(report);
+            }
+            return Err(Refusal::new(
+                "install.already-installed",
+                "This computer already has a Sidevoice installation.",
+            ));
+        }
+        let job = Arc::new(InstallJob::new(job_id));
+        {
+            let mut active = self.install_job.lock().unwrap();
+            if active.is_some() {
+                return Err(Refusal::new("install.busy", "Another Sidevoice install or update is already running."));
+            }
+            *active = Some(job.clone());
+        }
+        let result = self.run_bundled_install(&cli, &job);
+        job.complete(result.as_ref().err().is_some_and(|error| error.key == "install.cancelled"));
+        {
+            let mut active = self.install_job.lock().unwrap();
+            if active.as_ref().is_some_and(|current| Arc::ptr_eq(current, &job)) {
+                *active = None;
+            }
+        }
+        result.map(|_| self.inner.lock().unwrap().report.clone())
+    }
+
+    fn run_bundled_install(&self, cli: &Cli, job: &Arc<InstallJob>) -> Result<Report, Refusal> {
+        let deadline = Instant::now() + INSTALL_LOCK_WAIT;
+        let lock = self.config.dirs.data.join("install.lock");
+        while std::fs::symlink_metadata(&lock).is_ok() {
+            job.progress(ProgressEvent { step: "wait-lock".into(), done: None, total: None });
+            if job.cancel.is_requested() {
+                return Err(Refusal::new("install.cancelled", "The install was cancelled before it started."));
+            }
+            if Instant::now() >= deadline {
+                return Err(Refusal::new(
+                    "cli.timeout",
+                    "Another Sidevoice installer held the install lock for too long.",
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(150));
+        }
+        let answer = cli.run_with_progress(
+            &["install", "--no-agents", "--service", "--json", "--progress=jsonl"],
+            INSTALL_TIMEOUT,
+            &job.cancel,
+            |event| job.progress(event),
+        )?;
+        self.inner.lock().unwrap().fallback = None;
+        let report = self.poll();
+        if report.state == State::Incompatible {
+            return Err(Refusal::new("install.incompatible", "The installed core API is not supported by this app."));
+        }
+        if report.reachable {
+            return Ok(report);
+        }
+        if let Some(failure) = report.failure.as_ref() {
+            let key = failure.get("key").and_then(Value::as_str).unwrap_or("install.pairing");
+            let message =
+                failure.get("message").and_then(Value::as_str).unwrap_or("The local core did not become reachable.");
+            return Err(Refusal::new(key, message));
+        }
+        let outcome = answer.get("result").and_then(Value::as_str).unwrap_or("installed");
+        Err(Refusal::new(
+            "install.pairing",
+            format!("The connector reported {outcome}, but its compatible core is not paired and reachable yet."),
+        ))
     }
 
     /// `service status --json` when no connector answers, reused for [`FALLBACK_EVERY`]. No install, no answer.

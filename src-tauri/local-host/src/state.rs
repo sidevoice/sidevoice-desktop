@@ -41,6 +41,7 @@ pub enum State {
     ServiceFailed,
     Refused,
     Incompatible,
+    Installing,
 }
 
 /// `{state, failure?, core?, service?, calls?, attempts?, limit?, reachable}`.
@@ -62,6 +63,9 @@ pub struct Report {
     pub attempts: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<u64>,
+    /// R4 app-owned install progress, projected only while its job is active.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress: Option<Value>,
     /// A core answers and the app's pairing with it works.
     pub reachable: bool,
 }
@@ -76,6 +80,7 @@ impl Report {
             calls: None,
             attempts: None,
             limit: None,
+            progress: None,
             reachable: false,
         }
     }
@@ -328,6 +333,7 @@ mod tests {
             State::ServiceFailed,
             State::Refused,
             State::Incompatible,
+            State::Installing,
         ]
         .iter()
         .map(|s| json!(s))
@@ -344,7 +350,8 @@ mod tests {
                 "failed",
                 "service-failed",
                 "refused",
-                "incompatible"
+                "incompatible",
+                "installing"
             ]
         );
         assert_eq!(json!(Report::new(State::Running)), json!({"state": "running", "reachable": false}));

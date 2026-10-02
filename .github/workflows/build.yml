@@ -120,11 +120,20 @@ jobs:
               - 'src-tauri/src/call_controls.rs'
               - 'src-tauri/core/src/call_controls.rs'
               - 'src-tauri/src/lib.rs'
+              - 'src-tauri/build.rs'
               - 'src-tauri/capabilities/**'
+              - 'src-tauri/permissions/**'
+              - 'src-tauri/connector-pin.json'
+              - 'src-tauri/tauri.macos-aarch64.conf.json'
               - 'src-tauri/tauri.conf.json'
               - 'src-tauri/core/src/engines.rs'
               - 'src-tauri/core/src/bridge.rs'
               - 'bridge/**'
+              - 'scripts/connector-pin.mjs'
+              - 'scripts/fetch-connector.mjs'
+              - 'scripts/verify-packaged-connector.mjs'
+              - 'package.json'
+              - '.github/workflows/build.yml'
               - 'catalog/**'
               - 'test/fixtures/**'
               - 'ui/voice/**'
@@ -149,9 +158,16 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Compile the Apple Silicon app on pull requests without packaging a connector
+        if: needs.changes.outputs.installers != 'true'
+        working-directory: src-tauri
+        run: cargo check --target aarch64-apple-darwin --all-features
+      - name: Fetch and verify the immutable macOS arm64 connector pin
+        if: needs.changes.outputs.installers == 'true'
+        run: node scripts/fetch-connector.mjs
       - name: Build the app bundle (ad-hoc signed, hardened runtime, entitlements)
         if: needs.changes.outputs.installers == 'true'
-        run: npx tauri build --target aarch64-apple-darwin --bundles app
+        run: npx tauri build --target aarch64-apple-darwin --bundles app --config src-tauri/tauri.macos-aarch64.conf.json
       - name: Check what a first open depends on
         if: needs.changes.outputs.installers == 'true'
         run: |
@@ -164,6 +180,10 @@ jobs:
           test "$(plutil -extract LSMinimumSystemVersion raw "$APP/Contents/Info.plist")" = "13.0"
           echo "--- signature"
           codesign --verify --deep --strict --verbose=2 "$APP"
+          SEA="$APP/Contents/Resources/resources/sidevoice"
+          test -x "$SEA"
+          cmp src-tauri/connector-pin.json "$APP/Contents/Resources/resources/connector-pin.json"
+          node scripts/verify-packaged-connector.mjs "$SEA"
           codesign -dvvv "$APP" 2>&1 | tee /tmp/sig.txt
           grep -q "Signature=adhoc" /tmp/sig.txt
           grep -q "runtime" /tmp/sig.txt
@@ -259,6 +279,8 @@ jobs:
           test -s "$MNT/.DS_Store"
           test -s "$MNT/.VolumeIcon.icns"
           codesign --verify --deep --strict --verbose=2 "$MNT/Sidevoice.app"
+          ditto "$MNT/Sidevoice.app" "$RUNNER_TEMP/Sidevoice-moved.app"
+          node scripts/verify-packaged-connector.mjs "$RUNNER_TEMP/Sidevoice-moved.app/Contents/Resources/resources/sidevoice"
           codesign -d --entitlements - --xml "$MNT/Sidevoice.app" | grep -q "com.apple.security.device.audio-input"
           plutil -extract NSMicrophoneUsageDescription raw "$MNT/Sidevoice.app/Contents/Info.plist"
           hdiutil detach "$MNT"

@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": {
+      "resources/sidevoice": "resources/sidevoice",
+      "connector-pin.json": "resources/connector-pin.json"
+    }
+  }
+}

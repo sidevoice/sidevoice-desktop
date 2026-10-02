@@ -30,10 +30,12 @@ pub mod host;
 pub mod http;
 pub mod identity;
 pub mod paths;
+pub mod pin;
 pub mod proxy;
 pub mod state;
 pub mod store;
 pub mod trusted;
+pub mod versioning;
 
 use serde::Serialize;
 use std::fmt;

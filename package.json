@@ -7,7 +7,8 @@
   "scripts": {
     "tauri": "tauri",
     "test": "node --test test/*.test.mjs",
-    "build:mac": "tauri build --target aarch64-apple-darwin --bundles app",
+    "connector:prepare": "node scripts/fetch-connector.mjs",
+    "build:mac": "npm run connector:prepare && tauri build --target aarch64-apple-darwin --bundles app --config src-tauri/tauri.macos-aarch64.conf.json",
     "web-assets": "node scripts/web-assets.mjs",
     "icons": "node scripts/make-icons.mjs"
   },
