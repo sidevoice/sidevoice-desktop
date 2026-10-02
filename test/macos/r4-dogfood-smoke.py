@@ -328,7 +328,9 @@ def main():
 
         pairing = run_json(sea, ["pair-device", "--json"], timeout=30, action="pair-device")
         code = pairing.pop("code", None)
-        require(isinstance(code, str) and 4 <= len(code) <= 32
+        # Core's SV1 code carries the identity fingerprint, address and one-time secret; it is not a short PIN.
+        require(isinstance(code, str) and 24 <= len(code) <= 8192
+                and code.startswith("SV1.") and re.fullmatch(r"[A-Za-z0-9_-]+", code[4:])
                 and isinstance(pairing.get("expires_in"), int) and pairing["expires_in"] > 0
                 and isinstance(pairing.get("reach"), str) and pairing["reach"],
                 "pair-device did not return a valid local pairing code")
