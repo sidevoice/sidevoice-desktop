@@ -118,6 +118,7 @@ export function validatePin(pin) {
   requirePin(Number.isSafeInteger(pin.link_min) && Number.isSafeInteger(pin.link_max)
     && pin.link_min > 0 && pin.link_min <= pin.core_link && pin.core_link <= pin.link_max,
   "has an invalid connector/core link range.");
+  requirePin(Array.isArray(pin.provenance?.sidecars), t("pin.connectorSidecars"));
   const provenance = pin.provenance;
   requirePin(provenance?.repository === "sidevoice/sidevoice-connector"
     && typeof provenance.repository_id === "string" && /^[1-9][0-9]*$/.test(provenance.repository_id)
@@ -126,10 +127,8 @@ export function validatePin(pin) {
     && typeof provenance.artifact_name === "string" && provenance.artifact_name.length > 0,
   "has incomplete provenance.");
   requirePin(Array.isArray(pin.core_manifest_sidecars) && pin.core_manifest_sidecars.length > 0,
-    t("pin.coreSidecars"));
-  requirePin(Array.isArray(provenance.sidecars), t("pin.connectorSidecars"));
-  const sidecars = [...provenance.sidecars, ...pin.core_manifest_sidecars];
-  requirePin(new Set(sidecars.map((item) => item?.name)).size === sidecars.length, t("pin.duplicateSidecars"));
+    "has no pinned core manifest attestation sidecars.");
+  const sidecars = [...(provenance.sidecars || []), ...(pin.core_manifest_sidecars || [])];
   requirePin(sidecars.length > 0, "has no pinned attestation sidecars.");
   for (const sidecar of sidecars) {
     requirePin(sidecar && typeof sidecar.name === "string" && /^[A-Za-z0-9._-]+$/.test(sidecar.name)
@@ -138,6 +137,7 @@ export function validatePin(pin) {
       && SHA256.test(sidecar.sha256 || "") && Number.isSafeInteger(sidecar.size) && sidecar.size > 0,
     "has an invalid pinned attestation sidecar.");
   }
+  requirePin(new Set(sidecars.map((item) => item?.name)).size === sidecars.length, t("pin.duplicateSidecars"));
   return pin;
 }
 
