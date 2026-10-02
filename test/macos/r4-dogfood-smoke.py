@@ -387,10 +387,12 @@ def verify_projected_host():
     env["SIDEVOICE_DEBUG"] = "1"
     env["SIDEVOICE_DEBUG_LOCAL_HOST_DOGFOOD"] = "1"
     run_app_until(
-        PROBE_APP.resolve(strict=True), env, {b"local-host-dogfood ok "},
+        PROBE_APP.resolve(strict=True), env,
+        {b"local-host-dogfood ok ", b"local-agents=ready local-route=authenticated"},
         timeout=180, action="genuine-core bridge probe", error_marker=b"local-host-dogfood error",
     )
-    say("bundled page: projected pairing reached the genuine core; same-version bridge update was a no-op")
+    say("bundled page: projected pairing reached genuine core Agents through the authenticated local proxy")
+    say("bundled page: same-version bridge update was a no-op")
 
 
 def require_running_status(status, core_version):

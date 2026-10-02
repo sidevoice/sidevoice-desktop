@@ -12,7 +12,7 @@ test("the bundled production web is the exact reviewed R2/R3 head", () => {
   assert.equal(webSource.uncommitted_changes, false);
 });
 
-test("R2/R3 web vendoring preserves the reviewed R4 connector pin", () => {
+test("R2/R3 web vendoring preserves the reviewed R2 local-host connector pin", () => {
   const sha256 = createHash("sha256").update(connectorPin).digest("hex");
-  assert.equal(sha256, "4cd98256aebb1bdc899a764dd11095f200087772af51e73808478e0f2723d7f2");
+  assert.equal(sha256, "32b59a536e6548960b725cfd97e35b20a8bd86c9b3093553dbf50a4674558734");
 });

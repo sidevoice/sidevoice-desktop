@@ -42,6 +42,60 @@
         } catch { return null; }
       }, 60000, "page-proxy-did-not-reach-core");
 
+      // Exercise the actual host-scoped Agents API from the bundled page. Record only the request route and whether
+      // it carried authorization; never inspect or print the bearer value or response body.
+      const originalFetch = window.fetch;
+      const agentRequests = [];
+      window.fetch = function (input, init) {
+        try {
+          const rawUrl = typeof input === "string" || input instanceof URL ? input : input?.url;
+          const url = new URL(String(rawUrl || ""), location.href);
+          if (url.pathname === "/api/host/agents") {
+            const headers = new Headers(input?.headers);
+            new Headers(init?.headers).forEach((value, name) => headers.set(name, value));
+            agentRequests.push({
+              origin: url.origin,
+              path: url.pathname,
+              rescan: url.searchParams.get("rescan"),
+              method: String(init?.method || input?.method || "GET").toUpperCase(),
+              authorized: headers.has("authorization"),
+            });
+          }
+        } catch {}
+        return originalFetch.call(this, input, init);
+      };
+
+      let agentsListing;
+      try {
+        const loadHostAgents = window.sidevoiceActions?.loadHostAgents;
+        if (typeof loadHostAgents !== "function") throw new Error("page-host-agents-action-missing");
+        await loadHostAgents(pairing.fp, { rescan: true });
+        agentsListing = await until(() => {
+          const current = window.sidevoiceUI?.store?.getState()?.facts?.hostAgents?.[pairing.fp];
+          return current?.status === "ready" ? current : null;
+        }, 30000, "page-local-host-agents");
+      } catch {
+        throw new Error("page-local-host-agents-failed");
+      } finally {
+        window.fetch = originalFetch;
+      }
+
+      const agentsRequest = agentRequests.find((request) => request.method === "GET"
+        && request.path === "/api/host/agents" && request.rescan === "1");
+      const scannedAt = agentsListing?.value?.scanned_at;
+      const validScanTime = typeof scannedAt === "string" ? scannedAt.length > 0
+        : Number.isFinite(scannedAt) && scannedAt > 0;
+      if (!agentsRequest || !agentsRequest.authorized || !/^http:\/\/127\.0\.0\.1:\d+$/.test(agentsRequest.origin)
+        || !Array.isArray(agentsListing?.value?.agents) || !validScanTime
+        || !Object.hasOwn(agentsListing.value, "custom"))
+        throw new Error("page-local-host-agents-invalid");
+
+      const afterAgentsState = await local.state();
+      const afterAgentsPairing = await local.pairing();
+      if (afterAgentsState.state !== "running" || afterAgentsState.reachable !== true || !afterAgentsPairing
+        || afterAgentsPairing.fp !== pairing.fp || afterAgentsPairing.device_id !== pairing.device_id)
+        throw new Error("page-local-host-agents-revoked-pairing");
+
       const before = await local.version();
       if (before.update !== "current" || before.installed?.connectorVersion !== before.bundled?.connector_version
         || before.installed?.coreVersion !== before.bundled?.core_version
@@ -59,7 +113,8 @@
 
       // Never include the pairing token, device ID, code, host name, or response body in diagnostics.
       await say(`ok state=${state.state} reachable=${state.reachable} page-device=${listDevices.length > 0}
-        update=${updated.result} connector=${after.installed.connectorVersion} core=${after.installed.coreVersion}`.replace(/\s+/g, " ").trim());
+        local-agents=ready local-route=authenticated update=${updated.result}
+        connector=${after.installed.connectorVersion} core=${after.installed.coreVersion}`.replace(/\s+/g, " ").trim());
     } catch (error) {
       const key = typeof error?.message === "string" && /^[a-z0-9-]{1,64}$/.test(error.message)
         ? error.message : "unexpected-error";
