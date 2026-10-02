@@ -80,6 +80,15 @@ test("a test-only pin requires immutable artifacts, manifest bytes, attestation 
   assert.throws(() => validatePin(malformed), /immutable connector artifact/);
 });
 
+test("R4-b artifact pins may omit connector sidecars when the core manifest attestation is pinned", () => {
+  const pin = fixturePin();
+  pin.provenance.sidecars = [];
+  assert.equal(validatePin(pin), pin);
+
+  pin.core_manifest_sidecars = [];
+  assert.throws(() => validatePin(pin), /no pinned attestation sidecars/);
+});
+
 test("SEA version and embedded core metadata must match the pin", () => {
   const pin = fixturePin();
   const version = { ok: true, version: pin.connector_version, target: pin.target, channel: pin.channel,

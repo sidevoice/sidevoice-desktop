@@ -263,7 +263,6 @@ impl ConnectorPin {
             || provenance.workflow.as_deref().map_or(true, str::is_empty)
             || provenance.run_id.unwrap_or_default() == 0
             || provenance.artifact_name.as_deref().map_or(true, str::is_empty)
-            || provenance.sidecars.is_empty()
         {
             return Err(invalid_pin("has incomplete R4-b provenance"));
         }
@@ -475,6 +474,16 @@ pub(crate) mod test_support {
         assert_eq!(pin.validate_ready().unwrap_err().key, "install.pin-invalid");
         let mut pin = fixture_pin();
         pin.core_assets[0].size += 1;
+        assert_eq!(pin.validate_ready().unwrap_err().key, "install.pin-invalid");
+    }
+
+    #[test]
+    fn r4b_pin_accepts_no_connector_sidecar_when_the_core_manifest_attestation_is_pinned() {
+        let mut pin = fixture_pin();
+        pin.provenance.as_mut().unwrap().sidecars.clear();
+        assert!(pin.validate_ready().is_ok());
+
+        pin.core_manifest_sidecars.clear();
         assert_eq!(pin.validate_ready().unwrap_err().key, "install.pin-invalid");
     }
 
