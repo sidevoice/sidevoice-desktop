@@ -695,13 +695,16 @@ echo '{"ok":true}'"#,
     #[test]
     fn cancellation_does_not_kill_an_installer_after_commit_progress() {
         let tmp = tempfile::tempdir().unwrap();
-        let cli = fake(
-            tmp.path(),
-            r#"echo '{"type":"progress","step":"commit","done":null,"total":null}' >&2
-trap '' INT
+        let signal_seen = tmp.path().join("cancel-signal-seen");
+        let script = format!(
+            r#"trap 'touch "{signal_seen}"' INT
+echo '{{"type":"progress","step":"commit","done":null,"total":null}}' >&2
+while [ ! -e "{signal_seen}" ]; do sleep 0.01; done
 sleep 0.25
-echo '{"ok":true}'"#,
+echo '{{"ok":true}}'"#,
+            signal_seen = signal_seen.display()
         );
+        let cli = fake(tmp.path(), &script);
         let cancel = CancelToken::default();
         let answer = cli
             .run_inner(
@@ -718,6 +721,7 @@ echo '{"ok":true}'"#,
             .unwrap();
         assert_eq!(answer["ok"], true);
         assert!(cancel.is_requested());
+        assert!(signal_seen.exists(), "the installer received the requested SIGINT");
     }
 
     #[test]
