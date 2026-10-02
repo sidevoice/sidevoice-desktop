@@ -11,6 +11,7 @@ assert.notEqual(engineStart, -1);
 const macJob = workflow.slice(macStart, engineStart);
 const archiveScript = "scripts/archive-mac-preview.sh";
 const archiveSource = readFileSync(archiveScript, "utf8");
+const buildSource = readFileSync("scripts/build-mac.mjs", "utf8");
 
 test("macOS package can start with the path filter, independent of lint/unit completion", () => {
   assert.match(macJob, /needs: \[changes\]/);
@@ -40,7 +41,11 @@ test("verified production app is archived and uploaded before any probe build", 
 
   const publishAt = workflow.indexOf("\n  publish:\n");
   assert.match(workflow.slice(publishAt), /needs: \[changes, test, macos, engine, linux, windows\]/);
-  assert.match(macJob.slice(uploadAt, probeAt), /name: development-macos-arm64-app-\$\{\{ github\.sha \}\}/);
+  assert.match(
+    macJob.slice(uploadAt, probeAt),
+    /name: development-macos-arm64-app-\$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}/,
+  );
+  assert.match(buildSource, /desktop_sha: git\("rev-parse", "HEAD"\)/);
   assert.match(macJob.slice(uploadAt, probeAt), /compression-level: 0/);
   assert.match(macJob.slice(uploadAt, probeAt), /retention-days: 7/);
   assert.match(macJob.slice(uploadAt, probeAt), /if-no-files-found: error/);

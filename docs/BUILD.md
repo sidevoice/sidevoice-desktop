@@ -48,8 +48,10 @@ script requires the verified production `.app` and `dist/build-evidence.json`, e
 directory, verifies the app signature, and checks the packaged executable digest against the evidence. Archives are
 not promised to be byte-identical across machines because SDK and archive metadata can differ.
 
-For a PR preview, download `development-macos-arm64-app-<source-sha>` from that exact commit's Actions run. The
-artifact contains the ZIP, sidecar, and `build-evidence.json`; confirm the checksum before extracting:
+For a PR preview, download `development-macos-arm64-app-<pr-head-sha>` from that exact commit's Actions run. The
+artifact name uses the PR source head SHA; `build-evidence.json` keeps `desktop_sha` as the checked-out `HEAD` SHA,
+which is the synthetic merge commit on a `pull_request` run and identifies the exact merged tree that was built. The
+artifact contains the ZIP, sidecar, and evidence; confirm the checksum before extracting:
 
 ```sh
 shasum -a 256 -c Sidevoice-dev-macos-arm64.zip.sha256

@@ -229,7 +229,7 @@ jobs:
         if: (github.event_name != 'pull_request' && !inputs.fixture) || steps.connector.outputs.status != 'pending'
         uses: actions/upload-artifact@v4
         with:
-          name: development-macos-arm64-app-${{ github.sha }}
+          name: development-macos-arm64-app-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
             src-tauri/target/previews/Sidevoice-dev-macos-arm64.zip
             src-tauri/target/previews/Sidevoice-dev-macos-arm64.zip.sha256
