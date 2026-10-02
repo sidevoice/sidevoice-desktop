@@ -761,7 +761,7 @@ fi
         let cli = Cli::installed(&dirs).unwrap();
         let job = InstallJob::new("lock-fixture".into());
         let answer = run_connector_install(&cli, &job).unwrap();
-        assert_eq!(answer["result"], "installed");
+        assert_eq!(answer["action"], "install");
         assert!(dirs.data.join("install-command-ran").exists());
         let events = job.events.lock().unwrap();
         assert_eq!(events.len(), 1);
