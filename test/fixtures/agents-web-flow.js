@@ -10,19 +10,48 @@
   const TOKEN = "ci-agents-device-token";
   const BASE = "http://127.0.0.1:8768";
   const seen = [];
+  const presentationReads = [];
+  const dialogAttempts = [];
   const nativeFetch = window.fetch.bind(window);
+  if (typeof HTMLDialogElement !== "undefined" && typeof HTMLDialogElement.prototype.showModal === "function") {
+    const nativeShowModal = HTMLDialogElement.prototype.showModal;
+    HTMLDialogElement.prototype.showModal = function (...args) {
+      const attempt = { id: this.id, outcome: "called" };
+      dialogAttempts.push(attempt);
+      try {
+        const result = nativeShowModal.apply(this, args);
+        attempt.outcome = this.open ? "opened" : "returned-closed";
+        return result;
+      } catch (error) {
+        attempt.outcome = "threw";
+        throw error;
+      }
+    };
+  }
 
   // Record only endpoint, method, and whether the exact host pairing token was used. Never retain or print a token.
   window.fetch = function (input, init = {}) {
     const request = input instanceof Request ? input : null;
     const url = new URL(request ? request.url : String(input), location.href);
+    let presentationRead = null;
     if (url.origin === BASE && url.pathname.startsWith("/api/host/agents")) {
       const headers = new Headers(request?.headers);
       new Headers(init.headers).forEach((value, key) => headers.set(key, value));
       seen.push({ path: url.pathname + url.search, method: (init.method || request?.method || "GET").toUpperCase(),
         authorized: headers.get("authorization") === `Bearer ${TOKEN}` });
+    } else if (url.origin === BASE && url.pathname === "/api/presentation/languages") {
+      presentationRead = { status: "pending" };
+      presentationReads.push(presentationRead);
     }
-    return nativeFetch(input, init);
+    const response = nativeFetch(input, init);
+    if (!presentationRead) return response;
+    return response.then((value) => {
+      presentationRead.status = `http-${value.status}`;
+      return value;
+    }, (error) => {
+      presentationRead.status = "rejected";
+      throw error;
+    });
   };
 
   // Set before the web bundle reads its persisted pairings, as the native-worker fixture does.
@@ -65,7 +94,9 @@
       if (!settingsDialog.open) {
         const requiredSettings = ["ui-language", "audio-grace-seconds", "replay-on-return-seconds", "turn-patience", "presence-sound", "locked-call"];
         const missing = requiredSettings.filter((id) => !document.getElementById(id));
-        await say(`settings-state dialog=closed connected=${settingsDialog.isConnected ? "yes" : "no"} click-handler=${typeof gear.onclick === "function" ? "yes" : "no"} missing-fields=${missing.join(",") || "none"} error=${settingsError.textContent.trim() ? "yes" : "no"} agent-request=${store()?.facts?.settingsAgentRequest?.id ? "yes" : "no"}`);
+        const reads = presentationReads.map((entry) => entry.status).join(",") || "none";
+        const modal = dialogAttempts.map((entry) => `${entry.id || "unknown"}:${entry.outcome}`).join(",") || "not-called";
+        await say(`settings-state dialog=closed connected=${settingsDialog.isConnected ? "yes" : "no"} click-handler=${typeof gear.onclick === "function" ? "yes" : "no"} missing-fields=${missing.join(",") || "none"} error=${settingsError.textContent.trim() ? "yes" : "no"} agent-request=${store()?.facts?.settingsAgentRequest?.id ? "yes" : "no"} language-fetch=${reads} show-modal=${modal}`);
       }
       await until(() => settingsDialog.open || !!settingsError.textContent.trim(), 15000, "settings-dialog");
       if (!settingsDialog.open) {
