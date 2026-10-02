@@ -86,7 +86,7 @@ do not remove verification or regenerate a digest from arbitrary downloaded byte
 | Resource wiring while pin is pending | `npm run build:mac:fixture` | Explicit shell fixture, in `target/packages/fixture`; never a production artifact |
 | Native integration | `npm run build:mac:probe`, `test/macos/*.sh` | WKWebView/local-host proxy, native engine, room model flow and card behavior |
 | Product packaging | `npm run build:mac`, optional `npm run package:mac` | Real verified connector, production app and evidence JSON |
-| Hosted clean-account dogfood smoke | `python3 test/macos/r4-dogfood-smoke.py` after a trusted ready-pin build | Real bundled SEA installs the pinned core under launchd, reports reachable, issues an unlogged local pairing code, returns same-version `noop`, and uninstalls |
+| Hosted clean-account dogfood smoke | `python3 test/macos/r4-dogfood-smoke.py` after a trusted ready-pin build | Real bundled SEA installs the pinned core under launchd, reports reachable, and issues an unlogged local pairing code; the production app launches and pairs on first open; a probe build carrying byte-identical pinned resources verifies the vendored page's authenticated device projection and bridge same-version update `noop`; uninstall is verified |
 | Local R4 acceptance | Clean macOS arm64 account, real app | Install/start/pair/update-or-rollback results, recorded separately |
 
 Native integration scripts run from the repository root on a **disposable macOS test account**. The engine/room
@@ -96,11 +96,20 @@ filters so local-host transport changes do not always download and exercise spee
 WebView assertions remain. The native engine belongs to Desktop; moving those tests to Connector would test the
 wrong product boundary.
 
-Trusted manual/main/release builds with a ready connector pin run the hosted dogfood smoke after production
-packaging and before the UI probes. It requires the hosted account's launchd GUI domain, refuses a pre-existing
-Sidevoice service or data directory, strips inherited credentials from connector subprocesses, never logs the
-pairing code, and traps interruption to uninstall. A pending-pin fixture never runs it. This focused SEA/service
-check does not replace launching the app and completing the actual UI pairing flow on a clean Mac.
+Trusted manual/main/release builds with a ready connector pin run the hosted dogfood smoke after production and
+CI-probe packaging, before any other app launch. It requires a fresh hosted account, an active launchd GUI domain,
+and no pre-existing Sidevoice app config, service, or data directory. It strips inherited credentials from
+connector subprocesses, never logs the pairing code or stored app token, bounds app/CLI waits, and traps
+interruption to stop the app and uninstall. The production app launches from its packaged executable. The CI-only
+probe app must carry the exact production pin and SEA bytes; its injected check runs inside the actual vendored page
+and requires a reachable native report, an app pairing whose device ID is current in the genuine core's
+authenticated device list, and a same-version bridge update `noop` that preserves the host identity. The probe
+feature and its script are excluded from production packages. A pending-pin fixture never runs this smoke.
+
+This hosted check does not exercise Finder/LaunchServices behavior, click through the UI installer, connect a
+separate phone or computer, enter a room, or request microphone permission. Those require a human-operated Mac and
+a second device/room where applicable; Actions must not report them as passed. A stand-in core, pairing-code
+issuance alone, or package verification cannot satisfy the genuine-core projection and update assertions above.
 
 Do not compile on the shared agent node. Use GitHub Actions for native builds. A manual run builds and uploads
 artifacts without publishing; no merge or release is necessary to exercise this workflow. A manual run with
@@ -113,9 +122,12 @@ Use a new macOS arm64 account with no Sidevoice install. Record the exact Action
 `build-evidence.json`, the app/DMG checksum, connector identity and web SHA. Launch the copied app via Finder or
 `open`, following `MACOS.md`, so microphone permission belongs to the app.
 
-Check the actual bundled interface: explicitly install the local host; observe ordered progress; verify the
-service starts and the local host becomes reachable/paired; restart the app and verify the pairing remains.
-Exercise an eligible update, or a controlled failed update/cancel and verify the previous working install remains
-usable. Cancellation after commit must not kill the installer. Record each observed result and the installed
-connector/core identities. A stand-in core, probe build, pending pin, or passing packaging check cannot satisfy
-this record. Missing signed upstream assets or lack of a Mac must be reported as an unrun gate, not a pass.
+Use the following short manual add-on for evidence a hosted runner cannot produce:
+
+1. On a clean macOS arm64 user account, open the checksum-verified production DMG in Finder and launch Sidevoice. Confirm the bundled interface comes up without a startup error.
+2. From the interface, install the local host and observe ordered progress. Confirm the service is reachable and paired, quit and reopen Sidevoice, and confirm it remains reachable with the same local machine.
+3. If a second device is available, request a local pairing code, enter it only on that device, and confirm it appears in the machine's device list. Do not include the code, token, or room credential in logs or screenshots.
+4. If a reviewed newer pin is available, use the app's update action and verify the installed connector/core versions. Otherwise record the hosted same-version `noop`; do not claim rollback evidence without actually exercising a controlled rollback/failure on an eligible build.
+5. Record the Actions run and desktop SHA, app/DMG checksum, web SHA, connector/core identities, whether a second device/room/microphone was available, and each observed outcome.
+
+Missing signed upstream assets, a second device for external pairing, a usable room for a call, or a clean Mac must be reported as an unrun part of the manual record, not a pass.

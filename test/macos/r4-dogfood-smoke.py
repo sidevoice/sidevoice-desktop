@@ -17,13 +17,18 @@ from pathlib import Path
 
 
 APP = Path(os.environ.get("APP", "src-tauri/target/packages/production/Sidevoice.app"))
+PROBE_APP = Path(os.environ.get("PROBE_APP", "src-tauri/target/packages/probe/Sidevoice.app"))
 DATA = Path.home() / ".sidevoice"
+APP_CONFIG = Path.home() / "Library/Application Support/dev.sidevoice.desktop"
+PAIRING_FILE = APP_CONFIG / "local-host.json"
 LABELS = ("dev.sidevoice.core", "dev.sidevoice.connector")
 ALLOWED_STEPS = {
     "download", "verify", "stage", "service-start", "wait-calls", "wait-lock", "commit", "pairing", "rollback"
 }
 MAX_STDOUT = 1024 * 1024
 MAX_LINE = 64 * 1024
+MAX_APP_OUTPUT = 2 * 1024 * 1024
+APP_LINE_LIMIT = 16 * 1024
 PROCESS = None
 INTERRUPTED = None
 IN_CLEANUP = False
@@ -62,9 +67,18 @@ def child_environment():
     return env
 
 
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def read_pin_and_verify_sea():
     require(sys.platform == "darwin" and platform.machine() == "arm64", "requires a native macOS arm64 runner")
     app = APP.resolve(strict=True)
+    probe_app = PROBE_APP.resolve(strict=True)
     resources = app / "Contents/Resources/resources"
     pin = json.loads((resources / "connector-pin.json").read_text(encoding="utf-8"))
     require(pin.get("status") == "ready" and pin.get("target") == "macos-aarch64", "packaged connector pin is not ready for macOS arm64")
@@ -72,11 +86,17 @@ def read_pin_and_verify_sea():
     info = sea.stat()
     require(stat.S_ISREG(info.st_mode) and info.st_mode & stat.S_IXUSR, "packaged SEA is not an executable file")
     require(info.st_size == pin.get("executable_size"), "packaged SEA size does not match the reviewed pin")
-    digest = hashlib.sha256()
-    with sea.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    require(digest.hexdigest() == pin.get("executable_sha256"), "packaged SEA digest does not match the reviewed pin")
+    sea_sha256 = sha256_file(sea)
+    require(sea_sha256 == pin.get("executable_sha256"), "packaged SEA digest does not match the reviewed pin")
+    probe_resources = probe_app / "Contents/Resources/resources"
+    probe_pin = (probe_resources / "connector-pin.json").read_bytes()
+    require(probe_pin == (resources / "connector-pin.json").read_bytes(),
+            "probe app does not carry the production connector pin bytes")
+    probe_sea = probe_resources / "sidevoice"
+    require(probe_sea.is_file() and not probe_sea.is_symlink(), "probe app has no regular bundled SEA")
+    require(probe_sea.stat().st_size == info.st_size
+            and sha256_file(probe_sea) == sea_sha256,
+            "probe app does not carry the production SEA bytes")
     version = run_json(sea, ["--version", "--json"], timeout=20, action="SEA version")
     for key, expected in {
         "format": "sea", "sea": True, "version": pin.get("connector_version"),
@@ -243,6 +263,8 @@ def require_launchd_label_absent(uid, label, context):
 
 def preflight():
     require(not DATA.exists() and not DATA.is_symlink(), "runner account already has a Sidevoice data directory")
+    require(not APP_CONFIG.exists() and not APP_CONFIG.is_symlink(),
+            "runner account already has Sidevoice app configuration")
     agents = Path.home() / "Library/LaunchAgents"
     for label in LABELS:
         plist = agents / f"{label}.plist"
@@ -254,6 +276,125 @@ def preflight():
     for label in LABELS:
         require_launchd_label_absent(uid, label, "preflight")
     return uid, agents
+
+
+def stop_app(process, action):
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        process.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            raise SmokeFailure(f"could not stop {action}") from None
+
+
+def run_app_until(app, env, markers, timeout, action, error_marker=None):
+    """Launch a packaged app, consume bounded output without printing it, and require explicit readiness markers."""
+    try:
+        process = subprocess.Popen(
+            [str(app / "Contents/MacOS/sidevoice-desktop")], env=env, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
+        )
+    except OSError as exc:
+        raise SmokeFailure(f"could not start {action} ({type(exc).__name__})") from None
+
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ)
+    selector.register(process.stderr, selectors.EVENT_READ)
+    lines = {process.stdout: bytearray(), process.stderr: bytearray()}
+    seen = set()
+    total = 0
+    deadline = time.monotonic() + timeout
+    ready_at = None
+    try:
+        while time.monotonic() < deadline:
+            if INTERRUPTED:
+                raise SmokeFailure(f"interrupted by {INTERRUPTED}")
+            if process.poll() is not None and not selector.get_map():
+                break
+            for key, _ in selector.select(timeout=0.25):
+                chunk = os.read(key.fileobj.fileno(), 65536)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    key.fileobj.close()
+                    continue
+                total += len(chunk)
+                require(total <= MAX_APP_OUTPUT, f"{action} exceeded bounded diagnostic output")
+                line = lines[key.fileobj]
+                for byte in chunk:
+                    if byte == 10:
+                        value = bytes(line)
+                        line.clear()
+                        if error_marker and error_marker in value:
+                            match = re.search(rb"local-host-dogfood error ([a-z0-9-]{1,64})", value)
+                            key_name = match.group(1).decode("ascii") if match else "unknown"
+                            raise SmokeFailure(f"{action} reported {key_name}")
+                        for marker in markers:
+                            if marker in value:
+                                seen.add(marker)
+                    elif len(line) < APP_LINE_LIMIT:
+                        line.append(byte)
+                    else:
+                        line.clear()
+            if len(seen) == len(markers):
+                require(process.poll() is None, f"{action} exited after reporting readiness")
+                ready_at = ready_at or time.monotonic()
+                if time.monotonic() - ready_at >= 5:
+                    return
+            if process.poll() is not None and not selector.get_map():
+                break
+        if time.monotonic() >= deadline:
+            raise SmokeFailure(f"{action} did not become ready before its deadline")
+        raise SmokeFailure(f"{action} exited before reporting readiness (status {process.returncode})")
+    finally:
+        selector.close()
+        stop_app(process, action)
+
+
+def launch_production_app():
+    env = child_environment()
+    env["SIDEVOICE_DEBUG"] = "1"
+    markers = {
+        b"page tauri://localhost/voice/index.html",
+        b"ready: true",
+        b"local-host paired ",
+        b"local-host state running",
+    }
+    run_app_until(APP.resolve(strict=True), env, markers, timeout=120, action="production app")
+
+    require(PAIRING_FILE.is_file() and not PAIRING_FILE.is_symlink(),
+            "production app did not persist its local-host pairing")
+    try:
+        mode = stat.S_IMODE(PAIRING_FILE.stat().st_mode)
+        pairing = json.loads(PAIRING_FILE.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        raise SmokeFailure("production app pairing record is unreadable") from None
+    require(mode == 0o600 and all(isinstance(pairing.get(key), str) and pairing[key]
+                                  for key in ("fp", "public_key", "device_id", "token", "host", "paired_at"))
+            and len(pairing["token"]) == 43,
+            "production app did not persist a private, complete pairing record")
+    say("production app: bundled page became ready and paired the local host")
+
+
+def verify_projected_host():
+    env = child_environment()
+    env["SIDEVOICE_DEBUG"] = "1"
+    env["SIDEVOICE_DEBUG_LOCAL_HOST_DOGFOOD"] = "1"
+    run_app_until(
+        PROBE_APP.resolve(strict=True), env, {b"local-host-dogfood ok "},
+        timeout=180, action="genuine-core bridge probe", error_marker=b"local-host-dogfood error",
+    )
+    say("bundled page: projected pairing reached the genuine core; same-version bridge update was a no-op")
 
 
 def require_running_status(status, core_version):
@@ -306,6 +447,10 @@ def uninstall_and_verify(sea, uid, agents, core_pid):
     if DATA.exists():
         shutil.rmtree(DATA)
     require(not DATA.exists(), "could not remove the fresh Sidevoice data directory")
+    require(not APP_CONFIG.is_symlink(), "app configuration path became a symlink")
+    if APP_CONFIG.exists():
+        shutil.rmtree(APP_CONFIG)
+    require(not APP_CONFIG.exists(), "could not remove the fresh Sidevoice app configuration")
     say("uninstall: service, launch agents, core process, and fresh data directory are absent")
 
 
@@ -346,6 +491,12 @@ def main():
         status = run_json(sea, ["service", "status", "--json"], timeout=30, action="post-noop status")
         installed_pid = require_running_status(status, pin["core_version"])
         say("same-version install: safe no-op preserved the reachable service")
+
+        launch_production_app()
+        verify_projected_host()
+        status = run_json(sea, ["service", "status", "--json"], timeout=30, action="post-app status")
+        installed_pid = require_running_status(status, pin["core_version"])
+        say("post-app status: genuine core remains running and reachable")
     finally:
         if install_attempted:
             uninstall_and_verify(sea, uid, agents, installed_pid)

@@ -49,3 +49,4 @@ if grep -q "room-flow" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the r
 if grep -q "SIDEVOICE_DEBUG_IDLE_UNLOAD_SECS" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the idle-time switch is in the release app"; exit 1; fi
 if grep -Eq "SIDEVOICE_DEBUG_(REFUSE_LOAD|SLOW_TRANSCRIBE)" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "a fault switch is in the release app"; exit 1; fi
 if grep -Eq "SIDEVOICE_DEBUG_LOCAL_HOST_FLOW|local-host-flow" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the local-host flow is in the release app"; exit 1; fi
+if grep -Eq "SIDEVOICE_DEBUG_LOCAL_HOST_DOGFOOD|local-host-dogfood-flow" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the genuine-core dogfood flow is in the release app"; exit 1; fi
