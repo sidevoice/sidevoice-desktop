@@ -197,7 +197,8 @@ def run_json(sea, args, timeout, action, require_ok=True, progress=False,
     if require_ok:
         require(result.get("ok") is True, safe_refusal(action, result))
     if require_progress:
-        required_steps = ["download", "verify", "stage", "service-start", "pairing"]
+        # The release transaction opens its staging directory before the core runtime is downloaded.
+        required_steps = ["stage", "download", "verify", "service-start", "pairing"]
         cursor = 0
         for step in progress_steps:
             if cursor < len(required_steps) and step == required_steps[cursor]:
