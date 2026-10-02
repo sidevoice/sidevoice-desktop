@@ -690,7 +690,7 @@ echo '{"ok":true}'"#,
 if [ "$1" = "--version" ]; then
   echo '{"ok":true,"version":"1.2.3","target":"macos-aarch64","channel":"nightly","connector_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","build_seq":42}'
 elif [ "$1" = "metadata" ]; then
-  echo '{"ok":true,"connector":{"version":"1.2.3","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","channel":"nightly","build_seq":42,"link_min":1,"link_max":1},"embedded_core":{"version":"0.9.0","manifest_sha256":"MANIFEST_SHA","assets":CORE_ASSETS,"api":1,"link":1},"protocols":{"metadata":"sidevoice-metadata-v1","progress":"sidevoice-progress-jsonl-v1"}}'
+  echo '{"ok":true,"connector":{"version":"1.2.3","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","channel":"nightly","build_seq":42,"link_min":1,"link_max":1},"embedded_core":{"version":"0.1.0","manifest_sha256":"MANIFEST_SHA","assets":CORE_ASSETS,"api":1,"link":1},"protocols":{"metadata":"sidevoice-metadata-v1","progress":"sidevoice-progress-jsonl-v1"}}'
 fi
 "##;
         let script = script.replace("MANIFEST_SHA", manifest_sha).replace("CORE_ASSETS", &assets_json);
