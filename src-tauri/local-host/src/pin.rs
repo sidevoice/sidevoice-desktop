@@ -270,7 +270,8 @@ impl ConnectorPin {
         // GitHub's download endpoint is artifact-scoped, never nested beneath actions/runs.
         let artifact_prefix = "https://api.github.com/repos/sidevoice/sidevoice-connector/actions/artifacts/";
         let artifact_id = url.strip_prefix(artifact_prefix).and_then(|path| path.strip_suffix("/zip"));
-        if !matches!(artifact_id, Some(id) if !id.is_empty() && !id.starts_with('0') && id.bytes().all(|byte| byte.is_ascii_digit())) {
+        if !matches!(artifact_id, Some(id) if !id.is_empty() && !id.starts_with('0') && id.bytes().all(|byte| byte.is_ascii_digit()))
+        {
             return Err(invalid_pin("does not name the immutable artifact ZIP from its pinned CI run"));
         }
         for sidecar in &provenance.sidecars {

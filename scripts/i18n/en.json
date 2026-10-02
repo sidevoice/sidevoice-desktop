@@ -15,7 +15,6 @@
   "build.node": "Use Node.js {version}, as pinned in .node-version.",
   "build.fixture": "The fixture build requires an explicitly pending connector pin.",
   "build.rust": "Use Rust {version}, as pinned in rust-toolchain.toml.",
-  "pin.coreSidecars": "has no pinned core manifest attestation sidecars.",
   "pin.connectorSidecars": "has no connector sidecar list.",
   "pin.duplicateSidecars": "has duplicate sidecar names.",
   "build.existingResource": "The existing connector resource is not this fixture; refusing to replace it."
