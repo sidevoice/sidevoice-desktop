@@ -35,7 +35,9 @@
       });
     };
   }
-  if (typeof HTMLDialogElement !== "undefined" && typeof HTMLDialogElement.prototype.showModal === "function") {
+  const showModalAvailable = typeof HTMLDialogElement !== "undefined"
+    && typeof HTMLDialogElement.prototype.showModal === "function";
+  if (showModalAvailable) {
     const nativeShowModal = HTMLDialogElement.prototype.showModal;
     HTMLDialogElement.prototype.showModal = function (...args) {
       const attempt = { id: this.id, outcome: "called" };
@@ -136,14 +138,14 @@
         const missing = requiredSettings.filter((id) => !document.getElementById(id));
         const reads = presentationReads.map((entry) => `${entry.status}/${entry.json}`).join(",") || "none";
         const modal = dialogAttempts.map((entry) => `${entry.id || "unknown"}:${entry.outcome}`).join(",") || "not-called";
-        await say(`settings-state dialog=closed connected=${settingsDialog.isConnected ? "yes" : "no"} click-handler=${typeof gear.onclick === "function" ? "yes" : "no"} handler-invoked=${handlerState.invoked ? "yes" : "no"} handler-outcome=${handlerState.outcome} missing-fields=${missing.join(",") || "none"} error=${settingsError.textContent.trim() ? "yes" : "no"} agent-request=${store()?.facts?.settingsAgentRequest?.id ? "yes" : "no"} language-fetch=${reads} show-modal=${modal}`);
+        await say(`settings-state dialog=closed connected=${settingsDialog.isConnected ? "yes" : "no"} click-handler=${typeof gear.onclick === "function" ? "yes" : "no"} handler-invoked=${handlerState.invoked ? "yes" : "no"} handler-outcome=${handlerState.outcome} dialog-api=${showModalAvailable ? "available" : "unavailable"} boot-error=${store()?.facts?.bootError ? "present" : "none"} missing-fields=${missing.join(",") || "none"} error=${settingsError.textContent.trim() ? "yes" : "no"} agent-request=${store()?.facts?.settingsAgentRequest?.id ? "yes" : "no"} language-fetch=${reads} show-modal=${modal}`);
       }
       try {
         await until(() => settingsDialog.open || !!settingsError.textContent.trim(), 15000, "settings-dialog");
       } catch (error) {
         if (error?.message === "timeout-settings-dialog" && !settingsDialog.open) {
           const reads = presentationReads.map((entry) => `${entry.status}/${entry.json}`).join(",") || "none";
-          await say(`settings-timeout handler-invoked=${handlerState.invoked ? "yes" : "no"} handler-outcome=${handlerState.outcome} language-fetch=${reads} show-modal=${dialogAttempts.map((entry) => `${entry.id || "unknown"}:${entry.outcome}`).join(",") || "not-called"}`);
+          await say(`settings-timeout handler-invoked=${handlerState.invoked ? "yes" : "no"} handler-outcome=${handlerState.outcome} dialog-api=${showModalAvailable ? "available" : "unavailable"} boot-error=${store()?.facts?.bootError ? "present" : "none"} language-fetch=${reads} show-modal=${dialogAttempts.map((entry) => `${entry.id || "unknown"}:${entry.outcome}`).join(",") || "not-called"}`);
         }
         throw error;
       }
