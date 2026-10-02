@@ -9,10 +9,14 @@ const assetUrl = "https://api.github.com/repos/sidevoice/sidevoice-connector/act
 const pin = {
   asset_url: assetUrl, connector_sha: "a".repeat(40), build_seq: 42,
   provenance: { repository: "sidevoice/sidevoice-connector", repository_id: "12345", run_id: 123,
-    workflow: ".github/workflows/r4-sea.yml@refs/heads/main", artifact_name: "sidevoice-connector-macos-aarch64-r4b" },
+    workflow: ".github/workflows/r4-sea.yml@refs/heads/main", artifact_name: "sidevoice-connector-macos-aarch64-r4b",
+    sidecars: [{ url: assetUrl.replace("456", "457"), sha256: "e".repeat(64), size: 1024 }] },
 };
 function records() {
   return {
+    attestation: { id: 457, name: `${pin.provenance.artifact_name}-provenance`, expired: false,
+      archive_download_url: pin.provenance.sidecars[0].url, digest: `sha256:${"e".repeat(64)}`, size_in_bytes: 1024,
+      workflow_run: { id: 123, repository_id: 12345, head_repository_id: 12345, head_sha: pin.connector_sha } },
     artifact: { id: 456, name: pin.provenance.artifact_name, expired: false, archive_download_url: assetUrl,
       workflow_run: { id: 123, repository_id: 12345, head_repository_id: 12345, head_sha: pin.connector_sha } },
     run: { id: 123, head_sha: pin.connector_sha, repository: { id: 12345, full_name: pin.provenance.repository },
@@ -61,10 +65,30 @@ test("provenance uses artifact and run API endpoints, with authentication", asyn
   const record = records(); const urls = [];
   const evidence = await verifyRemoteProvenance(pin, { token: "test-token", fetchImpl: async (url, options) => {
     assert.equal(options.headers.authorization, "Bearer test-token"); urls.push(url);
-    return Response.json(url.endsWith("/artifacts/456") ? record.artifact : record.run);
+    return Response.json(url.endsWith("/artifacts/456") ? record.artifact
+      : url.endsWith("/artifacts/457") ? record.attestation : record.run);
   } });
   assert.equal(evidence.run_id, 123);
-  assert.deepEqual(urls.map((url) => url.split("/actions/")[1]), ["artifacts/456", "runs/123"]);
+  assert.deepEqual(urls.map((url) => url.split("/actions/")[1]), ["artifacts/456", "runs/123", "artifacts/457"]);
+  assert.equal(evidence.provenance_artifact_id, "457");
+});
+
+test("the provenance archive must come from the same run and match its pinned archive bytes", async () => {
+  for (const mutate of [
+    (artifact) => { artifact.workflow_run.id++; },
+    (artifact) => { artifact.workflow_run.head_repository_id++; },
+    (artifact) => { artifact.workflow_run.head_sha = "b".repeat(40); },
+    (artifact) => { artifact.expired = true; },
+    (artifact) => { artifact.name = "untrusted-provenance"; },
+    (artifact) => { artifact.digest = `sha256:${"f".repeat(64)}`; },
+    (artifact) => { artifact.size_in_bytes++; },
+  ]) {
+    const record = records(); mutate(record.attestation);
+    await assert.rejects(verifyRemoteProvenance(pin, { token: "test-token", fetchImpl: async (url) =>
+      Response.json(url.endsWith("/artifacts/456") ? record.artifact
+        : url.endsWith("/artifacts/457") ? record.attestation : record.run),
+    }), /provenance/);
+  }
 });
 
 test("API authentication is required and never forwarded to redirect storage", async () => {

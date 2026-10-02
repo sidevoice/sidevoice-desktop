@@ -42,9 +42,9 @@ function fixturePin() {
       repository_id: "12345",
       workflow: ".github/workflows/r4-sea.yml@refs/heads/main",
       run_id: 123,
-      artifact_name: "sidevoice-macos-aarch64",
-      sidecars: [{ name: "sidevoice.sigstore.json",
-        url: "https://github.com/sidevoice/sidevoice-connector/releases/download/v1.2.3/sidevoice.sigstore.json",
+      artifact_name: "sidevoice-connector-macos-aarch64-r4b",
+      sidecars: [{ name: "sidevoice-provenance.zip",
+        url: "https://api.github.com/repos/sidevoice/sidevoice-connector/actions/artifacts/457/zip",
         sha256: "e".repeat(64), size: 12 }],
     },
   };
@@ -80,13 +80,24 @@ test("a test-only pin requires immutable artifacts, manifest bytes, attestation 
   assert.throws(() => validatePin(malformed), /immutable connector artifact/);
 });
 
-test("R4-b artifact pins may omit connector sidecars when the core manifest attestation is pinned", () => {
+test("R4-b pins require the connector provenance ZIP as well as core manifest attestations", () => {
+  for (const mutate of [
+    (pin) => { delete pin.provenance.sidecars; },
+    (pin) => { pin.provenance.sidecars = []; },
+    (pin) => { pin.provenance.sidecars.push(pin.provenance.sidecars[0]); },
+    (pin) => { pin.provenance.sidecars[0].name = "sidevoice.sigstore.json"; },
+    (pin) => { pin.provenance.sidecars[0].url = pin.asset_url; },
+    (pin) => { pin.provenance.sidecars[0].url = "https://github.com/sidevoice/sidevoice-connector/releases/download/nightly/provenance.zip"; },
+  ]) {
+    const pin = fixturePin(); mutate(pin);
+    assert.throws(() => validatePin(pin), /requires one immutable/);
+  }
   const pin = fixturePin();
-  pin.provenance.sidecars = [];
-  assert.equal(validatePin(pin), pin);
-
   pin.core_manifest_sidecars = [];
   assert.throws(() => validatePin(pin), /no pinned core manifest attestation sidecars/);
+  const branchPin = fixturePin();
+  branchPin.provenance.workflow = ".github/workflows/r4-sea.yml@refs/heads/feature";
+  assert.throws(() => validatePin(branchPin), /incomplete provenance/);
 });
 
 test("SEA version and embedded core metadata must match the pin", () => {
@@ -122,6 +133,6 @@ test("pins reject unsafe or colliding sidecar output names", () => {
     const pin = fixturePin(); pin.core_manifest_sidecars[0].name = name;
     assert.throws(() => validatePin(pin), /sidecar/);
   }
-  const pin = fixturePin(); pin.provenance.sidecars[0].name = pin.core_manifest_sidecars[0].name;
+  const pin = fixturePin(); pin.core_manifest_sidecars[0].name = pin.provenance.sidecars[0].name;
   assert.throws(() => validatePin(pin), /duplicate/);
 });
