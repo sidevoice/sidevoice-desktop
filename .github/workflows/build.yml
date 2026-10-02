@@ -382,7 +382,7 @@ jobs:
           # and its Origin kept, 401 without the secret, 404 for native's own routes, a WebSocket spliced and refused.
           grep -q "local-host-flow ok" /tmp/lh.log
           LINE=$(grep "local-host-flow ok" /tmp/lh.log)
-          for fact in version=2 state=running/api=1 subscribed=running pairing=ok host=fake-machine \
+          for fact in version=3 state=running/api=1 subscribed=running pairing=ok host=fake-machine \
               fetch=200/device/tauri://localhost/the_bundled_page no_secret=401 native_only=404 \
               ws=open/sidevoice/ping_from_the_page ws_no_secret=refused; do
             echo "$LINE" | grep -q " $fact" || { echo "missing $fact"; exit 1; }
