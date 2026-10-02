@@ -810,9 +810,12 @@ echo '{{"ok":true}}'"#
             );
             let mut queued = Vec::new();
             for _ in 0..400 {
-                queued.extend_from_slice(b"{\"type\":\"progress\",\"step\":\"download\",\"done\":null,\"total\":null}\n");
+                queued
+                    .extend_from_slice(b"{\"type\":\"progress\",\"step\":\"download\",\"done\":null,\"total\":null}\n");
             }
-            queued.extend_from_slice(format!("{{\"type\":\"progress\",\"step\":\"{step}\",\"done\":null,\"total\":null}}\n").as_bytes());
+            queued.extend_from_slice(
+                format!("{{\"type\":\"progress\",\"step\":\"{step}\",\"done\":null,\"total\":null}}\n").as_bytes(),
+            );
             assert!(queued.len() > 16 * 1024);
             let mut writer = unsafe { std::fs::File::from_raw_fd(fds[1]) };
             writer.write_all(&queued).unwrap();

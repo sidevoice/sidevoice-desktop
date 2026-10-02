@@ -690,10 +690,7 @@ mod tests {
         let frames = find_install_job("completed-job", None, &completed).unwrap().after(0);
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].step, "pairing");
-        assert_eq!(
-            find_install_job("other-job", None, &completed).err().unwrap().key,
-            "install.job-ended"
-        );
+        assert_eq!(find_install_job("other-job", None, &completed).err().unwrap().key, "install.job-ended");
     }
 
     #[test]
