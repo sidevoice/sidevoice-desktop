@@ -454,7 +454,7 @@ pub(crate) mod test_support {
     #[test]
     fn pending_or_incomplete_pin_is_rejected() {
         let pin = fixture_pin();
-        assert!(pin.validate_ready().is_ok(), "core PR #34's `{bundles,wheel}` bytes are accepted as produced");
+        assert!(pin.validate_ready().is_ok(), "core PR #34's `{{bundles,wheel}}` bytes are accepted as produced");
         let mut pin = fixture_pin();
         pin.status = "pending".into();
         assert_eq!(pin.validate_ready().unwrap_err().key, "install.pin-invalid");
