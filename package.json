@@ -8,9 +8,12 @@
     "tauri": "tauri",
     "test": "node --test test/*.test.mjs",
     "connector:prepare": "node scripts/fetch-connector.mjs",
-    "build:mac": "npm run connector:prepare && tauri build --target aarch64-apple-darwin --bundles app --config src-tauri/tauri.macos-aarch64.conf.json",
+    "build:mac": "node scripts/build-mac.mjs",
     "web-assets": "node scripts/web-assets.mjs",
-    "icons": "node scripts/make-icons.mjs"
+    "icons": "node scripts/make-icons.mjs",
+    "build:mac:fixture": "node scripts/build-mac.mjs fixture",
+    "build:mac:probe": "node scripts/build-mac.mjs probe",
+    "package:mac": "npm run build:mac && bash test/macos/package-dmg.sh"
   },
   "devDependencies": {
     "@resvg/resvg-js": "2.6.2",

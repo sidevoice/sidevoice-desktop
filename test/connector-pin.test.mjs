@@ -30,7 +30,7 @@ function fixturePin() {
       sha256: "c".repeat(64), size: 11 }],
     executable_sha256: "d".repeat(64),
     executable_size: 123,
-    asset_url: "https://api.github.com/repos/sidevoice/sidevoice-connector/actions/runs/123/artifacts/456/zip",
+    asset_url: "https://api.github.com/repos/sidevoice/sidevoice-connector/actions/artifacts/456/zip",
     metadata_protocol: "sidevoice-metadata-v1",
     progress_protocol: "sidevoice-progress-jsonl-v1",
     core_api: 1,
@@ -40,7 +40,7 @@ function fixturePin() {
     provenance: {
       repository: "sidevoice/sidevoice-connector",
       repository_id: "12345",
-      workflow: ".github/workflows/build.yml@refs/heads/main",
+      workflow: ".github/workflows/r4-sea.yml@refs/heads/main",
       run_id: 123,
       artifact_name: "sidevoice-macos-aarch64",
       sidecars: [{ name: "sidevoice.sigstore.json",
@@ -118,4 +118,14 @@ test("SEA version and embedded core metadata must match the pin", () => {
   metadata.embedded_core.manifest_sha256 = pin.core_manifest_sha256;
   metadata.embedded_core.assets[0].sha256 = "0".repeat(64);
   assert.throws(() => verifyMetadata(pin, version, metadata), /embedded_core.assets/);
+});
+
+
+test("pins reject unsafe or colliding sidecar output names", () => {
+  for (const name of [".", "..", "sidevoice", "connector-artifact.zip", "../manifest.json"]) {
+    const pin = fixturePin(); pin.core_manifest_sidecars[0].name = name;
+    assert.throws(() => validatePin(pin), /sidecar/);
+  }
+  const pin = fixturePin(); pin.provenance.sidecars[0].name = pin.core_manifest_sidecars[0].name;
+  assert.throws(() => validatePin(pin), /duplicate/);
 });

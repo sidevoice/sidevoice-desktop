@@ -1,6 +1,7 @@
 import { constants } from "node:fs";
-import { appendFile, chmod, copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { appendFile, chmod, copyFile, mkdir, readFile, stat, lstat, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { t } from "./build-i18n.mjs";
 import { fetchConnector } from "./connector-pin.mjs";
 import { fixtureResponses, sha256 } from "./connector-package-fixture.mjs";
 
@@ -16,7 +17,16 @@ if (pin.status === "ready") {
   const source = resolve("test/fixtures/connector-package-cli.sh");
   const destination = resolve("src-tauri/resources/sidevoice");
   await mkdir(resolve("src-tauri/resources"), { recursive: true });
-  await copyFile(source, destination, constants.COPYFILE_EXCL); // Never replace a real or previous connector resource.
+  try {
+    await copyFile(source, destination, constants.COPYFILE_EXCL);
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    // Repeated fixture builds may reuse only the same regular fixture file, never a real connector or link.
+    if (!(await lstat(destination)).isFile()
+        || sha256(await readFile(destination)) !== sha256(await readFile(source))) {
+      throw new Error(t("build.existingResource"));
+    }
+  }
   await chmod(destination, 0o755);
   const bytes = await readFile(destination);
   const info = await stat(destination);
