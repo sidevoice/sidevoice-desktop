@@ -436,7 +436,10 @@ impl LocalHost {
         }
         Err(Refusal::new(
             "install.pairing",
-            format!("The connector reported {}, but its compatible core is not paired and reachable yet.", action.as_str()),
+            format!(
+                "The connector reported {}, but its compatible core is not paired and reachable yet.",
+                action.as_str()
+            ),
         ))
     }
 
