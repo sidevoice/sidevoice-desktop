@@ -261,10 +261,15 @@ impl Cli {
         };
         loop {
             if !cancel_sent && cancel.is_some_and(CancelToken::is_requested) {
-                // SAFETY: this is the process group created for this CLI invocation.
-                unsafe { libc::killpg(group, libc::SIGINT) };
                 cancel_sent = true;
-                cancel_at = Some(Instant::now());
+                // The cancellation token can race with the progress callback that closes the commit boundary.
+                // Drain first so an already-written commit/rollback event prevents a post-boundary signal.
+                drain_pending_progress(&mut streams, &mut receive_progress);
+                if !transaction_finalizing.get() {
+                    // SAFETY: this is the process group created for this CLI invocation.
+                    unsafe { libc::killpg(group, libc::SIGINT) };
+                    cancel_at = Some(Instant::now());
+                }
             }
             let cancel_expired = cancel_at.is_some_and(|at| at.elapsed() >= cancel_deadline) && status.is_none();
             if cancel_expired && !transaction_finalizing.get() {
@@ -726,35 +731,37 @@ echo '{"ok":true}'"#,
     }
 
     #[test]
-    fn cancellation_does_not_kill_an_installer_after_commit_progress() {
-        let tmp = tempfile::tempdir().unwrap();
-        let signal_seen = tmp.path().join("cancel-signal-seen");
-        let script = format!(
-            r#"trap 'touch "{signal_seen}"' INT
-echo '{{"type":"progress","step":"commit","done":null,"total":null}}' >&2
-while [ ! -e "{signal_seen}" ]; do sleep 0.01; done
+    fn cancellation_does_not_signal_an_installer_after_commit_progress() {
+        for step in ["commit", "rollback"] {
+            let tmp = tempfile::tempdir().unwrap();
+            let signal_seen = tmp.path().join("cancel-signal-seen");
+            let script = format!(
+                r#"trap 'touch "{signal_seen}"' INT
+echo '{{"type":"progress","step":"{step}","done":null,"total":null}}' >&2
 sleep 0.25
 echo '{{"ok":true}}'"#,
-            signal_seen = signal_seen.display()
-        );
-        let cli = fake(tmp.path(), &script);
-        let cancel = CancelToken::default();
-        let answer = cli
-            .run_inner(
-                &["install", "--json", "--progress=jsonl"],
-                Duration::from_secs(3),
-                Some(&cancel),
-                Duration::from_millis(75),
-                |event| {
-                    if event.step == "commit" {
-                        cancel.request();
-                    }
-                },
-            )
-            .unwrap();
-        assert_eq!(answer["ok"], true);
-        assert!(cancel.is_requested());
-        assert!(signal_seen.exists(), "the installer received the requested SIGINT");
+                signal_seen = signal_seen.display(),
+                step = step
+            );
+            let cli = fake(tmp.path(), &script);
+            let cancel = CancelToken::default();
+            let answer = cli
+                .run_inner(
+                    &["install", "--json", "--progress=jsonl"],
+                    Duration::from_secs(3),
+                    Some(&cancel),
+                    Duration::from_millis(75),
+                    |event| {
+                        if event.step == step {
+                            cancel.request();
+                        }
+                    },
+                )
+                .unwrap();
+            assert_eq!(answer["ok"], true, "{step}");
+            assert!(cancel.is_requested(), "{step}");
+            assert!(!signal_seen.exists(), "the installer must not receive SIGINT after {step} progress");
+        }
     }
 
     #[test]

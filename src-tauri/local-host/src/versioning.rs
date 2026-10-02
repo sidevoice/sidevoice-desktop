@@ -69,6 +69,11 @@ pub fn update_status(pin: Option<&ConnectorPin>, installed: Option<&InstalledBui
             if nightly_candidate && candidate > current {
                 return UpdateStatus::Available;
             }
+            if installed_channel == "source" && candidate_channel != "source" {
+                // Connector release.decide replaces a source checkout with a packaged channel, even at the same
+                // connector version. The installed source identity is not the bundled SEA's identity.
+                return UpdateStatus::Available;
+            }
             if !same_channel {
                 // The connector treats cross-channel same-version selections as a no-op unless the candidate nightly
                 // sequence above is newer. A lower sequence does not mean this cross-channel artifact should be used.
@@ -147,6 +152,13 @@ mod tests {
             update_status(Some(&pin), Some(&installed("1.2.3", "release", 43, Some(1), Some(1)))),
             UpdateStatus::Current,
             "a lower same-version nightly candidate is a cross-channel no-op"
+        );
+        let mut release_pin = pin.clone();
+        release_pin.channel = Some("release".into());
+        assert_eq!(
+            update_status(Some(&release_pin), Some(&installed("1.2.3", "source", 0, Some(1), Some(1)))),
+            UpdateStatus::Available,
+            "the connector upgrades a source checkout to a release candidate at the same version"
         );
     }
 

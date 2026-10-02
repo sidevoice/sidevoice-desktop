@@ -136,6 +136,7 @@ mod imp {
     use sidevoice_local_host::host::{computer_name, Action, Config, LocalHost};
     use sidevoice_local_host::paths::DataDirs;
     use sidevoice_local_host::pin::{ConnectorPin, InstalledBuild};
+    use sidevoice_local_host::state::Report;
     use sidevoice_local_host::versioning::{self, UpdateStatus};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
@@ -246,6 +247,16 @@ mod imp {
         format!("{prefix}-{now:x}-{:x}", JOBS.fetch_add(1, Ordering::Relaxed))
     }
 
+    fn noop_update_response(report: &Report) -> Answer {
+        let mut response = serde_json::to_value(report)
+            .map_err(|_| refusal("internal", "The local-host status could not be serialized."))?;
+        let Some(fields) = response.as_object_mut() else {
+            return Err(refusal("internal", "The local-host status could not be serialized."));
+        };
+        fields.insert("result".into(), json!("noop"));
+        Ok(response)
+    }
+
     pub fn install(app: &AppHandle, job: &str) -> Answer {
         let host = host(app)?;
         let pin = pin()?;
@@ -298,9 +309,7 @@ mod imp {
                     .map(|report| json!(report))
                     .map_err(|error| json!(error))
             }
-            UpdateStatus::Current => {
-                Ok(json!({"state": report.state, "reachable": report.reachable, "result": "noop"}))
-            }
+            UpdateStatus::Current => noop_update_response(&report),
             UpdateStatus::NewerInstalled => Err(refusal(
                 "update.newer-installed",
                 "A newer connector is already installed; the app will not downgrade it.",
@@ -356,5 +365,33 @@ mod imp {
     }
     pub fn agents(_app: &AppHandle) -> Answer {
         Err(unsupported())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::noop_update_response;
+        use sidevoice_local_host::state::{Report, State};
+        use serde_json::json;
+
+        #[test]
+        fn update_noop_preserves_the_complete_local_host_status() {
+            let mut report = Report::new(State::Running);
+            report.failure = Some(json!({"key":"service.warning"}));
+            report.core = Some(json!({"version":"0.1.0","api":1}));
+            report.service = Some("launchd".into());
+            report.calls = Some(4);
+            report.attempts = Some(2);
+            report.limit = Some(5);
+            report.progress = Some(json!({"job":"job-1","sequence":3,"step":"pairing","cancellable":false}));
+            report.reachable = true;
+
+            let response = noop_update_response(&report).unwrap();
+            assert_eq!(response, json!({
+                "state":"running", "failure":{"key":"service.warning"}, "core":{"version":"0.1.0","api":1},
+                "service":"launchd", "calls":4, "attempts":2, "limit":5,
+                "progress":{"job":"job-1","sequence":3,"step":"pairing","cancellable":false},
+                "reachable":true, "result":"noop"
+            }));
+        }
     }
 }

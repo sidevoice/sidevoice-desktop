@@ -138,7 +138,9 @@ echo '{"type":"progress","step":"commit","done":null,"total":null}' >&2"#;
     assert_eq!(report.state, State::Running);
     assert!(report.reachable);
     assert!(host.pairing().is_some(), "the existing R1 poll projects the local pairing");
-    assert_eq!(host.install_progress("job-a", 0).unwrap_err().key, "install.job-ended");
+    let completed = host.install_progress("job-a", 0).unwrap();
+    assert_eq!(completed.iter().map(|frame| frame.step.as_str()).collect::<Vec<_>>(), ["download", "commit"]);
+    assert!(!completed[1].cancellable, "completed progress remains available for the bridge's final poll");
 }
 
 #[test]
