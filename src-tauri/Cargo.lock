@@ -3595,7 +3595,7 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "sidevoice-desktop"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "block2",
  "objc2",
@@ -3620,7 +3620,7 @@ dependencies = [
 
 [[package]]
 name = "sidevoice-desktop-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3629,7 +3629,7 @@ dependencies = [
 
 [[package]]
 name = "sidevoice-desktop-engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bzip2",
  "libc",
