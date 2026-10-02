@@ -79,8 +79,13 @@ def read_pin_and_verify_sea():
     require(sys.platform == "darwin" and platform.machine() == "arm64", "requires a native macOS arm64 runner")
     app = APP.resolve(strict=True)
     probe_app = PROBE_APP.resolve(strict=True)
+    require((probe_app / "Contents/MacOS/sidevoice-desktop").is_file(), "probe app executable is missing")
     resources = app / "Contents/Resources/resources"
-    pin = json.loads((resources / "connector-pin.json").read_text(encoding="utf-8"))
+    pin_path = resources / "connector-pin.json"
+    pin_bytes = pin_path.read_bytes()
+    require(pin_bytes == Path("src-tauri/connector-pin.json").read_bytes(),
+            "production app pin does not match the source pin compiled into the probe app")
+    pin = json.loads(pin_bytes)
     require(pin.get("status") == "ready" and pin.get("target") == "macos-aarch64", "packaged connector pin is not ready for macOS arm64")
     sea = resources / "sidevoice"
     info = sea.stat()
@@ -88,15 +93,6 @@ def read_pin_and_verify_sea():
     require(info.st_size == pin.get("executable_size"), "packaged SEA size does not match the reviewed pin")
     sea_sha256 = sha256_file(sea)
     require(sea_sha256 == pin.get("executable_sha256"), "packaged SEA digest does not match the reviewed pin")
-    probe_resources = probe_app / "Contents/Resources/resources"
-    probe_pin = (probe_resources / "connector-pin.json").read_bytes()
-    require(probe_pin == (resources / "connector-pin.json").read_bytes(),
-            "probe app does not carry the production connector pin bytes")
-    probe_sea = probe_resources / "sidevoice"
-    require(probe_sea.is_file() and not probe_sea.is_symlink(), "probe app has no regular bundled SEA")
-    require(probe_sea.stat().st_size == info.st_size
-            and sha256_file(probe_sea) == sea_sha256,
-            "probe app does not carry the production SEA bytes")
     version = run_json(sea, ["--version", "--json"], timeout=20, action="SEA version")
     for key, expected in {
         "format": "sea", "sea": True, "version": pin.get("connector_version"),

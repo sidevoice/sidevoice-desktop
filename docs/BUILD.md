@@ -101,10 +101,11 @@ CI-probe packaging, before any other app launch. It requires a fresh hosted acco
 and no pre-existing Sidevoice app config, service, or data directory. It strips inherited credentials from
 connector subprocesses, never logs the pairing code or stored app token, bounds app/CLI waits, and traps
 interruption to stop the app and uninstall. The production app launches from its packaged executable. The CI-only
-probe app must carry the exact production pin and SEA bytes; its injected check runs inside the actual vendored page
-and requires a reachable native report, an app pairing whose device ID is current in the genuine core's
-authenticated device list, and a same-version bridge update `noop` that preserves the host identity. The probe
-feature and its script are excluded from production packages. A pending-pin fixture never runs this smoke.
+probe app compiles from the same source pin as production; its injected check runs inside the actual vendored page
+against the core installed by the production bundle. It requires a reachable native report, an app pairing whose
+device ID is current in the genuine core's authenticated device list, and a same-version bridge update `noop` that
+preserves the host identity. The probe feature and its script are excluded from production packages. A pending-pin
+fixture never runs this smoke.
 
 This hosted check does not exercise Finder/LaunchServices behavior, click through the UI installer, connect a
 separate phone or computer, enter a room, or request microphone permission. Those require a human-operated Mac and
