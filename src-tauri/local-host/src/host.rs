@@ -82,7 +82,6 @@ const STATUS_TIMEOUT: Duration = Duration::from_secs(10);
 const PAIR_DEVICE_TIMEOUT: Duration = Duration::from_secs(30);
 const PAIR_ROOM_TIMEOUT: Duration = Duration::from_secs(60);
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(45 * 60);
-const INSTALL_LOCK_WAIT: Duration = Duration::from_secs(10 * 60);
 const MAX_PROGRESS_EVENTS: usize = 512;
 
 /// Where the app keeps its side, and what it calls itself.
@@ -384,27 +383,7 @@ impl LocalHost {
     }
 
     fn run_bundled_install(&self, cli: &Cli, job: &Arc<InstallJob>) -> Result<Report, Refusal> {
-        let deadline = Instant::now() + INSTALL_LOCK_WAIT;
-        let lock = self.config.dirs.data.join("install.lock");
-        while std::fs::symlink_metadata(&lock).is_ok() {
-            job.progress(ProgressEvent { step: "wait-lock".into(), done: None, total: None });
-            if job.cancel.is_requested() {
-                return Err(Refusal::new("install.cancelled", "The install was cancelled before it started."));
-            }
-            if Instant::now() >= deadline {
-                return Err(Refusal::new(
-                    "cli.timeout",
-                    "Another Sidevoice installer held the install lock for too long.",
-                ));
-            }
-            std::thread::sleep(Duration::from_millis(150));
-        }
-        let answer = cli.run_with_progress(
-            &["install", "--no-agents", "--service", "--json", "--progress=jsonl"],
-            INSTALL_TIMEOUT,
-            &job.cancel,
-            |event| job.progress(event),
-        )?;
+        let answer = run_connector_install(cli, job)?;
         self.inner.lock().unwrap().fallback = None;
         let report = self.poll();
         if report.state == State::Incompatible {
@@ -611,6 +590,17 @@ impl LocalHost {
     }
 }
 
+/// The connector owns `D/install.lock` as a permanent inode and reports actual flock waits over progress JSONL.
+/// Always start it; checking whether the path exists would mistake every completed install for an active lock holder.
+fn run_connector_install(cli: &Cli, job: &InstallJob) -> Result<Value, Refusal> {
+    cli.run_with_progress(
+        &["install", "--no-agents", "--service", "--json", "--progress=jsonl"],
+        INSTALL_TIMEOUT,
+        &job.cancel,
+        |event| job.progress(event),
+    )
+}
+
 fn install_failure_refusal(failure: &Value) -> Refusal {
     let key = failure.get("key").and_then(Value::as_str).unwrap_or("install.pairing");
     crate::cli::refusal_for_key(key)
@@ -663,5 +653,44 @@ mod tests {
         let refusal = install_failure_refusal(&serde_json::json!({"message":"untrusted"}));
         assert_eq!(refusal.key, "install.pairing");
         assert!(!refusal.message.contains("untrusted"));
+    }
+
+    #[test]
+    fn a_permanent_install_lock_inode_does_not_block_the_connector_or_its_wait_progress() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = DataDirs::new(tmp.path().join("data"));
+        std::fs::create_dir(&dirs.data).unwrap();
+        std::fs::set_permissions(&dirs.data, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::write(dirs.data.join("install.lock"), b"").unwrap();
+
+        let executable = dirs.data.join("sidevoice");
+        std::fs::write(
+            &executable,
+            r##"#!/bin/sh
+if [ "$1" = "install" ]; then
+  echo '{"type":"progress","step":"wait-lock","done":null,"total":null}' >&2
+  : > "$SIDEVOICE_DATA_DIR/install-command-ran"
+  echo '{"ok":true,"result":"installed"}'
+else
+  exit 2
+fi
+"##,
+        )
+        .unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let install = serde_json::json!({ "command": [executable.to_string_lossy().to_string()] });
+        std::fs::write(dirs.install_record(), serde_json::to_vec(&install).unwrap()).unwrap();
+        std::fs::set_permissions(dirs.install_record(), std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let cli = Cli::installed(&dirs).unwrap();
+        let job = InstallJob::new("lock-fixture".into());
+        let answer = run_connector_install(&cli, &job).unwrap();
+        assert_eq!(answer["result"], "installed");
+        assert!(dirs.data.join("install-command-ran").exists());
+        let events = job.events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].step, "wait-lock");
     }
 }
