@@ -188,12 +188,18 @@ def run_json(sea, args, timeout, action, require_ok=True, progress=False,
 
     if INTERRUPTED and not IN_CLEANUP:
         raise SmokeFailure(f"interrupted by {INTERRUPTED}")
-    require(return_code == 0, f"{action} exited with status {return_code}")
     try:
         result = json.loads(stdout)
     except (UnicodeDecodeError, json.JSONDecodeError):
-        raise SmokeFailure(f"{action} did not return valid JSON") from None
+        raise SmokeFailure(f"{action} exited with status {return_code} without valid JSON") from None
     require(isinstance(result, dict), f"{action} returned an unexpected JSON value")
+    if return_code != 0:
+        failure = result.get("failure")
+        failure_key = failure.get("key") if isinstance(failure, dict) else None
+        if not isinstance(failure_key, str) or not re.fullmatch(r"[a-z0-9._-]{1,80}", failure_key):
+            failure_key = None
+        detail = f"; underlying {failure_key}" if failure_key else ""
+        raise SmokeFailure(f"{safe_refusal(action, result)}{detail}; exit status {return_code}")
     if require_ok:
         require(result.get("ok") is True, safe_refusal(action, result))
     if require_progress:
