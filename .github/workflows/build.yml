@@ -11,6 +11,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      fixture:
+        description: Check resource wiring with a pending-pin fixture; never publish or upload installers.
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       release-tag:
@@ -104,7 +109,7 @@ jobs:
       engine: ${{ github.event_name != 'pull_request' || steps.filter.outputs.engine == 'true' }}
       card: ${{ github.event_name != 'pull_request' || steps.filter.outputs.card == 'true' }}
       # The .dmg: never on a pull request. (Windows and Linux build their installers on every run.)
-      installers: ${{ github.event_name != 'pull_request' }}
+      installers: ${{ github.event_name != 'pull_request' && !inputs.fixture }}
       # Where the installers go: the release that called this, or the rolling `nightly` pre-release on a push to main.
       publish: ${{ inputs.release-tag && 'release' || (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'nightly' || '' }}
     steps:
@@ -199,10 +204,10 @@ jobs:
         id: connector
         run: node -e 'const fs = require("node:fs"); fs.appendFileSync(process.env.GITHUB_OUTPUT, "status=" + require("./src-tauri/connector-pin.json").status + "\n")'
       - name: Build the explicit fixture package (resource wiring only)
-        if: github.event_name == 'pull_request' && steps.connector.outputs.status == 'pending'
+        if: (github.event_name == 'pull_request' || inputs.fixture) && steps.connector.outputs.status == 'pending'
         run: npm run build:mac:fixture
       - name: Build and verify the real app (the same command as a developer Mac)
-        if: github.event_name != 'pull_request' || steps.connector.outputs.status != 'pending'
+        if: (github.event_name != 'pull_request' && !inputs.fixture) || steps.connector.outputs.status != 'pending'
         env:
           # The built-in token is restricted to this repository. A trusted manual/main run may use the
           # narrowly scoped cross-repository Actions: read token; never expose it to PR code.
