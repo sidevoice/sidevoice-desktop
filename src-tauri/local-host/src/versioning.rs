@@ -69,13 +69,13 @@ pub fn update_status(pin: Option<&ConnectorPin>, installed: Option<&InstalledBui
             if nightly_candidate && candidate > current {
                 return UpdateStatus::Available;
             }
+            if !same_channel {
+                // The connector treats cross-channel same-version selections as a no-op unless the candidate nightly
+                // sequence above is newer. A lower sequence does not mean this cross-channel artifact should be used.
+                return UpdateStatus::Current;
+            }
             if nightly_candidate && candidate < current {
                 return UpdateStatus::NewerInstalled;
-            }
-            if !same_channel {
-                // Match connector `decide`: a release never replaces a same-version nightly, and a nightly whose
-                // sequence is not newer never replaces another channel. Both cases are no-ops, never updates.
-                return UpdateStatus::Current;
             }
             if nightly_candidate && candidate != current {
                 return UpdateStatus::Unknown;
@@ -145,7 +145,8 @@ mod tests {
         );
         assert_eq!(
             update_status(Some(&pin), Some(&installed("1.2.3", "release", 43, Some(1), Some(1)))),
-            UpdateStatus::NewerInstalled
+            UpdateStatus::Current,
+            "a lower same-version nightly candidate is a cross-channel no-op"
         );
     }
 

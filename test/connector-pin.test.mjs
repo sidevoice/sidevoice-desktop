@@ -85,8 +85,12 @@ test("R4-b artifact pins may omit connector sidecars when the core manifest atte
   pin.provenance.sidecars = [];
   assert.equal(validatePin(pin), pin);
 
+  const noManifestSidecar = fixturePin();
+  noManifestSidecar.core_manifest_sidecars = [];
+  assert.throws(() => validatePin(noManifestSidecar), /no pinned core manifest attestation sidecars/);
+
   pin.core_manifest_sidecars = [];
-  assert.throws(() => validatePin(pin), /no pinned attestation sidecars/);
+  assert.throws(() => validatePin(pin), /no pinned core manifest attestation sidecars/);
 });
 
 test("SEA version and embedded core metadata must match the pin", () => {

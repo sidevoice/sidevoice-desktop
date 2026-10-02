@@ -347,7 +347,7 @@ impl Stream {
 
 /// Waits at most `wait` for any open stream to have something, and reads what there is. End of file, or an error,
 /// closes the stream; beyond [`OUTPUT_LIMIT`] bytes are read and dropped.
-fn drain(streams: &mut [Stream], wait: Duration, on_progress: &mut impl FnMut(ProgressEvent)) {
+fn drain(streams: &mut [Stream], wait: Duration, on_progress: &mut impl FnMut(ProgressEvent)) -> bool {
     let mut polled: Vec<libc::pollfd> = streams
         .iter()
         .filter_map(|s| s.fd.as_ref())
@@ -357,8 +357,9 @@ fn drain(streams: &mut [Stream], wait: Duration, on_progress: &mut impl FnMut(Pr
     // SAFETY: `polled` is a valid array of its length; with none, poll only sleeps.
     let ready = unsafe { libc::poll(polled.as_mut_ptr(), polled.len() as libc::nfds_t, millis) };
     if ready <= 0 {
-        return;
+        return false;
     }
+    let mut read_any = false;
     let mut events = polled.iter().map(|p| p.revents);
     for (index, stream) in streams.iter_mut().enumerate().filter(|(_, s)| s.fd.is_some()) {
         if events.next().unwrap_or(0) == 0 {
@@ -370,8 +371,11 @@ fn drain(streams: &mut [Stream], wait: Duration, on_progress: &mut impl FnMut(Pr
         let n = unsafe { libc::read(fd, chunk.as_mut_ptr() as *mut libc::c_void, chunk.len()) };
         if n <= 0 {
             stream.fd = None;
-        } else if (stream.bytes.len() as u64) < OUTPUT_LIMIT {
-            stream.bytes.extend_from_slice(&chunk[..n as usize]);
+        } else {
+            read_any = true;
+            if (stream.bytes.len() as u64) < OUTPUT_LIMIT {
+                stream.bytes.extend_from_slice(&chunk[..n as usize]);
+            }
         }
         if index == 1 && n > 0 {
             for byte in &chunk[..n as usize] {
@@ -394,11 +398,12 @@ fn drain(streams: &mut [Stream], wait: Duration, on_progress: &mut impl FnMut(Pr
             }
         }
     }
+    read_any
 }
 
-/// Progress already written by the connector must be consumed before a timeout or cancellation can kill its process.
+/// Drain all currently queued bytes so a final progress frame behind several output chunks precedes timeout/cancel kill.
 fn drain_pending_progress(streams: &mut [Stream], on_progress: &mut impl FnMut(ProgressEvent)) {
-    drain(streams, Duration::ZERO, on_progress);
+    while drain(streams, Duration::ZERO, on_progress) {}
 }
 
 fn progress_record(bytes: &[u8]) -> Option<ProgressEvent> {
@@ -780,26 +785,49 @@ echo '{{"ok":true}}'"#
     }
 
     #[test]
-    fn pending_commit_or_rollback_progress_is_drained_before_a_kill_decision() {
+    fn pending_commit_or_rollback_after_large_progress_is_drained_before_a_kill_decision() {
         use std::io::Write;
         use std::os::fd::FromRawFd;
 
         for step in ["commit", "rollback"] {
             let mut fds = [-1; 2];
-            // SAFETY: `fds` points to two writable integers for the pipe descriptors.
-            assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+            // SAFETY: `fds` points to two writable integers for the socket descriptors.
+            assert_eq!(unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()) }, 0);
             let reader = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+            let send_buffer: libc::c_int = 64 * 1024;
+            // SAFETY: `send_buffer` is a valid socket option value, and `fds[1]` is open.
+            assert_eq!(
+                unsafe {
+                    libc::setsockopt(
+                        fds[1],
+                        libc::SOL_SOCKET,
+                        libc::SO_SNDBUF,
+                        &send_buffer as *const _ as *const libc::c_void,
+                        std::mem::size_of_val(&send_buffer) as libc::socklen_t,
+                    )
+                },
+                0
+            );
+            let mut queued = Vec::new();
+            for _ in 0..400 {
+                queued.extend_from_slice(b"{\"type\":\"progress\",\"step\":\"download\",\"done\":null,\"total\":null}\n");
+            }
+            queued.extend_from_slice(format!("{{\"type\":\"progress\",\"step\":\"{step}\",\"done\":null,\"total\":null}}\n").as_bytes());
+            assert!(queued.len() > 16 * 1024);
             let mut writer = unsafe { std::fs::File::from_raw_fd(fds[1]) };
-            writeln!(writer, "{{\"type\":\"progress\",\"step\":\"{step}\",\"done\":null,\"total\":null}}").unwrap();
+            writer.write_all(&queued).unwrap();
             drop(writer);
             let mut streams = [Stream::new(None), Stream::new(Some(reader))];
             let finalizing = std::cell::Cell::new(false);
+            let mut progress_count = 0;
             drain_pending_progress(&mut streams, &mut |event| {
+                progress_count += 1;
                 if matches!(event.step.as_str(), "commit" | "rollback") {
                     finalizing.set(true);
                 }
             });
             assert!(finalizing.get(), "the pending {step} record must win over timeout/cancellation kill");
+            assert_eq!(progress_count, 401);
         }
     }
 

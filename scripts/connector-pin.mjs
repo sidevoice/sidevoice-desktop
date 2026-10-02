@@ -133,6 +133,8 @@ export function validatePin(pin) {
     && Number.isSafeInteger(provenance.run_id) && provenance.run_id > 0
     && typeof provenance.artifact_name === "string" && provenance.artifact_name.length > 0,
   "has incomplete provenance.");
+  requirePin(Array.isArray(pin.core_manifest_sidecars) && pin.core_manifest_sidecars.length > 0,
+    "has no pinned core manifest attestation sidecars.");
   const sidecars = [...(provenance.sidecars || []), ...(pin.core_manifest_sidecars || [])];
   requirePin(sidecars.length > 0, "has no pinned attestation sidecars.");
   for (const sidecar of sidecars) {

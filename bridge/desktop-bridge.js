@@ -152,14 +152,15 @@
     function install(onProgress) {
       const job = "local-install-" + ++hostInstalls + "-" + Date.now().toString(36);
       let sequence = 0;
-      let active = true;
       let polling = false;
+      let inFlight = Promise.resolve();
       const poll = () => {
-        if (!active || polling || typeof onProgress !== "function") return;
+        if (typeof onProgress !== "function") return Promise.resolve();
+        if (polling) return inFlight;
         polling = true;
-        call("local_host_install_progress", { job, afterSequence: sequence })
+        inFlight = call("local_host_install_progress", { job, afterSequence: sequence })
           .then((frames) => {
-            if (!active || !Array.isArray(frames)) return;
+            if (!Array.isArray(frames)) return;
             for (const frame of frames) {
               if (!frame || !Number.isSafeInteger(frame.sequence) || frame.sequence <= sequence) continue;
               sequence = frame.sequence;
@@ -170,11 +171,12 @@
           })
           .catch(() => {})
           .finally(() => { polling = false; });
+        return inFlight;
       };
       const timer = typeof onProgress === "function" ? win.setInterval(poll, 150) : null;
       const promise = call("local_host_install", { job }).finally(() => {
-        active = false;
         if (timer !== null) win.clearInterval(timer);
+        return inFlight.then(() => poll());
       });
       promise.job = job;
       return promise;

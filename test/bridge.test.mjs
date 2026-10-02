@@ -477,6 +477,27 @@ test("localHost install progress and cancellation stay scoped to their job", asy
   assert.deepEqual(calls, [pending.job]);
 });
 
+test("localHost flushes final install progress when the install settles before the first poll", async () => {
+  const install = loadFactory();
+  const calls = [];
+  const { win } = localHostWindow({
+    local_host_install: { state: "running", reachable: true },
+    local_host_install_progress: ({ job, afterSequence }) => {
+      calls.push({ job, afterSequence });
+      return afterSequence === 0
+        ? [{ job, sequence: 1, step: "pairing", done: null, total: null, cancellable: false }]
+        : [];
+    },
+  });
+  const local = install(win, ORIGIN, null, true).host.localHost;
+  const progress = [];
+  assert.deepEqual(await local.install((event) => progress.push(event)), { state: "running", reachable: true });
+  assert.deepEqual(JSON.parse(JSON.stringify(progress)), [
+    { step: "pairing", done: null, total: null, cancellable: false },
+  ]);
+  assert.equal(calls.length, 1, "the settlement path performs a final progress poll");
+});
+
 test("localHost calls go to their native commands and resolve what the app answers", async () => {
   const install = loadFactory();
   const pairing = { fp: "fp", public_key: "k", device_id: "d", token: "secret", urls: ["http://127.0.0.1:5"], rv: null, host: "Mac", local: true };

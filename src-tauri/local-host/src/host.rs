@@ -83,6 +83,7 @@ const PAIR_DEVICE_TIMEOUT: Duration = Duration::from_secs(30);
 const PAIR_ROOM_TIMEOUT: Duration = Duration::from_secs(60);
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(45 * 60);
 const MAX_PROGRESS_EVENTS: usize = 512;
+const MAX_COMPLETED_INSTALL_JOBS: usize = 4;
 
 /// Where the app keeps its side, and what it calls itself.
 #[derive(Debug, Clone)]
@@ -115,6 +116,7 @@ pub struct LocalHost {
     /// One pass at a time: the poll thread's and an action's.
     passes: Mutex<()>,
     install_job: Mutex<Option<Arc<InstallJob>>>,
+    completed_install_jobs: Mutex<VecDeque<Arc<InstallJob>>>,
     stopped: AtomicBool,
     log: Arc<dyn Fn(&str) + Send + Sync>,
 }
@@ -235,6 +237,7 @@ impl LocalHost {
             }),
             passes: Mutex::new(()),
             install_job: Mutex::new(None),
+            completed_install_jobs: Mutex::new(VecDeque::new()),
             stopped: AtomicBool::new(false),
             log,
         }))
@@ -320,17 +323,11 @@ impl LocalHost {
         report
     }
 
-    /// Progress frames after `sequence`, scoped to exactly one active install job.
+    /// Progress frames after `sequence`, scoped to one active or recently completed install job.
     pub fn install_progress(&self, job_id: &str, sequence: u64) -> Result<Vec<InstallProgress>, Refusal> {
-        let job = self
-            .install_job
-            .lock()
-            .unwrap()
-            .clone()
-            .ok_or_else(|| Refusal::new("install.job-ended", "That install job has ended."))?;
-        if job.id != job_id {
-            return Err(Refusal::new("install.job-mismatch", "That install job does not belong to this request."));
-        }
+        let active = self.install_job.lock().unwrap().clone();
+        let completed = self.completed_install_jobs.lock().unwrap();
+        let job = find_install_job(job_id, active, &completed)?;
         Ok(job.after(sequence))
     }
 
@@ -373,6 +370,14 @@ impl LocalHost {
         }
         let result = self.run_bundled_install(&cli, &job);
         job.complete(result.as_ref().err().is_some_and(|error| error.key == "install.cancelled"));
+        {
+            let mut completed = self.completed_install_jobs.lock().unwrap();
+            completed.retain(|finished| finished.id != job.id);
+            completed.push_back(job.clone());
+            while completed.len() > MAX_COMPLETED_INSTALL_JOBS {
+                completed.pop_front();
+            }
+        }
         {
             let mut active = self.install_job.lock().unwrap();
             if active.as_ref().is_some_and(|current| Arc::ptr_eq(current, &job)) {
@@ -590,6 +595,25 @@ impl LocalHost {
     }
 }
 
+fn find_install_job(
+    job_id: &str,
+    active: Option<Arc<InstallJob>>,
+    completed: &VecDeque<Arc<InstallJob>>,
+) -> Result<Arc<InstallJob>, Refusal> {
+    if let Some(job) = active.as_ref().filter(|job| job.id == job_id) {
+        return Ok(job.clone());
+    }
+    if let Some(job) = completed.iter().find(|job| job.id == job_id) {
+        return Ok(job.clone());
+    }
+    let (key, message) = if active.is_some() {
+        ("install.job-mismatch", "That install job does not belong to this request.")
+    } else {
+        ("install.job-ended", "That install job has ended.")
+    };
+    Err(Refusal::new(key, message))
+}
+
 /// The connector owns `D/install.lock` as a permanent inode and reports actual flock waits over progress JSONL.
 /// Always start it; checking whether the path exists would mistake every completed install for an active lock holder.
 fn run_connector_install(cli: &Cli, job: &InstallJob) -> Result<Value, Refusal> {
@@ -653,6 +677,23 @@ mod tests {
         let refusal = install_failure_refusal(&serde_json::json!({"message":"untrusted"}));
         assert_eq!(refusal.key, "install.pairing");
         assert!(!refusal.message.contains("untrusted"));
+    }
+
+    #[test]
+    fn completed_install_progress_remains_available_for_the_final_bridge_poll() {
+        let job = Arc::new(InstallJob::new("completed-job".into()));
+        job.progress(ProgressEvent { step: "pairing".into(), done: None, total: None });
+        job.complete(false);
+        let mut completed = VecDeque::new();
+        completed.push_back(job);
+
+        let frames = find_install_job("completed-job", None, &completed).unwrap().after(0);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].step, "pairing");
+        assert_eq!(
+            find_install_job("other-job", None, &completed).err().unwrap().key,
+            "install.job-ended"
+        );
     }
 
     #[test]
