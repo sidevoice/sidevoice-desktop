@@ -58,7 +58,16 @@
       const gear = document.getElementById("settings-open");
       if (!gear || !gear.getAttribute("aria-label")?.toLowerCase().includes("agents")) throw new Error("unmarked-settings-gear");
       gear.click();
-      await until(() => document.getElementById("language-settings")?.open, 15000, "settings-dialog");
+      const settingsDialog = document.getElementById("language-settings");
+      const settingsError = document.getElementById("settings-error");
+      if (!settingsDialog || !settingsError) throw new Error("settings-dialog-controls-missing");
+      await until(() => settingsDialog.open || !!settingsError.textContent.trim(), 15000, "settings-dialog");
+      if (!settingsDialog.open) {
+        const requiredSettings = ["ui-language", "audio-grace-seconds", "replay-on-return-seconds", "turn-patience", "presence-sound", "locked-call"];
+        const missing = requiredSettings.filter((id) => !document.getElementById(id));
+        await say(`settings-state dialog=closed missing-fields=${missing.join(",") || "none"} error=yes agent-request=${store()?.facts?.settingsAgentRequest?.id ? "yes" : "no"}`);
+        throw new Error("settings-dialog-error");
+      }
       const machinesTab = document.getElementById("settings-machines");
       if (!machinesTab) throw new Error("settings-machines-control-missing");
       machinesTab.click();
