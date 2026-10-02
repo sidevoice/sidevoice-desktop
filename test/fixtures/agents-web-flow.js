@@ -107,13 +107,22 @@
   const safeName = (error) => /^[a-z0-9-]{1,64}$/.test(error?.message || "") ? error.message : "unexpected-error";
 
   (async () => {
+    let dialogOpenObserver = null;
     try {
       await until(() => window.sidevoiceActions && window.sidevoiceUI && listing()?.status === "ready"
         && listing()?.value?.agents?.some((agent) => agent.id === "cursor" && agent.actionable), 60000, "host-agent-scan");
 
       const gear = document.getElementById("settings-open");
       if (!gear || !gear.getAttribute("aria-label")?.toLowerCase().includes("agents")) throw new Error("unmarked-settings-gear");
+      const settingsDialog = document.getElementById("language-settings");
+      const settingsError = document.getElementById("settings-error");
+      if (!settingsDialog || !settingsError) throw new Error("settings-dialog-controls-missing");
       const nativeClickHandler = gear.onclick;
+      let handlerSource = "";
+      try {
+        if (typeof nativeClickHandler === "function") handlerSource = Function.prototype.toString.call(nativeClickHandler);
+      } catch {}
+      const hasHandlerMarker = (marker) => handlerSource.includes(marker);
       const handlerState = { invoked: false, outcome: "not-called" };
       if (typeof nativeClickHandler === "function") {
         gear.onclick = function (...args) {
@@ -128,27 +137,38 @@
           return result;
         };
       }
+      let dialogEverOpened = settingsDialog.open;
+      if (typeof MutationObserver === "function") {
+        dialogOpenObserver = new MutationObserver((records) => {
+          if (records.some((record) => record.target.id === "language-settings"
+            && record.attributeName === "open" && record.oldValue === null)) dialogEverOpened = true;
+        });
+        dialogOpenObserver.observe(document.documentElement, {
+          subtree: true, attributes: true, attributeFilter: ["open"], attributeOldValue: true,
+        });
+      }
       gear.click();
-      const settingsDialog = document.getElementById("language-settings");
-      const settingsError = document.getElementById("settings-error");
-      if (!settingsDialog || !settingsError) throw new Error("settings-dialog-controls-missing");
       await sleep(750);
+      dialogEverOpened ||= settingsDialog.open;
       if (!settingsDialog.open) {
         const requiredSettings = ["ui-language", "audio-grace-seconds", "replay-on-return-seconds", "turn-patience", "presence-sound", "locked-call"];
         const missing = requiredSettings.filter((id) => !document.getElementById(id));
         const reads = presentationReads.map((entry) => `${entry.status}/${entry.json}`).join(",") || "none";
         const modal = dialogAttempts.map((entry) => `${entry.id || "unknown"}:${entry.outcome}`).join(",") || "not-called";
-        await say(`settings-state dialog=closed connected=${settingsDialog.isConnected ? "yes" : "no"} click-handler=${typeof gear.onclick === "function" ? "yes" : "no"} handler-invoked=${handlerState.invoked ? "yes" : "no"} handler-outcome=${handlerState.outcome} dialog-api=${showModalAvailable ? "available" : "unavailable"} boot-error=${store()?.facts?.bootError ? "present" : "none"} missing-fields=${missing.join(",") || "none"} error=${settingsError.textContent.trim() ? "yes" : "no"} agent-request=${store()?.facts?.settingsAgentRequest?.id ? "yes" : "no"} language-fetch=${reads} show-modal=${modal}`);
+        await say(`settings-state dialog=closed connected=${settingsDialog.isConnected ? "yes" : "no"} click-handler=${typeof gear.onclick === "function" ? "yes" : "no"} handler-invoked=${handlerState.invoked ? "yes" : "no"} handler-outcome=${handlerState.outcome} handler-source-show-modal=${hasHandlerMarker("showModal") ? "yes" : "no"} handler-source-scan-agents=${hasHandlerMarker("scanPairedAgents") ? "yes" : "no"} handler-source-load-preferences=${hasHandlerMarker("loadPreferences") ? "yes" : "no"} dialog-ever-opened=${dialogEverOpened ? "yes" : "no"} dialog-api=${showModalAvailable ? "available" : "unavailable"} boot-error=${store()?.facts?.bootError ? "present" : "none"} missing-fields=${missing.join(",") || "none"} error=${settingsError.textContent.trim() ? "yes" : "no"} agent-request=${store()?.facts?.settingsAgentRequest?.id ? "yes" : "no"} language-fetch=${reads} show-modal=${modal}`);
       }
       try {
         await until(() => settingsDialog.open || !!settingsError.textContent.trim(), 15000, "settings-dialog");
       } catch (error) {
         if (error?.message === "timeout-settings-dialog" && !settingsDialog.open) {
+          dialogEverOpened ||= settingsDialog.open;
           const reads = presentationReads.map((entry) => `${entry.status}/${entry.json}`).join(",") || "none";
-          await say(`settings-timeout handler-invoked=${handlerState.invoked ? "yes" : "no"} handler-outcome=${handlerState.outcome} dialog-api=${showModalAvailable ? "available" : "unavailable"} boot-error=${store()?.facts?.bootError ? "present" : "none"} language-fetch=${reads} show-modal=${dialogAttempts.map((entry) => `${entry.id || "unknown"}:${entry.outcome}`).join(",") || "not-called"}`);
+          await say(`settings-timeout handler-invoked=${handlerState.invoked ? "yes" : "no"} handler-outcome=${handlerState.outcome} handler-source-show-modal=${hasHandlerMarker("showModal") ? "yes" : "no"} handler-source-scan-agents=${hasHandlerMarker("scanPairedAgents") ? "yes" : "no"} handler-source-load-preferences=${hasHandlerMarker("loadPreferences") ? "yes" : "no"} dialog-ever-opened=${dialogEverOpened ? "yes" : "no"} dialog-api=${showModalAvailable ? "available" : "unavailable"} boot-error=${store()?.facts?.bootError ? "present" : "none"} language-fetch=${reads} show-modal=${dialogAttempts.map((entry) => `${entry.id || "unknown"}:${entry.outcome}`).join(",") || "not-called"}`);
         }
+        dialogOpenObserver?.disconnect();
         throw error;
       }
+      dialogOpenObserver?.disconnect();
       if (!settingsDialog.open) {
         throw new Error("settings-dialog-error");
       }
@@ -215,6 +235,7 @@
 
       await say(`ok settings=machines host=agents gear=marked get=authorized cursor-connect=authorized codex-replace=manual-visible codex-copy=${copyResult} revoked=status`);
     } catch (error) {
+      dialogOpenObserver?.disconnect();
       await say("error " + safeName(error));
     }
   })();
