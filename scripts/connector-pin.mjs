@@ -4,8 +4,11 @@ import { dirname, resolve } from "node:path";
 import { promisify } from "node:util";
 import { execFile as execFileCallback, spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
-import { Readable, Transform } from "node:stream";
+import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+
+import { t } from "./build-i18n.mjs";
+import { artifactId, download, verifyRemoteProvenance } from "./github-artifact.mjs";
 
 const execFile = promisify(execFileCallback);
 const SHA256 = /^[0-9a-f]{64}$/i;
@@ -32,17 +35,6 @@ function githubAssetUrl(value) {
     || value.startsWith("https://github.com/sidevoice/sidevoice-core/")
     || value.startsWith("https://api.github.com/repos/sidevoice/sidevoice-core/")
   );
-}
-
-function immutableAssetUrl(value, runId) {
-  if (!githubAssetUrl(value)) return false;
-  try {
-    const url = new URL(value);
-    const prefix = `/repos/sidevoice/sidevoice-connector/actions/runs/${runId}/artifacts/`;
-    const artifact = url.pathname.startsWith(prefix) ? url.pathname.slice(prefix.length) : "";
-    return url.protocol === "https:" && url.hostname === "api.github.com" && !url.search && !url.hash
-      && artifact.endsWith("/zip") && /^[0-9]+$/.test(artifact.slice(0, -4));
-  } catch { return false; }
 }
 
 function coreReleaseAsset(url, filename, version, tag) {
@@ -118,7 +110,7 @@ export function validatePin(pin) {
     }), "pinned core assets do not match the bundles in the core manifest.");
   requirePin(SHA256.test(pin.executable_sha256 || ""), "has no valid SEA SHA-256.");
   requirePin(Number.isSafeInteger(pin.executable_size) && pin.executable_size > 0, "has no SEA byte size.");
-  requirePin(immutableAssetUrl(pin.asset_url, pin.provenance?.run_id), "does not name an immutable connector artifact.");
+  requirePin(artifactId(pin.asset_url), "does not name an immutable connector artifact.");
   requirePin(pin.metadata_protocol === "sidevoice-metadata-v1" && pin.progress_protocol === "sidevoice-progress-jsonl-v1",
     "does not pin the R4-b metadata and progress protocols.");
   requirePin(Number.isSafeInteger(pin.core_api) && pin.core_api > 0 && Number.isSafeInteger(pin.core_link) && pin.core_link > 0,
@@ -128,15 +120,20 @@ export function validatePin(pin) {
   "has an invalid connector/core link range.");
   const provenance = pin.provenance;
   requirePin(provenance?.repository === "sidevoice/sidevoice-connector"
-    && typeof provenance.repository_id === "string" && provenance.repository_id.length > 0
-    && typeof provenance.workflow === "string" && provenance.workflow.length > 0
+    && typeof provenance.repository_id === "string" && /^[1-9][0-9]*$/.test(provenance.repository_id)
+    && typeof provenance.workflow === "string" && /^\.github\/workflows\/r4-sea\.yml@refs\/heads\/[A-Za-z0-9._/-]+$/.test(provenance.workflow)
     && Number.isSafeInteger(provenance.run_id) && provenance.run_id > 0
     && typeof provenance.artifact_name === "string" && provenance.artifact_name.length > 0,
   "has incomplete provenance.");
-  const sidecars = [...(provenance.sidecars || []), ...(pin.core_manifest_sidecars || [])];
+  requirePin(Array.isArray(pin.core_manifest_sidecars) && pin.core_manifest_sidecars.length > 0,
+    t("pin.coreSidecars"));
+  requirePin(Array.isArray(provenance.sidecars), t("pin.connectorSidecars"));
+  const sidecars = [...provenance.sidecars, ...pin.core_manifest_sidecars];
+  requirePin(new Set(sidecars.map((item) => item?.name)).size === sidecars.length, t("pin.duplicateSidecars"));
   requirePin(sidecars.length > 0, "has no pinned attestation sidecars.");
   for (const sidecar of sidecars) {
     requirePin(sidecar && typeof sidecar.name === "string" && /^[A-Za-z0-9._-]+$/.test(sidecar.name)
+      && ![".", "..", "sidevoice", "connector-artifact.zip"].includes(sidecar.name)
       && githubAssetUrl(sidecar.url)
       && SHA256.test(sidecar.sha256 || "") && Number.isSafeInteger(sidecar.size) && sidecar.size > 0,
     "has an invalid pinned attestation sidecar.");
@@ -182,20 +179,6 @@ export function verifyMetadata(pin, version, metadata) {
   return true;
 }
 
-async function download(url, output, maxBytes) {
-  const response = await fetch(url, { redirect: "follow", headers: { "user-agent": "sidevoice-desktop-build" } });
-  if (!response.ok || !response.body) throw new Error(`Could not fetch pinned asset (${response.status}).`);
-  const final = new URL(response.url);
-  if (!(["github.com", "api.github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"].includes(final.hostname))) {
-    throw new Error("Pinned asset redirected outside GitHub's public asset hosts.");
-  }
-  const declared = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > maxBytes) throw new Error("Pinned asset exceeds the allowed size.");
-  await pipeline(Readable.fromWeb(response.body), createWriteStream(output, { flags: "wx", mode: 0o600 }));
-  const info = await stat(output);
-  if (info.size === 0 || info.size > maxBytes) throw new Error("Downloaded asset size is invalid.");
-}
-
 async function commandJson(executable, args) {
   const { stdout } = await execFile(executable, args, { timeout: 20_000, maxBuffer: 1024 * 1024 });
   const result = JSON.parse(stdout);
@@ -225,11 +208,11 @@ export async function verifyArtifact(executable, pin, { platform = process.platf
   return { size: info.size, sha256: pin.executable_sha256, version, metadata };
 }
 
-async function verifySidecars(pin, directory) {
+async function verifySidecars(pin, directory, options) {
   const records = [...pin.provenance.sidecars, ...pin.core_manifest_sidecars];
   for (const sidecar of records) {
     const path = resolve(directory, sidecar.name);
-    await download(sidecar.url, path, Math.min(MAX_ARTIFACT_BYTES, sidecar.size + 1));
+    await download(sidecar.url, path, Math.min(MAX_ARTIFACT_BYTES, sidecar.size + 1), options);
     const bytes = await readFile(path);
     if (bytes.length !== sidecar.size || sha256(bytes) !== sidecar.sha256) {
       throw new Error(`Pinned sidecar ${sidecar.name} failed its size or SHA-256 check.`);
@@ -273,6 +256,7 @@ export async function fetchConnector({
   outputPath = resolve("src-tauri/resources/sidevoice"),
   platform = process.platform,
   arch = process.arch,
+  token = process.env.SIDEVOICE_GITHUB_TOKEN || process.env.GH_TOKEN || process.env.GITHUB_TOKEN,
 } = {}) {
   const pin = validatePin(JSON.parse(await readFile(pinPath, "utf8")));
   if (platform !== "darwin" || arch !== "arm64") throw new Error("Connector packaging requires a native macOS arm64 runner.");
@@ -282,8 +266,9 @@ export async function fetchConnector({
   const staged = resolve(scratch, "sidevoice");
   const archive = resolve(scratch, "connector-artifact.zip");
   try {
-    await verifySidecars(pin, scratch);
-    await download(pin.asset_url, archive, Math.min(MAX_ARTIFACT_BYTES, pin.executable_size + 16 * 1024 * 1024));
+    await verifyRemoteProvenance(pin, { token });
+    await verifySidecars(pin, scratch, { token });
+    await download(pin.asset_url, archive, Math.min(MAX_ARTIFACT_BYTES, pin.executable_size + 16 * 1024 * 1024), { token });
     await extractPinnedExecutable(archive, staged, pin.executable_size);
     await chmod(staged, 0o755);
     await verifyArtifact(staged, pin, { platform, arch });

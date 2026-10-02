@@ -241,7 +241,7 @@ impl ConnectorPin {
             return Err(invalid_pin("has no executable size"));
         }
         let url = self.asset_url.as_deref().ok_or_else(|| invalid_pin("has no immutable asset URL"))?;
-        if !url.starts_with("https://api.github.com/repos/sidevoice/sidevoice-connector/actions/runs/") {
+        if !url.starts_with("https://api.github.com/repos/sidevoice/sidevoice-connector/actions/artifacts/") {
             return Err(invalid_pin("does not name a public connector asset"));
         }
         if self.metadata_protocol.as_deref() != Some("sidevoice-metadata-v1")
@@ -266,12 +266,11 @@ impl ConnectorPin {
         {
             return Err(invalid_pin("has incomplete R4-b provenance"));
         }
-        let run_asset = format!(
-            "https://api.github.com/repos/sidevoice/sidevoice-connector/actions/runs/{}/artifacts/",
-            provenance.run_id.unwrap_or_default()
-        );
-        let artifact_id = url.strip_prefix(&run_asset).and_then(|path| path.strip_suffix("/zip"));
-        if !matches!(artifact_id, Some(id) if !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit())) {
+        // Run/repository/SHA provenance is checked by the authenticated build-time downloader.
+        // GitHub's download endpoint is artifact-scoped, never nested beneath actions/runs.
+        let artifact_prefix = "https://api.github.com/repos/sidevoice/sidevoice-connector/actions/artifacts/";
+        let artifact_id = url.strip_prefix(artifact_prefix).and_then(|path| path.strip_suffix("/zip"));
+        if !matches!(artifact_id, Some(id) if !id.is_empty() && !id.starts_with('0') && id.bytes().all(|byte| byte.is_ascii_digit())) {
             return Err(invalid_pin("does not name the immutable artifact ZIP from its pinned CI run"));
         }
         for sidecar in &provenance.sidecars {
@@ -442,7 +441,7 @@ pub(crate) mod test_support {
             }],
             executable_sha256: Some("c".repeat(64)),
             executable_size: Some(12),
-            asset_url: Some("https://api.github.com/repos/sidevoice/sidevoice-connector/actions/runs/3/artifacts/4/zip".into()),
+            asset_url: Some("https://api.github.com/repos/sidevoice/sidevoice-connector/actions/artifacts/4/zip".into()),
             metadata_protocol: Some("sidevoice-metadata-v1".into()),
             progress_protocol: Some("sidevoice-progress-jsonl-v1".into()),
             core_api: Some(1),
@@ -475,6 +474,19 @@ pub(crate) mod test_support {
         let mut pin = fixture_pin();
         pin.core_assets[0].size += 1;
         assert_eq!(pin.validate_ready().unwrap_err().key, "install.pin-invalid");
+    }
+
+    #[test]
+    fn artifact_url_is_canonical_and_not_nested_under_a_run() {
+        for url in [
+            "https://api.github.com/repos/sidevoice/sidevoice-connector/actions/runs/3/artifacts/4/zip",
+            "https://api.github.com/repos/sidevoice/sidevoice-connector/actions/artifacts/0/zip",
+            "https://api.github.com/repos/sidevoice/sidevoice-connector/actions/artifacts/4/zip?x=1",
+        ] {
+            let mut pin = fixture_pin();
+            pin.asset_url = Some(url.into());
+            assert_eq!(pin.validate_ready().unwrap_err().key, "install.pin-invalid");
+        }
     }
 
     #[test]
