@@ -266,8 +266,8 @@ mod imp {
         let pin = pin()?;
         let report = host.state();
         let core_api = report.core.as_ref().and_then(|core| core.get("api")).and_then(Value::as_i64);
-        let record = Cli::install_record(host.data_dirs()).map_err(|error| json!(error))?;
-        let installed = record.as_ref().map(|record| InstalledBuild::from_install_record(record, core_api, None));
+        let record = Cli::selected_release_record(host.data_dirs()).map_err(|error| json!(error))?;
+        let installed = record.as_ref().map(|record| InstalledBuild::from_release_record(record, core_api, None));
         let update = versioning::update_status(Some(&pin), installed.as_ref());
         Ok(json!({
             "bridge": sidevoice_desktop_core::bridge::VERSION,
@@ -289,8 +289,8 @@ mod imp {
         let pin = pin()?;
         let report = host.state();
         let core_api = report.core.as_ref().and_then(|core| core.get("api")).and_then(Value::as_i64);
-        let record = Cli::install_record(host.data_dirs()).map_err(|error| json!(error))?;
-        let installed = record.as_ref().map(|record| InstalledBuild::from_install_record(record, core_api, None));
+        let record = Cli::selected_release_record(host.data_dirs()).map_err(|error| json!(error))?;
+        let installed = record.as_ref().map(|record| InstalledBuild::from_release_record(record, core_api, None));
         match versioning::update_status(Some(&pin), installed.as_ref()) {
             UpdateStatus::Available => {
                 let cli = bundled_cli(app, &host, &pin)?;

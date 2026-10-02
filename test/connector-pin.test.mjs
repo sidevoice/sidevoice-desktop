@@ -1,9 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { sha256, validatePin, verifyMetadata } from "../scripts/connector-pin.mjs";
 
+function producerManifest() {
+  return readFileSync(new URL("../src-tauri/local-host/test-fixtures/core-manifest-core34.json", import.meta.url));
+}
+
 function fixturePin() {
-  const manifest = Buffer.from('{"version":"0.9.0","bundles":[]}');
+  const manifest = producerManifest();
+  const manifestJson = JSON.parse(manifest);
   return {
     schema: 1,
     status: "ready",
@@ -12,14 +18,15 @@ function fixturePin() {
     connector_version: "1.2.3",
     channel: "nightly",
     build_seq: 42,
-    core_version: "0.9.0",
+    core_version: "0.1.0",
     core_manifest_sha256: sha256(manifest),
     core_manifest_size: manifest.length,
     core_manifest_bytes_base64: manifest.toString("base64"),
-    core_assets: [{ name: "core.tar.zst", url: "https://github.com/sidevoice/sidevoice-core/releases/download/v0.9.0/core.tar.zst",
-      sha256: "b".repeat(64), size: 10 }],
+    core_assets: manifestJson.bundles.map((asset) => ({
+      name: asset.url.split("/").at(-1), url: asset.url, sha256: asset.sha256, size: asset.size,
+    })),
     core_manifest_sidecars: [{ name: "manifest.sigstore.json",
-      url: "https://github.com/sidevoice/sidevoice-core/releases/download/v0.9.0/manifest.sigstore.json",
+      url: "https://github.com/sidevoice/sidevoice-core/releases/download/v0.1.0/manifest.sigstore.json",
       sha256: "c".repeat(64), size: 11 }],
     executable_sha256: "d".repeat(64),
     executable_size: 123,
@@ -43,17 +50,24 @@ function fixturePin() {
   };
 }
 
-test("production pin validation rejects the pending pin and the PR manifest-less SEA", () => {
+test("production pin accepts core PR #34 producer bytes and rejects pending or manifest-less pins", () => {
   assert.throws(() => validatePin({ schema: 1, status: "pending" }), /pending R4-b/);
   const pin = fixturePin();
+  assert.equal(validatePin(pin), pin, "real producer bytes have bundles and wheel, with no synthetic version field");
   pin.core_manifest_bytes_base64 = Buffer.from("{}").toString("base64");
   assert.throws(() => validatePin(pin), /manifest bytes do not match/);
-  const wrongVersion = fixturePin();
-  const manifest = Buffer.from('{"version":"0.8.0","bundles":[]}');
-  wrongVersion.core_manifest_bytes_base64 = manifest.toString("base64");
-  wrongVersion.core_manifest_size = manifest.length;
-  wrongVersion.core_manifest_sha256 = sha256(manifest);
-  assert.throws(() => validatePin(wrongVersion), /manifest version does not match/);
+  const manifestVersion = fixturePin();
+  const withSyntheticVersion = Buffer.from(JSON.stringify({ version: "0.1.0", ...JSON.parse(producerManifest().toString("utf8")) }));
+  manifestVersion.core_manifest_bytes_base64 = withSyntheticVersion.toString("base64");
+  manifestVersion.core_manifest_size = withSyntheticVersion.length;
+  manifestVersion.core_manifest_sha256 = sha256(withSyntheticVersion);
+  assert.throws(() => validatePin(manifestVersion), /exactly bundles and wheel/);
+  const wrongAssetVersion = fixturePin();
+  wrongAssetVersion.core_version = "0.8.0";
+  assert.throws(() => validatePin(wrongAssetVersion), /versioned release asset/);
+  const alteredAssetPin = fixturePin();
+  alteredAssetPin.core_assets[0].size += 1;
+  assert.throws(() => validatePin(alteredAssetPin), /do not match the bundles/);
 });
 
 test("a test-only pin requires immutable artifacts, manifest bytes, attestation sidecars and protocols", () => {

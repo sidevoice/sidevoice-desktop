@@ -84,6 +84,64 @@ impl Cli {
         open_install_record(dirs).map(|record| record.map(|(_, value)| value))
     }
 
+    /// Reads the selected connector release metadata through `install.json`'s recorded R root. The selection is
+    /// captured from `R/current` as one validated `releases/<id>` link, then `release.json` is read through checked
+    /// directory descriptors; the command and other install-record fields never supply version metadata.
+    pub fn selected_release_record(dirs: &DataDirs) -> Result<Option<Value>, Refusal> {
+        let Some((_, install)) = open_install_record(dirs)? else { return Ok(None) };
+        let Some(root) = install.get("releases").and_then(Value::as_str).map(std::path::Path::new) else {
+            return Ok(None);
+        };
+        if !root.is_absolute() || root.file_name() != Some(std::ffi::OsStr::new("sidevoice")) {
+            return Err(Refusal::new(
+                "install.unsafe",
+                "The connector release directory is not a trusted Sidevoice path.",
+            ));
+        }
+        let root = match trusted::Dir::open(root, 0o022, "install.unsafe") {
+            Ok(root) => root,
+            Err(crate::checks::Check::Missing) => return Ok(None),
+            Err(crate::checks::Check::Unsafe(refusal)) => return Err(refusal),
+        };
+        let target = match root.read_link("current") {
+            Ok(target) => target,
+            Err(crate::checks::Check::Missing) => return Ok(None),
+            Err(crate::checks::Check::Unsafe(refusal)) => return Err(refusal),
+        };
+        let Some(("releases", id)) = selected_release_target(&target) else {
+            return Err(Refusal::new(
+                "install.unsafe",
+                "The connector current release link does not name a safe release.",
+            ));
+        };
+        let releases = match root.open_child("releases", 0o022) {
+            Ok(releases) => releases,
+            Err(crate::checks::Check::Missing) => return Err(unreadable_selected_release()),
+            Err(crate::checks::Check::Unsafe(refusal)) => return Err(refusal),
+        };
+        let release = match releases.open_child(id, 0o022) {
+            Ok(release) => release,
+            Err(crate::checks::Check::Missing) => return Err(unreadable_selected_release()),
+            Err(crate::checks::Check::Unsafe(refusal)) => return Err(refusal),
+        };
+        let bytes = release
+            .read("release.json", 0o022, RECORD_LIMIT)
+            .map_err(|check| match check {
+                crate::checks::Check::Missing => unreadable_selected_release(),
+                crate::checks::Check::Unsafe(refusal) => refusal,
+            })?;
+        let record: Value = serde_json::from_slice(&bytes).map_err(|error| {
+            Refusal::new(
+                "install.unreadable",
+                format!("The selected connector release metadata is not JSON: {error}"),
+            )
+        })?;
+        if record.get("id").and_then(Value::as_str) != Some(id) {
+            return Err(unreadable_selected_release());
+        }
+        Ok(Some(record))
+    }
+
     /// The app-bundled executable, after its checked resource path, executable mode, pinned bytes and R4-b embedded
     /// metadata are all verified. This path is independent of the installed R1 command and never consults `PATH`.
     pub fn bundled(resource: &std::path::Path, dirs: &DataDirs, pin: &ConnectorPin) -> Result<Cli, Refusal> {
@@ -382,6 +440,31 @@ fn open_install_record(dirs: &DataDirs) -> Result<Option<(trusted::Dir, Value)>,
     Ok(Some((dir, install)))
 }
 
+fn selected_release_target(target: &std::path::Path) -> Option<(&str, &str)> {
+    use std::path::Component;
+    if target.is_absolute() {
+        return None;
+    }
+    let mut components = target.components();
+    let Component::Normal(parent) = components.next()? else { return None };
+    let Component::Normal(id) = components.next()? else { return None };
+    if components.next().is_some() || parent != "releases" {
+        return None;
+    }
+    let id = id.to_str()?;
+    let exact = target.to_str()? == format!("releases/{id}");
+    (exact
+        && !id.is_empty()
+        && id != "."
+        && id != ".."
+        && id.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"._+-".contains(&byte)))
+    .then_some(("releases", id))
+}
+
+fn unreadable_selected_release() -> Refusal {
+    Refusal::new("install.unreadable", "The selected connector release metadata is missing or inconsistent.")
+}
+
 /// `install.json`'s `command`: every element an absolute path.
 fn command(install: &Value) -> Option<Vec<String>> {
     let items = install.get("command")?.as_array()?;
@@ -432,6 +515,99 @@ mod tests {
         std::fs::write(&script, format!("#!/bin/sh\n{body}\n")).unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
         Cli { prefix: vec![script.to_string_lossy().into_owned()], data: dir.to_path_buf() }
+    }
+
+    fn selected_release_fixture(kind: &str) -> Value {
+        let (install_fixture, release_fixture) = match kind {
+            "r1" => (
+                include_str!("../test-fixtures/connector-install-r1.json"),
+                include_str!("../test-fixtures/connector-release-r1.json"),
+            ),
+            "r4" => (
+                include_str!("../test-fixtures/connector-install-r4.json"),
+                include_str!("../test-fixtures/connector-release-r4.json"),
+            ),
+            _ => panic!("unknown connector fixture"),
+        };
+        let tmp = tempfile::Builder::new().prefix("svcli").tempdir_in("/tmp").unwrap();
+        let dirs = DataDirs::new(tmp.path().join("data"));
+        std::fs::create_dir(&dirs.data).unwrap();
+        std::fs::set_permissions(&dirs.data, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let root = tmp.path().join("sidevoice");
+        let releases = root.join("releases");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::create_dir(&releases).unwrap();
+        let release: Value = serde_json::from_str(release_fixture).unwrap();
+        let id = release["id"].as_str().unwrap();
+        let release_dir = releases.join(id);
+        std::fs::create_dir(&release_dir).unwrap();
+        std::fs::write(release_dir.join("release.json"), release_fixture).unwrap();
+        std::os::unix::fs::symlink(format!("releases/{id}"), root.join("current")).unwrap();
+
+        let mut install: Value = serde_json::from_str(install_fixture).unwrap();
+        install["releases"] = Value::String(root.to_string_lossy().into_owned());
+        std::fs::write(dirs.install_record(), serde_json::to_vec(&install).unwrap()).unwrap();
+        std::fs::set_permissions(&dirs.install_record(), std::fs::Permissions::from_mode(0o600)).unwrap();
+        Cli::selected_release_record(&dirs).unwrap().unwrap()
+    }
+
+    #[test]
+    fn r1_and_r4_install_records_resolve_metadata_from_the_selected_release() {
+        let r1 = selected_release_fixture("r1");
+        assert_eq!(r1["connector"], "0.5.0");
+        assert_eq!(r1["channel"], "release");
+        assert_eq!(r1["build_seq"], 14);
+        assert_eq!(r1["core_build"], "0.1.0-macos-aarch64-2026-09-28");
+
+        let r4 = selected_release_fixture("r4");
+        assert_eq!(r4["connector"], "1.2.3");
+        assert_eq!(r4["channel"], "nightly");
+        assert_eq!(r4["build_seq"], 42);
+        assert_eq!(r4["core_build"], "0.1.0-macos-aarch64-2026-10-02");
+    }
+
+    #[test]
+    fn r1_and_r4_selected_releases_drive_update_order_without_downgrades() {
+        use crate::versioning::{self, UpdateStatus};
+        let pin = crate::pin::test_support::fixture_pin();
+
+        let r1 = selected_release_fixture("r1");
+        let r1_build = crate::pin::InstalledBuild::from_release_record(&r1, Some(1), None);
+        assert_eq!(versioning::update_status(Some(&pin), Some(&r1_build)), UpdateStatus::Available);
+
+        let r4 = selected_release_fixture("r4");
+        let r4_build = crate::pin::InstalledBuild::from_release_record(&r4, Some(1), None);
+        assert_eq!(versioning::update_status(Some(&pin), Some(&r4_build)), UpdateStatus::Current);
+
+        let mut newer = r4.clone();
+        newer["connector"] = Value::String("1.2.4".into());
+        let newer_build = crate::pin::InstalledBuild::from_release_record(&newer, Some(1), None);
+        assert_eq!(versioning::update_status(Some(&pin), Some(&newer_build)), UpdateStatus::NewerInstalled);
+
+        let mut newer_core = r4;
+        newer_core["connector"] = Value::String("1.3.0".into());
+        newer_core["core"] = Value::String("0.2.0".into());
+        let newer_core_build = crate::pin::InstalledBuild::from_release_record(&newer_core, Some(1), None);
+        assert_eq!(versioning::update_status(Some(&pin), Some(&newer_core_build)), UpdateStatus::NewerInstalled);
+    }
+
+    #[test]
+    fn selected_release_metadata_rejects_a_current_link_that_escapes_r() {
+        let tmp = tempfile::Builder::new().prefix("svcli").tempdir_in("/tmp").unwrap();
+        let dirs = DataDirs::new(tmp.path().join("data"));
+        std::fs::create_dir(&dirs.data).unwrap();
+        std::fs::set_permissions(&dirs.data, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let root = tmp.path().join("sidevoice");
+        std::fs::create_dir(&root).unwrap();
+        let mut install: Value =
+            serde_json::from_str(include_str!("../test-fixtures/connector-install-r1.json")).unwrap();
+        install["releases"] = Value::String(root.to_string_lossy().into_owned());
+        std::fs::write(dirs.install_record(), serde_json::to_vec(&install).unwrap()).unwrap();
+        std::fs::set_permissions(&dirs.install_record(), std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::os::unix::fs::symlink("../../outside", root.join("current")).unwrap();
+        assert_eq!(Cli::selected_release_record(&dirs).unwrap_err().key, "install.unsafe");
     }
 
     #[test]

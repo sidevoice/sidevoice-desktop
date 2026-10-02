@@ -30,18 +30,28 @@ pub fn update_status(pin: Option<&ConnectorPin>, installed: Option<&InstalledBui
     let Some(candidate_version) = pin.connector_version.as_deref().and_then(|v| Version::parse(v).ok()) else {
         return UpdateStatus::Unknown;
     };
-    if !crate::state::API.contains(&pin.core_api.unwrap_or(i64::MIN))
-        || !installed.core_api.is_some_and(|api| crate::state::API.contains(&api))
-    {
+    let Some(candidate_api) = pin.core_api else { return UpdateStatus::Unknown };
+    let Some(installed_api) = installed.core_api else { return UpdateStatus::Unknown };
+    if !crate::state::API.contains(&candidate_api) || !crate::state::API.contains(&installed_api) {
         return UpdateStatus::Incompatible;
+    }
+    let Some(candidate_core) = pin.core_version.as_deref().and_then(|v| Version::parse(v).ok()) else {
+        return UpdateStatus::Unknown;
+    };
+    let Some(installed_core) = installed.core_version.as_deref().and_then(|v| Version::parse(v).ok()) else {
+        return UpdateStatus::Unknown;
+    };
+    if installed_core > candidate_core {
+        return UpdateStatus::NewerInstalled;
     }
     let (Some(link_min), Some(link_max), Some(candidate_link)) = (pin.link_min, pin.link_max, pin.core_link) else {
         return UpdateStatus::Unknown;
     };
-    let Some(installed_link) = installed.core_link else {
-        return UpdateStatus::Unknown;
-    };
-    if !(link_min..=link_max).contains(&candidate_link) || !(link_min..=link_max).contains(&installed_link) {
+    // R1's selected release and health contracts do not expose the installed core link id. Verify the candidate link
+    // against its pinned connector range, and reject an installed link when an R4 record provides one.
+    if !(link_min..=link_max).contains(&candidate_link)
+        || installed.core_link.is_some_and(|link| !(link_min..=link_max).contains(&link))
+    {
         return UpdateStatus::Incompatible;
     }
     match candidate_version.cmp(&installed_version) {
@@ -74,7 +84,8 @@ mod tests {
         InstalledBuild {
             connector_version: Some(version.into()),
             connector_sha: Some("a".repeat(64)),
-            core_version: Some("0.8.0".into()),
+            core_version: Some("0.1.0".into()),
+            core_build: Some("0.8.0-macos-aarch64-fixture".into()),
             core_manifest_sha256: Some("b".repeat(64)),
             channel: Some(channel.into()),
             build_seq: Some(build_seq),
@@ -118,6 +129,14 @@ mod tests {
             update_status(Some(&pin), Some(&installed("1.2.3", "release", 43, Some(1), Some(1)))),
             UpdateStatus::NewerInstalled
         );
+    }
+
+    #[test]
+    fn a_newer_installed_core_is_never_downgraded_by_a_connector_update() {
+        let pin = crate::pin::test_support::fixture_pin();
+        let mut installed = installed("1.2.2", "release", 41, Some(1), Some(1));
+        installed.core_version = Some("0.2.0".into());
+        assert_eq!(update_status(Some(&pin), Some(&installed)), UpdateStatus::NewerInstalled);
     }
 
     #[test]

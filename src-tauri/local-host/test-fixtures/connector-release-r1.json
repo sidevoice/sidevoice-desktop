@@ -1,0 +1,9 @@
+{
+  "id": "0.5.0",
+  "connector": "0.5.0",
+  "core": "0.1.0",
+  "core_build": "0.1.0-macos-aarch64-2026-09-28",
+  "channel": "release",
+  "build_seq": 14,
+  "format": "esm"
+}

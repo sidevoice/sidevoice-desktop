@@ -1,0 +1,9 @@
+{
+  "id": "1.2.3-nightly.42-sea",
+  "connector": "1.2.3",
+  "core": "0.1.0",
+  "core_build": "0.1.0-macos-aarch64-2026-10-02",
+  "channel": "nightly",
+  "build_seq": 42,
+  "format": "sea"
+}

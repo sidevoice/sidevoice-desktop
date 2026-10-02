@@ -1,0 +1,6 @@
+{
+  "command": ["/Users/example/.local/share/sidevoice/current/dist/sidevoice"],
+  "nodeExecutable": "/usr/local/bin/node",
+  "releases": "/Users/example/.local/share/sidevoice",
+  "definitions": ["/Users/example/Library/LaunchAgents/com.sidevoice.connector.plist"]
+}

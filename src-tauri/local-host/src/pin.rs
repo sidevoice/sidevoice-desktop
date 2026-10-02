@@ -11,6 +11,12 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 const SHA256_LEN: usize = 64;
+const CORE_RELEASE_PREFIX: &str = "https://github.com/sidevoice/sidevoice-core/releases/download/";
+const CORE_TARGETS: [(&str, &str, &str); 3] = [
+    ("macos", "aarch64", "macos-aarch64"),
+    ("linux", "x86_64", "linux-x86_64"),
+    ("linux", "aarch64", "linux-aarch64"),
+];
 
 fn invalid_pin(why: &str) -> Refusal {
     Refusal::new("install.pin-invalid", format!("The connector build pin {why}."))
@@ -76,11 +82,88 @@ pub struct InstalledBuild {
     pub connector_version: Option<String>,
     pub connector_sha: Option<String>,
     pub core_version: Option<String>,
+    pub core_build: Option<String>,
     pub core_manifest_sha256: Option<String>,
     pub channel: Option<String>,
     pub build_seq: Option<u64>,
     pub core_api: Option<i64>,
     pub core_link: Option<i64>,
+}
+
+fn exact_keys(value: &Value, expected: &[&str]) -> bool {
+    let Some(object) = value.as_object() else { return false };
+    object.len() == expected.len() && expected.iter().all(|key| object.contains_key(*key))
+}
+
+fn encoded_component(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-_.~".contains(&byte) {
+            encoded.push(byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
+}
+
+fn core_release_asset(url: &str, filename: &str, version: &str, tag: Option<&str>) -> Option<String> {
+    if url.contains('?') || url.contains('#') {
+        return None;
+    }
+    let remainder = url.strip_prefix(CORE_RELEASE_PREFIX)?;
+    let (release_tag, name) = remainder.split_once('/')?;
+    let version_tag = format!("v{version}");
+    if name.contains('/')
+        || name != filename
+        || (release_tag != "nightly" && release_tag != version_tag.as_str())
+        || tag.is_some_and(|expected| expected != release_tag)
+    {
+        return None;
+    }
+    let expected = format!("{CORE_RELEASE_PREFIX}{}/{}", encoded_component(release_tag), encoded_component(filename));
+    (expected == url).then(|| release_tag.to_string())
+}
+
+/// The signed core producer's exact `{bundles, wheel}` shape. Version identity comes from versioned asset filenames
+/// and their release tag; accepting a synthetic `manifest.version` field would reject real producer bytes.
+fn core_manifest_assets(manifest: &Value, version: &str) -> Option<Vec<CoreAssetPin>> {
+    if !exact_keys(manifest, &["bundles", "wheel"]) {
+        return None;
+    }
+    let bundles = manifest.get("bundles")?.as_array()?;
+    if bundles.len() != CORE_TARGETS.len() {
+        return None;
+    }
+    let mut release_tag = None;
+    let mut assets = Vec::with_capacity(bundles.len());
+    for (entry, (os, arch, target)) in bundles.iter().zip(CORE_TARGETS) {
+        if !exact_keys(entry, &["os", "arch", "url", "sha256", "size"])
+            || entry.get("os")?.as_str()? != os
+            || entry.get("arch")?.as_str()? != arch
+        {
+            return None;
+        }
+        let name = format!("sidevoice-core-{version}-{target}.tar.zst");
+        let url = entry.get("url")?.as_str()?;
+        let tag = core_release_asset(url, &name, version, release_tag.as_deref())?;
+        let sha256 = entry.get("sha256")?.as_str()?;
+        let size = entry.get("size")?.as_u64()?;
+        if !valid_sha(sha256) || size == 0 {
+            return None;
+        }
+        release_tag = Some(tag);
+        assets.push(CoreAssetPin { name, url: url.to_string(), sha256: sha256.to_string(), size });
+    }
+    let wheel = manifest.get("wheel")?;
+    let wheel_name = format!("sidevoice_core-{version}-py3-none-any.whl");
+    if !exact_keys(wheel, &["url", "sha256"])
+        || core_release_asset(wheel.get("url")?.as_str()?, &wheel_name, version, release_tag.as_deref()).is_none()
+        || !valid_sha(wheel.get("sha256")?.as_str()?)
+    {
+        return None;
+    }
+    Some(assets)
 }
 
 impl ConnectorPin {
@@ -131,11 +214,16 @@ impl ConnectorPin {
         }
         let manifest_json: Value =
             serde_json::from_slice(&manifest).map_err(|_| invalid_pin("has invalid pinned core manifest JSON"))?;
-        if manifest_json.get("version").and_then(Value::as_str) != self.core_version.as_deref() {
-            return Err(invalid_pin("has a core manifest version that does not match the pin"));
-        }
+        let expected_assets = core_manifest_assets(
+            &manifest_json,
+            self.core_version.as_deref().ok_or_else(|| invalid_pin("has no core version"))?,
+        )
+        .ok_or_else(|| invalid_pin("does not match the signed producer's versioned bundles/wheel schema"))?;
         if self.core_assets.is_empty() || self.core_manifest_sidecars.is_empty() {
             return Err(invalid_pin("has no pinned core assets or manifest attestations"));
+        }
+        if self.core_assets != expected_assets {
+            return Err(invalid_pin("has core assets that do not match the pinned manifest bundles"));
         }
         for asset in &self.core_assets {
             if asset.name.is_empty()
@@ -297,15 +385,16 @@ fn validate_sidecar(sidecar: &SidecarPin) -> Result<(), &'static str> {
 }
 
 impl InstalledBuild {
-    /// Projects only public release metadata from the trusted R1 install record; the stored command never reaches the
-    /// page. R4-b's record fields can be absent for an older `npx` install, making update eligibility `unknown`.
-    pub fn from_install_record(record: &Value, core_api: Option<i64>, core_link: Option<i64>) -> Self {
+    /// Projects public metadata from the trusted selected `R/current/release.json`; the install command never reaches
+    /// the page. `core_build` identifies the runtime selected by R1/R4 without treating it as a protocol link id.
+    pub fn from_release_record(record: &Value, core_api: Option<i64>, core_link: Option<i64>) -> Self {
         let text = |key: &str| record.get(key).and_then(Value::as_str).map(str::to_string);
         let number = |key: &str| record.get(key).and_then(Value::as_u64);
         InstalledBuild {
             connector_version: text("connector"),
             connector_sha: text("connector_sha"),
             core_version: text("core"),
+            core_build: text("core_build"),
             core_manifest_sha256: text("core_manifest_sha256"),
             channel: text("channel"),
             build_seq: number("build_seq"),
@@ -320,7 +409,9 @@ pub(crate) mod test_support {
     use super::*;
 
     pub fn fixture_pin() -> ConnectorPin {
-        let manifest = br#"{"version":"0.9.0"}"#;
+        let manifest = include_bytes!("../test-fixtures/core-manifest-core34.json");
+        let manifest_json: Value = serde_json::from_slice(manifest).unwrap();
+        let core_assets = core_manifest_assets(&manifest_json, "0.1.0").unwrap();
         let manifest_sha = sha256_bytes(manifest);
         ConnectorPin {
             schema: 1,
@@ -330,19 +421,14 @@ pub(crate) mod test_support {
             connector_version: Some("1.2.3".into()),
             channel: Some("nightly".into()),
             build_seq: Some(42),
-            core_version: Some("0.9.0".into()),
+            core_version: Some("0.1.0".into()),
             core_manifest_sha256: Some(manifest_sha),
             core_manifest_size: Some(manifest.len() as u64),
             core_manifest_bytes_base64: Some(base64::engine::general_purpose::STANDARD.encode(manifest)),
-            core_assets: vec![CoreAssetPin {
-                name: "sidevoice-core-0.9.0-macos-arm64.tar.zst".into(),
-                url: "https://github.com/sidevoice/sidevoice-core/releases/download/v0.9.0/core.tar.zst".into(),
-                sha256: "f".repeat(64),
-                size: 100,
-            }],
+            core_assets,
             core_manifest_sidecars: vec![SidecarPin {
                 name: "core-manifest.sigstore.json".into(),
-                url: Some("https://github.com/sidevoice/sidevoice-core/releases/download/v0.9.0/core-manifest.sigstore.json".into()),
+                url: Some("https://github.com/sidevoice/sidevoice-core/releases/download/v0.1.0/core-manifest.sigstore.json".into()),
                 sha256: "d".repeat(64),
                 size: 10,
             }],
@@ -370,11 +456,16 @@ pub(crate) mod test_support {
 
     #[test]
     fn pending_or_incomplete_pin_is_rejected() {
+        let pin = fixture_pin();
+        assert!(pin.validate_ready().is_ok(), "core PR #34's `{bundles,wheel}` bytes are accepted as produced");
         let mut pin = fixture_pin();
         pin.status = "pending".into();
         assert_eq!(pin.validate_ready().unwrap_err().key, "install.pin-invalid");
         let mut pin = fixture_pin();
         pin.executable_sha256 = Some("not-a-digest".into());
+        assert_eq!(pin.validate_ready().unwrap_err().key, "install.pin-invalid");
+        let mut pin = fixture_pin();
+        pin.core_assets[0].size += 1;
         assert_eq!(pin.validate_ready().unwrap_err().key, "install.pin-invalid");
     }
 
@@ -384,7 +475,7 @@ pub(crate) mod test_support {
         let version = serde_json::json!({"version":"1.2.3", "target":"macos-aarch64", "channel":"nightly",
             "connector_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "build_seq":42});
         let metadata = serde_json::json!({"connector":{"version":"1.2.3", "sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "channel":"nightly", "build_seq":42, "link_min":1, "link_max":1}, "embedded_core":{"version":"0.9.0",
+            "channel":"nightly", "build_seq":42, "link_min":1, "link_max":1}, "embedded_core":{"version":"0.1.0",
             "manifest_sha256":pin.core_manifest_sha256, "assets":pin.core_assets,
             "api":1, "link":1},
             "protocols":{"metadata":"sidevoice-metadata-v1", "progress":"sidevoice-progress-jsonl-v1"}});
@@ -395,10 +486,10 @@ pub(crate) mod test_support {
     }
 
     #[test]
-    fn install_record_projection_does_not_include_the_command() {
-        let installed = InstalledBuild::from_install_record(
-            &serde_json::json!({"connector":"1.0.0", "connector_sha":"e".repeat(40), "core":"0.8.0",
-                "channel":"release", "build_seq":12, "command":["/private/path"]}),
+    fn release_record_projection_does_not_include_the_install_command() {
+        let installed = InstalledBuild::from_release_record(
+            &serde_json::json!({"id":"1.0.0", "connector":"1.0.0", "connector_sha":"e".repeat(40), "core":"0.8.0",
+                "core_build":"build-17", "channel":"release", "build_seq":12, "command":["/private/path"]}),
             Some(1),
             Some(1),
         );
@@ -406,5 +497,6 @@ pub(crate) mod test_support {
         assert!(value.get("command").is_none());
         assert_eq!(value["connectorVersion"], "1.0.0");
         assert_eq!(value["connectorSha"], "e".repeat(40));
+        assert_eq!(value["coreBuild"], "build-17");
     }
 }

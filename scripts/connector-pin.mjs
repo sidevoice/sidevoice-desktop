@@ -11,6 +11,11 @@ const execFile = promisify(execFileCallback);
 const SHA256 = /^[0-9a-f]{64}$/i;
 const GIT_SHA = /^[0-9a-f]{40}$/i;
 const MAX_ARTIFACT_BYTES = 512 * 1024 * 1024;
+const CORE_TARGETS = [
+  ["macos", "aarch64", "macos-aarch64"],
+  ["linux", "x86_64", "linux-x86_64"],
+  ["linux", "aarch64", "linux-aarch64"],
+];
 
 export function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
@@ -40,6 +45,49 @@ function immutableAssetUrl(value, runId) {
   } catch { return false; }
 }
 
+function coreReleaseAsset(url, filename, version, tag) {
+  if (typeof url !== "string") return null;
+  try {
+    const parsed = new URL(url);
+    const parts = parsed.pathname.split("/").slice(1).map((part) => decodeURIComponent(part));
+    if (parsed.protocol !== "https:" || parsed.hostname !== "github.com" || parsed.search || parsed.hash
+      || parts.length !== 6 || parts.slice(0, 4).join("/") !== "sidevoice/sidevoice-core/releases/download"
+      || parts[5] !== filename || !["nightly", `v${version}`].includes(parts[4])
+      || (tag !== undefined && parts[4] !== tag)) return null;
+    const canonical = `https://github.com/sidevoice/sidevoice-core/releases/download/${encodeURIComponent(parts[4])}/${encodeURIComponent(filename)}`;
+    return canonical === url ? parts[4] : null;
+  } catch { return null; }
+}
+
+function manifestAssets(manifest, version) {
+  requirePin(manifest && typeof manifest === "object" && !Array.isArray(manifest)
+    && Object.keys(manifest).sort().join(",") === "bundles,wheel", "core manifest must have exactly bundles and wheel.");
+  requirePin(Array.isArray(manifest.bundles) && manifest.bundles.length === CORE_TARGETS.length,
+    "core manifest must contain exactly the supported bundles.");
+  const assets = [];
+  let releaseTag;
+  for (let i = 0; i < CORE_TARGETS.length; i++) {
+    const [os, arch, target] = CORE_TARGETS[i];
+    const entry = manifest.bundles[i];
+    requirePin(entry && typeof entry === "object" && !Array.isArray(entry)
+      && Object.keys(entry).sort().join(",") === "arch,os,sha256,size,url"
+      && entry.os === os && entry.arch === arch, `core manifest bundle ${target} has an unexpected shape or order.`);
+    const name = `sidevoice-core-${version}-${target}.tar.zst`;
+    const tag = coreReleaseAsset(entry.url, name, version, releaseTag);
+    requirePin(tag && SHA256.test(entry.sha256 || "") && Number.isSafeInteger(entry.size) && entry.size > 0,
+      `core manifest bundle ${target} does not match its versioned release asset.`);
+    releaseTag = tag;
+    assets.push({ name, url: entry.url, sha256: entry.sha256, size: entry.size });
+  }
+  const wheel = manifest.wheel;
+  const wheelName = `sidevoice_core-${version}-py3-none-any.whl`;
+  requirePin(wheel && typeof wheel === "object" && !Array.isArray(wheel)
+    && Object.keys(wheel).sort().join(",") === "sha256,url"
+    && coreReleaseAsset(wheel.url, wheelName, version, releaseTag)
+    && SHA256.test(wheel.sha256 || ""), "core manifest wheel does not match its versioned release asset.");
+  return assets;
+}
+
 export function validatePin(pin) {
   requirePin(pin && pin.schema === 1, "uses an unsupported schema.");
   requirePin(pin.status === "ready", "is pending R4-b's genuine signed macOS arm64 SEA and metadata/progress contract.");
@@ -61,16 +109,13 @@ export function validatePin(pin) {
   let parsedManifest;
   try { parsedManifest = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(manifest)); }
   catch { throw new Error("connector-pin.json core manifest bytes are not JSON."); }
-  requirePin(parsedManifest?.version === pin.core_version, "core manifest version does not match the pin.");
-  requirePin(Array.isArray(pin.core_assets) && pin.core_assets.length > 0, "has no pinned core assets.");
-  const assetNames = new Set();
-  for (const asset of pin.core_assets) {
-    requirePin(asset && typeof asset.name === "string" && /^[A-Za-z0-9._-]+$/.test(asset.name)
-      && !assetNames.has(asset.name) && typeof asset.url === "string"
-      && asset.url.startsWith("https://") && SHA256.test(asset.sha256 || "")
-      && Number.isSafeInteger(asset.size) && asset.size > 0, "has an invalid core asset pin.");
-    assetNames.add(asset.name);
-  }
+  const manifestAssetsPinned = manifestAssets(parsedManifest, pin.core_version);
+  requirePin(Array.isArray(pin.core_assets) && pin.core_assets.length === manifestAssetsPinned.length
+    && pin.core_assets.every((asset, index) => {
+      const expected = manifestAssetsPinned[index];
+      return asset?.name === expected.name && asset?.url === expected.url
+        && asset?.sha256 === expected.sha256 && asset?.size === expected.size;
+    }), "pinned core assets do not match the bundles in the core manifest.");
   requirePin(SHA256.test(pin.executable_sha256 || ""), "has no valid SEA SHA-256.");
   requirePin(Number.isSafeInteger(pin.executable_size) && pin.executable_size > 0, "has no SEA byte size.");
   requirePin(immutableAssetUrl(pin.asset_url, pin.provenance?.run_id), "does not name an immutable connector artifact.");
