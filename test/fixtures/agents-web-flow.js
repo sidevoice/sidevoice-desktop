@@ -58,9 +58,18 @@
       const gear = document.getElementById("settings-open");
       if (!gear || !gear.getAttribute("aria-label")?.toLowerCase().includes("agents")) throw new Error("unmarked-settings-gear");
       gear.click();
-      await until(() => document.getElementById("language-settings")?.open
-        && document.getElementById("settings-machines")?.getAttribute("aria-pressed") === "true"
+      await until(() => document.getElementById("language-settings")?.open, 15000, "settings-dialog");
+      const machinesTab = document.getElementById("settings-machines");
+      if (!machinesTab) throw new Error("settings-machines-control-missing");
+      machinesTab.click();
+      await until(() => machinesTab.getAttribute("aria-pressed") === "true"
         && document.getElementById("pane-machines")?.hidden === false, 15000, "settings-machines");
+      if (!document.querySelector(".host-detail")) {
+        const hostAgentButton = [...document.querySelectorAll(".machine-row .host-agent-tab-label")].find((button) =>
+          button.textContent.trim() === "Agents" || button.getAttribute("aria-label")?.includes("Agents"));
+        if (!hostAgentButton) throw new Error("host-agents-action-missing");
+        hostAgentButton.click();
+      }
       await until(() => document.querySelector(".host-detail")
         && document.getElementById("host-detail-title")?.textContent.includes("CI Agents Host"), 15000, "host-detail");
       await until(() => document.getElementById("host-tab-agents")?.getAttribute("aria-selected") === "true"
