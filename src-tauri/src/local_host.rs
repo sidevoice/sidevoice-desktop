@@ -324,6 +324,37 @@ mod imp {
             )),
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::noop_update_response;
+        use serde_json::json;
+        use sidevoice_local_host::state::{Report, State};
+
+        #[test]
+        fn update_noop_preserves_the_complete_local_host_status() {
+            let mut report = Report::new(State::Running);
+            report.failure = Some(json!({"key":"service.warning"}));
+            report.core = Some(json!({"version":"0.1.0","api":1}));
+            report.service = Some("launchd".into());
+            report.calls = Some(4);
+            report.attempts = Some(2);
+            report.limit = Some(5);
+            report.progress = Some(json!({"job":"job-1","sequence":3,"step":"pairing","cancellable":false}));
+            report.reachable = true;
+
+            let response = noop_update_response(&report).unwrap();
+            assert_eq!(
+                response,
+                json!({
+                    "state":"running", "failure":{"key":"service.warning"}, "core":{"version":"0.1.0","api":1},
+                    "service":"launchd", "calls":4, "attempts":2, "limit":5,
+                    "progress":{"job":"job-1","sequence":3,"step":"pairing","cancellable":false},
+                    "reachable":true, "result":"noop"
+                })
+            );
+        }
+    }
 }
 
 #[cfg(not(unix))]
@@ -365,36 +396,5 @@ mod imp {
     }
     pub fn agents(_app: &AppHandle) -> Answer {
         Err(unsupported())
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::noop_update_response;
-        use serde_json::json;
-        use sidevoice_local_host::state::{Report, State};
-
-        #[test]
-        fn update_noop_preserves_the_complete_local_host_status() {
-            let mut report = Report::new(State::Running);
-            report.failure = Some(json!({"key":"service.warning"}));
-            report.core = Some(json!({"version":"0.1.0","api":1}));
-            report.service = Some("launchd".into());
-            report.calls = Some(4);
-            report.attempts = Some(2);
-            report.limit = Some(5);
-            report.progress = Some(json!({"job":"job-1","sequence":3,"step":"pairing","cancellable":false}));
-            report.reachable = true;
-
-            let response = noop_update_response(&report).unwrap();
-            assert_eq!(
-                response,
-                json!({
-                    "state":"running", "failure":{"key":"service.warning"}, "core":{"version":"0.1.0","api":1},
-                    "service":"launchd", "calls":4, "attempts":2, "limit":5,
-                    "progress":{"job":"job-1","sequence":3,"step":"pairing","cancellable":false},
-                    "reachable":true, "result":"noop"
-                })
-            );
-        }
     }
 }
