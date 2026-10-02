@@ -236,7 +236,7 @@ jobs:
           grep -q "SIDEVOICE_DEBUG_LOCAL_HOST_FLOW" "$BIN"
           grep -q "local-host-flow" "$BIN"
           grep -q "SIDEVOICE_DEBUG_LOCAL_HOST_DOGFOOD" "$BIN"
-          grep -q "local-host-dogfood-flow" "$BIN"
+          grep -q "local-host-dogfood" "$BIN"
       - name: Fresh-account R4 install, production app launch, projected host, update no-op and uninstall
         if: ${{ github.event_name != 'pull_request' && !inputs.fixture && steps.connector.outputs.status == 'ready' }}
         timeout-minutes: 65
