@@ -18,3 +18,7 @@ Rules for any coding agent (and person) working in this repository.
 Read `README.md` and `docs/`. The bundled web interface is vendored (`scripts/vendor-web.mjs`): its texts are
 fixed in sidevoice-web, not here. The app's own texts: the settings window's in `ui/i18n/<language>.js`, the
 native ones (tray, …) in `src-tauri/core/src/i18n.rs`; older literals in the settings window still await moving.
+
+## Public product information
+
+For changes to user-visible behavior, supported platforms/models, setup, security/privacy practices, availability, limitations, or release/download details, follow the shared [public-information process](https://github.com/sidevoice/landing/blob/main/AGENTS.md#keep-public-product-information-current). Record the landing change/PR or a linked `sidevoice/landing` issue in the PR checklist. Landing issues are the follow-up triage queue.
