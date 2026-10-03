@@ -93,6 +93,8 @@ docs/                the bridge, the engines and models, targets, macOS notes, t
 
 Build the macOS arm64 app with `npm run build:mac` after `npm ci`. The same command runs in CI and requires a genuine ready connector pin; see [`docs/BUILD.md`](docs/BUILD.md) for inputs, artifact credentials, test gates and package evidence.
 
+For a short-lived development app on macOS arm64, run `npm ci && npm run build:mac && bash scripts/archive-mac-preview.sh`. This produces the same app and build evidence as CI plus a checksummed ZIP. PR Actions uploads it for seven days as `development-macos-arm64-app-<pr-head-sha>` as soon as packaging verifies, before the slower probes finish. Build evidence retains the Actions checkout SHA. This is a development preview, not a release candidate: the full CI result is separate and may still be red. See [`docs/BUILD.md`](docs/BUILD.md#fast-macos-development-preview) for checksum, first-open, and replacement guidance.
+
 The bundled interface is a build of [sidevoice-web](https://github.com/sidevoice/sidevoice-web), vendored with
 `scripts/vendor-web.mjs`, which records the commit it came from in `ui/voice/web-source.json` ([`docs/TARGETS.md`](docs/TARGETS.md)). The app drives it only through an explicit bridge
 ([`docs/BRIDGE.md`](docs/BRIDGE.md)), never through its DOM.
