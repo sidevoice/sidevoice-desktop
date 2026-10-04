@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, resolve, sep } from "node:path";
+import { findCommittedPairRelease } from "./committed-pair-release.mjs";
 import { assertReleaseRootWithin } from "./release-root-containment.mjs";
 
 const APP = resolve(process.env.APP || "src-tauri/target/packages/native-pair/Sidevoice.app");
@@ -334,9 +335,7 @@ async function main() {
     ]);
 
     const releasesDir = resolve(priorAgain.root, "releases");
-    const staged = (await readdir(releasesDir)).filter((name) => name.includes(".tmp-"));
-    requireValue(staged.length === 1, "expected one fully staged update release before commit.");
-    const stagedRelease = resolve(releasesDir, staged[0]);
+    const stagedRelease = await findCommittedPairRelease(releasesDir, current.pin.native_pair.pair_id);
     const stagedDir = await lstat(stagedRelease);
     requireValue(stagedDir.isDirectory() && !stagedDir.isSymbolicLink(), "staged release directory is not private and regular.");
     const stagedMetadata = JSON.parse(await readFile(resolve(stagedRelease, "release.json"), "utf8"));
