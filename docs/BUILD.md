@@ -101,7 +101,7 @@ do not remove verification or regenerate a digest from arbitrary downloaded byte
 | Resource wiring while pin is pending | `npm run build:mac:fixture` | Explicit shell fixture, in `target/packages/fixture`; never a production artifact |
 | Native integration | `npm run build:mac:probe`, `test/macos/*.sh` | WKWebView/local-host proxy, native engine, room model flow and card behavior |
 | Product packaging | `npm run build:mac`, optional `npm run package:mac` | Real verified connector, production app and evidence JSON |
-| Local R4 candidate acceptance | `r4-native-pair-candidate=true`, hosted macOS arm64 account | Production app launch plus CI-only page-driver app exercising the vendored install CTA, bridge, page proxy, remote-pairing route, same-version update and uninstall |
+| Local R4 candidate acceptance | `r4-native-pair-candidate=true`, hosted macOS arm64 account | Production app launch plus CI-only page-driver app exercising local install, page proxy, remote pairing, same-version no-op, a genuine changed-pair bridge update, automatic rollback and cleanup |
 
 Native integration scripts run from the repository root on a **disposable macOS test account**. The engine/room
 checks download speech models, and UI probes use the account's desktop and application state. They are not part of
@@ -118,13 +118,18 @@ Leave it false for the genuine product gate; it cannot turn a missing signed dep
 ## Clean-account acceptance record
 
 The candidate workflow uses a fresh hosted macOS arm64 runner account. Record the exact Actions run/desktop SHA and
-retain `build-evidence.json`, the app checksum, connector identity, web SHA and separate `smoke-evidence.json`.
-It first opens the production-shaped app, then launches a probe-feature copy containing the same page and native
-pair resources; a CI-only script clicks the actual local-install CTA through the page bridge.
+retain `build-evidence.json`, the app checksum, connector identity, web SHA, `smoke-evidence.json` and
+`update-evidence.json`. It first opens the production-shaped app, then launches a probe-feature copy containing the
+same page and current native pair resources; a CI-only script clicks the actual local-install CTA through the page
+bridge. For update acceptance, the workflow source-builds a prior genuine Connector runtime/SEA from an exact commit
+using the same pinned Core source and closed archive set. That prior pair is installed only in the isolated runner
+account.
 
-The page check verifies visible install progress, local pairing projection and the local Core proxy, invokes the explicit
-same-version update as a running no-op, then checks launchd cleanup. This is controlled-beta candidate evidence;
-manual Finder/Gatekeeper dogfood and any eligible update/rollback of a prior candidate remain separate. A
-stand-in core, mismatched probe resources, pending pin presented as production, or passing packaging check alone
-cannot satisfy the page acceptance. Missing exact source inputs or a hosted Mac must be reported as an unrun gate,
-not a pass.
+The initial page check verifies visible install progress, local pairing projection and the local Core proxy, invokes
+the explicit same-version update as a running no-op, then checks launchd cleanup. A second page check starts from the
+prior source-built pair, updates through the bundled app bridge, then faults only the staged Core after Connector
+staging and before commit; it passes only when the bridge reports rollback and the previous pair is running, reachable
+and still paired. These changed-pair assertions remain unproven until the revised exact-head hosted Mac run succeeds.
+Manual Finder/Gatekeeper dogfood remains separate. A stand-in core, mismatched probe resources, pending pin presented
+as production, or passing packaging check alone cannot satisfy the page acceptance. Missing exact source inputs or a
+hosted Mac must be reported as an unrun gate, not a pass.

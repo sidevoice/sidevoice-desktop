@@ -54,4 +54,5 @@ else
   if grep -Eq "SIDEVOICE_DEBUG_(REFUSE_LOAD|SLOW_TRANSCRIBE)" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "a fault switch is in the release app"; exit 1; fi
   if grep -Eq "SIDEVOICE_DEBUG_LOCAL_HOST_FLOW|local-host-flow" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the local-host flow is in the release app"; exit 1; fi
   if grep -Eq "SIDEVOICE_DEBUG_LOCAL_HOST_DOGFOOD|local-host-dogfood" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the R4 page driver is in the release app"; exit 1; fi
+  if grep -Eq "SIDEVOICE_DEBUG_LOCAL_HOST_PAIR_(UPGRADE|ROLLBACK)|local-host-pair-(update|rollback)" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the R4 pair update/rollback driver is in the release app"; exit 1; fi
 fi

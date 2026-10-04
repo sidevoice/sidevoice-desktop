@@ -45,16 +45,23 @@ installer transaction.
 
 The manual `build` workflow input `r4-native-pair-candidate=true` runs the exact Core source builds, creates the
 closed manifest, builds Connector's Rust runtime and SEA from the two pinned source trees, and packages the
-production app. It also builds a CI-only probe variant with the same vendored web assets, pin, and SEA. On the fresh
+production app. For update acceptance, it also builds a prior Connector runtime and SEA from the exact source pin in
+`test/fixtures/r4-native-pair-previous-source-pin.json`, using the same pinned Core source and closed archive set.
+That prior pair is installed only into the isolated hosted test account; it is never bundled or uploaded. The workflow
+also builds a CI-only probe variant with the same vendored web assets, pin, and current SEA. On the fresh
 hosted Mac account, the production app is opened first; the probe variant then loads the same packaged page and
 clicks its local-install CTA. The page test verifies that the remote pairing dialog remains available, the local
 install and progress complete through the Desktop bridge, the paired local device can reach Core through the page
 proxy, and an explicit same-version update is a safe no-op. The smoke then verifies Connector/Core service status
-and uninstalls the pair. The probe app is never uploaded; the production app, build evidence, checksums, and
-secret-free smoke evidence are uploaded as a seven-day Actions artifact. No pairing code or token is logged. The
-run does not publish a prerelease or numbered release. A same-version no-op is the safe update evidence in this
-lane; rollback behavior remains covered by the existing Connector transaction tests and has no previous release
-to exercise on a clean account.
+and uninstalls the pair. A second focused probe starts with the source-built prior pair, calls `localHost.update()`
+through the packaged page, and verifies that the current pair is selected and reachable. It then repeats the baseline,
+pauses the current Connector after staging and before commit, replaces only the staged Core entrypoint with a
+non-serving executable, and resumes the transaction. The bridge must return the Connector rollback error while the
+previous verified pair remains selected, paired, and reachable. The test always resumes the transaction and
+uninstalls its service. The probe app and prior SEA are never uploaded; the production app, build evidence,
+checksums, install smoke evidence and update/rollback evidence are uploaded as a seven-day Actions artifact. No
+pairing code or token is logged. The run does not publish a prerelease or numbered release. These app-level
+update/rollback assertions remain unproven until the revised exact-head hosted Mac run succeeds.
 
 This remains a **candidate-only** lane. The normal `build:mac` and default main Mac job still validate the checked-in
 `src-tauri/connector-pin.json`, which is deliberately pending and therefore fails closed. A green candidate run
@@ -82,15 +89,14 @@ The single app-owned update path reuses the Connector transaction:
   `Cli::bundled` and `host.install_bundled(..., true)`; `NewerInstalled`, incompatible, and incomplete metadata do
   not start an update. `src-tauri/local-host/tests/local_host.rs` verifies that an `install.rollback` result remains
   an error while the previous Core is still running.
-- The packaged-page smoke in the candidate run exercises the app bridge's same-version no-op and verifies pairing
-  survives it. It does **not** install an older real pair, run a changed-pair update through the app page, or force an
-  app-triggered failed update and verify automatic rollback on hosted macOS.
+- The immutable `8037287` packaged-page run exercises the same-version no-op and verifies pairing survives it. This
+  follow-up candidate adds the packaged-page changed-pair upgrade and failed-update rollback check described above;
+  its result is not evidence until its exact-head Mac run succeeds.
 
-These source and component tests support the current bounded install/no-op dogfood claim; they are not end-to-end
-proof of a changed-pair update or rollback in the packaged app. Do not claim those app-level behaviors as beta-verified
-until one focused hosted Mac acceptance installs a prior genuine source-built pair, updates through the packaged
-bridge, then causes a deterministic post-stage failure and confirms the prior pair remains reachable. The present
-candidate remains usable for the bounded local-install trial without that broader claim.
+Connector and Desktop source tests cover the transaction and bridge components. Do not claim changed-pair update or
+rollback as beta-verified until the follow-up exact-head hosted Mac acceptance passes both packaged bridge paths. The
+immutable candidate remains usable for its already-reviewed bounded fresh-Mac local-install trial while that check
+runs.
 
 ## Signing readiness and distribution limits
 

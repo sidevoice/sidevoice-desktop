@@ -12,6 +12,8 @@
 //! - the R4 dogfood flow (`test/fixtures/local-host-dogfood-flow.js`), injected with
 //!   `SIDEVOICE_DEBUG_LOCAL_HOST_DOGFOOD=1`: clicks the vendored local-install CTA, verifies the local-host bridge,
 //!   and confirms the remote pairing dialog is still available;
+//! - the pair upgrade/rollback flows, injected only by their explicit test switches: run the pinned update path and
+//!   verify restoration of a prior pair after a staged Core failure;
 //! - `SIDEVOICE_DEBUG_IDLE_UNLOAD_SECS`: how long a model stays in memory unused (D13), shortened so the probe page
 //!   sees the app unload a model and load it again as a call connects;
 //! - `SIDEVOICE_DEBUG_REFUSE_LOAD`, `SIDEVOICE_DEBUG_SLOW_TRANSCRIBE`: faults the room flow selects models against.
@@ -30,6 +32,8 @@ const CARD_HTML: &[u8] = include_bytes!("../../test/fixtures/card-probe.html");
 const ROOM_FLOW: &str = include_str!("../../test/fixtures/room-flow.js");
 const LOCAL_HOST_FLOW: &str = include_str!("../../test/fixtures/local-host-flow.js");
 const LOCAL_HOST_DOGFOOD_FLOW: &str = include_str!("../../test/fixtures/local-host-dogfood-flow.js");
+const LOCAL_HOST_PAIR_UPGRADE_FLOW: &str = include_str!("../../test/fixtures/local-host-pair-upgrade-flow.js");
+const LOCAL_HOST_PAIR_ROLLBACK_FLOW: &str = include_str!("../../test/fixtures/local-host-pair-rollback-flow.js");
 
 /// The page the room window loads: a probe when asked for, else `interface`.
 pub fn page(interface: &str) -> String {
@@ -81,6 +85,18 @@ pub fn local_host_flow() -> Option<&'static str> {
 pub fn local_host_dogfood_flow() -> Option<&'static str> {
     let asked = std::env::var("SIDEVOICE_DEBUG_LOCAL_HOST_DOGFOOD").is_ok_and(|v| v == "1");
     (crate::debugging() && asked).then_some(LOCAL_HOST_DOGFOOD_FLOW)
+}
+
+/// A prior genuine Rust pair upgraded by the packaged page through `localHost.update()`.
+pub fn local_host_pair_upgrade_flow() -> Option<&'static str> {
+    let asked = std::env::var("SIDEVOICE_DEBUG_LOCAL_HOST_PAIR_UPGRADE").is_ok_and(|v| v == "1");
+    (crate::debugging() && asked).then_some(LOCAL_HOST_PAIR_UPGRADE_FLOW)
+}
+
+/// A failed packaged-page update must restore the prior verified pair and keep the host reachable.
+pub fn local_host_pair_rollback_flow() -> Option<&'static str> {
+    let asked = std::env::var("SIDEVOICE_DEBUG_LOCAL_HOST_PAIR_ROLLBACK").is_ok_and(|v| v == "1");
+    (crate::debugging() && asked).then_some(LOCAL_HOST_PAIR_ROLLBACK_FLOW)
 }
 
 /// How long a model stays in memory unused (D13), shortened with `SIDEVOICE_DEBUG_IDLE_UNLOAD_SECS` so the probe

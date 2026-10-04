@@ -139,6 +139,17 @@ test("Rust runtime identity accepts the producer's strict JSON shape without an 
   }
 });
 
+test("hosted pair update baseline pins the prior Connector source to the same Core inputs", () => {
+  const previous = JSON.parse(readFileSync(new URL("../test/fixtures/r4-native-pair-previous-source-pin.json", import.meta.url)));
+  const current = JSON.parse(readFileSync(new URL("../src-tauri/r4-native-pair-source-pin.json", import.meta.url)));
+  assert.deepEqual(Object.keys(previous).sort(), ["connector", "core", "schema", "target"]);
+  assert.equal(previous.schema, 1);
+  assert.equal(previous.target, current.target);
+  assert.equal(previous.connector.repository, "sidevoice/sidevoice-connector");
+  assert.equal(previous.connector.source_sha, "c3aa3468e66e265897fdf0fccf5ad55d6fcf060f");
+  assert.deepEqual(previous.core, current.core, "only the exact Connector runtime source changes in this baseline pair");
+});
+
 test("Rust-native SEA metadata keeps Python manifest fields empty and verifies protocols", () => {
   const pin = nativePairPin();
   const version = { ok: true, version: pin.connector_version, target: pin.target, channel: pin.channel,

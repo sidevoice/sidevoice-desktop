@@ -38,6 +38,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   R4_CONNECTOR_SOURCE_SHA: 435fd315e657a4f1372fc524f773387797195f38
+  R4_PREVIOUS_CONNECTOR_SOURCE_SHA: c3aa3468e66e265897fdf0fccf5ad55d6fcf060f
   R4_CORE_SOURCE_SHA: b41840e41e3eb81905d285514c7deb35bd8efe57
   R4_CORE_LOCK_SHA256: b0e068cf34f5c1549c00add4c2d94e06af3758bb1586c2e58f192220a22b53e9
 
@@ -271,6 +272,10 @@ jobs:
           grep -q "SIDEVOICE_DEBUG_SLOW_TRANSCRIBE" "$BIN"
           grep -q "SIDEVOICE_DEBUG_LOCAL_HOST_FLOW" "$BIN"
           grep -q "local-host-flow" "$BIN"
+          grep -q "SIDEVOICE_DEBUG_LOCAL_HOST_PAIR_UPGRADE" "$BIN"
+          grep -q "local-host-pair-update" "$BIN"
+          grep -q "SIDEVOICE_DEBUG_LOCAL_HOST_PAIR_ROLLBACK" "$BIN"
+          grep -q "local-host-pair-rollback" "$BIN"
       - name: The local host from the bundled page (stand-in core on local.sock, pairing, proxy, refusals)
         run: |
           set -euo pipefail
@@ -568,6 +573,12 @@ jobs:
           ref: ${{ env.R4_CORE_SOURCE_SHA }}
           path: core-src
           persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: sidevoice/sidevoice-connector
+          ref: ${{ env.R4_PREVIOUS_CONNECTOR_SOURCE_SHA }}
+          path: connector-previous
+          persist-credentials: false
       - name: Verify Connector protected-candidate source and native Core pin
         run: |
           set -euo pipefail
@@ -585,6 +596,7 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             connector-src/package-lock.json
+            connector-previous/package-lock.json
       - uses: dtolnay/rust-toolchain@1.99.0
         with:
           targets: aarch64-apple-darwin
@@ -597,6 +609,16 @@ jobs:
       - run: npm ci
       - name: Install Connector dependencies
         working-directory: connector-src
+        run: npm ci
+      - name: Verify the exact prior Connector source and its native Core pin
+        run: |
+          set -euo pipefail
+          test "$(git -C connector-previous rev-parse HEAD)" = "$R4_PREVIOUS_CONNECTOR_SOURCE_SHA"
+          test "$(jq -r '.connector.source_sha' test/fixtures/r4-native-pair-previous-source-pin.json)" = "$R4_PREVIOUS_CONNECTOR_SOURCE_SHA"
+          test "$(jq -r '.core.source_sha' connector-previous/packages/connector/rust-core-production-pin.json)" = "$R4_CORE_SOURCE_SHA"
+          test "$(jq -r '.core.cargo_lock_sha256' connector-previous/packages/connector/rust-core-production-pin.json)" = "$R4_CORE_LOCK_SHA256"
+      - name: Install prior Connector dependencies
+        working-directory: connector-previous
         run: npm ci
       - name: Build the exact Rust Connector runtime
         working-directory: connector-src
@@ -627,6 +649,40 @@ jobs:
         run: npm run build:sea -w @sidevoice/uplink
       - name: Sign the embedded SEA ad hoc for the app's native resource check
         run: codesign --force --sign - connector-src/packages/connector/dist-sea/macos-aarch64/sidevoice
+      - name: Build a genuine prior Rust Connector runtime and SEA for the app update acceptance
+        working-directory: connector-previous
+        env:
+          RUSTUP_TOOLCHAIN: stable
+          SIDEVOICE_CONNECTOR_BUILD_SHA: ${{ env.R4_PREVIOUS_CONNECTOR_SOURCE_SHA }}
+          SIDEVOICE_CONNECTOR_TARGET: macos-aarch64
+          SIDEVOICE_BUILD_SEA: '1'
+          SIDEVOICE_REQUIRE_RUST_CORE: '1'
+          SIDEVOICE_RUST_CORE_SOURCE_BUILD: '1'
+          SIDEVOICE_REQUIRE_RUST_CONNECTOR: '1'
+          SIDEVOICE_CHANNEL: release
+          SIDEVOICE_BUILD_SEQ: '0'
+          SIDEVOICE_CONNECTOR_SHA: ${{ env.R4_PREVIOUS_CONNECTOR_SOURCE_SHA }}
+          SIDEVOICE_RUST_CONNECTOR_SOURCE_SHA: ${{ env.R4_PREVIOUS_CONNECTOR_SOURCE_SHA }}
+          SIDEVOICE_RUST_CONNECTOR_TARGET: macos-aarch64
+          SIDEVOICE_RUST_CONNECTOR_BINARY: ${{ github.workspace }}/connector-previous/packages/connector-rust/target/release/sidevoice-rust-proof
+          SIDEVOICE_RUST_CORE_SOURCE_SHA: ${{ env.R4_CORE_SOURCE_SHA }}
+          SIDEVOICE_RUST_CORE_TARGET: macos-aarch64
+          SIDEVOICE_RUST_CORE_MANIFEST: ${{ runner.temp }}/r4-core-inputs/native-core-manifest.json
+        run: |
+          set -euo pipefail
+          export SIDEVOICE_CONNECTOR_VERSION="$(node -p "require('./packages/connector/package.json').version")"
+          cargo build --locked --release --manifest-path packages/connector-rust/Cargo.toml
+          npm run build:sea -w @sidevoice/uplink
+          codesign --force --sign - packages/connector/dist-sea/macos-aarch64/sidevoice
+      - name: Pin the prior pair to its exact source-built inputs
+        run: |
+          set -euo pipefail
+          node scripts/prepare-r4-native-pair.mjs \
+            connector-previous core-src "$RUNNER_TEMP/r4-core-inputs" \
+            connector-previous/packages/connector-rust/target/release/sidevoice-rust-proof \
+            connector-previous/packages/connector/dist-sea/macos-aarch64/sidevoice \
+            "$RUNNER_TEMP/r4-native-pair-previous-pin.json" \
+            test/fixtures/r4-native-pair-previous-source-pin.json
       - name: Create the exact native-pair pin from the verified build inputs
         run: |
           set -euo pipefail
@@ -664,6 +720,15 @@ jobs:
           DOGFOOD_APP: src-tauri/target/packages/native-pair-probe/Sidevoice.app
           SIDEVOICE_R4_SMOKE_EVIDENCE: ${{ runner.temp }}/r4-native-pair-preview/smoke-evidence.json
         run: node test/macos/native-pair-install-smoke.mjs
+      - name: Upgrade and roll back a changed pair through the packaged app bridge
+        timeout-minutes: 80
+        env:
+          APP: src-tauri/target/packages/native-pair/Sidevoice.app
+          DOGFOOD_APP: src-tauri/target/packages/native-pair-probe/Sidevoice.app
+          PREVIOUS_PAIR_PIN: ${{ runner.temp }}/r4-native-pair-previous-pin.json
+          PREVIOUS_PAIR_SEA: ${{ github.workspace }}/connector-previous/packages/connector/dist-sea/macos-aarch64/sidevoice
+          SIDEVOICE_R4_UPDATE_SMOKE_EVIDENCE: ${{ runner.temp }}/r4-native-pair-preview/update-evidence.json
+        run: node test/macos/native-pair-update-smoke.mjs
       - name: Archive the tested app as a short-lived workflow artifact
         run: |
           set -euo pipefail
@@ -671,7 +736,7 @@ jobs:
           ditto -c -k --keepParent src-tauri/target/packages/native-pair/Sidevoice.app \
             "$RUNNER_TEMP/r4-native-pair-preview/Sidevoice-macOS-arm64-R4-native-pair.zip"
           cp dist/build-evidence.json "$RUNNER_TEMP/r4-native-pair-preview/build-evidence.json"
-          (cd "$RUNNER_TEMP/r4-native-pair-preview" && shasum -a 256 -- *.zip build-evidence.json smoke-evidence.json > SHA256SUMS)
+          (cd "$RUNNER_TEMP/r4-native-pair-preview" && shasum -a 256 -- *.zip build-evidence.json smoke-evidence.json update-evidence.json > SHA256SUMS)
       - uses: actions/upload-artifact@v4
         with:
           name: Sidevoice-macOS-arm64-R4-native-pair-candidate-${{ github.sha }}

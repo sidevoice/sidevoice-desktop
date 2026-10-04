@@ -184,9 +184,11 @@ export async function prepareNativePairPin({ connectorRoot, coreRoot, coreInputs
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const [connectorRoot, coreRoot, coreInputs, rustConnector, sea, output] = process.argv.slice(2);
-  if (process.argv.length !== 8) throw new Error("Usage: prepare-r4-native-pair <connector> <core> <core-inputs> <rust-connector> <sea> <output>");
-  const pin = await prepareNativePairPin({ connectorRoot, coreRoot, coreInputs, rustConnector, sea, output });
+  const [connectorRoot, coreRoot, coreInputs, rustConnector, sea, output, sourcePinPath] = process.argv.slice(2);
+  if (process.argv.length !== 8 && process.argv.length !== 9) {
+    throw new Error("Usage: prepare-r4-native-pair <connector> <core> <core-inputs> <rust-connector> <sea> <output> [source-pin]");
+  }
+  const pin = await prepareNativePairPin({ connectorRoot, coreRoot, coreInputs, rustConnector, sea, output, sourcePinPath });
   process.stdout.write(`${JSON.stringify({ target: pin.target, connector_sha: pin.connector_sha,
     core_source_sha: pin.native_pair.core_source_sha, executable_sha256: pin.executable_sha256 })}\n`);
 }

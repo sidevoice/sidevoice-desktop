@@ -322,6 +322,14 @@ fn open_room(app: &AppHandle, settings: &Settings) -> tauri::Result<()> {
     if let Some(flow) = probe::local_host_dogfood_flow() {
         builder = builder.initialization_script(flow);
     }
+    #[cfg(feature = "probe")]
+    if let Some(flow) = probe::local_host_pair_upgrade_flow() {
+        builder = builder.initialization_script(flow);
+    }
+    #[cfg(feature = "probe")]
+    if let Some(flow) = probe::local_host_pair_rollback_flow() {
+        builder = builder.initialization_script(flow);
+    }
     builder
         // A hidden window still carries the call: never suspend or throttle its page.
         .background_throttling(BackgroundThrottlingPolicy::Disabled)
