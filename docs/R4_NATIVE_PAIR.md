@@ -62,6 +62,36 @@ does not mean the default main package job can build this Rust-native pair. Do n
 candidate as a normal main package until that production boundary is deliberately updated and independently
 verified.
 
+For the current no-release dogfood, the selected delivery strategy is to keep this lane candidate-only. The existing
+main Mac job is not skipped or made green with a fixture: a main push still fails closed at the pending production
+pin. The signed candidate artifact from Desktop `80372872c36798792270cf7df0432e348ac1c78a` and hosted run
+`37203998670` is available for its seven-day retention window. Making a one-PR merge buildable requires a separately
+reviewed change to the production package path and its exact-head Mac gate.
+
+## Update and rollback evidence boundary
+
+The single app-owned update path reuses the Connector transaction:
+
+- At Connector `435fd315e657a4f1372fc524f773387797195f38`, `release.decide` treats a same-version Rust pair identity
+  change as an upgrade. `packages/connector/install.mjs` stages the candidate, switches the selection only after
+  quiescing the old Rust owner, verifies the new service and pair identity, and flips back to the last verified
+  release on verification failure. Connector `test/test_install.mjs` covers the pair decision, Rust owner quiescence,
+  and selected-release recovery/rollback paths with manager stand-ins.
+- Desktop `src-tauri/local-host/src/versioning.rs` tests that a changed native `pair_id` makes an update available and
+  that a newer installed Core is never downgraded. `src-tauri/src/local_host.rs` routes only `Available` through
+  `Cli::bundled` and `host.install_bundled(..., true)`; `NewerInstalled`, incompatible, and incomplete metadata do
+  not start an update. `src-tauri/local-host/tests/local_host.rs` verifies that an `install.rollback` result remains
+  an error while the previous Core is still running.
+- The packaged-page smoke in the candidate run exercises the app bridge's same-version no-op and verifies pairing
+  survives it. It does **not** install an older real pair, run a changed-pair update through the app page, or force an
+  app-triggered failed update and verify automatic rollback on hosted macOS.
+
+These source and component tests support the current bounded install/no-op dogfood claim; they are not end-to-end
+proof of a changed-pair update or rollback in the packaged app. Do not claim those app-level behaviors as beta-verified
+until one focused hosted Mac acceptance installs a prior genuine source-built pair, updates through the packaged
+bridge, then causes a deterministic post-stage failure and confirms the prior pair remains reachable. The present
+candidate remains usable for the bounded local-install trial without that broader claim.
+
 ## Signing readiness and distribution limits
 
 The hosted candidate is ad-hoc signed for controlled beta dogfood. Apple Developer ID signing and notarization are
