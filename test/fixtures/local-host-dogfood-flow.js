@@ -76,7 +76,9 @@
       await until(async () => (await local.version()).update === "current", 60_000, "install-bridge-did-not-complete");
       await until(() => {
         const status = panel.querySelector('[role="status"]')?.textContent?.trim();
-        return status && status !== initialStatus ? status : null;
+        if (status && status !== initialStatus) return "status-updated";
+        // The reviewed room selects the newly reachable local machine and removes this panel on success.
+        return visible(panel) ? null : "advanced-to-local-room";
       }, 60_000, "install-ui-no-result");
 
       const pairing = await local.pairing();
@@ -115,7 +117,7 @@
           || stillPaired.fp !== pairing.fp)
         throw new Error("page-state-changed-after-update");
 
-      await say("ok local-cta=true progress=rendered remote-pairing=true reachable=true page-proxy=true update=noop");
+      await say("ok local-cta=true progress=rendered install-ui=settled remote-pairing=true reachable=true page-proxy=true update=noop");
     } catch (error) {
       const key = typeof error?.message === "string" && /^[a-z0-9-]{1,64}$/.test(error.message)
         ? error.message : "unexpected-error";

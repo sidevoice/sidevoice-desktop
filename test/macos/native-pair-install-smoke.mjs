@@ -11,7 +11,7 @@ const MAX_STDOUT = 1_048_576;
 const MAX_STDERR_LINE = 65_536;
 const MAX_APP_OUTPUT = 4_194_304;
 const ALLOWED_PROGRESS = new Set(["stage", "verify", "service-start", "wait-calls", "wait-lock", "commit", "pairing", "rollback"]);
-const DOGFOOD_SUCCESS = "local-host-dogfood ok local-cta=true progress=rendered remote-pairing=true reachable=true page-proxy=true update=noop";
+const DOGFOOD_SUCCESS = "local-host-dogfood ok local-cta=true progress=rendered install-ui=settled remote-pairing=true reachable=true page-proxy=true update=noop";
 
 function requireValue(ok, message) {
   if (!ok) throw new Error(message);
