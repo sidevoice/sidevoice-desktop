@@ -453,6 +453,9 @@ test("localHost install progress and cancellation stay scoped to their job", asy
     local_host_install_progress: ({ job, afterSequence }) => [
       { job, sequence: afterSequence + 1, step: "download", done: 4, total: 12, cancellable: true },
       { job, sequence: afterSequence + 2, step: "verify", done: null, total: null, cancellable: false },
+      { job, sequence: afterSequence + 3, step: "stage", done: null, total: null, cancellable: false },
+      { job, sequence: afterSequence + 4, step: "wait-lock", done: null, total: null, cancellable: false },
+      { job, sequence: afterSequence + 5, step: "wait-calls", done: null, total: null, cancellable: false },
     ],
     local_host_cancel: ({ job }) => (calls.push(job), true),
     local_host_update: { state: "running", reachable: true },
@@ -467,6 +470,9 @@ test("localHost install progress and cancellation stay scoped to their job", asy
   assert.deepEqual(JSON.parse(JSON.stringify(progress)), [
     { step: "download", done: 4, total: 12, cancellable: true },
     { step: "verify", done: null, total: null, cancellable: false },
+    { step: "staging", done: null, total: null, cancellable: false },
+    { step: "staging", done: null, total: null, cancellable: false },
+    { step: "staging", done: null, total: null, cancellable: false },
   ]);
   assert.equal(await local.cancel(pending.job), true);
   assert.deepEqual(await local.version(), { bridge: 3, update: "available", capabilities: { agents: false } });

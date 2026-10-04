@@ -57,6 +57,19 @@
   let installs = 0; // numbers each install call's job
   let hostInstalls = 0;
 
+  // Connector progress is a process protocol. The vendored room uses stable presentation step names, so translate
+  // connector-only names here instead of making the UI understand service transaction internals.
+  function localInstallStep(step) {
+    switch (step) {
+      case "stage":
+      case "wait-calls":
+      case "wait-lock":
+        return "staging";
+      default:
+        return step;
+    }
+  }
+
   /** The app's native model engines (docs/BRIDGE.md → "The native engine"): what this device is, which builds are on
    *  disk, get one ready, run it. A build is a catalogue model id + an engine id; the page resolves its offers itself
    *  from `capabilities()` and the catalogue. `accelerator` (optional): the one the page chose, else the app uses the
@@ -164,7 +177,7 @@
             for (const frame of frames) {
               if (!frame || !Number.isSafeInteger(frame.sequence) || frame.sequence <= sequence) continue;
               sequence = frame.sequence;
-              try { onProgress({ step: frame.step, done: frame.done ?? null, total: frame.total ?? null,
+              try { onProgress({ step: localInstallStep(frame.step), done: frame.done ?? null, total: frame.total ?? null,
                 cancellable: frame.cancellable === true }); }
               catch (_) { /* progress listeners cannot break the install */ }
             }

@@ -19,6 +19,8 @@
 
   (async () => {
     let local;
+    let progressObserver;
+    let sawInstallProgress = false;
     try {
       const host = window.__sidevoiceDesktop?.host;
       local = host?.localHost;
@@ -53,13 +55,18 @@
 
       const currentLocalButton = document.querySelector(".local-install-cta button");
       if (!visible(currentLocalButton)) throw new Error("local-install-button-disappeared");
+      progressObserver = new MutationObserver(() => {
+        const progress = document.querySelector(".local-install-panel .muted:not([role='status'])");
+        if (visible(progress) && progress.textContent?.trim()) sawInstallProgress = true;
+      });
+      progressObserver.observe(document.body, { childList: true, characterData: true, subtree: true });
       currentLocalButton.click();
       const panel = await until(() => {
         const value = document.querySelector(".local-install-panel");
         return visible(value) && value.querySelector('[role="status"]') ? value : null;
       }, 15_000, "install-progress-panel-missing");
       const initialStatus = panel.querySelector('[role="status"]')?.textContent?.trim() || "";
-      await until(() => panel.querySelector(".muted")?.textContent?.trim(), 60_000, "install-progress-not-rendered");
+      await until(() => sawInstallProgress, 60_000, "install-progress-not-rendered");
 
       const state = await until(async () => {
         if (panel.querySelector('[role="alert"]')) throw new Error("install-ui-reported-failure");
@@ -108,11 +115,13 @@
           || stillPaired.fp !== pairing.fp)
         throw new Error("page-state-changed-after-update");
 
-      await say("ok local-cta=true progress=true remote-pairing=true reachable=true page-proxy=true update=noop");
+      await say("ok local-cta=true progress=rendered remote-pairing=true reachable=true page-proxy=true update=noop");
     } catch (error) {
       const key = typeof error?.message === "string" && /^[a-z0-9-]{1,64}$/.test(error.message)
         ? error.message : "unexpected-error";
       await say(`error ${key}`);
+    } finally {
+      progressObserver?.disconnect();
     }
   })();
 })();

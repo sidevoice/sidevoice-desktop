@@ -126,7 +126,7 @@ docs/LOCAL_HOST.md.
 | `revealLog()` | shows the core's log in Finder (`~/.sidevoice/core.log`, else `connector.log`) |
 | `pairingCode()` | `{code, expires_in, reach}`, on the person's click only: shown, never sent — the page's convention; native authorises the caller, not a person (docs/LOCAL_HOST.md → Trust) |
 | `pairRoom(url, code)` | pairs this machine with a room (`pair … --json` only): `{room}` |
-| `install(onProgress)` | explicit `--no-agents` install; ordered `{step, done, total, cancellable}` events; promise has `.job` |
+| `install(onProgress)` | explicit `--no-agents` install; ordered `{step, done, total, cancellable}` events; connector `stage`, `wait-calls`, and `wait-lock` are presented to the vendored room as `staging`; promise has `.job` |
 | `cancel(job)` | true only after the connector acknowledges cancellation before commit |
 | `update()` / `version()` | apply an eligible bundled update / read pinned and installed metadata plus capability status |
 | `agents()` | rejects with `agents.unavailable` until connector R2 supplies discovery |
