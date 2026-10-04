@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { sha256, validatePin, verifyMetadata } from "../scripts/connector-pin.mjs";
 import { assertRustConnectorRuntimeIdentity } from "../scripts/prepare-r4-native-pair.mjs";
+import { alignCorePin } from "../scripts/align-r4-native-pair-core-pin.mjs";
 
 function producerManifest() {
   return readFileSync(new URL("../src-tauri/local-host/test-fixtures/core-manifest-core34.json", import.meta.url));
@@ -153,13 +154,25 @@ test("hosted pair update baseline pins the prior Connector source to the same Co
 test("prior Connector producer pin uses top-level native Core identity fields", () => {
   const producerPin = JSON.parse(readFileSync(new URL("../test/fixtures/connector-rust-core-production-pin-c3aa346.json", import.meta.url)));
   const previous = JSON.parse(readFileSync(new URL("../test/fixtures/r4-native-pair-previous-source-pin.json", import.meta.url)));
+  const current = JSON.parse(readFileSync(new URL("../src-tauri/r4-native-pair-source-pin.json", import.meta.url)));
   assert.deepEqual(Object.keys(producerPin).sort(), ["cargo_lock_sha256", "repository", "schema", "source_sha"]);
   assert.equal(producerPin.repository, "sidevoice/sidevoice-core");
-  assert.equal(producerPin.source_sha, previous.core.source_sha);
+  assert.equal(producerPin.source_sha, "b41840e41e3eb81905d285514c7deb35bd8efe57");
+  assert.equal(producerPin.cargo_lock_sha256, "b0e068cf34f5c1549c00add4c2d94e06af3758bb1586c2e58f192220a22b53e9");
   assert.equal(producerPin.cargo_lock_sha256, previous.core.cargo_lock_sha256);
+  assert.equal(previous.core.source_sha, "b2ae125453baa3634b94eefcc49879588e3b6e40");
+  assert.equal(previous.core.cargo_lock_sha256, "b0e068cf34f5c1549c00add4c2d94e06af3758bb1586c2e58f192220a22b53e9");
+  assert.deepEqual(alignCorePin(producerPin, previous.connector.source_sha, previous), {
+    ...producerPin,
+    source_sha: previous.core.source_sha,
+    cargo_lock_sha256: previous.core.cargo_lock_sha256,
+  }, "the prior producer pin is aligned only to the exact effective trial Core identity");
+  assert.equal(current.connector.source_sha, "435fd315e657a4f1372fc524f773387797195f38");
+  assert.equal(current.core.source_sha, previous.core.source_sha);
+  assert.equal(current.core.cargo_lock_sha256, previous.core.cargo_lock_sha256);
 
   const workflow = readFileSync(new URL("../.github/workflows/build.yml", import.meta.url), "utf8");
-  const priorPinGuard = workflow.match(/- name: Verify the exact prior Connector source and its native Core pin\n        run: \|\n([\s\S]*?)(?=\n      - name: )/);
+  const priorPinGuard = workflow.match(/- name: Verify the exact prior Connector source and its aligned native Core pin[\s\S]*?\n        run: \|\n([\s\S]*?)(?=\n      - name: )/);
   assert.ok(priorPinGuard, "the hosted changed-pair gate retains its exact prior-pin guard");
   assert.match(priorPinGuard[1], /jq -r '\.source_sha' connector-previous\/packages\/connector\/rust-core-production-pin\.json/);
   assert.match(priorPinGuard[1], /jq -r '\.cargo_lock_sha256' connector-previous\/packages\/connector\/rust-core-production-pin\.json/);
