@@ -5,6 +5,11 @@ This is a hosted macOS arm64 candidate lane for the Rust Connector + Rust Core p
 replaced. The Rust pair SEA already contains the Connector runtime and closed native Core archive, so installing the
 app does not fetch Connector or Core payloads.
 
+The bundled local install/update interface is vendored from reviewed sidevoice-web main commit
+`4ae0911d4946db84f9523489966f18d1b137be51`, recorded in `ui/voice/web-source.json`. It is the same tree as reviewed
+Web PR #42 head `8d56c1bb93a8c6e0b9a1f06d521d0413e721c572`; the remote-machine pairing route remains available
+separately.
+
 ## Exact source inputs
 
 [`src-tauri/r4-native-pair-source-pin.json`](../src-tauri/r4-native-pair-source-pin.json) pins the Connector
@@ -39,19 +44,25 @@ checks; an installed newer Core is never replaced by this candidate. The app con
 installer transaction.
 
 The manual `build` workflow input `r4-native-pair-candidate=true` runs the exact Core source builds, creates the
-closed manifest, builds Connector's Rust runtime and SEA from the two pinned source trees, and uses that SEA while
-building the production-shaped app. It then opens the packaged app, runs the bundled SEA install/status/pair-device/
-same-version no-op/uninstall smoke on the fresh hosted Mac account, and uploads the tested app plus build evidence
-as a seven-day Actions artifact. Pairing codes are validated in memory and never printed. The run does not publish
-a prerelease or numbered release. A same-version no-op is the safe update evidence in this lane; rollback behavior
-remains covered by the existing Connector transaction tests and has no previous release to exercise on a clean
-account.
+closed manifest, builds Connector's Rust runtime and SEA from the two pinned source trees, and packages the
+production app. It also builds a CI-only probe variant with the same vendored web assets, pin, and SEA. On the fresh
+hosted Mac account, the production app is opened first; the probe variant then loads the same packaged page and
+clicks its local-install CTA. The page test verifies that the remote pairing dialog remains available, the local
+install and progress complete through the Desktop bridge, the paired local device can reach Core through the page
+proxy, and an explicit same-version update is a safe no-op. The smoke then verifies Connector/Core service status
+and uninstalls the pair. The probe app is never uploaded; the production app, build evidence, checksums, and
+secret-free smoke evidence are uploaded as a seven-day Actions artifact. No pairing code or token is logged. The
+run does not publish a prerelease or numbered release. A same-version no-op is the safe update evidence in this
+lane; rollback behavior remains covered by the existing Connector transaction tests and has no previous release
+to exercise on a clean account.
+
+This remains a **candidate-only** lane. The normal `build:mac` and default main Mac job still validate the checked-in
+`src-tauri/connector-pin.json`, which is deliberately pending and therefore fails closed. A green candidate run
+does not mean the default main package job can build this Rust-native pair. Do not describe or integrate the
+candidate as a normal main package until that production boundary is deliberately updated and independently
+verified.
 
 ## Signing readiness and distribution limits
 
-The hosted candidate is ad-hoc signed and is useful for CI review and local dogfood only. Apple Developer ID signing
-and notarization are not configured: this repository's current readiness requires an Apple Developer Program
-membership, a Developer ID Application certificate, the `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD` and
-`APPLE_SIGNING_IDENTITY` CI secrets, and notarization credentials described in [MACOS.md](MACOS.md). Until those
-are configured and a clean-Mac Gatekeeper smoke succeeds, the Actions artifact is not a double-click-ready public
-installer. It is not a versioned release.
+The hosted candidate is ad-hoc signed for controlled beta dogfood. Apple Developer ID signing and notarization are
+deferred distribution work; this artifact is not a public installer or a versioned release.

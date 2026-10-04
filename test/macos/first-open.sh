@@ -8,7 +8,7 @@ PID=$!
 for i in $(seq 1 45); do grep -q "ready: true" /tmp/app.log && break; sleep 1; done
 sleep 5
 if ! kill -0 "$PID" 2>/dev/null; then echo "The app exited on its own:"; cat /tmp/app.log; exit 1; fi
-kill "$PID"; cat /tmp/app.log
+kill "$PID"; wait "$PID" || true; cat /tmp/app.log
 # The interface loaded from the app itself, and its controller came up: the bridge attached to the
 # real web UI's store and actions, and reached the app over IPC.
 grep -q "page tauri://localhost/voice/index.html" /tmp/app.log

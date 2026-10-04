@@ -13,6 +13,7 @@
     "icons": "node scripts/make-icons.mjs",
     "build:mac:fixture": "node scripts/build-mac.mjs fixture",
     "build:mac:native-pair": "node scripts/build-mac.mjs native-pair",
+    "build:mac:native-pair-probe": "node scripts/build-mac.mjs native-pair-probe",
     "build:mac:probe": "node scripts/build-mac.mjs probe",
     "package:mac": "npm run build:mac && bash test/macos/package-dmg.sh"
   },

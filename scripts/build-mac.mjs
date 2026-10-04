@@ -6,7 +6,10 @@ import { fetchConnector, sha256, validatePin, verifyArtifact } from "./connector
 import { t } from "./build-i18n.mjs";
 
 const mode = process.argv[2] ?? "production";
-if (!["production", "fixture", "probe", "native-pair"].includes(mode) || process.argv.length > 3) throw new Error(t("build.arguments"));
+if (!["production", "fixture", "probe", "native-pair", "native-pair-probe"].includes(mode) || process.argv.length > 3) throw new Error(t("build.arguments"));
+const nativePairMode = mode === "native-pair" || mode === "native-pair-probe";
+const nativePairProbe = mode === "native-pair-probe";
+const writeBuildEvidence = mode === "production" || mode === "native-pair";
 if (process.platform !== "darwin" || process.arch !== "arm64") throw new Error(t("build.platform"));
 const expectedNode = (await readFile(new URL("../.node-version", import.meta.url), "utf8")).trim();
 if (process.version !== `v${expectedNode}`) throw new Error(t("build.node", { version: expectedNode }));
@@ -27,13 +30,13 @@ const trackedChangesBeforeBuild = execFileSync("git", ["status", "--porcelain", 
 const run = (file, args, extraEnv = {}) => execFileSync(file, args, { stdio: "inherit", env: { ...env, ...extraEnv } });
 try {
   const expected = resolve(scratch, "fixture.json");
-  if (mode === "production" || mode === "native-pair") {
+  if (writeBuildEvidence) {
     await rm("dist/build-evidence.json", { force: true });
   }
   if (mode === "production") {
     await fetchConnector();
   }
-  if (mode === "native-pair") {
+  if (nativePairMode) {
     const pinPath = process.env.SIDEVOICE_R4_NATIVE_PAIR_PIN;
     const seaPath = process.env.SIDEVOICE_R4_NATIVE_PAIR_SEA;
     if (!pinPath || !seaPath) throw new Error("native-pair build requires the hosted source-built pin and SEA paths.");
@@ -80,7 +83,10 @@ try {
   }
   const args = ["node_modules/@tauri-apps/cli/tauri.js", "build", "--target", "aarch64-apple-darwin", "--bundles", "app"];
   if (mode === "probe") args.push("--features", "probe");
-  else args.push("--config", "src-tauri/tauri.macos-aarch64.conf.json");
+  else {
+    args.push("--config", "src-tauri/tauri.macos-aarch64.conf.json");
+    if (nativePairProbe) args.push("--features", "probe");
+  }
   args.push("--", "--locked");
   run(process.execPath, args);
   await mkdir(resolve(targetDir, "packages", mode), { recursive: true });
@@ -89,9 +95,10 @@ try {
   if (mode !== "probe") {
     run("bash", ["test/macos/check-package.sh"], {
       APP: app, CONNECTOR_FIXTURE: String(mode === "fixture"), CONNECTOR_FIXTURE_EXPECTED: expected,
+      EXPECT_CI_PROBE: String(nativePairProbe),
     });
   }
-  if (mode === "production" || mode === "native-pair") {
+  if (writeBuildEvidence) {
     const git = (...args) => execFileSync("git", args, { encoding: "utf8" }).trim();
     const pin = JSON.parse(await readFile(resolve(app, "Contents/Resources/resources/connector-pin.json"), "utf8"));
     const web = JSON.parse(await readFile("ui/voice/web-source.json", "utf8"));

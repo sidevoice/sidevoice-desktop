@@ -40,12 +40,18 @@ mkdir -p dmg-screens && cp -R "${CHECK_TEMP}/icon.iconset" dmg-screens/
 test "$(plutil -extract CFBundleName raw "$APP/Contents/Info.plist")" = "Sidevoice"
 echo "--- architecture"
 lipo -archs "$APP/Contents/MacOS/sidevoice-desktop" | tee /dev/stderr | grep -q arm64
-echo "--- no CI probe in a release (src-tauri/src/probe.rs is behind the probe feature)"
-if grep -q "SIDEVOICE_DEBUG_PAGE" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the probe switch is in the release app"; exit 1; fi
-if grep -q "probe-engine" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the probe page is in the release app"; exit 1; fi
-if grep -q "probe-card" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the call controls probe is in the release app"; exit 1; fi
-if grep -q "SIDEVOICE_DEBUG_ROOM_FLOW" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the room-flow switch is in the release app"; exit 1; fi
-if grep -q "room-flow" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the room-flow script is in the release app"; exit 1; fi
-if grep -q "SIDEVOICE_DEBUG_IDLE_UNLOAD_SECS" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the idle-time switch is in the release app"; exit 1; fi
-if grep -Eq "SIDEVOICE_DEBUG_(REFUSE_LOAD|SLOW_TRANSCRIBE)" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "a fault switch is in the release app"; exit 1; fi
-if grep -Eq "SIDEVOICE_DEBUG_LOCAL_HOST_FLOW|local-host-flow" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the local-host flow is in the release app"; exit 1; fi
+echo "--- CI probe feature boundary"
+if [ "${EXPECT_CI_PROBE:-false}" = "true" ]; then
+  grep -q "SIDEVOICE_DEBUG_LOCAL_HOST_DOGFOOD" "$APP/Contents/MacOS/sidevoice-desktop"
+  grep -q "local-host-dogfood" "$APP/Contents/MacOS/sidevoice-desktop"
+else
+  if grep -q "SIDEVOICE_DEBUG_PAGE" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the probe switch is in the release app"; exit 1; fi
+  if grep -q "probe-engine" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the probe page is in the release app"; exit 1; fi
+  if grep -q "probe-card" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the call controls probe is in the release app"; exit 1; fi
+  if grep -q "SIDEVOICE_DEBUG_ROOM_FLOW" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the room-flow switch is in the release app"; exit 1; fi
+  if grep -q "room-flow" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the room-flow script is in the release app"; exit 1; fi
+  if grep -q "SIDEVOICE_DEBUG_IDLE_UNLOAD_SECS" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the idle-time switch is in the release app"; exit 1; fi
+  if grep -Eq "SIDEVOICE_DEBUG_(REFUSE_LOAD|SLOW_TRANSCRIBE)" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "a fault switch is in the release app"; exit 1; fi
+  if grep -Eq "SIDEVOICE_DEBUG_LOCAL_HOST_FLOW|local-host-flow" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the local-host flow is in the release app"; exit 1; fi
+  if grep -Eq "SIDEVOICE_DEBUG_LOCAL_HOST_DOGFOOD|local-host-dogfood" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the R4 page driver is in the release app"; exit 1; fi
+fi

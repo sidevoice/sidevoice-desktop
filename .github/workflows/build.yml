@@ -648,13 +648,20 @@ jobs:
           SIDEVOICE_R4_NATIVE_PAIR_PIN: ${{ runner.temp }}/r4-native-pair-pin.json
           SIDEVOICE_R4_NATIVE_PAIR_SEA: ${{ github.workspace }}/connector-src/packages/connector/dist-sea/macos-aarch64/sidevoice
         run: npm run build:mac:native-pair
-      - name: Open the packaged app and load its production page
+      - name: Build the CI-only page-driver app with the same verified pair
+        env:
+          SIDEVOICE_R4_NATIVE_PAIR_PIN: ${{ runner.temp }}/r4-native-pair-pin.json
+          SIDEVOICE_R4_NATIVE_PAIR_SEA: ${{ github.workspace }}/connector-src/packages/connector/dist-sea/macos-aarch64/sidevoice
+        run: npm run build:mac:native-pair-probe
+      - name: Launch the production app and load its packaged page
         env:
           APP: src-tauri/target/packages/native-pair/Sidevoice.app
+          SIDEVOICE_DATA_DIR: ${{ runner.temp }}/r4-production-first-open-data
         run: bash test/macos/first-open.sh
-      - name: Install and remove the bundled Rust-native pair on this fresh runner account
+      - name: Install, reach, same-version update, and remove the pair from the packaged page
         env:
           APP: src-tauri/target/packages/native-pair/Sidevoice.app
+          DOGFOOD_APP: src-tauri/target/packages/native-pair-probe/Sidevoice.app
           SIDEVOICE_R4_SMOKE_EVIDENCE: ${{ runner.temp }}/r4-native-pair-preview/smoke-evidence.json
         run: node test/macos/native-pair-install-smoke.mjs
       - name: Archive the tested app as a short-lived workflow artifact
@@ -664,7 +671,7 @@ jobs:
           ditto -c -k --keepParent src-tauri/target/packages/native-pair/Sidevoice.app \
             "$RUNNER_TEMP/r4-native-pair-preview/Sidevoice-macOS-arm64-R4-native-pair.zip"
           cp dist/build-evidence.json "$RUNNER_TEMP/r4-native-pair-preview/build-evidence.json"
-          (cd "$RUNNER_TEMP/r4-native-pair-preview" && shasum -a 256 -- *.zip build-evidence.json > SHA256SUMS)
+          (cd "$RUNNER_TEMP/r4-native-pair-preview" && shasum -a 256 -- *.zip build-evidence.json smoke-evidence.json > SHA256SUMS)
       - uses: actions/upload-artifact@v4
         with:
           name: Sidevoice-macOS-arm64-R4-native-pair-candidate-${{ github.sha }}

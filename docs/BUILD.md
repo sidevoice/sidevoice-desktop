@@ -10,6 +10,14 @@ the workflow, temporarily supplies them through the existing app resource map, v
 bundle, and restores the pending checkout pin and prior resource on exit. See [R4_NATIVE_PAIR.md](R4_NATIVE_PAIR.md)
 for exact source pins, the candidate smoke and signing limits. Do not use this candidate lane for release publication.
 
+The lane also builds a CI-only probe variant with the same web assets, pin, and SEA so it can exercise the
+local-install page against the real pair on a fresh hosted Mac account. The uploaded app is the production-shaped
+`native-pair` app; the probe variant is used only for acceptance and is not uploaded.
+
+This branch remains candidate-only: the default main Mac job runs `npm run build:mac` against the checked-in
+pending pin and fails closed. A green manually dispatched R4 candidate run does not establish that a normal main
+build can package the pair.
+
 ## Inputs and commands
 
 Use an Apple Silicon Mac with Xcode Command Line Tools and Tauri's macOS prerequisites, Node **22.23.3**
@@ -36,7 +44,8 @@ check verifies the mounted app and its connector after copying it out of the ima
 
 `dist/build-evidence.json` records the desktop commit, tracked working-tree changes, web provenance, Node/Rust/GitHub CLI,
 lockfile digests, app executable digest, connector digest/SHA and core manifest digest. A dirty checkout is
-explicitly recorded. Keep this evidence with the app tested. It does **not** assert the clean-account smoke below.
+explicitly recorded. Keep this evidence with the app tested. It does **not** assert the clean-account smoke; the
+candidate lane uploads separate `smoke-evidence.json` after the app-page acceptance passes.
 The build shares Cargo's dependency cache, then copies each finished app into a separate production/fixture/probe
 location so a later probe build cannot replace the installable app.
 
@@ -92,7 +101,7 @@ do not remove verification or regenerate a digest from arbitrary downloaded byte
 | Resource wiring while pin is pending | `npm run build:mac:fixture` | Explicit shell fixture, in `target/packages/fixture`; never a production artifact |
 | Native integration | `npm run build:mac:probe`, `test/macos/*.sh` | WKWebView/local-host proxy, native engine, room model flow and card behavior |
 | Product packaging | `npm run build:mac`, optional `npm run package:mac` | Real verified connector, production app and evidence JSON |
-| Local R4 acceptance | Clean macOS arm64 account, real app | Install/start/pair/update-or-rollback results, recorded separately |
+| Local R4 candidate acceptance | `r4-native-pair-candidate=true`, hosted macOS arm64 account | Production app launch plus CI-only page-driver app exercising the vendored install CTA, bridge, page proxy, remote-pairing route, same-version update and uninstall |
 
 Native integration scripts run from the repository root on a **disposable macOS test account**. The engine/room
 checks download speech models, and UI probes use the account's desktop and application state. They are not part of
@@ -108,13 +117,14 @@ Leave it false for the genuine product gate; it cannot turn a missing signed dep
 
 ## Clean-account acceptance record
 
-Use a new macOS arm64 account with no Sidevoice install. Record the exact Actions run/desktop SHA and retain
-`build-evidence.json`, the app/DMG checksum, connector identity and web SHA. Launch the copied app via Finder or
-`open`, following `MACOS.md`, so microphone permission belongs to the app.
+The candidate workflow uses a fresh hosted macOS arm64 runner account. Record the exact Actions run/desktop SHA and
+retain `build-evidence.json`, the app checksum, connector identity, web SHA and separate `smoke-evidence.json`.
+It first opens the production-shaped app, then launches a probe-feature copy containing the same page and native
+pair resources; a CI-only script clicks the actual local-install CTA through the page bridge.
 
-Check the actual bundled interface: explicitly install the local host; observe ordered progress; verify the
-service starts and the local host becomes reachable/paired; restart the app and verify the pairing remains.
-Exercise an eligible update, or a controlled failed update/cancel and verify the previous working install remains
-usable. Cancellation after commit must not kill the installer. Record each observed result and the installed
-connector/core identities. A stand-in core, probe build, pending pin, or passing packaging check cannot satisfy
-this record. Missing signed upstream assets or lack of a Mac must be reported as an unrun gate, not a pass.
+The page check verifies visible install progress, local pairing projection and the local Core proxy, invokes the explicit
+same-version update as a running no-op, then checks launchd cleanup. This is controlled-beta candidate evidence;
+manual Finder/Gatekeeper dogfood and any eligible update/rollback of a prior candidate remain separate. A
+stand-in core, mismatched probe resources, pending pin presented as production, or passing packaging check alone
+cannot satisfy the page acceptance. Missing exact source inputs or a hosted Mac must be reported as an unrun gate,
+not a pass.
