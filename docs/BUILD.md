@@ -10,6 +10,16 @@ the workflow, temporarily supplies them through the existing app resource map, v
 bundle, and restores the pending checkout pin and prior resource on exit. See [R4_NATIVE_PAIR.md](R4_NATIVE_PAIR.md)
 for exact source pins, the candidate smoke and signing limits. Do not use this candidate lane for release publication.
 
+For the bounded operator trial, dispatch with both `r4-native-pair-candidate=true` and
+`r4-native-pair-operator-trial=true`. This keeps the clean-account install/reachability smoke and uploads the app,
+but records changed-pair update and failed-update rollback as `not-run-operator-trial`. The trial uses the existing
+R4 page and is not full-beta acceptance; its exact limits and safe startup steps are in
+[`R4_OPERATOR_TRIAL.md`](R4_OPERATOR_TRIAL.md). Connector `435fd315` commits a Core pin for the old `b41840e`
+source. The workflow aligns only the temporary Connector checkout's pin data to Desktop's exact Core `b2ae125`
+pin and includes the old/effective values in the artifact; Connector code remains at the reviewed `435fd315` SHA.
+The exact Connector SEA contract also requires all three target archives in the closed Core manifest: these are
+Core package inputs, not separate Linux Desktop builds.
+
 Before any source build starts, the candidate lane runs a short Linux gate that uses the lockfile-pinned ESLint
 undefined-name rule on the changed-pair smoke and its filesystem helpers, plus disposable preflight/release safety
 fixtures. A failure there prevents the Core source-build matrix from starting.

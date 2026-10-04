@@ -7,7 +7,7 @@
   "scripts": {
     "tauri": "tauri",
     "test": "node --test test/*.test.mjs",
-    "lint:r4-native-pair-smoke": "eslint test/macos/native-pair-update-smoke.mjs test/macos/committed-pair-release.mjs test/macos/native-pair-update-preflight.mjs test/macos/release-root-containment.mjs",
+    "lint:r4-native-pair-smoke": "eslint test/macos/native-pair-update-smoke.mjs test/macos/committed-pair-release.mjs test/macos/native-pair-update-preflight.mjs test/macos/release-root-containment.mjs scripts/align-r4-native-pair-core-pin.mjs",
     "connector:prepare": "node scripts/fetch-connector.mjs",
     "build:mac": "node scripts/build-mac.mjs",
     "web-assets": "node scripts/web-assets.mjs",

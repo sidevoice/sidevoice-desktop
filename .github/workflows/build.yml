@@ -17,7 +17,11 @@ on:
         type: boolean
         default: false
       r4-native-pair-candidate:
-        description: Build one Mac candidate from exact pinned Rust Connector/Core source; no matrix or publication.
+        description: Build one Mac app from exact pinned Rust Connector/Core source; no Desktop platform matrix or publication.
+        type: boolean
+        default: false
+      r4-native-pair-operator-trial:
+        description: Package a bounded Mac self-test artifact; skip changed-pair update and rollback acceptance, recording them as not run.
         type: boolean
         default: false
   workflow_call:
@@ -39,7 +43,7 @@ env:
   CARGO_TERM_COLOR: always
   R4_CONNECTOR_SOURCE_SHA: 435fd315e657a4f1372fc524f773387797195f38
   R4_PREVIOUS_CONNECTOR_SOURCE_SHA: c3aa3468e66e265897fdf0fccf5ad55d6fcf060f
-  R4_CORE_SOURCE_SHA: b41840e41e3eb81905d285514c7deb35bd8efe57
+  R4_CORE_SOURCE_SHA: b2ae125453baa3634b94eefcc49879588e3b6e40
   R4_CORE_LOCK_SHA256: b0e068cf34f5c1549c00add4c2d94e06af3758bb1586c2e58f192220a22b53e9
 
 jobs:
@@ -443,7 +447,7 @@ jobs:
       - name: Reject undefined names in the Mac candidate smoke and its helpers
         run: npm run lint:r4-native-pair-smoke
       - name: Exercise disposable smoke preflight and release safety fixtures
-        run: node --test test/native-pair-update-preflight.test.mjs test/committed-pair-release.test.mjs test/release-root-containment.test.mjs
+        run: node --test test/native-pair-update-preflight.test.mjs test/committed-pair-release.test.mjs test/release-root-containment.test.mjs test/r4-native-pair-core-pin.test.mjs
 
   r4-core-native:
     name: R4 pinned Core source (${{ matrix.target }})
@@ -600,12 +604,7 @@ jobs:
           ref: ${{ env.R4_PREVIOUS_CONNECTOR_SOURCE_SHA }}
           path: connector-previous
           persist-credentials: false
-      - name: Verify Connector protected-candidate source and native Core pin
-        run: |
-          set -euo pipefail
-          test "$(git -C connector-src rev-parse HEAD)" = "$R4_CONNECTOR_SOURCE_SHA"
-          test "$(jq -r '.source_sha' connector-src/packages/connector/rust-core-production-pin.json)" = "$R4_CORE_SOURCE_SHA"
-          test "$(jq -r '.cargo_lock_sha256' connector-src/packages/connector/rust-core-production-pin.json)" = "$R4_CORE_LOCK_SHA256"
+        if: ${{ inputs.r4-native-pair-operator-trial != true }}
       - uses: actions/download-artifact@v4
         with:
           name: r4-core-source-inputs
@@ -617,7 +616,6 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             connector-src/package-lock.json
-            connector-previous/package-lock.json
       - uses: dtolnay/rust-toolchain@1.99.0
         with:
           targets: aarch64-apple-darwin
@@ -627,11 +625,25 @@ jobs:
         with:
           workspaces: src-tauri
       - run: test "$(node --version)" = v22.23.3
+      - name: Align only the exact Connector checkout's Core pin data
+        run: |
+          set -euo pipefail
+          test "$(git -C connector-src rev-parse HEAD)" = "$R4_CONNECTOR_SOURCE_SHA"
+          node scripts/align-r4-native-pair-core-pin.mjs connector-src "$R4_CONNECTOR_SOURCE_SHA" \
+            src-tauri/r4-native-pair-source-pin.json "$RUNNER_TEMP/r4-native-pair-preview/connector-core-pin-current.json"
       - run: npm ci
       - name: Install Connector dependencies
         working-directory: connector-src
         run: npm ci
-      - name: Verify the exact prior Connector source and its native Core pin
+      - name: Align the exact prior Connector source to the reviewed Core pin
+        if: ${{ inputs.r4-native-pair-operator-trial != true }}
+        run: |
+          set -euo pipefail
+          test "$(git -C connector-previous rev-parse HEAD)" = "$R4_PREVIOUS_CONNECTOR_SOURCE_SHA"
+          node scripts/align-r4-native-pair-core-pin.mjs connector-previous "$R4_PREVIOUS_CONNECTOR_SOURCE_SHA" \
+            test/fixtures/r4-native-pair-previous-source-pin.json "$RUNNER_TEMP/r4-native-pair-preview/connector-core-pin-previous.json"
+      - name: Verify the exact prior Connector source and its aligned native Core pin
+        if: ${{ inputs.r4-native-pair-operator-trial != true }}
         run: |
           set -euo pipefail
           check_sha() {
@@ -652,6 +664,7 @@ jobs:
           check_sha prior-core-source-pin "$(jq -r '.source_sha' connector-previous/packages/connector/rust-core-production-pin.json)" "$R4_CORE_SOURCE_SHA"
           check_sha prior-core-cargo-lock-pin "$(jq -r '.cargo_lock_sha256' connector-previous/packages/connector/rust-core-production-pin.json)" "$R4_CORE_LOCK_SHA256"
       - name: Install prior Connector dependencies
+        if: ${{ inputs.r4-native-pair-operator-trial != true }}
         working-directory: connector-previous
         run: npm ci
       - name: Build the exact Rust Connector runtime
@@ -684,6 +697,7 @@ jobs:
       - name: Sign the embedded SEA ad hoc for the app's native resource check
         run: codesign --force --sign - connector-src/packages/connector/dist-sea/macos-aarch64/sidevoice
       - name: Build a genuine prior Rust Connector runtime and SEA for the app update acceptance
+        if: ${{ inputs.r4-native-pair-operator-trial != true }}
         working-directory: connector-previous
         env:
           RUSTUP_TOOLCHAIN: stable
@@ -709,6 +723,7 @@ jobs:
           npm run build:sea -w @sidevoice/uplink
           codesign --force --sign - packages/connector/dist-sea/macos-aarch64/sidevoice
       - name: Pin the prior pair to its exact source-built inputs
+        if: ${{ inputs.r4-native-pair-operator-trial != true }}
         run: |
           set -euo pipefail
           node scripts/prepare-r4-native-pair.mjs \
@@ -755,6 +770,7 @@ jobs:
           SIDEVOICE_R4_SMOKE_EVIDENCE: ${{ runner.temp }}/r4-native-pair-preview/smoke-evidence.json
         run: node test/macos/native-pair-install-smoke.mjs
       - name: Upgrade and roll back a changed pair through the packaged app bridge
+        if: ${{ inputs.r4-native-pair-operator-trial != true }}
         timeout-minutes: 80
         env:
           APP: src-tauri/target/packages/native-pair/Sidevoice.app
@@ -763,6 +779,22 @@ jobs:
           PREVIOUS_PAIR_SEA: ${{ github.workspace }}/connector-previous/packages/connector/dist-sea/macos-aarch64/sidevoice
           SIDEVOICE_R4_UPDATE_SMOKE_EVIDENCE: ${{ runner.temp }}/r4-native-pair-preview/update-evidence.json
         run: node test/macos/native-pair-update-smoke.mjs
+      - name: Record changed-pair update and rollback as not run for the operator trial
+        if: ${{ inputs.r4-native-pair-operator-trial == true }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/r4-native-pair-preview"
+          cat > "$RUNNER_TEMP/r4-native-pair-preview/update-evidence.json" <<'JSON'
+          {
+            "schema": 1,
+            "kind": "r4-native-pair-update-rollback-smoke",
+            "changed_pair_upgrade": "not-run-operator-trial",
+            "failed_update_rollback": "not-run-operator-trial"
+          }
+          JSON
+      - name: Include trial limitations with the packaged app
+        if: ${{ inputs.r4-native-pair-operator-trial == true }}
+        run: cp docs/R4_OPERATOR_TRIAL.md "$RUNNER_TEMP/r4-native-pair-preview/trial-limitations.md"
       - name: Archive the tested app as a short-lived workflow artifact
         run: |
           set -euo pipefail
@@ -770,10 +802,10 @@ jobs:
           ditto -c -k --keepParent src-tauri/target/packages/native-pair/Sidevoice.app \
             "$RUNNER_TEMP/r4-native-pair-preview/Sidevoice-macOS-arm64-R4-native-pair.zip"
           cp dist/build-evidence.json "$RUNNER_TEMP/r4-native-pair-preview/build-evidence.json"
-          (cd "$RUNNER_TEMP/r4-native-pair-preview" && shasum -a 256 -- *.zip build-evidence.json smoke-evidence.json update-evidence.json > SHA256SUMS)
+          (cd "$RUNNER_TEMP/r4-native-pair-preview" && shasum -a 256 -- * > SHA256SUMS)
       - uses: actions/upload-artifact@v4
         with:
-          name: Sidevoice-macOS-arm64-R4-native-pair-candidate-${{ github.sha }}
+          name: Sidevoice-macOS-arm64-R4-native-pair-${{ inputs.r4-native-pair-operator-trial == true && 'operator-trial' || 'candidate' }}-${{ github.sha }}
           path: ${{ runner.temp }}/r4-native-pair-preview/
           retention-days: 7
           if-no-files-found: error

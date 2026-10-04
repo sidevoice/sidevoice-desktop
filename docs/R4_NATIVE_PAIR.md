@@ -15,10 +15,11 @@ separately.
 [`src-tauri/r4-native-pair-source-pin.json`](../src-tauri/r4-native-pair-source-pin.json) pins the Connector
 protected-main merge SHA and the Core source SHA plus Cargo lock digest. The Connector source is pinned to PR #56's
 protected-main merge commit (`435fd315e657a4f1372fc524f773387797195f38`), whose tree is the reviewed `9612074` tree.
-The first Desktop candidate attempt used the pre-merge review SHA and exposed a CLI contract mismatch before packaging;
-the corrected candidate uses the protected-main commit. Its workflow still verifies that the Connector's own Rust
-Core production pin equals the pinned Core source and lockfile. Do not build from a branch name, tag, or artifact left
-by an earlier run.
+That commit's `rust-core-production-pin.json` still names the superseded Core `b41840e`. The candidate workflow checks
+the exact Connector commit and committed descriptor, then changes only that descriptor in the disposable CI checkout
+to the Desktop-pinned corrected Core source `b2ae125453baa3634b94eefcc49879588e3b6e40` and matching lock digest. It
+records committed and effective values beside the app. Connector code remains at SHA `435fd315`; the source-built SEA
+and Desktop pin both bind to Core `b2ae125`. Do not build from a branch name, tag, or artifact left by an earlier run.
 
 The Connector producer requires all three canonical Rust Core target archives in its closed manifest. The candidate
 workflow therefore builds those Core source inputs on hosted runners, but packages and tests only one Desktop app:
@@ -45,7 +46,11 @@ installer transaction.
 
 The manual `build` workflow input `r4-native-pair-candidate=true` runs the exact Core source builds, creates the
 closed manifest, builds Connector's Rust runtime and SEA from the two pinned source trees, and packages the
-production app. For update acceptance, it also builds a prior Connector runtime and SEA from the exact source pin in
+production app. Setting `r4-native-pair-operator-trial=true` keeps the first-open and packaged-page install,
+reachability, pairing, proxy, and same-version update checks, then uploads a seven-day self-test artifact. It explicitly
+records changed-pair upgrade and failed-update rollback as `not-run-operator-trial`; it does not claim those results.
+The trial bundle carries its UI limits and safe startup steps. For full update acceptance, leave that input false: the
+workflow also builds a prior Connector runtime and SEA from the exact source pin in
 `test/fixtures/r4-native-pair-previous-source-pin.json`, using the same pinned Core source and closed archive set.
 That prior pair is installed only into the isolated hosted test account; it is never bundled or uploaded. The workflow
 also builds a CI-only probe variant with the same vendored web assets, pin, and current SEA. On the fresh
@@ -59,7 +64,7 @@ pauses the current Connector after staging and before commit, replaces only the 
 non-serving executable, and resumes the transaction. The bridge must return the Connector rollback error while the
 previous verified pair remains selected, paired, and reachable. The test always resumes the transaction and
 uninstalls its service. The probe app and prior SEA are never uploaded; the production app, build evidence,
-checksums, install smoke evidence and update/rollback evidence are uploaded as a seven-day Actions artifact. No
+checksums, install smoke evidence and update/rollback status are uploaded as a seven-day Actions artifact. No
 pairing code or token is logged. The run does not publish a prerelease or numbered release. These app-level
 update/rollback assertions remain unproven until the revised exact-head hosted Mac run succeeds.
 
@@ -69,11 +74,10 @@ does not mean the default main package job can build this Rust-native pair. Do n
 candidate as a normal main package until that production boundary is deliberately updated and independently
 verified.
 
-For the current no-release dogfood, the selected delivery strategy is to keep this lane candidate-only. The existing
-main Mac job is not skipped or made green with a fixture: a main push still fails closed at the pending production
-pin. The signed candidate artifact from Desktop `80372872c36798792270cf7df0432e348ac1c78a` and hosted run
-`37203998670` is available for its seven-day retention window. Making a one-PR merge buildable requires a separately
-reviewed change to the production package path and its exact-head Mac gate.
+For the current no-release operator trial, keep this lane candidate-only. The existing main Mac job is not skipped or
+made green with a fixture: a main push still fails closed at the pending production pin. Historical artifact
+`80372872c36798792270cf7df0432e348ac1c78a` from run `37203998670` embeds the superseded Core `b41840e` and is not a
+usable corrected-call trial; preserve it only as historical evidence. A one-PR main package path remains separate.
 
 ## Update and rollback evidence boundary
 
@@ -89,14 +93,13 @@ The single app-owned update path reuses the Connector transaction:
   `Cli::bundled` and `host.install_bundled(..., true)`; `NewerInstalled`, incompatible, and incomplete metadata do
   not start an update. `src-tauri/local-host/tests/local_host.rs` verifies that an `install.rollback` result remains
   an error while the previous Core is still running.
-- The immutable `8037287` packaged-page run exercises the same-version no-op and verifies pairing survives it. This
-  follow-up candidate adds the packaged-page changed-pair upgrade and failed-update rollback check described above;
-  its result is not evidence until its exact-head Mac run succeeds.
+- The immutable `8037287` run exercised the same-version no-op with the superseded Core `b41840e`; its app is not a
+  corrected-call trial. Later hosted runs reached packaged-page changed-pair upgrade, but the forced rollback never
+  completed. Only a successful exact-head acceptance run can close that evidence gap; the operator-trial path records
+  it as not run.
 
 Connector and Desktop source tests cover the transaction and bridge components. Do not claim changed-pair update or
-rollback as beta-verified until the follow-up exact-head hosted Mac acceptance passes both packaged bridge paths. The
-immutable candidate remains usable for its already-reviewed bounded fresh-Mac local-install trial while that check
-runs.
+rollback as beta-verified until the follow-up exact-head hosted Mac acceptance passes both packaged bridge paths.
 
 ## Signing readiness and distribution limits
 

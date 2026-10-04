@@ -13,6 +13,7 @@ export default [{
     "test/macos/committed-pair-release.mjs",
     "test/macos/native-pair-update-preflight.mjs",
     "test/macos/release-root-containment.mjs",
+    "scripts/align-r4-native-pair-core-pin.mjs",
   ],
   languageOptions: {
     ecmaVersion: "latest",
