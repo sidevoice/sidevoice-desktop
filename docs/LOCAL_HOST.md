@@ -90,7 +90,12 @@ whatever `state` says — the page uses the host when `pairing()` is non-null (S
 discovery. R4 install and update transactions ask the pinned Connector to register only Codex (`--harness codex`).
 For the Rust-native pair, Connector resolves the MCP entry to the selected `current` Rust runtime. Codex's own CLI
 checks and writes its registration; a foreign or invalid `sidevoice` entry is left untouched, and no credentials are
-copied into the MCP entry. Other harnesses are not targeted.
+copied into the MCP entry. After the transaction, Desktop checks Connector's `agents --json` report: when Codex is
+detected, only `registration: connected` is accepted. A manual, foreign, invalid, unknown, malformed or unavailable
+report rejects the install/update result without rolling back the reachable Core or changing Codex configuration.
+No detected Codex does not block installing the local host. The current-version update path also runs the Connector's
+same-version install transaction, allowing it to reconcile a missing registration without replacing the selected pair.
+Other harnesses are not targeted for registration.
 
 `state()` → `{state, failure?, core?, service?, calls?, attempts?, limit?, reachable}`: `failure` as the service
 reports it (`{key, step, message, at, log_tail, …}`) or the app's own `{key, message}`; `core` `{pid, version, api,

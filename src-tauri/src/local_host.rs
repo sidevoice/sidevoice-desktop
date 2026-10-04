@@ -111,7 +111,8 @@ pub fn local_host_version(app: AppHandle, webview: Webview) -> Answer {
     imp::version(&app)
 }
 
-/// The local agent registry is owned by connector R2; R4 installs the host with registration disabled.
+/// The local agent registry is owned by Connector. R4 checks Codex registration readiness internally but does not
+/// expose agent discovery through the room bridge.
 #[tauri::command]
 pub fn local_host_agents(app: AppHandle, webview: Webview) -> Answer {
     caller(&app, &webview)?;
@@ -261,7 +262,11 @@ mod imp {
         let host = host(app)?;
         let pin = pin()?;
         let cli = bundled_cli(app, &host, &pin)?;
-        host.install_bundled(cli, job.to_string(), false)
+        let core_api = host.state().core.as_ref().and_then(|core| core.get("api")).and_then(Value::as_i64);
+        let record = Cli::selected_release_record(host.data_dirs()).map_err(|error| json!(error))?;
+        let installed = record.as_ref().map(|record| InstalledBuild::from_release_record(record, core_api, None));
+        let reconcile_current = versioning::update_status(Some(&pin), installed.as_ref()) == UpdateStatus::Current;
+        host.install_bundled(cli, job.to_string(), reconcile_current)
             .map(|outcome| json!(outcome.report))
             .map_err(|error| json!(error))
     }
@@ -305,14 +310,13 @@ mod imp {
         let record = Cli::selected_release_record(host.data_dirs()).map_err(|error| json!(error))?;
         let installed = record.as_ref().map(|record| InstalledBuild::from_release_record(record, core_api, None));
         match versioning::update_status(Some(&pin), installed.as_ref()) {
-            UpdateStatus::Available => {
+            UpdateStatus::Available | UpdateStatus::Current => {
                 let cli = bundled_cli(app, &host, &pin)?;
                 match host.install_bundled(cli, next_job("local-update"), true) {
                     Ok(outcome) => update_response(&outcome.report, outcome.action),
                     Err(error) => Err(json!(error)),
                 }
             }
-            UpdateStatus::Current => update_response(&report, InstallAction::Noop),
             UpdateStatus::NewerInstalled => Err(refusal(
                 "update.newer-installed",
                 "A newer connector is already installed; the app will not downgrade it.",

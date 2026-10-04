@@ -104,7 +104,10 @@ web UI feature-detects the desktop app by it, and each capability by its presenc
 R4's install, progress/cancel, update, version and agents methods exist only on macOS arm64. `install()` is explicit and
 invokes the bundled connector with `--harness codex`. The Connector registers only Codex through its selected Rust
 `current` MCP executable; its Codex CLI checks the existing entry and leaves foreign or invalid entries untouched.
-The registration contains the executable and arguments, not copied credentials. Other harnesses are not targeted.
+The registration contains the executable and arguments, not copied credentials. After install/update, Desktop checks
+Connector's agent-status JSON; if Codex is detected, the bridge resolves only when it reports `connected`. Otherwise
+the bridge rejects while retaining the installed, reachable Core. A same-version update runs the Connector's no-op
+install transaction to reconcile registration. Other harnesses are not targeted.
 The app verifies the connector resource against `src-tauri/connector-pin.json`, including the embedded core manifest identity, before running it.
 Until R4-a/b publishes the signed asset and stable CLI metadata/progress contract, the checked-in pin remains pending
 and macOS production packaging fails closed. Test fixtures use a stand-in executable and are not package resources.

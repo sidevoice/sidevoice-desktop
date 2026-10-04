@@ -192,7 +192,12 @@ impl Cli {
     /// hands to the service manager
     /// (`service start` → launchd) or starts detached in a session of its own is not in the group, and stays.
     pub fn run(&self, args: &[&str], timeout: Duration) -> Result<Value, Refusal> {
-        self.run_inner(args, timeout, None, Duration::from_secs(15), |_| {})
+        self.run_inner(args, timeout, None, Duration::from_secs(15), true, |_| {})
+    }
+
+    /// Runs a read/report CLI command whose successful JSON object is not wrapped in `{ok:true}`.
+    pub fn run_json(&self, args: &[&str], timeout: Duration) -> Result<Value, Refusal> {
+        self.run_inner(args, timeout, None, Duration::from_secs(15), false, |_| {})
     }
 
     /// Runs an installer with the R4-b JSON-lines progress adapter. Both pipes are drained concurrently and output,
@@ -205,7 +210,7 @@ impl Cli {
         cancel: &CancelToken,
         on_progress: impl FnMut(ProgressEvent),
     ) -> Result<Value, Refusal> {
-        self.run_inner(args, timeout, Some(cancel), Duration::from_secs(15), on_progress)
+        self.run_inner(args, timeout, Some(cancel), Duration::from_secs(15), true, on_progress)
     }
 
     fn run_inner(
@@ -214,6 +219,7 @@ impl Cli {
         timeout: Duration,
         cancel: Option<&CancelToken>,
         cancel_grace: Duration,
+        require_ok: bool,
         mut on_progress: impl FnMut(ProgressEvent),
     ) -> Result<Value, Refusal> {
         let failed = || Refusal::new("cli.failed", "The connector did not return a valid result.");
@@ -310,7 +316,12 @@ impl Cli {
         };
         let [stdout, _stderr] = streams.map(|s| s.bytes);
         let answer: Value = serde_json::from_slice(&stdout).ok().filter(Value::is_object).ok_or_else(failed)?;
-        if answer.get("ok") == Some(&Value::Bool(true)) && status.success() {
+        let success = if require_ok {
+            answer.get("ok") == Some(&Value::Bool(true))
+        } else {
+            answer.get("ok") != Some(&Value::Bool(false))
+        };
+        if success && status.success() {
             return Ok(answer);
         }
         Err(refusal_of(&answer).unwrap_or_else(failed))
@@ -674,6 +685,24 @@ mod tests {
     }
 
     #[test]
+    fn read_only_json_commands_accept_unwrapped_success_and_sanitize_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cli = fake(tmp.path(), r#"echo '{"agents":[]}'"#);
+        assert_eq!(
+            cli.run_json(&["agents", "--json"], Duration::from_secs(5)).unwrap(),
+            serde_json::json!({"agents":[]})
+        );
+
+        let failed = fake(
+            tmp.path(),
+            r#"echo '{"ok":false,"error":{"key":"agents.action-failed","message":"private token"}}'; exit 1"#,
+        );
+        let refusal = failed.run_json(&["agents", "--json"], Duration::from_secs(5)).unwrap_err();
+        assert_eq!(refusal.key, "cli.failed");
+        assert!(!refusal.message.contains("private token"));
+    }
+
+    #[test]
     fn a_refusal_carries_its_key() {
         let tmp = tempfile::tempdir().unwrap();
         let cli = fake(
@@ -762,6 +791,7 @@ echo '{{"ok":true}}'"#,
                     Duration::from_secs(3),
                     Some(&cancel),
                     Duration::from_millis(75),
+                    true,
                     |event| {
                         if event.step == step {
                             cancel.request();
@@ -794,6 +824,7 @@ echo '{{"ok":true}}'"#
                     Duration::from_millis(100),
                     None,
                     Duration::from_millis(20),
+                    true,
                     |_| {},
                 )
                 .expect("a finalizing transaction must finish and return its final result");

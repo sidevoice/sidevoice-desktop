@@ -73,6 +73,29 @@ impl InstallAction {
     }
 }
 
+fn codex_registration_unconfirmed() -> Refusal {
+    Refusal::new(
+        "agents.registration-unconfirmed",
+        "The Codex MCP registration could not be confirmed. The local Core remains installed.",
+    )
+}
+
+fn codex_registration_status(answer: &Value) -> Result<(), Refusal> {
+    let agents = answer.get("agents").and_then(Value::as_array).ok_or_else(codex_registration_unconfirmed)?;
+    let mut codex_seen = false;
+    for agent in agents {
+        let Some(object) = agent.as_object() else { return Err(codex_registration_unconfirmed()) };
+        let Some(id) = object.get("id").and_then(Value::as_str) else { return Err(codex_registration_unconfirmed()) };
+        if id == "codex" {
+            if codex_seen || object.get("registration").and_then(Value::as_str) != Some("connected") {
+                return Err(codex_registration_unconfirmed());
+            }
+            codex_seen = true;
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct InstallOutcome {
     pub report: Report,
@@ -115,6 +138,7 @@ const STATUS_TIMEOUT: Duration = Duration::from_secs(10);
 const PAIR_DEVICE_TIMEOUT: Duration = Duration::from_secs(30);
 const PAIR_ROOM_TIMEOUT: Duration = Duration::from_secs(60);
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(45 * 60);
+const CODEX_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(30);
 // Keep registration inside Connector's install transaction so it uses the selected release and its ownership checks.
 const PACKAGED_INSTALL_ARGS: &[&str] = &["install", "--harness", "codex", "--service", "--json", "--progress=jsonl"];
 const MAX_PROGRESS_EVENTS: usize = 512;
@@ -366,6 +390,15 @@ impl LocalHost {
         Ok(job.after(sequence))
     }
 
+    /// Confirms a detected Codex registration through Connector's existing agent-status command. It does not modify
+    /// Codex configuration; the bundled install transaction remains the only registration writer.
+    pub fn ensure_codex_registration(&self, cli: &Cli) -> Result<(), Refusal> {
+        let answer = cli
+            .run_json(&["agents", "--json"], CODEX_REGISTRATION_TIMEOUT)
+            .map_err(|_| codex_registration_unconfirmed())?;
+        codex_registration_status(&answer)
+    }
+
     /// Requests cancellation only for the matching job and returns true only when the connector's final result
     /// acknowledges `install.cancelled`. A transaction already at commit is allowed to finish or roll back.
     pub fn cancel_install(&self, job_id: &str) -> bool {
@@ -388,6 +421,7 @@ impl LocalHost {
         if !update && Cli::install_record(&self.config.dirs)?.is_some() {
             let report = self.poll();
             if report.reachable && report.state != State::Incompatible {
+                self.ensure_codex_registration(&cli)?;
                 return Ok(InstallOutcome { report, action: InstallAction::Noop });
             }
             return Err(Refusal::new(
@@ -431,6 +465,7 @@ impl LocalHost {
             return Err(Refusal::new("install.incompatible", "The installed core API is not supported by this app."));
         }
         if report.reachable {
+            self.ensure_codex_registration(cli)?;
             return Ok(action);
         }
         if let Some(failure) = report.failure.as_ref() {
@@ -710,6 +745,32 @@ mod tests {
         let refusal = install_failure_refusal(&serde_json::json!({"message":"untrusted"}));
         assert_eq!(refusal.key, "install.pairing");
         assert!(!refusal.message.contains("untrusted"));
+    }
+
+    #[test]
+    fn codex_registration_requires_connected_state_only_when_codex_is_detected() {
+        assert!(codex_registration_status(&serde_json::json!({"agents":[]})).is_ok());
+        assert!(codex_registration_status(&serde_json::json!({
+            "agents":[{"id":"claude","registration":"not-connected"}]
+        }))
+        .is_ok());
+        assert!(codex_registration_status(&serde_json::json!({
+            "agents":[{"id":"codex","registration":"connected"}]
+        }))
+        .is_ok());
+
+        for state in ["not-connected", "manual", "foreign", "invalid", "unknown"] {
+            let refusal = codex_registration_status(&serde_json::json!({
+                "agents":[{"id":"codex","registration":state}]
+            }))
+            .unwrap_err();
+            assert_eq!(refusal.key, "agents.registration-unconfirmed", "{state}");
+            assert!(refusal.message.contains("Core remains installed"));
+        }
+
+        let malformed = codex_registration_status(&serde_json::json!({"agents":{}})).unwrap_err();
+        assert_eq!(malformed.key, "agents.registration-unconfirmed");
+        assert!(!malformed.message.contains("path"));
     }
 
     #[test]
