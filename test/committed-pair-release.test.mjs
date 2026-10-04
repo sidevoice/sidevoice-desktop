@@ -43,8 +43,26 @@ test("rollback smoke locates the committed staged pair and rejects partial or li
       return true;
     });
     assert.ok((await lstat(partial)).isDirectory(), "inspection leaves incomplete staging data untouched");
-    if (symlinkCount) await unlink(linked);
     await rm(partial, { recursive: true, force: true });
+    if (symlinkCount) {
+      await assert.rejects(findCommittedPairRelease(releases, currentPairId), (error) => {
+        assert.match(error.message, /matches=1; releases=2; temporary=0; symlinks=1; other=0; invalid_records=0/);
+        assert.equal(error.message.includes(fixture), false);
+        return true;
+      });
+      await unlink(linked);
+    }
+
+    const duplicate = join(releases, "duplicate-release");
+    await mkdir(duplicate);
+    await writeFile(join(duplicate, "release.json"), JSON.stringify({ id: "duplicate-release", pair_id: currentPairId }));
+    await assert.rejects(findCommittedPairRelease(releases, currentPairId), (error) => {
+      assert.match(error.message, /matches=2; releases=3; temporary=0; symlinks=0; other=0; invalid_records=0/);
+      assert.equal(error.message.includes(fixture), false);
+      assert.equal(error.message.includes(currentPairId), false);
+      return true;
+    });
+    await rm(duplicate, { recursive: true, force: true });
     assert.equal(await findCommittedPairRelease(releases, currentPairId), committed);
     assert.deepEqual(JSON.parse(await readFile(join(committed, "release.json"), "utf8")), { id: "current-release", pair_id: currentPairId });
     assert.ok((await lstat(join(releases, "old-release"))).isDirectory(), "inspection preserves the rollback release");

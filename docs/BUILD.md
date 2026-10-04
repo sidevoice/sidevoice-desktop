@@ -10,6 +10,10 @@ the workflow, temporarily supplies them through the existing app resource map, v
 bundle, and restores the pending checkout pin and prior resource on exit. See [R4_NATIVE_PAIR.md](R4_NATIVE_PAIR.md)
 for exact source pins, the candidate smoke and signing limits. Do not use this candidate lane for release publication.
 
+Before any source build starts, the candidate lane runs a short Linux gate that uses the lockfile-pinned ESLint
+undefined-name rule on the changed-pair smoke and its filesystem helpers, plus disposable preflight/release safety
+fixtures. A failure there prevents the Core source-build matrix from starting.
+
 The lane also builds a CI-only probe variant with the same web assets, pin, and SEA so it can exercise the
 local-install page against the real pair on a fresh hosted Mac account. The uploaded app is the production-shaped
 `native-pair` app; the probe variant is used only for acceptance and is not uploaded.

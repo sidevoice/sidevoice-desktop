@@ -425,9 +425,30 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  r4-native-pair-smoke-static:
+    name: R4 pair smoke static and fixture checks
+    if: ${{ inputs.r4-native-pair-candidate == true }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Install the locked JavaScript toolchain without install scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Reject undefined names in the Mac candidate smoke and its helpers
+        run: npm run lint:r4-native-pair-smoke
+      - name: Exercise disposable smoke preflight and release safety fixtures
+        run: node --test test/native-pair-update-preflight.test.mjs test/committed-pair-release.test.mjs test/release-root-containment.test.mjs
+
   r4-core-native:
     name: R4 pinned Core source (${{ matrix.target }})
     if: ${{ inputs.r4-native-pair-candidate == true }}
+    needs: r4-native-pair-smoke-static
     strategy:
       fail-fast: false
       matrix:

@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, resolve, sep } from "node:path";
 import { findCommittedPairRelease } from "./committed-pair-release.mjs";
+import { assertFreshAppConfig } from "./native-pair-update-preflight.mjs";
 import { assertReleaseRootWithin } from "./release-root-containment.mjs";
 
 const APP = resolve(process.env.APP || "src-tauri/target/packages/native-pair/Sidevoice.app");
@@ -251,8 +252,7 @@ async function main() {
   const uid = process.getuid?.();
   requireValue(Number.isSafeInteger(uid) && uid > 0, "runner account has no valid GUI uid.");
   await verifyLaunchdClean(uid);
-  try { requireValue((await readdir(APP_CONFIG_DIR)).length === 0, "runner app configuration is not fresh."); }
-  catch (error) { if (error.code !== "ENOENT") throw error; }
+  await assertFreshAppConfig(APP_CONFIG_DIR);
 
   const previous = await readPair(PREVIOUS_PIN, PREVIOUS_SEA, "c3aa3468e66e265897fdf0fccf5ad55d6fcf060f");
   const currentPinPath = resolve(APP, "Contents/Resources/resources/connector-pin.json");
