@@ -897,7 +897,8 @@ echo '{{"ok":true}}'"#
     #[test]
     fn bundled_constructor_checks_file_identity_mode_and_embedded_metadata() {
         let tmp = tempfile::tempdir().unwrap();
-        let executable = tmp.path().join("sidevoice");
+        let directory = tmp.path().canonicalize().unwrap();
+        let executable = directory.join("sidevoice");
         let mut pin = crate::pin::test_support::fixture_pin();
         let manifest_sha = pin.core_manifest_sha256.as_deref().unwrap();
         let assets_json = serde_json::to_string(&pin.core_assets).unwrap();
@@ -913,22 +914,23 @@ fi
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
         pin.executable_size = Some(script.len() as u64);
         pin.executable_sha256 = Some(sha256_file(&executable).unwrap());
-        let cli = Cli::bundled(&executable, &DataDirs::new(tmp.path()), &pin).unwrap();
+        let cli = Cli::bundled(&executable, &DataDirs::new(&directory), &pin).unwrap();
         assert_eq!(cli.prefix, [executable.to_string_lossy().to_string()]);
 
         pin.executable_sha256 = Some("0".repeat(64));
         assert_eq!(
-            Cli::bundled(&executable, &DataDirs::new(tmp.path()), &pin).unwrap_err().key,
+            Cli::bundled(&executable, &DataDirs::new(&directory), &pin).unwrap_err().key,
             "install.pin-mismatch"
         );
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o600)).unwrap();
-        assert_eq!(Cli::bundled(&executable, &DataDirs::new(tmp.path()), &pin).unwrap_err().key, "install.unsafe");
+        assert_eq!(Cli::bundled(&executable, &DataDirs::new(&directory), &pin).unwrap_err().key, "install.unsafe");
     }
 
     #[test]
     fn bundled_constructor_accepts_only_the_pinned_rust_native_pair_metadata() {
         let tmp = tempfile::tempdir().unwrap();
-        let executable = tmp.path().join("sidevoice");
+        let directory = tmp.path().canonicalize().unwrap();
+        let executable = directory.join("sidevoice");
         let mut pin = crate::pin::test_support::fixture_native_pair_pin();
         let version = serde_json::json!({"ok":true,"version":"1.2.3","target":"macos-aarch64","channel":"nightly",
             "connector_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","build_seq":42,"format":"sea","sea":true});
@@ -944,10 +946,10 @@ fi
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
         pin.executable_size = Some(script.len() as u64);
         pin.executable_sha256 = Some(sha256_file(&executable).unwrap());
-        assert!(Cli::bundled(&executable, &DataDirs::new(tmp.path()), &pin).is_ok());
+        assert!(Cli::bundled(&executable, &DataDirs::new(&directory), &pin).is_ok());
 
         pin.native_pair.as_mut().unwrap().pair_id = "pair-v1:javascript:wrong".into();
-        assert_eq!(Cli::bundled(&executable, &DataDirs::new(tmp.path()), &pin).unwrap_err().key, "install.pin-invalid");
+        assert_eq!(Cli::bundled(&executable, &DataDirs::new(&directory), &pin).unwrap_err().key, "install.pin-invalid");
     }
 
     #[test]
