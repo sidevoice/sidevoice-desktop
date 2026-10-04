@@ -4,6 +4,12 @@ The product build is `npm run build:mac`, both locally and in Actions. It requir
 `src-tauri/connector-pin.json`; the pending pin deliberately prevents a production build. A successful fixture
 package is only evidence that Tauri carries the resource. It is not an installable R4 local-host implementation.
 
+The isolated R4 Rust-native candidate is built by the `r4-native-pair-candidate=true` manual Actions lane and
+`npm run build:mac:native-pair`. That command accepts only the exact source-built Rust pair pin and SEA staged by
+the workflow, temporarily supplies them through the existing app resource map, verifies the production-shaped
+bundle, and restores the pending checkout pin and prior resource on exit. See [R4_NATIVE_PAIR.md](R4_NATIVE_PAIR.md)
+for exact source pins, the candidate smoke and signing limits. Do not use this candidate lane for release publication.
+
 ## Inputs and commands
 
 Use an Apple Silicon Mac with Xcode Command Line Tools and Tauri's macOS prerequisites, Node **22.23.3**

@@ -20,6 +20,9 @@ const CORE_TARGETS = [
   ["linux", "x86_64", "linux-x86_64"],
   ["linux", "aarch64", "linux-aarch64"],
 ];
+const RUST_CORE_TARGETS = ["macos-aarch64", "linux-x86_64", "linux-aarch64"];
+const RUST_CORE_ENTRYPOINT = "bin/sidevoice-core-rust";
+const MAX_RUST_CORE_ARCHIVE_BYTES = 250_000_000;
 
 export function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
@@ -82,6 +85,7 @@ function manifestAssets(manifest, version) {
 }
 
 export function validatePin(pin) {
+  if (pin?.schema === 2) return validateNativePairPin(pin);
   requirePin(pin && pin.schema === 1, "uses an unsupported schema.");
   requirePin(pin.status === "ready", "is pending R4-b's genuine signed macOS arm64 SEA and metadata/progress contract.");
   requirePin(pin.target === "macos-aarch64", "does not target macOS arm64.");
@@ -145,8 +149,94 @@ export function validatePin(pin) {
   return pin;
 }
 
+function exactKeys(value, keys) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    && Object.keys(value).sort().join(",") === [...keys].sort().join(",");
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/** Validate the separate Rust-native source-pair pin. It never treats a native Core archive as Python assets. */
+export function validateNativePairPin(pin) {
+  const keys = ["schema", "status", "target", "connector_sha", "connector_version", "channel", "build_seq",
+    "core_version", "executable_sha256", "executable_size", "metadata_protocol", "progress_protocol", "core_api",
+    "core_link", "link_min", "link_max", "native_pair"];
+  requirePin(exactKeys(pin, keys), "native pair pin has an unexpected shape.");
+  requirePin(pin.schema === 2 && pin.status === "ready" && pin.target === "macos-aarch64",
+    "native pair is not ready for macOS arm64.");
+  requirePin(GIT_SHA.test(pin.connector_sha || ""), "native pair has no exact Connector source SHA.");
+  requirePin(typeof pin.connector_version === "string" && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(pin.connector_version),
+    "native pair has an invalid Connector version.");
+  requirePin(["release", "nightly"].includes(pin.channel) && Number.isSafeInteger(pin.build_seq) && pin.build_seq >= 0,
+    "native pair has invalid channel ordering metadata.");
+  requirePin(typeof pin.core_version === "string" && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(pin.core_version),
+    "native pair has an invalid Core version.");
+  requirePin(pin.metadata_protocol === "sidevoice-metadata-v1" && pin.progress_protocol === "sidevoice-progress-jsonl-v1",
+    "native pair does not pin the R4 metadata and progress protocols.");
+  requirePin(Number.isSafeInteger(pin.core_api) && pin.core_api > 0 && Number.isSafeInteger(pin.core_link) && pin.core_link > 0
+    && Number.isSafeInteger(pin.link_min) && Number.isSafeInteger(pin.link_max)
+    && pin.link_min > 0 && pin.link_min <= pin.core_link && pin.core_link <= pin.link_max,
+  "native pair has invalid Core API/link compatibility metadata.");
+  requirePin(SHA256.test(pin.executable_sha256 || "") && Number.isSafeInteger(pin.executable_size)
+    && pin.executable_size > 0 && pin.executable_size <= MAX_ARTIFACT_BYTES,
+  "native pair has an invalid bundled SEA digest or size.");
+
+  const pair = pin.native_pair;
+  requirePin(exactKeys(pair, ["runtime_kind", "runtime_build_sha", "runtime_sha256", "runtime_size", "runtime_target",
+    "core_kind", "core_source_sha", "core_cargo_lock_sha256", "core_manifest_sha256", "core_manifest_size",
+    "core_manifest_bytes_base64", "core_archive_sha256", "core_archive_size", "core_target", "core_entrypoint",
+    "core_build", "pair_id"]), "native pair identity has an unexpected shape.");
+  requirePin(pair.runtime_kind === "rust-native-v1" && pair.core_kind === "rust-native-v1"
+    && pair.runtime_target === pin.target && pair.core_target === pin.target
+    && pair.runtime_build_sha === pin.connector_sha && GIT_SHA.test(pair.core_source_sha || "")
+    && SHA256.test(pair.runtime_sha256 || "") && Number.isSafeInteger(pair.runtime_size)
+    && pair.runtime_size > 0 && pair.runtime_size <= 100_000_000
+    && SHA256.test(pair.core_cargo_lock_sha256 || "") && SHA256.test(pair.core_manifest_sha256 || "")
+    && SHA256.test(pair.core_archive_sha256 || "") && Number.isSafeInteger(pair.core_archive_size)
+    && pair.core_archive_size > 0 && pair.core_archive_size <= MAX_RUST_CORE_ARCHIVE_BYTES
+    && pair.core_entrypoint === RUST_CORE_ENTRYPOINT,
+  "native pair has an invalid Rust runtime or Core identity.");
+  let manifestBytes;
+  try { manifestBytes = Buffer.from(pair.core_manifest_bytes_base64, "base64"); }
+  catch { throw new Error("connector-pin.json has invalid native Core manifest base64."); }
+  requirePin(typeof pair.core_manifest_bytes_base64 === "string"
+    && manifestBytes.toString("base64") === pair.core_manifest_bytes_base64
+    && manifestBytes.length === pair.core_manifest_size && sha256(manifestBytes) === pair.core_manifest_sha256,
+  "native Core manifest bytes do not match their pinned size and digest.");
+  let manifest;
+  try {
+    manifest = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes));
+  } catch { throw new Error("connector-pin.json native Core manifest is not UTF-8 JSON."); }
+  requirePin(Buffer.from(`${canonicalJson(manifest)}\n`, "utf8").equals(manifestBytes),
+    "native Core manifest bytes are not canonical JSON.");
+  requirePin(exactKeys(manifest, ["schema", "kind", "source_sha", "cargo_lock_sha256", "entrypoint", "bundles"])
+    && manifest.schema === 1 && manifest.kind === "rust-native-v1" && manifest.source_sha === pair.core_source_sha
+    && manifest.cargo_lock_sha256 === pair.core_cargo_lock_sha256 && manifest.entrypoint === RUST_CORE_ENTRYPOINT
+    && exactKeys(manifest.bundles, RUST_CORE_TARGETS), "native Core manifest differs from the pinned closed schema.");
+  for (const target of RUST_CORE_TARGETS) {
+    const record = manifest.bundles[target];
+    requirePin(exactKeys(record, ["name", "size", "sha256"])
+      && record.name === `sidevoice-core-rust-${pair.core_source_sha}-${target}.tar.zst`
+      && Number.isSafeInteger(record.size) && record.size > 0 && record.size <= MAX_RUST_CORE_ARCHIVE_BYTES
+      && SHA256.test(record.sha256 || ""), `native Core manifest has an invalid ${target} archive record.`);
+  }
+  const selected = manifest.bundles[pair.core_target];
+  requirePin(selected.sha256 === pair.core_archive_sha256 && selected.size === pair.core_archive_size
+    && pair.core_build === `rust-native-v1-${pair.core_target}-${pair.core_source_sha}-${pair.core_archive_sha256}`
+    && pair.pair_id === `pair-v1:rust-native-v1:${pair.runtime_sha256}:core:${pair.core_build}`,
+  "native pair ID does not bind the pinned runtime and closed Core archive.");
+  return pin;
+}
+
 export function verifyMetadata(pin, version, metadata) {
   validatePin(pin);
+  if (pin.schema === 2) return verifyNativePairMetadata(pin, version, metadata);
   requirePin(version?.format === "sea" && version?.sea === true, "version output is not the required SEA build.");
   for (const [key, expected] of Object.entries({
     version: pin.connector_version,
@@ -180,6 +270,33 @@ export function verifyMetadata(pin, version, metadata) {
     }), "embedded_core.assets do not match the pinned manifest assets.");
   requirePin(metadata?.protocols?.metadata === pin.metadata_protocol
     && metadata?.protocols?.progress === pin.progress_protocol, "metadata/progress protocols do not match the pin.");
+  return true;
+}
+
+function verifyNativePairMetadata(pin, version, metadata) {
+  requirePin(version?.format === "sea" && version?.sea === true, "version output is not the required SEA build.");
+  for (const [key, expected] of Object.entries({ version: pin.connector_version, target: pin.target,
+    channel: pin.channel, connector_sha: pin.connector_sha })) {
+    requirePin(version?.[key] === expected, `version output ${key} does not match the native pair pin.`);
+  }
+  requirePin(version?.build_seq === pin.build_seq, "version output build_seq does not match the native pair pin.");
+  const connector = metadata?.connector;
+  requirePin(connector?.format === "sea" && connector?.sea === true, "metadata connector identity is not the required SEA build.");
+  for (const [key, expected] of Object.entries({ version: pin.connector_version, target: pin.target,
+    sha: pin.connector_sha, channel: pin.channel, build_seq: pin.build_seq,
+    link_min: pin.link_min, link_max: pin.link_max })) {
+    requirePin(connector?.[key] === expected, `metadata connector.${key} does not match the native pair pin.`);
+  }
+  const core = metadata?.embedded_core;
+  requirePin(core?.version === pin.core_version && core?.manifest_sha256 === null
+    && Array.isArray(core?.assets) && core.assets.length === 0,
+  "embedded_core does not report the distinct Rust-native Core schema.");
+  for (const [key, expected] of Object.entries({ api: pin.core_api, link: pin.core_link })) {
+    requirePin(core?.[key] === expected, `embedded_core.${key} does not match the native pair pin.`);
+  }
+  requirePin(metadata?.protocols?.metadata === pin.metadata_protocol
+    && metadata?.protocols?.progress === pin.progress_protocol,
+  "metadata/progress protocols do not match the native pair pin.");
   return true;
 }
 

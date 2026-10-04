@@ -59,6 +59,26 @@ pub fn update_status(pin: Option<&ConnectorPin>, installed: Option<&InstalledBui
         std::cmp::Ordering::Greater => UpdateStatus::Available,
         std::cmp::Ordering::Less => UpdateStatus::NewerInstalled,
         std::cmp::Ordering::Equal => {
+            if pin.channel.as_deref() == Some("nightly")
+                && installed.channel.as_deref() == Some("nightly")
+                && pin.build_seq.is_some_and(|candidate| installed.build_seq.is_some_and(|current| candidate < current))
+            {
+                return UpdateStatus::NewerInstalled;
+            }
+            if let Some(candidate_pair) = pin.native_pair.as_ref() {
+                let installed_runtime = installed.runtime_kind.as_deref().unwrap_or("javascript");
+                if candidate_pair.runtime_kind != installed_runtime {
+                    return UpdateStatus::Available;
+                }
+                if candidate_pair.runtime_kind == "rust-native-v1" {
+                    let Some(installed_pair_id) = installed.pair_id.as_deref() else {
+                        return UpdateStatus::Unknown;
+                    };
+                    if candidate_pair.pair_id != installed_pair_id {
+                        return UpdateStatus::Available;
+                    }
+                }
+            }
             let (Some(candidate_channel), Some(installed_channel), Some(candidate), Some(current)) =
                 (pin.channel.as_deref(), installed.channel.as_deref(), pin.build_seq, installed.build_seq)
             else {
@@ -112,6 +132,8 @@ mod tests {
             build_seq: Some(build_seq),
             core_api: api,
             core_link: link,
+            runtime_kind: Some("javascript".into()),
+            pair_id: Some("pair-v1:javascript:fixture".into()),
         }
     }
 
@@ -185,6 +207,56 @@ mod tests {
         let mut installed = installed("1.2.2", "release", 41, Some(1), Some(1));
         installed.core_version = Some("0.2.0".into());
         assert_eq!(update_status(Some(&pin), Some(&installed)), UpdateStatus::NewerInstalled);
+    }
+
+    #[test]
+    fn same_version_native_pair_transition_is_available_but_never_overrides_newer_core() {
+        let mut pin = crate::pin::test_support::fixture_native_pair_pin();
+        pin.channel = Some("release".into());
+        pin.build_seq = Some(0);
+        let mut current = installed("1.2.3", "release", 0, Some(1), Some(1));
+        assert_eq!(
+            update_status(Some(&pin), Some(&current)),
+            UpdateStatus::Available,
+            "same-version transition from the existing JavaScript pair must install the native pair"
+        );
+
+        let mut older_nightly = pin.clone();
+        older_nightly.channel = Some("nightly".into());
+        older_nightly.build_seq = Some(41);
+        assert_eq!(
+            update_status(Some(&older_nightly), Some(&installed("1.2.3", "nightly", 42, Some(1), Some(1)))),
+            UpdateStatus::NewerInstalled,
+            "a changed pair identity must not override a newer installed nightly build"
+        );
+
+        current.runtime_kind = Some("rust-native-v1".into());
+        current.pair_id = pin.native_pair.as_ref().map(|pair| pair.pair_id.clone());
+        current.channel = Some("release".into());
+        current.build_seq = Some(0);
+        assert_eq!(update_status(Some(&pin), Some(&current)), UpdateStatus::Current);
+
+        current.pair_id = Some("pair-v1:rust-native-v1:old-pair".into());
+        assert_eq!(
+            update_status(Some(&pin), Some(&current)),
+            UpdateStatus::Available,
+            "a changed runtime/Core pair identity is an update at the same package version"
+        );
+
+        current.pair_id = None;
+        assert_eq!(
+            update_status(Some(&pin), Some(&current)),
+            UpdateStatus::Unknown,
+            "missing native pair identity cannot be treated as current"
+        );
+
+        current.pair_id = Some("pair-v1:rust-native-v1:old-pair".into());
+        current.core_version = Some("9.0.0".into());
+        assert_eq!(
+            update_status(Some(&pin), Some(&current)),
+            UpdateStatus::NewerInstalled,
+            "the pair upgrade must not downgrade an installed newer Core"
+        );
     }
 
     #[test]

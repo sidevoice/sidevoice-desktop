@@ -70,6 +70,66 @@ test("production pin accepts core PR #34 producer bytes and rejects pending or m
   assert.throws(() => validatePin(alteredAssetPin), /do not match the bundles/);
 });
 
+function nativePairPin() {
+  const manifest = readFileSync(new URL("../test/fixtures/rust-native-core-manifest.json", import.meta.url));
+  const coreSource = "e".repeat(40);
+  const runtimeSha = "d".repeat(64);
+  const archiveSha = "a".repeat(64);
+  const coreBuild = `rust-native-v1-macos-aarch64-${coreSource}-${archiveSha}`;
+  return {
+    schema: 2, status: "ready", target: "macos-aarch64", connector_sha: "1".repeat(40),
+    connector_version: "0.6.0", channel: "release", build_seq: 0, core_version: "0.1.0",
+    executable_sha256: "2".repeat(64), executable_size: 4096,
+    metadata_protocol: "sidevoice-metadata-v1", progress_protocol: "sidevoice-progress-jsonl-v1",
+    core_api: 1, core_link: 1, link_min: 1, link_max: 1,
+    native_pair: {
+      runtime_kind: "rust-native-v1", runtime_build_sha: "1".repeat(40), runtime_sha256: runtimeSha,
+      runtime_size: 2048, runtime_target: "macos-aarch64", core_kind: "rust-native-v1",
+      core_source_sha: coreSource, core_cargo_lock_sha256: "f".repeat(64),
+      core_manifest_sha256: sha256(manifest), core_manifest_size: manifest.length,
+      core_manifest_bytes_base64: manifest.toString("base64"), core_archive_sha256: archiveSha,
+      core_archive_size: 1, core_target: "macos-aarch64", core_entrypoint: "bin/sidevoice-core-rust",
+      core_build: coreBuild, pair_id: `pair-v1:rust-native-v1:${runtimeSha}:core:${coreBuild}`,
+    },
+  };
+}
+
+test("Rust-native pin validates exact pair identity and closed Core archive schema without Python assets", () => {
+  const pin = nativePairPin();
+  assert.equal(validatePin(pin), pin);
+  assert.equal(Object.hasOwn(pin, "core_assets"), false);
+
+  for (const mutate of [
+    (candidate) => { candidate.native_pair.pair_id = "pair-v1:javascript:fake"; },
+    (candidate) => { candidate.native_pair.core_target = "linux-x86_64"; },
+    (candidate) => {
+      const bytes = Buffer.from(candidate.native_pair.core_manifest_bytes_base64, "base64").subarray(0, -1);
+      candidate.native_pair.core_manifest_bytes_base64 = bytes.toString("base64");
+      candidate.native_pair.core_manifest_size = bytes.length;
+      candidate.native_pair.core_manifest_sha256 = sha256(bytes);
+    },
+    (candidate) => { candidate.core_assets = []; },
+  ]) {
+    const malformed = nativePairPin();
+    mutate(malformed);
+    assert.throws(() => validatePin(malformed), /native pair|native Core/);
+  }
+});
+
+test("Rust-native SEA metadata keeps Python manifest fields empty and verifies protocols", () => {
+  const pin = nativePairPin();
+  const version = { ok: true, version: pin.connector_version, target: pin.target, channel: pin.channel,
+    connector_sha: pin.connector_sha, build_seq: pin.build_seq, format: "sea", sea: true };
+  const metadata = { ok: true,
+    connector: { version: pin.connector_version, sha: pin.connector_sha, channel: pin.channel,
+      build_seq: pin.build_seq, target: pin.target, format: "sea", sea: true, link_min: 1, link_max: 1 },
+    embedded_core: { version: pin.core_version, manifest_sha256: null, assets: [], api: pin.core_api, link: pin.core_link },
+    protocols: { metadata: pin.metadata_protocol, progress: pin.progress_protocol } };
+  assert.equal(verifyMetadata(pin, version, metadata), true);
+  metadata.embedded_core.assets.push({ name: "python-core.whl" });
+  assert.throws(() => verifyMetadata(pin, version, metadata), /distinct Rust-native Core schema/);
+});
+
 test("a test-only pin requires immutable artifacts, manifest bytes, attestation sidecars and protocols", () => {
   const pin = fixturePin();
   assert.equal(validatePin(pin), pin);

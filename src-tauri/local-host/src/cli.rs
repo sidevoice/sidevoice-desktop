@@ -926,6 +926,31 @@ fi
     }
 
     #[test]
+    fn bundled_constructor_accepts_only_the_pinned_rust_native_pair_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        let executable = tmp.path().join("sidevoice");
+        let mut pin = crate::pin::test_support::fixture_native_pair_pin();
+        let version = serde_json::json!({"ok":true,"version":"1.2.3","target":"macos-aarch64","channel":"nightly",
+            "connector_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","build_seq":42,"format":"sea","sea":true});
+        let metadata = serde_json::json!({"ok":true,"connector":{"version":"1.2.3","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "target":"macos-aarch64","channel":"nightly","build_seq":42,"format":"sea","sea":true,"link_min":1,"link_max":1},
+            "embedded_core":{"version":"0.1.0","manifest_sha256":null,"assets":[],"api":1,"link":1},
+            "protocols":{"metadata":"sidevoice-metadata-v1","progress":"sidevoice-progress-jsonl-v1"}});
+        let script = format!(
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo '{}'; else echo '{}'; fi\n",
+            version, metadata
+        );
+        std::fs::write(&executable, &script).unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        pin.executable_size = Some(script.len() as u64);
+        pin.executable_sha256 = Some(sha256_file(&executable).unwrap());
+        assert!(Cli::bundled(&executable, &DataDirs::new(tmp.path()), &pin).is_ok());
+
+        pin.native_pair.as_mut().unwrap().pair_id = "pair-v1:javascript:wrong".into();
+        assert_eq!(Cli::bundled(&executable, &DataDirs::new(tmp.path()), &pin).unwrap_err().key, "install.pin-invalid");
+    }
+
+    #[test]
     fn bundled_constructor_refuses_a_pending_production_pin_before_running_anything() {
         let tmp = tempfile::tempdir().unwrap();
         let executable = tmp.path().join("missing");
