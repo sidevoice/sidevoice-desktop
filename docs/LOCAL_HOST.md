@@ -87,7 +87,10 @@ else `service status --json`, which computes the same object.
 whatever `state` says — the page uses the host when `pairing()` is non-null (SEAMS §5).
 
 `version()` reports `capabilities.agents: false`, and `agents()` returns `agents.unavailable` until connector R2 supplies
-discovery. R4 installation always uses `--no-agents`.
+discovery. R4 install and update transactions ask the pinned Connector to register only Codex (`--harness codex`).
+For the Rust-native pair, Connector resolves the MCP entry to the selected `current` Rust runtime. Codex's own CLI
+checks and writes its registration; a foreign or invalid `sidevoice` entry is left untouched, and no credentials are
+copied into the MCP entry. Other harnesses are not targeted.
 
 `state()` → `{state, failure?, core?, service?, calls?, attempts?, limit?, reachable}`: `failure` as the service
 reports it (`{key, step, message, at, log_tail, …}`) or the app's own `{key, message}`; `core` `{pid, version, api,
@@ -113,7 +116,7 @@ the group and stays.
 | `pairRoom(url, code)` | `pair <url> <code> --json` → `{room}`, nothing else (the core follows the new credentials) | 60 s |
 | `reconnect()` | a new local pairing over the socket | — |
 | `revealLog()` | `/usr/bin/open -R D/core.log` (else `D/connector.log`) | — |
-| `install(onProgress)` | bundled `install --no-agents --service --json --progress=jsonl`; resolves after the core is reachable and paired | 45 min |
+| `install(onProgress)` | bundled `install --harness codex --service --json --progress=jsonl`; resolves after the core is reachable and paired | 45 min |
 | `update()` | eligible bundled connector transaction; never downgrades | 45 min |
 | `version()` / `agents()` | pinned/installed metadata; agents rejects with `agents.unavailable` until connector R2 | — |
 

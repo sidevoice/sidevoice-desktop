@@ -42,7 +42,8 @@ manifest SHA null and asset list empty; source, archive and pair identities are 
 Installed `R/current/release.json` metadata projects `runtime_kind` and `pair_id` into the desktop version decision.
 A same-version runtime/pair change is eligible for update after the existing version, API, link and Core downgrade
 checks; an installed newer Core is never replaced by this candidate. The app continues to invoke one bundled
-installer transaction.
+installer transaction. That transaction requests registration only for Codex. Connector uses the selected Rust
+`current` MCP command and asks Codex to write it; its foreign-entry check prevents replacing a user-owned registration.
 
 The manual `build` workflow input `r4-native-pair-candidate=true` runs the exact Core source builds, creates the
 closed manifest, builds Connector's Rust runtime and SEA from the two pinned source trees, and packages the

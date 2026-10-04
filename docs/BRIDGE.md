@@ -101,9 +101,11 @@ only allows from a click in the page. "Mostrar Sidevoice" opens the window for t
 
 `window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", version, nativeEngine, mediaKeys, localHost? }`: the
 web UI feature-detects the desktop app by it, and each capability by its presence. `version` is the bridge's (3).
-R4's install, progress/cancel, update, version and agents methods exist only on macOS arm64. `install()` is explicit and always
-invokes the bundled connector with `--no-agents`; it does not register an agent. The app verifies the connector
-resource against `src-tauri/connector-pin.json`, including the embedded core manifest identity, before running it.
+R4's install, progress/cancel, update, version and agents methods exist only on macOS arm64. `install()` is explicit and
+invokes the bundled connector with `--harness codex`. The Connector registers only Codex through its selected Rust
+`current` MCP executable; its Codex CLI checks the existing entry and leaves foreign or invalid entries untouched.
+The registration contains the executable and arguments, not copied credentials. Other harnesses are not targeted.
+The app verifies the connector resource against `src-tauri/connector-pin.json`, including the embedded core manifest identity, before running it.
 Until R4-a/b publishes the signed asset and stable CLI metadata/progress contract, the checked-in pin remains pending
 and macOS production packaging fails closed. Test fixtures use a stand-in executable and are not package resources.
 `version()` reports update eligibility; incomplete installed R1 metadata reports `unknown`, and a newer installed
@@ -126,7 +128,7 @@ docs/LOCAL_HOST.md.
 | `revealLog()` | shows the core's log in Finder (`~/.sidevoice/core.log`, else `connector.log`) |
 | `pairingCode()` | `{code, expires_in, reach}`, on the person's click only: shown, never sent — the page's convention; native authorises the caller, not a person (docs/LOCAL_HOST.md → Trust) |
 | `pairRoom(url, code)` | pairs this machine with a room (`pair … --json` only): `{room}` |
-| `install(onProgress)` | explicit `--no-agents` install; ordered `{step, done, total, cancellable}` events; connector `stage`, `wait-calls`, and `wait-lock` are presented to the vendored room as `staging`; promise has `.job` |
+| `install(onProgress)` | explicit Codex-only `--harness codex` install; ordered `{step, done, total, cancellable}` events; connector `stage`, `wait-calls`, and `wait-lock` are presented to the vendored room as `staging`; promise has `.job` |
 | `cancel(job)` | true only after the connector acknowledges cancellation before commit |
 | `update()` / `version()` | apply an eligible bundled update / read pinned and installed metadata plus capability status |
 | `agents()` | rejects with `agents.unavailable` until connector R2 supplies discovery |

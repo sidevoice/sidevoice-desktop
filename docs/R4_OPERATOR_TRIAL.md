@@ -16,9 +16,12 @@ the artifact. The app is ad-hoc signed, not notarized. The Actions artifact expi
 3. Copy `Sidevoice.app` to that account's `~/Applications`, remove quarantine from that copy with
    `xattr -dr com.apple.quarantine "$HOME/Applications/Sidevoice.app"`, then open it from Finder. Allow microphone
    access if macOS asks.
-4. In the packaged R4 page, install the bundled local pair and pair the machine. The trial install uses the
-   source-built executable already inside the app; it does not download an installer at run time. Keep one-time
-   pairing codes out of screenshots, logs, and reports.
+4. In the packaged R4 page, install the bundled local pair and pair the machine. Builds containing the Codex
+   registration follow-up ask the pinned Connector, within the same install transaction, to register Codex against
+   the selected Rust runtime when Codex is available. A foreign or invalid existing `sidevoice` registration is left
+   untouched; no credentials are copied into the MCP entry. The historical `24f399` app still uses `--no-agents` and
+   does not register Codex. The trial uses the source-built executable already inside the app and does not download
+   an installer at run time. Keep one-time pairing codes out of screenshots, logs, and reports.
 5. Try a local call. This build's hosted checks cover app/page launch, install progress, local service reachability,
    pairing projection, the page proxy, and same-version update. They do **not** assert a real room join or first-call
    end-to-end success; those remain operator self-test findings.

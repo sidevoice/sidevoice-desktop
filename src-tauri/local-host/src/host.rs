@@ -115,6 +115,8 @@ const STATUS_TIMEOUT: Duration = Duration::from_secs(10);
 const PAIR_DEVICE_TIMEOUT: Duration = Duration::from_secs(30);
 const PAIR_ROOM_TIMEOUT: Duration = Duration::from_secs(60);
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(45 * 60);
+// Keep registration inside Connector's install transaction so it uses the selected release and its ownership checks.
+const PACKAGED_INSTALL_ARGS: &[&str] = &["install", "--harness", "codex", "--service", "--json", "--progress=jsonl"];
 const MAX_PROGRESS_EVENTS: usize = 512;
 const MAX_COMPLETED_INSTALL_JOBS: usize = 4;
 
@@ -653,12 +655,7 @@ fn find_install_job(
 /// The connector owns `D/install.lock` as a permanent inode and reports actual flock waits over progress JSONL.
 /// Always start it; checking whether the path exists would mistake every completed install for an active lock holder.
 fn run_connector_install(cli: &Cli, job: &InstallJob) -> Result<Value, Refusal> {
-    cli.run_with_progress(
-        &["install", "--no-agents", "--service", "--json", "--progress=jsonl"],
-        INSTALL_TIMEOUT,
-        &job.cancel,
-        |event| job.progress(event),
-    )
+    cli.run_with_progress(PACKAGED_INSTALL_ARGS, INSTALL_TIMEOUT, &job.cancel, |event| job.progress(event))
 }
 
 fn install_failure_refusal(failure: &Value) -> Refusal {
