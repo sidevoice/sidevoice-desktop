@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, relative, resolve, sep } from "node:path";
+import { dirname, resolve } from "node:path";
+import { assertReleaseRootWithin } from "./release-root-containment.mjs";
 
 const APP = resolve(process.env.APP || "src-tauri/target/packages/native-pair/Sidevoice.app");
 const PROBE_APP = resolve(process.env.DOGFOOD_APP || "src-tauri/target/packages/native-pair-probe/Sidevoice.app");
@@ -136,10 +137,7 @@ async function readPair(pinPath, seaPath, expectedSource) {
 
 async function parseRelease(recordPath, expectedRoot) {
   const installed = JSON.parse(await readFile(recordPath, "utf8"));
-  const root = await realpath(installed.releases);
-  const fromTemp = relative(expectedRoot, root);
-  requireValue(fromTemp !== ".." && !fromTemp.startsWith(`..${sep}`) && !fromTemp.startsWith(sep),
-    "install record release root is outside the isolated test data directory.");
+  const root = await assertReleaseRootWithin(installed.releases, expectedRoot);
   const current = resolve(root, "current");
   const selectedDir = await realpath(current);
   const release = JSON.parse(await readFile(resolve(selectedDir, "release.json"), "utf8"));
