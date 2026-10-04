@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, resolve, sep } from "node:path";
 import { findCommittedPairRelease } from "./committed-pair-release.mjs";
