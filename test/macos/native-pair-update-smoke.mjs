@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { dirname, resolve, sep } from "node:path";
 import { assertReleaseRootWithin } from "./release-root-containment.mjs";
 
 const APP = resolve(process.env.APP || "src-tauri/target/packages/native-pair/Sidevoice.app");
