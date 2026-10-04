@@ -613,10 +613,23 @@ jobs:
       - name: Verify the exact prior Connector source and its native Core pin
         run: |
           set -euo pipefail
-          test "$(git -C connector-previous rev-parse HEAD)" = "$R4_PREVIOUS_CONNECTOR_SOURCE_SHA"
-          test "$(jq -r '.connector.source_sha' test/fixtures/r4-native-pair-previous-source-pin.json)" = "$R4_PREVIOUS_CONNECTOR_SOURCE_SHA"
-          test "$(jq -r '.core.source_sha' connector-previous/packages/connector/rust-core-production-pin.json)" = "$R4_CORE_SOURCE_SHA"
-          test "$(jq -r '.core.cargo_lock_sha256' connector-previous/packages/connector/rust-core-production-pin.json)" = "$R4_CORE_LOCK_SHA256"
+          check_sha() {
+            local label="$1" observed="$2" expected="$3" observed_label=invalid expected_label=invalid
+            if [[ "$observed" =~ ^[0-9a-f]{40}$ || "$observed" =~ ^[0-9a-f]{64}$ ]]; then
+              observed_label="$observed"
+            fi
+            if [[ "$expected" =~ ^[0-9a-f]{40}$ || "$expected" =~ ^[0-9a-f]{64}$ ]]; then
+              expected_label="$expected"
+            fi
+            if [[ "$observed" != "$expected" || "$expected_label" == invalid ]]; then
+              printf '%s mismatch: observed=%s expected=%s\n' "$label" "$observed_label" "$expected_label" >&2
+              return 1
+            fi
+          }
+          check_sha prior-connector-checkout "$(git -C connector-previous rev-parse HEAD)" "$R4_PREVIOUS_CONNECTOR_SOURCE_SHA"
+          check_sha prior-connector-source-pin "$(jq -r '.connector.source_sha' test/fixtures/r4-native-pair-previous-source-pin.json)" "$R4_PREVIOUS_CONNECTOR_SOURCE_SHA"
+          check_sha prior-core-source-pin "$(jq -r '.source_sha' connector-previous/packages/connector/rust-core-production-pin.json)" "$R4_CORE_SOURCE_SHA"
+          check_sha prior-core-cargo-lock-pin "$(jq -r '.cargo_lock_sha256' connector-previous/packages/connector/rust-core-production-pin.json)" "$R4_CORE_LOCK_SHA256"
       - name: Install prior Connector dependencies
         working-directory: connector-previous
         run: npm ci
