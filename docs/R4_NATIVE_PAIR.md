@@ -8,11 +8,12 @@ app does not fetch Connector or Core payloads.
 ## Exact source inputs
 
 [`src-tauri/r4-native-pair-source-pin.json`](../src-tauri/r4-native-pair-source-pin.json) pins the Connector
-candidate source SHA and the Core source SHA plus Cargo lock digest. The current Connector SHA is the reviewed head
-of Connector PR #56 (`961207422024ad82766c21d98ccbbc2f556505d8`); it is not yet the protected-main commit. After PR #56
-lands on Connector `main`, change the Desktop Connector pin and workflow constant to that exact protected-main
-merge SHA, confirm the Connector's own Rust Core production pin still equals the pinned Core source and lockfile,
-then repeat the complete candidate workflow. Do not build from a branch name, tag, or artifact left by an earlier run.
+protected-main merge SHA and the Core source SHA plus Cargo lock digest. The Connector source is pinned to PR #56's
+protected-main merge commit (`435fd315e657a4f1372fc524f773387797195f38`), whose tree is the reviewed `9612074` tree.
+The first Desktop candidate attempt used the pre-merge review SHA and exposed a CLI contract mismatch before packaging;
+the corrected candidate uses the protected-main commit. Its workflow still verifies that the Connector's own Rust
+Core production pin equals the pinned Core source and lockfile. Do not build from a branch name, tag, or artifact left
+by an earlier run.
 
 The Connector producer requires all three canonical Rust Core target archives in its closed manifest. The candidate
 workflow therefore builds those Core source inputs on hosted runners, but packages and tests only one Desktop app:

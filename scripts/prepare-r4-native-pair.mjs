@@ -27,11 +27,22 @@ function canonicalJson(value) {
   return JSON.stringify(value);
 }
 
-function commandJson(executable, args) {
+function commandJson(executable, args, { requireOk = true } = {}) {
   const text = execFileSync(executable, args, { encoding: "utf8", timeout: 20_000, maxBuffer: 1024 * 1024 });
   const value = JSON.parse(text);
-  if (!value || value.ok !== true) throw new Error(`Pinned executable refused ${args.join(" ")}.`);
+  if (!value || typeof value !== "object" || Array.isArray(value) || (requireOk && value.ok !== true)) {
+    throw new Error(`Pinned executable refused ${args.join(" ")}.`);
+  }
   return value;
+}
+
+export function assertRustConnectorRuntimeIdentity(runtime, { target, sourceSha } = {}) {
+  if (!exactKeys(runtime, ["kind", "target", "source_sha", "version"])
+      || runtime.kind !== "rust-native-v1" || runtime.target !== target
+      || runtime.source_sha !== sourceSha || typeof runtime.version !== "string" || runtime.version.length === 0) {
+    throw new Error("Rust Connector runtime identity differs from the pinned source build.");
+  }
+  return runtime;
 }
 
 function gitSha(directory) {
@@ -107,12 +118,10 @@ export async function prepareNativePairPin({ connectorRoot, coreRoot, coreInputs
   }
 
   const rustBytes = await readRegularFile(resolve(rustConnector), 100_000_000);
-  const runtime = commandJson(resolve(rustConnector), ["runtime-identity", "--json"]);
-  if (!exactKeys(runtime, ["kind", "target", "source_sha", "version"])
-      || runtime.kind !== "rust-native-v1" || runtime.target !== sourcePin.target
-      || runtime.source_sha !== connectorSha) {
-    throw new Error("Rust Connector runtime binary differs from its pinned source identity.");
-  }
+  const runtime = assertRustConnectorRuntimeIdentity(
+    commandJson(resolve(rustConnector), ["runtime-identity", "--json"], { requireOk: false }),
+    { target: sourcePin.target, sourceSha: connectorSha },
+  );
   const seaBytes = await readRegularFile(resolve(sea), 512_000_000);
   const version = commandJson(resolve(sea), ["--version", "--json"]);
   const metadata = commandJson(resolve(sea), ["metadata", "--json"]);

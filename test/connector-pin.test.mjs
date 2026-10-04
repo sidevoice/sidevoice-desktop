@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { sha256, validatePin, verifyMetadata } from "../scripts/connector-pin.mjs";
+import { assertRustConnectorRuntimeIdentity } from "../scripts/prepare-r4-native-pair.mjs";
 
 function producerManifest() {
   return readFileSync(new URL("../src-tauri/local-host/test-fixtures/core-manifest-core34.json", import.meta.url));
@@ -113,6 +114,28 @@ test("Rust-native pin validates exact pair identity and closed Core archive sche
     const malformed = nativePairPin();
     mutate(malformed);
     assert.throws(() => validatePin(malformed), /native pair|native Core/);
+  }
+});
+
+test("Rust runtime identity accepts the producer's strict JSON shape without an ok wrapper", () => {
+  const identity = {
+    kind: "rust-native-v1", target: "macos-aarch64",
+    source_sha: "1".repeat(40), version: "0.6.0",
+  };
+  assert.equal(assertRustConnectorRuntimeIdentity(identity, {
+    target: "macos-aarch64", sourceSha: "1".repeat(40),
+  }), identity);
+  for (const mutate of [
+    (candidate) => { candidate.ok = true; },
+    (candidate) => { candidate.target = "linux-x86_64"; },
+    (candidate) => { candidate.source_sha = "2".repeat(40); },
+    (candidate) => { candidate.version = ""; },
+  ]) {
+    const malformed = { ...identity };
+    mutate(malformed);
+    assert.throws(() => assertRustConnectorRuntimeIdentity(malformed, {
+      target: "macos-aarch64", sourceSha: "1".repeat(40),
+    }), /differs from the pinned source build/);
   }
 });
 
