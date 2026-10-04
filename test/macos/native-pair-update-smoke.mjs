@@ -51,7 +51,9 @@ function sha256(bytes) {
 
 function childEnv(extra = {}) {
   const env = {};
-  for (const key of ["HOME", "PATH", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "USER", "LOGNAME", "SHELL"]) {
+  for (const key of [
+    "HOME", "PATH", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "USER", "LOGNAME", "SHELL", "XDG_DATA_HOME",
+  ]) {
     if (process.env[key]) env[key] = process.env[key];
   }
   if (process.env.SIDEVOICE_DATA_DIR) env.SIDEVOICE_DATA_DIR = process.env.SIDEVOICE_DATA_DIR;
@@ -268,9 +270,12 @@ async function main() {
 
   const temp = await mkdtemp(resolve(tmpdir(), "sidevoice-r4-pair-update-"));
   const dataDir = resolve(temp, "data");
+  const xdgDataHome = resolve(temp, "xdg-data");
   const hooksDir = resolve(temp, "hooks");
+  await mkdir(xdgDataHome, { mode: 0o700 });
   await mkdir(hooksDir, { mode: 0o700 });
   process.env.SIDEVOICE_DATA_DIR = dataDir;
+  process.env.XDG_DATA_HOME = xdgDataHome;
   let activeFlow = null;
   let installAttempted = false;
   let evidence = {
