@@ -2,7 +2,7 @@
 
 This is a temporary Apple-Silicon self-test build, not a beta or release. It uses the existing R4 bundled page from
 `sidevoice-web` commit `4ae0911d4946db84f9523489966f18d1b137be51`, the source-built Connector at
-`435fd315e657a4f1372fc524f773387797195f38`, and corrected Core main at
+`3cf94b46fce86ade5f182dd8da17d37277188221`, and corrected Core main at
 `b2ae125453baa3634b94eefcc49879588e3b6e40` (`Cargo.lock` SHA-256
 `b0e068cf34f5c1549c00add4c2d94e06af3758bb1586c2e58f192220a22b53e9`). Connector Core-pin alignment is recorded in
 the artifact. The app is ad-hoc signed, not notarized. The Actions artifact expires after seven days.
@@ -20,8 +20,9 @@ the artifact. The app is ad-hoc signed, not notarized. The Actions artifact expi
    Codex to register the selected Rust runtime. A foreign or invalid existing `sidevoice` registration is left
    untouched; no credentials are copied into the MCP entry. The bridge requires exactly one connected Codex row in
    Connector's status report and fails the install result if that is absent or unconfirmed; the reachable Core remains
-   installed. A current-pair update may reconcile registration through Connector's same-version transaction. The
-   historical `24f399` app still uses `--no-agents` and does not register Codex. The trial uses the source-built
+   installed. Hosted smoke uses Codex CLI `0.160.0` under a disposable runner `CODEX_HOME`; it checks registration but
+   does not sign in or run a model. A current-pair update may reconcile registration through Connector's same-version
+   transaction. The historical `24f399` app still uses `--no-agents` and does not register Codex. The trial uses the source-built
    executable already inside the app and does not download an installer at run time. Keep one-time pairing codes out of
    screenshots, logs, and reports.
 5. Try a local call. This build's hosted checks cover app/page launch, install progress, local service reachability,

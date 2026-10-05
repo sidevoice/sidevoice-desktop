@@ -41,8 +41,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  R4_CONNECTOR_SOURCE_SHA: 435fd315e657a4f1372fc524f773387797195f38
+  R4_CONNECTOR_SOURCE_SHA: 3cf94b46fce86ade5f182dd8da17d37277188221
   R4_PREVIOUS_CONNECTOR_SOURCE_SHA: c3aa3468e66e265897fdf0fccf5ad55d6fcf060f
+  R4_CODEX_CLI_VERSION: '0.160.0'
   R4_CORE_SOURCE_SHA: b2ae125453baa3634b94eefcc49879588e3b6e40
   R4_CORE_LOCK_SHA256: b0e068cf34f5c1549c00add4c2d94e06af3758bb1586c2e58f192220a22b53e9
 
@@ -447,7 +448,15 @@ jobs:
       - name: Reject undefined names in the Mac candidate smoke and its helpers
         run: npm run lint:r4-native-pair-smoke
       - name: Exercise disposable smoke preflight and release safety fixtures
-        run: node --test test/native-pair-update-preflight.test.mjs test/committed-pair-release.test.mjs test/release-root-containment.test.mjs test/r4-native-pair-core-pin.test.mjs
+        run: node --test test/native-pair-update-preflight.test.mjs test/committed-pair-release.test.mjs test/release-root-containment.test.mjs test/r4-native-pair-core-pin.test.mjs test/r4-codex-install-registration.test.mjs test/r4-codex-smoke-readiness.test.mjs test/connector-pin.test.mjs
+      - name: Verify the pinned Codex CLI package and version without signing in
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/codex-cli" --no-audit --no-fund "@openai/codex@$R4_CODEX_CLI_VERSION"
+          mkdir -m 700 "$RUNNER_TEMP/codex-version-home"
+          trap 'rm -rf "$RUNNER_TEMP/codex-version-home"' EXIT
+          codex_version="$(CODEX_HOME="$RUNNER_TEMP/codex-version-home" "$RUNNER_TEMP/codex-cli/node_modules/.bin/codex" --version)"
+          CODEX_VERSION_OUTPUT="$codex_version" node --input-type=module -e 'import { assertCodexCliVersion } from "./test/macos/codex-smoke-readiness.mjs"; assertCodexCliVersion(process.env.CODEX_VERSION_OUTPUT);'
 
   r4-core-native:
     name: R4 pinned Core source (${{ matrix.target }})
@@ -616,6 +625,20 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             connector-src/package-lock.json
+      - name: Install pinned Codex CLI and create its disposable runner profile
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/codex-cli" --no-audit --no-fund "@openai/codex@$R4_CODEX_CLI_VERSION"
+          codex_bin="$RUNNER_TEMP/codex-cli/node_modules/.bin/codex"
+          mkdir -m 700 "$RUNNER_TEMP/r4-codex-version-home"
+          trap 'rm -rf "$RUNNER_TEMP/r4-codex-version-home"' EXIT
+          codex_version="$(CODEX_HOME="$RUNNER_TEMP/r4-codex-version-home" "$codex_bin" --version)"
+          printf 'Codex CLI: %s\n' "$codex_version"
+          CODEX_VERSION_OUTPUT="$codex_version" node --input-type=module -e 'import { assertCodexCliVersion } from "./test/macos/codex-smoke-readiness.mjs"; assertCodexCliVersion(process.env.CODEX_VERSION_OUTPUT);'
+          mkdir -m 700 "$RUNNER_TEMP/r4-codex-home"
+          printf '%s\n' "$RUNNER_TEMP/codex-cli/node_modules/.bin" >> "$GITHUB_PATH"
+          printf 'CODEX_HOME=%s\n' "$RUNNER_TEMP/r4-codex-home" >> "$GITHUB_ENV"
+          printf 'SIDEVOICE_CODEX_BIN=%s\n' "$codex_bin" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@1.99.0
         with:
           targets: aarch64-apple-darwin
@@ -635,6 +658,11 @@ jobs:
       - name: Install Connector dependencies
         working-directory: connector-src
         run: npm ci
+      - name: Test the exact Rust Connector source
+        working-directory: connector-src
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        run: cargo test --locked --manifest-path packages/connector-rust/Cargo.toml
       - name: Align the exact prior Connector source to the reviewed Core pin
         if: ${{ inputs.r4-native-pair-operator-trial != true }}
         run: |
@@ -677,6 +705,23 @@ jobs:
           set -euo pipefail
           export SIDEVOICE_CONNECTOR_VERSION="$(node -p "require('./packages/connector/package.json').version")"
           cargo build --locked --release --manifest-path packages/connector-rust/Cargo.toml
+      - name: Verify Codex registration with the pinned CLI in an isolated profile
+        working-directory: connector-src
+        env:
+          SIDEVOICE_RUST_PROOF_BIN: ${{ github.workspace }}/connector-src/packages/connector-rust/target/release/sidevoice-rust-proof
+          SIDEVOICE_CODEX_BIN: ${{ runner.temp }}/codex-cli/node_modules/.bin/codex
+        run: python3 packages/connector-rust/test/codex_cli_smoke.py
+      - uses: astral-sh/setup-uv@v6
+      - name: Install pinned Core Python dependencies for the existing Codex queue fixture
+        run: |
+          set -euo pipefail
+          uv venv --python 3.12 core-src/.venv
+          uv pip install --python core-src/.venv/bin/python -e ./core-src 'websockets>=15,<16'
+      - name: Exercise per-call MCP thread metadata, Codex queue and read receipt against the pinned Core
+        env:
+          SIDEVOICE_CORE_PYTHON: ${{ github.workspace }}/core-src/.venv/bin/python
+          SIDEVOICE_RUST_PROOF_BIN: ${{ github.workspace }}/connector-src/packages/connector-rust/target/release/sidevoice-rust-proof
+        run: core-src/.venv/bin/python connector-src/packages/connector-rust/test/interop_core.py
       - name: Build the Connector SEA with the closed source-built Core manifest
         working-directory: connector-src
         env:

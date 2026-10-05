@@ -3,6 +3,12 @@ import { spawn, spawnSync } from "node:child_process";
 import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
+import {
+  assertCodexCliPath,
+  assertCodexCliVersion,
+  assertConnectedCodexReport,
+  assertDisposableCodexHome,
+} from "./codex-smoke-readiness.mjs";
 
 const APP = resolve(process.env.APP || "src-tauri/target/packages/native-pair/Sidevoice.app");
 const DOGFOOD_APP = resolve(process.env.DOGFOOD_APP || "src-tauri/target/packages/native-pair-probe/Sidevoice.app");
@@ -26,22 +32,25 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-function runChecked(file, args, action) {
-  const result = spawnSync(file, args, { encoding: "utf8", timeout: 15_000, stdio: ["ignore", "pipe", "pipe"] });
+function runChecked(file, args, action, env = process.env) {
+  const result = spawnSync(file, args, { encoding: "utf8", timeout: 15_000, stdio: ["ignore", "pipe", "pipe"], env });
   requireValue(!result.error && result.status === 0, `${action} failed.`);
   return `${result.stdout || ""}${result.stderr || ""}`;
 }
 
 function childEnv() {
   const env = {};
-  for (const key of ["HOME", "PATH", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "USER", "LOGNAME", "SHELL"]) {
+  for (const key of ["HOME", "PATH", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "USER", "LOGNAME", "SHELL",
+    "CODEX_HOME", "SIDEVOICE_CODEX_BIN"]) {
     if (process.env[key]) env[key] = process.env[key];
   }
   if (process.env.SIDEVOICE_DATA_DIR) env.SIDEVOICE_DATA_DIR = process.env.SIDEVOICE_DATA_DIR;
   return env;
 }
 
-function runJson(executable, args, { action, timeoutMs = 30_000, progress = false, finalizeGraceMs = 90_000 } = {}) {
+function runJson(executable, args, {
+  action, timeoutMs = 30_000, progress = false, finalizeGraceMs = 90_000, requireOk = true,
+} = {}) {
   const env = childEnv();
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(executable, args, { env, stdio: ["ignore", "pipe", "pipe"], detached: true });
@@ -108,7 +117,7 @@ function runJson(executable, args, { action, timeoutMs = 30_000, progress = fals
       let result;
       try { result = JSON.parse(Buffer.concat(out).toString("utf8")); }
       catch { return settle(new Error(`${action} returned no valid JSON (status ${status ?? signal}).`)); }
-      if (status !== 0 || result?.ok !== true) return settle(new Error(`${action} refused (${safeError(result)}).`));
+      if (status !== 0 || (requireOk && result?.ok !== true)) return settle(new Error(`${action} refused (${safeError(result)}).`));
       settle(null, result);
     });
   });
@@ -226,6 +235,29 @@ async function preflight() {
   requireValue(process.platform === "darwin" && process.arch === "arm64", "requires a hosted macOS arm64 runner.");
   const uid = process.getuid?.();
   requireValue(Number.isSafeInteger(uid) && uid > 0, "runner account has no valid GUI uid.");
+  const codexHome = assertDisposableCodexHome(process.env.CODEX_HOME, process.env.RUNNER_TEMP, process.env.HOME);
+  const codexBin = assertCodexCliPath(process.env.SIDEVOICE_CODEX_BIN, process.env.RUNNER_TEMP);
+  const codexHomeInfo = await lstat(codexHome);
+  requireValue(codexHomeInfo.isDirectory() && !codexHomeInfo.isSymbolicLink() && (codexHomeInfo.mode & 0o077) === 0,
+    "Codex profile is not a private runner-temp directory.");
+  requireValue((await readdir(codexHome)).length === 0, "Codex profile is not fresh.");
+  const defaultCodexHome = resolve(process.env.HOME, ".codex");
+  try {
+    await lstat(defaultCodexHome);
+    throw new Error("runner default Codex profile is present; refusing to touch it.");
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  const versionHome = resolve(process.env.RUNNER_TEMP, "r4-codex-version-home");
+  await mkdir(versionHome, { mode: 0o700 });
+  let codexVersion;
+  try {
+    codexVersion = assertCodexCliVersion(runChecked(codexBin, ["--version"], "pinned Codex CLI", {
+      ...childEnv(), CODEX_HOME: versionHome,
+    }));
+  } finally {
+    await rm(versionHome, { recursive: true, force: true });
+  }
   runChecked("/bin/launchctl", ["print", `gui/${uid}`], "macOS GUI launchd domain");
   const agents = resolve(process.env.HOME, "Library/LaunchAgents");
   for (const label of ["dev.sidevoice.core", "dev.sidevoice.connector"]) {
@@ -242,7 +274,7 @@ async function preflight() {
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
-  return { uid, agents };
+  return { uid, agents, codexHome, codexVersion };
 }
 
 async function verifyServicesAbsent(SEA, uid, agents) {
@@ -273,7 +305,7 @@ async function main() {
     && version.version === pin.connector_version && version.sea === true,
   "packaged SEA runtime identity differs from its native pair pin.");
 
-  const { uid, agents } = await preflight();
+  const { uid, agents, codexHome, codexVersion } = await preflight();
   const temp = await mkdtemp(resolve(tmpdir(), "sidevoice-r4-native-pair-"));
   process.env.SIDEVOICE_DATA_DIR = resolve(temp, "data");
   let installAttempted = false;
@@ -286,6 +318,11 @@ async function main() {
     const status = await runJson(production.seaPath, ["service", "status", "--json"], { action: "app-installed service status" });
     corePid = requireRunningStatus(status, pin.core_version);
     process.stdout.write("service status: bundled Connector and pinned Core are running and reachable\n");
+    const agentStatus = await runJson(production.seaPath, ["agents", "--json"], {
+      action: "installed Codex registration", requireOk: false,
+    });
+    assertConnectedCodexReport(agentStatus);
+    process.stdout.write(`Codex registration: exactly one connected row from CLI ${codexVersion}\n`);
     smokeResult = {
       schema: 1,
       kind: "r4-native-pair-packaged-page-smoke",
@@ -299,6 +336,8 @@ async function main() {
       remote_pairing: "dialog-and-remote-install-command-available",
       reachable: "launchd-connector-and-pinned-core",
       page_proxy: "current-local-device-reached-core",
+      codex_cli_version: codexVersion,
+      codex_registration: "exactly-one-connected-row-from-real-cli",
       same_version_update: "bridge-noop-kept-service-and-pairing",
       uninstall: "pending-cleanup",
     };
@@ -322,8 +361,11 @@ async function main() {
         failure = failure || cleanupError;
       }
     }
-    await rm(temp, { recursive: true, force: true });
-    await rm(APP_CONFIG_DIR, { recursive: true, force: true });
+    await Promise.all([
+      rm(temp, { recursive: true, force: true }),
+      rm(codexHome, { recursive: true, force: true }),
+      rm(APP_CONFIG_DIR, { recursive: true, force: true }),
+    ]);
   }
   if (failure) throw failure;
   if (process.env.SIDEVOICE_R4_SMOKE_EVIDENCE) {
