@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { alignCorePin } from "../scripts/align-r4-native-pair-core-pin.mjs";
 
-const connectorSha = "cdcc1a613d35bf600b8f39427195cbe4700ea6ec";
+const connectorSha = "6076bdab84ed6db23ba8735ff669050a5728ed32";
 const oldCoreSha = "b41840e41e3eb81905d285514c7deb35bd8efe57";
 const coreSha = "b2ae125453baa3634b94eefcc49879588e3b6e40";
 const lockSha = "b0e068cf34f5c1549c00add4c2d94e06af3758bb1586c2e58f192220a22b53e9";

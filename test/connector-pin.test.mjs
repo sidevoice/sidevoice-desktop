@@ -167,7 +167,7 @@ test("prior Connector producer pin uses top-level native Core identity fields", 
     source_sha: previous.core.source_sha,
     cargo_lock_sha256: previous.core.cargo_lock_sha256,
   }, "the prior producer pin is aligned only to the exact effective trial Core identity");
-  assert.equal(current.connector.source_sha, "cdcc1a613d35bf600b8f39427195cbe4700ea6ec");
+  assert.equal(current.connector.source_sha, "6076bdab84ed6db23ba8735ff669050a5728ed32");
   assert.equal(current.core.source_sha, previous.core.source_sha);
   assert.equal(current.core.cargo_lock_sha256, previous.core.cargo_lock_sha256);
 
