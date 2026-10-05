@@ -2,7 +2,7 @@
   "schema": 1,
   "connector": {
     "repository": "sidevoice/sidevoice-connector",
-    "source_sha": "3cf94b46fce86ade5f182dd8da17d37277188221"
+    "source_sha": "cdcc1a613d35bf600b8f39427195cbe4700ea6ec"
   },
   "core": {
     "repository": "sidevoice/sidevoice-core",

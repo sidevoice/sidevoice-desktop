@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 const CONNECTOR_SHAS = new Set([
   "435fd315e657a4f1372fc524f773387797195f38",
   "3cf94b46fce86ade5f182dd8da17d37277188221",
+  "cdcc1a613d35bf600b8f39427195cbe4700ea6ec",
   "c3aa3468e66e265897fdf0fccf5ad55d6fcf060f",
 ]);
 const OLD_CORE_SHA = "b41840e41e3eb81905d285514c7deb35bd8efe57";

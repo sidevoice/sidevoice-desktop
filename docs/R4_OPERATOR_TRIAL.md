@@ -2,7 +2,7 @@
 
 This is a temporary Apple-Silicon self-test build, not a beta or release. It uses the existing R4 bundled page from
 `sidevoice-web` commit `4ae0911d4946db84f9523489966f18d1b137be51`, the source-built Connector at
-`3cf94b46fce86ade5f182dd8da17d37277188221`, and corrected Core main at
+`cdcc1a613d35bf600b8f39427195cbe4700ea6ec`, and corrected Core main at
 `b2ae125453baa3634b94eefcc49879588e3b6e40` (`Cargo.lock` SHA-256
 `b0e068cf34f5c1549c00add4c2d94e06af3758bb1586c2e58f192220a22b53e9`). Connector Core-pin alignment is recorded in
 the artifact. The app is ad-hoc signed, not notarized. The Actions artifact expires after seven days.
