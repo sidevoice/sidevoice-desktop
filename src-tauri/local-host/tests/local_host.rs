@@ -98,6 +98,9 @@ fn install_script(delay: &str, progress: &str) -> String {
   service:status)
     echo '{{"ok":true,"state":"running","service":"launchd","calls":0}}'
     ;;
+  agents:--json)
+    echo '{{"agents":[{{"id":"codex","registration":"connected"}}]}}'
+    ;;
   *) echo '{{"ok":false,"error":{{"key":"fixture.bad-request","message":"bad request"}}}}'; exit 1 ;;
 esac"#,
         progress = progress,
@@ -195,6 +198,9 @@ fn bundled_update_preserves_connector_noop_when_a_racing_release_is_already_curr
     ;;
   service:status)
     echo '{"ok":true,"state":"running","service":"launchd","calls":0}'
+    ;;
+  agents:--json)
+    echo '{"agents":[{"id":"codex","registration":"connected"}]}'
     ;;
   *) echo '{"ok":false,"error":{"key":"fixture.bad-request","message":"bad request"}}'; exit 1 ;;
 esac"#,
