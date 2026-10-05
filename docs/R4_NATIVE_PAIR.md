@@ -45,9 +45,10 @@ checks; an installed newer Core is never replaced by this candidate. The app con
 installer transaction. That transaction requests registration only for Codex. Connector uses the selected Rust
 `current` MCP command and asks Codex to write it; its foreign-entry check prevents replacing a user-owned registration.
 The install JSON omits registration outcome, so Desktop follows with Connector's `agents --json` status report. A
-detected Codex must report `connected` before the bridge resolves; otherwise it returns a bounded readiness refusal
-without rolling back the reachable Core or changing Codex configuration. A current-version update runs the same
-Connector transaction so an earlier `--no-agents` install can be reconciled while preserving the selected pair.
+exactly one Codex row must report `connected` before the bridge resolves; an absent or duplicate row, or any other
+registration state, returns a bounded readiness refusal without rolling back the reachable Core or changing Codex
+configuration. A current-version update runs the same Connector transaction so an earlier `--no-agents` install can be
+reconciled while preserving the selected pair.
 
 The manual `build` workflow input `r4-native-pair-candidate=true` runs the exact Core source builds, creates the
 closed manifest, builds Connector's Rust runtime and SEA from the two pinned source trees, and packages the

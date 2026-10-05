@@ -14,9 +14,10 @@ test("packaged install asks the transactional Connector to register only Codex",
   assert.doesNotMatch(hostSource, /--no-agents/);
 });
 
-test("packaged install and current-pair no-op require a confirmed detected Codex", () => {
+test("packaged install and current-pair no-op require exactly one confirmed Codex", () => {
   assert.match(hostSource, /run_json\(\s*&\["agents", "--json"\]/);
   assert.match(hostSource, /codex_registration_status\(&answer\)/);
+  assert.match(hostSource, /if codex_seen\s*\{\s*Ok\(\(\)\)\s*\}\s*else\s*\{\s*Err\(codex_registration_unconfirmed\(\)\)\s*\}/s);
   assert.match(hostSource, /ensure_codex_registration\(&cli\)\?/);
   assert.match(hostSource, /ensure_codex_registration\(cli\)\?/);
   assert.match(appHostSource, /UpdateStatus::Available \| UpdateStatus::Current/);

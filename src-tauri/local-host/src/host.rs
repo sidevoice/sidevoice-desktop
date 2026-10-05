@@ -93,7 +93,11 @@ fn codex_registration_status(answer: &Value) -> Result<(), Refusal> {
             codex_seen = true;
         }
     }
-    Ok(())
+    if codex_seen {
+        Ok(())
+    } else {
+        Err(codex_registration_unconfirmed())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -748,16 +752,31 @@ mod tests {
     }
 
     #[test]
-    fn codex_registration_requires_connected_state_only_when_codex_is_detected() {
-        assert!(codex_registration_status(&serde_json::json!({"agents":[]})).is_ok());
-        assert!(codex_registration_status(&serde_json::json!({
-            "agents":[{"id":"claude","registration":"not-connected"}]
-        }))
-        .is_ok());
+    fn codex_registration_requires_exactly_one_connected_codex_entry() {
         assert!(codex_registration_status(&serde_json::json!({
             "agents":[{"id":"codex","registration":"connected"}]
         }))
         .is_ok());
+        assert!(codex_registration_status(&serde_json::json!({
+            "agents":[
+                {"id":"claude","registration":"not-connected"},
+                {"id":"codex","registration":"connected"}
+            ]
+        }))
+        .is_ok());
+
+        for agents in [
+            serde_json::json!([]),
+            serde_json::json!([{"id":"claude","registration":"connected"}]),
+            serde_json::json!([
+                {"id":"codex","registration":"connected"},
+                {"id":"codex","registration":"connected"}
+            ]),
+        ] {
+            let refusal = codex_registration_status(&serde_json::json!({"agents": agents})).unwrap_err();
+            assert_eq!(refusal.key, "agents.registration-unconfirmed");
+            assert!(refusal.message.contains("Core remains installed"));
+        }
 
         for state in ["not-connected", "manual", "foreign", "invalid", "unknown"] {
             let refusal = codex_registration_status(&serde_json::json!({
