@@ -8,6 +8,7 @@ const CONNECTOR_SHAS = new Set([
   "3cf94b46fce86ade5f182dd8da17d37277188221",
   "cdcc1a613d35bf600b8f39427195cbe4700ea6ec",
   "6076bdab84ed6db23ba8735ff669050a5728ed32",
+  "47c77105372c72ee5cb90eb40bb22ad392262a7d",
   "c3aa3468e66e265897fdf0fccf5ad55d6fcf060f",
 ]);
 const OLD_CORE_SHA = "b41840e41e3eb81905d285514c7deb35bd8efe57";

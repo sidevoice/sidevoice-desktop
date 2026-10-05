@@ -14,11 +14,11 @@ separately.
 
 [`src-tauri/r4-native-pair-source-pin.json`](../src-tauri/r4-native-pair-source-pin.json) pins the Connector source
 SHA and the Core source SHA plus Cargo lock digest. The operator-trial Connector is exact commit
-`6076bdab84ed6db23ba8735ff669050a5728ed32` from `fix/codex-thread-meta`, a signed follow-up to
-`cdcc1a613d35bf600b8f39427195cbe4700ea6ec` and ultimately based on protected-main
+`47c77105372c72ee5cb90eb40bb22ad392262a7d` from `fix/codex-thread-meta`, a signed follow-up to
+`6076bdab84ed6db23ba8735ff669050a5728ed32` and ultimately based on protected-main
 `435fd315e657a4f1372fc524f773387797195f38`. It carries the per-call MCP `threadId` correction, its integrated
 fake-Codex queue/receipt fixture, the lifetime binding needed for the metadata extraction to compile, and interop
-fixture roots short enough for macOS Unix socket paths. This
+fixture roots that are short and canonical for macOS Unix socket and registration paths. This
 candidate does not claim that the correction has merged to Connector main. The commit's `rust-core-production-pin.json`
 still names the superseded Core `b41840e`. The candidate workflow checks the
 exact Connector commit and committed descriptor, then changes only that descriptor in the disposable CI checkout to

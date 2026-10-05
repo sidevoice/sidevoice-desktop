@@ -257,7 +257,7 @@ async function main() {
   const previous = await readPair(PREVIOUS_PIN, PREVIOUS_SEA, "c3aa3468e66e265897fdf0fccf5ad55d6fcf060f");
   const currentPinPath = resolve(APP, "Contents/Resources/resources/connector-pin.json");
   const currentSeaPath = resolve(APP, "Contents/Resources/resources/sidevoice");
-  const current = await readPair(currentPinPath, currentSeaPath, "6076bdab84ed6db23ba8735ff669050a5728ed32");
+  const current = await readPair(currentPinPath, currentSeaPath, "47c77105372c72ee5cb90eb40bb22ad392262a7d");
   const probePinBytes = await readFile(resolve(PROBE_APP, "Contents/Resources/resources/connector-pin.json"));
   const probeSeaBytes = await readFile(resolve(PROBE_APP, "Contents/Resources/resources/sidevoice"));
   requireValue(probePinBytes.equals(await readFile(currentPinPath)) && sha256(probeSeaBytes) === sha256(current.bytes),
