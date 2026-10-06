@@ -16,10 +16,11 @@
         { "type": "toml", "path": "src-tauri/Cargo.toml", "jsonpath": "$.package.version" },
         { "type": "toml", "path": "src-tauri/core/Cargo.toml", "jsonpath": "$.package.version" },
         { "type": "toml", "path": "src-tauri/engine/Cargo.toml", "jsonpath": "$.package.version" },
+        { "type": "toml", "path": "src-tauri/local-host/Cargo.toml", "jsonpath": "$.package.version" },
         {
           "type": "toml",
-          "path": "src-tauri/Cargo.lock",
-          "jsonpath": "$.package[?(@.name.value=='sidevoice-desktop' || @.name.value=='sidevoice-desktop-core' || @.name.value=='sidevoice-desktop-engine')].version"
+          "path": "Cargo.lock",
+          "jsonpath": "$.package[?(@.name.value=='sidevoice-desktop' || @.name.value=='sidevoice-desktop-core' || @.name.value=='sidevoice-desktop-engine' || @.name.value=='sidevoice-local-host')].version"
         }
       ]
     }

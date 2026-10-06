@@ -1,0 +1,71 @@
+name: ci
+
+# Every pull request: lint on each OS (each compiles code the others do not), then on every target the tests and the
+# installers, built and checked exactly as a release builds them (`cargo xtask dist`), publishing nothing; on Linux the
+# local host with two users, on macOS the app's native flows (`cargo xtask smoke`). What passes here is what merging
+# publishes (release.yml). RELEASING.md.
+on:
+  pull_request:
+    branches: [main]
+  # release-please.yml dispatches it on the release PR, whose pushes start no workflow.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Format and Clippy (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, macos-14, windows-2022]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: ./.github/actions/setup
+      - run: cargo fmt --all --check
+      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      # The bridge scripts (node:test), and the icons as the brand files draw them.
+      - if: runner.os == 'Linux'
+        run: npm test
+      - if: runner.os == 'Linux'
+        run: cargo xtask icons
+
+  test:
+    name: Test and package (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: macos-aarch64, runner: macos-14 }
+          - { target: linux-x86_64, runner: ubuntu-22.04 }
+          - { target: windows-x86_64, runner: windows-2022 }
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: ./.github/actions/setup
+      - run: cargo test --locked
+      - run: cargo xtask dist
+      - if: runner.os == 'Linux'
+        run: cargo xtask isolation
+      - if: runner.os == 'macOS'
+        run: cargo xtask smoke
+      # The installers, to try a pull request's app; and the call controls card as the flow saw it.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: installers-${{ matrix.target }}
+          path: target/dist/
+          retention-days: 7
+          if-no-files-found: error
+      - if: always() && runner.os == 'macOS'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: call-controls-screenshots
+          path: target/xtask/card-shots/
+          retention-days: 7
+          if-no-files-found: warn

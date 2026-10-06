@@ -5,6 +5,8 @@
 //! The core is started as its supervisor would (`--data-dir C --port 0 --idle-exit 0`, `C` 0700), and the app's side
 //! pairs with it over `C/local.sock`, proves its identity, and carries a page's request through the proxy.
 
+#![cfg(unix)]
+
 use serde_json::Value;
 use sidevoice_local_host::core_socket::CoreSocket;
 use sidevoice_local_host::host::{Config, LocalHost};

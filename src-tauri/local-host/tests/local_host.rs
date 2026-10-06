@@ -3,6 +3,8 @@
 //! swapped in, a socket spliced both ways, the refusals — and the service's state and actions through a stand-in
 //! connector and CLI.
 
+#![cfg(unix)]
+
 use serde_json::{json, Value};
 use sidevoice_local_host::fake_core::{self, FakeCore};
 use sidevoice_local_host::host::{Action, Config, LocalHost};
