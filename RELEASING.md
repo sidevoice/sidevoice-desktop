@@ -1,19 +1,21 @@
 # Releasing
 
 One version for the whole app, tagged `vX.Y.Z`. It lives in `src-tauri/tauri.conf.json`, `package.json`,
-`package-lock.json`, the three `Cargo.toml` and `src-tauri/Cargo.lock`; release-please moves them together
+`package-lock.json`, the four crates' `Cargo.toml` and `Cargo.lock`; release-please moves them together
 (`release-please-config.json`). Never edit them by hand.
 
 ## What each act means
 
 | Act | Who | What happens |
 |---|---|---|
-| Open / update a PR | anyone | **Lint and unit tests** (Linux), **PR title is a conventional commit**, and the **Windows** and **Linux** app builds (installers as artifacts). The macOS native flow (engine round trip, probe page, room flow, call controls card) only when the engine, the bridge, the catalogue or the CI probes change; no .dmg. |
-| Squash-merge into `main` | reviewer | The PR title becomes the commit. `build` runs everything, installers included; when it is green, the `nightly` pre-release is replaced. release-please opens or updates the **release PR** ("chore(main): release X.Y.Z"). Nothing versioned is published. |
-| Merge the release PR | a maintainer | **This is the release.** release-please tags `vX.Y.Z` and creates a draft GitHub Release whose notes are that version's changelog; `build` builds from the tag, attaches the assets and publishes the Release. |
+| Open / update a PR | anyone | **ci**: format and Clippy on Linux, macOS and Windows, the bridge tests and the icons; on each target the tests and the installers built and checked as a release builds them (`cargo xtask dist`, kept 7 days as artifacts); on Linux the local host with two users, on macOS the native flows (`cargo xtask smoke`: engine round trip, local host, probe page, call controls card, room flow). And **PR title is a conventional commit**. |
+| Squash-merge into `main` | reviewer | The PR title becomes the commit. **release** tests and builds every target again, attests the assets and replaces the `nightly` pre-release (`cargo xtask manifest`, `cargo xtask publish`). release-please opens or updates the **release PR** ("chore(main): release X.Y.Z"). Nothing versioned is published. |
+| Merge the release PR | a maintainer | **This is the release.** release-please tags `vX.Y.Z` and creates a draft GitHub Release whose notes are that version's changelog; **release** builds from the tag, attaches the attested assets, reads them back against `SHA256SUMS` and publishes the Release. |
 
 Assets of a release: `Sidevoice_X.Y.Z_aarch64.dmg` (Apple Silicon, ad-hoc signed: `docs/FIRST_OPEN.txt`),
-`Sidevoice_X.Y.Z_x64-setup.exe`, `Sidevoice_X.Y.Z_amd64.deb`, `Sidevoice_X.Y.Z_amd64.AppImage`, `SHA256SUMS`.
+`Sidevoice_X.Y.Z_x64-setup.exe`, `Sidevoice_X.Y.Z_amd64.deb`, `Sidevoice_X.Y.Z_amd64.AppImage`, `SHA256SUMS`, and
+`attestation.sigstore.json` (GitHub build provenance over all of them: `gh attestation verify <file> --repo
+sidevoice/sidevoice-desktop`).
 
 The changelog is written from the squashed PR titles. To change it, edit `CHANGELOG.md` in the release PR right
 before merging it: any later merge into `main` regenerates the PR. After the release, fix the notes on the
@@ -42,7 +44,7 @@ with one empty commit (`git commit --allow-empty`) carries the footer.
 
 ## Nightly
 
-Every green `build` on `main` moves the tag `nightly` to that commit and replaces every asset of the one
+Every green `release` run on `main` moves the tag `nightly` to that commit and replaces every asset of the one
 `nightly` pre-release: `Sidevoice_nightly_aarch64.dmg`, `Sidevoice_nightly_x64-setup.exe`,
 `Sidevoice_nightly_amd64.deb`, `Sidevoice_nightly_amd64.AppImage`, `SHA256SUMS`. Fixed names, so a link keeps
 working. Its notes give the commit and its date. It is a snapshot, not a version: the app inside reports the

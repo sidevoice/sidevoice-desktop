@@ -1,0 +1,11 @@
+[package]
+name = "xtask"
+version = "0.0.0"
+description = "Build tooling for the desktop app: `cargo xtask <command>` (.cargo/config.toml)."
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+serde_json = "1"
+sha2 = "0.10"

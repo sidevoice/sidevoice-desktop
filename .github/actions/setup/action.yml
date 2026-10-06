@@ -1,0 +1,33 @@
+name: Set up the app build
+description: >-
+  Installs the pinned Rust toolchain (with rustfmt and Clippy) and Node.js, on Linux the WebKitGTK and tray libraries
+  the shell links against, the npm packages of package-lock.json (the Tauri CLI, the web assets' runtimes), and
+  restores the build cache.
+
+runs:
+  using: composite
+  steps:
+    - name: Toolchain
+      shell: bash
+      env:
+        RUST_VERSION: "1.98.1"
+      run: |
+        set -euo pipefail
+        rustup toolchain install "$RUST_VERSION" --profile minimal --component clippy --component rustfmt
+        echo "RUSTUP_TOOLCHAIN=$RUST_VERSION" >> "$GITHUB_ENV"
+    - name: WebKitGTK and the tray's libraries (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      with:
+        node-version: "22"
+        cache: npm
+    - name: npm packages
+      shell: bash
+      run: npm ci
+    # Compiled dependencies, per runner and toolchain; a PR reads main's cache and keeps its own.
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2

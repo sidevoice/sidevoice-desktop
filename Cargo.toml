@@ -1,0 +1,10 @@
+# The app (src-tauri), its crates, and the build tooling (`cargo xtask`, xtask/src/main.rs).
+[workspace]
+members = ["src-tauri", "src-tauri/core", "src-tauri/engine", "src-tauri/local-host", "xtask"]
+resolver = "2"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
