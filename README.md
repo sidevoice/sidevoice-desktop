@@ -84,7 +84,7 @@ npx tauri dev                              # needs a desktop: macOS, Windows, or
 ```
 src-tauri/src/       the shell: windows, tray, shortcut, commands
 src-tauri/core/      pure logic (settings, bridge contract, media rules), testable without Tauri
-src-tauri/engine/    the native speech engine
+src-tauri/engine/    the app's side of sidevoice-engine (ids, install jobs, what stays in memory)
 bridge/              the script injected into the call page: the page side of the bridge
 ui/                  the settings window; ui/voice*/ hold the bundled web interface
 brand/               the brand files the icons and installer art are generated from

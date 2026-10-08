@@ -1,0 +1,5 @@
+# The Rust the app is built with, here and in CI: sidevoice-engine's (its `rust-version`), so the two never drift.
+[toolchain]
+channel = "1.98.1"
+profile = "minimal"
+components = ["clippy", "rustfmt"]

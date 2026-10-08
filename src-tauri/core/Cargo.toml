@@ -3,7 +3,7 @@ name = "sidevoice-desktop-core"
 version = "0.1.0"
 description = "The desktop app's pure logic: settings, the bridge contract, media permissions. No Tauri, so it is tested anywhere."
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.98"
 license = "Apache-2.0"
 publish = false
 

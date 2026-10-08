@@ -1,27 +1,28 @@
 [package]
 name = "sidevoice-desktop-engine"
 version = "0.1.0"
-description = "Native model engines, downloaded at run time (docs/ENGINES.md): fetch, verify, unpack, load, run."
+description = "The app's side of sidevoice-engine (docs/ENGINES.md): the page's ids, install jobs, refusals and what stays in memory."
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.98"
 license = "Apache-2.0"
 publish = false
 
 [dependencies]
-sidevoice-desktop-core = { path = "../core" }
+# The engine itself: catalogue, downloads, the build that runs here, the models. Pinned to one commit until it is
+# tagged; its sherpa-onnx backend links sherpa-onnx's static libraries (SHERPA_ONNX_LIB_DIR, docs/ENGINES.md).
+sidevoice-engine = { git = "https://github.com/sidevoice/sidevoice-engine", rev = "ede74d4992eadf2e80257f6f239424d2b3a6b50e" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-libloading = "0.9"
-sha2 = "0.10"
-tar = "0.4"
-bzip2 = "0.6"
-reqwest = { version = "0.13", default-features = false, features = ["native-tls"] }
-# Downloads awaited against a cancel, which drops them mid-wait (src/install.rs).
-tokio = { version = "1", features = ["rt", "time", "macros", "net"] }
+# The engine's futures run on the app's Tokio runtime; installs race a cancel (src/lib.rs).
+tokio = { version = "1", features = ["rt", "time", "macros"] }
 
-# The machine's total memory (src/memory.rs).
+# What is available of the machine's memory now (src/memory.rs).
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_System_SystemInformation"] }
+
+[dev-dependencies]
+sha2 = "0.11"
+tokio = { version = "1", features = ["rt-multi-thread"] }

@@ -69,7 +69,7 @@ what the interface's own window offers — same origin, same permission rule —
   }
 
   // The native engine through the app itself, as the interface calls it (docs/BRIDGE.md): capabilities, install,
-  // run by catalogue model id + engine — hardened runtime, dlopen of the downloaded package, raw-byte IPC.
+  // run by catalogue model id + engine — hardened runtime, sidevoice-engine linked into the app, raw-byte IPC.
   const engine = window.__sidevoiceDesktop && window.__sidevoiceDesktop.host && window.__sidevoiceDesktop.host.nativeEngine;
   if (!engine) { await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-engine none" }); return; }
   try {

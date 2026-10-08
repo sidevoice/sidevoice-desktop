@@ -81,7 +81,7 @@ pub fn idle_unload() -> Option<std::time::Duration> {
 }
 
 /// Faults for the room flow (`SIDEVOICE_DEBUG_REFUSE_LOAD=whisper-base`,
-/// `SIDEVOICE_DEBUG_SLOW_TRANSCRIBE=whisper-tiny/coreml:2500`, each a comma-separated list): a model whose load the
+/// `SIDEVOICE_DEBUG_SLOW_TRANSCRIBE=whisper-small/cpu:2500`, each a comma-separated list): a model whose load the
 /// engine refuses, and a transcription slowed by that many milliseconds, so CI sees the interface roll a failed
 /// selection back and ask about a slow one, with real models otherwise.
 pub fn faults() -> sidevoice_desktop_engine::Faults {
@@ -92,8 +92,7 @@ pub fn faults() -> sidevoice_desktop_engine::Faults {
     let slow = |entry: &String| {
         let (build, ms) = entry.split_once(':')?;
         let (model, accelerator) = build.split_once('/')?;
-        let accelerator = sidevoice_desktop_core::engines::capability_named(accelerator);
-        Some((model.to_string(), accelerator, std::time::Duration::from_millis(ms.parse().ok()?)))
+        Some((model.to_string(), accelerator.to_string(), std::time::Duration::from_millis(ms.parse().ok()?)))
     };
     sidevoice_desktop_engine::Faults {
         refuse_load: list("SIDEVOICE_DEBUG_REFUSE_LOAD"),
