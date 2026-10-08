@@ -455,8 +455,10 @@ pub fn run() {
             // sidevoice-engine keeps the models it downloads, on demand, in the app's data directory (docs/ENGINES.md).
             // Without it the app still runs; the page then finds no native engine to use.
             let engine_root = app.path().app_data_dir()?.join("sidevoice-engine");
-            match sidevoice_desktop_engine::NativeEngines::new(engine_root, tauri::async_runtime::handle().inner().clone())
-            {
+            match sidevoice_desktop_engine::NativeEngines::new(
+                engine_root,
+                tauri::async_runtime::handle().inner().clone(),
+            ) {
                 #[allow(unused_mut)] // the probe build may shorten the idle time
                 Ok(mut engines) => {
                     #[cfg(feature = "probe")]
