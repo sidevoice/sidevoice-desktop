@@ -256,7 +256,7 @@ impl NativeEngines {
     /// `model` on `engine`, if the engine can run it on this device: an engine compiled into this app, a model of its
     /// catalogue with a build for that engine, and that build runnable here (an accelerator, the model's memory).
     fn locate(&self, model_id: &str, engine_id: &str) -> Result<Located, Error> {
-        if !self.engine.backends().iter().any(|b| *b == engine_id) {
+        if !self.engine.backends().contains(&engine_id) {
             return Err(error::engine_unsupported(engine_id));
         }
         let models = self.models()?;
@@ -462,7 +462,9 @@ impl NativeEngines {
     /// before it does. One already in memory is not loaded again; its `load_ms` is the time its load took. Refused with
     /// `load_cancelled` when the page unloads it before the load ends.
     pub fn load(&self, model_id: &str, engine_id: &str, accelerator: Option<&str>) -> Result<Load, Error> {
-        self.load_since(model_id, engine_id, accelerator, self.residency().unloads())
+        // Read first: a guard held through the call would deadlock the load, which takes the lock again.
+        let since = self.residency().unloads();
+        self.load_since(model_id, engine_id, accelerator, since)
     }
 
     fn load_since(
@@ -539,7 +541,8 @@ impl NativeEngines {
         sample_rate: u32,
     ) -> Result<String, Error> {
         let located = self.ready(model_id, engine_id, Some(Task::Stt), accelerator)?;
-        let (model, _, _) = self.instance(&located, self.residency().unloads())?;
+        let since = self.residency().unloads();
+        let (model, _, _) = self.instance(&located, since)?;
         let stt = model.as_stt().ok_or_else(|| error::model_wrong_task(model_id, "speech-to-text"))?;
         let language = Some(language.trim()).filter(|l| !l.is_empty());
         let text = self
@@ -567,7 +570,8 @@ impl NativeEngines {
         let located = self.ready(model_id, engine_id, Some(Task::Tts), accelerator)?;
         let language = located.voices.iter().find(|(id, _)| id == voice).map(|(_, language)| language.clone());
         let language = language.ok_or_else(|| error::voice_unknown(model_id, voice))?;
-        let (model, _, _) = self.instance(&located, self.residency().unloads())?;
+        let since = self.residency().unloads();
+        let (model, _, _) = self.instance(&located, since)?;
         let tts = model.as_tts().ok_or_else(|| error::model_wrong_task(model_id, "text-to-speech"))?;
         let speed = Some(speed).filter(|s| *s > 0.0);
         let audio = self
