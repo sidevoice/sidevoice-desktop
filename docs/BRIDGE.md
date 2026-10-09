@@ -223,10 +223,12 @@ on disk, and getting one there with its progress. Running models is the voice ca
   network — for the answer's headers or its next chunk, however long the server has gone quiet: the request is
   dropped and its connection closed — or unpacking. It frees the install lock, removes what it was downloading
   (sidevoice-engine stores a file only once it is whole and verified) and rejects with `install_cancelled`. A file it
-  had already completed is whole and verified, and stays. A cancel the app accepted always wins: one that lands as
-  the files are moved into place removes the model again, and a transport error that follows it (the connection it
-  closed) is still `install_cancelled`, never `download_failed`. There is no overall download timeout: a slow line is
-  not a failure, and the cancel is how a person stops one.
+  had already completed is whole and verified, and stays. A cancel the app accepted wins: one that lands as the files
+  are moved into place removes the model again, unless another build of it was installed before (the engine removes
+  only whole models: the build then stays and the install rejects with `install_cancel_late`; a removal that fails
+  rejects with `install_cancel_failed`), and a transport error that follows it (the connection it closed) is still
+  `install_cancelled`, never `download_failed`. There is no overall download timeout: a slow line is not a failure,
+  and the cancel is how a person stops one.
 - Commands behind it (`src-tauri/src/engine_ipc.rs`): `engine_capabilities`, `engine_installed`,
   `engine_install {model, engine, job}` with `engine_progress {job}` (the report above, or `null` while the job
   waits or after it ends) and `engine_cancel {job}` (`true`/`false` as `cancel`), `engine_memory`. Granted to the room
@@ -262,6 +264,8 @@ sidevoice-engine itself fails with is one of these keys, with the engine's own c
 | `download_corrupt` | `model`, `engine` | the bytes are not the ones the catalogue names (SHA-256) |
 | `install_failed` | — | unpacking or moving the download into place failed (disk, permissions, an archive without its files) |
 | `install_cancelled` | — | the page cancelled the install (`cancel(job)`): not a failure, nothing to show as an error |
+| `install_cancel_late` | `model`, `engine` | the page cancelled after the download had ended and another build of the model was installed before it: the build stays installed (the engine removes only whole models); the page may remove it |
+| `install_cancel_failed` | `model`, `engine`, `code` | the page cancelled after the download had ended and removing it failed (`code`, the engine's: `model-in-use`, a storage failure): it may still be on disk |
 | `runtime_failed` | `engine` | the engine refused, with a code this app does not map |
 | `voice_model_unknown` | `model` | a voice setting names a model the engine's catalogue does not have |
 | `voice_model_wrong_task` | `model` | a voice setting names a model that cannot do that stage (a voice for transcription) |

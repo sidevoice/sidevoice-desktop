@@ -114,6 +114,26 @@ pub fn install_cancelled() -> Error {
     Error::new("install_cancelled", "The download was cancelled.")
 }
 
+/// The page cancelled the install after its download had ended, and another build of the model was installed before
+/// it: the engine removes only whole models, so this build stays installed rather than taking the other with it.
+pub fn install_cancel_late(model: &str, engine: &str) -> Error {
+    Error::new(
+        "install_cancel_late",
+        format!("{model} on {engine} had finished downloading: it stays installed; remove it to free its space."),
+    )
+    .with("model", model)
+    .with("engine", engine)
+}
+
+/// The page cancelled the install after its download had ended, and removing what it downloaded failed (`code`, the
+/// engine's: `model-in-use`, a storage failure): it may still be on disk.
+pub fn install_cancel_failed(error: sidevoice_engine::Error, model: &str, engine: &str) -> Error {
+    Error::new("install_cancel_failed", format!("{model} on {engine} could not be removed after the cancel."))
+        .with("model", model)
+        .with("engine", engine)
+        .with("code", error.code)
+}
+
 /// The engine refused to load or to run (a model the runtime rejects, a transcription that failed).
 pub fn runtime_failed(engine: &str, detail: impl fmt::Display) -> Error {
     Error::new("runtime_failed", format!("{engine} failed: {detail}")).with("engine", engine)

@@ -9,10 +9,11 @@
 // The built site is kept under target/web/<commit>/site, so a second run at the same pin only copies.
 // `ref` in the pin is a reminder for people (the branch or tag the commit came from); the commit is what is built,
 // and the checkout must be exactly it.
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { installSite } from "./web-site.mjs";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const pin = JSON.parse(readFileSync(path.join(root, "web.pin.json"), "utf8"));
@@ -51,15 +52,12 @@ if (!existsSync(done)) {
 // Everything the site serves below its root goes to ui/ at the same path; its root index.html (a redirect to
 // /voice/) does not: the app opens /voice/index.html itself.
 const ui = path.join(root, "ui");
-const served = readdirSync(site, { withFileTypes: true }).filter((entry) => entry.isDirectory());
-if (!served.some((entry) => entry.name === "voice")) {
+if (!existsSync(path.join(site, "voice"))) {
   console.error(`${pin.repository}@${pin.commit.slice(0, 7)} built no voice/ page`);
   process.exit(1);
 }
-for (const entry of served) {
-  rmSync(path.join(ui, entry.name), { recursive: true, force: true });
-  cpSync(path.join(site, entry.name), path.join(ui, entry.name), { recursive: true });
-}
+// A directory the previous pin put in ui/ and this one does not build goes (web-site.mjs).
+const served = installSite(site, ui);
 const record = { repository: pin.repository, ref: pin.ref ?? null, commit: pin.commit };
 writeFileSync(path.join(ui, "voice/web-source.json"), JSON.stringify(record, null, 2) + "\n");
-console.log(`web interface ${pin.repository}@${pin.commit.slice(0, 7)} built into ${served.map((e) => `ui/${e.name}/`).join(", ")}`);
+console.log(`web interface ${pin.repository}@${pin.commit.slice(0, 7)} built into ${served.map((name) => `ui/${name}/`).join(", ")}`);
