@@ -479,7 +479,7 @@ pub fn call_controls_layout(app: AppHandle, webview: Webview, width: f64, height
     if let Some(card) = card(&app) {
         let mut inner = card.0.lock().unwrap();
         inner.size = Some(size);
-        if inner.rest_size.map_or(true, |rest| height < rest.height) {
+        if inner.rest_size.is_none_or(|rest| height < rest.height) {
             inner.rest_size = Some(size);
         }
     }

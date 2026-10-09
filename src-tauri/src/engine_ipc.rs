@@ -87,7 +87,7 @@ fn accelerator(name: Option<&str>) -> Option<String> {
 }
 
 fn samples_of(bytes: &[u8]) -> Vec<f32> {
-    bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+    bytes.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect()
 }
 
 /// Body: f32 samples. Headers: `x-model`, `x-engine`, `x-accelerator` (optional), `x-language` (empty = detect),
