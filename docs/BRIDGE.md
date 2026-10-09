@@ -235,8 +235,10 @@ engine reports, and runs the build it chose through it. `window.__sidevoiceDeskt
   network — for the answer's headers or its next chunk, however long the server has gone quiet: the request is
   dropped and its connection closed — or unpacking. It frees the install lock, removes
   what it was downloading (sidevoice-engine stores a file only once it is whole and verified) and rejects with
-  `install_cancelled`. A file it had already completed is whole and verified, and stays. A cancel the app accepted always wins: one that lands as the files are moved into place
-  removes the model again, and a transport error that follows it (the connection it closed) is still
+  `install_cancelled`. A file it had already completed is whole and verified, and stays. A cancel the app accepted wins: one that lands as the files are moved into place
+  removes the model again, unless another build of it was installed before (the engine removes only whole models:
+  the build then stays and the install rejects with `install_cancel_late`; a removal that fails rejects with
+  `install_cancel_failed`), and a transport error that follows it (the connection it closed) is still
   `install_cancelled`, never `download_failed`. Any other failed download is cleaned up the same way. There is no
   overall download timeout: a slow line is not a failure, and the cancel is how a person stops one.
 - Commands behind it (`src-tauri/src/engine_ipc.rs`): `engine_capabilities`, `engine_installed`,
@@ -295,6 +297,8 @@ beside it as `code` (`digest-mismatch`, `model-load-failed`…).
 | `download_corrupt` | `model`, `engine` | the bytes are not the ones the catalogue names (SHA-256) |
 | `install_failed` | — | unpacking or moving the download into place failed (disk, permissions, an archive without its files) |
 | `install_cancelled` | — | the page cancelled the install (`cancel(job)`): not a failure, nothing to show as an error |
+| `install_cancel_late` | `model`, `engine` | the page cancelled after the download had ended and another build of the model was installed before it: the build stays installed (the engine removes only whole models); the page may remove it |
+| `install_cancel_failed` | `model`, `engine`, `code` | the page cancelled after the download had ended and removing it failed (`code`, the engine's: `model-in-use`, a storage failure): it may still be on disk |
 | `load_cancelled` | `model`, `engine`, `accelerator` | the page unloaded the build while it was loading — also when the load then failed: not a failure |
 | `runtime_failed` | `engine` | the engine refused to load the model into memory, or to run it |
 | `bad_request` | — | a malformed call (a missing header): a bug in the caller |

@@ -341,14 +341,14 @@ impl NativeEngines {
 
     /// `install`, stopped with `install_cancelled` as soon as `stop` says so: while it waits for another install, or
     /// wherever the download is, waiting on the network included (the download is dropped, and the engine keeps
-    /// nothing half downloaded). Answers whether it downloaded the build.
+    /// nothing half downloaded). Answers what it downloaded.
     fn install_until(
         &self,
         model_id: &str,
         engine_id: &str,
         progress: &(dyn Fn(u64, u64) + Sync),
         stop: &dyn Fn() -> bool,
-    ) -> Result<bool, Error> {
+    ) -> Result<Downloaded, Error> {
         let located = self.locate(model_id, engine_id)?;
         let _one_at_a_time = loop {
             if stop() {
@@ -364,8 +364,9 @@ impl NativeEngines {
         let located = self.locate(model_id, engine_id).unwrap_or(located);
         if located.installed {
             progress(0, 0);
-            return Ok(false);
+            return Ok(Downloaded { this: false, others: false });
         }
+        let others = self.others_installed(model_id, &located.build)?;
         let total = located.download_bytes;
         progress(0, total);
         let bytes = Bytes::default();
@@ -384,13 +385,38 @@ impl NativeEngines {
             }
         })?;
         progress(total, total);
-        Ok(true)
+        Ok(Downloaded { this: true, others })
+    }
+
+    /// Whether a build of `model_id` other than `build` is installed.
+    fn others_installed(&self, model_id: &str, build: &str) -> Result<bool, Error> {
+        let models = self.models()?;
+        Ok(models
+            .iter()
+            .filter(|model| model.id == model_id)
+            .flat_map(|model| &model.builds)
+            .any(|other| other.id != build && other.installed))
+    }
+
+    /// Undoes what a cancelled job downloaded, as `undo` decides: removes the model when this job's build is all of it
+    /// on disk, keeps the build when another one is installed too (the engine removes only whole models), and says
+    /// which, or why removing failed.
+    fn roll_back(&self, model_id: &str, engine_id: &str, downloaded: Downloaded) -> Error {
+        match undo(downloaded) {
+            Undo::Nothing => error::install_cancelled(),
+            Undo::Remove => match self.block_on(self.engine.uninstall(model_id)) {
+                Ok(()) => error::install_cancelled(),
+                Err(failed) => error::install_cancel_failed(failed, model_id, engine_id),
+            },
+            Undo::Keep => error::install_cancel_late(model_id, engine_id),
+        }
     }
 
     /// `install` as the page's job `job`: known to `jobs` until it ends — its progress once it starts, cancellable
-    /// throughout (`Jobs::cancel`). A cancel the job accepted always wins: one that lands after the download ended
-    /// removes the model this job installed, so a cancelled install never leaves a model to load (sidevoice-core#21
-    /// review R04).
+    /// throughout (`Jobs::cancel`). A cancel the job accepted wins: one that lands after the download ended removes
+    /// what this job installed, so a cancelled install leaves no model to load (sidevoice-core#21 review R04) — unless
+    /// another build of the model was installed before it, which removing would take too: then the build stays and the
+    /// job says so (`install_cancel_late`). A removal that fails is said too (`install_cancel_failed`), never hidden.
     pub fn install_job(&self, jobs: &Jobs, job: &str, model_id: &str, engine_id: &str) -> Result<(), Error> {
         if !jobs.begin(job, model_id, engine_id) {
             return Err(error::install_cancelled());
@@ -399,12 +425,7 @@ impl NativeEngines {
             self.install_until(model_id, engine_id, &|done, total| jobs.set(job, done, total), &|| jobs.cancelled(job));
         match (result, jobs.finish(job)) {
             (result, true) => result.map(|_| ()),
-            (Ok(downloaded), false) => {
-                if downloaded {
-                    let _ = self.block_on(self.engine.uninstall(model_id));
-                }
-                Err(error::install_cancelled())
-            }
+            (Ok(downloaded), false) => Err(self.roll_back(model_id, engine_id, downloaded)),
             // Whatever the transport said after the cancel, the page asked to stop: a cancel, never a failure
             // (sidevoice-core#21 review N04).
             (Err(_), false) => Err(error::install_cancelled()),
@@ -585,6 +606,33 @@ impl NativeEngines {
             .map_err(|e| error::engine_failed(e, model_id, engine_id));
         self.residency().touch(&located.key());
         audio.map(|audio| Audio { samples: audio.samples, sample_rate: audio.sample_rate })
+    }
+}
+
+/// What an install put on disk: whether it downloaded the build (`this`), and whether another build of the model was
+/// installed already (`others`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Downloaded {
+    this: bool,
+    others: bool,
+}
+
+/// What a cancel that landed after the download ended does with it.
+#[derive(Debug, PartialEq)]
+enum Undo {
+    /// Nothing was downloaded.
+    Nothing,
+    /// The build is all of the model on disk: removing the model removes only it.
+    Remove,
+    /// Another build is installed: removing the model would take it too, so the build stays.
+    Keep,
+}
+
+fn undo(downloaded: Downloaded) -> Undo {
+    match downloaded {
+        Downloaded { this: false, .. } => Undo::Nothing,
+        Downloaded { others: false, .. } => Undo::Remove,
+        Downloaded { others: true, .. } => Undo::Keep,
     }
 }
 

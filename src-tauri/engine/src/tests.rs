@@ -300,3 +300,31 @@ fn the_call_state_is_the_room_s_and_a_call_starting_is_the_moment_to_preload() {
     assert!(engines.preload().is_empty(), "nothing was unloaded idle");
     assert!(engines.unload_idle(now + IDLE_UNLOAD).is_empty());
 }
+
+#[test]
+fn a_late_cancel_removes_only_a_build_that_is_all_of_the_model_on_disk() {
+    assert_eq!(undo(Downloaded { this: false, others: false }), Undo::Nothing);
+    assert_eq!(undo(Downloaded { this: false, others: true }), Undo::Nothing);
+    assert_eq!(undo(Downloaded { this: true, others: false }), Undo::Remove);
+    assert_eq!(undo(Downloaded { this: true, others: true }), Undo::Keep, "the other build would go with it");
+}
+
+#[test]
+fn rolling_back_a_late_cancel_removes_the_build_or_keeps_it_and_says_so() {
+    let test = engines("roll-back", false);
+    let engines = &test.engines;
+    engines.install("whisper-test", "sherpa-onnx", &mut |_, _| {}).unwrap();
+    let build = "whisper-test/sherpa-onnx-int8";
+    assert!(!engines.others_installed("whisper-test", build).unwrap(), "its own build is not another");
+    assert!(engines.others_installed("whisper-test", "whisper-test/another").unwrap());
+
+    // Another build was installed before this job: the engine removes whole models, so this one stays.
+    let kept = engines.roll_back("whisper-test", "sherpa-onnx", Downloaded { this: true, others: true });
+    assert_eq!(kept.key, "install_cancel_late");
+    assert_eq!(engines.installed().unwrap().len(), 1, "nothing was removed");
+
+    // The build is all of the model on disk: it goes, and the job is a plain cancel.
+    let removed = engines.roll_back("whisper-test", "sherpa-onnx", Downloaded { this: true, others: false });
+    assert_eq!(removed.key, "install_cancelled");
+    assert!(engines.installed().unwrap().is_empty());
+}
