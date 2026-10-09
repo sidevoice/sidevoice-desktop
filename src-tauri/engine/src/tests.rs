@@ -300,3 +300,51 @@ fn the_call_state_is_the_room_s_and_a_call_starting_is_the_moment_to_preload() {
     assert!(engines.preload().is_empty(), "nothing was unloaded idle");
     assert!(engines.unload_idle(now + IDLE_UNLOAD).is_empty());
 }
+
+/// The device's report to the core (sidevoice-core#85), from the catalogue the app ships: every model, with its
+/// capabilities and builds; a build of a backend the app does not link is not available. No model is loaded.
+#[test]
+fn the_models_report_lists_every_model_of_the_bundled_catalogue_with_what_runs_here() {
+    let root = std::env::temp_dir().join(format!("sidevoice-desktop-engine-report-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+    let engines = NativeEngines::new(&root, runtime.handle().clone()).unwrap();
+    let report = engines.models_report().unwrap();
+    let _ = std::fs::remove_dir_all(&root);
+
+    let model = |id: &str| report.iter().find(|m| m["id"] == id).unwrap_or_else(|| panic!("{id} is reported"));
+    for entry in &report {
+        assert!(entry["capabilities"].as_array().is_some_and(|c| !c.is_empty()), "{entry}");
+        assert!(entry["languages"].is_array(), "{entry}");
+        let builds = entry["builds"].as_array().unwrap_or_else(|| panic!("builds of {entry}"));
+        assert!(!builds.is_empty(), "{entry}");
+        for build in builds {
+            assert!(
+                build["id"].is_string() && build["backend"].is_string() && build["available"].is_boolean(),
+                "{build}"
+            );
+            assert_ne!(build["accelerator"], "coreml", "Core ML is never offered: {build}");
+            if build["available"] == true {
+                assert!(
+                    engines.engine.backends().iter().any(|b| b.id == build["backend"]),
+                    "an available build's backend is linked: {build}"
+                );
+            }
+        }
+        let tts = entry["capabilities"].as_array().unwrap().iter().any(|c| c == "tts");
+        assert_eq!(entry.get("voices").is_some(), tts, "voices only for a text-to-speech model: {entry}");
+    }
+
+    let whisper = model("whisper-tiny");
+    assert_eq!(whisper["capabilities"], serde_json::json!(["stt"]));
+    let sherpa = whisper["builds"].as_array().unwrap().iter().find(|b| b["backend"] == "sherpa-onnx").unwrap();
+    assert_eq!((sherpa["accelerator"].as_str(), sherpa["available"].as_bool()), (Some("cpu"), Some(true)));
+    // transformers.js is the engine's web build's, never linked into this app.
+    let web = whisper["builds"].as_array().unwrap().iter().find(|b| b["backend"] == "transformers-js").unwrap();
+    assert_eq!(web["available"], false);
+
+    let kokoro = model("kokoro-82m-v1.0");
+    assert_eq!(kokoro["capabilities"], serde_json::json!(["tts"]));
+    let voices = kokoro["voices"].as_array().unwrap();
+    assert!(voices.iter().any(|v| v["id"] == "ef_dora" && v["languages"].as_array().is_some_and(|l| !l.is_empty())));
+}

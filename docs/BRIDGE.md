@@ -195,6 +195,7 @@ engine reports, and runs the build it chose through it. `window.__sidevoiceDeskt
 | Call | Returns / does |
 |---|---|
 | `capabilities()` | `{runs: "native", os: "macos"\|"windows"\|"linux", arch: "aarch64"\|"x86_64", has: ["cpu", …], memory_mb: number\|null}` — `has` is what sidevoice-engine runs a model on here (`cpu`; `metal` on Apple Silicon, for whisper.cpp), never Core ML, `memory_mb` the machine's total, from the OS |
+| `models()` | `[{id, capabilities: ["stt"\|"tts"], languages, voices?: [{id, languages}], builds: [{id, backend, accelerator, available}]}]` — every model sidevoice-engine lists, as the device's report to the core lists them (sidevoice-core#85): ids are the engine's, `voices` only for a text-to-speech model, and a build is `available` when the engine runs it here, its backend is linked into the app and it is not on Core ML. The page wraps the list in the report, `{version: 1, defaults, models}`, which it sends in the call's hello |
 | `installed()` | `[{model, engine}]` — builds whose engine package and model files are on disk and whole: the download's marker names its hash, and its root and every file the engine needs from it are there |
 | `install(model, engine, onProgress?)` | downloads the engine package and the model's build, whichever is missing or incomplete (a download that lost a file is fetched again). Returns a promise that also carries the install's job id from the start, `promise.job` (a string), for `cancel`. `onProgress(event)` about twice a second, only with this call's own bytes (below) |
 | `cancel(job)` | cancels that install, waiting or running; its `install` promise rejects with `{key: "install_cancelled", message}` and the model is not on disk afterwards (unless it already was before the install), so a `load` of it is refused `not_installed`. Resolves `true` when the install will reject so — also when it has not reached the app yet (it is refused as it arrives) — and `false` when it had already ended (a no-op, never a rejection) |
@@ -239,7 +240,7 @@ engine reports, and runs the build it chose through it. `window.__sidevoiceDeskt
   removes the model again, and a transport error that follows it (the connection it closed) is still
   `install_cancelled`, never `download_failed`. Any other failed download is cleaned up the same way. There is no
   overall download timeout: a slow line is not a failure, and the cancel is how a person stops one.
-- Commands behind it (`src-tauri/src/engine_ipc.rs`): `engine_capabilities`, `engine_installed`,
+- Commands behind it (`src-tauri/src/engine_ipc.rs`): `engine_capabilities`, `engine_models`, `engine_installed`,
   `engine_install {model, engine, job}` with `engine_progress {job}` (the report above, or `null` while the job
   waits or after it ends) and `engine_cancel {job}` (`true`/`false` as `cancel`), `engine_transcribe` (raw f32 body; `x-model`, `x-engine`, `x-accelerator`, `x-language`,
   `x-sample-rate` headers), `engine_synthesize` (answer: raw bytes, a u32 sample rate then f32 samples),

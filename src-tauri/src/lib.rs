@@ -432,6 +432,7 @@ pub fn run() {
             headset_test,
             engine_ipc::engine_capabilities,
             engine_ipc::engine_installed,
+            engine_ipc::engine_models,
             engine_ipc::engine_on_disk,
             engine_ipc::engine_install,
             engine_ipc::engine_progress,
