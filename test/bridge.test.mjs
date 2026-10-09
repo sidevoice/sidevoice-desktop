@@ -211,7 +211,7 @@ test("installs once per page and survives a missing Tauri runtime", async () => 
 test("the native engine is exactly the contract, keyed by catalogue model id + engine, audio as raw bytes", async () => {
   const install = loadFactory();
   const { win, calls } = fakeWindow(ORIGIN);
-  const capabilities = { runs: "native", os: "macos", arch: "aarch64", has: ["cpu", "coreml"], memory_mb: 16384 };
+  const capabilities = { runs: "native", os: "macos", arch: "aarch64", has: ["cpu", "metal"], memory_mb: 16384 };
   const answers = {
     engine_capabilities: capabilities,
     engine_installed: [{ model: "whisper-tiny", engine: "sherpa-onnx" }],
@@ -246,8 +246,8 @@ test("the native engine is exactly the contract, keyed by catalogue model id + e
   assert.equal(JSON.stringify(options.headers), JSON.stringify({
     "x-model": "whisper-small", "x-engine": "sherpa-onnx", "x-accelerator": "", "x-language": "es", "x-sample-rate": "16000",
   }));
-  await engine.transcribe("whisper-small", "sherpa-onnx", samples, 16000, "", "coreml");
-  assert.equal(calls.filter(([cmd]) => cmd === "engine_transcribe")[1][2].headers["x-accelerator"], "coreml");
+  await engine.transcribe("whisper-small", "whisper-cpp", samples, 16000, "", "metal");
+  assert.equal(calls.filter(([cmd]) => cmd === "engine_transcribe")[1][2].headers["x-accelerator"], "metal");
 
   const audio = await engine.synthesize("kokoro-82m-v1.0", "sherpa-onnx", "ef_dora", 1, "hola");
   assert.equal(audio.sampleRate, 24000);
@@ -275,7 +275,7 @@ test("the native engine is exactly the contract, keyed by catalogue model id + e
 test("load, unload, loaded and memory: the build in memory, by catalogue model id + engine", async () => {
   const install = loadFactory();
   const { win, calls } = fakeWindow(ORIGIN);
-  const resident = [{ model: "whisper-small", engine: "sherpa-onnx", accelerator: "coreml", since: 1, last_used: 2 }];
+  const resident = [{ model: "whisper-small", engine: "whisper-cpp", accelerator: "metal", since: 1, last_used: 2 }];
   const answers = {
     engine_load: { load_ms: 840 },
     engine_unload: null,
@@ -285,17 +285,17 @@ test("load, unload, loaded and memory: the build in memory, by catalogue model i
   win.__TAURI_INTERNALS__.invoke = (cmd, args) => (calls.push([cmd, structuredClone(args)]), Promise.resolve(answers[cmd]));
   const engine = install(win, ORIGIN).host.nativeEngine;
 
-  assert.equal(JSON.stringify(await engine.load("whisper-small", "sherpa-onnx", "coreml")), '{"load_ms":840}');
+  assert.equal(JSON.stringify(await engine.load("whisper-small", "whisper-cpp", "metal")), '{"load_ms":840}');
   await engine.load("kokoro-82m-v1.0", "sherpa-onnx");
   assert.equal(await engine.unload("whisper-small", "sherpa-onnx"), null);
-  await engine.unload("whisper-small", "sherpa-onnx", "coreml");
+  await engine.unload("whisper-small", "whisper-cpp", "metal");
   assert.equal(JSON.stringify(await engine.loaded()), JSON.stringify(resident));
   assert.equal(JSON.stringify(await engine.memory()), '{"total_mb":16384,"available_mb":9000}');
   assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("engine_")), [
-    ["engine_load", { model: "whisper-small", engine: "sherpa-onnx", accelerator: "coreml" }],
+    ["engine_load", { model: "whisper-small", engine: "whisper-cpp", accelerator: "metal" }],
     ["engine_load", { model: "kokoro-82m-v1.0", engine: "sherpa-onnx", accelerator: null }],
     ["engine_unload", { model: "whisper-small", engine: "sherpa-onnx", accelerator: null }],
-    ["engine_unload", { model: "whisper-small", engine: "sherpa-onnx", accelerator: "coreml" }],
+    ["engine_unload", { model: "whisper-small", engine: "whisper-cpp", accelerator: "metal" }],
     ["engine_loaded", undefined],
     ["engine_memory", undefined],
   ]);

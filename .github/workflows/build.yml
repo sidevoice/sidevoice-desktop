@@ -655,6 +655,9 @@ jobs:
       - name: Round trip naming the accelerator, as the page does
         working-directory: src-tauri
         run: cargo run --release -p sidevoice-desktop-engine --example roundtrip -- "$RUNNER_TEMP/engine" cpu
+      - name: Round trip hearing with whisper.cpp, on Metal
+        working-directory: src-tauri
+        run: cargo run --release -p sidevoice-desktop-engine --example roundtrip -- "$RUNNER_TEMP/engine" "" whisper-cpp
 
   linux:
     name: Linux (.deb, .AppImage)

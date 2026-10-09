@@ -218,8 +218,8 @@ mod tests {
 
     #[test]
     fn r05_unloading_one_accelerator_frees_only_that_copy() {
-        let mut residency = with(&[("whisper-base", "cpu", Task::Stt), ("whisper-base", "coreml", Task::Stt)]);
-        residency.unload("sherpa-onnx", "whisper-base", Some("coreml"));
+        let mut residency = with(&[("whisper-base", "cpu", Task::Stt), ("whisper-base", "metal", Task::Stt)]);
+        residency.unload("sherpa-onnx", "whisper-base", Some("metal"));
         assert_eq!(names(&residency.loaded()), ["whisper-base@sherpa-onnx/cpu"]);
         residency.unload("sherpa-onnx", "whisper-base", None);
         assert!(residency.loaded().is_empty());
@@ -234,11 +234,11 @@ mod tests {
         assert!(residency.loaded().is_empty());
         // Unloading another accelerator, or another model, does not touch this load.
         let since = residency.unloads();
-        residency.unload("sherpa-onnx", "whisper-tiny", Some("coreml"));
+        residency.unload("sherpa-onnx", "whisper-tiny", Some("metal"));
         residency.unload("sherpa-onnx", "whisper-base", None);
         assert!(residency.keep(key("whisper-tiny", "cpu"), "model", Task::Stt, 5, since));
         // A load that starts after the unload is kept.
-        assert!(residency.keep(key("whisper-tiny", "coreml"), "model", Task::Stt, 5, residency.unloads()));
+        assert!(residency.keep(key("whisper-tiny", "metal"), "model", Task::Stt, 5, residency.unloads()));
         assert_eq!(residency.loaded().len(), 2);
     }
 
@@ -249,6 +249,6 @@ mod tests {
         std::thread::sleep(Duration::from_millis(5));
         assert_eq!(residency.touch(&key("whisper-tiny", "cpu")), Some(("model", 5)));
         assert!(residency.loaded()[0].last_used > before);
-        assert_eq!(residency.touch(&key("whisper-tiny", "coreml")), None);
+        assert_eq!(residency.touch(&key("whisper-tiny", "metal")), None);
     }
 }

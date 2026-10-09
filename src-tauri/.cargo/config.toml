@@ -1,0 +1,6 @@
+# sherpa-onnx's static libraries for Linux x86_64 use libstdc++'s old string ABI, and whisper.cpp, which
+# sidevoice-engine compiles from source, the new one unless told: both define std::regex internals under the same
+# names, the linker keeps one copy, and ONNX Runtime aborts (`free(): invalid pointer`). An app linking both there
+# compiles whisper.cpp with the old ABI too, as sidevoice-engine's README asks of consumers.
+[env]
+CXXFLAGS_x86_64_unknown_linux_gnu = "-D_GLIBCXX_USE_CXX11_ABI=0"

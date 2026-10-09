@@ -194,7 +194,7 @@ engine reports, and runs the build it chose through it. `window.__sidevoiceDeskt
 
 | Call | Returns / does |
 |---|---|
-| `capabilities()` | `{runs: "native", os: "macos"\|"windows"\|"linux", arch: "aarch64"\|"x86_64", has: ["cpu", …], memory_mb: number\|null}` — `has` is what sidevoice-engine runs a model on here (the CPU alone for now: sidevoice-engine#33 brings Core ML back), `memory_mb` the machine's total, from the OS |
+| `capabilities()` | `{runs: "native", os: "macos"\|"windows"\|"linux", arch: "aarch64"\|"x86_64", has: ["cpu", …], memory_mb: number\|null}` — `has` is what sidevoice-engine runs a model on here (`cpu`; `metal` on Apple Silicon, for whisper.cpp), never Core ML, `memory_mb` the machine's total, from the OS |
 | `installed()` | `[{model, engine}]` — builds whose engine package and model files are on disk and whole: the download's marker names its hash, and its root and every file the engine needs from it are there |
 | `install(model, engine, onProgress?)` | downloads the engine package and the model's build, whichever is missing or incomplete (a download that lost a file is fetched again). Returns a promise that also carries the install's job id from the start, `promise.job` (a string), for `cancel`. `onProgress(event)` about twice a second, only with this call's own bytes (below) |
 | `cancel(job)` | cancels that install, waiting or running; its `install` promise rejects with `{key: "install_cancelled", message}` and the model is not on disk afterwards (unless it already was before the install), so a `load` of it is refused `not_installed`. Resolves `true` when the install will reject so — also when it has not reached the app yet (it is refused as it arrives) — and `false` when it had already ended (a no-op, never a rejection) |
@@ -210,7 +210,7 @@ engine reports, and runs the build it chose through it. `window.__sidevoiceDeskt
   it downloads or runs anything it checks, at this trust boundary, that the build runs here: an adapter for the
   engine, a package for this OS/architecture, the build's needs and accelerators, and the model's
   `requires.memory_mb` against the machine's memory (unknown memory is not a refusal).
-- `accelerator` (optional, `cpu`, `coreml`…): the one the page chose for that build (the resolver's, or the
+- `accelerator` (optional, `cpu`, `metal`…): the one the page chose for that build (the resolver's, or the
   person's in *Avanzado*). It must be one the build can use here, or the call is refused. Without it the app uses
   the first the build can use on this device, which is what the resolver picks.
 - A build is in memory once per engine, model and accelerator. The language is each call's (`transcribe`'s, the

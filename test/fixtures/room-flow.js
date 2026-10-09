@@ -12,8 +12,8 @@
 //      — and only one model of the task stays in memory either way             (whisper-small)
 //   5. the page reloads: settings show the stored choice, and the next selection starts from it.
 //
-// The engine runs these builds on the CPU alone for now (sidevoice-engine#33 brings Core ML back), so the slow one is
-// another model rather than the same one on another accelerator.
+// The room offers the builds of the catalogue it carries, which are sherpa-onnx's alone, on the CPU: the slow one is
+// another model rather than the same one on another engine or accelerator.
 //
 // Prints one line through debug_log: "room-flow ok …" or "room-flow error …".
 (function () {

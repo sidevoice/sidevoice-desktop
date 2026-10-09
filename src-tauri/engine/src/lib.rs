@@ -125,12 +125,17 @@ pub struct Faults {
     pub slow_transcribe: Vec<(String, String, Duration)>,
 }
 
-/// An accelerator as the page and the catalogue name it (`cpu`, `coreml`…).
+/// Whether the app offers builds that run on `accelerator`: every one the engine runs here but Core ML, which the
+/// app does not offer at all.
+fn offered(accelerator: Accelerator) -> bool {
+    accelerator != Accelerator::CoreMl
+}
+
+/// An accelerator as the page and the catalogue name it (`cpu`, `metal`…).
 pub fn accelerator_name(accelerator: Accelerator) -> String {
     match accelerator {
         Accelerator::Cpu => "cpu",
         Accelerator::Cuda => "cuda",
-        Accelerator::CoreMl => "coreml",
         Accelerator::Metal => "metal",
         Accelerator::WebGpu => "webgpu",
         Accelerator::Wasm => "wasm",
@@ -218,7 +223,7 @@ impl NativeEngines {
         let models = runtime.block_on(engine.models()).map_err(|e| error::internal(format!("the engine: {e}")))?;
         let mut has = Vec::new();
         for build in models.iter().flat_map(|m| &m.builds) {
-            if let (true, Some(accelerator)) = (build.available, build.accelerator) {
+            if let (true, Some(accelerator)) = (build.available, build.accelerator.filter(|a| offered(*a))) {
                 let name = accelerator_name(accelerator);
                 if !has.contains(&name) {
                     has.push(name);
@@ -256,7 +261,7 @@ impl NativeEngines {
     /// `model` on `engine`, if the engine can run it on this device: an engine compiled into this app, a model of its
     /// catalogue with a build for that engine, and that build runnable here (an accelerator, the model's memory).
     fn locate(&self, model_id: &str, engine_id: &str) -> Result<Located, Error> {
-        if !self.engine.backends().contains(&engine_id) {
+        if !self.engine.backends().iter().any(|backend| backend.id == engine_id) {
             return Err(error::engine_unsupported(engine_id));
         }
         let models = self.models()?;
@@ -265,7 +270,8 @@ impl NativeEngines {
     }
 
     fn located(model: &Model, engine_id: &str) -> Result<Located, Error> {
-        let mut builds = model.builds.iter().filter(|b| b.backend == engine_id).peekable();
+        let mut builds =
+            model.builds.iter().filter(|b| b.backend == engine_id && b.accelerator.is_none_or(offered)).peekable();
         let first = *builds.peek().ok_or_else(|| error::build_missing(&model.id, engine_id))?;
         let build = builds.find(|b| b.available).unwrap_or(first);
         let Some(accelerator) = build.accelerator.filter(|_| build.available) else {
@@ -301,7 +307,7 @@ impl NativeEngines {
     fn runnable(&self) -> Result<Vec<Located>, Error> {
         let backends = self.engine.backends();
         let models = self.models()?;
-        Ok(models.iter().flat_map(|m| backends.iter().filter_map(|b| Self::located(m, b).ok())).collect())
+        Ok(models.iter().flat_map(|m| backends.iter().filter_map(|b| Self::located(m, b.id).ok())).collect())
     }
 
     /// The model builds on disk, with the bytes each downloaded.

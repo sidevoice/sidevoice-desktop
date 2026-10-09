@@ -80,7 +80,7 @@ fn header<'a>(request: &'a Request<'_>, name: &str) -> Result<&'a str, Error> {
     value.ok_or_else(|| bad_request(format!("missing header {name}")))
 }
 
-/// An accelerator as the catalogue names it (`cpu`, `coreml`…); empty or absent for the engine's choice. One the
+/// An accelerator as the catalogue names it (`cpu`, `metal`…); empty or absent for the engine's choice. One the
 /// build does not run on here is refused where the choice is checked.
 fn accelerator(name: Option<&str>) -> Option<String> {
     name.map(str::trim).filter(|n| !n.is_empty()).map(str::to_string)

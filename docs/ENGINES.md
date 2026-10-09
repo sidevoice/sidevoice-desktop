@@ -25,14 +25,15 @@ against its own copy, until the core takes the engine's (a sidevoice-core issue)
 the engine's too. They are, for every native build the core's catalogue lists today:
 
 - models `whisper-tiny`, `whisper-base`, `whisper-small`, `whisper-large-v3-turbo`, `kokoro-82m-v1.0`;
-- engine `sherpa-onnx` (the engine's backend id);
+- engine `sherpa-onnx` (the engine's backend id); the engine's `whisper-cpp` builds of Whisper are not in the core's
+  catalogue, so the page does not offer them yet, though the app's engine commands run them (below);
 - Kokoro's voices, all 17 the core lists (`ef_dora`, `em_alex`, `em_santa`, `af_heart`, …).
 
 Where the two catalogues differ (to be resolved when the core takes the engine's):
 
-- **Accelerators.** The core's lists `cpu` and `coreml` for sherpa-onnx on Apple Silicon; the engine runs these
-  builds on the CPU alone for now (its static sherpa-onnx libraries have no Core ML; sidevoice-engine#33). The app
-  reports `has: ["cpu"]`, so the page offers the CPU; a stored choice of Core ML is refused (`accelerator_unusable`).
+- **Accelerators.** The app offers no Core ML: the engine's sherpa-onnx builds run on the CPU, its whisper.cpp builds
+  on Metal on Apple Silicon. The app reports `has` from them (`["cpu", "metal"]` there), so the page offers the CPU
+  for the core's sherpa-onnx builds; a choice of Core ML is refused (`accelerator_unusable`).
 - **Files and sizes.** The core's Whisper builds are sherpa-onnx's release archives; the engine's are the same int8
   models as separate files from Hugging Face, pinned by revision. The download size the page shows before asking
   comes from the core's catalogue; the progress the app reports comes from the engine's.
@@ -43,17 +44,18 @@ Where the two catalogues differ (to be resolved when the core takes the engine's
 
 ## What runs, where
 
-- Backend: **sherpa-onnx 1.13.8** (ONNX Runtime), linked statically into the app through the engine (its
-  `sherpa-onnx` feature). Nothing is loaded at run time with `dlopen`, so the macOS app keeps library validation on:
-  its only entitlement is the microphone.
+- Backends, both linked statically into the app through sidevoice-engine `v0.2.0` (the tag `src-tauri/engine/Cargo.toml`
+  pins), with no Cargo features to choose: **sherpa-onnx 1.13.8** (ONNX Runtime) on the CPU, and **whisper.cpp**
+  (through `whisper-rs`), compiled from source, on Metal on Apple Silicon. Nothing is loaded at run time with
+  `dlopen`, so the macOS app keeps library validation on: its only entitlement is the microphone.
 - Models are downloaded on demand into the app's data directory, `sidevoice-engine/`
   (`~/Library/Application Support/dev.sidevoice.desktop/sidevoice-engine/` on macOS), each file checked against its
-  SHA-256 as it arrives and stored only once whole. What the previous engine downloaded, `engines/` beside it, is no
-  longer read.
+  SHA-256 as it arrives and stored only once whole.
 - Whisper for speech to text, Kokoro for speech; one model in memory serves every language. The language of a
-  transcription goes to the engine with the call (`x-language`), and reaches Whisper once the engine passes it on
-  (sidevoice-engine#46; until then Whisper detects it). A voice's language goes with each synthesis.
-- Accelerator: the one the engine runs the build on here (the CPU), which is what the page is offered.
+  transcription goes to the engine with the call (`x-language`; empty: Whisper detects it). A voice's language goes
+  with each synthesis.
+- Accelerator: the one the engine runs the build on here (the CPU for sherpa-onnx, Metal for whisper.cpp on Apple
+  Silicon), which is what the page is offered.
 
 ## Building
 
@@ -63,17 +65,20 @@ The engine's sherpa-onnx backend links sherpa-onnx's prebuilt static libraries. 
 
     export SHERPA_ONNX_LIB_DIR="$(cargo xtask sherpa-libs)"
 
-Without it, sherpa-onnx's build script downloads them itself, unchecked. The Rust version is the engine's,
-`src-tauri/rust-toolchain.toml`.
+Without it, sherpa-onnx's build script downloads them itself, unchecked. The engine's whisper.cpp backend compiles
+whisper.cpp and ggml from source: the build needs CMake, a C++ compiler and libclang (for `bindgen`); on Linux
+x86_64, `src-tauri/.cargo/config.toml` compiles it with libstdc++'s old string ABI, as sherpa-onnx's libraries there
+are. The Rust version is the engine's, `src-tauri/rust-toolchain.toml`.
 
 ## Verified in CI
 
 The job "Native engine on Apple Silicon" runs `src-tauri/engine/examples/roundtrip.rs`: download Kokoro and Whisper
 tiny, load both, Kokoro says a sentence in Spanish, English and Spanish again and Whisper hears each, through the one
-model each has in memory. The macOS job's probe page and room flow run the same through the signed app's IPC.
+model each has in memory: on the CPU, naming it, and with Whisper on whisper.cpp, which must run on Metal. The macOS
+job's probe page and room flow run the same through the signed app's IPC.
 
 ## Changing the engine
 
-Moving the pin is one line, `rev` in `src-tauri/engine/Cargo.toml`, then `cargo update -p sidevoice-engine`. A model
+Moving the pin is one line, the `tag` in `src-tauri/engine/Cargo.toml`, then `cargo update -p sidevoice-engine`. A model
 or a voice is added in sidevoice-engine's catalogue, never here; the page offers it once the core's catalogue (for now)
 has it too.

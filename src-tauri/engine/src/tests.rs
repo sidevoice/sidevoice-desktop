@@ -168,12 +168,12 @@ fn what_does_not_run_here_is_refused_by_key_before_anything_is_downloaded_or_loa
     assert_eq!(key(engines.load("whisper-test", "whisper-cpp", None)), "engine_unsupported");
     assert_eq!(key(engines.load("whisper-nope", "sherpa-onnx", None)), "model_unknown");
     assert_eq!(key(engines.load("whisper-test", "sherpa-onnx", None)), "not_installed");
-    let unusable = engines.load("whisper-test", "sherpa-onnx", Some("coreml")).unwrap_err();
+    let unusable = engines.load("whisper-test", "sherpa-onnx", Some("metal")).unwrap_err();
     assert_eq!(
         serde_json::to_value(&unusable).unwrap(),
         serde_json::json!({
-            "key": "accelerator_unusable", "model": "whisper-test", "engine": "sherpa-onnx", "accelerator": "coreml",
-            "usable": ["cpu"], "message": "whisper-test on sherpa-onnx cannot use coreml here; it can use cpu."
+            "key": "accelerator_unusable", "model": "whisper-test", "engine": "sherpa-onnx", "accelerator": "metal",
+            "usable": ["cpu"], "message": "whisper-test on sherpa-onnx cannot use metal here; it can use cpu."
         })
     );
     let memory = engines.load("kokoro-test", "sherpa-onnx", None).unwrap_err();
