@@ -266,6 +266,8 @@ sidevoice-engine itself fails with is one of these keys, with the engine's own c
 | `voice_model_unknown` | `model` | a voice setting names a model the engine's catalogue does not have |
 | `voice_model_wrong_task` | `model` | a voice setting names a model that cannot do that stage (a voice for transcription) |
 | `voice_model_unfit` | `model` | no build of that model runs on this device |
+| `voice_build_unfit` | `model` | a voice setting names a build that is not one of the model's that runs here (Core ML and MLX included) |
+| `voice_end_of_turn_unavailable` | — | `end_of_turn: "smart-turn"` while no model of the catalogue ends turns (sidevoice-engine#69) |
 | `voice_settings_missing` | `code` (`settings-missing`) | a call of `host.voice` before its first `setSettings` |
 | `voice_failed` | `code` (the call's: `microphone-denied`, `audio-device-unavailable`, the engine's `model-load-failed`, …, or `stopped`) | the call could not start, or was stopped before it listened |
 | `keychain_failed` | — | the keychain refused to keep or read a key |
@@ -294,8 +296,9 @@ and uses nothing else of either. It is not restated here: a change is made there
 
 What is this app's own:
 
-- `setSettings` makes sidevoice-voice's configuration (core `voice.rs`): Whisper on whisper.cpp (Metal on Apple
-  Silicon), other models on the engine's recommended build, never Core ML nor MLX, Silero for voice activity. It
+- `setSettings` makes sidevoice-voice's configuration (core `voice.rs`): a build the person names, if it runs here;
+  otherwise Whisper on whisper.cpp (Metal on Apple Silicon) and other models on the engine's recommended build; never
+  Core ML nor MLX; Silero for voice activity; `smart-turn` only with a model of the `end-of-turn` capability. It
   rejects with the app's keyed refusals (below), each with the seam's `code` beside its `key` (`voice_model_unknown`
   → `model-unknown`).
 - `start` rejects `{key: "voice_failed", code, message}` with the call's code, `{key: "voice_settings_missing", code:

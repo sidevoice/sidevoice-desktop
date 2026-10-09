@@ -14,6 +14,8 @@ mod tests;
 
 /// The voice activity detector every call runs: Silero, on sherpa-onnx.
 pub const VAD_MODEL: &str = "silero-vad";
+/// The capability of a model that ends turns (sidevoice-engine#69).
+const END_OF_TURN: &str = "end-of-turn";
 /// The backend speech to text prefers where a model has a build for it.
 const PREFERRED_STT_BACKEND: &str = "whisper-cpp";
 
@@ -25,12 +27,17 @@ pub struct VoiceSettings {
     pub tts: TtsChoice,
     #[serde(default)]
     pub patience: Option<Patience>,
+    #[serde(default)]
+    pub end_of_turn: Option<EndOfTurn>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SttChoice {
     pub model: String,
+    /// One of the model's builds that runs here; absent or null for the app's choice.
+    #[serde(default)]
+    pub build: Option<String>,
     /// A BCP 47 tag; absent or null to detect it.
     #[serde(default)]
     pub language: Option<String>,
@@ -40,6 +47,9 @@ pub struct SttChoice {
 #[serde(deny_unknown_fields)]
 pub struct TtsChoice {
     pub model: String,
+    /// One of the model's builds that runs here; absent or null for the app's choice.
+    #[serde(default)]
+    pub build: Option<String>,
     /// One of the model's voices; absent or null for its first.
     #[serde(default)]
     pub voice: Option<String>,
@@ -53,6 +63,14 @@ pub enum Patience {
     Fast,
     Normal,
     Calm,
+}
+
+/// What ends a turn: a pause, or the engine's `end-of-turn` model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EndOfTurn {
+    Silence,
+    SmartTurn,
 }
 
 /// A model of the engine's catalogue, as far as choosing its build needs.
@@ -84,9 +102,18 @@ pub struct Refusal {
 
 /// sidevoice-voice's `VoiceConfig` for `settings`, on the builds of `catalogue` that run here.
 pub fn config(settings: &VoiceSettings, catalogue: &[Candidate]) -> Result<Value, Refusal> {
-    let vad = build(catalogue, VAD_MODEL, "vad")?;
-    let stt = build(catalogue, &settings.stt.model, "stt")?;
-    let tts = build(catalogue, &settings.tts.model, "tts")?;
+    let vad = build(catalogue, VAD_MODEL, "vad", None)?;
+    let stt = build(catalogue, &settings.stt.model, "stt", settings.stt.build.as_deref())?;
+    let tts = build(catalogue, &settings.tts.model, "tts", settings.tts.build.as_deref())?;
+    let end_of_turn = settings.end_of_turn.unwrap_or(EndOfTurn::Silence);
+    let can_end_turns = catalogue.iter().any(|c| c.capabilities.iter().any(|capability| capability == END_OF_TURN));
+    if end_of_turn == EndOfTurn::SmartTurn && !can_end_turns {
+        return Err(Refusal {
+            key: "voice_end_of_turn_unavailable",
+            model: String::new(),
+            message: "No model of the engine's catalogue ends turns.".into(),
+        });
+    }
     let mut config = json!({
         "vad": { "model": VAD_MODEL, "build": vad },
         "stt": { "model": settings.stt.model, "build": stt, "language": settings.stt.language },
@@ -94,6 +121,7 @@ pub fn config(settings: &VoiceSettings, catalogue: &[Candidate]) -> Result<Value
             "model": settings.tts.model, "build": tts, "voice": settings.tts.voice,
             "speed": settings.tts.speed.unwrap_or(1.0),
         },
+        "end_of_turn": end_of_turn,
     });
     if let Some(patience) = settings.patience {
         config["patience"] = json!(patience);
@@ -101,8 +129,9 @@ pub fn config(settings: &VoiceSettings, catalogue: &[Candidate]) -> Result<Value
     Ok(config)
 }
 
-/// The build of `model` that the call runs, for `task`.
-fn build(catalogue: &[Candidate], model: &str, task: &str) -> Result<String, Refusal> {
+/// The build of `model` that the call runs, for `task`: `named` when the person named one, which must be one that runs
+/// here and the app offers.
+fn build(catalogue: &[Candidate], model: &str, task: &str, named: Option<&str>) -> Result<String, Refusal> {
     let refuse = |key, message: String| Refusal { key, model: model.to_string(), message };
     let candidate = catalogue
         .iter()
@@ -116,6 +145,11 @@ fn build(catalogue: &[Candidate], model: &str, task: &str) -> Result<String, Ref
         .iter()
         .filter(|b| b.available && b.backend != "mlx" && b.accelerator.as_deref() != Some("coreml"))
         .collect();
+    if let Some(named) = named {
+        return offered.iter().find(|b| b.id == named).map(|b| b.id.clone()).ok_or_else(|| {
+            refuse("voice_build_unfit", format!("{named} is not a build of {model} that runs on this device."))
+        });
+    }
     let preferred = (task == "stt").then(|| offered.iter().find(|b| b.backend == PREFERRED_STT_BACKEND)).flatten();
     let recommended = offered.iter().find(|b| Some(&b.id) == candidate.recommended.as_ref());
     preferred

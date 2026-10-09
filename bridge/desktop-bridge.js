@@ -119,8 +119,9 @@
       }
     }
     const host = {
-      /** The person's choices, `{stt: {model, language?}, tts: {model, voice?, speed?}, patience?}`: the app picks the
-       *  builds (whisper.cpp on Metal for Whisper), the voice activity detector and every other number. */
+      /** The person's choices (`VoiceSettings`: models, builds, language, voice, speed, patience, end of turn). The
+       *  app picks the builds not named (whisper.cpp on Metal for Whisper), the voice activity detector and every
+       *  other number. */
       setSettings: (settings) => call("voice_set_settings", { settings }),
       /** Loads the models (installing them if they are not), opens the microphone and the speaker and listens.
        *  Resolves once it listens (at once if it does); rejects `{key, code, message}`, `code` the call's or `stopped`. */

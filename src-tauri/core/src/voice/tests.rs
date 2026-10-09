@@ -72,6 +72,7 @@ fn whisper_runs_on_whisper_cpp_and_the_rest_on_the_recommended_build() {
                 "stt": {"model": "whisper-small", "build": "whisper-small/whisper-cpp-q5_1", "language": "es"},
                 "tts": {"model": "kokoro-82m-v1.0", "build": "kokoro-82m-v1.0/sherpa-onnx-int8", "voice": "ef_dora",
                         "speed": 1.0},
+                "end_of_turn": "silence",
                 "patience": "calm",
             })
         );
@@ -106,4 +107,32 @@ fn settings_are_read_strictly_and_their_choices_are_optional() {
     assert!(config.get("patience").is_none());
     let unknown = json!({"stt": {"model": "a", "prompt": "x"}, "tts": {"model": "b"}});
     assert!(serde_json::from_value::<VoiceSettings>(unknown).is_err());
+}
+
+#[test]
+fn a_named_build_runs_if_it_runs_here_and_the_app_offers_it() {
+    let named = |build: &str| {
+        let mut chosen = settings("whisper-small", "kokoro-82m-v1.0");
+        chosen.stt.build = Some(build.into());
+        config(&chosen, &catalogue(true))
+    };
+    assert_eq!(named("whisper-small/sherpa-onnx-int8").unwrap()["stt"]["build"], "whisper-small/sherpa-onnx-int8");
+    for unfit in ["whisper-small/mlx-fp16", "whisper-small/nope", "kokoro-82m-v1.0/sherpa-onnx-int8"] {
+        assert_eq!(named(unfit).unwrap_err().key, "voice_build_unfit", "{unfit}");
+    }
+}
+
+#[test]
+fn smart_turn_needs_a_model_that_ends_turns() {
+    let mut chosen = settings("whisper-small", "kokoro-82m-v1.0");
+    chosen.end_of_turn = Some(EndOfTurn::SmartTurn);
+    assert_eq!(config(&chosen, &catalogue(true)).unwrap_err().key, "voice_end_of_turn_unavailable");
+    let mut with_turns = catalogue(true);
+    with_turns.push(Candidate {
+        id: "smart-turn-v3".into(),
+        capabilities: vec!["end-of-turn".into()],
+        builds: vec![build("smart-turn-v3/sherpa-onnx", "sherpa-onnx", Some("cpu"))],
+        recommended: None,
+    });
+    assert_eq!(config(&chosen, &with_turns).unwrap()["end_of_turn"], "smart-turn");
 }

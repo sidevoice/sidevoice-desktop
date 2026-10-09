@@ -340,6 +340,16 @@ fn model_value(model: &Model) -> Value {
             "downloadBytes": build.download_bytes,
             "memoryMb": build.memory_mb,
             "available": build.available,
+            "reasons": build.reasons.iter().map(|reason| {
+                let mut params = serde_json::Map::new();
+                if let Some(needs) = reason.needs {
+                    params.insert("needs".into(), json!(needs));
+                }
+                if let Some(has) = reason.has {
+                    params.insert("has".into(), json!(has));
+                }
+                json!({"code": reason.code, "params": params})
+            }).collect::<Vec<_>>(),
             "installed": build.installed,
         })).collect::<Vec<_>>(),
         "recommendedBuild": model.recommended_build,
