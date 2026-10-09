@@ -64,11 +64,13 @@ pkg-config`). The Rust version is the engine's, `src-tauri/rust-toolchain.toml`.
 
 The macOS job's probe page, in the signed app: the engine's capabilities, installs with progress, refusals by key, a
 cancelled download; and the voice call's seam, its catalogue, Whisper configured on whisper.cpp, and a start that
-settles (listening, or refused with the call's code where the runner has no microphone or speaker). The call itself,
-with real models on recorded speech, is sidevoice-voice's own CI.
+settles (listening, or refused with the call's code where the runner has no microphone or speaker): that start loads
+the engine's real models through the app's adapter (`src-tauri/src/voice/models.rs`). sidevoice-voice's own CI drives
+the call with fakes; the real models are the app's to test.
 
 ## Changing the engine
 
-The app links one engine: `src-tauri/engine/Cargo.toml` and sidevoice-voice must pin the same commit (a second copy
-would link sherpa-onnx and whisper.cpp twice). Move both, then `cargo update -p sidevoice-engine -p sidevoice-voice`.
+The engine is pinned in `src-tauri/engine/Cargo.toml`, sidevoice-voice in `src-tauri/Cargo.toml`, each on its own:
+sidevoice-voice depends on no engine, and the app fills its interfaces with the engine's models
+(`src-tauri/src/voice/models.rs`). Move a pin, then `cargo update -p sidevoice-engine` (or `-p sidevoice-voice`).
 A model or a voice is added in sidevoice-engine's catalogue, never here.

@@ -1,6 +1,6 @@
 //! The voice call, run by the app itself (`window.__sidevoiceDesktop.host.voice`, docs/BRIDGE.md → "The voice call"):
-//! sidevoice-voice's `VoiceCall` on the app's engine, with the device's own microphone and speaker and WebRTC's echo
-//! cancellation between them (`NativeIo`). The page keeps the room: it hands the call the room's replies and carries
+//! sidevoice-voice's `VoiceCall` with the models the app picks on its engine (`models`), the device's own microphone and
+//! speaker and WebRTC's echo cancellation between them (`NativeIo`). The page keeps the room: it hands the call the room's replies and carries
 //! the call's turns and playback reports to the room, in its outbox.
 //!
 //! Only the room window's own page may call these (capabilities/room.json, and `room_page`). The call's events reach
@@ -11,12 +11,15 @@
 //! runs the call itself.
 #![cfg(target_os = "macos")]
 
+mod models;
+
 use std::sync::{Arc, Mutex};
 
 use futures_util::StreamExt;
+use models::EngineModels;
 use serde::Serialize;
 use serde_json::{json, Value};
-use sidevoice_desktop_core::voice::{config, Candidate, CandidateBuild, VoiceSettings};
+use sidevoice_desktop_core::voice::{choose, Candidate, CandidateBuild, VoiceChoice, VoiceSettings};
 use sidevoice_desktop_engine::sidevoice_engine::{Capability, Gender, Model};
 use sidevoice_desktop_engine::{accelerator_name, NativeEngines};
 use sidevoice_voice::{Events, Listening, NativeIo, Reply, RoomEvent, VoiceCall, VoiceConfig, VoiceEvent};
@@ -26,10 +29,10 @@ use tokio::sync::oneshot;
 use crate::engine_ipc::EngineState;
 use crate::keychain;
 
-/// The call, once the page has set its settings.
+/// The call, once the page has set its settings, with the models and configuration it was given last.
 #[derive(Default)]
 pub struct VoiceState {
-    call: tokio::sync::Mutex<Option<VoiceCall>>,
+    call: tokio::sync::Mutex<Option<(VoiceCall, VoiceChoice)>>,
     lifecycle: Arc<Mutex<Lifecycle>>,
 }
 
@@ -75,8 +78,9 @@ fn engines(app: &AppHandle) -> Result<Arc<NativeEngines>, Refusal> {
     Ok(Arc::clone(&state.engines))
 }
 
-/// Sets the person's choices: the app makes the call's configuration from them (the builds, the detector, every
-/// number the person does not choose), and the call takes it. The first settings create the call.
+/// Sets the person's choices: the app picks the call's models from them (the builds, the detector, the end-of-turn
+/// model) and makes its configuration (every number the person does not choose). The call takes both at once, other
+/// models first (a call that listens restarts on them). The first settings create the call.
 #[tauri::command]
 pub async fn voice_set_settings(
     app: AppHandle,
@@ -94,20 +98,28 @@ pub async fn voice_set_settings(
             .map_err(|e| refusal(e.key, e.message))?
     };
     let candidates: Vec<Candidate> = catalogue.iter().map(candidate).collect();
-    let made = config(&settings, &candidates).map_err(|r| {
+    let choice = choose(&settings, &candidates).map_err(|r| {
         let mut refused = refusal(r.key, r.message);
         refused.params.insert("model".into(), json!(r.model));
         refused
     })?;
-    let made: VoiceConfig = serde_json::from_value(made).map_err(|e| refusal("internal", e.to_string()))?;
-    crate::debug(&format!("voice settings: {}", serde_json::to_string(&made).unwrap_or_default()));
+    let config: VoiceConfig =
+        serde_json::from_value(choice.config.clone()).map_err(|e| refusal("internal", e.to_string()))?;
+    crate::debug(&format!("voice settings: {}", serde_json::to_string(&choice).unwrap_or_default()));
+    let models = || Arc::new(EngineModels::new(engines.engine(), choice.clone()));
     let mut call = state.call.lock().await;
-    match call.as_ref() {
-        Some(running) => running.set_config(made),
+    match call.as_mut() {
+        Some((running, given)) => {
+            if !given.same_models(&choice) {
+                running.set_models(models());
+            }
+            running.set_config(config);
+            *given = choice;
+        }
         None => {
-            let (created, events) = VoiceCall::new(engines.engine(), Box::new(NativeIo::new()), made);
+            let (created, events) = VoiceCall::new(models(), Box::new(NativeIo::new()), config);
             forward(app.clone(), events, Arc::clone(&state.lifecycle));
-            *call = Some(created);
+            *call = Some((created, choice));
         }
     }
     Ok(())
@@ -122,7 +134,8 @@ pub async fn voice_start(app: AppHandle, webview: Webview, state: State<'_, Voic
     let (sender, started) = oneshot::channel();
     {
         let call = state.call.lock().await;
-        let call = call.as_ref().ok_or_else(|| refusal("voice_settings_missing", "Set the voice settings first."))?;
+        let (call, _) =
+            call.as_ref().ok_or_else(|| refusal("voice_settings_missing", "Set the voice settings first."))?;
         let mut lifecycle = state.lifecycle.lock().unwrap();
         if lifecycle.listening {
             return Ok(());
@@ -233,7 +246,7 @@ pub fn page_changed(app: &AppHandle) {
 }
 
 async fn stop(state: &VoiceState) {
-    if let Some(call) = state.call.lock().await.as_ref() {
+    if let Some((call, _)) = state.call.lock().await.as_ref() {
         state.lifecycle.lock().unwrap().settle(&Err("stopped".into()));
         call.stop();
     }
@@ -247,7 +260,8 @@ async fn with_call(
 ) -> Result<(), Refusal> {
     page(app, webview)?;
     let call = state.call.lock().await;
-    action(call.as_ref().ok_or_else(|| refusal("voice_settings_missing", "Set the voice settings first."))?);
+    let (call, _) = call.as_ref().ok_or_else(|| refusal("voice_settings_missing", "Set the voice settings first."))?;
+    action(call);
     Ok(())
 }
 
@@ -292,6 +306,7 @@ fn capability(capability: &Capability) -> &'static str {
         Capability::Stt => "stt",
         Capability::Tts => "tts",
         Capability::Vad => "vad",
+        Capability::EndOfTurn => "end-of-turn",
         _ => "other",
     }
 }

@@ -62,17 +62,24 @@ fn settings(stt: &str, tts: &str) -> VoiceSettings {
     .unwrap()
 }
 
+fn chosen(model: &str, build: &str) -> ModelChoice {
+    ModelChoice { model: model.into(), build: build.into() }
+}
+
 #[test]
 fn whisper_runs_on_whisper_cpp_and_the_rest_on_the_recommended_build() {
     for apple_silicon in [true, false] {
-        let config = config(&settings("whisper-small", "kokoro-82m-v1.0"), &catalogue(apple_silicon)).unwrap();
+        let choice = choose(&settings("whisper-small", "kokoro-82m-v1.0"), &catalogue(apple_silicon)).unwrap();
+        assert_eq!(choice.vad, chosen("silero-vad", "silero-vad/sherpa-onnx-fp32"));
+        assert_eq!(choice.stt, chosen("whisper-small", "whisper-small/whisper-cpp-q5_1"));
+        assert_eq!(choice.tts, chosen("kokoro-82m-v1.0", "kokoro-82m-v1.0/sherpa-onnx-int8"));
+        assert_eq!(choice.end_of_turn, None);
         assert_eq!(
-            config,
+            choice.config,
             json!({
-                "vad": {"model": "silero-vad", "build": "silero-vad/sherpa-onnx-fp32"},
-                "stt": {"model": "whisper-small", "build": "whisper-small/whisper-cpp-q5_1", "language": "es"},
-                "tts": {"model": "kokoro-82m-v1.0", "build": "kokoro-82m-v1.0/sherpa-onnx-int8", "voice": "ef_dora",
-                        "speed": 1.0},
+                "language": "es",
+                "voice": "ef_dora",
+                "speed": 1.0,
                 "end_of_turn": "silence",
                 "patience": "calm",
                 "idle_unload_minutes": 30,
@@ -83,18 +90,18 @@ fn whisper_runs_on_whisper_cpp_and_the_rest_on_the_recommended_build() {
 
 #[test]
 fn a_remote_model_runs_on_its_provider() {
-    let config = config(&settings("gpt-4o-mini-transcribe", "kokoro-82m-v1.0"), &catalogue(true)).unwrap();
-    assert_eq!(config["stt"]["build"], "gpt-4o-mini-transcribe/openai");
+    let choice = choose(&settings("gpt-4o-mini-transcribe", "kokoro-82m-v1.0"), &catalogue(true)).unwrap();
+    assert_eq!(choice.stt.build, "gpt-4o-mini-transcribe/openai");
 }
 
 #[test]
 fn what_cannot_run_is_refused_by_key() {
-    let key = |stt: &str, tts: &str| config(&settings(stt, tts), &catalogue(true)).unwrap_err().key;
+    let key = |stt: &str, tts: &str| choose(&settings(stt, tts), &catalogue(true)).unwrap_err().key;
     assert_eq!(key("whisper-nope", "kokoro-82m-v1.0"), "voice_model_unknown");
     assert_eq!(key("kokoro-82m-v1.0", "kokoro-82m-v1.0"), "voice_model_wrong_task");
     assert_eq!(key("parakeet", "kokoro-82m-v1.0"), "voice_model_unfit", "never Core ML");
     let without_vad: Vec<Candidate> = catalogue(true).into_iter().filter(|c| c.id != VAD_MODEL).collect();
-    let refused = config(&settings("whisper-small", "kokoro-82m-v1.0"), &without_vad).unwrap_err();
+    let refused = choose(&settings("whisper-small", "kokoro-82m-v1.0"), &without_vad).unwrap_err();
     assert_eq!((refused.key, refused.model.as_str()), ("voice_model_unknown", "silero-vad"));
 }
 
@@ -103,9 +110,9 @@ fn settings_are_read_strictly_and_their_choices_are_optional() {
     let minimal: VoiceSettings =
         serde_json::from_value(json!({"stt": {"model": "whisper-small"}, "tts": {"model": "kokoro-82m-v1.0"}}))
             .unwrap();
-    let config = config(&minimal, &catalogue(true)).unwrap();
-    assert_eq!(config["stt"]["language"], Value::Null);
-    assert_eq!(config["tts"]["voice"], Value::Null);
+    let config = choose(&minimal, &catalogue(true)).unwrap().config;
+    assert_eq!(config["language"], Value::Null);
+    assert_eq!(config["voice"], Value::Null);
     assert!(config.get("patience").is_none());
     let unknown = json!({"stt": {"model": "a", "prompt": "x"}, "tts": {"model": "b"}});
     assert!(serde_json::from_value::<VoiceSettings>(unknown).is_err());
@@ -116,19 +123,20 @@ fn a_named_build_runs_if_it_runs_here_and_the_app_offers_it() {
     let named = |build: &str| {
         let mut chosen = settings("whisper-small", "kokoro-82m-v1.0");
         chosen.stt.build = Some(build.into());
-        config(&chosen, &catalogue(true))
+        choose(&chosen, &catalogue(true))
     };
-    assert_eq!(named("whisper-small/sherpa-onnx-int8").unwrap()["stt"]["build"], "whisper-small/sherpa-onnx-int8");
+    assert_eq!(named("whisper-small/sherpa-onnx-int8").unwrap().stt.build, "whisper-small/sherpa-onnx-int8");
     for unfit in ["whisper-small/mlx-fp16", "whisper-small/nope", "kokoro-82m-v1.0/sherpa-onnx-int8"] {
         assert_eq!(named(unfit).unwrap_err().key, "voice_build_unfit", "{unfit}");
     }
 }
 
 #[test]
-fn smart_turn_needs_a_model_that_ends_turns() {
-    let mut chosen = settings("whisper-small", "kokoro-82m-v1.0");
-    chosen.end_of_turn = Some(EndOfTurn::SmartTurn);
-    assert_eq!(config(&chosen, &catalogue(true)).unwrap_err().key, "voice_end_of_turn_unavailable");
+fn smart_turn_takes_a_model_that_ends_turns_and_changes_the_models() {
+    let silence = settings("whisper-small", "kokoro-82m-v1.0");
+    let mut smart = silence.clone();
+    smart.end_of_turn = Some(EndOfTurn::SmartTurn);
+    assert_eq!(choose(&smart, &catalogue(true)).unwrap_err().key, "voice_end_of_turn_unavailable");
     let mut with_turns = catalogue(true);
     with_turns.push(Candidate {
         id: "smart-turn-v3".into(),
@@ -136,5 +144,11 @@ fn smart_turn_needs_a_model_that_ends_turns() {
         builds: vec![build("smart-turn-v3/sherpa-onnx", "sherpa-onnx", Some("cpu"))],
         recommended: None,
     });
-    assert_eq!(config(&chosen, &with_turns).unwrap()["end_of_turn"], "smart-turn");
+    let choice = choose(&smart, &with_turns).unwrap();
+    assert_eq!(choice.config["end_of_turn"], "smart-turn");
+    assert_eq!(choice.end_of_turn, Some(chosen("smart-turn-v3", "smart-turn-v3/sherpa-onnx")));
+    assert!(!choice.same_models(&choose(&silence, &with_turns).unwrap()));
+    let mut slower = smart.clone();
+    slower.patience = Some(Patience::Fast);
+    assert!(choice.same_models(&choose(&slower, &with_turns).unwrap()), "a number is not a model");
 }

@@ -1,10 +1,12 @@
-//! The voice call's configuration, from the person's choices (`VoiceSettings`, what the page sends through
+//! The voice call's models and configuration, from the person's choices (`VoiceSettings`, what the page sends through
 //! `host.voice.setSettings`) and the engine's catalogue as it ranks its builds here (`Candidate`): the app picks the
-//! build of each stage, the voice activity detector and every number the person does not choose.
+//! build of each stage, the voice activity detector, the end-of-turn model and every number the person does not
+//! choose.
 //!
 //! Which build: among those that run here (never Core ML, which the app does not offer, nor MLX, a stub), a
 //! speech-to-text model runs on whisper.cpp where it has a build for it (Metal on Apple silicon); anything else on the
-//! build the engine recommends, else the first that runs here. The result is sidevoice-voice's `VoiceConfig` as JSON.
+//! build the engine recommends, else the first that runs here. The result names the model and build of each slot
+//! (sidevoice-voice names none) and carries sidevoice-voice's `VoiceConfig` as JSON.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -103,27 +105,59 @@ pub struct Refusal {
     pub message: String,
 }
 
-/// sidevoice-voice's `VoiceConfig` for `settings`, on the builds of `catalogue` that run here.
-pub fn config(settings: &VoiceSettings, catalogue: &[Candidate]) -> Result<Value, Refusal> {
-    let vad = build(catalogue, VAD_MODEL, "vad", None)?;
-    let stt = build(catalogue, &settings.stt.model, "stt", settings.stt.build.as_deref())?;
-    let tts = build(catalogue, &settings.tts.model, "tts", settings.tts.build.as_deref())?;
-    let end_of_turn = settings.end_of_turn.unwrap_or(EndOfTurn::Silence);
-    let can_end_turns = catalogue.iter().any(|c| c.capabilities.iter().any(|capability| capability == END_OF_TURN));
-    if end_of_turn == EndOfTurn::SmartTurn && !can_end_turns {
-        return Err(Refusal {
-            key: "voice_end_of_turn_unavailable",
-            model: String::new(),
-            message: "No model of the engine's catalogue ends turns.".into(),
-        });
+/// A model of the catalogue and the build of it the call runs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ModelChoice {
+    pub model: String,
+    pub build: String,
+}
+
+/// What the app makes of the person's choices: the model that fills each of the call's slots, and sidevoice-voice's
+/// `VoiceConfig` (which names no model) as JSON.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct VoiceChoice {
+    pub vad: ModelChoice,
+    pub stt: ModelChoice,
+    pub tts: ModelChoice,
+    /// For `smart-turn`: the first model of the catalogue that ends turns and runs here.
+    pub end_of_turn: Option<ModelChoice>,
+    pub config: Value,
+}
+
+impl VoiceChoice {
+    /// Whether `other` fills the call's slots with the same models (its configuration aside).
+    pub fn same_models(&self, other: &VoiceChoice) -> bool {
+        (&self.vad, &self.stt, &self.tts, &self.end_of_turn) == (&other.vad, &other.stt, &other.tts, &other.end_of_turn)
     }
+}
+
+/// The models and the configuration for `settings`, on the builds of `catalogue` that run here.
+pub fn choose(settings: &VoiceSettings, catalogue: &[Candidate]) -> Result<VoiceChoice, Refusal> {
+    let pick = |model: &str, task: &str, named: Option<&str>| {
+        build(catalogue, model, task, named).map(|build| ModelChoice { model: model.to_string(), build })
+    };
+    let vad = pick(VAD_MODEL, "vad", None)?;
+    let stt = pick(&settings.stt.model, "stt", settings.stt.build.as_deref())?;
+    let tts = pick(&settings.tts.model, "tts", settings.tts.build.as_deref())?;
+    let end_of_turn = settings.end_of_turn.unwrap_or(EndOfTurn::Silence);
+    let ends_turns = match end_of_turn {
+        EndOfTurn::Silence => None,
+        EndOfTurn::SmartTurn => Some(
+            catalogue
+                .iter()
+                .filter(|c| c.capabilities.iter().any(|capability| capability == END_OF_TURN))
+                .find_map(|c| pick(&c.id, END_OF_TURN, None).ok())
+                .ok_or_else(|| Refusal {
+                    key: "voice_end_of_turn_unavailable",
+                    model: String::new(),
+                    message: "No model of the engine's catalogue that ends turns runs on this device.".into(),
+                })?,
+        ),
+    };
     let mut config = json!({
-        "vad": { "model": VAD_MODEL, "build": vad },
-        "stt": { "model": settings.stt.model, "build": stt, "language": settings.stt.language },
-        "tts": {
-            "model": settings.tts.model, "build": tts, "voice": settings.tts.voice,
-            "speed": settings.tts.speed.unwrap_or(1.0),
-        },
+        "language": settings.stt.language,
+        "voice": settings.tts.voice,
+        "speed": settings.tts.speed.unwrap_or(1.0),
         "end_of_turn": end_of_turn,
     });
     if let Some(patience) = settings.patience {
@@ -132,7 +166,7 @@ pub fn config(settings: &VoiceSettings, catalogue: &[Candidate]) -> Result<Value
     if let Some(minutes) = settings.idle_unload_minutes {
         config["idle_unload_minutes"] = json!(minutes);
     }
-    Ok(config)
+    Ok(VoiceChoice { vad, stt, tts, end_of_turn: ends_turns, config })
 }
 
 /// The build of `model` that the call runs, for `task`: `named` when the person named one, which must be one that runs

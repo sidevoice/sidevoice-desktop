@@ -277,9 +277,11 @@ sidevoice-engine itself fails with is one of these keys, with the engine's own c
 
 ## The voice call
 
-On macOS the app runs the voice call itself: sidevoice-voice (`sidevoice/sidevoice-voice`) on the app's engine, with
-the device's own microphone and speaker (cpal) and WebRTC's AEC3 between them, so the call cancels its own echo
-(`src-tauri/src/voice.rs`; sidevoice/sidevoice-core#89). The room window's page is then never granted the microphone
+On macOS the app runs the voice call itself: sidevoice-voice (`sidevoice/sidevoice-voice`) with the device's own
+microphone and speaker (cpal) and WebRTC's AEC3 between them, so the call cancels its own echo
+(`src-tauri/src/voice.rs`; sidevoice/sidevoice-core#89). sidevoice-voice names no model and depends on no engine:
+the app fills its interfaces (voice activity, transcriber, speaker, end of turn) with the engine's models
+(`src-tauri/src/voice/models.rs`). The room window's page is then never granted the microphone
 (`media::decide`) and runs no model: it keeps the room. It hands the call the room's replies and carries the call's
 turns and playback reports to the room, in its outbox. Elsewhere `host.voice` is absent, the page runs the call
 itself over `@sidevoice/voice` in the webview, and the room window grants it the microphone as before.
@@ -290,15 +292,17 @@ itself over `@sidevoice/voice` in the webview, and the room window grants it the
 [`js/voice-host.d.ts`](https://github.com/sidevoice/sidevoice-voice/blob/feat/voice-host/js/voice-host.d.ts) in
 `@sidevoice/voice` (sidevoice/sidevoice-voice#6), with its payload types (`VoiceSettings`, `VoiceUserTurn`,
 `VoicePlayback`, `VoiceReply`, `VoiceState`, `VoiceKaraoke`, `VoiceHostError`) and what every implementation promises
-(that package's README, "The voice seam a page drives"). On the web the same package's `createVoiceHost(engine)`
-implements it over the call in the page; the page does `host.voice ?? createVoiceHost(await WebEngine.create(host))`
-and uses nothing else of either. It is not restated here: a change is made there, and both sides follow.
+(that package's README, "The voice seam a page drives"). On the web the same package's `createVoiceHost(source)`
+implements it over the call in the page, with the models the page's `source` loads (sidevoice-web's adapter over its
+engine); the page does `host.voice ?? createVoiceHost(source)` and uses nothing else of either. It is not restated
+here: a change is made there, and both sides follow.
 
 What is this app's own:
 
-- `setSettings` makes sidevoice-voice's configuration (core `voice.rs`): a build the person names, if it runs here;
-  otherwise Whisper on whisper.cpp (Metal on Apple Silicon) and other models on the engine's recommended build; never
-  Core ML nor MLX; Silero for voice activity; `smart-turn` only with a model of the `end-of-turn` capability. It
+- `setSettings` picks the call's models and makes its configuration (core `voice.rs`): a build the person names, if
+  it runs here; otherwise Whisper on whisper.cpp (Metal on Apple Silicon) and other models on the engine's
+  recommended build; never Core ML nor MLX; Silero for voice activity; for `smart-turn`, the first model of the
+  `end-of-turn` capability that runs here. Other models reach a call that listens at once (it restarts on them). It
   rejects with the app's keyed refusals (below), each with the seam's `code` beside its `key` (`voice_model_unknown`
   → `model-unknown`).
 - `start` rejects `{key: "voice_failed", code, message}` with the call's code, `{key: "voice_settings_missing", code:

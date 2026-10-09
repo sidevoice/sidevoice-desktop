@@ -1,11 +1,11 @@
 //! The app's side of sidevoice-engine: what the page asks through the bridge (docs/BRIDGE.md → "The native engine"),
-//! in the page's terms, answered by the engine (docs/ENGINES.md), and the engine itself for the app's voice call.
+//! in the page's terms, answered by the engine (docs/ENGINES.md), and the engine itself, to load and run its models.
 //!
 //! The engine owns the catalogue it runs, the downloads (checked against their SHA-256), the build that runs here and
 //! the models themselves. This crate keeps what is the app's: the page's names for a build (catalogue model id +
 //! engine id, which are the engine's model id and backend id), its install jobs (progress per job, cancel) and its
-//! refusals (keyed, `error.rs`). Running the models is the voice call's (sidevoice-voice), on the same engine
-//! (`NativeEngines::engine`): what is in memory is what the call holds.
+//! refusals (keyed, `error.rs`). Loading and running the models goes through the
+//! engine itself (`NativeEngines::engine`): what is in memory is what its `LoadedModel`s hold.
 //!
 //! It always installs the build the page chose — model + engine. Before it downloads anything it checks, at this trust
 //! boundary, that the engine runs that build here; anything else is refused with a keyed `Error`, never replaced by
@@ -20,7 +20,7 @@ pub mod memory;
 
 pub use error::Error;
 pub use jobs::{Jobs, Progress};
-/// The engine crate itself, for what the app hands it (`Credentials`) and what the voice call runs on.
+/// The engine crate itself, for what the app hands it (`Credentials`) and the models it loads.
 pub use sidevoice_engine;
 use sidevoice_engine::{
     Accelerator, BundledCatalog, Cancel, CatalogSource, Credentials, Engine, Host, Model, NativeHost,
@@ -187,7 +187,7 @@ impl NativeEngines {
         Ok(NativeEngines { engine: Arc::new(engine), runtime, device, installing: Mutex::default() })
     }
 
-    /// The engine itself, which the app's voice call loads and runs its models on.
+    /// The engine itself, to load and run its models.
     pub fn engine(&self) -> Arc<Engine> {
         Arc::clone(&self.engine)
     }
