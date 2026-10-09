@@ -176,6 +176,20 @@ pub async fn voice_speak(
     with_call(&app, &webview, &state, |call| call.room_event(RoomEvent::Reply(reply))).await
 }
 
+/// The room's answer to a turn's `started` (`voice-user-turn`'s `data`): the call matches it by `turn_id` and drops replies
+/// written before that turn.
+#[tauri::command]
+pub async fn voice_turn_started(
+    app: AppHandle,
+    webview: Webview,
+    state: State<'_, VoiceState>,
+    started: Value,
+) -> Result<(), Refusal> {
+    let event = RoomEvent::from_json(&json!({"type": "voice-user-turn", "data": started}))
+        .map_err(|e| refusal("bad_request", e.to_string()))?;
+    with_call(&app, &webview, &state, |call| call.room_event(event)).await
+}
+
 /// Whether the room is in reach: turns reported while it is not say `offline`.
 #[tauri::command]
 pub async fn voice_set_online(

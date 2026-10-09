@@ -266,7 +266,7 @@ test("host.voice only where the app runs the call, and exactly the seam", () => 
   const api = install(fakeWindow(ORIGIN).win, ORIGIN, "native", true, true);
   assert.deepEqual(Object.keys(api.host.voice).sort(), [
     "cancelInput", "hasProviderKey", "models", "mute", "onError", "onKaraoke", "onLevel", "onPlayback", "onState",
-    "onUserTurn", "setOnline", "setProviderKey", "setSettings", "speak", "start", "stop",
+    "onUserTurn", "setOnline", "setProviderKey", "setSettings", "speak", "start", "stop", "turnStarted",
   ]);
   assert.ok(Object.isFrozen(api.host.voice));
 });
@@ -281,6 +281,8 @@ test("host.voice calls go to their native commands, with their arguments", async
   await voice.setSettings(settings);
   await voice.start();
   await voice.speak(reply);
+  const started = { phase: "started", turn_id: "t-turn-0", revision: 12, thread_id: "conv-1" };
+  await voice.turnStarted(started);
   await voice.setOnline(0);
   await voice.mute(1);
   await voice.cancelInput();
@@ -293,6 +295,7 @@ test("host.voice calls go to their native commands, with their arguments", async
     ["voice_set_settings", { settings }],
     ["voice_start", undefined],
     ["voice_speak", { reply }],
+    ["voice_turn_started", { started }],
     ["voice_set_online", { online: false }],
     ["voice_mute", { muted: true }],
     ["voice_cancel_input", undefined],

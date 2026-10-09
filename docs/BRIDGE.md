@@ -318,6 +318,7 @@ What is this app's own:
 ### How it travels
 
 - Page → app: the commands `voice_set_settings {settings}`, `voice_start`, `voice_stop`, `voice_speak {reply}`,
+  `voice_turn_started {started}`,
   `voice_set_online {online}`, `voice_mute {muted}`, `voice_cancel_input`, `voice_models`,
   `voice_set_provider_key {provider, key}`, `voice_has_provider_key {provider}` (`src-tauri/src/voice.rs`). Granted to
   the room window (`capabilities/room.json`); each re-checks that the caller is the current room window on the app's

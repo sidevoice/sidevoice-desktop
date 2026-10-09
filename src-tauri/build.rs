@@ -26,6 +26,7 @@ fn main() {
         "voice_start",
         "voice_stop",
         "voice_speak",
+        "voice_turn_started",
         "voice_set_online",
         "voice_mute",
         "voice_cancel_input",

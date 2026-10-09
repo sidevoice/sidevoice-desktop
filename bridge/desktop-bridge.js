@@ -131,6 +131,9 @@
       stop: () => call("voice_stop"),
       /** A room `voice-reply`, its `data` as the room sent it. */
       speak: (reply) => call("voice_speak", { reply }),
+      /** The room's answer to a turn's `started` (`voice-user-turn`'s `data`): its `turn_id` and the revision that is the
+       *  turn's boundary for stale replies. */
+      turnStarted: (started) => call("voice_turn_started", { started }),
       /** Whether the room is in reach: turns emitted while it is not say `offline: true`. */
       setOnline: (online) => call("voice_set_online", { online: !!online }),
       mute: (muted) => call("voice_mute", { muted: !!muted }),
