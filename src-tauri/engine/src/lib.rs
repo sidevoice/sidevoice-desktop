@@ -336,32 +336,38 @@ impl NativeEngines {
         progress: &mut (dyn FnMut(u64, u64) + Send),
     ) -> Result<(), Error> {
         let progress = Mutex::new(progress);
-        self.install_until(model_id, engine_id, &|done, total| (guard(&progress))(done, total), &|| false).map(|_| ())
+        let held = self.install_lock(&|| false)?;
+        self.install_until(&held, model_id, engine_id, &|done, total| (guard(&progress))(done, total), &|| false)
+            .map(|_| ())
     }
 
-    /// `install`, stopped with `install_cancelled` as soon as `stop` says so: while it waits for another install, or
+    /// The install lock, one install at a time, waited for until `stop` says so (`install_cancelled`).
+    fn install_lock(&self, stop: &dyn Fn() -> bool) -> Result<MutexGuard<'_, ()>, Error> {
+        loop {
+            if stop() {
+                return Err(error::install_cancelled());
+            }
+            match self.installing.try_lock() {
+                Ok(held) => return Ok(held),
+                Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(50)),
+                Err(TryLockError::Poisoned(_)) => return Err(error::internal("a lock was poisoned")),
+            }
+        }
+    }
+
+    /// `install`, under the install lock (`_held`), stopped with `install_cancelled` as soon as `stop` says so,
     /// wherever the download is, waiting on the network included (the download is dropped, and the engine keeps
     /// nothing half downloaded). Answers what it downloaded.
     fn install_until(
         &self,
+        _held: &MutexGuard<'_, ()>,
         model_id: &str,
         engine_id: &str,
         progress: &(dyn Fn(u64, u64) + Sync),
         stop: &dyn Fn() -> bool,
     ) -> Result<Downloaded, Error> {
+        // Asked under the lock: an install ahead of this one may have put it on disk.
         let located = self.locate(model_id, engine_id)?;
-        let _one_at_a_time = loop {
-            if stop() {
-                return Err(error::install_cancelled());
-            }
-            match self.installing.try_lock() {
-                Ok(held) => break held,
-                Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(50)),
-                Err(TryLockError::Poisoned(_)) => return Err(error::internal("a lock was poisoned")),
-            }
-        };
-        // Asked again under the lock: an install ahead of this one may have put it on disk.
-        let located = self.locate(model_id, engine_id).unwrap_or(located);
         if located.installed {
             progress(0, 0);
             return Ok(Downloaded { this: false, others: false });
@@ -400,8 +406,8 @@ impl NativeEngines {
 
     /// Undoes what a cancelled job downloaded, as `undo` decides: removes the model when this job's build is all of it
     /// on disk, keeps the build when another one is installed too (the engine removes only whole models), and says
-    /// which, or why removing failed.
-    fn roll_back(&self, model_id: &str, engine_id: &str, downloaded: Downloaded) -> Error {
+    /// which, or why removing failed. Only under the install lock (`_held`), the one the job downloaded under.
+    fn roll_back(&self, _held: &MutexGuard<'_, ()>, model_id: &str, engine_id: &str, downloaded: Downloaded) -> Error {
         match undo(downloaded) {
             Undo::Nothing => error::install_cancelled(),
             Undo::Remove => match self.block_on(self.engine.uninstall(model_id)) {
@@ -421,11 +427,23 @@ impl NativeEngines {
         if !jobs.begin(job, model_id, engine_id) {
             return Err(error::install_cancelled());
         }
-        let result =
-            self.install_until(model_id, engine_id, &|done, total| jobs.set(job, done, total), &|| jobs.cancelled(job));
+        let stop = || jobs.cancelled(job);
+        // The install lock is held until the job has ended, its roll-back included: no other install can put another
+        // build of the model on disk between what this job saw before downloading and the removal a late cancel makes.
+        let (held, result) = match self.install_lock(&stop) {
+            Ok(held) => {
+                let result =
+                    self.install_until(&held, model_id, engine_id, &|done, total| jobs.set(job, done, total), &stop);
+                (Some(held), result)
+            }
+            Err(error) => (None, Err(error)),
+        };
         match (result, jobs.finish(job)) {
             (result, true) => result.map(|_| ()),
-            (Ok(downloaded), false) => Err(self.roll_back(model_id, engine_id, downloaded)),
+            (Ok(downloaded), false) => match &held {
+                Some(held) => Err(self.roll_back(held, model_id, engine_id, downloaded)),
+                None => Err(error::install_cancelled()),
+            },
             // Whatever the transport said after the cancel, the page asked to stop: a cancel, never a failure
             // (sidevoice-core#21 review N04).
             (Err(_), false) => Err(error::install_cancelled()),

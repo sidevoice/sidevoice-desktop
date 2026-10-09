@@ -318,13 +318,29 @@ fn rolling_back_a_late_cancel_removes_the_build_or_keeps_it_and_says_so() {
     assert!(!engines.others_installed("whisper-test", build).unwrap(), "its own build is not another");
     assert!(engines.others_installed("whisper-test", "whisper-test/another").unwrap());
 
+    let held = engines.install_lock(&|| false).unwrap();
     // Another build was installed before this job: the engine removes whole models, so this one stays.
-    let kept = engines.roll_back("whisper-test", "sherpa-onnx", Downloaded { this: true, others: true });
+    let kept = engines.roll_back(&held, "whisper-test", "sherpa-onnx", Downloaded { this: true, others: true });
     assert_eq!(kept.key, "install_cancel_late");
     assert_eq!(engines.installed().unwrap().len(), 1, "nothing was removed");
 
     // The build is all of the model on disk: it goes, and the job is a plain cancel.
-    let removed = engines.roll_back("whisper-test", "sherpa-onnx", Downloaded { this: true, others: false });
+    let removed = engines.roll_back(&held, "whisper-test", "sherpa-onnx", Downloaded { this: true, others: false });
     assert_eq!(removed.key, "install_cancelled");
     assert!(engines.installed().unwrap().is_empty());
+}
+
+/// A job holds the install lock until it has ended, its roll-back included (`roll_back` takes the lock): another
+/// install asking meanwhile waits, so it cannot put another build of the model on disk before a late cancel removes the
+/// model.
+#[test]
+fn another_install_waits_for_the_lock_a_job_holds_to_roll_back() {
+    let test = engines("roll-back-lock", false);
+    let engines = &test.engines;
+    let held = engines.install_lock(&|| false).unwrap();
+    let asked = std::time::Instant::now();
+    let waited = engines.install_lock(&|| asked.elapsed() > Duration::from_millis(200));
+    assert_eq!(waited.unwrap_err().key, "install_cancelled", "it waited until told to stop");
+    drop(held);
+    assert!(engines.install_lock(&|| false).is_ok());
 }
