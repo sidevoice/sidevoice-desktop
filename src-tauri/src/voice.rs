@@ -1,7 +1,7 @@
 //! The voice call, run by the app itself (`window.__sidevoiceDesktop.host.voice`, docs/BRIDGE.md → "The voice call"):
-//! sidevoice-voice's `VoiceCall` with the models the app picks on its engine (`models`), the device's own microphone and
-//! speaker and WebRTC's echo cancellation between them (`NativeIo`). The page keeps the room: it hands the call the room's replies and carries
-//! the call's turns and playback reports to the room, in its outbox.
+//! sidevoice-voice's `VoiceCall` with the models the app picks on its engine (`models`), the device's own
+//! microphone and speaker and WebRTC's echo cancellation between them (`NativeIo`). The page keeps the room: it hands
+//! the call the room's replies and carries the call's turns and playback reports to the room, in its outbox.
 //!
 //! Only the room window's own page may call these (capabilities/room.json, and `room_page`). The call's events reach
 //! that page as `window.__sidevoiceDesktop.voiceEvent(event)`, each sidevoice-voice's `VoiceEvent` as JSON. A page
@@ -79,8 +79,9 @@ fn engines(app: &AppHandle) -> Result<Arc<NativeEngines>, Refusal> {
 }
 
 /// Sets the person's choices: the app picks the call's models from them (the builds, the detector, the end-of-turn
-/// model) and makes its configuration (every number the person does not choose). The call takes both at once, other
-/// models first (a call that listens restarts on them). The first settings create the call.
+/// model) and makes its configuration (every number the person does not choose). The call takes both at once: other
+/// models come with their configuration, and a call that listens restarts once on the pair. The first settings create
+/// the call.
 #[tauri::command]
 pub async fn voice_set_settings(
     app: AppHandle,
@@ -110,10 +111,12 @@ pub async fn voice_set_settings(
     let mut call = state.call.lock().await;
     match call.as_mut() {
         Some((running, given)) => {
-            if !given.same_models(&choice) {
-                running.set_models(models());
+            if given.same_models(&choice) {
+                running.set_config(config);
+            } else {
+                // Together: a call that listens restarts once, on the new models and the configuration they go with.
+                running.set_models(models(), config);
             }
-            running.set_config(config);
             *given = choice;
         }
         None => {

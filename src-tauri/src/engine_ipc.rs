@@ -2,10 +2,9 @@
 //!
 //! The bridge script exposes these as `window.__sidevoiceDesktop.host.nativeEngine`. Only the room window's own
 //! pages may call them (capabilities/room.json); the settings window may read what is on disk
-//! (`engine_on_disk`, capabilities/settings.json). Engine work runs on blocking threads, never the main one.
-//! Audio crosses as raw bytes: little-endian f32 samples (transcribe's body; synthesize's answer, after a
-//! 4-byte little-endian sample rate). A refusal is the engine's keyed `Error` (docs/BRIDGE.md → "Refusals").
-//! What stays in memory follows sidevoice/sidevoice-core#21 D13 (`call_changed`, `unload_when_idle`).
+//! (`engine_on_disk`, capabilities/settings.json). They manage the models: what runs here, what is installed and
+//! on disk, installs and their cancel, memory. Engine work runs on blocking threads, never the main one. A refusal is
+//! the engine's keyed `Error` (docs/BRIDGE.md → "Refusals").
 
 use sidevoice_desktop_engine::error::internal;
 use sidevoice_desktop_engine::{Device, Error, Installed, Jobs, Memory, NativeEngines, OnDisk, Progress};

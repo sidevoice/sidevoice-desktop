@@ -43,8 +43,10 @@ Beta. What works today:
 - A global mute shortcut (⌘⇧M on macOS, Ctrl+Shift+M elsewhere; configurable).
 - On Macs (macOS 13+), the voice call runs in the app: the microphone and the speaker with the app's own echo
   cancellation (WebRTC AEC3), transcription (Whisper, on Metal on Apple Silicon) and speech (Kokoro) downloaded the
-  first time they are needed, or a provider (OpenAI, ElevenLabs) with your own key, kept in the macOS keychain. The
-  Windows and Linux builds run the call in the page.
+  first time they are needed, or a provider (OpenAI, ElevenLabs) with your own key, kept in the macOS keychain.
+  **For now the voice call is macOS only:** the Windows and Linux builds run the call in the page, and the page they
+  bundle cannot load its voice modules until `@sidevoice/voice` and `@sidevoice/engine` are published on npm, so
+  they open rooms but cannot talk yet.
 
 The macOS build is ad-hoc signed and not notarized yet, so macOS blocks it on first open (below).
 

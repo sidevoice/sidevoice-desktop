@@ -43,8 +43,11 @@ writing `/voice/target.js` (`SIDEVOICE_TARGET` in the nginx image).
 
 - First open with no settings: the bundled interface loads and its controller comes up (the bridge reports
   `ready`).
-- The interface's window is a secure context; WebCrypto ECDSA P-256 (what pinning needs) works; the microphone
-  is granted to the app's origin (probe page, same window and rule).
+- The interface's window is a secure context and WebCrypto ECDSA P-256 (what pinning needs) works (probe page,
+  same window and rule). Where the app runs the call itself (`host.voice`, macOS) the page is never granted the
+  microphone: the app owns it.
+- The voice call: `host.voice`'s seam on the probe page, and a call on the engine's real models through the app's
+  adapter, recorded speech in and a spoken reply out (`src-tauri/src/voice/models/tests.rs`).
 - With a target, the interface calls it cross-origin with `Origin: tauri://localhost` (fake node).
 
 ## Updating the bundled interface

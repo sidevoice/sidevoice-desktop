@@ -103,7 +103,7 @@ jobs:
     permissions:
       pull-requests: read
     outputs:
-      # The Apple-Silicon engine round trip, the probe page and the room flow.
+      # The macOS job: the probe page, and a call on the engine's real models through the app's adapter.
       native: ${{ github.event_name != 'pull_request' || steps.filter.outputs.native == 'true' }}
       # The .dmg: never on a pull request. (Windows and Linux build their installers on every run.)
       installers: ${{ github.event_name != 'pull_request' }}
@@ -116,28 +116,16 @@ jobs:
         with:
           filters: |
             native:
-              - 'src-tauri/engine/**'
-              - 'src-tauri/Cargo.toml'
-              - 'src-tauri/Cargo.lock'
-              - 'src-tauri/rust-toolchain.toml'
-              - 'src-tauri/Entitlements.plist'
+              # Every native source: macOS is the only job that compiles the macOS-only code (the voice call, its
+              # adapter, the keychain), so a change to any of it must run there.
+              - 'src-tauri/**'
               - '.github/actions/**'
               - '.github/workflows/build.yml'
-              - 'src-tauri/local-host/**'
-              - 'src-tauri/src/local_host.rs'
-              - 'src-tauri/src/engine_ipc.rs'
-              - 'src-tauri/src/probe.rs'
-              - 'src-tauri/src/call_controls.rs'
-              - 'src-tauri/core/src/call_controls.rs'
-              - 'src-tauri/src/lib.rs'
-              - 'src-tauri/capabilities/**'
-              - 'src-tauri/tauri.conf.json'
-              - 'src-tauri/core/src/engines.rs'
-              - 'src-tauri/core/src/bridge.rs'
               - 'bridge/**'
               - 'test/fixtures/**'
               - 'web.pin.json'
               - 'scripts/build-web.mjs'
+              - 'scripts/web-site.mjs'
 
   macos:
     name: macOS (Apple Silicon) .dmg and native flow
@@ -421,13 +409,14 @@ jobs:
           if find "$ENGINE/partial" -type f | grep -q .; then echo "a download was left half written"; exit 1; fi
           # The voice call the app runs (host.voice): the seam's sixteen calls, the engine's catalogue with the voice
           # activity detector, an unknown model refused by key, Whisper configured on whisper.cpp, and a start that
-          # settles: listening, or refused with the call's code where the runner has no microphone or speaker.
+          # settles: listening, or refused only for want of a microphone or a speaker here (a model or adapter failure
+          # fails this step; the call on real models is the next one).
           grep -q 'probe-voice ok' /tmp/probe.log
           VOICE=$(grep 'probe-voice ok' /tmp/probe.log)
           echo "$VOICE" | grep -q ' keys=16 '
           echo "$VOICE" | grep -Eq ' models=[1-9][0-9]* vad=true unknown=voice_model_unknown '
           grep -q 'sidevoice: voice settings: .*"build":"whisper-tiny/whisper-cpp-q5_1"' /tmp/probe.log
-          echo "$VOICE" | grep -Eq ' start=(ok|voice_failed/[a-z-]+) '
+          echo "$VOICE" | grep -Eq ' start=(ok|voice_failed/(microphone-unavailable|microphone-denied|speaker-unavailable|audio-device-unavailable|audio-device-failed)) '
           echo "--- voice"; grep 'sidevoice: voice' /tmp/probe.log || true
           # Headset buttons: a (simulated) call made the app the Now Playing app, and it let go after.
           grep -q 'probe-headset ok' /tmp/probe.log
@@ -436,6 +425,14 @@ jobs:
           grep 'headset apply' /tmp/probe.log
           # The app's own mute is not mistaken for an AirPods gesture.
           if grep -q 'headset airpods' /tmp/probe.log; then echo 'echo recorded as a gesture'; exit 1; fi
+      - name: A call on the engine's real models through the app's adapter (recorded speech in, a reply out)
+        working-directory: src-tauri
+        run: |
+          set -euo pipefail
+          # Silero, Whisper tiny on whisper.cpp and Kokoro, downloaded into a scratch folder: the turn must come back as
+          # the clip's words and the reply must be spoken and heard (src/voice/models/tests.rs). A failure of any model
+          # or of the adapter fails here.
+          cargo test --release --lib voice::models::tests -- --include-ignored --nocapture
       - name: The call controls card over a full-screen editor (never activating, clicks, drag, typing, states)
         run: |
           set -euo pipefail

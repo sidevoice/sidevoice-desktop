@@ -287,8 +287,9 @@ microphone and speaker (cpal) and WebRTC's AEC3 between them, so the call cancel
 the app fills its interfaces (voice activity, transcriber, speaker, end of turn) with the engine's models
 (`src-tauri/src/voice/models.rs`). The room window's page is then never granted the microphone
 (`media::decide`) and runs no model: it keeps the room. It hands the call the room's replies and carries the call's
-turns and playback reports to the room, in its outbox. Elsewhere `host.voice` is absent, the page runs the call
-itself over `@sidevoice/voice` in the webview, and the room window grants it the microphone as before.
+turns and playback reports to the room, in its outbox. Elsewhere `host.voice` is absent and the page runs the call
+itself over `@sidevoice/voice` in the webview, the room window granting it the microphone: the page pinned now
+(`web.pin.json`) cannot load those modules until they are on npm, so on Windows and Linux there is no voice yet.
 
 ### The seam
 

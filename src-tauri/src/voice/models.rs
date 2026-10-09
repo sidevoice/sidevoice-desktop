@@ -2,8 +2,13 @@
 //! with the models core's `voice::choose` picks, each loaded by sidevoice-engine (installed first if it is not) and
 //! called through what it can do (`as_vad`, `as_stt`, `as_tts`, `as_end_of_turn`). Failures are the engine's codes.
 //!
-//! Transcribing, speaking and ending turns run on a blocking thread each, off the call's task: they are CPU work for a
-//! local model. The voice activity detector runs on the call's task, one 32 ms window at a time.
+//! Nothing native runs on an async worker of the app's runtime. Loading each model and opening the detector's stream
+//! (reading model files, building ONNX sessions, initialising Metal), transcribing, speaking and ending turns run on
+//! a blocking thread each. The detector runs one 32 ms window at a time where it is called, inside `block_in_place`,
+//! so the worker hands its other tasks on for that while.
+
+#[cfg(test)]
+mod tests;
 
 use std::future::Future;
 use std::sync::Arc;
@@ -31,16 +36,24 @@ impl EngineModels {
     }
 
     async fn load_one(&self, chosen: &ModelChoice) -> Result<LoadedModel, String> {
-        let progress = |_: Progress| {};
-        self.engine.load(&chosen.model, Some(&chosen.build), &progress, &Cancel::new()).await.map_err(code)
+        let (engine, model, build) = (Arc::clone(&self.engine), chosen.model.clone(), chosen.build.clone());
+        blocking(async move {
+            let progress = |_: Progress| {};
+            engine.load(&model, Some(&build), &progress, &Cancel::new()).await
+        })
+        .await
     }
 }
 
 #[async_trait]
 impl VoiceModels for EngineModels {
     async fn load(&self) -> Result<Models, String> {
-        let vad = self.load_one(&self.choice.vad).await?;
-        let vad = vad.as_vad().ok_or("model-cannot-detect")?.stream(VAD_OPTIONS).await.map_err(code)?;
+        let detector = self.load_one(&self.choice.vad).await?;
+        let vad = blocking(async move {
+            let vad = detector.as_vad().ok_or(Error::new("model-cannot-detect"))?;
+            vad.stream(VAD_OPTIONS).await
+        })
+        .await?;
         if vad.sample_rate() != VAD_RATE {
             return Err("vad-sample-rate".into());
         }
@@ -59,7 +72,9 @@ struct EngineVad(VadStream);
 #[async_trait]
 impl Vad for EngineVad {
     async fn accept(&mut self, pcm: &[f32]) -> Result<Vec<VadFrame>, String> {
-        let output = self.0.accept(pcm).await.map_err(code)?;
+        let stream = &mut self.0;
+        let output = tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(stream.accept(pcm)))
+            .map_err(code)?;
         Ok(output
             .frames
             .into_iter()
@@ -126,14 +141,12 @@ impl EndOfTurnModel for EngineEndOfTurn {
     }
 }
 
-/// Runs `work` to its end on a blocking thread of the app's runtime.
+/// Runs `work` to its end on a blocking thread of the runtime it is called on (the app's), off its async workers.
 async fn blocking<T: Send + 'static>(
     work: impl Future<Output = Result<T, Error>> + Send + 'static,
 ) -> Result<T, String> {
-    tauri::async_runtime::spawn_blocking(move || tauri::async_runtime::block_on(work))
-        .await
-        .map_err(|_| "internal".to_string())?
-        .map_err(code)
+    let runtime = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || runtime.block_on(work)).await.map_err(|_| "internal".to_string())?.map_err(code)
 }
 
 fn code(error: Error) -> String {
