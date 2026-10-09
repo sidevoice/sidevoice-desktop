@@ -165,7 +165,8 @@ fn what_does_not_run_here_is_refused_by_key_before_anything_is_downloaded_or_loa
     let engines = &test.engines;
     let key = |r: Result<Load, Error>| r.unwrap_err().key;
     assert_eq!(key(engines.load("whisper-test", "transformers-js", None)), "engine_unsupported");
-    assert_eq!(key(engines.load("whisper-test", "whisper-cpp", None)), "engine_unsupported");
+    // whisper.cpp is in this build of the engine; the test catalogue has no build of this model for it.
+    assert_eq!(key(engines.load("whisper-test", "whisper-cpp", None)), "build_missing");
     assert_eq!(key(engines.load("whisper-nope", "sherpa-onnx", None)), "model_unknown");
     assert_eq!(key(engines.load("whisper-test", "sherpa-onnx", None)), "not_installed");
     let unusable = engines.load("whisper-test", "sherpa-onnx", Some("metal")).unwrap_err();
