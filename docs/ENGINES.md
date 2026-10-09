@@ -7,8 +7,9 @@ models, local and remote, the downloads, which build of a model runs on this mac
 On macOS the app runs the voice call itself with **sidevoice-voice** (`sidevoice/sidevoice-voice`, `src-tauri/src/voice.rs`,
 docs/BRIDGE.md → "The voice call"), on that same engine: the microphone, voice activity and turns, transcription,
 speech, playback, barge-in and what was heard. What is in memory is what the call holds: its three models (the voice
-activity detector, speech to text, text to speech) stay loaded while the app runs, across calls, and a change of
-settings loads the new ones.
+activity detector, speech to text, text to speech) stay loaded across calls, and leave memory once the call has been
+stopped for `idle_unload_minutes` (10 by default; a setting of `host.voice`); the next start loads them again. A
+change of settings loads the new ones.
 
 This app keeps what is the app's, in `src-tauri/engine/` (`sidevoice-desktop-engine`):
 

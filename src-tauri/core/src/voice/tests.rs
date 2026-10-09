@@ -57,6 +57,7 @@ fn settings(stt: &str, tts: &str) -> VoiceSettings {
         "stt": {"model": stt, "language": "es"},
         "tts": {"model": tts, "voice": "ef_dora"},
         "patience": "calm",
+        "idle_unload_minutes": 30,
     }))
     .unwrap()
 }
@@ -74,6 +75,7 @@ fn whisper_runs_on_whisper_cpp_and_the_rest_on_the_recommended_build() {
                         "speed": 1.0},
                 "end_of_turn": "silence",
                 "patience": "calm",
+                "idle_unload_minutes": 30,
             })
         );
     }

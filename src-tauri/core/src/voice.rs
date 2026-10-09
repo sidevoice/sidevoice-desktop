@@ -29,6 +29,9 @@ pub struct VoiceSettings {
     pub patience: Option<Patience>,
     #[serde(default)]
     pub end_of_turn: Option<EndOfTurn>,
+    /// How long the models stay in memory with the call stopped, in minutes; absent for the call's default (10).
+    #[serde(default)]
+    pub idle_unload_minutes: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -125,6 +128,9 @@ pub fn config(settings: &VoiceSettings, catalogue: &[Candidate]) -> Result<Value
     });
     if let Some(patience) = settings.patience {
         config["patience"] = json!(patience);
+    }
+    if let Some(minutes) = settings.idle_unload_minutes {
+        config["idle_unload_minutes"] = json!(minutes);
     }
     Ok(config)
 }
