@@ -39,14 +39,6 @@ pub async fn engine_installed(state: State<'_, EngineState>) -> Result<Vec<Insta
     tauri::async_runtime::spawn_blocking(move || engines.installed()).await.map_err(internal)?
 }
 
-/// `[{id, capabilities, languages, voices?, builds: [{id, backend, accelerator, available}]}]`: the models this app
-/// offers, for the page's report to the core (sidevoice-core#85; the page adds `version` and `defaults`).
-#[tauri::command]
-pub async fn engine_models(state: State<'_, EngineState>) -> Result<Vec<serde_json::Value>, Error> {
-    let engines = state.engines.clone();
-    tauri::async_runtime::spawn_blocking(move || engines.models_report()).await.map_err(internal)?
-}
-
 /// For the settings window: engine packages and model builds on disk, with their sizes.
 #[tauri::command]
 pub async fn engine_on_disk(state: State<'_, EngineState>) -> Result<OnDisk, Error> {

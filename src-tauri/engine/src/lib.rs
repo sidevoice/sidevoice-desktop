@@ -293,60 +293,6 @@ impl NativeEngines {
         })
     }
 
-    /// The models this app offers, as the device's report to the core lists them (sidevoice-core#85): every model
-    /// the engine lists, with its id, capabilities (`stt`, `tts`), languages, its voices (a text-to-speech model's) and
-    /// its builds (`{id, backend, accelerator, available}`). A build is available when the engine runs it here, its
-    /// backend is linked into this app and it is not on Core ML, the same rule `locate` applies. The report's
-    /// `version` and `defaults` are the page's.
-    pub fn models_report(&self) -> Result<Vec<serde_json::Value>, Error> {
-        let backends = self.engine.backends();
-        let linked = |backend: &str| backends.iter().any(|info| info.id == backend);
-        Ok(self
-            .models()?
-            .iter()
-            .map(|model| {
-                let capabilities: Vec<&str> = model
-                    .capabilities
-                    .iter()
-                    .filter_map(|capability| match capability {
-                        sidevoice_engine::Capability::Stt => Some("stt"),
-                        sidevoice_engine::Capability::Tts => Some("tts"),
-                        _ => None,
-                    })
-                    .collect();
-                let builds: Vec<serde_json::Value> = model
-                    .builds
-                    .iter()
-                    .map(|build| {
-                        let available =
-                            build.available && linked(&build.backend) && build.accelerator.is_none_or(offered);
-                        serde_json::json!({
-                            "id": build.id,
-                            "backend": build.backend,
-                            "accelerator": build.accelerator.map(accelerator_name),
-                            "available": available,
-                        })
-                    })
-                    .collect();
-                let mut entry = serde_json::json!({
-                    "id": model.id,
-                    "capabilities": capabilities,
-                    "languages": model.languages,
-                    "builds": builds,
-                });
-                if capabilities.contains(&"tts") {
-                    let voices: Vec<serde_json::Value> = model
-                        .voices
-                        .iter()
-                        .map(|voice| serde_json::json!({ "id": voice.id, "languages": voice.languages }))
-                        .collect();
-                    entry["voices"] = voices.into();
-                }
-                entry
-            })
-            .collect())
-    }
-
     /// Every build the engine can run here whose files are all on disk, as the page names it.
     pub fn installed(&self) -> Result<Vec<Installed>, Error> {
         Ok(self

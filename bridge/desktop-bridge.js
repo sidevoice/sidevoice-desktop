@@ -67,10 +67,6 @@
       capabilities: () => call("engine_capabilities"),
       /** `[{model, engine}]`: the builds already on disk. */
       installed: () => call("engine_installed"),
-      /** `[{id, capabilities, languages, voices?, builds: [{id, backend, accelerator, available}]}]`: the models this
-       *  app offers, as the device's report to the core lists them (sidevoice-core#85). The page wraps them in the
-       *  report, `{version: 1, defaults, models}`. */
-      models: () => call("engine_models"),
       /** Downloads the engine package (if missing) and the model's build. Returns a promise that also carries this
        *  install's job id, `promise.job`, from the start: `cancel(job)` stops it, and it then rejects with
        *  `{key: "install_cancelled", message}`. `onProgress({job, model, engine, done, total, bytes_per_s})` about

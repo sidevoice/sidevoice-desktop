@@ -215,8 +215,6 @@ test("the native engine is exactly the contract, keyed by catalogue model id + e
   const answers = {
     engine_capabilities: capabilities,
     engine_installed: [{ model: "whisper-tiny", engine: "sherpa-onnx" }],
-    engine_models: [{ id: "whisper-tiny", capabilities: ["stt"], languages: ["en", "es"],
-      builds: [{ id: "whisper-tiny/whisper-cpp-q5_1", backend: "whisper-cpp", accelerator: "metal", available: true }] }],
     engine_synthesize: (() => {
       const buffer = new ArrayBuffer(4 + 8);
       new DataView(buffer).setUint32(0, 24000, true);
@@ -234,13 +232,11 @@ test("the native engine is exactly the contract, keyed by catalogue model id + e
   const engine = install(win, ORIGIN).host.nativeEngine;
   assert.equal(install(win, ORIGIN).host.app, "sidevoice-desktop");
   assert.deepEqual(Object.keys(engine).sort(),
-    ["cancel", "capabilities", "install", "installed", "load", "loaded", "memory", "models", "synthesize", "transcribe", "unload"]);
+    ["cancel", "capabilities", "install", "installed", "load", "loaded", "memory", "synthesize", "transcribe", "unload"]);
   assert.ok(Object.isFrozen(engine));
 
   assert.equal(JSON.stringify(await engine.capabilities()), JSON.stringify(capabilities));
   assert.equal(JSON.stringify(await engine.installed()), JSON.stringify([{ model: "whisper-tiny", engine: "sherpa-onnx" }]));
-  assert.equal(JSON.stringify(await engine.models()), JSON.stringify(answers.engine_models));
-  assert.deepEqual(calls.at(-1).slice(0, 2), ["engine_models", undefined]);
 
   const samples = new Float32Array([0.1, 0.2, 0.3]);
   assert.equal(await engine.transcribe("whisper-small", "sherpa-onnx", samples, 16000, "es"), "hola");

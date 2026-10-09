@@ -17,7 +17,6 @@ fn main() {
         "headset_test",
         "engine_capabilities",
         "engine_installed",
-        "engine_models",
         "engine_on_disk",
         "engine_install",
         "engine_progress",

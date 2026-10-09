@@ -9,7 +9,6 @@
     "allow-debug-log",
     "allow-engine-capabilities",
     "allow-engine-installed",
-    "allow-engine-models",
     "allow-engine-install",
     "allow-engine-progress",
     "allow-engine-cancel",
