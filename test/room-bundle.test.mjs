@@ -1,4 +1,4 @@
-// The vendored room's native worker (ui/voice-browser/native-worker.js, built from sidevoice-web) and this
+// The bundled room's native worker (ui/voice-browser/native-worker.js, built from sidevoice-web) and this
 // app's bridge (bridge/desktop-bridge.js) in one page context, with only Tauri's IPC faked: the bundle the app ships
 // and the bridge it injects speak the same contract. CI's macOS job runs the same flow in the real app
 // (test/fixtures/room-flow.js).
@@ -48,7 +48,7 @@ function audio(rate, samples) {
   return buffer;
 }
 
-test("the vendored native worker installs, transcribes and speaks through this bridge", async () => {
+test("the bundled native worker installs, transcribes and speaks through this bridge", async () => {
   const { calls, workers } = room({
     engine_installed: [],
     engine_install: null,

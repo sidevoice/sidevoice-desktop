@@ -1,6 +1,6 @@
 // CI only, injected only by the app built with the `probe` feature (src-tauri/src/probe.rs) when
 // SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_ROOM_FLOW=1: model selection (sidevoice/sidevoice-core#21 §6, D11–D12) through the
-// ACTUAL vendored room (ui/voice) — its settings actions, the ones its Transcripción pane calls, its controller,
+// ACTUAL bundled room (ui/voice) — its settings actions, the ones its Transcripción pane calls, its controller,
 // selection state machine, native worker and storage — over this app's bridge and native engine, with real models.
 // Nothing here stands in for the room: it pairs the device with CI's stand-in machine (test/fixtures/fake-node.py,
 // whose key it pins) so the room stores its choices, then only calls the room's actions and reads what they did.

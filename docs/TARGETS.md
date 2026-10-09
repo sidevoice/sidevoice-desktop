@@ -14,10 +14,9 @@ By design:
 ## The window
 
 `room-N` shows `tauri://localhost/voice/index.html` (Windows: `http://tauri.localhost/voice/index.html`), the
-interface vendored in `ui/voice/` and `ui/voice-browser/` in the layout sidevoice-web's
-`scripts/assemble-static-web.mjs` defines (`scripts/vendor-web.mjs` here calls it; provenance in
-`ui/voice/web-source.json`). The in-browser models' WebAssembly (`ui/voice-browser/assets/`, 50 MB) comes from
-pinned npm packages at build time (`scripts/web-assets.mjs`), not from git.
+interface built from sidevoice-web at the commit `web.pin.json` names, into `ui/voice/` and `ui/voice-browser/`, in the
+layout that repo's `scripts/assemble-static-web.mjs` defines (`scripts/build-web.mjs` here runs its build and that
+script; `ui/voice/web-source.json` says which commit). None of it is committed.
 
 The window only ever navigates within the app's own pages; the microphone is granted to them only; the bridge
 (`docs/BRIDGE.md`) is bound to them.
@@ -50,11 +49,6 @@ writing `/voice/target.js` (`SIDEVOICE_TARGET` in the nginx image).
 
 ## Updating the bundled interface
 
-```sh
-W=<sidevoice-web checkout>
-(cd $W && npm run build -w @sidevoice/protocol && npm run build -w @sidevoice/browser-audio && npm run build -w @sidevoice/web)
-node scripts/vendor-web.mjs $W
-```
-
-If `onnxruntime-web` or `espeak-ng` change version in `packages/browser-audio`, change the exact versions in this
-repo's `package.json` too.
+Move `web.pin.json` to another sidevoice-web commit (its full sha; `ref` names the branch or tag it is on, for
+people), then `npm run web`. The next Tauri build or dev run does the same by itself. The built site is kept in
+`target/web/<commit>/site/`, so a second run at the same pin only copies it.

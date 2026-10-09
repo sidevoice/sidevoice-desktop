@@ -86,13 +86,14 @@ src-tauri/src/       the shell: windows, tray, shortcut, commands
 src-tauri/core/      pure logic (settings, bridge contract, media rules), testable without Tauri
 src-tauri/engine/    the app's side of sidevoice-engine (ids, install jobs, what stays in memory)
 bridge/              the script injected into the call page: the page side of the bridge
-ui/                  the settings window; ui/voice*/ hold the bundled web interface
+ui/                  the settings window; ui/voice*/ hold the web interface, built at the pin (not committed)
 brand/               the brand files the icons and installer art are generated from
 docs/                the bridge, the engines and models, targets, macOS notes, the brand
 ```
 
-The bundled interface is a build of [sidevoice-web](https://github.com/sidevoice/sidevoice-web), vendored with
-`scripts/vendor-web.mjs`, which records the commit it came from in `ui/voice/web-source.json` ([`docs/TARGETS.md`](docs/TARGETS.md)). The app drives it only through an explicit bridge
+The bundled interface is a build of [sidevoice-web](https://github.com/sidevoice/sidevoice-web) at the commit
+`web.pin.json` names: `npm run web` (`scripts/build-web.mjs`, run by every Tauri build and dev run) fetches it, builds
+it and puts it in `ui/voice*/`, and `ui/voice/web-source.json` says which commit it is ([`docs/TARGETS.md`](docs/TARGETS.md)). The app drives it only through an explicit bridge
 ([`docs/BRIDGE.md`](docs/BRIDGE.md)), never through its DOM.
 
 ## Contributing

@@ -5,7 +5,8 @@
   "identifier": "dev.sidevoice.desktop",
   "build": {
     "frontendDist": "../ui",
-    "beforeBuildCommand": "npm run web-assets"
+    "beforeDevCommand": "npm run web",
+    "beforeBuildCommand": "npm run web"
   },
   "app": {
     "windows": [],

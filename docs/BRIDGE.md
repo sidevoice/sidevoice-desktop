@@ -133,7 +133,7 @@ controls. Hidden from the tray ("Hide call controls") it stays hidden for that c
 in the settings keeps its controls in view.
 
 - **The window** (`src/call_controls.rs`, label `call-controls`) loads `voice/call-controls.html`, a second page of
-  the vendored web build (`apps/web/src/call-controls/`), which reuses the room's conversation list and icons.
+  the bundled web build (`apps/web/src/call-controls/`), which reuses the room's conversation list and icons.
   macOS: a non-activating `NSPanel` (tauri-nspanel) at the status level (25), on every Space and over full-screen
   apps, never the key window: clicking it leaves the person's app active. Windows and Linux X11: borderless,
   transparent, always on top, never focused, no taskbar button. Wayland (a Wayland display, and `GDK_BACKEND` not
@@ -305,11 +305,11 @@ beside it as `code` (`digest-mismatch`, `model-load-failed`…).
 - Add a command: a variant in `Command` (Rust), a `case` in `run` (JS), a test on each side.
 - Add a field: `CallSnapshot` uses `#[serde(default)]`, so old and new scripts interoperate;
   bump `version` only for a breaking change.
-- Tests: `npm test` (the script against a fake window; the vendored room's native worker against this bridge,
+- Tests: `npm test` (the script against a fake window; the bundled room's native worker against this bridge,
   `test/room-bundle.test.mjs`), `cargo test -p sidevoice-desktop-core` and
   `cargo test -p sidevoice-desktop-engine` (the engine against a fake runtime adapter), `cargo test -p
   sidevoice-local-host` (the local host against a stand-in core; docs/LOCAL_HOST.md → Tests). In the real app, CI's macOS
-  job selects models through the vendored room itself (`test/fixtures/room-flow.js`, probe build), paired with CI's
+  job selects models through the bundled room itself (`test/fixtures/room-flow.js`, probe build), paired with CI's
   stand-in machine (`test/fixtures/fake-node.py`, which proves its identity): the room's own settings actions, with
   real models, for consent → download → load → two checks → in effect; a cancel mid-download; a failure (a load
   refused, `SIDEVOICE_DEBUG_REFUSE_LOAD`); a slow model declined and accepted (`SIDEVOICE_DEBUG_SLOW_TRANSCRIBE`);

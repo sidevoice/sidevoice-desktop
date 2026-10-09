@@ -6,9 +6,9 @@
 //!   `SIDEVOICE_DEBUG_PAGE=card-probe.html`: a call walked through the states the card shows, for CI's screenshots;
 //!   with it, the card's own page asks for the microphone once ([`card_script`]), which the app must refuse;
 //! - the room-flow script (`test/fixtures/room-flow.js`), injected into the room window with
-//!   `SIDEVOICE_DEBUG_ROOM_FLOW=1`: the native engine driven through the vendored room itself;
+//!   `SIDEVOICE_DEBUG_ROOM_FLOW=1`: the native engine driven through the bundled room itself;
 //! - the local-host flow (`test/fixtures/local-host-flow.js`), injected into the room window with
-//!   `SIDEVOICE_DEBUG_LOCAL_HOST_FLOW=1`: the local host and its proxy as the vendored room's page reaches them;
+//!   `SIDEVOICE_DEBUG_LOCAL_HOST_FLOW=1`: the local host and its proxy as the bundled room's page reaches them;
 //! - `SIDEVOICE_DEBUG_IDLE_UNLOAD_SECS`: how long a model stays in memory unused (D13), shortened so the probe page
 //!   sees the app unload a model and load it again as a call connects;
 //! - `SIDEVOICE_DEBUG_REFUSE_LOAD`, `SIDEVOICE_DEBUG_SLOW_TRANSCRIBE`: faults the room flow selects models against.
@@ -59,14 +59,14 @@ pub fn card_script() -> Option<&'static str> {
     )
 }
 
-/// The script that drives the native flow through the vendored room itself (`test/fixtures/room-flow.js`), when
+/// The script that drives the native flow through the bundled room itself (`test/fixtures/room-flow.js`), when
 /// asked for with `SIDEVOICE_DEBUG_ROOM_FLOW=1`; injected into the room window, where the interface loads.
 pub fn room_flow() -> Option<&'static str> {
     let asked = std::env::var("SIDEVOICE_DEBUG_ROOM_FLOW").is_ok_and(|v| v == "1");
     (crate::debugging() && asked).then_some(ROOM_FLOW)
 }
 
-/// The script that walks the local host through the vendored room's own page (`test/fixtures/local-host-flow.js`),
+/// The script that walks the local host through the bundled room's own page (`test/fixtures/local-host-flow.js`),
 /// when asked for with `SIDEVOICE_DEBUG_LOCAL_HOST_FLOW=1`; injected into the room window.
 pub fn local_host_flow() -> Option<&'static str> {
     let asked = std::env::var("SIDEVOICE_DEBUG_LOCAL_HOST_FLOW").is_ok_and(|v| v == "1");

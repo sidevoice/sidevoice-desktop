@@ -50,6 +50,12 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - uses: actions/cache@v4
+        with:
+          path: target/web
+          key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs') }}
+      - name: The web interface at the pin (web.pin.json)
+        run: npm run web
       - name: Bridge script tests
         run: npm test
       - name: The icons, tray and .dmg window are what the brand files draw (npm run icons)
@@ -130,7 +136,8 @@ jobs:
               - 'src-tauri/core/src/bridge.rs'
               - 'bridge/**'
               - 'test/fixtures/**'
-              - 'ui/voice/**'
+              - 'web.pin.json'
+              - 'scripts/build-web.mjs'
 
   macos:
     name: macOS (Apple Silicon) .dmg and native flow
@@ -150,6 +157,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - uses: actions/cache@v4
+        with:
+          path: target/web
+          key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs') }}
       - name: Build the app bundle (ad-hoc signed, hardened runtime, entitlements)
         if: needs.changes.outputs.installers == 'true'
         run: npx tauri build --target aarch64-apple-darwin --bundles app
@@ -588,7 +599,7 @@ jobs:
           path: card-shots/
           retention-days: 7
           if-no-files-found: warn
-      - name: Selecting models through the vendored room itself (consent, cancel, failure, slow, persistence)
+      - name: Selecting models through the bundled room itself (consent, cancel, failure, slow, persistence)
         run: |
           set -euo pipefail
           APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
@@ -607,7 +618,7 @@ jobs:
           cat /tmp/room.log
           cat ui/voice/web-source.json
           ls -laR "$HOME/Library/Application Support/dev.sidevoice.desktop/sidevoice-engine/models"
-          # The actual vendored room (ui/voice), not a test page: its settings actions, controller, selection, native
+          # The actual bundled room (ui/voice, built at the pin), not a test page: its settings actions, controller, selection, native
           # worker and storage, over this app's bridge and engine (test/fixtures/room-flow.js).
           grep -q "page tauri://localhost/voice/index.html" /tmp/room.log
           grep -q 'room-flow ok' /tmp/room.log
@@ -679,6 +690,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - uses: actions/cache@v4
+        with:
+          path: target/web
+          key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs') }}
       - run: npx tauri build --bundles deb,appimage
       - uses: actions/upload-artifact@v4
         with:
@@ -706,6 +721,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - uses: actions/cache@v4
+        with:
+          path: target/web
+          key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs') }}
       - run: npx tauri build --bundles nsis
       - uses: actions/upload-artifact@v4
         with:
