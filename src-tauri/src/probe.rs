@@ -6,7 +6,7 @@
 //!   `SIDEVOICE_DEBUG_PAGE=card-probe.html`: a call walked through the states the card shows, for CI's screenshots;
 //!   with it, the card's own page asks for the microphone once ([`card_script`]), which the app must refuse;
 //! - the local-host flow (`test/fixtures/local-host-flow.js`), injected into the room window with
-//!   `SIDEVOICE_DEBUG_LOCAL_HOST_FLOW=1`: the local host and its proxy as the vendored room's page reaches them;
+//!   `SIDEVOICE_DEBUG_LOCAL_HOST_FLOW=1`: the local host and its proxy as the bundled room's page reaches them;
 //!
 //! All run in CI's macOS job (.github/workflows/build.yml). A release app has none of them, nor the switches; CI
 //! checks.
@@ -53,7 +53,7 @@ pub fn card_script() -> Option<&'static str> {
     )
 }
 
-/// The script that walks the local host through the vendored room's own page (`test/fixtures/local-host-flow.js`),
+/// The script that walks the local host through the bundled room's own page (`test/fixtures/local-host-flow.js`),
 /// when asked for with `SIDEVOICE_DEBUG_LOCAL_HOST_FLOW=1`; injected into the room window.
 pub fn local_host_flow() -> Option<&'static str> {
     let asked = std::env::var("SIDEVOICE_DEBUG_LOCAL_HOST_FLOW").is_ok_and(|v| v == "1");

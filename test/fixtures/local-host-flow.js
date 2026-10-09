@@ -1,6 +1,6 @@
 // CI only, injected only by the app built with the `probe` feature (src-tauri/src/probe.rs) when
 // SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_LOCAL_HOST_FLOW=1: the local host (docs/LOCAL_HOST.md) as the ACTUAL bundled page
-// reaches it — the vendored room (ui/voice) at the app's own origin, with this app's bridge — against CI's stand-in
+// reaches it — the bundled room (ui/voice) at the app's own origin, with this app's bridge — against CI's stand-in
 // core on ~/.sidevoice/core/local.sock (`local-host-ci core`, src-tauri/local-host/examples/local-host-ci.rs).
 //
 //   1. the bridge reports `running` (state() and subscribe()) and the pairing object (design §4.1);

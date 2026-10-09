@@ -7,12 +7,11 @@ them, as listed.
 ## Inside the installers
 
 - **eSpeak NG** (`espeak-ng` 1.0.2 on npm: its JavaScript and WebAssembly build), **GPL-3.0-or-later**. It is copied
-  into `voice-browser/assets/` at build time (`scripts/web-assets.mjs`) and runs in the bundled interface's speech
-  workers. Redistributing the installers redistributes it, under the GPL: its license text and source are at
+  into `voice-browser/assets/` by sidevoice-web's build of the bundled interface and runs in its speech workers. Redistributing the installers redistributes it, under the GPL: its license text and source are at
   https://github.com/espeak-ng/espeak-ng, and the build used is the npm package of that version.
 - **ONNX Runtime Web** (`onnxruntime-web`, the WebAssembly runtime and its loaders), MIT.
 - **Transformers.js** (bundled into the interface's workers), Apache-2.0.
-- **The Sidevoice web interface** (sidevoice-web, vendored in `ui/voice/` and `ui/voice-browser/`), Apache-2.0, with
+- **The Sidevoice web interface** (sidevoice-web, built at `web.pin.json` into `ui/voice/` and `ui/voice-browser/`), Apache-2.0, with
   its own dependencies: React (MIT), the OpenTelemetry JavaScript SDK (Apache-2.0) and the components listed in
   sidevoice-web's `THIRD_PARTY_NOTICES.md`.
 - **Tauri** and its plugins (`tauri`, `tauri-plugin-global-shortcut`, `tauri-plugin-single-instance`), MIT or

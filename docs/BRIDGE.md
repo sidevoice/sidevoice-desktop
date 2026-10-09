@@ -134,7 +134,7 @@ controls. Hidden from the tray ("Hide call controls") it stays hidden for that c
 in the settings keeps its controls in view.
 
 - **The window** (`src/call_controls.rs`, label `call-controls`) loads `voice/call-controls.html`, a second page of
-  the vendored web build (`apps/web/src/call-controls/`), which reuses the room's conversation list and icons.
+  the bundled web build (`apps/web/src/call-controls/`), which reuses the room's conversation list and icons.
   macOS: a non-activating `NSPanel` (tauri-nspanel) at the status level (25), on every Space and over full-screen
   apps, never the key window: clicking it leaves the person's app active. Windows and Linux X11: borderless,
   transparent, always on top, never focused, no taskbar button. Wayland (a Wayland display, and `GDK_BACKEND` not

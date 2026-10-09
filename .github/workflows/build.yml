@@ -50,6 +50,12 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - uses: actions/cache@v4
+        with:
+          path: target/web
+          key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs') }}
+      - name: The web interface at the pin (web.pin.json)
+        run: npm run web
       - name: Bridge script tests
         run: npm test
       - name: The icons, tray and .dmg window are what the brand files draw (npm run icons)
@@ -130,7 +136,8 @@ jobs:
               - 'src-tauri/core/src/bridge.rs'
               - 'bridge/**'
               - 'test/fixtures/**'
-              - 'ui/voice/**'
+              - 'web.pin.json'
+              - 'scripts/build-web.mjs'
 
   macos:
     name: macOS (Apple Silicon) .dmg and native flow
@@ -150,6 +157,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - uses: actions/cache@v4
+        with:
+          path: target/web
+          key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs') }}
       - name: Build the app bundle (ad-hoc signed, hardened runtime, entitlements)
         if: needs.changes.outputs.installers == 'true'
         run: npx tauri build --target aarch64-apple-darwin --bundles app
@@ -198,7 +209,7 @@ jobs:
           set -euo pipefail
           APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
           # Asking for the probe page changes nothing in a release: the interface loads (checked below).
-          SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_PAGE=probe.html SIDEVOICE_DEBUG_ROOM_FLOW=1 "$APP/Contents/MacOS/sidevoice-desktop" > /tmp/app.log 2>&1 &
+          SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_PAGE=probe.html "$APP/Contents/MacOS/sidevoice-desktop" > /tmp/app.log 2>&1 &
           PID=$!
           for i in $(seq 1 45); do grep -q "ready: true" /tmp/app.log && break; sleep 1; done
           sleep 5
@@ -596,6 +607,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - uses: actions/cache@v4
+        with:
+          path: target/web
+          key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs') }}
       - run: npx tauri build --bundles deb,appimage
       - uses: actions/upload-artifact@v4
         with:
@@ -623,6 +638,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - uses: actions/cache@v4
+        with:
+          path: target/web
+          key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs') }}
       - run: npx tauri build --bundles nsis
       - uses: actions/upload-artifact@v4
         with:

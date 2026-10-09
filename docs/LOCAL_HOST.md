@@ -170,7 +170,7 @@ pairing the proxy answers 503; without a core, 502.
 - CI, Linux (`test` job): `examples/local-host-ci.rs serve` as the runner and `attack` as a second user — it cannot
   open `local.sock` (so neither pair nor link as a connector), read the app's pairing, or use the proxy without the
   secret; the same attempts as the first user, as a control, do get through.
-- CI, macOS (probe build): the app with a temporary `HOME` against `local-host-ci core`; the vendored room's own page
+- CI, macOS (probe build): the app with a temporary `HOME` against `local-host-ci core`; the bundled room's own page
   (`test/fixtures/local-host-flow.js`) sees `running` and the pairing, fetches through the proxy (WebKit's preflight,
   then the request with the token swapped in), is refused without the secret and on native routes, and opens a
   WebSocket through it; `curl` sends what a page cannot (hostile, missing, empty, `null` Origin; a wrong or rebound
