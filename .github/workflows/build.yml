@@ -399,11 +399,11 @@ jobs:
           grep -q 'request OPTIONS /api/presentation/echo origin=tauri://localhost' /tmp/probe-node.log
           grep "sidevoice: media" /tmp/probe.log || echo "(WebKit did not ask the app about the microphone)"
           # The native engine inside the signed app, through the bridge the interface uses (docs/BRIDGE.md):
-          # capabilities with the OS's real memory (and the CPU, what sidevoice-engine runs these builds on for now),
+          # capabilities with the OS's real memory (the CPU for sherpa-onnx, Metal for whisper.cpp, never Core ML),
           # downloads with progress, the builds on disk by model + engine, Kokoro says a sentence and Whisper hears it,
           # and a page engine is refused rather than replaced.
           grep -q 'probe-engine ok' /tmp/probe.log
-          grep -q 'probe-engine ok capabilities={"runs":"native","os":"macos","arch":"aarch64","has":\["cpu"\]' /tmp/probe.log
+          grep -q 'probe-engine ok capabilities={"runs":"native","os":"macos","arch":"aarch64","has":\["cpu","metal"\]' /tmp/probe.log
           grep -Eq 'probe-engine ok .*"memory_mb":[1-9][0-9]{3,}' /tmp/probe.log
           grep -q 'probe-engine ok .* installed=kokoro-82m-v1.0@sherpa-onnx,whisper-tiny@sherpa-onnx ' /tmp/probe.log
           grep -Eq 'probe-engine ok .* progress_calls=[1-9]' /tmp/probe.log
@@ -613,7 +613,7 @@ jobs:
           grep -q 'room-flow ok' /tmp/room.log
           LINE=$(grep 'room-flow ok' /tmp/room.log)
           # What the room asked the app, and the offers it resolved from it: the five native models, nothing of the page's.
-          echo "$LINE" | grep -q 'capabilities={"runs":"native","os":"macos","arch":"aarch64","has":\["cpu"\]'
+          echo "$LINE" | grep -q 'capabilities={"runs":"native","os":"macos","arch":"aarch64","has":\["cpu","metal"\]'
           echo "$LINE" | grep -Eq '"memory_mb":[1-9][0-9]{3,}'
           echo "$LINE" | grep -Eq ' engines=(sherpa-onnx/[a-z]+,?)+ '
           for model in whisper-tiny whisper-base whisper-small whisper-large-v3-turbo; do echo "$LINE" | grep -Eq " offers_stt=[^ ]*$model"; done

@@ -4,3 +4,9 @@
 # compiles whisper.cpp with the old ABI too, as sidevoice-engine's README asks of consumers.
 [env]
 CXXFLAGS_x86_64_unknown_linux_gnu = "-D_GLIBCXX_USE_CXX11_ABI=0"
+
+# sherpa-onnx's static libraries for Windows are built against the static C runtime (/MT); whisper.cpp is compiled
+# with whichever runtime the build uses, the dynamic one (/MD) by default, and the linker refuses the mix (LNK2038).
+# The whole app links the static C runtime there, so everything the cc and cmake crates compile does too.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]
