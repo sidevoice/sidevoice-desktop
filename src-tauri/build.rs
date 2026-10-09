@@ -1,8 +1,8 @@
 fn main() {
     // The app's own commands, declared so capabilities can grant them per window/origin:
     // the settings window gets the settings commands (and reads the native engine's state), the room window
-    // `bridge_state` and `bridge_level` (+ `debug_log`), the native engine and the local host (`local_host_*`), the
-    // call controls card its own four.
+    // `bridge_state` and `bridge_level` (+ `debug_log`), the native engine, the voice call (`voice_*`, macOS) and the
+    // local host (`local_host_*`), the call controls card its own four.
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
         "get_settings",
         "save_settings",
@@ -21,12 +21,17 @@ fn main() {
         "engine_install",
         "engine_progress",
         "engine_cancel",
-        "engine_transcribe",
-        "engine_synthesize",
-        "engine_load",
-        "engine_unload",
-        "engine_loaded",
         "engine_memory",
+        "voice_set_settings",
+        "voice_start",
+        "voice_stop",
+        "voice_speak",
+        "voice_set_online",
+        "voice_mute",
+        "voice_cancel_input",
+        "voice_models",
+        "voice_set_provider_key",
+        "voice_has_provider_key",
         "local_host_state",
         "local_host_pairing",
         "local_host_action",

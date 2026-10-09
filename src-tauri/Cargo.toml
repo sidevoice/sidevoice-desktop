@@ -44,6 +44,15 @@ winreg = "0.55"
 windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+# The voice call the app runs itself (src/voice.rs, `host.voice`): sidevoice-voice with its native microphone and
+# speaker (cpal) and WebRTC's AEC3 between them, on the app's engine. Pinned to the head of sidevoice-voice#5 (stacked
+# on #2 and #3), which pins the same engine as `engine/` does, until a release carries it. macOS only: AEC3's C++ does
+# not build on Windows, and the beta ships on macOS. Its build needs meson, ninja and pkg-config.
+sidevoice-voice = { git = "https://github.com/sidevoice/sidevoice-voice", rev = "f4793748d1775f91d4db2ae17aa18431d34456a2" }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+tokio = { version = "1", features = ["sync"] }
+# The keys of remote providers, in the keychain (src/keychain.rs).
+security-framework = "3"
 # The call controls card as a non-activating panel: over full-screen apps, on every Space, never taking focus
 # (src/call_controls.rs).
 tauri-nspanel = "2.1"

@@ -14,10 +14,12 @@
 mod call_controls;
 mod engine_ipc;
 mod headset;
+mod keychain;
 mod local_host;
 #[cfg(feature = "probe")]
 mod probe;
 mod tray;
+mod voice;
 
 use serde::Serialize;
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
@@ -202,7 +204,6 @@ fn bridge_state(
     *state.call.lock().unwrap() = snapshot.clone();
     tray::update(&app, &snapshot);
     headset::update(&app, &snapshot);
-    engine_ipc::call_changed(&app, snapshot.joined);
     call_controls::update(&app);
     Ok(())
 }
@@ -276,8 +277,9 @@ fn reset_call_state(app: &AppHandle) {
     *app.state::<AppState>().call.lock().unwrap() = snapshot.clone();
     tray::update(app, &snapshot);
     headset::update(app, &snapshot);
-    engine_ipc::call_changed(app, snapshot.joined);
     call_controls::update(app);
+    #[cfg(target_os = "macos")]
+    voice::page_changed(app);
 }
 
 /// (Re)creates the room window: the bundled interface, told its target, bound to the app's own pages.
@@ -309,11 +311,6 @@ fn open_room(app: &AppHandle, settings: &Settings) -> tauri::Result<()> {
     if let Some(target) = settings::target_script(settings) {
         builder = builder.initialization_script(target);
     }
-    // CI's probe build only (src/probe.rs): the native flow driven through the vendored room itself.
-    #[cfg(feature = "probe")]
-    if let Some(flow) = probe::room_flow() {
-        builder = builder.initialization_script(flow);
-    }
     #[cfg(feature = "probe")]
     if let Some(flow) = probe::local_host_flow() {
         builder = builder.initialization_script(flow);
@@ -330,7 +327,7 @@ fn open_room(app: &AppHandle, settings: &Settings) -> tauri::Result<()> {
                 _ => media::Capture::Other,
             };
             let page = committed_origin.lock().unwrap().clone();
-            let decision = media::decide(capture, page.as_deref(), APP_ORIGIN);
+            let decision = media::decide(capture, page.as_deref(), APP_ORIGIN, !bridge::voice_offered());
             debug(&format!("media {capture:?} for {page:?}: {decision:?}"));
             match decision {
                 media::Decision::Allow => PermissionResponse::Allow,
@@ -397,28 +394,10 @@ fn apply_shortcut(app: &AppHandle, accelerator: &str) {
     *app.state::<AppState>().shortcut.lock().unwrap() = status;
 }
 
-pub fn run() {
-    let context = tauri::generate_context!();
-    #[cfg(feature = "probe")]
-    let context = probe::with_page(context);
-    let builder = tauri::Builder::default();
-    // The call controls card is a non-activating panel on macOS (src/call_controls.rs).
-    #[cfg(target_os = "macos")]
-    let builder = builder.plugin(tauri_nspanel::init());
-    builder
-        // A second launch (Finder, Spotlight) brings the running one forward instead.
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| show_room(app)))
-        .plugin(
-            tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
-                    if event.state() == ShortcutState::Pressed {
-                        send(app, Command::ToggleMute);
-                    }
-                })
-                .build(),
-        )
-        .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![
+/// The app's commands, with `$extra` (each after a comma) after them.
+macro_rules! commands {
+    ($($extra:tt)*) => {
+        tauri::generate_handler![
             get_settings,
             save_settings,
             bridge_state,
@@ -436,18 +415,64 @@ pub fn run() {
             engine_ipc::engine_install,
             engine_ipc::engine_progress,
             engine_ipc::engine_cancel,
-            engine_ipc::engine_transcribe,
-            engine_ipc::engine_synthesize,
-            engine_ipc::engine_load,
-            engine_ipc::engine_unload,
-            engine_ipc::engine_loaded,
             engine_ipc::engine_memory,
             local_host::local_host_state,
             local_host::local_host_pairing,
             local_host::local_host_action,
             local_host::local_host_pairing_code,
             local_host::local_host_pair_room
-        ])
+            $($extra)*
+        ]
+    };
+}
+
+/// Every command, the voice call's where the app runs it (`host.voice`, macOS).
+#[cfg(target_os = "macos")]
+fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
+    commands![
+        , voice::voice_set_settings,
+        voice::voice_start,
+        voice::voice_stop,
+        voice::voice_speak,
+        voice::voice_set_online,
+        voice::voice_mute,
+        voice::voice_cancel_input,
+        voice::voice_models,
+        voice::voice_set_provider_key,
+        voice::voice_has_provider_key
+    ]
+}
+
+#[cfg(not(target_os = "macos"))]
+fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
+    commands![]
+}
+
+pub fn run() {
+    let context = tauri::generate_context!();
+    #[cfg(feature = "probe")]
+    let context = probe::with_page(context);
+    let builder = tauri::Builder::default();
+    // The call controls card is a non-activating panel on macOS (src/call_controls.rs).
+    #[cfg(target_os = "macos")]
+    let builder = builder.plugin(tauri_nspanel::init());
+    // The voice call the app runs (`host.voice`, src/voice.rs).
+    #[cfg(target_os = "macos")]
+    let builder = builder.manage(voice::VoiceState::default());
+    builder
+        // A second launch (Finder, Spotlight) brings the running one forward instead.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| show_room(app)))
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        send(app, Command::ToggleMute);
+                    }
+                })
+                .build(),
+        )
+        .manage(AppState::default())
+        .invoke_handler(handler())
         .setup(|app| {
             let handle = app.handle().clone();
             tray::create(&handle)?;
@@ -455,25 +480,18 @@ pub fn run() {
             // sidevoice-engine keeps the models it downloads, on demand, in the app's data directory (docs/ENGINES.md).
             // Without it the app still runs; the page then finds no native engine to use.
             let engine_root = app.path().app_data_dir()?.join("sidevoice-engine");
+            // The keys of remote providers come from the keychain (macOS); elsewhere the app keeps none.
+            #[cfg(target_os = "macos")]
+            let credentials = keychain::Keychain;
+            #[cfg(not(target_os = "macos"))]
+            let credentials = sidevoice_desktop_engine::sidevoice_engine::NoCredentials;
             match sidevoice_desktop_engine::NativeEngines::new(
                 engine_root,
+                credentials,
                 tauri::async_runtime::handle().inner().clone(),
             ) {
-                #[allow(unused_mut)] // the probe build may shorten the idle time
-                Ok(mut engines) => {
-                    #[cfg(feature = "probe")]
-                    if let Some(idle) = probe::idle_unload() {
-                        engines.idle_unload = idle;
-                    }
-                    #[cfg(feature = "probe")]
-                    {
-                        engines.faults = probe::faults();
-                    }
-                    let engines = engine_ipc::EngineState::new(engines);
-                    // A model stays in memory during a call and for ten minutes after the last use
-                    // (sidevoice-core#21 D13).
-                    engine_ipc::unload_when_idle(engines.engines.clone());
-                    app.manage(engines);
+                Ok(engines) => {
+                    app.manage(engine_ipc::EngineState::new(engines));
                 }
                 Err(e) => eprintln!("sidevoice: the native engine did not start: {} ({})", e.key, e.message),
             }

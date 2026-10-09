@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-voice-has-provider-key"
+description = "Enables the voice_has_provider_key command without any pre-configured scope."
+commands.allow = ["voice_has_provider_key"]
+
+[[permission]]
+identifier = "deny-voice-has-provider-key"
+description = "Denies the voice_has_provider_key command without any pre-configured scope."
+commands.deny = ["voice_has_provider_key"]

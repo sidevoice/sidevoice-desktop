@@ -7,3 +7,4 @@ pub mod headset;
 pub mod i18n;
 pub mod media;
 pub mod settings;
+pub mod voice;

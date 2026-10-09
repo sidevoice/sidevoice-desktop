@@ -191,10 +191,6 @@ jobs:
           if grep -q "SIDEVOICE_DEBUG_PAGE" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the probe switch is in the release app"; exit 1; fi
           if grep -q "probe-engine" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the probe page is in the release app"; exit 1; fi
           if grep -q "probe-card" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the call controls probe is in the release app"; exit 1; fi
-          if grep -q "SIDEVOICE_DEBUG_ROOM_FLOW" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the room-flow switch is in the release app"; exit 1; fi
-          if grep -q "room-flow" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the room-flow script is in the release app"; exit 1; fi
-          if grep -q "SIDEVOICE_DEBUG_IDLE_UNLOAD_SECS" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the idle-time switch is in the release app"; exit 1; fi
-          if grep -Eq "SIDEVOICE_DEBUG_(REFUSE_LOAD|SLOW_TRANSCRIBE)" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "a fault switch is in the release app"; exit 1; fi
           if grep -Eq "SIDEVOICE_DEBUG_LOCAL_HOST_FLOW|local-host-flow" "$APP/Contents/MacOS/sidevoice-desktop"; then echo "the local-host flow is in the release app"; exit 1; fi
       - name: First open (no settings) — the bundled interface comes up in the real WKWebView
         if: needs.changes.outputs.installers == 'true'
@@ -211,7 +207,7 @@ jobs:
           # The interface loaded from the app itself, and its controller came up: the bridge attached to the
           # real web UI's store and actions, and reached the app over IPC.
           grep -q "page tauri://localhost/voice/index.html" /tmp/app.log
-          if grep -Eq "probe.html|room-flow" /tmp/app.log; then echo "a release ran a CI probe"; exit 1; fi
+          if grep -Eq "probe.html" /tmp/app.log; then echo "a release ran a CI probe"; exit 1; fi
           grep -q "ready: true" /tmp/app.log
       - name: With a target (a fake node on loopback)
         if: needs.changes.outputs.installers == 'true'
@@ -317,11 +313,6 @@ jobs:
           grep -q "SIDEVOICE_DEBUG_PAGE" "$BIN"
           grep -q "probe-engine" "$BIN"
           grep -q "probe-card" "$BIN"
-          grep -q "SIDEVOICE_DEBUG_ROOM_FLOW" "$BIN"
-          grep -q "room-flow" "$BIN"
-          grep -q "SIDEVOICE_DEBUG_IDLE_UNLOAD_SECS" "$BIN"
-          grep -q "SIDEVOICE_DEBUG_REFUSE_LOAD" "$BIN"
-          grep -q "SIDEVOICE_DEBUG_SLOW_TRANSCRIBE" "$BIN"
           grep -q "SIDEVOICE_DEBUG_LOCAL_HOST_FLOW" "$BIN"
           grep -q "local-host-flow" "$BIN"
       - name: The local host from the bundled page (stand-in core on local.sock, pairing, proxy, refusals)
@@ -382,11 +373,9 @@ jobs:
           APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
           python3 -u test/fixtures/fake-node.py 8768 > /tmp/probe-node.log 2>&1 &
           NODE=$!
-          # A model stays in memory 5 s unused here (10 minutes in a release), so the probe sees D13 happen.
-          SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_PAGE=probe.html SIDEVOICE_DEBUG_IDLE_UNLOAD_SECS=5 \
-            "$APP/Contents/MacOS/sidevoice-desktop" > /tmp/probe.log 2>&1 &
+          SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_PAGE=probe.html "$APP/Contents/MacOS/sidevoice-desktop" > /tmp/probe.log 2>&1 &
           PID=$!
-          for i in $(seq 1 240); do grep -q "probe-engine" /tmp/probe.log && break; sleep 1; done
+          for i in $(seq 1 480); do grep -q "probe-voice" /tmp/probe.log && break; sleep 1; done
           kill "$PID" || true
           cat /tmp/probe.log
           echo "--- macOS $(sw_vers -productVersion)"
@@ -397,39 +386,38 @@ jobs:
           kill "$NODE" || true
           grep -q 'probe-loopback 200 Bearer probe-token' /tmp/probe.log
           grep -q 'request OPTIONS /api/presentation/echo origin=tauri://localhost' /tmp/probe-node.log
-          grep "sidevoice: media" /tmp/probe.log || echo "(WebKit did not ask the app about the microphone)"
+          # The microphone is the app's here (host.voice): the page is never granted it.
+          if grep -q "sidevoice: media Microphone .*Allow" /tmp/probe.log; then echo "the page got the microphone"; exit 1; fi
           # The native engine inside the signed app, through the bridge the interface uses (docs/BRIDGE.md):
-          # capabilities with the OS's real memory (the CPU for sherpa-onnx, Metal for whisper.cpp, never Core ML),
-          # downloads with progress, the builds on disk by model + engine, Kokoro says a sentence and Whisper hears it,
-          # and a page engine is refused rather than replaced.
+          # capabilities with the OS's real memory (the CPU for sherpa-onnx, Metal for whisper.cpp, remote providers,
+          # never Core ML), downloads with progress, the builds on disk by model + engine, a page engine refused rather
+          # than replaced, and a cancelled download.
           grep -q 'probe-engine ok' /tmp/probe.log
-          grep -q 'probe-engine ok capabilities={"runs":"native","os":"macos","arch":"aarch64","has":\["cpu","metal"\]' /tmp/probe.log
-          grep -Eq 'probe-engine ok .*"memory_mb":[1-9][0-9]{3,}' /tmp/probe.log
-          grep -q 'probe-engine ok .* installed=kokoro-82m-v1.0@sherpa-onnx,whisper-tiny@sherpa-onnx ' /tmp/probe.log
-          grep -Eq 'probe-engine ok .* progress_calls=[1-9]' /tmp/probe.log
-          grep -q 'probe-engine ok .* refused=yes ' /tmp/probe.log
-          grep -iq 'probe-engine ok.*prueba' /tmp/probe.log
-          # Load → transcribe → unload (sidevoice/sidevoice-core#21 phase 3): loaded once, one model in memory each for every
-          # language (Spanish, then English), freed on unload; the OS's memory and what is available of it.
-          grep -q 'probe-engine ok .* before_load=kokoro-82m-v1.0@sherpa-onnx/cpu load_ms=' /tmp/probe.log
-          grep -q 'probe-engine ok .* load_ms=\([0-9]*\) load_again_ms=\1 ' /tmp/probe.log
-          grep -q 'probe-engine ok .* loaded=kokoro-82m-v1.0@sherpa-onnx/cpu,whisper-tiny@sherpa-onnx/cpu since_ok=true same_models=true unloaded=kokoro-82m-v1.0@sherpa-onnx/cpu ' /tmp/probe.log
-          grep -Eq 'probe-engine ok .* memory=\{"total_mb":[1-9][0-9]{3,},"available_mb":[1-9][0-9]*\}' /tmp/probe.log
-          grep -Eiq 'probe-engine ok .* text_en="[^"]*(test|voice)' /tmp/probe.log
-          # D13: after the call, unused for the idle time, both unloaded by the app; loaded again as the next call connects.
-          grep -q 'sidevoice: engine unloaded idle whisper-tiny@sherpa-onnx/cpu' /tmp/probe.log
-          grep -q 'sidevoice: engine unloaded idle kokoro-82m-v1.0@sherpa-onnx/cpu' /tmp/probe.log
-          grep -q 'sidevoice: engine preload whisper-tiny@sherpa-onnx/cpu load_ms=' /tmp/probe.log
-          grep -q 'probe-engine ok .* preloaded=kokoro-82m-v1.0@sherpa-onnx/cpu,whisper-tiny@sherpa-onnx/cpu ' /tmp/probe.log
-          # Cancel: a download stopped mid-way rejects with install_cancelled; progress events carry the job, the build
-          # and the speed; nothing of it is left on disk.
-          grep -q 'probe-engine ok .* cancel=true/install_cancelled/false cancel_gone=true progress_event=bytes_per_s+done+engine+job+model+total:true ' /tmp/probe.log
-          grep -Eq 'probe-engine ok .* speed=[1-9][0-9]* ' /tmp/probe.log
+          LINE=$(grep 'probe-engine ok' /tmp/probe.log)
+          echo "$LINE" | grep -q 'capabilities={"runs":"native","os":"macos","arch":"aarch64","has":\['
+          for accelerator in cpu metal remote; do echo "$LINE" | grep -q "\"has\":\[[^]]*\"$accelerator\""; done
+          if echo "$LINE" | grep -q '"coreml"'; then echo "Core ML offered"; exit 1; fi
+          echo "$LINE" | grep -Eq '"memory_mb":[1-9][0-9]{3,}'
+          echo "$LINE" | grep -q ' installed=kokoro-82m-v1.0@sherpa-onnx,silero-vad@sherpa-onnx,whisper-tiny@whisper-cpp '
+          echo "$LINE" | grep -Eq ' progress_calls=[1-9]'
+          echo "$LINE" | grep -q ' refused=yes '
+          echo "$LINE" | grep -Eq ' memory=\{"total_mb":[1-9][0-9]{3,},"available_mb":[1-9][0-9]*\}'
+          echo "$LINE" | grep -q ' cancel=true/install_cancelled/false cancel_gone=true progress_event=bytes_per_s+done+engine+job+model+total:true '
           # sidevoice-engine's storage: a folder per installed build, nothing of the cancelled one, nothing half written.
           ENGINE="$HOME/Library/Application Support/dev.sidevoice.desktop/sidevoice-engine"
           ls -laR "$ENGINE/models"
           if find "$ENGINE/models" -path '*whisper-small*' | grep -q .; then echo "a cancelled download left files"; exit 1; fi
           if find "$ENGINE/partial" -type f | grep -q .; then echo "a download was left half written"; exit 1; fi
+          # The voice call the app runs (host.voice): the seam's sixteen calls, the engine's catalogue with the voice
+          # activity detector, an unknown model refused by key, Whisper configured on whisper.cpp, and a start that
+          # settles: listening, or refused with the call's code where the runner has no microphone or speaker.
+          grep -q 'probe-voice ok' /tmp/probe.log
+          VOICE=$(grep 'probe-voice ok' /tmp/probe.log)
+          echo "$VOICE" | grep -q ' keys=16 '
+          echo "$VOICE" | grep -Eq ' models=[1-9][0-9]* vad=true unknown=voice_model_unknown '
+          grep -q 'sidevoice: voice settings: .*"build":"whisper-tiny/whisper-cpp-q5_1"' /tmp/probe.log
+          echo "$VOICE" | grep -Eq ' start=(ok|voice_failed/[a-z-]+) '
+          echo "--- voice"; grep 'sidevoice: voice' /tmp/probe.log || true
           # Headset buttons: a (simulated) call made the app the Now Playing app, and it let go after.
           grep -q 'probe-headset ok' /tmp/probe.log
           grep -q 'headset apply active=true in_call=true mic=true' /tmp/probe.log
@@ -588,77 +576,6 @@ jobs:
           path: card-shots/
           retention-days: 7
           if-no-files-found: warn
-      - name: Selecting models through the vendored room itself (consent, cancel, failure, slow, persistence)
-        run: |
-          set -euo pipefail
-          APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
-          # From nothing on disk, so the room downloads what it selects (the probe above downloaded into the same place).
-          rm -rf "$HOME/Library/Application Support/dev.sidevoice.desktop/sidevoice-engine"
-          # The machine the room is paired with (its identity proven; it stores the choices per machine).
-          python3 -u test/fixtures/fake-node.py 8768 > /tmp/room-node.log 2>&1 &
-          NODE=$!
-          # Real models; only a refused load (whisper-tiny) and a slow transcription (whisper-small) injected.
-          SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_ROOM_FLOW=1 SIDEVOICE_DEBUG_REFUSE_LOAD=whisper-tiny \
-            SIDEVOICE_DEBUG_SLOW_TRANSCRIBE=whisper-small/cpu:2500 \
-            "$APP/Contents/MacOS/sidevoice-desktop" > /tmp/room.log 2>&1 &
-          PID=$!
-          for i in $(seq 1 600); do grep -Eq "room-flow (ok|error)" /tmp/room.log && break; sleep 1; done
-          kill "$PID" "$NODE" || true
-          cat /tmp/room.log
-          cat ui/voice/web-source.json
-          ls -laR "$HOME/Library/Application Support/dev.sidevoice.desktop/sidevoice-engine/models"
-          # The actual vendored room (ui/voice), not a test page: its settings actions, controller, selection, native
-          # worker and storage, over this app's bridge and engine (test/fixtures/room-flow.js).
-          grep -q "page tauri://localhost/voice/index.html" /tmp/room.log
-          grep -q 'room-flow ok' /tmp/room.log
-          LINE=$(grep 'room-flow ok' /tmp/room.log)
-          # What the room asked the app, and the offers it resolved from it: the five native models, nothing of the page's.
-          echo "$LINE" | grep -q 'capabilities={"runs":"native","os":"macos","arch":"aarch64","has":\["cpu","metal"\]'
-          echo "$LINE" | grep -Eq '"memory_mb":[1-9][0-9]{3,}'
-          echo "$LINE" | grep -Eq ' engines=(sherpa-onnx/[a-z]+,?)+ '
-          for model in whisper-tiny whisper-base whisper-small whisper-large-v3-turbo; do echo "$LINE" | grep -Eq " offers_stt=[^ ]*$model"; done
-          echo "$LINE" | grep -q ' offers_tts=kokoro-82m-v1.0 '
-          if echo "$LINE" | grep -Eq 'transformers-js|webgpu|wasm'; then echo "a page engine in the app"; exit 1; fi
-          echo "$LINE" | grep -Eq ' shown_stt=[^ ]*whisper-tiny'
-          echo "$LINE" | grep -Eq ' shown_tts=[^ ]*kokoro-82m-v1.0'
-          echo "$LINE" | grep -q ' where=app '
-          # 1. Consent with the size, then download → load → two passes → in effect, stored, loaded.
-          echo "$LINE" | grep -Eq ' consent_size=[1-9][0-9]{7,} stored_before=none chosen=whisper-base/auto chosen_resident=whisper-base@sherpa-onnx/cpu chosen_passes=2 '
-          # 2. Cancelled mid-download: nothing stored, nothing loaded, nothing installed, the download row cancelled.
-          echo "$LINE" | grep -Eq ' cancel_at=[1-9][0-9]*/[1-9][0-9]* cancel_download=cancelled cancel_stored=whisper-base/auto cancel_resident=whisper-base@sherpa-onnx/cpu cancel_installed=false '
-          # 3. A failed load: its step and cause, the model in use still in use and alone in memory.
-          echo "$LINE" | grep -Eq ' fail_step=load fail_key=(runtime_failed|load_failed) fail_stored=whisper-base/auto fail_resident=whisper-base@sherpa-onnx/cpu '
-          # 4. A slow model: declined, nothing changes and it goes; accepted, it is stored and the one it replaced goes.
-          echo "$LINE" | grep -Eq ' slow_latency_ms=(2[0-9]{3}|[3-9][0-9]{3}) declined_stored=whisper-base/auto declined_resident=whisper-base@sherpa-onnx/cpu '
-          echo "$LINE" | grep -q ' accepted_stored=whisper-small/auto accepted_resident=whisper-small@sherpa-onnx/cpu '
-          # 5. After a reload, with the machine reached: settings show the stored choice; the next selection starts from it.
-          echo "$LINE" | grep -q ' reload_reach=ok reload_restored=whisper-small/auto reload_restored_pane=whisper-small/auto '
-          echo "$LINE" | grep -q ' reload_after_stored=whisper-base/auto reload_after_resident=whisper-base@sherpa-onnx/cpu'
-          grep -q 'request GET /api/device/identity' /tmp/room-node.log
-
-  engine:
-    name: Native engine on Apple Silicon (download, Kokoro → Whisper round trip)
-    needs: changes
-    if: needs.changes.outputs.native == 'true'
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.release-tag }}
-      - uses: ./.github/actions/setup-rust
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-      - name: Round trip on the accelerator the engine picks (the CPU)
-        working-directory: src-tauri
-        run: cargo run --release -p sidevoice-desktop-engine --example roundtrip -- "$RUNNER_TEMP/engine"
-      - name: Round trip naming the accelerator, as the page does
-        working-directory: src-tauri
-        run: cargo run --release -p sidevoice-desktop-engine --example roundtrip -- "$RUNNER_TEMP/engine" cpu
-      - name: Round trip hearing with whisper.cpp, on Metal
-        working-directory: src-tauri
-        run: cargo run --release -p sidevoice-desktop-engine --example roundtrip -- "$RUNNER_TEMP/engine" "" whisper-cpp
-
   linux:
     name: Linux (.deb, .AppImage)
     needs: changes
@@ -718,7 +635,7 @@ jobs:
   # rolling `nightly` pre-release (RELEASING.md). Pull requests never get here.
   publish:
     name: Publish (release or nightly)
-    needs: [changes, test, macos, engine, linux, windows]
+    needs: [changes, test, macos, linux, windows]
     if: needs.changes.outputs.publish != ''
     runs-on: ubuntu-24.04
     permissions:

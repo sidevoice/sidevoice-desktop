@@ -19,14 +19,17 @@ already have with your agent into a voice call. The agent keeps its context and 
 speaks its replies, and you answer by voice and can interrupt it — from the sofa or on a walk, not only at your desk.
 
 **sidevoice-desktop** is the app you call from, for macOS, Windows and Linux. A call lives in its own window with a
-tray icon and a global mute shortcut, and on Apple-Silicon Macs speech models run natively on your computer.
+tray icon and a global mute shortcut. On Macs the call itself runs natively: your microphone, turns, transcription,
+the agent's voice and its echo cancellation, on your computer.
 
 ## How it fits
 
 | Piece | Role |
 |---|---|
 | [sidevoice-connector](https://github.com/sidevoice/sidevoice-connector) | What you install on the machine where your agents run: their voice tools, and the supervisor of that machine's core. |
-| [sidevoice-core](https://github.com/sidevoice/sidevoice-core) | The conversations and the voice pipeline, next to the agents. The app talks to it. |
+| [sidevoice-core](https://github.com/sidevoice/sidevoice-core) | The room: the conversations, presence and routing to the agents. Text and events only; the app talks to it. |
+| [sidevoice-voice](https://github.com/sidevoice/sidevoice-voice) | The voice call: turns, transcription, speech, playback, barge-in, echo cancellation. Compiled into the app on macOS. |
+| [sidevoice-engine](https://github.com/sidevoice/sidevoice-engine) | The models, local and remote, and their catalogue. Compiled into the app. |
 | **sidevoice-desktop** (this repository) | The app you call from. |
 | [sidevoice-web](https://github.com/sidevoice/sidevoice-web) | The call interface. The app bundles a recorded build of it and never loads a remote page. |
 
@@ -38,9 +41,10 @@ Beta. What works today:
 - The tray (menu-bar) icon with the call state (idle, live, muted): mute, hang up, show the window, settings, quit.
   Closing the window keeps the call going.
 - A global mute shortcut (⌘⇧M on macOS, Ctrl+Shift+M elsewhere; configurable).
-- On Apple-Silicon Macs (macOS 13+), transcription (Whisper) and speech (Kokoro) in the app's native engine,
-  downloaded the first time you choose a model. On every platform, a provider (OpenAI, ElevenLabs) with your own
-  key, kept on your machine. The Windows and Linux builds do not include a local speech engine yet.
+- On Macs (macOS 13+), the voice call runs in the app: the microphone and the speaker with the app's own echo
+  cancellation (WebRTC AEC3), transcription (Whisper, on Metal on Apple Silicon) and speech (Kokoro) downloaded the
+  first time they are needed, or a provider (OpenAI, ElevenLabs) with your own key, kept in the macOS keychain. The
+  Windows and Linux builds run the call in the page.
 
 The macOS build is ad-hoc signed and not notarized yet, so macOS blocks it on first open (below).
 
@@ -76,15 +80,15 @@ OpenSSL and xdo development packages).
 npm ci
 npm test                                   # the bridge script
 cd src-tauri
-cargo test -p sidevoice-desktop-core       # settings, bridge contract, media rules
+cargo test -p sidevoice-desktop-core       # settings, bridge contract, media rules, the voice call's builds
 cargo clippy --workspace --all-targets -- -D warnings
 npx tauri dev                              # needs a desktop: macOS, Windows, or Linux with WebKitGTK 4.1
 ```
 
 ```
-src-tauri/src/       the shell: windows, tray, shortcut, commands
-src-tauri/core/      pure logic (settings, bridge contract, media rules), testable without Tauri
-src-tauri/engine/    the app's side of sidevoice-engine (ids, install jobs, what stays in memory)
+src-tauri/src/       the shell: windows, tray, shortcut, commands, the voice call (voice.rs) and its keychain
+src-tauri/core/      pure logic (settings, bridge contract, media rules, voice builds), testable without Tauri
+src-tauri/engine/    the app's side of sidevoice-engine (ids, install jobs, refusals)
 bridge/              the script injected into the call page: the page side of the bridge
 ui/                  the settings window; ui/voice*/ hold the bundled web interface
 brand/               the brand files the icons and installer art are generated from

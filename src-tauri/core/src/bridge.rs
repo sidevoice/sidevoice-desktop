@@ -11,6 +11,7 @@ pub const SCRIPT_TEMPLATE: &str = include_str!("../../../bridge/desktop-bridge.j
 const ORIGIN_PLACEHOLDER: &str = "\"__SIDEVOICE_ROOM_ORIGIN__\"";
 const MEDIA_KEYS_PLACEHOLDER: &str = "\"__SIDEVOICE_MEDIA_KEYS__\"";
 const LOCAL_HOST_PLACEHOLDER: &str = "\"__SIDEVOICE_LOCAL_HOST__\"";
+const VOICE_PLACEHOLDER: &str = "\"__SIDEVOICE_VOICE__\"";
 
 /// Who answers the headset's buttons and media keys in a call: `native` where the app does (macOS,
 /// `src/headset.rs`), so the page does not answer them too; `None` elsewhere (the page's Media Session does).
@@ -25,6 +26,13 @@ pub fn media_keys() -> Option<&'static str> {
 /// Whether the app offers this computer's own core, the local host (`window.__sidevoiceDesktop.host.localHost`,
 /// docs/LOCAL_HOST.md): on macOS only, the beta's app platform (design O2). Elsewhere the app is a remote client.
 pub fn local_host_offered() -> bool {
+    cfg!(target_os = "macos")
+}
+
+/// Whether the app runs the voice call itself (`window.__sidevoiceDesktop.host.voice`, docs/BRIDGE.md → "The voice
+/// call"): on macOS only, where its echo canceller builds and the beta ships. Elsewhere the page runs the call, and the
+/// room window grants it the microphone (`media::decide`).
+pub fn voice_offered() -> bool {
     cfg!(target_os = "macos")
 }
 
@@ -47,12 +55,12 @@ pub fn call_controls_push(patch: &serde_json::Value) -> String {
 pub fn script_for_origin(origin: &str) -> String {
     let literal = serde_json::to_string(origin).expect("a string serialises");
     let keys = serde_json::to_string(&media_keys()).expect("serialises");
-    let local_host = if local_host_offered() { "true" } else { "false" };
-    SCRIPT_TEMPLATE.replacen(ORIGIN_PLACEHOLDER, &literal, 1).replacen(MEDIA_KEYS_PLACEHOLDER, &keys, 1).replacen(
-        LOCAL_HOST_PLACEHOLDER,
-        local_host,
-        1,
-    )
+    let flag = |offered: bool| if offered { "true" } else { "false" };
+    SCRIPT_TEMPLATE
+        .replacen(ORIGIN_PLACEHOLDER, &literal, 1)
+        .replacen(MEDIA_KEYS_PLACEHOLDER, &keys, 1)
+        .replacen(LOCAL_HOST_PLACEHOLDER, flag(local_host_offered()), 1)
+        .replacen(VOICE_PLACEHOLDER, flag(voice_offered()), 1)
 }
 
 /// The bridge's version: the room page sends it in every snapshot (bridge/desktop-bridge.js).
@@ -211,7 +219,8 @@ mod tests {
         assert!(!s.contains("__SIDEVOICE_ROOM_ORIGIN__"));
         assert!(!s.contains("__SIDEVOICE_MEDIA_KEYS__"));
         assert!(!s.contains("__SIDEVOICE_LOCAL_HOST__"));
-        let keys = if cfg!(target_os = "macos") { r#""native", true)"# } else { "null, false)" };
+        assert!(!s.contains("__SIDEVOICE_VOICE__"));
+        let keys = if cfg!(target_os = "macos") { r#""native", true, true)"# } else { "null, false, false)" };
         assert!(s.contains(&format!(r#"factory(window, "https://voice.example.com", {keys}"#)), "{keys}");
         // A hostile value cannot break out of the string literal.
         let evil = script_for_origin("\"); alert(1); (\"");
