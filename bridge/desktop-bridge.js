@@ -63,7 +63,7 @@
    *  translates, and an English sentence for one it does not know (docs/BRIDGE.md → "Refusals"). */
   function nativeEngine() {
     return {
-      /** `{runs: "native", os, arch, has: ["cpu", "coreml", …], memory_mb}` (`memory_mb` null when unknown). */
+      /** `{runs: "native", os, arch, has: ["cpu", "metal", …], memory_mb}` (`memory_mb` null when unknown). */
       capabilities: () => call("engine_capabilities"),
       /** `[{model, engine}]`: the builds already on disk. */
       installed: () => call("engine_installed"),

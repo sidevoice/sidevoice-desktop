@@ -2,7 +2,7 @@ name: build
 
 # What runs when (RELEASING.md):
 # - pull request: lint + unit tests on Linux, and the Windows and Linux app builds (the repo is public: Actions
-#   minutes are free); the Apple-Silicon native-engine jobs only when the engine, the bridge, the catalogue or the CI
+#   minutes are free); the Apple-Silicon native-engine jobs only when the engine, its pin, the bridge or the CI
 #   probes change (`changes` below).
 # - push to main, manual run: everything, installers included; a green run on main replaces the `nightly` pre-release.
 # - a release (called by release-please.yml with the tag it created): everything, attached to that release.
@@ -41,9 +41,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
+      - uses: ./.github/actions/setup-rust
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -113,6 +111,12 @@ jobs:
           filters: |
             native:
               - 'src-tauri/engine/**'
+              - 'src-tauri/Cargo.toml'
+              - 'src-tauri/Cargo.lock'
+              - 'src-tauri/rust-toolchain.toml'
+              - 'src-tauri/Entitlements.plist'
+              - '.github/actions/**'
+              - '.github/workflows/build.yml'
               - 'src-tauri/local-host/**'
               - 'src-tauri/src/local_host.rs'
               - 'src-tauri/src/engine_ipc.rs'
@@ -125,7 +129,6 @@ jobs:
               - 'src-tauri/core/src/engines.rs'
               - 'src-tauri/core/src/bridge.rs'
               - 'bridge/**'
-              - 'catalog/**'
               - 'test/fixtures/**'
               - 'ui/voice/**'
 
@@ -138,9 +141,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.release-tag }}
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin
+      - uses: ./.github/actions/setup-rust
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -171,7 +172,8 @@ jobs:
           codesign -d --entitlements - --xml "$APP" > /tmp/ent.xml
           cat /tmp/ent.xml; echo
           grep -q "com.apple.security.device.audio-input" /tmp/ent.xml
-          grep -q "com.apple.security.cs.disable-library-validation" /tmp/ent.xml
+          # The engine is linked into the app: no downloaded library is loaded, so library validation stays on.
+          if grep -q "com.apple.security.cs.disable-library-validation" /tmp/ent.xml; then echo "library validation is off"; exit 1; fi
           echo "--- icon"
           test "$(plutil -extract CFBundleIconFile raw "$APP/Contents/Info.plist")" = "icon.icns"
           iconutil --convert iconset --output /tmp/icon.iconset "$APP/Contents/Resources/icon.icns"
@@ -397,10 +399,11 @@ jobs:
           grep -q 'request OPTIONS /api/presentation/echo origin=tauri://localhost' /tmp/probe-node.log
           grep "sidevoice: media" /tmp/probe.log || echo "(WebKit did not ask the app about the microphone)"
           # The native engine inside the signed app, through the bridge the interface uses (docs/BRIDGE.md):
-          # capabilities with the OS's real memory, downloads with progress, the builds on disk by model + engine,
-          # Kokoro says a sentence and Whisper hears it, and a page engine is refused rather than replaced.
+          # capabilities with the OS's real memory (the CPU for sherpa-onnx, Metal for whisper.cpp, never Core ML),
+          # downloads with progress, the builds on disk by model + engine, Kokoro says a sentence and Whisper hears it,
+          # and a page engine is refused rather than replaced.
           grep -q 'probe-engine ok' /tmp/probe.log
-          grep -q 'probe-engine ok capabilities={"runs":"native","os":"macos","arch":"aarch64","has":\["cpu","coreml"' /tmp/probe.log
+          grep -q 'probe-engine ok capabilities={"runs":"native","os":"macos","arch":"aarch64","has":\["cpu","metal"\]' /tmp/probe.log
           grep -Eq 'probe-engine ok .*"memory_mb":[1-9][0-9]{3,}' /tmp/probe.log
           grep -q 'probe-engine ok .* installed=kokoro-82m-v1.0@sherpa-onnx,whisper-tiny@sherpa-onnx ' /tmp/probe.log
           grep -Eq 'probe-engine ok .* progress_calls=[1-9]' /tmp/probe.log
@@ -422,9 +425,11 @@ jobs:
           # and the speed; nothing of it is left on disk.
           grep -q 'probe-engine ok .* cancel=true/install_cancelled/false cancel_gone=true progress_event=bytes_per_s+done+engine+job+model+total:true ' /tmp/probe.log
           grep -Eq 'probe-engine ok .* speed=[1-9][0-9]* ' /tmp/probe.log
-          MODELS="$HOME/Library/Application Support/dev.sidevoice.desktop/engines/models/sherpa-onnx"
-          ls -la "$MODELS"
-          if ls "$MODELS" | grep -q whisper-small; then echo "a cancelled download left files"; exit 1; fi
+          # sidevoice-engine's storage: a folder per installed build, nothing of the cancelled one, nothing half written.
+          ENGINE="$HOME/Library/Application Support/dev.sidevoice.desktop/sidevoice-engine"
+          ls -laR "$ENGINE/models"
+          if find "$ENGINE/models" -path '*whisper-small*' | grep -q .; then echo "a cancelled download left files"; exit 1; fi
+          if find "$ENGINE/partial" -type f | grep -q .; then echo "a download was left half written"; exit 1; fi
           # Headset buttons: a (simulated) call made the app the Now Playing app, and it let go after.
           grep -q 'probe-headset ok' /tmp/probe.log
           grep -q 'headset apply active=true in_call=true mic=true' /tmp/probe.log
@@ -588,28 +593,27 @@ jobs:
           set -euo pipefail
           APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
           # From nothing on disk, so the room downloads what it selects (the probe above downloaded into the same place).
-          rm -rf "$HOME/Library/Application Support/dev.sidevoice.desktop/engines"
+          rm -rf "$HOME/Library/Application Support/dev.sidevoice.desktop/sidevoice-engine"
           # The machine the room is paired with (its identity proven; it stores the choices per machine).
           python3 -u test/fixtures/fake-node.py 8768 > /tmp/room-node.log 2>&1 &
           NODE=$!
-          # Real models; only a refused load (whisper-tiny) and a slow transcription (whisper-base on Core ML) injected.
+          # Real models; only a refused load (whisper-tiny) and a slow transcription (whisper-small) injected.
           SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_ROOM_FLOW=1 SIDEVOICE_DEBUG_REFUSE_LOAD=whisper-tiny \
-            SIDEVOICE_DEBUG_SLOW_TRANSCRIBE=whisper-base/coreml:2500 \
+            SIDEVOICE_DEBUG_SLOW_TRANSCRIBE=whisper-small/cpu:2500 \
             "$APP/Contents/MacOS/sidevoice-desktop" > /tmp/room.log 2>&1 &
           PID=$!
           for i in $(seq 1 600); do grep -Eq "room-flow (ok|error)" /tmp/room.log && break; sleep 1; done
           kill "$PID" "$NODE" || true
           cat /tmp/room.log
           cat ui/voice/web-source.json
-          MODELS="$HOME/Library/Application Support/dev.sidevoice.desktop/engines/models/sherpa-onnx"
-          ls -la "$MODELS"
+          ls -laR "$HOME/Library/Application Support/dev.sidevoice.desktop/sidevoice-engine/models"
           # The actual vendored room (ui/voice), not a test page: its settings actions, controller, selection, native
           # worker and storage, over this app's bridge and engine (test/fixtures/room-flow.js).
           grep -q "page tauri://localhost/voice/index.html" /tmp/room.log
           grep -q 'room-flow ok' /tmp/room.log
           LINE=$(grep 'room-flow ok' /tmp/room.log)
           # What the room asked the app, and the offers it resolved from it: the five native models, nothing of the page's.
-          echo "$LINE" | grep -q 'capabilities={"runs":"native","os":"macos","arch":"aarch64","has":\["cpu","coreml"'
+          echo "$LINE" | grep -q 'capabilities={"runs":"native","os":"macos","arch":"aarch64","has":\["cpu","metal"\]'
           echo "$LINE" | grep -Eq '"memory_mb":[1-9][0-9]{3,}'
           echo "$LINE" | grep -Eq ' engines=(sherpa-onnx/[a-z]+,?)+ '
           for model in whisper-tiny whisper-base whisper-small whisper-large-v3-turbo; do echo "$LINE" | grep -Eq " offers_stt=[^ ]*$model"; done
@@ -622,14 +626,13 @@ jobs:
           echo "$LINE" | grep -Eq ' consent_size=[1-9][0-9]{7,} stored_before=none chosen=whisper-base/auto chosen_resident=whisper-base@sherpa-onnx/cpu chosen_passes=2 '
           # 2. Cancelled mid-download: nothing stored, nothing loaded, nothing installed, the download row cancelled.
           echo "$LINE" | grep -Eq ' cancel_at=[1-9][0-9]*/[1-9][0-9]* cancel_download=cancelled cancel_stored=whisper-base/auto cancel_resident=whisper-base@sherpa-onnx/cpu cancel_installed=false '
-          if ls "$MODELS" | grep -q whisper-small; then echo "a cancelled download left files"; exit 1; fi
           # 3. A failed load: its step and cause, the model in use still in use and alone in memory.
           echo "$LINE" | grep -Eq ' fail_step=load fail_key=(runtime_failed|load_failed) fail_stored=whisper-base/auto fail_resident=whisper-base@sherpa-onnx/cpu '
-          # 4. Slow on Core ML: declined, nothing changes and its copy goes; accepted, it is stored and the old copy goes.
+          # 4. A slow model: declined, nothing changes and it goes; accepted, it is stored and the one it replaced goes.
           echo "$LINE" | grep -Eq ' slow_latency_ms=(2[0-9]{3}|[3-9][0-9]{3}) declined_stored=whisper-base/auto declined_resident=whisper-base@sherpa-onnx/cpu '
-          echo "$LINE" | grep -q ' accepted_stored=whisper-base/coreml accepted_resident=whisper-base@sherpa-onnx/coreml '
+          echo "$LINE" | grep -q ' accepted_stored=whisper-small/auto accepted_resident=whisper-small@sherpa-onnx/cpu '
           # 5. After a reload, with the machine reached: settings show the stored choice; the next selection starts from it.
-          echo "$LINE" | grep -q ' reload_reach=ok reload_restored=whisper-base/coreml reload_restored_pane=whisper-base/sherpa-onnx/coreml '
+          echo "$LINE" | grep -q ' reload_reach=ok reload_restored=whisper-small/auto reload_restored_pane=whisper-small/auto '
           echo "$LINE" | grep -q ' reload_after_stored=whisper-base/auto reload_after_resident=whisper-base@sherpa-onnx/cpu'
           grep -q 'request GET /api/device/identity' /tmp/room-node.log
 
@@ -642,20 +645,19 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.release-tag }}
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-rust
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-      - name: Round trip on the accelerator the resolver picks (CPU)
+      - name: Round trip on the accelerator the engine picks (the CPU)
         working-directory: src-tauri
-        run: cargo run --release -p sidevoice-desktop-engine --example roundtrip -- "$RUNNER_TEMP/engines"
-      - name: Round trip with Core ML (informational)
-        continue-on-error: true
+        run: cargo run --release -p sidevoice-desktop-engine --example roundtrip -- "$RUNNER_TEMP/engine"
+      - name: Round trip naming the accelerator, as the page does
         working-directory: src-tauri
-        run: cargo run --release -p sidevoice-desktop-engine --example roundtrip -- "$RUNNER_TEMP/engines" coreml
-      - name: The engine's libraries (for the record)
-        run: |
-          find "$RUNNER_TEMP/engines/engines" -name "*.dylib" -exec sh -c 'echo "== $1"; otool -L "$1" | head -8; codesign -dv "$1" 2>&1 | head -3' _ {} \;
+        run: cargo run --release -p sidevoice-desktop-engine --example roundtrip -- "$RUNNER_TEMP/engine" cpu
+      - name: Round trip hearing with whisper.cpp, on Metal
+        working-directory: src-tauri
+        run: cargo run --release -p sidevoice-desktop-engine --example roundtrip -- "$RUNNER_TEMP/engine" "" whisper-cpp
 
   linux:
     name: Linux (.deb, .AppImage)
@@ -668,7 +670,7 @@ jobs:
       - run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-rust
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -695,7 +697,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.release-tag }}
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-rust
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri

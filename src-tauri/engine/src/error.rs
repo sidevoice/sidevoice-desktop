@@ -1,7 +1,9 @@
 //! What the native engine answers when it will not or cannot do something, in the shape of sidevoice-core's
 //! refusals: a stable `key` the page translates, the parameters its message needs (beside it, flat), and the
 //! sentence in English for a client that does not know the key. Every key is made here, and listed in
-//! docs/BRIDGE.md → "Refusals"; a new one goes in both.
+//! docs/BRIDGE.md → "Refusals"; a new one goes in both. sidevoice-engine fails with stable codes of its own
+//! (`digest-mismatch`, `model-load-failed`…): `engine_failed` turns each into one of these keys, with the engine's
+//! code beside it as `code`.
 
 use serde::Serialize;
 use serde_json::Value;
@@ -50,18 +52,6 @@ pub fn engine_unsupported(engine: &str) -> Error {
     Error::new("engine_unsupported", format!("This app cannot run the engine {engine}.")).with("engine", engine)
 }
 
-pub fn engine_no_package(engine: &str, platform: &str) -> Error {
-    Error::new("engine_no_package", format!("{engine} has no package for this device ({platform})."))
-        .with("engine", engine)
-        .with("platform", platform)
-}
-
-pub fn family_unsupported(engine: &str, family: &str) -> Error {
-    Error::new("family_unsupported", format!("This app does not run {family} models on {engine}."))
-        .with("engine", engine)
-        .with("family", family)
-}
-
 pub fn model_unknown(model: &str) -> Error {
     Error::new("model_unknown", format!("Unknown model {model}.")).with("model", model)
 }
@@ -73,10 +63,15 @@ pub fn build_missing(model: &str, engine: &str) -> Error {
 }
 
 /// The build exists but not for this device: a feature it needs, or an accelerator it can use, is missing here.
-pub fn build_unfit(model: &str, engine: &str) -> Error {
-    Error::new("build_unfit", format!("{model} on {engine} does not run on this device."))
+/// `reason`: the engine's code for why, when it gave one (`build-accelerator`, `no-runtime-for-platform`…).
+pub fn build_unfit(model: &str, engine: &str, reason: Option<&str>) -> Error {
+    let refusal = Error::new("build_unfit", format!("{model} on {engine} does not run on this device."))
         .with("model", model)
-        .with("engine", engine)
+        .with("engine", engine);
+    match reason {
+        Some(reason) => refusal.with("reason", reason),
+        None => refusal,
+    }
 }
 
 pub fn model_needs_memory(model: &str, needed_mb: u64, memory_mb: u64) -> Error {
@@ -111,22 +106,17 @@ pub fn voice_unknown(model: &str, voice: &str) -> Error {
     Error::new("voice_unknown", format!("{model} has no voice {voice}.")).with("model", model).with("voice", voice)
 }
 
-pub fn language_unsupported(language: &str) -> Error {
-    Error::new("language_unsupported", format!("The model does not know the language {language:?}."))
-        .with("language", language)
-}
-
-pub fn download_refused(url: &str) -> Error {
-    Error::new("download_refused", format!("Refusing a download that is not https: {url}")).with("url", url)
-}
-
-pub fn download_failed(url: &str, detail: impl fmt::Display) -> Error {
-    Error::new("download_failed", format!("Could not download {url}: {detail}")).with("url", url)
+pub fn download_failed(model: &str, engine: &str) -> Error {
+    Error::new("download_failed", format!("Could not download {model} on {engine}."))
+        .with("model", model)
+        .with("engine", engine)
 }
 
 /// The bytes downloaded are not the ones the catalogue names (SHA-256).
-pub fn download_corrupt(url: &str) -> Error {
-    Error::new("download_corrupt", format!("{url} is not the file the catalogue names.")).with("url", url)
+pub fn download_corrupt(model: &str, engine: &str) -> Error {
+    Error::new("download_corrupt", format!("A file of {model} on {engine} is not the one the catalogue names."))
+        .with("model", model)
+        .with("engine", engine)
 }
 
 /// Unpacking or moving a download into place failed (disk full, permissions, an archive without its files).
@@ -139,6 +129,26 @@ pub fn install_cancelled() -> Error {
     Error::new("install_cancelled", "The download was cancelled.")
 }
 
+/// The page cancelled the install after its download had ended, and another build of the model was installed before
+/// it: the engine removes only whole models, so this build stays installed rather than taking the other with it.
+pub fn install_cancel_late(model: &str, engine: &str) -> Error {
+    Error::new(
+        "install_cancel_late",
+        format!("{model} on {engine} had finished downloading: it stays installed; remove it to free its space."),
+    )
+    .with("model", model)
+    .with("engine", engine)
+}
+
+/// The page cancelled the install after its download had ended, and removing what it downloaded failed (`code`, the
+/// engine's: `model-in-use`, a storage failure): it may still be on disk.
+pub fn install_cancel_failed(error: sidevoice_engine::Error, model: &str, engine: &str) -> Error {
+    Error::new("install_cancel_failed", format!("{model} on {engine} could not be removed after the cancel."))
+        .with("model", model)
+        .with("engine", engine)
+        .with("code", error.code)
+}
+
 /// The page unloaded the build while it was loading: it is not kept in memory.
 pub fn load_cancelled(model: &str, engine: &str, accelerator: &str) -> Error {
     Error::new("load_cancelled", format!("{model} on {engine} ({accelerator}) was unloaded while it was loading."))
@@ -147,9 +157,41 @@ pub fn load_cancelled(model: &str, engine: &str, accelerator: &str) -> Error {
         .with("accelerator", accelerator)
 }
 
-/// The engine refused to load or to run (a library that fails its hash, a model the runtime rejects).
+/// The engine refused to load or to run (a model the runtime rejects, a transcription that failed).
 pub fn runtime_failed(engine: &str, detail: impl fmt::Display) -> Error {
     Error::new("runtime_failed", format!("{engine} failed: {detail}")).with("engine", engine)
+}
+
+/// What sidevoice-engine failed with, doing something with `model` on `engine`, as the page's key; the engine's own
+/// code goes with it as `code`. Codes it adds later fall to `runtime_failed`, still with their `code`.
+pub fn engine_failed(error: sidevoice_engine::Error, model: &str, engine: &str) -> Error {
+    let code = error.code;
+    let refusal = match code {
+        "cancelled" => return install_cancelled(),
+        "model-not-found" => model_unknown(model),
+        "build-not-found" => build_missing(model, engine),
+        "backend-not-in-this-build" => engine_unsupported(engine),
+        "no-build-available" | "no-runtime-for-platform" | "no-accelerator" | "build-accelerator" => {
+            build_unfit(model, engine, None)
+        }
+        "download-failed" => download_failed(model, engine),
+        "digest-mismatch" => download_corrupt(model, engine),
+        "file-not-installed" => not_installed(model, engine),
+        "unknown-voice" => {
+            Error::new("voice_unknown", format!("{model} does not have that voice.")).with("model", model)
+        }
+        "model-cannot-transcribe" => model_wrong_task(model, "speech-to-text"),
+        "model-cannot-speak" => model_wrong_task(model, "text-to-speech"),
+        code if code.starts_with("archive-")
+            || code.starts_with("storage-")
+            || code.starts_with("file-")
+            || matches!(code, "digest-invalid" | "artifact-key-conflict") =>
+        {
+            install_failed(code)
+        }
+        _ => runtime_failed(engine, code),
+    };
+    refusal.with("code", code)
 }
 
 #[cfg(test)]
@@ -166,5 +208,24 @@ mod tests {
                 "message": "whisper-small on sherpa-onnx is not downloaded yet."
             })
         );
+    }
+
+    #[test]
+    fn an_engine_failure_is_one_of_the_page_s_keys_with_the_engine_s_code_beside_it() {
+        let failed = |code| super::engine_failed(sidevoice_engine::Error::new(code), "whisper-base", "sherpa-onnx");
+        assert_eq!(failed("cancelled"), super::install_cancelled());
+        for (code, key) in [
+            ("model-not-found", "model_unknown"),
+            ("digest-mismatch", "download_corrupt"),
+            ("download-failed", "download_failed"),
+            ("archive-corrupt", "install_failed"),
+            ("storage-failed", "install_failed"),
+            ("model-load-failed", "runtime_failed"),
+            ("transcription-failed", "runtime_failed"),
+            ("a-code-from-a-later-engine", "runtime_failed"),
+        ] {
+            let error = failed(code);
+            assert_eq!((error.key, &error.params["code"]), (key, &serde_json::json!(code)), "{code}");
+        }
     }
 }

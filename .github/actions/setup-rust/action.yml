@@ -1,0 +1,44 @@
+name: Set up Rust and the native engine's libraries
+description: >-
+  Installs the Rust toolchain src-tauri/rust-toolchain.toml pins, and fetches the sherpa-onnx static libraries that
+  sidevoice-engine links, with that engine's own `cargo xtask sherpa-libs` at the commit src-tauri/Cargo.lock pins:
+  checked against the digests it pins, kept outside target/ and linked through SHERPA_ONNX_LIB_DIR (which the command
+  exports), so no build script downloads anything unchecked.
+
+runs:
+  using: composite
+  steps:
+    - name: Toolchain (src-tauri/rust-toolchain.toml)
+      shell: bash
+      working-directory: src-tauri
+      run: |
+        set -euo pipefail
+        rustup toolchain install
+        rustc --version
+    - name: The engine at the commit Cargo.lock pins
+      id: engine
+      shell: bash
+      run: |
+        set -euo pipefail
+        SOURCE=$(grep -o '"git+https://github.com/sidevoice/sidevoice-engine[^"]*"' src-tauri/Cargo.lock | head -1)
+        REV=${SOURCE##*#}; REV=${REV%\"}
+        [ ${#REV} = 40 ] || { echo "no sidevoice-engine commit in src-tauri/Cargo.lock: $SOURCE"; exit 1; }
+        DIR="$RUNNER_TEMP/sidevoice-engine"
+        rm -rf "$DIR" && git init -q "$DIR"
+        git -C "$DIR" fetch -q --depth 1 https://github.com/sidevoice/sidevoice-engine "$REV"
+        git -C "$DIR" checkout -q FETCH_HEAD
+        echo "rev=$REV" >> "$GITHUB_OUTPUT"
+        echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+    - uses: actions/cache@v4
+      with:
+        path: ~/.cache/sidevoice-engine/sherpa-onnx
+        # By the engine's commit: its xtask/sherpa-onnx-libs.json is outside the workspace, where hashFiles cannot see.
+        key: sherpa-onnx-libs-${{ runner.os }}-${{ runner.arch }}-${{ steps.engine.outputs.rev }}
+    # From src-tauri, so the pinned toolchain builds the xtask too. Without its default features it does not build
+    # the engine (nor sherpa-onnx-sys) before the libraries are there.
+    - name: sherpa-onnx's libraries (cargo xtask sherpa-libs)
+      shell: bash
+      working-directory: src-tauri
+      env:
+        ENGINE: ${{ steps.engine.outputs.dir }}
+      run: cargo run --quiet --locked --manifest-path "$ENGINE/xtask/Cargo.toml" --no-default-features -- sherpa-libs

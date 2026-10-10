@@ -194,7 +194,7 @@ engine reports, and runs the build it chose through it. `window.__sidevoiceDeskt
 
 | Call | Returns / does |
 |---|---|
-| `capabilities()` | `{runs: "native", os: "macos"\|"windows"\|"linux", arch: "aarch64"\|"x86_64", has: ["cpu", "coreml", …], memory_mb: number\|null}` — `memory_mb` is the machine's total, from the OS |
+| `capabilities()` | `{runs: "native", os: "macos"\|"windows"\|"linux", arch: "aarch64"\|"x86_64", has: ["cpu", …], memory_mb: number\|null}` — `has` is what sidevoice-engine runs a model on here (`cpu`; `metal` on Apple Silicon, for whisper.cpp), never Core ML, `memory_mb` the machine's total, from the OS |
 | `installed()` | `[{model, engine}]` — builds whose engine package and model files are on disk and whole: the download's marker names its hash, and its root and every file the engine needs from it are there |
 | `install(model, engine, onProgress?)` | downloads the engine package and the model's build, whichever is missing or incomplete (a download that lost a file is fetched again). Returns a promise that also carries the install's job id from the start, `promise.job` (a string), for `cancel`. `onProgress(event)` about twice a second, only with this call's own bytes (below) |
 | `cancel(job)` | cancels that install, waiting or running; its `install` promise rejects with `{key: "install_cancelled", message}` and the model is not on disk afterwards (unless it already was before the install), so a `load` of it is refused `not_installed`. Resolves `true` when the install will reject so — also when it has not reached the app yet (it is refused as it arrives) — and `false` when it had already ended (a no-op, never a rejection) |
@@ -206,11 +206,11 @@ engine reports, and runs the build it chose through it. `window.__sidevoiceDeskt
 | `memory()` | `{total_mb, available_mb}`: the machine's memory and what is available of it now, each `null` when the OS does not say. On macOS `available_mb` is the share the kernel's memory-pressure level reports free (`kern.memorystatus_level`): a gauge, not a limit, since macOS compresses and swaps rather than fail |
 
 - `model` is the catalogue id (`whisper-small`, `kokoro-82m-v1.0`), `engine` the build's engine id
-  (`sherpa-onnx`). The app runs exactly that build or refuses it (below), and never another build instead. Before
+  (`sherpa-onnx`): sidevoice-engine's model id and backend id, the same ids the core's catalogue uses. The app runs exactly that build or refuses it (below), and never another build instead. Before
   it downloads or runs anything it checks, at this trust boundary, that the build runs here: an adapter for the
   engine, a package for this OS/architecture, the build's needs and accelerators, and the model's
   `requires.memory_mb` against the machine's memory (unknown memory is not a refusal).
-- `accelerator` (optional, `cpu`, `coreml`…): the one the page chose for that build (the resolver's, or the
+- `accelerator` (optional, `cpu`, `metal`…): the one the page chose for that build (the resolver's, or the
   person's in *Avanzado*). It must be one the build can use here, or the call is refused. Without it the app uses
   the first the build can use on this device, which is what the resolver picks.
 - A build is in memory once per engine, model and accelerator. The language is each call's (`transcribe`'s, the
@@ -227,17 +227,18 @@ engine reports, and runs the build it chose through it. `window.__sidevoiceDeskt
     "done": 52428800, "total": 639387718, "bytes_per_s": 31457280 }
   ```
 
-  `done`/`total` are this job's bytes across what it downloads (the engine package if missing, then the model);
-  `total` comes from the catalogue, so it is known from the first report (0 when nothing is left to fetch).
+  `done`/`total` are this job's bytes across the build's files; `total` comes from sidevoice-engine's catalogue, so it
+  is known from the first report (0 when nothing is left to fetch).
   `bytes_per_s` is `null` until the first second is measured, then the speed sampled each second, each sample
   weighing half against the speed before it; time left is `(total - done) / bytes_per_s`.
 - A cancelled install stops within a moment, whatever it is doing: waiting for another install, waiting on the
   network — for the answer's headers or its next chunk, however long the server has gone quiet: the request is
-  dropped and its connection closed — or unpacking (at the next archive entry). It frees the install lock, removes
-  what it was downloading (the partial file, the unpacking directory, the unmarked slot) and rejects with
-  `install_cancelled`. A download it had already completed — the engine package before the model — is whole and
-  verified, and stays. A cancel the app accepted always wins: one that lands as the files are moved into place
-  removes the model again, and a transport error that follows it (the connection it closed) is still
+  dropped and its connection closed — or unpacking. It frees the install lock, removes
+  what it was downloading (sidevoice-engine stores a file only once it is whole and verified) and rejects with
+  `install_cancelled`. A file it had already completed is whole and verified, and stays. A cancel the app accepted wins: one that lands as the files are moved into place
+  removes the model again, unless another build of it was installed before (the engine removes only whole models:
+  the build then stays and the install rejects with `install_cancel_late`; a removal that fails rejects with
+  `install_cancel_failed`), and a transport error that follows it (the connection it closed) is still
   `install_cancelled`, never `download_failed`. Any other failed download is cleaned up the same way. There is no
   overall download timeout: a slow line is not a failure, and the cancel is how a person stops one.
 - Commands behind it (`src-tauri/src/engine_ipc.rs`): `engine_capabilities`, `engine_installed`,
@@ -255,7 +256,8 @@ The app enforces it itself, from the call state the room already reports (`bridg
 
 - While a call is on (joining counts), nothing is unloaded but what the page unloads.
 - With no call on, a build unused for 10 minutes — counted from its last load or run, or from when the last call
-  ended if that is later — is unloaded (`IDLE_UNLOAD`, `src-tauri/engine/src/lib.rs`).
+  ended if that is later — is unloaded (`IDLE_UNLOAD`, `src-tauri/engine/src/lib.rs`; the rules in
+  `src-tauri/engine/src/residency.rs`). The engine frees a model when the app drops its last handle to it.
 - As the next call connects, what the app unloaded that way is loaded again, on the accelerator it had, unless the
   page has unloaded it since — even while that preload is already loading it — or has another build of that task
   (transcription, voice) in memory by then. A build the
@@ -277,29 +279,28 @@ client that does not know the key:
 ```
 
 The page renders by `key` and falls back to `message`. Every key is made in `src-tauri/engine/src/error.rs`; a new
-one is added there and here.
+one is added there and here. What sidevoice-engine itself fails with is one of these keys, with the engine's own code
+beside it as `code` (`digest-mismatch`, `model-load-failed`…).
 
 | `key` | Parameters | When |
 |---|---|---|
 | `engine_unsupported` | `engine` | no runtime in this app for that engine: unknown, a page's engine, or one a newer catalogue added |
-| `engine_no_package` | `engine`, `platform` | the engine has no package for this OS/architecture (`macos-aarch64`) |
-| `family_unsupported` | `engine`, `family` | the engine's adapter here has no pipeline for the model's family |
-| `model_unknown` | `model` | not in the app's catalogue |
+| `model_unknown` | `model` | not in sidevoice-engine's catalogue |
 | `build_missing` | `model`, `engine` | the model has no build for that engine |
-| `build_unfit` | `model`, `engine` | the build needs a feature, or an accelerator, this device lacks |
+| `build_unfit` | `model`, `engine`, `reason` (the engine's code, when it gave one) | the build needs a feature, or an accelerator, this device lacks |
 | `model_needs_memory` | `model`, `needed_mb`, `memory_mb` | the model needs more memory than this machine has |
 | `model_wrong_task` | `model`, `task` | transcribing with a voice model, or speaking with a transcription one |
 | `accelerator_unusable` | `model`, `engine`, `accelerator`, `usable` (list) | the accelerator asked for is not one this build can use here |
 | `not_installed` | `model`, `engine` | run before `install` finished, or after a download lost a file |
 | `voice_unknown` | `model`, `voice` | the model has no such voice |
-| `language_unsupported` | `language` | the model does not know that language code |
-| `download_refused` | `url` | a download that is not https |
-| `download_failed` | `url` | the network failed, or answered with an error |
-| `download_corrupt` | `url` | the bytes are not the ones the catalogue names (SHA-256) |
+| `download_failed` | `model`, `engine` | the network failed, or answered with an error |
+| `download_corrupt` | `model`, `engine` | the bytes are not the ones the catalogue names (SHA-256) |
 | `install_failed` | — | unpacking or moving the download into place failed (disk, permissions, an archive without its files) |
 | `install_cancelled` | — | the page cancelled the install (`cancel(job)`): not a failure, nothing to show as an error |
+| `install_cancel_late` | `model`, `engine` | the page cancelled after the download had ended and another build of the model was installed before it: the build stays installed (the engine removes only whole models); the page may remove it |
+| `install_cancel_failed` | `model`, `engine`, `code` | the page cancelled after the download had ended and removing it failed (`code`, the engine's: `model-in-use`, a storage failure): it may still be on disk |
 | `load_cancelled` | `model`, `engine`, `accelerator` | the page unloaded the build while it was loading — also when the load then failed: not a failure |
-| `runtime_failed` | `engine` | the engine refused to load (a library failing its hash), to load the model into memory, or to run it |
+| `runtime_failed` | `engine` | the engine refused to load the model into memory, or to run it |
 | `bad_request` | — | a malformed call (a missing header): a bug in the caller |
 | `internal` | — | something inside the app failed |
 

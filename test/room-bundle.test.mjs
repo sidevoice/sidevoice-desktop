@@ -59,10 +59,10 @@ test("the vendored native worker installs, transcribes and speaks through this b
   assert.equal(workers.available(), true, "the bundle finds the bridge's nativeEngine");
 
   const stt = workers.transcription();
-  const loaded = await talk(stt, { id: 1, type: "load", model: "whisper-small", engine: "sherpa-onnx", accelerator: "coreml" });
+  const loaded = await talk(stt, { id: 1, type: "load", model: "whisper-small", engine: "whisper-cpp", accelerator: "metal" });
   assert.equal(loaded.at(-1).type, "ready");
   const install = calls.find(([cmd]) => cmd === "engine_install")[1];
-  assert.deepEqual([install.model, install.engine], ["whisper-small", "sherpa-onnx"]);
+  assert.deepEqual([install.model, install.engine], ["whisper-small", "whisper-cpp"]);
   assert.match(install.job, /^install-/);
 
   const heard = await talk(stt, { id: 2, type: "transcribe", audio: new Float32Array(1600).buffer, language: "es" });
@@ -70,7 +70,7 @@ test("the vendored native worker installs, transcribes and speaks through this b
   const [, body, options] = calls.find(([cmd]) => cmd === "engine_transcribe");
   assert.equal(body.byteLength, 1600 * 4, "the samples, as raw bytes");
   assert.equal(JSON.stringify(options.headers), JSON.stringify({
-    "x-model": "whisper-small", "x-engine": "sherpa-onnx", "x-accelerator": "coreml", "x-language": "es", "x-sample-rate": "16000",
+    "x-model": "whisper-small", "x-engine": "whisper-cpp", "x-accelerator": "metal", "x-language": "es", "x-sample-rate": "16000",
   }));
 
   const tts = workers.voice();

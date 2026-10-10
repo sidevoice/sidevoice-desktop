@@ -452,25 +452,31 @@ pub fn run() {
             let handle = app.handle().clone();
             tray::create(&handle)?;
             headset::setup(&handle);
-            // Native engines and models are downloaded into the app's data directory, on demand (docs/ENGINES.md).
-            let engines_root = app.path().app_data_dir()?.join("engines");
-            #[allow(unused_mut)] // the probe build may shorten the idle time
-            let mut engines = sidevoice_desktop_engine::NativeEngines::new(
-                sidevoice_desktop_core::engines::bundled_catalog(),
-                engines_root,
-            );
-            #[cfg(feature = "probe")]
-            if let Some(idle) = probe::idle_unload() {
-                engines.idle_unload = idle;
+            // sidevoice-engine keeps the models it downloads, on demand, in the app's data directory (docs/ENGINES.md).
+            // Without it the app still runs; the page then finds no native engine to use.
+            let engine_root = app.path().app_data_dir()?.join("sidevoice-engine");
+            match sidevoice_desktop_engine::NativeEngines::new(
+                engine_root,
+                tauri::async_runtime::handle().inner().clone(),
+            ) {
+                #[allow(unused_mut)] // the probe build may shorten the idle time
+                Ok(mut engines) => {
+                    #[cfg(feature = "probe")]
+                    if let Some(idle) = probe::idle_unload() {
+                        engines.idle_unload = idle;
+                    }
+                    #[cfg(feature = "probe")]
+                    {
+                        engines.faults = probe::faults();
+                    }
+                    let engines = engine_ipc::EngineState::new(engines);
+                    // A model stays in memory during a call and for ten minutes after the last use
+                    // (sidevoice-core#21 D13).
+                    engine_ipc::unload_when_idle(engines.engines.clone());
+                    app.manage(engines);
+                }
+                Err(e) => eprintln!("sidevoice: the native engine did not start: {} ({})", e.key, e.message),
             }
-            #[cfg(feature = "probe")]
-            {
-                engines.faults = probe::faults();
-            }
-            let engines = engine_ipc::EngineState::new(engines);
-            // A model stays in memory during a call and for ten minutes after the last use (sidevoice-core#21 D13).
-            engine_ipc::unload_when_idle(engines.engines.clone());
-            app.manage(engines);
             // This computer's own core, if any (macOS): found, paired, proxied for the page (docs/LOCAL_HOST.md).
             local_host::setup(&handle);
             let stored = app.path().app_config_dir().ok().and_then(|dir| settings::load(&dir));

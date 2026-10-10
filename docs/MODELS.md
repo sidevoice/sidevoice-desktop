@@ -22,5 +22,5 @@ webview.
 ## What the settings window shows
 
 "Motor nativo" / "Native engine": what the engine reports to the page (system, accelerators, memory) and what it
-has on disk — the engine package and each downloaded model build, with its size. Models are downloaded the first
+has on disk — each downloaded model build, with what it downloaded (the engine itself is linked into the app). Models are downloaded the first
 time the person chooses them in the room's settings.

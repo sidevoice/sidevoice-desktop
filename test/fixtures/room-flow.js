@@ -9,8 +9,11 @@
 //   2. cancel mid-download: nothing stored, loaded or left installed           (whisper-small)
 //   3. a failure (the load, refused: SIDEVOICE_DEBUG_REFUSE_LOAD) rolls back   (whisper-tiny)
 //   4. slow (SIDEVOICE_DEBUG_SLOW_TRANSCRIBE): "elegir otro" keeps the old one, "usar igualmente" takes the new one
-//      — and only one copy of the model stays in memory either way             (whisper-base on Core ML, Avanzado)
+//      — and only one model of the task stays in memory either way             (whisper-small)
 //   5. the page reloads: settings show the stored choice, and the next selection starts from it.
+//
+// The room offers the builds of the catalogue it carries, which are sherpa-onnx's alone, on the CPU: the slow one is
+// another model rather than the same one on another engine or accelerator.
 //
 // Prints one line through debug_log: "room-flow ok …" or "room-flow error …".
 (function () {
@@ -126,24 +129,29 @@
     out.fail_stored = stored();
     out.fail_resident = await resident();
 
-    // 4. Avanzado → Core ML, which checks slow: "elegir otro" leaves everything as it was, the candidate's copy
-    // freed; "usar igualmente" puts it in effect and frees the copy it replaced (review R05).
-    stale = check("stt");
-    actions.chooseStageBuild("stt", "sherpa-onnx/coreml");
-    const slow = await reach("stt", ["slow"], 300000, stale);
+    // 4. whisper-small, which checks slow: "elegir otro" leaves everything as it was, the candidate freed; "usar
+    // igualmente" puts it in effect and frees the model it replaced (review R05). Asked for its download the first
+    // time (step 2 cancelled it), not the second.
+    const slowly = async () => {
+      const stale = check("stt");
+      actions.chooseStageModel("stt", "whisper-small");
+      const asked = await reach("stt", ["consent", "slow"], 300000, stale);
+      if (asked.phase !== "consent") return asked;
+      actions.decideStage("stt", true);
+      return reach("stt", ["slow"], 600000);
+    };
+    const slow = await slowly();
     out.slow_latency_ms = slow.result && slow.result.latency_ms;
     actions.decideStage("stt", false);
     await until(() => check("stt") === null, 30000, "the slow one declined");
     out.declined_stored = stored();
     await settles("whisper-base@sherpa-onnx/cpu", "declined");
     out.declined_resident = await resident();
-    stale = check("stt");
-    actions.chooseStageBuild("stt", "sherpa-onnx/coreml");
-    await reach("stt", ["slow"], 300000, stale);
+    await slowly();
     actions.decideStage("stt", true);
     await reach("stt", ["done"], 60000);
     out.accepted_stored = stored();
-    await settles("whisper-base@sherpa-onnx/coreml", "accepted");
+    await settles("whisper-small@sherpa-onnx/cpu", "accepted");
     out.accepted_resident = await resident();
     return out;
   }
@@ -165,8 +173,12 @@
     }, 30000, "the pane's build");
     out.restored_pane = pane.model + "/" + pane.advanced.value;
     const stale = check("stt");
-    actions.chooseStageBuild("stt", "auto");
-    await reach("stt", ["done"], 120000, stale);
+    actions.chooseStageModel("stt", "whisper-base");
+    const asked = await reach("stt", ["consent", "done"], 120000, stale);
+    if (asked.phase === "consent") {
+      actions.decideStage("stt", true);
+      await reach("stt", ["done"], 120000);
+    }
     out.after_stored = stored();
     await settles("whisper-base@sherpa-onnx/cpu", "after the reload");
     out.after_resident = await resident();
