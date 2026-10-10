@@ -393,13 +393,13 @@ jobs:
           # The microphone is the app's here (host.voice): the page is never granted it.
           if grep -q "sidevoice: media Microphone .*Allow" /tmp/probe.log; then echo "the page got the microphone"; exit 1; fi
           # The native engine inside the signed app, through the bridge the interface uses (docs/BRIDGE.md):
-          # capabilities with the OS's real memory (the CPU for sherpa-onnx, Metal for whisper.cpp, remote providers,
-          # never Core ML), downloads with progress, the builds on disk by model + engine, a page engine refused rather
-          # than replaced, and a cancelled download.
+          # capabilities with the OS's real memory (the CPU for sherpa-onnx, Metal for whisper.cpp, never Core ML;
+          # remote providers are catalogues of their own), downloads with progress, the builds on disk by model +
+          # engine, a page engine refused rather than replaced, and a cancelled download.
           grep -q 'probe-engine ok' /tmp/probe.log
           LINE=$(grep 'probe-engine ok' /tmp/probe.log)
           echo "$LINE" | grep -q 'capabilities={"runs":"native","os":"macos","arch":"aarch64","has":\['
-          for accelerator in cpu metal remote; do echo "$LINE" | grep -q "\"has\":\[[^]]*\"$accelerator\""; done
+          for accelerator in cpu metal; do echo "$LINE" | grep -q "\"has\":\[[^]]*\"$accelerator\""; done
           if echo "$LINE" | grep -q '"coreml"'; then echo "Core ML offered"; exit 1; fi
           echo "$LINE" | grep -Eq '"memory_mb":[1-9][0-9]{3,}'
           echo "$LINE" | grep -q ' installed=kokoro-82m-v1.0@sherpa-onnx,silero-vad@sherpa-onnx,whisper-tiny@whisper-cpp '
@@ -412,15 +412,17 @@ jobs:
           ls -laR "$ENGINE/models"
           if find "$ENGINE/models" -path '*whisper-small*' | grep -q .; then echo "a cancelled download left files"; exit 1; fi
           if find "$ENGINE/partial" -type f | grep -q .; then echo "a download was left half written"; exit 1; fi
-          # The voice call the app runs (host.voice): the seam's thirteen calls, the engine's catalogue with the voice
-          # activity detector, an unknown model refused by key, Whisper configured on whisper.cpp, and a start that
-          # settles: listening, or refused only for want of a microphone or a speaker here (a model or adapter failure
-          # fails this step; the call on real models is the next one).
+          # The voice call the app runs (host.voice): the seam's ten calls, the engine's catalogues (host.engine) with
+          # the voice activity detector, an unknown model refused by key and code, settings naming a catalogue's model,
+          # and a start that settles: listening, or refused only for want of a microphone or a speaker here (a model or
+          # adapter failure fails this step; the call on real models is the next one).
           grep -q 'probe-voice ok' /tmp/probe.log
           VOICE=$(grep 'probe-voice ok' /tmp/probe.log)
-          echo "$VOICE" | grep -q ' keys=13 '
-          echo "$VOICE" | grep -Eq ' models=[1-9][0-9]* vad=true unknown=voice_model_unknown '
-          grep -q 'sidevoice: voice settings: .*"build":"whisper-tiny/whisper-cpp-q5_1"' /tmp/probe.log
+          echo "$VOICE" | grep -q ' keys=10 '
+          # The local catalogue first; a provider with no key lists nothing and says so.
+          echo "$VOICE" | grep -Eq ' catalogs=local,[a-z-]+:credential-missing'
+          echo "$VOICE" | grep -Eq ' models=[1-9][0-9]* vad=true unknown=voice_model_unknown/model-unknown '
+          grep -q 'sidevoice: voice settings: .*"stt":{"catalog":"local","model":"whisper-tiny"}' /tmp/probe.log
           echo "$VOICE" | grep -Eq ' start=(ok|voice_failed/(microphone-unavailable|microphone-denied|speaker-unavailable|audio-device-unavailable|audio-device-failed)) '
           echo "--- voice"; grep 'sidevoice: voice' /tmp/probe.log || true
           # Headset buttons: a (simulated) call made the app the Now Playing app, and it let go after.

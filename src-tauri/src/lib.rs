@@ -416,6 +416,9 @@ macro_rules! commands {
             engine_ipc::engine_progress,
             engine_ipc::engine_cancel,
             engine_ipc::engine_memory,
+            engine_ipc::engine_catalogs,
+            engine_ipc::engine_set_credential,
+            engine_ipc::engine_has_credential,
             local_host::local_host_state,
             local_host::local_host_pairing,
             local_host::local_host_action,
@@ -436,10 +439,7 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
         voice::voice_say,
         voice::voice_cancel_say,
         voice::voice_mute,
-        voice::voice_cancel_input,
-        voice::voice_models,
-        voice::voice_set_provider_key,
-        voice::voice_has_provider_key
+        voice::voice_cancel_input
     ]
 }
 

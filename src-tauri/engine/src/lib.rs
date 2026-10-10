@@ -14,16 +14,19 @@
 //! The engine's futures run on the Tokio runtime whose handle `NativeEngines` is given; its own calls block on them,
 //! so they are made off that runtime's worker threads (`spawn_blocking` in the app).
 
+pub mod catalogs;
 pub mod error;
 mod jobs;
 pub mod memory;
 
+pub use catalogs::CatalogView;
 pub use error::Error;
 pub use jobs::{Jobs, Progress};
 /// The engine crate itself, for what the app hands it (`Credentials`) and the models it loads.
 pub use sidevoice_engine;
 use sidevoice_engine::{
-    Accelerator, BundledCatalog, Cancel, CatalogSource, Credentials, Engine, Host, Model, NativeHost,
+    Accelerator, BundledCatalog, Cancel, CatalogSource, Credentials, Engine, Host, LocalModelInfo, NativeHost,
+    LOCAL_CATALOG,
 };
 use std::future::Future;
 use std::path::PathBuf;
@@ -105,7 +108,6 @@ pub fn accelerator_name(accelerator: Accelerator) -> String {
         Accelerator::Metal => "metal",
         Accelerator::WebGpu => "webgpu",
         Accelerator::Wasm => "wasm",
-        Accelerator::Remote => "remote",
         _ => "unknown",
     }
     .to_string()
@@ -127,7 +129,7 @@ fn guard<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn task_of(model: &Model) -> Task {
+fn task_of(model: &LocalModelInfo) -> Task {
     let can = |capability| model.capabilities.contains(&capability);
     if can(sidevoice_engine::Capability::Stt) {
         Task::Stt
@@ -167,7 +169,9 @@ impl NativeEngines {
     ) -> Result<Self, Error> {
         let capabilities = host.capabilities();
         let engine = Engine::new(host, sources).map_err(|e| error::internal(format!("the engine: {e}")))?;
-        let models = runtime.block_on(engine.models()).map_err(|e| error::internal(format!("the engine: {e}")))?;
+        let models = runtime
+            .block_on(engine.local_catalog().models(None))
+            .map_err(|e| error::internal(format!("the engine: {e}")))?;
         let mut has = Vec::new();
         for build in models.iter().flat_map(|m| &m.builds) {
             if let (true, Some(accelerator)) = (build.available, build.accelerator.filter(|a| offered(*a))) {
@@ -196,9 +200,54 @@ impl NativeEngines {
         self.runtime.block_on(future)
     }
 
-    /// Every model of the catalogue, with its builds ranked here.
-    pub fn models(&self) -> Result<Vec<Model>, Error> {
-        self.block_on(self.engine.models()).map_err(|e| error::internal(format!("the engine's models: {e}")))
+    /// Every model of the local catalogue, with its builds ranked here.
+    pub fn models(&self) -> Result<Vec<LocalModelInfo>, Error> {
+        self.block_on(self.engine.local_catalog().models(None))
+            .map_err(|e| error::internal(format!("the engine's models: {e}")))
+    }
+
+    /// Every catalogue of the engine, the local one first, each with how it stands and every model it lists. One that
+    /// cannot list its models (a provider with no key, one that refuses) has none, and its status says why: only the
+    /// engine itself failing fails this.
+    pub fn catalogs(&self) -> Result<Vec<CatalogView>, Error> {
+        self.block_on(async {
+            let mut views = Vec::new();
+            for catalog in self.engine.catalogs() {
+                let status = catalogs::status(&catalog.status().await);
+                let models = if catalog.id() == LOCAL_CATALOG {
+                    self.engine
+                        .local_catalog()
+                        .models(None)
+                        .await
+                        .map_err(|e| error::internal(format!("the engine's models: {e}")))?
+                        .iter()
+                        .map(catalogs::local_model)
+                        .collect()
+                } else {
+                    catalog
+                        .models(None)
+                        .await
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|m| catalogs::remote_model(&**m))
+                        .collect()
+                };
+                views.push(CatalogView {
+                    id: catalog.id().to_string(),
+                    name: catalog.name().map(str::to_string),
+                    status,
+                    models,
+                });
+            }
+            Ok::<_, Error>(views)
+        })
+    }
+
+    /// Reads provider `id`'s catalogue again now, with the key the host has for it: after the page set or cleared it.
+    pub fn refresh(&self, id: &str) -> Result<(), Error> {
+        let catalog = self.engine.catalog(id).map_err(|_| error::catalog_not_found(id))?;
+        self.block_on(catalog.refresh());
+        Ok(())
     }
 
     /// `model` on `engine`, if the engine can run it on this device: an engine compiled into this app, a model of its
@@ -212,7 +261,7 @@ impl NativeEngines {
         Self::located(model, engine_id)
     }
 
-    fn located(model: &Model, engine_id: &str) -> Result<Located, Error> {
+    fn located(model: &LocalModelInfo, engine_id: &str) -> Result<Located, Error> {
         let mut builds =
             model.builds.iter().filter(|b| b.backend == engine_id && b.accelerator.is_none_or(offered)).peekable();
         let first = *builds.peek().ok_or_else(|| error::build_missing(&model.id, engine_id))?;
@@ -311,9 +360,8 @@ impl NativeEngines {
         let located = self.locate(model_id, engine_id)?;
         if located.installed {
             progress(0, 0);
-            return Ok(Downloaded { this: false, others: false });
+            return Ok(Downloaded::Nothing);
         }
-        let others = self.others_installed(model_id, &located.build)?;
         let total = located.download_bytes;
         progress(0, total);
         let bytes = Bytes::default();
@@ -332,38 +380,26 @@ impl NativeEngines {
             }
         })?;
         progress(total, total);
-        Ok(Downloaded { this: true, others })
+        Ok(Downloaded::Build(located.build))
     }
 
-    /// Whether a build of `model_id` other than `build` is installed.
-    fn others_installed(&self, model_id: &str, build: &str) -> Result<bool, Error> {
-        let models = self.models()?;
-        Ok(models
-            .iter()
-            .filter(|model| model.id == model_id)
-            .flat_map(|model| &model.builds)
-            .any(|other| other.id != build && other.installed))
-    }
-
-    /// Undoes what a cancelled job downloaded, as `undo` decides: removes the model when this job's build is all of it
-    /// on disk, keeps the build when another one is installed too (the engine removes only whole models), and says
-    /// which, or why removing failed. Only under the install lock (`_held`), the one the job downloaded under.
+    /// Undoes what a cancelled job downloaded: removes the build it installed, and only that one (another build of the
+    /// model stays), or says why removing failed. Only under the install lock (`_held`), the one the job downloaded
+    /// under.
     fn roll_back(&self, _held: &MutexGuard<'_, ()>, model_id: &str, engine_id: &str, downloaded: Downloaded) -> Error {
-        match undo(downloaded) {
-            Undo::Nothing => error::install_cancelled(),
-            Undo::Remove => match self.block_on(self.engine.uninstall(model_id)) {
+        match downloaded {
+            Downloaded::Nothing => error::install_cancelled(),
+            Downloaded::Build(build) => match self.block_on(self.engine.uninstall(model_id, Some(&build))) {
                 Ok(()) => error::install_cancelled(),
                 Err(failed) => error::install_cancel_failed(failed, model_id, engine_id),
             },
-            Undo::Keep => error::install_cancel_late(model_id, engine_id),
         }
     }
 
     /// `install` as the page's job `job`: known to `jobs` until it ends — its progress once it starts, cancellable
     /// throughout (`Jobs::cancel`). A cancel the job accepted wins: one that lands after the download ended removes
-    /// what this job installed, so a cancelled install leaves no model to load (sidevoice-core#21 review R04) — unless
-    /// another build of the model was installed before it, which removing would take too: then the build stays and the
-    /// job says so (`install_cancel_late`). A removal that fails is said too (`install_cancel_failed`), never hidden.
+    /// the build this job installed, and only it, so a cancelled install leaves nothing of it to load (sidevoice-core#21
+    /// review R04). A removal that fails is said (`install_cancel_failed`), never hidden.
     pub fn install_job(&self, jobs: &Jobs, job: &str, model_id: &str, engine_id: &str) -> Result<(), Error> {
         if !jobs.begin(job, model_id, engine_id) {
             return Err(error::install_cancelled());
@@ -397,31 +433,11 @@ impl NativeEngines {
     }
 }
 
-/// What an install put on disk: whether it downloaded the build (`this`), and whether another build of the model was
-/// installed already (`others`).
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct Downloaded {
-    this: bool,
-    others: bool,
-}
-
-/// What a cancel that landed after the download ended does with it.
-#[derive(Debug, PartialEq)]
-enum Undo {
-    /// Nothing was downloaded.
+/// What an install put on disk: nothing (the build was there already), or the build it downloaded.
+#[derive(Debug, Clone, PartialEq)]
+enum Downloaded {
     Nothing,
-    /// The build is all of the model on disk: removing the model removes only it.
-    Remove,
-    /// Another build is installed: removing the model would take it too, so the build stays.
-    Keep,
-}
-
-fn undo(downloaded: Downloaded) -> Undo {
-    match downloaded {
-        Downloaded { this: false, .. } => Undo::Nothing,
-        Downloaded { others: false, .. } => Undo::Remove,
-        Downloaded { others: true, .. } => Undo::Keep,
-    }
+    Build(String),
 }
 
 /// The bytes an install has downloaded so far, from the engine's reports: the files it finished, and the one it is

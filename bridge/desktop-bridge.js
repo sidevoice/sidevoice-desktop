@@ -49,12 +49,32 @@
 
   let installs = 0; // numbers each install call's job
 
-  /** The app's native model engines (docs/BRIDGE.md → "The native engine"): what this device is, which builds are on
-   *  disk, and get one there. A build is a catalogue model id + an engine id. Running a model is the voice call's
-   *  (`voice`). A refusal rejects with `{key, message, …params}`: a stable key the page
-   *  translates, and an English sentence for one it does not know (docs/BRIDGE.md → "Refusals"). */
-  function nativeEngine() {
+  /** A refusal of `host.engine`'s catalogue and key calls, with the `code` the page reads: the refusal's own, else its
+   *  key with dashes. */
+  function coded(promise) {
+    return promise.catch((refusal) => {
+      const key = refusal && typeof refusal === "object" ? refusal.key : undefined;
+      throw Object.assign({}, refusal, { code: refusal?.code ?? String(key ?? "internal").replace(/_/g, "-") });
+    });
+  }
+
+  /** The app's model engine (docs/BRIDGE.md → "The native engine"): its catalogues and the keys of remote providers,
+   *  what this device is, which builds are on disk, and get one there. A build is a catalogue model id + an engine id.
+   *  Running a model is the voice call's (`voice`). A refusal rejects with `{key, message, …params}`: a stable key the
+   *  page translates, and an English sentence for one it does not know (docs/BRIDGE.md → "Refusals"). */
+  function engine() {
     return {
+      /** `[{id, name, status: {reason?, stale, detail?}, models}]`: every catalogue, the local one first (`name` null),
+       *  then each provider's, each with every model it lists in `/engine`'s shape (a local model with its
+       *  family and builds). One that cannot list (a provider with no key) has `models: []` and says why in `status`.
+       *  Rejects `{code}` only when the engine itself fails. */
+      catalogs: () => coded(call("engine_catalogs")),
+      /** Keeps `key` for remote catalogue `provider` in the keychain, or removes it (`null` or blank); that provider is
+       *  then listed again with it. */
+      setCredential: (provider, key) =>
+        coded(call("engine_set_credential", { provider, key: key == null ? null : String(key) })).then(() => undefined),
+      /** Whether the keychain holds a key for `provider`. The key itself never reaches the page. */
+      hasCredential: (provider) => coded(call("engine_has_credential", { provider })),
       /** `{runs: "native", os, arch, has: ["cpu", "metal", …], memory_mb}` (`memory_mb` null when unknown). */
       capabilities: () => call("engine_capabilities"),
       /** `[{model, engine}]`: the builds already on disk. */
@@ -150,9 +170,11 @@
       return handle;
     }
     const host = {
-      /** The person's choices (`VoiceSettings`: models, builds, language, voice, speed, patience, end of turn). The
-       *  app picks the builds not named (whisper.cpp on Metal for Whisper), the voice activity detector and every
-       *  other number. */
+      /** The person's choices (`VoiceSettings`): each slot a model of a catalogue, `stt: {catalog, model, language}`,
+       *  `tts: {catalog, model, voice, speed}`, with `patience`, `end_of_turn` and `idle_unload_minutes`. The catalogue
+       *  picks the build; the app adds the voice activity detector and the end-of-turn model. Rejects `{key, code,
+       *  message}`: `model-unknown`, `model-unfit`, `catalog-not-found`, `vad-unavailable`, `end-of-turn-unavailable`,
+       *  or the engine's own code (`credential-missing`, ...) with the provider's `detail`. */
       setSettings: (settings) => call("voice_set_settings", { settings }),
       /** Loads the models (installing them if they are not), opens the microphone and the speaker and listens.
        *  Resolves once it listens (at once if it does); rejects `{key, code, message}`, `code` the call's or `stopped`. */
@@ -173,12 +195,6 @@
       onLevel: on("level"),
       /** `{code}`: something failed that the person may be told. Returns `stop`. */
       onError: on("error"),
-      /** The engine's catalogue, in the shape `WebEngine.models()` answers. */
-      models: () => call("voice_models"),
-      /** Keeps `key` for `provider` (`openai`, `elevenlabs`) in the keychain, or removes it with `null`. */
-      setProviderKey: (provider, key) => call("voice_set_provider_key", { provider, key: key == null ? null : String(key) }),
-      /** Whether the keychain has a key for `provider`; the key itself never reaches the page. */
-      hasProviderKey: (provider) => call("voice_has_provider_key", { provider }),
     };
     return { host: Object.freeze(host), receive };
   }
@@ -321,12 +337,13 @@
   const api = {
     version: BRIDGE_VERSION,
     /** What this host offers the page besides the webview itself. The web UI feature-detects it.
-     *  `nativeEngine`: the app's engine, for models on disk (docs/ENGINES.md); `voice`: the call the app runs. */
+     *  `engine`: the app's engine, its catalogues, keys and models on disk (docs/ENGINES.md); `voice`: the call the
+     *  app runs. */
     host: Object.freeze({
       app: "sidevoice-desktop",
       /** The bridge's version: what the page may rely on (docs/BRIDGE.md). */
       version: BRIDGE_VERSION,
-      nativeEngine: Object.freeze(nativeEngine()),
+      engine: Object.freeze(engine()),
       /** `"native"`: the app answers headset buttons / media keys in a call, so the page must not register its
        *  own Media Session handlers (both would toggle the microphone on one click). `null`: the page does. */
       mediaKeys: mediaKeys === "native" ? "native" : null,

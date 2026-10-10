@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use futures_util::StreamExt;
 use serde_json::json;
-use sidevoice_desktop_core::voice::{choose, Candidate, VoiceSettings};
+use sidevoice_desktop_core::voice::{choose, CatalogCandidates, ModelChoice, VoiceSettings};
 use sidevoice_desktop_engine::sidevoice_engine::NoCredentials;
 use sidevoice_desktop_engine::NativeEngines;
 use sidevoice_voice::{
@@ -118,15 +118,16 @@ fn a_call_on_the_engines_real_models_hears_speech_and_plays_a_reply() {
     let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build().unwrap();
     let root = std::env::temp_dir().join(format!("sidevoice-real-call-{}", std::process::id()));
     let engines = NativeEngines::new(&root, NoCredentials, runtime.handle().clone()).unwrap();
-    let catalogue: Vec<Candidate> = engines.models().unwrap().iter().map(crate::voice::candidate).collect();
+    let catalogs: Vec<CatalogCandidates> = engines.catalogs().unwrap().iter().map(crate::voice::candidates).collect();
     let settings: VoiceSettings = serde_json::from_value(json!({
-        "stt": {"model": "whisper-tiny", "language": "en"},
-        "tts": {"model": "kokoro-82m-v1.0"},
+        "stt": {"catalog": "local", "model": "whisper-tiny", "language": "en"},
+        "tts": {"catalog": "local", "model": "kokoro-82m-v1.0"},
         "patience": "fast",
     }))
     .unwrap();
-    let choice = choose(&settings, &catalogue).unwrap();
-    assert_eq!(choice.stt.build, "whisper-tiny/whisper-cpp-q5_1", "Whisper on whisper.cpp");
+    let choice = choose(&settings, &catalogs).unwrap();
+    assert_eq!(choice.stt, ModelChoice { catalog: "local".into(), model: "whisper-tiny".into() });
+    assert_eq!(choice.vad, ModelChoice { catalog: "local".into(), model: "silero-vad".into() });
     let config: VoiceConfig = serde_json::from_value(choice.config.clone()).unwrap();
     let played = Arc::new(Mutex::new(Vec::new()));
     let io = Fixture { sink: None, stop: Arc::default(), played: Arc::clone(&played) };

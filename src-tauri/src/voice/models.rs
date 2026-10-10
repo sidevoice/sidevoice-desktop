@@ -1,6 +1,7 @@
 //! The voice call's models on the app's engine: sidevoice-voice's interfaces (`VoiceModels` and its slots) filled
-//! with the models core's `voice::choose` picks, each loaded by sidevoice-engine (installed first if it is not) and
-//! called through what it can do (`as_vad`, `as_stt`, `as_tts`, `as_end_of_turn`). Failures are the engine's codes.
+//! with the models core's `voice::choose` picks, each loaded by its catalogue (`engine.catalog(id).load(model)`: the
+//! catalogue picks the build, and a local one is installed first if it is not) and called through what it can do
+//! (`as_vad`, `as_stt`, `as_tts`, `as_end_of_turn`). Failures are the engine's codes.
 //!
 //! Nothing native runs on an async worker of the app's runtime. Loading each model and opening the detector's stream
 //! (reading model files, building ONNX sessions, initialising Metal), transcribing, speaking and ending turns run on
@@ -14,7 +15,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use sidevoice_desktop_core::voice::{ModelChoice, VoiceChoice};
-use sidevoice_desktop_engine::sidevoice_engine::{Cancel, Engine, Error, LoadedModel, Progress, VadOptions, VadStream};
+use sidevoice_desktop_engine::sidevoice_engine::{Cancel, Engine, Error, Model, Progress, VadOptions, VadStream};
 use sidevoice_voice::{async_trait, EndOfTurnModel, Models, Speaker, Transcriber, Vad, VadFrame, VoiceModels};
 
 /// The rate sidevoice-voice hands the detector.
@@ -35,11 +36,12 @@ impl EngineModels {
         Self { engine, choice }
     }
 
-    async fn load_one(&self, chosen: &ModelChoice) -> Result<LoadedModel, String> {
-        let (engine, model, build) = (Arc::clone(&self.engine), chosen.model.clone(), chosen.build.clone());
+    async fn load_one(&self, chosen: &ModelChoice) -> Result<Arc<dyn Model>, String> {
+        let (engine, catalog, model) = (Arc::clone(&self.engine), chosen.catalog.clone(), chosen.model.clone());
         blocking(async move {
             let progress = |_: Progress| {};
-            engine.load(&model, Some(&build), &progress, &Cancel::new()).await
+            let loaded = engine.catalog(&catalog)?.load(&model, &progress, &Cancel::new()).await?;
+            Ok(Arc::from(loaded))
         })
         .await
     }
@@ -87,12 +89,12 @@ impl Vad for EngineVad {
     }
 }
 
-struct EngineStt(LoadedModel);
+struct EngineStt(Arc<dyn Model>);
 
 #[async_trait]
 impl Transcriber for EngineStt {
     async fn transcribe(&self, pcm: Vec<f32>, sample_rate: u32, language: Option<String>) -> Result<String, String> {
-        let model = self.0.clone();
+        let model = Arc::clone(&self.0);
         blocking(async move {
             let stt = model.as_stt().ok_or(Error::new("model-cannot-transcribe"))?;
             stt.transcribe(&pcm, sample_rate, language.as_deref()).await
@@ -101,7 +103,7 @@ impl Transcriber for EngineStt {
     }
 }
 
-struct EngineTts(LoadedModel);
+struct EngineTts(Arc<dyn Model>);
 
 #[async_trait]
 impl Speaker for EngineTts {
@@ -113,7 +115,7 @@ impl Speaker for EngineTts {
         language: Option<String>,
         speed: f32,
     ) -> Result<(Vec<f32>, u32), String> {
-        let model = self.0.clone();
+        let model = Arc::clone(&self.0);
         blocking(async move {
             let tts = model.as_tts().ok_or(Error::new("model-cannot-speak"))?;
             let voice = match voice {
@@ -127,12 +129,12 @@ impl Speaker for EngineTts {
     }
 }
 
-struct EngineEndOfTurn(LoadedModel);
+struct EngineEndOfTurn(Arc<dyn Model>);
 
 #[async_trait]
 impl EndOfTurnModel for EngineEndOfTurn {
     async fn end_of_turn(&self, pcm: Vec<f32>, sample_rate: u32) -> Result<f32, String> {
-        let model = self.0.clone();
+        let model = Arc::clone(&self.0);
         blocking(async move {
             let classifier = model.as_end_of_turn().ok_or(Error::new("model-cannot-end-turns"))?;
             classifier.probability(&pcm, sample_rate).await

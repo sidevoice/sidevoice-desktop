@@ -114,17 +114,6 @@ pub fn install_cancelled() -> Error {
     Error::new("install_cancelled", "The download was cancelled.")
 }
 
-/// The page cancelled the install after its download had ended, and another build of the model was installed before
-/// it: the engine removes only whole models, so this build stays installed rather than taking the other with it.
-pub fn install_cancel_late(model: &str, engine: &str) -> Error {
-    Error::new(
-        "install_cancel_late",
-        format!("{model} on {engine} had finished downloading: it stays installed; remove it to free its space."),
-    )
-    .with("model", model)
-    .with("engine", engine)
-}
-
 /// The page cancelled the install after its download had ended, and removing what it downloaded failed (`code`, the
 /// engine's: `model-in-use`, a storage failure): it may still be on disk.
 pub fn install_cancel_failed(error: sidevoice_engine::Error, model: &str, engine: &str) -> Error {
@@ -132,6 +121,28 @@ pub fn install_cancel_failed(error: sidevoice_engine::Error, model: &str, engine
         .with("model", model)
         .with("engine", engine)
         .with("code", error.code)
+}
+
+/// Not the id of a provider whose key the app keeps (lowercase letters, digits and dashes).
+pub fn provider_invalid(provider: &str) -> Error {
+    Error::new("provider_invalid", format!("Not a provider id: {provider:?}.")).with("provider", provider)
+}
+
+/// The app keeps the keys of remote providers only where it has a keychain (macOS).
+pub fn credentials_unavailable() -> Error {
+    Error::new("credentials_unavailable", "This app keeps no provider keys on this system.")
+}
+
+/// The keychain would not keep, remove or read a key.
+pub fn credentials_failed(detail: impl fmt::Display) -> Error {
+    Error::new("credentials_failed", format!("The keychain failed: {detail}"))
+}
+
+/// A catalogue id that is none of the engine's (`local`, or a provider compiled into it).
+pub fn catalog_not_found(id: &str) -> Error {
+    Error::new("catalog_not_found", format!("There is no catalogue {id}."))
+        .with("code", "catalog-not-found")
+        .with("catalog", id)
 }
 
 /// The engine refused to load or to run (a model the runtime rejects, a transcription that failed).
