@@ -128,9 +128,10 @@ fn voice(voice: &Voice) -> VoiceView {
         id: voice.id.clone(),
         name: voice.name.clone(),
         languages: voice.languages.clone(),
-        gender: voice.gender.map(|gender| match gender {
-            Gender::Female => "female",
-            Gender::Male => "male",
+        gender: voice.gender.and_then(|gender| match gender {
+            Gender::Female => Some("female"),
+            Gender::Male => Some("male"),
+            _ => None,
         }),
     }
 }
