@@ -190,6 +190,20 @@ pub async fn voice_turn_started(
     with_call(&app, &webview, &state, |call| call.room_event(event)).await
 }
 
+/// A refusal the room sent naming one of the call's messages (the `error` frame's `data`): the call keeps a turn refused for
+/// too many open turns (`room.turns_full`) and says it again once another ends, and ignores other keys.
+#[tauri::command]
+pub async fn voice_room_refused(
+    app: AppHandle,
+    webview: Webview,
+    state: State<'_, VoiceState>,
+    refused: Value,
+) -> Result<(), Refusal> {
+    let event = RoomEvent::from_json(&json!({"type": "error", "data": refused}))
+        .map_err(|e| refusal("bad_request", e.to_string()))?;
+    with_call(&app, &webview, &state, |call| call.room_event(event)).await
+}
+
 /// Whether the room is in reach: turns reported while it is not say `offline`.
 #[tauri::command]
 pub async fn voice_set_online(

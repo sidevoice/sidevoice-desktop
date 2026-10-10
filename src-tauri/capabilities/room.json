@@ -18,6 +18,7 @@
     "allow-voice-stop",
     "allow-voice-speak",
     "allow-voice-turn-started",
+    "allow-voice-room-refused",
     "allow-voice-set-online",
     "allow-voice-mute",
     "allow-voice-cancel-input",

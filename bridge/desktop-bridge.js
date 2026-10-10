@@ -134,6 +134,9 @@
       /** The room's answer to a turn's `started` (`voice-user-turn`'s `data`): its `turn_id` and the revision that is the
        *  turn's boundary for stale replies. */
       turnStarted: (started) => call("voice_turn_started", { started }),
+      /** A refusal the room sent naming one of the call's messages (the `error` frame's `data`): a turn refused for too
+       *  many open turns keeps its words and is said again once another ends. */
+      roomRefused: (refused) => call("voice_room_refused", { refused }),
       /** Whether the room is in reach: turns emitted while it is not say `offline: true`. */
       setOnline: (online) => call("voice_set_online", { online: !!online }),
       mute: (muted) => call("voice_mute", { muted: !!muted }),
