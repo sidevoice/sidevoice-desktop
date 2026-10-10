@@ -8,7 +8,7 @@ One version for the whole app, tagged `vX.Y.Z`. It lives in `src-tauri/tauri.con
 
 | Act | Who | What happens |
 |---|---|---|
-| Open / update a PR | anyone | **Lint and unit tests** (Linux), **PR title is a conventional commit**, and the **Windows** and **Linux** app builds (installers as artifacts). The macOS native flow (engine round trip, probe page, room flow, call controls card) only when the engine (or its pin), the bridge or the CI probes change; no .dmg (a manual run of `build` on the branch makes one). |
+| Open / update a PR | anyone | **Lint and unit tests** (Linux), **PR title is a conventional commit**, and the **Windows** and **Linux** app builds (installers as artifacts). The macOS native flow (probe page, a call on the engine's real models, call controls card) whenever native code (`src-tauri/`), the bridge, the web pin or the CI probes change; no .dmg (a manual run of `build` on the branch makes one). |
 | Squash-merge into `main` | reviewer | The PR title becomes the commit. `build` runs everything, installers included; when it is green, the `nightly` pre-release is replaced. release-please opens or updates the **release PR** ("chore(main): release X.Y.Z"). Nothing versioned is published. |
 | Merge the release PR | a maintainer | **This is the release.** release-please tags `vX.Y.Z` and creates a draft GitHub Release whose notes are that version's changelog; `build` builds from the tag, attaches the assets and publishes the Release. |
 

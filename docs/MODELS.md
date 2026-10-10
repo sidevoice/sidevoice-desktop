@@ -1,10 +1,10 @@
 # Models in the desktop app: native, never in the webview
 
-In the app, speech-to-text and text-to-speech run only in its **native engine** (docs/ENGINES.md), never in the
-page: a native runtime is never offered a page engine's builds (sidevoice/sidevoice-core#21 D5). The bundled interface
-asks the engine what this device is (`nativeEngine.capabilities()`, docs/BRIDGE.md), resolves its offers from
-that and the catalogue, and runs the chosen build through the engine. The same interface in a browser offers the
-page's own engines instead (transformers.js on WebGPU or WebAssembly).
+In the app, speech models run only natively, never in the page: on macOS the voice call itself is native
+(`host.voice`, docs/BRIDGE.md → "The voice call"), and its models run on the app's engine (docs/ENGINES.md). The
+page chooses models and voices from the engine's catalogue (`host.voice.models()`) and hands the person's choices to
+the call (`host.voice.setSettings`); the app picks the builds. The same interface in a browser runs the call in the
+page, over `@sidevoice/voice` and the page's own engine.
 
 ## Why not the webview (macOS)
 
@@ -17,10 +17,9 @@ browser with a choice of engine:
 | 13–15 | Off (observed on macOS 14.8 in CI) | Whisper tiny/base and Kokoro q8 on the CPU via single-threaded WebAssembly |
 
 The native engine runs the same models on every supported macOS, multi-threaded, with the same result in any
-webview.
+webview, and the native call cancels its own echo with WebRTC's AEC3 rather than relying on the webview's.
 
 ## What the settings window shows
 
-"Motor nativo" / "Native engine": what the engine reports to the page (system, accelerators, memory) and what it
-has on disk — each downloaded model build, with what it downloaded (the engine itself is linked into the app). Models are downloaded the first
-time the person chooses them in the room's settings.
+"Motor nativo" / "Native engine": what the engine reports (system, accelerators, memory) and what it has on disk —
+each downloaded model build, with what it downloaded (the engine itself is linked into the app).

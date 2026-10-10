@@ -1,6 +1,7 @@
 name: Set up Rust and the native engine's libraries
 description: >-
-  Installs the Rust toolchain src-tauri/rust-toolchain.toml pins, and fetches the sherpa-onnx static libraries that
+  Installs the Rust toolchain src-tauri/rust-toolchain.toml pins (and on macOS the voice call's build tools: meson,
+  ninja, pkg-config), and fetches the sherpa-onnx static libraries that
   sidevoice-engine links, with that engine's own `cargo xtask sherpa-libs` at the commit src-tauri/Cargo.lock pins:
   checked against the digests it pins, kept outside target/ and linked through SHERPA_ONNX_LIB_DIR (which the command
   exports), so no build script downloads anything unchecked.
@@ -15,6 +16,11 @@ runs:
         set -euo pipefail
         rustup toolchain install
         rustc --version
+    # WebRTC's audio processing (sidevoice-voice's echo cancellation, macOS) builds its C++ with meson and ninja.
+    - name: The voice call's build tools (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: brew install meson ninja pkg-config
     - name: The engine at the commit Cargo.lock pins
       id: engine
       shell: bash

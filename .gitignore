@@ -4,4 +4,8 @@ src-tauri/gen/schemas/
 dist/
 *.dmg
 .DS_Store
-ui/voice-browser/assets/
+# The web interface, the release web.pin.json names, fetched by scripts/build-web.mjs, and its download.
+ui/voice/
+ui/voice-browser/
+ui/.web-site.json
+target/web/

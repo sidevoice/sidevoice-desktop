@@ -15,6 +15,6 @@ Rules for any coding agent (and person) working in this repository.
 
 ## Before changing things
 
-Read `README.md` and `docs/`. The bundled web interface is vendored (`scripts/vendor-web.mjs`): its texts are
-fixed in sidevoice-web, not here. The app's own texts: the settings window's in `ui/i18n/<language>.js`, the
+Read `README.md` and `docs/`. The bundled web interface is the sidevoice-web release `web.pin.json` names (`scripts/build-web.mjs`): its texts
+are fixed in sidevoice-web, not here. The app's own texts: the settings window's in `ui/i18n/<language>.js`, the
 native ones (tray, …) in `src-tauri/core/src/i18n.rs`; older literals in the settings window still await moving.

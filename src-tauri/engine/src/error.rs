@@ -85,25 +85,10 @@ pub fn model_wrong_task(model: &str, task: &str) -> Error {
     Error::new("model_wrong_task", format!("{model} is not a {task} model.")).with("model", model).with("task", task)
 }
 
-pub fn accelerator_unusable(model: &str, engine: &str, accelerator: &str, usable: Vec<String>) -> Error {
-    Error::new(
-        "accelerator_unusable",
-        format!("{model} on {engine} cannot use {accelerator} here; it can use {}.", usable.join(", ")),
-    )
-    .with("model", model)
-    .with("engine", engine)
-    .with("accelerator", accelerator)
-    .with("usable", usable)
-}
-
 pub fn not_installed(model: &str, engine: &str) -> Error {
     Error::new("not_installed", format!("{model} on {engine} is not downloaded yet."))
         .with("model", model)
         .with("engine", engine)
-}
-
-pub fn voice_unknown(model: &str, voice: &str) -> Error {
-    Error::new("voice_unknown", format!("{model} has no voice {voice}.")).with("model", model).with("voice", voice)
 }
 
 pub fn download_failed(model: &str, engine: &str) -> Error {
@@ -147,14 +132,6 @@ pub fn install_cancel_failed(error: sidevoice_engine::Error, model: &str, engine
         .with("model", model)
         .with("engine", engine)
         .with("code", error.code)
-}
-
-/// The page unloaded the build while it was loading: it is not kept in memory.
-pub fn load_cancelled(model: &str, engine: &str, accelerator: &str) -> Error {
-    Error::new("load_cancelled", format!("{model} on {engine} ({accelerator}) was unloaded while it was loading."))
-        .with("model", model)
-        .with("engine", engine)
-        .with("accelerator", accelerator)
 }
 
 /// The engine refused to load or to run (a model the runtime rejects, a transcription that failed).

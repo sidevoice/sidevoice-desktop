@@ -1,17 +1,19 @@
 [package]
 name = "sidevoice-desktop-engine"
 version = "0.1.0"
-description = "The app's side of sidevoice-engine (docs/ENGINES.md): the page's ids, install jobs, refusals and what stays in memory."
+description = "The app's side of sidevoice-engine (docs/ENGINES.md): the page's ids, install jobs and refusals, and the engine the voice call runs on."
 edition = "2021"
 rust-version = "1.98"
 license = "Apache-2.0"
 publish = false
 
 [dependencies]
-# The engine itself: catalogue, downloads, the build that runs here, the models. At a release tag. Its sherpa-onnx
+# The engine itself: catalogue, downloads, the build that runs here, the models, local and remote (whose keys the
+# app hands it, `Credentials`). Pinned to the head of sidevoice-engine#73 (the end-of-turn model, on #72's remote
+# backends and the host's credentials and #71's `vad` capability) until a release carries them. Its sherpa-onnx
 # backend links sherpa-onnx's static libraries (SHERPA_ONNX_LIB_DIR), its whisper.cpp backend compiles whisper.cpp
 # from source with CMake, with Metal on Apple silicon (docs/ENGINES.md).
-sidevoice-engine = { git = "https://github.com/sidevoice/sidevoice-engine", tag = "v0.2.0" }
+sidevoice-engine = { git = "https://github.com/sidevoice/sidevoice-engine", rev = "4135791e0def983923c7a28c230fb3f683d5f53b" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The engine's futures run on the app's Tokio runtime; installs race a cancel (src/lib.rs).

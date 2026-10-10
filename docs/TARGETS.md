@@ -14,10 +14,9 @@ By design:
 ## The window
 
 `room-N` shows `tauri://localhost/voice/index.html` (Windows: `http://tauri.localhost/voice/index.html`), the
-interface vendored in `ui/voice/` and `ui/voice-browser/` in the layout sidevoice-web's
-`scripts/assemble-static-web.mjs` defines (`scripts/vendor-web.mjs` here calls it; provenance in
-`ui/voice/web-source.json`). The in-browser models' WebAssembly (`ui/voice-browser/assets/`, 50 MB) comes from
-pinned npm packages at build time (`scripts/web-assets.mjs`), not from git.
+interface of the sidevoice-web release `web.pin.json` names: that release's static site (`sidevoice-web-<version>.tar.gz`),
+unpacked into `ui/voice/` in the layout a room serves (`scripts/build-web.mjs`; `ui/voice/web-source.json` says
+which release). None of it is committed, and nothing of it is built here.
 
 The window only ever navigates within the app's own pages; the microphone is granted to them only; the bridge
 (`docs/BRIDGE.md`) is bound to them.
@@ -44,17 +43,18 @@ writing `/voice/target.js` (`SIDEVOICE_TARGET` in the nginx image).
 
 - First open with no settings: the bundled interface loads and its controller comes up (the bridge reports
   `ready`).
-- The interface's window is a secure context; WebCrypto ECDSA P-256 (what pinning needs) works; the microphone
-  is granted to the app's origin (probe page, same window and rule).
+- The interface's window is a secure context and WebCrypto ECDSA P-256 (what pinning needs) works (probe page,
+  same window and rule). Where the app runs the call itself (`host.voice`, macOS) the page is never granted the
+  microphone: the app owns it.
+- The voice call: `host.voice`'s seam on the probe page, and a call on the engine's real models through the app's
+  adapter, recorded speech in and a spoken reply out (`src-tauri/src/voice/models/tests.rs`).
 - With a target, the interface calls it cross-origin with `Origin: tauri://localhost` (fake node).
 
 ## Updating the bundled interface
 
-```sh
-W=<sidevoice-web checkout>
-(cd $W && npm run build -w @sidevoice/protocol && npm run build -w @sidevoice/browser-audio && npm run build -w @sidevoice/web)
-node scripts/vendor-web.mjs $W
-```
-
-If `onnxruntime-web` or `espeak-ng` change version in `packages/browser-audio`, change the exact versions in this
-repo's `package.json` too.
+Move `web.pin.json` to another sidevoice-web release: its `tag` (`vX.Y.Z`, or `nightly`) and the SHA-256 of its
+tarball, as the release's `SHA256SUMS` lists it; then `npm run web`. The next Tauri build or dev run does the same by
+itself. The tarball must match that digest and be listed so in `SHA256SUMS`, and its attestation
+(`attestation.sigstore.json`) is verified with `gh attestation verify` when `gh` is on the PATH (always in CI). The
+unpacked site is kept in `target/web/<sha256>/site/`, so a second run at the same pin only copies it. A `nightly` pin
+is only ever temporary: its tarball is replaced on every push to sidevoice-web's main, and the digest stops matching.

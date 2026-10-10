@@ -1,9 +1,9 @@
 //! The app's side of the engine against a real `Engine` over a test host: the machine's own storage and capabilities
 //! (`NativeHost`, in a directory of the test's), and downloads served from memory instead of the network. No model is
-//! ever loaded here: what runs a model is the engine's, and CI's round trip on Apple Silicon runs it.
+//! ever loaded here: what runs a model is the engine's, through the voice call.
 
 use super::*;
-use sidevoice_engine::{async_trait, CatalogFragment, Download, Family, Fetcher, Storage};
+use sidevoice_engine::{async_trait, CatalogFragment, Credentials, Download, Family, Fetcher, HttpClient, Storage};
 use std::path::Path;
 
 /// What one served file is: its bytes, and whether its download stalls after the first part until it is dropped.
@@ -62,6 +62,12 @@ impl Host for TestHost {
     }
     fn fetcher(&self) -> &dyn Fetcher {
         &self.fetcher
+    }
+    fn http(&self) -> &dyn HttpClient {
+        self.native.http()
+    }
+    fn credentials(&self) -> &dyn Credentials {
+        self.native.credentials()
     }
 }
 
@@ -160,37 +166,19 @@ fn capabilities_are_this_device_what_the_engine_runs_here_and_its_memory() {
 }
 
 #[test]
-fn what_does_not_run_here_is_refused_by_key_before_anything_is_downloaded_or_loaded() {
+fn what_does_not_run_here_is_refused_by_key_before_anything_is_downloaded() {
     let test = engines("refusals", false);
     let engines = &test.engines;
-    let key = |r: Result<Load, Error>| r.unwrap_err().key;
-    assert_eq!(key(engines.load("whisper-test", "transformers-js", None)), "engine_unsupported");
+    let key = |model: &str, engine: &str| engines.install(model, engine, &mut |_, _| {}).unwrap_err().key;
+    assert_eq!(key("whisper-test", "transformers-js"), "engine_unsupported");
     // whisper.cpp is in this build of the engine; the test catalogue has no build of this model for it.
-    assert_eq!(key(engines.load("whisper-test", "whisper-cpp", None)), "build_missing");
-    assert_eq!(key(engines.load("whisper-nope", "sherpa-onnx", None)), "model_unknown");
-    assert_eq!(key(engines.load("whisper-test", "sherpa-onnx", None)), "not_installed");
-    let unusable = engines.load("whisper-test", "sherpa-onnx", Some("metal")).unwrap_err();
-    assert_eq!(
-        serde_json::to_value(&unusable).unwrap(),
-        serde_json::json!({
-            "key": "accelerator_unusable", "model": "whisper-test", "engine": "sherpa-onnx", "accelerator": "metal",
-            "usable": ["cpu"], "message": "whisper-test on sherpa-onnx cannot use metal here; it can use cpu."
-        })
-    );
-    let memory = engines.load("kokoro-test", "sherpa-onnx", None).unwrap_err();
-    assert_eq!((memory.key, &memory.params["needed_mb"]), ("model_needs_memory", &serde_json::json!(4000000)));
-    let wrong = engines.synthesize("whisper-test", "sherpa-onnx", None, "ef_dora", 1.0, "hola").unwrap_err();
-    assert_eq!(wrong.key, "model_wrong_task");
-    let wrong = engines.transcribe("kokoro-test", "sherpa-onnx", None, "es", &[], 16_000).unwrap_err();
-    assert_eq!(wrong.key, "model_needs_memory", "what does not run here is refused first");
+    assert_eq!(key("whisper-test", "whisper-cpp"), "build_missing");
+    assert_eq!(key("whisper-nope", "sherpa-onnx"), "model_unknown");
     let mut calls = 0;
-    assert_eq!(
-        engines.install("kokoro-test", "sherpa-onnx", &mut |_, _| calls += 1).unwrap_err().key,
-        "model_needs_memory"
-    );
+    let memory = engines.install("kokoro-test", "sherpa-onnx", &mut |_, _| calls += 1).unwrap_err();
+    assert_eq!((memory.key, &memory.params["needed_mb"]), ("model_needs_memory", &serde_json::json!(4000000)));
     assert_eq!(calls, 0, "refused before it starts");
     assert!(engines.installed().unwrap().is_empty());
-    assert!(engines.loaded().is_empty());
 }
 
 #[test]
@@ -276,29 +264,12 @@ fn a_job_waiting_for_another_reports_nothing_and_is_cancelled_where_it_waits() {
 }
 
 #[test]
-fn a_load_the_ci_probe_refuses_is_runtime_failed_and_leaves_memory_as_it_was() {
-    let mut test = engines("refused", false);
-    test.engines.faults.refuse_load = vec!["whisper-test".into()];
-    let engines = &test.engines;
-    engines.install("whisper-test", "sherpa-onnx", &mut |_, _| {}).unwrap();
-    let refused = engines.load("whisper-test", "sherpa-onnx", Some("cpu")).unwrap_err();
-    assert_eq!(refused.key, "runtime_failed");
-    assert!(engines.loaded().is_empty());
-    // The page unloaded it while it loaded: a cancel, not a failure (N03).
-    engines.unload("whisper-test", "sherpa-onnx", None);
-    assert!(engines.loaded().is_empty());
-}
-
-#[test]
-fn the_call_state_is_the_room_s_and_a_call_starting_is_the_moment_to_preload() {
-    let test = engines("calls", false);
-    let engines = &test.engines;
-    let now = Instant::now();
-    assert!(engines.call_changed(true, now));
-    assert!(!engines.call_changed(true, now), "already on");
-    assert!(!engines.call_changed(false, now));
-    assert!(engines.preload().is_empty(), "nothing was unloaded idle");
-    assert!(engines.unload_idle(now + IDLE_UNLOAD).is_empty());
+fn the_engine_is_shared_with_the_voice_call() {
+    let test = engines("shared", false);
+    let engine = test.engines.engine();
+    let models = test.engines.models().unwrap();
+    assert_eq!(models.len(), 2);
+    assert!(std::sync::Arc::ptr_eq(&engine, &test.engines.engine()));
 }
 
 #[test]

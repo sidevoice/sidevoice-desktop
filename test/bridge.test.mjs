@@ -208,20 +208,14 @@ test("installs once per page and survives a missing Tauri runtime", async () => 
   await flush();
 });
 
-test("the native engine is exactly the contract, keyed by catalogue model id + engine, audio as raw bytes", async () => {
+test("the native engine is exactly the contract: what runs here, what is on disk, installs and memory", async () => {
   const install = loadFactory();
   const { win, calls } = fakeWindow(ORIGIN);
-  const capabilities = { runs: "native", os: "macos", arch: "aarch64", has: ["cpu", "metal"], memory_mb: 16384 };
+  const capabilities = { runs: "native", os: "macos", arch: "aarch64", has: ["cpu", "metal", "remote"], memory_mb: 16384 };
   const answers = {
     engine_capabilities: capabilities,
     engine_installed: [{ model: "whisper-tiny", engine: "sherpa-onnx" }],
-    engine_synthesize: (() => {
-      const buffer = new ArrayBuffer(4 + 8);
-      new DataView(buffer).setUint32(0, 24000, true);
-      new Float32Array(buffer, 4, 2).set([0.5, -0.25]);
-      return buffer;
-    })(),
-    engine_transcribe: "hola",
+    engine_memory: { total_mb: 16384, available_mb: 9000 },
     engine_install: () => new Promise((resolve) => setTimeout(() => resolve(null), 20)), // long enough to poll
     engine_progress: { job: "?", model: "whisper-small", engine: "sherpa-onnx", done: 5, total: 10, bytes_per_s: null },
   };
@@ -231,35 +225,12 @@ test("the native engine is exactly the contract, keyed by catalogue model id + e
   };
   const engine = install(win, ORIGIN).host.nativeEngine;
   assert.equal(install(win, ORIGIN).host.app, "sidevoice-desktop");
-  assert.deepEqual(Object.keys(engine).sort(),
-    ["cancel", "capabilities", "install", "installed", "load", "loaded", "memory", "synthesize", "transcribe", "unload"]);
+  assert.deepEqual(Object.keys(engine).sort(), ["cancel", "capabilities", "install", "installed", "memory"]);
   assert.ok(Object.isFrozen(engine));
 
   assert.equal(JSON.stringify(await engine.capabilities()), JSON.stringify(capabilities));
   assert.equal(JSON.stringify(await engine.installed()), JSON.stringify([{ model: "whisper-tiny", engine: "sherpa-onnx" }]));
-
-  const samples = new Float32Array([0.1, 0.2, 0.3]);
-  assert.equal(await engine.transcribe("whisper-small", "sherpa-onnx", samples, 16000, "es"), "hola");
-  const [, body, options] = calls.find(([cmd]) => cmd === "engine_transcribe");
-  assert.ok(body.constructor.name === "Uint8Array" && body.byteLength === 12, "raw f32 bytes");
-  // (objects built inside the vm context: compare their JSON, not their prototypes)
-  assert.equal(JSON.stringify(options.headers), JSON.stringify({
-    "x-model": "whisper-small", "x-engine": "sherpa-onnx", "x-accelerator": "", "x-language": "es", "x-sample-rate": "16000",
-  }));
-  await engine.transcribe("whisper-small", "whisper-cpp", samples, 16000, "", "metal");
-  assert.equal(calls.filter(([cmd]) => cmd === "engine_transcribe")[1][2].headers["x-accelerator"], "metal");
-
-  const audio = await engine.synthesize("kokoro-82m-v1.0", "sherpa-onnx", "ef_dora", 1, "hola");
-  assert.equal(audio.sampleRate, 24000);
-  assert.deepEqual(Array.from(audio.samples), [0.5, -0.25]);
-  assert.equal(JSON.stringify(calls.find(([cmd]) => cmd === "engine_synthesize")[1]), JSON.stringify({
-    model: "kokoro-82m-v1.0", engine: "sherpa-onnx", accelerator: null, voice: "ef_dora", speed: 1, text: "hola",
-  }));
-  await engine.synthesize("kokoro-82m-v1.0", "sherpa-onnx", "ef_dora", 1, "hola", "cpu");
-  assert.equal(calls.filter(([cmd]) => cmd === "engine_synthesize")[1][1].accelerator, "cpu");
-
-  answers.engine_synthesize = Array.from(new Uint8Array(answers.engine_synthesize));
-  assert.equal((await engine.synthesize("kokoro-82m-v1.0", "sherpa-onnx", "ef_dora", 1, "x")).sampleRate, 24000, "postMessage fallback");
+  assert.equal(JSON.stringify(await engine.memory()), '{"total_mb":16384,"available_mb":9000}');
 
   const seen = [];
   const installing = engine.install("whisper-small", "sherpa-onnx", (progress) => seen.push(progress));
@@ -272,37 +243,129 @@ test("the native engine is exactly the contract, keyed by catalogue model id + e
   assert.match(engine.install("whisper-tiny", "sherpa-onnx").job, /^install-/, "without onProgress too");
 });
 
-test("load, unload, loaded and memory: the build in memory, by catalogue model id + engine", async () => {
-  const install = loadFactory();
+// ---- host.voice: the voice call the app runs (docs/BRIDGE.md → "The voice call") ----
+
+function voiceWindow(answers = {}) {
   const { win, calls } = fakeWindow(ORIGIN);
-  const resident = [{ model: "whisper-small", engine: "whisper-cpp", accelerator: "metal", since: 1, last_used: 2 }];
-  const answers = {
-    engine_load: { load_ms: 840 },
-    engine_unload: null,
-    engine_loaded: resident,
-    engine_memory: { total_mb: 16384, available_mb: 9000 },
+  win.__TAURI_INTERNALS__.invoke = (cmd, args) => {
+    calls.push([cmd, args === undefined ? undefined : structuredClone(args)]);
+    const answer = answers[cmd];
+    if (answer instanceof Error) return Promise.reject(answer.refusal);
+    return Promise.resolve(answer);
   };
-  win.__TAURI_INTERNALS__.invoke = (cmd, args) => (calls.push([cmd, structuredClone(args)]), Promise.resolve(answers[cmd]));
-  const engine = install(win, ORIGIN).host.nativeEngine;
+  return { win, calls };
+}
 
-  assert.equal(JSON.stringify(await engine.load("whisper-small", "whisper-cpp", "metal")), '{"load_ms":840}');
-  await engine.load("kokoro-82m-v1.0", "sherpa-onnx");
-  assert.equal(await engine.unload("whisper-small", "sherpa-onnx"), null);
-  await engine.unload("whisper-small", "whisper-cpp", "metal");
-  assert.equal(JSON.stringify(await engine.loaded()), JSON.stringify(resident));
-  assert.equal(JSON.stringify(await engine.memory()), '{"total_mb":16384,"available_mb":9000}');
-  assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("engine_")), [
-    ["engine_load", { model: "whisper-small", engine: "whisper-cpp", accelerator: "metal" }],
-    ["engine_load", { model: "kokoro-82m-v1.0", engine: "sherpa-onnx", accelerator: null }],
-    ["engine_unload", { model: "whisper-small", engine: "sherpa-onnx", accelerator: null }],
-    ["engine_unload", { model: "whisper-small", engine: "whisper-cpp", accelerator: "metal" }],
-    ["engine_loaded", undefined],
-    ["engine_memory", undefined],
+test("host.voice only where the app runs the call, and exactly the seam", () => {
+  const install = loadFactory();
+  for (const offered of [undefined, false, "__SIDEVOICE_VOICE__", "true"]) {
+    const api = install(fakeWindow(ORIGIN).win, ORIGIN, null, true, offered);
+    assert.equal("voice" in api.host, false, String(offered));
+    api.voiceEvent({ type: "level", data: 0.5 }); // nothing listens, nothing breaks
+  }
+  const api = install(fakeWindow(ORIGIN).win, ORIGIN, "native", true, true);
+  assert.deepEqual(Object.keys(api.host.voice).sort(), [
+    "cancelInput", "hasProviderKey", "models", "mute", "onError", "onLevel", "onState", "onTurn", "say",
+    "setProviderKey", "setSettings", "start", "stop",
   ]);
+  assert.ok(Object.isFrozen(api.host.voice));
+});
 
-  const refusal = { key: "runtime_failed", engine: "sherpa-onnx", message: "sherpa-onnx failed: …" };
-  win.__TAURI_INTERNALS__.invoke = () => Promise.reject(refusal);
-  await assert.rejects(engine.load("whisper-small", "sherpa-onnx"), (error) => error === refusal, "refusals pass through as sent");
+test("host.voice calls go to their native commands, with their arguments", async () => {
+  const install = loadFactory();
+  const { win, calls } = voiceWindow({ voice_models: [{ id: "whisper-small" }], voice_has_provider_key: true });
+  const voice = install(win, ORIGIN, "native", true, true).host.voice;
+  const settings = { stt: { model: "whisper-small", language: "es" }, tts: { model: "kokoro-82m-v1.0", voice: "ef_dora" } };
+  await voice.setSettings(settings);
+  await voice.start();
+  voice.say("Hola.", { language: "es" });
+  voice.say("Sin idioma.");
+  await voice.mute(1);
+  await voice.cancelInput();
+  await voice.stop();
+  assert.equal(JSON.stringify(await voice.models()), '[{"id":"whisper-small"}]');
+  await voice.setProviderKey("openai", "sk-test");
+  await voice.setProviderKey("openai", null);
+  assert.equal(await voice.hasProviderKey("openai"), true);
+  assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("voice_")), [
+    ["voice_set_settings", { settings }],
+    ["voice_start", undefined],
+    ["voice_say", { key: "say-1", text: "Hola.", language: "es" }],
+    ["voice_say", { key: "say-2", text: "Sin idioma.", language: null }],
+    ["voice_mute", { muted: true }],
+    ["voice_cancel_input", undefined],
+    ["voice_stop", undefined],
+    ["voice_models", undefined],
+    ["voice_set_provider_key", { provider: "openai", key: "sk-test" }],
+    ["voice_set_provider_key", { provider: "openai", key: null }],
+    ["voice_has_provider_key", { provider: "openai" }],
+  ]);
+});
+
+test("something said answers its handle at once: its steps, its outcome, and a cancel that never overtakes the say", async () => {
+  const install = loadFactory();
+  const { win, calls } = voiceWindow();
+  const api = install(win, ORIGIN, "native", true, true);
+  const saying = api.host.voice.say("Hecho, ya está en la rama.");
+  assert.equal(saying.id, "say-1");
+  assert.ok(Object.isFrozen(saying));
+  const steps = [];
+  saying.onEvent((step) => steps.push(step.type));
+  saying.onEvent(() => { throw new Error("a listener's own"); });
+  saying.cancel();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const voiceCalls = () => calls.filter(([cmd]) => cmd.startsWith("voice_"));
+  assert.deepEqual(voiceCalls().map(([cmd]) => cmd), ["voice_say", "voice_cancel_say"], "the cancel goes behind its say");
+  assert.deepEqual(voiceCalls()[1][1], { key: "say-1" });
+  const step = (event) => api.voiceEvent({ type: "say", data: { key: "say-1", event } });
+  step({ type: "playing" });
+  step({ type: "progress", sounding: [0, 26], heard_chars: 0 });
+  const outcome = { status: "heard-up-to", heard_chars: 0, reason: "cancelled" };
+  step({ type: "done", outcome });
+  assert.deepEqual(await saying.outcome, outcome);
+  assert.deepEqual(steps, ["playing", "progress", "done"]);
+  // Done: a late step goes nowhere, and a cancel then is nothing.
+  step({ type: "playing" });
+  assert.equal(steps.length, 3);
+  saying.cancel();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(voiceCalls().length, 2);
+  // A say the app refuses ends as not played, failed with the refusal's code.
+  const refusal = { key: "bad_request", code: "bad-request", message: "not a say key" };
+  const refused = install(voiceWindow({ voice_say: Object.assign(new Error(), { refusal }) }).win, ORIGIN, "native", true, true)
+    .host.voice.say("x");
+  assert.equal(JSON.stringify(await refused.outcome), '{"status":"not-played","reason":"failed","code":"bad-request"}');
+});
+
+test("the call's events reach host.voice's listeners by their type, until they stop", () => {
+  const install = loadFactory();
+  const api = install(voiceWindow().win, ORIGIN, "native", true, true);
+  const seen = [];
+  const listen = (name) => api.host.voice[name]((data) => seen.push([name, JSON.stringify(data)]));
+  const stops = ["onTurn", "onState", "onLevel", "onError"].map(listen);
+  api.host.voice.onLevel(() => { throw new Error("a listener's own"); });
+  const turn = { phase: "started", turn_id: "c-turn-0", started_at: 1 };
+  api.voiceEvent({ type: "turn", data: turn });
+  api.voiceEvent({ type: "state", data: { listening: "listening" } });
+  api.voiceEvent({ type: "level", data: 0.25 });
+  api.voiceEvent({ type: "error", data: { code: "microphone-denied" } });
+  api.voiceEvent({ type: "say", data: { key: "nobody", event: { type: "playing" } } });
+  api.voiceEvent({ type: "something-else", data: {} });
+  api.voiceEvent(null);
+  assert.deepEqual(seen.map(([name]) => name), ["onTurn", "onState", "onLevel", "onError"]);
+  assert.equal(seen[0][1], JSON.stringify(turn), "the call's turn, as it told it");
+  stops.forEach((stop) => stop());
+  api.voiceEvent({ type: "level", data: 0.5 });
+  assert.equal(seen.length, 4);
+  assert.throws(() => api.host.voice.onState("not a function"), { name: "TypeError" });
+});
+
+test("a refused start rejects with the app's keyed refusal", async () => {
+  const install = loadFactory();
+  const refusal = { key: "voice_failed", code: "microphone-denied", message: "The call could not start: microphone-denied." };
+  const voice = install(voiceWindow({ voice_start: Object.assign(new Error(), { refusal }) }).win, ORIGIN, null, true, true)
+    .host.voice;
+  await assert.rejects(voice.start(), (error) => error === refusal);
 });
 
 test("cancel: by the job install carries from the start; the install rejects as the app refuses it", async () => {
@@ -380,12 +443,14 @@ test("concurrent installs: each callback gets its own job's bytes, and none whil
 test("a refusal reaches the page as the app sent it: a key, its parameters and an English message", async () => {
   const install = loadFactory();
   const { win } = fakeWindow(ORIGIN);
-  const refusal = { key: "not_installed", model: "whisper-small", engine: "sherpa-onnx", message: "whisper-small on sherpa-onnx is not downloaded yet." };
+  const refusal = { key: "model_needs_memory", model: "whisper-large-v3", needed_mb: 4000, memory_mb: 2000,
+    message: "whisper-large-v3 needs 4000 MB of memory; this machine has 2000 MB." };
   win.__TAURI_INTERNALS__.invoke = () => Promise.reject(refusal);
   const engine = install(win, ORIGIN).host.nativeEngine;
-  await assert.rejects(engine.transcribe("whisper-small", "sherpa-onnx", new Float32Array(1), 16000, "es"), (error) => {
-    assert.equal(error.key, "not_installed");
-    assert.equal(error.model, "whisper-small");
+  await assert.rejects(engine.install("whisper-large-v3", "sherpa-onnx"), (error) => {
+    assert.equal(error.key, "model_needs_memory");
+    assert.equal(error.needed_mb, 4000);
+    assert.equal(error.model, "whisper-large-v3");
     assert.equal(error.message, refusal.message);
     return true;
   });
@@ -402,6 +467,8 @@ test("works on the app's own pages, whose origin may be opaque", () => {
 test("the placeholders the app replaces are present exactly once", () => {
   assert.equal(source.split("__SIDEVOICE_ROOM_ORIGIN__").length, 2);
   assert.equal(source.split("__SIDEVOICE_MEDIA_KEYS__").length, 2);
+  assert.equal(source.split("__SIDEVOICE_LOCAL_HOST__").length, 2);
+  assert.equal(source.split("__SIDEVOICE_VOICE__").length, 2);
 });
 
 test("says who answers the media keys", () => {

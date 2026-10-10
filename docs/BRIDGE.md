@@ -12,6 +12,7 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 | `src-tauri/core/src/bridge.rs` | The contract on the Rust side: `CallSnapshot`, `Command`, and how the tray renders a snapshot. Unit-tested. |
 | `src-tauri/src/lib.rs` | Wiring: the `bridge_state` command, `send(Command)`; `capabilities/room.json`. |
 | `src-tauri/src/engine_ipc.rs` | The native engine's commands, behind `nativeEngine` (below). |
+| `src-tauri/src/voice.rs`, `src-tauri/src/keychain.rs`, `src-tauri/core/src/voice.rs` | The voice call the app runs, behind `voice` (macOS; below), its provider keys in the keychain, and the builds it picks (unit-tested). |
 | `src-tauri/src/local_host.rs`, `src-tauri/local-host/` | This computer's own core, behind `localHost` (below; docs/LOCAL_HOST.md). |
 | `src-tauri/src/tray.rs` | The menu-bar icon and its menu. |
 | `bridge/call-controls-bridge.js` | Injected into the call controls card's window (below). |
@@ -99,7 +100,7 @@ Evaluated by the app with `webview.eval` (works with the window hidden); the com
 Joining is deliberately **not** a tray command: joining unlocks audio output, which the webview
 only allows from a click in the page. "Mostrar Sidevoice" opens the window for that.
 
-`window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", version, nativeEngine, mediaKeys, localHost? }`: the
+`window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", version, nativeEngine, mediaKeys, localHost?, voice? }`: the
 web UI feature-detects the desktop app by it, and each capability by its presence. `version` is the bridge's (2).
 
 ## The local host
@@ -133,7 +134,7 @@ controls. Hidden from the tray ("Hide call controls") it stays hidden for that c
 in the settings keeps its controls in view.
 
 - **The window** (`src/call_controls.rs`, label `call-controls`) loads `voice/call-controls.html`, a second page of
-  the vendored web build (`apps/web/src/call-controls/`), which reuses the room's conversation list and icons.
+  the bundled web build (`apps/web/src/call-controls/`), which reuses the room's conversation list and icons.
   macOS: a non-activating `NSPanel` (tauri-nspanel) at the status level (25), on every Space and over full-screen
   apps, never the key window: clicking it leaves the person's app active. Windows and Linux X11: borderless,
   transparent, always on top, never focused, no taskbar button. Wayland (a Wayland display, and `GDK_BACKEND` not
@@ -188,36 +189,23 @@ web repo), other displays and scales, and any platform but macOS.
 
 ## The native engine
 
-In the app, speech models run only in its native engine, never in the page (sidevoice/sidevoice-core#21 D5). The page
-resolves its offers itself — `offers(catalog, capabilities, place)` over the catalogue it carries — from what the
-engine reports, and runs the build it chose through it. `window.__sidevoiceDesktop.host.nativeEngine`:
+The app's engine (docs/ENGINES.md), for what the page manages of its models: what this device runs, which builds are
+on disk, and getting one there with its progress. Running models is the voice call's (below), never the page's.
+`window.__sidevoiceDesktop.host.nativeEngine`:
 
 | Call | Returns / does |
 |---|---|
-| `capabilities()` | `{runs: "native", os: "macos"\|"windows"\|"linux", arch: "aarch64"\|"x86_64", has: ["cpu", …], memory_mb: number\|null}` — `has` is what sidevoice-engine runs a model on here (`cpu`; `metal` on Apple Silicon, for whisper.cpp), never Core ML, `memory_mb` the machine's total, from the OS |
-| `installed()` | `[{model, engine}]` — builds whose engine package and model files are on disk and whole: the download's marker names its hash, and its root and every file the engine needs from it are there |
-| `install(model, engine, onProgress?)` | downloads the engine package and the model's build, whichever is missing or incomplete (a download that lost a file is fetched again). Returns a promise that also carries the install's job id from the start, `promise.job` (a string), for `cancel`. `onProgress(event)` about twice a second, only with this call's own bytes (below) |
-| `cancel(job)` | cancels that install, waiting or running; its `install` promise rejects with `{key: "install_cancelled", message}` and the model is not on disk afterwards (unless it already was before the install), so a `load` of it is refused `not_installed`. Resolves `true` when the install will reject so — also when it has not reached the app yet (it is refused as it arrives) — and `false` when it had already ended (a no-op, never a rejection) |
-| `transcribe(model, engine, samples, sampleRate, language, accelerator?)` | text; `samples` a mono `Float32Array`, `language` empty to detect |
-| `synthesize(model, engine, voice, speed, text, accelerator?)` | `{samples: Float32Array, sampleRate}` |
-| `load(model, engine, accelerator?)` | loads the build into memory and resolves `{load_ms}`: how long loading it took. One already in memory is not loaded again, and answers the time its load took. Rejects with `load_cancelled` when the page unloads that build (on that accelerator, or all) before the load ends: it is then not kept |
-| `unload(model, engine, accelerator?)` | frees that build's memory on `accelerator` — only that copy — or, with none named, on every accelerator it is loaded on; resolves `null`, also when it was not loaded. A transcription or synthesis already running on it finishes first; a `load` of it still under way is not kept (it rejects with `load_cancelled`), nor is the app's own preload (below) |
-| `loaded()` | `[{model, engine, accelerator, since, last_used}]`: what is in memory, oldest first; `since` and `last_used` are milliseconds since the Unix epoch |
+| `capabilities()` | `{runs: "native", os: "macos"\|"windows"\|"linux", arch: "aarch64"\|"x86_64", has: ["cpu", …], memory_mb: number\|null}` — `has` is what sidevoice-engine runs a model on here (`cpu`; `metal` on Apple Silicon, for whisper.cpp; `remote` for the providers' models), never Core ML, `memory_mb` the machine's total, from the OS |
+| `installed()` | `[{model, engine}]` — builds whose files are on disk and whole |
+| `install(model, engine, onProgress?)` | downloads the model's build, whatever of it is missing. Returns a promise that also carries the install's job id from the start, `promise.job` (a string), for `cancel`. `onProgress(event)` about twice a second, only with this call's own bytes (below) |
+| `cancel(job)` | cancels that install, waiting or running; its `install` promise rejects with `{key: "install_cancelled", message}` and the model is not on disk afterwards (unless it already was before the install). Resolves `true` when the install will reject so — also when it has not reached the app yet (it is refused as it arrives) — and `false` when it had already ended (a no-op, never a rejection) |
 | `memory()` | `{total_mb, available_mb}`: the machine's memory and what is available of it now, each `null` when the OS does not say. On macOS `available_mb` is the share the kernel's memory-pressure level reports free (`kern.memorystatus_level`): a gauge, not a limit, since macOS compresses and swaps rather than fail |
 
-- `model` is the catalogue id (`whisper-small`, `kokoro-82m-v1.0`), `engine` the build's engine id
-  (`sherpa-onnx`): sidevoice-engine's model id and backend id, the same ids the core's catalogue uses. The app runs exactly that build or refuses it (below), and never another build instead. Before
-  it downloads or runs anything it checks, at this trust boundary, that the build runs here: an adapter for the
-  engine, a package for this OS/architecture, the build's needs and accelerators, and the model's
-  `requires.memory_mb` against the machine's memory (unknown memory is not a refusal).
-- `accelerator` (optional, `cpu`, `metal`…): the one the page chose for that build (the resolver's, or the
-  person's in *Avanzado*). It must be one the build can use here, or the call is refused. Without it the app uses
-  the first the build can use on this device, which is what the resolver picks.
-- A build is in memory once per engine, model and accelerator. The language is each call's (`transcribe`'s, the
-  voice's), so `load` takes none and one loaded Whisper or Kokoro serves every language. `transcribe` and
-  `synthesize` on a build that is not in memory load it first, as before: `load` is how the page has it ready before
-  the first call, and measures it. A `load` that fails rejects with a refusal (below) and leaves what is in memory as
-  it was.
+- `model` is the catalogue id (`whisper-small`, `kokoro-82m-v1.0`), `engine` the build's engine id (`sherpa-onnx`,
+  `whisper-cpp`): sidevoice-engine's model id and backend id. The app installs exactly that build or refuses it
+  (below), and never another build instead. Before it downloads anything it checks, at this trust boundary, that the
+  build runs here: an engine in this app, the build's needs and accelerators, and the model's memory against the
+  machine's (unknown memory is not a refusal).
 - Installs run one at a time. Each `install` call is its own job (`job`, an id the bridge makes, `promise.job`); the
   app keeps progress per job from the moment the job starts — after any install ahead of it — until it ends, so a
   call that waits reports nothing and no call ever reports another's bytes. Each report is one object:
@@ -233,54 +221,35 @@ engine reports, and runs the build it chose through it. `window.__sidevoiceDeskt
   weighing half against the speed before it; time left is `(total - done) / bytes_per_s`.
 - A cancelled install stops within a moment, whatever it is doing: waiting for another install, waiting on the
   network — for the answer's headers or its next chunk, however long the server has gone quiet: the request is
-  dropped and its connection closed — or unpacking. It frees the install lock, removes
-  what it was downloading (sidevoice-engine stores a file only once it is whole and verified) and rejects with
-  `install_cancelled`. A file it had already completed is whole and verified, and stays. A cancel the app accepted wins: one that lands as the files are moved into place
-  removes the model again, unless another build of it was installed before (the engine removes only whole models:
-  the build then stays and the install rejects with `install_cancel_late`; a removal that fails rejects with
-  `install_cancel_failed`), and a transport error that follows it (the connection it closed) is still
-  `install_cancelled`, never `download_failed`. Any other failed download is cleaned up the same way. There is no
-  overall download timeout: a slow line is not a failure, and the cancel is how a person stops one.
+  dropped and its connection closed — or unpacking. It frees the install lock, removes what it was downloading
+  (sidevoice-engine stores a file only once it is whole and verified) and rejects with `install_cancelled`. A file it
+  had already completed is whole and verified, and stays. A cancel the app accepted wins: one that lands as the files
+  are moved into place removes the model again, unless another build of it was installed before (the engine removes
+  only whole models: the build then stays and the install rejects with `install_cancel_late`; a removal that fails
+  rejects with `install_cancel_failed`), and a transport error that follows it (the connection it closed) is still
+  `install_cancelled`, never `download_failed`. There is no overall download timeout: a slow line is not a failure,
+  and the cancel is how a person stops one.
 - Commands behind it (`src-tauri/src/engine_ipc.rs`): `engine_capabilities`, `engine_installed`,
   `engine_install {model, engine, job}` with `engine_progress {job}` (the report above, or `null` while the job
-  waits or after it ends) and `engine_cancel {job}` (`true`/`false` as `cancel`), `engine_transcribe` (raw f32 body; `x-model`, `x-engine`, `x-accelerator`, `x-language`,
-  `x-sample-rate` headers), `engine_synthesize` (answer: raw bytes, a u32 sample rate then f32 samples),
-  `engine_load {model, engine, accelerator}` (`accelerator` `null` for the resolver's),
-  `engine_unload {model, engine, accelerator}` (`null` for all),
-  `engine_loaded`, `engine_memory`. Granted to the room window (`capabilities/room.json`). The settings window may read `engine_capabilities` and
-  `engine_on_disk` (what is on disk and its size), and nothing else of the engine.
-
-### What stays in memory (sidevoice/sidevoice-core#21 D13)
-
-The app enforces it itself, from the call state the room already reports (`bridge_state`, `joined`):
-
-- While a call is on (joining counts), nothing is unloaded but what the page unloads.
-- With no call on, a build unused for 10 minutes — counted from its last load or run, or from when the last call
-  ended if that is later — is unloaded (`IDLE_UNLOAD`, `src-tauri/engine/src/lib.rs`; the rules in
-  `src-tauri/engine/src/residency.rs`). The engine frees a model when the app drops its last handle to it.
-- As the next call connects, what the app unloaded that way is loaded again, on the accelerator it had, unless the
-  page has unloaded it since — even while that preload is already loading it — or has another build of that task
-  (transcription, voice) in memory by then. A build the
-  page loaded to check and unloaded when the check failed does not count: the one it kept comes back.
-- What the app has never had in memory since it started (a fresh launch) it cannot preload: the page's choice is the
-  page's. The page calls `load` as a call connects, or the first `transcribe` / `synthesize` loads it.
-
-With `SIDEVOICE_DEBUG=1` the app prints `engine unloaded idle …` and `engine preload … load_ms=…`.
+  waits or after it ends) and `engine_cancel {job}` (`true`/`false` as `cancel`), `engine_memory`. Granted to the room
+  window (`capabilities/room.json`). The settings window may read `engine_capabilities` and `engine_on_disk` (what is
+  on disk and its size), and nothing else of the engine.
 
 ### Refusals
 
-A call the engine refuses, or one that fails, rejects with the shape of sidevoice-core's refusals: a stable `key`
+A call the app refuses, or one that fails, rejects with the shape of sidevoice-core's refusals: a stable `key`
 the page translates, the parameters its message needs beside it, and `message`, the sentence in English for a
 client that does not know the key:
 
 ```json
-{ "key": "not_installed", "model": "whisper-small", "engine": "sherpa-onnx",
-  "message": "whisper-small on sherpa-onnx is not downloaded yet." }
+{ "key": "model_needs_memory", "model": "whisper-large-v3", "needed_mb": 4000, "memory_mb": 2000,
+  "message": "whisper-large-v3 needs 4000 MB of memory; this machine has 2000 MB." }
 ```
 
-The page renders by `key` and falls back to `message`. Every key is made in `src-tauri/engine/src/error.rs`; a new
-one is added there and here. What sidevoice-engine itself fails with is one of these keys, with the engine's own code
-beside it as `code` (`digest-mismatch`, `model-load-failed`…).
+The page renders by `key` and falls back to `message`. The engine's keys are made in `src-tauri/engine/src/error.rs`,
+the voice call's in `src-tauri/src/voice.rs` and core `voice.rs`; a new one is added there and here. What
+sidevoice-engine itself fails with is one of these keys, with the engine's own code beside it as `code`
+(`digest-mismatch`, `model-load-failed`…).
 
 | `key` | Parameters | When |
 |---|---|---|
@@ -289,35 +258,88 @@ beside it as `code` (`digest-mismatch`, `model-load-failed`…).
 | `build_missing` | `model`, `engine` | the model has no build for that engine |
 | `build_unfit` | `model`, `engine`, `reason` (the engine's code, when it gave one) | the build needs a feature, or an accelerator, this device lacks |
 | `model_needs_memory` | `model`, `needed_mb`, `memory_mb` | the model needs more memory than this machine has |
-| `model_wrong_task` | `model`, `task` | transcribing with a voice model, or speaking with a transcription one |
-| `accelerator_unusable` | `model`, `engine`, `accelerator`, `usable` (list) | the accelerator asked for is not one this build can use here |
-| `not_installed` | `model`, `engine` | run before `install` finished, or after a download lost a file |
-| `voice_unknown` | `model`, `voice` | the model has no such voice |
+| `model_wrong_task` | `model`, `task` | the engine refused a model for what it was asked to do |
+| `not_installed` | `model`, `engine` | the engine found a file missing |
 | `download_failed` | `model`, `engine` | the network failed, or answered with an error |
 | `download_corrupt` | `model`, `engine` | the bytes are not the ones the catalogue names (SHA-256) |
 | `install_failed` | — | unpacking or moving the download into place failed (disk, permissions, an archive without its files) |
 | `install_cancelled` | — | the page cancelled the install (`cancel(job)`): not a failure, nothing to show as an error |
 | `install_cancel_late` | `model`, `engine` | the page cancelled after the download had ended and another build of the model was installed before it: the build stays installed (the engine removes only whole models); the page may remove it |
 | `install_cancel_failed` | `model`, `engine`, `code` | the page cancelled after the download had ended and removing it failed (`code`, the engine's: `model-in-use`, a storage failure): it may still be on disk |
-| `load_cancelled` | `model`, `engine`, `accelerator` | the page unloaded the build while it was loading — also when the load then failed: not a failure |
-| `runtime_failed` | `engine` | the engine refused to load the model into memory, or to run it |
-| `bad_request` | — | a malformed call (a missing header): a bug in the caller |
+| `runtime_failed` | `engine` | the engine refused, with a code this app does not map |
+| `voice_model_unknown` | `model` | a voice setting names a model the engine's catalogue does not have |
+| `voice_model_wrong_task` | `model` | a voice setting names a model that cannot do that stage (a voice for transcription) |
+| `voice_model_unfit` | `model` | no build of that model runs on this device |
+| `voice_build_unfit` | `model` | a voice setting names a build that is not one of the model's that runs here (Core ML and MLX included) |
+| `voice_end_of_turn_unavailable` | — | `end_of_turn: "smart-turn"` while no model of the catalogue ends turns (sidevoice-engine#69) |
+| `voice_settings_missing` | `code` (`settings-missing`) | a call of `host.voice` before its first `setSettings` |
+| `voice_failed` | `code` (the call's: `microphone-denied`, `audio-device-unavailable`, the engine's `model-load-failed`, …, or `stopped`) | the call could not start, or was stopped before it listened |
+| `keychain_failed` | — | the keychain refused to keep or read a key |
+| `engine_unavailable` | — | the engine did not start with the app |
+| `bad_request` | — | a malformed call, or a caller other than the room window's own page: a bug in the caller |
 | `internal` | — | something inside the app failed |
+
+## The voice call
+
+On macOS the app runs the voice call itself: sidevoice-voice (`sidevoice/sidevoice-voice`) with the device's own
+microphone and speaker (cpal) and WebRTC's AEC3 between them, so the call cancels its own echo
+(`src-tauri/src/voice.rs`; sidevoice/sidevoice-core#89). sidevoice-voice names no model and depends on no engine:
+the app fills its interfaces (voice activity, transcriber, speaker, end of turn) with the engine's models
+(`src-tauri/src/voice/models.rs`). The room window's page is then never granted the microphone
+(`media::decide`) and runs no model: it keeps the room. The call knows nothing of it: the page tells the room the
+turns the call gives it, and has the call say what the room sends, through a handle that tells how it went. Elsewhere `host.voice` is absent and the page runs the call
+itself over `@sidevoice/voice` in the webview, the room window granting it the microphone: the page pinned now
+(`web.pin.json`) cannot load those modules until they are on npm, so on Windows and Linux there is no voice yet.
+
+### The seam
+
+`window.__sidevoiceDesktop.host.voice` implements `VoiceHost`, the page's voice seam, defined once in sidevoice-voice:
+[`js/voice-host.d.ts`](https://github.com/sidevoice/sidevoice-voice/blob/feat/voice-host/js/voice-host.d.ts) in
+`@sidevoice/voice` (sidevoice/sidevoice-voice#6), with the types it carries (`VoiceSettings`, `VoiceHostError`,
+and `js/voice-events.d.ts`'s `VoiceTurnEvent`, `VoiceCallState`, `VoiceSaying`, `VoiceSayOutcome`) and what every
+implementation promises
+(that package's README, "The voice seam a page drives"). On the web the same package's `createVoiceHost(source)`
+implements it over the call in the page, with the models the page's `source` loads (sidevoice-web's adapter over its
+engine); the page does `host.voice ?? createVoiceHost(source)` and uses nothing else of either. It is not restated
+here: a change is made there, and both sides follow.
+
+What is this app's own:
+
+- `setSettings` picks the call's models and makes its configuration (core `voice.rs`): a build the person names, if
+  it runs here; otherwise Whisper on whisper.cpp (Metal on Apple Silicon) and other models on the engine's
+  recommended build; never Core ML nor MLX; Silero for voice activity; for `smart-turn`, the first model of the
+  `end-of-turn` capability that runs here. Other models reach a call that listens at once (it restarts on them). It
+  rejects with the app's keyed refusals (below), each with the seam's `code` beside its `key` (`voice_model_unknown`
+  → `model-unknown`).
+- `start` rejects `{key: "voice_failed", code, message}` with the call's code, `{key: "voice_settings_missing", code:
+  "settings-missing"}` before any settings, and `{key: "voice_failed", code: "stopped"}` when `stop` came first.
+- Provider keys go to the macOS keychain; the page never reads one back.
+- A page that loads anew finds the call stopped, its models still loaded.
+
+### How it travels
+
+- Page → app: the commands `voice_set_settings {settings}`, `voice_start`, `voice_stop`,
+  `voice_say {key, text, language}`, `voice_cancel_say {key}`, `voice_mute {muted}`, `voice_cancel_input`, `voice_models`,
+  `voice_set_provider_key {provider, key}`, `voice_has_provider_key {provider}` (`src-tauri/src/voice.rs`). Granted to
+  the room window (`capabilities/room.json`); each re-checks that the caller is the current room window on the app's
+  own page.
+- App → page: `window.__sidevoiceDesktop.voiceEvent(event)` (`webview.eval`), each sidevoice-voice `VoiceEvent` as
+  JSON, `{type: "turn" | "state" | "level" | "error", data}`, which the bridge hands to its listeners; and each step
+  of something said, `{type: "say", data: {key, event}}` (`key` the bridge's for the handle `say` answered at once;
+  `event` sidevoice-voice's `SayEvent`, the last `done` with the outcome), which it hands to that handle. A handle's
+  `cancel` goes behind its `voice_say`, so it never overtakes it.
+- Keys: `setProviderKey` writes the macOS keychain (`src-tauri/src/keychain.rs`), and the engine reads it when a
+  remote model is installed, loaded or called.
 
 ## Changing the bridge
 
 - Add a command: a variant in `Command` (Rust), a `case` in `run` (JS), a test on each side.
 - Add a field: `CallSnapshot` uses `#[serde(default)]`, so old and new scripts interoperate;
   bump `version` only for a breaking change.
-- Tests: `npm test` (the script against a fake window; the vendored room's native worker against this bridge,
-  `test/room-bundle.test.mjs`), `cargo test -p sidevoice-desktop-core` and
-  `cargo test -p sidevoice-desktop-engine` (the engine against a fake runtime adapter), `cargo test -p
-  sidevoice-local-host` (the local host against a stand-in core; docs/LOCAL_HOST.md → Tests). In the real app, CI's macOS
-  job selects models through the vendored room itself (`test/fixtures/room-flow.js`, probe build), paired with CI's
-  stand-in machine (`test/fixtures/fake-node.py`, which proves its identity): the room's own settings actions, with
-  real models, for consent → download → load → two checks → in effect; a cancel mid-download; a failure (a load
-  refused, `SIDEVOICE_DEBUG_REFUSE_LOAD`); a slow model declined and accepted (`SIDEVOICE_DEBUG_SLOW_TRANSCRIBE`);
-  and, after a reload, the stored choice read back — asserting what is stored, in memory and on disk each time. The
-  probe page (`test/fixtures/probe.html`) loads, runs two languages on one build, unloads, reads `memory()`, watches D13
-  with the idle time shortened (`SIDEVOICE_DEBUG_IDLE_UNLOAD_SECS`, probe build only), and cancels a download
-  mid-way (CI then checks nothing of it is on disk).
+- Tests: `npm test` (the script against a fake window, `host.voice` included), `cargo test -p sidevoice-desktop-core`
+  (the voice call's builds and the media rule among the rest) and `cargo test -p sidevoice-desktop-engine` (the engine
+  over a test host), `cargo test -p sidevoice-local-host` (the local host against a stand-in core; docs/LOCAL_HOST.md →
+  Tests). In the real app, CI's macOS job runs the probe page (`test/fixtures/probe.html`, probe build): the engine's
+  capabilities, installs, refusals and a cancelled download (CI then checks nothing of it is on disk), and the voice
+  call's seam, catalogue, builds and a start that settles. The call itself, with real models on recorded speech, is
+  sidevoice-voice's own CI.

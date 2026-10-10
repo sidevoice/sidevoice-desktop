@@ -4,13 +4,14 @@
 //   page → app : invoke('bridge_state', { snapshot })  whenever the call state the app shows changes (tray, card)
 //                invoke('bridge_level', { level })     the microphone's level during a call, for the card's wave
 //   app → page : window.__sidevoiceDesktop.run({ command: 'toggle-mute' | 'hang-up' | 'skip-reply' | … })
+//                window.__sidevoiceDesktop.voiceEvent(event)  each event of the voice call the app runs (host.voice)
 // It only reads the web UI's public seams (window.sidevoiceUI.store and .micLevel, window.sidevoiceActions) and
 // never touches the DOM. On any origin other than the window's page (the room's, or the app's own for the
 // bundled interface) it does nothing at all.
 (function (factory) {
   if (typeof module === "object" && module.exports) module.exports = factory; // unit tests
-  else factory(window, "__SIDEVOICE_ROOM_ORIGIN__", "__SIDEVOICE_MEDIA_KEYS__", "__SIDEVOICE_LOCAL_HOST__");
-})(function installDesktopBridge(win, roomOrigin, mediaKeys, localHostOffered) {
+  else factory(window, "__SIDEVOICE_ROOM_ORIGIN__", "__SIDEVOICE_MEDIA_KEYS__", "__SIDEVOICE_LOCAL_HOST__", "__SIDEVOICE_VOICE__");
+})(function installDesktopBridge(win, roomOrigin, mediaKeys, localHostOffered, voiceOffered) {
   "use strict";
   // scheme://host rather than location.origin: the app's own pages (tauri://localhost) may have an opaque origin.
   if (win.location.protocol + "//" + win.location.host !== roomOrigin) return null;
@@ -46,20 +47,11 @@
     return Promise.resolve().then(() => internals.invoke(command, args, options));
   }
 
-  /** Raw answers arrive as an ArrayBuffer (custom-protocol IPC) or, through the postMessage fallback, as bytes. */
-  function bufferOf(answer) {
-    if (Object.prototype.toString.call(answer) === "[object ArrayBuffer]") return answer;
-    if (ArrayBuffer.isView(answer)) return answer.buffer.slice(answer.byteOffset, answer.byteOffset + answer.byteLength);
-    if (Array.isArray(answer)) return Uint8Array.from(answer).buffer;
-    throw new Error("unexpected audio from the desktop host");
-  }
-
   let installs = 0; // numbers each install call's job
 
   /** The app's native model engines (docs/BRIDGE.md → "The native engine"): what this device is, which builds are on
-   *  disk, get one ready, run it. A build is a catalogue model id + an engine id; the page resolves its offers itself
-   *  from `capabilities()` and the catalogue. `accelerator` (optional): the one the page chose, else the app uses the
-   *  resolver's first for that build here. A refusal rejects with `{key, message, …params}`: a stable key the page
+   *  disk, and get one there. A build is a catalogue model id + an engine id. Running a model is the voice call's
+   *  (`voice`). A refusal rejects with `{key, message, …params}`: a stable key the page
    *  translates, and an English sentence for one it does not know (docs/BRIDGE.md → "Refusals"). */
   function nativeEngine() {
     return {
@@ -94,38 +86,101 @@
        *  when the install will reject so (also when it has not reached the app yet: it is refused as it arrives);
        *  false when it had already ended. */
       cancel: (job) => call("engine_cancel", { job }),
-      /** Loads the build into memory on `accelerator` (optional): `{load_ms}`. One already loaded is not loaded again
-       *  (its `load_ms` is the time its load took). The app unloads it 10 minutes after its last use once no call is
-       *  on, and loads it again as the next call connects (sidevoice-core#21 D13). */
-      load: (model, engine, accelerator) => call("engine_load", { model, engine, accelerator: accelerator || null }),
-      /** Frees the build's memory on `accelerator`, or on every accelerator when none is named; nothing to do when it
-       *  is not loaded. A `load` of it still under way then rejects with `{key: "load_cancelled", …}`, and the app
-       *  does not load it again as a call connects. */
-      unload: (model, engine, accelerator) => call("engine_unload", { model, engine, accelerator: accelerator || null }),
-      /** `[{model, engine, accelerator, since, last_used}]`: what is in memory (times in ms since the epoch). */
-      loaded: () => call("engine_loaded"),
       /** `{total_mb, available_mb}` (each null when unknown). */
       memory: () => call("engine_memory"),
-      /** Mono Float32Array at `sampleRate` → text. `language` empty to detect. */
-      transcribe(model, engine, samples, sampleRate, language, accelerator) {
-        const bytes = new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength);
-        return call("engine_transcribe", bytes, {
-          headers: {
-            "x-model": model,
-            "x-engine": engine,
-            "x-accelerator": accelerator || "",
-            "x-language": language || "",
-            "x-sample-rate": String(sampleRate),
-          },
-        });
-      },
-      /** Text → `{samples: Float32Array, sampleRate}`. */
-      async synthesize(model, engine, voice, speed, text, accelerator) {
-        const args = { model, engine, accelerator: accelerator || null, voice, speed: speed || 1, text };
-        const buffer = bufferOf(await call("engine_synthesize", args));
-        return { sampleRate: new DataView(buffer).getUint32(0, true), samples: new Float32Array(buffer.slice(4)) };
-      },
     };
+  }
+
+  /** The voice call the app runs itself (docs/BRIDGE.md → "The voice call"): sidevoice-voice natively, with the
+   *  device's microphone and speaker and the app's own echo cancellation. It implements `VoiceHost`, the seam
+   *  `@sidevoice/voice` defines (js/voice-host.d.ts), which `createVoiceHost` implements in a browser. The call knows
+   *  nothing of the room: the page tells the room the turns `onTurn` gives it, and has the call `say` what the room
+   *  sends, through a handle that tells how it went. A refusal rejects with `{key, message, …params}`. Only where the
+   *  app offers it (macOS); elsewhere the page runs the call itself. */
+  function voice() {
+    const listeners = { turn: new Set(), state: new Set(), level: new Set(), error: new Set() };
+    const on = (kind) => (listener) => {
+      if (typeof listener !== "function") throw new TypeError("a listener");
+      listeners[kind].add(listener);
+      return () => listeners[kind].delete(listener);
+    };
+    // What is being said, by the key this bridge gave it, until its `done` step.
+    const sayings = new Map();
+    let said = 0;
+    /** One event of the call, sidevoice-voice's `VoiceEvent` as JSON (`{type, data}`), to its listeners; a step of
+     *  something said (`{type: "say", data: {key, event}}`) to its handle. */
+    function receive(event) {
+      if (!event || typeof event !== "object") return;
+      if (event.type === "say") {
+        const saying = event.data && sayings.get(event.data.key);
+        if (saying) saying.step(event.data.event);
+        return;
+      }
+      for (const listener of listeners[event.type] || []) {
+        try { listener(event.data); } catch (_) { /* a listener's error is the page's own */ }
+      }
+    }
+    /** A handle (`VoiceSaying`) for `text` said under `key`: its steps reach the listeners subscribed when each comes,
+     *  `done` settles `outcome`, and `cancel` goes behind the `say` itself, so it never overtakes it. */
+    function saying(key, text, options) {
+      const heard = new Set();
+      let settle;
+      const outcome = new Promise((resolve) => { settle = resolve; });
+      const asked = call("voice_say", { key, text: String(text), language: (options && options.language) ?? null })
+        .catch((error) => step({ type: "done", outcome: { status: "not-played", reason: "failed", code: (error && (error.code || error.key)) || "voice-failed" } }));
+      function step(event) {
+        for (const listener of heard) {
+          try { listener(event); } catch (_) { /* a listener's error is the page's own */ }
+        }
+        if (event && event.type === "done") {
+          sayings.delete(key);
+          settle(event.outcome);
+        }
+      }
+      const handle = Object.freeze({
+        id: key,
+        cancel: () => { asked.then(() => sayings.has(key) && call("voice_cancel_say", { key })).catch(() => {}); },
+        onEvent(listener) {
+          if (typeof listener !== "function") throw new TypeError("a listener");
+          heard.add(listener);
+        },
+        outcome,
+      });
+      sayings.set(key, { step });
+      return handle;
+    }
+    const host = {
+      /** The person's choices (`VoiceSettings`: models, builds, language, voice, speed, patience, end of turn). The
+       *  app picks the builds not named (whisper.cpp on Metal for Whisper), the voice activity detector and every
+       *  other number. */
+      setSettings: (settings) => call("voice_set_settings", { settings }),
+      /** Loads the models (installing them if they are not), opens the microphone and the speaker and listens.
+       *  Resolves once it listens (at once if it does); rejects `{key, code, message}`, `code` the call's or `stopped`. */
+      start: () => call("voice_start"),
+      /** Stops listening and speaking (the turn not told yet is cancelled, what is being said ends `stopped`); the
+       *  models stay loaded. */
+      stop: () => call("voice_stop"),
+      /** Says `text` (`options`: `{language?}`) after whatever is being said, and answers its handle at once. */
+      say: (text, options) => saying("say-" + ++said, text, options),
+      mute: (muted) => call("voice_mute", { muted: !!muted }),
+      cancelInput: () => call("voice_cancel_input"),
+      /** A turn of the person's under the call's own `turn_id`: `started`, then `finished` (the words) or
+       *  `cancelled`. Returns `stop`. */
+      onTurn: on("turn"),
+      /** `{listening, recognising, playback}` when it changes. Returns `stop`. */
+      onState: on("state"),
+      /** The microphone's level, 0 to 1, about 30 times a second. Returns `stop`. */
+      onLevel: on("level"),
+      /** `{code}`: something failed that the person may be told. Returns `stop`. */
+      onError: on("error"),
+      /** The engine's catalogue, in the shape `WebEngine.models()` answers. */
+      models: () => call("voice_models"),
+      /** Keeps `key` for `provider` (`openai`, `elevenlabs`) in the keychain, or removes it with `null`. */
+      setProviderKey: (provider, key) => call("voice_set_provider_key", { provider, key: key == null ? null : String(key) }),
+      /** Whether the keychain has a key for `provider`; the key itself never reaches the page. */
+      hasProviderKey: (provider) => call("voice_has_provider_key", { provider }),
+    };
+    return { host: Object.freeze(host), receive };
   }
 
   /** This computer's own core, the local host (docs/LOCAL_HOST.md): its state, the pairing the page uses to reach it
@@ -260,10 +315,13 @@
     return true;
   }
 
+  // Only where the app runs the voice call itself (macOS): elsewhere the page runs it.
+  const voiceCall = voiceOffered === true ? voice() : null;
+
   const api = {
     version: BRIDGE_VERSION,
     /** What this host offers the page besides the webview itself. The web UI feature-detects it.
-     *  `nativeEngine`: models run natively by the app (docs/ENGINES.md). */
+     *  `nativeEngine`: the app's engine, for models on disk (docs/ENGINES.md); `voice`: the call the app runs. */
     host: Object.freeze({
       app: "sidevoice-desktop",
       /** The bridge's version: what the page may rely on (docs/BRIDGE.md). */
@@ -274,7 +332,13 @@
       mediaKeys: mediaKeys === "native" ? "native" : null,
       // Only where the app offers this computer's own core (O2: macOS): the page hides what is not there.
       ...(localHostOffered === true ? { localHost: Object.freeze(localHost()) } : {}),
+      // Only where the app runs the voice call (macOS): the page then neither opens the microphone nor runs models.
+      ...(voiceCall ? { voice: voiceCall.host } : {}),
     }),
+    /** An event of the voice call, from the app (`webview.eval`): to `host.voice`'s listeners. */
+    voiceEvent(event) {
+      if (voiceCall) voiceCall.receive(event);
+    },
     snapshot,
     /** Runs one command from the app (tray, shortcut, headset, call controls card) through the web UI's own actions:
      *  `{command, …arguments}`. Returns whether it ran. */
