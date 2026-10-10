@@ -1,6 +1,6 @@
 [package]
 name = "sidevoice-desktop"
-version = "0.1.0"
+version = "0.2.0"
 description = "Sidevoice desktop client: a native shell around the Sidevoice web UI"
 edition = "2021"
 rust-version = "1.98"
