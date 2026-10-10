@@ -70,7 +70,7 @@ what the interface's own window offers — same origin, same permission rule —
 
   // The native engine through the app itself, as the interface calls it (docs/BRIDGE.md): capabilities, installs by
   // catalogue model id + engine, refusals by key, the machine's memory, a cancelled download.
-  const engine = window.__sidevoiceDesktop && window.__sidevoiceDesktop.host && window.__sidevoiceDesktop.host.nativeEngine;
+  const engine = window.__sidevoiceDesktop && window.__sidevoiceDesktop.host && window.__sidevoiceDesktop.host.engine;
   if (!engine) { await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-engine none" }); return; }
   async function until(check, ms) {
     const end = Date.now() + ms;
@@ -114,8 +114,8 @@ what the interface's own window offers — same origin, same permission rule —
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-engine error " + String(error && (error.message || error)) });
   }
 
-  // The voice call the app runs (docs/BRIDGE.md → "The voice call"): the seam's shape, the settings the app turns into
-  // builds (whisper.cpp for Whisper), the catalogue, and a start that settles. A CI runner may have no microphone or
+  // The voice call the app runs (docs/BRIDGE.md → "The voice call"): the seam's shape, the engine's catalogues
+  // (`host.engine`), settings that name a catalogue's model, and a start that settles. A CI runner may have no microphone or
   // speaker: then the start is refused with the call's code, which is what the probe reports.
   const voice = window.__sidevoiceDesktop && window.__sidevoiceDesktop.host && window.__sidevoiceDesktop.host.voice;
   if (!voice) { await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-voice none" }); return; }
@@ -123,17 +123,19 @@ what the interface's own window offers — same origin, same permission rule —
     const states = [];
     const errors = [];
     const stops = [voice.onState((s) => states.push(s.listening)), voice.onError((e) => errors.push(e.code))];
-    const models = await voice.models();
-    const unknown = await voice.setSettings({ stt: { model: "whisper-nope" }, tts: { model: "kokoro-82m-v1.0" } })
-      .then(() => "no", (error) => error && error.key);
-    await voice.setSettings({ stt: { model: "whisper-tiny", language: "es" }, tts: { model: "kokoro-82m-v1.0", voice: "ef_dora" },
-      patience: "fast" });
+    const catalogs = await window.__sidevoiceDesktop.host.engine.catalogs();
+    const models = catalogs[0].models;
+    const remote = catalogs.slice(1).map((c) => c.id + ":" + (c.status.reason ? c.status.reason.code : "current")).join(",");
+    const unknown = await voice.setSettings({ stt: { catalog: "local", model: "whisper-nope" },
+      tts: { catalog: "local", model: "kokoro-82m-v1.0" } }).then(() => "no", (error) => error && error.key + "/" + error.code);
+    await voice.setSettings({ stt: { catalog: "local", model: "whisper-tiny", language: "es" },
+      tts: { catalog: "local", model: "kokoro-82m-v1.0", voice: "ef_dora", speed: 1 }, patience: "fast" });
     const started = await voice.start().then(() => "ok", (error) => error.key + "/" + error.code);
     await voice.stop();
     await until(() => states.includes("idle") || started !== "ok", 30000);
     stops.forEach((stop) => stop());
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-voice ok keys=" + Object.keys(voice).length +
-      " models=" + models.length + " vad=" + models.some((m) => m.capabilities.includes("vad")) + " unknown=" + unknown +
+      " catalogs=" + catalogs[0].id + "," + remote + " models=" + models.length + " vad=" + models.some((m) => m.capabilities.includes("vad")) + " unknown=" + unknown +
       " start=" + started + " states=" + states.join(",") + " errors=" + errors.join(",") });
   } catch (error) {
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-voice error " + String(error && (error.message || error)) });

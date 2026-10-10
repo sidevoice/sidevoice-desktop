@@ -208,7 +208,7 @@ test("installs once per page and survives a missing Tauri runtime", async () => 
   await flush();
 });
 
-test("the native engine is exactly the contract: what runs here, what is on disk, installs and memory", async () => {
+test("the engine is exactly the contract: its catalogues and keys, what runs here, what is on disk, installs and memory", async () => {
   const install = loadFactory();
   const { win, calls } = fakeWindow(ORIGIN);
   const capabilities = { runs: "native", os: "macos", arch: "aarch64", has: ["cpu", "metal", "remote"], memory_mb: 16384 };
@@ -223,9 +223,11 @@ test("the native engine is exactly the contract: what runs here, what is on disk
     calls.push([cmd, args, options]);
     return Promise.resolve(typeof answers[cmd] === "function" ? answers[cmd]() : answers[cmd]);
   };
-  const engine = install(win, ORIGIN).host.nativeEngine;
+  const engine = install(win, ORIGIN).host.engine;
   assert.equal(install(win, ORIGIN).host.app, "sidevoice-desktop");
-  assert.deepEqual(Object.keys(engine).sort(), ["cancel", "capabilities", "install", "installed", "memory"]);
+  assert.deepEqual(Object.keys(engine).sort(), [
+    "cancel", "capabilities", "catalogs", "hasCredential", "install", "installed", "memory", "setCredential",
+  ]);
   assert.ok(Object.isFrozen(engine));
 
   assert.equal(JSON.stringify(await engine.capabilities()), JSON.stringify(capabilities));
@@ -241,6 +243,37 @@ test("the native engine is exactly the contract: what runs here, what is on disk
   assert.equal(calls.find(([cmd]) => cmd === "engine_progress")[1].job, installArgs.job, "polled by that job");
   assert.equal(JSON.stringify(seen[0]), JSON.stringify(answers.engine_progress), "one object per report, as the app sent it");
   assert.match(engine.install("whisper-tiny", "sherpa-onnx").job, /^install-/, "without onProgress too");
+});
+
+test("host.engine lists the catalogues and keeps provider keys, refusing with a code", async () => {
+  const install = loadFactory();
+  const { win, calls } = fakeWindow(ORIGIN);
+  const catalogs = [
+    { id: "local", name: null, status: { stale: false }, models: [{ id: "whisper-tiny", capabilities: ["stt"] }] },
+    { id: "openai", name: "OpenAI", status: { stale: false, reason: { code: "credential-missing", params: {} } }, models: [] },
+  ];
+  const answers = { engine_catalogs: catalogs, engine_set_credential: null, engine_has_credential: true };
+  win.__TAURI_INTERNALS__.invoke = (cmd, args) => {
+    calls.push([cmd, args === undefined ? undefined : structuredClone(args)]);
+    if (cmd === "engine_set_credential" && args.provider === "Nope") {
+      return Promise.reject({ key: "provider_invalid", provider: "Nope", message: "Not a provider id." });
+    }
+    return Promise.resolve(answers[cmd]);
+  };
+  const engine = install(win, ORIGIN).host.engine;
+  assert.equal(JSON.stringify(await engine.catalogs()), JSON.stringify(catalogs));
+  assert.equal(await engine.setCredential("openai", "sk-test"), undefined);
+  await engine.setCredential("openai", null);
+  assert.equal(await engine.hasCredential("openai"), true);
+  const refused = await engine.setCredential("Nope", "x").catch((error) => error);
+  assert.deepEqual([refused.key, refused.code], ["provider_invalid", "provider-invalid"]);
+  assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("engine_")), [
+    ["engine_catalogs", undefined],
+    ["engine_set_credential", { provider: "openai", key: "sk-test" }],
+    ["engine_set_credential", { provider: "openai", key: null }],
+    ["engine_has_credential", { provider: "openai" }],
+    ["engine_set_credential", { provider: "Nope", key: "x" }],
+  ]);
 });
 
 // ---- host.voice: the voice call the app runs (docs/BRIDGE.md → "The voice call") ----
@@ -265,17 +298,19 @@ test("host.voice only where the app runs the call, and exactly the seam", () => 
   }
   const api = install(fakeWindow(ORIGIN).win, ORIGIN, "native", true, true);
   assert.deepEqual(Object.keys(api.host.voice).sort(), [
-    "cancelInput", "hasProviderKey", "models", "mute", "onError", "onLevel", "onState", "onTurn", "say",
-    "setProviderKey", "setSettings", "start", "stop",
+    "cancelInput", "mute", "onError", "onLevel", "onState", "onTurn", "say", "setSettings", "start", "stop",
   ]);
   assert.ok(Object.isFrozen(api.host.voice));
 });
 
 test("host.voice calls go to their native commands, with their arguments", async () => {
   const install = loadFactory();
-  const { win, calls } = voiceWindow({ voice_models: [{ id: "whisper-small" }], voice_has_provider_key: true });
+  const { win, calls } = voiceWindow();
   const voice = install(win, ORIGIN, "native", true, true).host.voice;
-  const settings = { stt: { model: "whisper-small", language: "es" }, tts: { model: "kokoro-82m-v1.0", voice: "ef_dora" } };
+  const settings = {
+    stt: { catalog: "local", model: "whisper-small", language: "es" },
+    tts: { catalog: "local", model: "kokoro-82m-v1.0", voice: "ef_dora", speed: 1 },
+  };
   await voice.setSettings(settings);
   await voice.start();
   voice.say("Hola.", { language: "es" });
@@ -283,10 +318,6 @@ test("host.voice calls go to their native commands, with their arguments", async
   await voice.mute(1);
   await voice.cancelInput();
   await voice.stop();
-  assert.equal(JSON.stringify(await voice.models()), '[{"id":"whisper-small"}]');
-  await voice.setProviderKey("openai", "sk-test");
-  await voice.setProviderKey("openai", null);
-  assert.equal(await voice.hasProviderKey("openai"), true);
   assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("voice_")), [
     ["voice_set_settings", { settings }],
     ["voice_start", undefined],
@@ -295,10 +326,6 @@ test("host.voice calls go to their native commands, with their arguments", async
     ["voice_mute", { muted: true }],
     ["voice_cancel_input", undefined],
     ["voice_stop", undefined],
-    ["voice_models", undefined],
-    ["voice_set_provider_key", { provider: "openai", key: "sk-test" }],
-    ["voice_set_provider_key", { provider: "openai", key: null }],
-    ["voice_has_provider_key", { provider: "openai" }],
   ]);
 });
 
@@ -384,7 +411,7 @@ test("cancel: by the job install carries from the start; the install rejects as 
     }
     return Promise.resolve(null);
   };
-  const engine = install(win, ORIGIN).host.nativeEngine;
+  const engine = install(win, ORIGIN).host.engine;
   const seen = [];
   const installing = engine.install("whisper-small", "sherpa-onnx", (p) => seen.push(p));
   await flush();
@@ -414,7 +441,7 @@ test("concurrent installs: each callback gets its own job's bytes, and none whil
     }
     return Promise.resolve(null);
   };
-  const engine = install(win, ORIGIN).host.nativeEngine;
+  const engine = install(win, ORIGIN).host.engine;
   const whisper = [];
   const kokoro = [];
   const a = engine.install("whisper-small", "sherpa-onnx", (p) => whisper.push([p.done, p.total, p.job]));
@@ -446,7 +473,7 @@ test("a refusal reaches the page as the app sent it: a key, its parameters and a
   const refusal = { key: "model_needs_memory", model: "whisper-large-v3", needed_mb: 4000, memory_mb: 2000,
     message: "whisper-large-v3 needs 4000 MB of memory; this machine has 2000 MB." };
   win.__TAURI_INTERNALS__.invoke = () => Promise.reject(refusal);
-  const engine = install(win, ORIGIN).host.nativeEngine;
+  const engine = install(win, ORIGIN).host.engine;
   await assert.rejects(engine.install("whisper-large-v3", "sherpa-onnx"), (error) => {
     assert.equal(error.key, "model_needs_memory");
     assert.equal(error.needed_mb, 4000);
@@ -499,7 +526,7 @@ test("host carries the bridge version; localHost only where the app offers it", 
     const api = install(win, ORIGIN, null, offered);
     assert.equal(api.host.version, 2);
     assert.equal(api.host.app, "sidevoice-desktop");
-    assert.ok(api.host.nativeEngine, "the rest of the host is untouched");
+    assert.ok(api.host.engine, "the rest of the host is untouched");
     assert.equal("localHost" in api.host, false, String(offered));
   }
   const { win } = fakeWindow(ORIGIN);

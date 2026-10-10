@@ -11,8 +11,8 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 | `bridge/desktop-bridge.js` | Injected by the app into every page of the room window, before the page's own scripts. Bound to the app's own origin (the bundled interface). |
 | `src-tauri/core/src/bridge.rs` | The contract on the Rust side: `CallSnapshot`, `Command`, and how the tray renders a snapshot. Unit-tested. |
 | `src-tauri/src/lib.rs` | Wiring: the `bridge_state` command, `send(Command)`; `capabilities/room.json`. |
-| `src-tauri/src/engine_ipc.rs` | The native engine's commands, behind `nativeEngine` (below). |
-| `src-tauri/src/voice.rs`, `src-tauri/src/keychain.rs`, `src-tauri/core/src/voice.rs` | The voice call the app runs, behind `voice` (macOS; below), its provider keys in the keychain, and the builds it picks (unit-tested). |
+| `src-tauri/src/engine_ipc.rs` | The engine's commands, behind `engine` (below): its catalogues, provider keys and models on disk. |
+| `src-tauri/src/voice.rs`, `src-tauri/src/keychain.rs`, `src-tauri/core/src/voice.rs` | The voice call the app runs, behind `voice` (macOS; below), the keychain the engine reads provider keys from, and the models it picks from the catalogues (unit-tested). |
 | `src-tauri/src/local_host.rs`, `src-tauri/local-host/` | This computer's own core, behind `localHost` (below; docs/LOCAL_HOST.md). |
 | `src-tauri/src/tray.rs` | The menu-bar icon and its menu. |
 | `bridge/call-controls-bridge.js` | Injected into the call controls card's window (below). |
@@ -100,7 +100,7 @@ Evaluated by the app with `webview.eval` (works with the window hidden); the com
 Joining is deliberately **not** a tray command: joining unlocks audio output, which the webview
 only allows from a click in the page. "Mostrar Sidevoice" opens the window for that.
 
-`window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", version, nativeEngine, mediaKeys, localHost?, voice? }`: the
+`window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", version, engine, mediaKeys, localHost?, voice? }`: the
 web UI feature-detects the desktop app by it, and each capability by its presence. `version` is the bridge's (2).
 
 ## The local host
@@ -189,13 +189,17 @@ web repo), other displays and scales, and any platform but macOS.
 
 ## The native engine
 
-The app's engine (docs/ENGINES.md), for what the page manages of its models: what this device runs, which builds are
-on disk, and getting one there with its progress. Running models is the voice call's (below), never the page's.
-`window.__sidevoiceDesktop.host.nativeEngine`:
+The app's engine (docs/ENGINES.md), for what the page knows and manages of its models: its catalogues and the keys of
+remote providers, what this device runs, which builds are on disk, and getting one there with its progress. Running
+models is the voice call's (below), never the page's. `window.__sidevoiceDesktop.host.engine` is the page's
+`ModelCatalogs` seam in the app (sidevoice-web `apps/web/src/services/model-catalogs.js`) plus the install calls:
 
 | Call | Returns / does |
 |---|---|
-| `capabilities()` | `{runs: "native", os: "macos"\|"windows"\|"linux", arch: "aarch64"\|"x86_64", has: ["cpu", …], memory_mb: number\|null}` — `has` is what sidevoice-engine runs a model on here (`cpu`; `metal` on Apple Silicon, for whisper.cpp; `remote` for the providers' models), never Core ML, `memory_mb` the machine's total, from the OS |
+| `catalogs()` | `[{id, name, status: {reason?: {code, params}, stale, detail?}, models}]`: every catalogue of sidevoice-engine 0.3.1, `local` first (`name` `null`), then each provider (`openai`, `elevenlabs`; `name` the provider's), each with every model it lists in `/engine`'s shape: `{id, capabilities, languages, voices: [{id, name?, languages, gender?}], speed?: {min, max}}`, and for a local model also `family, parametersM, license, installed, builds: [{id, backend, accelerator?, precision, downloadBytes, memoryMb, available, reasons: [{code, params}], installed}], recommendedBuild?`. A catalogue that cannot list (a provider with no key, one that refuses) has `models: []` and says why in `status.reason` (`credential-missing`, ...), the provider's own words in `status.detail`. Rejects `{code}` only when the engine itself fails |
+| `setCredential(provider, key)` | keeps `key` for remote catalogue `provider` in the macOS keychain, or removes it (`null` or blank), then lists that provider again with it. Rejects `provider_invalid`, `credentials_failed`, and `credentials_unavailable` where the app keeps no keys (Windows, Linux) |
+| `hasCredential(provider)` | whether the keychain holds a key for `provider` (`false` where the app keeps none). The key itself never reaches the page |
+| `capabilities()` | `{runs: "native", os: "macos"\|"windows"\|"linux", arch: "aarch64"\|"x86_64", has: ["cpu", …], memory_mb: number\|null}` — `has` is what sidevoice-engine runs a model on here (`cpu`; `metal` on Apple Silicon, for whisper.cpp), never Core ML; remote providers are catalogues of their own (`catalogs()`), `memory_mb` the machine's total, from the OS |
 | `installed()` | `[{model, engine}]` — builds whose files are on disk and whole |
 | `install(model, engine, onProgress?)` | downloads the model's build, whatever of it is missing. Returns a promise that also carries the install's job id from the start, `promise.job` (a string), for `cancel`. `onProgress(event)` about twice a second, only with this call's own bytes (below) |
 | `cancel(job)` | cancels that install, waiting or running; its `install` promise rejects with `{key: "install_cancelled", message}` and the model is not on disk afterwards (unless it already was before the install). Resolves `true` when the install will reject so — also when it has not reached the app yet (it is refused as it arrives) — and `false` when it had already ended (a no-op, never a rejection) |
@@ -224,12 +228,12 @@ on disk, and getting one there with its progress. Running models is the voice ca
   dropped and its connection closed — or unpacking. It frees the install lock, removes what it was downloading
   (sidevoice-engine stores a file only once it is whole and verified) and rejects with `install_cancelled`. A file it
   had already completed is whole and verified, and stays. A cancel the app accepted wins: one that lands as the files
-  are moved into place removes the model again, unless another build of it was installed before (the engine removes
-  only whole models: the build then stays and the install rejects with `install_cancel_late`; a removal that fails
+  are moved into place removes the build again, and only it (another build of the model stays; a removal that fails
   rejects with `install_cancel_failed`), and a transport error that follows it (the connection it closed) is still
   `install_cancelled`, never `download_failed`. There is no overall download timeout: a slow line is not a failure,
   and the cancel is how a person stops one.
-- Commands behind it (`src-tauri/src/engine_ipc.rs`): `engine_capabilities`, `engine_installed`,
+- Commands behind it (`src-tauri/src/engine_ipc.rs`): `engine_catalogs`, `engine_set_credential {provider, key}`,
+  `engine_has_credential {provider}`, `engine_capabilities`, `engine_installed`,
   `engine_install {model, engine, job}` with `engine_progress {job}` (the report above, or `null` while the job
   waits or after it ends) and `engine_cancel {job}` (`true`/`false` as `cancel`), `engine_memory`. Granted to the room
   window (`capabilities/room.json`). The settings window may read `engine_capabilities` and `engine_on_disk` (what is
@@ -264,17 +268,20 @@ sidevoice-engine itself fails with is one of these keys, with the engine's own c
 | `download_corrupt` | `model`, `engine` | the bytes are not the ones the catalogue names (SHA-256) |
 | `install_failed` | — | unpacking or moving the download into place failed (disk, permissions, an archive without its files) |
 | `install_cancelled` | — | the page cancelled the install (`cancel(job)`): not a failure, nothing to show as an error |
-| `install_cancel_late` | `model`, `engine` | the page cancelled after the download had ended and another build of the model was installed before it: the build stays installed (the engine removes only whole models); the page may remove it |
 | `install_cancel_failed` | `model`, `engine`, `code` | the page cancelled after the download had ended and removing it failed (`code`, the engine's: `model-in-use`, a storage failure): it may still be on disk |
 | `runtime_failed` | `engine` | the engine refused, with a code this app does not map |
-| `voice_model_unknown` | `model` | a voice setting names a model the engine's catalogue does not have |
-| `voice_model_wrong_task` | `model` | a voice setting names a model that cannot do that stage (a voice for transcription) |
-| `voice_model_unfit` | `model` | no build of that model runs on this device |
-| `voice_build_unfit` | `model` | a voice setting names a build that is not one of the model's that runs here (Core ML and MLX included) |
-| `voice_end_of_turn_unavailable` | — | `end_of_turn: "smart-turn"` while no model of the catalogue ends turns (sidevoice-engine#69) |
+| `voice_model_unknown` | `code` (`model-unknown`), `model` | a slot names a model its catalogue does not list for that task |
+| `voice_model_unfit` | `code` (`model-unfit`), `model` | a local model with no build that runs on this device |
+| `voice_catalog_not_found` | `code` (`catalog-not-found`), `model` | a slot names a catalogue the engine does not have |
+| `voice_vad_unavailable` | `code` (`vad-unavailable`) | no local voice activity detector runs on this device |
+| `voice_end_of_turn_unavailable` | `code` (`end-of-turn-unavailable`) | `end_of_turn: "smart-turn"` while no local model that ends turns runs here |
+| `voice_<code>` | `code` (the engine's: `credential-missing`, `credential-rejected`, ...), `model`, `detail` (the provider's words) | a slot names a provider's model while that provider lists nothing |
+| `catalog_not_found` | `code`, `catalog` | `setCredential` for a provider the engine does not have |
+| `provider_invalid` | `provider` | not a provider id (lowercase letters, digits and dashes) |
+| `credentials_unavailable` | — | `setCredential` where the app keeps no keys (Windows, Linux) |
+| `credentials_failed` | — | the keychain would not keep, remove or read a key |
 | `voice_settings_missing` | `code` (`settings-missing`) | a call of `host.voice` before its first `setSettings` |
 | `voice_failed` | `code` (the call's: `microphone-denied`, `audio-device-unavailable`, the engine's `model-load-failed`, …, or `stopped`) | the call could not start, or was stopped before it listened |
-| `keychain_failed` | — | the keychain refused to keep or read a key |
 | `engine_unavailable` | — | the engine did not start with the app |
 | `bad_request` | — | a malformed call, or a caller other than the room window's own page: a bug in the caller |
 | `internal` | — | something inside the app failed |
@@ -305,22 +312,26 @@ here: a change is made there, and both sides follow.
 
 What is this app's own:
 
-- `setSettings` picks the call's models and makes its configuration (core `voice.rs`): a build the person names, if
-  it runs here; otherwise Whisper on whisper.cpp (Metal on Apple Silicon) and other models on the engine's
-  recommended build; never Core ML nor MLX; Silero for voice activity; for `smart-turn`, the first model of the
-  `end-of-turn` capability that runs here. Other models reach a call that listens at once (it restarts on them). It
-  rejects with the app's keyed refusals (below), each with the seam's `code` beside its `key` (`voice_model_unknown`
-  → `model-unknown`).
+- `setSettings` takes each slot as a model of a catalogue: `stt: {catalog, model, language}`, `tts: {catalog, model,
+  voice, speed}`, with `patience`, `end_of_turn` and `idle_unload_minutes` (core `voice.rs`; no `build`: an unknown
+  key is refused). Each slot is loaded as `engine.catalog(catalog).load(model)`, which picks the build. The app adds
+  the voice activity detector, the local catalogue's (family `silero-vad`, else another local `vad` that runs), and,
+  for `smart-turn`, the local catalogue's first model that ends turns. A change of a slot's catalogue or model, or of
+  `end_of_turn`, gives a call that listens other models at once (it restarts on them); `language`, `voice`, `speed`,
+  `patience` and `idle_unload_minutes` apply live. It rejects with the app's keyed refusals (above), each with the
+  `code` the page translates (`model-unknown`, `model-unfit`, `catalog-not-found`, `vad-unavailable`,
+  `end-of-turn-unavailable`, or the engine's own with the provider's `detail`).
 - `start` rejects `{key: "voice_failed", code, message}` with the call's code, `{key: "voice_settings_missing", code:
   "settings-missing"}` before any settings, and `{key: "voice_failed", code: "stopped"}` when `stop` came first.
-- Provider keys go to the macOS keychain; the page never reads one back.
+- The seam has ten calls: `setSettings`, `start`, `stop`, `say`, `mute`, `cancelInput`, `onTurn`, `onState`, `onLevel`,
+  `onError`. The catalogues and provider keys are `host.engine`'s (above).
 - A page that loads anew finds the call stopped, its models still loaded.
 
 ### How it travels
 
 - Page → app: the commands `voice_set_settings {settings}`, `voice_start`, `voice_stop`,
-  `voice_say {key, text, language}`, `voice_cancel_say {key}`, `voice_mute {muted}`, `voice_cancel_input`, `voice_models`,
-  `voice_set_provider_key {provider, key}`, `voice_has_provider_key {provider}` (`src-tauri/src/voice.rs`). Granted to
+  `voice_say {key, text, language}`, `voice_cancel_say {key}`, `voice_mute {muted}`, `voice_cancel_input`
+  (`src-tauri/src/voice.rs`). Granted to
   the room window (`capabilities/room.json`); each re-checks that the caller is the current room window on the app's
   own page.
 - App → page: `window.__sidevoiceDesktop.voiceEvent(event)` (`webview.eval`), each sidevoice-voice `VoiceEvent` as
@@ -328,8 +339,8 @@ What is this app's own:
   of something said, `{type: "say", data: {key, event}}` (`key` the bridge's for the handle `say` answered at once;
   `event` sidevoice-voice's `SayEvent`, the last `done` with the outcome), which it hands to that handle. A handle's
   `cancel` goes behind its `voice_say`, so it never overtakes it.
-- Keys: `setProviderKey` writes the macOS keychain (`src-tauri/src/keychain.rs`), and the engine reads it when a
-  remote model is installed, loaded or called.
+- Keys: `host.engine.setCredential` writes the macOS keychain (`src-tauri/src/keychain.rs`), and the engine reads it
+  when a provider is listed, or its model loaded or called.
 
 ## Changing the bridge
 

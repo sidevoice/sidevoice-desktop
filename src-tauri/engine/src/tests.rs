@@ -273,32 +273,45 @@ fn the_engine_is_shared_with_the_voice_call() {
 }
 
 #[test]
-fn a_late_cancel_removes_only_a_build_that_is_all_of_the_model_on_disk() {
-    assert_eq!(undo(Downloaded { this: false, others: false }), Undo::Nothing);
-    assert_eq!(undo(Downloaded { this: false, others: true }), Undo::Nothing);
-    assert_eq!(undo(Downloaded { this: true, others: false }), Undo::Remove);
-    assert_eq!(undo(Downloaded { this: true, others: true }), Undo::Keep, "the other build would go with it");
-}
-
-#[test]
-fn rolling_back_a_late_cancel_removes_the_build_or_keeps_it_and_says_so() {
+fn rolling_back_a_late_cancel_removes_the_build_it_installed() {
     let test = engines("roll-back", false);
     let engines = &test.engines;
     engines.install("whisper-test", "sherpa-onnx", &mut |_, _| {}).unwrap();
-    let build = "whisper-test/sherpa-onnx-int8";
-    assert!(!engines.others_installed("whisper-test", build).unwrap(), "its own build is not another");
-    assert!(engines.others_installed("whisper-test", "whisper-test/another").unwrap());
-
     let held = engines.install_lock(&|| false).unwrap();
-    // Another build was installed before this job: the engine removes whole models, so this one stays.
-    let kept = engines.roll_back(&held, "whisper-test", "sherpa-onnx", Downloaded { this: true, others: true });
-    assert_eq!(kept.key, "install_cancel_late");
-    assert_eq!(engines.installed().unwrap().len(), 1, "nothing was removed");
-
-    // The build is all of the model on disk: it goes, and the job is a plain cancel.
-    let removed = engines.roll_back(&held, "whisper-test", "sherpa-onnx", Downloaded { this: true, others: false });
-    assert_eq!(removed.key, "install_cancelled");
+    // Nothing was downloaded: nothing to remove.
+    assert_eq!(engines.roll_back(&held, "whisper-test", "sherpa-onnx", Downloaded::Nothing).key, "install_cancelled");
+    assert_eq!(engines.installed().unwrap().len(), 1);
+    // The build it downloaded goes, and only it (the engine removes one build when it is named).
+    let build = Downloaded::Build("whisper-test/sherpa-onnx-int8".into());
+    assert_eq!(engines.roll_back(&held, "whisper-test", "sherpa-onnx", build).key, "install_cancelled");
     assert!(engines.installed().unwrap().is_empty());
+}
+
+/// The page's list of catalogues: the local one first, in the engine's JavaScript names, then each provider, which
+/// without a key lists nothing and says why. Nothing goes to the network for that.
+#[test]
+fn the_catalogues_are_the_local_one_then_each_provider_in_the_pages_shape() {
+    let test = engines("catalogs", false);
+    let views = test.engines.catalogs().unwrap();
+    assert_eq!(views[0].id, LOCAL_CATALOG);
+    assert_eq!(views[0].name, None);
+    let local = serde_json::to_value(&views[0]).unwrap();
+    assert_eq!(local["status"], serde_json::json!({"stale": false}));
+    let whisper = local["models"].as_array().unwrap().iter().find(|m| m["id"] == "whisper-test").unwrap();
+    assert_eq!(whisper["capabilities"], serde_json::json!(["stt"]));
+    for key in ["family", "parametersM", "license", "installed", "builds"] {
+        assert!(whisper.get(key).is_some(), "{key} in {whisper}");
+    }
+    let build = &whisper["builds"][0];
+    for key in ["id", "backend", "precision", "downloadBytes", "memoryMb", "available", "reasons", "installed"] {
+        assert!(build.get(key).is_some(), "{key} in {build}");
+    }
+    for remote in &views[1..] {
+        assert!(remote.name.is_some(), "a provider has a name");
+        assert!(remote.models.is_empty(), "{} lists nothing without a key", remote.id);
+        assert_eq!(remote.status.reason.as_ref().map(|r| r.code.as_str()), Some("credential-missing"));
+    }
+    assert_eq!(test.engines.refresh("no-such").unwrap_err().key, "catalog_not_found");
 }
 
 /// A job holds the install lock until it has ended, its roll-back included (`roll_back` takes the lock): another

@@ -1,12 +1,10 @@
 //! The voice call's models and configuration, from the person's choices (`VoiceSettings`, what the page sends through
-//! `host.voice.setSettings`) and the engine's catalogue as it ranks its builds here (`Candidate`): the app picks the
-//! build of each stage, the voice activity detector, the end-of-turn model and every number the person does not
-//! choose.
+//! `host.voice.setSettings`) and the engine's catalogues as they list their models (`CatalogCandidates`): each slot is
+//! a model of a catalogue (`{catalog, model}`), which picks the build itself when it loads it; the app picks the voice
+//! activity detector and the end-of-turn model, from the local catalogue, and every number the person does not choose.
 //!
-//! Which build: among those that run here (never Core ML, which the app does not offer, nor MLX, a stub), a
-//! speech-to-text model runs on whisper.cpp where it has a build for it (Metal on Apple silicon); anything else on the
-//! build the engine recommends, else the first that runs here. The result names the model and build of each slot
-//! (sidevoice-voice names none) and carries sidevoice-voice's `VoiceConfig` as JSON.
+//! The result names the catalogue and model of each slot (sidevoice-voice names none) and carries sidevoice-voice's
+//! `VoiceConfig` as JSON. What cannot be made is refused with a stable code the page translates.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -14,12 +12,10 @@ use serde_json::{json, Value};
 #[cfg(test)]
 mod tests;
 
-/// The voice activity detector every call runs: Silero, on sherpa-onnx.
-pub const VAD_MODEL: &str = "silero-vad";
-/// The capability of a model that ends turns (sidevoice-engine#69).
-const END_OF_TURN: &str = "end-of-turn";
-/// The backend speech to text prefers where a model has a build for it.
-const PREFERRED_STT_BACKEND: &str = "whisper-cpp";
+/// The id of the catalogue of models that run on this device.
+pub const LOCAL_CATALOG: &str = "local";
+/// The family of the voice activity detector a call prefers.
+const VAD_FAMILY: &str = "silero-vad";
 
 /// What the person chooses, as the page sends it. Read strictly: an unknown key is refused.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -36,25 +32,23 @@ pub struct VoiceSettings {
     pub idle_unload_minutes: Option<u32>,
 }
 
+/// Speech to text: a model of a catalogue, and the language spoken.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SttChoice {
+    pub catalog: String,
     pub model: String,
-    /// One of the model's builds that runs here; absent or null for the app's choice.
-    #[serde(default)]
-    pub build: Option<String>,
     /// A BCP 47 tag; absent or null to detect it.
     #[serde(default)]
     pub language: Option<String>,
 }
 
+/// Text to speech: a model of a catalogue, its voice and speed.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TtsChoice {
+    pub catalog: String,
     pub model: String,
-    /// One of the model's builds that runs here; absent or null for the app's choice.
-    #[serde(default)]
-    pub build: Option<String>,
     /// One of the model's voices; absent or null for its first.
     #[serde(default)]
     pub voice: Option<String>,
@@ -78,38 +72,44 @@ pub enum EndOfTurn {
     SmartTurn,
 }
 
-/// A model of the engine's catalogue, as far as choosing its build needs.
+/// A catalogue of the engine, as far as choosing from it needs: why it is not current, and the models it lists.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CatalogCandidates {
+    pub id: String,
+    /// Why it lists nothing, or not the latest (`credential-missing`, ...): the engine's code.
+    pub reason: Option<String>,
+    /// What a provider said when it refused.
+    pub detail: Option<String>,
+    pub models: Vec<Candidate>,
+}
+
+/// A model of a catalogue, as far as choosing it needs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Candidate {
     pub id: String,
-    /// `stt`, `tts`, `vad`.
+    /// A local model's family; `None` for a provider's.
+    pub family: Option<String>,
+    /// `stt`, `tts`, `vad`, `end-of-turn`.
     pub capabilities: Vec<String>,
-    pub builds: Vec<CandidateBuild>,
-    pub recommended: Option<String>,
+    /// Whether it runs here: a local model with a build that runs; a provider's always.
+    pub runs: bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct CandidateBuild {
-    pub id: String,
-    pub backend: String,
-    /// The accelerator it would run on here (`cpu`, `metal`, `coreml`, `remote`…), when it runs here.
-    pub accelerator: Option<String>,
-    pub available: bool,
-}
-
-/// Why a configuration cannot be made: a stable key and its parameters, as the bridge's refusals.
+/// Why a configuration cannot be made: the page's code for it (`model-unknown`, `model-unfit`, `catalog-not-found`,
+/// `vad-unavailable`, `end-of-turn-unavailable`, or the engine's own), with what a provider said.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Refusal {
-    pub key: &'static str,
+    pub code: String,
     pub model: String,
+    pub detail: Option<String>,
     pub message: String,
 }
 
-/// A model of the catalogue and the build of it the call runs.
+/// A slot's model: its catalogue and its id there.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ModelChoice {
+    pub catalog: String,
     pub model: String,
-    pub build: String,
 }
 
 /// What the app makes of the person's choices: the model that fills each of the call's slots, and sidevoice-voice's
@@ -119,38 +119,45 @@ pub struct VoiceChoice {
     pub vad: ModelChoice,
     pub stt: ModelChoice,
     pub tts: ModelChoice,
-    /// For `smart-turn`: the first model of the catalogue that ends turns and runs here.
+    /// For `smart-turn`: the local catalogue's first model that ends turns and runs here.
     pub end_of_turn: Option<ModelChoice>,
     pub config: Value,
 }
 
 impl VoiceChoice {
-    /// Whether `other` fills the call's slots with the same models (its configuration aside).
+    /// Whether `other` fills the call's slots with the same models (its configuration aside): other models come when a
+    /// slot's catalogue or model changes, or the end of turn does.
     pub fn same_models(&self, other: &VoiceChoice) -> bool {
         (&self.vad, &self.stt, &self.tts, &self.end_of_turn) == (&other.vad, &other.stt, &other.tts, &other.end_of_turn)
     }
 }
 
-/// The models and the configuration for `settings`, on the builds of `catalogue` that run here.
-pub fn choose(settings: &VoiceSettings, catalogue: &[Candidate]) -> Result<VoiceChoice, Refusal> {
-    let pick = |model: &str, task: &str, named: Option<&str>| {
-        build(catalogue, model, task, named).map(|build| ModelChoice { model: model.to_string(), build })
-    };
-    let vad = pick(VAD_MODEL, "vad", None)?;
-    let stt = pick(&settings.stt.model, "stt", settings.stt.build.as_deref())?;
-    let tts = pick(&settings.tts.model, "tts", settings.tts.build.as_deref())?;
+fn refusal(code: &str, model: &str, message: String) -> Refusal {
+    Refusal { code: code.to_string(), model: model.to_string(), detail: None, message }
+}
+
+/// The models and the configuration for `settings`, from what `catalogs` list.
+pub fn choose(settings: &VoiceSettings, catalogs: &[CatalogCandidates]) -> Result<VoiceChoice, Refusal> {
+    let stt = slot(catalogs, &settings.stt.catalog, &settings.stt.model, "stt")?;
+    let tts = slot(catalogs, &settings.tts.catalog, &settings.tts.model, "tts")?;
+    let local: &[Candidate] = catalogs.iter().find(|c| c.id == LOCAL_CATALOG).map_or(&[], |c| &c.models);
+    fn runs_as<'a>(local: &'a [Candidate], task: &'a str) -> impl Iterator<Item = &'a Candidate> {
+        local.iter().filter(move |m| m.runs && m.capabilities.iter().any(|capability| capability == task))
+    }
+    let vad = runs_as(local, "vad")
+        .find(|m| m.family.as_deref() == Some(VAD_FAMILY))
+        .or_else(|| runs_as(local, "vad").next())
+        .map(|m| ModelChoice { catalog: LOCAL_CATALOG.into(), model: m.id.clone() })
+        .ok_or_else(|| refusal("vad-unavailable", "", "No voice activity detector runs on this device.".into()))?;
     let end_of_turn = settings.end_of_turn.unwrap_or(EndOfTurn::Silence);
     let ends_turns = match end_of_turn {
         EndOfTurn::Silence => None,
         EndOfTurn::SmartTurn => Some(
-            catalogue
-                .iter()
-                .filter(|c| c.capabilities.iter().any(|capability| capability == END_OF_TURN))
-                .find_map(|c| pick(&c.id, END_OF_TURN, None).ok())
-                .ok_or_else(|| Refusal {
-                    key: "voice_end_of_turn_unavailable",
-                    model: String::new(),
-                    message: "No model of the engine's catalogue that ends turns runs on this device.".into(),
+            runs_as(local, "end-of-turn")
+                .next()
+                .map(|m| ModelChoice { catalog: LOCAL_CATALOG.into(), model: m.id.clone() })
+                .ok_or_else(|| {
+                    refusal("end-of-turn-unavailable", "", "No model that ends turns runs on this device.".into())
                 })?,
         ),
     };
@@ -169,32 +176,28 @@ pub fn choose(settings: &VoiceSettings, catalogue: &[Candidate]) -> Result<Voice
     Ok(VoiceChoice { vad, stt, tts, end_of_turn: ends_turns, config })
 }
 
-/// The build of `model` that the call runs, for `task`: `named` when the person named one, which must be one that runs
-/// here and the app offers.
-fn build(catalogue: &[Candidate], model: &str, task: &str, named: Option<&str>) -> Result<String, Refusal> {
-    let refuse = |key, message: String| Refusal { key, model: model.to_string(), message };
-    let candidate = catalogue
+/// Model `model` of catalogue `catalog`, for `task`: one the catalogue lists for it and that runs here. A catalogue
+/// that lists nothing for a reason (a provider with no key, ...) refuses with that reason and what the provider said.
+fn slot(catalogs: &[CatalogCandidates], catalog: &str, model: &str, task: &str) -> Result<ModelChoice, Refusal> {
+    let listed = catalogs
         .iter()
-        .find(|candidate| candidate.id == model)
-        .ok_or_else(|| refuse("voice_model_unknown", format!("{model} is not in the engine's catalogue.")))?;
-    if !candidate.capabilities.iter().any(|capability| capability == task) {
-        return Err(refuse("voice_model_wrong_task", format!("{model} cannot do {task}.")));
-    }
-    let offered: Vec<&CandidateBuild> = candidate
-        .builds
-        .iter()
-        .filter(|b| b.available && b.backend != "mlx" && b.accelerator.as_deref() != Some("coreml"))
-        .collect();
-    if let Some(named) = named {
-        return offered.iter().find(|b| b.id == named).map(|b| b.id.clone()).ok_or_else(|| {
-            refuse("voice_build_unfit", format!("{named} is not a build of {model} that runs on this device."))
+        .find(|c| c.id == catalog)
+        .ok_or_else(|| refusal("catalog-not-found", model, format!("There is no catalogue {catalog}.")))?;
+    let Some(candidate) =
+        listed.models.iter().find(|m| m.id == model && m.capabilities.iter().any(|capability| capability == task))
+    else {
+        return Err(match &listed.reason {
+            Some(reason) => Refusal {
+                code: reason.clone(),
+                model: model.to_string(),
+                detail: listed.detail.clone(),
+                message: format!("{catalog} lists no models now ({reason})."),
+            },
+            None => refusal("model-unknown", model, format!("{catalog} lists no {task} model {model}.")),
         });
+    };
+    if !candidate.runs {
+        return Err(refusal("model-unfit", model, format!("{model} has no build that runs on this device.")));
     }
-    let preferred = (task == "stt").then(|| offered.iter().find(|b| b.backend == PREFERRED_STT_BACKEND)).flatten();
-    let recommended = offered.iter().find(|b| Some(&b.id) == candidate.recommended.as_ref());
-    preferred
-        .or(recommended)
-        .or(offered.first())
-        .map(|b| b.id.clone())
-        .ok_or_else(|| refuse("voice_model_unfit", format!("{model} has no build that runs on this device.")))
+    Ok(ModelChoice { catalog: catalog.to_string(), model: model.to_string() })
 }

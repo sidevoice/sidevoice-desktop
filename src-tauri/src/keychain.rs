@@ -1,6 +1,6 @@
 //! The keys of remote providers (OpenAI, ElevenLabs), kept in the macOS keychain: one generic password per provider,
 //! under the service `dev.sidevoice.desktop.providers`. The engine asks for a key each time it needs one
-//! (`Credentials`); the page may set, clear and ask whether there is one (`host.voice`), never read it back. The
+//! (`Credentials`); the page may set, clear and ask whether there is one (`host.engine`), never read it back. The
 //! keychain is macOS's; elsewhere the app keeps no keys.
 #![cfg(target_os = "macos")]
 

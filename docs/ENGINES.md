@@ -23,25 +23,27 @@ This app keeps what is the app's, in `src-tauri/engine/` (`sidevoice-desktop-eng
 
 **Owner: sidevoice-engine** (operator's decision, 2026-10-09). The app runs the engine's bundled catalogue
 (`BundledCatalog`, `catalog/families/` in that repository, at the commit `src-tauri/Cargo.lock` pins) and has none of
-its own. The page lists it through `host.voice.models()`, in the shape `WebEngine.models()` answers on the web.
+its own. The page lists it, and each remote provider's, through `host.engine.catalogs()` (sidevoice-engine 0.3.1's
+catalogues: `local` first, then each provider), in the shape `/engine` gives the page on the web.
 
 ## What runs, where
 
-- Backends, linked statically into the app through sidevoice-engine (the commit `src-tauri/engine/Cargo.toml` pins),
+- Backends, linked statically into the app through sidevoice-engine (the release `src-tauri/engine/Cargo.toml` pins, 0.3.1),
   with no Cargo features to choose: **sherpa-onnx 1.13.8** (ONNX Runtime) on the CPU, **whisper.cpp** (through
   `whisper-rs`), compiled from source, on Metal on Apple Silicon, and the **remote** OpenAI and ElevenLabs backends.
   Nothing is loaded at run time with `dlopen`, so the macOS app keeps library validation on: its only entitlement is
   the microphone.
-- The voice call picks each stage's build (core `voice.rs`): Whisper on whisper.cpp where the model has that build
-  (Metal on Apple Silicon), every other model on the build the engine recommends, never Core ML nor MLX, and Silero
-  for voice activity, on sherpa-onnx.
+- Each stage of the voice call is a model of a catalogue, which picks its build when it loads it
+  (`engine.catalog(id).load(model)`: an installed build that runs here, else the recommended one). The app adds the
+  voice activity detector, the local catalogue's Silero, and, for `smart-turn`, its local end-of-turn model (core
+  `voice.rs`).
 - Models are downloaded on demand into the app's data directory, `sidevoice-engine/`
   (`~/Library/Application Support/dev.sidevoice.desktop/sidevoice-engine/` on macOS), each file checked against its
   SHA-256 as it arrives and stored only once whole. The voice call installs what it needs as it starts; the page may
-  install a model before (`nativeEngine.install`), to show its progress.
+  install a model before (`engine.install`), to show its progress.
 - **Remote models** need their provider's key, which the app keeps in the macOS keychain (`src-tauri/src/keychain.rs`,
   service `dev.sidevoice.desktop.providers`). The engine asks the app for it each time it needs it
-  (`NativeHost::with_credentials`); the page sets and clears it (`host.voice.setProviderKey`) and never reads it back.
+  (`NativeHost::with_credentials`); the page sets and clears it (`host.engine.setCredential`) and never reads it back.
   Elsewhere the app keeps no keys.
 - **Echo cancellation** is the call's own: WebRTC's AEC3, fed with the call's playback (sidevoice-voice's README). The
   room window's page is never granted the microphone where the app runs the call.
@@ -63,7 +65,8 @@ pkg-config`). The Rust version is the engine's, `src-tauri/rust-toolchain.toml`.
 ## Verified in CI
 
 The macOS job's probe page, in the signed app: the engine's capabilities, installs with progress, refusals by key, a
-cancelled download; and the voice call's seam, its catalogue, Whisper configured on whisper.cpp, and a start that
+cancelled download; the catalogues (`local` first, a provider with no key listing nothing); and the voice call's
+seam, settings naming a catalogue's model, and a start that
 settles (listening, or refused with the call's code where the runner has no microphone or speaker): that start loads
 the engine's real models through the app's adapter (`src-tauri/src/voice/models.rs`). sidevoice-voice's own CI drives
 the call with fakes; the real models are the app's to test.
