@@ -14,9 +14,9 @@ By design:
 ## The window
 
 `room-N` shows `tauri://localhost/voice/index.html` (Windows: `http://tauri.localhost/voice/index.html`), the
-interface built from sidevoice-web at the commit `web.pin.json` names, into `ui/voice/`, in the
-layout that repo's `scripts/assemble-static-web.mjs` defines (`scripts/build-web.mjs` here runs its build and that
-script; `ui/voice/web-source.json` says which commit). None of it is committed.
+interface of the sidevoice-web release `web.pin.json` names: that release's static site (`sidevoice-web-<version>.tar.gz`),
+unpacked into `ui/voice/` in the layout a room serves (`scripts/build-web.mjs`; `ui/voice/web-source.json` says
+which release). None of it is committed, and nothing of it is built here.
 
 The window only ever navigates within the app's own pages; the microphone is granted to them only; the bridge
 (`docs/BRIDGE.md`) is bound to them.
@@ -52,6 +52,9 @@ writing `/voice/target.js` (`SIDEVOICE_TARGET` in the nginx image).
 
 ## Updating the bundled interface
 
-Move `web.pin.json` to another sidevoice-web commit (its full sha; `ref` names the branch or tag it is on, for
-people), then `npm run web`. The next Tauri build or dev run does the same by itself. The built site is kept in
-`target/web/<commit>/site/`, so a second run at the same pin only copies it.
+Move `web.pin.json` to another sidevoice-web release: its `tag` (`vX.Y.Z`, or `nightly`) and the SHA-256 of its
+tarball, as the release's `SHA256SUMS` lists it; then `npm run web`. The next Tauri build or dev run does the same by
+itself. The tarball must match that digest and be listed so in `SHA256SUMS`, and its attestation
+(`attestation.sigstore.json`) is verified with `gh attestation verify` when `gh` is on the PATH (always in CI). The
+unpacked site is kept in `target/web/<sha256>/site/`, so a second run at the same pin only copies it. A `nightly` pin
+is only ever temporary: its tarball is replaced on every push to sidevoice-web's main, and the digest stops matching.

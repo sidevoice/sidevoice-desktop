@@ -34,8 +34,8 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 const SETTINGS_LABEL: &str = "settings";
 const ROOM_PREFIX: &str = "room-";
-/// The web interface bundled in the app (built from sidevoice-web at `web.pin.json`, `scripts/build-web.mjs`), at the
-/// path a room serves it from, so its absolute `/voice/…` URLs resolve.
+/// The web interface bundled in the app (the sidevoice-web release `web.pin.json` names, `scripts/build-web.mjs`), at
+/// the path a room serves it from, so its absolute `/voice/…` URLs resolve.
 const BUNDLED_INTERFACE: &str = "voice/index.html";
 
 pub(crate) struct AppState {

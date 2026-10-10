@@ -1,5 +1,5 @@
 {
   "repository": "sidevoice/sidevoice-web",
-  "ref": "feat/voice-settings",
-  "commit": "22686ca1f6801525d50f55724664fa86d54802b5"
+  "tag": "nightly",
+  "sha256": "7dac6e9fa5936dec825d16d243d0366b8485a4a2f8a24c5bc603cde4f99b67c0"
 }

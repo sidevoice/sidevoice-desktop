@@ -6,7 +6,7 @@ them, as listed.
 
 ## Inside the installers
 
-- **The Sidevoice web interface** (sidevoice-web, built at `web.pin.json` into `ui/voice/`), Apache-2.0, with its own
+- **The Sidevoice web interface** (sidevoice-web, the release `web.pin.json` names, in `ui/voice/`), Apache-2.0, with its own
   dependencies: React (MIT), Radix UI (MIT), zustand (MIT), lucide-react (ISC), the OpenTelemetry JavaScript SDK
   (Apache-2.0) and the components listed in sidevoice-web's `THIRD_PARTY_NOTICES.md`.
 - **Tauri** and its plugins (`tauri`, `tauri-plugin-global-shortcut`, `tauri-plugin-single-instance`), MIT or

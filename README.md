@@ -92,14 +92,15 @@ src-tauri/src/       the shell: windows, tray, shortcut, commands, the voice cal
 src-tauri/core/      pure logic (settings, bridge contract, media rules, voice builds), testable without Tauri
 src-tauri/engine/    the app's side of sidevoice-engine (ids, install jobs, refusals)
 bridge/              the script injected into the call page: the page side of the bridge
-ui/                  the settings window; ui/voice*/ hold the web interface, built at the pin (not committed)
+ui/                  the settings window; ui/voice/ holds the web interface, the pinned release (not committed)
 brand/               the brand files the icons and installer art are generated from
 docs/                the bridge, the engines and models, targets, macOS notes, the brand
 ```
 
-The bundled interface is a build of [sidevoice-web](https://github.com/sidevoice/sidevoice-web) at the commit
-`web.pin.json` names: `npm run web` (`scripts/build-web.mjs`, run by every Tauri build and dev run) fetches it, builds
-it and puts it in `ui/voice*/`, and `ui/voice/web-source.json` says which commit it is ([`docs/TARGETS.md`](docs/TARGETS.md)). The app drives it only through an explicit bridge
+The bundled interface is the [sidevoice-web](https://github.com/sidevoice/sidevoice-web) release `web.pin.json`
+names, by tag and its tarball's SHA-256: `npm run web` (`scripts/build-web.mjs`, run by every Tauri build and dev
+run) downloads that release's static site, checks its digest and attestation, and puts it in `ui/voice/`, and
+`ui/voice/web-source.json` says which release it is ([`docs/TARGETS.md`](docs/TARGETS.md)). The app drives it only through an explicit bridge
 ([`docs/BRIDGE.md`](docs/BRIDGE.md)), never through its DOM.
 
 ## Contributing

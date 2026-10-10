@@ -28,6 +28,10 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # The bundled web interface is a release of sidevoice-web (web.pin.json): its attestation is verified wherever it is
+  # fetched (`npm run web`, and every Tauri build through it), with gh and this run's token.
+  SIDEVOICE_WEB_ATTESTATION: require
+  GH_TOKEN: ${{ github.token }}
 
 jobs:
   test:
@@ -53,7 +57,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: target/web
-          key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs') }}
+          key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs', 'scripts/web-release.mjs') }}
       - name: The web interface at the pin (web.pin.json)
         run: npm run web
       - name: Bridge script tests
@@ -125,6 +129,7 @@ jobs:
               - 'test/fixtures/**'
               - 'web.pin.json'
               - 'scripts/build-web.mjs'
+              - 'scripts/web-release.mjs'
               - 'scripts/web-site.mjs'
 
   macos:
@@ -148,7 +153,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: target/web
-          key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs') }}
+          key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs', 'scripts/web-release.mjs') }}
       - name: Build the app bundle (ad-hoc signed, hardened runtime, entitlements)
         if: needs.changes.outputs.installers == 'true'
         run: npx tauri build --target aarch64-apple-darwin --bundles app
@@ -607,7 +612,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: target/web
-          key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs') }}
+          key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs', 'scripts/web-release.mjs') }}
       - run: npx tauri build --bundles deb,appimage
       - uses: actions/upload-artifact@v4
         with:
@@ -638,7 +643,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: target/web
-          key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs') }}
+          key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs', 'scripts/web-release.mjs') }}
       - run: npx tauri build --bundles nsis
       - uses: actions/upload-artifact@v4
         with:
