@@ -93,30 +93,61 @@
 
   /** The voice call the app runs itself (docs/BRIDGE.md → "The voice call"): sidevoice-voice natively, with the
    *  device's microphone and speaker and the app's own echo cancellation. It implements `VoiceHost`, the seam
-   *  `@sidevoice/voice` defines (js/voice-host.d.ts), which `createVoiceHost` implements in a browser. The page keeps
-   *  the room: it hands the call the room's `voice-reply` (`speak`) and
-   *  carries what `onUserTurn` and `onPlayback` give it to the room, in its outbox. A refusal rejects with
-   *  `{key, message, …params}`. Only where the app offers it (macOS); elsewhere the page runs the call itself. */
+   *  `@sidevoice/voice` defines (js/voice-host.d.ts), which `createVoiceHost` implements in a browser. The call knows
+   *  nothing of the room: the page tells the room the turns `onTurn` gives it, and has the call `say` what the room
+   *  sends, through a handle that tells how it went. A refusal rejects with `{key, message, …params}`. Only where the
+   *  app offers it (macOS); elsewhere the page runs the call itself. */
   function voice() {
-    const listeners = { "user-turn": new Set(), playback: new Set(), state: new Set(), level: new Set(),
-      karaoke: new Set(), error: new Set() };
+    const listeners = { turn: new Set(), state: new Set(), level: new Set(), error: new Set() };
     const on = (kind) => (listener) => {
       if (typeof listener !== "function") throw new TypeError("a listener");
       listeners[kind].add(listener);
       return () => listeners[kind].delete(listener);
     };
-    /** One event of the call, sidevoice-voice's `VoiceEvent` as JSON (`{type, data}`), to its listeners. */
+    // What is being said, by the key this bridge gave it, until its `done` step.
+    const sayings = new Map();
+    let said = 0;
+    /** One event of the call, sidevoice-voice's `VoiceEvent` as JSON (`{type, data}`), to its listeners; a step of
+     *  something said (`{type: "say", data: {key, event}}`) to its handle. */
     function receive(event) {
       if (!event || typeof event !== "object") return;
-      let kind = event.type;
-      let data = event.data;
-      if (kind === "room-message") {
-        kind = { "voice-user-turn": "user-turn", "voice-playback": "playback" }[data && data.type];
-        data = data && data.data;
+      if (event.type === "say") {
+        const saying = event.data && sayings.get(event.data.key);
+        if (saying) saying.step(event.data.event);
+        return;
       }
-      for (const listener of (kind && listeners[kind]) || []) {
-        try { listener(data); } catch (_) { /* a listener's error is the page's own */ }
+      for (const listener of listeners[event.type] || []) {
+        try { listener(event.data); } catch (_) { /* a listener's error is the page's own */ }
       }
+    }
+    /** A handle (`VoiceSaying`) for `text` said under `key`: its steps reach the listeners subscribed when each comes,
+     *  `done` settles `outcome`, and `cancel` goes behind the `say` itself, so it never overtakes it. */
+    function saying(key, text, options) {
+      const heard = new Set();
+      let settle;
+      const outcome = new Promise((resolve) => { settle = resolve; });
+      const asked = call("voice_say", { key, text: String(text), language: (options && options.language) ?? null })
+        .catch((error) => step({ type: "done", outcome: { status: "not-played", reason: "failed", code: (error && (error.code || error.key)) || "voice-failed" } }));
+      function step(event) {
+        for (const listener of heard) {
+          try { listener(event); } catch (_) { /* a listener's error is the page's own */ }
+        }
+        if (event && event.type === "done") {
+          sayings.delete(key);
+          settle(event.outcome);
+        }
+      }
+      const handle = Object.freeze({
+        id: key,
+        cancel: () => { asked.then(() => sayings.has(key) && call("voice_cancel_say", { key })).catch(() => {}); },
+        onEvent(listener) {
+          if (typeof listener !== "function") throw new TypeError("a listener");
+          heard.add(listener);
+        },
+        outcome,
+      });
+      sayings.set(key, { step });
+      return handle;
     }
     const host = {
       /** The person's choices (`VoiceSettings`: models, builds, language, voice, speed, patience, end of turn). The
@@ -126,31 +157,20 @@
       /** Loads the models (installing them if they are not), opens the microphone and the speaker and listens.
        *  Resolves once it listens (at once if it does); rejects `{key, code, message}`, `code` the call's or `stopped`. */
       start: () => call("voice_start"),
-      /** Stops listening and speaking (the turn not reported is cancelled, the reply playing interrupted, the queue
-       *  dropped); the models stay loaded. */
+      /** Stops listening and speaking (the turn not told yet is cancelled, what is being said ends `stopped`); the
+       *  models stay loaded. */
       stop: () => call("voice_stop"),
-      /** A room `voice-reply`, its `data` as the room sent it. */
-      speak: (reply) => call("voice_speak", { reply }),
-      /** The room's answer to a turn's `started` (`voice-user-turn`'s `data`): its `turn_id` and the revision that is the
-       *  turn's boundary for stale replies. */
-      turnStarted: (started) => call("voice_turn_started", { started }),
-      /** A refusal the room sent naming one of the call's messages (the `error` frame's `data`): a turn refused for too
-       *  many open turns keeps its words and is said again once another ends. */
-      roomRefused: (refused) => call("voice_room_refused", { refused }),
-      /** Whether the room is in reach: turns emitted while it is not say `offline: true`. */
-      setOnline: (online) => call("voice_set_online", { online: !!online }),
+      /** Says `text` (`options`: `{language?}`) after whatever is being said, and answers its handle at once. */
+      say: (text, options) => saying("say-" + ++said, text, options),
       mute: (muted) => call("voice_mute", { muted: !!muted }),
       cancelInput: () => call("voice_cancel_input"),
-      /** `voice-user-turn`'s `data` (with its `client_msg_id`), for the page's outbox. Returns `stop`. */
-      onUserTurn: on("user-turn"),
-      /** `voice-playback`'s `data` (with its `client_msg_id`), for the page's outbox. Returns `stop`. */
-      onPlayback: on("playback"),
-      /** `{listening, recognising, playback, online}` when it changes. Returns `stop`. */
+      /** A turn of the person's under the call's own `turn_id`: `started`, then `finished` (the words) or
+       *  `cancelled`. Returns `stop`. */
+      onTurn: on("turn"),
+      /** `{listening, recognising, playback}` when it changes. Returns `stop`. */
       onState: on("state"),
       /** The microphone's level, 0 to 1, about 30 times a second. Returns `stop`. */
       onLevel: on("level"),
-      /** `{utterance_id, sounding: [from, to] | null, heard_chars}`. Returns `stop`. */
-      onKaraoke: on("karaoke"),
       /** `{code}`: something failed that the person may be told. Returns `stop`. */
       onError: on("error"),
       /** The engine's catalogue, in the shape `WebEngine.models()` answers. */

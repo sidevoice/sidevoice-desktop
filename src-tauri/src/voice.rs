@@ -1,11 +1,13 @@
 //! The voice call, run by the app itself (`window.__sidevoiceDesktop.host.voice`, docs/BRIDGE.md → "The voice call"):
 //! sidevoice-voice's `VoiceCall` with the models the app picks on its engine (`models`), the device's own
-//! microphone and speaker and WebRTC's echo cancellation between them (`NativeIo`). The page keeps the room: it hands
-//! the call the room's replies and carries the call's turns and playback reports to the room, in its outbox.
+//! microphone and speaker and WebRTC's echo cancellation between them (`NativeIo`). The page keeps the room, which the
+//! call knows nothing of: it tells the room the call's turns, and has the call say what the room sends (`voice_say`),
+//! each through a handle in the page that tells how it went.
 //!
 //! Only the room window's own page may call these (capabilities/room.json, and `room_page`). The call's events reach
-//! that page as `window.__sidevoiceDesktop.voiceEvent(event)`, each sidevoice-voice's `VoiceEvent` as JSON. A page
-//! that loads anew finds the call stopped, its models still loaded.
+//! that page as `window.__sidevoiceDesktop.voiceEvent(event)`, each sidevoice-voice's `VoiceEvent` as JSON, and each
+//! step of something said as `{type: "say", data: {key, event}}`. A page that loads anew finds the call stopped, its
+//! models still loaded.
 //!
 //! macOS only: the echo canceller's C++ does not build on Windows yet, and the beta ships on macOS. Elsewhere the page
 //! runs the call itself.
@@ -13,6 +15,7 @@
 
 mod models;
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use futures_util::StreamExt;
@@ -22,7 +25,10 @@ use serde_json::{json, Value};
 use sidevoice_desktop_core::voice::{choose, Candidate, CandidateBuild, VoiceChoice, VoiceSettings};
 use sidevoice_desktop_engine::sidevoice_engine::{Capability, Gender, Model};
 use sidevoice_desktop_engine::{accelerator_name, NativeEngines};
-use sidevoice_voice::{Events, Listening, NativeIo, Reply, RoomEvent, VoiceCall, VoiceConfig, VoiceEvent};
+use sidevoice_voice::{
+    Events, Listening, NativeIo, SayCancel, SayEvent, SayOptions, SayOutcome, StopReason, VoiceCall, VoiceConfig,
+    VoiceEvent,
+};
 use tauri::{AppHandle, Manager, State, Webview};
 use tokio::sync::oneshot;
 
@@ -34,6 +40,8 @@ use crate::keychain;
 pub struct VoiceState {
     call: tokio::sync::Mutex<Option<(VoiceCall, VoiceChoice)>>,
     lifecycle: Arc<Mutex<Lifecycle>>,
+    /// What is being said, by the page's key for it, until it is done.
+    sayings: Arc<Mutex<HashMap<String, SayCancel>>>,
 }
 
 /// Whether the call listens, and the `start`s waiting to hear that it does, or why it does not.
@@ -165,54 +173,56 @@ pub async fn voice_stop(app: AppHandle, webview: Webview, state: State<'_, Voice
     Ok(())
 }
 
-/// A reply the room sent (`voice-reply`'s `data`): spoken in its turn.
+/// Says `text` (in `language`, the settings' when absent) after whatever is being said, under `key`, the page's handle
+/// for it: each step reaches the page as `voiceEvent({type: "say", data: {key, event}})`, the last being `done` with
+/// its outcome. With no call yet it is not played (`stopped`).
 #[tauri::command]
-pub async fn voice_speak(
+pub async fn voice_say(
     app: AppHandle,
     webview: Webview,
     state: State<'_, VoiceState>,
-    reply: Reply,
+    key: String,
+    text: String,
+    language: Option<String>,
 ) -> Result<(), Refusal> {
-    with_call(&app, &webview, &state, |call| call.room_event(RoomEvent::Reply(reply))).await
+    page(&app, &webview)?;
+    if key.is_empty() || key.len() > 64 || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Err(refusal("bad_request", format!("not a say key: {key:?}")));
+    }
+    let call = state.call.lock().await;
+    let Some((call, _)) = call.as_ref() else {
+        let stopped = SayEvent::Done { outcome: SayOutcome::NotPlayed { reason: StopReason::Stopped } };
+        to_page(&app, &json!({"type": "say", "data": {"key": key, "event": stopped}}));
+        return Ok(());
+    };
+    let mut saying = call.say(text, SayOptions { language });
+    state.sayings.lock().unwrap().insert(key.clone(), saying.canceller());
+    let sayings = Arc::clone(&state.sayings);
+    tauri::async_runtime::spawn(async move {
+        while let Some(event) = saying.next().await {
+            if matches!(event, SayEvent::Done { .. }) {
+                sayings.lock().unwrap().remove(&key);
+            }
+            to_page(&app, &json!({"type": "say", "data": {"key": key, "event": event}}));
+        }
+    });
+    Ok(())
 }
 
-/// The room's answer to a turn's `started` (`voice-user-turn`'s `data`): the call matches it by `turn_id` and drops replies
-/// written before that turn.
+/// Cancels what is being said under `key`: the part not yet heard is dropped, and its outcome says `cancelled`. Once
+/// it has ended, nothing.
 #[tauri::command]
-pub async fn voice_turn_started(
+pub async fn voice_cancel_say(
     app: AppHandle,
     webview: Webview,
     state: State<'_, VoiceState>,
-    started: Value,
+    key: String,
 ) -> Result<(), Refusal> {
-    let event = RoomEvent::from_json(&json!({"type": "voice-user-turn", "data": started}))
-        .map_err(|e| refusal("bad_request", e.to_string()))?;
-    with_call(&app, &webview, &state, |call| call.room_event(event)).await
-}
-
-/// A refusal the room sent naming one of the call's messages (the `error` frame's `data`): the call keeps a turn refused for
-/// too many open turns (`room.turns_full`) and says it again once another ends, and ignores other keys.
-#[tauri::command]
-pub async fn voice_room_refused(
-    app: AppHandle,
-    webview: Webview,
-    state: State<'_, VoiceState>,
-    refused: Value,
-) -> Result<(), Refusal> {
-    let event = RoomEvent::from_json(&json!({"type": "error", "data": refused}))
-        .map_err(|e| refusal("bad_request", e.to_string()))?;
-    with_call(&app, &webview, &state, |call| call.room_event(event)).await
-}
-
-/// Whether the room is in reach: turns reported while it is not say `offline`.
-#[tauri::command]
-pub async fn voice_set_online(
-    app: AppHandle,
-    webview: Webview,
-    state: State<'_, VoiceState>,
-    online: bool,
-) -> Result<(), Refusal> {
-    with_call(&app, &webview, &state, |call| call.set_online(online)).await
+    page(&app, &webview)?;
+    if let Some(cancel) = state.sayings.lock().unwrap().get(&key) {
+        cancel.cancel();
+    }
+    Ok(())
 }
 
 /// Mutes or unmutes the microphone; muting ends the open turn with what was said.
@@ -323,13 +333,18 @@ fn forward(app: AppHandle, mut events: Events, lifecycle: Arc<Mutex<Lifecycle>>)
             if !matches!(event, VoiceEvent::Level(_)) {
                 crate::debug(&format!("voice event {}", serde_json::to_string(&event).unwrap_or_default()));
             }
-            let Ok(json) = serde_json::to_string(&event) else { continue };
-            if let Some(window) = crate::room_window(&app) {
-                let _ =
-                    window.eval(format!("window.__sidevoiceDesktop && window.__sidevoiceDesktop.voiceEvent({json})"));
+            if let Ok(event) = serde_json::to_value(&event) {
+                to_page(&app, &event);
             }
         }
     });
+}
+
+/// Hands `event` to the room page: `window.__sidevoiceDesktop.voiceEvent(event)`.
+fn to_page(app: &AppHandle, event: &Value) {
+    if let Some(window) = crate::room_window(app) {
+        let _ = window.eval(format!("window.__sidevoiceDesktop && window.__sidevoiceDesktop.voiceEvent({event})"));
+    }
 }
 
 fn capability(capability: &Capability) -> &'static str {

@@ -286,8 +286,8 @@ microphone and speaker (cpal) and WebRTC's AEC3 between them, so the call cancel
 (`src-tauri/src/voice.rs`; sidevoice/sidevoice-core#89). sidevoice-voice names no model and depends on no engine:
 the app fills its interfaces (voice activity, transcriber, speaker, end of turn) with the engine's models
 (`src-tauri/src/voice/models.rs`). The room window's page is then never granted the microphone
-(`media::decide`) and runs no model: it keeps the room. It hands the call the room's replies and carries the call's
-turns and playback reports to the room, in its outbox. Elsewhere `host.voice` is absent and the page runs the call
+(`media::decide`) and runs no model: it keeps the room. The call knows nothing of it: the page tells the room the
+turns the call gives it, and has the call say what the room sends, through a handle that tells how it went. Elsewhere `host.voice` is absent and the page runs the call
 itself over `@sidevoice/voice` in the webview, the room window granting it the microphone: the page pinned now
 (`web.pin.json`) cannot load those modules until they are on npm, so on Windows and Linux there is no voice yet.
 
@@ -295,8 +295,9 @@ itself over `@sidevoice/voice` in the webview, the room window granting it the m
 
 `window.__sidevoiceDesktop.host.voice` implements `VoiceHost`, the page's voice seam, defined once in sidevoice-voice:
 [`js/voice-host.d.ts`](https://github.com/sidevoice/sidevoice-voice/blob/feat/voice-host/js/voice-host.d.ts) in
-`@sidevoice/voice` (sidevoice/sidevoice-voice#6), with its payload types (`VoiceSettings`, `VoiceUserTurn`,
-`VoicePlayback`, `VoiceReply`, `VoiceState`, `VoiceKaraoke`, `VoiceHostError`) and what every implementation promises
+`@sidevoice/voice` (sidevoice/sidevoice-voice#6), with the types it carries (`VoiceSettings`, `VoiceHostError`,
+and `js/voice-events.d.ts`'s `VoiceTurnEvent`, `VoiceCallState`, `VoiceSaying`, `VoiceSayOutcome`) and what every
+implementation promises
 (that package's README, "The voice seam a page drives"). On the web the same package's `createVoiceHost(source)`
 implements it over the call in the page, with the models the page's `source` loads (sidevoice-web's adapter over its
 engine); the page does `host.voice ?? createVoiceHost(source)` and uses nothing else of either. It is not restated
@@ -317,15 +318,16 @@ What is this app's own:
 
 ### How it travels
 
-- Page → app: the commands `voice_set_settings {settings}`, `voice_start`, `voice_stop`, `voice_speak {reply}`,
-  `voice_turn_started {started}`, `voice_room_refused {refused}`,
-  `voice_set_online {online}`, `voice_mute {muted}`, `voice_cancel_input`, `voice_models`,
+- Page → app: the commands `voice_set_settings {settings}`, `voice_start`, `voice_stop`,
+  `voice_say {key, text, language}`, `voice_cancel_say {key}`, `voice_mute {muted}`, `voice_cancel_input`, `voice_models`,
   `voice_set_provider_key {provider, key}`, `voice_has_provider_key {provider}` (`src-tauri/src/voice.rs`). Granted to
   the room window (`capabilities/room.json`); each re-checks that the caller is the current room window on the app's
   own page.
 - App → page: `window.__sidevoiceDesktop.voiceEvent(event)` (`webview.eval`), each sidevoice-voice `VoiceEvent` as
-  JSON, `{type: "room-message" | "state" | "level" | "karaoke" | "error", data}`; the bridge hands each to its
-  listeners (a room message by its own `type`).
+  JSON, `{type: "turn" | "state" | "level" | "error", data}`, which the bridge hands to its listeners; and each step
+  of something said, `{type: "say", data: {key, event}}` (`key` the bridge's for the handle `say` answered at once;
+  `event` sidevoice-voice's `SayEvent`, the last `done` with the outcome), which it hands to that handle. A handle's
+  `cancel` goes behind its `voice_say`, so it never overtakes it.
 - Keys: `setProviderKey` writes the macOS keychain (`src-tauri/src/keychain.rs`), and the engine reads it when a
   remote model is installed, loaded or called.
 

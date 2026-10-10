@@ -265,8 +265,8 @@ test("host.voice only where the app runs the call, and exactly the seam", () => 
   }
   const api = install(fakeWindow(ORIGIN).win, ORIGIN, "native", true, true);
   assert.deepEqual(Object.keys(api.host.voice).sort(), [
-    "cancelInput", "hasProviderKey", "models", "mute", "onError", "onKaraoke", "onLevel", "onPlayback", "onState",
-    "onUserTurn", "roomRefused", "setOnline", "setProviderKey", "setSettings", "speak", "start", "stop", "turnStarted",
+    "cancelInput", "hasProviderKey", "models", "mute", "onError", "onLevel", "onState", "onTurn", "say",
+    "setProviderKey", "setSettings", "start", "stop",
   ]);
   assert.ok(Object.isFrozen(api.host.voice));
 });
@@ -276,16 +276,10 @@ test("host.voice calls go to their native commands, with their arguments", async
   const { win, calls } = voiceWindow({ voice_models: [{ id: "whisper-small" }], voice_has_provider_key: true });
   const voice = install(win, ORIGIN, "native", true, true).host.voice;
   const settings = { stt: { model: "whisper-small", language: "es" }, tts: { model: "kokoro-82m-v1.0", voice: "ef_dora" } };
-  const reply = { utterance_id: "u1", revision: 3, reply_revision: 4, thread_id: "t", history_id: "h", text: "Hola.",
-    language: "es" };
   await voice.setSettings(settings);
   await voice.start();
-  await voice.speak(reply);
-  const started = { phase: "started", turn_id: "t-turn-0", revision: 12, thread_id: "conv-1" };
-  await voice.turnStarted(started);
-  const refused = { key: "room.turns_full", message: "Too many turns", client_msg_id: "m-1" };
-  await voice.roomRefused(refused);
-  await voice.setOnline(0);
+  voice.say("Hola.", { language: "es" });
+  voice.say("Sin idioma.");
   await voice.mute(1);
   await voice.cancelInput();
   await voice.stop();
@@ -296,10 +290,8 @@ test("host.voice calls go to their native commands, with their arguments", async
   assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("voice_")), [
     ["voice_set_settings", { settings }],
     ["voice_start", undefined],
-    ["voice_speak", { reply }],
-    ["voice_turn_started", { started }],
-    ["voice_room_refused", { refused }],
-    ["voice_set_online", { online: false }],
+    ["voice_say", { key: "say-1", text: "Hola.", language: "es" }],
+    ["voice_say", { key: "say-2", text: "Sin idioma.", language: null }],
     ["voice_mute", { muted: true }],
     ["voice_cancel_input", undefined],
     ["voice_stop", undefined],
@@ -310,27 +302,61 @@ test("host.voice calls go to their native commands, with their arguments", async
   ]);
 });
 
-test("the call's events reach host.voice's listeners, room messages by their type, until they stop", () => {
+test("something said answers its handle at once: its steps, its outcome, and a cancel that never overtakes the say", async () => {
+  const install = loadFactory();
+  const { win, calls } = voiceWindow();
+  const api = install(win, ORIGIN, "native", true, true);
+  const saying = api.host.voice.say("Hecho, ya está en la rama.");
+  assert.equal(saying.id, "say-1");
+  assert.ok(Object.isFrozen(saying));
+  const steps = [];
+  saying.onEvent((step) => steps.push(step.type));
+  saying.onEvent(() => { throw new Error("a listener's own"); });
+  saying.cancel();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const voiceCalls = () => calls.filter(([cmd]) => cmd.startsWith("voice_"));
+  assert.deepEqual(voiceCalls().map(([cmd]) => cmd), ["voice_say", "voice_cancel_say"], "the cancel goes behind its say");
+  assert.deepEqual(voiceCalls()[1][1], { key: "say-1" });
+  const step = (event) => api.voiceEvent({ type: "say", data: { key: "say-1", event } });
+  step({ type: "playing" });
+  step({ type: "progress", sounding: [0, 26], heard_chars: 0 });
+  const outcome = { status: "heard-up-to", heard_chars: 0, reason: "cancelled" };
+  step({ type: "done", outcome });
+  assert.deepEqual(await saying.outcome, outcome);
+  assert.deepEqual(steps, ["playing", "progress", "done"]);
+  // Done: a late step goes nowhere, and a cancel then is nothing.
+  step({ type: "playing" });
+  assert.equal(steps.length, 3);
+  saying.cancel();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(voiceCalls().length, 2);
+  // A say the app refuses ends as not played, failed with the refusal's code.
+  const refusal = { key: "bad_request", code: "bad-request", message: "not a say key" };
+  const refused = install(voiceWindow({ voice_say: Object.assign(new Error(), { refusal }) }).win, ORIGIN, "native", true, true)
+    .host.voice.say("x");
+  assert.equal(JSON.stringify(await refused.outcome), '{"status":"not-played","reason":"failed","code":"bad-request"}');
+});
+
+test("the call's events reach host.voice's listeners by their type, until they stop", () => {
   const install = loadFactory();
   const api = install(voiceWindow().win, ORIGIN, "native", true, true);
   const seen = [];
   const listen = (name) => api.host.voice[name]((data) => seen.push([name, JSON.stringify(data)]));
-  const stops = ["onUserTurn", "onPlayback", "onState", "onLevel", "onKaraoke", "onError"].map(listen);
+  const stops = ["onTurn", "onState", "onLevel", "onError"].map(listen);
   api.host.voice.onLevel(() => { throw new Error("a listener's own"); });
-  const turn = { client_msg_id: "c-1", turn_id: "c-turn-0", phase: "started" };
-  api.voiceEvent({ type: "room-message", data: { type: "voice-user-turn", data: turn } });
-  api.voiceEvent({ type: "room-message", data: { type: "voice-playback", data: { utterance_id: "u1", status: "heard" } } });
+  const turn = { phase: "started", turn_id: "c-turn-0", started_at: 1 };
+  api.voiceEvent({ type: "turn", data: turn });
   api.voiceEvent({ type: "state", data: { listening: "listening" } });
   api.voiceEvent({ type: "level", data: 0.25 });
-  api.voiceEvent({ type: "karaoke", data: { utterance_id: "u1", sounding: [0, 5], heard_chars: 0 } });
   api.voiceEvent({ type: "error", data: { code: "microphone-denied" } });
-  api.voiceEvent({ type: "room-message", data: { type: "something-else", data: {} } });
+  api.voiceEvent({ type: "say", data: { key: "nobody", event: { type: "playing" } } });
+  api.voiceEvent({ type: "something-else", data: {} });
   api.voiceEvent(null);
-  assert.deepEqual(seen.map(([name]) => name), ["onUserTurn", "onPlayback", "onState", "onLevel", "onKaraoke", "onError"]);
-  assert.equal(seen[0][1], JSON.stringify(turn), "the room message's data, as the page's outbox sends it");
+  assert.deepEqual(seen.map(([name]) => name), ["onTurn", "onState", "onLevel", "onError"]);
+  assert.equal(seen[0][1], JSON.stringify(turn), "the call's turn, as it told it");
   stops.forEach((stop) => stop());
   api.voiceEvent({ type: "level", data: 0.5 });
-  assert.equal(seen.length, 6);
+  assert.equal(seen.length, 4);
   assert.throws(() => api.host.voice.onState("not a function"), { name: "TypeError" });
 });
 
