@@ -118,7 +118,7 @@
    *  sends, through a handle that tells how it went. A refusal rejects with `{key, message, …params}`. Only where the
    *  app offers it (macOS); elsewhere the page runs the call itself. */
   function voice() {
-    const listeners = { turn: new Set(), state: new Set(), level: new Set(), error: new Set() };
+    const listeners = { turn: new Set(), state: new Set(), level: new Set(), error: new Set(), devices: new Set() };
     const on = (kind) => (listener) => {
       if (typeof listener !== "function") throw new TypeError("a listener");
       listeners[kind].add(listener);
@@ -195,6 +195,24 @@
       onLevel: on("level"),
       /** `{code}`: something failed that the person may be told. Returns `stop`. */
       onError: on("error"),
+      /** The system's microphones and speakers and the ones chosen (`VoiceAudioDevices`: `{inputs, outputs, input,
+       *  output, outputSelectable, lost?}`, `null` the system's default). A chosen one that went away is the default
+       *  from then, said once as `lost`. */
+      audioDevices: () => call("voice_audio_devices"),
+      /** Chooses the microphone, the speaker or both (`{input?, output?}`: a missing kind stays, `null` is the
+       *  default), mid-call too: the microphone switches at once, the speaker once what is playing has ended. Answers
+       *  the devices; rejects `{key, code: "audio-device-unknown", message}` for an id not listed. */
+      setAudioDevices: (choice) => {
+        const chosen = {};
+        for (const kind of ["input", "output"]) {
+          const id = choice && choice[kind];
+          if (id !== undefined) chosen[kind] = id === null ? null : String(id);
+        }
+        return call("voice_set_audio_devices", { choice: chosen });
+      },
+      /** The devices, as `audioDevices` answers them, each time they change once they have been asked for. Returns
+       *  `stop`. */
+      onAudioDevices: on("devices"),
     };
     return { host: Object.freeze(host), receive };
   }

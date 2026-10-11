@@ -1,13 +1,14 @@
 //! The voice call, run by the app itself (`window.__sidevoiceDesktop.host.voice`, docs/BRIDGE.md → "The voice call"):
 //! sidevoice-voice's `VoiceCall` with the models the app picks on its engine (`models`), the device's own
-//! microphone and speaker and WebRTC's echo cancellation between them (`NativeIo`). The page keeps the room, which the
-//! call knows nothing of: it tells the room the call's turns, and has the call say what the room sends (`voice_say`),
-//! each through a handle in the page that tells how it went.
+//! microphone and speaker, the system's default ones or those the page chooses (`NativeDevices`), and WebRTC's echo
+//! cancellation between them (`NativeIo`). The page keeps the room, which the call knows nothing of: it tells the room
+//! the call's turns, and has the call say what the room sends (`voice_say`), each through a handle in the page that
+//! tells how it went.
 //!
 //! Only the room window's own page may call these (capabilities/room.json, and `room_page`). The call's events reach
 //! that page as `window.__sidevoiceDesktop.voiceEvent(event)`, each sidevoice-voice's `VoiceEvent` as JSON, and each
-//! step of something said as `{type: "say", data: {key, event}}`. A page that loads anew finds the call stopped, its
-//! models still loaded.
+//! step of something said as `{type: "say", data: {key, event}}`, and the audio devices when they change as
+//! `{type: "devices", data}`. A page that loads anew finds the call stopped, its models still loaded.
 //!
 //! macOS only: the echo canceller's C++ does not build on Windows yet, and the beta ships on macOS. Elsewhere the page
 //! runs the call itself.
@@ -16,17 +17,19 @@
 mod models;
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use futures_util::StreamExt;
 use models::EngineModels;
-use serde::Serialize;
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use sidevoice_desktop_core::voice::{self as choice, choose, Candidate, CatalogCandidates, VoiceChoice, VoiceSettings};
 use sidevoice_desktop_engine::{CatalogView, NativeEngines};
 use sidevoice_voice::{
-    Events, Listening, NativeIo, SayCancel, SayEvent, SayOptions, SayOutcome, StopReason, VoiceCall, VoiceConfig,
-    VoiceEvent,
+    AudioDevices, Events, Listening, NativeDevices, NativeIo, SayCancel, SayEvent, SayOptions, SayOutcome, StopReason,
+    VoiceCall, VoiceConfig, VoiceEvent,
 };
 use tauri::{AppHandle, Manager, State, Webview};
 use tokio::sync::oneshot;
@@ -40,7 +43,14 @@ pub struct VoiceState {
     lifecycle: Arc<Mutex<Lifecycle>>,
     /// What is being said, by the page's key for it, until it is done.
     sayings: Arc<Mutex<HashMap<String, SayCancel>>>,
+    /// Which microphone and speaker the call uses; the call has a clone.
+    devices: NativeDevices,
+    /// Whether the devices are watched for changes (from the first time the page asks for them).
+    watching: AtomicBool,
 }
+
+/// How often the devices are listed to tell the page when they change: the system tells cpal of no change.
+const DEVICES_EVERY: Duration = Duration::from_secs(2);
 
 /// Whether the call listens, and the `start`s waiting to hear that it does, or why it does not.
 #[derive(Default)]
@@ -135,7 +145,8 @@ pub async fn voice_set_settings(
             *given = choice;
         }
         None => {
-            let (created, events) = VoiceCall::new(models(), Box::new(NativeIo::new()), config);
+            let (created, events) =
+                VoiceCall::new(models(), Box::new(NativeIo::with_devices(state.devices.clone())), config);
             forward(app.clone(), events, Arc::clone(&state.lifecycle));
             *call = Some((created, choice));
         }
@@ -247,6 +258,99 @@ pub async fn voice_mute(
 #[tauri::command]
 pub async fn voice_cancel_input(app: AppHandle, webview: Webview, state: State<'_, VoiceState>) -> Result<(), Refusal> {
     with_call(&app, &webview, &state, VoiceCall::cancel_input).await
+}
+
+/// The system's microphones and speakers and the ones chosen (`null`: the system's default), as the seam's
+/// `VoiceAudioDevices`: `{inputs, outputs, input, output, outputSelectable, lost?}`, each device `{id, label}`. A chosen
+/// device that went away is the default one from then, said once as `lost`. From now on the page is told when they
+/// change (`{type: "devices", data}`).
+#[tauri::command]
+pub async fn voice_audio_devices(
+    app: AppHandle,
+    webview: Webview,
+    state: State<'_, VoiceState>,
+) -> Result<Value, Refusal> {
+    page(&app, &webview)?;
+    watch_devices(&app, &state);
+    let devices = state.devices.clone();
+    listed(tauri::async_runtime::spawn_blocking(move || devices.list()).await)
+}
+
+/// What `voice_set_audio_devices` chooses: a missing kind stays as it is, `null` is the system's default.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AudioChoice {
+    #[serde(default, deserialize_with = "present")]
+    input: Option<Option<String>>,
+    #[serde(default, deserialize_with = "present")]
+    output: Option<Option<String>>,
+}
+
+/// A field that is there, `null` included.
+fn present<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Option<String>>, D::Error> {
+    Option::<String>::deserialize(deserializer).map(Some)
+}
+
+/// Chooses the microphone, the speaker or both, at any time: a call that runs switches its microphone at once and its
+/// speaker once what it is playing has ended. Answers the devices as `voice_audio_devices` does; rejects `{key:
+/// "voice_audio_device_unknown", code: "audio-device-unknown"}` for an id the system does not list, nothing changed.
+#[tauri::command]
+pub async fn voice_set_audio_devices(
+    app: AppHandle,
+    webview: Webview,
+    state: State<'_, VoiceState>,
+    choice: AudioChoice,
+) -> Result<Value, Refusal> {
+    page(&app, &webview)?;
+    watch_devices(&app, &state);
+    let devices = state.devices.clone();
+    listed(tauri::async_runtime::spawn_blocking(move || devices.choose(choice.input, choice.output)).await)
+}
+
+/// The devices as the seam has them, or the app's refusal with the code the system's listing gave.
+fn listed(listing: Result<Result<AudioDevices, String>, tauri::Error>) -> Result<Value, Refusal> {
+    let devices = listing.map_err(|e| refusal("internal", e.to_string()))?.map_err(|code| {
+        let mut refused = refusal(&format!("voice_{}", code.replace('-', "_")), format!("The audio devices: {code}."));
+        refused.params.insert("code".into(), json!(code));
+        refused
+    })?;
+    Ok(seam_devices(&devices))
+}
+
+/// `devices` as the seam's `VoiceAudioDevices`: natively, the speaker can always be chosen.
+fn seam_devices(devices: &AudioDevices) -> Value {
+    let mut value = json!(devices);
+    value["outputSelectable"] = json!(true);
+    value
+}
+
+/// Lists the devices every `DEVICES_EVERY` from the first call on, and tells the page each change: other devices, another
+/// choice, or a chosen one that went away.
+fn watch_devices(app: &AppHandle, state: &VoiceState) {
+    if state.watching.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let (app, devices) = (app.clone(), state.devices.clone());
+    tauri::async_runtime::spawn(async move {
+        let mut last: Option<AudioDevices> = None;
+        loop {
+            let listing = devices.clone();
+            let Ok(Ok(now)) = tauri::async_runtime::spawn_blocking(move || listing.list()).await else {
+                tokio::time::sleep(DEVICES_EVERY).await;
+                continue;
+            };
+            let changed = now.lost.is_some()
+                || last.as_ref().is_some_and(|last| {
+                    (&last.inputs, &last.outputs, &last.input, &last.output)
+                        != (&now.inputs, &now.outputs, &now.input, &now.output)
+                });
+            if changed {
+                to_page(&app, &json!({"type": "devices", "data": seam_devices(&now)}));
+            }
+            last = Some(now);
+            tokio::time::sleep(DEVICES_EVERY).await;
+        }
+    });
 }
 
 /// The room page loaded anew: its call is stopped, and the next page starts it again.
