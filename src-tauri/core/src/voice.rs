@@ -210,8 +210,9 @@ pub fn choose(settings: &VoiceSettings, catalogs: &[CatalogCandidates]) -> Resul
 
 /// Model `model` of catalogue `catalog`, for `task`: one the catalogue lists for it and that runs here. A catalogue
 /// that lists nothing for a reason (a provider with no key, ...) refuses with that reason and what the provider said.
-/// A local model's `build`, when named, is one of its builds that runs here (`build-not-found` otherwise, or the
-/// engine's code for why it does not run); a provider's models have no builds, and a `build` named for one is ignored.
+/// A local model's `build`, when named (an empty one is not), is one of its builds that runs here, checked once the
+/// model is (`build-not-found` otherwise, or the engine's code for why it does not run); a provider's models have no
+/// builds, and a `build` named for one is ignored. As the web's voice source.
 fn slot(
     catalogs: &[CatalogCandidates],
     catalog: &str,
@@ -239,7 +240,7 @@ fn slot(
     if !candidate.runs {
         return Err(refusal("model-unfit", model, format!("{model} has no build that runs on this device.")));
     }
-    let build = match build {
+    let build = match build.filter(|wanted| !wanted.is_empty()) {
         Some(wanted) if catalog == LOCAL_CATALOG => {
             let found = candidate
                 .builds

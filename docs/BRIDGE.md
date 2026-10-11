@@ -318,7 +318,8 @@ What is this app's own:
   of a catalogue: `stt: {catalog, model, language, build?}`, `tts: {catalog, model, voice, speed, build?}`, with
   `patience`, `end_of_turn`, `idle_unload_minutes` and `turn_model?` (core `voice.rs`; any other key is refused).
   A slot is loaded as `engine.catalog(catalog).load(model)`, which picks the build, or, for a local model with a
-  `build` (Settings, "How it runs"), as that build (`engine.load(model, build)`): it must be one of the model's builds
+  `build` (Settings, "How it runs"; an empty one names none), as that build (`engine.load(model, build)`): once the
+  model is found and runs here (else `model-unknown`, `model-unfit`), the build must be one of its builds
   (`build-not-found`) and run here (else the engine's code for why not, `memory`, ...). A provider's model has no
   builds, and a `build` named for one is not looked at, as on the web. The app adds the voice activity detector, the
   local catalogue's (family `silero-vad`, else another local `vad` that runs), and, for `smart-turn`, the local model

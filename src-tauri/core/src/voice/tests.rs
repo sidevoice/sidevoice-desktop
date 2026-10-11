@@ -173,6 +173,15 @@ fn a_local_models_build_chosen_is_loaded_when_it_is_one_of_its_builds_that_runs(
     chosen.stt.build = None;
     chosen.tts.build = Some("kokoro/nope".into());
     assert_eq!(choose(&chosen, &catalogs(true)).unwrap_err().code, "build-not-found");
+    // An empty build names none, as on the web: the catalogue picks.
+    chosen.stt.build = Some(String::new());
+    chosen.tts.build = Some(String::new());
+    let choice = choose(&chosen, &catalogs(true)).unwrap();
+    assert_eq!((choice.stt.build, choice.tts.build), (None, None));
+    // The model is checked first: one with no build that runs is unfit, whichever build is named.
+    let mut unfit = settings(("local", "parakeet"), ("local", "kokoro-82m-v1.0"));
+    unfit.stt.build = Some("parakeet/nope".into());
+    assert_eq!(choose(&unfit, &catalogs(true)).unwrap_err().code, "model-unfit");
     // A provider's model has no builds: one named is not looked at, as on the web.
     let mut remote = settings(("openai", "gpt-4o-mini-transcribe"), ("local", "kokoro-82m-v1.0"));
     remote.stt.build = Some("whatever".into());

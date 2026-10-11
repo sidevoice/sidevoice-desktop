@@ -130,11 +130,13 @@ what the interface's own window offers — same origin, same permission rule —
     const unknown = await voice.setSettings({ stt: { catalog: "local", model: "whisper-nope" },
       tts: { catalog: "local", model: "kokoro-82m-v1.0" } }).then(() => "no", (error) => error && error.key + "/" + error.code);
     // A build that is not the model's is refused; one that runs here is loaded, and so is the end-of-turn model chosen
-    // (the last that runs here, so that it is not the one the app would take anyway).
+    // (the last that runs here: with several, not the one the app would take anyway).
     const badBuild = await voice.setSettings({ stt: { catalog: "local", model: "whisper-tiny", build: "whisper-tiny/nope" },
       tts: { catalog: "local", model: "kokoro-82m-v1.0" } }).then(() => "no", (error) => error && error.key + "/" + error.code);
     const tiny = models.find((m) => m.id === "whisper-tiny");
-    const build = ((tiny && tiny.builds.find((b) => b.available)) || { id: "none" }).id;
+    // One the catalogue would not pick on its own when there is such a build.
+    const runnable = tiny ? tiny.builds.filter((b) => b.available) : [];
+    const build = (runnable.find((b) => b.id !== tiny.recommendedBuild) || runnable[0] || { id: "none" }).id;
     const turns = models.filter((m) => m.capabilities.includes("end-of-turn") && m.builds.some((b) => b.available));
     const turnModel = turns.length ? turns[turns.length - 1].id : "none";
     await voice.setSettings({ stt: { catalog: "local", model: "whisper-tiny", language: "es", build },
