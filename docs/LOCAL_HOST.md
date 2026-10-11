@@ -85,11 +85,19 @@ else `service status --json`, which computes the same object.
 `reachable` is whether a core answers and the app's pairing with it works; `pairing()` is non-null exactly then,
 whatever `state` says — the page uses the host when `pairing()` is non-null (SEAMS §5).
 
-`state()` → `{state, failure?, core?, service?, calls?, attempts?, limit?, reachable}`: `failure` as the service
-reports it (`{key, step, message, at, log_tail, …}`) or the app's own `{key, message}`; `core` `{pid, version, api,
-launch_id}`; `calls` absent when unknown (the service says `null` with no core answering); `attempts` the manager's
-restarts so far and `limit` its limit when it has one (systemd; launchd has none) — «(2 de 5)» only with `limit`. The
-service's `since`, `window_started` and `next_retry_at` are null in rev. 2 and not passed on.
+`state()` → `{state, failure?, core?, product_version, service?, calls?, attempts?, limit?, reachable}`: `failure`
+as the service reports it (`{key, step, message, at, log_tail, …}`) or the app's own `{key, message}`; `core` `{pid,
+version, api, launch_id}` (the core's own version); `product_version` the installed Sidevoice's version — the
+`sidevoice` package, which bundles the core — as the person knows it («Sidevoice 0.8.1»), `null` when unknown or
+nothing is installed; `calls` absent when unknown (the service says `null` with no core answering); `attempts` the
+manager's restarts so far and `limit` its limit when it has one (systemd; launchd has none) — «(2 de 5)» only with
+`limit`. The service's `since`, `window_started` and `next_retry_at` are null in rev. 2 and not passed on.
+
+`product_version` is what `install.json`'s command answers to `--version --json` (its `version`): the release the
+installation runs. Neither `node.status` nor `service status --json` carries it, and it starts a process, so it is
+asked once and kept — asked again when the core seen changes (a new launch, or none: an install, an update or a
+restart restarts the core), after each action, and, while unknown, at most every 10 s. An answer that is not a plain
+version (printable, no spaces, ≤ 64 characters) is unknown.
 
 ## Actions
 

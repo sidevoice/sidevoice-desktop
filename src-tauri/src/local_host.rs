@@ -28,7 +28,7 @@ fn caller(app: &AppHandle, webview: &Webview) -> Result<(), Value> {
     })
 }
 
-/// `{state, failure?, core?, service?, calls?}`.
+/// `{state, failure?, core?, product_version, service?, calls?, attempts?, limit?, reachable}`.
 #[tauri::command]
 pub fn local_host_state(app: AppHandle, webview: Webview) -> Answer {
     caller(&app, &webview)?;

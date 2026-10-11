@@ -15,6 +15,12 @@
 //! answers, `service status --json` through the CLI (at most every [`FALLBACK_EVERY`], or right after an action: it
 //! starts a process); the core's health; and while paired, whether the core still accepts the token — refused, the
 //! proxy stops carrying it and closes its tunnels.
+//!
+//! **The installed version** (`product_version`): the installation's program asked `--version --json` — the release
+//! `install.json`'s command runs, so the installed `sidevoice` package's version. Neither `node.status` nor
+//! `service status --json` carries it. It starts a process, so it is asked once and kept: asked again when the core
+//! seen changes (a new launch or none: an install, an update or a restart restarts it), after each action, and, while
+//! unknown, at most every [`FALLBACK_EVERY`].
 
 use crate::cli::Cli;
 use crate::connector;
@@ -78,6 +84,7 @@ impl Action {
 }
 
 const STATUS_TIMEOUT: Duration = Duration::from_secs(10);
+const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
 const PAIR_DEVICE_TIMEOUT: Duration = Duration::from_secs(30);
 const PAIR_ROOM_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -100,6 +107,8 @@ struct Inner {
     report: Report,
     /// `service status --json`'s last answer and when, while no connector answers.
     fallback: Option<(Instant, Option<Value>)>,
+    /// The installed version last asked, the core launch it was asked under and when.
+    product: Option<Product>,
     /// `reconnect()`: pair anew on the next pass, whatever is stored.
     force_pair: bool,
 }
@@ -134,6 +143,7 @@ impl LocalHost {
                 pairing: None,
                 report: Report::new(State::Absent),
                 fallback: None,
+                product: None,
                 force_pair: false,
             }),
             passes: Mutex::new(()),
@@ -197,13 +207,39 @@ impl LocalHost {
             // No core to carry requests to; a core that comes back is checked again before the token goes out.
             self.proxy.set_token(None);
         }
+        let launch = health.as_ref().ok().map(|h| (h.launch_id.clone(), h.fingerprint.clone()));
+        let product_version = self.product_version(launch);
         let mut inner = self.inner.lock().unwrap();
-        let report = state::report(Observed { status: status.as_ref(), core: health.as_ref(), link: &inner.link });
+        let report = state::report(Observed {
+            status: status.as_ref(),
+            core: health.as_ref(),
+            link: &inner.link,
+            product_version: product_version.as_deref(),
+        });
         if report.state != inner.report.state {
             (self.log)(&format!("local-host state {}", json!(report.state).as_str().unwrap_or("?")));
         }
         inner.report = report.clone();
         report
+    }
+
+    /// The installed Sidevoice's version: what `install.json`'s command answers to `--version --json`, kept while the
+    /// core seen is the same launch (`launch`, `None` with no core); unknown is asked again after [`FALLBACK_EVERY`].
+    /// No install, no version.
+    fn product_version(&self, launch: Option<(Option<String>, String)>) -> Option<String> {
+        if let Some(known) = &self.inner.lock().unwrap().product {
+            if known.launch == launch && (known.version.is_some() || known.at.elapsed() < FALLBACK_EVERY) {
+                return known.version.clone();
+            }
+        }
+        let version = Cli::installed(&self.config.dirs)
+            .and_then(|cli| cli.run(&["--version", "--json"], VERSION_TIMEOUT))
+            .ok()
+            .and_then(|answer| {
+                answer.get("version").and_then(Value::as_str).filter(|v| plain_version(v)).map(str::to_string)
+            });
+        self.inner.lock().unwrap().product = Some(Product { launch, at: Instant::now(), version: version.clone() });
+        version
     }
 
     /// `service status --json` when no connector answers, reused for [`FALLBACK_EVERY`]. No install, no answer.
@@ -354,10 +390,15 @@ impl LocalHost {
         Cli::installed(&self.config.dirs)
     }
 
-    /// Runs a service action, then a fresh pass (the CLI's view refreshed too): the state after it.
+    /// Runs a service action, then a fresh pass (the CLI's view and the installed version refreshed too): the state
+    /// after it.
     pub fn act(&self, action: Action) -> Result<Report, Refusal> {
         let result = self.cli()?.run(&action.argv(), action.timeout());
-        self.inner.lock().unwrap().fallback = None;
+        {
+            let mut inner = self.inner.lock().unwrap();
+            inner.fallback = None;
+            inner.product = None;
+        }
         result?;
         Ok(self.poll())
     }
@@ -398,6 +439,18 @@ impl Drop for LocalHost {
     fn drop(&mut self) {
         self.shutdown();
     }
+}
+
+/// The installed version as last asked.
+struct Product {
+    launch: Option<(Option<String>, String)>,
+    at: Instant,
+    version: Option<String>,
+}
+
+/// A version as a release names it (`0.8.1`, `0.9.0-rc.1+abc`): short, printable, no spaces.
+fn plain_version(text: &str) -> bool {
+    !text.is_empty() && text.len() <= 64 && text.chars().all(|c| c.is_ascii_graphic())
 }
 
 fn mismatch() -> Refusal {

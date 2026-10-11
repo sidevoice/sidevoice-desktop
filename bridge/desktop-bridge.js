@@ -219,7 +219,8 @@
 
   /** This computer's own core, the local host (docs/LOCAL_HOST.md): its state, the pairing the page uses to reach it
    *  (through the app's proxy, with this launch's secret — never the device token), and the service's actions. Each
-   *  action resolves the state after it (`{state, failure?, core?, service?, calls?, attempts?, limit?, reachable}`) or rejects `{key, message}`.
+   *  action resolves the state after it (`{state, failure?, core?, product_version, service?, calls?, attempts?, limit?,
+   *  reachable}`) or rejects `{key, message}`.
    *  Only where the app offers a local host (macOS). */
   function localHost() {
     const listeners = new Set();
@@ -238,8 +239,10 @@
         .catch(() => {});
     const action = (name) => () => call("local_host_action", { action: name });
     return {
-      /** `{state, failure?, core?, service?, calls?, attempts?, limit?, reachable}`; `state` one of `absent`, `not-installed`, `stopped-by-person`,
-       *  `starting`, `backoff`, `running`, `failed`, `service-failed`, `refused`, `incompatible`. */
+      /** `{state, failure?, core?, product_version, service?, calls?, attempts?, limit?, reachable}`; `state` one of
+       *  `absent`, `not-installed`, `stopped-by-person`, `starting`, `backoff`, `running`, `failed`, `service-failed`,
+       *  `refused`, `incompatible`; `product_version` the installed Sidevoice's version (the `sidevoice` package, not
+       *  `core.version`), `null` when unknown or not installed. */
       state: () => call("local_host_state"),
       /** `listener(state)` with the state now, then on every change (polled every 2 s while anyone listens).
        *  Returns `stop`. */
