@@ -85,11 +85,14 @@ else `service status --json`, which computes the same object.
 `reachable` is whether a core answers and the app's pairing with it works; `pairing()` is non-null exactly then,
 whatever `state` says — the page uses the host when `pairing()` is non-null (SEAMS §5).
 
-`state()` → `{state, failure?, core?, service?, calls?, attempts?, limit?, reachable}`: `failure` as the service
+`state()` → `{state, failure?, core?, service?, calls?, attempts?, limit?, installed?, reachable}`: `failure` as the service
 reports it (`{key, step, message, at, log_tail, …}`) or the app's own `{key, message}`; `core` `{pid, version, api,
 launch_id}`; `calls` absent when unknown (the service says `null` with no core answering); `attempts` the manager's
 restarts so far and `limit` its limit when it has one (systemd; launchd has none) — «(2 de 5)» only with `limit`. The
 service's `since`, `window_started` and `next_retry_at` are null in rev. 2 and not passed on.
+`installed` is whether the service starts at the next sign-in: the connector's own `start_at_login` (in `node.status`
+and `service status --json`), as it says it; absent when it does not say (a connector that predates the toggle), never
+inferred from `service` or from the service's own `installed`.
 
 ## Actions
 
@@ -127,8 +130,9 @@ the same reply shape as the other `service … --json` verbs (`{ok: true, state,
 written. A connector that does not know it answers `--json` with `connector.usage`, and the app refuses the call with
 `service.login-unsupported`, at once; an older connector that answers no JSON at all is `cli.failed`.
 
-The service's status carries no fact of its own for start at sign-in yet, so `state()` reports none; the page reads
-it from what it has (`service`).
+The state after it reads the change back: `installed` is the connector's `start_at_login` (see `state()` above), from
+the fresh pass every action ends with, and `subscribe` listeners get it as any other change. A connector that does not
+report `start_at_login` leaves `installed` absent, and the page falls back to what it has (`service`).
 
 ## The proxy
 

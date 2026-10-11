@@ -467,6 +467,48 @@ fn a_connector_without_start_at_sign_in_refuses_it_with_a_key_at_once() {
     assert!(ran.iter().any(|c| c == "service login off --json"), "{ran:?}");
 }
 
+/// A CLI whose start at sign-in is a fact it keeps (`service login on|off` writes it, `service status` reports it as
+/// `start_at_login`); the service itself stays stopped. A `gate` file holds the next `service status` (its answer
+/// already read) until a `release` file appears.
+fn install_login_cli(dirs: &DataDirs) -> (PathBuf, PathBuf) {
+    let log = install_fake_cli(dirs, "{}");
+    let dir = dirs.data.clone();
+    let status = r#"{\"ok\":true,\"state\":\"stopped-by-person\",\"service\":\"launchd\",\"start_at_login\":$login}"#;
+    std::fs::write(
+        dir.join("fake-cli"),
+        format!(
+            "#!/bin/sh\necho \"$*\" >> '{log}'\nd='{d}'\ncase \"$1 $2\" in\n\
+             'service status') login=$(cat \"$d/login\" 2>/dev/null || echo false)\n\
+               if [ -e \"$d/gate\" ]; then rm -f \"$d/gate\"; while [ ! -e \"$d/release\" ]; do sleep 0.02; done; fi\n\
+               echo \"{status}\" ;;\n\
+             'service login') if [ \"$3\" = on ]; then login=true; else login=false; fi; echo $login > \"$d/login\"\n\
+               echo \"{status}\" ;;\n\
+             *) echo '{{\"ok\":true,\"state\":\"stopped-by-person\",\"service\":\"launchd\"}}' ;;\nesac\n",
+            log = log.display(),
+            d = dir.display()
+        ),
+    )
+    .unwrap();
+    (log, dir)
+}
+
+#[test]
+fn start_at_sign_in_reads_back_as_installed_and_leaves_the_service_as_it_was() {
+    let world = World::new();
+    let (log, _) = install_login_cli(&world.dirs);
+    let host = world.host();
+    let before = host.poll();
+    assert_eq!((before.state, before.installed), (State::StoppedByPerson, Some(false)));
+    let on = host.act(Action::LoginOn).unwrap();
+    assert_eq!((on.state, on.installed), (State::StoppedByPerson, Some(true)), "on: read back at once");
+    assert_eq!(host.state(), on, "what subscribers are polled with");
+    let off = host.act(Action::LoginOff).unwrap();
+    assert_eq!((off.state, off.installed), (State::StoppedByPerson, Some(false)));
+    assert_eq!(host.state(), off);
+    let ran = calls(&log);
+    assert!(ran.iter().all(|c| !c.starts_with("service start") && !c.starts_with("service stop")), "{ran:?}");
+}
+
 #[test]
 fn a_connector_that_answers_is_asked_first() {
     let world = World::new();

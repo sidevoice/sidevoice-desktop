@@ -662,6 +662,29 @@ test("subscribe: the state now, then only changes; polling stops with the last l
   assert.ok(polls >= 3);
 });
 
+test("setStartAtLogin resolves the state read back, and subscribers see installed change alone", async () => {
+  const install = loadFactory();
+  let state = { state: "stopped-by-person", service: "launchd", installed: false, reachable: false };
+  const { win, tick } = localHostWindow({
+    local_host_state: () => state,
+    local_host_action: ({ action }) => {
+      state = { ...state, installed: action === "start-at-login-on" };
+      return state;
+    },
+  });
+  const local = install(win, ORIGIN, null, true).host.localHost;
+  const seen = [];
+  local.subscribe((s) => seen.push([s.state, s.installed]));
+  await flush();
+  assert.deepEqual(await local.setStartAtLogin(true), { ...state, installed: true });
+  tick();
+  await flush();
+  assert.deepEqual(await local.setStartAtLogin(false), { ...state, installed: false });
+  tick();
+  await flush();
+  assert.deepEqual(seen, [["stopped-by-person", false], ["stopped-by-person", true], ["stopped-by-person", false]]);
+});
+
 test("nothing of localHost runs until the page asks", async () => {
   const install = loadFactory();
   const { win, calls, tick } = localHostWindow({ local_host_state: { state: "running" } });
