@@ -75,6 +75,13 @@
         coded(call("engine_set_credential", { provider, key: key == null ? null : String(key) })).then(() => undefined),
       /** Whether the keychain holds a key for `provider`. The key itself never reaches the page. */
       hasCredential: (provider) => coded(call("engine_has_credential", { provider })),
+      /** Asks `provider` with `key` without keeping it (never in the keychain, never in the listings the app keeps):
+       *  what its catalogue says against it, `{code, params}` (`credential-rejected`, …), or null when it lists with it.
+       *  The kept key and its listing are as they were. */
+      testCredential: (provider, key) =>
+        coded(call("engine_test_credential", { provider, key: String(key ?? "") })).then((reason) => reason ?? null),
+      /** Asks `provider` again now, past any listing kept, with the key the keychain has. */
+      refresh: (provider) => coded(call("engine_refresh", { provider })).then(() => undefined),
       /** `{runs: "native", os, arch, has: ["cpu", "metal", …], memory_mb}` (`memory_mb` null when unknown). */
       capabilities: () => call("engine_capabilities"),
       /** `[{model, engine}]`: the builds already on disk. */

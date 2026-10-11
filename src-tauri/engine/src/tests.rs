@@ -3,7 +3,10 @@
 //! ever loaded here: what runs a model is the engine's, through the voice call.
 
 use super::*;
-use sidevoice_engine::{async_trait, CatalogFragment, Credentials, Download, Family, Fetcher, HttpClient, Storage};
+use sidevoice_engine::{
+    async_trait, CatalogFragment, Credentials, Download, Family, Fetcher, HttpClient, HttpRequest, HttpResponse,
+    Storage,
+};
 use std::path::Path;
 
 /// What one served file is: its bytes, and whether its download stalls after the first part until it is dropped.
@@ -327,4 +330,212 @@ fn another_install_waits_for_the_lock_a_job_holds_to_roll_back() {
     assert_eq!(waited.unwrap_err().key, "install_cancelled", "it waited until told to stop");
     drop(held);
     assert!(engines.install_lock(&|| false).is_ok());
+}
+
+// ---- Provider keys: tried without being kept, and a provider asked again ----
+
+const OPENAI_SPEC: &str = "https://raw.githubusercontent.com/openai/openai-openapi/main/openapi.json";
+const OPENAI_MODELS: &str = "https://api.openai.com/v1/models";
+
+/// A fake OpenAI: its spec, and its models for the key `good`; any other key is refused (401). A request with the key
+/// `hold` waits until `released` before it is refused. Every request to it is recorded with the key it carried.
+#[derive(Default)]
+struct FakeOpenAi {
+    asked: Mutex<Vec<(String, String)>>,
+    holding: std::sync::atomic::AtomicBool,
+    released: std::sync::atomic::AtomicBool,
+}
+
+impl FakeOpenAi {
+    /// The keys the models listing was asked with, in order.
+    fn listed_with(&self) -> Vec<String> {
+        guard(&self.asked).iter().filter(|(url, _)| url == OPENAI_MODELS).map(|(_, key)| key.clone()).collect()
+    }
+}
+
+/// The spec the engine reads OpenAI's facts from, cut to what it reads (sidevoice-engine's own test fixture).
+fn openai_spec() -> serde_json::Value {
+    serde_json::json!({ "components": { "schemas": {
+        "CreateTranscriptionRequest": { "properties": {
+            "model": { "anyOf": [{ "type": "string" }, { "type": "string", "enum": ["whisper-1", "gpt-4o-transcribe"] }] },
+            "language": { "type": "string" },
+        }},
+        "CreateSpeechRequest": { "properties": {
+            "model": { "anyOf": [{ "type": "string" }, { "type": "string", "enum": ["tts-1"] }] },
+            "voice": { "anyOf": [{ "type": "string" }, { "type": "string", "enum": ["alloy", "nova"] }] },
+            "speed": { "type": "number", "minimum": 0.25, "maximum": 4 },
+            "response_format": { "type": "string", "enum": ["mp3", "pcm"] },
+        }},
+    }}})
+}
+
+/// The host's network: the fake OpenAI.
+struct Network(Arc<FakeOpenAi>);
+
+#[async_trait]
+impl HttpClient for Network {
+    async fn send(&self, request: HttpRequest) -> sidevoice_engine::Result<HttpResponse> {
+        use std::sync::atomic::Ordering;
+        let openai = &self.0;
+        let key = request
+            .headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+            .map(|(_, value)| value.trim_start_matches("Bearer ").to_string())
+            .unwrap_or_default();
+        guard(&openai.asked).push((request.url.clone(), key.clone()));
+        let answer =
+            |status: u16, body: serde_json::Value| Ok(HttpResponse { status, body: body.to_string().into_bytes() });
+        if request.url == OPENAI_SPEC {
+            return answer(200, openai_spec());
+        }
+        if request.url != OPENAI_MODELS {
+            return answer(404, serde_json::json!({}));
+        }
+        if key == "hold" {
+            openai.holding.store(true, Ordering::SeqCst);
+            while !openai.released.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
+        if key == "good" {
+            return answer(200, serde_json::json!({ "data": [{ "id": "whisper-1" }, { "id": "tts-1" }] }));
+        }
+        answer(401, serde_json::json!({ "error": { "message": "Incorrect API key provided." } }))
+    }
+}
+
+/// The key the app keeps for OpenAI (the keychain's part), which a test changes.
+#[derive(Default)]
+struct KeptKey(Mutex<Option<String>>);
+
+/// The host's keys: the one kept.
+struct Keys(Arc<KeptKey>);
+
+#[async_trait]
+impl Credentials for Keys {
+    async fn credential(&self, provider: &str) -> sidevoice_engine::Result<Option<String>> {
+        Ok(if provider == "openai" { guard(&self.0 .0).clone() } else { None })
+    }
+}
+
+struct ProviderHost {
+    native: NativeHost,
+    network: Network,
+    keys: Keys,
+}
+
+impl Host for ProviderHost {
+    fn capabilities(&self) -> sidevoice_engine::Capabilities {
+        self.native.capabilities()
+    }
+    fn storage(&self) -> &dyn Storage {
+        self.native.storage()
+    }
+    fn fetcher(&self) -> &dyn Fetcher {
+        self.native.fetcher()
+    }
+    fn http(&self) -> &dyn HttpClient {
+        &self.network
+    }
+    fn credentials(&self) -> &dyn Credentials {
+        &self.keys
+    }
+}
+
+/// The engines over a host whose OpenAI is fake, with `kept` the key the app keeps for it.
+fn with_provider(name: &str, kept: Option<&str>) -> (Test, Arc<FakeOpenAi>, Arc<KeptKey>) {
+    let root = std::env::temp_dir().join(format!("sidevoice-desktop-engine-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+    let openai = Arc::new(FakeOpenAi::default());
+    let key = Arc::new(KeptKey(Mutex::new(kept.map(str::to_string))));
+    let host = ProviderHost {
+        native: NativeHost::new(&root).unwrap(),
+        network: Network(Arc::clone(&openai)),
+        keys: Keys(Arc::clone(&key)),
+    };
+    let engines = NativeEngines::with(Box::new(host), Vec::new(), runtime.handle().clone()).unwrap();
+    (Test { engines, root, _runtime: runtime }, openai, key)
+}
+
+fn openai_view(engines: &NativeEngines) -> CatalogView {
+    engines.catalogs().unwrap().into_iter().find(|view| view.id == "openai").unwrap()
+}
+
+fn code(reason: Option<ReasonView>) -> Option<String> {
+    reason.map(|reason| reason.code)
+}
+
+/// A key tried is asked of the provider, and what the provider said is the answer; the key kept, and what was listed
+/// with it, are as they were: nothing of the tried key is kept anywhere.
+#[test]
+fn a_key_tried_is_asked_of_the_provider_and_kept_nowhere() {
+    let (test, openai, _) = with_provider("trial", Some("good"));
+    let engines = &test.engines;
+    let before = openai_view(engines);
+    assert!(before.status.reason.is_none() && !before.models.is_empty(), "{before:?}");
+    assert_eq!(openai.listed_with(), ["good"]);
+
+    assert_eq!(code(engines.test_credential("openai", "bad").unwrap()).as_deref(), Some("credential-rejected"));
+    assert_eq!(code(engines.test_credential("openai", " good ").unwrap()), None, "trimmed, and taken");
+    assert_eq!(code(engines.test_credential("openai", "  ").unwrap()).as_deref(), Some("credential-missing"));
+    assert_eq!(openai.listed_with(), ["good", "bad", "good"], "each trial asked the provider itself");
+
+    assert_eq!(openai_view(engines), before, "the kept listing is the one listed before");
+    assert_eq!(openai.listed_with().len(), 3, "and was not listed again for it");
+
+    assert_eq!(engines.test_credential("local", "x").unwrap_err().key, "catalog_not_found");
+    assert_eq!(engines.test_credential("no-such", "x").unwrap_err().key, "catalog_not_found");
+}
+
+/// A key the provider takes is not kept by trying it: with none kept, the provider still has none.
+#[test]
+fn a_key_taken_on_trial_is_not_kept() {
+    let (test, openai, _) = with_provider("trial-none-kept", None);
+    let engines = &test.engines;
+    assert_eq!(code(engines.test_credential("openai", "good").unwrap()), None);
+    let view = openai_view(engines);
+    assert_eq!(view.status.reason.map(|r| r.code).as_deref(), Some("credential-missing"));
+    assert!(view.models.is_empty());
+    assert_eq!(openai.listed_with(), ["good"], "only the trial asked");
+}
+
+/// While a key is being tried, what the app lists — asked again or not — is listed with the kept key, and the trial
+/// does not hold it up.
+#[test]
+fn a_listing_while_a_key_is_tried_is_the_kept_keys() {
+    use std::sync::atomic::Ordering;
+    let (test, openai, _) = with_provider("trial-concurrent", Some("good"));
+    let engines = &test.engines;
+    std::thread::scope(|scope| {
+        let trying = scope.spawn(|| engines.test_credential("openai", "hold"));
+        while !openai.holding.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        engines.refresh("openai").unwrap();
+        let view = openai_view(engines);
+        assert!(view.status.reason.is_none() && !view.models.is_empty(), "{view:?}");
+        openai.released.store(true, Ordering::SeqCst);
+        assert_eq!(code(trying.join().unwrap().unwrap()).as_deref(), Some("credential-rejected"));
+    });
+    assert_eq!(openai.listed_with(), ["hold", "good"], "the app's listing never carried the tried key");
+    assert!(openai_view(engines).status.reason.is_none(), "nor did the trial's answer reach it");
+}
+
+/// `refresh` asks the provider again past the listing kept, with the key kept now.
+#[test]
+fn refresh_asks_the_provider_again_past_the_kept_listing() {
+    let (test, openai, kept) = with_provider("refresh", Some("good"));
+    let engines = &test.engines;
+    openai_view(engines);
+    openai_view(engines);
+    assert_eq!(openai.listed_with(), ["good"], "a listing is kept");
+    engines.refresh("openai").unwrap();
+    assert_eq!(openai.listed_with(), ["good", "good"], "asked again");
+    *guard(&kept.0) = Some("revoked".into());
+    engines.refresh("openai").unwrap();
+    let view = openai_view(engines);
+    assert_eq!(view.status.reason.map(|r| r.code).as_deref(), Some("credential-rejected"));
+    assert!(view.models.is_empty());
 }
