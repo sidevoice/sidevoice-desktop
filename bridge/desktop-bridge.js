@@ -106,6 +106,10 @@
        *  when the install will reject so (also when it has not reached the app yet: it is refused as it arrives);
        *  false when it had already ended. */
       cancel: (job) => call("engine_cancel", { job }),
+      /** Takes `model` off this computer, every build of it; resolves `undefined` (also when none was on disk).
+       *  Rejects with a refusal whose `code` the page reads: `model-in-use` while the voice call holds it,
+       *  `model-installing` while an install of it is waiting or running (cancel it first), `model-not-found`. */
+      uninstall: (model) => coded(call("engine_uninstall", { model })).then(() => undefined),
       /** `{total_mb, available_mb}` (each null when unknown). */
       memory: () => call("engine_memory"),
     };

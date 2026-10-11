@@ -21,6 +21,7 @@ fn main() {
         "engine_install",
         "engine_progress",
         "engine_cancel",
+        "engine_uninstall",
         "engine_memory",
         "engine_catalogs",
         "engine_set_credential",

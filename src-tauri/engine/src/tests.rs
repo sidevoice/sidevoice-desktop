@@ -328,3 +328,64 @@ fn another_install_waits_for_the_lock_a_job_holds_to_roll_back() {
     drop(held);
     assert!(engines.install_lock(&|| false).is_ok());
 }
+
+/// `uninstall` takes the model off the computer, every build of it; one that is not on disk is nothing to do, and a
+/// model the catalogue does not list is refused by key, with the engine's code the page reads.
+#[test]
+fn an_uninstall_takes_every_build_of_the_model_off_the_disk() {
+    let test = engines("uninstall", false);
+    let engines = &test.engines;
+    let jobs = Jobs::default();
+    engines.install("whisper-test", "sherpa-onnx", &mut |_, _| {}).unwrap();
+    assert_eq!(engines.installed().unwrap().len(), 1);
+    engines.uninstall(&jobs, "whisper-test").unwrap();
+    assert!(engines.installed().unwrap().is_empty());
+    assert!(engines.on_disk().unwrap().builds.is_empty());
+    let models = engines.models().unwrap();
+    let whisper = models.iter().find(|m| m.id == "whisper-test").unwrap();
+    assert!(whisper.builds.iter().all(|b| !b.installed), "no build of it is left");
+    engines.uninstall(&jobs, "whisper-test").expect("not on disk: nothing to do");
+    let unknown = serde_json::to_value(engines.uninstall(&jobs, "whisper-nope").unwrap_err()).unwrap();
+    assert_eq!((unknown["key"].as_str(), unknown["code"].as_str()), (Some("model_unknown"), Some("model-not-found")));
+    // And it installs again afterwards.
+    engines.install("whisper-test", "sherpa-onnx", &mut |_, _| {}).unwrap();
+    assert_eq!(engines.installed().unwrap().len(), 1);
+}
+
+/// An install job of the model, waiting or running, refuses its uninstall until the page cancels it: the job would
+/// otherwise put back what was removed, or lose it once it resolved. A job of another model does not.
+#[test]
+fn an_uninstall_is_refused_while_a_job_of_the_model_is_installing() {
+    let test = engines("uninstall-installing", false);
+    let engines = &test.engines;
+    let jobs = Jobs::default();
+    engines.install("whisper-test", "sherpa-onnx", &mut |_, _| {}).unwrap();
+    assert!(jobs.begin("j", "whisper-test", "sherpa-onnx"));
+    let refused = engines.uninstall(&jobs, "whisper-test").unwrap_err();
+    assert_eq!((refused.key, &refused.params["code"]), ("model_installing", &serde_json::json!("model-installing")));
+    assert_eq!(engines.installed().unwrap().len(), 1, "nothing removed");
+    assert!(jobs.begin("k", "kokoro-test", "sherpa-onnx"));
+    assert!(jobs.cancel("j"));
+    engines.uninstall(&jobs, "whisper-test").expect("a cancelled job and another model's do not refuse it");
+    assert!(engines.installed().unwrap().is_empty());
+}
+
+/// It waits for the install that holds the install lock, so no install puts a build of the model on disk while it
+/// removes.
+#[test]
+fn an_uninstall_waits_for_the_install_lock() {
+    let test = engines("uninstall-lock", false);
+    let engines = &test.engines;
+    let jobs = Jobs::default();
+    engines.install("whisper-test", "sherpa-onnx", &mut |_, _| {}).unwrap();
+    let held = engines.install_lock(&|| false).unwrap(); // another install is running
+    std::thread::scope(|scope| {
+        let removing = scope.spawn(|| engines.uninstall(&jobs, "whisper-test"));
+        std::thread::sleep(Duration::from_millis(150));
+        assert!(!removing.is_finished(), "it waits for the install ahead of it");
+        drop(held);
+        removing.join().unwrap().unwrap();
+    });
+    assert!(engines.installed().unwrap().is_empty());
+    assert!(engines.installing.try_lock().is_ok(), "the install lock is free");
+}

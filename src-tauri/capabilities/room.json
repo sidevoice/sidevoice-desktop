@@ -12,6 +12,7 @@
     "allow-engine-install",
     "allow-engine-progress",
     "allow-engine-cancel",
+    "allow-engine-uninstall",
     "allow-engine-memory",
     "allow-engine-catalogs",
     "allow-engine-set-credential",

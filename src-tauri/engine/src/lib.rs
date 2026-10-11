@@ -427,6 +427,26 @@ impl NativeEngines {
         }
     }
 
+    /// Takes `model` off this device: every build of it, each file another installed build does not share (the
+    /// engine's `uninstall(model, None)`). A build that is not on disk is left as it is, so removing a model that is not
+    /// installed does nothing. Refused `model_installing` while an install job of the model is waiting or running (the
+    /// page cancels it first: `Jobs::cancel`), and, from the engine, `model_in_use` while the voice call holds a build
+    /// of it in memory and `model_unknown` for a model its catalogue does not list.
+    ///
+    /// It runs under the install lock, so no install puts a build of the model on disk while it removes, and waits for
+    /// the install ahead of it to end (the engine itself waits for the installs and loads in progress).
+    pub fn uninstall(&self, jobs: &Jobs, model_id: &str) -> Result<(), Error> {
+        if jobs.installing(model_id) {
+            return Err(error::model_installing(model_id));
+        }
+        let _held = self.install_lock(&|| false)?;
+        // Asked again under the lock: a job of the model that arrived meanwhile is waiting for it.
+        if jobs.installing(model_id) {
+            return Err(error::model_installing(model_id));
+        }
+        self.block_on(self.engine.uninstall(model_id, None)).map_err(|e| error::uninstall_refused(e, model_id))
+    }
+
     /// This machine's memory and what is available of it now.
     pub fn memory(&self) -> Memory {
         Memory { total_mb: self.device.memory_mb, available_mb: memory::available_mb() }

@@ -203,6 +203,7 @@ models is the voice call's (below), never the page's. `window.__sidevoiceDesktop
 | `installed()` | `[{model, engine}]` — builds whose files are on disk and whole |
 | `install(model, engine, onProgress?)` | downloads the model's build, whatever of it is missing. Returns a promise that also carries the install's job id from the start, `promise.job` (a string), for `cancel`. `onProgress(event)` about twice a second, only with this call's own bytes (below) |
 | `cancel(job)` | cancels that install, waiting or running; its `install` promise rejects with `{key: "install_cancelled", message}` and the model is not on disk afterwards (unless it already was before the install). Resolves `true` when the install will reject so — also when it has not reached the app yet (it is refused as it arrives) — and `false` when it had already ended (a no-op, never a rejection) |
+| `uninstall(model)` | takes `model` off this computer: every build of it, and each of its files no other installed build shares (sidevoice-engine's `uninstall(model)`). Resolves `undefined`, also when none of it was on disk. Rejects with a refusal whose `code` the page reads (`failureCode`): `model_in_use` (`model-in-use`) while the voice call holds a build of it in memory, `model_installing` (`model-installing`) while an `install` of it is waiting or running — the page cancels that install first (`cancel(job)`), the app never cancels it for it —, `model_unknown` (`model-not-found`) for a model the local catalogue does not list, `uninstall_failed` (a storage code) when the disk refused. It waits for an install of another model that is running to end, as installs wait for each other, and no install starts while it removes |
 | `memory()` | `{total_mb, available_mb}`: the machine's memory and what is available of it now, each `null` when the OS does not say. On macOS `available_mb` is the share the kernel's memory-pressure level reports free (`kern.memorystatus_level`): a gauge, not a limit, since macOS compresses and swaps rather than fail |
 
 - `model` is the catalogue id (`whisper-small`, `kokoro-82m-v1.0`), `engine` the build's engine id (`sherpa-onnx`,
@@ -235,7 +236,8 @@ models is the voice call's (below), never the page's. `window.__sidevoiceDesktop
 - Commands behind it (`src-tauri/src/engine_ipc.rs`): `engine_catalogs`, `engine_set_credential {provider, key}`,
   `engine_has_credential {provider}`, `engine_capabilities`, `engine_installed`,
   `engine_install {model, engine, job}` with `engine_progress {job}` (the report above, or `null` while the job
-  waits or after it ends) and `engine_cancel {job}` (`true`/`false` as `cancel`), `engine_memory`. Granted to the room
+  waits or after it ends) and `engine_cancel {job}` (`true`/`false` as `cancel`), `engine_uninstall {model}`,
+  `engine_memory`. Granted to the room
   window (`capabilities/room.json`). The settings window may read `engine_capabilities` and `engine_on_disk` (what is
   on disk and its size), and nothing else of the engine.
 
@@ -258,7 +260,7 @@ sidevoice-engine itself fails with is one of these keys, with the engine's own c
 | `key` | Parameters | When |
 |---|---|---|
 | `engine_unsupported` | `engine` | no runtime in this app for that engine: unknown, a page's engine, or one a newer catalogue added |
-| `model_unknown` | `model` | not in sidevoice-engine's catalogue |
+| `model_unknown` | `model` (and the engine's `code`, `model-not-found`, when the engine said it) | not in sidevoice-engine's catalogue |
 | `build_missing` | `model`, `engine` | the model has no build for that engine |
 | `build_unfit` | `model`, `engine`, `reason` (the engine's code, when it gave one) | the build needs a feature, or an accelerator, this device lacks |
 | `model_needs_memory` | `model`, `needed_mb`, `memory_mb` | the model needs more memory than this machine has |
@@ -269,6 +271,9 @@ sidevoice-engine itself fails with is one of these keys, with the engine's own c
 | `install_failed` | — | unpacking or moving the download into place failed (disk, permissions, an archive without its files) |
 | `install_cancelled` | — | the page cancelled the install (`cancel(job)`): not a failure, nothing to show as an error |
 | `install_cancel_failed` | `model`, `engine`, `code` | the page cancelled after the download had ended and removing it failed (`code`, the engine's: `model-in-use`, a storage failure): it may still be on disk |
+| `model_installing` | `code` (`model-installing`), `model` | `uninstall(model)` while an install of that model is waiting or running: cancel it first |
+| `model_in_use` | `code` (`model-in-use`), `model` | `uninstall(model)` while the voice call holds a build of it in memory |
+| `uninstall_failed` | `code` (the engine's: a storage failure), `model` | removing the model's files failed: some of it may still be on disk |
 | `runtime_failed` | `engine` | the engine refused, with a code this app does not map |
 | `voice_model_unknown` | `code` (`model-unknown`), `model` | a slot names a model its catalogue does not list for that task |
 | `voice_model_unfit` | `code` (`model-unfit`), `model` | a local model with no build that runs on this device |

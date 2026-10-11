@@ -4,7 +4,7 @@
 //! pages may call them (capabilities/room.json); the settings window may read what is on disk
 //! (`engine_on_disk`, capabilities/settings.json). They manage the models: the catalogues and what they list, the keys
 //! of remote providers (kept in the keychain, never handed back), what runs here, what is installed and on disk,
-//! installs and their cancel, memory. Engine work runs on blocking threads, never the main one. A refusal is
+//! installs and their cancel, removing a model, memory. Engine work runs on blocking threads, never the main one. A refusal is
 //! the engine's keyed `Error` (docs/BRIDGE.md → "Refusals").
 
 use sidevoice_desktop_engine::error::{self, internal};
@@ -71,6 +71,14 @@ pub fn engine_progress(state: State<'_, EngineState>, job: String) -> Option<Pro
 #[tauri::command]
 pub fn engine_cancel(state: State<'_, EngineState>, job: String) -> bool {
     state.jobs.cancel(&job)
+}
+
+/// Takes `model` off this device, every build of it. Refused `model_installing` while an install job of it is waiting
+/// or running, `model_in_use` while the voice call holds it, `model_unknown` for a model the catalogue does not list.
+#[tauri::command]
+pub async fn engine_uninstall(state: State<'_, EngineState>, model: String) -> Result<(), Error> {
+    let (engines, jobs) = (state.engines.clone(), state.jobs.clone());
+    tauri::async_runtime::spawn_blocking(move || engines.uninstall(&jobs, &model)).await.map_err(internal)?
 }
 
 /// `{total_mb, available_mb}`.

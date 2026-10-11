@@ -15,7 +15,8 @@ This app keeps what is the app's, in `src-tauri/engine/` (`sidevoice-desktop-eng
 
 - `lib.rs`: `NativeEngines`, the page's model management in the page's terms over `sidevoice_engine::Engine`, and the
   engine itself for the voice call (`NativeEngines::engine`).
-- `jobs.rs`: each `install` call's progress and cancel.
+- `jobs.rs`: each `install` call's progress and cancel (and whether one of a model is under way, which refuses its
+  `uninstall`).
 - `error.rs`: the keyed refusals, and how each of the engine's codes becomes one (with the code beside it as `code`).
 - `memory.rs`: what is available of the machine's memory now.
 
@@ -40,7 +41,9 @@ catalogues: `local` first, then each provider), in the shape `/engine` gives the
 - Models are downloaded on demand into the app's data directory, `sidevoice-engine/`
   (`~/Library/Application Support/dev.sidevoice.desktop/sidevoice-engine/` on macOS), each file checked against its
   SHA-256 as it arrives and stored only once whole. The voice call installs what it needs as it starts; the page may
-  install a model before (`engine.install`), to show its progress.
+  install a model before (`engine.install`), to show its progress, and takes one off the computer with
+  `engine.uninstall(model)`: every build of it, never while the call holds it in memory (`model-in-use`) or an install
+  of it is under way (`model-installing`).
 - **Remote models** need their provider's key, which the app keeps in the macOS keychain (`src-tauri/src/keychain.rs`,
   service `dev.sidevoice.desktop.providers`). The engine asks the app for it each time it needs it
   (`NativeHost::with_credentials`); the page sets and clears it (`host.engine.setCredential`) and never reads it back.
@@ -65,7 +68,7 @@ pkg-config`). The Rust version is the engine's, `src-tauri/rust-toolchain.toml`.
 ## Verified in CI
 
 The macOS job's probe page, in the signed app: the engine's capabilities, installs with progress, refusals by key, a
-cancelled download; the catalogues (`local` first, a provider with no key listing nothing); and the voice call's
+cancelled download, removing a model (one not on disk, an unknown one refused by key and code); the catalogues (`local` first, a provider with no key listing nothing); and the voice call's
 seam, settings naming a catalogue's model, and a start that
 settles (listening, or refused with the call's code where the runner has no microphone or speaker): that start loads
 the engine's real models through the app's adapter (`src-tauri/src/voice/models.rs`). sidevoice-voice's own CI drives
