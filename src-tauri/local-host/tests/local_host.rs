@@ -510,6 +510,37 @@ fn start_at_sign_in_reads_back_as_installed_and_leaves_the_service_as_it_was() {
 }
 
 #[test]
+fn a_poll_in_flight_cannot_put_back_the_status_an_action_replaced() {
+    let world = World::new();
+    let (log, dir) = install_login_cli(&world.dirs);
+    let host = world.host();
+    // A poll reads `start_at_login: false` and is held there, its answer not stored yet.
+    std::fs::write(dir.join("gate"), "").unwrap();
+    let polling = std::thread::spawn({
+        let host = host.clone();
+        move || host.poll()
+    });
+    while !calls(&log).iter().any(|c| c == "service status --json") {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let acting = std::thread::spawn({
+        let host = host.clone();
+        move || host.act(Action::LoginOn)
+    });
+    while !calls(&log).iter().any(|c| c == "service login on --json") {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // Let the action's CLI return and reach the cache before the held poll stores its older answer.
+    std::thread::sleep(Duration::from_millis(300));
+    std::fs::write(dir.join("release"), "").unwrap();
+    assert_eq!(polling.join().unwrap().installed, Some(false), "the held poll saw the old fact");
+    let after = acting.join().unwrap().unwrap();
+    assert_eq!(after.installed, Some(true), "the action's state is read after it, not the held poll's");
+    assert_eq!(host.state().installed, Some(true));
+    assert_eq!(host.poll().installed, Some(true), "and the cache holds the new answer");
+}
+
+#[test]
 fn a_connector_that_answers_is_asked_first() {
     let world = World::new();
     let log = install_fake_cli(&world.dirs, r#"{"ok":true,"state":"absent"}"#);

@@ -224,7 +224,21 @@ impl LocalHost {
 
     /// One pass: observe, keep the pairing, decide the state.
     pub fn poll(&self) -> Report {
-        let _pass = self.passes.lock().unwrap();
+        let pass = self.passes.lock().unwrap();
+        self.pass(&pass)
+    }
+
+    /// After something changed what `service status --json` would say, its cached answer is dropped under the pass
+    /// lock: a poll already running the fallback finishes first, so its older answer is never stored after the drop.
+    /// The guard is returned for a fresh pass under the same lock.
+    fn invalidate(&self) -> std::sync::MutexGuard<'_, ()> {
+        let pass = self.passes.lock().unwrap();
+        self.inner.lock().unwrap().fallback = None;
+        pass
+    }
+
+    /// The pass itself; the caller holds `passes` (the guard proves it).
+    fn pass(&self, _pass: &std::sync::MutexGuard<'_, ()>) -> Report {
         // Any connector's `node.status` is the derived service status (SEAMS rev. 2 §4); the CLI's only when none answers.
         let status = connector::node_status(&self.config.dirs).or_else(|| self.fallback_status());
         let health = self.core.health();
@@ -394,9 +408,9 @@ impl LocalHost {
     /// Runs a service action, then a fresh pass (the CLI's view refreshed too): the state after it.
     pub fn act(&self, action: Action) -> Result<Report, Refusal> {
         let result = self.cli()?.run(&action.argv(), action.timeout());
-        self.inner.lock().unwrap().fallback = None;
+        let pass = self.invalidate();
         result.map_err(|refusal| action.refusal(refusal))?;
-        Ok(self.poll())
+        Ok(self.pass(&pass))
     }
 
     /// `pair-device --json` (only on the person's click): `{code, expires_in, reach}`.
@@ -421,7 +435,7 @@ impl LocalHost {
             return Err(Refusal::new("bad_request", "That is not a pairing code."));
         }
         let answer = self.cli()?.run(&["pair", url, code, "--json"], PAIR_ROOM_TIMEOUT)?;
-        self.inner.lock().unwrap().fallback = None;
+        drop(self.invalidate());
         Ok(json!({ "room": answer["room"] }))
     }
 
