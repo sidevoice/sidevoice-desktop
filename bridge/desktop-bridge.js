@@ -58,9 +58,12 @@
     });
   }
 
+  /** A cancelled install, as the page reads it (`code`) and as the app says it (`key`). */
+  const cancelled = () => ({ key: "install_cancelled", code: "install-cancelled", message: "The download was cancelled." });
+
   /** The app's model engine (docs/BRIDGE.md → "The native engine"): its catalogues and the keys of remote providers,
-   *  what this device is, which builds are on disk, and get one there. A build is a catalogue model id + an engine id.
-   *  Running a model is the voice call's (`voice`). A refusal rejects with `{key, message, …params}`: a stable key the
+   *  what this device is, which builds are on disk, and get one there: its catalogues and `install` are sidevoice-web's
+   *  `ModelCatalogs` as they are. A build on disk is a catalogue model id + an engine id. Running a model is the voice call's (`voice`). A refusal rejects with `{key, message, …params}`: a stable key the
    *  page translates, and an English sentence for one it does not know (docs/BRIDGE.md → "Refusals"). */
   function engine() {
     return {
@@ -79,33 +82,41 @@
       capabilities: () => call("engine_capabilities"),
       /** `[{model, engine}]`: the builds already on disk. */
       installed: () => call("engine_installed"),
-      /** Downloads the engine package (if missing) and the model's build. Returns a promise that also carries this
-       *  install's job id, `promise.job`, from the start: `cancel(job)` stops it, and it then rejects with
-       *  `{key: "install_cancelled", message}`. `onProgress({job, model, engine, done, total, bytes_per_s})` about
-       *  twice a second once the job starts (after any install ahead of it); `bytes_per_s` is null until measured. */
-      install(model, engine, onProgress) {
+      /** `ModelCatalogs.install` (sidevoice-web's seam): gets a build of `model` on disk, whatever of it is missing.
+       *  `options`: `build`, the build's catalogue id (`ModelBuild.id`), and/or `engine`, its backend id; with neither,
+       *  the build the catalogue recommends here. `onProgress({fraction, done, total})` about twice a second once the
+       *  install starts (after any install ahead of it): the share done (null while the size is unknown) and its bytes.
+       *  `signal` (an AbortSignal) cancels it, waiting or running: it then rejects `{code: "install-cancelled", key:
+       *  "install_cancelled", message}` — at once, without starting, when the signal is already aborted. Resolves
+       *  `undefined`; any other refusal rejects `{key, code, message, …params}`. */
+      install(model, options) {
+        const { build = null, engine = null, onProgress, signal } = options || {};
+        if (signal && signal.aborted) return Promise.reject(cancelled());
         // This call's own job: the app reports progress per job, from when it starts until it ends — never another
-        // call's bytes.
+        // call's bytes — and cancels it by that id.
         const job = "install-" + ++installs + "-" + Date.now().toString(36);
-        const running = call("engine_install", { model, engine, job });
+        const running = call("engine_install", { model, build, engine, job });
         let finished = false;
+        const abort = () => { if (!finished) call("engine_cancel", { job }).catch(() => {}); };
+        if (signal) signal.addEventListener("abort", abort, { once: true });
         const poll = () => {
           if (finished) return;
           call("engine_progress", { job })
-            .then((progress) => { if (!finished && progress && typeof progress === "object") onProgress(progress); })
+            .then((report) => {
+              if (finished || !report || typeof report !== "object") return;
+              const done = typeof report.done === "number" ? report.done : null;
+              const total = typeof report.total === "number" ? report.total : null;
+              onProgress({ fraction: total ? Math.min(1, (done || 0) / total) : null, done, total });
+            })
             .catch(() => {});
           win.setTimeout(poll, 500);
         };
         if (typeof onProgress === "function") poll();
-        const promise = running.finally(() => { finished = true; });
-        promise.job = job;
-        return promise;
+        return coded(running.finally(() => {
+          finished = true;
+          if (signal) signal.removeEventListener("abort", abort);
+        })).then(() => undefined);
       },
-      /** Cancels install `job` (`install(…).job`), waiting or running: its install rejects with
-       *  `{key: "install_cancelled", message}` and the model is not on disk (unless it already was). Resolves true
-       *  when the install will reject so (also when it has not reached the app yet: it is refused as it arrives);
-       *  false when it had already ended. */
-      cancel: (job) => call("engine_cancel", { job }),
       /** `{total_mb, available_mb}` (each null when unknown). */
       memory: () => call("engine_memory"),
     };
