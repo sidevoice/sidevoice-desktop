@@ -492,6 +492,15 @@ test("cancel: the signal's abort cancels the install's own job, which rejects in
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.deepEqual(seen, [], "no progress for it once it ended");
 
+  // Aborted in the same tick as the call: the cancel goes behind the install, never ahead of it.
+  const now = new AbortController();
+  const immediate = engine.install("kokoro-82m-v1.0", { signal: now.signal });
+  now.abort();
+  await assert.rejects(immediate, (error) => error.code === "install-cancelled");
+  const order = calls.filter(([cmd]) => cmd === "engine_install" || cmd === "engine_cancel").slice(-2);
+  assert.deepEqual(order.map(([cmd]) => cmd), ["engine_install", "engine_cancel"]);
+  assert.equal(order[0][1].job, order[1][1].job);
+
   // An abort after the install ended asks the app nothing.
   const late = new AbortController();
   const ended = engine.install("whisper-tiny", { signal: late.signal });
@@ -500,7 +509,7 @@ test("cancel: the signal's abort cancels the install's own job, which rejects in
   await ended;
   late.abort();
   await flush();
-  assert.equal(calls.filter(([cmd]) => cmd === "engine_cancel").length, 1);
+  assert.equal(calls.filter(([cmd]) => cmd === "engine_cancel").length, 2);
 });
 
 test("an install whose signal is already aborted rejects install-cancelled at once, asking the app nothing", async () => {

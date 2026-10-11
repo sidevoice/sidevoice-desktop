@@ -103,8 +103,9 @@ what the interface's own window offers — same origin, same permission rule —
     let measured = null;
     let ended = false;
     const abort = new AbortController();
+    // Aborted from its first report with bytes, as early as the page could, so a fast line cannot finish it first.
     const small = engine.install("whisper-small", { engine: "sherpa-onnx", signal: abort.signal,
-      onProgress: (p) => { if (p.fraction > 0 && !measured) measured = p; } });
+      onProgress: (p) => { if (p.fraction > 0 && !measured) { measured = p; abort.abort(); } } });
     small.then(() => { ended = true; }, () => { ended = true; });
     await until(() => measured || ended, 120000);
     abort.abort();

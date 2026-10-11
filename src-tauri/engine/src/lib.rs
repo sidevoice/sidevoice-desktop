@@ -329,19 +329,30 @@ impl NativeEngines {
 
     /// Every build the engine can run here whose files are all on disk, as the page names it.
     pub fn installed(&self) -> Result<Vec<Installed>, Error> {
-        Ok(self
-            .runnable()?
-            .into_iter()
-            .filter(|l| l.installed)
-            .map(|l| Installed { model: l.model, engine: l.engine })
-            .collect())
+        let mut installed: Vec<Installed> = Vec::new();
+        for l in self.runnable()?.into_iter().filter(|l| l.installed) {
+            // Two builds of a model for one engine on disk are one entry as the page names them.
+            if !installed.iter().any(|i| i.model == l.model && i.engine == l.engine) {
+                installed.push(Installed { model: l.model, engine: l.engine });
+            }
+        }
+        Ok(installed)
     }
 
-    /// Every build the engine can run here, in catalogue order.
+    /// Every build the engine can run here, in catalogue order: each of them, not only the one an install by engine
+    /// would choose, so a build installed by its id is listed too.
     fn runnable(&self) -> Result<Vec<Located>, Error> {
         let backends = self.engine.backends();
         let models = self.models()?;
-        Ok(models.iter().flat_map(|m| backends.iter().filter_map(|b| Self::located(m, b.id).ok())).collect())
+        Ok(models
+            .iter()
+            .flat_map(|m| {
+                m.builds
+                    .iter()
+                    .filter(|b| backends.iter().any(|backend| backend.id == b.backend))
+                    .filter_map(|b| Self::fit(m, b).ok())
+            })
+            .collect())
     }
 
     /// The model builds on disk, with the bytes each downloaded.
@@ -451,9 +462,9 @@ impl NativeEngines {
             Ok(chosen) => chosen,
             // Refused as it arrives, and ended for a cancel that comes after; one that came first wins.
             Err(refusal) => {
-                let arrived = jobs.begin(job, model_id, wanted.engine.unwrap_or_default());
-                jobs.finish(job);
-                return Err(if arrived { refusal } else { error::install_cancelled() });
+                jobs.begin(job, model_id, wanted.engine.unwrap_or_default());
+                // False when the job was cancelled before it got here, or since.
+                return Err(if jobs.finish(job) { refusal } else { error::install_cancelled() });
             }
         };
         let (engine_id, wanted) = (chosen.engine.as_str(), Wanted { build: Some(&chosen.build), engine: None });

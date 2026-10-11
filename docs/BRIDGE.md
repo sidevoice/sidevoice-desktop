@@ -253,7 +253,9 @@ client that does not know the key:
   "message": "whisper-large-v3 needs 4000 MB of memory; this machine has 2000 MB." }
 ```
 
-The page renders by `key` and falls back to `message`. The engine's keys are made in `src-tauri/engine/src/error.rs`,
+The page renders by `key` and falls back to `message`. `host.engine`'s catalogue, key and install calls also carry
+`code`, the code sidevoice-web's `ModelCatalogs` reads (`failureCode`): the refusal's own `code` (the engine's, below)
+when it has one, else its `key` with dashes (`model-needs-memory`, `install-cancelled`). The engine's keys are made in `src-tauri/engine/src/error.rs`,
 the voice call's in `src-tauri/src/voice.rs` and core `voice.rs`; a new one is added there and here. What
 sidevoice-engine itself fails with is one of these keys, with the engine's own code beside it as `code`
 (`digest-mismatch`, `model-load-failed`…).
