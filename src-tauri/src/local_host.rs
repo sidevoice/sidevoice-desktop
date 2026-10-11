@@ -42,8 +42,8 @@ pub fn local_host_pairing(app: AppHandle, webview: Webview) -> Answer {
     imp::pairing(&app)
 }
 
-/// `start`, `stop`, `restart`, `service-install`, `service-uninstall` (the connector's CLI), `reconnect`, `reveal-log`:
-/// the state after it.
+/// `start`, `stop`, `restart`, `service-install`, `service-uninstall`, `start-at-login-on`, `start-at-login-off` (the
+/// connector's CLI), `reconnect`, `reveal-log`: the state after it.
 #[tauri::command]
 pub async fn local_host_action(app: AppHandle, webview: Webview, action: String) -> Answer {
     caller(&app, &webview)?;

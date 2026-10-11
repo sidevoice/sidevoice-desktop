@@ -104,6 +104,7 @@ the group and stays.
 |---|---|---|
 | `start()` / `stop()` / `restart()` | `service start\|stop\|restart --json` | 30 / 45 / 30 s |
 | `serviceInstall()` / `serviceUninstall()` | `service install\|uninstall --json` | 45 s |
+| `setStartAtLogin(enabled)` | `service login on\|off --json` | 45 s |
 | `pairingCode()` | `pair-device --json` → `{code, expires_in, reach}` | 30 s |
 | `pairRoom(url, code)` | `pair <url> <code> --json` → `{room}`, nothing else (the core follows the new credentials) | 60 s |
 | `reconnect()` | a new local pairing over the socket | — |
@@ -111,7 +112,23 @@ the group and stays.
 
 `pairRoom` refuses (`bad_request`) a URL that is not `http(s)://…` or a code with blanks or starting with `-`, so neither
 can become an option. A CLI refusal is its `{key, message}`; the app's own: `cli.unavailable`, `cli.failed`,
-`cli.timeout`, `install.unsafe`, `install.unreadable`, `log.missing`, `reveal.failed`, `unsupported`.
+`cli.timeout`, `install.unsafe`, `install.unreadable`, `log.missing`, `reveal.failed`, `unsupported`,
+`service.login-unsupported`.
+
+### Start at sign-in
+
+`setStartAtLogin(enabled)` changes whether the service starts at the next sign-in, and only that: a running service
+keeps running, a stopped one stays stopped (`serviceInstall`/`serviceUninstall` also start and stop it). It answers
+the state after it, as every action; anything but a boolean is refused (`bad_request`) before anything runs.
+
+**Depends on the connector's `service login on|off --json`** (in progress in sidevoice-connector, `service/mod.rs`):
+the same reply shape as the other `service … --json` verbs (`{ok: true, state, service, …}`, or `{ok: false, error:
+{key, params, message}}`). The verb is `LOGIN_VERB` in `src-tauri/local-host/src/host.rs`, the one place it is
+written. A connector that does not know it answers `--json` with `connector.usage`, and the app refuses the call with
+`service.login-unsupported`, at once; an older connector that answers no JSON at all is `cli.failed`.
+
+The service's status carries no fact of its own for start at sign-in yet, so `state()` reports none; the page reads
+it from what it has (`service`).
 
 ## The proxy
 

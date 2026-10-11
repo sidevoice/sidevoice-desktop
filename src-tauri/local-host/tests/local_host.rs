@@ -417,6 +417,8 @@ fn without_a_connector_the_cli_says_and_actions_run_through_it() {
     host.act(Action::Stop).unwrap();
     host.act(Action::ServiceInstall).unwrap();
     host.act(Action::ServiceUninstall).unwrap();
+    host.act(Action::LoginOn).unwrap();
+    host.act(Action::LoginOff).unwrap();
     assert_eq!(host.pairing_code().unwrap(), json!({"code": "SV1-CODE", "expires_in": 600, "reach": "local-only"}));
     assert_eq!(host.pair_room("https://room.example", "ROOM-CODE").unwrap(), json!({"room": "https://room.example"}));
     for (url, code) in
@@ -431,12 +433,38 @@ fn without_a_connector_the_cli_says_and_actions_run_through_it() {
         "service stop --json",
         "service install --json",
         "service uninstall --json",
+        "service login on --json",
+        "service login off --json",
         "pair-device --json",
         "pair https://room.example ROOM-CODE --json",
     ] {
         assert!(ran.iter().any(|c| c == expected), "{expected} not in {ran:?}");
     }
     assert!(!ran.iter().any(|c| c.contains("--force") || c.starts_with("pair -x")));
+}
+
+#[test]
+fn a_connector_without_start_at_sign_in_refuses_it_with_a_key_at_once() {
+    let world = World::new();
+    let log = install_fake_cli(&world.dirs, r#"{"ok":true,"state":"running","service":"launchd"}"#);
+    // As a connector whose command line has no `service login` answers `--json` (clap's error, keyed).
+    let script = world.dirs.data.join("fake-cli");
+    let body = std::fs::read_to_string(&script).unwrap().replace(
+        "case \"$1 $2\" in\n",
+        "case \"$1 $2\" in\n'service login') echo '{\"ok\":false,\"error\":{\"key\":\"connector.usage\",\"params\":{\"detail\":\"invalid subcommand\"},\"message\":\"m\"}}'; exit 1 ;;\n",
+    );
+    std::fs::write(&script, body).unwrap();
+    let host = world.host();
+    let started = std::time::Instant::now();
+    for action in [Action::LoginOn, Action::LoginOff] {
+        let refused = host.act(action).unwrap_err();
+        assert_eq!(refused.key, "service.login-unsupported");
+    }
+    assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+    assert_eq!(host.act(Action::Stop).unwrap().state, State::Starting, "the other actions are untouched");
+    let ran = calls(&log);
+    assert!(ran.iter().any(|c| c == "service login on --json"), "{ran:?}");
+    assert!(ran.iter().any(|c| c == "service login off --json"), "{ran:?}");
 }
 
 #[test]

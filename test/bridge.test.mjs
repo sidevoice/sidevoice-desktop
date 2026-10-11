@@ -567,7 +567,7 @@ test("host carries the bridge version; localHost only where the app offers it", 
   const api = install(win, ORIGIN, "native", true);
   assert.deepEqual(Object.keys(api.host.localHost).sort(), [
     "pairRoom", "pairing", "pairingCode", "reconnect", "restart", "revealLog", "serviceInstall", "serviceUninstall",
-    "start", "state", "stop", "subscribe",
+    "setStartAtLogin", "start", "state", "stop", "subscribe",
   ]);
   assert.ok(Object.isFrozen(api.host.localHost));
 });
@@ -587,6 +587,8 @@ test("localHost calls go to their native commands and resolve what the app answe
   assert.deepEqual(await local.pairing(), pairing);
   assert.deepEqual(await local.stop(), { state: "stopped-by-person" });
   for (const name of ["start", "restart", "serviceInstall", "serviceUninstall", "reconnect", "revealLog"]) await local[name]();
+  await local.setStartAtLogin(true);
+  await local.setStartAtLogin(false);
   assert.deepEqual(await local.pairingCode(), { code: "SV1", expires_in: 600, reach: "room" });
   assert.deepEqual(await local.pairRoom("https://room.example", "CODE"), { room: "https://room.example" });
   assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("local_host")), [
@@ -599,6 +601,8 @@ test("localHost calls go to their native commands and resolve what the app answe
     ["local_host_action", { action: "service-uninstall" }],
     ["local_host_action", { action: "reconnect" }],
     ["local_host_action", { action: "reveal-log" }],
+    ["local_host_action", { action: "start-at-login-on" }],
+    ["local_host_action", { action: "start-at-login-off" }],
     ["local_host_pairing_code", undefined],
     ["local_host_pair_room", { url: "https://room.example", code: "CODE" }],
   ]);
@@ -609,6 +613,23 @@ test("a refused action rejects with the app's {key, message}", async () => {
   const refused = Object.assign(new Error("refused"), { refusal: { key: "service.not-loaded", message: "m" } });
   const { win } = localHostWindow({ local_host_action: refused });
   await assert.rejects(install(win, ORIGIN, null, true).host.localHost.start(), { key: "service.not-loaded", message: "m" });
+});
+
+test("setStartAtLogin takes a boolean only, and a connector without it rejects with its key", async () => {
+  const install = loadFactory();
+  const unsupported = Object.assign(new Error("refused"), {
+    refusal: { key: "service.login-unsupported", message: "m" },
+  });
+  const { win, calls } = localHostWindow({ local_host_action: unsupported });
+  const local = install(win, ORIGIN, null, true).host.localHost;
+  for (const bad of [undefined, null, 1, "true", {}]) {
+    await assert.rejects(local.setStartAtLogin(bad), { key: "bad_request" }, String(bad));
+  }
+  assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("local_host")), [], "nothing runs on a bad argument");
+  await assert.rejects(local.setStartAtLogin(false), { key: "service.login-unsupported", message: "m" });
+  assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("local_host")), [
+    ["local_host_action", { action: "start-at-login-off" }],
+  ]);
 });
 
 test("subscribe: the state now, then only changes; polling stops with the last listener", async () => {

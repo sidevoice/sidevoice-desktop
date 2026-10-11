@@ -269,6 +269,14 @@
       restart: action("restart"),
       serviceInstall: action("service-install"),
       serviceUninstall: action("service-uninstall"),
+      /** Whether the service starts at the next sign-in, and only that: a running service keeps running, a stopped one
+       *  stays stopped (the connector's `service login on|off`). `enabled` must be a boolean; anything else rejects
+       *  `{key: "bad_request"}` without running anything. A connector that cannot do it rejects
+       *  `{key: "service.login-unsupported"}`. */
+      setStartAtLogin: (enabled) =>
+        typeof enabled === "boolean"
+          ? call("local_host_action", { action: enabled ? "start-at-login-on" : "start-at-login-off" })
+          : Promise.reject({ key: "bad_request", message: "setStartAtLogin(enabled) takes a boolean." }),
       /** Pairs this app with the core again (after `refused`): never done on its own. */
       reconnect: action("reconnect"),
       /** Shows the core's log in Finder (else the connector's). */
