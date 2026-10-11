@@ -95,9 +95,11 @@ manager's restarts so far and `limit` its limit when it has one (systemd; launch
 
 `product_version` is what `install.json`'s command answers to `--version --json` (its `version`): the release the
 installation runs. Neither `node.status` nor `service status --json` carries it, and it starts a process, so it is
-asked once and kept — asked again when the core seen changes (a new launch, or none: an install, an update or a
-restart restarts the core), after each action, and, while unknown, at most every 10 s. An answer that is not a plain
-version (printable, no spaces, ≤ 64 characters) is unknown.
+asked once per installed program: each poll reads `install.json` and resolves its command (no process), and the
+program is asked again only when that resolves to another file (an install, an update or a rollback switches
+`R/current` to another release), after each action (once any pass under way has ended), and, while unknown, at most
+every 10 s. No `install.json`: `null` at once. An answer that is not `X.Y.Z[-pre][+build]` (as the page accepts it),
+or is longer than 64 characters, is unknown.
 
 ## Actions
 

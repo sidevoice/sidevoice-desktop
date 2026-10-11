@@ -18,9 +18,10 @@
 //!
 //! **The installed version** (`product_version`): the installation's program asked `--version --json` — the release
 //! `install.json`'s command runs, so the installed `sidevoice` package's version. Neither `node.status` nor
-//! `service status --json` carries it. It starts a process, so it is asked once and kept: asked again when the core
-//! seen changes (a new launch or none: an install, an update or a restart restarts it), after each action, and, while
-//! unknown, at most every [`FALLBACK_EVERY`].
+//! `service status --json` carries it. It starts a process, so it is asked once per installed program: every poll
+//! reads `install.json` and resolves its command (no process), and the program is asked again only when that resolves
+//! to another file (an install, an update or a rollback switches `R/current` to another release), after each action,
+//! and, while unknown, at most every [`FALLBACK_EVERY`]. No `install.json`, no version, at once.
 
 use crate::cli::Cli;
 use crate::connector;
@@ -207,8 +208,7 @@ impl LocalHost {
             // No core to carry requests to; a core that comes back is checked again before the token goes out.
             self.proxy.set_token(None);
         }
-        let launch = health.as_ref().ok().map(|h| (h.launch_id.clone(), h.fingerprint.clone()));
-        let product_version = self.product_version(launch);
+        let product_version = self.product_version();
         let mut inner = self.inner.lock().unwrap();
         let report = state::report(Observed {
             status: status.as_ref(),
@@ -223,22 +223,21 @@ impl LocalHost {
         report
     }
 
-    /// The installed Sidevoice's version: what `install.json`'s command answers to `--version --json`, kept while the
-    /// core seen is the same launch (`launch`, `None` with no core); unknown is asked again after [`FALLBACK_EVERY`].
-    /// No install, no version.
-    fn product_version(&self, launch: Option<(Option<String>, String)>) -> Option<String> {
+    /// The installed Sidevoice's version: what `install.json`'s command answers to `--version --json`, kept while that
+    /// command resolves to the same program; unknown is asked again after [`FALLBACK_EVERY`]. No install, no version.
+    fn product_version(&self) -> Option<String> {
+        // Reading the record and resolving its command starts nothing; only a program not asked yet is run.
+        let cli = Cli::installed(&self.config.dirs).ok();
+        let program = cli.as_ref().map(|cli| cli.prefix.clone());
         if let Some(known) = &self.inner.lock().unwrap().product {
-            if known.launch == launch && (known.version.is_some() || known.at.elapsed() < FALLBACK_EVERY) {
+            if known.program == program && (known.version.is_some() || known.at.elapsed() < FALLBACK_EVERY) {
                 return known.version.clone();
             }
         }
-        let version = Cli::installed(&self.config.dirs)
-            .and_then(|cli| cli.run(&["--version", "--json"], VERSION_TIMEOUT))
-            .ok()
-            .and_then(|answer| {
-                answer.get("version").and_then(Value::as_str).filter(|v| plain_version(v)).map(str::to_string)
-            });
-        self.inner.lock().unwrap().product = Some(Product { launch, at: Instant::now(), version: version.clone() });
+        let version = cli
+            .and_then(|cli| cli.run(&["--version", "--json"], VERSION_TIMEOUT).ok())
+            .and_then(|answer| answer.get("version").and_then(Value::as_str).filter(|v| semver(v)).map(str::to_string));
+        self.inner.lock().unwrap().product = Some(Product { program, at: Instant::now(), version: version.clone() });
         version
     }
 
@@ -395,6 +394,8 @@ impl LocalHost {
     pub fn act(&self, action: Action) -> Result<Report, Refusal> {
         let result = self.cli()?.run(&action.argv(), action.timeout());
         {
+            // After any pass already under way: what it read before the action must not outlive this.
+            let _pass = self.passes.lock().unwrap();
             let mut inner = self.inner.lock().unwrap();
             inner.fallback = None;
             inner.product = None;
@@ -443,14 +444,30 @@ impl Drop for LocalHost {
 
 /// The installed version as last asked.
 struct Product {
-    launch: Option<(Option<String>, String)>,
+    /// The program asked (`install.json`'s command, resolved); `None` with no installation.
+    program: Option<Vec<String>>,
     at: Instant,
     version: Option<String>,
 }
 
-/// A version as a release names it (`0.8.1`, `0.9.0-rc.1+abc`): short, printable, no spaces.
-fn plain_version(text: &str) -> bool {
-    !text.is_empty() && text.len() <= 64 && text.chars().all(|c| c.is_ascii_graphic())
+/// A version as a release names it, and as the page accepts it (sidevoice-web `local-host-status.ts`):
+/// `X.Y.Z[-pre][+build]`, the suffixes of ASCII letters, digits, `.` and `-`; at most 64 characters.
+fn semver(text: &str) -> bool {
+    let suffix = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
+    let (rest, build) = match text.split_once('+') {
+        Some((rest, build)) => (rest, Some(build)),
+        None => (text, None),
+    };
+    let (core, pre) = match rest.split_once('-') {
+        Some((core, pre)) => (core, Some(pre)),
+        None => (rest, None),
+    };
+    let numbers: Vec<&str> = core.split('.').collect();
+    text.len() <= 64
+        && numbers.len() == 3
+        && numbers.iter().all(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+        && pre.is_none_or(suffix)
+        && build.is_none_or(suffix)
 }
 
 fn mismatch() -> Refusal {
@@ -469,5 +486,40 @@ pub fn computer_name() -> String {
         "Sidevoice".into()
     } else {
         name
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::semver;
+
+    #[test]
+    fn a_version_is_what_the_page_accepts() {
+        for good in ["0.8.1", "10.20.30", "0.9.0-rc.1", "0.9.0-rc.1+abc", "0.9.0+0123abcdef01", "1.2.3-a-b.c+d-e.f"] {
+            assert!(semver(good), "{good}");
+        }
+        let long = format!("1.2.3-{}", "a".repeat(60));
+        for bad in [
+            "",
+            " ",
+            "unknown",
+            "0.8",
+            "0.8.1.2",
+            "v0.8.1",
+            "0.8.1_dirty",
+            "0.8.1 ",
+            " 0.8.1",
+            "0.8.1-",
+            "0.8.1+",
+            "0.8.1-rc 1",
+            "0.8.1+a+b",
+            "0.8.1-ré",
+            "０.8.1",
+            "0..1",
+            long.as_str(),
+            "0.8.1\n",
+        ] {
+            assert!(!semver(bad), "{bad:?}");
+        }
     }
 }
