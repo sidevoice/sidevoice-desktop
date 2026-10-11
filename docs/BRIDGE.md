@@ -323,19 +323,27 @@ What is this app's own:
   `end-of-turn-unavailable`, or the engine's own with the provider's `detail`).
 - `start` rejects `{key: "voice_failed", code, message}` with the call's code, `{key: "voice_settings_missing", code:
   "settings-missing"}` before any settings, and `{key: "voice_failed", code: "stopped"}` when `stop` came first.
-- The seam has ten calls: `setSettings`, `start`, `stop`, `say`, `mute`, `cancelInput`, `onTurn`, `onState`, `onLevel`,
-  `onError`. The catalogues and provider keys are `host.engine`'s (above).
+- The seam has thirteen calls: `setSettings`, `start`, `stop`, `say`, `mute`, `cancelInput`, `onTurn`, `onState`,
+  `onLevel`, `onError`, `audioDevices`, `setAudioDevices`, `onAudioDevices`. The catalogues and provider keys are
+  `host.engine`'s (above).
+- The audio devices are the system's (cpal's, each id cpal's device id), chosen through sidevoice-voice's
+  `NativeDevices`; `outputSelectable` is always `true`. A call that runs switches its microphone at once and its
+  speaker once what it is playing has ended. `setAudioDevices` rejects `{key: "voice_audio_device_unknown", code:
+  "audio-device-unknown"}` for an id the system does not list. The system tells of no change, so from the first
+  `audioDevices` or `setAudioDevices` the app lists the devices every 2 s and tells `onAudioDevices` each change
+  (other devices, another choice, or a chosen one that went away, said once as `lost` and replaced by the default).
 - A page that loads anew finds the call stopped, its models still loaded.
 
 ### How it travels
 
 - Page → app: the commands `voice_set_settings {settings}`, `voice_start`, `voice_stop`,
-  `voice_say {key, text, language}`, `voice_cancel_say {key}`, `voice_mute {muted}`, `voice_cancel_input`
-  (`src-tauri/src/voice.rs`). Granted to
+  `voice_say {key, text, language}`, `voice_cancel_say {key}`, `voice_mute {muted}`, `voice_cancel_input`,
+  `voice_audio_devices`, `voice_set_audio_devices {choice: {input?, output?}}` (`src-tauri/src/voice.rs`). Granted to
   the room window (`capabilities/room.json`); each re-checks that the caller is the current room window on the app's
   own page.
 - App → page: `window.__sidevoiceDesktop.voiceEvent(event)` (`webview.eval`), each sidevoice-voice `VoiceEvent` as
-  JSON, `{type: "turn" | "state" | "level" | "error", data}`, which the bridge hands to its listeners; and each step
+  JSON, `{type: "turn" | "state" | "level" | "error", data}`, and the devices when they change, `{type: "devices",
+  data}`, which the bridge hands to its listeners; and each step
   of something said, `{type: "say", data: {key, event}}` (`key` the bridge's for the handle `say` answered at once;
   `event` sidevoice-voice's `SayEvent`, the last `done` with the outcome), which it hands to that handle. A handle's
   `cancel` goes behind its `voice_say`, so it never overtakes it.

@@ -298,7 +298,8 @@ test("host.voice only where the app runs the call, and exactly the seam", () => 
   }
   const api = install(fakeWindow(ORIGIN).win, ORIGIN, "native", true, true);
   assert.deepEqual(Object.keys(api.host.voice).sort(), [
-    "cancelInput", "mute", "onError", "onLevel", "onState", "onTurn", "say", "setSettings", "start", "stop",
+    "audioDevices", "cancelInput", "mute", "onAudioDevices", "onError", "onLevel", "onState", "onTurn", "say",
+    "setAudioDevices", "setSettings", "start", "stop",
   ]);
   assert.ok(Object.isFrozen(api.host.voice));
 });
@@ -385,6 +386,39 @@ test("the call's events reach host.voice's listeners by their type, until they s
   api.voiceEvent({ type: "level", data: 0.5 });
   assert.equal(seen.length, 4);
   assert.throws(() => api.host.voice.onState("not a function"), { name: "TypeError" });
+});
+
+test("the audio devices: listed, chosen by kind (null the default, a missing kind as it is), told when they change", async () => {
+  const install = loadFactory();
+  const devices = {
+    inputs: [{ id: "CoreAudio:mic", label: "MacBook Pro Microphone" }],
+    outputs: [{ id: "CoreAudio:speakers", label: "MacBook Pro Speakers" }],
+    input: null, output: "CoreAudio:speakers", outputSelectable: true,
+  };
+  const { win, calls } = voiceWindow({ voice_audio_devices: devices, voice_set_audio_devices: devices });
+  const api = install(win, ORIGIN, "native", true, true);
+  const voice = api.host.voice;
+  assert.deepEqual(await voice.audioDevices(), devices);
+  assert.deepEqual(await voice.setAudioDevices({ output: "CoreAudio:speakers" }), devices);
+  await voice.setAudioDevices({ input: null, output: undefined, extra: "dropped" });
+  await voice.setAudioDevices({ input: "CoreAudio:mic", output: null });
+  assert.deepEqual(calls.filter(([cmd]) => cmd.includes("audio_devices")), [
+    ["voice_audio_devices", undefined],
+    ["voice_set_audio_devices", { choice: { output: "CoreAudio:speakers" } }],
+    ["voice_set_audio_devices", { choice: { input: null } }],
+    ["voice_set_audio_devices", { choice: { input: "CoreAudio:mic", output: null } }],
+  ]);
+  const seen = [];
+  const stop = voice.onAudioDevices((listed) => seen.push(listed));
+  const lost = { ...devices, output: null, lost: { output: "CoreAudio:speakers" } };
+  api.voiceEvent({ type: "devices", data: lost });
+  stop();
+  api.voiceEvent({ type: "devices", data: devices });
+  assert.deepEqual(seen, [lost]);
+  // An id the system does not list: the app's refusal, as it is.
+  const refusal = { key: "voice_audio_device_unknown", code: "audio-device-unknown", message: "The audio devices: audio-device-unknown." };
+  const refusing = install(voiceWindow({ voice_set_audio_devices: Object.assign(new Error(), { refusal }) }).win, ORIGIN, null, true, true);
+  await assert.rejects(refusing.host.voice.setAudioDevices({ input: "gone" }), (error) => error === refusal);
 });
 
 test("a refused start rejects with the app's keyed refusal", async () => {

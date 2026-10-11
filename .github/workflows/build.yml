@@ -412,13 +412,14 @@ jobs:
           ls -laR "$ENGINE/models"
           if find "$ENGINE/models" -path '*whisper-small*' | grep -q .; then echo "a cancelled download left files"; exit 1; fi
           if find "$ENGINE/partial" -type f | grep -q .; then echo "a download was left half written"; exit 1; fi
-          # The voice call the app runs (host.voice): the seam's ten calls, the engine's catalogues (host.engine) with
-          # the voice activity detector, an unknown model refused by key and code, settings naming a catalogue's model,
-          # and a start that settles: listening, or refused only for want of a microphone or a speaker here (a model or
+          # The voice call the app runs (host.voice): the seam's thirteen calls, the engine's catalogues (host.engine)
+          # with the voice activity detector, an unknown model refused by key and code, settings naming a catalogue's
+          # model, the system's audio devices (the speaker selectable, an unlisted id refused), and a start that settles: listening, or refused only for want of a microphone or a speaker here (a model or
           # adapter failure fails this step; the call on real models is the next one).
           grep -q 'probe-voice ok' /tmp/probe.log
           VOICE=$(grep 'probe-voice ok' /tmp/probe.log)
-          echo "$VOICE" | grep -q ' keys=10 '
+          echo "$VOICE" | grep -q ' keys=13 '
+          echo "$VOICE" | grep -Eq ' devices=[0-9]+/[0-9]+/true unknown_device=voice_audio_device_unknown/audio-device-unknown '
           # The local catalogue first; a provider with no key lists nothing and says so.
           echo "$VOICE" | grep -Eq ' catalogs=local,[a-z-]+:credential-missing'
           echo "$VOICE" | grep -Eq ' models=[1-9][0-9]* vad=true unknown=voice_model_unknown/model-unknown '
