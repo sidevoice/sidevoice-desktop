@@ -104,16 +104,22 @@ what the interface's own window offers — same origin, same permission rule —
     const outcome = await small.then(() => "installed", (error) => error && error.key);
     const cancelAgain = await engine.cancel(small.job);
     const smallGone = !(await engine.installed()).some((b) => b.model === "whisper-small");
-    // Removing a model through the app's own command: one not on disk is nothing to do, an unknown one is refused by
-    // key with the engine's code. The models installed above stay: the voice call below loads them.
-    const removed = await engine.uninstall("whisper-small").then((value) => String(value), (error) => "error:" + JSON.stringify(error));
+    // Removing a model through the app's own command: whisper-tiny, installed above, goes from the builds on disk and
+    // from the catalogue (the engine reads both from its storage), then comes back for the voice call further down;
+    // an unknown model is refused by key with the engine's code.
+    const removed = await engine.uninstall("whisper-tiny").then((value) => String(value), (error) => "error:" + JSON.stringify(error));
+    const tinyLeft = (await engine.installed()).some((b) => b.model === "whisper-tiny") ||
+      (await engine.catalogs())[0].models.some((m) => m.id === "whisper-tiny" && (m.installed || m.builds.some((b) => b.installed)));
+    const tinyGone = !tinyLeft;
     const unknown = await engine.uninstall("no-such-model")
       .then(() => "removed", (error) => (error && error.key) + ":" + (error && error.code));
+    await engine.install("whisper-tiny", "whisper-cpp");
+    const tinyBack = (await engine.installed()).some((b) => b.model === "whisper-tiny" && b.engine === "whisper-cpp");
     const event = measured ? Object.keys(measured).sort().join("+") + ":" + (measured.job === small.job && measured.model === "whisper-small") : "none";
 
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-engine ok capabilities=" + JSON.stringify(capabilities) +
       " installed=" + installed + " progress_calls=" + progress + " refused=" + refused + " memory=" + JSON.stringify(memory) +
-      " cancel=" + cancelled + "/" + outcome + "/" + cancelAgain + " cancel_gone=" + smallGone + " uninstall=" + removed + "/" + unknown + " progress_event=" + event +
+      " cancel=" + cancelled + "/" + outcome + "/" + cancelAgain + " cancel_gone=" + smallGone + " uninstall=" + removed + "/" + tinyGone + "/" + unknown + "/" + tinyBack + " progress_event=" + event +
       " speed=" + (measured ? measured.bytes_per_s : 0) });
   } catch (error) {
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-engine error " + String(error && (error.message || error)) });

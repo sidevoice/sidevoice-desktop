@@ -72,12 +72,13 @@ impl Host for TestHost {
 }
 
 /// A catalogue of one Whisper model, `whisper-test`, whose sherpa-onnx build is three files served by the test host,
-/// and one Kokoro-like voice model whose build needs more memory than any machine has.
-struct TestCatalog(Family, Family);
+/// and one Kokoro-like voice model whose build needs more memory than any machine has (and, `shared`, more: see
+/// `engines_with`).
+struct TestCatalog(Vec<Family>);
 
 impl CatalogSource for TestCatalog {
     fn load(&self) -> sidevoice_engine::Result<CatalogFragment> {
-        Ok(CatalogFragment { families: vec![self.0.clone(), self.1.clone()] })
+        Ok(CatalogFragment { families: self.0.clone() })
     }
 }
 
@@ -108,6 +109,12 @@ impl Drop for Test {
 
 /// The engines over a test host in a fresh directory; `stalls`: the encoder's download stops answering mid-way.
 fn engines(name: &str, stalls: bool) -> Test {
+    engines_with(name, stalls, false)
+}
+
+/// `engines`; `shared`: `whisper-test` has a second sherpa-onnx build, and another model, `echo-test`, one whose files
+/// are the same bytes as `whisper-test`'s (the engine stores a file once, by its SHA-256, and links it to each build).
+fn engines_with(name: &str, stalls: bool, shared: bool) -> Test {
     let root = std::env::temp_dir().join(format!("sidevoice-desktop-engine-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let files = vec![
@@ -139,7 +146,20 @@ fn engines(name: &str, stalls: bool) -> Test {
             }]
         }]
     });
-    let catalog = TestCatalog(serde_json::from_value(whisper).unwrap(), serde_json::from_value(kokoro).unwrap());
+    let mut families = vec![whisper, kokoro];
+    if shared {
+        let mut second = families[0]["models"][0]["builds"][0].clone();
+        second["id"] = "whisper-test/sherpa-onnx-fp32".into();
+        second["precision"] = "fp32".into();
+        families[0]["models"][0]["builds"].as_array_mut().unwrap().push(second);
+        let mut echo = families[0].clone();
+        echo["id"] = "echo".into();
+        echo["models"][0]["id"] = "echo-test".into();
+        echo["models"][0]["builds"] = serde_json::json!([families[0]["models"][0]["builds"][0].clone()]);
+        echo["models"][0]["builds"][0]["id"] = "echo-test/sherpa-onnx-int8".into();
+        families.push(echo);
+    }
+    let catalog = TestCatalog(families.into_iter().map(|f| serde_json::from_value(f).unwrap()).collect());
     let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
     let host = TestHost { native: NativeHost::new(&root).unwrap(), fetcher: ServedFetcher(files) };
     let engines = NativeEngines::with(Box::new(host), vec![Box::new(catalog)], runtime.handle().clone()).unwrap();
@@ -350,6 +370,40 @@ fn an_uninstall_takes_every_build_of_the_model_off_the_disk() {
     // And it installs again afterwards.
     engines.install("whisper-test", "sherpa-onnx", &mut |_, _| {}).unwrap();
     assert_eq!(engines.installed().unwrap().len(), 1);
+}
+
+/// Every build of the model goes, and a file another model's build links stays: that model is still whole on disk.
+#[test]
+fn an_uninstall_removes_every_build_and_keeps_the_files_another_model_shares() {
+    let test = engines_with("uninstall-builds", false, true);
+    let engines = &test.engines;
+    let engine = engines.engine();
+    let installed = |model: &str| -> Vec<(String, bool)> {
+        let models = engines.models().unwrap();
+        let model = models.iter().find(|m| m.id == model).unwrap();
+        model.builds.iter().map(|b| (b.id.clone(), b.installed)).collect()
+    };
+    let install = |model: &str, build: &str| {
+        let cancel = Cancel::new();
+        test._runtime.block_on(engine.install(model, Some(build), &|_| {}, &cancel)).unwrap();
+    };
+    install("whisper-test", "whisper-test/sherpa-onnx-int8");
+    install("whisper-test", "whisper-test/sherpa-onnx-fp32");
+    install("echo-test", "echo-test/sherpa-onnx-int8");
+    assert!(installed("whisper-test").iter().all(|(_, on)| *on));
+    engines.uninstall(&Jobs::default(), "whisper-test").unwrap();
+    assert_eq!(
+        installed("whisper-test"),
+        [("whisper-test/sherpa-onnx-int8".to_string(), false), ("whisper-test/sherpa-onnx-fp32".to_string(), false)],
+        "both builds gone"
+    );
+    assert_eq!(installed("echo-test"), [("echo-test/sherpa-onnx-int8".to_string(), true)], "the other model stays");
+    let folder = test.root.join("models").join("echo-test/sherpa-onnx-int8");
+    let files: Vec<_> = std::fs::read_dir(&folder).map(|d| d.flatten().collect()).unwrap_or_default();
+    assert_eq!(files.len(), 3, "its files are whole in {folder:?}");
+    for file in files {
+        assert!(std::fs::metadata(file.path()).unwrap().len() > 0);
+    }
 }
 
 /// An install job of the model, waiting or running, refuses its uninstall until the page cancels it: the job would

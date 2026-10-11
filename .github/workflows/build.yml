@@ -406,7 +406,7 @@ jobs:
           echo "$LINE" | grep -Eq ' progress_calls=[1-9]'
           echo "$LINE" | grep -q ' refused=yes '
           echo "$LINE" | grep -Eq ' memory=\{"total_mb":[1-9][0-9]{3,},"available_mb":[1-9][0-9]*\}'
-          echo "$LINE" | grep -q ' cancel=true/install_cancelled/false cancel_gone=true uninstall=undefined/model_unknown:model-not-found progress_event=bytes_per_s+done+engine+job+model+total:true '
+          echo "$LINE" | grep -q ' cancel=true/install_cancelled/false cancel_gone=true uninstall=undefined/true/model_unknown:model-not-found/true progress_event=bytes_per_s+done+engine+job+model+total:true '
           # sidevoice-engine's storage: a folder per installed build, nothing of the cancelled one, nothing half written.
           ENGINE="$HOME/Library/Application Support/dev.sidevoice.desktop/sidevoice-engine"
           ls -laR "$ENGINE/models"
