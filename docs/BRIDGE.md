@@ -103,6 +103,8 @@ Evaluated by the app with `webview.eval` (works with the window hidden); the com
 - `select-audio-device` → `sidevoiceActions.setAudioDevices({[kind]: id})`, `kind` `input` or `output`, `id` `""` the
   system's default (`null` to the room): the room's own choice, kept for this device as its device bar keeps it, so
   the card and the room never disagree. A choice the room refuses leaves the device it had, which the card says.
+  Choices go to the room one at a time, in the order asked (the room keeps whichever answers last), and the card's
+  `devices.busy` holds until the last has been answered.
 
 Joining is deliberately **not** a tray command: joining unlocks audio output, which the webview
 only allows from a click in the page. "Mostrar Sidevoice" opens the window for that.
@@ -171,7 +173,7 @@ The card's page talks to the app only through `window.__sidevoiceDesktop.host.ca
 | Card → app | |
 |---|---|
 | `subscribe(listener)` → `stop` | the whole state now, then on every change (`call_controls_ready` asks the app for it) |
-| `run({command, …})` | `call_controls_run`: `open-app` (the app shows the room), or one of the room commands above, which the app parses (`bridge::Command`) before it carries it to the room |
+| `run({command, …})` | `call_controls_run`: `open-app` (the app shows the room), or one of the room commands above, which the app parses (`bridge::Command`) before it carries it to the room. After `select-audio-device` the card hears its devices `busy` at once, until the app next tells it the call (or 3 s pass): the device still chosen is never read as the room refusing the new one |
 | `layout({width, height})` | `call_controls_layout`: the card's size with its shadow margin; the window takes it and is placed to fit |
 | `drag(phase)` | `call_controls_drag`: `start`, `move`, `end`; the window follows the pointer (the app reads it) and is dropped, snapped and remembered |
 

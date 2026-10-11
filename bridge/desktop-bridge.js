@@ -25,8 +25,10 @@
   /** The fields of the room's conversation rows the card shows (the web UI's ParticipantView). */
   const PARTICIPANT_FIELDS = ["threadId", "title", "selected", "available", "switching", "unread", "reach", "stateLabel",
     "activityNote", "detail", "subtitle", "working", "machine", "harness", "route"];
-  /** Choices of a device the card asked for that the room has not answered yet: the card's devices are busy meanwhile. */
+  /** Choices of a device the card asked for that the room has not answered yet: the card's devices are busy meanwhile.
+   *  They go to the room one after another, in the order asked (the room keeps whichever answers last). */
   let choosingDevices = 0;
+  let deviceChoices = Promise.resolve();
   const pick = (object, fields) => {
     const picked = {};
     for (const field of fields) if (object && object[field] !== undefined) picked[field] = object[field];
@@ -430,15 +432,17 @@
           if (!["input", "output"].includes(request.kind) || typeof request.id !== "string") return false;
           if (typeof actions.setAudioDevices !== "function") return false;
           // The room's own choice (`setAudioDevices`), kept for this device as its device bar keeps it; `""` is the
-          // system's default, which the room chooses as `null`. The card's devices are busy until the room answers.
+          // system's default, which the room chooses as `null`. The card's devices are busy until the room has answered
+          // every choice, each asked once the one before has been answered: the last asked is the one that stays.
           choosingDevices += 1;
           report();
-          settle(Promise.resolve()
+          deviceChoices = deviceChoices
             .then(() => actions.setAudioDevices({ [request.kind]: request.id === "" ? null : request.id }))
+            .catch(() => {})
             .finally(() => {
               choosingDevices -= 1;
               report();
-            }));
+            });
           return true;
         default:
           return false;
