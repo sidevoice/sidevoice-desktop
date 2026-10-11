@@ -77,8 +77,8 @@ pub enum AgentState {
 }
 
 /// The call as the room page reports it: what the tray and the headset need, and what the call controls card shows.
-/// Mirrors the web UI's own views; `participants` and `devices` are relayed to the card as the room wrote them (the
-/// web UI owns their shape: `ParticipantView`, `AudioDevices`).
+/// Mirrors the web UI's own views; `participants` and `devices` are relayed to the card as the page's bridge wrote
+/// them (the web UI owns their shape: `ParticipantView`, the card's `AudioDevices`).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CallSnapshot {
