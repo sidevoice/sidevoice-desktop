@@ -273,6 +273,8 @@ sidevoice-engine itself fails with is one of these keys, with the engine's own c
 | `voice_model_unknown` | `code` (`model-unknown`), `model` | a slot names a model its catalogue does not list for that task |
 | `voice_model_unfit` | `code` (`model-unfit`), `model` | a local model with no build that runs on this device |
 | `voice_catalog_not_found` | `code` (`catalog-not-found`), `model` | a slot names a catalogue the engine does not have |
+| `voice_build_not_found` | `code` (`build-not-found`), `model` | a local slot's `build` is not a build of its model |
+| `voice_<code>` | `code` (the engine's: `memory`, `backend-not-in-this-build`, ...), `model` | a local slot's `build` does not run on this device |
 | `voice_vad_unavailable` | `code` (`vad-unavailable`) | no local voice activity detector runs on this device |
 | `voice_end_of_turn_unavailable` | `code` (`end-of-turn-unavailable`) | `end_of_turn: "smart-turn"` while no local model that ends turns runs here |
 | `voice_<code>` | `code` (the engine's: `credential-missing`, `credential-rejected`, ...), `model`, `detail` (the provider's words) | a slot names a provider's model while that provider lists nothing |
@@ -312,15 +314,20 @@ here: a change is made there, and both sides follow.
 
 What is this app's own:
 
-- `setSettings` takes each slot as a model of a catalogue: `stt: {catalog, model, language}`, `tts: {catalog, model,
-  voice, speed}`, with `patience`, `end_of_turn` and `idle_unload_minutes` (core `voice.rs`; no `build`: an unknown
-  key is refused). Each slot is loaded as `engine.catalog(catalog).load(model)`, which picks the build. The app adds
-  the voice activity detector, the local catalogue's (family `silero-vad`, else another local `vad` that runs), and,
-  for `smart-turn`, the local catalogue's first model that ends turns. A change of a slot's catalogue or model, or of
-  `end_of_turn`, gives a call that listens other models at once (it restarts on them); `language`, `voice`, `speed`,
-  `patience` and `idle_unload_minutes` apply live. It rejects with the app's keyed refusals (above), each with the
-  `code` the page translates (`model-unknown`, `model-unfit`, `catalog-not-found`, `vad-unavailable`,
-  `end-of-turn-unavailable`, or the engine's own with the provider's `detail`).
+- `setSettings` takes the web's settings (sidevoice-web `voice-settings.js`, `DeviceVoiceSettings`), each slot a model
+  of a catalogue: `stt: {catalog, model, language, build?}`, `tts: {catalog, model, voice, speed, build?}`, with
+  `patience`, `end_of_turn`, `idle_unload_minutes` and `turn_model?` (core `voice.rs`; any other key is refused).
+  A slot is loaded as `engine.catalog(catalog).load(model)`, which picks the build, or, for a local model with a
+  `build` (Settings, "How it runs"), as that build (`engine.load(model, build)`): it must be one of the model's builds
+  (`build-not-found`) and run here (else the engine's code for why not, `memory`, ...). A provider's model has no
+  builds, and a `build` named for one is not looked at, as on the web. The app adds the voice activity detector, the
+  local catalogue's (family `silero-vad`, else another local `vad` that runs), and, for `smart-turn`, the local model
+  that ends turns `turn_model` names when it runs here, else (as on the web) the first that does. A change of a slot's
+  catalogue, model or build, of `end_of_turn` or of the model that ends turns gives a call that listens other models at
+  once (it restarts once on them); `language`, `voice`, `speed`, `patience` and `idle_unload_minutes` apply live.
+  It rejects with the app's keyed refusals (above), each with the `code` the page translates (`model-unknown`,
+  `model-unfit`, `catalog-not-found`, `build-not-found`, `vad-unavailable`, `end-of-turn-unavailable`, or the
+  engine's own with the provider's `detail`).
 - `start` rejects `{key: "voice_failed", code, message}` with the call's code, `{key: "voice_settings_missing", code:
   "settings-missing"}` before any settings, and `{key: "voice_failed", code: "stopped"}` when `stop` came first.
 - The seam has thirteen calls: `setSettings`, `start`, `stop`, `say`, `mute`, `cancelInput`, `onTurn`, `onState`,

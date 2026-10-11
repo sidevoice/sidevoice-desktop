@@ -423,7 +423,13 @@ jobs:
           # The local catalogue first; a provider with no key lists nothing and says so.
           echo "$VOICE" | grep -Eq ' catalogs=local,[a-z-]+:credential-missing'
           echo "$VOICE" | grep -Eq ' models=[1-9][0-9]* vad=true unknown=voice_model_unknown/model-unknown '
-          grep -q 'sidevoice: voice settings: .*"stt":{"catalog":"local","model":"whisper-tiny"}' /tmp/probe.log
+          # The web's settings: a build of the model (one not its own refused by code) and the end-of-turn model chosen.
+          echo "$VOICE" | grep -q ' bad_build=voice_build_not_found/build-not-found '
+          BUILD=$(echo "$VOICE" | sed -E 's/.* build=([^ ]+) .*/\1/'); TURN=$(echo "$VOICE" | sed -E 's/.* turn_model=([^ ]+) .*/\1/')
+          test "$BUILD" != none && test "$TURN" != none
+          grep -qF "sidevoice: voice settings: " /tmp/probe.log
+          grep -F "sidevoice: voice settings: " /tmp/probe.log | tail -1 | grep -qF "\"stt\":{\"catalog\":\"local\",\"model\":\"whisper-tiny\",\"build\":\"$BUILD\"}"
+          grep -F "sidevoice: voice settings: " /tmp/probe.log | tail -1 | grep -qF "\"end_of_turn\":{\"catalog\":\"local\",\"model\":\"$TURN\"}"
           echo "$VOICE" | grep -Eq ' start=(ok|voice_failed/(microphone-unavailable|microphone-denied|speaker-unavailable|audio-device-unavailable|audio-device-failed)) '
           echo "--- voice"; grep 'sidevoice: voice' /tmp/probe.log || true
           # Headset buttons: a (simulated) call made the app the Now Playing app, and it let go after.

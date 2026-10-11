@@ -6,6 +6,18 @@ fn model(id: &str, family: Option<&str>, capabilities: &[&str], runs: bool) -> C
         family: family.map(Into::into),
         capabilities: capabilities.iter().map(|c| c.to_string()).collect(),
         runs,
+        builds: Vec::new(),
+    }
+}
+
+/// A local model with `builds`: each an id and why it does not run here (`None`: it runs).
+fn built(id: &str, capabilities: &[&str], builds: &[(&str, Option<&str>)]) -> Candidate {
+    Candidate {
+        builds: builds
+            .iter()
+            .map(|(id, unfit)| BuildCandidate { id: id.to_string(), unfit: unfit.map(Into::into) })
+            .collect(),
+        ..model(id, Some(id), capabilities, builds.iter().any(|(_, unfit)| unfit.is_none()))
     }
 }
 
@@ -19,10 +31,16 @@ fn catalogs(keyed: bool) -> Vec<CatalogCandidates> {
             models: vec![
                 model("other-vad", Some("other-vad"), &["vad"], true),
                 model("silero-vad", Some("silero-vad"), &["vad"], true),
-                model("whisper-small", Some("whisper"), &["stt"], true),
+                built(
+                    "whisper-small",
+                    &["stt"],
+                    &[("whisper-small/metal", Some("memory")), ("whisper-small/cpu", None)],
+                ),
                 model("parakeet", Some("parakeet"), &["stt"], false),
                 model("kokoro-82m-v1.0", Some("kokoro"), &["tts"], true),
                 model("smart-turn-v3", Some("smart-turn"), &["end-of-turn"], true),
+                model("smart-turn-v4", Some("smart-turn"), &["end-of-turn"], false),
+                model("smart-turn-v3-int8", Some("smart-turn"), &["end-of-turn"], true),
             ],
         },
         CatalogCandidates {
@@ -45,14 +63,17 @@ fn settings(stt: (&str, &str), tts: (&str, &str)) -> VoiceSettings {
 }
 
 fn local(model: &str) -> ModelChoice {
-    ModelChoice { catalog: LOCAL_CATALOG.into(), model: model.into() }
+    ModelChoice::local(model)
 }
 
 #[test]
 fn each_slot_is_a_catalogues_model_and_the_detector_is_the_local_silero() {
     let choice =
         choose(&settings(("openai", "gpt-4o-mini-transcribe"), ("local", "kokoro-82m-v1.0")), &catalogs(true)).unwrap();
-    assert_eq!(choice.stt, ModelChoice { catalog: "openai".into(), model: "gpt-4o-mini-transcribe".into() });
+    assert_eq!(
+        choice.stt,
+        ModelChoice { catalog: "openai".into(), model: "gpt-4o-mini-transcribe".into(), build: None }
+    );
     assert_eq!(choice.tts, local("kokoro-82m-v1.0"));
     assert_eq!(choice.vad, local("silero-vad"), "Silero first, wherever it is listed");
     assert_eq!(choice.end_of_turn, None);
@@ -70,7 +91,7 @@ fn smart_turn_takes_the_local_model_that_ends_turns() {
     assert_eq!(choose(&chosen, &catalogs(true)).unwrap().end_of_turn, Some(local("smart-turn-v3")));
 
     let mut without = catalogs(true);
-    without[0].models.retain(|m| m.id != "smart-turn-v3");
+    without[0].models.retain(|m| !m.capabilities.contains(&"end-of-turn".to_string()));
     assert_eq!(choose(&chosen, &without).unwrap_err().code, "end-of-turn-unavailable");
 }
 
@@ -112,7 +133,8 @@ fn other_models_come_with_a_slots_catalogue_or_model_or_the_end_of_turn() {
     live.patience = Some(Patience::Fast);
     assert!(first.same_models(&choose(&live, &catalogs(true)).unwrap()), "language, voice, speed, patience apply live");
     let mut moved = base.clone();
-    moved.stt = SttChoice { catalog: "openai".into(), model: "gpt-4o-mini-transcribe".into(), language: None };
+    moved.stt =
+        SttChoice { catalog: "openai".into(), model: "gpt-4o-mini-transcribe".into(), language: None, build: None };
     assert!(!first.same_models(&choose(&moved, &catalogs(true)).unwrap()));
     let mut smart = base;
     smart.end_of_turn = Some(EndOfTurn::SmartTurn);
@@ -120,12 +142,84 @@ fn other_models_come_with_a_slots_catalogue_or_model_or_the_end_of_turn() {
 }
 
 #[test]
-fn settings_name_a_catalogue_and_take_no_build() {
+fn smart_turn_takes_the_end_of_turn_model_chosen_when_it_runs_else_the_first() {
+    let mut chosen = settings(("local", "whisper-small"), ("local", "kokoro-82m-v1.0"));
+    chosen.end_of_turn = Some(EndOfTurn::SmartTurn);
+    chosen.turn_model = Some("smart-turn-v3-int8".into());
+    assert_eq!(choose(&chosen, &catalogs(true)).unwrap().end_of_turn, Some(local("smart-turn-v3-int8")));
+    // One that does not run here, one that does not end turns, one not listed: the first that runs, as on the web.
+    for other in ["smart-turn-v4", "silero-vad", "nowhere"] {
+        chosen.turn_model = Some(other.into());
+        assert_eq!(choose(&chosen, &catalogs(true)).unwrap().end_of_turn, Some(local("smart-turn-v3")), "{other}");
+    }
+    // Ending turns on silence, a model chosen loads nothing.
+    chosen.end_of_turn = Some(EndOfTurn::Silence);
+    chosen.turn_model = Some("smart-turn-v3-int8".into());
+    assert_eq!(choose(&chosen, &catalogs(true)).unwrap().end_of_turn, None);
+}
+
+#[test]
+fn a_local_models_build_chosen_is_loaded_when_it_is_one_of_its_builds_that_runs() {
+    let mut chosen = settings(("local", "whisper-small"), ("local", "kokoro-82m-v1.0"));
+    assert_eq!(choose(&chosen, &catalogs(true)).unwrap().stt.build, None, "none chosen: the catalogue picks");
+    chosen.stt.build = Some("whisper-small/cpu".into());
+    let choice = choose(&chosen, &catalogs(true)).unwrap();
+    assert_eq!(choice.stt, ModelChoice { build: Some("whisper-small/cpu".into()), ..local("whisper-small") });
+    chosen.stt.build = Some("whisper-small/metal".into());
+    let unfit = choose(&chosen, &catalogs(true)).unwrap_err();
+    assert_eq!((unfit.code.as_str(), unfit.model.as_str()), ("memory", "whisper-small"), "why it does not run here");
+    chosen.stt.build = Some("whisper-tiny/cpu".into());
+    assert_eq!(choose(&chosen, &catalogs(true)).unwrap_err().code, "build-not-found", "not a build of this model");
+    chosen.stt.build = None;
+    chosen.tts.build = Some("kokoro/nope".into());
+    assert_eq!(choose(&chosen, &catalogs(true)).unwrap_err().code, "build-not-found");
+    // A provider's model has no builds: one named is not looked at, as on the web.
+    let mut remote = settings(("openai", "gpt-4o-mini-transcribe"), ("local", "kokoro-82m-v1.0"));
+    remote.stt.build = Some("whatever".into());
+    assert_eq!(choose(&remote, &catalogs(true)).unwrap().stt.build, None);
+}
+
+#[test]
+fn other_models_come_with_another_build_or_end_of_turn_model() {
+    let mut base = settings(("local", "whisper-small"), ("local", "kokoro-82m-v1.0"));
+    base.end_of_turn = Some(EndOfTurn::SmartTurn);
+    let first = choose(&base, &catalogs(true)).unwrap();
+    let mut built = base.clone();
+    built.stt.build = Some("whisper-small/cpu".into());
+    let built = choose(&built, &catalogs(true)).unwrap();
+    assert!(!first.same_models(&built), "a build chosen");
+    let mut turned = base.clone();
+    turned.turn_model = Some("smart-turn-v3-int8".into());
+    assert!(!first.same_models(&choose(&turned, &catalogs(true)).unwrap()), "another end-of-turn model");
+    // Naming the model already taken changes nothing.
+    turned.turn_model = Some("smart-turn-v3".into());
+    assert!(first.same_models(&choose(&turned, &catalogs(true)).unwrap()));
+}
+
+#[test]
+fn settings_take_a_build_and_an_end_of_turn_model_and_refuse_any_other_key() {
     let read = |value: Value| serde_json::from_value::<VoiceSettings>(value);
     assert!(read(json!({"stt": {"catalog": "local", "model": "m"}, "tts": {"catalog": "local", "model": "t"}})).is_ok());
-    let with_build =
-        json!({"stt": {"catalog": "local", "model": "m", "build": "m/x"}, "tts": {"catalog": "local", "model": "t"}});
-    assert!(read(with_build).is_err(), "no build any more");
+    // What the web's settings carry (sidevoice-web `voice-settings.js` DeviceVoiceSettings), every field filled.
+    let web = read(json!({
+        "stt": {"catalog": "local", "model": "m", "language": null, "build": "m/x"},
+        "tts": {"catalog": "local", "model": "t", "voice": null, "speed": 1, "build": "t/y"},
+        "patience": "normal", "end_of_turn": "smart-turn", "idle_unload_minutes": 10, "turn_model": "smart-turn-v3",
+    }))
+    .unwrap();
+    assert_eq!(
+        (web.stt.build.as_deref(), web.tts.build.as_deref(), web.turn_model.as_deref()),
+        (Some("m/x"), Some("t/y"), Some("smart-turn-v3"))
+    );
+    let unknown = |slot: &str| {
+        let mut value = json!({"stt": {"catalog": "local", "model": "m"}, "tts": {"catalog": "local", "model": "t"}});
+        match slot {
+            "top" => value["nope"] = json!(1),
+            slot => value[slot]["nope"] = json!(1),
+        }
+        read(value).is_err()
+    };
+    assert!(unknown("top") && unknown("stt") && unknown("tts"), "an unknown key is refused");
     assert!(
         read(json!({"stt": {"model": "m"}, "tts": {"catalog": "local", "model": "t"}})).is_err(),
         "a catalogue is named"
