@@ -4452,7 +4452,7 @@ dependencies = [
 [[package]]
 name = "sidevoice-engine"
 version = "0.3.1"
-source = "git+https://github.com/sidevoice/sidevoice-engine?tag=v0.3.1#6101297d9e152349a4b9f980c2731517b98fb160"
+source = "git+https://github.com/sidevoice/sidevoice-engine?rev=8cac1b76d130fc037e01514cd8f527dfb491660b#8cac1b76d130fc037e01514cd8f527dfb491660b"
 dependencies = [
  "async-lock",
  "async-trait",

@@ -44,7 +44,7 @@ pub struct ReasonParams {
 }
 
 /// A model as its catalogue lists it, `{id, capabilities, languages, voices, speed?}`; a local one also has its family,
-/// size, licence, builds and what is installed.
+/// size, licence, builds, what is installed and when it was last used.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelView {
@@ -65,6 +65,10 @@ pub struct LocalView {
     pub parameters_m: u32,
     pub license: String,
     pub installed: bool,
+    /// When it was last loaded, in milliseconds since the Unix epoch (`lastUsedAt`); absent when the engine does not
+    /// know: not installed, or not loaded since it was.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_used_at: Option<u64>,
     pub builds: Vec<BuildView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recommended_build: Option<String>,
@@ -154,7 +158,7 @@ fn build(build: &ModelBuild) -> BuildView {
     }
 }
 
-/// A local model, with its family, builds and what is installed.
+/// A local model, with its family, builds, what is installed and when it was last used.
 pub(crate) fn local_model(model: &LocalModelInfo) -> ModelView {
     ModelView {
         id: model.id.clone(),
@@ -167,6 +171,7 @@ pub(crate) fn local_model(model: &LocalModelInfo) -> ModelView {
             parameters_m: model.parameters_m,
             license: model.license.clone(),
             installed: model.installed,
+            last_used_at: model.last_used_at,
             builds: model.builds.iter().map(build).collect(),
             recommended_build: model.recommended_build.clone(),
         }),
