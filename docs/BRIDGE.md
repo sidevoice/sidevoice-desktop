@@ -25,12 +25,13 @@ Both are globals the web UI (sidevoice-web → `apps/web`) already defines:
 - `window.sidevoiceUI.store` — the room's view-model store (`apps/web/src/state/room-store.ts`,
   `installRoomBridge`). The bridge calls `getState()` and `subscribe()` and reads only `call.joined`, `call.busy`,
   `mic.enabled`, `mic.disabled`, `callCard` (the room's own view for the card: the call's conversation title, the
-  agent's state, `youTalking`, `canSkip`), `participants` (the rows' public fields) and `audioDevices`.
+  agent's state, `youTalking`, `canSkip`), `participants` (the rows' public fields) and `facts.audioDevices` (what the
+  voice lists and what is chosen: `{inputs, outputs, input, output, outputSelectable}`, `state/room-session-state.d.ts`).
 - `window.sidevoiceUI.micLevel` — the microphone's level, 0–100, from the room's capture, whether or not the room is
   painted (`apps/web/src/state/mic-level.ts`). The bridge subscribes to it.
 - `window.sidevoiceActions` — the room's actions (`apps/web/src/state/room-types.ts`, `SidevoiceActions`). The
   bridge calls only `toggleMic()`, `toggleCall()`, `skipReply()`, `selectParticipant(threadId)` and
-  `selectAudioDevice(kind, id)`.
+  `setAudioDevices(choice)`.
 
 If the web UI renames either, the tray greys out ("sala sin cargar") and nothing else breaks.
 Keeping these two names stable is the web UI's side of the contract.
@@ -49,15 +50,20 @@ window.__TAURI_INTERNALS__.invoke("bridge_state", { snapshot })
   "agent": "idle | working | speaking", "youTalking": false, "canSkip": false, "since": 1759300000000,
   "participants": [{ "threadId": "…", "title": "…", "selected": true, "reach": "listening", "working": false,
                      "machine": "daimon", "harness": "claude", "subtitle": "", "…": "…" }],
-  "devices": { "inputs": [{ "id": "default", "label": "…" }], "outputs": [], "inputId": "default",
-               "outputId": "default", "available": true, "outputAvailable": false, "busy": false } }
+  "devices": { "inputs": [{ "id": "", "label": "", "system": true }, { "id": "CoreAudio:…", "label": "…" }],
+               "outputs": [{ "id": "", "label": "", "system": true }], "inputId": "CoreAudio:…",
+               "outputId": "", "available": true, "outputAvailable": false, "busy": false } }
 ```
 
 - `agent`: what the agent does — `speaking` while its voice plays (it wins over its work), else `working` while the
   conversation works on a turn, else `idle`. `youTalking`: a turn of the person's is open.
 - `since`: when this page saw the call joined (ms since the epoch), for the card's clock; `null` outside a call.
-- `participants` and `devices` are relayed to the card as the room wrote them: the web UI owns their shape
-  (`ParticipantView`, `AudioDevices`).
+- `participants` are relayed to the card as the room wrote them: the web UI owns their shape (`ParticipantView`).
+- `devices` is the card's `AudioDevices` (web `call-controls/host.ts`), made from the room's `facts.audioDevices`
+  (`null` until the voice has listed them): the system's default first, as an option `{id: "", system: true}`; a
+  device listed without a name as `{label: "", number}` (its place, from 1); `inputId`/`outputId` the chosen ids, `""`
+  for the default; `outputAvailable` the voice's `outputSelectable` (when false, `outputId` is `""`); `available`
+  always `true`; `busy` while a device the card chose has not been answered by the room.
 
 Sent once on page start (`ready: false`), then on every change of those fields (the store
 ticks often; unchanged snapshots are not re-sent). The app also resets to `ready: false` on
@@ -94,8 +100,11 @@ Evaluated by the app with `webview.eval` (works with the window hidden); the com
 - `hang-up` → `sidevoiceActions.toggleCall()`, only while joined.
 - `skip-reply` → `sidevoiceActions.skipReply()`, only while something plays.
 - `select-participant` → `sidevoiceActions.selectParticipant(threadId)`, only for a conversation the room lists.
-- `select-audio-device` → `sidevoiceActions.selectAudioDevice(kind, id)`, `kind` `input` or `output`: the room's own
-  choice, so the card and the room never disagree.
+- `select-audio-device` → `sidevoiceActions.setAudioDevices({[kind]: id})`, `kind` `input` or `output`, `id` `""` the
+  system's default (`null` to the room): the room's own choice, kept for this device as its device bar keeps it, so
+  the card and the room never disagree. A choice the room refuses leaves the device it had, which the card says.
+  Choices go to the room one at a time, in the order asked (the room keeps whichever answers last), and the card's
+  `devices.busy` holds until the last has been answered.
 
 Joining is deliberately **not** a tray command: joining unlocks audio output, which the webview
 only allows from a click in the page. "Mostrar Sidevoice" opens the window for that.
@@ -164,7 +173,7 @@ The card's page talks to the app only through `window.__sidevoiceDesktop.host.ca
 | Card → app | |
 |---|---|
 | `subscribe(listener)` → `stop` | the whole state now, then on every change (`call_controls_ready` asks the app for it) |
-| `run({command, …})` | `call_controls_run`: `open-app` (the app shows the room), or one of the room commands above, which the app parses (`bridge::Command`) before it carries it to the room |
+| `run({command, …})` | `call_controls_run`: `open-app` (the app shows the room), or one of the room commands above, which the app parses (`bridge::Command`) before it carries it to the room. After `select-audio-device` the card hears its devices `busy` at once, until the app next tells it the call (or 3 s pass): the device still chosen is never read as the room refusing the new one |
 | `layout({width, height})` | `call_controls_layout`: the card's size with its shadow margin; the window takes it and is placed to fit |
 | `drag(phase)` | `call_controls_drag`: `start`, `move`, `end`; the window follows the pointer (the app reads it) and is dropped, snapped and remembered |
 

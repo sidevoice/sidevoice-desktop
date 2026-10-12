@@ -25,7 +25,10 @@
   /** The fields of the room's conversation rows the card shows (the web UI's ParticipantView). */
   const PARTICIPANT_FIELDS = ["threadId", "title", "selected", "available", "switching", "unread", "reach", "stateLabel",
     "activityNote", "detail", "subtitle", "working", "machine", "harness", "route"];
-  const DEVICE_FIELDS = ["inputs", "outputs", "inputId", "outputId", "available", "outputAvailable", "busy"];
+  /** Choices of a device the card asked for that the room has not answered yet: the card's devices are busy meanwhile.
+   *  They go to the room one after another, in the order asked (the room keeps whichever answers last). */
+  let choosingDevices = 0;
+  let deviceChoices = Promise.resolve();
   const pick = (object, fields) => {
     const picked = {};
     for (const field of fields) if (object && object[field] !== undefined) picked[field] = object[field];
@@ -293,6 +296,28 @@
     };
   }
 
+  /** The card's devices (the web UI's call-controls `AudioDevices`), from the room's own (`facts.audioDevices`: what the
+   *  voice lists and what is chosen). The system's default comes first, as an option of its own (id `""`); a device the
+   *  system lists without a name is said by its place; the speaker can be chosen only where the voice can move it. */
+  function cardDevices(devices) {
+    if (!devices || typeof devices !== "object") return null;
+    const options = (rows) => [{ id: "", label: "", system: true }].concat((Array.isArray(rows) ? rows : [])
+      .map((row, index) => row && typeof row.id === "string" && row.id
+        ? (typeof row.label === "string" && row.label ? { id: row.id, label: row.label } : { id: row.id, label: "", number: index + 1 })
+        : null)
+      .filter(Boolean));
+    const outputAvailable = !!devices.outputSelectable;
+    return {
+      inputs: options(devices.inputs),
+      outputs: options(devices.outputs),
+      inputId: typeof devices.input === "string" ? devices.input : "",
+      outputId: outputAvailable && typeof devices.output === "string" ? devices.output : "",
+      available: true,
+      outputAvailable,
+      busy: choosingDevices > 0,
+    };
+  }
+
   /** The call as the app shows it (tray, headset, call controls card), read from the web UI's own view model. */
   function snapshot() {
     const store = win.sidevoiceUI && win.sidevoiceUI.store;
@@ -323,7 +348,7 @@
       canSkip: !!card.canSkip,
       since: joinedAt,
       participants: Array.isArray(view.participants) ? view.participants.map((row) => pick(row, PARTICIPANT_FIELDS)) : [],
-      devices: view.audioDevices ? pick(view.audioDevices, DEVICE_FIELDS) : null,
+      devices: cardDevices(view.facts && view.facts.audioDevices),
     };
   }
 
@@ -418,8 +443,19 @@
           return true;
         case "select-audio-device":
           if (!["input", "output"].includes(request.kind) || typeof request.id !== "string") return false;
-          if (typeof actions.selectAudioDevice !== "function") return false;
-          settle(actions.selectAudioDevice(request.kind, request.id));
+          if (typeof actions.setAudioDevices !== "function") return false;
+          // The room's own choice (`setAudioDevices`), kept for this device as its device bar keeps it; `""` is the
+          // system's default, which the room chooses as `null`. The card's devices are busy until the room has answered
+          // every choice, each asked once the one before has been answered: the last asked is the one that stays.
+          choosingDevices += 1;
+          report();
+          deviceChoices = deviceChoices
+            .then(() => actions.setAudioDevices({ [request.kind]: request.id === "" ? null : request.id }))
+            .catch(() => {})
+            .finally(() => {
+              choosingDevices -= 1;
+              report();
+            });
           return true;
         default:
           return false;

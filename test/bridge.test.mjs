@@ -119,8 +119,10 @@ test("the call controls card's view: the agent, you, the clock, the conversation
     { threadId: "a", title: "mini", selected: true, reach: "listening", machine: "daimon", harness: "claude", working: false, subtitle: "", karaoke: "not relayed" },
     { threadId: "b", title: "web", selected: false, reach: "holding", machine: "nas", harness: "codex", working: true, subtitle: "2 sin leer" },
   ];
-  const audioDevices = { inputs: [{ id: "default", label: "x" }], outputs: [], inputId: "default", outputId: "default", available: true, outputAvailable: false, busy: false, extra: 1 };
-  const store = fakeStore({ call: { joined: false }, mic: { enabled: true }, title: "a browsed transcript", participants, audioDevices,
+  // The room's facts, as its voice lists the devices (room-session-state.d.ts SessionFacts.audioDevices).
+  const audioDevices = { inputs: [{ id: "CoreAudio:mbp", label: "MacBook Pro Microphone" }, { id: "CoreAudio:usb", label: "" }],
+    outputs: [{ id: "CoreAudio:speakers", label: "Speakers" }], input: "CoreAudio:usb", output: "CoreAudio:speakers", outputSelectable: false };
+  const store = fakeStore({ call: { joined: false }, mic: { enabled: true }, title: "a browsed transcript", participants, facts: { audioDevices },
     callCard: { agent: "idle", youTalking: false, canSkip: false, title: "mini" } });
   win.sidevoiceUI = { store };
   win.sidevoiceActions = { toggleMic() {}, toggleCall: async () => {} };
@@ -131,7 +133,18 @@ test("the call controls card's view: the agent, you, the clock, the conversation
   assert.equal(s.since, null, "no clock outside a call");
   const plain = (value) => JSON.parse(JSON.stringify(value)); // objects made in the bridge's own realm
   assert.deepEqual(plain(s.participants[0]), { threadId: "a", title: "mini", selected: true, reach: "listening", machine: "daimon", harness: "claude", working: false, subtitle: "" });
-  assert.deepEqual(plain(s.devices), { inputs: [{ id: "default", label: "x" }], outputs: [], inputId: "default", outputId: "default", available: true, outputAvailable: false, busy: false });
+  // As the card reads them (call-controls/host.ts AudioDevices): the system's default first, an unnamed device by its
+  // place, and a speaker the voice cannot move shown as the system's.
+  const system = { id: "", label: "", system: true };
+  assert.deepEqual(plain(s.devices), {
+    inputs: [system, { id: "CoreAudio:mbp", label: "MacBook Pro Microphone" }, { id: "CoreAudio:usb", label: "", number: 2 }],
+    outputs: [system, { id: "CoreAudio:speakers", label: "Speakers" }],
+    inputId: "CoreAudio:usb", outputId: "", available: true, outputAvailable: false, busy: false });
+  store.set({ facts: { audioDevices: { ...audioDevices, input: null, outputSelectable: true } } });
+  s = api.snapshot();
+  assert.deepEqual([s.devices.inputId, s.devices.outputId, s.devices.outputAvailable], ["", "CoreAudio:speakers", true]);
+  store.set({ facts: { audioDevices: null } });
+  assert.equal(api.snapshot().devices, null, "none until the voice has listed them");
 
   assert.equal(s.title, "mini", "the conversation the call is on, not the transcript being browsed");
   const before = Date.now();
@@ -165,7 +178,7 @@ test("the card's commands: skip, switch conversation and choose a device, each o
     toggleMic() {}, toggleCall: async () => {},
     skipReply: async () => did.push("skip"),
     selectParticipant: (id) => did.push("select " + id),
-    selectAudioDevice: async (kind, id) => did.push("device " + kind + " " + id),
+    setAudioDevices: async (choice) => did.push("devices " + JSON.stringify(choice)),
   };
   const api = install(win, ORIGIN);
   assert.equal(api.run({ command: "skip-reply" }), false, "nothing playing");
@@ -175,9 +188,44 @@ test("the card's commands: skip, switch conversation and choose a device, each o
   assert.equal(api.run({ command: "select-participant", threadId: "zzz" }), false, "only a conversation the room lists");
   assert.equal(api.run({ command: "select-participant", threadId: "c" }), false, "and one the call can go to");
   assert.equal(api.run({ command: "select-audio-device", kind: "input", id: "mbp" }), true);
+  assert.equal(api.run({ command: "select-audio-device", kind: "output", id: "" }), true, "the system's default");
   assert.equal(api.run({ command: "select-audio-device", kind: "camera", id: "x" }), false);
+  assert.equal(api.run({ command: "select-audio-device", kind: "input", id: 3 }), false);
   await flush();
-  assert.deepEqual(did, ["skip", "select b", "device input mbp"]);
+  assert.deepEqual(did, ["skip", "select b", 'devices {"input":"mbp"}', 'devices {"output":null}']);
+});
+
+test("the card's choices go to the room one after another, busy until the last has been answered, refused or not", async () => {
+  const install = loadFactory();
+  const { win, calls } = fakeWindow(ORIGIN);
+  const audioDevices = { inputs: [{ id: "mbp", label: "mbp" }], outputs: [], input: null, output: null, outputSelectable: false };
+  const store = fakeStore({ call: { joined: true }, mic: { enabled: true }, participants: [], callCard: {}, facts: { audioDevices } });
+  win.sidevoiceUI = { store };
+  const answers = [];
+  const asked = [];
+  const plain = (value) => JSON.parse(JSON.stringify(value)); // objects made in the bridge's own realm
+  win.sidevoiceActions = { toggleMic() {}, toggleCall: async () => {},
+    setAudioDevices: (choice) => new Promise((resolve, reject) => { asked.push(choice); answers.push({ resolve, reject }); }) };
+  const api = install(win, ORIGIN);
+  await flush();
+  const busy = () => calls.filter(([cmd]) => cmd === "bridge_state").at(-1)[1].snapshot.devices.busy;
+  assert.equal(busy(), false);
+  assert.equal(api.run({ command: "select-audio-device", kind: "input", id: "mbp" }), true);
+  await flush();
+  assert.equal(busy(), true, "told to the card at once");
+  assert.equal(api.run({ command: "select-audio-device", kind: "input", id: "" }), true);
+  await flush();
+  assert.deepEqual(plain(asked), [{ input: "mbp" }], "the second waits for the first's answer");
+  answers[0].reject(Object.assign(Error("no"), { code: "audio-device-unknown" }));
+  await flush();
+  assert.deepEqual(plain(asked), [{ input: "mbp" }, { input: null }], "then goes, the first refused or not");
+  assert.equal(busy(), true, "until every choice is answered");
+  answers[1].resolve({});
+  await flush();
+  assert.equal(busy(), false);
+  assert.equal(api.run({ command: "select-audio-device", kind: "output", id: "x" }), true);
+  await flush();
+  assert.deepEqual(plain(asked.at(-1)), { output: "x" }, "a later choice goes at once");
 });
 
 test("the microphone's level reaches the app during a call only, throttled, and 0 when it stops", async () => {
