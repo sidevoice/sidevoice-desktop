@@ -181,11 +181,13 @@
       return handle;
     }
     const host = {
-      /** The person's choices (`VoiceSettings`): each slot a model of a catalogue, `stt: {catalog, model, language}`,
-       *  `tts: {catalog, model, voice, speed}`, with `patience`, `end_of_turn` and `idle_unload_minutes`. The catalogue
-       *  picks the build; the app adds the voice activity detector and the end-of-turn model. Rejects `{key, code,
-       *  message}`: `model-unknown`, `model-unfit`, `catalog-not-found`, `vad-unavailable`, `end-of-turn-unavailable`,
-       *  or the engine's own code (`credential-missing`, ...) with the provider's `detail`. */
+      /** The person's choices (`VoiceSettings`): each slot a model of a catalogue, `stt: {catalog, model, language,
+       *  build?}`, `tts: {catalog, model, voice, speed, build?}`, with `patience`, `end_of_turn`, `idle_unload_minutes`
+       *  and `turn_model?`. A local model loads the build named, else the one its catalogue picks; the app adds the voice
+       *  activity detector and, unless `turn_model` names one that runs, the end-of-turn model. Rejects `{key, code,
+       *  message}`: `model-unknown`, `model-unfit`, `catalog-not-found`, `build-not-found`, `vad-unavailable`,
+       *  `end-of-turn-unavailable`, or the engine's own code (`credential-missing`, `memory`, ...) with the provider's
+       *  `detail`. */
       setSettings: (settings) => call("voice_set_settings", { settings }),
       /** Loads the models (installing them if they are not), opens the microphone and the speaker and listens.
        *  Resolves once it listens (at once if it does); rejects `{key, code, message}`, `code` the call's or `stopped`. */
