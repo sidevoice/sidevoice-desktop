@@ -337,8 +337,8 @@ fn another_install_waits_for_the_lock_a_job_holds_to_roll_back() {
 const OPENAI_SPEC: &str = "https://raw.githubusercontent.com/openai/openai-openapi/main/openapi.json";
 const OPENAI_MODELS: &str = "https://api.openai.com/v1/models";
 
-/// A fake OpenAI: its spec, and its models for the key `good`; any other key is refused (401). A request with the key
-/// `hold` waits until `released` before it is refused. Every request to it is recorded with the key it carried.
+/// A fake OpenAI: its spec, and its models for the key `good`; the key `scoped` is known but may not list (403), any
+/// other key is refused (401). A request with the key `hold` waits until `released` before it is refused. Every request to it is recorded with the key it carried.
 #[derive(Default)]
 struct FakeOpenAi {
     asked: Mutex<Vec<(String, String)>>,
@@ -400,6 +400,9 @@ impl HttpClient for Network {
         }
         if key == "good" {
             return answer(200, serde_json::json!({ "data": [{ "id": "whisper-1" }, { "id": "tts-1" }] }));
+        }
+        if key == "scoped" {
+            return answer(403, serde_json::json!({ "error": { "message": "Missing scopes: api.model.read" } }));
         }
         answer(401, serde_json::json!({ "error": { "message": "Incorrect API key provided." } }))
     }
@@ -478,12 +481,13 @@ fn a_key_tried_is_asked_of_the_provider_and_kept_nowhere() {
     assert_eq!(openai.listed_with(), ["good"]);
 
     assert_eq!(code(engines.test_credential("openai", "bad").unwrap()).as_deref(), Some("credential-rejected"));
+    assert_eq!(code(engines.test_credential("openai", "scoped").unwrap()).as_deref(), Some("listing-not-permitted"));
     assert_eq!(code(engines.test_credential("openai", " good ").unwrap()), None, "trimmed, and taken");
     assert_eq!(code(engines.test_credential("openai", "  ").unwrap()).as_deref(), Some("credential-missing"));
-    assert_eq!(openai.listed_with(), ["good", "bad", "good"], "each trial asked the provider itself");
+    assert_eq!(openai.listed_with(), ["good", "bad", "scoped", "good"], "each trial asked the provider itself");
 
     assert_eq!(openai_view(engines), before, "the kept listing is the one listed before");
-    assert_eq!(openai.listed_with().len(), 3, "and was not listed again for it");
+    assert_eq!(openai.listed_with().len(), 4, "and was not listed again for it");
 
     assert_eq!(engines.test_credential("local", "x").unwrap_err().key, "catalog_not_found");
     assert_eq!(engines.test_credential("no-such", "x").unwrap_err().key, "catalog_not_found");
@@ -506,17 +510,31 @@ fn a_key_taken_on_trial_is_not_kept() {
 #[test]
 fn a_listing_while_a_key_is_tried_is_the_kept_keys() {
     use std::sync::atomic::Ordering;
+    /// Lets the held trial go however the test ends, so a failure fails rather than hangs.
+    struct Release<'a>(&'a FakeOpenAi);
+    impl Drop for Release<'_> {
+        fn drop(&mut self) {
+            self.0.released.store(true, Ordering::SeqCst);
+        }
+    }
     let (test, openai, _) = with_provider("trial-concurrent", Some("good"));
     let engines = &test.engines;
     std::thread::scope(|scope| {
+        let release = Release(&openai);
         let trying = scope.spawn(|| engines.test_credential("openai", "hold"));
+        let asked = std::time::Instant::now();
         while !openai.holding.load(Ordering::SeqCst) {
+            assert!(asked.elapsed() < Duration::from_secs(10), "the trial never reached the provider");
             std::thread::sleep(Duration::from_millis(5));
         }
-        engines.refresh("openai").unwrap();
-        let view = openai_view(engines);
+        // Listed with the trial held mid-request: on its own thread, so a listing the trial blocks fails the test.
+        let (done, listed) = std::sync::mpsc::channel();
+        scope.spawn(move || {
+            let _ = done.send(engines.refresh("openai").map(|()| openai_view(engines)));
+        });
+        let view = listed.recv_timeout(Duration::from_secs(10)).expect("a listing waited for the trial").unwrap();
         assert!(view.status.reason.is_none() && !view.models.is_empty(), "{view:?}");
-        openai.released.store(true, Ordering::SeqCst);
+        drop(release);
         assert_eq!(code(trying.join().unwrap().unwrap()).as_deref(), Some("credential-rejected"));
     });
     assert_eq!(openai.listed_with(), ["hold", "good"], "the app's listing never carried the tried key");
