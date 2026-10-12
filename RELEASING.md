@@ -53,8 +53,9 @@ Build artifacts on Actions runs are kept 7 days, for debugging only. Download fr
 ## macOS signing and notarization
 
 Only a release's macOS app and .dmg are signed with the Developer ID and notarized (`build.yml`, job `macos`).
-Pull requests and the nightly are ad-hoc signed (`docs/FIRST_OPEN.txt` ships beside their .dmg), and never read
-the secrets.
+Pull requests and the nightly are ad-hoc signed (`docs/FIRST_OPEN.txt` ships beside their .dmg): their signing
+steps are skipped, and every secret those steps name resolves to nothing unless the run signs. (A pull request
+from a fork never has the repository's secrets.)
 
 - The app: Tauri's bundler imports `APPLE_CERTIFICATE` into a keychain of its own, signs every binary with
   `APPLE_SIGNING_IDENTITY`, the hardened runtime and `src-tauri/Entitlements.plist` (the microphone; the keychain
@@ -64,7 +65,9 @@ the secrets.
 - The .dmg: signed with the same identity from a keychain of the job's own, notarized with `notarytool` and stapled.
 - Checked in the job: the Developer ID authority, the team, a secure timestamp, `stapler validate` and
   `spctl -a -vv` (`source=Notarized Developer ID`) on the app, on the .dmg, and on the app inside the .dmg.
-- The keychain and the key file are removed at the end of the job, whatever happened.
+- The job's own keychain, the certificate file and the key file are removed at the end of the job, whatever
+  happened. The bundler removes the keychain it made itself when it is done; one left by a bundler that failed
+  half-way goes with the runner, a GitHub-hosted machine discarded after the job.
 
 **A dry signed build**, nothing published: run `build` by hand with `sign` on (Actions → build → Run workflow, or
 `gh workflow run build.yml -R sidevoice/sidevoice-desktop --ref main -f sign=true`). A manual run publishes nothing
