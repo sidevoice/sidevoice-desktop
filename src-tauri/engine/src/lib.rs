@@ -7,7 +7,8 @@
 //! refusals (keyed, `error.rs`). Loading and running the models goes through the
 //! engine itself (`NativeEngines::engine`): what is in memory is what its `LoadedModel`s hold.
 //!
-//! It always installs the build the page chose — model + engine. Before it downloads anything it checks, at this trust
+//! It always installs the build the page chose — model + build id (`Wanted`), or model + engine, or the build the
+//! catalogue recommends here when the page names neither. Before it downloads anything it checks, at this trust
 //! boundary, that the engine runs that build here; anything else is refused with a keyed `Error`, never replaced by
 //! another build.
 //!
@@ -26,8 +27,8 @@ pub use jobs::{Jobs, Progress};
 /// The engine crate itself, for what the app hands it (`Credentials`) and the models it loads.
 pub use sidevoice_engine;
 use sidevoice_engine::{
-    Accelerator, BundledCatalog, Cancel, CatalogSource, Credentials, Engine, Host, LocalModelInfo, NativeHost,
-    LOCAL_CATALOG,
+    Accelerator, BundledCatalog, Cancel, CatalogSource, Credentials, Engine, Host, LocalModelInfo, ModelBuild,
+    NativeHost, LOCAL_CATALOG,
 };
 use std::future::Future;
 use std::path::PathBuf;
@@ -53,6 +54,15 @@ pub struct Device {
     pub arch: String,
     pub has: Vec<String>,
     pub memory_mb: Option<u64>,
+}
+
+/// Which build of a model an install is for, as the page names it: the build named (its catalogue id, `ModelBuild.id`),
+/// which must be `engine`'s when that is named too; else the build for `engine`; else, with neither, the build the
+/// catalogue recommends here.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Wanted<'a> {
+    pub build: Option<&'a str>,
+    pub engine: Option<&'a str>,
 }
 
 /// A build on disk, as the page names it: catalogue model id + engine id.
@@ -258,9 +268,10 @@ impl NativeEngines {
 
     /// Asks provider `id` with `key` in place of the key the host keeps, and keeps nothing of it: what its catalogue
     /// says against that key (its reason: `credential-rejected`, `listing-not-permitted`, `provider-unreachable`, …,
-    /// with the provider's own words made safe: [`CredentialRefusal::new`]), or `None` when the provider lists with it. The listing is an engine's of its own, over the same host with `key`
-    /// as its only key (`trial.rs`): this engine's listings, and the key it hands a provider, are the kept key's
-    /// throughout, whatever runs at the same time. `catalog_not_found` for an id that is not a provider's.
+    /// with the provider's own words made safe: [`CredentialRefusal::new`]), or `None` when the provider lists with it.
+    /// The listing is an engine's of its own, over the same host with `key` as its only key (`trial.rs`): this engine's
+    /// listings, and the key it hands a provider, are the kept key's throughout, whatever runs at the same time.
+    /// `catalog_not_found` for an id that is not a provider's.
     pub fn test_credential(&self, id: &str, key: &str) -> Result<Option<CredentialRefusal>, Error> {
         if id == LOCAL_CATALOG {
             return Err(error::catalog_not_found(id));
@@ -273,32 +284,66 @@ impl NativeEngines {
         Ok(status.reason.map(|reason| CredentialRefusal::new(reason, status.detail.as_deref(), key)))
     }
 
-    /// `model` on `engine`, if the engine can run it on this device: an engine compiled into this app, a model of its
-    /// catalogue with a build for that engine, and that build runnable here (an accelerator, the model's memory).
-    fn locate(&self, model_id: &str, engine_id: &str) -> Result<Located, Error> {
-        if !self.engine.backends().iter().any(|backend| backend.id == engine_id) {
-            return Err(error::engine_unsupported(engine_id));
+    /// The build of `model` the page asks for (`wanted`), if the engine can run it on this device: an engine compiled
+    /// into this app, a model of its catalogue with that build, and that build runnable here (an accelerator, the
+    /// model's memory).
+    fn locate(&self, model_id: &str, wanted: Wanted<'_>) -> Result<Located, Error> {
+        if let Some(engine_id) = wanted.engine {
+            self.compiled(engine_id)?;
         }
         let models = self.models()?;
         let model = models.iter().find(|m| m.id == model_id).ok_or_else(|| error::model_unknown(model_id))?;
-        Self::located(model, engine_id)
+        let build_id = match (wanted.build, wanted.engine) {
+            (None, Some(engine_id)) => return Self::located(model, engine_id),
+            (Some(build_id), _) => build_id,
+            // Neither: the build the catalogue recommends here (its first that runs here, on an accelerator the app
+            // offers), else its first, which says why it does not run.
+            (None, None) => {
+                let mut builds = model.builds.iter();
+                match builds.clone().find(|b| b.available && b.accelerator.is_some_and(offered)).or(builds.next()) {
+                    Some(build) => build.id.as_str(),
+                    None => return Err(error::build_missing(model_id, "this device")),
+                }
+            }
+        };
+        let build =
+            model.builds.iter().find(|b| b.id == build_id).ok_or_else(|| error::build_missing(model_id, build_id))?;
+        // A build named with an engine is that engine's: never another's run in its place.
+        if wanted.engine.is_some_and(|engine_id| engine_id != build.backend) {
+            return Err(error::build_missing(model_id, wanted.engine.unwrap_or_default()));
+        }
+        self.compiled(&build.backend)?;
+        Self::fit(model, build)
+    }
+
+    /// Refused unless `engine_id` is an engine compiled into this app.
+    fn compiled(&self, engine_id: &str) -> Result<(), Error> {
+        if self.engine.backends().iter().any(|backend| backend.id == engine_id) {
+            Ok(())
+        } else {
+            Err(error::engine_unsupported(engine_id))
+        }
     }
 
     fn located(model: &LocalModelInfo, engine_id: &str) -> Result<Located, Error> {
         let mut builds =
             model.builds.iter().filter(|b| b.backend == engine_id && b.accelerator.is_none_or(offered)).peekable();
         let first = *builds.peek().ok_or_else(|| error::build_missing(&model.id, engine_id))?;
-        let build = builds.find(|b| b.available).unwrap_or(first);
-        if !build.available || build.accelerator.is_none() {
+        Self::fit(model, builds.find(|b| b.available).unwrap_or(first))
+    }
+
+    /// `build` of `model`, if it runs here: available, on an accelerator the app offers.
+    fn fit(model: &LocalModelInfo, build: &ModelBuild) -> Result<Located, Error> {
+        if !build.available || !build.accelerator.is_some_and(offered) {
             let memory = build.reasons.iter().find(|r| r.code == "memory");
             return Err(match memory.and_then(|r| Some((r.needs?, r.has?))) {
                 Some((needs, has)) => error::model_needs_memory(&model.id, needs.into(), has.into()),
-                None => error::build_unfit(&model.id, engine_id, build.reasons.first().map(|r| r.code)),
+                None => error::build_unfit(&model.id, &build.backend, build.reasons.first().map(|r| r.code)),
             });
         }
         Ok(Located {
             model: model.id.clone(),
-            engine: engine_id.to_string(),
+            engine: build.backend.clone(),
             build: build.id.clone(),
             task: task_of(model),
             installed: build.installed,
@@ -308,19 +353,30 @@ impl NativeEngines {
 
     /// Every build the engine can run here whose files are all on disk, as the page names it.
     pub fn installed(&self) -> Result<Vec<Installed>, Error> {
-        Ok(self
-            .runnable()?
-            .into_iter()
-            .filter(|l| l.installed)
-            .map(|l| Installed { model: l.model, engine: l.engine })
-            .collect())
+        let mut installed: Vec<Installed> = Vec::new();
+        for l in self.runnable()?.into_iter().filter(|l| l.installed) {
+            // Two builds of a model for one engine on disk are one entry as the page names them.
+            if !installed.iter().any(|i| i.model == l.model && i.engine == l.engine) {
+                installed.push(Installed { model: l.model, engine: l.engine });
+            }
+        }
+        Ok(installed)
     }
 
-    /// Every build the engine can run here, in catalogue order.
+    /// Every build the engine can run here, in catalogue order: each of them, not only the one an install by engine
+    /// would choose, so a build installed by its id is listed too.
     fn runnable(&self) -> Result<Vec<Located>, Error> {
         let backends = self.engine.backends();
         let models = self.models()?;
-        Ok(models.iter().flat_map(|m| backends.iter().filter_map(|b| Self::located(m, b.id).ok())).collect())
+        Ok(models
+            .iter()
+            .flat_map(|m| {
+                m.builds
+                    .iter()
+                    .filter(|b| backends.iter().any(|backend| backend.id == b.backend))
+                    .filter_map(|b| Self::fit(m, b).ok())
+            })
+            .collect())
     }
 
     /// The model builds on disk, with the bytes each downloaded.
@@ -340,17 +396,17 @@ impl NativeEngines {
         Ok(OnDisk { engines: Vec::new(), builds })
     }
 
-    /// Downloads what `model` on `engine` needs — whatever of it is missing — reporting (done, total) bytes. The first
-    /// report, `(0, total)`, comes once this install holds the install lock.
+    /// Downloads what the build of `model` the page asks for (`wanted`) needs — whatever of it is missing — reporting
+    /// (done, total) bytes. The first report, `(0, total)`, comes once this install holds the install lock.
     pub fn install(
         &self,
         model_id: &str,
-        engine_id: &str,
+        wanted: Wanted<'_>,
         progress: &mut (dyn FnMut(u64, u64) + Send),
     ) -> Result<(), Error> {
         let progress = Mutex::new(progress);
         let held = self.install_lock(&|| false)?;
-        self.install_until(&held, model_id, engine_id, &|done, total| (guard(&progress))(done, total), &|| false)
+        self.install_until(&held, model_id, wanted, &|done, total| (guard(&progress))(done, total), &|| false)
             .map(|_| ())
     }
 
@@ -375,12 +431,13 @@ impl NativeEngines {
         &self,
         _held: &MutexGuard<'_, ()>,
         model_id: &str,
-        engine_id: &str,
+        wanted: Wanted<'_>,
         progress: &(dyn Fn(u64, u64) + Sync),
         stop: &dyn Fn() -> bool,
     ) -> Result<Downloaded, Error> {
         // Asked under the lock: an install ahead of this one may have put it on disk.
-        let located = self.locate(model_id, engine_id)?;
+        let located = self.locate(model_id, wanted)?;
+        let engine_id = located.engine.as_str();
         if located.installed {
             progress(0, 0);
             return Ok(Downloaded::Nothing);
@@ -420,10 +477,21 @@ impl NativeEngines {
     }
 
     /// `install` as the page's job `job`: known to `jobs` until it ends — its progress once it starts, cancellable
-    /// throughout (`Jobs::cancel`). A cancel the job accepted wins: one that lands after the download ended removes
+    /// throughout (`Jobs::cancel`). The build is chosen first: one that does not run here is refused at once, and the
+    /// job reports the engine of the build it installs. A cancel the job accepted wins: one that lands after the download ended removes
     /// the build this job installed, and only it, so a cancelled install leaves nothing of it to load (sidevoice-core#21
     /// review R04). A removal that fails is said (`install_cancel_failed`), never hidden.
-    pub fn install_job(&self, jobs: &Jobs, job: &str, model_id: &str, engine_id: &str) -> Result<(), Error> {
+    pub fn install_job(&self, jobs: &Jobs, job: &str, model_id: &str, wanted: Wanted<'_>) -> Result<(), Error> {
+        let chosen = match self.locate(model_id, wanted) {
+            Ok(chosen) => chosen,
+            // Refused as it arrives, and ended for a cancel that comes after; one that came first wins.
+            Err(refusal) => {
+                jobs.begin(job, model_id, wanted.engine.unwrap_or_default());
+                // False when the job was cancelled before it got here, or since.
+                return Err(if jobs.finish(job) { refusal } else { error::install_cancelled() });
+            }
+        };
+        let (engine_id, wanted) = (chosen.engine.as_str(), Wanted { build: Some(&chosen.build), engine: None });
         if !jobs.begin(job, model_id, engine_id) {
             return Err(error::install_cancelled());
         }
@@ -433,7 +501,7 @@ impl NativeEngines {
         let (held, result) = match self.install_lock(&stop) {
             Ok(held) => {
                 let result =
-                    self.install_until(&held, model_id, engine_id, &|done, total| jobs.set(job, done, total), &stop);
+                    self.install_until(&held, model_id, wanted, &|done, total| jobs.set(job, done, total), &stop);
                 (Some(held), result)
             }
             Err(error) => (None, Err(error)),

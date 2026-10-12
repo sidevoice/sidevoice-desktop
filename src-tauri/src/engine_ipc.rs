@@ -9,7 +9,7 @@
 
 use sidevoice_desktop_engine::error::{self, internal};
 use sidevoice_desktop_engine::{
-    CatalogView, CredentialRefusal, Device, Error, Installed, Jobs, Memory, NativeEngines, OnDisk, Progress,
+    CatalogView, CredentialRefusal, Device, Error, Installed, Jobs, Memory, NativeEngines, OnDisk, Progress, Wanted,
 };
 use std::sync::Arc;
 use tauri::State;
@@ -46,19 +46,24 @@ pub async fn engine_on_disk(state: State<'_, EngineState>) -> Result<OnDisk, Err
     tauri::async_runtime::spawn_blocking(move || engines.on_disk()).await.map_err(internal)?
 }
 
-/// Installs `model` on `engine` as `job` (the page's id for this call): its progress while it runs, cancellable with
-/// `engine_cancel` until it ends.
+/// Installs `model` as `job` (the page's id for this call): build `build` (its catalogue id), which must be `engine`'s
+/// when that is named too; else the build for `engine`; else the one the catalogue recommends here. Its progress while
+/// it runs, cancellable with `engine_cancel` until it ends.
 #[tauri::command]
 pub async fn engine_install(
     state: State<'_, EngineState>,
     model: String,
-    engine: String,
+    build: Option<String>,
+    engine: Option<String>,
     job: String,
 ) -> Result<(), Error> {
     let (engines, jobs) = (state.engines.clone(), state.jobs.clone());
-    tauri::async_runtime::spawn_blocking(move || engines.install_job(&jobs, &job, &model, &engine))
-        .await
-        .map_err(internal)?
+    tauri::async_runtime::spawn_blocking(move || {
+        let wanted = Wanted { build: build.as_deref(), engine: engine.as_deref() };
+        engines.install_job(&jobs, &job, &model, wanted)
+    })
+    .await
+    .map_err(internal)?
 }
 
 /// `{job, model, engine, done, total, bytes_per_s}` of install `job` once it has started; `null` while it waits or
@@ -104,10 +109,10 @@ pub async fn engine_set_credential(
 }
 
 /// Asks `provider` with `key` without keeping it: never written to the keychain, never in the engine's own listings
-/// (`NativeEngines::test_credential`). Answers what the provider's catalogue says against it (`{code, params, detail?}`, `detail` the
-/// provider's own words without the key), or
-/// `null` when it lists with it. Refused as `engine_set_credential` is where the app keeps no keys: a key it could
-/// not keep is not worth trying. The key is never logged.
+/// (`NativeEngines::test_credential`). Answers what the provider's catalogue says against it (`{code, params, detail?}`,
+/// `detail` the provider's own words without the key), or `null` when it lists with it. Refused as
+/// `engine_set_credential` is where the app keeps no keys: a key it could not keep is not worth trying. The key is
+/// never logged.
 #[tauri::command]
 pub async fn engine_test_credential(
     state: State<'_, EngineState>,

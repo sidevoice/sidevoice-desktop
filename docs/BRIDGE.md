@@ -192,7 +192,8 @@ web repo), other displays and scales, and any platform but macOS.
 The app's engine (docs/ENGINES.md), for what the page knows and manages of its models: its catalogues and the keys of
 remote providers, what this device runs, which builds are on disk, and getting one there with its progress. Running
 models is the voice call's (below), never the page's. `window.__sidevoiceDesktop.host.engine` is the page's
-`ModelCatalogs` seam in the app (sidevoice-web `apps/web/src/services/model-catalogs.js`) plus the install calls:
+`ModelCatalogs` seam in the app (sidevoice-web `apps/web/src/services/model-catalogs.js`), as that file types it —
+`install` included, with its options, progress and cancel — plus what this device is, runs and has on disk:
 
 | Call | Returns / does |
 |---|---|
@@ -203,28 +204,27 @@ models is the voice call's (below), never the page's. `window.__sidevoiceDesktop
 | `refresh(provider)` | asks `provider` again now, past any listing kept, with the key the keychain has (what Test does); `catalogs()` then lists what it said. Rejects `catalog_not_found` |
 | `capabilities()` | `{runs: "native", os: "macos"\|"windows"\|"linux", arch: "aarch64"\|"x86_64", has: ["cpu", …], memory_mb: number\|null}` — `has` is what sidevoice-engine runs a model on here (`cpu`; `metal` on Apple Silicon, for whisper.cpp), never Core ML; remote providers are catalogues of their own (`catalogs()`), `memory_mb` the machine's total, from the OS |
 | `installed()` | `[{model, engine}]` — builds whose files are on disk and whole |
-| `install(model, engine, onProgress?)` | downloads the model's build, whatever of it is missing. Returns a promise that also carries the install's job id from the start, `promise.job` (a string), for `cancel`. `onProgress(event)` about twice a second, only with this call's own bytes (below) |
-| `cancel(job)` | cancels that install, waiting or running; its `install` promise rejects with `{key: "install_cancelled", message}` and the model is not on disk afterwards (unless it already was before the install). Resolves `true` when the install will reject so — also when it has not reached the app yet (it is refused as it arrives) — and `false` when it had already ended (a no-op, never a rejection) |
+| `install(model, {build?, engine?, onProgress?, signal?})` | `ModelCatalogs.install`: downloads a build of the model, whatever of it is missing, and resolves `undefined`. `build` is the build's catalogue id (`ModelBuild.id`, `whisper-small/sherpa-onnx-int8`), `engine` its engine id (`backend`); either or both (below), or neither for the build the catalogue recommends here (`recommendedBuild`). `onProgress({fraction, done, total})` about twice a second, only with this call's own bytes (below). `signal`, an `AbortSignal`, cancels it, waiting or running: it rejects `{code: "install-cancelled", key: "install_cancelled", message}` and the model is not on disk afterwards (unless it already was before the install); a signal already aborted rejects so at once, and nothing reaches the app. Any other refusal rejects `{key, code, message, …params}` (below) |
 | `memory()` | `{total_mb, available_mb}`: the machine's memory and what is available of it now, each `null` when the OS does not say. On macOS `available_mb` is the share the kernel's memory-pressure level reports free (`kern.memorystatus_level`): a gauge, not a limit, since macOS compresses and swaps rather than fail |
 
 - `model` is the catalogue id (`whisper-small`, `kokoro-82m-v1.0`), `engine` the build's engine id (`sherpa-onnx`,
-  `whisper-cpp`): sidevoice-engine's model id and backend id. The app installs exactly that build or refuses it
+  `whisper-cpp`): sidevoice-engine's model id and backend id. The build is the one `build` names (refused
+  `build_missing` when the model has no such build, or when `engine` is named too and is not its engine); else, with
+  only `engine`, that engine's build; else the recommended one. The app installs exactly that build or refuses it
   (below), and never another build instead. Before it downloads anything it checks, at this trust boundary, that the
   build runs here: an engine in this app, the build's needs and accelerators, and the model's memory against the
   machine's (unknown memory is not a refusal).
-- Installs run one at a time. Each `install` call is its own job (`job`, an id the bridge makes, `promise.job`); the
-  app keeps progress per job from the moment the job starts — after any install ahead of it — until it ends, so a
-  call that waits reports nothing and no call ever reports another's bytes. Each report is one object:
+- Installs run one at a time. Each `install` call is its own job (`job`, an id the bridge makes); the app keeps
+  progress per job from the moment the job starts — after any install ahead of it — until it ends, so a call that
+  waits reports nothing and no call ever reports another's bytes. Each report is one object:
 
   ```json
-  { "job": "install-3-mg8k2x", "model": "whisper-small", "engine": "sherpa-onnx",
-    "done": 52428800, "total": 639387718, "bytes_per_s": 31457280 }
+  { "fraction": 0.082, "done": 52428800, "total": 639387718 }
   ```
 
   `done`/`total` are this job's bytes across the build's files; `total` comes from sidevoice-engine's catalogue, so it
-  is known from the first report (0 when nothing is left to fetch).
-  `bytes_per_s` is `null` until the first second is measured, then the speed sampled each second, each sample
-  weighing half against the speed before it; time left is `(total - done) / bytes_per_s`.
+  is known from the first report (0 when nothing is left to fetch, and then `fraction` is `null`). `fraction` is
+  `done / total`, at most 1.
 - A cancelled install stops within a moment, whatever it is doing: waiting for another install, waiting on the
   network — for the answer's headers or its next chunk, however long the server has gone quiet: the request is
   dropped and its connection closed — or unpacking. It frees the install lock, removes what it was downloading
@@ -235,10 +235,13 @@ models is the voice call's (below), never the page's. `window.__sidevoiceDesktop
   `install_cancelled`, never `download_failed`. There is no overall download timeout: a slow line is not a failure,
   and the cancel is how a person stops one.
 - Commands behind it (`src-tauri/src/engine_ipc.rs`): `engine_catalogs`, `engine_set_credential {provider, key}`,
-  `engine_has_credential {provider}`, `engine_test_credential {provider, key}` (the reason with its `detail?`, or `null`),
-  `engine_refresh {provider}`, `engine_capabilities`, `engine_installed`,
-  `engine_install {model, engine, job}` with `engine_progress {job}` (the report above, or `null` while the job
-  waits or after it ends) and `engine_cancel {job}` (`true`/`false` as `cancel`), `engine_memory`. Granted to the room
+  `engine_has_credential {provider}`, `engine_test_credential {provider, key}` (the reason with its `detail?`, or
+  `null`), `engine_refresh {provider}`, `engine_capabilities`, `engine_installed`,
+  `engine_install {model, build, engine, job}` (`build` and `engine` each a string or `null`) with
+  `engine_progress {job}` (`{job, model, engine, done, total, bytes_per_s}` — the job's bytes and its speed, `null`
+  until a second is measured — or `null` while the job waits or after it ends), `engine_cancel {job}` (what the
+  signal's abort calls: `true` when the install will reject `install_cancelled`, also when it has not reached the app
+  yet, which then refuses it as it arrives; `false` when it had already ended), `engine_memory`. Granted to the room
   window (`capabilities/room.json`). The settings window may read `engine_capabilities` and `engine_on_disk` (what is
   on disk and its size), and nothing else of the engine.
 
@@ -253,7 +256,9 @@ client that does not know the key:
   "message": "whisper-large-v3 needs 4000 MB of memory; this machine has 2000 MB." }
 ```
 
-The page renders by `key` and falls back to `message`. The engine's keys are made in `src-tauri/engine/src/error.rs`,
+The page renders by `key` and falls back to `message`. `host.engine`'s catalogue, key and install calls also carry
+`code`, the code sidevoice-web's `ModelCatalogs` reads (`failureCode`): the refusal's own `code` (the engine's, below)
+when it has one, else its `key` with dashes (`model-needs-memory`, `install-cancelled`). The engine's keys are made in `src-tauri/engine/src/error.rs`,
 the voice call's in `src-tauri/src/voice.rs` and core `voice.rs`; a new one is added there and here. What
 sidevoice-engine itself fails with is one of these keys, with the engine's own code beside it as `code`
 (`digest-mismatch`, `model-load-failed`…).
@@ -262,7 +267,7 @@ sidevoice-engine itself fails with is one of these keys, with the engine's own c
 |---|---|---|
 | `engine_unsupported` | `engine` | no runtime in this app for that engine: unknown, a page's engine, or one a newer catalogue added |
 | `model_unknown` | `model` | not in sidevoice-engine's catalogue |
-| `build_missing` | `model`, `engine` | the model has no build for that engine |
+| `build_missing` | `model`, `engine` | the model has no build for that engine, or none with the `build` id named (then `engine` is that id), or the build named is not the `engine` named |
 | `build_unfit` | `model`, `engine`, `reason` (the engine's code, when it gave one) | the build needs a feature, or an accelerator, this device lacks |
 | `model_needs_memory` | `model`, `needed_mb`, `memory_mb` | the model needs more memory than this machine has |
 | `model_wrong_task` | `model`, `task` | the engine refused a model for what it was asked to do |
@@ -270,7 +275,7 @@ sidevoice-engine itself fails with is one of these keys, with the engine's own c
 | `download_failed` | `model`, `engine` | the network failed, or answered with an error |
 | `download_corrupt` | `model`, `engine` | the bytes are not the ones the catalogue names (SHA-256) |
 | `install_failed` | — | unpacking or moving the download into place failed (disk, permissions, an archive without its files) |
-| `install_cancelled` | — | the page cancelled the install (`cancel(job)`): not a failure, nothing to show as an error |
+| `install_cancelled` | — | the page cancelled the install (its `signal`): not a failure, nothing to show as an error. `install` rejects it with `code: "install-cancelled"` |
 | `install_cancel_failed` | `model`, `engine`, `code` | the page cancelled after the download had ended and removing it failed (`code`, the engine's: `model-in-use`, a storage failure): it may still be on disk |
 | `runtime_failed` | `engine` | the engine refused, with a code this app does not map |
 | `voice_model_unknown` | `code` (`model-unknown`), `model` | a slot names a model its catalogue does not list for that task |

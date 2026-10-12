@@ -68,8 +68,10 @@ what the interface's own window offers — same origin, same permission rule —
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-headset error " + String(error && (error.message || error)) });
   }
 
-  // The native engine through the app itself, as the interface calls it (docs/BRIDGE.md): capabilities, installs by
-  // catalogue model id + engine, refusals by key, the machine's memory, a cancelled download.
+  // The native engine through the app itself, as the interface calls it (docs/BRIDGE.md): capabilities, installs as
+  // sidevoice-web's `ModelCatalogs.install(model, {build, engine, onProgress, signal})` — by a catalogue build id, by an
+  // engine, by nothing (the recommended build) —, refusals by key, the machine's memory, a download cancelled by its
+  // signal.
   const engine = window.__sidevoiceDesktop && window.__sidevoiceDesktop.host && window.__sidevoiceDesktop.host.engine;
   if (!engine) { await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-engine none" }); return; }
   async function until(check, ms) {
@@ -84,32 +86,42 @@ what the interface's own window offers — same origin, same permission rule —
   try {
     const capabilities = await engine.capabilities();
     let progress = 0;
-    await engine.install("kokoro-82m-v1.0", "sherpa-onnx", () => { progress++; });
-    await engine.install("whisper-tiny", "whisper-cpp");
-    await engine.install("silero-vad", "sherpa-onnx");
+    await engine.install("kokoro-82m-v1.0", { engine: "sherpa-onnx", onProgress: () => { progress++; } });
+    // As the web's settings do: the build the person chose, by its catalogue id and its engine.
+    const tiny = (await engine.catalogs())[0].models.find((m) => m.id === "whisper-tiny");
+    const tinyBuild = tiny.builds.find((b) => b.backend === "whisper-cpp" && b.available);
+    await engine.install("whisper-tiny", { build: tinyBuild.id, engine: tinyBuild.backend });
+    await engine.install("silero-vad");
     const installed = (await engine.installed()).map((b) => b.model + "@" + b.engine).sort().join(",");
     // A page engine is never installed natively, nor replaced by another: refused, by key (docs/BRIDGE.md → "Refusals").
-    const refused = await engine.install("whisper-tiny", "transformers-js")
+    const refused = await engine.install("whisper-tiny", { engine: "transformers-js" })
       .then(() => "no", (error) => (error && error.key === "engine_unsupported" ? "yes" : "other:" + JSON.stringify(error)));
     const memory = await engine.memory();
 
-    // Cancel: a big download, cancelled once its speed is measured; the install rejects by key and leaves nothing
-    // (CI then checks the disk).
+    // Cancel: a big download, its signal aborted once it is under way; the install rejects install-cancelled and
+    // leaves nothing (CI then checks the disk). A signal already aborted rejects so without starting.
     let measured = null;
     let ended = false;
-    const small = engine.install("whisper-small", "sherpa-onnx", (p) => { if (p.bytes_per_s && !measured) measured = p; });
+    const abort = new AbortController();
+    // Aborted from its first report with bytes, as early as the page could, so a fast line cannot finish it first.
+    const small = engine.install("whisper-small", { engine: "sherpa-onnx", signal: abort.signal,
+      onProgress: (p) => { if (p.fraction > 0 && !measured) { measured = p; abort.abort(); } } });
     small.then(() => { ended = true; }, () => { ended = true; });
     await until(() => measured || ended, 120000);
-    const cancelled = await engine.cancel(small.job);
-    const outcome = await small.then(() => "installed", (error) => error && error.key);
-    const cancelAgain = await engine.cancel(small.job);
+    abort.abort();
+    const outcome = await small.then(() => "installed", (error) => error && error.code + "/" + error.key);
     const smallGone = !(await engine.installed()).some((b) => b.model === "whisper-small");
-    const event = measured ? Object.keys(measured).sort().join("+") + ":" + (measured.job === small.job && measured.model === "whisper-small") : "none";
+    const event = measured
+      ? Object.keys(measured).sort().join("+") + ":" + (measured.total > 0 && measured.done > 0 && measured.fraction <= 1)
+      : "none";
+    const aborted = new AbortController();
+    aborted.abort();
+    const preAborted = await engine.install("whisper-small", { engine: "sherpa-onnx", signal: aborted.signal })
+      .then(() => "installed", (error) => error && error.code);
 
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-engine ok capabilities=" + JSON.stringify(capabilities) +
       " installed=" + installed + " progress_calls=" + progress + " refused=" + refused + " memory=" + JSON.stringify(memory) +
-      " cancel=" + cancelled + "/" + outcome + "/" + cancelAgain + " cancel_gone=" + smallGone + " progress_event=" + event +
-      " speed=" + (measured ? measured.bytes_per_s : 0) });
+      " cancel=" + outcome + " pre_aborted=" + preAborted + " cancel_gone=" + smallGone + " progress_event=" + event });
   } catch (error) {
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-engine error " + String(error && (error.message || error)) });
   }

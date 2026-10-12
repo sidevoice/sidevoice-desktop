@@ -226,7 +226,7 @@ test("the engine is exactly the contract: its catalogues and keys, what runs her
   const engine = install(win, ORIGIN).host.engine;
   assert.equal(install(win, ORIGIN).host.app, "sidevoice-desktop");
   assert.deepEqual(Object.keys(engine).sort(), [
-    "cancel", "capabilities", "catalogs", "hasCredential", "install", "installed", "memory", "refresh", "setCredential",
+    "capabilities", "catalogs", "hasCredential", "install", "installed", "memory", "refresh", "setCredential",
     "testCredential",
   ]);
   assert.ok(Object.isFrozen(engine));
@@ -235,15 +235,49 @@ test("the engine is exactly the contract: its catalogues and keys, what runs her
   assert.equal(JSON.stringify(await engine.installed()), JSON.stringify([{ model: "whisper-tiny", engine: "sherpa-onnx" }]));
   assert.equal(JSON.stringify(await engine.memory()), '{"total_mb":16384,"available_mb":9000}');
 
+  // sidevoice-web's `ModelCatalogs.install(model, {build, engine, onProgress, signal})`, as its settings call it.
   const seen = [];
-  const installing = engine.install("whisper-small", "sherpa-onnx", (progress) => seen.push(progress));
-  assert.match(installing.job, /^install-/, "the call's own job, there from the start");
-  await installing;
+  const build = "whisper-small/sherpa-onnx-int8";
+  assert.equal(await engine.install("whisper-small", { build, engine: "sherpa-onnx", onProgress: (p) => seen.push(p) }), undefined);
   const installArgs = calls.find(([cmd]) => cmd === "engine_install")[1];
-  assert.deepEqual([installArgs.model, installArgs.engine, installArgs.job], ["whisper-small", "sherpa-onnx", installing.job]);
+  assert.deepEqual(Object.keys(installArgs).sort(), ["build", "engine", "job", "model"]);
+  assert.deepEqual([installArgs.model, installArgs.build, installArgs.engine], ["whisper-small", build, "sherpa-onnx"]);
+  assert.match(installArgs.job, /^install-/, "the call's own job");
   assert.equal(calls.find(([cmd]) => cmd === "engine_progress")[1].job, installArgs.job, "polled by that job");
-  assert.equal(JSON.stringify(seen[0]), JSON.stringify(answers.engine_progress), "one object per report, as the app sent it");
-  assert.match(engine.install("whisper-tiny", "sherpa-onnx").job, /^install-/, "without onProgress too");
+  assert.equal(JSON.stringify(seen[0]), '{"fraction":0.5,"done":5,"total":10}', "the app's bytes as the share done");
+  // With nothing named the app installs the build the catalogue recommends; without onProgress nothing is polled.
+  const polled = calls.filter(([cmd]) => cmd === "engine_progress").length;
+  await engine.install("whisper-tiny");
+  const bare = calls.filter(([cmd]) => cmd === "engine_install")[1][1];
+  assert.deepEqual([bare.model, bare.build, bare.engine], ["whisper-tiny", null, null]);
+  assert.notEqual(bare.job, installArgs.job, "a job per call");
+  assert.equal(calls.filter(([cmd]) => cmd === "engine_progress").length, polled);
+});
+
+test("install progress: the share done of the app's bytes, null while the size is unknown", async () => {
+  const install = loadFactory();
+  const { win } = fakeWindow(ORIGIN);
+  const reports = [
+    { job: "j", model: "m", engine: "e", done: 0, total: 0, bytes_per_s: null },
+    { job: "j", model: "m", engine: "e", done: 30, total: 120, bytes_per_s: null },
+    { job: "j", model: "m", engine: "e", done: 130, total: 120, bytes_per_s: 7 },
+  ];
+  let finish;
+  win.__TAURI_INTERNALS__.invoke = (cmd) => {
+    if (cmd === "engine_install") return new Promise((resolve) => { finish = resolve; });
+    if (cmd === "engine_progress") return Promise.resolve(reports.length > 1 ? reports.shift() : reports[0]);
+    return Promise.resolve(null);
+  };
+  const seen = [];
+  const installing = install(win, ORIGIN).host.engine.install("m", { onProgress: (p) => seen.push(JSON.stringify(p)) });
+  while (seen.length < 3) await new Promise((resolve) => setTimeout(resolve, 5));
+  finish(null);
+  await installing;
+  assert.deepEqual(seen.slice(0, 3), [
+    '{"fraction":null,"done":0,"total":0}',
+    '{"fraction":0.25,"done":30,"total":120}',
+    '{"fraction":1,"done":130,"total":120}',
+  ]);
 });
 
 test("host.engine lists the catalogues and keeps provider keys, refusing with a code", async () => {
@@ -463,7 +497,7 @@ test("a refused start rejects with the app's keyed refusal", async () => {
   await assert.rejects(voice.start(), (error) => error === refusal);
 });
 
-test("cancel: by the job install carries from the start; the install rejects as the app refuses it", async () => {
+test("cancel: the signal's abort cancels the install's own job, which rejects install-cancelled", async () => {
   const install = loadFactory();
   const { win, calls } = fakeWindow(ORIGIN);
   const pending = new Map();
@@ -481,14 +515,50 @@ test("cancel: by the job install carries from the start; the install rejects as 
   };
   const engine = install(win, ORIGIN).host.engine;
   const seen = [];
-  const installing = engine.install("whisper-small", "sherpa-onnx", (p) => seen.push(p));
+  const abort = new AbortController();
+  const installing = engine.install("whisper-small", { engine: "sherpa-onnx", onProgress: (p) => seen.push(p), signal: abort.signal });
   await flush();
-  assert.equal(await engine.cancel(installing.job), true);
-  await assert.rejects(installing, (error) => error.key === "install_cancelled" && error.message === "The download was cancelled.");
-  assert.equal(await engine.cancel(installing.job), false, "an ended job: nothing to cancel, no throw");
-  assert.deepEqual(calls.filter(([cmd]) => cmd === "engine_cancel").map(([, args]) => args), [{ job: installing.job }, { job: installing.job }]);
+  abort.abort();
+  await assert.rejects(installing, (error) =>
+    error.code === "install-cancelled" && error.key === "install_cancelled" && error.message === "The download was cancelled.");
+  const job = calls.find(([cmd]) => cmd === "engine_install")[1].job;
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "engine_cancel").map(([, args]) => args), [{ job }]);
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.deepEqual(seen, [], "no progress for it once it ended");
+
+  // Aborted in the same tick as the call: the cancel goes behind the install, never ahead of it.
+  const now = new AbortController();
+  const immediate = engine.install("kokoro-82m-v1.0", { signal: now.signal });
+  now.abort();
+  await assert.rejects(immediate, (error) => error.code === "install-cancelled");
+  const order = calls.filter(([cmd]) => cmd === "engine_install" || cmd === "engine_cancel").slice(-2);
+  assert.deepEqual(order.map(([cmd]) => cmd), ["engine_install", "engine_cancel"]);
+  assert.equal(order[0][1].job, order[1][1].job);
+
+  // An abort after the install ended asks the app nothing.
+  const late = new AbortController();
+  const ended = engine.install("whisper-tiny", { signal: late.signal });
+  await flush();
+  [...pending.values()][0].resolve(null);
+  await ended;
+  late.abort();
+  await flush();
+  assert.equal(calls.filter(([cmd]) => cmd === "engine_cancel").length, 2);
+});
+
+test("an install whose signal is already aborted rejects install-cancelled at once, asking the app nothing", async () => {
+  const install = loadFactory();
+  const { win, calls } = fakeWindow(ORIGIN);
+  const abort = new AbortController();
+  abort.abort();
+  const progress = [];
+  await assert.rejects(
+    install(win, ORIGIN).host.engine.install("whisper-small", { build: "b", onProgress: (p) => progress.push(p), signal: abort.signal }),
+    (error) => error.code === "install-cancelled" && error.key === "install_cancelled",
+  );
+  await flush();
+  assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("engine_")), []);
+  assert.deepEqual(progress, []);
 });
 
 test("concurrent installs: each callback gets its own job's bytes, and none while its job waits", async () => {
@@ -512,8 +582,8 @@ test("concurrent installs: each callback gets its own job's bytes, and none whil
   const engine = install(win, ORIGIN).host.engine;
   const whisper = [];
   const kokoro = [];
-  const a = engine.install("whisper-small", "sherpa-onnx", (p) => whisper.push([p.done, p.total, p.job]));
-  const b = engine.install("kokoro-82m-v1.0", "sherpa-onnx", (p) => kokoro.push([p.done, p.total, p.job]));
+  const a = engine.install("whisper-small", { engine: "sherpa-onnx", onProgress: (p) => whisper.push([p.done, p.total]) });
+  const b = engine.install("kokoro-82m-v1.0", { engine: "sherpa-onnx", onProgress: (p) => kokoro.push([p.done, p.total]) });
   await flush(); // the bridge reaches the app on a later tick
   try {
     assert.equal(jobs.length, 2);
@@ -526,8 +596,8 @@ test("concurrent installs: each callback gets its own job's bytes, and none whil
     await a;
     progress.set(jobs[1], [10, 132]);
     await new Promise((resolve) => setTimeout(resolve, 30));
-    assert.ok(kokoro.every(([, t, job]) => t === 132 && job === b.job) && kokoro.length > 0, "B sees only its own");
-    assert.ok(whisper.every(([, , job]) => job === a.job));
+    assert.ok(kokoro.every(([, t]) => t === 132) && kokoro.length > 0, "B sees only its own");
+    assert.ok(whisper.every(([, t]) => t === 100));
     finish.get(jobs[1])();
     await b;
   } finally {
@@ -542,8 +612,9 @@ test("a refusal reaches the page as the app sent it: a key, its parameters and a
     message: "whisper-large-v3 needs 4000 MB of memory; this machine has 2000 MB." };
   win.__TAURI_INTERNALS__.invoke = () => Promise.reject(refusal);
   const engine = install(win, ORIGIN).host.engine;
-  await assert.rejects(engine.install("whisper-large-v3", "sherpa-onnx"), (error) => {
+  await assert.rejects(engine.install("whisper-large-v3", { engine: "sherpa-onnx" }), (error) => {
     assert.equal(error.key, "model_needs_memory");
+    assert.equal(error.code, "model-needs-memory", "the code the page reads");
     assert.equal(error.needed_mb, 4000);
     assert.equal(error.model, "whisper-large-v3");
     assert.equal(error.message, refusal.message);
