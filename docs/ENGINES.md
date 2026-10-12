@@ -30,8 +30,7 @@ catalogues: `local` first, then each provider), in the shape `/engine` gives the
 
 ## What runs, where
 
-- Backends, linked statically into the app through sidevoice-engine (the commit `src-tauri/engine/Cargo.toml` pins: 0.3.1 with
-  sidevoice-engine#90, until a release carries it),
+- Backends, linked statically into the app through sidevoice-engine (the release `src-tauri/engine/Cargo.toml` pins: 0.4.0),
   with no Cargo features to choose: **sherpa-onnx 1.13.8** (ONNX Runtime) on the CPU, **whisper.cpp** (through
   `whisper-rs`), compiled from source, on Metal on Apple Silicon, and the **remote** OpenAI and ElevenLabs backends.
   Nothing is loaded at run time with `dlopen`, so the macOS app keeps library validation on: its only entitlement is
