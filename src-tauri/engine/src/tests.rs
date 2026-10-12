@@ -432,7 +432,7 @@ fn an_uninstall_takes_every_build_of_the_model_off_the_disk() {
     let test = engines("uninstall", false);
     let engines = &test.engines;
     let jobs = Jobs::default();
-    engines.install("whisper-test", "sherpa-onnx", &mut |_, _| {}).unwrap();
+    engines.install("whisper-test", ENGINE, &mut |_, _| {}).unwrap();
     assert_eq!(engines.installed().unwrap().len(), 1);
     engines.uninstall(&jobs, "whisper-test").unwrap();
     assert!(engines.installed().unwrap().is_empty());
@@ -444,7 +444,7 @@ fn an_uninstall_takes_every_build_of_the_model_off_the_disk() {
     let unknown = serde_json::to_value(engines.uninstall(&jobs, "whisper-nope").unwrap_err()).unwrap();
     assert_eq!((unknown["key"].as_str(), unknown["code"].as_str()), (Some("model_unknown"), Some("model-not-found")));
     // And it installs again afterwards.
-    engines.install("whisper-test", "sherpa-onnx", &mut |_, _| {}).unwrap();
+    engines.install("whisper-test", ENGINE, &mut |_, _| {}).unwrap();
     assert_eq!(engines.installed().unwrap().len(), 1);
 }
 
@@ -489,7 +489,7 @@ fn an_uninstall_is_refused_while_a_job_of_the_model_is_installing() {
     let test = engines("uninstall-installing", false);
     let engines = &test.engines;
     let jobs = Jobs::default();
-    engines.install("whisper-test", "sherpa-onnx", &mut |_, _| {}).unwrap();
+    engines.install("whisper-test", ENGINE, &mut |_, _| {}).unwrap();
     assert!(jobs.begin("j", "whisper-test", "sherpa-onnx"));
     let refused = engines.uninstall(&jobs, "whisper-test").unwrap_err();
     assert_eq!((refused.key, &refused.params["code"]), ("model_installing", &serde_json::json!("model-installing")));
@@ -507,7 +507,7 @@ fn an_uninstall_waits_for_the_install_lock() {
     let test = engines("uninstall-lock", false);
     let engines = &test.engines;
     let jobs = Jobs::default();
-    engines.install("whisper-test", "sherpa-onnx", &mut |_, _| {}).unwrap();
+    engines.install("whisper-test", ENGINE, &mut |_, _| {}).unwrap();
     let held = engines.install_lock(&|| false).unwrap(); // another install is running
     std::thread::scope(|scope| {
         let removing = scope.spawn(|| engines.uninstall(&jobs, "whisper-test"));
