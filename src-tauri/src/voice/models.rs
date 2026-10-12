@@ -71,8 +71,8 @@ impl EngineModels {
     }
 
     /// Makes `choice` the call's. A slot whose model changes gets the new one once it is loaded (the old one serving
-    /// until then, and finishing what it started); text to speech, a new model or voice, once nothing is being said
-    /// (a reply is spoken by one model, in one voice, to its end). The end of turn keeps its classifier when the choice
+    /// until then, and finishing what it started: a transcription, a chunk of a reply, a pause asked); text to speech
+    /// its voice with it, from its next chunk. The end of turn keeps its classifier when the choice
     /// has none (`silence`): a pause already asked of it is answered. Without loaded slots (no call yet, or one that
     /// dropped its models), the choice is what the next load takes.
     ///
@@ -128,14 +128,6 @@ impl EngineModels {
         }
         *lock(&self.choice) = choice;
         Ok(Some(Switched { _turn: turn }))
-    }
-
-    /// What the call's speaker is doing now: once it is idle, a text-to-speech model or voice chosen meanwhile takes
-    /// over.
-    pub fn playback(&self, idle: bool) {
-        if let Some(slots) = lock(&self.live).upgrade() {
-            slots.playback(idle);
-        }
     }
 }
 
@@ -210,22 +202,12 @@ fn voice_of(choice: &VoiceChoice) -> Option<String> {
     choice.config.get("voice").and_then(|voice| voice.as_str()).map(str::to_string)
 }
 
-/// A speaker with the voice chosen with it.
-type Voiced = (Arc<dyn Speaker>, Option<String>);
-
-/// The text-to-speech slot: the speaker in use, and one chosen while something was being said, which takes over once
-/// nothing is.
-struct SpeakerSlot {
-    now: Voiced,
-    next: Option<Voiced>,
-    speaking: bool,
-}
-
 /// What fills each slot of a call now. The call holds these through [`Slots::models`]; each call to a slot takes the
 /// model the slot holds as it starts, and keeps it to the end.
 pub(crate) struct Slots {
     transcriber: Mutex<Arc<dyn Transcriber>>,
-    speaker: Mutex<SpeakerSlot>,
+    /// The speaker, and the voice chosen with it.
+    speaker: Mutex<(Arc<dyn Speaker>, Option<String>)>,
     end_of_turn: Mutex<Option<Arc<dyn EndOfTurnModel>>>,
 }
 
@@ -238,7 +220,7 @@ impl Slots {
     ) -> Arc<Self> {
         Arc::new(Slots {
             transcriber: Mutex::new(transcriber),
-            speaker: Mutex::new(SpeakerSlot { now: (speaker, voice), next: None, speaking: false }),
+            speaker: Mutex::new((speaker, voice)),
             end_of_turn: Mutex::new(end_of_turn),
         })
     }
@@ -256,35 +238,13 @@ impl Slots {
         *lock(&self.transcriber) = transcriber;
     }
 
-    /// `speaker` with `voice`: now if nothing is being said, else once it has been.
+    /// `speaker` with `voice`, from the next chunk the call asks it for.
     pub(crate) fn set_speaker(&self, speaker: Arc<dyn Speaker>, voice: Option<String>) {
-        let mut slot = lock(&self.speaker);
-        if slot.speaking {
-            slot.next = Some((speaker, voice));
-        } else {
-            slot.now = (speaker, voice);
-            slot.next = None;
-        }
+        *lock(&self.speaker) = (speaker, voice);
     }
 
-    /// The speaker chosen last, in `voice`.
     pub(crate) fn set_voice(&self, voice: Option<String>) {
-        let speaker = {
-            let slot = lock(&self.speaker);
-            Arc::clone(&slot.next.as_ref().unwrap_or(&slot.now).0)
-        };
-        self.set_speaker(speaker, voice);
-    }
-
-    /// Whether nothing is being said now: the speaker chosen meanwhile, if any, takes over.
-    pub(crate) fn playback(&self, idle: bool) {
-        let mut slot = lock(&self.speaker);
-        slot.speaking = !idle;
-        if idle {
-            if let Some(next) = slot.next.take() {
-                slot.now = next;
-            }
-        }
+        lock(&self.speaker).1 = voice;
     }
 
     pub(crate) fn set_end_of_turn(&self, end_of_turn: Arc<dyn EndOfTurnModel>) {
@@ -314,12 +274,7 @@ impl Speaker for SlotSpeaker {
         language: Option<String>,
         speed: f32,
     ) -> Result<(Vec<f32>, u32), String> {
-        let (model, voice) = {
-            let mut slot = lock(&self.0.speaker);
-            // Asked to speak: something is being said from now, whatever the call has told yet.
-            slot.speaking = true;
-            slot.now.clone()
-        };
+        let (model, voice) = lock(&self.0.speaker).clone();
         model.speak(text, voice, language, speed).await
     }
 }

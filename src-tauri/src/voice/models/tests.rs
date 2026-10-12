@@ -318,6 +318,14 @@ impl EndOfTurnModel for Held {
 struct FakeLoader {
     models: Vec<Arc<Held>>,
     slow: tokio::sync::watch::Sender<bool>,
+    /// Whether a load of `slow-…` has begun waiting.
+    waiting: AtomicBool,
+}
+
+impl FakeLoader {
+    fn new(models: Vec<Arc<Held>>, slow: bool) -> Arc<Self> {
+        Arc::new(FakeLoader { models, slow: tokio::sync::watch::channel(!slow).0, waiting: AtomicBool::new(false) })
+    }
 }
 
 impl FakeLoader {
@@ -326,6 +334,7 @@ impl FakeLoader {
             return Err("model-load-failed".into());
         }
         if chosen.model.starts_with("slow-") {
+            self.waiting.store(true, Ordering::SeqCst);
             let _ = self.slow.subscribe().wait_for(|open| *open).await;
         }
         Ok(Arc::clone(self.models.iter().find(|m| m.name == chosen.model).expect("a model of the test")))
@@ -368,12 +377,15 @@ fn config(end_of_turn: &str, voice: &str) -> VoiceConfig {
 
 const ALWAYS: &(dyn Fn() -> bool + Send + Sync) = &|| true;
 
-/// A call on `models`, as the app runs one (the call's playback state told to the models), and what the test sees of
-/// it. Every wait is bounded; an error, or the call going idle, fails the test: a model changed never stops the call.
+/// `work`, within thirty seconds.
+async fn within<T>(work: impl std::future::Future<Output = T>) -> T {
+    tokio::time::timeout(Duration::from_secs(30), work).await.expect("in time")
+}
+
+/// A call on `models`, as the app runs one, and what the test sees of it. Every wait is bounded; an error, or the call going idle, fails the test: a model changed never stops the call.
 struct Live {
     call: VoiceCall,
     events: Events,
-    models: Arc<EngineModels>,
     tone: Arc<AtomicUsize>,
     began: tokio::sync::mpsc::UnboundedReceiver<&'static str>,
     /// Whether the call has listened: from then on it must never be idle.
@@ -384,14 +396,13 @@ impl Live {
     fn start(models: Arc<EngineModels>, began: tokio::sync::mpsc::UnboundedReceiver<&'static str>) -> Self {
         let tone = Arc::new(AtomicUsize::new(0));
         let mic = Mic { sink: None, stop: Arc::default(), tone: Arc::clone(&tone) };
-        let (call, events) =
-            VoiceCall::new(Arc::clone(&models) as Arc<dyn VoiceModels>, Box::new(mic), config("silence", "af_old"));
+        let (call, events) = VoiceCall::new(models as Arc<dyn VoiceModels>, Box::new(mic), config("silence", "af_old"));
         call.start();
-        Live { call, events, models, tone, began, listened: false }
+        Live { call, events, tone, began, listened: false }
     }
 
     async fn next<T>(&mut self, want: impl Fn(&VoiceEvent) -> Option<T>) -> T {
-        let (events, models, listened) = (&mut self.events, &self.models, &mut self.listened);
+        let (events, listened) = (&mut self.events, &mut self.listened);
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
                 let event = events.next().await.expect("the call is alive");
@@ -402,7 +413,6 @@ impl Live {
                             *listened = true;
                         }
                         assert!(!*listened || state.listening != Listening::Idle, "the call stopped");
-                        models.playback(state.playback == PlaybackState::Idle);
                     }
                     _ => {}
                 }
@@ -458,8 +468,9 @@ const LONG: &str = "This first sentence is long enough to be a chunk of its own 
     And a third, to be sure the reply has several chunks to speak in turn.";
 
 /// Through the app's own switch: a turn being transcribed when the transcriber changes ends on the one it started
-/// with, and the next turn is the new one's; a reply being spoken when the speaker changes is spoken to its end by the
-/// one it started with, in its voice, and the next reply is the new one's. The call never stops.
+/// with, and the next turn is the new one's; a reply being spoken when the speaker changes is heard to its end, the
+/// chunk under way by the one it started with, in its voice, the next ones by the new one, in its. The call never
+/// stops.
 #[test]
 fn a_model_switched_mid_turn_and_mid_reply_does_not_stop_the_call() {
     let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build().unwrap();
@@ -469,17 +480,14 @@ fn a_model_switched_mid_turn_and_mid_reply_does_not_stop_the_call() {
         let new_stt = Held::new("new", false, &started);
         let old_tts = Held::new("af_old", true, &started);
         let new_tts = Held::new("af_new", false, &started);
-        let loader = Arc::new(FakeLoader {
-            models: vec![old_stt.clone(), new_stt.clone(), old_tts.clone(), new_tts.clone()],
-            slow: tokio::sync::watch::channel(true).0,
-        });
+        let loader = FakeLoader::new(vec![old_stt.clone(), new_stt.clone(), old_tts.clone(), new_tts.clone()], false);
         let models = Arc::new(EngineModels::with(Box::new(loader), chosen("old", "af_old", None)));
         let mut live = Live::start(Arc::clone(&models), began);
 
         // A turn: its transcription is held while the transcriber switches.
         live.tone.store(80, Ordering::SeqCst);
         assert_eq!(live.began().await, "old");
-        let switched = models.switch(chosen("new", "af_old", None), ALWAYS).await.unwrap();
+        let switched = within(models.switch(chosen("new", "af_old", None), ALWAYS)).await.unwrap();
         assert!(switched.is_some());
         drop(switched);
         old_stt.release();
@@ -493,10 +501,11 @@ fn a_model_switched_mid_turn_and_mid_reply_does_not_stop_the_call() {
         let second = live.turn().await;
         assert!(second.contains("new") && !second.contains("old"), "the next turn is the new model's: {second:?}");
 
-        // A reply of several chunks: its first is held while the speaker switches; the whole reply is the old one's.
+        // A reply of several chunks: its first is held while the speaker switches. That chunk is the old speaker's, in
+        // its voice; the next ones are the new one's, in its (as on the web: the slot moves between chunks).
         let mut saying = live.call.say(LONG, SayOptions::default());
         while live.began().await != "af_old" {}
-        drop(models.switch(chosen("new", "af_new", None), ALWAYS).await.unwrap().expect("switched"));
+        drop(within(models.switch(chosen("new", "af_new", None), ALWAYS)).await.unwrap().expect("switched"));
         live.call.set_config(config("silence", "af_new"));
         old_tts.release();
         let mut outcome = None;
@@ -505,12 +514,13 @@ fn a_model_switched_mid_turn_and_mid_reply_does_not_stop_the_call() {
                 outcome = Some(done);
             }
         }
-        assert_eq!(outcome, Some(SayOutcome::Heard), "the reply under way was heard");
-        assert!(old_tts.calls() >= 2, "the reply had several chunks: {}", old_tts.calls());
-        assert_eq!(new_tts.calls(), 0, "no chunk of it went to the new speaker");
+        assert_eq!(outcome, Some(SayOutcome::Heard), "the reply under way was heard to its end");
+        assert_eq!(old_tts.calls(), 1, "the chunk under way ended on the old speaker");
+        assert!(new_tts.calls() >= 1, "the reply's next chunks are the new speaker's");
         live.idle().await;
+        let before = new_tts.calls();
         assert_eq!(live.say("And now the new voice.").await, SayOutcome::Heard);
-        assert!(new_tts.calls() >= 1, "the next reply is the new speaker's");
+        assert!(new_tts.calls() > before, "the next reply is the new speaker's");
 
         // Still listening.
         live.turn().await;
@@ -529,16 +539,12 @@ fn a_refused_model_keeps_the_current_one_and_the_latest_switch_wins() {
         let slow = Held::new("slow-one", false, &started);
         let last = Held::new("last", false, &started);
         let tts = Held::new("af_old", false, &started);
-        let (slow_gate, _) = tokio::sync::watch::channel(false);
-        let loader = Arc::new(FakeLoader {
-            models: vec![old.clone(), slow.clone(), last.clone(), tts.clone()],
-            slow: slow_gate,
-        });
+        let loader = FakeLoader::new(vec![old.clone(), slow.clone(), last.clone(), tts.clone()], true);
         let models = Arc::new(EngineModels::with(Box::new(Arc::clone(&loader)), chosen("old", "af_old", None)));
         let mut live = Live::start(Arc::clone(&models), began);
         assert!(live.turn().await.contains("old"));
 
-        let refused = models.switch(chosen("fail", "af_old", None), ALWAYS).await.err();
+        let refused = within(models.switch(chosen("fail", "af_old", None), ALWAYS)).await.err();
         assert_eq!(refused.as_deref(), Some("model-load-failed"));
         assert!(live.turn().await.contains("old"), "the call goes on, on the model it had");
 
@@ -551,7 +557,12 @@ fn a_refused_model_keeps_the_current_one_and_the_latest_switch_wins() {
                 models.switch(chosen("slow-one", "af_old", None), &latest).await.map(|switched| switched.is_some())
             })
         };
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        within(async {
+            while !loader.waiting.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
         counter.store(2, Ordering::SeqCst);
         let second = {
             let (models, counter) = (Arc::clone(&models), Arc::clone(&counter));
@@ -561,8 +572,8 @@ fn a_refused_model_keeps_the_current_one_and_the_latest_switch_wins() {
             })
         };
         loader.slow.send_replace(true);
-        assert_eq!(first.await.unwrap(), Ok(false), "overtaken: it changes nothing");
-        assert_eq!(second.await.unwrap(), Ok(true));
+        assert_eq!(within(first).await.unwrap(), Ok(false), "overtaken: it changes nothing");
+        assert_eq!(within(second).await.unwrap(), Ok(true));
         let heard = live.turn().await;
         assert!(heard.contains("last") && slow.calls() == 0, "the latest switch's model: {heard:?}");
         live.call.stop();
@@ -580,18 +591,17 @@ fn smart_turn_and_back_mid_call_does_not_stop_it() {
         let stt = Held::new("heard", false, &started);
         let tts = Held::new("af_old", false, &started);
         let ends = Held::new("ends", false, &started);
-        let loader =
-            Arc::new(FakeLoader { models: vec![stt, tts, ends.clone()], slow: tokio::sync::watch::channel(true).0 });
+        let loader = FakeLoader::new(vec![stt, tts, ends.clone()], false);
         let models = Arc::new(EngineModels::with(Box::new(loader), chosen("heard", "af_old", None)));
         let mut live = Live::start(Arc::clone(&models), began);
         live.turn().await;
 
-        drop(models.switch(chosen("heard", "af_old", Some("ends")), ALWAYS).await.unwrap().expect("switched"));
+        drop(within(models.switch(chosen("heard", "af_old", Some("ends")), ALWAYS)).await.unwrap().expect("switched"));
         live.call.set_config(config("smart-turn", "af_old"));
         live.turn().await;
         assert!(ends.calls() > 0, "the pause asked the end-of-turn model");
 
-        drop(models.switch(chosen("heard", "af_old", None), ALWAYS).await.unwrap().expect("switched"));
+        drop(within(models.switch(chosen("heard", "af_old", None), ALWAYS)).await.unwrap().expect("switched"));
         live.call.set_config(config("silence", "af_old"));
         live.turn().await;
         live.call.stop();
