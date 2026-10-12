@@ -280,7 +280,7 @@ test("host.engine lists the catalogues and keeps provider keys, refusing with a 
 test("host.engine tries a key without keeping it, answering the catalogue's reason or null, and asks a provider again", async () => {
   const install = loadFactory();
   const { win, calls } = fakeWindow(ORIGIN);
-  const rejected = { code: "credential-rejected", params: {} };
+  const rejected = { code: "credential-rejected", params: {}, detail: "Incorrect API key provided: [key]." };
   win.__TAURI_INTERNALS__.invoke = (cmd, args) => {
     calls.push([cmd, args === undefined ? undefined : structuredClone(args)]);
     if (cmd === "engine_test_credential") {

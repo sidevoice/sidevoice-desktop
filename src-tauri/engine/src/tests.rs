@@ -401,6 +401,10 @@ impl HttpClient for Network {
         if key == "good" {
             return answer(200, serde_json::json!({ "data": [{ "id": "whisper-1" }, { "id": "tts-1" }] }));
         }
+        if key.starts_with("sk-echo") {
+            let said = format!("Incorrect API key provided: {key}.\nSee {}", "x".repeat(400));
+            return answer(401, serde_json::json!({ "error": { "message": said } }));
+        }
         if key == "scoped" {
             return answer(403, serde_json::json!({ "error": { "message": "Missing scopes: api.model.read" } }));
         }
@@ -466,8 +470,8 @@ fn openai_view(engines: &NativeEngines) -> CatalogView {
     engines.catalogs().unwrap().into_iter().find(|view| view.id == "openai").unwrap()
 }
 
-fn code(reason: Option<ReasonView>) -> Option<String> {
-    reason.map(|reason| reason.code)
+fn code(refused: Option<CredentialRefusal>) -> Option<String> {
+    refused.map(|refused| refused.reason.code)
 }
 
 /// A key tried is asked of the provider, and what the provider said is the answer; the key kept, and what was listed
@@ -491,6 +495,41 @@ fn a_key_tried_is_asked_of_the_provider_and_kept_nowhere() {
 
     assert_eq!(engines.test_credential("local", "x").unwrap_err().key, "catalog_not_found");
     assert_eq!(engines.test_credential("no-such", "x").unwrap_err().key, "catalog_not_found");
+}
+
+/// A refused key is told with the provider's own words, never with the key itself, and never longer than
+/// `DETAIL_CHARS`; serialised, the detail sits beside `{code, params}`.
+#[test]
+fn a_refused_key_is_told_with_the_provider_words_without_the_key() {
+    let (test, _, _) = with_provider("trial-detail", Some("good"));
+    let engines = &test.engines;
+    let refused = engines.test_credential("openai", "bad").unwrap().expect("refused");
+    assert_eq!(refused.reason.code, "credential-rejected");
+    assert!(refused.detail.as_deref().is_some_and(|said| said.contains("Incorrect API key provided")), "{refused:?}");
+    let json = serde_json::to_value(&refused).unwrap();
+    assert_eq!(json["code"], "credential-rejected");
+    assert!(json.get("params").is_some() && json["detail"].is_string(), "{json}");
+
+    let refused = engines.test_credential("openai", " sk-echo-SENTINEL-123 ").unwrap().expect("refused");
+    let json = serde_json::to_string(&refused).unwrap();
+    let said = refused.detail.expect("the provider's words");
+    assert!(!said.contains("sk-echo-SENTINEL-123") && !json.contains("SENTINEL"), "{said}");
+    assert!(said.contains("[key]") && !said.contains('\n'), "{said}");
+    assert_eq!(said.chars().count(), catalogs::DETAIL_CHARS + 1, "cut, with an ellipsis");
+}
+
+/// Words that are only blank are no detail, and a refusal without words has none: it serialises as `{code, params}`.
+#[test]
+fn a_refusal_without_words_has_no_detail() {
+    let reason =
+        || ReasonView { code: "credential-rejected".into(), params: catalogs::ReasonParams { needs: None, has: None } };
+    assert_eq!(CredentialRefusal::new(reason(), Some(" \t\n "), "abc").detail, None);
+    assert_eq!(
+        CredentialRefusal::new(reason(), Some("bad abc, abc"), " abc ").detail.as_deref(),
+        Some("bad [key], [key]")
+    );
+    let none = serde_json::to_value(CredentialRefusal::new(reason(), None, "abc")).unwrap();
+    assert_eq!(none, serde_json::json!({ "code": "credential-rejected", "params": {} }));
 }
 
 /// A key the provider takes is not kept by trying it: with none kept, the provider still has none.

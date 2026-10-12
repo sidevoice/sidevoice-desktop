@@ -35,6 +35,42 @@ pub struct ReasonView {
     pub params: ReasonParams,
 }
 
+/// What a provider said against a key tried (`host.engine.testCredential`): its catalogue's reason, `{code, params}`,
+/// and the provider's own words, `detail`, when it gave some — never the key, and at most [`DETAIL_CHARS`] long.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CredentialRefusal {
+    #[serde(flatten)]
+    pub reason: ReasonView,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// The most of a provider's words a refused key is told with, in characters.
+pub const DETAIL_CHARS: usize = 300;
+
+impl CredentialRefusal {
+    /// `reason`, with what the provider said (`detail`) made safe to hand the page: every occurrence of `key` (the
+    /// key tried, trimmed) taken out, control characters made spaces, trimmed, and cut to [`DETAIL_CHARS`] (with "…").
+    /// Nothing left, no detail.
+    pub fn new(reason: ReasonView, detail: Option<&str>, key: &str) -> Self {
+        let key = key.trim();
+        let detail = detail.and_then(|said| {
+            let said = if key.is_empty() { said.to_string() } else { said.replace(key, "[key]") };
+            let said: String = said.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+            let said = said.trim();
+            if said.is_empty() {
+                return None;
+            }
+            let mut cut: String = said.chars().take(DETAIL_CHARS).collect();
+            if said.chars().count() > DETAIL_CHARS {
+                cut.push('…');
+            }
+            Some(cut)
+        });
+        CredentialRefusal { reason, detail }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ReasonParams {
     #[serde(skip_serializing_if = "Option::is_none")]

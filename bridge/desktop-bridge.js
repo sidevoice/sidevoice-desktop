@@ -76,7 +76,8 @@
       /** Whether the keychain holds a key for `provider`. The key itself never reaches the page. */
       hasCredential: (provider) => coded(call("engine_has_credential", { provider })),
       /** Asks `provider` with `key` without keeping it (never in the keychain, never in the listings the app keeps):
-       *  what its catalogue says against it, `{code, params}` (`credential-rejected`, …), or null when it lists with it.
+       *  what its catalogue says against it, `{code, params, detail?}` (`credential-rejected`, …; `detail` the
+       *  provider's own words, without the key, at most 300 characters), or null when it lists with it.
        *  The kept key and its listing are as they were. */
       testCredential: (provider, key) =>
         coded(call("engine_test_credential", { provider, key: String(key ?? "") })).then((reason) => reason ?? null),

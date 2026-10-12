@@ -20,7 +20,7 @@ mod jobs;
 pub mod memory;
 mod trial;
 
-pub use catalogs::{CatalogView, ReasonView};
+pub use catalogs::{CatalogView, CredentialRefusal, ReasonView};
 pub use error::Error;
 pub use jobs::{Jobs, Progress};
 /// The engine crate itself, for what the app hands it (`Credentials`) and the models it loads.
@@ -257,11 +257,11 @@ impl NativeEngines {
     }
 
     /// Asks provider `id` with `key` in place of the key the host keeps, and keeps nothing of it: what its catalogue
-    /// says against that key (its reason: `credential-rejected`, `listing-not-permitted`, `provider-unreachable`, …),
-    /// or `None` when the provider lists with it. The listing is an engine's of its own, over the same host with `key`
+    /// says against that key (its reason: `credential-rejected`, `listing-not-permitted`, `provider-unreachable`, …,
+    /// with the provider's own words made safe: [`CredentialRefusal::new`]), or `None` when the provider lists with it. The listing is an engine's of its own, over the same host with `key`
     /// as its only key (`trial.rs`): this engine's listings, and the key it hands a provider, are the kept key's
     /// throughout, whatever runs at the same time. `catalog_not_found` for an id that is not a provider's.
-    pub fn test_credential(&self, id: &str, key: &str) -> Result<Option<ReasonView>, Error> {
+    pub fn test_credential(&self, id: &str, key: &str) -> Result<Option<CredentialRefusal>, Error> {
         if id == LOCAL_CATALOG {
             return Err(error::catalog_not_found(id));
         }
@@ -269,8 +269,8 @@ impl NativeEngines {
         let trial = Engine::new(Box::new(trial::Trial::new(Arc::clone(&self.host), id, key)), Vec::new())
             .map_err(|e| error::internal(format!("the engine: {e}")))?;
         let catalog = trial.catalog(id).map_err(|_| error::catalog_not_found(id))?;
-        let status = self.block_on(catalog.refresh());
-        Ok(catalogs::status(&status).reason)
+        let status = catalogs::status(&self.block_on(catalog.refresh()));
+        Ok(status.reason.map(|reason| CredentialRefusal::new(reason, status.detail.as_deref(), key)))
     }
 
     /// `model` on `engine`, if the engine can run it on this device: an engine compiled into this app, a model of its

@@ -9,7 +9,7 @@
 
 use sidevoice_desktop_engine::error::{self, internal};
 use sidevoice_desktop_engine::{
-    CatalogView, Device, Error, Installed, Jobs, Memory, NativeEngines, OnDisk, Progress, ReasonView,
+    CatalogView, CredentialRefusal, Device, Error, Installed, Jobs, Memory, NativeEngines, OnDisk, Progress,
 };
 use std::sync::Arc;
 use tauri::State;
@@ -104,7 +104,8 @@ pub async fn engine_set_credential(
 }
 
 /// Asks `provider` with `key` without keeping it: never written to the keychain, never in the engine's own listings
-/// (`NativeEngines::test_credential`). Answers what the provider's catalogue says against it (`{code, params}`), or
+/// (`NativeEngines::test_credential`). Answers what the provider's catalogue says against it (`{code, params, detail?}`, `detail` the
+/// provider's own words without the key), or
 /// `null` when it lists with it. Refused as `engine_set_credential` is where the app keeps no keys: a key it could
 /// not keep is not worth trying. The key is never logged.
 #[tauri::command]
@@ -112,7 +113,7 @@ pub async fn engine_test_credential(
     state: State<'_, EngineState>,
     provider: String,
     key: String,
-) -> Result<Option<ReasonView>, Error> {
+) -> Result<Option<CredentialRefusal>, Error> {
     credentials::check(&provider)?;
     let engines = state.engines.clone();
     tauri::async_runtime::spawn_blocking(move || engines.test_credential(&provider, &key)).await.map_err(internal)?
