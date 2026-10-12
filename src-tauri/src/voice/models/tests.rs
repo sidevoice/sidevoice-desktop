@@ -529,7 +529,7 @@ fn a_model_switched_mid_turn_and_mid_reply_does_not_stop_the_call() {
 }
 
 /// A model that cannot be loaded changes nothing: the call goes on, on the model it had. Of two switches, the later
-/// one wins even when the earlier one is still loading: the earlier one's models are dropped.
+/// one wins, and goes ahead while the earlier one is still loading; the earlier one's models are then dropped.
 #[test]
 fn a_refused_model_keeps_the_current_one_and_the_latest_switch_wins() {
     let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build().unwrap();
@@ -571,9 +571,11 @@ fn a_refused_model_keeps_the_current_one_and_the_latest_switch_wins() {
                 models.switch(chosen("last", "af_old", None), &latest).await.map(|switched| switched.is_some())
             })
         };
+        // The later one goes ahead while the earlier one's model is still loading.
+        assert_eq!(within(second).await.unwrap(), Ok(true));
+        assert!(!first.is_finished(), "the earlier one is still loading");
         loader.slow.send_replace(true);
         assert_eq!(within(first).await.unwrap(), Ok(false), "overtaken: it changes nothing");
-        assert_eq!(within(second).await.unwrap(), Ok(true));
         let heard = live.turn().await;
         assert!(heard.contains("last") && slow.calls() == 0, "the latest switch's model: {heard:?}");
         live.call.stop();

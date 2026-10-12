@@ -54,6 +54,9 @@ pub struct EngineModels {
     turn: tokio::sync::Mutex<()>,
 }
 
+/// The models a switch loaded for the slots that change.
+type Changed = (Option<Arc<dyn Transcriber>>, Option<Arc<dyn Speaker>>, Option<Arc<dyn EndOfTurnModel>>);
+
 /// A switch that took place: the slots hold its models, and no other switch moves them while this is held, so the
 /// configuration that goes with them is applied before any later one.
 pub struct Switched<'a> {
@@ -85,36 +88,31 @@ impl EngineModels {
         choice: VoiceChoice,
         latest: &(dyn Fn() -> bool + Send + Sync),
     ) -> Result<Option<Switched<'_>>, String> {
+        // Loaded with nothing held, so that a later change goes ahead meanwhile (a revert need not wait for a download
+        // no longer wanted); only the latest change, at the end, moves the slots. Every change that moved them since
+        // this one began is a later one, so the choice it compares with is still the one in place when it may apply.
+        let current = lock(&self.choice).clone();
+        let changes = !current.same_models(&choice);
+        let loading = changes && lock(&self.live).upgrade().is_some();
+        let early = if loading { Some(self.changed(&current, &choice).await) } else { None };
         let turn = self.turn.lock().await;
         if !latest() {
+            // Overtaken: what loaded (or failed to) is dropped, and the later change applies instead.
             return Ok(None);
         }
-        let current = lock(&self.choice).clone();
         let live = lock(&self.live).upgrade();
-        let Some(slots) = live.filter(|_| !current.same_models(&choice)) else {
+        let Some(slots) = live.filter(|_| changes) else {
             if let Some(slots) = lock(&self.live).upgrade() {
                 slots.set_voice(voice_of(&choice));
             }
             *lock(&self.choice) = choice;
             return Ok(Some(Switched { _turn: turn }));
         };
-        // Everything new is loaded first, so a failure changes nothing.
-        let loaded = async {
-            let stt = if current.stt == choice.stt { None } else { Some(self.loader.transcriber(&choice.stt).await?) };
-            let tts = if current.tts == choice.tts { None } else { Some(self.loader.speaker(&choice.tts).await?) };
-            let end_of_turn = match &choice.end_of_turn {
-                Some(chosen) if current.end_of_turn.as_ref() != Some(chosen) => {
-                    Some(self.loader.end_of_turn(chosen).await?)
-                }
-                _ => None,
-            };
-            Ok::<_, String>((stt, tts, end_of_turn))
-        }
-        .await;
-        if !latest() {
-            // Overtaken while loading: what loaded (or failed to) is dropped, and the later change applies instead.
-            return Ok(None);
-        }
+        // The call loaded its models while this one began: what changed is loaded now.
+        let loaded = match early {
+            Some(loaded) => loaded,
+            None => self.changed(&current, &choice).await,
+        };
         let (stt, tts, end_of_turn) = loaded?;
         if let Some(stt) = stt {
             slots.set_transcriber(stt);
@@ -128,6 +126,21 @@ impl EngineModels {
         }
         *lock(&self.choice) = choice;
         Ok(Some(Switched { _turn: turn }))
+    }
+
+    /// The models `choice` has that `current` does not, loaded: each slot's, or `None` where it stays. The end of turn
+    /// keeps its classifier when the choice has none. Everything is loaded before anything moves, so a failure changes
+    /// nothing.
+    async fn changed(&self, current: &VoiceChoice, choice: &VoiceChoice) -> Result<Changed, String> {
+        let stt = if current.stt == choice.stt { None } else { Some(self.loader.transcriber(&choice.stt).await?) };
+        let tts = if current.tts == choice.tts { None } else { Some(self.loader.speaker(&choice.tts).await?) };
+        let end_of_turn = match &choice.end_of_turn {
+            Some(chosen) if current.end_of_turn.as_ref() != Some(chosen) => {
+                Some(self.loader.end_of_turn(chosen).await?)
+            }
+            _ => None,
+        };
+        Ok((stt, tts, end_of_turn))
     }
 }
 

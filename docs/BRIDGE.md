@@ -341,9 +341,11 @@ What is this app's own:
   call (sidevoice-web #75, gap #31): the call holds one interface per slot (speech to text, text to speech with its
   voice, end of turn), and a change of a slot's catalogue, model or build, of `end_of_turn` or of the model that ends
   turns loads the new model while the one in use goes on serving, then moves the slot to it; what was under way (a
-  turn being transcribed, a reply being spoken) ends on the model it started with. Only then does the configuration
-  that goes with it apply (`smart-turn` once its model is in place), and `setSettings` resolves. `language`, `voice`,
-  `speed`, `patience` and `idle_unload_minutes` apply live. The voice activity detector, the app's own choice,
+  turn being transcribed, a chunk of a reply being synthesized, a pause being asked) ends on the model it started with,
+  and a reply's next chunks are the new speaker's, in its voice (as on the web). Only the latest change moves the
+  slots: an earlier one still loading is dropped when it is done, and a later one never waits for it. Once the slots
+  have moved, the configuration that goes with them applies (`smart-turn` once its model is in place), and
+  `setSettings` resolves. `language`, `voice`, `speed`, `patience` and `idle_unload_minutes` apply live. The voice activity detector, the app's own choice,
   stays for the call: a different one comes with its next load. With no call holding models, the settings are what the
   next start loads.
   It rejects with the app's keyed refusals (above), each with the `code` the page translates (`model-unknown`,
