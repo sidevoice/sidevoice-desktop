@@ -109,7 +109,7 @@ pub fn install_failed(detail: impl fmt::Display) -> Error {
     Error::new("install_failed", format!("Could not install the download: {detail}"))
 }
 
-/// The page cancelled the install (`cancel(job)`): what it was downloading is gone from disk.
+/// The page cancelled the install (its signal, `engine_cancel`): what it was downloading is gone from disk.
 pub fn install_cancelled() -> Error {
     Error::new("install_cancelled", "The download was cancelled.")
 }

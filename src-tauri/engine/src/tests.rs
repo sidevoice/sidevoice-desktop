@@ -112,8 +112,8 @@ fn engines(name: &str, stalls: bool) -> Test {
     engines_with(name, stalls, false)
 }
 
-/// `engines`; `shared`: `whisper-test` has a second sherpa-onnx build, and another model, `echo-test`, one whose files
-/// are the same bytes as `whisper-test`'s (the engine stores a file once, by its SHA-256, and links it to each build).
+/// `engines`; `shared`: another model, `echo-test`, whose one build's files are the same bytes as `whisper-test`'s int8
+/// build's (the engine stores a file once, by its SHA-256, and links it to each build).
 fn engines_with(name: &str, stalls: bool, shared: bool) -> Test {
     let root = std::env::temp_dir().join(format!("sidevoice-desktop-engine-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
@@ -121,6 +121,7 @@ fn engines_with(name: &str, stalls: bool, shared: bool) -> Test {
         served("encoder.onnx", 5000, stalls),
         served("decoder.onnx", 3000, false),
         served("tokens.txt", 200, false),
+        served("whisper-fp32.onnx", 300, false),
     ];
     let whisper = serde_json::json!({
         "id": "whisper", "architecture": "whisper", "source": "https://test.invalid",
@@ -130,6 +131,10 @@ fn engines_with(name: &str, stalls: bool, shared: bool) -> Test {
                 "id": "whisper-test/sherpa-onnx-int8", "backend": "sherpa-onnx", "precision": "int8",
                 "memory": { "mb": 1, "source": "estimated", "basis": "test" },
                 "files": [file("whisper.encoder", &files[0]), file("whisper.decoder", &files[1]), file("tokens", &files[2])]
+            }, {
+                "id": "whisper-test/sherpa-onnx-fp32", "backend": "sherpa-onnx", "precision": "fp32",
+                "memory": { "mb": 1, "source": "estimated", "basis": "test" },
+                "files": [file("whisper.model", &files[3])]
             }]
         }]
     });
@@ -148,10 +153,6 @@ fn engines_with(name: &str, stalls: bool, shared: bool) -> Test {
     });
     let mut families = vec![whisper, kokoro];
     if shared {
-        let mut second = families[0]["models"][0]["builds"][0].clone();
-        second["id"] = "whisper-test/sherpa-onnx-fp32".into();
-        second["precision"] = "fp32".into();
-        families[0]["models"][0]["builds"].as_array_mut().unwrap().push(second);
         let mut echo = families[0].clone();
         echo["id"] = "echo".into();
         echo["models"][0]["id"] = "echo-test".into();
@@ -165,6 +166,9 @@ fn engines_with(name: &str, stalls: bool, shared: bool) -> Test {
     let engines = NativeEngines::with(Box::new(host), vec![Box::new(catalog)], runtime.handle().clone()).unwrap();
     Test { engines, root, _runtime: runtime }
 }
+
+/// The build the page asks for by engine, as the tests mostly install it.
+const ENGINE: Wanted<'static> = Wanted { build: None, engine: Some("sherpa-onnx") };
 
 /// Files the engine's storage holds being written: none once an install has ended, however it ended.
 fn partial(root: &Path) -> Vec<String> {
@@ -189,16 +193,91 @@ fn capabilities_are_this_device_what_the_engine_runs_here_and_its_memory() {
 fn what_does_not_run_here_is_refused_by_key_before_anything_is_downloaded() {
     let test = engines("refusals", false);
     let engines = &test.engines;
-    let key = |model: &str, engine: &str| engines.install(model, engine, &mut |_, _| {}).unwrap_err().key;
+    let key = |model: &str, engine: &str| {
+        engines.install(model, Wanted { build: None, engine: Some(engine) }, &mut |_, _| {}).unwrap_err().key
+    };
     assert_eq!(key("whisper-test", "transformers-js"), "engine_unsupported");
     // whisper.cpp is in this build of the engine; the test catalogue has no build of this model for it.
     assert_eq!(key("whisper-test", "whisper-cpp"), "build_missing");
     assert_eq!(key("whisper-nope", "sherpa-onnx"), "model_unknown");
     let mut calls = 0;
-    let memory = engines.install("kokoro-test", "sherpa-onnx", &mut |_, _| calls += 1).unwrap_err();
+    let memory = engines.install("kokoro-test", ENGINE, &mut |_, _| calls += 1).unwrap_err();
     assert_eq!((memory.key, &memory.params["needed_mb"]), ("model_needs_memory", &serde_json::json!(4000000)));
     assert_eq!(calls, 0, "refused before it starts");
     assert!(engines.installed().unwrap().is_empty());
+}
+
+/// The page names a build by its catalogue id (the web's `install(model, {build, engine})`), or nothing: the build
+/// named, never another, and with neither the one the catalogue recommends here.
+#[test]
+fn an_install_takes_the_build_named_or_else_the_recommended_one() {
+    let test = engines("build", false);
+    let engines = &test.engines;
+    let key = |model: &str, build: Option<&str>, engine: Option<&str>| {
+        engines.install(model, Wanted { build, engine }, &mut |_, _| {}).unwrap_err().key
+    };
+    assert_eq!(key("whisper-test", Some("whisper-test/whisper-cpp"), None), "build_missing", "an unknown build");
+    assert_eq!(
+        key("whisper-test", Some("whisper-test/sherpa-onnx-int8"), Some("whisper-cpp")),
+        "build_missing",
+        "not that engine's"
+    );
+    assert_eq!(
+        key("whisper-test", Some("whisper-test/sherpa-onnx-int8"), Some("transformers-js")),
+        "engine_unsupported"
+    );
+    assert_eq!(key("whisper-nope", None, None), "model_unknown");
+    assert_eq!(
+        key("whisper-test", Some("kokoro-test/sherpa-onnx-int8"), None),
+        "build_missing",
+        "another model's build"
+    );
+    assert_eq!(
+        key("kokoro-test", Some("kokoro-test/sherpa-onnx-int8"), None),
+        "model_needs_memory",
+        "named, still checked"
+    );
+    // Nothing of kokoro-test runs here: with no build named, its own build says why.
+    assert_eq!(key("kokoro-test", None, None), "model_needs_memory");
+    assert!(engines.installed().unwrap().is_empty(), "refused before anything is downloaded");
+
+    let named = Wanted { build: Some("whisper-test/sherpa-onnx-int8"), engine: Some("sherpa-onnx") };
+    engines.install("whisper-test", named, &mut |_, _| {}).unwrap();
+    assert_eq!(
+        engines.installed().unwrap(),
+        [Installed { model: "whisper-test".into(), engine: "sherpa-onnx".into() }]
+    );
+    let mut again = Vec::new();
+    engines.install("whisper-test", Wanted::default(), &mut |done, total| again.push((done, total))).unwrap();
+    assert_eq!(again, [(0, 0)], "the recommended build is the one on disk: nothing to download");
+
+    let jobs = Jobs::default();
+    let build_only = Wanted { build: Some("whisper-test/sherpa-onnx-int8"), engine: None };
+    engines.install_job(&jobs, "by-build", "whisper-test", build_only).unwrap();
+    let nope = Wanted { build: Some("nope"), engine: None };
+    assert_eq!(engines.install_job(&jobs, "refused", "whisper-test", nope).unwrap_err().key, "build_missing");
+    assert!(!jobs.cancel("refused"), "a refused job has ended: nothing to cancel");
+    assert!(jobs.cancel("early"), "cancelled before it arrives");
+    let early = engines.install_job(&jobs, "early", "whisper-test", nope).unwrap_err();
+    assert_eq!(early.key, "install_cancelled", "a cancel that came first wins over the refusal");
+}
+
+/// A build that is not the one an install by engine would choose, installed by its id, is listed as on disk.
+#[test]
+fn a_build_installed_by_its_id_is_listed_on_disk() {
+    let test = engines("other-build", false);
+    let engines = &test.engines;
+    let fp32 = Wanted { build: Some("whisper-test/sherpa-onnx-fp32"), engine: None };
+    let mut reports = Vec::new();
+    engines.install("whisper-test", fp32, &mut |done, total| reports.push((done, total))).unwrap();
+    assert_eq!(reports.last(), Some(&(300, 300)), "that build's bytes, not the int8 one's");
+    assert_eq!(
+        engines.installed().unwrap(),
+        [Installed { model: "whisper-test".into(), engine: "sherpa-onnx".into() }]
+    );
+    let disk = serde_json::to_value(engines.on_disk().unwrap()).unwrap();
+    assert_eq!(disk["builds"][0]["bytes"], 300);
+    assert_eq!(disk["builds"].as_array().unwrap().len(), 1);
 }
 
 #[test]
@@ -206,7 +285,7 @@ fn an_install_reports_its_bytes_from_zero_to_the_total_and_lists_the_build_by_mo
     let test = engines("install", false);
     let engines = &test.engines;
     let mut reports = Vec::new();
-    engines.install("whisper-test", "sherpa-onnx", &mut |done, total| reports.push((done, total))).unwrap();
+    engines.install("whisper-test", ENGINE, &mut |done, total| reports.push((done, total))).unwrap();
     assert_eq!(reports.first(), Some(&(0, 8200)), "(0, total) first");
     assert_eq!(reports.last(), Some(&(8200, 8200)));
     assert!(reports.windows(2).all(|w| w[0].0 <= w[1].0), "never backwards: {reports:?}");
@@ -223,7 +302,7 @@ fn an_install_reports_its_bytes_from_zero_to_the_total_and_lists_the_build_by_mo
         }]})
     );
     let mut again = Vec::new();
-    engines.install("whisper-test", "sherpa-onnx", &mut |done, total| again.push((done, total))).unwrap();
+    engines.install("whisper-test", ENGINE, &mut |done, total| again.push((done, total))).unwrap();
     assert_eq!(again, [(0, 0)], "nothing left to download");
     assert!(partial(&test.root).is_empty());
 }
@@ -234,7 +313,7 @@ fn a_cancel_stops_a_download_the_network_stopped_answering_and_leaves_nothing() 
     let engines = &test.engines;
     let jobs = Jobs::default();
     std::thread::scope(|scope| {
-        let install = scope.spawn(|| engines.install_job(&jobs, "j1", "whisper-test", "sherpa-onnx"));
+        let install = scope.spawn(|| engines.install_job(&jobs, "j1", "whisper-test", ENGINE));
         let progress = loop {
             match jobs.get("j1") {
                 Some(p) if p.done > 0 => break p,
@@ -267,7 +346,7 @@ fn a_job_waiting_for_another_reports_nothing_and_is_cancelled_where_it_waits() {
     let jobs = Jobs::default();
     let held = engines.installing.lock().unwrap(); // another install is running
     std::thread::scope(|scope| {
-        let waiting = scope.spawn(|| engines.install_job(&jobs, "w", "whisper-test", "sherpa-onnx"));
+        let waiting = scope.spawn(|| engines.install_job(&jobs, "w", "whisper-test", ENGINE));
         std::thread::sleep(Duration::from_millis(100));
         assert_eq!(jobs.get("w"), None, "waiting: no progress");
         assert!(jobs.cancel("w"), "but known, and cancellable");
@@ -275,11 +354,8 @@ fn a_job_waiting_for_another_reports_nothing_and_is_cancelled_where_it_waits() {
     });
     drop(held);
     assert!(jobs.cancel("early"), "not arrived yet: it will be refused");
-    assert_eq!(
-        engines.install_job(&jobs, "early", "whisper-test", "sherpa-onnx").unwrap_err().key,
-        "install_cancelled"
-    );
-    engines.install_job(&jobs, "later", "whisper-test", "sherpa-onnx").unwrap();
+    assert_eq!(engines.install_job(&jobs, "early", "whisper-test", ENGINE).unwrap_err().key, "install_cancelled");
+    engines.install_job(&jobs, "later", "whisper-test", ENGINE).unwrap();
     assert_eq!(engines.installed().unwrap().len(), 1);
 }
 
@@ -296,7 +372,7 @@ fn the_engine_is_shared_with_the_voice_call() {
 fn rolling_back_a_late_cancel_removes_the_build_it_installed() {
     let test = engines("roll-back", false);
     let engines = &test.engines;
-    engines.install("whisper-test", "sherpa-onnx", &mut |_, _| {}).unwrap();
+    engines.install("whisper-test", ENGINE, &mut |_, _| {}).unwrap();
     let held = engines.install_lock(&|| false).unwrap();
     // Nothing was downloaded: nothing to remove.
     assert_eq!(engines.roll_back(&held, "whisper-test", "sherpa-onnx", Downloaded::Nothing).key, "install_cancelled");
