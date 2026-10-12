@@ -12,7 +12,7 @@ One version for the whole app, tagged `vX.Y.Z`. It lives in `src-tauri/tauri.con
 | Squash-merge into `main` | reviewer | The PR title becomes the commit. `build` runs everything, installers included; when it is green, the `nightly` pre-release is replaced. release-please opens or updates the **release PR** ("chore(main): release X.Y.Z"). Nothing versioned is published. |
 | Merge the release PR | a maintainer | **This is the release.** release-please tags `vX.Y.Z` and creates a draft GitHub Release whose notes are that version's changelog; `build` builds from the tag, attaches the assets and publishes the Release. |
 
-Assets of a release: `Sidevoice_X.Y.Z_aarch64.dmg` (Apple Silicon, ad-hoc signed: `docs/FIRST_OPEN.txt`),
+Assets of a release: `Sidevoice_X.Y.Z_aarch64.dmg` (Apple Silicon, Developer ID signed and notarized, below),
 `Sidevoice_X.Y.Z_x64-setup.exe`, `Sidevoice_X.Y.Z_amd64.deb`, `Sidevoice_X.Y.Z_amd64.AppImage`, `SHA256SUMS`.
 
 The changelog is written from the squashed PR titles. To change it, edit `CHANGELOG.md` in the release PR right
@@ -50,6 +50,27 @@ version of the last release, it is never latest, and release-please ignores the 
 
 Build artifacts on Actions runs are kept 7 days, for debugging only. Download from Releases.
 
+## macOS signing and notarization
+
+Only a release's macOS app and .dmg are signed with the Developer ID and notarized (`build.yml`, job `macos`).
+Pull requests and the nightly are ad-hoc signed (`docs/FIRST_OPEN.txt` ships beside their .dmg), and never read
+the secrets.
+
+- The app: Tauri's bundler imports `APPLE_CERTIFICATE` into a keychain of its own, signs every binary with
+  `APPLE_SIGNING_IDENTITY`, the hardened runtime and `src-tauri/Entitlements.plist` (the microphone; the keychain
+  items the app keeps need no entitlement outside the sandbox), notarizes it with the App Store Connect API key
+  (`APPLE_API_KEY`, `APPLE_API_ISSUER`, and `APPLE_API_KEY_P8` written to a file only the job can read,
+  `APPLE_API_KEY_PATH`) and staples the ticket.
+- The .dmg: signed with the same identity from a keychain of the job's own, notarized with `notarytool` and stapled.
+- Checked in the job: the Developer ID authority, the team, a secure timestamp, `stapler validate` and
+  `spctl -a -vv` (`source=Notarized Developer ID`) on the app, on the .dmg, and on the app inside the .dmg.
+- The keychain and the key file are removed at the end of the job, whatever happened.
+
+**A dry signed build**, nothing published: run `build` by hand with `sign` on (Actions → build → Run workflow, or
+`gh workflow run build.yml -R sidevoice/sidevoice-desktop --ref main -f sign=true`). A manual run publishes nothing
+(only a release or a push to `main` does); the signed .dmg is the run's `Sidevoice-macOS-AppleSilicon-dmg` artifact,
+kept 7 days.
+
 ## When something fails
 
 - The build of a release fails: the Release stays a draft, its tag in place. Fix forward if needed, then re-run
@@ -61,5 +82,10 @@ Build artifacts on Actions runs are kept 7 days, for debugging only. Download fr
 - Settings → Actions → General → **Allow GitHub Actions to create and approve pull requests**: without it
   release-please cannot open its PR (off as of 2026-10-01).
 - Squash merging, with the PR title as the commit message.
+- Repository secrets for macOS signing (a release, or a manual `sign` run): `APPLE_CERTIFICATE` (the Developer ID
+  Application certificate and key, a base64 .p12), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`
+  ("Developer ID Application: … (TEAMID)"), `APPLE_TEAM_ID`, and the notary's App Store Connect API key:
+  `APPLE_API_KEY` (its id), `APPLE_API_ISSUER`, `APPLE_API_KEY_P8` (the .p8's contents). release-please.yml
+  hands them to `build` (`secrets: inherit`).
 - Required check **PR title is a conventional commit**. release-please's own PR gets it through a dispatched run
   (its pushes start no workflow by themselves).

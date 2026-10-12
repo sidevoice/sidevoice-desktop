@@ -52,3 +52,5 @@ jobs:
     uses: ./.github/workflows/build.yml
     with:
       release-tag: ${{ needs.release-please.outputs.tag_name }}
+    # The macOS signing and notarization secrets (build.yml signs a release's app and .dmg).
+    secrets: inherit

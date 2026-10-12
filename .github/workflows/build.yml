@@ -6,11 +6,18 @@ name: build
 #   probes change (`changes` below).
 # - push to main, manual run: everything, installers included; a green run on main replaces the `nightly` pre-release.
 # - a release (called by release-please.yml with the tag it created): everything, attached to that release.
+# The macOS app and .dmg are signed with the Developer ID and notarized only for a release, or a manual run asked to
+# (`sign`: a dry signed build, its .dmg an artifact, nothing published); otherwise they are ad-hoc signed (RELEASING.md).
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      sign:
+        description: Sign the macOS app and .dmg with the Developer ID and notarize them (a dry signed build; nothing is published)
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       release-tag:
@@ -111,6 +118,9 @@ jobs:
       native: ${{ github.event_name != 'pull_request' || steps.filter.outputs.native == 'true' }}
       # The .dmg: never on a pull request. (Windows and Linux build their installers on every run.)
       installers: ${{ github.event_name != 'pull_request' }}
+      # The macOS app and .dmg signed with the Developer ID and notarized: a release, or a manual run that asks for it.
+      # Never on a pull request or a push (the secrets are not even read then).
+      sign: ${{ inputs.release-tag && 'true' || (github.event_name == 'workflow_dispatch' && inputs.sign && 'true') || 'false' }}
       # Where the installers go: the release that called this, or the rolling `nightly` pre-release on a push to main.
       publish: ${{ inputs.release-tag && 'release' || (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'nightly' || '' }}
     steps:
@@ -155,10 +165,41 @@ jobs:
           path: target/web
           key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs', 'scripts/web-release.mjs') }}
       - name: Build the app bundle (ad-hoc signed, hardened runtime, entitlements)
-        if: needs.changes.outputs.installers == 'true'
+        if: needs.changes.outputs.installers == 'true' && needs.changes.outputs.sign != 'true'
         run: npx tauri build --target aarch64-apple-darwin --bundles app
+      # Signed: the notary's API key as the file the bundler reads (APPLE_API_KEY_PATH), only the runner's user may
+      # read it, and it is removed at the end of the job whatever happens (below).
+      - name: The notary's API key, for this job only
+        if: needs.changes.outputs.sign == 'true'
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$RUNNER_TEMP/notary"
+          printf '%s\n' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/notary/AuthKey.p8"
+          chmod 600 "$RUNNER_TEMP/notary/AuthKey.p8"
+          test -s "$RUNNER_TEMP/notary/AuthKey.p8"
+      # Tauri's bundler imports the certificate into a keychain of its own, signs every binary with the hardened runtime
+      # and the entitlements (src-tauri/Entitlements.plist), then notarizes the app with the API key and staples it.
+      - name: Build the app bundle (Developer ID signed, hardened runtime, notarized and stapled)
+        if: needs.changes.outputs.sign == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          export APPLE_API_KEY_PATH="$RUNNER_TEMP/notary/AuthKey.p8"
+          npx tauri build --target aarch64-apple-darwin --bundles app
       - name: Check what a first open depends on
         if: needs.changes.outputs.installers == 'true'
+        env:
+          SIGNED: ${{ needs.changes.outputs.sign }}
+          APPLE_TEAM_ID: ${{ needs.changes.outputs.sign == 'true' && secrets.APPLE_TEAM_ID || '' }}
         run: |
           set -euo pipefail
           APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app"
@@ -170,8 +211,20 @@ jobs:
           echo "--- signature"
           codesign --verify --deep --strict --verbose=2 "$APP"
           codesign -dvvv "$APP" 2>&1 | tee /tmp/sig.txt
-          grep -q "Signature=adhoc" /tmp/sig.txt
           grep -q "runtime" /tmp/sig.txt
+          if [ "$SIGNED" = true ]; then
+            # The Developer ID's, this team's, with a secure timestamp; notarized, its ticket stapled, and Gatekeeper
+            # takes it as a notarized Developer ID app.
+            grep -q "^Authority=Developer ID Application: " /tmp/sig.txt
+            grep -q "^TeamIdentifier=$APPLE_TEAM_ID$" /tmp/sig.txt
+            grep -q "^Timestamp=" /tmp/sig.txt
+            if grep -q "Signature=adhoc" /tmp/sig.txt; then echo "ad-hoc signed in a signed build"; exit 1; fi
+            xcrun stapler validate "$APP"
+            spctl -a -vv -t exec "$APP" 2>&1 | tee /tmp/spctl.txt
+            grep -q "source=Notarized Developer ID" /tmp/spctl.txt
+          else
+            grep -q "Signature=adhoc" /tmp/sig.txt
+          fi
           echo "--- entitlements"
           codesign -d --entitlements - --xml "$APP" > /tmp/ent.xml
           cat /tmp/ent.xml; echo
@@ -237,6 +290,8 @@ jobs:
           grep -q "origin=tauri://localhost" /tmp/node.log
       - name: Make the .dmg (the brand's window, with background, icon layout and volume icon)
         if: needs.changes.outputs.installers == 'true'
+        env:
+          SIGNED: ${{ needs.changes.outputs.sign }}
         run: |
           set -euo pipefail
           VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
@@ -264,8 +319,54 @@ jobs:
           codesign -d --entitlements - --xml "$MNT/Sidevoice.app" | grep -q "com.apple.security.device.audio-input"
           plutil -extract NSMicrophoneUsageDescription raw "$MNT/Sidevoice.app/Contents/Info.plist"
           hdiutil detach "$MNT"
-          cp docs/FIRST_OPEN.txt dist/LEEME-primera-apertura.txt
-          (cd dist && shasum -a 256 *.dmg | tee SHA256SUMS.txt)
+          # How to open an app Gatekeeper does not know: only for an ad-hoc signed one.
+          if [ "$SIGNED" != true ]; then cp docs/FIRST_OPEN.txt dist/LEEME-primera-apertura.txt; fi
+      # The image itself: signed with the Developer ID (from a keychain of this job's own, the bundler's being gone),
+      # notarized and stapled, so Gatekeeper opens it from a download without a word.
+      - name: Sign, notarize and staple the .dmg
+        if: needs.changes.outputs.sign == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          umask 077
+          KEYCHAIN="$RUNNER_TEMP/sidevoice-signing.keychain-db"
+          PASSWORD=$(openssl rand -hex 24)
+          security create-keychain -p "$PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$PASSWORD" "$KEYCHAIN"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$KEYCHAIN" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign >/dev/null
+          rm -f "$RUNNER_TEMP/certificate.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$PASSWORD" "$KEYCHAIN" >/dev/null
+          DMG=$(ls dist/*.dmg)
+          codesign --sign "$APPLE_SIGNING_IDENTITY" --keychain "$KEYCHAIN" --timestamp "$DMG"
+          xcrun notarytool submit "$DMG" --key "$RUNNER_TEMP/notary/AuthKey.p8" --key-id "$APPLE_API_KEY" \
+            --issuer "$APPLE_API_ISSUER" --wait --timeout 30m --output-format json | tee /tmp/notary.json
+          test "$(plutil -extract status raw /tmp/notary.json)" = "Accepted"
+          xcrun stapler staple "$DMG"
+          xcrun stapler validate "$DMG"
+          spctl -a -vv -t open --context context:primary-signature "$DMG" 2>&1 | tee /tmp/spctl-dmg.txt
+          grep -q "source=Notarized Developer ID" /tmp/spctl-dmg.txt
+          # The app inside, as a download would have it: notarized, stapled, accepted.
+          MNT=$(mktemp -d)
+          hdiutil attach -readonly -nobrowse -mountpoint "$MNT" "$DMG"
+          xcrun stapler validate "$MNT/Sidevoice.app"
+          spctl -a -vv -t exec "$MNT/Sidevoice.app" 2>&1 | grep -q "source=Notarized Developer ID"
+          hdiutil detach "$MNT"
+      - name: The .dmg's checksum
+        if: needs.changes.outputs.installers == 'true'
+        run: (cd dist && shasum -a 256 *.dmg | tee SHA256SUMS.txt)
+      - name: Remove the signing keychain and the notary's key
+        if: always() && needs.changes.outputs.sign == 'true'
+        run: |
+          security delete-keychain "$RUNNER_TEMP/sidevoice-signing.keychain-db" 2>/dev/null || true
+          rm -rf "$RUNNER_TEMP/notary" "$RUNNER_TEMP/certificate.p12"
       - name: The .dmg window as Finder shows it (screenshots, light and dark; informational)
         if: needs.changes.outputs.installers == 'true'
         continue-on-error: true
