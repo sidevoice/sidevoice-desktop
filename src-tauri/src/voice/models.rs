@@ -21,6 +21,7 @@
 mod tests;
 
 use std::future::Future;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use sidevoice_desktop_core::voice::{ModelChoice, VoiceChoice, LOCAL_CATALOG};
@@ -41,22 +42,42 @@ pub struct EngineModels {
     choice: Mutex<VoiceChoice>,
     /// The slots of the call's loaded models, while it keeps them (it drops them when idle).
     live: Mutex<Weak<Slots>>,
-    /// One load or switch at a time, in the order they come: a switch never lands in the middle of a load, nor two
-    /// switches out of order.
+    /// One load or switch at a time: a switch never lands in the middle of a load, nor two switches out of order.
     turn: tokio::sync::Mutex<()>,
+    /// The switches asked for so far: one that a later one overtook while it waited or loaded changes nothing.
+    changes: AtomicU64,
+}
+
+/// A switch that took place: the slots hold its models, and no other switch moves them while this is held, so the
+/// configuration that goes with them is applied before any later one.
+pub struct Switched<'a> {
+    _turn: tokio::sync::MutexGuard<'a, ()>,
 }
 
 impl EngineModels {
     pub fn new(engine: Arc<Engine>, choice: VoiceChoice) -> Self {
-        Self { engine, choice: Mutex::new(choice), live: Mutex::default(), turn: tokio::sync::Mutex::new(()) }
+        Self {
+            engine,
+            choice: Mutex::new(choice),
+            live: Mutex::default(),
+            turn: tokio::sync::Mutex::new(()),
+            changes: AtomicU64::new(0),
+        }
     }
 
     /// Makes `choice` the call's: a slot whose model changes gets the new one once it is loaded (the old one serving
     /// until then, and finishing what it started), and text to speech its voice at once. Without loaded slots (no call
-    /// yet, or one that dropped its models), the choice is what the next load takes. A model that cannot be loaded
-    /// leaves the slots as they were, and the choice too: its code.
-    pub async fn switch(&self, choice: VoiceChoice) -> Result<(), String> {
-        let _turn = self.turn.lock().await;
+    /// yet, or one that dropped its models), the choice is what the next load takes. The latest change wins: one that a
+    /// later one overtook (while it waited, or while its models loaded) changes nothing and answers `None`. A model
+    /// that cannot be loaded leaves the slots as they were, and the choice too: its code. `Some` holds off any later
+    /// switch until it is dropped, for the configuration that goes with these models to apply first.
+    pub async fn switch(&self, choice: VoiceChoice) -> Result<Option<Switched<'_>>, String> {
+        let change = self.changes.fetch_add(1, Ordering::SeqCst) + 1;
+        let turn = self.turn.lock().await;
+        let latest = || self.changes.load(Ordering::SeqCst) == change;
+        if !latest() {
+            return Ok(None);
+        }
         let current = lock(&self.choice).clone();
         let live = lock(&self.live).upgrade();
         let Some(slots) = live.filter(|_| !current.same_models(&choice)) else {
@@ -64,16 +85,25 @@ impl EngineModels {
                 slots.set_voice(voice_of(&choice));
             }
             *lock(&self.choice) = choice;
-            return Ok(());
+            return Ok(Some(Switched { _turn: turn }));
         };
         // Everything new is loaded first, so a failure changes nothing.
-        let stt = if current.stt == choice.stt { None } else { Some(EngineStt(self.load_one(&choice.stt).await?)) };
-        let tts = if current.tts == choice.tts { None } else { Some(EngineTts(self.load_one(&choice.tts).await?)) };
-        let end_of_turn = match (current.end_of_turn == choice.end_of_turn, &choice.end_of_turn) {
-            (true, _) => None,
-            (false, Some(chosen)) => Some(Some(EngineEndOfTurn(self.load_one(chosen).await?))),
-            (false, None) => Some(None),
-        };
+        let loaded = async {
+            let stt = if current.stt == choice.stt { None } else { Some(EngineStt(self.load_one(&choice.stt).await?)) };
+            let tts = if current.tts == choice.tts { None } else { Some(EngineTts(self.load_one(&choice.tts).await?)) };
+            let end_of_turn = match (current.end_of_turn == choice.end_of_turn, &choice.end_of_turn) {
+                (true, _) => None,
+                (false, Some(chosen)) => Some(Some(EngineEndOfTurn(self.load_one(chosen).await?))),
+                (false, None) => Some(None),
+            };
+            Ok::<_, String>((stt, tts, end_of_turn))
+        }
+        .await;
+        if !latest() {
+            // Overtaken while loading: what loaded (or failed to) is dropped, and the later change applies instead.
+            return Ok(None);
+        }
+        let (stt, tts, end_of_turn) = loaded?;
         if let Some(stt) = stt {
             slots.set_transcriber(Arc::new(stt));
         }
@@ -86,7 +116,7 @@ impl EngineModels {
             slots.set_end_of_turn(end_of_turn.map(|model| Arc::new(model) as Arc<dyn EndOfTurnModel>));
         }
         *lock(&self.choice) = choice;
-        Ok(())
+        Ok(Some(Switched { _turn: turn }))
     }
 
     async fn load_one(&self, chosen: &ModelChoice) -> Result<Arc<dyn Model>, String> {

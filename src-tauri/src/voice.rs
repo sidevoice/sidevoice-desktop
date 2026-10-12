@@ -42,8 +42,6 @@ use crate::engine_ipc::EngineState;
 #[derive(Default)]
 pub struct VoiceState {
     call: tokio::sync::Mutex<Option<(VoiceCall, Arc<EngineModels>)>>,
-    /// One `setSettings` at a time, to its end: the models and the configuration of one never mix with another's.
-    settings: tokio::sync::Mutex<()>,
     lifecycle: Arc<Mutex<Lifecycle>>,
     /// What is being said, by the page's key for it, until it is done.
     sayings: Arc<Mutex<HashMap<String, SayCancel>>>,
@@ -116,8 +114,9 @@ fn engines(app: &AppHandle) -> Result<Arc<NativeEngines>, Refusal> {
 /// what it lists); the app adds the detector and the end-of-turn model, and makes the configuration (every number the
 /// person does not choose). The first settings create the call. Later ones never stop it: a changed model is loaded
 /// while the one in use goes on (`EngineModels::switch`), takes over once ready, and only then does the configuration
-/// that goes with it apply; it resolves then. A model that cannot be loaded leaves the call as it was and rejects
-/// `voice_failed` with the engine's code.
+/// that goes with it apply; it resolves then. The latest settings win: ones a later call overtook resolve without
+/// changing anything. A model that cannot be loaded leaves the call as it was and rejects `voice_failed` with the
+/// engine's code.
 #[tauri::command]
 pub async fn voice_set_settings(
     app: AppHandle,
@@ -139,18 +138,19 @@ pub async fn voice_set_settings(
     let config: VoiceConfig =
         serde_json::from_value(choice.config.clone()).map_err(|e| refusal("internal", e.to_string()))?;
     crate::debug(&format!("voice settings: {}", serde_json::to_string(&choice).unwrap_or_default()));
-    let _settings = state.settings.lock().await;
     let existing = state.call.lock().await.as_ref().map(|(_, models)| Arc::clone(models));
     match existing {
         Some(models) => {
             // The call goes on: a slot whose model changes moves to the new one once it is loaded (the old one serving
             // until then), and only then does the configuration that goes with it apply. The call's lock is not held
             // while a model loads, so the call is said to, muted and stopped meanwhile.
-            models.switch(choice).await.map_err(|code| {
+            let switched = models.switch(choice).await.map_err(|code| {
                 let mut refused = refusal("voice_failed", format!("The new model could not be loaded: {code}."));
                 refused.params.insert("code".into(), json!(code));
                 refused
             })?;
+            // A later setSettings overtook this one: it applies instead, models and configuration.
+            let Some(_switched) = switched else { return Ok(()) };
             if let Some((call, _)) = state.call.lock().await.as_ref() {
                 call.set_config(config);
             }
