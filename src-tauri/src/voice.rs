@@ -26,22 +26,24 @@ use models::EngineModels;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use sidevoice_desktop_core::voice::{
-    self as choice, choose, BuildCandidate, Candidate, CatalogCandidates, VoiceChoice, VoiceSettings,
+    self as choice, choose, BuildCandidate, Candidate, CatalogCandidates, VoiceSettings,
 };
 use sidevoice_desktop_engine::{CatalogView, NativeEngines};
 use sidevoice_voice::{
     AudioDevices, Events, Listening, NativeDevices, NativeIo, SayCancel, SayEvent, SayOptions, SayOutcome, StopReason,
-    VoiceCall, VoiceConfig, VoiceEvent,
+    VoiceCall, VoiceConfig, VoiceEvent, VoiceModels,
 };
 use tauri::{AppHandle, Manager, State, Webview};
 use tokio::sync::oneshot;
 
 use crate::engine_ipc::EngineState;
 
-/// The call, once the page has set its settings, with the models and configuration it was given last.
+/// The call, once the page has set its settings, with the models it runs on (whose choice changes in place).
 #[derive(Default)]
 pub struct VoiceState {
-    call: tokio::sync::Mutex<Option<(VoiceCall, VoiceChoice)>>,
+    call: tokio::sync::Mutex<Option<(VoiceCall, Arc<EngineModels>)>>,
+    /// One `setSettings` at a time, to its end: the models and the configuration of one never mix with another's.
+    settings: tokio::sync::Mutex<()>,
     lifecycle: Arc<Mutex<Lifecycle>>,
     /// What is being said, by the page's key for it, until it is done.
     sayings: Arc<Mutex<HashMap<String, SayCancel>>>,
@@ -112,8 +114,10 @@ fn engines(app: &AppHandle) -> Result<Arc<NativeEngines>, Refusal> {
 
 /// Sets the person's choices: each slot is a model of one of the engine's catalogues (`{catalog, model}`, checked against
 /// what it lists); the app adds the detector and the end-of-turn model, and makes the configuration (every number the
-/// person does not choose). The call takes both at once: other models come with their configuration, and a call that
-/// listens restarts once on the pair. The first settings create the call.
+/// person does not choose). The first settings create the call. Later ones never stop it: a changed model is loaded
+/// while the one in use goes on (`EngineModels::switch`), takes over once ready, and only then does the configuration
+/// that goes with it apply; it resolves then. A model that cannot be loaded leaves the call as it was and rejects
+/// `voice_failed` with the engine's code.
 #[tauri::command]
 pub async fn voice_set_settings(
     app: AppHandle,
@@ -135,23 +139,28 @@ pub async fn voice_set_settings(
     let config: VoiceConfig =
         serde_json::from_value(choice.config.clone()).map_err(|e| refusal("internal", e.to_string()))?;
     crate::debug(&format!("voice settings: {}", serde_json::to_string(&choice).unwrap_or_default()));
-    let models = || Arc::new(EngineModels::new(engines.engine(), choice.clone()));
-    let mut call = state.call.lock().await;
-    match call.as_mut() {
-        Some((running, given)) => {
-            if given.same_models(&choice) {
-                running.set_config(config);
-            } else {
-                // Together: a call that listens restarts once, on the new models and the configuration they go with.
-                running.set_models(models(), config);
+    let _settings = state.settings.lock().await;
+    let existing = state.call.lock().await.as_ref().map(|(_, models)| Arc::clone(models));
+    match existing {
+        Some(models) => {
+            // The call goes on: a slot whose model changes moves to the new one once it is loaded (the old one serving
+            // until then), and only then does the configuration that goes with it apply. The call's lock is not held
+            // while a model loads, so the call is said to, muted and stopped meanwhile.
+            models.switch(choice).await.map_err(|code| {
+                let mut refused = refusal("voice_failed", format!("The new model could not be loaded: {code}."));
+                refused.params.insert("code".into(), json!(code));
+                refused
+            })?;
+            if let Some((call, _)) = state.call.lock().await.as_ref() {
+                call.set_config(config);
             }
-            *given = choice;
         }
         None => {
-            let (created, events) =
-                VoiceCall::new(models(), Box::new(NativeIo::with_devices(state.devices.clone())), config);
+            let models = Arc::new(EngineModels::new(engines.engine(), choice));
+            let io = Box::new(NativeIo::with_devices(state.devices.clone()));
+            let (created, events) = VoiceCall::new(Arc::clone(&models) as Arc<dyn VoiceModels>, io, config);
             forward(app.clone(), events, Arc::clone(&state.lifecycle));
-            *call = Some((created, choice));
+            *state.call.lock().await = Some((created, models));
         }
     }
     Ok(())

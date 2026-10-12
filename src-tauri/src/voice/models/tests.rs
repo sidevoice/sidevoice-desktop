@@ -12,7 +12,8 @@ use sidevoice_desktop_core::voice::{choose, CatalogCandidates, ModelChoice, Voic
 use sidevoice_desktop_engine::sidevoice_engine::NoCredentials;
 use sidevoice_desktop_engine::NativeEngines;
 use sidevoice_voice::{
-    AudioIo, Events, IoEvent, IoSink, SayEvent, SayOptions, SayOutcome, TurnEvent, VoiceCall, VoiceConfig, VoiceEvent,
+    AudioIo, Events, IoEvent, IoSink, Listening, SayEvent, SayOptions, SayOutcome, TurnEvent, VoiceCall, VoiceConfig,
+    VoiceEvent,
 };
 
 use super::*;
@@ -168,4 +169,279 @@ fn a_call_on_the_engines_real_models_hears_speech_and_plays_a_reply() {
     });
     drop(engines);
     let _ = std::fs::remove_dir_all(&root);
+}
+
+// ---- A model changed mid-call (gap #31): the call goes on, and work under way ends on its own model ----
+
+/// A microphone that says a tone while the test asks it to and is quiet otherwise, in real time, and a speaker that
+/// plays at once what it is given.
+struct Mic {
+    sink: Option<IoSink>,
+    stop: Arc<AtomicBool>,
+    /// Frames of tone left to say.
+    tone: Arc<AtomicUsize>,
+}
+
+impl AudioIo for Mic {
+    fn start(&mut self, sink: IoSink) -> Result<(), String> {
+        self.sink = Some(sink.clone());
+        let (stop, tone) = (Arc::clone(&self.stop), Arc::clone(&self.tone));
+        std::thread::spawn(move || {
+            sink.send(IoEvent::Ready);
+            let mut phase = 0.0f32;
+            while !stop.load(Ordering::SeqCst) {
+                let speaking = tone.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1)).is_ok();
+                let frame = (0..160)
+                    .map(|_| {
+                        phase = (phase + 2.0 * std::f32::consts::PI * 220.0 / 16_000.0) % std::f32::consts::TAU;
+                        if speaking {
+                            0.3 * phase.sin()
+                        } else {
+                            0.0
+                        }
+                    })
+                    .collect();
+                sink.send(IoEvent::Captured(frame));
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        });
+        Ok(())
+    }
+
+    fn play(&mut self, utterance: &str, chunk: usize, _samples: Vec<f32>, _sample_rate: u32) {
+        if let Some(sink) = &self.sink {
+            sink.send(IoEvent::ChunkStarted { utterance: utterance.into(), chunk });
+            sink.send(IoEvent::ChunkPlayed { utterance: utterance.into(), chunk });
+        }
+    }
+
+    fn stop_playback(&mut self) {}
+
+    fn stop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+    }
+}
+
+/// A detector that hears speech in any 32 ms window louder than a whisper.
+#[derive(Default)]
+struct LoudVad {
+    pending: Vec<f32>,
+    taken: u64,
+}
+
+#[async_trait]
+impl Vad for LoudVad {
+    async fn accept(&mut self, pcm: &[f32]) -> Result<Vec<VadFrame>, String> {
+        self.pending.extend_from_slice(pcm);
+        let mut frames = Vec::new();
+        while self.pending.len() >= 512 {
+            let window: Vec<f32> = self.pending.drain(..512).collect();
+            self.taken += 512;
+            let loud = window.iter().map(|s| s * s).sum::<f32>() / 512.0 > 0.001;
+            frames.push(VadFrame { end: self.taken, speech: loud, probability: None });
+        }
+        Ok(frames)
+    }
+
+    async fn reset(&mut self) {
+        self.pending.clear();
+        self.taken = 0;
+    }
+}
+
+/// A model that answers `name`, each call telling `started` it began and, held, waiting until it is released.
+struct Held {
+    name: &'static str,
+    started: tokio::sync::mpsc::UnboundedSender<&'static str>,
+    /// Open: its calls end at once.
+    gate: tokio::sync::watch::Sender<bool>,
+    calls: AtomicUsize,
+}
+
+impl Held {
+    fn new(name: &'static str, held: bool, started: &tokio::sync::mpsc::UnboundedSender<&'static str>) -> Arc<Self> {
+        let (gate, _) = tokio::sync::watch::channel(!held);
+        Arc::new(Held { name, started: started.clone(), gate, calls: AtomicUsize::new(0) })
+    }
+
+    /// Every call held, and every one to come, ends.
+    fn release(&self) {
+        self.gate.send_replace(true);
+    }
+
+    async fn answer(&self) {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let _ = self.started.send(self.name);
+        let mut open = self.gate.subscribe();
+        let _ = open.wait_for(|open| *open).await;
+    }
+}
+
+#[async_trait]
+impl Transcriber for Held {
+    async fn transcribe(&self, _pcm: Vec<f32>, _rate: u32, _language: Option<String>) -> Result<String, String> {
+        self.answer().await;
+        Ok(self.name.to_string())
+    }
+}
+
+#[async_trait]
+impl Speaker for Held {
+    async fn speak(
+        &self,
+        _text: String,
+        voice: Option<String>,
+        _language: Option<String>,
+        _speed: f32,
+    ) -> Result<(Vec<f32>, u32), String> {
+        self.answer().await;
+        // A voice is only ever the one chosen with this model.
+        assert_eq!(voice.as_deref(), Some(self.name), "the voice chosen with {}", self.name);
+        Ok((vec![0.1; 4_800], 24_000))
+    }
+}
+
+#[async_trait]
+impl EndOfTurnModel for Held {
+    async fn end_of_turn(&self, _pcm: Vec<f32>, _rate: u32) -> Result<f32, String> {
+        self.answer().await;
+        Ok(1.0)
+    }
+}
+
+/// The call's models over `slots`, as `EngineModels` hands them, with the detector above.
+struct SlotModels(Arc<Slots>);
+
+#[async_trait]
+impl VoiceModels for SlotModels {
+    async fn load(&self) -> Result<Models, String> {
+        Ok(self.0.models(Box::new(LoudVad::default())))
+    }
+}
+
+fn config(end_of_turn: &str, voice: &str) -> VoiceConfig {
+    serde_json::from_value(json!({
+        "language": "en", "voice": voice, "speed": 1.0, "end_of_turn": end_of_turn, "patience": "fast",
+    }))
+    .unwrap()
+}
+
+/// The next event `want` keeps, within thirty seconds; an error, or the call going idle, fails the test: a model
+/// changed never stops the call.
+async fn next_live<T>(events: &mut Events, want: impl Fn(VoiceEvent) -> Option<T>) -> T {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            match events.next().await.expect("the call is alive") {
+                VoiceEvent::Error(error) => panic!("the call failed: {}", error.code),
+                VoiceEvent::State(state) if state.listening == Listening::Idle => panic!("the call stopped"),
+                event => {
+                    if let Some(found) = want(event) {
+                        return found;
+                    }
+                }
+            }
+        }
+    })
+    .await
+    .expect("in time")
+}
+
+fn finished(event: VoiceEvent) -> Option<String> {
+    match event {
+        VoiceEvent::Turn(TurnEvent::Finished { text, .. }) => Some(text),
+        _ => None,
+    }
+}
+
+/// A turn being transcribed when the transcriber changes ends with the one it started on; the call never stops, and
+/// the next turn is the new model's. The same for a reply being spoken when the speaker changes: it is heard, and the
+/// next reply is the new speaker's, with the voice chosen with it.
+#[test]
+fn a_model_changed_mid_turn_and_mid_reply_does_not_stop_the_call() {
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build().unwrap();
+    runtime.block_on(async {
+        let (started, mut began) = tokio::sync::mpsc::unbounded_channel();
+        let old_stt = Held::new("old", true, &started);
+        let new_stt = Held::new("new", false, &started);
+        let old_tts = Held::new("af_old", true, &started);
+        let new_tts = Held::new("af_new", false, &started);
+        let slots = Slots::new(old_stt.clone(), old_tts.clone(), Some("af_old".into()), None);
+        let tone = Arc::new(AtomicUsize::new(0));
+        let mic = Mic { sink: None, stop: Arc::default(), tone: Arc::clone(&tone) };
+        let (call, mut events) =
+            VoiceCall::new(Arc::new(SlotModels(Arc::clone(&slots))), Box::new(mic), config("silence", "af_old"));
+        call.start();
+        next_live(&mut events, |event| {
+            matches!(event, VoiceEvent::State(s) if s.listening != Listening::Idle).then_some(())
+        })
+        .await;
+
+        // A turn; its transcription is held while the transcriber changes.
+        tone.store(80, Ordering::SeqCst);
+        assert_eq!(began.recv().await, Some("old"));
+        slots.set_transcriber(new_stt.clone());
+        old_stt.release();
+        let first = next_live(&mut events, finished).await;
+        assert!(first.contains("old"), "the turn under way ended on its own model: {first:?}");
+
+        tone.store(80, Ordering::SeqCst);
+        let second = next_live(&mut events, finished).await;
+        assert!(second.contains("new") && !second.contains("old"), "the next turn is the new model's: {second:?}");
+
+        // A reply; its speech is held while the speaker (and its voice) change, then the call's own voice follows.
+        let mut saying = call.say("Hola.", SayOptions::default());
+        loop {
+            if began.recv().await == Some("af_old") {
+                break;
+            }
+        }
+        slots.set_speaker(new_tts.clone(), Some("af_new".into()));
+        call.set_config(config("silence", "af_new"));
+        old_tts.release();
+        let mut last = None;
+        while let Some(step) = tokio::time::timeout(Duration::from_secs(30), saying.next()).await.expect("in time") {
+            last = Some(step);
+        }
+        assert_eq!(last, Some(SayEvent::Done { outcome: SayOutcome::Heard }), "the reply under way was heard");
+        let mut again = call.say("Adiós.", SayOptions::default());
+        while let Some(step) = tokio::time::timeout(Duration::from_secs(30), again.next()).await.expect("in time") {
+            last = Some(step);
+        }
+        assert_eq!(last, Some(SayEvent::Done { outcome: SayOutcome::Heard }));
+        assert_eq!((old_tts.calls.load(Ordering::SeqCst), new_tts.calls.load(Ordering::SeqCst)), (1, 1));
+        assert!(new_stt.calls.load(Ordering::SeqCst) > 0);
+
+        // Still listening: a turn after all that is heard.
+        tone.store(80, Ordering::SeqCst);
+        next_live(&mut events, finished).await;
+        call.stop();
+    });
+}
+
+/// A call on silence turns to smart-turn without stopping: the end-of-turn model is put in its slot first, then the
+/// configuration asks for it, and the next pause asks it.
+#[test]
+fn turning_to_smart_turn_mid_call_does_not_stop_it() {
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build().unwrap();
+    runtime.block_on(async {
+        let (started, _began) = tokio::sync::mpsc::unbounded_channel();
+        let stt = Held::new("heard", false, &started);
+        let tts = Held::new("af_heart", false, &started);
+        let ends = Held::new("ends", false, &started);
+        let slots = Slots::new(stt, tts, Some("af_heart".into()), None);
+        let tone = Arc::new(AtomicUsize::new(0));
+        let mic = Mic { sink: None, stop: Arc::default(), tone: Arc::clone(&tone) };
+        let (call, mut events) =
+            VoiceCall::new(Arc::new(SlotModels(Arc::clone(&slots))), Box::new(mic), config("silence", "af_heart"));
+        call.start();
+        tone.store(80, Ordering::SeqCst);
+        next_live(&mut events, finished).await;
+
+        slots.set_end_of_turn(Some(ends.clone() as Arc<dyn EndOfTurnModel>));
+        call.set_config(config("smart-turn", "af_heart"));
+        tone.store(80, Ordering::SeqCst);
+        next_live(&mut events, finished).await;
+        assert!(ends.calls.load(Ordering::SeqCst) > 0, "the pause asked the end-of-turn model");
+        call.stop();
+    });
 }

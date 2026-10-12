@@ -337,12 +337,19 @@ What is this app's own:
   (`build-not-found`) and run here (else the engine's code for why not, `memory`, ...). A provider's model has no
   builds, and a `build` named for one is not looked at, as on the web. The app adds the voice activity detector, the
   local catalogue's (family `silero-vad`, else another local `vad` that runs), and, for `smart-turn`, the local model
-  that ends turns `turn_model` names when it runs here, else (as on the web) the first that does. A change of a slot's
-  catalogue, model or build, of `end_of_turn` or of the model that ends turns gives a call that listens other models at
-  once (it restarts once on them); `language`, `voice`, `speed`, `patience` and `idle_unload_minutes` apply live.
+  that ends turns `turn_model` names when it runs here, else (as on the web) the first that does. Nothing stops the
+  call (sidevoice-web #75, gap #31): the call holds one interface per slot (speech to text, text to speech with its
+  voice, end of turn), and a change of a slot's catalogue, model or build, of `end_of_turn` or of the model that ends
+  turns loads the new model while the one in use goes on serving, then moves the slot to it; what was under way (a
+  turn being transcribed, a reply being spoken) ends on the model it started with. Only then does the configuration
+  that goes with it apply (`smart-turn` once its model is in place), and `setSettings` resolves. `language`, `voice`,
+  `speed`, `patience` and `idle_unload_minutes` apply live. The voice activity detector, the app's own choice,
+  stays for the call: a different one comes with its next load. With no call holding models, the settings are what the
+  next start loads.
   It rejects with the app's keyed refusals (above), each with the `code` the page translates (`model-unknown`,
   `model-unfit`, `catalog-not-found`, `build-not-found`, `vad-unavailable`, `end-of-turn-unavailable`, or the
-  engine's own with the provider's `detail`).
+  engine's own with the provider's `detail`), and with `{key: "voice_failed", code}` when the new model cannot be
+  loaded: the call then goes on as it was, on the models it had.
 - `start` rejects `{key: "voice_failed", code, message}` with the call's code, `{key: "voice_settings_missing", code:
   "settings-missing"}` before any settings, and `{key: "voice_failed", code: "stopped"}` when `stop` came first.
 - The seam has thirteen calls: `setSettings`, `start`, `stop`, `say`, `mute`, `cancelInput`, `onTurn`, `onState`,
