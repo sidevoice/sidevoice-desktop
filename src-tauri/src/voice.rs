@@ -17,7 +17,7 @@
 mod models;
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -30,8 +30,8 @@ use sidevoice_desktop_core::voice::{
 };
 use sidevoice_desktop_engine::{CatalogView, NativeEngines};
 use sidevoice_voice::{
-    AudioDevices, Events, Listening, NativeDevices, NativeIo, SayCancel, SayEvent, SayOptions, SayOutcome, StopReason,
-    VoiceCall, VoiceConfig, VoiceEvent, VoiceModels,
+    AudioDevices, Events, Listening, NativeDevices, NativeIo, PlaybackState, SayCancel, SayEvent, SayOptions,
+    SayOutcome, StopReason, VoiceCall, VoiceConfig, VoiceEvent, VoiceModels,
 };
 use tauri::{AppHandle, Manager, State, Webview};
 use tokio::sync::oneshot;
@@ -42,6 +42,8 @@ use crate::engine_ipc::EngineState;
 #[derive(Default)]
 pub struct VoiceState {
     call: tokio::sync::Mutex<Option<(VoiceCall, Arc<EngineModels>)>>,
+    /// The `setSettings` asked for so far, numbered as they arrive: only the latest changes the call.
+    settings: Arc<AtomicU64>,
     lifecycle: Arc<Mutex<Lifecycle>>,
     /// What is being said, by the page's key for it, until it is done.
     sayings: Arc<Mutex<HashMap<String, SayCancel>>>,
@@ -125,6 +127,10 @@ pub async fn voice_set_settings(
     settings: VoiceSettings,
 ) -> Result<(), Refusal> {
     page(&app, &webview)?;
+    // Numbered on arrival, before anything is awaited: a later one wins however long this one takes.
+    let number = state.settings.fetch_add(1, Ordering::SeqCst) + 1;
+    let counter = Arc::clone(&state.settings);
+    let latest = move || counter.load(Ordering::SeqCst) == number;
     let engines = engines(&app)?;
     let catalogs = {
         let engines = Arc::clone(&engines);
@@ -138,13 +144,18 @@ pub async fn voice_set_settings(
     let config: VoiceConfig =
         serde_json::from_value(choice.config.clone()).map_err(|e| refusal("internal", e.to_string()))?;
     crate::debug(&format!("voice settings: {}", serde_json::to_string(&choice).unwrap_or_default()));
-    let existing = state.call.lock().await.as_ref().map(|(_, models)| Arc::clone(models));
+    if !latest() {
+        return Ok(());
+    }
+    let mut call = state.call.lock().await;
+    let existing = call.as_ref().map(|(_, models)| Arc::clone(models));
     match existing {
         Some(models) => {
+            drop(call);
             // The call goes on: a slot whose model changes moves to the new one once it is loaded (the old one serving
             // until then), and only then does the configuration that goes with it apply. The call's lock is not held
             // while a model loads, so the call is said to, muted and stopped meanwhile.
-            let switched = models.switch(choice).await.map_err(|code| {
+            let switched = models.switch(choice, &latest).await.map_err(|code| {
                 let mut refused = refusal("voice_failed", format!("The new model could not be loaded: {code}."));
                 refused.params.insert("code".into(), json!(code));
                 refused
@@ -159,8 +170,8 @@ pub async fn voice_set_settings(
             let models = Arc::new(EngineModels::new(engines.engine(), choice));
             let io = Box::new(NativeIo::with_devices(state.devices.clone()));
             let (created, events) = VoiceCall::new(Arc::clone(&models) as Arc<dyn VoiceModels>, io, config);
-            forward(app.clone(), events, Arc::clone(&state.lifecycle));
-            *state.call.lock().await = Some((created, models));
+            forward(app.clone(), events, Arc::clone(&state.lifecycle), Arc::clone(&models));
+            *call = Some((created, models));
         }
     }
     Ok(())
@@ -397,11 +408,13 @@ async fn with_call(
 
 /// Hands every event of the call to the room page, in order, and keeps the lifecycle: the call listens from its first
 /// state other than idle, which settles the `start`s waiting, as does the first error while they wait.
-fn forward(app: AppHandle, mut events: Events, lifecycle: Arc<Mutex<Lifecycle>>) {
+fn forward(app: AppHandle, mut events: Events, lifecycle: Arc<Mutex<Lifecycle>>, models: Arc<EngineModels>) {
     tauri::async_runtime::spawn(async move {
         while let Some(event) = events.next().await {
             match &event {
                 VoiceEvent::State(state) => {
+                    // A text-to-speech model chosen while something was said takes over once nothing is.
+                    models.playback(state.playback == PlaybackState::Idle);
                     let mut lifecycle = lifecycle.lock().unwrap();
                     lifecycle.listening = state.listening != Listening::Idle;
                     if lifecycle.listening {
