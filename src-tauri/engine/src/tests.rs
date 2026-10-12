@@ -515,7 +515,8 @@ fn a_refused_key_is_told_with_the_provider_words_without_the_key() {
     let said = refused.detail.expect("the provider's words");
     assert!(!said.contains("sk-echo-SENTINEL-123") && !json.contains("SENTINEL"), "{said}");
     assert!(said.contains("[key]") && !said.contains('\n'), "{said}");
-    assert_eq!(said.chars().count(), catalogs::DETAIL_CHARS + 1, "cut, with an ellipsis");
+    assert_eq!(said.chars().count(), catalogs::DETAIL_CHARS, "cut to the most, the last an ellipsis");
+    assert!(said.ends_with('…'));
 }
 
 /// Words that are only blank are no detail, and a refusal without words has none: it serialises as `{code, params}`.
@@ -529,6 +530,25 @@ fn a_refusal_without_words_has_no_detail() {
         Some("bad [key], [key]")
     );
     let none = serde_json::to_value(CredentialRefusal::new(reason(), None, "abc")).unwrap();
+    // The key as the provider may echo it: masked, cut short (the engine clips a body that is not its JSON), encoded,
+    // in a header; none of it reaches the page, and words that merely look alike stay.
+    let key = "sk-echo-SENTINEL-123";
+    for echo in [
+        "Incorrect API key provided: sk-echo-SENTINEL-***.",
+        "Unauthorized: Bearer sk-echo-SENT",
+        "bad key %73%6B-echo-SENTINEL-123",
+        "key='sk-echo-SENTINEL-123'",
+    ] {
+        let said = CredentialRefusal::new(reason(), Some(echo), key).detail.unwrap();
+        assert!(!said.contains("SENT") && !said.contains("echo-") && said.contains("[key]"), "{echo} → {said}");
+    }
+    assert_eq!(
+        CredentialRefusal::new(reason(), Some("Incorrect API key provided."), key).detail.as_deref(),
+        Some("Incorrect API key provided.")
+    );
+    let long = "é".repeat(400);
+    let cut = CredentialRefusal::new(reason(), Some(&long), key).detail.unwrap();
+    assert_eq!(cut.chars().count(), catalogs::DETAIL_CHARS);
     assert_eq!(none, serde_json::json!({ "code": "credential-rejected", "params": {} }));
 }
 

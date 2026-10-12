@@ -48,27 +48,86 @@ pub struct CredentialRefusal {
 /// The most of a provider's words a refused key is told with, in characters.
 pub const DETAIL_CHARS: usize = 300;
 
+/// The shortest run of a key's characters that marks a word as carrying it (a key the provider masked, cut or
+/// encoded): long enough that ordinary words never match it.
+const KEY_RUN: usize = 8;
+
 impl CredentialRefusal {
-    /// `reason`, with what the provider said (`detail`) made safe to hand the page: every occurrence of `key` (the
-    /// key tried, trimmed) taken out, control characters made spaces, trimmed, and cut to [`DETAIL_CHARS`] (with "…").
-    /// Nothing left, no detail.
+    /// `reason`, with what the provider said (`detail`) made safe to hand the page: control characters made spaces,
+    /// every occurrence of `key` (the key tried, trimmed) taken out, and every word that carries any [`KEY_RUN`]
+    /// characters of it in a row (the key masked — `sk-…-***` —, cut short, or percent-encoded in part) taken out
+    /// whole; then trimmed and cut to at most [`DETAIL_CHARS`] characters, the last an "…" when cut. Nothing left, no
+    /// detail. The provider's words can say other things (they are its own message); the key is never among them.
     pub fn new(reason: ReasonView, detail: Option<&str>, key: &str) -> Self {
         let key = key.trim();
         let detail = detail.and_then(|said| {
-            let said = if key.is_empty() { said.to_string() } else { said.replace(key, "[key]") };
             let said: String = said.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+            let said = if key.is_empty() { said } else { redact(&said.replace(key, "[key]"), key) };
             let said = said.trim();
             if said.is_empty() {
                 return None;
             }
-            let mut cut: String = said.chars().take(DETAIL_CHARS).collect();
-            if said.chars().count() > DETAIL_CHARS {
-                cut.push('…');
+            if said.chars().count() <= DETAIL_CHARS {
+                return Some(said.to_string());
             }
+            let mut cut: String = said.chars().take(DETAIL_CHARS - 1).collect();
+            cut.push('…');
             Some(cut)
         });
         CredentialRefusal { reason, detail }
     }
+}
+
+/// `said` with each word that carries [`KEY_RUN`] characters of `key` in a row (decoded where percent-encoded)
+/// replaced by `[key]`. A word is what lies between spaces, quotes and the punctuation that ends a sentence or a
+/// field (`,;:()[]{}<>`).
+fn redact(said: &str, key: &str) -> String {
+    let runs: Vec<String> = if key.chars().count() < KEY_RUN {
+        Vec::new()
+    } else {
+        let chars: Vec<char> = key.chars().collect();
+        chars.windows(KEY_RUN).map(|run| run.iter().collect()).collect()
+    };
+    let carries = |word: &str| {
+        let decoded = percent_decoded(word);
+        runs.iter().any(|run| word.contains(run.as_str()) || decoded.contains(run.as_str()))
+    };
+    let mut out = String::with_capacity(said.len());
+    let mut word = String::new();
+    let flush = |word: &mut String, out: &mut String| {
+        out.push_str(if carries(word.as_str()) { "[key]" } else { word.as_str() });
+        word.clear();
+    };
+    for c in said.chars() {
+        if c.is_whitespace() || "\"'`,;:()[]{}<>".contains(c) {
+            flush(&mut word, &mut out);
+            out.push(c);
+        } else {
+            word.push(c);
+        }
+    }
+    flush(&mut word, &mut out);
+    out
+}
+
+/// `word` with its `%XX` escapes decoded where they make text; as it is otherwise.
+fn percent_decoded(word: &str) -> String {
+    let bytes = word.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| (b as char).to_digit(16);
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(high), Some(low)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
+                out.push((high * 16 + low) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
