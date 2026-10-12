@@ -68,8 +68,10 @@ what the interface's own window offers — same origin, same permission rule —
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-headset error " + String(error && (error.message || error)) });
   }
 
-  // The native engine through the app itself, as the interface calls it (docs/BRIDGE.md): capabilities, installs by
-  // catalogue model id + engine, refusals by key, the machine's memory, a cancelled download.
+  // The native engine through the app itself, as the interface calls it (docs/BRIDGE.md): capabilities, installs as
+  // sidevoice-web's `ModelCatalogs.install(model, {build, engine, onProgress, signal})` — by a catalogue build id, by an
+  // engine, by nothing (the recommended build) —, refusals by key, the machine's memory, a download cancelled by its
+  // signal.
   const engine = window.__sidevoiceDesktop && window.__sidevoiceDesktop.host && window.__sidevoiceDesktop.host.engine;
   if (!engine) { await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-engine none" }); return; }
   async function until(check, ms) {
@@ -84,38 +86,49 @@ what the interface's own window offers — same origin, same permission rule —
   try {
     const capabilities = await engine.capabilities();
     let progress = 0;
-    await engine.install("kokoro-82m-v1.0", "sherpa-onnx", () => { progress++; });
-    await engine.install("whisper-tiny", "whisper-cpp");
-    await engine.install("silero-vad", "sherpa-onnx");
+    await engine.install("kokoro-82m-v1.0", { engine: "sherpa-onnx", onProgress: () => { progress++; } });
+    // As the web's settings do: the build the person chose, by its catalogue id and its engine.
+    const tiny = (await engine.catalogs())[0].models.find((m) => m.id === "whisper-tiny");
+    const tinyBuild = tiny.builds.find((b) => b.backend === "whisper-cpp" && b.available);
+    await engine.install("whisper-tiny", { build: tinyBuild.id, engine: tinyBuild.backend });
+    await engine.install("silero-vad");
     const installed = (await engine.installed()).map((b) => b.model + "@" + b.engine).sort().join(",");
     // A page engine is never installed natively, nor replaced by another: refused, by key (docs/BRIDGE.md → "Refusals").
-    const refused = await engine.install("whisper-tiny", "transformers-js")
+    const refused = await engine.install("whisper-tiny", { engine: "transformers-js" })
       .then(() => "no", (error) => (error && error.key === "engine_unsupported" ? "yes" : "other:" + JSON.stringify(error)));
     const memory = await engine.memory();
 
-    // Cancel: a big download, cancelled once its speed is measured; the install rejects by key and leaves nothing
-    // (CI then checks the disk).
+    // Cancel: a big download, its signal aborted once it is under way; the install rejects install-cancelled and
+    // leaves nothing (CI then checks the disk). A signal already aborted rejects so without starting.
     let measured = null;
     let ended = false;
-    const small = engine.install("whisper-small", "sherpa-onnx", (p) => { if (p.bytes_per_s && !measured) measured = p; });
+    const abort = new AbortController();
+    // Aborted from its first report with bytes, as early as the page could, so a fast line cannot finish it first.
+    const small = engine.install("whisper-small", { engine: "sherpa-onnx", signal: abort.signal,
+      onProgress: (p) => { if (p.fraction > 0 && !measured) { measured = p; abort.abort(); } } });
     small.then(() => { ended = true; }, () => { ended = true; });
     await until(() => measured || ended, 120000);
-    const cancelled = await engine.cancel(small.job);
-    const outcome = await small.then(() => "installed", (error) => error && error.key);
-    const cancelAgain = await engine.cancel(small.job);
+    abort.abort();
+    const outcome = await small.then(() => "installed", (error) => error && error.code + "/" + error.key);
     const smallGone = !(await engine.installed()).some((b) => b.model === "whisper-small");
-    const event = measured ? Object.keys(measured).sort().join("+") + ":" + (measured.job === small.job && measured.model === "whisper-small") : "none";
+    const event = measured
+      ? Object.keys(measured).sort().join("+") + ":" + (measured.total > 0 && measured.done > 0 && measured.fraction <= 1)
+      : "none";
+    const aborted = new AbortController();
+    aborted.abort();
+    const preAborted = await engine.install("whisper-small", { engine: "sherpa-onnx", signal: aborted.signal })
+      .then(() => "installed", (error) => error && error.code);
 
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-engine ok capabilities=" + JSON.stringify(capabilities) +
       " installed=" + installed + " progress_calls=" + progress + " refused=" + refused + " memory=" + JSON.stringify(memory) +
-      " cancel=" + cancelled + "/" + outcome + "/" + cancelAgain + " cancel_gone=" + smallGone + " progress_event=" + event +
-      " speed=" + (measured ? measured.bytes_per_s : 0) });
+      " cancel=" + outcome + " pre_aborted=" + preAborted + " cancel_gone=" + smallGone + " progress_event=" + event });
   } catch (error) {
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-engine error " + String(error && (error.message || error)) });
   }
 
   // The voice call the app runs (docs/BRIDGE.md → "The voice call"): the seam's shape, the engine's catalogues
-  // (`host.engine`), settings that name a catalogue's model, the audio devices, and a start that settles. A CI runner may have no microphone or
+  // (`host.engine`), settings that name a catalogue's model, a build of it and an end-of-turn model, as the web's settings
+  // do, the audio devices, and a start that settles. A CI runner may have no microphone or
   // speaker: then the start is refused with the call's code, which is what the probe reports.
   const voice = window.__sidevoiceDesktop && window.__sidevoiceDesktop.host && window.__sidevoiceDesktop.host.voice;
   if (!voice) { await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-voice none" }); return; }
@@ -128,8 +141,19 @@ what the interface's own window offers — same origin, same permission rule —
     const remote = catalogs.slice(1).map((c) => c.id + ":" + (c.status.reason ? c.status.reason.code : "current")).join(",");
     const unknown = await voice.setSettings({ stt: { catalog: "local", model: "whisper-nope" },
       tts: { catalog: "local", model: "kokoro-82m-v1.0" } }).then(() => "no", (error) => error && error.key + "/" + error.code);
-    await voice.setSettings({ stt: { catalog: "local", model: "whisper-tiny", language: "es" },
-      tts: { catalog: "local", model: "kokoro-82m-v1.0", voice: "ef_dora", speed: 1 }, patience: "fast" });
+    // A build that is not the model's is refused; one that runs here is loaded, and so is the end-of-turn model chosen
+    // (the last that runs here: with several, not the one the app would take anyway).
+    const badBuild = await voice.setSettings({ stt: { catalog: "local", model: "whisper-tiny", build: "whisper-tiny/nope" },
+      tts: { catalog: "local", model: "kokoro-82m-v1.0" } }).then(() => "no", (error) => error && error.key + "/" + error.code);
+    const tiny = models.find((m) => m.id === "whisper-tiny");
+    // One the catalogue would not pick on its own when there is such a build.
+    const runnable = tiny ? tiny.builds.filter((b) => b.available) : [];
+    const build = (runnable.find((b) => b.id !== tiny.recommendedBuild) || runnable[0] || { id: "none" }).id;
+    const turns = models.filter((m) => m.capabilities.includes("end-of-turn") && m.builds.some((b) => b.available));
+    const turnModel = turns.length ? turns[turns.length - 1].id : "none";
+    await voice.setSettings({ stt: { catalog: "local", model: "whisper-tiny", language: "es", build },
+      tts: { catalog: "local", model: "kokoro-82m-v1.0", voice: "ef_dora", speed: 1 }, patience: "fast",
+      end_of_turn: "smart-turn", turn_model: turnModel, idle_unload_minutes: 10 });
     // The system's devices (a runner may list none) and an id it does not list, refused by key and code.
     const listed = await voice.audioDevices();
     const devices = listed.inputs.length + "/" + listed.outputs.length + "/" + listed.outputSelectable;
@@ -141,6 +165,7 @@ what the interface's own window offers — same origin, same permission rule —
     stops.forEach((stop) => stop());
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-voice ok keys=" + Object.keys(voice).length +
       " catalogs=" + catalogs[0].id + "," + remote + " models=" + models.length + " vad=" + models.some((m) => m.capabilities.includes("vad")) + " unknown=" + unknown +
+      " bad_build=" + badBuild + " build=" + build + " turn_model=" + turnModel +
       " devices=" + devices + " unknown_device=" + unknownDevice + " start=" + started + " states=" + states.join(",") + " errors=" + errors.join(",") });
   } catch (error) {
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-voice error " + String(error && (error.message || error)) });

@@ -25,12 +25,13 @@ Both are globals the web UI (sidevoice-web → `apps/web`) already defines:
 - `window.sidevoiceUI.store` — the room's view-model store (`apps/web/src/state/room-store.ts`,
   `installRoomBridge`). The bridge calls `getState()` and `subscribe()` and reads only `call.joined`, `call.busy`,
   `mic.enabled`, `mic.disabled`, `callCard` (the room's own view for the card: the call's conversation title, the
-  agent's state, `youTalking`, `canSkip`), `participants` (the rows' public fields) and `audioDevices`.
+  agent's state, `youTalking`, `canSkip`), `participants` (the rows' public fields) and `facts.audioDevices` (what the
+  voice lists and what is chosen: `{inputs, outputs, input, output, outputSelectable}`, `state/room-session-state.d.ts`).
 - `window.sidevoiceUI.micLevel` — the microphone's level, 0–100, from the room's capture, whether or not the room is
   painted (`apps/web/src/state/mic-level.ts`). The bridge subscribes to it.
 - `window.sidevoiceActions` — the room's actions (`apps/web/src/state/room-types.ts`, `SidevoiceActions`). The
   bridge calls only `toggleMic()`, `toggleCall()`, `skipReply()`, `selectParticipant(threadId)` and
-  `selectAudioDevice(kind, id)`.
+  `setAudioDevices(choice)`.
 
 If the web UI renames either, the tray greys out ("sala sin cargar") and nothing else breaks.
 Keeping these two names stable is the web UI's side of the contract.
@@ -49,15 +50,20 @@ window.__TAURI_INTERNALS__.invoke("bridge_state", { snapshot })
   "agent": "idle | working | speaking", "youTalking": false, "canSkip": false, "since": 1759300000000,
   "participants": [{ "threadId": "…", "title": "…", "selected": true, "reach": "listening", "working": false,
                      "machine": "daimon", "harness": "claude", "subtitle": "", "…": "…" }],
-  "devices": { "inputs": [{ "id": "default", "label": "…" }], "outputs": [], "inputId": "default",
-               "outputId": "default", "available": true, "outputAvailable": false, "busy": false } }
+  "devices": { "inputs": [{ "id": "", "label": "", "system": true }, { "id": "CoreAudio:…", "label": "…" }],
+               "outputs": [{ "id": "", "label": "", "system": true }], "inputId": "CoreAudio:…",
+               "outputId": "", "available": true, "outputAvailable": false, "busy": false } }
 ```
 
 - `agent`: what the agent does — `speaking` while its voice plays (it wins over its work), else `working` while the
   conversation works on a turn, else `idle`. `youTalking`: a turn of the person's is open.
 - `since`: when this page saw the call joined (ms since the epoch), for the card's clock; `null` outside a call.
-- `participants` and `devices` are relayed to the card as the room wrote them: the web UI owns their shape
-  (`ParticipantView`, `AudioDevices`).
+- `participants` are relayed to the card as the room wrote them: the web UI owns their shape (`ParticipantView`).
+- `devices` is the card's `AudioDevices` (web `call-controls/host.ts`), made from the room's `facts.audioDevices`
+  (`null` until the voice has listed them): the system's default first, as an option `{id: "", system: true}`; a
+  device listed without a name as `{label: "", number}` (its place, from 1); `inputId`/`outputId` the chosen ids, `""`
+  for the default; `outputAvailable` the voice's `outputSelectable` (when false, `outputId` is `""`); `available`
+  always `true`; `busy` while a device the card chose has not been answered by the room.
 
 Sent once on page start (`ready: false`), then on every change of those fields (the store
 ticks often; unchanged snapshots are not re-sent). The app also resets to `ready: false` on
@@ -94,8 +100,11 @@ Evaluated by the app with `webview.eval` (works with the window hidden); the com
 - `hang-up` → `sidevoiceActions.toggleCall()`, only while joined.
 - `skip-reply` → `sidevoiceActions.skipReply()`, only while something plays.
 - `select-participant` → `sidevoiceActions.selectParticipant(threadId)`, only for a conversation the room lists.
-- `select-audio-device` → `sidevoiceActions.selectAudioDevice(kind, id)`, `kind` `input` or `output`: the room's own
-  choice, so the card and the room never disagree.
+- `select-audio-device` → `sidevoiceActions.setAudioDevices({[kind]: id})`, `kind` `input` or `output`, `id` `""` the
+  system's default (`null` to the room): the room's own choice, kept for this device as its device bar keeps it, so
+  the card and the room never disagree. A choice the room refuses leaves the device it had, which the card says.
+  Choices go to the room one at a time, in the order asked (the room keeps whichever answers last), and the card's
+  `devices.busy` holds until the last has been answered.
 
 Joining is deliberately **not** a tray command: joining unlocks audio output, which the webview
 only allows from a click in the page. "Mostrar Sidevoice" opens the window for that.
@@ -111,7 +120,7 @@ docs/LOCAL_HOST.md.
 
 | Call | Returns / does |
 |---|---|
-| `state()` | `{state, failure?, core?, service?, calls?, attempts?, limit?, installed?, reachable}` (`limit` only where the service manager has one: «(2 de 5)» only then; `installed` whether the service starts at the next sign-in — the connector's `start_at_login`, absent when the connector does not say); `state` one of `absent`, `not-installed`, `stopped-by-person`, `starting`, `backoff`, `running`, `failed`, `service-failed`, `refused`, `incompatible` |
+| `state()` | `{state, failure?, core?, product_version, service?, calls?, attempts?, limit?, installed?, reachable}` (`limit` only where the service manager has one: «(2 de 5)» only then; `product_version` the installed Sidevoice's version, the `sidevoice` package — not `core.version` —, `null` when unknown or not installed; `installed` whether the service starts at the next sign-in — the connector's `start_at_login`, absent when the connector does not say); `state` one of `absent`, `not-installed`, `stopped-by-person`, `starting`, `backoff`, `running`, `failed`, `service-failed`, `refused`, `incompatible` |
 | `subscribe(listener)` → `stop` | the state now, then on every change (polled every 2 s while anyone listens) |
 | `pairing()` | `{fp, public_key, device_id, token, urls: ["http://127.0.0.1:<port>"], rv: null, host, local: true}` whenever a core answers and the app is paired (`reachable`), whatever `state` says, else `null`; `token` is the app's proxy secret for this launch, never the device token |
 | `start()` / `stop()` / `restart()` / `serviceInstall()` / `serviceUninstall()` | the connector's `service …`; resolve the state after it |
@@ -165,7 +174,7 @@ The card's page talks to the app only through `window.__sidevoiceDesktop.host.ca
 | Card → app | |
 |---|---|
 | `subscribe(listener)` → `stop` | the whole state now, then on every change (`call_controls_ready` asks the app for it) |
-| `run({command, …})` | `call_controls_run`: `open-app` (the app shows the room), or one of the room commands above, which the app parses (`bridge::Command`) before it carries it to the room |
+| `run({command, …})` | `call_controls_run`: `open-app` (the app shows the room), or one of the room commands above, which the app parses (`bridge::Command`) before it carries it to the room. After `select-audio-device` the card hears its devices `busy` at once, until the app next tells it the call (or 3 s pass): the device still chosen is never read as the room refusing the new one |
 | `layout({width, height})` | `call_controls_layout`: the card's size with its shadow margin; the window takes it and is placed to fit |
 | `drag(phase)` | `call_controls_drag`: `start`, `move`, `end`; the window follows the pointer (the app reads it) and is dropped, snapped and remembered |
 
@@ -193,7 +202,8 @@ web repo), other displays and scales, and any platform but macOS.
 The app's engine (docs/ENGINES.md), for what the page knows and manages of its models: its catalogues and the keys of
 remote providers, what this device runs, which builds are on disk, and getting one there with its progress. Running
 models is the voice call's (below), never the page's. `window.__sidevoiceDesktop.host.engine` is the page's
-`ModelCatalogs` seam in the app (sidevoice-web `apps/web/src/services/model-catalogs.js`) plus the install calls:
+`ModelCatalogs` seam in the app (sidevoice-web `apps/web/src/services/model-catalogs.js`), as that file types it —
+`install` included, with its options, progress and cancel — plus what this device is, runs and has on disk:
 
 | Call | Returns / does |
 |---|---|
@@ -202,28 +212,27 @@ models is the voice call's (below), never the page's. `window.__sidevoiceDesktop
 | `hasCredential(provider)` | whether the keychain holds a key for `provider` (`false` where the app keeps none). The key itself never reaches the page |
 | `capabilities()` | `{runs: "native", os: "macos"\|"windows"\|"linux", arch: "aarch64"\|"x86_64", has: ["cpu", …], memory_mb: number\|null}` — `has` is what sidevoice-engine runs a model on here (`cpu`; `metal` on Apple Silicon, for whisper.cpp), never Core ML; remote providers are catalogues of their own (`catalogs()`), `memory_mb` the machine's total, from the OS |
 | `installed()` | `[{model, engine}]` — builds whose files are on disk and whole |
-| `install(model, engine, onProgress?)` | downloads the model's build, whatever of it is missing. Returns a promise that also carries the install's job id from the start, `promise.job` (a string), for `cancel`. `onProgress(event)` about twice a second, only with this call's own bytes (below) |
-| `cancel(job)` | cancels that install, waiting or running; its `install` promise rejects with `{key: "install_cancelled", message}` and the model is not on disk afterwards (unless it already was before the install). Resolves `true` when the install will reject so — also when it has not reached the app yet (it is refused as it arrives) — and `false` when it had already ended (a no-op, never a rejection) |
+| `install(model, {build?, engine?, onProgress?, signal?})` | `ModelCatalogs.install`: downloads a build of the model, whatever of it is missing, and resolves `undefined`. `build` is the build's catalogue id (`ModelBuild.id`, `whisper-small/sherpa-onnx-int8`), `engine` its engine id (`backend`); either or both (below), or neither for the build the catalogue recommends here (`recommendedBuild`). `onProgress({fraction, done, total})` about twice a second, only with this call's own bytes (below). `signal`, an `AbortSignal`, cancels it, waiting or running: it rejects `{code: "install-cancelled", key: "install_cancelled", message}` and the model is not on disk afterwards (unless it already was before the install); a signal already aborted rejects so at once, and nothing reaches the app. Any other refusal rejects `{key, code, message, …params}` (below) |
 | `memory()` | `{total_mb, available_mb}`: the machine's memory and what is available of it now, each `null` when the OS does not say. On macOS `available_mb` is the share the kernel's memory-pressure level reports free (`kern.memorystatus_level`): a gauge, not a limit, since macOS compresses and swaps rather than fail |
 
 - `model` is the catalogue id (`whisper-small`, `kokoro-82m-v1.0`), `engine` the build's engine id (`sherpa-onnx`,
-  `whisper-cpp`): sidevoice-engine's model id and backend id. The app installs exactly that build or refuses it
+  `whisper-cpp`): sidevoice-engine's model id and backend id. The build is the one `build` names (refused
+  `build_missing` when the model has no such build, or when `engine` is named too and is not its engine); else, with
+  only `engine`, that engine's build; else the recommended one. The app installs exactly that build or refuses it
   (below), and never another build instead. Before it downloads anything it checks, at this trust boundary, that the
   build runs here: an engine in this app, the build's needs and accelerators, and the model's memory against the
   machine's (unknown memory is not a refusal).
-- Installs run one at a time. Each `install` call is its own job (`job`, an id the bridge makes, `promise.job`); the
-  app keeps progress per job from the moment the job starts — after any install ahead of it — until it ends, so a
-  call that waits reports nothing and no call ever reports another's bytes. Each report is one object:
+- Installs run one at a time. Each `install` call is its own job (`job`, an id the bridge makes); the app keeps
+  progress per job from the moment the job starts — after any install ahead of it — until it ends, so a call that
+  waits reports nothing and no call ever reports another's bytes. Each report is one object:
 
   ```json
-  { "job": "install-3-mg8k2x", "model": "whisper-small", "engine": "sherpa-onnx",
-    "done": 52428800, "total": 639387718, "bytes_per_s": 31457280 }
+  { "fraction": 0.082, "done": 52428800, "total": 639387718 }
   ```
 
   `done`/`total` are this job's bytes across the build's files; `total` comes from sidevoice-engine's catalogue, so it
-  is known from the first report (0 when nothing is left to fetch).
-  `bytes_per_s` is `null` until the first second is measured, then the speed sampled each second, each sample
-  weighing half against the speed before it; time left is `(total - done) / bytes_per_s`.
+  is known from the first report (0 when nothing is left to fetch, and then `fraction` is `null`). `fraction` is
+  `done / total`, at most 1.
 - A cancelled install stops within a moment, whatever it is doing: waiting for another install, waiting on the
   network — for the answer's headers or its next chunk, however long the server has gone quiet: the request is
   dropped and its connection closed — or unpacking. It frees the install lock, removes what it was downloading
@@ -235,8 +244,11 @@ models is the voice call's (below), never the page's. `window.__sidevoiceDesktop
   and the cancel is how a person stops one.
 - Commands behind it (`src-tauri/src/engine_ipc.rs`): `engine_catalogs`, `engine_set_credential {provider, key}`,
   `engine_has_credential {provider}`, `engine_capabilities`, `engine_installed`,
-  `engine_install {model, engine, job}` with `engine_progress {job}` (the report above, or `null` while the job
-  waits or after it ends) and `engine_cancel {job}` (`true`/`false` as `cancel`), `engine_memory`. Granted to the room
+  `engine_install {model, build, engine, job}` (`build` and `engine` each a string or `null`) with
+  `engine_progress {job}` (`{job, model, engine, done, total, bytes_per_s}` — the job's bytes and its speed, `null`
+  until a second is measured — or `null` while the job waits or after it ends), `engine_cancel {job}` (what the
+  signal's abort calls: `true` when the install will reject `install_cancelled`, also when it has not reached the app
+  yet, which then refuses it as it arrives; `false` when it had already ended), `engine_memory`. Granted to the room
   window (`capabilities/room.json`). The settings window may read `engine_capabilities` and `engine_on_disk` (what is
   on disk and its size), and nothing else of the engine.
 
@@ -251,7 +263,9 @@ client that does not know the key:
   "message": "whisper-large-v3 needs 4000 MB of memory; this machine has 2000 MB." }
 ```
 
-The page renders by `key` and falls back to `message`. The engine's keys are made in `src-tauri/engine/src/error.rs`,
+The page renders by `key` and falls back to `message`. `host.engine`'s catalogue, key and install calls also carry
+`code`, the code sidevoice-web's `ModelCatalogs` reads (`failureCode`): the refusal's own `code` (the engine's, below)
+when it has one, else its `key` with dashes (`model-needs-memory`, `install-cancelled`). The engine's keys are made in `src-tauri/engine/src/error.rs`,
 the voice call's in `src-tauri/src/voice.rs` and core `voice.rs`; a new one is added there and here. What
 sidevoice-engine itself fails with is one of these keys, with the engine's own code beside it as `code`
 (`digest-mismatch`, `model-load-failed`…).
@@ -260,7 +274,7 @@ sidevoice-engine itself fails with is one of these keys, with the engine's own c
 |---|---|---|
 | `engine_unsupported` | `engine` | no runtime in this app for that engine: unknown, a page's engine, or one a newer catalogue added |
 | `model_unknown` | `model` | not in sidevoice-engine's catalogue |
-| `build_missing` | `model`, `engine` | the model has no build for that engine |
+| `build_missing` | `model`, `engine` | the model has no build for that engine, or none with the `build` id named (then `engine` is that id), or the build named is not the `engine` named |
 | `build_unfit` | `model`, `engine`, `reason` (the engine's code, when it gave one) | the build needs a feature, or an accelerator, this device lacks |
 | `model_needs_memory` | `model`, `needed_mb`, `memory_mb` | the model needs more memory than this machine has |
 | `model_wrong_task` | `model`, `task` | the engine refused a model for what it was asked to do |
@@ -268,12 +282,14 @@ sidevoice-engine itself fails with is one of these keys, with the engine's own c
 | `download_failed` | `model`, `engine` | the network failed, or answered with an error |
 | `download_corrupt` | `model`, `engine` | the bytes are not the ones the catalogue names (SHA-256) |
 | `install_failed` | — | unpacking or moving the download into place failed (disk, permissions, an archive without its files) |
-| `install_cancelled` | — | the page cancelled the install (`cancel(job)`): not a failure, nothing to show as an error |
+| `install_cancelled` | — | the page cancelled the install (its `signal`): not a failure, nothing to show as an error. `install` rejects it with `code: "install-cancelled"` |
 | `install_cancel_failed` | `model`, `engine`, `code` | the page cancelled after the download had ended and removing it failed (`code`, the engine's: `model-in-use`, a storage failure): it may still be on disk |
 | `runtime_failed` | `engine` | the engine refused, with a code this app does not map |
 | `voice_model_unknown` | `code` (`model-unknown`), `model` | a slot names a model its catalogue does not list for that task |
 | `voice_model_unfit` | `code` (`model-unfit`), `model` | a local model with no build that runs on this device |
 | `voice_catalog_not_found` | `code` (`catalog-not-found`), `model` | a slot names a catalogue the engine does not have |
+| `voice_build_not_found` | `code` (`build-not-found`), `model` | a local slot's `build` is not a build of its model |
+| `voice_<code>` | `code` (the engine's: `memory`, `backend-not-in-this-build`, ...), `model` | a local slot's `build` does not run on this device |
 | `voice_vad_unavailable` | `code` (`vad-unavailable`) | no local voice activity detector runs on this device |
 | `voice_end_of_turn_unavailable` | `code` (`end-of-turn-unavailable`) | `end_of_turn: "smart-turn"` while no local model that ends turns runs here |
 | `voice_<code>` | `code` (the engine's: `credential-missing`, `credential-rejected`, ...), `model`, `detail` (the provider's words) | a slot names a provider's model while that provider lists nothing |
@@ -313,15 +329,21 @@ here: a change is made there, and both sides follow.
 
 What is this app's own:
 
-- `setSettings` takes each slot as a model of a catalogue: `stt: {catalog, model, language}`, `tts: {catalog, model,
-  voice, speed}`, with `patience`, `end_of_turn` and `idle_unload_minutes` (core `voice.rs`; no `build`: an unknown
-  key is refused). Each slot is loaded as `engine.catalog(catalog).load(model)`, which picks the build. The app adds
-  the voice activity detector, the local catalogue's (family `silero-vad`, else another local `vad` that runs), and,
-  for `smart-turn`, the local catalogue's first model that ends turns. A change of a slot's catalogue or model, or of
-  `end_of_turn`, gives a call that listens other models at once (it restarts on them); `language`, `voice`, `speed`,
-  `patience` and `idle_unload_minutes` apply live. It rejects with the app's keyed refusals (above), each with the
-  `code` the page translates (`model-unknown`, `model-unfit`, `catalog-not-found`, `vad-unavailable`,
-  `end-of-turn-unavailable`, or the engine's own with the provider's `detail`).
+- `setSettings` takes the web's settings (sidevoice-web `voice-settings.js`, `DeviceVoiceSettings`), each slot a model
+  of a catalogue: `stt: {catalog, model, language, build?}`, `tts: {catalog, model, voice, speed, build?}`, with
+  `patience`, `end_of_turn`, `idle_unload_minutes` and `turn_model?` (core `voice.rs`; any other key is refused).
+  A slot is loaded as `engine.catalog(catalog).load(model)`, which picks the build, or, for a local model with a
+  `build` (Settings, "How it runs"; an empty one names none), as that build (`engine.load(model, build)`): once the
+  model is found and runs here (else `model-unknown`, `model-unfit`), the build must be one of its builds
+  (`build-not-found`) and run here (else the engine's code for why not, `memory`, ...). A provider's model has no
+  builds, and a `build` named for one is not looked at, as on the web. The app adds the voice activity detector, the
+  local catalogue's (family `silero-vad`, else another local `vad` that runs), and, for `smart-turn`, the local model
+  that ends turns `turn_model` names when it runs here, else (as on the web) the first that does. A change of a slot's
+  catalogue, model or build, of `end_of_turn` or of the model that ends turns gives a call that listens other models at
+  once (it restarts once on them); `language`, `voice`, `speed`, `patience` and `idle_unload_minutes` apply live.
+  It rejects with the app's keyed refusals (above), each with the `code` the page translates (`model-unknown`,
+  `model-unfit`, `catalog-not-found`, `build-not-found`, `vad-unavailable`, `end-of-turn-unavailable`, or the
+  engine's own with the provider's `detail`).
 - `start` rejects `{key: "voice_failed", code, message}` with the call's code, `{key: "voice_settings_missing", code:
   "settings-missing"}` before any settings, and `{key: "voice_failed", code: "stopped"}` when `stop` came first.
 - The seam has thirteen calls: `setSettings`, `start`, `stop`, `say`, `mute`, `cancelInput`, `onTurn`, `onState`,

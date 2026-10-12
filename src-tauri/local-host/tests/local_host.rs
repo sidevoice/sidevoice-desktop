@@ -361,11 +361,16 @@ fn an_unsafe_core_directory_is_never_connected_to() {
 fn with_nothing_installed_the_host_is_absent() {
     let world = World::new();
     let host = world.host();
-    assert_eq!(serde_json::to_value(host.poll()).unwrap(), json!({"state": "absent", "reachable": false}));
+    assert_eq!(
+        serde_json::to_value(host.poll()).unwrap(),
+        json!({"state": "absent", "product_version": null, "reachable": false})
+    );
     assert_eq!(host.act(Action::Start).unwrap_err().key, "cli.unavailable");
 }
 
-/// A stand-in CLI recorded in `install.json`: it appends its arguments to `calls.log` and answers per subcommand.
+/// A stand-in CLI recorded in `install.json`: it appends its arguments to `calls.log` and answers per subcommand;
+/// `--version --json` with the JSON value `D/version` holds (`"0.8.1"` to begin with), slowly while `D/slow` exists,
+/// leaving `D/version-read` once it has read it.
 fn install_fake_cli(dirs: &DataDirs, status: &str) -> PathBuf {
     std::fs::create_dir_all(&dirs.data).unwrap();
     std::fs::set_permissions(&dirs.data, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -375,18 +380,23 @@ fn install_fake_cli(dirs: &DataDirs, status: &str) -> PathBuf {
         &script,
         format!(
             "#!/bin/sh\necho \"$*\" >> '{log}'\ncase \"$1 $2\" in\n\
+             '--version --json') v=$(cat '{version}'); : > '{read}'; [ -f '{slow}' ] && sleep 1; printf '{{\"ok\":true,\"version\":%s}}\\n' \"$v\" ;;\n\
              'service status') echo '{status}' ;;\n\
              'pair-device --json') echo '{{\"ok\":true,\"code\":\"SV1-CODE\",\"expires_in\":600,\"reach\":\"local-only\",\"payload\":{{}}}}' ;;\n\
              pair*) echo '{{\"ok\":true,\"room\":\"https://room.example\",\"connector_id\":\"c1\"}}' ;;\n\
              'service start') echo '{{\"ok\":false,\"error\":{{\"key\":\"service.not-loaded\",\"message\":\"m\"}}}}'; exit 1 ;;\n\
              *) echo '{{\"ok\":true,\"state\":\"starting\",\"service\":\"launchd\"}}' ;;\nesac\n",
-            log = log.display()
+            log = log.display(),
+            version = dirs.data.join("version").display(),
+            read = dirs.data.join("version-read").display(),
+            slow = dirs.data.join("slow").display()
         ),
     )
     .unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
     std::fs::write(dirs.install_record(), json!({"command": [script]}).to_string()).unwrap();
     std::fs::set_permissions(dirs.install_record(), std::fs::Permissions::from_mode(0o600)).unwrap();
+    set_version(dirs, json!("0.8.1"));
     log
 }
 
@@ -405,11 +415,15 @@ fn without_a_connector_the_cli_says_and_actions_run_through_it() {
     let report = serde_json::to_value(host.poll()).unwrap();
     assert_eq!(
         report,
-        json!({"state": "stopped-by-person", "service": "launchd", "reachable": false}),
+        json!({"state": "stopped-by-person", "service": "launchd", "product_version": "0.8.1", "reachable": false}),
         "calls null: unknown"
     );
     host.poll();
-    assert_eq!(calls(&log), ["service status --json"], "the fallback is not re-run on every poll");
+    assert_eq!(
+        calls(&log),
+        ["service status --json", "--version --json"],
+        "neither the fallback nor the version is re-run on every poll"
+    );
 
     assert_eq!(host.act(Action::Restart).unwrap().state, State::StoppedByPerson);
     let refused = host.act(Action::Start).unwrap_err();
@@ -566,7 +580,8 @@ fn a_connector_that_answers_is_asked_first() {
     assert_eq!(report["failure"]["detail"], "soxr");
     assert_eq!((report["attempts"].as_u64(), report["limit"].as_u64()), (Some(2), Some(5)));
     assert!(report.get("calls").is_none(), "calls null: unknown");
-    assert!(calls(&log).is_empty(), "no CLI while the connector answers");
+    assert_eq!(calls(&log), ["--version --json"], "no `service status` while the connector answers");
+    assert_eq!(report["product_version"], "0.8.1");
 }
 
 #[test]
@@ -643,7 +658,100 @@ fn a_connector_status_is_the_service_status() {
     let report = serde_json::to_value(host.poll()).unwrap();
     assert_eq!((report["state"].as_str(), report["reachable"].as_bool()), (Some("not-installed"), Some(true)));
     assert!(host.pairing().is_some());
-    assert!(calls(&log).is_empty(), "no CLI while a connector answers");
+    assert_eq!(calls(&log), ["--version --json"], "no `service status` while a connector answers");
+    assert_eq!(report["product_version"], "0.8.1", "the installed version, not the core's 0.0.0-fake");
+}
+
+/// What the stand-in CLI's `--version --json` answers as `version`: any JSON value.
+fn set_version(dirs: &DataDirs, version: Value) {
+    std::fs::write(dirs.data.join("version"), version.to_string()).unwrap();
+}
+
+/// The installed Sidevoice's version (`product_version`): the installation's program asked once and kept, asked again
+/// when `install.json`'s command resolves to another program and after an action; `null` with nothing installed or an
+/// answer that is not a version.
+#[test]
+fn the_installed_version_is_asked_once_per_program_and_after_actions() {
+    let world = World::new();
+    let core = world.core(1);
+    let log = install_fake_cli(&world.dirs, r#"{"ok":true,"state":"running","service":"launchd"}"#);
+    let host = world.host();
+    let asked = || calls(&log).iter().filter(|c| *c == "--version --json").count();
+    assert_eq!(host.poll().product_version.as_deref(), Some("0.8.1"));
+    host.poll();
+    core.relaunch();
+    host.poll();
+    assert_eq!(asked(), 1, "kept while the installed program is the same, whatever the core does");
+    assert_eq!(host.state().product_version.as_deref(), Some("0.8.1"));
+
+    // An update selects another release: the command resolves to another program, which is asked.
+    let release = world.dirs.data.join("fake-cli-0.9.0");
+    std::fs::copy(world.dirs.data.join("fake-cli"), &release).unwrap();
+    std::fs::write(world.dirs.install_record(), json!({"command": [release]}).to_string()).unwrap();
+    set_version(&world.dirs, json!("0.9.0"));
+    assert_eq!(host.poll().product_version.as_deref(), Some("0.9.0"));
+    assert_eq!(asked(), 2);
+
+    // An action asks again.
+    set_version(&world.dirs, json!("0.9.1-rc.1+abc"));
+    assert_eq!(host.act(Action::Restart).unwrap().product_version.as_deref(), Some("0.9.1-rc.1+abc"));
+    assert_eq!(asked(), 3);
+
+    // What is not a version is unknown, never passed on; the core's own version stays where it was.
+    let long = format!("1.2.3-{}", "a".repeat(60));
+    for bad in [
+        json!("unknown"),
+        json!(""),
+        json!(" "),
+        json!("0.8.1_dirty"),
+        json!("0.8.1 "),
+        json!("ü.1.2"),
+        json!(long),
+        json!(7),
+    ] {
+        set_version(&world.dirs, bad.clone());
+        let report = serde_json::to_value(host.act(Action::Restart).unwrap()).unwrap();
+        assert_eq!(report["product_version"], Value::Null, "{bad}");
+        assert_eq!(report["core"]["version"], "0.0.0-fake");
+    }
+    // Unknown is not asked again on every poll.
+    let before = asked();
+    host.poll();
+    assert_eq!(asked(), before, "unknown is asked again only after a while");
+
+    // Uninstalled while nothing else changes (no core, the same launch seen): null at once, nothing run.
+    set_version(&world.dirs, json!("0.9.1"));
+    host.act(Action::Restart).unwrap();
+    core.stop();
+    assert_eq!(host.poll().product_version.as_deref(), Some("0.9.1"));
+    std::fs::remove_file(world.dirs.install_record()).unwrap();
+    let before = asked();
+    assert_eq!(serde_json::to_value(host.poll()).unwrap()["product_version"], Value::Null);
+    assert_eq!(asked(), before);
+}
+
+/// A poll under way when an action ends cannot leave its pre-action answer behind: the action's own pass asks again.
+#[test]
+fn an_action_during_a_poll_still_refreshes_the_version() {
+    let world = World::new();
+    let _core = world.core(1);
+    install_fake_cli(&world.dirs, r#"{"ok":true,"state":"running","service":"launchd"}"#);
+    let (slow, read) = (world.dirs.data.join("slow"), world.dirs.data.join("version-read"));
+    std::fs::write(&slow, "").unwrap();
+    let host = world.host();
+    let polling = {
+        let host = host.clone();
+        std::thread::spawn(move || host.poll().product_version)
+    };
+    // The poll has read the old version and is still answering.
+    while !read.exists() {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    set_version(&world.dirs, json!("0.9.0"));
+    std::fs::remove_file(&slow).unwrap();
+    assert_eq!(host.act(Action::Restart).unwrap().product_version.as_deref(), Some("0.9.0"));
+    assert_eq!(polling.join().unwrap().as_deref(), Some("0.8.1"));
+    assert_eq!(host.state().product_version.as_deref(), Some("0.9.0"));
 }
 
 /// «Ver registro»: the core's log, else the connector's; the old supervisor log is not one of them.
