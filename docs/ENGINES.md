@@ -16,6 +16,8 @@ This app keeps what is the app's, in `src-tauri/engine/` (`sidevoice-desktop-eng
 - `lib.rs`: `NativeEngines`, the page's model management in the page's terms over `sidevoice_engine::Engine`, and the
   engine itself for the voice call (`NativeEngines::engine`).
 - `jobs.rs`: each `install` call's progress and cancel.
+- `Wanted` (`lib.rs`): which build an install is for, as the page names it — a catalogue build id, an engine, or
+  neither for the recommended build.
 - `error.rs`: the keyed refusals, and how each of the engine's codes becomes one (with the code beside it as `code`).
 - `memory.rs`: what is available of the machine's memory now.
 
@@ -41,7 +43,8 @@ catalogues: `local` first, then each provider), in the shape `/engine` gives the
 - Models are downloaded on demand into the app's data directory, `sidevoice-engine/`
   (`~/Library/Application Support/dev.sidevoice.desktop/sidevoice-engine/` on macOS), each file checked against its
   SHA-256 as it arrives and stored only once whole. The voice call installs what it needs as it starts; the page may
-  install a model before (`engine.install`), to show its progress.
+  install a model before (`engine.install(model, {build, engine, onProgress, signal})`, sidevoice-web's
+  `ModelCatalogs.install`), to show its progress and cancel it.
 - The engine notes when each local model was last loaded, by any build, in that same directory, so it outlives the
   app; the page reads it as the model's `lastUsedAt` in `host.engine.catalogs()` (milliseconds since the Unix epoch,
   absent while the engine does not know), to show it and to find models not used for a while.
@@ -68,8 +71,8 @@ pkg-config`). The Rust version is the engine's, `src-tauri/rust-toolchain.toml`.
 
 ## Verified in CI
 
-The macOS job's probe page, in the signed app: the engine's capabilities, installs with progress, refusals by key, a
-cancelled download; the catalogues (`local` first, a provider with no key listing nothing); and the voice call's
+The macOS job's probe page, in the signed app: the engine's capabilities, installs in the web's shape (by build id, by
+engine, by the recommended build) with progress, refusals by key, a download cancelled by its signal; the catalogues (`local` first, a provider with no key listing nothing); and the voice call's
 seam, settings naming a catalogue's model, and a start that
 settles (listening, or refused with the call's code where the runner has no microphone or speaker): that start loads
 the engine's real models through the app's adapter (`src-tauri/src/voice/models.rs`). sidevoice-voice's own CI drives
