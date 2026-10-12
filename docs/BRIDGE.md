@@ -345,9 +345,9 @@ What is this app's own:
   and a reply's next chunks are the new speaker's, in its voice (as on the web). Only the latest change moves the
   slots: an earlier one still loading is dropped when it is done, and a later one never waits for it. Once the slots
   have moved, the configuration that goes with them applies (`smart-turn` once its model is in place), and
-  `setSettings` resolves. `language`, `voice`, `speed`, `patience` and `idle_unload_minutes` apply live. The voice activity detector, the app's own choice,
-  stays for the call: a different one comes with its next load. With no call holding models, the settings are what the
-  next start loads.
+  `setSettings` resolves. `language`, `voice`, `speed`, `patience` and `idle_unload_minutes` apply live. The voice
+  activity detector, the app's own choice, stays for the call: a different one comes with its next load. With no call
+  holding models, the settings are what the next start loads.
   It rejects with the app's keyed refusals (above), each with the `code` the page translates (`model-unknown`,
   `model-unfit`, `catalog-not-found`, `build-not-found`, `vad-unavailable`, `end-of-turn-unavailable`, or the
   engine's own with the provider's `detail`), and with `{key: "voice_failed", code}` when the new model cannot be
