@@ -127,7 +127,8 @@ what the interface's own window offers — same origin, same permission rule —
   }
 
   // The voice call the app runs (docs/BRIDGE.md → "The voice call"): the seam's shape, the engine's catalogues
-  // (`host.engine`), settings that name a catalogue's model, the audio devices, and a start that settles. A CI runner may have no microphone or
+  // (`host.engine`), settings that name a catalogue's model, a build of it and an end-of-turn model, as the web's settings
+  // do, the audio devices, and a start that settles. A CI runner may have no microphone or
   // speaker: then the start is refused with the call's code, which is what the probe reports.
   const voice = window.__sidevoiceDesktop && window.__sidevoiceDesktop.host && window.__sidevoiceDesktop.host.voice;
   if (!voice) { await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-voice none" }); return; }
@@ -140,8 +141,19 @@ what the interface's own window offers — same origin, same permission rule —
     const remote = catalogs.slice(1).map((c) => c.id + ":" + (c.status.reason ? c.status.reason.code : "current")).join(",");
     const unknown = await voice.setSettings({ stt: { catalog: "local", model: "whisper-nope" },
       tts: { catalog: "local", model: "kokoro-82m-v1.0" } }).then(() => "no", (error) => error && error.key + "/" + error.code);
-    await voice.setSettings({ stt: { catalog: "local", model: "whisper-tiny", language: "es" },
-      tts: { catalog: "local", model: "kokoro-82m-v1.0", voice: "ef_dora", speed: 1 }, patience: "fast" });
+    // A build that is not the model's is refused; one that runs here is loaded, and so is the end-of-turn model chosen
+    // (the last that runs here: with several, not the one the app would take anyway).
+    const badBuild = await voice.setSettings({ stt: { catalog: "local", model: "whisper-tiny", build: "whisper-tiny/nope" },
+      tts: { catalog: "local", model: "kokoro-82m-v1.0" } }).then(() => "no", (error) => error && error.key + "/" + error.code);
+    const tiny = models.find((m) => m.id === "whisper-tiny");
+    // One the catalogue would not pick on its own when there is such a build.
+    const runnable = tiny ? tiny.builds.filter((b) => b.available) : [];
+    const build = (runnable.find((b) => b.id !== tiny.recommendedBuild) || runnable[0] || { id: "none" }).id;
+    const turns = models.filter((m) => m.capabilities.includes("end-of-turn") && m.builds.some((b) => b.available));
+    const turnModel = turns.length ? turns[turns.length - 1].id : "none";
+    await voice.setSettings({ stt: { catalog: "local", model: "whisper-tiny", language: "es", build },
+      tts: { catalog: "local", model: "kokoro-82m-v1.0", voice: "ef_dora", speed: 1 }, patience: "fast",
+      end_of_turn: "smart-turn", turn_model: turnModel, idle_unload_minutes: 10 });
     // The system's devices (a runner may list none) and an id it does not list, refused by key and code.
     const listed = await voice.audioDevices();
     const devices = listed.inputs.length + "/" + listed.outputs.length + "/" + listed.outputSelectable;
@@ -153,6 +165,7 @@ what the interface's own window offers — same origin, same permission rule —
     stops.forEach((stop) => stop());
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-voice ok keys=" + Object.keys(voice).length +
       " catalogs=" + catalogs[0].id + "," + remote + " models=" + models.length + " vad=" + models.some((m) => m.capabilities.includes("vad")) + " unknown=" + unknown +
+      " bad_build=" + badBuild + " build=" + build + " turn_model=" + turnModel +
       " devices=" + devices + " unknown_device=" + unknownDevice + " start=" + started + " states=" + states.join(",") + " errors=" + errors.join(",") });
   } catch (error) {
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-voice error " + String(error && (error.message || error)) });

@@ -118,16 +118,25 @@ fn a_call_on_the_engines_real_models_hears_speech_and_plays_a_reply() {
     let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build().unwrap();
     let root = std::env::temp_dir().join(format!("sidevoice-real-call-{}", std::process::id()));
     let engines = NativeEngines::new(&root, NoCredentials, runtime.handle().clone()).unwrap();
-    let catalogs: Vec<CatalogCandidates> = engines.catalogs().unwrap().iter().map(crate::voice::candidates).collect();
+    let views = engines.catalogs().unwrap();
+    let catalogs: Vec<CatalogCandidates> = views.iter().map(crate::voice::candidates).collect();
+    // Transcribing with a build chosen, as the web's settings name one ("How it runs"): the first that runs here.
+    let build = views[0]
+        .models
+        .iter()
+        .find(|m| m.id == "whisper-tiny")
+        .and_then(|m| m.local.as_ref())
+        .and_then(|local| local.builds.iter().find(|build| build.available).map(|build| build.id.clone()));
+    let build = build.expect("a whisper-tiny build runs here");
     let settings: VoiceSettings = serde_json::from_value(json!({
-        "stt": {"catalog": "local", "model": "whisper-tiny", "language": "en"},
+        "stt": {"catalog": "local", "model": "whisper-tiny", "language": "en", "build": build},
         "tts": {"catalog": "local", "model": "kokoro-82m-v1.0"},
         "patience": "fast",
     }))
     .unwrap();
     let choice = choose(&settings, &catalogs).unwrap();
-    assert_eq!(choice.stt, ModelChoice { catalog: "local".into(), model: "whisper-tiny".into() });
-    assert_eq!(choice.vad, ModelChoice { catalog: "local".into(), model: "silero-vad".into() });
+    assert_eq!(choice.stt, ModelChoice { build: Some(build), ..ModelChoice::local("whisper-tiny") });
+    assert_eq!(choice.vad, ModelChoice::local("silero-vad"));
     let config: VoiceConfig = serde_json::from_value(choice.config.clone()).unwrap();
     let played = Arc::new(Mutex::new(Vec::new()));
     let io = Fixture { sink: None, stop: Arc::default(), played: Arc::clone(&played) };
