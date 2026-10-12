@@ -16,8 +16,9 @@ use std::path::Path;
 /// How this copy of the app was installed, as the shell finds it (Tauri's bundle type, and where it runs from).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Install {
-    /// A macOS `.app`; `in_bundle`: the executable runs from inside one, outside a read-only translocated copy.
-    MacApp { in_bundle: bool },
+    /// A macOS `.app`; `in_bundle`: the executable runs from inside one, outside a read-only translocated copy;
+    /// `read_only`: the volume it is on cannot be written (a mounted disk image), so it cannot be replaced.
+    MacApp { in_bundle: bool, read_only: bool },
     /// A Linux AppImage; `mounted`: run as one (its `APPIMAGE` path is set), so there is a file to replace.
     AppImage { mounted: bool },
     /// The Windows NSIS installer's.
@@ -36,8 +37,11 @@ pub fn offered(debug_build: bool, install: Install) -> Result<(), &'static str> 
         return Err("a debug build");
     }
     match install {
-        Install::MacApp { in_bundle: true } | Install::AppImage { mounted: true } | Install::Nsis => Ok(()),
-        Install::MacApp { in_bundle: false } => Err("not running from an .app it can replace"),
+        Install::MacApp { in_bundle: true, read_only: false } | Install::AppImage { mounted: true } | Install::Nsis => {
+            Ok(())
+        }
+        Install::MacApp { in_bundle: false, .. } => Err("not running from an .app it can replace"),
+        Install::MacApp { read_only: true, .. } => Err("an .app on a read-only volume (a mounted disk image)"),
         Install::AppImage { mounted: false } => Err("an AppImage's binary run on its own"),
         Install::Deb => Err("a .deb: the package manager updates it"),
         Install::Other => Err("a bundle the releases publish no updates for"),
@@ -154,8 +158,11 @@ impl Updates {
             self.ready = Some(version.to_string());
         } else {
             self.failed = Some(version.to_string());
-            // A restart that was waiting on it is not left pending: the person may ask again.
-            self.restart = false;
+            // A restart with nothing else to install is not left pending: the person may ask again. One with an
+            // update already downloaded still installs that one.
+            if self.ready.is_none() {
+                self.restart = false;
+            }
         }
         self.next()
     }
@@ -179,7 +186,16 @@ impl Updates {
             return Err(NothingToInstall);
         }
         self.restart = true;
+        // Asked for: an update whose download failed is tried again.
+        self.failed = None;
         Ok(self.next())
+    }
+
+    /// The shell found a call on just before installing (a call that began as the install was decided): the install
+    /// waits for it to end, as a restart asked for during a call does.
+    pub fn install_deferred(&mut self) {
+        self.installing = false;
+        self.in_call = true;
     }
 
     /// Whether a call is on: the room's call joined, or the voice call the app runs listening.
@@ -194,7 +210,7 @@ impl Updates {
         }
         // The version the person would be told of: off, the one found; on, the one found once it is downloaded.
         let wanted = match (&self.found, self.auto_download) {
-            (Some(found), false) if self.restart => Some(found.clone()),
+            (Some(found), false) if self.restart && self.failed.as_ref() != Some(found) => Some(found.clone()),
             (Some(found), true) if self.failed.as_ref() != Some(found) => Some(found.clone()),
             _ => None,
         };
@@ -204,8 +220,10 @@ impl Updates {
                 return Step::Download(version);
             }
         }
-        // Off, a restart waits for the version it was told of; on, it installs what is downloaded.
-        let waiting = !self.auto_download && self.found.is_some() && self.ready != self.found;
+        // Off, a restart waits for the version it was told of (unless that one failed); on, it installs what is
+        // downloaded.
+        let waiting =
+            !self.auto_download && self.found.is_some() && self.ready != self.found && self.failed != self.found;
         if self.restart && self.ready.is_some() && !waiting && !self.in_call {
             self.installing = true;
             return Step::Install;
@@ -228,13 +246,14 @@ mod tests {
 
     #[test]
     fn only_a_release_bundle_that_can_replace_itself_updates() {
-        assert_eq!(offered(false, Install::MacApp { in_bundle: true }), Ok(()));
+        assert_eq!(offered(false, Install::MacApp { in_bundle: true, read_only: false }), Ok(()));
         assert_eq!(offered(false, Install::AppImage { mounted: true }), Ok(()));
         assert_eq!(offered(false, Install::Nsis), Ok(()));
         assert!(offered(true, Install::Nsis).is_err(), "a debug build never updates");
         assert!(offered(false, Install::Deb).is_err(), "a .deb is the package manager's");
         assert!(offered(false, Install::AppImage { mounted: false }).is_err());
-        assert!(offered(false, Install::MacApp { in_bundle: false }).is_err());
+        assert!(offered(false, Install::MacApp { in_bundle: false, read_only: false }).is_err());
+        assert!(offered(false, Install::MacApp { in_bundle: true, read_only: true }).is_err(), "run from the .dmg");
         assert!(offered(false, Install::Other).is_err());
         assert!(offered(false, Install::Unbundled).is_err(), "cargo run, tauri dev");
     }
@@ -408,5 +427,45 @@ mod tests {
         assert_eq!(u.call(false), Step::Nothing);
         assert!(u.begin_check());
         assert_eq!(u.checked(found("0.3.0")), Step::Download("0.3.0".into()));
+    }
+
+    #[test]
+    fn a_newer_download_failing_keeps_the_restart_into_the_one_ready() {
+        let mut u = Updates::new(true);
+        u.begin_check();
+        u.checked(found("0.3.0"));
+        u.downloaded("0.3.0", true);
+        u.call(true);
+        assert_eq!(u.restart(), Ok(Step::Nothing));
+        u.begin_check();
+        assert_eq!(u.checked(found("0.4.0")), Step::Download("0.4.0".into()));
+        assert_eq!(u.downloaded("0.4.0", false), Step::Nothing, "still in the call");
+        assert_eq!(u.call(false), Step::Install, "the one ready, once the call ends");
+    }
+
+    #[test]
+    fn off_a_newer_download_failing_installs_the_one_ready() {
+        let mut u = Updates::new(false);
+        u.begin_check();
+        u.checked(found("0.3.0"));
+        u.restart().unwrap();
+        u.call(true);
+        u.downloaded("0.3.0", true);
+        u.begin_check();
+        assert_eq!(u.checked(found("0.4.0")), Step::Download("0.4.0".into()), "the restart wants the newest");
+        assert_eq!(u.downloaded("0.4.0", false), Step::Nothing, "no second try on its own, still in the call");
+        assert_eq!(u.call(false), Step::Install, "the one ready");
+    }
+
+    #[test]
+    fn an_install_that_finds_a_call_begun_waits_for_its_end() {
+        let mut u = Updates::new(true);
+        u.begin_check();
+        u.checked(found("0.3.0"));
+        u.downloaded("0.3.0", true);
+        assert_eq!(u.restart(), Ok(Step::Install));
+        u.install_deferred();
+        assert_eq!(u.call(true), Step::Nothing);
+        assert_eq!(u.call(false), Step::Install);
     }
 }

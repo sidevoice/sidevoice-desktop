@@ -21,6 +21,10 @@ use tauri_plugin_updater::{Update, UpdaterExt};
 
 /// How often the releases are checked after the first check, at launch.
 const EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+/// How long a check may take: one that hangs would hold every later check back.
+const CHECK_FOR: Duration = Duration::from_secs(2 * 60);
+/// How long a download may take, so one that stalls is given up and tried again at the next check.
+const DOWNLOAD_FOR: Duration = Duration::from_secs(60 * 60);
 
 pub struct UpdaterState {
     plan: Mutex<Updates>,
@@ -47,13 +51,32 @@ fn install() -> Install {
     use tauri::utils::config::BundleType;
     match tauri::utils::platform::bundle_type() {
         Some(BundleType::App | BundleType::Dmg) => {
-            Install::MacApp { in_bundle: std::env::current_exe().is_ok_and(|exe| plan::in_app_bundle(&exe)) }
+            let exe = std::env::current_exe().ok();
+            Install::MacApp {
+                in_bundle: exe.as_deref().is_some_and(plan::in_app_bundle),
+                read_only: exe.as_deref().is_some_and(on_read_only_volume),
+            }
         }
         Some(BundleType::AppImage) => Install::AppImage { mounted: std::env::var_os("APPIMAGE").is_some() },
         Some(BundleType::Nsis) => Install::Nsis,
         Some(BundleType::Deb) => Install::Deb,
         Some(BundleType::Rpm | BundleType::Msi) => Install::Other,
         None => Install::Unbundled,
+    }
+}
+
+/// Whether the `.app` holding `exe` is on a volume that cannot be written (the mounted .dmg it was opened from): a file
+/// next to it cannot be made for that reason. Any other refusal (a folder only an administrator writes) is not: the
+/// plugin asks for the administrator's password when it installs there.
+fn on_read_only_volume(exe: &std::path::Path) -> bool {
+    let Some(folder) = exe.ancestors().nth(4) else { return false };
+    let probe = folder.join(format!(".sidevoice-update-check-{}", std::process::id()));
+    match std::fs::OpenOptions::new().write(true).create_new(true).open(&probe) {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&probe);
+            false
+        }
+        Err(e) => e.kind() == std::io::ErrorKind::ReadOnlyFilesystem,
     }
 }
 
@@ -86,16 +109,17 @@ async fn check(app: &AppHandle) {
     if !state.plan.lock().unwrap().begin_check() {
         return;
     }
-    let result = match app.updater() {
-        Ok(updater) => updater.check().await.map_err(|e| e.to_string()),
-        Err(e) => Err(e.to_string()),
+    let result = match updater(app) {
+        Ok(updater) => match tokio::time::timeout(CHECK_FOR, updater.check()).await {
+            Ok(checked) => checked.map_err(|e| e.to_string()),
+            Err(_) => Err("timed out".into()),
+        },
+        Err(e) => Err(e),
     };
-    let found = match result {
+    let checked = match &result {
         Ok(update) => {
             crate::debug(&format!("updater checked: {:?}", update.as_ref().map(|u| &u.version)));
-            let version = update.as_ref().map(|u| u.version.clone());
-            *state.announced.lock().unwrap() = update;
-            Ok(version)
+            Ok(update.as_ref().map(|u| u.version.clone()))
         }
         Err(e) => {
             // No release with a latest.json yet, no network, a manifest without this platform: nothing to offer.
@@ -103,18 +127,45 @@ async fn check(app: &AppHandle) {
             Err(())
         }
     };
-    let step = state.plan.lock().unwrap().checked(found);
-    run(app, step);
+    transition(app, |plan| {
+        // What was announced changes with the plan, under its lock: a download it decides takes that update.
+        if let Ok(update) = result {
+            *state.announced.lock().unwrap() = update;
+        }
+        plan.checked(checked)
+    });
 }
 
-/// Does what core `updater` decided, and tells the page when its status changed.
-fn run(app: &AppHandle, step: Step) {
+/// The plugin's updater: the releases' endpoint (tauri.conf.json), or in CI's probe build an address that never
+/// answers, so the probe never depends on what the releases hold, nor installs one.
+fn updater(app: &AppHandle) -> Result<tauri_plugin_updater::Updater, String> {
+    let builder = app.updater_builder();
+    #[cfg(feature = "probe")]
+    let builder = builder
+        .endpoints(vec!["https://127.0.0.1:9/latest.json".parse().expect("a URL")])
+        .map_err(|e| e.to_string())?;
+    builder.build().map_err(|e| e.to_string())
+}
+
+/// Changes the plan under its lock and does what it decided; tells the page its status may have changed. A download
+/// takes the update announced as it was decided, never one a later check put in its place.
+fn transition(app: &AppHandle, change: impl FnOnce(&mut Updates) -> Step) {
+    let Some(state) = app.try_state::<UpdaterState>() else { return };
+    let (step, update) = {
+        let mut plan = state.plan.lock().unwrap();
+        let step = change(&mut plan);
+        let update = match &step {
+            Step::Download(version) => state.announced.lock().unwrap().clone().filter(|u| &u.version == version),
+            _ => None,
+        };
+        (step, update)
+    };
     notify(app);
     match step {
         Step::Nothing => {}
         Step::Download(version) => {
             let app = app.clone();
-            tauri::async_runtime::spawn(async move { download(&app, version).await });
+            tauri::async_runtime::spawn(async move { download(&app, version, update).await });
         }
         Step::Install => {
             let app = app.clone();
@@ -123,32 +174,44 @@ fn run(app: &AppHandle, step: Step) {
     }
 }
 
-async fn download(app: &AppHandle, version: String) {
+async fn download(app: &AppHandle, version: String, update: Option<Update>) {
     let Some(state) = app.try_state::<UpdaterState>() else { return };
-    let update = state.announced.lock().unwrap().clone().filter(|u| u.version == version);
     let ok = match update {
         // Downloaded whole, then verified against the app's public key before anything else sees it.
-        Some(update) => match update.download(|_, _| {}, || {}).await {
-            Ok(bytes) => {
+        Some(update) => match tokio::time::timeout(DOWNLOAD_FOR, update.download(|_, _| {}, || {})).await {
+            Ok(Ok(bytes)) => {
                 crate::debug(&format!("updater downloaded {version} ({} bytes)", bytes.len()));
                 *state.ready.lock().unwrap() = Some((update, bytes));
                 true
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 crate::debug(&format!("updater download of {version} failed: {e}"));
+                false
+            }
+            Err(_) => {
+                crate::debug(&format!("updater download of {version} timed out"));
                 false
             }
         },
         None => false,
     };
-    let step = state.plan.lock().unwrap().downloaded(&version, ok);
-    run(app, step);
+    transition(app, |plan| plan.downloaded(&version, ok));
 }
 
-/// Installs the update ready and restarts into it. Windows: the installer the update is takes over (the plugin exits
-/// the app and the installer starts it again).
+/// Installs the update ready and restarts into it, unless a call began as the install was decided: then it waits for
+/// that call to end. Windows: the installer the update is takes over (the plugin exits the app and the installer
+/// starts it again).
 fn install_and_restart(app: &AppHandle) {
     let Some(state) = app.try_state::<UpdaterState>() else { return };
+    {
+        // Under the plan's lock, as `call_changed` reads the call: a call that begins after this waits for the restart.
+        let mut plan = state.plan.lock().unwrap();
+        if crate::in_call(app) {
+            crate::debug("updater install waits: a call began");
+            plan.install_deferred();
+            return;
+        }
+    }
     let ready = state.ready.lock().unwrap().take();
     let result = match &ready {
         Some((update, bytes)) => {
@@ -180,22 +243,13 @@ fn notify(app: &AppHandle) {
 /// A call began or ended (the room's snapshot, the voice call the app runs): a restart the person asked for during it
 /// happens once it has ended.
 pub fn call_changed(app: &AppHandle) {
-    let Some(state) = app.try_state::<UpdaterState>() else { return };
     // Read under the plan's lock, so two changes close together are applied in the order they were read.
-    let step = {
-        let mut plan = state.plan.lock().unwrap();
-        plan.call(crate::in_call(app))
-    };
-    if step != Step::Nothing {
-        run(app, step);
-    }
+    transition(app, |plan| plan.call(crate::in_call(app)));
 }
 
 /// The settings window turned automatic download on or off.
 pub fn set_auto_download(app: &AppHandle, on: bool) {
-    let Some(state) = app.try_state::<UpdaterState>() else { return };
-    let step = state.plan.lock().unwrap().set_auto_download(on);
-    run(app, step);
+    transition(app, |plan| plan.set_auto_download(on));
 }
 
 fn refusal(key: &str, message: &str) -> Value {
@@ -223,10 +277,23 @@ pub fn updater_status(app: AppHandle, webview: Webview) -> Result<Status, Value>
 pub fn updater_restart(app: AppHandle, webview: Webview) -> Result<(), Value> {
     caller(&app, &webview)?;
     let unavailable = || refusal("update_unavailable", "There is no update to install.");
-    let state = app.try_state::<UpdaterState>().ok_or_else(unavailable)?;
+    if app.try_state::<UpdaterState>().is_none() {
+        return Err(unavailable());
+    }
     // The plan knows the call as it is now (`call_changed`): a restart asked for during one waits for it to end.
-    let step = state.plan.lock().unwrap().restart().map_err(|plan::NothingToInstall| unavailable())?;
-    crate::debug(&format!("updater restart asked: {step:?}"));
-    run(&app, step);
+    let mut refused = false;
+    transition(&app, |plan| match plan.restart() {
+        Ok(step) => {
+            crate::debug(&format!("updater restart asked: {step:?}"));
+            step
+        }
+        Err(plan::NothingToInstall) => {
+            refused = true;
+            Step::Nothing
+        }
+    });
+    if refused {
+        return Err(unavailable());
+    }
     Ok(())
 }

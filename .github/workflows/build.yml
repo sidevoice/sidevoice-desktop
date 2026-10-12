@@ -567,7 +567,7 @@ jobs:
           echo "$VOICE" | grep -Eq ' start=(ok|voice_failed/(microphone-unavailable|microphone-denied|speaker-unavailable|audio-device-unavailable|audio-device-failed)) '
           echo "--- voice"; grep 'sidevoice: voice' /tmp/probe.log || true
           # The app's updates: a bundled .app offers host.updater (sidevoice-web's AppUpdater) to its room page; with no
-          # newer release for it, nothing is available and a restart is refused.
+          # endpoint answering (the probe build's never does), nothing is available and a restart is refused.
           grep -q 'sidevoice: updater off' /tmp/probe.log && { grep 'sidevoice: updater' /tmp/probe.log; exit 1; }
           grep -q 'probe-updater ok keys=restart,status,subscribe status={"available":false} restart=update_unavailable ' /tmp/probe.log
           grep 'sidevoice: updater' /tmp/probe.log || true

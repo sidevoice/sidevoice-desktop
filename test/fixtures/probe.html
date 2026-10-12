@@ -69,8 +69,8 @@ what the interface's own window offers — same origin, same permission rule —
   }
 
   // The app's updates (docs/BRIDGE.md → "The updater"): this probe app is a bundled .app, so it can update itself and
-  // the page gets sidevoice-web's AppUpdater seam. No newer release is offered to it in CI (none, or the same version):
-  // the status says nothing available, and a restart is refused.
+  // the page gets sidevoice-web's AppUpdater seam. Its endpoint never answers (probe build, src/updater.rs): the
+  // status says nothing available, and a restart is refused.
   const updater = window.__sidevoiceDesktop && window.__sidevoiceDesktop.host && window.__sidevoiceDesktop.host.updater;
   try {
     if (!updater) throw new Error("no host.updater");

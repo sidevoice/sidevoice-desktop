@@ -389,21 +389,23 @@ sidevoice-web's `AppUpdater` seam (`apps/web/src/features/updates/useUpdates.ts`
   Rust only). With "Download updates automatically" on (the settings window, `autoDownloadUpdates`, the default) an
   update found is downloaded and verified in the background, so `restart()` never waits on the network. Off, the page
   is told as soon as one is found and `restart()` downloads it first. A check that fails (no network, no release with
-  a `latest.json`, a manifest without this platform) changes nothing: what was not available stays so. A download
-  that fails is not retried until the next check.
+  a `latest.json`, a manifest without this platform, 2 minutes without an answer) changes nothing: what was not
+  available stays so. A download that fails (or takes over an hour) is not retried until the next check; a restart
+  asked for meanwhile still installs an update already downloaded.
 - **The call.** "A call" is the room's call joined (`bridge_state`'s `joined`) or the voice call the app runs
   listening (`host.voice`, `src-tauri/src/voice.rs`). A restart asked for during one is held and happens when the
   last of them ends. Only the person's `restart()` installs anything.
 - **Where.** Only where this copy can replace itself: a release's `.app` running from its bundle (not a translocated
-  copy), the AppImage run as one, the Windows installer's install. A `.deb` (the package manager's), a dev or debug
-  build, an unbundled binary: no `host.updater` and nothing is checked; the commands answer nothing available and
-  refuse a restart (`update_unavailable`) (core `updater::offered`, unit-tested).
+  copy, nor from the read-only .dmg), the AppImage run as one, the Windows installer's install. A `.deb` (the package
+  manager's), a dev or debug build, an unbundled binary: no `host.updater` and nothing is checked; the commands
+  answer nothing available and refuse a restart (`update_unavailable`) (core `updater::offered`, unit-tested).
 - App → page: `window.__sidevoiceDesktop.updaterEvent()` (`webview.eval`), which calls the listeners.
 - Commands behind it: `updater_status`, `updater_restart`. Granted to the room window (`capabilities/room.json`); each
   re-checks that the caller is the current room window on the app's own page (else `bad_request`). The page is granted
   none of the plugin's own commands.
 - What decides what (the check, the download, the install, the call, the setting) is core `updater.rs`, unit-tested;
-  CI's macOS job checks the probe app offers `host.updater` and refuses a restart with nothing to install.
+  CI's macOS job checks the probe app (its endpoint one that never answers) offers `host.updater`, says nothing
+  is available and refuses a restart.
 
 ## Changing the bridge
 
