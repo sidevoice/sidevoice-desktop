@@ -14,6 +14,10 @@ function say(text, isError) {
 $("call-controls-always-label").textContent = i18n.t("callControls.always");
 $("call-controls-always-hint").textContent = i18n.t("callControls.alwaysHint");
 
+// The app's updates (src/updater.rs): whether they download on their own. Only where this copy can update itself.
+$("auto-download-updates-label").textContent = i18n.t("updates.autoDownload");
+$("auto-download-updates-hint").textContent = i18n.t("updates.autoDownloadHint");
+
 // The mute shortcut as the system took it (src/lib.rs `ShortcutStatus`): refused, with an alternative the system does
 // take; or on, but sharing its keys with VoiceOver while VoiceOver is on.
 function showShortcut(status) {
@@ -39,10 +43,12 @@ function showShortcut(status) {
 }
 
 async function load() {
-  const { settings, shortcut, debug } = await invoke("get_settings");
+  const { settings, shortcut, debug, updates } = await invoke("get_settings");
   $("target").value = settings.target;
   $("mute-shortcut").value = settings.muteShortcut;
   $("call-controls-always").checked = !!settings.callControlsAlways;
+  $("auto-download-updates").checked = settings.autoDownloadUpdates !== false;
+  $("updates").hidden = !updates;
   showShortcut(shortcut);
   $("target").focus();
   return debug;
@@ -58,6 +64,7 @@ $("settings").addEventListener("submit", async (event) => {
         target: $("target").value,
         muteShortcut: $("mute-shortcut").value,
         callControlsAlways: $("call-controls-always").checked,
+        autoDownloadUpdates: $("auto-download-updates").checked,
       },
     });
     $("target").value = result.settings.target;

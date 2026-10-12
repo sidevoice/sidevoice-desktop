@@ -13,7 +13,9 @@ One version for the whole app, tagged `vX.Y.Z`. It lives in `src-tauri/tauri.con
 | Merge the release PR | a maintainer | **This is the release.** release-please tags `vX.Y.Z` and creates a draft GitHub Release whose notes are that version's changelog; `build` builds from the tag, attaches the assets and publishes the Release. |
 
 Assets of a release: `Sidevoice_X.Y.Z_aarch64.dmg` (Apple Silicon, Developer ID signed and notarized, below),
-`Sidevoice_X.Y.Z_x64-setup.exe`, `Sidevoice_X.Y.Z_amd64.deb`, `Sidevoice_X.Y.Z_amd64.AppImage`, `SHA256SUMS`.
+`Sidevoice_X.Y.Z_x64-setup.exe`, `Sidevoice_X.Y.Z_amd64.deb`, `Sidevoice_X.Y.Z_amd64.AppImage`, `SHA256SUMS`, and
+what the app updates itself from (Updates, below): `latest.json`, `Sidevoice_X.Y.Z_aarch64.app.tar.gz` and the
+`.sig` of it, of the installer and of the AppImage.
 
 The changelog is written from the squashed PR titles. To change it, edit `CHANGELOG.md` in the release PR right
 before merging it: any later merge into `main` regenerates the PR. After the release, fix the notes on the
@@ -74,6 +76,40 @@ from a fork never has the repository's secrets.)
 (only a release or a push to `main` does); the signed .dmg is the run's `Sidevoice-macOS-AppleSilicon-dmg` artifact,
 kept 7 days.
 
+## Updates
+
+A running app updates itself from the releases (docs/BRIDGE.md → "The updater"): it reads
+`https://github.com/sidevoice/sidevoice-desktop/releases/latest/download/latest.json` at launch and every 6 hours.
+`latest` is the newest release that is neither a draft nor a pre-release, so a `-rc.N` and the nightly are never
+offered. The app installs only what is signed with the updater's key, checked against the public key in
+`src-tauri/tauri.conf.json` (`plugins.updater.pubkey`, minisign key id `EA1BE9B3A4CF715A`).
+
+- **What a release adds.** Built only in the runs that sign, a release or a manual `sign` run (`changes.updates`):
+  - macOS: `Sidevoice_X.Y.Z_aarch64.app.tar.gz`, the signed, notarized and stapled app (checked again after
+    unpacking);
+  - Windows: the NSIS installer itself;
+  - Linux: the AppImage itself.
+
+  Each comes with its `.sig`. The builds turn on `bundle.createUpdaterArtifacts` only then (`--config`): a build
+  asked for them without the private key fails, and pull requests and the nightly never have it. The publish job of
+  a release checks all three and their signatures, writes `latest.json` (`version`, `notes` (the release's notes),
+  `pub_date`, and `platforms` `darwin-aarch64`, `windows-x86_64`, `linux-x86_64`, each `{signature, url}` of that
+  release's asset), and attaches them to the release. The nightly gets none of it.
+- **What cannot update itself.** A `.deb` (the package manager owns it), a dev build, an AppImage's binary run on its
+  own: the page gets no `host.updater`. Nor can versions from before the first release with the updater: people on
+  those reinstall once.
+- **The key.** The private key and its password are the repository secrets `TAURI_SIGNING_PRIVATE_KEY` and
+  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. A step resolves them only in a run that builds update artifacts (in any
+  other run they resolve to nothing). Keep a copy outside GitHub: without the key no update can be signed for the
+  apps out there, and a new key means a new public key in the app, which those apps do not have. They would have to
+  reinstall.
+- **macOS and the signature.** An update replaces the app with one signed by the same Developer ID and team, so macOS
+  keeps the microphone permission and the keychain's trust in the app. A nightly or CI build is ad-hoc signed: moving
+  from one to a release may ask once more for both.
+- **A dry run.** A manual `sign` run builds and signs the update artifacts too and publishes nothing: the macOS one is
+  in its `Sidevoice-macOS-AppleSilicon-dmg` artifact, the AppImage's and the installer's `.sig` in
+  `Sidevoice-Linux-x64` and `Sidevoice-Windows-x64`. `latest.json` is written only by a release's publish job.
+
 ## When something fails
 
 - The build of a release fails: the Release stays a draft, its tag in place. Fix forward if needed, then re-run
@@ -90,5 +126,7 @@ kept 7 days.
   ("Developer ID Application: … (TEAMID)"), `APPLE_TEAM_ID`, and the notary's App Store Connect API key:
   `APPLE_API_KEY` (its id), `APPLE_API_ISSUER`, `APPLE_API_KEY_P8` (the .p8's contents). release-please.yml
   hands them to `build` (`secrets: inherit`).
+- Repository secrets for the updates (a release, or a manual `sign` run): `TAURI_SIGNING_PRIVATE_KEY` (the minisign
+  private key `tauri signer generate` wrote) and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (Updates, above).
 - Required check **PR title is a conventional commit**. release-please's own PR gets it through a dispatched run
   (its pushes start no workflow by themselves).

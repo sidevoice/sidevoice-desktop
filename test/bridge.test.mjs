@@ -768,3 +768,53 @@ test("nothing of localHost runs until the page asks", async () => {
   await flush();
   assert.equal(calls.filter(([cmd]) => cmd.startsWith("local_host")).length, 0);
 });
+
+// ---- host.updater: the app's updates (docs/BRIDGE.md → "The updater") ----
+
+test("the host's keys: updater only where this copy of the app can update itself", () => {
+  const install = loadFactory();
+  // A .deb, a dev build, an unbundled binary: the app passes false, and the page shows nothing to update.
+  for (const offered of [undefined, false, "__SIDEVOICE_UPDATER__", "true"]) {
+    const api = install(fakeWindow(ORIGIN).win, ORIGIN, null, false, false, offered);
+    assert.deepEqual(Object.keys(api.host).sort(), ["app", "engine", "mediaKeys", "version"], String(offered));
+    api.updaterEvent(); // nothing listens, nothing breaks
+  }
+  const api = install(fakeWindow(ORIGIN).win, ORIGIN, "native", true, true, true);
+  assert.deepEqual(Object.keys(api.host).sort(), ["app", "engine", "localHost", "mediaKeys", "updater", "version", "voice"]);
+  // sidevoice-web's AppUpdater: status(), subscribe?(listener), restart().
+  assert.deepEqual(Object.keys(api.host.updater).sort(), ["restart", "status", "subscribe"]);
+  assert.ok(Object.isFrozen(api.host.updater));
+});
+
+test("host.updater's calls go to their commands and answer what the app says", async () => {
+  const install = loadFactory();
+  const { win, calls } = voiceWindow({
+    updater_status: { available: true, version: "0.3.0" },
+    updater_restart: null,
+  });
+  const updater = install(win, ORIGIN, null, false, false, true).host.updater;
+  assert.equal(JSON.stringify(await updater.status()), '{"available":true,"version":"0.3.0"}');
+  assert.equal(await updater.restart(), undefined);
+  assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("updater_")), [
+    ["updater_status", undefined],
+    ["updater_restart", undefined],
+  ]);
+  const nothing = { key: "update_unavailable", message: "There is no update to install." };
+  const refusing = voiceWindow({ updater_restart: Object.assign(new Error("refused"), { refusal: nothing }) });
+  await assert.rejects(install(refusing.win, ORIGIN, null, false, false, true).host.updater.restart(), (e) => e === nothing);
+});
+
+test("the app's updaterEvent tells host.updater's listeners to read the status again, until they stop", () => {
+  const install = loadFactory();
+  const api = install(fakeWindow(ORIGIN).win, ORIGIN, null, false, false, true);
+  const seen = [];
+  const stop = api.host.updater.subscribe(() => seen.push("a"));
+  api.host.updater.subscribe(() => { throw new Error("a listener's own"); });
+  api.host.updater.subscribe(() => seen.push("b"));
+  api.updaterEvent();
+  assert.deepEqual(seen, ["a", "b"], "every listener, past one that throws");
+  stop();
+  api.updaterEvent();
+  assert.deepEqual(seen, ["a", "b", "b"]);
+  assert.throws(() => api.host.updater.subscribe("nope"), { name: "TypeError" });
+});

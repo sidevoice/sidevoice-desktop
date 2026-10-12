@@ -87,7 +87,9 @@ toggles twice. CI simulates a call on a macOS runner and checks the app becomes 
 4. Let the bundler build the `.dmg` too (it signs and notarizes it) and staple the ticket.
    Result: opens with a double click, no Gatekeeper dialog, and the microphone permission survives
    updates (stable signature).
-5. Auto-update (`tauri-plugin-updater`) needs signed builds plus an update signing key; later.
+5. Auto-update (`tauri-plugin-updater`) needs signed builds plus an update signing key: in place, RELEASING.md →
+   Updates. An update replaces the .app with one signed by the same Developer ID, so the microphone permission and
+   the keychain's trust carry over; from an ad-hoc nightly to a release macOS may ask once more.
 
 ## iPhone (out of scope)
 

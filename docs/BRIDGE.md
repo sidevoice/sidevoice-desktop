@@ -17,6 +17,7 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 | `src-tauri/src/tray.rs` | The menu-bar icon and its menu. |
 | `bridge/call-controls-bridge.js` | Injected into the call controls card's window (below). |
 | `src-tauri/src/call_controls.rs`, `src-tauri/core/src/call_controls.rs` | The card's window, and when it shows, where it sits and how it moves (unit-tested). |
+| `src-tauri/src/updater.rs`, `src-tauri/core/src/updater.rs` | The app's updates, behind `updater` (below): when to check, download and install (unit-tested). |
 
 ## What the bridge reads and calls in the web UI
 
@@ -109,7 +110,7 @@ Evaluated by the app with `webview.eval` (works with the window hidden); the com
 Joining is deliberately **not** a tray command: joining unlocks audio output, which the webview
 only allows from a click in the page. "Mostrar Sidevoice" opens the window for that.
 
-`window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", version, engine, mediaKeys, localHost?, voice? }`: the
+`window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", version, engine, mediaKeys, localHost?, voice?, updater? }`: the
 web UI feature-detects the desktop app by it, and each capability by its presence. `version` is the bridge's (2).
 
 ## The local host
@@ -299,6 +300,7 @@ sidevoice-engine itself fails with is one of these keys, with the engine's own c
 | `voice_settings_missing` | `code` (`settings-missing`) | a call of `host.voice` before its first `setSettings` |
 | `voice_failed` | `code` (the call's: `microphone-denied`, `audio-device-unavailable`, the engine's `model-load-failed`, …, or `stopped`) | the call could not start, or was stopped before it listened |
 | `engine_unavailable` | — | the engine did not start with the app |
+| `update_unavailable` | — | `host.updater.restart()` with no update available, or where this copy cannot update itself |
 | `bad_request` | — | a malformed call, or a caller other than the room window's own page: a bug in the caller |
 | `internal` | — | something inside the app failed |
 
@@ -372,13 +374,44 @@ What is this app's own:
 - Keys: `host.engine.setCredential` writes the macOS keychain (`src-tauri/src/keychain.rs`), and the engine reads it
   when a provider is listed, or its model loaded or called.
 
+## The updater
+
+The app updates itself from the releases (RELEASING.md → Updates). `window.__sidevoiceDesktop.host.updater` is
+sidevoice-web's `AppUpdater` seam (`apps/web/src/features/updates/useUpdates.ts`), as that file types it:
+
+| Call | Returns / does |
+|---|---|
+| `status()` | `{available, version?}`: `available` once an update is downloaded and its signature verified, `version` its version; with automatic download off, once one is found. `required` is never said (no policy yet) |
+| `subscribe(listener)` → `stop` | `listener()` whenever the status may have changed: the page reads `status()` again |
+| `restart()` | installs the update and restarts the app into it: at once outside a call; during one, once it has ended; with automatic download off, it downloads the update first. Resolves once that is under way (the page goes with the app); rejects `{key: "update_unavailable", message}` when nothing is available |
+
+- **When.** The app checks at launch and then every 6 hours (`src-tauri/src/updater.rs`, tauri-plugin-updater from
+  Rust only). With "Download updates automatically" on (the settings window, `autoDownloadUpdates`, the default) an
+  update found is downloaded and verified in the background, so `restart()` never waits on the network. Off, the page
+  is told as soon as one is found and `restart()` downloads it first. A check that fails (no network, no release with
+  a `latest.json`, a manifest without this platform) changes nothing: what was not available stays so. A download
+  that fails is not retried until the next check.
+- **The call.** "A call" is the room's call joined (`bridge_state`'s `joined`) or the voice call the app runs
+  listening (`host.voice`, `src-tauri/src/voice.rs`). A restart asked for during one is held and happens when the
+  last of them ends. Only the person's `restart()` installs anything.
+- **Where.** Only where this copy can replace itself: a release's `.app` running from its bundle (not a translocated
+  copy), the AppImage run as one, the Windows installer's install. A `.deb` (the package manager's), a dev or debug
+  build, an unbundled binary: no `host.updater` and nothing is checked; the commands answer nothing available and
+  refuse a restart (`update_unavailable`) (core `updater::offered`, unit-tested).
+- App → page: `window.__sidevoiceDesktop.updaterEvent()` (`webview.eval`), which calls the listeners.
+- Commands behind it: `updater_status`, `updater_restart`. Granted to the room window (`capabilities/room.json`); each
+  re-checks that the caller is the current room window on the app's own page (else `bad_request`). The page is granted
+  none of the plugin's own commands.
+- What decides what (the check, the download, the install, the call, the setting) is core `updater.rs`, unit-tested;
+  CI's macOS job checks the probe app offers `host.updater` and refuses a restart with nothing to install.
+
 ## Changing the bridge
 
 - Add a command: a variant in `Command` (Rust), a `case` in `run` (JS), a test on each side.
 - Add a field: `CallSnapshot` uses `#[serde(default)]`, so old and new scripts interoperate;
   bump `version` only for a breaking change.
-- Tests: `npm test` (the script against a fake window, `host.voice` included), `cargo test -p sidevoice-desktop-core`
-  (the voice call's builds and the media rule among the rest) and `cargo test -p sidevoice-desktop-engine` (the engine
+- Tests: `npm test` (the script against a fake window, `host.voice` and `host.updater` included), `cargo test -p
+  sidevoice-desktop-core` (the voice call's builds, the media rule and the updates' decisions among the rest) and `cargo test -p sidevoice-desktop-engine` (the engine
   over a test host), `cargo test -p sidevoice-local-host` (the local host against a stand-in core; docs/LOCAL_HOST.md →
   Tests). In the real app, CI's macOS job runs the probe page (`test/fixtures/probe.html`, probe build): the engine's
   capabilities, installs, refusals and a cancelled download (CI then checks nothing of it is on disk), and the voice

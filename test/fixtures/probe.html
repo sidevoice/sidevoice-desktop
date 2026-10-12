@@ -68,6 +68,23 @@ what the interface's own window offers — same origin, same permission rule —
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-headset error " + String(error && (error.message || error)) });
   }
 
+  // The app's updates (docs/BRIDGE.md → "The updater"): this probe app is a bundled .app, so it can update itself and
+  // the page gets sidevoice-web's AppUpdater seam. No newer release is offered to it in CI (none, or the same version):
+  // the status says nothing available, and a restart is refused.
+  const updater = window.__sidevoiceDesktop && window.__sidevoiceDesktop.host && window.__sidevoiceDesktop.host.updater;
+  try {
+    if (!updater) throw new Error("no host.updater");
+    let told = 0;
+    const stop = updater.subscribe(() => { told += 1; });
+    const status = await updater.status();
+    const restart = status.available ? "available" : await updater.restart().then(() => "no", (error) => error && error.key);
+    stop();
+    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-updater ok keys=" + Object.keys(updater).sort().join(",") +
+      " status=" + JSON.stringify(status) + " restart=" + restart + " told=" + told });
+  } catch (error) {
+    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-updater error " + String(error && (error.message || error)) });
+  }
+
   // The native engine through the app itself, as the interface calls it (docs/BRIDGE.md): capabilities, installs as
   // sidevoice-web's `ModelCatalogs.install(model, {build, engine, onProgress, signal})` — by a catalogue build id, by an
   // engine, by nothing (the recommended build) —, refusals by key, the machine's memory, a download cancelled by its

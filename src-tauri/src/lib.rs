@@ -19,6 +19,7 @@ mod local_host;
 #[cfg(feature = "probe")]
 mod probe;
 mod tray;
+mod updater;
 mod voice;
 
 use serde::Serialize;
@@ -130,6 +131,8 @@ struct SettingsInfo {
     /// Diagnostics on (`SIDEVOICE_DEBUG=1`): the settings page then also reports what its webview offers.
     debug: bool,
     app_version: String,
+    /// Whether this copy of the app can update itself: the settings window shows the automatic download only then.
+    updates: bool,
 }
 
 #[derive(Serialize)]
@@ -149,6 +152,7 @@ fn get_settings(app: AppHandle, state: State<'_, AppState>) -> SettingsInfo {
         shortcut: shortcut_status(&state),
         debug: debugging(),
         app_version: app.package_info().version.to_string(),
+        updates: updater::offered(),
     }
 }
 
@@ -167,6 +171,7 @@ async fn save_settings(app: AppHandle, state: State<'_, AppState>, settings: Set
     apply_shortcut(&app, &settings.mute_shortcut);
     let shortcut = shortcut_status(&state);
     call_controls::update(&app);
+    updater::set_auto_download(&app, settings.auto_download_updates);
 
     let target_changed = previous.as_ref().map(|p| p.target != settings.target).unwrap_or(true);
     if target_changed || room_window(&app).is_none() {
@@ -205,6 +210,7 @@ fn bridge_state(
     tray::update(&app, &snapshot);
     headset::update(&app, &snapshot);
     call_controls::update(&app);
+    updater::call_changed(&app);
     Ok(())
 }
 
@@ -265,6 +271,24 @@ pub(crate) fn room_window(app: &AppHandle) -> Option<WebviewWindow> {
     app.get_webview_window(&label)
 }
 
+/// Whether a call is on: the room's call joined (its snapshot), or the voice call the app runs listening (macOS).
+pub(crate) fn in_call(app: &AppHandle) -> bool {
+    let joined = app.state::<AppState>().call.lock().unwrap().joined;
+    joined || voice_listening(app)
+}
+
+fn voice_listening(app: &AppHandle) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        voice::listening(app)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        false
+    }
+}
+
 /// Sends one command to the room page. Works with the window hidden.
 pub(crate) fn send(app: &AppHandle, command: Command) {
     if let Some(w) = room_window(app) {
@@ -278,6 +302,7 @@ fn reset_call_state(app: &AppHandle) {
     tray::update(app, &snapshot);
     headset::update(app, &snapshot);
     call_controls::update(app);
+    updater::call_changed(app);
     #[cfg(target_os = "macos")]
     voice::page_changed(app);
 }
@@ -307,7 +332,7 @@ fn open_room(app: &AppHandle, settings: &Settings) -> tauri::Result<()> {
         .title("Sidevoice")
         .inner_size(1100.0, 760.0)
         .min_inner_size(420.0, 560.0)
-        .initialization_script(bridge::script_for_origin(APP_ORIGIN));
+        .initialization_script(bridge::script_for_origin(APP_ORIGIN, updater::offered()));
     if let Some(target) = settings::target_script(settings) {
         builder = builder.initialization_script(target);
     }
@@ -423,7 +448,9 @@ macro_rules! commands {
             local_host::local_host_pairing,
             local_host::local_host_action,
             local_host::local_host_pairing_code,
-            local_host::local_host_pair_room
+            local_host::local_host_pair_room,
+            updater::updater_status,
+            updater::updater_restart
             $($extra)*
         ]
     };
@@ -504,6 +531,8 @@ pub fn run() {
             // First run too: the interface itself asks for a pairing code; nothing has to be set up first.
             let current = stored.unwrap_or_else(Settings::first_run);
             apply_shortcut(&handle, &current.mute_shortcut);
+            // Before the room opens, so its bridge offers `host.updater` and its first snapshot reaches the plan.
+            updater::setup(&handle, current.auto_download_updates);
             open_room(&handle, &current)?;
             call_controls::create(&handle)?;
             Ok(())

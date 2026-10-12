@@ -12,6 +12,7 @@ const ORIGIN_PLACEHOLDER: &str = "\"__SIDEVOICE_ROOM_ORIGIN__\"";
 const MEDIA_KEYS_PLACEHOLDER: &str = "\"__SIDEVOICE_MEDIA_KEYS__\"";
 const LOCAL_HOST_PLACEHOLDER: &str = "\"__SIDEVOICE_LOCAL_HOST__\"";
 const VOICE_PLACEHOLDER: &str = "\"__SIDEVOICE_VOICE__\"";
+const UPDATER_PLACEHOLDER: &str = "\"__SIDEVOICE_UPDATER__\"";
 
 /// Who answers the headset's buttons and media keys in a call: `native` where the app does (macOS,
 /// `src/headset.rs`), so the page does not answer them too; `None` elsewhere (the page's Media Session does).
@@ -51,8 +52,9 @@ pub fn call_controls_push(patch: &serde_json::Value) -> String {
     format!("window.__sidevoiceDesktop && window.__sidevoiceDesktop.receive({patch});")
 }
 
-/// The script injected into the main window, bound to one page origin.
-pub fn script_for_origin(origin: &str) -> String {
+/// The script injected into the main window, bound to one page origin. `updater`: whether this copy of the app can
+/// update itself (`window.__sidevoiceDesktop.host.updater`; core `updater::offered`), which the shell finds at start.
+pub fn script_for_origin(origin: &str, updater: bool) -> String {
     let literal = serde_json::to_string(origin).expect("a string serialises");
     let keys = serde_json::to_string(&media_keys()).expect("serialises");
     let flag = |offered: bool| if offered { "true" } else { "false" };
@@ -61,6 +63,7 @@ pub fn script_for_origin(origin: &str) -> String {
         .replacen(MEDIA_KEYS_PLACEHOLDER, &keys, 1)
         .replacen(LOCAL_HOST_PLACEHOLDER, flag(local_host_offered()), 1)
         .replacen(VOICE_PLACEHOLDER, flag(voice_offered()), 1)
+        .replacen(UPDATER_PLACEHOLDER, flag(updater), 1)
 }
 
 /// The bridge's version: the room page sends it in every snapshot (bridge/desktop-bridge.js).
@@ -215,15 +218,22 @@ mod tests {
 
     #[test]
     fn script_binds_the_origin_as_a_js_string() {
-        let s = script_for_origin("https://voice.example.com");
+        let s = script_for_origin("https://voice.example.com", false);
         assert!(!s.contains("__SIDEVOICE_ROOM_ORIGIN__"));
         assert!(!s.contains("__SIDEVOICE_MEDIA_KEYS__"));
         assert!(!s.contains("__SIDEVOICE_LOCAL_HOST__"));
         assert!(!s.contains("__SIDEVOICE_VOICE__"));
-        let keys = if cfg!(target_os = "macos") { r#""native", true, true)"# } else { "null, false, false)" };
+        assert!(!s.contains("__SIDEVOICE_UPDATER__"));
+        let keys =
+            if cfg!(target_os = "macos") { r#""native", true, true, false)"# } else { "null, false, false, false)" };
         assert!(s.contains(&format!(r#"factory(window, "https://voice.example.com", {keys}"#)), "{keys}");
+        // Where this copy can update itself, the page gets `host.updater`.
+        let updating =
+            if cfg!(target_os = "macos") { r#""native", true, true, true)"# } else { "null, false, false, true)" };
+        let offered = script_for_origin("https://voice.example.com", true);
+        assert!(offered.contains(&format!(r#"factory(window, "https://voice.example.com", {updating}"#)), "{updating}");
         // A hostile value cannot break out of the string literal.
-        let evil = script_for_origin("\"); alert(1); (\"");
+        let evil = script_for_origin("\"); alert(1); (\"", false);
         assert!(evil.contains(r#""\"); alert(1); (\"""#));
     }
 

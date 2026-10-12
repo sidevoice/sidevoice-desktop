@@ -5,13 +5,14 @@
 //                invoke('bridge_level', { level })     the microphone's level during a call, for the card's wave
 //   app → page : window.__sidevoiceDesktop.run({ command: 'toggle-mute' | 'hang-up' | 'skip-reply' | … })
 //                window.__sidevoiceDesktop.voiceEvent(event)  each event of the voice call the app runs (host.voice)
+//                window.__sidevoiceDesktop.updaterEvent()     the updates' status may have changed (host.updater)
 // It only reads the web UI's public seams (window.sidevoiceUI.store and .micLevel, window.sidevoiceActions) and
 // never touches the DOM. On any origin other than the window's page (the room's, or the app's own for the
 // bundled interface) it does nothing at all.
 (function (factory) {
   if (typeof module === "object" && module.exports) module.exports = factory; // unit tests
-  else factory(window, "__SIDEVOICE_ROOM_ORIGIN__", "__SIDEVOICE_MEDIA_KEYS__", "__SIDEVOICE_LOCAL_HOST__", "__SIDEVOICE_VOICE__");
-})(function installDesktopBridge(win, roomOrigin, mediaKeys, localHostOffered, voiceOffered) {
+  else factory(window, "__SIDEVOICE_ROOM_ORIGIN__", "__SIDEVOICE_MEDIA_KEYS__", "__SIDEVOICE_LOCAL_HOST__", "__SIDEVOICE_VOICE__", "__SIDEVOICE_UPDATER__");
+})(function installDesktopBridge(win, roomOrigin, mediaKeys, localHostOffered, voiceOffered, updaterOffered) {
   "use strict";
   // scheme://host rather than location.origin: the app's own pages (tauri://localhost) may have an opaque origin.
   if (win.location.protocol + "//" + win.location.host !== roomOrigin) return null;
@@ -299,6 +300,36 @@
     };
   }
 
+  /** The app's updates (docs/BRIDGE.md → "The updater"): sidevoice-web's `AppUpdater` seam
+   *  (apps/web/src/features/updates/useUpdates.ts). The app checks the releases at launch and every 6 hours and, unless
+   *  the person turned it off in the app's settings, downloads and verifies an update in the background. Only where
+   *  this copy of the app can update itself (a release's .app, AppImage or Windows installer; never a .deb or a dev
+   *  build). */
+  function updater() {
+    const listeners = new Set();
+    const host = {
+      /** `{available, version?}`: `available` once an update is downloaded and ready (with automatic download off, once
+       *  one is found). `required` is never said. */
+      status: () => call("updater_status"),
+      /** `listener()` each time the status may have changed: read it again. Returns `stop`. */
+      subscribe(listener) {
+        if (typeof listener !== "function") throw new TypeError("subscribe(listener)");
+        listeners.add(listener);
+        return () => { listeners.delete(listener); };
+      },
+      /** Installs the update and restarts into it: at once, or (automatic download off) once it is downloaded, or once
+       *  the call has ended — never mid-call. Resolves once that is under way; rejects `{key: "update_unavailable",
+       *  message}` when there is nothing to install. */
+      restart: () => call("updater_restart").then(() => undefined),
+    };
+    function changed() {
+      for (const listener of listeners) {
+        try { listener(); } catch (_) { /* a listener's error is the page's own */ }
+      }
+    }
+    return { host: Object.freeze(host), changed };
+  }
+
   /** The card's devices (the web UI's call-controls `AudioDevices`), from the room's own (`facts.audioDevices`: what the
    *  voice lists and what is chosen). The system's default comes first, as an option of its own (id `""`); a device the
    *  system lists without a name is said by its place; the speaker can be chosen only where the voice can move it. */
@@ -392,6 +423,8 @@
 
   // Only where the app runs the voice call itself (macOS): elsewhere the page runs it.
   const voiceCall = voiceOffered === true ? voice() : null;
+  // Only where this copy of the app can update itself.
+  const updates = updaterOffered === true ? updater() : null;
 
   const api = {
     version: BRIDGE_VERSION,
@@ -410,10 +443,16 @@
       ...(localHostOffered === true ? { localHost: Object.freeze(localHost()) } : {}),
       // Only where the app runs the voice call (macOS): the page then neither opens the microphone nor runs models.
       ...(voiceCall ? { voice: voiceCall.host } : {}),
+      // Only where this copy of the app can update itself: the page then offers "Restart to update".
+      ...(updates ? { updater: updates.host } : {}),
     }),
     /** An event of the voice call, from the app (`webview.eval`): to `host.voice`'s listeners. */
     voiceEvent(event) {
       if (voiceCall) voiceCall.receive(event);
+    },
+    /** The updates' status may have changed, from the app (`webview.eval`): `host.updater.subscribe`'s listeners. */
+    updaterEvent() {
+      if (updates) updates.changed();
     },
     snapshot,
     /** Runs one command from the app (tray, shortcut, headset, call controls card) through the web UI's own actions:
