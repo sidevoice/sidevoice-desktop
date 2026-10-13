@@ -1,6 +1,7 @@
 //! The voice call's models on the app's engine: sidevoice-voice's interfaces (`VoiceModels` and its slots) filled
 //! with the models core's `voice::choose` picks, each loaded by its catalogue (`engine.catalog(id).load(model)`: the
-//! catalogue picks the build, and a local one is installed first if it is not) and called through what it can do
+//! catalogue picks the build), or, for a local model with a build chosen, as that build (`engine.load(model, build)`),
+//! a local one installed first if it is not, and called through what it can do
 //! (`as_vad`, `as_stt`, `as_tts`, `as_end_of_turn`). Failures are the engine's codes.
 //!
 //! Nothing native runs on an async worker of the app's runtime. Loading each model and opening the detector's stream
@@ -14,7 +15,7 @@ mod tests;
 use std::future::Future;
 use std::sync::Arc;
 
-use sidevoice_desktop_core::voice::{ModelChoice, VoiceChoice};
+use sidevoice_desktop_core::voice::{ModelChoice, VoiceChoice, LOCAL_CATALOG};
 use sidevoice_desktop_engine::sidevoice_engine::{Cancel, Engine, Error, Model, Progress, VadOptions, VadStream};
 use sidevoice_voice::{async_trait, EndOfTurnModel, Models, Speaker, Transcriber, Vad, VadFrame, VoiceModels};
 
@@ -37,11 +38,16 @@ impl EngineModels {
     }
 
     async fn load_one(&self, chosen: &ModelChoice) -> Result<Arc<dyn Model>, String> {
-        let (engine, catalog, model) = (Arc::clone(&self.engine), chosen.catalog.clone(), chosen.model.clone());
+        let (engine, chosen) = (Arc::clone(&self.engine), chosen.clone());
         blocking(async move {
             let progress = |_: Progress| {};
-            let loaded = engine.catalog(&catalog)?.load(&model, &progress, &Cancel::new()).await?;
-            Ok(Arc::from(loaded))
+            let loaded: Arc<dyn Model> = match chosen.build.as_deref() {
+                Some(build) if chosen.catalog == LOCAL_CATALOG => {
+                    Arc::new(engine.load(&chosen.model, Some(build), &progress, &Cancel::new()).await?)
+                }
+                _ => Arc::from(engine.catalog(&chosen.catalog)?.load(&chosen.model, &progress, &Cancel::new()).await?),
+            };
+            Ok(loaded)
         })
         .await
     }

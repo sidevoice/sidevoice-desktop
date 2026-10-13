@@ -25,7 +25,9 @@ use futures_util::StreamExt;
 use models::EngineModels;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
-use sidevoice_desktop_core::voice::{self as choice, choose, Candidate, CatalogCandidates, VoiceChoice, VoiceSettings};
+use sidevoice_desktop_core::voice::{
+    self as choice, choose, BuildCandidate, Candidate, CatalogCandidates, VoiceChoice, VoiceSettings,
+};
 use sidevoice_desktop_engine::{CatalogView, NativeEngines};
 use sidevoice_voice::{
     AudioDevices, Events, Listening, NativeDevices, NativeIo, SayCancel, SayEvent, SayOptions, SayOutcome, StopReason,
@@ -85,8 +87,9 @@ fn refusal(key: &str, message: impl Into<String>) -> Refusal {
 }
 
 /// A configuration the app cannot make, as the bridge refuses it: the code the page translates (`model-unknown`,
-/// `model-unfit`, `catalog-not-found`, `vad-unavailable`, `end-of-turn-unavailable`, or the engine's own, such as
-/// `credential-missing`), the model, and what a provider said (`detail`).
+/// `model-unfit`, `catalog-not-found`, `build-not-found`, `vad-unavailable`, `end-of-turn-unavailable`, or the
+/// engine's own, such as `credential-missing` or why a chosen build does not run), the model, and what a provider said
+/// (`detail`).
 fn refused(r: choice::Refusal) -> Refusal {
     let mut refused = refusal(&format!("voice_{}", r.code.replace('-', "_")), r.message);
     refused.params.insert("code".into(), json!(r.code));
@@ -417,7 +420,7 @@ fn to_page(app: &AppHandle, event: &Value) {
 }
 
 /// A catalogue of the engine, as choosing from it needs: a local model runs here when one of its builds does; a
-/// provider's always does.
+/// provider's always does. A build that does not run says why by its first reason's code.
 pub(crate) fn candidates(view: &CatalogView) -> CatalogCandidates {
     CatalogCandidates {
         id: view.id.clone(),
@@ -431,6 +434,18 @@ pub(crate) fn candidates(view: &CatalogView) -> CatalogCandidates {
                 family: model.local.as_ref().map(|local| local.family.clone()),
                 capabilities: model.capabilities.iter().map(|c| c.to_string()).collect(),
                 runs: model.local.as_ref().is_none_or(|local| local.builds.iter().any(|build| build.available)),
+                builds: model.local.as_ref().map_or_else(Vec::new, |local| {
+                    local
+                        .builds
+                        .iter()
+                        .map(|build| BuildCandidate {
+                            id: build.id.clone(),
+                            unfit: (!build.available).then(|| {
+                                build.reasons.first().map_or("no-build-available".into(), |reason| reason.code.clone())
+                            }),
+                        })
+                        .collect()
+                }),
             })
             .collect(),
     }

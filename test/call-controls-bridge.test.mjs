@@ -52,6 +52,34 @@ test("the card subscribes, asks for the state, and hears every change as a whole
   assert.deepEqual(late, [60]);
 });
 
+test("a device chosen shows the devices busy until the app next tells the call, or a while has passed", async () => {
+  const { win, calls } = fakeWindow(APP);
+  const timers = [];
+  win.setTimeout = (fn, ms) => (timers.push({ fn, ms }), timers.length);
+  win.clearTimeout = (id) => { timers[id - 1].cleared = true; };
+  const api = load()(win, APP);
+  const host = win.__sidevoiceDesktop.host.callControls;
+  const heard = [];
+  host.subscribe((state) => heard.push(state.call.devices && state.call.devices.busy));
+  host.run({ command: "select-audio-device", kind: "input", id: "mbp" });
+  assert.deepEqual(heard, [], "no devices yet: nothing to hold");
+  const devices = { inputs: [], outputs: [], inputId: "", outputId: "", available: true, outputAvailable: true, busy: false };
+  api.receive({ call: { joined: true, devices } });
+  host.run({ command: "select-audio-device", kind: "input", id: "mbp" });
+  api.receive({ level: 20 });
+  assert.deepEqual(heard, [false, true, true], "busy at once, through other changes");
+  api.receive({ call: { joined: true, devices: { ...devices, inputId: "mbp" } } });
+  assert.deepEqual(heard.at(-1), false, "the room's word from then on");
+  assert.ok(timers[0].cleared);
+  host.run({ command: "select-audio-device", kind: "input", id: "" });
+  assert.equal(heard.at(-1), true);
+  assert.equal(timers[1].ms, 3000);
+  timers[1].fn();
+  assert.equal(heard.at(-1), false, "given up when the room never answers");
+  await flush();
+  assert.equal(calls.filter(([cmd]) => cmd === "call_controls_run").length, 3);
+});
+
 test("commands, layout and drags reach the app, and only well-formed ones", async () => {
   const { win, calls } = fakeWindow(APP);
   load()(win, APP);

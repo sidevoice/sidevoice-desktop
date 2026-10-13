@@ -15,6 +15,13 @@
 //! answers, `service status --json` through the CLI (at most every [`FALLBACK_EVERY`], or right after an action: it
 //! starts a process); the core's health; and while paired, whether the core still accepts the token — refused, the
 //! proxy stops carrying it and closes its tunnels.
+//!
+//! **The installed version** (`product_version`): the installation's program asked `--version --json` — the release
+//! `install.json`'s command runs, so the installed `sidevoice` package's version. Neither `node.status` nor
+//! `service status --json` carries it. It starts a process, so it is asked once per installed program: every poll
+//! reads `install.json` and resolves its command (no process), and the program is asked again only when that resolves
+//! to another file (an install, an update or a rollback switches `R/current` to another release), after each action,
+//! and, while unknown, at most every [`FALLBACK_EVERY`]. No `install.json`, no version, at once.
 
 use crate::cli::Cli;
 use crate::connector;
@@ -78,6 +85,7 @@ impl Action {
 }
 
 const STATUS_TIMEOUT: Duration = Duration::from_secs(10);
+const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
 const PAIR_DEVICE_TIMEOUT: Duration = Duration::from_secs(30);
 const PAIR_ROOM_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -100,6 +108,8 @@ struct Inner {
     report: Report,
     /// `service status --json`'s last answer and when, while no connector answers.
     fallback: Option<(Instant, Option<Value>)>,
+    /// The installed version last asked, the core launch it was asked under and when.
+    product: Option<Product>,
     /// `reconnect()`: pair anew on the next pass, whatever is stored.
     force_pair: bool,
 }
@@ -134,6 +144,7 @@ impl LocalHost {
                 pairing: None,
                 report: Report::new(State::Absent),
                 fallback: None,
+                product: None,
                 force_pair: false,
             }),
             passes: Mutex::new(()),
@@ -197,13 +208,37 @@ impl LocalHost {
             // No core to carry requests to; a core that comes back is checked again before the token goes out.
             self.proxy.set_token(None);
         }
+        let product_version = self.product_version();
         let mut inner = self.inner.lock().unwrap();
-        let report = state::report(Observed { status: status.as_ref(), core: health.as_ref(), link: &inner.link });
+        let report = state::report(Observed {
+            status: status.as_ref(),
+            core: health.as_ref(),
+            link: &inner.link,
+            product_version: product_version.as_deref(),
+        });
         if report.state != inner.report.state {
             (self.log)(&format!("local-host state {}", json!(report.state).as_str().unwrap_or("?")));
         }
         inner.report = report.clone();
         report
+    }
+
+    /// The installed Sidevoice's version: what `install.json`'s command answers to `--version --json`, kept while that
+    /// command resolves to the same program; unknown is asked again after [`FALLBACK_EVERY`]. No install, no version.
+    fn product_version(&self) -> Option<String> {
+        // Reading the record and resolving its command starts nothing; only a program not asked yet is run.
+        let cli = Cli::installed(&self.config.dirs).ok();
+        let program = cli.as_ref().map(|cli| cli.prefix.clone());
+        if let Some(known) = &self.inner.lock().unwrap().product {
+            if known.program == program && (known.version.is_some() || known.at.elapsed() < FALLBACK_EVERY) {
+                return known.version.clone();
+            }
+        }
+        let version = cli
+            .and_then(|cli| cli.run(&["--version", "--json"], VERSION_TIMEOUT).ok())
+            .and_then(|answer| answer.get("version").and_then(Value::as_str).filter(|v| semver(v)).map(str::to_string));
+        self.inner.lock().unwrap().product = Some(Product { program, at: Instant::now(), version: version.clone() });
+        version
     }
 
     /// `service status --json` when no connector answers, reused for [`FALLBACK_EVERY`]. No install, no answer.
@@ -354,10 +389,17 @@ impl LocalHost {
         Cli::installed(&self.config.dirs)
     }
 
-    /// Runs a service action, then a fresh pass (the CLI's view refreshed too): the state after it.
+    /// Runs a service action, then a fresh pass (the CLI's view and the installed version refreshed too): the state
+    /// after it.
     pub fn act(&self, action: Action) -> Result<Report, Refusal> {
         let result = self.cli()?.run(&action.argv(), action.timeout());
-        self.inner.lock().unwrap().fallback = None;
+        {
+            // After any pass already under way: what it read before the action must not outlive this.
+            let _pass = self.passes.lock().unwrap();
+            let mut inner = self.inner.lock().unwrap();
+            inner.fallback = None;
+            inner.product = None;
+        }
         result?;
         Ok(self.poll())
     }
@@ -400,6 +442,34 @@ impl Drop for LocalHost {
     }
 }
 
+/// The installed version as last asked.
+struct Product {
+    /// The program asked (`install.json`'s command, resolved); `None` with no installation.
+    program: Option<Vec<String>>,
+    at: Instant,
+    version: Option<String>,
+}
+
+/// A version as a release names it, and as the page accepts it (sidevoice-web `local-host-status.ts`):
+/// `X.Y.Z[-pre][+build]`, the suffixes of ASCII letters, digits, `.` and `-`; at most 64 characters.
+fn semver(text: &str) -> bool {
+    let suffix = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
+    let (rest, build) = match text.split_once('+') {
+        Some((rest, build)) => (rest, Some(build)),
+        None => (text, None),
+    };
+    let (core, pre) = match rest.split_once('-') {
+        Some((core, pre)) => (core, Some(pre)),
+        None => (rest, None),
+    };
+    let numbers: Vec<&str> = core.split('.').collect();
+    text.len() <= 64
+        && numbers.len() == 3
+        && numbers.iter().all(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+        && pre.is_none_or(suffix)
+        && build.is_none_or(suffix)
+}
+
 fn mismatch() -> Refusal {
     Refusal::new("identity.mismatch", "The core on this computer did not prove the identity the app paired with.")
 }
@@ -416,5 +486,40 @@ pub fn computer_name() -> String {
         "Sidevoice".into()
     } else {
         name
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::semver;
+
+    #[test]
+    fn a_version_is_what_the_page_accepts() {
+        for good in ["0.8.1", "10.20.30", "0.9.0-rc.1", "0.9.0-rc.1+abc", "0.9.0+0123abcdef01", "1.2.3-a-b.c+d-e.f"] {
+            assert!(semver(good), "{good}");
+        }
+        let long = format!("1.2.3-{}", "a".repeat(60));
+        for bad in [
+            "",
+            " ",
+            "unknown",
+            "0.8",
+            "0.8.1.2",
+            "v0.8.1",
+            "0.8.1_dirty",
+            "0.8.1 ",
+            " 0.8.1",
+            "0.8.1-",
+            "0.8.1+",
+            "0.8.1-rc 1",
+            "0.8.1+a+b",
+            "0.8.1-ré",
+            "０.8.1",
+            "0..1",
+            long.as_str(),
+            "0.8.1\n",
+        ] {
+            assert!(!semver(bad), "{bad:?}");
+        }
     }
 }

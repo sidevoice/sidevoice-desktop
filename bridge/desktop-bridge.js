@@ -25,7 +25,10 @@
   /** The fields of the room's conversation rows the card shows (the web UI's ParticipantView). */
   const PARTICIPANT_FIELDS = ["threadId", "title", "selected", "available", "switching", "unread", "reach", "stateLabel",
     "activityNote", "detail", "subtitle", "working", "machine", "harness", "route"];
-  const DEVICE_FIELDS = ["inputs", "outputs", "inputId", "outputId", "available", "outputAvailable", "busy"];
+  /** Choices of a device the card asked for that the room has not answered yet: the card's devices are busy meanwhile.
+   *  They go to the room one after another, in the order asked (the room keeps whichever answers last). */
+  let choosingDevices = 0;
+  let deviceChoices = Promise.resolve();
   const pick = (object, fields) => {
     const picked = {};
     for (const field of fields) if (object && object[field] !== undefined) picked[field] = object[field];
@@ -78,6 +81,14 @@
         coded(call("engine_set_credential", { provider, key: key == null ? null : String(key) })).then(() => undefined),
       /** Whether the keychain holds a key for `provider`. The key itself never reaches the page. */
       hasCredential: (provider) => coded(call("engine_has_credential", { provider })),
+      /** Asks `provider` with `key` without keeping it (never in the keychain, never in the listings the app keeps):
+       *  what its catalogue says against it, `{code, params, detail?}` (`credential-rejected`, …; `detail` the
+       *  provider's own words, without the key, at most 300 characters), or null when it lists with it.
+       *  The kept key and its listing are as they were. */
+      testCredential: (provider, key) =>
+        coded(call("engine_test_credential", { provider, key: String(key ?? "") })).then((reason) => reason ?? null),
+      /** Asks `provider` again now, past any listing kept, with the key the keychain has. */
+      refresh: (provider) => coded(call("engine_refresh", { provider })).then(() => undefined),
       /** `{runs: "native", os, arch, has: ["cpu", "metal", …], memory_mb}` (`memory_mb` null when unknown). */
       capabilities: () => call("engine_capabilities"),
       /** `[{model, engine}]`: the builds already on disk. */
@@ -185,11 +196,13 @@
       return handle;
     }
     const host = {
-      /** The person's choices (`VoiceSettings`): each slot a model of a catalogue, `stt: {catalog, model, language}`,
-       *  `tts: {catalog, model, voice, speed}`, with `patience`, `end_of_turn` and `idle_unload_minutes`. The catalogue
-       *  picks the build; the app adds the voice activity detector and the end-of-turn model. Rejects `{key, code,
-       *  message}`: `model-unknown`, `model-unfit`, `catalog-not-found`, `vad-unavailable`, `end-of-turn-unavailable`,
-       *  or the engine's own code (`credential-missing`, ...) with the provider's `detail`. */
+      /** The person's choices (`VoiceSettings`): each slot a model of a catalogue, `stt: {catalog, model, language,
+       *  build?}`, `tts: {catalog, model, voice, speed, build?}`, with `patience`, `end_of_turn`, `idle_unload_minutes`
+       *  and `turn_model?`. A local model loads the build named, else the one its catalogue picks; the app adds the voice
+       *  activity detector and, unless `turn_model` names one that runs, the end-of-turn model. Rejects `{key, code,
+       *  message}`: `model-unknown`, `model-unfit`, `catalog-not-found`, `build-not-found`, `vad-unavailable`,
+       *  `end-of-turn-unavailable`, or the engine's own code (`credential-missing`, `memory`, ...) with the provider's
+       *  `detail`. */
       setSettings: (settings) => call("voice_set_settings", { settings }),
       /** Loads the models (installing them if they are not), opens the microphone and the speaker and listens.
        *  Resolves once it listens (at once if it does); rejects `{key, code, message}`, `code` the call's or `stopped`. */
@@ -234,7 +247,8 @@
 
   /** This computer's own core, the local host (docs/LOCAL_HOST.md): its state, the pairing the page uses to reach it
    *  (through the app's proxy, with this launch's secret — never the device token), and the service's actions. Each
-   *  action resolves the state after it (`{state, failure?, core?, service?, calls?, attempts?, limit?, reachable}`) or rejects `{key, message}`.
+   *  action resolves the state after it (`{state, failure?, core?, product_version, service?, calls?, attempts?, limit?,
+   *  reachable}`) or rejects `{key, message}`.
    *  Only where the app offers a local host (macOS). */
   function localHost() {
     const listeners = new Set();
@@ -253,8 +267,10 @@
         .catch(() => {});
     const action = (name) => () => call("local_host_action", { action: name });
     return {
-      /** `{state, failure?, core?, service?, calls?, attempts?, limit?, reachable}`; `state` one of `absent`, `not-installed`, `stopped-by-person`,
-       *  `starting`, `backoff`, `running`, `failed`, `service-failed`, `refused`, `incompatible`. */
+      /** `{state, failure?, core?, product_version, service?, calls?, attempts?, limit?, reachable}`; `state` one of
+       *  `absent`, `not-installed`, `stopped-by-person`, `starting`, `backoff`, `running`, `failed`, `service-failed`,
+       *  `refused`, `incompatible`; `product_version` the installed Sidevoice's version (the `sidevoice` package, not
+       *  `core.version`), `null` when unknown or not installed. */
       state: () => call("local_host_state"),
       /** `listener(state)` with the state now, then on every change (polled every 2 s while anyone listens).
        *  Returns `stop`. */
@@ -295,6 +311,28 @@
     };
   }
 
+  /** The card's devices (the web UI's call-controls `AudioDevices`), from the room's own (`facts.audioDevices`: what the
+   *  voice lists and what is chosen). The system's default comes first, as an option of its own (id `""`); a device the
+   *  system lists without a name is said by its place; the speaker can be chosen only where the voice can move it. */
+  function cardDevices(devices) {
+    if (!devices || typeof devices !== "object") return null;
+    const options = (rows) => [{ id: "", label: "", system: true }].concat((Array.isArray(rows) ? rows : [])
+      .map((row, index) => row && typeof row.id === "string" && row.id
+        ? (typeof row.label === "string" && row.label ? { id: row.id, label: row.label } : { id: row.id, label: "", number: index + 1 })
+        : null)
+      .filter(Boolean));
+    const outputAvailable = !!devices.outputSelectable;
+    return {
+      inputs: options(devices.inputs),
+      outputs: options(devices.outputs),
+      inputId: typeof devices.input === "string" ? devices.input : "",
+      outputId: outputAvailable && typeof devices.output === "string" ? devices.output : "",
+      available: true,
+      outputAvailable,
+      busy: choosingDevices > 0,
+    };
+  }
+
   /** The call as the app shows it (tray, headset, call controls card), read from the web UI's own view model. */
   function snapshot() {
     const store = win.sidevoiceUI && win.sidevoiceUI.store;
@@ -325,7 +363,7 @@
       canSkip: !!card.canSkip,
       since: joinedAt,
       participants: Array.isArray(view.participants) ? view.participants.map((row) => pick(row, PARTICIPANT_FIELDS)) : [],
-      devices: view.audioDevices ? pick(view.audioDevices, DEVICE_FIELDS) : null,
+      devices: cardDevices(view.facts && view.facts.audioDevices),
     };
   }
 
@@ -420,8 +458,19 @@
           return true;
         case "select-audio-device":
           if (!["input", "output"].includes(request.kind) || typeof request.id !== "string") return false;
-          if (typeof actions.selectAudioDevice !== "function") return false;
-          settle(actions.selectAudioDevice(request.kind, request.id));
+          if (typeof actions.setAudioDevices !== "function") return false;
+          // The room's own choice (`setAudioDevices`), kept for this device as its device bar keeps it; `""` is the
+          // system's default, which the room chooses as `null`. The card's devices are busy until the room has answered
+          // every choice, each asked once the one before has been answered: the last asked is the one that stays.
+          choosingDevices += 1;
+          report();
+          deviceChoices = deviceChoices
+            .then(() => actions.setAudioDevices({ [request.kind]: request.id === "" ? null : request.id }))
+            .catch(() => {})
+            .finally(() => {
+              choosingDevices -= 1;
+              report();
+            });
           return true;
         default:
           return false;

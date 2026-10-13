@@ -9,7 +9,7 @@
 
 use sidevoice_desktop_engine::error::{self, internal};
 use sidevoice_desktop_engine::{
-    CatalogView, Device, Error, Installed, Jobs, Memory, NativeEngines, OnDisk, Progress, Wanted,
+    CatalogView, CredentialRefusal, Device, Error, Installed, Jobs, Memory, NativeEngines, OnDisk, Progress, Wanted,
 };
 use std::sync::Arc;
 use tauri::State;
@@ -116,6 +116,29 @@ pub async fn engine_set_credential(
     tauri::async_runtime::spawn_blocking(move || engines.refresh(&provider)).await.map_err(internal)?
 }
 
+/// Asks `provider` with `key` without keeping it: never written to the keychain, never in the engine's own listings
+/// (`NativeEngines::test_credential`). Answers what the provider's catalogue says against it (`{code, params, detail?}`,
+/// `detail` the provider's own words without the key), or `null` when it lists with it. Refused as
+/// `engine_set_credential` is where the app keeps no keys: a key it could not keep is not worth trying. The key is
+/// never logged.
+#[tauri::command]
+pub async fn engine_test_credential(
+    state: State<'_, EngineState>,
+    provider: String,
+    key: String,
+) -> Result<Option<CredentialRefusal>, Error> {
+    credentials::check(&provider)?;
+    let engines = state.engines.clone();
+    tauri::async_runtime::spawn_blocking(move || engines.test_credential(&provider, &key)).await.map_err(internal)?
+}
+
+/// Reads `provider`'s catalogue again now, past any listing kept, with the key the keychain has.
+#[tauri::command]
+pub async fn engine_refresh(state: State<'_, EngineState>, provider: String) -> Result<(), Error> {
+    let engines = state.engines.clone();
+    tauri::async_runtime::spawn_blocking(move || engines.refresh(&provider)).await.map_err(internal)?
+}
+
 /// Whether the keychain holds a key for `provider`. The key itself never leaves the app.
 #[tauri::command]
 pub fn engine_has_credential(provider: String) -> Result<bool, Error> {
@@ -136,6 +159,11 @@ mod credentials {
         }
     }
 
+    /// Whether a key for `id` could be kept here.
+    pub fn check(id: &str) -> Result<(), Error> {
+        provider(id)
+    }
+
     pub fn write(id: &str, key: Option<&str>) -> Result<(), Error> {
         provider(id)?;
         keychain::write(id, key).map_err(error::credentials_failed)
@@ -151,6 +179,10 @@ mod credentials {
 #[cfg(not(target_os = "macos"))]
 mod credentials {
     use super::{error, Error};
+
+    pub fn check(_: &str) -> Result<(), Error> {
+        Err(error::credentials_unavailable())
+    }
 
     pub fn write(_: &str, _: Option<&str>) -> Result<(), Error> {
         Err(error::credentials_unavailable())

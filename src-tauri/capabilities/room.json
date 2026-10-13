@@ -17,6 +17,8 @@
     "allow-engine-catalogs",
     "allow-engine-set-credential",
     "allow-engine-has-credential",
+    "allow-engine-test-credential",
+    "allow-engine-refresh",
     "allow-voice-set-settings",
     "allow-voice-start",
     "allow-voice-stop",

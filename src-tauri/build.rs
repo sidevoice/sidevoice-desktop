@@ -26,6 +26,8 @@ fn main() {
         "engine_catalogs",
         "engine_set_credential",
         "engine_has_credential",
+        "engine_test_credential",
+        "engine_refresh",
         "voice_set_settings",
         "voice_start",
         "voice_stop",

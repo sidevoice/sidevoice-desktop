@@ -19,8 +19,9 @@ pub mod catalogs;
 pub mod error;
 mod jobs;
 pub mod memory;
+mod trial;
 
-pub use catalogs::CatalogView;
+pub use catalogs::{CatalogView, CredentialRefusal, ReasonView};
 pub use error::Error;
 pub use jobs::{Jobs, Progress};
 /// The engine crate itself, for what the app hands it (`Credentials`) and the models it loads.
@@ -152,6 +153,8 @@ fn task_of(model: &LocalModelInfo) -> Task {
 
 pub struct NativeEngines {
     engine: Arc<Engine>,
+    /// The host the engine runs on, for each key trial's own engine (`test_credential`).
+    host: Arc<dyn Host>,
     runtime: tokio::runtime::Handle,
     /// What `capabilities()` reports.
     pub device: Device,
@@ -177,8 +180,10 @@ impl NativeEngines {
         sources: Vec<Box<dyn CatalogSource>>,
         runtime: tokio::runtime::Handle,
     ) -> Result<Self, Error> {
+        let host: Arc<dyn Host> = Arc::from(host);
         let capabilities = host.capabilities();
-        let engine = Engine::new(host, sources).map_err(|e| error::internal(format!("the engine: {e}")))?;
+        let engine = Engine::new(Box::new(trial::Shared(Arc::clone(&host))), sources)
+            .map_err(|e| error::internal(format!("the engine: {e}")))?;
         let models = runtime
             .block_on(engine.local_catalog().models(None))
             .map_err(|e| error::internal(format!("the engine: {e}")))?;
@@ -198,7 +203,7 @@ impl NativeEngines {
             has,
             memory_mb: capabilities.memory_mb.map(u64::from).or_else(memory::total_mb),
         };
-        Ok(NativeEngines { engine: Arc::new(engine), runtime, device, installing: Mutex::default() })
+        Ok(NativeEngines { engine: Arc::new(engine), host, runtime, device, installing: Mutex::default() })
     }
 
     /// The engine itself, to load and run its models.
@@ -253,11 +258,30 @@ impl NativeEngines {
         })
     }
 
-    /// Reads provider `id`'s catalogue again now, with the key the host has for it: after the page set or cleared it.
+    /// Reads provider `id`'s catalogue again now, past any listing kept, with the key the host has for it: after the
+    /// page set or cleared it, or when the page asks the provider again (`host.engine.refresh`).
     pub fn refresh(&self, id: &str) -> Result<(), Error> {
         let catalog = self.engine.catalog(id).map_err(|_| error::catalog_not_found(id))?;
         self.block_on(catalog.refresh());
         Ok(())
+    }
+
+    /// Asks provider `id` with `key` in place of the key the host keeps, and keeps nothing of it: what its catalogue
+    /// says against that key (its reason: `credential-rejected`, `listing-not-permitted`, `provider-unreachable`, …,
+    /// with the provider's own words made safe: [`CredentialRefusal::new`]), or `None` when the provider lists with it.
+    /// The listing is an engine's of its own, over the same host with `key` as its only key (`trial.rs`): this engine's
+    /// listings, and the key it hands a provider, are the kept key's throughout, whatever runs at the same time.
+    /// `catalog_not_found` for an id that is not a provider's.
+    pub fn test_credential(&self, id: &str, key: &str) -> Result<Option<CredentialRefusal>, Error> {
+        if id == LOCAL_CATALOG {
+            return Err(error::catalog_not_found(id));
+        }
+        self.engine.catalog(id).map_err(|_| error::catalog_not_found(id))?;
+        let trial = Engine::new(Box::new(trial::Trial::new(Arc::clone(&self.host), id, key)), Vec::new())
+            .map_err(|e| error::internal(format!("the engine: {e}")))?;
+        let catalog = trial.catalog(id).map_err(|_| error::catalog_not_found(id))?;
+        let status = catalogs::status(&self.block_on(catalog.refresh()));
+        Ok(status.reason.map(|reason| CredentialRefusal::new(reason, status.detail.as_deref(), key)))
     }
 
     /// The build of `model` the page asks for (`wanted`), if the engine can run it on this device: an engine compiled

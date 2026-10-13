@@ -420,6 +420,8 @@ macro_rules! commands {
             engine_ipc::engine_catalogs,
             engine_ipc::engine_set_credential,
             engine_ipc::engine_has_credential,
+            engine_ipc::engine_test_credential,
+            engine_ipc::engine_refresh,
             local_host::local_host_state,
             local_host::local_host_pairing,
             local_host::local_host_action,

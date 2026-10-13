@@ -25,12 +25,13 @@ Both are globals the web UI (sidevoice-web → `apps/web`) already defines:
 - `window.sidevoiceUI.store` — the room's view-model store (`apps/web/src/state/room-store.ts`,
   `installRoomBridge`). The bridge calls `getState()` and `subscribe()` and reads only `call.joined`, `call.busy`,
   `mic.enabled`, `mic.disabled`, `callCard` (the room's own view for the card: the call's conversation title, the
-  agent's state, `youTalking`, `canSkip`), `participants` (the rows' public fields) and `audioDevices`.
+  agent's state, `youTalking`, `canSkip`), `participants` (the rows' public fields) and `facts.audioDevices` (what the
+  voice lists and what is chosen: `{inputs, outputs, input, output, outputSelectable}`, `state/room-session-state.d.ts`).
 - `window.sidevoiceUI.micLevel` — the microphone's level, 0–100, from the room's capture, whether or not the room is
   painted (`apps/web/src/state/mic-level.ts`). The bridge subscribes to it.
 - `window.sidevoiceActions` — the room's actions (`apps/web/src/state/room-types.ts`, `SidevoiceActions`). The
   bridge calls only `toggleMic()`, `toggleCall()`, `skipReply()`, `selectParticipant(threadId)` and
-  `selectAudioDevice(kind, id)`.
+  `setAudioDevices(choice)`.
 
 If the web UI renames either, the tray greys out ("sala sin cargar") and nothing else breaks.
 Keeping these two names stable is the web UI's side of the contract.
@@ -49,15 +50,20 @@ window.__TAURI_INTERNALS__.invoke("bridge_state", { snapshot })
   "agent": "idle | working | speaking", "youTalking": false, "canSkip": false, "since": 1759300000000,
   "participants": [{ "threadId": "…", "title": "…", "selected": true, "reach": "listening", "working": false,
                      "machine": "daimon", "harness": "claude", "subtitle": "", "…": "…" }],
-  "devices": { "inputs": [{ "id": "default", "label": "…" }], "outputs": [], "inputId": "default",
-               "outputId": "default", "available": true, "outputAvailable": false, "busy": false } }
+  "devices": { "inputs": [{ "id": "", "label": "", "system": true }, { "id": "CoreAudio:…", "label": "…" }],
+               "outputs": [{ "id": "", "label": "", "system": true }], "inputId": "CoreAudio:…",
+               "outputId": "", "available": true, "outputAvailable": false, "busy": false } }
 ```
 
 - `agent`: what the agent does — `speaking` while its voice plays (it wins over its work), else `working` while the
   conversation works on a turn, else `idle`. `youTalking`: a turn of the person's is open.
 - `since`: when this page saw the call joined (ms since the epoch), for the card's clock; `null` outside a call.
-- `participants` and `devices` are relayed to the card as the room wrote them: the web UI owns their shape
-  (`ParticipantView`, `AudioDevices`).
+- `participants` are relayed to the card as the room wrote them: the web UI owns their shape (`ParticipantView`).
+- `devices` is the card's `AudioDevices` (web `call-controls/host.ts`), made from the room's `facts.audioDevices`
+  (`null` until the voice has listed them): the system's default first, as an option `{id: "", system: true}`; a
+  device listed without a name as `{label: "", number}` (its place, from 1); `inputId`/`outputId` the chosen ids, `""`
+  for the default; `outputAvailable` the voice's `outputSelectable` (when false, `outputId` is `""`); `available`
+  always `true`; `busy` while a device the card chose has not been answered by the room.
 
 Sent once on page start (`ready: false`), then on every change of those fields (the store
 ticks often; unchanged snapshots are not re-sent). The app also resets to `ready: false` on
@@ -94,8 +100,11 @@ Evaluated by the app with `webview.eval` (works with the window hidden); the com
 - `hang-up` → `sidevoiceActions.toggleCall()`, only while joined.
 - `skip-reply` → `sidevoiceActions.skipReply()`, only while something plays.
 - `select-participant` → `sidevoiceActions.selectParticipant(threadId)`, only for a conversation the room lists.
-- `select-audio-device` → `sidevoiceActions.selectAudioDevice(kind, id)`, `kind` `input` or `output`: the room's own
-  choice, so the card and the room never disagree.
+- `select-audio-device` → `sidevoiceActions.setAudioDevices({[kind]: id})`, `kind` `input` or `output`, `id` `""` the
+  system's default (`null` to the room): the room's own choice, kept for this device as its device bar keeps it, so
+  the card and the room never disagree. A choice the room refuses leaves the device it had, which the card says.
+  Choices go to the room one at a time, in the order asked (the room keeps whichever answers last), and the card's
+  `devices.busy` holds until the last has been answered.
 
 Joining is deliberately **not** a tray command: joining unlocks audio output, which the webview
 only allows from a click in the page. "Mostrar Sidevoice" opens the window for that.
@@ -111,7 +120,7 @@ docs/LOCAL_HOST.md.
 
 | Call | Returns / does |
 |---|---|
-| `state()` | `{state, failure?, core?, service?, calls?, attempts?, limit?, reachable}` (`limit` only where the service manager has one: «(2 de 5)» only then); `state` one of `absent`, `not-installed`, `stopped-by-person`, `starting`, `backoff`, `running`, `failed`, `service-failed`, `refused`, `incompatible` |
+| `state()` | `{state, failure?, core?, product_version, service?, calls?, attempts?, limit?, reachable}` (`limit` only where the service manager has one: «(2 de 5)» only then; `product_version` the installed Sidevoice's version, the `sidevoice` package — not `core.version` —, `null` when unknown or not installed); `state` one of `absent`, `not-installed`, `stopped-by-person`, `starting`, `backoff`, `running`, `failed`, `service-failed`, `refused`, `incompatible` |
 | `subscribe(listener)` → `stop` | the state now, then on every change (polled every 2 s while anyone listens) |
 | `pairing()` | `{fp, public_key, device_id, token, urls: ["http://127.0.0.1:<port>"], rv: null, host, local: true}` whenever a core answers and the app is paired (`reachable`), whatever `state` says, else `null`; `token` is the app's proxy secret for this launch, never the device token |
 | `start()` / `stop()` / `restart()` / `serviceInstall()` / `serviceUninstall()` | the connector's `service …`; resolve the state after it |
@@ -164,7 +173,7 @@ The card's page talks to the app only through `window.__sidevoiceDesktop.host.ca
 | Card → app | |
 |---|---|
 | `subscribe(listener)` → `stop` | the whole state now, then on every change (`call_controls_ready` asks the app for it) |
-| `run({command, …})` | `call_controls_run`: `open-app` (the app shows the room), or one of the room commands above, which the app parses (`bridge::Command`) before it carries it to the room |
+| `run({command, …})` | `call_controls_run`: `open-app` (the app shows the room), or one of the room commands above, which the app parses (`bridge::Command`) before it carries it to the room. After `select-audio-device` the card hears its devices `busy` at once, until the app next tells it the call (or 3 s pass): the device still chosen is never read as the room refusing the new one |
 | `layout({width, height})` | `call_controls_layout`: the card's size with its shadow margin; the window takes it and is placed to fit |
 | `drag(phase)` | `call_controls_drag`: `start`, `move`, `end`; the window follows the pointer (the app reads it) and is dropped, snapped and remembered |
 
@@ -200,6 +209,8 @@ models is the voice call's (below), never the page's. `window.__sidevoiceDesktop
 | `catalogs()` | `[{id, name, status: {reason?: {code, params}, stale, detail?}, models}]`: every catalogue of sidevoice-engine 0.3.1, `local` first (`name` `null`), then each provider (`openai`, `elevenlabs`; `name` the provider's), each with every model it lists in `/engine`'s shape: `{id, capabilities, languages, voices: [{id, name?, languages, gender?}], speed?: {min, max}}`, and for a local model also `family, parametersM, license, installed, builds: [{id, backend, accelerator?, precision, downloadBytes, memoryMb, available, reasons: [{code, params}], installed}], recommendedBuild?`. A catalogue that cannot list (a provider with no key, one that refuses) has `models: []` and says why in `status.reason` (`credential-missing`, ...), the provider's own words in `status.detail`. Rejects `{code}` only when the engine itself fails |
 | `setCredential(provider, key)` | keeps `key` for remote catalogue `provider` in the macOS keychain, or removes it (`null` or blank), then lists that provider again with it. Rejects `provider_invalid`, `credentials_failed`, and `credentials_unavailable` where the app keeps no keys (Windows, Linux) |
 | `hasCredential(provider)` | whether the keychain holds a key for `provider` (`false` where the app keeps none). The key itself never reaches the page |
+| `testCredential(provider, key)` | asks `provider` with `key` (trimmed; blank is no key) without keeping it, and answers what its catalogue says against it, `{code, params, detail?}` (`credential-rejected`, `listing-not-permitted`, `provider-unreachable`, …, as `status.reason`; `detail`, when the provider gave some, its own words as `status.detail` has them, with every occurrence of the tried key replaced by `[key]`, control characters as spaces, and cut to 300 characters with "…"), or `null` when the provider lists with it. The key is never written to the keychain, never logged, and never reaches the listings the app keeps: the trial runs on an engine of its own, made for it and dropped after it, whose only key is this one for this provider. So the kept key, its listing, and anything listed or called at the same time (a call in progress, a `catalogs()`) are the kept key's, before, during and after. Rejects `catalog_not_found` for an id that is not a provider's (`local` included), and as `setCredential` does where the app keeps no keys (`credentials_unavailable`) or for a malformed id (`provider_invalid`) |
+| `refresh(provider)` | asks `provider` again now, past any listing kept, with the key the keychain has (what Test does); `catalogs()` then lists what it said. Rejects `catalog_not_found` |
 | `capabilities()` | `{runs: "native", os: "macos"\|"windows"\|"linux", arch: "aarch64"\|"x86_64", has: ["cpu", …], memory_mb: number\|null}` — `has` is what sidevoice-engine runs a model on here (`cpu`; `metal` on Apple Silicon, for whisper.cpp), never Core ML; remote providers are catalogues of their own (`catalogs()`), `memory_mb` the machine's total, from the OS |
 | `installed()` | `[{model, engine}]` — builds whose files are on disk and whole |
 | `install(model, {build?, engine?, onProgress?, signal?})` | `ModelCatalogs.install`: downloads a build of the model, whatever of it is missing, and resolves `undefined`. `build` is the build's catalogue id (`ModelBuild.id`, `whisper-small/sherpa-onnx-int8`), `engine` its engine id (`backend`); either or both (below), or neither for the build the catalogue recommends here (`recommendedBuild`). `onProgress({fraction, done, total})` about twice a second, only with this call's own bytes (below). `signal`, an `AbortSignal`, cancels it, waiting or running: it rejects `{code: "install-cancelled", key: "install_cancelled", message}` and the model is not on disk afterwards (unless it already was before the install); a signal already aborted rejects so at once, and nothing reaches the app. Any other refusal rejects `{key, code, message, …params}` (below) |
@@ -234,7 +245,8 @@ models is the voice call's (below), never the page's. `window.__sidevoiceDesktop
   `install_cancelled`, never `download_failed`. There is no overall download timeout: a slow line is not a failure,
   and the cancel is how a person stops one.
 - Commands behind it (`src-tauri/src/engine_ipc.rs`): `engine_catalogs`, `engine_set_credential {provider, key}`,
-  `engine_has_credential {provider}`, `engine_capabilities`, `engine_installed`,
+  `engine_has_credential {provider}`, `engine_test_credential {provider, key}` (the reason with its `detail?`, or
+  `null`), `engine_refresh {provider}`, `engine_capabilities`, `engine_installed`,
   `engine_install {model, build, engine, job}` (`build` and `engine` each a string or `null`) with
   `engine_progress {job}` (`{job, model, engine, done, total, bytes_per_s}` — the job's bytes and its speed, `null`
   until a second is measured — or `null` while the job waits or after it ends), `engine_cancel {job}` (what the
@@ -283,12 +295,14 @@ sidevoice-engine itself fails with is one of these keys, with the engine's own c
 | `voice_model_unknown` | `code` (`model-unknown`), `model` | a slot names a model its catalogue does not list for that task |
 | `voice_model_unfit` | `code` (`model-unfit`), `model` | a local model with no build that runs on this device |
 | `voice_catalog_not_found` | `code` (`catalog-not-found`), `model` | a slot names a catalogue the engine does not have |
+| `voice_build_not_found` | `code` (`build-not-found`), `model` | a local slot's `build` is not a build of its model |
+| `voice_<code>` | `code` (the engine's: `memory`, `backend-not-in-this-build`, ...), `model` | a local slot's `build` does not run on this device |
 | `voice_vad_unavailable` | `code` (`vad-unavailable`) | no local voice activity detector runs on this device |
 | `voice_end_of_turn_unavailable` | `code` (`end-of-turn-unavailable`) | `end_of_turn: "smart-turn"` while no local model that ends turns runs here |
 | `voice_<code>` | `code` (the engine's: `credential-missing`, `credential-rejected`, ...), `model`, `detail` (the provider's words) | a slot names a provider's model while that provider lists nothing |
-| `catalog_not_found` | `code`, `catalog` | `setCredential` for a provider the engine does not have |
+| `catalog_not_found` | `code`, `catalog` | `setCredential`, `testCredential` or `refresh` for a provider the engine does not have |
 | `provider_invalid` | `provider` | not a provider id (lowercase letters, digits and dashes) |
-| `credentials_unavailable` | — | `setCredential` where the app keeps no keys (Windows, Linux) |
+| `credentials_unavailable` | — | `setCredential` or `testCredential` where the app keeps no keys (Windows, Linux) |
 | `credentials_failed` | — | the keychain would not keep, remove or read a key |
 | `voice_settings_missing` | `code` (`settings-missing`) | a call of `host.voice` before its first `setSettings` |
 | `voice_failed` | `code` (the call's: `microphone-denied`, `audio-device-unavailable`, the engine's `model-load-failed`, …, or `stopped`) | the call could not start, or was stopped before it listened |
@@ -322,15 +336,21 @@ here: a change is made there, and both sides follow.
 
 What is this app's own:
 
-- `setSettings` takes each slot as a model of a catalogue: `stt: {catalog, model, language}`, `tts: {catalog, model,
-  voice, speed}`, with `patience`, `end_of_turn` and `idle_unload_minutes` (core `voice.rs`; no `build`: an unknown
-  key is refused). Each slot is loaded as `engine.catalog(catalog).load(model)`, which picks the build. The app adds
-  the voice activity detector, the local catalogue's (family `silero-vad`, else another local `vad` that runs), and,
-  for `smart-turn`, the local catalogue's first model that ends turns. A change of a slot's catalogue or model, or of
-  `end_of_turn`, gives a call that listens other models at once (it restarts on them); `language`, `voice`, `speed`,
-  `patience` and `idle_unload_minutes` apply live. It rejects with the app's keyed refusals (above), each with the
-  `code` the page translates (`model-unknown`, `model-unfit`, `catalog-not-found`, `vad-unavailable`,
-  `end-of-turn-unavailable`, or the engine's own with the provider's `detail`).
+- `setSettings` takes the web's settings (sidevoice-web `voice-settings.js`, `DeviceVoiceSettings`), each slot a model
+  of a catalogue: `stt: {catalog, model, language, build?}`, `tts: {catalog, model, voice, speed, build?}`, with
+  `patience`, `end_of_turn`, `idle_unload_minutes` and `turn_model?` (core `voice.rs`; any other key is refused).
+  A slot is loaded as `engine.catalog(catalog).load(model)`, which picks the build, or, for a local model with a
+  `build` (Settings, "How it runs"; an empty one names none), as that build (`engine.load(model, build)`): once the
+  model is found and runs here (else `model-unknown`, `model-unfit`), the build must be one of its builds
+  (`build-not-found`) and run here (else the engine's code for why not, `memory`, ...). A provider's model has no
+  builds, and a `build` named for one is not looked at, as on the web. The app adds the voice activity detector, the
+  local catalogue's (family `silero-vad`, else another local `vad` that runs), and, for `smart-turn`, the local model
+  that ends turns `turn_model` names when it runs here, else (as on the web) the first that does. A change of a slot's
+  catalogue, model or build, of `end_of_turn` or of the model that ends turns gives a call that listens other models at
+  once (it restarts once on them); `language`, `voice`, `speed`, `patience` and `idle_unload_minutes` apply live.
+  It rejects with the app's keyed refusals (above), each with the `code` the page translates (`model-unknown`,
+  `model-unfit`, `catalog-not-found`, `build-not-found`, `vad-unavailable`, `end-of-turn-unavailable`, or the
+  engine's own with the provider's `detail`).
 - `start` rejects `{key: "voice_failed", code, message}` with the call's code, `{key: "voice_settings_missing", code:
   "settings-missing"}` before any settings, and `{key: "voice_failed", code: "stopped"}` when `stop` came first.
 - The seam has thirteen calls: `setSettings`, `start`, `stop`, `say`, `mute`, `cancelInput`, `onTurn`, `onState`,
@@ -358,7 +378,8 @@ What is this app's own:
   `event` sidevoice-voice's `SayEvent`, the last `done` with the outcome), which it hands to that handle. A handle's
   `cancel` goes behind its `voice_say`, so it never overtakes it.
 - Keys: `host.engine.setCredential` writes the macOS keychain (`src-tauri/src/keychain.rs`), and the engine reads it
-  when a provider is listed, or its model loaded or called.
+  when a provider is listed, or its model loaded or called. `host.engine.testCredential` writes nothing: its key goes
+  only to a trial engine of its own.
 
 ## Changing the bridge
 
