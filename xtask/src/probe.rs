@@ -6,7 +6,7 @@
 use std::fs;
 use std::path::Path;
 
-use crate::macos::{app_command, binary, fake_node, AppData, PROBE_ONLY, TRIPLE};
+use crate::macos::{app_command, binary, fake_node, AppHome, PROBE_ONLY, TRIPLE};
 use crate::util::{
     contains, ensure, grep, has, line_count, lines_after, mode, re, read, read_bytes, repo, sleep, wait_for, work, Cmd,
     TauriBuild,
@@ -16,9 +16,8 @@ use crate::Result;
 /// `macos probe-app`: the app built with the `probe` feature, over the release app's place; it does carry the page
 /// and its switch (so the release app's check for them means something).
 pub fn probe_app() -> Result<()> {
-    TauriBuild { target: Some(TRIPLE), bundles: "app", features: Some("probe"), ..TauriBuild::default() }
-        .command()
-        .run()?;
+    let build = TauriBuild { target: Some(TRIPLE), bundles: "app", features: Some("probe"), ..TauriBuild::default() };
+    crate::macos::unsigned(build.command()).run()?;
     let bytes = read_bytes(&binary())?;
     for marker in PROBE_ONLY {
         ensure(contains(&bytes, marker), format!("the probe build does not carry {marker}"))?;
@@ -81,12 +80,15 @@ pub fn local_host() -> Result<()> {
     let (core_log, app_log) = (logs.join("lh-core.log"), logs.join("lh.log"));
     let mut core = Cmd::new(&tool).arg("core").arg(home.join(".sidevoice")).env("HOME", home).spawn(&core_log)?;
     for _ in 0..50 {
-        if home.join(".sidevoice/core/local.sock").exists() {
+        if crate::util::is_socket(&home.join(".sidevoice/core/local.sock")) {
             break;
         }
         sleep(0.2);
     }
-    let mut app = app_command(&[("SIDEVOICE_DEBUG_LOCAL_HOST_FLOW", "1")]).env("HOME", home).spawn(&app_log)?;
+    let mut app = app_command(&[("SIDEVOICE_DEBUG_LOCAL_HOST_FLOW", "1")])
+        .env("HOME", home)
+        .env_remove("SIDEVOICE_DATA_DIR")
+        .spawn(&app_log)?;
     wait_for(&app_log, "local-host-flow (ok|error)", 0, 120);
     let port = proxy_port(&read(&app_log)).unwrap_or_default();
     let mut failed = Vec::new();
@@ -133,14 +135,15 @@ pub fn local_host() -> Result<()> {
     ensure(bits == 0o600, format!("{} is {bits:o}, not 600", store.display()))
 }
 
-/// The checks on the probe page's `probe-engine ok` line: the native engine inside the app, through the bridge the
+/// The checks on the probe page's `probe-engine ok` line (each pattern matched line by line, as grep did, when there
+/// are several): the native engine inside the app, through the bridge the
 /// interface uses (docs/BRIDGE.md): capabilities with the OS's real memory (the CPU for sherpa-onnx, Metal for
 /// whisper.cpp, never Core ML; remote providers are catalogues of their own), downloads with progress in the web's
 /// shape (by build id, by engine, by nothing), the builds on disk by model + engine, a page engine refused rather
 /// than replaced, a download cancelled by its AbortSignal (one already aborted never starts), and removing a model
 /// (by key and code).
 pub fn check_engine_line(line: &str) -> Result<()> {
-    let must = |pattern: &str| ensure(re(pattern).is_match(line), format!("probe-engine: no {pattern}"));
+    let must = |pattern: &str| ensure(has(line, pattern), format!("probe-engine: no {pattern}"));
     must(r#"capabilities=\{"runs":"native","os":"macos","arch":"aarch64","has":\["#)?;
     for accelerator in ["cpu", "metal"] {
         must(&format!(r#""has":\[[^\]]*"{accelerator}""#))?;
@@ -163,7 +166,7 @@ pub fn check_engine_line(line: &str) -> Result<()> {
 /// settles: listening, or refused only for want of a microphone or a speaker here. Returns the build and the
 /// end-of-turn model the web's settings named.
 pub fn check_voice_line(line: &str) -> Result<(String, String)> {
-    let must = |pattern: &str| ensure(re(pattern).is_match(line), format!("probe-voice: no {pattern}"));
+    let must = |pattern: &str| ensure(has(line, pattern), format!("probe-voice: no {pattern}"));
     must(" keys=13 ")?;
     must(" devices=[0-9]+/[0-9]+/true unknown_device=voice_audio_device_unknown/audio-device-unknown ")?;
     // The local catalogue first; a provider with no key lists nothing and says so.
@@ -171,8 +174,9 @@ pub fn check_voice_line(line: &str) -> Result<(String, String)> {
     must(" models=[1-9][0-9]* vad=true unknown=voice_model_unknown/model-unknown ")?;
     // The web's settings: a build of the model (one not its own refused by code) and the end-of-turn model chosen.
     must(" bad_build=voice_build_not_found/build-not-found ")?;
-    let build = last_word_after(line, "build");
-    let turn = last_word_after(line, "turn_model");
+    let first = line.lines().next().unwrap_or_default();
+    let build = last_word_after(first, "build");
+    let turn = last_word_after(first, "turn_model");
     ensure(build != "none" && turn != "none", format!("no build ({build}) or end-of-turn model ({turn}) chosen"))?;
     must(" start=(ok|voice_failed/(microphone-unavailable|microphone-denied|speaker-unavailable|audio-device-unavailable|audio-device-failed)) ")?;
     Ok((build, turn))
@@ -189,11 +193,11 @@ pub fn last_word_after(line: &str, key: &str) -> String {
 /// native engine ([`check_engine_line`]) and its storage, the voice call ([`check_voice_line`]) and its settings,
 /// and the headset's buttons.
 pub fn probe() -> Result<()> {
-    let data = AppData::set_aside()?;
+    let data = AppHome::new("probe")?;
     let logs = work("probe")?;
     let (node_log, log) = (logs.join("probe-node.log"), logs.join("probe.log"));
     let mut node = fake_node(&node_log)?;
-    let mut app = app_command(&[("SIDEVOICE_DEBUG_PAGE", "probe.html")]).spawn(&log)?;
+    let mut app = data.app(&[("SIDEVOICE_DEBUG_PAGE", "probe.html")]).spawn(&log)?;
     wait_for(&log, "probe-voice", 0, 480);
     app.stop();
     let text = read(&log);
@@ -363,7 +367,7 @@ impl Card {
 /// and hang-up buttons clicked, and each of a call's states (screenshots into card-shots/). Every check runs; it
 /// fails at the end with each that did not hold.
 pub fn card() -> Result<()> {
-    let _data = AppData::set_aside()?;
+    let home = AppHome::new("card")?;
     let dir = work("card")?;
     let shots = repo().join("card-shots");
     crate::util::mkdir(&shots)?;
@@ -395,13 +399,12 @@ pub fn card() -> Result<()> {
     };
     // A call walked through the card's states (test/fixtures/card-probe.html); this page answers its buttons. Each
     // line with the time, to order it against the editor's and the input's.
-    let mut app = app_command(&[("SIDEVOICE_DEBUG_PAGE", "card-probe.html")]).spawn_timed(&card.log)?;
+    let mut app = home.app(&[("SIDEVOICE_DEBUG_PAGE", "card-probe.html")]).spawn_timed(&card.log)?;
     card.pid = app.pid().to_string();
     let walked = walk(&mut card);
     app.stop();
-    if !card.editor.is_empty() {
-        crate::util::terminate(card.editor.parse().unwrap_or(0));
-    }
+    // By its binary, so it goes even when it never said its pid.
+    let _ = Cmd::new("pkill").arg("-f").arg(card.editor_app.join("Contents/MacOS/Editor")).attempt();
     eprintln!("--- app\n{}", grep(&read(&card.log), "call-controls|probe-card").join("\n"));
     eprintln!("--- editor\n{}", read(&card.editor_log));
     walked?;
@@ -601,6 +604,9 @@ mod tests {
         assert!(check_engine_line(&ENGINE.replace("progress_calls=12", "progress_calls=0")).is_err());
         assert!(check_engine_line(&ENGINE.replace("done+fraction", "done fraction")).is_err());
         assert!(check_engine_line(&ENGINE.replace("refused=yes", "refused=no")).is_err());
+        // A pattern never spans two lines.
+        let split = ENGINE.replace(r#""cpu","metal""#, "\"cpu\"\n\"metal\"]");
+        assert!(check_engine_line(&split).is_err());
     }
 
     #[test]

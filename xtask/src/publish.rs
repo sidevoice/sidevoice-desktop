@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use crate::util::{ensure, files, fresh_dir, name, repo, version, write, Cmd};
+use crate::util::{ensure, files, name, repo, version, write, Cmd};
 use crate::Result;
 
 /// The installers a run publishes, by how their names end; and the kinds (extensions) every publication must hold
@@ -82,7 +82,9 @@ pub fn assemble(kind: &str) -> Result<()> {
     };
     let version = version()?;
     let assets = assets();
-    fresh_dir(&assets)?;
+    // As `mkdir assets` did: never over an earlier one.
+    ensure(!assets.exists(), format!("{} is there already: remove it first", assets.display()))?;
+    crate::util::mkdir(&assets)?;
     for file in all_files(&artifacts())? {
         let built = name(&file);
         if is_installer(&built) {

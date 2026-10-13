@@ -81,6 +81,7 @@ pub fn two_users() -> Result<()> {
         Cmd::new("sudo").args(["useradd", "--create-home", OTHER]).run()?;
     }
     let (data, app_dir, port_file, log) = (dir.join("d"), dir.join("app"), dir.join("port"), dir.join("serve.log"));
+    let _ = fs::remove_file(&port_file);
     let mut serve = Cmd::new(&tool).arg("serve").arg(&data).arg(&app_dir).arg(&port_file).spawn(&log)?;
     for _ in 0..50 {
         if fs::metadata(&port_file).is_ok_and(|m| m.len() > 0) {

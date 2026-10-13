@@ -48,9 +48,13 @@
 //! - `macos voice-models`: a call on the engine's real models through the app's adapter (the ignored tests).
 //! - `macos card`: on the probe app, the call controls card over a full-screen editor (screenshots into card-shots/).
 //!
-//! The commands that start the app with the person's home (`first-open`, `with-target`, `probe`, `card`) use the
-//! app's own settings and data as a fresh runner has them; off a runner (`CI` is not `true`) they move this machine's
-//! aside first and put them back after.
+//! The commands that start the app (`first-open`, `with-target`, `probe`, `card`) run it with the runner's home on a
+//! runner; off one (`CI` is not `true`), with a scratch home (`/tmp/svx-<step>`) and no `SIDEVOICE_DATA_DIR`, so
+//! this machine's own settings, pairing, local core and models are never touched (`local-host` always has its own,
+//! /tmp/svhome). `probe` expects no provider key in the login keychain, as on a runner. Unsigned and probe builds
+//! drop every `APPLE_*` signing variable. Ctrl-C or SIGTERM stops the running program and unwinds: secret files,
+//! keychains, mounts and background programs are removed; after a hard kill, `macos forget-secrets` removes what
+//! signing left.
 //!
 //! Publishing (the `publish` job; publish.rs), `gh` with `GH_TOKEN` and `GH_REPO`:
 //!
@@ -93,6 +97,7 @@ fn macos(command: &str, step: fn() -> Result<()>) -> Result<()> {
 }
 
 fn main() -> ExitCode {
+    util::on_interrupt();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let result = match args.as_slice() {

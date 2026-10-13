@@ -38,7 +38,10 @@ secrets into the environment of the steps that need them, choose which steps run
   `release-pr-checks` and `release-pr-title`.
 
 On a laptop, `npm ci` first. The `macos` commands that start the app (`first-open`, `with-target`, `probe`,
-`card`) move this machine's own app settings and data aside while they run and put them back after.
+`card`) run it off a runner with a scratch home (`/tmp/svx-<step>`), never with this machine's own settings,
+pairing, local core or models; `probe` expects no provider key in the login keychain, as on a runner. Unsigned and
+probe builds ignore any `APPLE_*` variables in the environment. Ctrl-C unwinds cleanly; if a signing step was
+killed outright, `cargo xtask macos forget-secrets` removes its keychain and key files.
 
 ## Which version comes next
 

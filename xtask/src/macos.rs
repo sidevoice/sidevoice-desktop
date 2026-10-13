@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::util::{
     contains, copy_dir, ensure, fresh_dir, in_ci, mkdir, private_file, random_hex, read, read_bytes, repo,
-    required_env, secret_path, sleep, version, wait_for, work, Cmd, SecretDir, TauriBuild,
+    required_env, secret_path, sleep, version, wait_for, work, Cmd, PrivateFiles, SecretDir, TauriBuild,
 };
 use crate::Result;
 
@@ -54,48 +54,37 @@ pub fn fake_node(log: &Path) -> Result<crate::util::Background> {
     Cmd::new("python3").args(["-u", "test/fixtures/fake-node.py", FAKE_NODE_PORT]).spawn(log)
 }
 
-/// The app's own settings and data while a step starts the app with the person's home. On a runner (`CI=true`) the
-/// step uses them as a fresh machine has them, and leaves them as the YAML did. Elsewhere they are moved aside
-/// first and put back after, whatever happens, so that a laptop's own settings, pairing and models are untouched.
-pub struct AppData {
+/// The home a step starts the app with. On a runner (`CI=true`): the person's, the app's settings and data as a
+/// fresh machine has them, as the YAML did. Elsewhere: a scratch home of the step's own (`/tmp/svx-<step>`, short: a
+/// Unix socket's path is at most 104 bytes), made empty first, with `SIDEVOICE_DATA_DIR` unset, so that a laptop's own
+/// settings, pairing, local core and models are never touched. (The app's provider keys are in the login keychain,
+/// which a home does not change: `probe` expects none there, as on a runner.)
+pub struct AppHome {
+    pub home: PathBuf,
+    /// The app's settings and data under [`AppHome::home`].
     pub dir: PathBuf,
-    saved: Option<PathBuf>,
-    laptop: bool,
+    scratch: bool,
 }
 
-impl AppData {
-    pub fn set_aside() -> Result<AppData> {
-        let dir = app_data(&home()?);
+impl AppHome {
+    pub fn new(step: &str) -> Result<AppHome> {
         if in_ci() {
-            return Ok(AppData { dir, saved: None, laptop: false });
+            let home = home()?;
+            return Ok(AppHome { dir: app_data(&home), home, scratch: false });
         }
-        let saved = dir.with_file_name(format!("{IDENTIFIER}.xtask-saved"));
-        ensure(!saved.exists(), format!("{} is there from an earlier run: put it back first", saved.display()))?;
-        let saved = if dir.exists() {
-            fs::rename(&dir, &saved).map_err(|e| format!("{}: {e}", dir.display()))?;
-            eprintln!("(the app's own data is in {} until this step ends)", saved.display());
-            Some(saved)
-        } else {
-            None
-        };
-        Ok(AppData { dir, saved, laptop: true })
+        let home = PathBuf::from("/tmp").join(format!("svx-{step}"));
+        fresh_dir(&home)?;
+        eprintln!("(off a runner: the app runs with HOME={}, this machine's own data untouched)", home.display());
+        Ok(AppHome { dir: app_data(&home), home, scratch: true })
     }
-}
 
-impl Drop for AppData {
-    fn drop(&mut self) {
-        if !self.laptop {
-            return;
-        }
-        let _ = fs::remove_dir_all(&self.dir);
-        if let Some(saved) = &self.saved {
-            if let Err(error) = fs::rename(saved, &self.dir) {
-                eprintln!(
-                    "could not put the app's data back: move {} to {}: {error}",
-                    saved.display(),
-                    self.dir.display()
-                );
-            }
+    /// The app's binary with this home, its diagnostics on, with `env`.
+    pub fn app(&self, env: &[(&str, &str)]) -> Cmd {
+        let cmd = app_command(env);
+        if self.scratch {
+            cmd.env("HOME", &self.home).env_remove("SIDEVOICE_DATA_DIR")
+        } else {
+            cmd
         }
     }
 }
@@ -121,14 +110,53 @@ fn notary_key(dir: &SecretDir) -> Result<PathBuf> {
 pub fn build_app(signed: bool) -> Result<()> {
     let build = TauriBuild { target: Some(TRIPLE), bundles: "app", ..TauriBuild::default() };
     if !signed {
-        return build.command().run();
+        return unsigned(build.command()).run();
     }
     for name in ["APPLE_SIGNING_IDENTITY", "APPLE_API_KEY", "APPLE_API_ISSUER"] {
         required_env(name)?;
     }
+    forget_secrets()?;
+    let _private = PrivateFiles::start();
     let secrets = SecretDir::new(NOTARY)?;
     let key = notary_key(&secrets)?;
-    build.command().env("APPLE_API_KEY_PATH", &key).run()
+    // The bundler imports the certificate into a keychain of its own, which it adds to the search list and removes
+    // when done; one it left (a build that failed half-way) is removed here.
+    let before = user_keychains()?;
+    let built = build.command().env("APPLE_API_KEY_PATH", &key).run();
+    for left in user_keychains()?.into_iter().filter(|k| !before.contains(k)) {
+        let _ = Cmd::new("security").arg("delete-keychain").arg(&left).attempt();
+    }
+    built
+}
+
+/// The signing and notarization variables a build would otherwise read: an unsigned or probe build never signs with
+/// the Developer ID, whatever this machine's environment holds (tauri.conf.json's ad-hoc identity then applies).
+const SIGNING_ENV: &[&str] = &[
+    "APPLE_CERTIFICATE",
+    "APPLE_CERTIFICATE_PASSWORD",
+    "APPLE_SIGNING_IDENTITY",
+    "APPLE_ID",
+    "APPLE_PASSWORD",
+    "APPLE_TEAM_ID",
+    "APPLE_API_KEY",
+    "APPLE_API_ISSUER",
+    "APPLE_API_KEY_PATH",
+    "APPLE_API_KEY_P8",
+];
+
+/// `cmd` without [`SIGNING_ENV`].
+pub fn unsigned(cmd: Cmd) -> Cmd {
+    SIGNING_ENV.iter().fold(cmd, |cmd, name| cmd.env_remove(name))
+}
+
+/// The user's keychain search list (`security list-keychains -d user`).
+fn user_keychains() -> Result<Vec<String>> {
+    Ok(keychain_list(&Cmd::new("security").args(["list-keychains", "-d", "user"]).stdout()?))
+}
+
+/// The paths in `security list-keychains`' output: one per line, indented and quoted.
+pub fn keychain_list(text: &str) -> Vec<String> {
+    text.lines().map(|line| line.trim().trim_matches('"').to_owned()).filter(|path| !path.is_empty()).collect()
 }
 
 /// What `codesign -dvvv` says of a signature, as far as the checks go.
@@ -290,9 +318,9 @@ const ICON_SIZES: [&str; 10] = [
 /// attached to the real web UI's store and actions and reaching the app over IPC; asking for the probe page changes
 /// nothing in a release.
 pub fn first_open() -> Result<()> {
-    let _data = AppData::set_aside()?;
+    let home = AppHome::new("first-open")?;
     let log = work("first-open")?.join("app.log");
-    let mut app = app_command(&[("SIDEVOICE_DEBUG_PAGE", "probe.html")]).spawn(&log)?;
+    let mut app = home.app(&[("SIDEVOICE_DEBUG_PAGE", "probe.html")]).spawn(&log)?;
     wait_for(&log, "ready: true", 0, 45);
     sleep(5.0);
     if !app.running() {
@@ -310,8 +338,8 @@ pub fn first_open() -> Result<()> {
 /// `macos with-target`: with a target (the stand-in node on loopback), the interface asks it from the app's own
 /// origin (cross-origin), with no pairing yet.
 pub fn with_target() -> Result<()> {
-    let data = AppData::set_aside()?;
-    let conf = &data.dir;
+    let home = AppHome::new("with-target")?;
+    let conf = &home.dir;
     mkdir(conf)?;
     crate::util::write(
         &conf.join("settings.json"),
@@ -320,7 +348,7 @@ pub fn with_target() -> Result<()> {
     let dir = work("with-target")?;
     let (node_log, app_log) = (dir.join("node.log"), dir.join("target.log"));
     let mut node = fake_node(&node_log)?;
-    let mut app = app_command(&[]).spawn(&app_log)?;
+    let mut app = home.app(&[]).spawn(&app_log)?;
     wait_for(&app_log, "ready: true", 0, 45);
     sleep(5.0);
     app.stop();
@@ -365,7 +393,12 @@ pub fn dmg(signed: bool) -> Result<()> {
         .args(["-cathidpicheck", "src-tauri/dmg/background.png", "src-tauri/dmg/background@2x.png", "-out"])
         .arg(&background)
         .run()?;
-    mkdir(&repo().join("dist"))?;
+    // No older image beside this one, to be checksummed or uploaded with it.
+    let dist = repo().join("dist");
+    mkdir(&dist)?;
+    for old in crate::util::files(&dist)?.into_iter().filter(|p| crate::util::name(p).ends_with(".dmg")) {
+        fs::remove_file(&old).map_err(|e| format!("{}: {e}", old.display()))?;
+    }
     let dmg = dmg_path()?;
     Cmd::new(venv.join("bin/dmgbuild"))
         .args(["-s", "scripts/dmg-settings.py"])
@@ -415,8 +448,9 @@ impl Mount {
     }
 
     fn detach(mut self) -> Result<()> {
+        Cmd::new("hdiutil").arg("detach").arg(&self.path).run()?;
         self.attached = false;
-        Cmd::new("hdiutil").arg("detach").arg(&self.path).run()
+        Ok(())
     }
 }
 
@@ -482,6 +516,8 @@ impl Drop for Keychain {
 /// download without a word; then the image and the app inside it checked as a download has them. The keychain, the
 /// certificate file and the key file are removed when it ends, whatever happened.
 pub fn sign_dmg() -> Result<()> {
+    forget_secrets()?;
+    let _private = PrivateFiles::start();
     let identity = required_env("APPLE_SIGNING_IDENTITY")?;
     let key_id = required_env("APPLE_API_KEY")?;
     let issuer = required_env("APPLE_API_ISSUER")?;
@@ -571,6 +607,8 @@ pub fn dmg_screens() -> Result<()> {
     let attached = Cmd::new("hdiutil").args(["attach", "-readonly"]).arg(&dmg).output()?;
     eprintln!("{attached}");
     let volume = crate::util::re("/Volumes/.*").find(&attached).map(|m| m.as_str().to_owned()).unwrap_or_default();
+    // The appearance as it was, put back at the end (it matters on a laptop).
+    let dark = osa(&["tell application \"System Events\" to tell appearance preferences to get dark mode"]);
     for mode in ["false", "true"] {
         let _ = osa(&[&format!(
             "tell application \"System Events\" to tell appearance preferences to set dark mode to {mode}"
@@ -595,6 +633,12 @@ pub fn dmg_screens() -> Result<()> {
         }
     }
     let _ = osa(&["tell application \"Finder\" to close every window"]);
+    if let Ok(dark) = dark {
+        let dark = dark.trim();
+        let _ = osa(&[&format!(
+            "tell application \"System Events\" to tell appearance preferences to set dark mode to {dark}"
+        )]);
+    }
     let _ = Cmd::new("hdiutil").arg("detach").arg(&volume).run();
     Cmd::new("ls").arg("-la").arg(&screens).run()
 }
@@ -684,6 +728,21 @@ TeamIdentifier=AB12CD34EF
         assert_eq!(region("0,28,1440,900").as_deref(), Some("0,0,1440,900"));
         assert_eq!(region("missing value"), None);
         assert_eq!(region("1,2,3"), None);
+    }
+
+    #[test]
+    fn the_keychain_list_is_read_unquoted() {
+        let out =
+            "    \"/Users/me/Library/Keychains/login.keychain-db\"\n    \"/private/var/folders/x/T/abc.keychain-db\"\n";
+        assert_eq!(
+            keychain_list(out),
+            ["/Users/me/Library/Keychains/login.keychain-db", "/private/var/folders/x/T/abc.keychain-db"]
+        );
+    }
+
+    #[test]
+    fn an_unsigned_build_drops_every_signing_variable() {
+        assert!(SIGNING_ENV.contains(&"APPLE_SIGNING_IDENTITY") && SIGNING_ENV.contains(&"APPLE_API_KEY_P8"));
     }
 
     #[test]

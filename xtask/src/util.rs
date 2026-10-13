@@ -6,6 +6,7 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -88,6 +89,36 @@ pub fn sleep(seconds: f64) {
     thread::sleep(Duration::from_secs_f64(seconds));
 }
 
+static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+
+/// Ctrl-C (SIGINT) or SIGTERM (a cancelled CI run) no longer ends the xtask on the spot: the program it runs gets the
+/// signal too and stops, the xtask then starts nothing more ([`interrupted`]) and unwinds, and its guards remove what
+/// they hold (secret files, keychains, mounts, programs in the background). After a SIGKILL nothing can:
+/// `cargo xtask macos forget-secrets` removes what signing left.
+#[cfg(unix)]
+pub fn on_interrupt() {
+    extern "C" {
+        fn signal(signum: i32, handler: usize) -> usize;
+    }
+    extern "C" fn flag(_: i32) {
+        INTERRUPTED.store(true, Ordering::SeqCst);
+    }
+    // SAFETY: the handler only stores to an atomic, which is async-signal-safe. SIGINT is 2 and SIGTERM 15 on Linux
+    // and macOS.
+    unsafe {
+        signal(2, flag as extern "C" fn(i32) as usize);
+        signal(15, flag as extern "C" fn(i32) as usize);
+    }
+}
+
+#[cfg(not(unix))]
+pub fn on_interrupt() {}
+
+/// `Err` once the xtask was interrupted: nothing more is started.
+pub fn interrupted() -> Result<()> {
+    ensure(!INTERRUPTED.load(Ordering::SeqCst), "interrupted")
+}
+
 /// Whether this runs on a CI runner (GitHub Actions sets `CI=true`): a machine discarded after the job.
 pub fn in_ci() -> bool {
     std::env::var("CI").is_ok_and(|ci| ci == "true")
@@ -154,12 +185,18 @@ impl Cmd {
         self
     }
 
+    pub fn env_remove(mut self, key: impl AsRef<OsStr>) -> Cmd {
+        self.command.env_remove(key);
+        self
+    }
+
     pub fn shown(&self) -> String {
         self.shown.join(" ")
     }
 
     /// Runs it, its output going through; fails unless it succeeds.
     pub fn run(mut self) -> Result<()> {
+        interrupted()?;
         let what = self.shown();
         eprintln!("$ {what}");
         let status = self.command.status().map_err(|e| format!("{what}: {e}"))?;
@@ -187,6 +224,7 @@ impl Cmd {
 
     /// Runs it with `input` on its standard input and its standard output into `out`; fails unless it succeeds.
     pub fn pipe(mut self, input: &[u8], out: File) -> Result<()> {
+        interrupted()?;
         let what = self.shown();
         eprintln!("$ {what} < (input) > (file)");
         let mut child =
@@ -198,6 +236,7 @@ impl Cmd {
     }
 
     fn capture(mut self, with_stderr: bool) -> Result<(bool, String, String)> {
+        interrupted()?;
         let what = self.shown();
         eprintln!("$ {what}");
         if !with_stderr {
@@ -213,6 +252,7 @@ impl Cmd {
 
     /// Starts it in the background, its standard output and error both into `log` (created empty).
     pub fn spawn(mut self, log: &Path) -> Result<Background> {
+        interrupted()?;
         let what = self.shown();
         let file = File::create(log).map_err(|e| format!("{}: {e}", log.display()))?;
         let err = file.try_clone().map_err(|e| e.to_string())?;
@@ -230,6 +270,7 @@ impl Cmd {
     /// Starts it in the background, each line it writes (either stream) into `log` with the time before it
     /// (`<seconds since 1970, to the hundredth> <line>`), to order it against other logs.
     pub fn spawn_timed(mut self, log: &Path) -> Result<Background> {
+        interrupted()?;
         let what = self.shown();
         let file = Arc::new(Mutex::new(File::create(log).map_err(|e| format!("{}: {e}", log.display()))?));
         eprintln!("$ {what} > (timed) {} 2>&1 &", log.display());
@@ -360,7 +401,7 @@ pub fn wait_for(log: &Path, pattern: &str, after: usize, seconds: u64) -> bool {
         if lines_after(&read(log), after).any(|line| pattern.is_match(line)) {
             return true;
         }
-        if Instant::now() >= deadline {
+        if Instant::now() >= deadline || interrupted().is_err() {
             return false;
         }
         sleep(1.0);
@@ -488,6 +529,61 @@ fn private_dir(_: &Path) -> Result<()> {
 #[cfg(not(unix))]
 pub fn private_file(_: &Path) -> Result<File> {
     Err("secrets are only written on macOS".into())
+}
+
+/// While it lives, files this process and its children create are private to this user (umask 077), whatever the
+/// person's umask: Tauri's bundler writes the certificate it decodes with plain file creation.
+pub struct PrivateFiles {
+    #[cfg(unix)]
+    before: ModeT,
+}
+
+#[cfg(target_os = "macos")]
+type ModeT = u16;
+#[cfg(all(unix, not(target_os = "macos")))]
+type ModeT = u32;
+
+impl PrivateFiles {
+    pub fn start() -> PrivateFiles {
+        #[cfg(unix)]
+        {
+            extern "C" {
+                fn umask(mask: ModeT) -> ModeT;
+            }
+            // SAFETY: umask only swaps the process's file mode mask.
+            let before = unsafe { umask(0o077) };
+            PrivateFiles { before }
+        }
+        #[cfg(not(unix))]
+        PrivateFiles {}
+    }
+}
+
+impl Drop for PrivateFiles {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            extern "C" {
+                fn umask(mask: ModeT) -> ModeT;
+            }
+            // SAFETY: as in new; the mask comes from umask itself.
+            unsafe { umask(self.before) };
+        }
+    }
+}
+
+/// Whether `path` is a Unix socket (`test -S`).
+pub fn is_socket(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileTypeExt;
+        fs::metadata(path).is_ok_and(|m| m.file_type().is_socket())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        false
+    }
 }
 
 /// The permission bits of `path` (`stat -f %Lp`), on Unix.
