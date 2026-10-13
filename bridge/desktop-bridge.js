@@ -81,6 +81,14 @@
         coded(call("engine_set_credential", { provider, key: key == null ? null : String(key) })).then(() => undefined),
       /** Whether the keychain holds a key for `provider`. The key itself never reaches the page. */
       hasCredential: (provider) => coded(call("engine_has_credential", { provider })),
+      /** Asks `provider` with `key` without keeping it (never in the keychain, never in the listings the app keeps):
+       *  what its catalogue says against it, `{code, params, detail?}` (`credential-rejected`, …; `detail` the
+       *  provider's own words, without the key, at most 300 characters), or null when it lists with it.
+       *  The kept key and its listing are as they were. */
+      testCredential: (provider, key) =>
+        coded(call("engine_test_credential", { provider, key: String(key ?? "") })).then((reason) => reason ?? null),
+      /** Asks `provider` again now, past any listing kept, with the key the keychain has. */
+      refresh: (provider) => coded(call("engine_refresh", { provider })).then(() => undefined),
       /** `{runs: "native", os, arch, has: ["cpu", "metal", …], memory_mb}` (`memory_mb` null when unknown). */
       capabilities: () => call("engine_capabilities"),
       /** `[{model, engine}]`: the builds already on disk. */
@@ -120,6 +128,10 @@
           if (signal) signal.removeEventListener("abort", abort);
         })).then(() => undefined);
       },
+      /** Takes `model` off this computer, every build of it; resolves `undefined` (also when none was on disk).
+       *  Rejects with a refusal whose `code` the page reads: `model-in-use` while the voice call holds it,
+       *  `model-installing` while an install of it is waiting or running (abort its signal first), `model-not-found`. */
+      uninstall: (model) => coded(call("engine_uninstall", { model })).then(() => undefined),
       /** `{total_mb, available_mb}` (each null when unknown). */
       memory: () => call("engine_memory"),
     };
@@ -236,7 +248,7 @@
   /** This computer's own core, the local host (docs/LOCAL_HOST.md): its state, the pairing the page uses to reach it
    *  (through the app's proxy, with this launch's secret — never the device token), and the service's actions. Each
    *  action resolves the state after it (`{state, failure?, core?, product_version, service?, calls?, attempts?, limit?,
-   *  reachable}`) or rejects `{key, message}`.
+   *  installed?, reachable}`) or rejects `{key, message}`.
    *  Only where the app offers a local host (macOS). */
   function localHost() {
     const listeners = new Set();
@@ -255,10 +267,11 @@
         .catch(() => {});
     const action = (name) => () => call("local_host_action", { action: name });
     return {
-      /** `{state, failure?, core?, product_version, service?, calls?, attempts?, limit?, reachable}`; `state` one of
-       *  `absent`, `not-installed`, `stopped-by-person`, `starting`, `backoff`, `running`, `failed`, `service-failed`,
-       *  `refused`, `incompatible`; `product_version` the installed Sidevoice's version (the `sidevoice` package, not
-       *  `core.version`), `null` when unknown or not installed. */
+      /** `{state, failure?, core?, product_version, service?, calls?, attempts?, limit?, installed?, reachable}`; `state`
+       *  one of `absent`, `not-installed`, `stopped-by-person`, `starting`, `backoff`, `running`, `failed`,
+       *  `service-failed`, `refused`, `incompatible`; `product_version` the installed Sidevoice's version (the
+       *  `sidevoice` package, not `core.version`), `null` when unknown or not installed; `installed` whether the service
+       *  starts at the next sign-in (the connector's `start_at_login`), absent when the connector does not say. */
       state: () => call("local_host_state"),
       /** `listener(state)` with the state now, then on every change (polled every 2 s while anyone listens).
        *  Returns `stop`. */
@@ -288,6 +301,14 @@
       restart: action("restart"),
       serviceInstall: action("service-install"),
       serviceUninstall: action("service-uninstall"),
+      /** Whether the service starts at the next sign-in, and only that: a running service keeps running, a stopped one
+       *  stays stopped (the connector's `service login on|off`). `enabled` must be a boolean; anything else rejects
+       *  `{key: "bad_request"}` without running anything. A connector that cannot do it rejects
+       *  `{key: "service.login-unsupported"}`. */
+      setStartAtLogin: (enabled) =>
+        typeof enabled === "boolean"
+          ? call("local_host_action", { action: enabled ? "start-at-login-on" : "start-at-login-off" })
+          : Promise.reject({ key: "bad_request", message: "setStartAtLogin(enabled) takes a boolean." }),
       /** Pairs this app with the core again (after `refused`): never done on its own. */
       reconnect: action("reconnect"),
       /** Shows the core's log in Finder (else the connector's). */

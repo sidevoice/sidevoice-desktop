@@ -85,7 +85,7 @@ else `service status --json`, which computes the same object.
 `reachable` is whether a core answers and the app's pairing with it works; `pairing()` is non-null exactly then,
 whatever `state` says — the page uses the host when `pairing()` is non-null (SEAMS §5).
 
-`state()` → `{state, failure?, core?, product_version, service?, calls?, attempts?, limit?, reachable}`: `failure`
+`state()` → `{state, failure?, core?, product_version, service?, calls?, attempts?, limit?, installed?, reachable}`: `failure`
 as the service reports it (`{key, step, message, at, log_tail, …}`) or the app's own `{key, message}`; `core` `{pid,
 version, api, launch_id}` (the core's own version); `product_version` the installed Sidevoice's version — the
 `sidevoice` package, which bundles the core — as the person knows it («Sidevoice 0.8.1»), `null` when unknown or
@@ -101,6 +101,10 @@ program is asked again only when that resolves to another file (an install, an u
 every 10 s. No `install.json`: `null` at once. An answer that is not `X.Y.Z[-pre][+build]` (as the page accepts it),
 or is longer than 64 characters, is unknown.
 
+`installed` is whether the service starts at the next sign-in: the connector's own `start_at_login` (in `node.status`
+and `service status --json`), as it says it; absent when it does not say (a connector that predates the toggle), never
+inferred from `service` or from the service's own `installed`.
+
 ## Actions
 
 Through `install.json` `command` only — an array of absolute paths, then the subcommand; never a shell, never a PATH
@@ -114,6 +118,7 @@ the group and stays.
 |---|---|---|
 | `start()` / `stop()` / `restart()` | `service start\|stop\|restart --json` | 30 / 45 / 30 s |
 | `serviceInstall()` / `serviceUninstall()` | `service install\|uninstall --json` | 45 s |
+| `setStartAtLogin(enabled)` | `service login on\|off --json` | 45 s |
 | `pairingCode()` | `pair-device --json` → `{code, expires_in, reach}` | 30 s |
 | `pairRoom(url, code)` | `pair <url> <code> --json` → `{room}`, nothing else (the core follows the new credentials) | 60 s |
 | `reconnect()` | a new local pairing over the socket | — |
@@ -121,7 +126,24 @@ the group and stays.
 
 `pairRoom` refuses (`bad_request`) a URL that is not `http(s)://…` or a code with blanks or starting with `-`, so neither
 can become an option. A CLI refusal is its `{key, message}`; the app's own: `cli.unavailable`, `cli.failed`,
-`cli.timeout`, `install.unsafe`, `install.unreadable`, `log.missing`, `reveal.failed`, `unsupported`.
+`cli.timeout`, `install.unsafe`, `install.unreadable`, `log.missing`, `reveal.failed`, `unsupported`,
+`service.login-unsupported`.
+
+### Start at sign-in
+
+`setStartAtLogin(enabled)` changes whether the service starts at the next sign-in, and only that: a running service
+keeps running, a stopped one stays stopped (`serviceInstall`/`serviceUninstall` also start and stop it). It answers
+the state after it, as every action; anything but a boolean is refused (`bad_request`) before anything runs.
+
+**Depends on the connector's `service login on|off --json`** (in progress in sidevoice-connector, `service/mod.rs`):
+the same reply shape as the other `service … --json` verbs (`{ok: true, state, service, …}`, or `{ok: false, error:
+{key, params, message}}`). The verb is `LOGIN_VERB` in `src-tauri/local-host/src/host.rs`, the one place it is
+written. A connector that does not know it answers `--json` with `connector.usage`, and the app refuses the call with
+`service.login-unsupported`, at once; an older connector that answers no JSON at all is `cli.failed`.
+
+The state after it reads the change back: `installed` is the connector's `start_at_login` (see `state()` above), from
+the fresh pass every action ends with, and `subscribe` listeners get it as any other change. A connector that does not
+report `start_at_login` leaves `installed` absent, and the page falls back to what it has (`service`).
 
 ## The proxy
 

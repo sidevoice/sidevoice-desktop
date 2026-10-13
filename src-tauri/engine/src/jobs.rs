@@ -108,6 +108,12 @@ impl Jobs {
         true
     }
 
+    /// Whether a job of `model` is waiting or running and has not been cancelled: one that would put a build of it
+    /// on disk.
+    pub(crate) fn installing(&self, model: &str) -> bool {
+        self.state().jobs.values().any(|j| j.model == model && !j.cancelled)
+    }
+
     pub(crate) fn cancelled(&self, job: &str) -> bool {
         self.state().jobs.get(job).is_some_and(|j| j.cancelled)
     }
