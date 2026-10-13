@@ -26,12 +26,12 @@ This app keeps what is the app's, in `src-tauri/engine/` (`sidevoice-desktop-eng
 
 **Owner: sidevoice-engine** (operator's decision, 2026-10-09). The app runs the engine's bundled catalogue
 (`BundledCatalog`, `catalog/families/` in that repository, at the commit `src-tauri/Cargo.lock` pins) and has none of
-its own. The page lists it, and each remote provider's, through `host.engine.catalogs()` (sidevoice-engine 0.3.1's
+its own. The page lists it, and each remote provider's, through `host.engine.catalogs()` (the pinned engine's
 catalogues: `local` first, then each provider), in the shape `/engine` gives the page on the web.
 
 ## What runs, where
 
-- Backends, linked statically into the app through sidevoice-engine (the release `src-tauri/engine/Cargo.toml` pins, 0.3.1),
+- Backends, linked statically into the app through sidevoice-engine (the release `src-tauri/engine/Cargo.toml` pins: 0.4.0),
   with no Cargo features to choose: **sherpa-onnx 1.13.8** (ONNX Runtime) on the CPU, **whisper.cpp** (through
   `whisper-rs`), compiled from source, on Metal on Apple Silicon, and the **remote** OpenAI and ElevenLabs backends.
   Nothing is loaded at run time with `dlopen`, so the macOS app keeps library validation on: its only entitlement is
@@ -47,6 +47,9 @@ catalogues: `local` first, then each provider), in the shape `/engine` gives the
   `ModelCatalogs.install`), to show its progress and cancel it, and takes one off the computer with
   `engine.uninstall(model)`: every build of it, never while the call holds it in memory (`model-in-use`) or an install
   of it is under way (`model-installing`).
+- The engine notes when each local model was last loaded, by any build, in that same directory, so it outlives the
+  app; the page reads it as the model's `lastUsedAt` in `host.engine.catalogs()` (milliseconds since the Unix epoch,
+  absent while the engine does not know), to show it and to find models not used for a while.
 - **Remote models** need their provider's key, which the app keeps in the macOS keychain (`src-tauri/src/keychain.rs`,
   service `dev.sidevoice.desktop.providers`). The engine asks the app for it each time it needs it
   (`NativeHost::with_credentials`); the page sets and clears it (`host.engine.setCredential`) and never reads it back.
