@@ -184,12 +184,14 @@ pub fn update(app: &AppHandle) {
     let Some(card) = card(app) else { return };
     let call = app.state::<AppState>().call.lock().unwrap().clone();
     let in_front = room_in_front(app);
+    let always_shown =
+        app.state::<AppState>().settings.lock().unwrap().as_ref().is_some_and(|s| s.call_controls_always_shown);
     let (show, hide) = {
         let mut inner = card.0.lock().unwrap();
         if !call.joined {
             inner.hidden_for_call = false;
         }
-        let wanted = logic::wanted(call.joined, inner.hidden_for_call, in_front);
+        let wanted = logic::wanted(call.joined, inner.hidden_for_call, in_front, always_shown);
         let change = (wanted && !inner.shown, !wanted && inner.shown);
         inner.shown = wanted;
         if change.1 {
@@ -255,7 +257,6 @@ fn full_state(app: &AppHandle, call: &CallSnapshot) -> serde_json::Value {
         "level": level,
         "pointerInside": pointer,
         "outsideClicks": clicks,
-        "alwaysExpanded": settings.call_controls_always,
         "muteShortcut": logic::shortcut_label(&settings.mute_shortcut, cfg!(target_os = "macos")),
     })
 }
@@ -454,10 +455,10 @@ pub async fn call_controls_settings(
     crate::room_page(&app, &webview).map_err(|why| crate::refusal("bad_request", why))?;
     let always = match (action.as_str(), enabled) {
         ("settings", _) => {
-            app.state::<AppState>().settings.lock().unwrap().as_ref().is_some_and(|s| s.call_controls_always)
+            app.state::<AppState>().settings.lock().unwrap().as_ref().is_some_and(|s| s.call_controls_always_shown)
         }
         ("set-always-shown", Some(enabled)) => {
-            crate::change_settings(&app, |s| s.call_controls_always = enabled)
+            crate::change_settings(&app, |s| s.call_controls_always_shown = enabled)
                 .map_err(|e| crate::refusal("internal", e))?;
             update(&app);
             enabled

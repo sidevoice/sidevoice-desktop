@@ -14,7 +14,7 @@
   "engine.task.tts": "voz",
   "engine.error": "El motor nativo no respondió: {error}",
   "callControls.always": "Mostrar siempre los controles de llamada",
-  "callControls.alwaysHint": "Durante una llamada, cuando Sidevoice no está delante, una pequeña tarjeta flota sobre tus otras apps. Sus controles de llamada aparecen al acercar el puntero; con esto activado, se quedan a la vista.",
+  "callControls.alwaysHint": "Durante una llamada, una pequeña tarjeta con los controles de llamada flota sobre tus otras apps. Desactivado: solo aparece mientras la ventana de Sidevoice está detrás o minimizada. Activado: se queda aunque Sidevoice esté delante.",
   "shortcut.refused": "El sistema no aceptó {shortcut} (quizá lo usa otra aplicación), así que el atajo para silenciar está desactivado.",
   "shortcut.noAlternative": "Escribe otra combinación y guarda.",
   "shortcut.useAlternative": "Usar {shortcut}",

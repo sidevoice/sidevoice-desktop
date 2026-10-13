@@ -26,7 +26,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
 use sidevoice_desktop_core::build_info::BuildInfo;
-use sidevoice_desktop_core::settings::{MuteShortcut, Registration, Settings, APP_ORIGIN};
+use sidevoice_desktop_core::settings::{MuteShortcut, Registration, Settings, WindowChanges, APP_ORIGIN};
 use sidevoice_desktop_core::{media, settings};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -151,37 +151,20 @@ fn get_settings(app: AppHandle, state: State<'_, AppState>) -> SettingsInfo {
     }
 }
 
-/// What the settings window changed: only what the person changed there, so a value set meanwhile from the room page
-/// is never overwritten by the one the window loaded.
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WindowChanges {
-    mute_shortcut: Option<String>,
-    call_controls_always: Option<bool>,
-}
-
-/// The settings window's save: its mute shortcut and call controls, those it changed; the rest stays as stored. Async
-/// so it runs off the main thread: creating a window from a synchronous command deadlocks on Windows (WebView2), and
-/// registering the shortcut waits for the main thread.
+/// The settings window's save: its mute shortcut and call controls, only those it changed (core `WindowChanges`); the
+/// rest stays as stored. Async so it runs off the main thread: creating a window from a synchronous command deadlocks
+/// on Windows (WebView2), and registering the shortcut waits for the main thread.
 #[tauri::command]
-async fn save_settings(app: AppHandle, changes: WindowChanges) -> Result<MuteShortcut, String> {
-    let accelerator = changes
+async fn save_settings(app: AppHandle, mut changes: WindowChanges) -> Result<MuteShortcut, String> {
+    changes.mute_shortcut = changes
         .mute_shortcut
-        .as_deref()
         .map(|text| {
-            checked_shortcut(text)
+            checked_shortcut(&text)
                 .ok_or_else(|| format!("El atajo «{}» no es válido. Ejemplo: Ctrl+Alt+M, Cmd+Shift+M.", text.trim()))
         })
         .transpose()?;
-    let shortcut = change_shortcut(&app, |stored| {
-        if let Some(accelerator) = accelerator {
-            stored.mute_shortcut = accelerator;
-        }
-        if let Some(always) = changes.call_controls_always {
-            stored.call_controls_always = always;
-        }
-    })
-    .map_err(|e| format!("No se pudo guardar: {e}"))?;
+    let shortcut =
+        change_shortcut(&app, |stored| changes.apply(stored)).map_err(|e| format!("No se pudo guardar: {e}"))?;
     if room_window(&app).is_none() {
         open_room(&app).map_err(|e| format!("No se pudo abrir la ventana: {e}"))?;
     }

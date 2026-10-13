@@ -40,7 +40,7 @@ test("the card subscribes, asks for the state, and hears every change as a whole
   assert.deepEqual(calls, [["call_controls_ready", undefined]]);
   api.receive({ level: 30 });
   assert.equal(heard.length, 0, "no call yet: nothing to show");
-  api.receive({ call: { joined: true }, alwaysExpanded: false });
+  api.receive({ call: { joined: true }, outsideClicks: 0 });
   api.receive({ level: 50 });
   assert.deepEqual(heard.map((s) => [s.call.joined, s.level]), [[true, 30], [true, 50]]);
   stop();

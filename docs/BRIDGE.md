@@ -141,8 +141,9 @@ the app's own page.
 
 During a call, while the room's window is not in front and focused, a small card floats over the person's other apps
 (sidevoice/sidevoice-desktop#4): the agent, the conversation, the person's microphone, and near the pointer the call's
-controls. Hidden from the tray ("Hide call controls") it stays hidden for that call; "Show the call controls always"
-(the page's `host.callControls`, below, and for now the settings window) keeps its controls in view.
+controls. Hidden from the tray ("Hide call controls") it stays hidden for that call. "Always show the call controls" (the
+page's `host.callControls`, below, and for now the settings window) shows it during a call even while the room's window
+is in front (core `call_controls::wanted`).
 
 - **The window** (`src/call_controls.rs`, label `call-controls`) loads `voice/call-controls.html`, a second page of
   the bundled web build (`apps/web/src/call-controls/`), which reuses the room's conversation list and icons.
@@ -180,7 +181,7 @@ The card's page talks to the app only through `window.__sidevoiceDesktop.host.ca
 | `drag(phase)` | `call_controls_drag`: `start`, `move`, `end`; the window follows the pointer (the app reads it) and is dropped, snapped and remembered |
 
 App → card: `window.__sidevoiceDesktop.receive(patch)` (`webview.eval`), any subset of
-`{call, level, pointerInside, outsideClicks, alwaysExpanded, muteShortcut}` — `call` is the room's snapshot above, `muteShortcut` the
+`{call, level, pointerInside, outsideClicks, muteShortcut}` — `call` is the room's snapshot above, `muteShortcut` the
 global shortcut as the person reads it (⌃⌥M, Ctrl+Alt+M). `capabilities/call-controls.json` grants the four commands
 to that window only, and each re-checks the caller's label and origin.
 
@@ -415,11 +416,13 @@ interface MuteShortcut {
 ```
 
 - `set` takes the web's form as it is: `+`-separated, any case, one or more of the modifiers `Cmd`/`Command`,
-  `Ctrl`/`Control`, `Alt`/`Option`, `Shift`, then one key (`M`, `F5`, `Space`, `;`). The app keeps it in one form,
+  `Ctrl`/`Control`, `Alt`/`Option`, `Shift`, then one key as the browser names it (`event.key`: `M`, `7`, `F5`, `Space`,
+  `ArrowUp`, `;`, `+`). With Shift, a character Shift makes on a US keyboard is read as its key (`Ctrl+Shift+?` is
+  Ctrl+Shift+/, `Cmd+Shift++` is Cmd+Shift+=). The app keeps it in one form,
   modifiers in the order `Cmd+Ctrl+Alt+Shift` and the key's first letter upper case (`shift+cmd+m` → `Cmd+Shift+M`;
   core `settings::normalize_shortcut`), and answers it as `accelerator`. `Cmd` is the Command key (Super elsewhere).
-  Anything else — no modifier, no key or two, a key the system cannot name — rejects `{key: "shortcut_invalid",
-  message}` and changes nothing. One the system refuses is kept, and answered `refused`.
+  Anything else — no modifier, no key or two, a character no key makes (`µ` from Option+M on a Mac, a dead key) —
+  rejects `{key: "shortcut_invalid", message}` and changes nothing. One the system refuses is kept, and answered `refused`.
 - Kept with the app's settings (`muteShortcut`); the settings window, which still shows it, and the page set the same
   value.
 - App → page: `window.__sidevoiceDesktop.muteShortcutEvent(shortcut)` (`webview.eval`) whenever the app registers it
@@ -429,8 +432,8 @@ interface MuteShortcut {
 
 ## The call controls settings
 
-Whether the call controls card keeps its controls in view ("Show the call controls always", above), set from the web's
-Settings. Always there.
+Whether the call controls card shows during a call always, also while the room's window is in front, or only while it is
+behind or minimised ("Always show the call controls", above), set from the web's Settings. Always there.
 
 ```ts
 interface CallControlsBridge {
@@ -439,7 +442,7 @@ interface CallControlsBridge {
 }
 ```
 
-- `setAlwaysShown` keeps it with the app's settings (`callControlsAlways`) and applies it to the card at once; a
+- `setAlwaysShown` keeps it with the app's settings (`callControlsAlwaysShown`) and applies it to the card at once; a
   non-boolean rejects `{key: "bad_request"}`. The settings window still shows it too.
 - Command behind it: `call_controls_settings {action, enabled?}`, `action` `settings` or `set-always-shown`.
 

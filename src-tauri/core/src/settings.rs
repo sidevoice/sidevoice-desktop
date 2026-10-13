@@ -28,9 +28,10 @@ pub struct Settings {
     /// The mute shortcut as [`normalize_shortcut`] writes it; empty disables it.
     #[serde(default = "default_shortcut")]
     pub mute_shortcut: String,
-    /// "Show the call controls always": the card keeps its controls in view instead of showing them near the pointer.
+    /// "Always show the call controls": the call controls card shows during a call even while the room's window is in
+    /// front; off, only while it is behind or minimised (core `call_controls::wanted`).
     #[serde(default)]
-    pub call_controls_always: bool,
+    pub call_controls_always_shown: bool,
     /// How the app's updates arrive (core `updater`): automatic (the default) or manual. Set only by the room page
     /// (`host.updater.setMode`); the settings window neither shows nor sends it, and saving it keeps the stored one.
     #[serde(default)]
@@ -77,31 +78,74 @@ fn shortcut_keys(accelerator: &str) -> Vec<String> {
 
 /// The modifiers a shortcut may hold, in the order the app writes them, each with the names it is read by.
 const MODIFIERS: [[&str; 2]; 4] = [["Cmd", "Command"], ["Ctrl", "Control"], ["Alt", "Option"], ["Shift", "Shift"]];
+const SHIFT: usize = 3;
 
-/// The mute shortcut as the room page (`host.muteShortcut.set`, sidevoice-web's `Cmd+Shift+M`) and the settings window
+/// The characters Shift makes of a key on a US keyboard, with that key: what the web's recorder writes for
+/// Ctrl+Shift+/ is `Ctrl+Shift+?`, which the system knows as Ctrl+Shift+Slash.
+const SHIFTED: [(char, char); 21] = [
+    ('!', '1'),
+    ('@', '2'),
+    ('#', '3'),
+    ('$', '4'),
+    ('%', '5'),
+    ('^', '6'),
+    ('&', '7'),
+    ('*', '8'),
+    ('(', '9'),
+    (')', '0'),
+    ('_', '-'),
+    ('+', '='),
+    ('{', '['),
+    ('}', ']'),
+    ('|', '\\'),
+    (':', ';'),
+    ('"', '\''),
+    ('<', ','),
+    ('>', '.'),
+    ('?', '/'),
+    ('~', '`'),
+];
+
+/// The mute shortcut as the room page (`host.muteShortcut.set`, sidevoice-web's recorder) and the settings window
 /// write it: `+`-separated, any case, one or more of the modifiers `Cmd`/`Command`, `Ctrl`/`Control`, `Alt`/`Option`
-/// and `Shift`, then one key (`M`, `F5`, `Space`). Answered in the one form the app keeps, `Cmd+Ctrl+Alt+Shift+Key`
-/// (those held, in that order; the key's first letter upper case). Empty is no shortcut; `None`, not a shortcut.
-/// Whether the system knows the key is the shell's to ask (global-hotkey, which reads `Cmd` as Super).
+/// and `Shift`, then one key as the browser names it (`M`, `5`, `F5`, `Space`, `ArrowUp`, `;`, `+`). With Shift, a
+/// character Shift makes is read as its key ([`SHIFTED`]: `Ctrl+Shift++` is Ctrl+Shift+=). Answered in the one form the
+/// app keeps, `Cmd+Ctrl+Alt+Shift+Key` (those held, in that order; the key's first letter upper case). Empty is no
+/// shortcut; `None`, not a shortcut. Whether the system knows the key is the shell's to ask (global-hotkey, which
+/// reads `Cmd` as Super).
 pub fn normalize_shortcut(text: &str) -> Option<String> {
-    let text = text.trim();
-    if text.is_empty() {
+    let mut rest = text.trim();
+    if rest.is_empty() {
         return Some(String::new());
     }
-    let mut parts: Vec<&str> = text.split('+').map(str::trim).collect();
-    let key = parts.pop()?;
     let modifier = |part: &str| MODIFIERS.iter().position(|names| names.iter().any(|n| n.eq_ignore_ascii_case(part)));
     let mut held = [false; MODIFIERS.len()];
-    for part in parts {
-        held[modifier(part)?] = true;
+    while let Some(at) = rest.split_once('+').and_then(|(head, tail)| Some((modifier(head.trim())?, tail))) {
+        held[at.0] = true;
+        rest = at.1;
     }
-    if !held.contains(&true) || key.is_empty() || modifier(key).is_some() {
+    let key = rest.trim();
+    if !held.contains(&true) || modifier(key).is_some() {
         return None;
     }
-    let mut chars = key.chars();
-    let key: String = chars.next()?.to_uppercase().chain(chars).collect();
+    let key = native_key(key, held[SHIFT])?;
     let names = MODIFIERS.iter().zip(held).filter(|(_, on)| *on).map(|(names, _)| names[0]);
     Some(names.chain([key.as_str()]).collect::<Vec<_>>().join("+"))
+}
+
+/// One key as the browser names it, as the app writes it: one character upper case (a character Shift made, its key);
+/// a name (`F5`, `space`, `ArrowUp`) with its first letter upper case. `None` for no key, or more than one.
+fn native_key(key: &str, shift: bool) -> Option<String> {
+    let mut chars = key.chars();
+    let first = chars.next()?;
+    if chars.next().is_none() {
+        let unshifted = SHIFTED.iter().find(|(made, _)| shift && *made == first).map_or(first, |(_, key)| *key);
+        return Some(unshifted.to_uppercase().collect());
+    }
+    if key.contains(['+', ' ']) {
+        return None;
+    }
+    Some(first.to_uppercase().chain(key.chars().skip(1)).collect())
 }
 
 /// Whether the system took the mute shortcut.
@@ -148,12 +192,33 @@ impl MuteShortcut {
     }
 }
 
+/// What the settings window changed: only what the person changed there, so a value set meanwhile from the room page
+/// is never overwritten by the one the window had loaded.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowChanges {
+    /// Already checked by the shell (a shortcut it can register, in the form [`normalize_shortcut`] keeps).
+    pub mute_shortcut: Option<String>,
+    pub call_controls_always_shown: Option<bool>,
+}
+
+impl WindowChanges {
+    pub fn apply(self, to: &mut Settings) {
+        if let Some(accelerator) = self.mute_shortcut {
+            to.mute_shortcut = accelerator;
+        }
+        if let Some(always) = self.call_controls_always_shown {
+            to.call_controls_always_shown = always;
+        }
+    }
+}
+
 impl Settings {
     /// First run: the default shortcut.
     pub fn first_run() -> Self {
         Settings {
             mute_shortcut: default_shortcut(),
-            call_controls_always: false,
+            call_controls_always_shown: false,
             update_mode: crate::updater::Mode::Automatic,
         }
     }
@@ -219,6 +284,42 @@ mod tests {
         assert_eq!(normalize_shortcut("  ").as_deref(), Some(""), "empty: none");
     }
 
+    /// What sidevoice-web's recorder writes (`acceleratorOf`: the modifiers, then `event.key`, a single character
+    /// upper case, `" "` as `Space`), through the app's form, to the parser the app registers shortcuts with.
+    #[test]
+    fn what_the_web_s_recorder_writes_registers_as_its_keys() {
+        use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+        let (cmd, ctrl, alt, shift) = (Modifiers::SUPER, Modifiers::CONTROL, Modifiers::ALT, Modifiers::SHIFT);
+        for (recorded, kept, mods, code) in [
+            ("Cmd+Shift+M", "Cmd+Shift+M", cmd | shift, Code::KeyM),
+            ("Ctrl+Alt+M", "Ctrl+Alt+M", ctrl | alt, Code::KeyM),
+            ("Cmd+Shift++", "Cmd+Shift+=", cmd | shift, Code::Equal),
+            ("Ctrl+=", "Ctrl+=", ctrl, Code::Equal),
+            ("Ctrl+Shift+?", "Ctrl+Shift+/", ctrl | shift, Code::Slash),
+            ("Ctrl+Shift+!", "Ctrl+Shift+1", ctrl | shift, Code::Digit1),
+            ("Cmd+Shift+_", "Cmd+Shift+-", cmd | shift, Code::Minus),
+            ("Ctrl+Shift+:", "Ctrl+Shift+;", ctrl | shift, Code::Semicolon),
+            ("Ctrl+Alt+;", "Ctrl+Alt+;", ctrl | alt, Code::Semicolon),
+            ("Cmd+7", "Cmd+7", cmd, Code::Digit7),
+            ("Cmd+F5", "Cmd+F5", cmd, Code::F5),
+            ("Ctrl+F13", "Ctrl+F13", ctrl, Code::F13),
+            ("Ctrl+Alt+Space", "Ctrl+Alt+Space", ctrl | alt, Code::Space),
+            ("Cmd+ArrowUp", "Cmd+ArrowUp", cmd, Code::ArrowUp),
+            ("Ctrl+Shift+PageDown", "Ctrl+Shift+PageDown", ctrl | shift, Code::PageDown),
+            ("Alt+Enter", "Alt+Enter", alt, Code::Enter),
+        ] {
+            let normalized = normalize_shortcut(recorded);
+            assert_eq!(normalized.as_deref(), Some(kept), "{recorded}");
+            let hotkey: HotKey = kept.parse().unwrap_or_else(|e| panic!("{recorded} → {kept}: {e}"));
+            assert_eq!((hotkey.mods, hotkey.key), (mods, code), "{recorded}");
+        }
+        // What no key on the keyboard is, as the parser says: the shell refuses these `shortcut_invalid`.
+        for recorded in ["Cmd+Alt+µ", "Ctrl+Dead", "Ctrl+Unidentified", "Ctrl+É"] {
+            let kept = normalize_shortcut(recorded).unwrap();
+            assert!(kept.parse::<HotKey>().is_err(), "{recorded} → {kept}");
+        }
+    }
+
     #[test]
     fn what_is_not_a_shortcut() {
         for text in
@@ -247,6 +348,25 @@ mod tests {
     }
 
     #[test]
+    fn the_settings_window_never_undoes_a_change_made_from_the_page() {
+        // The window loaded the defaults; meanwhile the page turned "always shown" on; the window saved its shortcut.
+        let mut stored = Settings::first_run();
+        stored.call_controls_always_shown = true;
+        WindowChanges { mute_shortcut: Some("Cmd+Shift+M".into()), ..WindowChanges::default() }.apply(&mut stored);
+        assert_eq!((stored.mute_shortcut.as_str(), stored.call_controls_always_shown), ("Cmd+Shift+M", true));
+        // The other way round: the page set a shortcut; the window saved its checkbox.
+        let mut stored = Settings::first_run();
+        stored.mute_shortcut = "Ctrl+Alt+K".into();
+        WindowChanges { call_controls_always_shown: Some(true), ..WindowChanges::default() }.apply(&mut stored);
+        assert_eq!((stored.mute_shortcut.as_str(), stored.call_controls_always_shown), ("Ctrl+Alt+K", true));
+        // Nothing changed there: nothing changes, the updates' mode included.
+        let mut stored = Settings { update_mode: crate::updater::Mode::Manual, ..Settings::first_run() };
+        let before = stored.clone();
+        WindowChanges::default().apply(&mut stored);
+        assert_eq!(stored, before);
+    }
+
+    #[test]
     fn custom_scheme_origins_are_scheme_and_host() {
         assert_eq!(url_origin(&Url::parse("tauri://localhost/voice/index.html").unwrap()), "tauri://localhost");
         assert_eq!(url_origin(&Url::parse("http://tauri.localhost/voice/").unwrap()), "http://tauri.localhost");
@@ -265,7 +385,7 @@ mod tests {
 
         let s = Settings {
             mute_shortcut: "Alt+M".into(),
-            call_controls_always: true,
+            call_controls_always_shown: true,
             update_mode: crate::updater::Mode::Manual,
         };
         save(&dir, &s).unwrap();

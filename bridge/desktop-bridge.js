@@ -378,8 +378,8 @@
     return { host: Object.freeze(host), changed: listeners.tell };
   }
 
-  /** Whether the call controls card keeps its controls in view: sidevoice-web's `CallControlsBridge`, onto the
-   *  `call_controls_settings` command (docs/BRIDGE.md → "The call controls settings"). */
+  /** Whether the call controls card shows always in a call, or only while the app is behind: sidevoice-web's
+   *  `CallControlsBridge`, onto the `call_controls_settings` command (docs/BRIDGE.md → "The call controls settings"). */
   function callControls() {
     return Object.freeze({
       settings: () => call("call_controls_settings", { action: "settings" }),
@@ -507,7 +507,7 @@
       ...(voiceCall ? { voice: voiceCall.host } : {}),
       /** What this build is: a release, a nightly (both with `updater`), or a development build. */
       build: Object.freeze({ ...build }),
-      /** The global mute shortcut, and whether the call controls card keeps its controls in view: the app's, set from
+      /** The global mute shortcut, and whether the call controls card shows always in a call: the app's, set from
        *  the page's Settings. */
       muteShortcut: shortcut.host,
       callControls: callControls(),

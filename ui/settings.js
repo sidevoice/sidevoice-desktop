@@ -10,7 +10,7 @@ function say(text, isError) {
   $("message").className = isError ? "error" : "";
 }
 
-// The call controls card (src/call_controls.rs): whether it keeps its controls in view.
+// The call controls card (src/call_controls.rs): whether it shows always in a call, or only while the app is behind.
 $("call-controls-always-label").textContent = i18n.t("callControls.always");
 $("call-controls-always-hint").textContent = i18n.t("callControls.alwaysHint");
 
@@ -41,12 +41,12 @@ function showShortcut(status) {
 // What the window shows as loaded or last saved: a save sends only what the person changed since, so a value the room
 // page set meanwhile is not overwritten.
 let shown = {};
-const fields = () => ({ muteShortcut: $("mute-shortcut").value, callControlsAlways: $("call-controls-always").checked });
+const fields = () => ({ muteShortcut: $("mute-shortcut").value, callControlsAlwaysShown: $("call-controls-always").checked });
 
 async function load() {
   const { settings, shortcut, debug } = await invoke("get_settings");
   $("mute-shortcut").value = settings.muteShortcut;
-  $("call-controls-always").checked = !!settings.callControlsAlways;
+  $("call-controls-always").checked = !!settings.callControlsAlwaysShown;
   shown = fields();
   showShortcut(shortcut);
   $("mute-shortcut").focus();
