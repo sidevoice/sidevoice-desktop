@@ -415,6 +415,7 @@ macro_rules! commands {
             engine_ipc::engine_install,
             engine_ipc::engine_progress,
             engine_ipc::engine_cancel,
+            engine_ipc::engine_uninstall,
             engine_ipc::engine_memory,
             engine_ipc::engine_catalogs,
             engine_ipc::engine_set_credential,

@@ -128,6 +128,10 @@
           if (signal) signal.removeEventListener("abort", abort);
         })).then(() => undefined);
       },
+      /** Takes `model` off this computer, every build of it; resolves `undefined` (also when none was on disk).
+       *  Rejects with a refusal whose `code` the page reads: `model-in-use` while the voice call holds it,
+       *  `model-installing` while an install of it is waiting or running (abort its signal first), `model-not-found`. */
+      uninstall: (model) => coded(call("engine_uninstall", { model })).then(() => undefined),
       /** `{total_mb, available_mb}` (each null when unknown). */
       memory: () => call("engine_memory"),
     };

@@ -214,6 +214,7 @@ models is the voice call's (below), never the page's. `window.__sidevoiceDesktop
 | `capabilities()` | `{runs: "native", os: "macos"\|"windows"\|"linux", arch: "aarch64"\|"x86_64", has: ["cpu", …], memory_mb: number\|null}` — `has` is what sidevoice-engine runs a model on here (`cpu`; `metal` on Apple Silicon, for whisper.cpp), never Core ML; remote providers are catalogues of their own (`catalogs()`), `memory_mb` the machine's total, from the OS |
 | `installed()` | `[{model, engine}]` — builds whose files are on disk and whole |
 | `install(model, {build?, engine?, onProgress?, signal?})` | `ModelCatalogs.install`: downloads a build of the model, whatever of it is missing, and resolves `undefined`. `build` is the build's catalogue id (`ModelBuild.id`, `whisper-small/sherpa-onnx-int8`), `engine` its engine id (`backend`); either or both (below), or neither for the build the catalogue recommends here (`recommendedBuild`). `onProgress({fraction, done, total})` about twice a second, only with this call's own bytes (below). `signal`, an `AbortSignal`, cancels it, waiting or running: it rejects `{code: "install-cancelled", key: "install_cancelled", message}` and the model is not on disk afterwards (unless it already was before the install); a signal already aborted rejects so at once, and nothing reaches the app. Any other refusal rejects `{key, code, message, …params}` (below) |
+| `uninstall(model)` | takes `model` off this computer: every build of it, and each of its files no other installed build shares (sidevoice-engine's `uninstall(model)`). Resolves `undefined`, also when none of it was on disk. Rejects with a refusal whose `code` the page reads (`failureCode`): `model_in_use` (`model-in-use`) while the voice call holds a build of it in memory, `model_installing` (`model-installing`) while an `install` of it is waiting or running — the page aborts that install first (its `signal`), the app never cancels it for it —, `model_unknown` (`model-not-found`) for a model the local catalogue does not list, `uninstall_failed` (a storage code) when the disk refused. It waits for an install of another model that is running to end, as installs wait for each other, and no install starts while it removes |
 | `memory()` | `{total_mb, available_mb}`: the machine's memory and what is available of it now, each `null` when the OS does not say. On macOS `available_mb` is the share the kernel's memory-pressure level reports free (`kern.memorystatus_level`): a gauge, not a limit, since macOS compresses and swaps rather than fail |
 
 - `model` is the catalogue id (`whisper-small`, `kokoro-82m-v1.0`), `engine` the build's engine id (`sherpa-onnx`,
@@ -250,7 +251,8 @@ models is the voice call's (below), never the page's. `window.__sidevoiceDesktop
   `engine_progress {job}` (`{job, model, engine, done, total, bytes_per_s}` — the job's bytes and its speed, `null`
   until a second is measured — or `null` while the job waits or after it ends), `engine_cancel {job}` (what the
   signal's abort calls: `true` when the install will reject `install_cancelled`, also when it has not reached the app
-  yet, which then refuses it as it arrives; `false` when it had already ended), `engine_memory`. Granted to the room
+  yet, which then refuses it as it arrives; `false` when it had already ended), `engine_uninstall {model}`,
+  `engine_memory`. Granted to the room
   window (`capabilities/room.json`). The settings window may read `engine_capabilities` and `engine_on_disk` (what is
   on disk and its size), and nothing else of the engine.
 
@@ -275,7 +277,7 @@ sidevoice-engine itself fails with is one of these keys, with the engine's own c
 | `key` | Parameters | When |
 |---|---|---|
 | `engine_unsupported` | `engine` | no runtime in this app for that engine: unknown, a page's engine, or one a newer catalogue added |
-| `model_unknown` | `model` | not in sidevoice-engine's catalogue |
+| `model_unknown` | `model` (and the engine's `code`, `model-not-found`, when the engine said it) | not in sidevoice-engine's catalogue |
 | `build_missing` | `model`, `engine` | the model has no build for that engine, or none with the `build` id named (then `engine` is that id), or the build named is not the `engine` named |
 | `build_unfit` | `model`, `engine`, `reason` (the engine's code, when it gave one) | the build needs a feature, or an accelerator, this device lacks |
 | `model_needs_memory` | `model`, `needed_mb`, `memory_mb` | the model needs more memory than this machine has |
@@ -286,6 +288,9 @@ sidevoice-engine itself fails with is one of these keys, with the engine's own c
 | `install_failed` | — | unpacking or moving the download into place failed (disk, permissions, an archive without its files) |
 | `install_cancelled` | — | the page cancelled the install (its `signal`): not a failure, nothing to show as an error. `install` rejects it with `code: "install-cancelled"` |
 | `install_cancel_failed` | `model`, `engine`, `code` | the page cancelled after the download had ended and removing it failed (`code`, the engine's: `model-in-use`, a storage failure): it may still be on disk |
+| `model_installing` | `code` (`model-installing`), `model` | `uninstall(model)` while an install of that model is waiting or running: abort it first |
+| `model_in_use` | `code` (`model-in-use`), `model` | `uninstall(model)` while the voice call holds a build of it in memory |
+| `uninstall_failed` | `code` (the engine's: a storage failure), `model` | removing the model's files failed: some of it may still be on disk |
 | `runtime_failed` | `engine` | the engine refused, with a code this app does not map |
 | `voice_model_unknown` | `code` (`model-unknown`), `model` | a slot names a model its catalogue does not list for that task |
 | `voice_model_unfit` | `code` (`model-unfit`), `model` | a local model with no build that runs on this device |
