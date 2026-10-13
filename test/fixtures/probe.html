@@ -1,21 +1,3 @@
-
-  // The app's call settings through the app itself (docs/BRIDGE.md → "The mute shortcut", "The call controls
-  // settings"), and no target (docs/TARGETS.md): the web's shortcut form kept in the app's, one that is not a shortcut
-  // refused, none, and the card's controls always shown and back.
-  try {
-    const { muteShortcut, callControls } = window.__sidevoiceDesktop.host;
-    const set = await muteShortcut.set("shift+cmd+f9");
-    const invalid = await muteShortcut.set("M").then(() => "answered", (error) => error && error.key);
-    const off = await muteShortcut.set(null);
-    const shown = await callControls.setAlwaysShown(true);
-    const read = await callControls.settings();
-    await callControls.setAlwaysShown(false);
-    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-settings ok target=" + window.__SIDEVOICE_TARGET__ +
-      " set=" + set.accelerator + "/" + set.state + " invalid=" + invalid + " off=" + off.state +
-      " always=" + shown.alwaysShown + "/" + read.alwaysShown });
-  } catch (error) {
-    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-settings error " + String(error && (error.message || error)) });
-  }
 <!doctype html>
 <html lang="es">
 <head><meta charset="utf-8"><title>Sidevoice · sonda (CI)</title></head>
@@ -95,6 +77,24 @@ what the interface's own window offers — same origin, same permission rule —
       " updater=" + ("updater" in host) + " status=" + status });
   } catch (error) {
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-build error " + String(error && (error.message || error)) });
+  }
+
+  // The app's call settings through the app itself (docs/BRIDGE.md → "The mute shortcut", "The call controls
+  // settings"), and no target (docs/TARGETS.md): the web's shortcut form kept in the app's, one that is not a shortcut
+  // refused, none, and the card's controls always shown and back.
+  try {
+    const { muteShortcut, callControls } = window.__sidevoiceDesktop.host;
+    const set = await muteShortcut.set("shift+cmd+f9");
+    const invalid = await muteShortcut.set("M").then(() => "answered", (error) => error && error.key);
+    const off = await muteShortcut.set(null);
+    const shown = await callControls.setAlwaysShown(true);
+    const read = await callControls.settings();
+    await callControls.setAlwaysShown(false);
+    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-settings ok target=" + window.__SIDEVOICE_TARGET__ +
+      " set=" + set.accelerator + "/" + set.state + " invalid=" + invalid + " off=" + off.state +
+      " always=" + shown.alwaysShown + "/" + read.alwaysShown });
+  } catch (error) {
+    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-settings error " + String(error && (error.message || error)) });
   }
 
   // The native engine through the app itself, as the interface calls it (docs/BRIDGE.md): capabilities, installs as

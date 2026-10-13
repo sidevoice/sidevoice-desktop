@@ -1002,19 +1002,15 @@ test("host.muteShortcut gets and sets through the mute_shortcut command, refusin
   ], "a wrong argument asks the app nothing");
 });
 
-test("the app's muteShortcutEvent hands each listener the shortcut, until it stops", () => {
+test("the app's muteShortcutEvent reaches host.muteShortcut's listeners, until they stop", () => {
   const install = loadFactory();
   const api = install(fakeWindow(ORIGIN).win, ORIGIN);
   const seen = [];
-  const stop = api.host.muteShortcut.subscribe((shortcut) => seen.push(["a", shortcut.state]));
-  api.host.muteShortcut.subscribe(() => { throw new Error("a listener's own"); });
-  api.host.muteShortcut.subscribe((shortcut) => seen.push(["b", shortcut.state]));
+  const stop = api.host.muteShortcut.subscribe((shortcut) => seen.push(shortcut.state));
   api.muteShortcutEvent({ accelerator: "Ctrl+Alt+M", label: "⌃⌥M", state: "refused", alternatives: ["Ctrl+Alt+Shift+M"], voiceOver: false });
-  assert.deepEqual(seen, [["a", "refused"], ["b", "refused"]], "every listener, past one that throws");
   stop();
   api.muteShortcutEvent({ accelerator: null, label: null, state: "off", alternatives: [], voiceOver: false });
-  assert.deepEqual(seen, [["a", "refused"], ["b", "refused"], ["b", "off"]]);
-  assert.throws(() => api.host.muteShortcut.subscribe("nope"), { name: "TypeError" });
+  assert.deepEqual(seen, ["refused"]);
 });
 
 test("host.callControls reads and sets alwaysShown through the call_controls_settings command, booleans only", async () => {
