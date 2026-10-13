@@ -12,12 +12,36 @@ One version for the whole app, tagged `vX.Y.Z`. It lives in `src-tauri/tauri.con
 | Squash-merge into `main` | reviewer | The PR title becomes the commit. `build` runs everything, installers included; when it is green, the `nightly` pre-release is replaced. release-please opens or updates the **release PR** ("chore(main): release X.Y.Z"). Nothing versioned is published. |
 | Merge the release PR | a maintainer | **This is the release.** release-please tags `vX.Y.Z` and creates a draft GitHub Release whose notes are that version's changelog; `build` builds from the tag, attaches the assets and publishes the Release. |
 
-Assets of a release: `Sidevoice_X.Y.Z_aarch64.dmg` (Apple Silicon, ad-hoc signed: `docs/FIRST_OPEN.txt`),
+Assets of a release: `Sidevoice_X.Y.Z_aarch64.dmg` (Apple Silicon, Developer ID signed and notarized, below),
 `Sidevoice_X.Y.Z_x64-setup.exe`, `Sidevoice_X.Y.Z_amd64.deb`, `Sidevoice_X.Y.Z_amd64.AppImage`, `SHA256SUMS`.
 
 The changelog is written from the squashed PR titles. To change it, edit `CHANGELOG.md` in the release PR right
 before merging it: any later merge into `main` regenerates the PR. After the release, fix the notes on the
 Release itself.
+
+## The steps: `cargo xtask`
+
+Everything besides setting up the machine and the GitHub wiring is code in `xtask/`, run as `cargo xtask <command>`
+from the repository's root, the same on a runner and on a laptop. `xtask/src/main.rs` lists every command, what it
+does and what it reads from the environment. The workflows only check out, install toolchains and caches, put the
+secrets into the environment of the steps that need them, choose which steps run, and call:
+
+- `test` job (Linux): `cargo xtask web` (the web interface at the pin), `icons`, `lint` (rustfmt and Clippy on
+  the app and on xtask), `test` (the bridge script and the Rust tests), `two-users` (CI only: it adds a user); and
+  xtask's own tests, `cargo test --manifest-path xtask/Cargo.toml`.
+- `linux` and `windows` jobs: `cargo xtask bundle`, this host's installers.
+- `macos` job: `cargo xtask macos app [--signed]`, `check-app [--signed]`, `first-open`, `with-target`,
+  `dmg [--signed]`, `sign-dmg`, `checksums`, `forget-secrets`, `dmg-screens`; then on the CI-only probe build
+  `probe-app`, `local-host`, `probe`, `voice-models`, `card`.
+- `publish` job: `cargo xtask publish assets release|nightly`, then `publish release TAG` or `publish nightly`.
+- `.github/actions/setup-rust`: `cargo xtask engine-rev` and `sherpa-libs`; release-please.yml and pr-title.yml:
+  `release-pr-checks` and `release-pr-title`.
+
+On a laptop, `npm ci` first. The `macos` commands that start the app (`first-open`, `with-target`, `probe`,
+`card`) run it off a runner with a scratch home (`/tmp/svx-<step>`), never with this machine's own settings,
+pairing, local core or models; `probe` expects no provider key in the login keychain, as on a runner. Unsigned and
+probe builds ignore any `APPLE_*` variables in the environment. Ctrl-C unwinds cleanly; if a signing step was
+killed outright, `cargo xtask macos forget-secrets` removes its keychain and key files.
 
 ## Which version comes next
 
@@ -50,6 +74,46 @@ version of the last release, it is never latest, and release-please ignores the 
 
 Build artifacts on Actions runs are kept 7 days, for debugging only. Download from Releases.
 
+## macOS signing and notarization
+
+Only a release's macOS app and .dmg are signed with the Developer ID and notarized (`build.yml`, job `macos`).
+Pull requests and the nightly are ad-hoc signed (`docs/FIRST_OPEN.txt` ships beside their .dmg): their signing
+steps are skipped, and every secret those steps name resolves to nothing unless the run signs. (A pull request
+from a fork never has the repository's secrets.)
+
+- The app: Tauri's bundler imports `APPLE_CERTIFICATE` into a keychain of its own, signs every binary with
+  `APPLE_SIGNING_IDENTITY`, the hardened runtime and `src-tauri/Entitlements.plist` (the microphone; the keychain
+  items the app keeps need no entitlement outside the sandbox), notarizes it with the App Store Connect API key
+  (`APPLE_API_KEY`, `APPLE_API_ISSUER`, and `APPLE_API_KEY_P8` written to a file only the job can read,
+  `APPLE_API_KEY_PATH`) and staples the ticket.
+- The .dmg: signed with the same identity from a keychain of the job's own, notarized with `notarytool` and stapled.
+- Checked in the job: the Developer ID authority, the team, a secure timestamp, `stapler validate` and
+  `spctl -a -vv` (`source=Notarized Developer ID`) on the app, on the .dmg, and on the app inside the .dmg.
+- The step's own keychain, the certificate file and the key file are removed when the step ends, whatever
+  happened, and `cargo xtask macos forget-secrets` removes what a step cut short left at the end of the job. The
+  bundler removes the keychain it made itself when it is done; one left by a bundler that failed
+  half-way goes with the runner, a GitHub-hosted machine discarded after the job.
+
+**A dry signed build**, nothing published: run `build` by hand with `sign` on (Actions → build → Run workflow, or
+`gh workflow run build.yml -R sidevoice/sidevoice-desktop --ref main -f sign=true`). A manual run publishes nothing
+(only a release or a push to `main` does); the signed .dmg is the run's `Sidevoice-macOS-AppleSilicon-dmg` artifact,
+kept 7 days.
+
+**Signing on a Mac**, the same steps: with the secrets above in the environment (on a laptop `APPLE_API_KEY_PATH`,
+a .p8 file, may stand for `APPLE_API_KEY_P8`, and without `APPLE_CERTIFICATE` the Developer ID in the login
+keychain signs),
+
+```sh
+npm ci
+cargo xtask macos app --signed
+cargo xtask macos check-app --signed      # needs APPLE_TEAM_ID
+cargo xtask macos dmg --signed
+cargo xtask macos sign-dmg
+cargo xtask macos checksums
+```
+
+leaves the signed, notarized and stapled `dist/Sidevoice_X.Y.Z_aarch64.dmg` and its `dist/SHA256SUMS.txt`.
+
 ## When something fails
 
 - The build of a release fails: the Release stays a draft, its tag in place. Fix forward if needed, then re-run
@@ -61,5 +125,10 @@ Build artifacts on Actions runs are kept 7 days, for debugging only. Download fr
 - Settings → Actions → General → **Allow GitHub Actions to create and approve pull requests**: without it
   release-please cannot open its PR (off as of 2026-10-01).
 - Squash merging, with the PR title as the commit message.
+- Repository secrets for macOS signing (a release, or a manual `sign` run): `APPLE_CERTIFICATE` (the Developer ID
+  Application certificate and key, a base64 .p12), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`
+  ("Developer ID Application: … (TEAMID)"), `APPLE_TEAM_ID`, and the notary's App Store Connect API key:
+  `APPLE_API_KEY` (its id), `APPLE_API_ISSUER`, `APPLE_API_KEY_P8` (the .p8's contents). release-please.yml
+  hands them to `build` (`secrets: inherit`).
 - Required check **PR title is a conventional commit**. release-please's own PR gets it through a dispatched run
   (its pushes start no workflow by themselves).

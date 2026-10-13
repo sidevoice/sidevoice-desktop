@@ -65,7 +65,7 @@ catalogues: `local` first, then each provider), in the shape `/engine` gives the
 
 The engine's sherpa-onnx backend links sherpa-onnx's prebuilt static libraries. CI fetches them with the engine's own
 `cargo xtask sherpa-libs`, at the pinned commit, checked against the digests it pins, and links them through
-`SHERPA_ONNX_LIB_DIR` (`.github/actions/setup-rust`). Locally, from a checkout of sidevoice-engine at that commit:
+`SHERPA_ONNX_LIB_DIR` (`cargo xtask sherpa-libs` in `.github/actions/setup-rust`). Locally, the same command:
 
     export SHERPA_ONNX_LIB_DIR="$(cargo xtask sherpa-libs)"
 

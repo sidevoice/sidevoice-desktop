@@ -1,0 +1,4 @@
+[alias]
+# Build tooling (the CI steps: lint and tests, the installers and their checks, the macOS app's signing and native
+# flows, publishing): `cargo xtask <command>`, see xtask/src/main.rs.
+xtask = "run --quiet --locked --manifest-path xtask/Cargo.toml --"

@@ -10,6 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  contents: read
   pull-requests: read
 
 concurrency:
@@ -25,14 +26,12 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           GITHUB_TOKEN: ${{ github.token }}
+      # The runner's own Rust builds the xtask.
+      - uses: actions/checkout@v4
+        if: github.event_name == 'workflow_dispatch'
       - name: The release PR's title (release-please's branch only)
         if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          case "$GITHUB_REF_NAME" in release-please--*) ;; *) echo "dispatch is for release-please's branch only"; exit 1;; esac
-          TITLE=$(gh pr view "$GITHUB_REF_NAME" --json title -q .title)
-          echo "$TITLE"
-          echo "$TITLE" | grep -Eq '^chore(\([^)]+\))?: release '
+        run: cargo xtask release-pr-title

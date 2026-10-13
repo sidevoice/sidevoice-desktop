@@ -1,8 +1,9 @@
 # macOS: what the app needs to work on first open
 
-## Install and first open (unsigned build)
+## Install and first open
 
-See `FIRST_OPEN.txt` (in this directory). Short version:
+A release's .dmg is signed with the Developer ID and notarized (RELEASING.md): it opens like any downloaded app.
+The nightly and CI builds are ad-hoc signed; for those, see `FIRST_OPEN.txt` (in this directory). Short version:
 
 ```sh
 # after dragging Sidevoice.app to /Applications
@@ -25,7 +26,8 @@ A `getUserMedia` call in the room page has to pass four gates. Each one is handl
 | Hardened runtime | `com.apple.security.device.audio-input` entitlement | `src-tauri/Entitlements.plist`; CI checks it is in the signature |
 
 macOS asks once ("Sidevoice quiere acceder al micrófono"). The answer is stored per app
-signature: with ad-hoc signing each new build is a "new" app and may ask again.
+signature: with ad-hoc signing each new build is a "new" app and may ask again; a release, signed with the Developer
+ID, keeps its answer from one version to the next.
 If it was denied: System Settings → Privacy & Security → Microphone, or
 `tccutil reset Microphone dev.sidevoice.desktop`.
 
