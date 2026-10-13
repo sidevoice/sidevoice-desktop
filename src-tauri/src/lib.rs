@@ -438,12 +438,7 @@ macro_rules! commands {
             local_host::local_host_action,
             local_host::local_host_pairing_code,
             local_host::local_host_pair_room,
-            updater::updater_settings,
-            updater::updater_set_mode,
-            updater::updater_status,
-            updater::updater_check,
-            updater::updater_download,
-            updater::updater_restart
+            updater::updater
             $($extra)*
         ]
     };

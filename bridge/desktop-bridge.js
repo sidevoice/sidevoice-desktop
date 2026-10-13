@@ -321,23 +321,23 @@
     };
   }
 
-  /** The app's updates: the `AppUpdater` seam, 1:1 onto the `updater_*` commands (docs/BRIDGE.md → "The updater").
+  /** The app's updates: the `AppUpdater` seam, 1:1 onto the `updater` command's actions (docs/BRIDGE.md → "The updater").
    *  Only in a release or a nightly that can update itself. */
   function updater() {
     const listeners = new Set();
     const host = {
-      settings: () => call("updater_settings"),
-      setMode: (mode) => call("updater_set_mode", { mode }),
-      status: () => call("updater_status"),
+      settings: () => call("updater", { action: "settings" }),
+      setMode: (mode) => call("updater", { action: "set-mode", mode }),
+      status: () => call("updater", { action: "status" }),
       /** `listener(status)` on every change. Returns `stop`. */
       subscribe(listener) {
         if (typeof listener !== "function") throw new TypeError("subscribe(listener)");
         listeners.add(listener);
         return () => { listeners.delete(listener); };
       },
-      check: () => call("updater_check"),
-      download: () => call("updater_download"),
-      restart: () => call("updater_restart").then(() => undefined),
+      check: () => call("updater", { action: "check" }),
+      download: () => call("updater", { action: "download" }),
+      restart: () => call("updater", { action: "restart" }).then(() => undefined),
     };
     function changed(status) {
       for (const listener of listeners) {

@@ -72,7 +72,7 @@ what the interface's own window offers — same origin, same permission rule —
   // `host.build` says so and the page has no `host.updater`; its commands refuse.
   try {
     const host = window.__sidevoiceDesktop.host;
-    const status = await window.__TAURI_INTERNALS__.invoke("updater_status").then(() => "answered", (error) => error && error.key);
+    const status = await window.__TAURI_INTERNALS__.invoke("updater", { action: "status" }).then(() => "answered", (error) => error && error.key);
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-build ok build=" + JSON.stringify(host.build) +
       " updater=" + ("updater" in host) + " status=" + status });
   } catch (error) {

@@ -3,16 +3,12 @@
 use serde_json::{json, Value};
 use sidevoice_desktop_core::settings::{self, Settings};
 use sidevoice_desktop_core::updater::{self as core, ErrorCode, Mode, State, Status};
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Webview};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
 use crate::AppState;
-
-const EVERY: Duration = Duration::from_secs(6 * 60 * 60);
-const CHECK_FOR: Duration = Duration::from_secs(2 * 60);
-const DOWNLOAD_FOR: Duration = Duration::from_secs(60 * 60);
 
 /// One lock over the status and its update; `installing`: an install under way, which quitting waits for.
 #[derive(Default)]
@@ -26,17 +22,14 @@ struct Updates {
 /// A release or nightly that can replace itself: its `.app` bundle on a writable volume, AppImage or NSIS install.
 pub fn offered() -> bool {
     use tauri::utils::{config::BundleType, platform::bundle_type};
-    static OFFERED: OnceLock<bool> = OnceLock::new();
-    *OFFERED.get_or_init(|| {
-        matches!(env!("SIDEVOICE_BUILD_CHANNEL"), "release" | "nightly")
-            && match bundle_type() {
-                Some(BundleType::App) => std::env::current_exe()
-                    .is_ok_and(|exe| core::in_app_bundle(&exe) && exe.ancestors().nth(4).is_some_and(writable)),
-                Some(BundleType::AppImage) => std::env::var_os("APPIMAGE").is_some(),
-                Some(BundleType::Nsis) => true,
-                _ => false,
-            }
-    })
+    matches!(env!("SIDEVOICE_BUILD_CHANNEL"), "release" | "nightly")
+        && match bundle_type() {
+            Some(BundleType::App) => std::env::current_exe()
+                .is_ok_and(|exe| core::in_app_bundle(&exe) && exe.ancestors().nth(4).is_some_and(writable)),
+            Some(BundleType::AppImage) => std::env::var_os("APPIMAGE").is_some(),
+            Some(BundleType::Nsis) => true,
+            _ => false,
+        }
 }
 
 /// Not on a read-only volume (the .dmg, a translocated copy).
@@ -59,12 +52,12 @@ pub fn setup(app: &AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
             check(&app).await;
-            tokio::time::sleep(EVERY).await;
+            tokio::time::sleep(Duration::from_secs(6 * 60 * 60)).await;
         }
     });
 }
 
-fn mode(app: &AppHandle) -> Mode {
+fn current_mode(app: &AppHandle) -> Mode {
     app.state::<AppState>().settings.lock().unwrap().as_ref().map(|s| s.update_mode).unwrap_or_default()
 }
 
@@ -83,7 +76,7 @@ fn with<T>(app: &AppHandle, change: impl FnOnce(&mut Updates) -> T) -> T {
 
 /// A newer version is `available` (automatic mode: downloaded at once); one downloading or ready is left as it is.
 async fn check(app: &AppHandle) {
-    let checked = async { app.updater_builder().timeout(CHECK_FOR).build()?.check().await }.await;
+    let checked = async { app.updater_builder().timeout(Duration::from_secs(2 * 60)).build()?.check().await }.await;
     with(app, |u| match checked {
         Ok(found) if matches!(u.status.state, State::Idle | State::Available) => {
             u.status = found.as_ref().map_or_else(Status::default, |f| Status::new(State::Available, &f.version));
@@ -95,22 +88,20 @@ async fn check(app: &AppHandle) {
             u.status = u.status.clone().failed(ErrorCode::CheckFailed);
         }
     });
-    if mode(app) == Mode::Automatic {
+    if current_mode(app) == Mode::Automatic {
         download(app);
     }
 }
 
 fn download(app: &AppHandle) {
-    let Some(mut update) = with(app, |u| match (u.status.state, &u.update) {
-        (State::Available, Some(update)) => {
-            u.status = Status::new(State::Downloading, &update.version);
-            Some(update.clone())
-        }
-        _ => None,
+    let Some(mut update) = with(app, |u| {
+        let update = u.update.clone().filter(|_| u.status.state == State::Available)?;
+        u.status = Status::new(State::Downloading, &update.version);
+        Some(update)
     }) else {
         return;
     };
-    update.timeout = Some(DOWNLOAD_FOR);
+    update.timeout = Some(Duration::from_secs(60 * 60));
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let mut received = 0;
@@ -156,7 +147,7 @@ pub fn quit(app: &AppHandle) {
     while with(app, |u| u.installing) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(100));
     }
-    if mode(app) == Mode::Automatic {
+    if current_mode(app) == Mode::Automatic {
         install(app, false);
     }
 }
@@ -165,60 +156,46 @@ fn unavailable() -> Value {
     json!({ "key": "update_unavailable", "message": "There is no update to install." })
 }
 
-fn caller(app: &AppHandle, webview: &Webview) -> Result<Status, Value> {
-    crate::room_page(app, webview).map_err(|why| json!({ "key": "bad_request", "message": why }))?;
-    app.try_state::<Mutex<Updates>>().ok_or_else(unavailable)?;
-    Ok(with(app, |u| u.status.clone()))
-}
-
+/// `host.updater`'s one command: `action` is settings, set-mode (with `mode`), status, check, download or restart.
 #[tauri::command]
-pub fn updater_settings(app: AppHandle, webview: Webview) -> Result<Value, Value> {
-    caller(&app, &webview)?;
-    Ok(json!({ "mode": mode(&app) }))
+pub async fn updater(app: AppHandle, webview: Webview, action: String, mode: Option<Mode>) -> Result<Value, Value> {
+    crate::room_page(&app, &webview).map_err(|why| json!({ "key": "bad_request", "message": why }))?;
+    app.try_state::<Mutex<Updates>>().ok_or_else(unavailable)?;
+    let status = |app: &AppHandle| with(app, |u| u.status.clone());
+    match (action.as_str(), mode) {
+        ("settings", _) => Ok(json!({ "mode": current_mode(&app) })),
+        ("set-mode", Some(mode)) => set_mode(&app, mode).map(|()| json!({ "mode": mode })),
+        ("status", _) => Ok(json!(status(&app))),
+        ("check", _) => {
+            check(&app).await;
+            Ok(json!(status(&app)))
+        }
+        ("download", _) => {
+            download(&app);
+            Some(status(&app)).filter(|s| s.state != State::Idle).map(|s| json!(s)).ok_or_else(unavailable)
+        }
+        ("restart", _) if status(&app).state == State::Ready => {
+            tauri::async_runtime::spawn_blocking(move || install(&app, true));
+            Ok(Value::Null)
+        }
+        ("restart", _) => Err(unavailable()),
+        _ => Err(json!({ "key": "bad_request", "message": format!("not an updater action: {action}") })),
+    }
 }
 
 /// Keeps the mode with the app's settings; automatic starts downloading an update already found.
-#[tauri::command]
-pub fn updater_set_mode(app: AppHandle, webview: Webview, mode: Mode) -> Result<Value, Value> {
-    caller(&app, &webview)?;
+fn set_mode(app: &AppHandle, mode: Mode) -> Result<(), Value> {
     let internal = |message: String| json!({ "key": "internal", "message": message });
     let dir = app.path().app_config_dir().map_err(|e| internal(e.to_string()))?;
-    let state = app.state::<AppState>();
-    let mut stored = state.settings.lock().unwrap();
-    let changed = Settings { update_mode: mode, ..stored.clone().unwrap_or_else(Settings::first_run) };
-    settings::save(&dir, &changed).map_err(|e| internal(format!("not saved: {e}")))?;
-    *stored = Some(changed);
-    drop(stored);
+    {
+        let state = app.state::<AppState>();
+        let mut stored = state.settings.lock().unwrap();
+        let changed = Settings { update_mode: mode, ..stored.clone().unwrap_or_else(Settings::first_run) };
+        settings::save(&dir, &changed).map_err(|e| internal(format!("not saved: {e}")))?;
+        *stored = Some(changed);
+    }
     if mode == Mode::Automatic {
-        download(&app);
+        download(app);
     }
-    Ok(json!({ "mode": mode }))
-}
-
-#[tauri::command]
-pub fn updater_status(app: AppHandle, webview: Webview) -> Result<Status, Value> {
-    caller(&app, &webview)
-}
-
-#[tauri::command]
-pub async fn updater_check(app: AppHandle, webview: Webview) -> Result<Status, Value> {
-    caller(&app, &webview)?;
-    check(&app).await;
-    caller(&app, &webview)
-}
-
-#[tauri::command]
-pub fn updater_download(app: AppHandle, webview: Webview) -> Result<Status, Value> {
-    caller(&app, &webview)?;
-    download(&app);
-    caller(&app, &webview).and_then(|s| if s.state == State::Idle { Err(unavailable()) } else { Ok(s) })
-}
-
-#[tauri::command]
-pub fn updater_restart(app: AppHandle, webview: Webview) -> Result<(), Value> {
-    if caller(&app, &webview)?.state != State::Ready {
-        return Err(unavailable());
-    }
-    tauri::async_runtime::spawn_blocking(move || install(&app, true));
     Ok(())
 }

@@ -309,7 +309,7 @@ sidevoice-engine itself fails with is one of these keys, with the engine's own c
 | `voice_settings_missing` | `code` (`settings-missing`) | a call of `host.voice` before its first `setSettings` |
 | `voice_failed` | `code` (the call's: `microphone-denied`, `audio-device-unavailable`, the engine's `model-load-failed`, …, or `stopped`) | the call could not start, or was stopped before it listened |
 | `engine_unavailable` | — | the engine did not start with the app |
-| `update_unavailable` | — | `host.updater.restart()` with no update ready, `download()` with none known, or any `updater_*` command where this copy has no updater |
+| `update_unavailable` | — | `host.updater.restart()` with no update ready, `download()` with none known, or the `updater` command where this copy has no updater |
 | `bad_request` | — | a malformed call, or a caller other than the room window's own page: a bug in the caller |
 | `internal` | — | something inside the app failed |
 
@@ -447,8 +447,8 @@ interface UpdaterStatus {
 - The mode is kept with the app's settings (`updateMode`), set only through `setMode` (the settings window does not
   show it, and saving there keeps it).
 - App → page: `window.__sidevoiceDesktop.updaterEvent(status)` (`webview.eval`) on each change, to the listeners.
-- Commands behind it: `updater_settings`, `updater_set_mode`, `updater_status`, `updater_check`, `updater_download`,
-  `updater_restart`. Granted to the room window (`capabilities/room.json`); each re-checks that the caller is the
+- Command behind it: `updater {action, mode?}`, `action` one of `settings`, `set-mode`, `status`, `check`,
+  `download`, `restart`. Granted to the room window (`capabilities/room.json`); it re-checks that the caller is the
   current room window on the app's own page (else `bad_request`). The page is granted none of the plugin's own
   commands. `src-tauri/src/updater.rs` drives tauri-plugin-updater (check, download with its progress, verify,
   install); core `updater.rs` holds the status and the mode (unit-tested). CI's macOS job checks the

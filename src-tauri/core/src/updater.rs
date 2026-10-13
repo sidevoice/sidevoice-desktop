@@ -24,8 +24,9 @@ pub enum State {
     Ready,
 }
 
-/// The last attempt that failed; the state stays what it was.
+/// The last attempt that failed (`{code}`); the state stays what it was.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "code")]
 pub enum ErrorCode {
     #[serde(rename = "update-check-failed")]
     CheckFailed,
@@ -33,11 +34,6 @@ pub enum ErrorCode {
     DownloadFailed,
     #[serde(rename = "update-install-failed")]
     InstallFailed,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct Failure {
-    pub code: ErrorCode,
 }
 
 /// `host.updater.status()`: `{state, version?, progress?, error?: {code}}`.
@@ -49,7 +45,7 @@ pub struct Status {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub progress: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<Failure>,
+    pub error: Option<ErrorCode>,
 }
 
 impl Status {
@@ -58,7 +54,7 @@ impl Status {
     }
 
     pub fn failed(mut self, code: ErrorCode) -> Status {
-        self.error = Some(Failure { code });
+        self.error = Some(code);
         self
     }
 }
@@ -97,8 +93,11 @@ mod tests {
             serde_json::to_value(failed).unwrap(),
             json!({"state": "ready", "version": "0.5.0", "error": {"code": "update-install-failed"}})
         );
-        assert_eq!(serde_json::to_value(ErrorCode::CheckFailed).unwrap(), json!("update-check-failed"));
-        assert_eq!(serde_json::to_value(ErrorCode::DownloadFailed).unwrap(), json!("update-download-failed"));
+        assert_eq!(serde_json::to_value(ErrorCode::CheckFailed).unwrap(), json!({ "code": "update-check-failed" }));
+        assert_eq!(
+            serde_json::to_value(ErrorCode::DownloadFailed).unwrap(),
+            json!({ "code": "update-download-failed" })
+        );
     }
 
     #[test]

@@ -33,11 +33,6 @@
     "allow-local-host-action",
     "allow-local-host-pairing-code",
     "allow-local-host-pair-room",
-    "allow-updater-settings",
-    "allow-updater-set-mode",
-    "allow-updater-status",
-    "allow-updater-check",
-    "allow-updater-download",
-    "allow-updater-restart"
+    "allow-updater"
   ]
 }

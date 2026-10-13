@@ -899,16 +899,26 @@ test("the host's keys: updater only where the app can update itself, build alway
   assert.ok(Object.isFrozen(api.host.updater));
 });
 
-test("host.updater's calls go to their commands and answer what the app says", async () => {
+test("host.updater's calls go to the updater command's actions and answer what the app says", async () => {
   const install = loadFactory();
-  const { win, calls } = voiceWindow({
-    updater_settings: { mode: "automatic" },
-    updater_set_mode: { mode: "manual" },
-    updater_status: { state: "downloading", version: "0.5.0", progress: 0.42 },
-    updater_check: { state: "available", version: "0.5.0" },
-    updater_download: { state: "downloading", version: "0.5.0" },
-    updater_restart: null,
-  });
+  const answers = {
+    settings: { mode: "automatic" },
+    "set-mode": { mode: "manual" },
+    status: { state: "downloading", version: "0.5.0", progress: 0.42 },
+    check: { state: "available", version: "0.5.0" },
+    download: { state: "downloading", version: "0.5.0" },
+    restart: null,
+  };
+  const updaterWindow = (refuse) => {
+    const { win, calls } = fakeWindow(ORIGIN);
+    win.__TAURI_INTERNALS__.invoke = (cmd, args) => {
+      calls.push([cmd, args === undefined ? undefined : structuredClone(args)]);
+      if (cmd !== "updater") return Promise.resolve(null);
+      return refuse?.[args.action] ? Promise.reject(refuse[args.action]) : Promise.resolve(answers[args.action]);
+    };
+    return { win, calls };
+  };
+  const { win, calls } = updaterWindow();
   const updater = install(win, ORIGIN, null, false, false, true).host.updater;
   assert.deepEqual(await updater.settings(), { mode: "automatic" });
   assert.deepEqual(await updater.setMode("manual"), { mode: "manual" });
@@ -916,20 +926,17 @@ test("host.updater's calls go to their commands and answer what the app says", a
   assert.deepEqual(await updater.check(), { state: "available", version: "0.5.0" });
   assert.deepEqual(await updater.download(), { state: "downloading", version: "0.5.0" });
   assert.equal(await updater.restart(), undefined);
-  assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("updater_")), [
-    ["updater_settings", undefined],
-    ["updater_set_mode", { mode: "manual" }],
-    ["updater_status", undefined],
-    ["updater_check", undefined],
-    ["updater_download", undefined],
-    ["updater_restart", undefined],
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "updater").map(([, args]) => args), [
+    { action: "settings" },
+    { action: "set-mode", mode: "manual" },
+    { action: "status" },
+    { action: "check" },
+    { action: "download" },
+    { action: "restart" },
   ]);
   const nothing = { key: "update_unavailable", message: "There is no update to install." };
-  const refusing = voiceWindow({
-    updater_restart: Object.assign(new Error("refused"), { refusal: nothing }),
-    updater_download: Object.assign(new Error("refused"), { refusal: nothing }),
-  });
-  const refused = install(refusing.win, ORIGIN, null, false, false, true).host.updater;
+  const refused = install(updaterWindow({ restart: nothing, download: nothing }).win, ORIGIN, null, false, false, true)
+    .host.updater;
   await assert.rejects(refused.restart(), (e) => e === nothing);
   await assert.rejects(refused.download(), (e) => e === nothing);
 });

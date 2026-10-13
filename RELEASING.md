@@ -115,10 +115,9 @@ key, checked against the public key in `src-tauri/tauri.conf.json` (`plugins.upd
     nightly`) is its ad-hoc signed app, its signature checked;
   - Windows and Linux (`bundle --channel release`): the NSIS installer and the AppImage themselves.
 
-  Each comes with its `.sig`, checked by the step that made it. `publish assets release TAG` checks all three and
-  their signatures are among the artifacts, writes `latest.json` (`version`, `notes` (the release's notes),
-  `pub_date` (when the assets were put together), and `platforms` `darwin-aarch64`, `windows-x86_64`,
-  `linux-x86_64`, each `{signature, url}` of that release's asset) and adds them to the assets. `publish assets
+  Each comes with its `.sig`. `publish assets release TAG` checks all three and their signatures are among the
+  artifacts, writes `latest.json` (`version` and `platforms` `darwin-aarch64`, `windows-x86_64`, `linux-x86_64`, each
+  `{signature, url}` of that release's asset: all the updater reads) and adds them to the assets. `publish assets
   nightly` does the same for the nightly: its version, and the urls of its `Sidevoice_nightly_*` assets.
 - **What cannot update itself.** A dev build (built without the updater), a `.deb` (the package manager
   owns it), an AppImage's binary run on its own, an app run from the .dmg: the page gets no `host.updater`.

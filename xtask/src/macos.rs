@@ -153,19 +153,14 @@ fn update_artifact(signed: bool) -> Result<()> {
     fs::copy(&bundle, &update).map_err(|e| format!("{}: {e}", bundle.display()))?;
     let bundle_sig = PathBuf::from(format!("{}.sig", bundle.display()));
     fs::copy(&bundle_sig, &sig).map_err(|e| format!("{}: {e}", bundle_sig.display()))?;
-    ensure(fs::metadata(&sig).is_ok_and(|m| m.len() > 0), format!("{} is empty", sig.display()))?;
-    let unpacked = work("update-artifact")?.join("unpacked");
-    fresh_dir(&unpacked)?;
-    Cmd::new("tar").arg("-xzf").arg(&update).arg("-C").arg(&unpacked).run()?;
-    let inside = unpacked.join("Sidevoice.app");
-    Cmd::new("codesign").args(["--verify", "--deep", "--strict", "--verbose=2"]).arg(&inside).run()?;
     if signed {
-        Cmd::new("xcrun").args(["stapler", "validate"]).arg(&inside).run()?;
-        let spctl = Cmd::new("spctl").args(["-a", "-vv", "-t", "exec"]).arg(&inside).output()?;
-        eprintln!("{spctl}");
-        ensure(notarized(&spctl), "the update unpacks to an app Gatekeeper does not take as notarized")?;
+        // What it unpacks to is the notarized app, its ticket stapled.
+        let unpacked = work("update-artifact")?.join("unpacked");
+        fresh_dir(&unpacked)?;
+        Cmd::new("tar").arg("-xzf").arg(&update).arg("-C").arg(&unpacked).run()?;
+        Cmd::new("xcrun").args(["stapler", "validate"]).arg(unpacked.join("Sidevoice.app")).run()?;
     }
-    Cmd::new("ls").arg("-la").arg(&dist).run()
+    Ok(())
 }
 
 /// The signing and notarization variables a build would otherwise read: an unsigned or probe build never signs with

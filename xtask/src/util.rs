@@ -427,14 +427,11 @@ pub fn npm() -> &'static str {
     }
 }
 
-/// What a build is for (RELEASING.md → "Channels"; `SIDEVOICE_BUILD_CHANNEL`, src-tauri/build.rs).
+/// What a build is for (RELEASING.md → "Channels"): `dev`, the default, is a laptop's, a PR's or a manual run's.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Channel {
-    /// A numbered release, built by the release's run (`--channel release`).
     Release,
-    /// The rolling `nightly` pre-release, built by a push to `main` (`--channel nightly`).
     Nightly,
-    /// Anything else: a laptop, a pull request, a manual run (its `sign` dry run included). The default.
     #[default]
     Dev,
 }
@@ -458,30 +455,10 @@ impl Channel {
     }
 }
 
-/// What the app's build script is told (src-tauri/build.rs): the channel, and for a nightly the short commit it is
-/// built from and that commit's date, `YYYY-MM-DD`. Every build says all three, so nothing in the environment leaks in.
-pub fn build_env(channel: Channel, commit: &str, date: &str) -> [(&'static str, String); 3] {
-    let nightly = channel == Channel::Nightly;
-    let only_nightly = |value: &str| {
-        if nightly {
-            value.to_owned()
-        } else {
-            String::new()
-        }
-    };
-    [
-        ("SIDEVOICE_BUILD_CHANNEL", channel.name().to_owned()),
-        ("SIDEVOICE_BUILD_COMMIT", only_nightly(commit)),
-        ("SIDEVOICE_BUILD_DATE", only_nightly(date)),
-    ]
-}
+/// A nightly's update feed (a release's is tauri.conf.json's).
+const NIGHTLY_FEED: &str = "https://github.com/sidevoice/sidevoice-desktop/releases/download/nightly/latest.json";
 
-/// Where a nightly looks for updates (a release's feed is tauri.conf.json's `plugins.updater.endpoints`).
-pub const NIGHTLY_FEED: &str = "https://github.com/sidevoice/sidevoice-desktop/releases/download/nightly/latest.json";
-
-/// What a build adds to tauri.conf.json for its channel (RELEASING.md → "Updates"): a release and a nightly make the
-/// update artifacts, signed with the updater's key; a nightly is also built as `nightly_version` and reads the
-/// nightly's feed. A dev build adds nothing.
+/// What a release or a nightly adds to tauri.conf.json: signed update artifacts; a nightly also its version and feed.
 pub fn channel_config(channel: Channel, nightly_version: &str) -> Option<String> {
     let updates = serde_json::json!({ "createUpdaterArtifacts": true });
     let config = match channel {
@@ -516,9 +493,6 @@ pub fn ci_nightly_version() -> Result<String> {
     nightly_version(manifest["."].as_str().unwrap_or_default(), &run)
 }
 
-/// The updater's signing key: read by Tauri's bundler in a release's or a nightly's build only, dropped from a dev one.
-pub const UPDATER_KEY_ENV: &[&str] = &["TAURI_SIGNING_PRIVATE_KEY", "TAURI_SIGNING_PRIVATE_KEY_PASSWORD"];
-
 /// A `tauri build` (the Tauri CLI package.json pins).
 #[derive(Debug, Default, PartialEq)]
 pub struct TauriBuild<'a> {
@@ -530,7 +504,7 @@ pub struct TauriBuild<'a> {
     pub features: Option<&'a str>,
     /// `--config`: JSON merged into tauri.conf.json.
     pub config: Option<&'a str>,
-    /// What the build is for ([`channel_config`], [`build_env`]).
+    /// What the build is for ([`channel_config`]).
     pub channel: Channel,
 }
 
@@ -550,15 +524,12 @@ impl TauriBuild<'_> {
         args
     }
 
-    /// The command: the CLI's script run by Node from `node_modules` (what `npx tauri` runs), the same on every OS,
-    /// built for its channel ([`channel_config`], [`build_env`]). A release or a nightly needs the updater's key
-    /// (`TAURI_SIGNING_PRIVATE_KEY`); a dev build never sees it.
+    /// The command: the CLI's script run by Node (what `npx tauri` runs), for its channel; only a release or a nightly
+    /// sees the updater's key, and the app's build script is told the channel (and a nightly's commit and date).
     pub fn command(&self) -> Result<Cmd> {
         let mut cmd = Cmd::new("node").arg(repo().join("node_modules/@tauri-apps/cli/tauri.js")).args(self.args());
         if self.channel == Channel::Dev {
-            cmd = UPDATER_KEY_ENV.iter().fold(cmd, |cmd, name| cmd.env_remove(name));
-        } else {
-            required_env("TAURI_SIGNING_PRIVATE_KEY")?;
+            cmd = cmd.env_remove("TAURI_SIGNING_PRIVATE_KEY").env_remove("TAURI_SIGNING_PRIVATE_KEY_PASSWORD");
         }
         // A nightly's version, short commit and that commit's date (`YYYY-MM-DD`).
         let (version, commit, date) = match self.channel {
@@ -572,11 +543,10 @@ impl TauriBuild<'_> {
         if let Some(config) = channel_config(self.channel, &version) {
             cmd = cmd.args(["--config", config.as_str()]);
         }
-        eprintln!("(a {} build {version} {commit})", self.channel.name());
-        for (key, value) in build_env(self.channel, &commit, &date) {
-            cmd = cmd.env(key, value);
-        }
-        Ok(cmd)
+        Ok(cmd
+            .env("SIDEVOICE_BUILD_CHANNEL", self.channel.name())
+            .env("SIDEVOICE_BUILD_COMMIT", commit)
+            .env("SIDEVOICE_BUILD_DATE", date))
     }
 }
 
@@ -786,19 +756,6 @@ mod tests {
         assert_eq!(nightly_version("0.3.0-rc.1", "5").unwrap(), "0.3.1-nightly.5");
         for (released, run) in [("0.4", "17"), ("0.4.x", "17"), ("0.4.2", ""), ("0.4.2", "a")] {
             assert!(nightly_version(released, run).is_err(), "{released} {run}");
-        }
-    }
-
-    #[test]
-    fn only_a_nightly_says_its_commit_and_date() {
-        let nightly = build_env(Channel::Nightly, "a1b2c3d", "2026-10-13");
-        assert_eq!(nightly[0], ("SIDEVOICE_BUILD_CHANNEL", "nightly".to_owned()));
-        assert_eq!(nightly[1], ("SIDEVOICE_BUILD_COMMIT", "a1b2c3d".to_owned()));
-        assert_eq!(nightly[2], ("SIDEVOICE_BUILD_DATE", "2026-10-13".to_owned()));
-        for (channel, name) in [(Channel::Release, "release"), (Channel::Dev, "dev")] {
-            let env = build_env(channel, "a1b2c3d", "2026-10-13");
-            assert_eq!(env[0].1, name);
-            assert!(env[1].1.is_empty() && env[2].1.is_empty(), "{name}");
         }
     }
 
