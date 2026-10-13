@@ -431,6 +431,8 @@ fn without_a_connector_the_cli_says_and_actions_run_through_it() {
     host.act(Action::Stop).unwrap();
     host.act(Action::ServiceInstall).unwrap();
     host.act(Action::ServiceUninstall).unwrap();
+    host.act(Action::LoginOn).unwrap();
+    host.act(Action::LoginOff).unwrap();
     assert_eq!(host.pairing_code().unwrap(), json!({"code": "SV1-CODE", "expires_in": 600, "reach": "local-only"}));
     assert_eq!(host.pair_room("https://room.example", "ROOM-CODE").unwrap(), json!({"room": "https://room.example"}));
     for (url, code) in
@@ -445,12 +447,111 @@ fn without_a_connector_the_cli_says_and_actions_run_through_it() {
         "service stop --json",
         "service install --json",
         "service uninstall --json",
+        "service login on --json",
+        "service login off --json",
         "pair-device --json",
         "pair https://room.example ROOM-CODE --json",
     ] {
         assert!(ran.iter().any(|c| c == expected), "{expected} not in {ran:?}");
     }
     assert!(!ran.iter().any(|c| c.contains("--force") || c.starts_with("pair -x")));
+}
+
+#[test]
+fn a_connector_without_start_at_sign_in_refuses_it_with_a_key_at_once() {
+    let world = World::new();
+    let log = install_fake_cli(&world.dirs, r#"{"ok":true,"state":"running","service":"launchd"}"#);
+    // As a connector whose command line has no `service login` answers `--json` (clap's error, keyed).
+    let script = world.dirs.data.join("fake-cli");
+    let body = std::fs::read_to_string(&script).unwrap().replace(
+        "case \"$1 $2\" in\n",
+        "case \"$1 $2\" in\n'service login') echo '{\"ok\":false,\"error\":{\"key\":\"connector.usage\",\"params\":{\"detail\":\"invalid subcommand\"},\"message\":\"m\"}}'; exit 1 ;;\n",
+    );
+    std::fs::write(&script, body).unwrap();
+    let host = world.host();
+    let started = std::time::Instant::now();
+    for action in [Action::LoginOn, Action::LoginOff] {
+        let refused = host.act(action).unwrap_err();
+        assert_eq!(refused.key, "service.login-unsupported");
+    }
+    assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+    assert_eq!(host.act(Action::Stop).unwrap().state, State::Starting, "the other actions are untouched");
+    let ran = calls(&log);
+    assert!(ran.iter().any(|c| c == "service login on --json"), "{ran:?}");
+    assert!(ran.iter().any(|c| c == "service login off --json"), "{ran:?}");
+}
+
+/// A CLI whose start at sign-in is a fact it keeps (`service login on|off` writes it, `service status` reports it as
+/// `start_at_login`); the service itself stays stopped. A `gate` file holds the next `service status` (its answer
+/// already read) until a `release` file appears.
+fn install_login_cli(dirs: &DataDirs) -> (PathBuf, PathBuf) {
+    let log = install_fake_cli(dirs, "{}");
+    let dir = dirs.data.clone();
+    let status = r#"{\"ok\":true,\"state\":\"stopped-by-person\",\"service\":\"launchd\",\"start_at_login\":$login}"#;
+    std::fs::write(
+        dir.join("fake-cli"),
+        format!(
+            "#!/bin/sh\necho \"$*\" >> '{log}'\nd='{d}'\ncase \"$1 $2\" in\n\
+             'service status') login=$(cat \"$d/login\" 2>/dev/null || echo false)\n\
+               if [ -e \"$d/gate\" ]; then rm -f \"$d/gate\"; while [ ! -e \"$d/release\" ]; do sleep 0.02; done; fi\n\
+               echo \"{status}\" ;;\n\
+             'service login') if [ \"$3\" = on ]; then login=true; else login=false; fi; echo $login > \"$d/login\"\n\
+               echo \"{status}\" ;;\n\
+             *) echo '{{\"ok\":true,\"state\":\"stopped-by-person\",\"service\":\"launchd\"}}' ;;\nesac\n",
+            log = log.display(),
+            d = dir.display()
+        ),
+    )
+    .unwrap();
+    (log, dir)
+}
+
+#[test]
+fn start_at_sign_in_reads_back_as_installed_and_leaves_the_service_as_it_was() {
+    let world = World::new();
+    let (log, _) = install_login_cli(&world.dirs);
+    let host = world.host();
+    let before = host.poll();
+    assert_eq!((before.state, before.installed), (State::StoppedByPerson, Some(false)));
+    let on = host.act(Action::LoginOn).unwrap();
+    assert_eq!((on.state, on.installed), (State::StoppedByPerson, Some(true)), "on: read back at once");
+    assert_eq!(host.state(), on, "what subscribers are polled with");
+    let off = host.act(Action::LoginOff).unwrap();
+    assert_eq!((off.state, off.installed), (State::StoppedByPerson, Some(false)));
+    assert_eq!(host.state(), off);
+    let ran = calls(&log);
+    assert!(ran.iter().all(|c| !c.starts_with("service start") && !c.starts_with("service stop")), "{ran:?}");
+}
+
+#[test]
+fn a_poll_in_flight_cannot_put_back_the_status_an_action_replaced() {
+    let world = World::new();
+    let (log, dir) = install_login_cli(&world.dirs);
+    let host = world.host();
+    // A poll reads `start_at_login: false` and is held there, its answer not stored yet.
+    std::fs::write(dir.join("gate"), "").unwrap();
+    let polling = std::thread::spawn({
+        let host = host.clone();
+        move || host.poll()
+    });
+    while !calls(&log).iter().any(|c| c == "service status --json") {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let acting = std::thread::spawn({
+        let host = host.clone();
+        move || host.act(Action::LoginOn)
+    });
+    while !calls(&log).iter().any(|c| c == "service login on --json") {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // Let the action's CLI return and reach the cache before the held poll stores its older answer.
+    std::thread::sleep(Duration::from_millis(300));
+    std::fs::write(dir.join("release"), "").unwrap();
+    assert_eq!(polling.join().unwrap().installed, Some(false), "the held poll saw the old fact");
+    let after = acting.join().unwrap().unwrap();
+    assert_eq!(after.installed, Some(true), "the action's state is read after it, not the held poll's");
+    assert_eq!(host.state().installed, Some(true));
+    assert_eq!(host.poll().installed, Some(true), "and the cache holds the new answer");
 }
 
 #[test]

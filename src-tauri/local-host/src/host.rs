@@ -42,6 +42,17 @@ use std::time::{Duration, Instant};
 pub const POLL_EVERY: Duration = Duration::from_secs(2);
 pub const FALLBACK_EVERY: Duration = Duration::from_secs(10);
 
+/// The connector's subcommand that turns start at sign-in on or off, and only that: `service <LOGIN_VERB> on|off --json`
+/// (a running service keeps running, a stopped one stays stopped). The one place its name is written.
+///
+/// Depends on the connector's login-only toggle (in progress); until the installed connector knows it, the call is
+/// refused with [`LOGIN_UNSUPPORTED`].
+pub const LOGIN_VERB: &str = "login";
+
+/// What a start-at-sign-in action is refused with when the connector does not know [`LOGIN_VERB`] (its command line
+/// does not parse: `connector.usage`).
+pub const LOGIN_UNSUPPORTED: &str = "service.login-unsupported";
+
 /// What the bridge's actions run (SEAMS §3), and how long each may take.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
@@ -50,6 +61,10 @@ pub enum Action {
     Restart,
     ServiceInstall,
     ServiceUninstall,
+    /// Start at sign-in on, without starting the service now.
+    LoginOn,
+    /// Start at sign-in off, without stopping the service now.
+    LoginOff,
 }
 
 impl Action {
@@ -60,26 +75,48 @@ impl Action {
             "restart" => Action::Restart,
             "service-install" => Action::ServiceInstall,
             "service-uninstall" => Action::ServiceUninstall,
+            "start-at-login-on" => Action::LoginOn,
+            "start-at-login-off" => Action::LoginOff,
             _ => return None,
         })
     }
 
-    fn argv(self) -> [&'static str; 3] {
-        let verb = match self {
-            Action::Start => "start",
-            Action::Stop => "stop",
-            Action::Restart => "restart",
-            Action::ServiceInstall => "install",
-            Action::ServiceUninstall => "uninstall",
-        };
-        ["service", verb, "--json"]
+    pub fn argv(self) -> Vec<&'static str> {
+        match self {
+            Action::Start => vec!["service", "start", "--json"],
+            Action::Stop => vec!["service", "stop", "--json"],
+            Action::Restart => vec!["service", "restart", "--json"],
+            Action::ServiceInstall => vec!["service", "install", "--json"],
+            Action::ServiceUninstall => vec!["service", "uninstall", "--json"],
+            Action::LoginOn => vec!["service", LOGIN_VERB, "on", "--json"],
+            Action::LoginOff => vec!["service", LOGIN_VERB, "off", "--json"],
+        }
     }
 
-    /// Start and restart wait for the manager; stop and uninstall wait for the jobs to exit (≤ 15 s), then kill.
-    fn timeout(self) -> Duration {
+    /// Start and restart wait for the manager; stop and uninstall wait for the jobs to exit (≤ 15 s), then kill. The
+    /// start-at-sign-in toggle only changes the manager's record, but, as every service command, may wait up to 30 s
+    /// for the install lock first.
+    pub fn timeout(self) -> Duration {
         match self {
             Action::Start | Action::Restart => Duration::from_secs(30),
-            Action::Stop | Action::ServiceInstall | Action::ServiceUninstall => Duration::from_secs(45),
+            Action::Stop | Action::ServiceInstall | Action::ServiceUninstall | Action::LoginOn | Action::LoginOff => {
+                Duration::from_secs(45)
+            }
+        }
+    }
+
+    /// The CLI's refusal as the page gets it: for start at sign-in, a connector whose command line does not take
+    /// [`LOGIN_VERB`] (`connector.usage`) is [`LOGIN_UNSUPPORTED`]; anything else as it is.
+    pub fn refusal(self, refusal: Refusal) -> Refusal {
+        match self {
+            Action::LoginOn | Action::LoginOff if refusal.key == "connector.usage" => Refusal::new(
+                LOGIN_UNSUPPORTED,
+                format!(
+                    "The installed Sidevoice cannot turn start at sign-in on or off on its own: {}",
+                    refusal.message
+                ),
+            ),
+            _ => refusal,
         }
     }
 }
@@ -198,7 +235,24 @@ impl LocalHost {
 
     /// One pass: observe, keep the pairing, decide the state.
     pub fn poll(&self) -> Report {
-        let _pass = self.passes.lock().unwrap();
+        let pass = self.passes.lock().unwrap();
+        self.pass(&pass)
+    }
+
+    /// After something changed what `service status --json` or the installed version would say, both cached answers
+    /// are dropped under the pass lock: a poll already under way finishes first, so what it read before is never
+    /// stored after the drop. The guard is returned for a fresh pass under the same lock.
+    fn invalidate(&self) -> std::sync::MutexGuard<'_, ()> {
+        let pass = self.passes.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap();
+        inner.fallback = None;
+        inner.product = None;
+        drop(inner);
+        pass
+    }
+
+    /// The pass itself; the caller holds `passes` (the guard proves it).
+    fn pass(&self, _pass: &std::sync::MutexGuard<'_, ()>) -> Report {
         // Any connector's `node.status` is the derived service status (SEAMS rev. 2 §4); the CLI's only when none answers.
         let status = connector::node_status(&self.config.dirs).or_else(|| self.fallback_status());
         let health = self.core.health();
@@ -393,15 +447,9 @@ impl LocalHost {
     /// after it.
     pub fn act(&self, action: Action) -> Result<Report, Refusal> {
         let result = self.cli()?.run(&action.argv(), action.timeout());
-        {
-            // After any pass already under way: what it read before the action must not outlive this.
-            let _pass = self.passes.lock().unwrap();
-            let mut inner = self.inner.lock().unwrap();
-            inner.fallback = None;
-            inner.product = None;
-        }
-        result?;
-        Ok(self.poll())
+        let pass = self.invalidate();
+        result.map_err(|refusal| action.refusal(refusal))?;
+        Ok(self.pass(&pass))
     }
 
     /// `pair-device --json` (only on the person's click): `{code, expires_in, reach}`.
@@ -426,7 +474,7 @@ impl LocalHost {
             return Err(Refusal::new("bad_request", "That is not a pairing code."));
         }
         let answer = self.cli()?.run(&["pair", url, code, "--json"], PAIR_ROOM_TIMEOUT)?;
-        self.inner.lock().unwrap().fallback = None;
+        drop(self.invalidate());
         Ok(json!({ "room": answer["room"] }))
     }
 
@@ -491,7 +539,46 @@ pub fn computer_name() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::semver;
+    use super::*;
+
+    #[test]
+    fn start_at_sign_in_is_its_own_action_on_the_login_verb() {
+        assert_eq!(Action::parse("start-at-login-on"), Some(Action::LoginOn));
+        assert_eq!(Action::parse("start-at-login-off"), Some(Action::LoginOff));
+        assert_eq!(Action::parse("start-at-login"), None);
+        assert_eq!(Action::LoginOn.argv(), ["service", LOGIN_VERB, "on", "--json"]);
+        assert_eq!(Action::LoginOff.argv(), ["service", LOGIN_VERB, "off", "--json"]);
+        assert_eq!(LOGIN_VERB, "login");
+        assert_eq!(Action::LoginOn.timeout(), Duration::from_secs(45));
+        assert_eq!(Action::LoginOff.timeout(), Duration::from_secs(45));
+    }
+
+    #[test]
+    fn the_other_actions_keep_their_verbs() {
+        for (name, verb) in [
+            ("start", "start"),
+            ("stop", "stop"),
+            ("restart", "restart"),
+            ("service-install", "install"),
+            ("service-uninstall", "uninstall"),
+        ] {
+            assert_eq!(Action::parse(name).unwrap().argv(), ["service", verb, "--json"], "{name}");
+        }
+        assert_eq!(Action::parse("login"), None);
+    }
+
+    #[test]
+    fn a_connector_without_the_login_verb_is_a_keyed_refusal() {
+        let usage = || Refusal::new("connector.usage", "unrecognized subcommand");
+        for action in [Action::LoginOn, Action::LoginOff] {
+            let refused = action.refusal(usage());
+            assert_eq!(refused.key, LOGIN_UNSUPPORTED);
+            assert!(refused.message.contains("unrecognized subcommand"), "{}", refused.message);
+            let other = Refusal::new("service.busy", "m");
+            assert_eq!(action.refusal(other.clone()), other, "any other refusal as it is");
+        }
+        assert_eq!(Action::Start.refusal(usage()), usage(), "only start at sign-in is renamed");
+    }
 
     #[test]
     fn a_version_is_what_the_page_accepts() {
