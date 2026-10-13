@@ -3,7 +3,10 @@
 //! ever loaded here: what runs a model is the engine's, through the voice call.
 
 use super::*;
-use sidevoice_engine::{async_trait, CatalogFragment, Credentials, Download, Family, Fetcher, HttpClient, Storage};
+use sidevoice_engine::{
+    async_trait, CatalogFragment, Credentials, Download, Family, Fetcher, HttpClient, HttpRequest, HttpResponse,
+    Storage,
+};
 use std::path::Path;
 
 /// What one served file is: its bytes, and whether its download stalls after the first part until it is dropped.
@@ -72,12 +75,13 @@ impl Host for TestHost {
 }
 
 /// A catalogue of one Whisper model, `whisper-test`, whose sherpa-onnx build is three files served by the test host,
-/// and one Kokoro-like voice model whose build needs more memory than any machine has.
-struct TestCatalog(Family, Family);
+/// and one Kokoro-like voice model whose build needs more memory than any machine has (and, `shared`, more: see
+/// `engines_with`).
+struct TestCatalog(Vec<Family>);
 
 impl CatalogSource for TestCatalog {
     fn load(&self) -> sidevoice_engine::Result<CatalogFragment> {
-        Ok(CatalogFragment { families: vec![self.0.clone(), self.1.clone()] })
+        Ok(CatalogFragment { families: self.0.clone() })
     }
 }
 
@@ -108,6 +112,12 @@ impl Drop for Test {
 
 /// The engines over a test host in a fresh directory; `stalls`: the encoder's download stops answering mid-way.
 fn engines(name: &str, stalls: bool) -> Test {
+    engines_with(name, stalls, false)
+}
+
+/// `engines`; `shared`: another model, `echo-test`, whose one build's files are the same bytes as `whisper-test`'s int8
+/// build's (the engine stores a file once, by its SHA-256, and links it to each build).
+fn engines_with(name: &str, stalls: bool, shared: bool) -> Test {
     let root = std::env::temp_dir().join(format!("sidevoice-desktop-engine-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let files = vec![
@@ -144,7 +154,16 @@ fn engines(name: &str, stalls: bool) -> Test {
             }]
         }]
     });
-    let catalog = TestCatalog(serde_json::from_value(whisper).unwrap(), serde_json::from_value(kokoro).unwrap());
+    let mut families = vec![whisper, kokoro];
+    if shared {
+        let mut echo = families[0].clone();
+        echo["id"] = "echo".into();
+        echo["models"][0]["id"] = "echo-test".into();
+        echo["models"][0]["builds"] = serde_json::json!([families[0]["models"][0]["builds"][0].clone()]);
+        echo["models"][0]["builds"][0]["id"] = "echo-test/sherpa-onnx-int8".into();
+        families.push(echo);
+    }
+    let catalog = TestCatalog(families.into_iter().map(|f| serde_json::from_value(f).unwrap()).collect());
     let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
     let host = TestHost { native: NativeHost::new(&root).unwrap(), fetcher: ServedFetcher(files) };
     let engines = NativeEngines::with(Box::new(host), vec![Box::new(catalog)], runtime.handle().clone()).unwrap();
@@ -382,6 +401,7 @@ fn the_catalogues_are_the_local_one_then_each_provider_in_the_pages_shape() {
     for key in ["family", "parametersM", "license", "installed", "builds"] {
         assert!(whisper.get(key).is_some(), "{key} in {whisper}");
     }
+    assert_eq!(whisper.get("lastUsedAt"), None, "not installed: the engine does not know");
     let build = &whisper["builds"][0];
     for key in ["id", "backend", "precision", "downloadBytes", "memoryMb", "available", "reasons", "installed"] {
         assert!(build.get(key).is_some(), "{key} in {build}");
@@ -392,6 +412,24 @@ fn the_catalogues_are_the_local_one_then_each_provider_in_the_pages_shape() {
         assert_eq!(remote.status.reason.as_ref().map(|r| r.code.as_str()), Some("credential-missing"));
     }
     assert_eq!(test.engines.refresh("no-such").unwrap_err().key, "catalog_not_found");
+}
+
+/// When the engine last loaded a local model reaches the page as `lastUsedAt`, the engine's milliseconds since the
+/// Unix epoch as a number, and is absent while the engine does not know. (No model is loaded here: the time is set on
+/// the engine's own listing of the model.)
+#[test]
+fn a_local_model_says_when_it_was_last_used_in_milliseconds_or_nothing() {
+    let test = engines("last-used", false);
+    let mut model = test.engines.models().unwrap().into_iter().find(|m| m.id == "whisper-test").unwrap();
+    model.installed = true;
+    model.last_used_at = Some(1_760_000_000_123);
+    let json = serde_json::to_value(catalogs::local_model(&model)).unwrap();
+    assert_eq!(json["lastUsedAt"], serde_json::json!(1_760_000_000_123_u64));
+    assert!(json["lastUsedAt"].is_u64());
+    model.last_used_at = None;
+    let json = serde_json::to_value(catalogs::local_model(&model)).unwrap();
+    assert_eq!(json.get("lastUsedAt"), None, "{json}");
+    assert_eq!(json.get("last_used_at"), None, "{json}");
 }
 
 /// A job holds the install lock until it has ended, its roll-back included (`roll_back` takes the lock): another
@@ -407,4 +445,384 @@ fn another_install_waits_for_the_lock_a_job_holds_to_roll_back() {
     assert_eq!(waited.unwrap_err().key, "install_cancelled", "it waited until told to stop");
     drop(held);
     assert!(engines.install_lock(&|| false).is_ok());
+}
+
+/// `uninstall` takes the model off the computer, every build of it; one that is not on disk is nothing to do, and a
+/// model the catalogue does not list is refused by key, with the engine's code the page reads.
+#[test]
+fn an_uninstall_takes_every_build_of_the_model_off_the_disk() {
+    let test = engines("uninstall", false);
+    let engines = &test.engines;
+    let jobs = Jobs::default();
+    engines.install("whisper-test", ENGINE, &mut |_, _| {}).unwrap();
+    assert_eq!(engines.installed().unwrap().len(), 1);
+    engines.uninstall(&jobs, "whisper-test").unwrap();
+    assert!(engines.installed().unwrap().is_empty());
+    assert!(engines.on_disk().unwrap().builds.is_empty());
+    let models = engines.models().unwrap();
+    let whisper = models.iter().find(|m| m.id == "whisper-test").unwrap();
+    assert!(whisper.builds.iter().all(|b| !b.installed), "no build of it is left");
+    engines.uninstall(&jobs, "whisper-test").expect("not on disk: nothing to do");
+    let unknown = serde_json::to_value(engines.uninstall(&jobs, "whisper-nope").unwrap_err()).unwrap();
+    assert_eq!((unknown["key"].as_str(), unknown["code"].as_str()), (Some("model_unknown"), Some("model-not-found")));
+    // And it installs again afterwards.
+    engines.install("whisper-test", ENGINE, &mut |_, _| {}).unwrap();
+    assert_eq!(engines.installed().unwrap().len(), 1);
+}
+
+/// Every build of the model goes, and a file another model's build links stays: that model is still whole on disk.
+#[test]
+fn an_uninstall_removes_every_build_and_keeps_the_files_another_model_shares() {
+    let test = engines_with("uninstall-builds", false, true);
+    let engines = &test.engines;
+    let engine = engines.engine();
+    let installed = |model: &str| -> Vec<(String, bool)> {
+        let models = engines.models().unwrap();
+        let model = models.iter().find(|m| m.id == model).unwrap();
+        model.builds.iter().map(|b| (b.id.clone(), b.installed)).collect()
+    };
+    let install = |model: &str, build: &str| {
+        let cancel = Cancel::new();
+        test._runtime.block_on(engine.install(model, Some(build), &|_| {}, &cancel)).unwrap();
+    };
+    install("whisper-test", "whisper-test/sherpa-onnx-int8");
+    install("whisper-test", "whisper-test/sherpa-onnx-fp32");
+    install("echo-test", "echo-test/sherpa-onnx-int8");
+    assert!(installed("whisper-test").iter().all(|(_, on)| *on));
+    engines.uninstall(&Jobs::default(), "whisper-test").unwrap();
+    assert_eq!(
+        installed("whisper-test"),
+        [("whisper-test/sherpa-onnx-int8".to_string(), false), ("whisper-test/sherpa-onnx-fp32".to_string(), false)],
+        "both builds gone"
+    );
+    assert_eq!(installed("echo-test"), [("echo-test/sherpa-onnx-int8".to_string(), true)], "the other model stays");
+    let folder = test.root.join("models").join("echo-test/sherpa-onnx-int8");
+    let files: Vec<_> = std::fs::read_dir(&folder).map(|d| d.flatten().collect()).unwrap_or_default();
+    assert_eq!(files.len(), 3, "its files are whole in {folder:?}");
+    for file in files {
+        assert!(std::fs::metadata(file.path()).unwrap().len() > 0);
+    }
+}
+
+/// An install job of the model, waiting or running, refuses its uninstall until the page cancels it: the job would
+/// otherwise put back what was removed, or lose it once it resolved. A job of another model does not.
+#[test]
+fn an_uninstall_is_refused_while_a_job_of_the_model_is_installing() {
+    let test = engines("uninstall-installing", false);
+    let engines = &test.engines;
+    let jobs = Jobs::default();
+    engines.install("whisper-test", ENGINE, &mut |_, _| {}).unwrap();
+    assert!(jobs.begin("j", "whisper-test", "sherpa-onnx"));
+    let refused = engines.uninstall(&jobs, "whisper-test").unwrap_err();
+    assert_eq!((refused.key, &refused.params["code"]), ("model_installing", &serde_json::json!("model-installing")));
+    assert_eq!(engines.installed().unwrap().len(), 1, "nothing removed");
+    assert!(jobs.begin("k", "kokoro-test", "sherpa-onnx"));
+    assert!(jobs.cancel("j"));
+    engines.uninstall(&jobs, "whisper-test").expect("a cancelled job and another model's do not refuse it");
+    assert!(engines.installed().unwrap().is_empty());
+}
+
+/// It waits for the install that holds the install lock, so no install puts a build of the model on disk while it
+/// removes.
+#[test]
+fn an_uninstall_waits_for_the_install_lock() {
+    let test = engines("uninstall-lock", false);
+    let engines = &test.engines;
+    let jobs = Jobs::default();
+    engines.install("whisper-test", ENGINE, &mut |_, _| {}).unwrap();
+    let held = engines.install_lock(&|| false).unwrap(); // another install is running
+    std::thread::scope(|scope| {
+        let removing = scope.spawn(|| engines.uninstall(&jobs, "whisper-test"));
+        std::thread::sleep(Duration::from_millis(150));
+        assert!(!removing.is_finished(), "it waits for the install ahead of it");
+        drop(held);
+        removing.join().unwrap().unwrap();
+    });
+    assert!(engines.installed().unwrap().is_empty());
+    assert!(engines.installing.try_lock().is_ok(), "the install lock is free");
+}
+
+// ---- Provider keys: tried without being kept, and a provider asked again ----
+
+const OPENAI_SPEC: &str = "https://raw.githubusercontent.com/openai/openai-openapi/main/openapi.json";
+const OPENAI_MODELS: &str = "https://api.openai.com/v1/models";
+
+/// A fake OpenAI: its spec, and its models for the key `good`; the key `scoped` is known but may not list (403), any
+/// other key is refused (401). A request with the key `hold` waits until `released` before it is refused. Every request to it is recorded with the key it carried.
+#[derive(Default)]
+struct FakeOpenAi {
+    asked: Mutex<Vec<(String, String)>>,
+    holding: std::sync::atomic::AtomicBool,
+    released: std::sync::atomic::AtomicBool,
+}
+
+impl FakeOpenAi {
+    /// The keys the models listing was asked with, in order.
+    fn listed_with(&self) -> Vec<String> {
+        guard(&self.asked).iter().filter(|(url, _)| url == OPENAI_MODELS).map(|(_, key)| key.clone()).collect()
+    }
+}
+
+/// The spec the engine reads OpenAI's facts from, cut to what it reads (sidevoice-engine's own test fixture).
+fn openai_spec() -> serde_json::Value {
+    serde_json::json!({ "components": { "schemas": {
+        "CreateTranscriptionRequest": { "properties": {
+            "model": { "anyOf": [{ "type": "string" }, { "type": "string", "enum": ["whisper-1", "gpt-4o-transcribe"] }] },
+            "language": { "type": "string" },
+        }},
+        "CreateSpeechRequest": { "properties": {
+            "model": { "anyOf": [{ "type": "string" }, { "type": "string", "enum": ["tts-1"] }] },
+            "voice": { "anyOf": [{ "type": "string" }, { "type": "string", "enum": ["alloy", "nova"] }] },
+            "speed": { "type": "number", "minimum": 0.25, "maximum": 4 },
+            "response_format": { "type": "string", "enum": ["mp3", "pcm"] },
+        }},
+    }}})
+}
+
+/// The host's network: the fake OpenAI.
+struct Network(Arc<FakeOpenAi>);
+
+#[async_trait]
+impl HttpClient for Network {
+    async fn send(&self, request: HttpRequest) -> sidevoice_engine::Result<HttpResponse> {
+        use std::sync::atomic::Ordering;
+        let openai = &self.0;
+        let key = request
+            .headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+            .map(|(_, value)| value.trim_start_matches("Bearer ").to_string())
+            .unwrap_or_default();
+        guard(&openai.asked).push((request.url.clone(), key.clone()));
+        let answer =
+            |status: u16, body: serde_json::Value| Ok(HttpResponse { status, body: body.to_string().into_bytes() });
+        if request.url == OPENAI_SPEC {
+            return answer(200, openai_spec());
+        }
+        if request.url != OPENAI_MODELS {
+            return answer(404, serde_json::json!({}));
+        }
+        if key == "hold" {
+            openai.holding.store(true, Ordering::SeqCst);
+            while !openai.released.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
+        if key == "good" {
+            return answer(200, serde_json::json!({ "data": [{ "id": "whisper-1" }, { "id": "tts-1" }] }));
+        }
+        if key.starts_with("sk-echo") {
+            let said = format!("Incorrect API key provided: {key}.\nSee {}", "x".repeat(400));
+            return answer(401, serde_json::json!({ "error": { "message": said } }));
+        }
+        if key == "scoped" {
+            return answer(403, serde_json::json!({ "error": { "message": "Missing scopes: api.model.read" } }));
+        }
+        answer(401, serde_json::json!({ "error": { "message": "Incorrect API key provided." } }))
+    }
+}
+
+/// The key the app keeps for OpenAI (the keychain's part), which a test changes.
+#[derive(Default)]
+struct KeptKey(Mutex<Option<String>>);
+
+/// The host's keys: the one kept.
+struct Keys(Arc<KeptKey>);
+
+#[async_trait]
+impl Credentials for Keys {
+    async fn credential(&self, provider: &str) -> sidevoice_engine::Result<Option<String>> {
+        Ok(if provider == "openai" { guard(&self.0 .0).clone() } else { None })
+    }
+}
+
+struct ProviderHost {
+    native: NativeHost,
+    network: Network,
+    keys: Keys,
+}
+
+impl Host for ProviderHost {
+    fn capabilities(&self) -> sidevoice_engine::Capabilities {
+        self.native.capabilities()
+    }
+    fn storage(&self) -> &dyn Storage {
+        self.native.storage()
+    }
+    fn fetcher(&self) -> &dyn Fetcher {
+        self.native.fetcher()
+    }
+    fn http(&self) -> &dyn HttpClient {
+        &self.network
+    }
+    fn credentials(&self) -> &dyn Credentials {
+        &self.keys
+    }
+}
+
+/// The engines over a host whose OpenAI is fake, with `kept` the key the app keeps for it.
+fn with_provider(name: &str, kept: Option<&str>) -> (Test, Arc<FakeOpenAi>, Arc<KeptKey>) {
+    let root = std::env::temp_dir().join(format!("sidevoice-desktop-engine-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+    let openai = Arc::new(FakeOpenAi::default());
+    let key = Arc::new(KeptKey(Mutex::new(kept.map(str::to_string))));
+    let host = ProviderHost {
+        native: NativeHost::new(&root).unwrap(),
+        network: Network(Arc::clone(&openai)),
+        keys: Keys(Arc::clone(&key)),
+    };
+    let engines = NativeEngines::with(Box::new(host), Vec::new(), runtime.handle().clone()).unwrap();
+    (Test { engines, root, _runtime: runtime }, openai, key)
+}
+
+fn openai_view(engines: &NativeEngines) -> CatalogView {
+    engines.catalogs().unwrap().into_iter().find(|view| view.id == "openai").unwrap()
+}
+
+fn code(refused: Option<CredentialRefusal>) -> Option<String> {
+    refused.map(|refused| refused.reason.code)
+}
+
+/// A key tried is asked of the provider, and what the provider said is the answer; the key kept, and what was listed
+/// with it, are as they were: nothing of the tried key is kept anywhere.
+#[test]
+fn a_key_tried_is_asked_of_the_provider_and_kept_nowhere() {
+    let (test, openai, _) = with_provider("trial", Some("good"));
+    let engines = &test.engines;
+    let before = openai_view(engines);
+    assert!(before.status.reason.is_none() && !before.models.is_empty(), "{before:?}");
+    assert_eq!(openai.listed_with(), ["good"]);
+
+    assert_eq!(code(engines.test_credential("openai", "bad").unwrap()).as_deref(), Some("credential-rejected"));
+    assert_eq!(code(engines.test_credential("openai", "scoped").unwrap()).as_deref(), Some("listing-not-permitted"));
+    assert_eq!(code(engines.test_credential("openai", " good ").unwrap()), None, "trimmed, and taken");
+    assert_eq!(code(engines.test_credential("openai", "  ").unwrap()).as_deref(), Some("credential-missing"));
+    assert_eq!(openai.listed_with(), ["good", "bad", "scoped", "good"], "each trial asked the provider itself");
+
+    assert_eq!(openai_view(engines), before, "the kept listing is the one listed before");
+    assert_eq!(openai.listed_with().len(), 4, "and was not listed again for it");
+
+    assert_eq!(engines.test_credential("local", "x").unwrap_err().key, "catalog_not_found");
+    assert_eq!(engines.test_credential("no-such", "x").unwrap_err().key, "catalog_not_found");
+}
+
+/// A refused key is told with the provider's own words, never with the key itself, and never longer than
+/// `DETAIL_CHARS`; serialised, the detail sits beside `{code, params}`.
+#[test]
+fn a_refused_key_is_told_with_the_provider_words_without_the_key() {
+    let (test, _, _) = with_provider("trial-detail", Some("good"));
+    let engines = &test.engines;
+    let refused = engines.test_credential("openai", "bad").unwrap().expect("refused");
+    assert_eq!(refused.reason.code, "credential-rejected");
+    assert!(refused.detail.as_deref().is_some_and(|said| said.contains("Incorrect API key provided")), "{refused:?}");
+    let json = serde_json::to_value(&refused).unwrap();
+    assert_eq!(json["code"], "credential-rejected");
+    assert!(json.get("params").is_some() && json["detail"].is_string(), "{json}");
+
+    let refused = engines.test_credential("openai", " sk-echo-SENTINEL-123 ").unwrap().expect("refused");
+    let json = serde_json::to_string(&refused).unwrap();
+    let said = refused.detail.expect("the provider's words");
+    assert!(!said.contains("sk-echo-SENTINEL-123") && !json.contains("SENTINEL"), "{said}");
+    assert!(said.contains("[key]") && !said.contains('\n'), "{said}");
+    assert_eq!(said.chars().count(), catalogs::DETAIL_CHARS, "cut to the most, the last an ellipsis");
+    assert!(said.ends_with('…'));
+}
+
+/// Words that are only blank are no detail, and a refusal without words has none: it serialises as `{code, params}`.
+#[test]
+fn a_refusal_without_words_has_no_detail() {
+    let reason =
+        || ReasonView { code: "credential-rejected".into(), params: catalogs::ReasonParams { needs: None, has: None } };
+    assert_eq!(CredentialRefusal::new(reason(), Some(" \t\n "), "abc").detail, None);
+    assert_eq!(
+        CredentialRefusal::new(reason(), Some("bad abc, abc"), " abc ").detail.as_deref(),
+        Some("bad [key], [key]")
+    );
+    let none = serde_json::to_value(CredentialRefusal::new(reason(), None, "abc")).unwrap();
+    // The key as the provider may echo it: masked, cut short (the engine clips a body that is not its JSON), encoded,
+    // in a header; none of it reaches the page, and words that merely look alike stay.
+    let key = "sk-echo-SENTINEL-123";
+    for echo in [
+        "Incorrect API key provided: sk-echo-SENTINEL-***.",
+        "Unauthorized: Bearer sk-echo-SENT",
+        "bad key %73%6B-echo-SENTINEL-123",
+        "key='sk-echo-SENTINEL-123'",
+    ] {
+        let said = CredentialRefusal::new(reason(), Some(echo), key).detail.unwrap();
+        assert!(!said.contains("SENT") && !said.contains("echo-") && said.contains("[key]"), "{echo} → {said}");
+    }
+    assert_eq!(
+        CredentialRefusal::new(reason(), Some("Incorrect API key provided."), key).detail.as_deref(),
+        Some("Incorrect API key provided.")
+    );
+    let long = "é".repeat(400);
+    let cut = CredentialRefusal::new(reason(), Some(&long), key).detail.unwrap();
+    assert_eq!(cut.chars().count(), catalogs::DETAIL_CHARS);
+    assert_eq!(none, serde_json::json!({ "code": "credential-rejected", "params": {} }));
+}
+
+/// A key the provider takes is not kept by trying it: with none kept, the provider still has none.
+#[test]
+fn a_key_taken_on_trial_is_not_kept() {
+    let (test, openai, _) = with_provider("trial-none-kept", None);
+    let engines = &test.engines;
+    assert_eq!(code(engines.test_credential("openai", "good").unwrap()), None);
+    let view = openai_view(engines);
+    assert_eq!(view.status.reason.map(|r| r.code).as_deref(), Some("credential-missing"));
+    assert!(view.models.is_empty());
+    assert_eq!(openai.listed_with(), ["good"], "only the trial asked");
+}
+
+/// While a key is being tried, what the app lists — asked again or not — is listed with the kept key, and the trial
+/// does not hold it up.
+#[test]
+fn a_listing_while_a_key_is_tried_is_the_kept_keys() {
+    use std::sync::atomic::Ordering;
+    /// Lets the held trial go however the test ends, so a failure fails rather than hangs.
+    struct Release<'a>(&'a FakeOpenAi);
+    impl Drop for Release<'_> {
+        fn drop(&mut self) {
+            self.0.released.store(true, Ordering::SeqCst);
+        }
+    }
+    let (test, openai, _) = with_provider("trial-concurrent", Some("good"));
+    let engines = &test.engines;
+    std::thread::scope(|scope| {
+        let release = Release(&openai);
+        let trying = scope.spawn(|| engines.test_credential("openai", "hold"));
+        let asked = std::time::Instant::now();
+        while !openai.holding.load(Ordering::SeqCst) {
+            assert!(asked.elapsed() < Duration::from_secs(10), "the trial never reached the provider");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // Listed with the trial held mid-request: on its own thread, so a listing the trial blocks fails the test.
+        let (done, listed) = std::sync::mpsc::channel();
+        scope.spawn(move || {
+            let _ = done.send(engines.refresh("openai").map(|()| openai_view(engines)));
+        });
+        let view = listed.recv_timeout(Duration::from_secs(10)).expect("a listing waited for the trial").unwrap();
+        assert!(view.status.reason.is_none() && !view.models.is_empty(), "{view:?}");
+        drop(release);
+        assert_eq!(code(trying.join().unwrap().unwrap()).as_deref(), Some("credential-rejected"));
+    });
+    assert_eq!(openai.listed_with(), ["hold", "good"], "the app's listing never carried the tried key");
+    assert!(openai_view(engines).status.reason.is_none(), "nor did the trial's answer reach it");
+}
+
+/// `refresh` asks the provider again past the listing kept, with the key kept now.
+#[test]
+fn refresh_asks_the_provider_again_past_the_kept_listing() {
+    let (test, openai, kept) = with_provider("refresh", Some("good"));
+    let engines = &test.engines;
+    openai_view(engines);
+    openai_view(engines);
+    assert_eq!(openai.listed_with(), ["good"], "a listing is kept");
+    engines.refresh("openai").unwrap();
+    assert_eq!(openai.listed_with(), ["good", "good"], "asked again");
+    *guard(&kept.0) = Some("revoked".into());
+    engines.refresh("openai").unwrap();
+    let view = openai_view(engines);
+    assert_eq!(view.status.reason.map(|r| r.code).as_deref(), Some("credential-rejected"));
+    assert!(view.models.is_empty());
 }

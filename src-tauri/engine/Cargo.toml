@@ -9,10 +9,11 @@ publish = false
 
 [dependencies]
 # The engine itself: catalogue, downloads, the build that runs here, the models, local and remote (whose keys the
-# app hands it, `Credentials`), through its catalogues (`local`, then each provider). The 0.3.1 release. Its sherpa-onnx
-# backend links sherpa-onnx's static libraries (SHERPA_ONNX_LIB_DIR), its whisper.cpp backend compiles whisper.cpp
-# from source with CMake, with Metal on Apple silicon (docs/ENGINES.md).
-sidevoice-engine = { git = "https://github.com/sidevoice/sidevoice-engine", tag = "v0.3.1" }
+# app hands it, `Credentials`), through its catalogues (`local`, then each provider). The 0.4.0 release (when each
+# local model was last loaded, `last_used_at`). Its sherpa-onnx backend links sherpa-onnx's static libraries
+# (SHERPA_ONNX_LIB_DIR), its whisper.cpp backend compiles whisper.cpp from source with CMake, with Metal on Apple
+# silicon (docs/ENGINES.md).
+sidevoice-engine = { git = "https://github.com/sidevoice/sidevoice-engine", tag = "v0.4.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The engine's futures run on the app's Tokio runtime; installs race a cancel (src/lib.rs).
