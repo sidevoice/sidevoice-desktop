@@ -1,5 +1,5 @@
 //! What this device remembers: where the bundled interface looks first (its target), the mute shortcut, how the
-//! call controls card shows its controls, and whether updates download on their own.
+//! call controls card shows its controls, and how the app's updates arrive (set only by the room page).
 //!
 //! The window always shows the web interface bundled in the app (docs/TARGETS.md). Which machine it talks to,
 //! and how to reach it, comes from pairing (the code the node issues carries the node's addresses); the target
@@ -39,18 +39,14 @@ pub struct Settings {
     /// "Show the call controls always": the card keeps its controls in view instead of showing them near the pointer.
     #[serde(default)]
     pub call_controls_always: bool,
-    /// Updates download in the background as soon as they are found (the default); off, the room is only told of one,
-    /// and "Restart to update" downloads it first (core `updater`).
-    #[serde(default = "on")]
-    pub auto_download_updates: bool,
+    /// How the app's updates arrive (core `updater`): automatic (the default) or manual. Set only by the room page
+    /// (`host.updater.setMode`); the settings window neither shows nor sends it, and saving it keeps the stored one.
+    #[serde(default)]
+    pub update_mode: crate::updater::Mode,
 }
 
 fn default_shortcut() -> String {
     DEFAULT_MUTE_SHORTCUT.to_string()
-}
-
-fn on() -> bool {
-    true
 }
 
 /// What the app offers, in this order, when the system refuses the mute shortcut: the first of these it can register
@@ -94,7 +90,7 @@ impl Settings {
             target: String::new(),
             mute_shortcut: default_shortcut(),
             call_controls_always: false,
-            auto_download_updates: true,
+            update_mode: crate::updater::Mode::Automatic,
         }
     }
 }
@@ -192,7 +188,7 @@ pub fn validate(input: Settings) -> Result<Settings, SettingsError> {
         target: normalize_target(&input.target)?,
         mute_shortcut: input.mute_shortcut.trim().to_string(),
         call_controls_always: input.call_controls_always,
-        auto_download_updates: input.auto_download_updates,
+        update_mode: input.update_mode,
     })
 }
 
@@ -290,7 +286,7 @@ mod tests {
             target: "https://room.example.com".into(),
             mute_shortcut: "Alt+M".into(),
             call_controls_always: true,
-            auto_download_updates: false,
+            update_mode: crate::updater::Mode::Manual,
         };
         save(&dir, &s).unwrap();
         assert_eq!(load(&dir), Some(s));
@@ -312,9 +308,9 @@ mod tests {
                 target: String::new(),
                 mute_shortcut: "Alt+M".into(),
                 call_controls_always: false,
-                auto_download_updates: true,
+                update_mode: crate::updater::Mode::Automatic,
             }),
-            "a file from the room-page days keeps its shortcut and forgets the room; updates download on their own"
+            "a file from the room-page days keeps its shortcut and forgets the room; updates are automatic"
         );
         fs::remove_dir_all(&dir).unwrap();
     }

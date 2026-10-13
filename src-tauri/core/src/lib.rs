@@ -2,6 +2,7 @@
 //! machine (the shell needs a webview toolkit to even link).
 
 pub mod bridge;
+pub mod build_info;
 pub mod call_controls;
 pub mod headset;
 pub mod i18n;

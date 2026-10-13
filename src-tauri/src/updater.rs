@@ -1,73 +1,71 @@
-//! The app's updates (docs/BRIDGE.md → "The updater"), as the room page reaches them:
-//! `window.__sidevoiceDesktop.host.updater`.
+//! The app's updates (docs/BRIDGE.md → "The updater"): `window.__sidevoiceDesktop.host.updater`, a thin layer over
+//! tauri-plugin-updater (from Rust only: the page is granted none of its own commands). The plugin reads the release's
+//! `latest.json` (tauri.conf.json `plugins.updater`), downloads and verifies the update, and installs it; this keeps
+//! the mode, the schedule (at launch, then every 6 hours), the status the page reads, and install-on-quit.
 //!
-//! tauri-plugin-updater, from Rust only (the page is granted none of its own commands): it reads the release's
-//! `latest.json` (the endpoint and the public key are `plugins.updater` in tauri.conf.json), downloads the update and
-//! verifies its signature, and installs it. What to do when is core `updater`'s: checked at launch and every 6 hours,
-//! downloaded in the background unless the person turned that off (the settings window), installed on the person's
-//! "Restart to update" — once the call has ended when there is one (the room's call joined, or the voice call the app
-//! runs listening).
-//!
-//! Only where this copy can update itself ([`offered`]: a release's .app, AppImage or Windows installer). Elsewhere —
-//! a .deb, a dev build — the page has no `host.updater`, nothing is checked, `updater_status` says nothing is
-//! available and `updater_restart` refuses.
+//! Only a numbered release has it (`SIDEVOICE_BUILD_CHANNEL`, build.rs; RELEASING.md → "Channels"), and only where
+//! that copy can replace itself ([`offered`]). Elsewhere nothing is checked and the page has no `host.updater`.
 
 use serde_json::{json, Value};
-use sidevoice_desktop_core::updater::{self as plan, Install, Status, Step, Updates};
+use sidevoice_desktop_core::build_info::{BuildInfo, Channel};
+use sidevoice_desktop_core::settings::{self, Settings};
+use sidevoice_desktop_core::updater::{self as core, ErrorCode, Mode, State, Status};
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tauri::{AppHandle, Manager, Webview};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
-/// How often the releases are checked after the first check, at launch.
-const EVERY: Duration = Duration::from_secs(6 * 60 * 60);
-/// How long a check may take: one that hangs would hold every later check back.
-const CHECK_FOR: Duration = Duration::from_secs(2 * 60);
-/// How long a download may take, so one that stalls is given up and tried again at the next check.
-const DOWNLOAD_FOR: Duration = Duration::from_secs(60 * 60);
+use crate::AppState;
 
-pub struct UpdaterState {
-    plan: Mutex<Updates>,
-    /// The update the last check announced.
-    announced: Mutex<Option<Update>>,
+/// Checked at launch and then this often, by the wall clock (a computer that slept through it checks on waking).
+const EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+const TICK: Duration = Duration::from_secs(10 * 60);
+/// A check or a download that hangs is given up (the plugin's request timeout; the next check tries again).
+const TIMEOUT: Duration = Duration::from_secs(60 * 60);
+
+/// `host.build`: the channel, the app's version (a nightly's is the last release's), and a nightly's commit and date.
+pub fn build(app: &AppHandle) -> BuildInfo {
+    BuildInfo::new(
+        env!("SIDEVOICE_BUILD_CHANNEL"),
+        &app.package_info().version.to_string(),
+        env!("SIDEVOICE_BUILD_COMMIT"),
+        env!("SIDEVOICE_BUILD_DATE"),
+    )
+}
+
+#[derive(Default)]
+struct Updater {
+    status: Mutex<Status>,
+    /// The update the last check found, until it is downloaded.
+    found: Mutex<Option<Update>>,
     /// The update downloaded and verified, with its bytes.
     ready: Mutex<Option<(Update, Vec<u8>)>>,
 }
 
-/// Whether this copy of the app can update itself; found once, at start (and logged with `SIDEVOICE_DEBUG=1`).
+/// Whether this copy updates itself; found once (and logged with `SIDEVOICE_DEBUG=1`).
 pub fn offered() -> bool {
     static OFFERED: OnceLock<bool> = OnceLock::new();
-    *OFFERED.get_or_init(|| match plan::offered(cfg!(debug_assertions), install()) {
-        Ok(()) => true,
-        Err(why) => {
-            crate::debug(&format!("updater off: {why}"));
-            false
-        }
+    *OFFERED.get_or_init(|| {
+        let release = Channel::parse(env!("SIDEVOICE_BUILD_CHANNEL")) == Some(Channel::Release);
+        let offered = release && replaceable();
+        crate::debug(&format!("updater on: {offered} (a release: {release})"));
+        offered
     })
 }
 
-/// How this copy was installed: the bundle Tauri's bundler wrote into the binary, and where it runs from.
-fn install() -> Install {
+/// Whether this copy can replace itself: a release's .app not on a read-only volume (the .dmg, a translocated copy),
+/// its AppImage run as one, its Windows installer's install. Never a .deb (the package manager's) or a bare binary.
+fn replaceable() -> bool {
     use tauri::utils::config::BundleType;
     match tauri::utils::platform::bundle_type() {
-        Some(BundleType::App | BundleType::Dmg) => {
-            let exe = std::env::current_exe().ok();
-            Install::MacApp {
-                in_bundle: exe.as_deref().is_some_and(plan::in_app_bundle),
-                read_only: exe.as_deref().is_some_and(on_read_only_volume),
-            }
-        }
-        Some(BundleType::AppImage) => Install::AppImage { mounted: std::env::var_os("APPIMAGE").is_some() },
-        Some(BundleType::Nsis) => Install::Nsis,
-        Some(BundleType::Deb) => Install::Deb,
-        Some(BundleType::Rpm | BundleType::Msi) => Install::Other,
-        None => Install::Unbundled,
+        Some(BundleType::App) => std::env::current_exe().is_ok_and(|exe| !on_read_only_volume(&exe)),
+        Some(BundleType::AppImage) => std::env::var_os("APPIMAGE").is_some(),
+        Some(BundleType::Nsis) => true,
+        _ => false,
     }
 }
 
-/// Whether the `.app` holding `exe` is on a volume that cannot be written (the mounted .dmg it was opened from): a file
-/// next to it cannot be made for that reason. Any other refusal (a folder only an administrator writes) is not: the
-/// plugin asks for the administrator's password when it installs there.
+/// Whether the folder holding the `.app` is on a read-only volume (the mounted .dmg it was opened from).
 fn on_read_only_volume(exe: &std::path::Path) -> bool {
     let Some(folder) = exe.ancestors().nth(4) else { return false };
     let probe = folder.join(format!(".sidevoice-update-check-{}", std::process::id()));
@@ -80,9 +78,8 @@ fn on_read_only_volume(exe: &std::path::Path) -> bool {
     }
 }
 
-/// At start: the plugin and the checks, where this copy can update itself. Without the plugin the app still runs: its
-/// page is then told nothing is available.
-pub fn setup(app: &AppHandle, auto_download: bool) {
+/// At start, where this copy updates itself: the plugin, and the checks.
+pub fn setup(app: &AppHandle) {
     if !offered() {
         return;
     }
@@ -90,210 +87,209 @@ pub fn setup(app: &AppHandle, auto_download: bool) {
         eprintln!("sidevoice: the updater did not start: {e}");
         return;
     }
-    app.manage(UpdaterState {
-        plan: Mutex::new(Updates::new(auto_download)),
-        announced: Mutex::default(),
-        ready: Mutex::default(),
-    });
+    app.manage(Updater::default());
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         loop {
+            let started = SystemTime::now();
             check(&app).await;
-            tokio::time::sleep(EVERY).await;
+            while started.elapsed().is_ok_and(|passed| passed < EVERY) {
+                tokio::time::sleep(TICK).await;
+            }
         }
     });
 }
 
-async fn check(app: &AppHandle) {
-    let Some(state) = app.try_state::<UpdaterState>() else { return };
-    if !state.plan.lock().unwrap().begin_check() {
-        return;
+fn mode(app: &AppHandle) -> Mode {
+    app.state::<AppState>().settings.lock().unwrap().as_ref().map(|s| s.update_mode).unwrap_or_default()
+}
+
+/// Changes the status and tells the page when it changed: `window.__sidevoiceDesktop.updaterEvent(status)`.
+fn set(app: &AppHandle, change: impl FnOnce(&mut Status)) -> Status {
+    let updater = app.state::<Updater>();
+    let (before, after) = {
+        let mut status = updater.status.lock().unwrap();
+        let before = status.clone();
+        change(&mut status);
+        (before, status.clone())
+    };
+    if before != after {
+        if let (Some(window), Ok(json)) = (crate::room_window(app), serde_json::to_string(&after)) {
+            let _ = window.eval(format!("window.__sidevoiceDesktop && window.__sidevoiceDesktop.updaterEvent({json})"));
+        }
     }
-    let result = match updater(app) {
-        Ok(updater) => match tokio::time::timeout(CHECK_FOR, updater.check()).await {
-            Ok(checked) => checked.map_err(|e| e.to_string()),
-            Err(_) => Err("timed out".into()),
-        },
+    after
+}
+
+/// Checks the releases. A newer version found is `available`, and in automatic mode
+/// downloaded at once; one already downloading or ready is left as it is.
+async fn check(app: &AppHandle) {
+    let updater = app.state::<Updater>();
+    let checked = match app.updater_builder().timeout(TIMEOUT).build() {
+        Ok(plugin) => plugin.check().await,
         Err(e) => Err(e),
     };
-    let checked = match &result {
-        Ok(update) => {
-            crate::debug(&format!("updater checked: {:?}", update.as_ref().map(|u| &u.version)));
-            Ok(update.as_ref().map(|u| u.version.clone()))
+    match checked {
+        Ok(found) => {
+            crate::debug(&format!("updater checked: {:?}", found.as_ref().map(|u| &u.version)));
+            set(app, |status| {
+                status.error = None;
+                if matches!(status.state, State::Idle | State::Available) {
+                    *status = match &found {
+                        Some(update) => Status::new(State::Available, &update.version),
+                        None => Status::default(),
+                    };
+                }
+            });
+            *updater.found.lock().unwrap() = found;
+            if mode(app) == Mode::Automatic {
+                let _ = download(app);
+            }
         }
         Err(e) => {
-            // No release with a latest.json yet, no network, a manifest without this platform: nothing to offer.
             crate::debug(&format!("updater check failed: {e}"));
-            Err(())
+            set(app, |status| *status = status.clone().failed(ErrorCode::CheckFailed));
         }
-    };
-    transition(app, |plan| {
-        // What was announced changes with the plan, under its lock: a download it decides takes that update.
-        if let Ok(update) = result {
-            *state.announced.lock().unwrap() = update;
+    }
+}
+
+/// Starts downloading the update found: `false` when none is available (one downloading or ready is fine).
+fn download(app: &AppHandle) -> bool {
+    let Some(update) = app.state::<Updater>().found.lock().unwrap().clone() else { return false };
+    let mut state = State::Idle;
+    set(app, |status| {
+        state = status.state;
+        if state == State::Available {
+            *status = Status::new(State::Downloading, &update.version);
         }
-        plan.checked(checked)
     });
-}
-
-/// The plugin's updater: the releases' endpoint (tauri.conf.json), or in CI's probe build an address that never
-/// answers, so the probe never depends on what the releases hold, nor installs one.
-fn updater(app: &AppHandle) -> Result<tauri_plugin_updater::Updater, String> {
-    let builder = app.updater_builder();
-    #[cfg(feature = "probe")]
-    let builder = builder
-        .endpoints(vec!["https://127.0.0.1:9/latest.json".parse().expect("a URL")])
-        .map_err(|e| e.to_string())?;
-    builder.build().map_err(|e| e.to_string())
-}
-
-/// Changes the plan under its lock and does what it decided; tells the page its status may have changed. A download
-/// takes the update announced as it was decided, never one a later check put in its place.
-fn transition(app: &AppHandle, change: impl FnOnce(&mut Updates) -> Step) {
-    let Some(state) = app.try_state::<UpdaterState>() else { return };
-    let (step, update) = {
-        let mut plan = state.plan.lock().unwrap();
-        let step = change(&mut plan);
-        let update = match &step {
-            Step::Download(version) => state.announced.lock().unwrap().clone().filter(|u| &u.version == version),
-            _ => None,
+    if state != State::Available {
+        return state != State::Idle;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut received = 0u64;
+        let progress = |chunk: usize, total: Option<u64>| {
+            received += chunk as u64;
+            set(&app, |status| status.progress = core::progress(received, total));
         };
-        (step, update)
-    };
-    notify(app);
-    match step {
-        Step::Nothing => {}
-        Step::Download(version) => {
-            let app = app.clone();
-            tauri::async_runtime::spawn(async move { download(&app, version, update).await });
+        match update.download(progress, || {}).await {
+            Ok(bytes) => {
+                crate::debug(&format!("updater downloaded {} ({} bytes)", update.version, bytes.len()));
+                let version = update.version.clone();
+                *app.state::<Updater>().ready.lock().unwrap() = Some((update, bytes));
+                set(&app, |status| *status = Status::new(State::Ready, &version));
+            }
+            Err(e) => {
+                crate::debug(&format!("updater download of {} failed: {e}", update.version));
+                let failed = Status::new(State::Available, &update.version).failed(ErrorCode::DownloadFailed);
+                set(&app, |status| *status = failed);
+            }
         }
-        Step::Install => {
-            let app = app.clone();
-            tauri::async_runtime::spawn_blocking(move || install_and_restart(&app));
-        }
-    }
+    });
+    true
 }
 
-async fn download(app: &AppHandle, version: String, update: Option<Update>) {
-    let Some(state) = app.try_state::<UpdaterState>() else { return };
-    let ok = match update {
-        // Downloaded whole, then verified against the app's public key before anything else sees it.
-        Some(update) => match tokio::time::timeout(DOWNLOAD_FOR, update.download(|_, _| {}, || {})).await {
-            Ok(Ok(bytes)) => {
-                crate::debug(&format!("updater downloaded {version} ({} bytes)", bytes.len()));
-                *state.ready.lock().unwrap() = Some((update, bytes));
-                true
-            }
-            Ok(Err(e)) => {
-                crate::debug(&format!("updater download of {version} failed: {e}"));
-                false
-            }
-            Err(_) => {
-                crate::debug(&format!("updater download of {version} timed out"));
-                false
-            }
-        },
-        None => false,
-    };
-    transition(app, |plan| plan.downloaded(&version, ok));
-}
-
-/// Installs the update ready and restarts into it, unless a call began as the install was decided: then it waits for
-/// that call to end. Windows: the installer the update is takes over (the plugin exits the app and the installer
-/// starts it again).
-fn install_and_restart(app: &AppHandle) {
-    let Some(state) = app.try_state::<UpdaterState>() else { return };
-    {
-        // Under the plan's lock, as `call_changed` reads the call: a call that begins after this waits for the restart.
-        let mut plan = state.plan.lock().unwrap();
-        if crate::in_call(app) {
-            crate::debug("updater install waits: a call began");
-            plan.install_deferred();
-            return;
-        }
+/// Installs the update ready; `restart`: then restarts into it (Windows: the plugin exits and the installer starts the
+/// app again only then). Taken while it installs, so the exit of a restart does not install it a second time.
+fn install(app: &AppHandle, restart: bool) {
+    let updater = app.state::<Updater>();
+    let Some((update, bytes)) = updater.ready.lock().unwrap().take() else { return };
+    crate::debug(&format!("updater installing {} (restart: {restart})", update.version));
+    if restart {
+        crate::local_host::shutdown(app);
     }
-    let ready = state.ready.lock().unwrap().take();
-    let result = match &ready {
-        Some((update, bytes)) => {
-            crate::debug(&format!("updater installing {}", update.version));
-            update.install(bytes).map_err(|e| e.to_string())
-        }
-        None => Err("nothing downloaded".into()),
-    };
-    match result {
-        Ok(()) => {
-            crate::local_host::shutdown(app);
-            app.restart();
-        }
+    match update.clone().restart_after_install(restart).install(&bytes) {
+        Ok(()) if restart => app.restart(),
+        Ok(()) => {}
         Err(e) => {
             crate::debug(&format!("updater install failed: {e}"));
-            state.plan.lock().unwrap().install_failed();
-            notify(app);
+            *updater.ready.lock().unwrap() = Some((update, bytes));
+            set(app, |status| *status = status.clone().failed(ErrorCode::InstallFailed));
         }
     }
 }
 
-/// Tells the page to read the status again: `window.__sidevoiceDesktop.updaterEvent()`.
-fn notify(app: &AppHandle) {
-    if let Some(window) = crate::room_window(app) {
-        let _ = window.eval("window.__sidevoiceDesktop && window.__sidevoiceDesktop.updaterEvent()");
+/// The app is quitting (`RunEvent::Exit`): in automatic mode, an update ready is installed on the way out.
+pub fn quit(app: &AppHandle) {
+    if app.try_state::<Updater>().is_some() && mode(app) == Mode::Automatic {
+        install(app, false);
     }
-}
-
-/// A call began or ended (the room's snapshot, the voice call the app runs): a restart the person asked for during it
-/// happens once it has ended.
-pub fn call_changed(app: &AppHandle) {
-    // Read under the plan's lock, so two changes close together are applied in the order they were read.
-    transition(app, |plan| plan.call(crate::in_call(app)));
-}
-
-/// The settings window turned automatic download on or off.
-pub fn set_auto_download(app: &AppHandle, on: bool) {
-    transition(app, |plan| plan.set_auto_download(on));
 }
 
 fn refusal(key: &str, message: &str) -> Value {
     json!({ "key": key, "message": message })
 }
 
-fn caller(app: &AppHandle, webview: &Webview) -> Result<(), Value> {
-    crate::room_page(app, webview).map_err(|why| {
-        crate::debug(&format!("updater refused: {why}"));
-        refusal("bad_request", &why)
-    })
+fn unavailable() -> Value {
+    refusal("update_unavailable", "There is no update to install.")
 }
 
-/// `{available, version?}`: `available` once an update is downloaded and ready (automatic download off: once one is
-/// found). Where this copy cannot update itself, never available.
+/// The commands answer only the current room window on the app's own page, and only where the updater runs.
+fn caller(app: &AppHandle, webview: &Webview) -> Result<(), Value> {
+    crate::room_page(app, webview).map_err(|why| refusal("bad_request", &why))?;
+    app.try_state::<Updater>().map(|_| ()).ok_or_else(unavailable)
+}
+
+fn status(app: &AppHandle) -> Status {
+    app.state::<Updater>().status.lock().unwrap().clone()
+}
+
+#[tauri::command]
+pub fn updater_settings(app: AppHandle, webview: Webview) -> Result<Value, Value> {
+    caller(&app, &webview)?;
+    Ok(json!({ "mode": mode(&app) }))
+}
+
+/// Keeps the mode with the app's settings; automatic starts downloading an update already found.
+#[tauri::command]
+pub fn updater_set_mode(app: AppHandle, webview: Webview, mode: Mode) -> Result<Value, Value> {
+    caller(&app, &webview)?;
+    let dir = app.path().app_config_dir().map_err(|e| refusal("internal", &e.to_string()))?;
+    {
+        let state = app.state::<AppState>();
+        let mut stored = state.settings.lock().unwrap();
+        let changed = Settings { update_mode: mode, ..stored.clone().unwrap_or_else(Settings::first_run) };
+        settings::save(&dir, &changed).map_err(|e| refusal("internal", &format!("not saved: {e}")))?;
+        *stored = Some(changed);
+    }
+    if mode == Mode::Automatic {
+        download(&app);
+    }
+    Ok(json!({ "mode": mode }))
+}
+
 #[tauri::command]
 pub fn updater_status(app: AppHandle, webview: Webview) -> Result<Status, Value> {
     caller(&app, &webview)?;
-    Ok(app.try_state::<UpdaterState>().map(|state| state.plan.lock().unwrap().status()).unwrap_or_default())
+    Ok(status(&app))
 }
 
-/// "Restart to update": installs and restarts now, or once the update is downloaded, or once the call has ended.
-/// Refuses `update_unavailable` when there is nothing to install.
+/// "Check for updates": answers the status once the check is done.
+#[tauri::command]
+pub async fn updater_check(app: AppHandle, webview: Webview) -> Result<Status, Value> {
+    caller(&app, &webview)?;
+    check(&app).await;
+    Ok(status(&app))
+}
+
+/// Starts downloading the update found; refuses `update_unavailable` when there is none.
+#[tauri::command]
+pub fn updater_download(app: AppHandle, webview: Webview) -> Result<Status, Value> {
+    caller(&app, &webview)?;
+    if !download(&app) {
+        return Err(unavailable());
+    }
+    Ok(status(&app))
+}
+
+/// "Restart to update": installs the ready update and restarts now; refuses `update_unavailable` unless one is ready.
 #[tauri::command]
 pub fn updater_restart(app: AppHandle, webview: Webview) -> Result<(), Value> {
     caller(&app, &webview)?;
-    let unavailable = || refusal("update_unavailable", "There is no update to install.");
-    if app.try_state::<UpdaterState>().is_none() {
+    if app.state::<Updater>().ready.lock().unwrap().is_none() {
         return Err(unavailable());
     }
-    // The plan knows the call as it is now (`call_changed`): a restart asked for during one waits for it to end.
-    let mut refused = false;
-    transition(&app, |plan| match plan.restart() {
-        Ok(step) => {
-            crate::debug(&format!("updater restart asked: {step:?}"));
-            step
-        }
-        Err(plan::NothingToInstall) => {
-            refused = true;
-            Step::Nothing
-        }
-    });
-    if refused {
-        return Err(unavailable());
-    }
+    tauri::async_runtime::spawn_blocking(move || install(&app, true));
     Ok(())
 }

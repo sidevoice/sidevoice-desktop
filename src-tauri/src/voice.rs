@@ -379,11 +379,6 @@ fn watch_devices(app: &AppHandle, state: &VoiceState) {
     });
 }
 
-/// Whether the voice call the app runs is listening: a call is on (an update waits for it to end).
-pub fn listening(app: &AppHandle) -> bool {
-    app.try_state::<VoiceState>().is_some_and(|state| state.lifecycle.lock().unwrap().listening)
-}
-
 /// The room page loaded anew: its call is stopped, and the next page starts it again.
 pub fn page_changed(app: &AppHandle) {
     let app = app.clone();
@@ -421,18 +416,10 @@ fn forward(app: AppHandle, mut events: Events, lifecycle: Arc<Mutex<Lifecycle>>)
         while let Some(event) = events.next().await {
             match &event {
                 VoiceEvent::State(state) => {
-                    let changed = {
-                        let mut lifecycle = lifecycle.lock().unwrap();
-                        let was = lifecycle.listening;
-                        lifecycle.listening = state.listening != Listening::Idle;
-                        if lifecycle.listening {
-                            lifecycle.settle(&Ok(()));
-                        }
-                        was != lifecycle.listening
-                    };
-                    // A restart into an update the person asked for during the call waits for it to end.
-                    if changed {
-                        crate::updater::call_changed(&app);
+                    let mut lifecycle = lifecycle.lock().unwrap();
+                    lifecycle.listening = state.listening != Listening::Idle;
+                    if lifecycle.listening {
+                        lifecycle.settle(&Ok(()));
                     }
                 }
                 VoiceEvent::Error(error) => lifecycle.lock().unwrap().settle(&Err(error.code.clone())),

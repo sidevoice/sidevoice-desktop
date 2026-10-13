@@ -873,52 +873,84 @@ test("nothing of localHost runs until the page asks", async () => {
   assert.equal(calls.filter(([cmd]) => cmd.startsWith("local_host")).length, 0);
 });
 
-// ---- host.updater: the app's updates (docs/BRIDGE.md → "The updater") ----
+// ---- host.updater and host.build: the app's updates and what this build is (docs/BRIDGE.md) ----
 
-test("the host's keys: updater only where this copy of the app can update itself", () => {
+test("host.build says what this build is, whatever the app passed", () => {
   const install = loadFactory();
-  // A .deb, a dev build, an unbundled binary: the app passes false, and the page shows nothing to update.
-  for (const offered of [undefined, false, "__SIDEVOICE_UPDATER__", "true"]) {
-    const api = install(fakeWindow(ORIGIN).win, ORIGIN, null, false, false, offered);
-    assert.deepEqual(Object.keys(api.host).sort(), ["app", "engine", "mediaKeys", "version"], String(offered));
-    api.updaterEvent(); // nothing listens, nothing breaks
+  const build = (given) => install(fakeWindow(ORIGIN).win, ORIGIN, null, false, false, false, given).host.build;
+  assert.deepEqual({ ...build({ channel: "release", version: "0.4.0" }) }, { channel: "release", version: "0.4.0" });
+  assert.deepEqual(
+    { ...build({ channel: "nightly", version: "0.4.0", commit: "a1b2c3d", date: "2026-10-13" }) },
+    { channel: "nightly", version: "0.4.0", commit: "a1b2c3d", date: "2026-10-13" },
+  );
+  // Never a release by accident: the unreplaced placeholder (tests, a broken build) or anything unknown is dev.
+  for (const given of [undefined, "__SIDEVOICE_BUILD__", { channel: "beta", version: 4 }]) {
+    assert.deepEqual({ ...build(given) }, { channel: "dev", version: "" }, JSON.stringify(given));
   }
-  const api = install(fakeWindow(ORIGIN).win, ORIGIN, "native", true, true, true);
-  assert.deepEqual(Object.keys(api.host).sort(), ["app", "engine", "localHost", "mediaKeys", "updater", "version", "voice"]);
-  // sidevoice-web's AppUpdater: status(), subscribe?(listener), restart().
-  assert.deepEqual(Object.keys(api.host.updater).sort(), ["restart", "status", "subscribe"]);
+  assert.ok(Object.isFrozen(build({ channel: "dev", version: "0.4.0" })));
+});
+
+test("the host's keys: updater only in a release that can update itself, build always", () => {
+  const install = loadFactory();
+  // A nightly, a dev build, a .deb: the app passes false, and the page shows nothing to update.
+  for (const offered of [undefined, false, "__SIDEVOICE_UPDATER__", "true"]) {
+    const api = install(fakeWindow(ORIGIN).win, ORIGIN, null, false, false, offered, { channel: "nightly", version: "0.4.0" });
+    assert.deepEqual(Object.keys(api.host).sort(), ["app", "build", "engine", "mediaKeys", "version"], String(offered));
+    api.updaterEvent({ state: "idle" }); // nothing listens, nothing breaks
+  }
+  const api = install(fakeWindow(ORIGIN).win, ORIGIN, "native", true, true, true, { channel: "release", version: "0.4.0" });
+  assert.deepEqual(Object.keys(api.host).sort(), ["app", "build", "engine", "localHost", "mediaKeys", "updater", "version", "voice"]);
+  // The AppUpdater seam, exactly.
+  assert.deepEqual(Object.keys(api.host.updater).sort(), ["check", "download", "restart", "setMode", "settings", "status", "subscribe"]);
   assert.ok(Object.isFrozen(api.host.updater));
 });
 
 test("host.updater's calls go to their commands and answer what the app says", async () => {
   const install = loadFactory();
   const { win, calls } = voiceWindow({
-    updater_status: { available: true, version: "0.3.0" },
+    updater_settings: { mode: "automatic" },
+    updater_set_mode: { mode: "manual" },
+    updater_status: { state: "downloading", version: "0.5.0", progress: 0.42 },
+    updater_check: { state: "available", version: "0.5.0" },
+    updater_download: { state: "downloading", version: "0.5.0" },
     updater_restart: null,
   });
   const updater = install(win, ORIGIN, null, false, false, true).host.updater;
-  assert.equal(JSON.stringify(await updater.status()), '{"available":true,"version":"0.3.0"}');
+  assert.deepEqual(await updater.settings(), { mode: "automatic" });
+  assert.deepEqual(await updater.setMode("manual"), { mode: "manual" });
+  assert.deepEqual(await updater.status(), { state: "downloading", version: "0.5.0", progress: 0.42 });
+  assert.deepEqual(await updater.check(), { state: "available", version: "0.5.0" });
+  assert.deepEqual(await updater.download(), { state: "downloading", version: "0.5.0" });
   assert.equal(await updater.restart(), undefined);
   assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("updater_")), [
+    ["updater_settings", undefined],
+    ["updater_set_mode", { mode: "manual" }],
     ["updater_status", undefined],
+    ["updater_check", undefined],
+    ["updater_download", undefined],
     ["updater_restart", undefined],
   ]);
   const nothing = { key: "update_unavailable", message: "There is no update to install." };
-  const refusing = voiceWindow({ updater_restart: Object.assign(new Error("refused"), { refusal: nothing }) });
-  await assert.rejects(install(refusing.win, ORIGIN, null, false, false, true).host.updater.restart(), (e) => e === nothing);
+  const refusing = voiceWindow({
+    updater_restart: Object.assign(new Error("refused"), { refusal: nothing }),
+    updater_download: Object.assign(new Error("refused"), { refusal: nothing }),
+  });
+  const refused = install(refusing.win, ORIGIN, null, false, false, true).host.updater;
+  await assert.rejects(refused.restart(), (e) => e === nothing);
+  await assert.rejects(refused.download(), (e) => e === nothing);
 });
 
-test("the app's updaterEvent tells host.updater's listeners to read the status again, until they stop", () => {
+test("the app's updaterEvent hands each listener the status, until it stops", () => {
   const install = loadFactory();
   const api = install(fakeWindow(ORIGIN).win, ORIGIN, null, false, false, true);
   const seen = [];
-  const stop = api.host.updater.subscribe(() => seen.push("a"));
+  const stop = api.host.updater.subscribe((status) => seen.push(["a", status.state]));
   api.host.updater.subscribe(() => { throw new Error("a listener's own"); });
-  api.host.updater.subscribe(() => seen.push("b"));
-  api.updaterEvent();
-  assert.deepEqual(seen, ["a", "b"], "every listener, past one that throws");
+  api.host.updater.subscribe((status) => seen.push(["b", status.state]));
+  api.updaterEvent({ state: "downloading", version: "0.5.0", progress: 0.1 });
+  assert.deepEqual(seen, [["a", "downloading"], ["b", "downloading"]], "every listener, past one that throws");
   stop();
-  api.updaterEvent();
-  assert.deepEqual(seen, ["a", "b", "b"]);
+  api.updaterEvent({ state: "ready", version: "0.5.0" });
+  assert.deepEqual(seen, [["a", "downloading"], ["b", "downloading"], ["b", "ready"]]);
   assert.throws(() => api.host.updater.subscribe("nope"), { name: "TypeError" });
 });

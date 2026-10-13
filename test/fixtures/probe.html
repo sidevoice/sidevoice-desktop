@@ -68,21 +68,15 @@ what the interface's own window offers — same origin, same permission rule —
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-headset error " + String(error && (error.message || error)) });
   }
 
-  // The app's updates (docs/BRIDGE.md → "The updater"): this probe app is a bundled .app, so it can update itself and
-  // the page gets sidevoice-web's AppUpdater seam. Its endpoint never answers (probe build, src/updater.rs): the
-  // status says nothing available, and a restart is refused.
-  const updater = window.__sidevoiceDesktop && window.__sidevoiceDesktop.host && window.__sidevoiceDesktop.host.updater;
+  // What this build is, and its updates (docs/BRIDGE.md → "The build", "The updater"): the probe app is a dev build, so
+  // `host.build` says so and the page has no `host.updater`; its commands refuse.
   try {
-    if (!updater) throw new Error("no host.updater");
-    let told = 0;
-    const stop = updater.subscribe(() => { told += 1; });
-    const status = await updater.status();
-    const restart = status.available ? "available" : await updater.restart().then(() => "no", (error) => error && error.key);
-    stop();
-    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-updater ok keys=" + Object.keys(updater).sort().join(",") +
-      " status=" + JSON.stringify(status) + " restart=" + restart + " told=" + told });
+    const host = window.__sidevoiceDesktop.host;
+    const status = await window.__TAURI_INTERNALS__.invoke("updater_status").then(() => "answered", (error) => error && error.key);
+    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-build ok build=" + JSON.stringify(host.build) +
+      " updater=" + ("updater" in host) + " status=" + status });
   } catch (error) {
-    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-updater error " + String(error && (error.message || error)) });
+    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-build error " + String(error && (error.message || error)) });
   }
 
   // The native engine through the app itself, as the interface calls it (docs/BRIDGE.md): capabilities, installs as

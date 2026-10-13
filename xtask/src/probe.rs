@@ -242,6 +242,16 @@ pub fn probe() -> Result<()> {
         format!("the voice settings do not name the end-of-turn model {turn}"),
     )?;
     eprintln!("--- voice\n{}", grep(&text, "sidevoice: voice").join("\n"));
+    // A dev build (the probe app is never a release): `host.build` says so, and there is no updater at all.
+    let build = grep(&text, "probe-build ");
+    eprintln!("--- build\n{}", build.join("\n"));
+    ensure(
+        build.iter().any(|line| {
+            line.contains(r#"probe-build ok build={"channel":"dev","version":""#)
+                && line.ends_with(" updater=false status=update_unavailable")
+        }),
+        "the probe app is not a dev build without an updater",
+    )?;
     // Headset buttons: a (simulated) call made the app the Now Playing app, and it let go after.
     ensure(text.contains("probe-headset ok"), "no probe-headset ok")?;
     ensure(text.contains("headset apply active=true in_call=true mic=true"), "the call never took the headset")?;

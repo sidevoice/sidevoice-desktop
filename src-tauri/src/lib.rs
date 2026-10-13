@@ -131,8 +131,6 @@ struct SettingsInfo {
     /// Diagnostics on (`SIDEVOICE_DEBUG=1`): the settings page then also reports what its webview offers.
     debug: bool,
     app_version: String,
-    /// Whether this copy of the app can update itself: the settings window shows the automatic download only then.
-    updates: bool,
 }
 
 #[derive(Serialize)]
@@ -152,7 +150,6 @@ fn get_settings(app: AppHandle, state: State<'_, AppState>) -> SettingsInfo {
         shortcut: shortcut_status(&state),
         debug: debugging(),
         app_version: app.package_info().version.to_string(),
-        updates: updater::offered(),
     }
 }
 
@@ -160,18 +157,22 @@ fn get_settings(app: AppHandle, state: State<'_, AppState>) -> SettingsInfo {
 // on Windows (WebView2), and the room window is (re)created here.
 #[tauri::command]
 async fn save_settings(app: AppHandle, state: State<'_, AppState>, settings: Settings) -> Result<SaveResult, String> {
-    let settings = settings::validate(settings).map_err(|e| e.to_string())?;
+    let mut settings = settings::validate(settings).map_err(|e| e.to_string())?;
     if !settings.mute_shortcut.is_empty() && settings.mute_shortcut.parse::<Shortcut>().is_err() {
         return Err(format!("El atajo «{}» no es válido. Ejemplo: CmdOrCtrl+Shift+M.", settings.mute_shortcut));
     }
     let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
-    settings::save(&dir, &settings).map_err(|e| format!("No se pudo guardar: {e}"))?;
-
-    let previous = state.settings.lock().unwrap().replace(settings.clone());
+    let previous = {
+        // The updates' mode is the room page's (`host.updater.setMode`): this window never sends it, so the stored one
+        // stays. Under the lock, so a mode set meanwhile is not lost.
+        let mut stored = state.settings.lock().unwrap();
+        settings.update_mode = stored.as_ref().map(|s| s.update_mode).unwrap_or_default();
+        settings::save(&dir, &settings).map_err(|e| format!("No se pudo guardar: {e}"))?;
+        stored.replace(settings.clone())
+    };
     apply_shortcut(&app, &settings.mute_shortcut);
     let shortcut = shortcut_status(&state);
     call_controls::update(&app);
-    updater::set_auto_download(&app, settings.auto_download_updates);
 
     let target_changed = previous.as_ref().map(|p| p.target != settings.target).unwrap_or(true);
     if target_changed || room_window(&app).is_none() {
@@ -210,7 +211,6 @@ fn bridge_state(
     tray::update(&app, &snapshot);
     headset::update(&app, &snapshot);
     call_controls::update(&app);
-    updater::call_changed(&app);
     Ok(())
 }
 
@@ -271,24 +271,6 @@ pub(crate) fn room_window(app: &AppHandle) -> Option<WebviewWindow> {
     app.get_webview_window(&label)
 }
 
-/// Whether a call is on: the room's call joined (its snapshot), or the voice call the app runs listening (macOS).
-pub(crate) fn in_call(app: &AppHandle) -> bool {
-    let joined = app.state::<AppState>().call.lock().unwrap().joined;
-    joined || voice_listening(app)
-}
-
-fn voice_listening(app: &AppHandle) -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        voice::listening(app)
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = app;
-        false
-    }
-}
-
 /// Sends one command to the room page. Works with the window hidden.
 pub(crate) fn send(app: &AppHandle, command: Command) {
     if let Some(w) = room_window(app) {
@@ -302,7 +284,6 @@ fn reset_call_state(app: &AppHandle) {
     tray::update(app, &snapshot);
     headset::update(app, &snapshot);
     call_controls::update(app);
-    updater::call_changed(app);
     #[cfg(target_os = "macos")]
     voice::page_changed(app);
 }
@@ -332,7 +313,7 @@ fn open_room(app: &AppHandle, settings: &Settings) -> tauri::Result<()> {
         .title("Sidevoice")
         .inner_size(1100.0, 760.0)
         .min_inner_size(420.0, 560.0)
-        .initialization_script(bridge::script_for_origin(APP_ORIGIN, updater::offered()));
+        .initialization_script(bridge::script_for_origin(APP_ORIGIN, updater::offered(), &updater::build(app)));
     if let Some(target) = settings::target_script(settings) {
         builder = builder.initialization_script(target);
     }
@@ -452,7 +433,11 @@ macro_rules! commands {
             local_host::local_host_action,
             local_host::local_host_pairing_code,
             local_host::local_host_pair_room,
+            updater::updater_settings,
+            updater::updater_set_mode,
             updater::updater_status,
+            updater::updater_check,
+            updater::updater_download,
             updater::updater_restart
             $($extra)*
         ]
@@ -534,8 +519,8 @@ pub fn run() {
             // First run too: the interface itself asks for a pairing code; nothing has to be set up first.
             let current = stored.unwrap_or_else(Settings::first_run);
             apply_shortcut(&handle, &current.mute_shortcut);
-            // Before the room opens, so its bridge offers `host.updater` and its first snapshot reaches the plan.
-            updater::setup(&handle, current.auto_download_updates);
+            // Before the room opens, so its bridge offers `host.updater`.
+            updater::setup(&handle);
             open_room(&handle, &current)?;
             call_controls::create(&handle)?;
             Ok(())
@@ -564,9 +549,10 @@ pub fn run() {
             if let tauri::RunEvent::Reopen { has_visible_windows: false, .. } = event {
                 show_room(app);
             }
-            // Quitting: the local host's proxy stops and closes every tunnel.
+            // Quitting: the local host's proxy stops and closes every tunnel; an update ready installs (automatic mode).
             if let tauri::RunEvent::Exit = event {
                 local_host::shutdown(app);
+                updater::quit(app);
             }
             let _ = (app, event);
         });
