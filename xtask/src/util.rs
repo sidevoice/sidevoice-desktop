@@ -478,11 +478,47 @@ pub fn build_env(channel: Channel, commit: &str, date: &str) -> [(&'static str, 
     ]
 }
 
-/// What a release's build adds to tauri.conf.json: the update artifacts, each signed with the updater's private key
-/// (`TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; RELEASING.md → "Updates").
-pub const UPDATER_CONFIG: &str = r#"{"bundle":{"createUpdaterArtifacts":true}}"#;
+/// Where a nightly looks for updates (a release's feed is tauri.conf.json's `plugins.updater.endpoints`).
+pub const NIGHTLY_FEED: &str = "https://github.com/sidevoice/sidevoice-desktop/releases/download/nightly/latest.json";
 
-/// The updater's signing key: read by Tauri's bundler in a release's build only, dropped from every other.
+/// What a build adds to tauri.conf.json for its channel (RELEASING.md → "Updates"): a release and a nightly make the
+/// update artifacts, signed with the updater's key; a nightly is also built as `nightly_version` and reads the
+/// nightly's feed. A dev build adds nothing.
+pub fn channel_config(channel: Channel, nightly_version: &str) -> Option<String> {
+    let updates = serde_json::json!({ "createUpdaterArtifacts": true });
+    let config = match channel {
+        Channel::Release => serde_json::json!({ "bundle": updates }),
+        Channel::Nightly => serde_json::json!({
+            "version": nightly_version,
+            "bundle": updates,
+            "plugins": { "updater": { "endpoints": [NIGHTLY_FEED] } },
+        }),
+        Channel::Dev => return None,
+    };
+    Some(config.to_string())
+}
+
+/// A nightly's version: the last release's (`released`) with its patch + 1, then `-nightly.RUN` (0.4.2, run 17 →
+/// 0.4.3-nightly.17): above that release, below the next, and higher every run, as the updater needs.
+pub fn nightly_version(released: &str, run: &str) -> Result<String> {
+    let core = released.split(['-', '+']).next().unwrap_or_default();
+    let numbers: std::result::Result<Vec<u64>, _> = core.split('.').map(str::parse).collect();
+    let (Ok([major, minor, patch]), Ok(run)) = (numbers.as_deref(), run.parse::<u64>()) else {
+        return Err(format!("no nightly version from release {released:?} and run {run:?}"));
+    };
+    Ok(format!("{major}.{minor}.{}-nightly.{run}", patch + 1))
+}
+
+/// The version CI builds and publishes the nightly as: from .release-please-manifest.json and `GITHUB_RUN_NUMBER`.
+pub fn ci_nightly_version() -> Result<String> {
+    let path = repo().join(".release-please-manifest.json");
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&read_bytes(&path)?).map_err(|e| format!("{}: {e}", path.display()))?;
+    let run = std::env::var("GITHUB_RUN_NUMBER").map_err(|_| "a nightly is CI's: GITHUB_RUN_NUMBER is not set")?;
+    nightly_version(manifest["."].as_str().unwrap_or_default(), &run)
+}
+
+/// The updater's signing key: read by Tauri's bundler in a release's or a nightly's build only, dropped from a dev one.
 pub const UPDATER_KEY_ENV: &[&str] = &["TAURI_SIGNING_PRIVATE_KEY", "TAURI_SIGNING_PRIVATE_KEY_PASSWORD"];
 
 /// A `tauri build` (the Tauri CLI package.json pins).
@@ -496,7 +532,7 @@ pub struct TauriBuild<'a> {
     pub features: Option<&'a str>,
     /// `--config`: JSON merged into tauri.conf.json.
     pub config: Option<&'a str>,
-    /// What the build is for; a release's also makes the update artifacts ([`UPDATER_CONFIG`]).
+    /// What the build is for ([`channel_config`], [`build_env`]).
     pub channel: Channel,
 }
 
@@ -513,36 +549,32 @@ impl TauriBuild<'_> {
         if let Some(config) = self.config {
             args.extend(["--config".into(), config.into()]);
         }
-        if self.channel == Channel::Release {
-            args.extend(["--config".into(), UPDATER_CONFIG.into()]);
-        }
         args
     }
 
     /// The command: the CLI's script run by Node from `node_modules` (what `npx tauri` runs), the same on every OS,
-    /// told its channel ([`build_env`]). A release's needs the updater's key (`TAURI_SIGNING_PRIVATE_KEY`); any other
-    /// build never sees it.
+    /// built for its channel ([`channel_config`], [`build_env`]). A release or a nightly needs the updater's key
+    /// (`TAURI_SIGNING_PRIVATE_KEY`); a dev build never sees it.
     pub fn command(&self) -> Result<Cmd> {
         let mut cmd = Cmd::new("node").arg(repo().join("node_modules/@tauri-apps/cli/tauri.js")).args(self.args());
-        if self.channel == Channel::Release {
-            required_env("TAURI_SIGNING_PRIVATE_KEY")?;
-        } else {
+        if self.channel == Channel::Dev {
             cmd = UPDATER_KEY_ENV.iter().fold(cmd, |cmd, name| cmd.env_remove(name));
+        } else {
+            required_env("TAURI_SIGNING_PRIVATE_KEY")?;
         }
-        // A nightly's short commit and that commit's date (`YYYY-MM-DD`).
-        let (commit, date) = match self.channel {
+        // A nightly's version, short commit and that commit's date (`YYYY-MM-DD`).
+        let (version, commit, date) = match self.channel {
             Channel::Nightly => {
                 let head = Cmd::new("git").args(["log", "-1", "--abbrev=7", "--format=%h %cs"]).stdout()?;
                 let (commit, date) = head.trim().split_once(' ').ok_or("git log: no commit")?;
-                (commit.to_owned(), date.to_owned())
+                (ci_nightly_version()?, commit.to_owned(), date.to_owned())
             }
             _ => Default::default(),
         };
-        eprintln!(
-            "(a {} build{})",
-            self.channel.name(),
-            if commit.is_empty() { String::new() } else { format!(" of {commit}") }
-        );
+        if let Some(config) = channel_config(self.channel, &version) {
+            cmd = cmd.args(["--config", config.as_str()]);
+        }
+        eprintln!("(a {} build {version} {commit})", self.channel.name());
         for (key, value) in build_env(self.channel, &commit, &date) {
             cmd = cmd.env(key, value);
         }
@@ -733,16 +765,33 @@ mod tests {
     }
 
     #[test]
-    fn a_release_build_makes_the_update_artifacts_and_only_it() {
-        let release = TauriBuild { bundles: "nsis", channel: Channel::Release, ..TauriBuild::default() };
-        assert_eq!(release.args().join(" "), format!("build --bundles nsis --config {UPDATER_CONFIG}"));
-        for channel in [Channel::Nightly, Channel::Dev] {
-            let build = TauriBuild { bundles: "nsis", channel, ..TauriBuild::default() };
-            assert_eq!(build.args().join(" "), "build --bundles nsis");
-        }
+    fn a_release_and_a_nightly_make_the_update_artifacts_and_a_nightly_has_its_own_version_and_feed() {
+        assert_eq!(channel_config(Channel::Release, "").unwrap(), r#"{"bundle":{"createUpdaterArtifacts":true}}"#);
+        let nightly = channel_config(Channel::Nightly, "0.4.3-nightly.17").unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&nightly).unwrap(),
+            serde_json::json!({
+                "version": "0.4.3-nightly.17",
+                "bundle": {"createUpdaterArtifacts": true},
+                "plugins": {"updater": {"endpoints": [
+                    "https://github.com/sidevoice/sidevoice-desktop/releases/download/nightly/latest.json"
+                ]}},
+            })
+        );
+        assert_eq!(channel_config(Channel::Dev, ""), None);
         assert_eq!(TauriBuild::default().channel, Channel::Dev, "a laptop's build is never a release");
     }
 
+    #[test]
+    fn a_nightly_s_version_is_above_the_last_release_and_grows_every_run() {
+        assert_eq!(nightly_version("0.4.2", "17").unwrap(), "0.4.3-nightly.17");
+        assert_eq!(nightly_version("0.3.0-rc.1", "5").unwrap(), "0.3.1-nightly.5");
+        for (released, run) in [("0.4", "17"), ("0.4.x", "17"), ("0.4.2", ""), ("0.4.2", "a")] {
+            assert!(nightly_version(released, run).is_err(), "{released} {run}");
+        }
+    }
+
+    #[test]
     fn only_a_nightly_says_its_commit_and_date() {
         let nightly = build_env(Channel::Nightly, "a1b2c3d", "2026-10-13");
         assert_eq!(nightly[0], ("SIDEVOICE_BUILD_CHANNEL", "nightly".to_owned()));
@@ -755,6 +804,7 @@ mod tests {
         }
     }
 
+    #[test]
     fn a_secret_argument_is_never_shown() {
         let cmd = Cmd::new("security").args(["unlock-keychain", "-p"]).secret("hunter2").arg("k.keychain-db");
         assert_eq!(cmd.shown(), "security unlock-keychain -p *** k.keychain-db");

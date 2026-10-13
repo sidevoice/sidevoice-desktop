@@ -890,7 +890,7 @@ test("host.build says what this build is, whatever the app passed", () => {
   assert.ok(Object.isFrozen(build({ channel: "dev", version: "0.4.0" })));
 });
 
-test("the host's keys: updater only in a release that can update itself, build always", () => {
+test("the host's keys: updater only where the app can update itself, build always", () => {
   const install = loadFactory();
   // A nightly, a dev build, a .deb: the app passes false, and the page shows nothing to update.
   for (const offered of [undefined, false, "__SIDEVOICE_UPDATER__", "true"]) {

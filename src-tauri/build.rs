@@ -56,8 +56,8 @@ fn main() {
 /// What this build is (core `build_info`, `host.build`; RELEASING.md → "Channels"), from what `cargo xtask` sets:
 /// `SIDEVOICE_BUILD_CHANNEL` (`release`, `nightly` or `dev`; unset or empty is `dev`, so a laptop's build is never a
 /// release), `SIDEVOICE_BUILD_COMMIT` (a short commit) and `SIDEVOICE_BUILD_DATE` (`YYYY-MM-DD`), which a nightly must
-/// have. Handed to the app's code under the same names; an unknown channel stops the build. Only a release has the
-/// updater.
+/// have. Handed to the app's code under the same names; an unknown channel stops the build. A release and (for now) a
+/// nightly have the updater.
 fn build_channel() {
     const CHANNEL: &str = "SIDEVOICE_BUILD_CHANNEL";
     const COMMIT: &str = "SIDEVOICE_BUILD_COMMIT";

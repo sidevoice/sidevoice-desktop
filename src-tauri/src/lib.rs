@@ -310,7 +310,7 @@ fn open_room(app: &AppHandle, settings: &Settings) -> tauri::Result<()> {
     let committed_origin: Arc<Mutex<Option<String>>> = Arc::default();
     let committed_for_load = committed_origin.clone();
     let page_app = app.clone();
-    // `host.build`: a nightly's version is the last release's (build.rs).
+    // `host.build`, as xtask built this copy (build.rs).
     let version = app.package_info().version.to_string();
     let (commit, date) = (env!("SIDEVOICE_BUILD_COMMIT"), env!("SIDEVOICE_BUILD_DATE"));
     let build = BuildInfo::new(env!("SIDEVOICE_BUILD_CHANNEL"), &version, commit, date);

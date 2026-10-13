@@ -107,13 +107,22 @@ fn notary_key(dir: &SecretDir) -> Result<PathBuf> {
 /// Tauri's bundler with the Developer ID (`APPLE_SIGNING_IDENTITY`; `APPLE_CERTIFICATE` and
 /// `APPLE_CERTIFICATE_PASSWORD`, imported into a keychain of the bundler's own, or else the login keychain's),
 /// notarized with the API key (`APPLE_API_KEY`, `APPLE_API_ISSUER`, and the key file, see [`notary_key`]) and
-/// stapled. A release's (`--channel release`, signed only) also makes the update artifact ([`update_artifact`]).
+/// stapled. A release's (signed only) or a nightly's also makes the update artifact ([`update_artifact`]).
 pub fn build_app(signed: bool, channel: Channel) -> Result<()> {
     let build = TauriBuild { target: Some(TRIPLE), bundles: "app", channel, ..TauriBuild::default() };
     ensure(signed || channel != Channel::Release, "a release's app is signed: `macos app --signed --channel release`")?;
-    if !signed {
-        return unsigned(build.command()?).run();
+    if signed {
+        build_signed(build)?;
+    } else {
+        unsigned(build.command()?).run()?;
     }
+    if channel != Channel::Dev {
+        update_artifact(signed)?;
+    }
+    Ok(())
+}
+
+fn build_signed(build: TauriBuild) -> Result<()> {
     for name in ["APPLE_SIGNING_IDENTITY", "APPLE_API_KEY", "APPLE_API_ISSUER"] {
         required_env(name)?;
     }
@@ -128,18 +137,14 @@ pub fn build_app(signed: bool, channel: Channel) -> Result<()> {
     for left in user_keychains()?.into_iter().filter(|k| !before.contains(k)) {
         let _ = Cmd::new("security").arg("delete-keychain").arg(&left).attempt();
     }
-    built?;
-    if channel == Channel::Release {
-        update_artifact()?;
-    }
-    Ok(())
+    built
 }
 
-/// The update a running app downloads (docs/BRIDGE.md → "The updater"): the signed, notarized and stapled app as
-/// the bundler packed it, `dist/Sidevoice_<version>_aarch64.app.tar.gz`, with its `.sig` (made with the updater's key,
-/// checked by the app against tauri.conf.json's public key). What it unpacks to is checked as the app is: Developer ID
-/// signed, its ticket stapled, and Gatekeeper takes it as notarized.
-fn update_artifact() -> Result<()> {
+/// The update a running app downloads (docs/BRIDGE.md → "The updater"): the app as the bundler packed it,
+/// `dist/Sidevoice_<version>_aarch64.app.tar.gz`, with its `.sig` (made with the updater's key, checked by the app
+/// against tauri.conf.json's public key). A `signed` one is checked unpacked as the app is: Developer ID signed, its
+/// ticket stapled, and Gatekeeper takes it as notarized (a nightly's is ad-hoc signed, as its app).
+fn update_artifact(signed: bool) -> Result<()> {
     let bundle = app().with_file_name("Sidevoice.app.tar.gz");
     let dist = repo().join("dist");
     mkdir(&dist)?;
@@ -154,10 +159,12 @@ fn update_artifact() -> Result<()> {
     Cmd::new("tar").arg("-xzf").arg(&update).arg("-C").arg(&unpacked).run()?;
     let inside = unpacked.join("Sidevoice.app");
     Cmd::new("codesign").args(["--verify", "--deep", "--strict", "--verbose=2"]).arg(&inside).run()?;
-    Cmd::new("xcrun").args(["stapler", "validate"]).arg(&inside).run()?;
-    let spctl = Cmd::new("spctl").args(["-a", "-vv", "-t", "exec"]).arg(&inside).output()?;
-    eprintln!("{spctl}");
-    ensure(notarized(&spctl), "the update unpacks to an app Gatekeeper does not take as notarized")?;
+    if signed {
+        Cmd::new("xcrun").args(["stapler", "validate"]).arg(&inside).run()?;
+        let spctl = Cmd::new("spctl").args(["-a", "-vv", "-t", "exec"]).arg(&inside).output()?;
+        eprintln!("{spctl}");
+        ensure(notarized(&spctl), "the update unpacks to an app Gatekeeper does not take as notarized")?;
+    }
     Cmd::new("ls").arg("-la").arg(&dist).run()
 }
 

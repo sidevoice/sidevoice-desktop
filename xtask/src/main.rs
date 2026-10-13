@@ -13,8 +13,8 @@
 //! - `icons`: `npm run icons`, then the icons, tray marks and .dmg window must be what is committed.
 //! - `two-users` (Linux, CI only: it adds a user with `sudo`): the local host with two users; the second gets nowhere.
 //! - `bundle [--channel C]` (Linux, Windows): this host's installers: the .deb and the AppImage, or the NSIS
-//!   installer. With `--channel release`, the AppImage and the installer are also signed as updates (their `.sig`,
-//!   checked).
+//!   installer. With `--channel release` or `nightly`, the AppImage and the installer are also signed as updates
+//!   (their `.sig`, checked).
 //!
 //! Setting up a build (`.github/actions/setup-rust`):
 //!
@@ -28,8 +28,8 @@
 //!   ID, notarized and stapled by Tauri's bundler. Reads `APPLE_SIGNING_IDENTITY`, `APPLE_API_KEY`,
 //!   `APPLE_API_ISSUER`, and `APPLE_API_KEY_P8` (the .p8's contents, written to a 0600 file removed when it ends) or
 //!   `APPLE_API_KEY_PATH` (a .p8 on a laptop); `APPLE_CERTIFICATE` and `APPLE_CERTIFICATE_PASSWORD` when set (else
-//!   the bundler signs from the login keychain). With `--signed --channel release`, also the update artifact:
-//!   dist/Sidevoice_<version>_aarch64.app.tar.gz and its `.sig`, checked unpacked as the app is.
+//!   the bundler signs from the login keychain). With `--signed --channel release` (or `--channel nightly`), also the
+//!   update artifact: dist/Sidevoice_<version>_aarch64.app.tar.gz and its `.sig`, checked unpacked as the app is.
 //! - `macos check-app [--signed]`: what a first open depends on: Info.plist, the signature (`--signed`: the Developer
 //!   ID's, `APPLE_TEAM_ID`'s, timestamped, notarized, stapled, and Gatekeeper takes it), entitlements, the icon, arm64,
 //!   no CI probe inside.
@@ -62,8 +62,8 @@
 //! Publishing (the `publish` job; publish.rs), `gh` with `GH_TOKEN` and `GH_REPO`:
 //!
 //! - `publish assets release TAG | nightly`: the installers among the build's artifacts (artifacts/) into assets/,
-//!   under their published names (fixed `_nightly_` ones for the nightly), with SHA256SUMS; a release's also every
-//!   platform's update and its `.sig`, checked, and latest.json (the notes are release TAG's).
+//!   under their published names (fixed `_nightly_` ones for the nightly), with SHA256SUMS; also every platform's
+//!   update and its `.sig`, checked, and latest.json (a release's notes are release TAG's).
 //! - `publish release TAG`: assets/ attached to the draft release TAG, which is then published (a `-rc.N` as a
 //!   pre-release, never latest).
 //! - `publish nightly`: the `nightly` tag moved to this commit (`GITHUB_SHA`, or HEAD) and the `nightly` pre-release
@@ -75,9 +75,10 @@
 //! - `release-pr-checks`: the PR-title check dispatched on every open release PR's branch.
 //!
 //! Channels (RELEASING.md): `--channel release|nightly|dev` (default `dev`, so a laptop's build is never a release)
-//! is what a Tauri build is told (`SIDEVOICE_BUILD_CHANNEL`, `_COMMIT`, `_DATE`; src-tauri/build.rs). Only a release
-//! build has the updater, makes update artifacts and reads `TAURI_SIGNING_PRIVATE_KEY` and
-//! `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; every other build has them removed.
+//! is what a Tauri build is told (`SIDEVOICE_BUILD_CHANNEL`, `_COMMIT`, `_DATE`; src-tauri/build.rs). A release
+//! and (for now) a nightly build have the updater, make update artifacts and read `TAURI_SIGNING_PRIVATE_KEY` and
+//! `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (a dev build has them removed); a nightly is built as
+//! `<manifest version, patch + 1>-nightly.<GITHUB_RUN_NUMBER>`, reading the nightly's feed.
 //!
 //! This tooling's own tests: `cargo test --manifest-path xtask/Cargo.toml`.
 

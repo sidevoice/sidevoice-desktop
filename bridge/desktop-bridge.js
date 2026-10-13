@@ -322,7 +322,7 @@
   }
 
   /** The app's updates: the `AppUpdater` seam, 1:1 onto the `updater_*` commands (docs/BRIDGE.md → "The updater").
-   *  Only in a release that can update itself. */
+   *  Only in a release or a nightly that can update itself. */
   function updater() {
     const listeners = new Set();
     const host = {
@@ -453,7 +453,7 @@
 
   // Only where the app runs the voice call itself (macOS): elsewhere the page runs it.
   const voiceCall = voiceOffered === true ? voice() : null;
-  // Only in a release that can update itself (core `updater::offered`).
+  // Only in a release or a nightly that can update itself (core `updater::offered`).
   const updates = updaterOffered === true ? updater() : null;
 
   const api = {
@@ -473,9 +473,9 @@
       ...(localHostOffered === true ? { localHost: Object.freeze(localHost()) } : {}),
       // Only where the app runs the voice call (macOS): the page then neither opens the microphone nor runs models.
       ...(voiceCall ? { voice: voiceCall.host } : {}),
-      /** What this build is: a release (the only one with `updater`), a nightly, or a development build. */
+      /** What this build is: a release, a nightly (both with `updater`), or a development build. */
       build: buildOf(build),
-      // Only in a release that can update itself.
+      // Only in a release or a nightly that can update itself.
       ...(updates ? { updater: updates.host } : {}),
     }),
     /** An event of the voice call, from the app (`webview.eval`): to `host.voice`'s listeners. */

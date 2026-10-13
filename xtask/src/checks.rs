@@ -162,8 +162,8 @@ pub fn sherpa_libs() -> Result<()> {
 
 /// `bundle [--channel release|nightly|dev]`: this host's installers, as a release ships them: the .deb and the
 /// AppImage on Linux, the NSIS installer on Windows (macOS: `macos app`, `macos dmg`), built for the channel (default
-/// `dev`). A release's also signs the AppImage and the installer as updates: each gets its `.sig` (a `.deb` cannot
-/// update itself; its own is not published), checked here.
+/// `dev`). A release's or a nightly's also signs the AppImage and the installer as updates: each gets its `.sig` (a
+/// `.deb` cannot update itself; its own is not published), checked here.
 pub fn bundle(channel: crate::util::Channel) -> Result<()> {
     let (bundles, updates) = match std::env::consts::OS {
         "linux" => ("deb,appimage", ("appimage", ".AppImage")),
@@ -171,7 +171,7 @@ pub fn bundle(channel: crate::util::Channel) -> Result<()> {
         os => return Err(format!("`cargo xtask bundle` is for Linux and Windows, not {os}: see `cargo xtask macos`")),
     };
     crate::util::TauriBuild { bundles, channel, ..Default::default() }.command()?.run()?;
-    if channel != crate::util::Channel::Release {
+    if channel == crate::util::Channel::Dev {
         return Ok(());
     }
     let (dir, end) = updates;

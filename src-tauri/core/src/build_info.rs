@@ -4,7 +4,7 @@
 use serde::Serialize;
 
 /// `{channel, version, commit?, date?}`: `release`, `nightly` or `dev` (build.rs refuses any other); a nightly carries
-/// the last release's version with its short commit and that commit's date (`YYYY-MM-DD`).
+/// its own version (`X.Y.Z-nightly.RUN`, xtask) with its short commit and that commit's date (`YYYY-MM-DD`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BuildInfo {
     pub channel: String,
@@ -32,10 +32,10 @@ mod tests {
     fn the_build_says_its_channel_and_only_what_it_has() {
         let release = BuildInfo::new("release", "0.4.0", "", "");
         assert_eq!(serde_json::to_value(&release).unwrap(), json!({"channel": "release", "version": "0.4.0"}));
-        let nightly = BuildInfo::new("nightly", "0.4.0", "a1b2c3d", "2026-10-13");
+        let nightly = BuildInfo::new("nightly", "0.4.1-nightly.3", "a1b2c3d", "2026-10-13");
         assert_eq!(
             serde_json::to_value(&nightly).unwrap(),
-            json!({"channel": "nightly", "version": "0.4.0", "commit": "a1b2c3d", "date": "2026-10-13"})
+            json!({"channel": "nightly", "version": "0.4.1-nightly.3", "commit": "a1b2c3d", "date": "2026-10-13"})
         );
     }
 }

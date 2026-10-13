@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use crate::util::{ensure, files, name, repo, version, write, Cmd};
+use crate::util::{ci_nightly_version, ensure, files, name, repo, version, write, Cmd};
 use crate::Result;
 
 /// The installers a run publishes, by how their names end; and the kinds (extensions) every publication must hold
@@ -28,15 +28,19 @@ pub fn is_installer(file: &str) -> bool {
     INSTALLERS.iter().any(|end| file.ends_with(end))
 }
 
-/// The name an installer is published under: as built for a release; for the nightly, `_nightly_` where its version
-/// was (`Sidevoice_0.3.0_aarch64.dmg` → `Sidevoice_nightly_aarch64.dmg`), so a link to it keeps working.
-pub fn published_name(file: &str, version: &str, nightly: bool) -> Result<String> {
+/// The name an installer or update is published under: as built for a release; for the nightly, `_nightly_` where its
+/// version was (`Sidevoice_0.3.0_aarch64.dmg`, or `Sidevoice_0.3.1-nightly.5_amd64.AppImage` as the bundler names a
+/// nightly's → `Sidevoice_nightly_aarch64.dmg`, …), so a link to it keeps working.
+pub fn published_name(file: &str, nightly: bool) -> Result<String> {
     if !nightly {
         return Ok(file.to_owned());
     }
-    let built = format!("_{version}_");
-    ensure(file.contains(&built), format!("{file} does not carry the version {version}"))?;
-    Ok(file.replacen(&built, "_nightly_", 1))
+    match file.split_once('_').and_then(|(product, rest)| Some((product, rest.split_once('_')?))) {
+        Some((product, (version, rest))) if version.starts_with(|c: char| c.is_ascii_digit()) => {
+            Ok(format!("{product}_nightly_{rest}"))
+        }
+        _ => Err(format!("{file} does not carry a version")),
+    }
 }
 
 /// The kinds of installer missing from `names`.
@@ -105,13 +109,13 @@ pub fn latest_json(version: &str, notes: &str, pub_date: &str, base: &str, sigs:
 }
 
 /// `publish assets release TAG | publish assets nightly`: the installers among the build's artifacts (`artifacts/`,
-/// as actions/download-artifact leaves them) into `assets/`, under their published names, each kind there; for a
-/// release, also every platform's update and its signature, checked, and latest.json (the notes are release TAG's,
-/// `gh` with `GH_REPO`); and their `SHA256SUMS`.
+/// as actions/download-artifact leaves them) into `assets/`, under their published names, each kind there; also every
+/// platform's update and its signature, checked, and latest.json (a release's notes are release TAG's, `gh` with
+/// `GH_REPO`; the nightly's version is [`ci_nightly_version`]); and their `SHA256SUMS`.
 pub fn assemble(kind: &str, tag: Option<&str>) -> Result<()> {
-    let nightly = match (kind, tag) {
-        ("release", Some(_)) => false,
-        ("nightly", None) => true,
+    let (tag, nightly) = match (kind, tag) {
+        ("release", Some(tag)) => (tag, false),
+        ("nightly", None) => ("nightly", true),
         _ => return Err("publish assets release TAG | publish assets nightly".into()),
     };
     let version = version()?;
@@ -121,33 +125,32 @@ pub fn assemble(kind: &str, tag: Option<&str>) -> Result<()> {
     crate::util::mkdir(&assets)?;
     for file in all_files(&artifacts())? {
         let built = name(&file);
-        if is_installer(&built) || (!nightly && is_update(&built)) {
-            let to = assets.join(published_name(&built, &version, nightly)?);
+        if is_installer(&built) || is_update(&built) {
+            let to = assets.join(published_name(&built, nightly)?);
             fs::copy(&file, &to).map_err(|e| format!("{}: {e}", file.display()))?;
         }
     }
-    let present: Vec<PathBuf> = files(&assets)?;
-    let names: Vec<String> = present.iter().map(|p| name(p)).collect();
+    let names: Vec<String> = files(&assets)?.iter().map(|p| name(p)).collect();
     let missing = missing_kinds(&names);
     ensure(missing.is_empty(), format!("no {} among the artifacts", missing.join(", ")))?;
-    if let Some(tag) = tag {
-        let mut sigs = Vec::new();
-        for (platform, file) in update_files(&version) {
-            let signature = fs::read_to_string(assets.join(format!("{file}.sig"))).unwrap_or_default();
-            ensure(!signature.trim().is_empty(), format!("no {file}.sig among the artifacts, or it is empty"))?;
-            ensure(fs::metadata(assets.join(&file)).is_ok_and(|m| m.len() > 0), format!("no {file}, or it is empty"))?;
-            sigs.push((platform, file, signature));
-        }
-        let repo_name = std::env::var("GH_REPO").map_err(|_| "GH_REPO is not set (owner/name)")?;
-        let release = Cmd::new("gh").args(["release", "view", tag, "--json", "body,createdAt"]).stdout()?;
-        let release: serde_json::Value = serde_json::from_str(&release).map_err(|e| format!("gh release view: {e}"))?;
-        let (notes, created) = (release["body"].as_str().unwrap_or_default(), release["createdAt"].as_str());
-        let created = created.ok_or("gh release view: no createdAt")?;
-        let base = format!("https://github.com/{repo_name}/releases/download/{tag}");
-        let latest = latest_json(&version, notes.trim_end(), created, &base, &sigs);
-        write(&assets.join("latest.json"), &latest)?;
-        eprint!("{latest}");
+    let mut sigs = Vec::new();
+    for (platform, file) in update_files(if nightly { "nightly" } else { &version }) {
+        let signature = fs::read_to_string(assets.join(format!("{file}.sig"))).unwrap_or_default();
+        ensure(!signature.trim().is_empty(), format!("no {file}.sig among the artifacts, or it is empty"))?;
+        ensure(fs::metadata(assets.join(&file)).is_ok_and(|m| m.len() > 0), format!("no {file}, or it is empty"))?;
+        sigs.push((platform, file, signature));
     }
+    let (version, notes) = if nightly {
+        (ci_nightly_version()?, "A nightly build of `main`, not a versioned release.".to_owned())
+    } else {
+        (version, Cmd::new("gh").args(["release", "view", tag, "--json", "body", "-q", ".body"]).stdout()?)
+    };
+    let repo_name = std::env::var("GH_REPO").map_err(|_| "GH_REPO is not set (owner/name)")?;
+    let now = Cmd::new("date").args(["-u", "+%Y-%m-%dT%H:%M:%SZ"]).stdout()?;
+    let base = format!("https://github.com/{repo_name}/releases/download/{tag}");
+    let latest = latest_json(&version, notes.trim_end(), now.trim(), &base, &sigs);
+    write(&assets.join("latest.json"), &latest)?;
+    eprint!("{latest}");
     let present: Vec<PathBuf> = files(&assets)?;
     let sums = sums(&present)?;
     write(&assets.join(SUMS), &sums)?;
@@ -277,13 +280,17 @@ mod tests {
     #[test]
     fn the_nightly_takes_fixed_names_and_a_release_keeps_its_own() {
         let dmg = "Sidevoice_0.3.0-rc.1_aarch64.dmg";
-        assert_eq!(published_name(dmg, "0.3.0-rc.1", false).unwrap(), dmg);
-        assert_eq!(published_name(dmg, "0.3.0-rc.1", true).unwrap(), "Sidevoice_nightly_aarch64.dmg");
-        assert_eq!(
-            published_name("Sidevoice_0.3.0_amd64.AppImage", "0.3.0", true).unwrap(),
-            "Sidevoice_nightly_amd64.AppImage"
-        );
-        assert!(published_name("Sidevoice_0.2.9_amd64.deb", "0.3.0", true).is_err());
+        assert_eq!(published_name(dmg, false).unwrap(), dmg);
+        assert_eq!(published_name(dmg, true).unwrap(), "Sidevoice_nightly_aarch64.dmg");
+        // As the bundler names a nightly's (built as its own version), and the updates.
+        for (built, published) in [
+            ("Sidevoice_0.3.1-nightly.5_amd64.AppImage", "Sidevoice_nightly_amd64.AppImage"),
+            ("Sidevoice_0.3.1-nightly.5_x64-setup.exe.sig", "Sidevoice_nightly_x64-setup.exe.sig"),
+            ("Sidevoice_0.3.0_aarch64.app.tar.gz", "Sidevoice_nightly_aarch64.app.tar.gz"),
+        ] {
+            assert_eq!(published_name(built, true).unwrap(), published);
+        }
+        assert!(published_name("Sidevoice_amd64.deb", true).is_err());
     }
 
     #[test]
@@ -346,6 +353,33 @@ mod tests {
                     "linux-x86_64": {"signature": "sig of Sidevoice_0.4.0_amd64.AppImage", "url": format!("{base}/Sidevoice_0.4.0_amd64.AppImage")},
                 }
             })
+        );
+    }
+
+    #[test]
+    fn the_nightly_s_latest_json_points_at_the_nightly_s_own_assets() {
+        // What the build makes for a nightly, published under the names latest.json gives.
+        let built = [
+            "Sidevoice_0.4.2_aarch64.app.tar.gz",
+            "Sidevoice_0.4.3-nightly.17_x64-setup.exe",
+            "Sidevoice_0.4.3-nightly.17_amd64.AppImage",
+        ];
+        let files: Vec<String> = update_files("nightly").into_iter().map(|(_, file)| file).collect();
+        let published: Vec<String> = built.iter().map(|b| published_name(b, true).unwrap()).collect();
+        assert_eq!(published, files);
+        let sigs: Vec<(&str, String, String)> =
+            update_files("nightly").into_iter().map(|(platform, file)| (platform, file, "sig".to_owned())).collect();
+        let base = "https://github.com/sidevoice/sidevoice-desktop/releases/download/nightly";
+        let manifest: serde_json::Value =
+            serde_json::from_str(&latest_json("0.4.3-nightly.17", "", "2026-10-13T08:00:00Z", base, &sigs)).unwrap();
+        assert_eq!(manifest["version"], "0.4.3-nightly.17");
+        assert_eq!(
+            manifest["platforms"]["linux-x86_64"]["url"],
+            "https://github.com/sidevoice/sidevoice-desktop/releases/download/nightly/Sidevoice_nightly_amd64.AppImage"
+        );
+        assert_eq!(
+            manifest["platforms"]["darwin-aarch64"]["url"],
+            format!("{base}/Sidevoice_nightly_aarch64.app.tar.gz")
         );
     }
 

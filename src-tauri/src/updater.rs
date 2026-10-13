@@ -26,13 +26,14 @@ struct Updates {
     installing: bool,
 }
 
-/// Only a release that can replace itself: its `.app` run from its bundle on a writable volume (not the .dmg, not
-/// translocated), its AppImage, its Windows install. Never a `.deb` or a bare binary.
+/// Only a release or a nightly (each built to read its own feed) that can replace itself: its `.app` run from its
+/// bundle on a writable volume (not the .dmg, not translocated), its AppImage, its Windows install. Never a `.deb` or
+/// a bare binary.
 pub fn offered() -> bool {
     use tauri::utils::{config::BundleType, platform::bundle_type};
     static OFFERED: OnceLock<bool> = OnceLock::new();
     *OFFERED.get_or_init(|| {
-        env!("SIDEVOICE_BUILD_CHANNEL") == "release"
+        matches!(env!("SIDEVOICE_BUILD_CHANNEL"), "release" | "nightly")
             && match bundle_type() {
                 Some(BundleType::App) => std::env::current_exe()
                     .is_ok_and(|exe| core::in_app_bundle(&exe) && exe.ancestors().nth(4).is_some_and(writable)),

@@ -44,8 +44,8 @@ On a laptop, `npm ci` first. The `macos` commands that start the app (`first-ope
 `card`) run it off a runner with a scratch home (`/tmp/svx-<step>`), never with this machine's own settings,
 pairing, local core or models; `probe` expects no provider key in the login keychain, as on a runner. Unsigned and
 probe builds ignore any `APPLE_*` variables in the environment. Every build is a `dev` build unless `--channel`
-says otherwise (Channels, below), and only a `release` build reads the updater's key. Ctrl-C unwinds cleanly; if a
-signing step was killed outright, `cargo xtask macos forget-secrets` removes its keychain and key files.
+says otherwise (Channels, below), and only a `release` or `nightly` build reads the updater's key. Ctrl-C unwinds
+cleanly; if a signing step was killed outright, `cargo xtask macos forget-secrets` removes its keychain and key files.
 
 ## Channels
 
@@ -54,10 +54,12 @@ sets from the run (`changes.channel`) and xtask hands to the app's build script 
 `SIDEVOICE_BUILD_COMMIT` and `SIDEVOICE_BUILD_DATE`; `src-tauri/build.rs` refuses anything else). The app says it to
 the page as `host.build` (docs/BRIDGE.md → "The build").
 
-- `release`: a run called with a release's tag. The only build with the updater (`host.updater`, its checks) and
-  the only one that makes update artifacts (Updates, below). A release's macOS app is always `--signed`.
-- `nightly`: a push to `main`. No updater; `host.build` gives the last release's version, the short commit and that
-  commit's date.
+- `release`: a run called with a release's tag. Has the updater (`host.updater`, its checks) on the releases' feed
+  and makes update artifacts (Updates, below). A release's macOS app is always `--signed`.
+- `nightly`: a push to `main`. Built as its own version, `<the release-please manifest's version, patch + 1>-nightly.
+  <GITHUB_RUN_NUMBER>` (after 0.4.2, run 17: `0.4.3-nightly.17`: above the last release, below the next, higher every
+  run). For now it also has the updater, on the nightly's own feed, and makes update artifacts (Updates, below);
+  `host.build` gives that version, the short commit and that commit's date.
 - `dev`: everything else, and the default: a laptop, a pull request, a manual run (a `sign` dry run too). No
   updater.
 
@@ -87,8 +89,9 @@ with one empty commit (`git commit --allow-empty`) carries the footer.
 Every green `build` on `main` moves the tag `nightly` to that commit and replaces every asset of the one
 `nightly` pre-release: `Sidevoice_nightly_aarch64.dmg`, `Sidevoice_nightly_x64-setup.exe`,
 `Sidevoice_nightly_amd64.deb`, `Sidevoice_nightly_amd64.AppImage`, `SHA256SUMS`. Fixed names, so a link keeps
-working. Its notes give the commit and its date. It is a snapshot, not a version: the app inside reports the
-version of the last release, it is never latest, and release-please ignores the tag (it is not `vX.Y.Z`).
+working, plus its updates and `latest.json` (Updates, below). Its notes give the commit and its date. It is a
+snapshot, not a release: the app inside reports its nightly version (Channels, above), it is never latest, and
+release-please ignores the tag (it is not `vX.Y.Z`).
 
 Build artifacts on Actions runs are kept 7 days, for debugging only. Download from Releases.
 
@@ -97,28 +100,35 @@ Build artifacts on Actions runs are kept 7 days, for debugging only. Download fr
 A release updates itself from the releases (docs/BRIDGE.md → "The updater"): it reads
 `https://github.com/sidevoice/sidevoice-desktop/releases/latest/download/latest.json` at launch and every 6 hours.
 `latest` is the newest release that is neither a draft nor a pre-release, so a `-rc.N` and the nightly are never
-offered. The app installs only what is signed with the updater's key, checked against the public key in
-`src-tauri/tauri.conf.json` (`plugins.updater.pubkey`, minisign key id `EA1BE9B3A4CF715A`).
+offered. For now a nightly updates itself too, from its own feed,
+`https://github.com/sidevoice/sidevoice-desktop/releases/download/nightly/latest.json` (xtask sets the endpoint and
+the version at build time with `--config`): temporary, so updating is exercised before the first release relies on
+it; an issue removes it once a release has updated itself. The app installs only what is signed with the updater's
+key, checked against the public key in `src-tauri/tauri.conf.json` (`plugins.updater.pubkey`, minisign key id
+`EA1BE9B3A4CF715A`).
 
-- **What a release adds.** Only a `release` build makes them (`bundle.createUpdaterArtifacts`, passed by xtask as
-  `--config`; a release build without the key fails before it starts):
+- **What a release (and a nightly) adds.** Only a `release` or `nightly` build makes them
+  (`bundle.createUpdaterArtifacts`, passed by xtask as `--config`; such a build without the key fails before it
+  starts):
   - macOS (`macos app --signed --channel release`): `dist/Sidevoice_X.Y.Z_aarch64.app.tar.gz`, the signed, notarized
-    and stapled app, checked again after unpacking (signature, ticket, Gatekeeper);
+    and stapled app, checked again after unpacking (signature, ticket, Gatekeeper); a nightly's (`macos app --channel
+    nightly`) is its ad-hoc signed app, its signature checked;
   - Windows and Linux (`bundle --channel release`): the NSIS installer and the AppImage themselves.
 
   Each comes with its `.sig`, checked by the step that made it. `publish assets release TAG` checks all three and
   their signatures are among the artifacts, writes `latest.json` (`version`, `notes` (the release's notes),
-  `pub_date` (when the release was created), and `platforms` `darwin-aarch64`, `windows-x86_64`, `linux-x86_64`,
-  each `{signature, url}` of that release's asset) and adds them to the assets. The nightly gets none of it.
-- **What cannot update itself.** A nightly or dev build (built without the updater), a `.deb` (the package manager
+  `pub_date` (when the assets were put together), and `platforms` `darwin-aarch64`, `windows-x86_64`,
+  `linux-x86_64`, each `{signature, url}` of that release's asset) and adds them to the assets. `publish assets
+  nightly` does the same for the nightly: its version, and the urls of its `Sidevoice_nightly_*` assets.
+- **What cannot update itself.** A dev build (built without the updater), a `.deb` (the package manager
   owns it), an AppImage's binary run on its own, an app run from the .dmg: the page gets no `host.updater`.
 - **The key.** The private key and its password are the repository secrets `TAURI_SIGNING_PRIVATE_KEY` and
-  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Only a release run resolves them (in any other they resolve to nothing),
-  and xtask drops them from any other build. Keep a copy outside GitHub: without the key no update can be signed for
-  the apps out there, and a new key means a new public key in the app, which those apps do not have.
+  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Only a release or nightly run resolves them (in any other they resolve to
+  nothing), and xtask drops them from a dev build. Keep a copy outside GitHub: without the key no update can be
+  signed for the apps out there, and a new key means a new public key in the app, which those apps do not have.
 - **macOS and the signature.** An update replaces the app with one signed by the same Developer ID and team, so macOS
   keeps the microphone permission and the keychain's trust in the app. Moving from an ad-hoc nightly to a release may
-  ask once more for both.
+  ask once more for both; so may each update of a nightly (ad-hoc signed, as its app).
 
 ## macOS signing and notarization
 
