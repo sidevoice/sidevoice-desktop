@@ -431,7 +431,7 @@ interface UpdaterStatus {
 }
 ```
 
-- **Automatic** (the default): checked at launch and every 6 hours (by the wall clock), an update found is
+- **Automatic** (the default): checked at launch and every 6 hours, an update found is
   downloaded and verified in the background → `ready`; the page offers "Restart to update". An update ready when the
   person quits the app (tray, ⌘Q) is installed on the way out (Windows: its installer runs without starting the app
   again). The app never restarts on its own.

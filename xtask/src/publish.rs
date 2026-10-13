@@ -149,6 +149,7 @@ pub fn assemble(kind: &str, tag: Option<&str>) -> Result<()> {
             let signature =
                 fs::read_to_string(assets.join(format!("{file}.sig"))).map_err(|e| format!("{file}.sig: {e}"))?;
             ensure(!signature.trim().is_empty(), format!("{file}.sig is empty"))?;
+            ensure(fs::metadata(assets.join(&file)).is_ok_and(|m| m.len() > 0), format!("{file} is empty"))?;
             sigs.push((platform, file, signature));
         }
         let repo_name = std::env::var("GH_REPO").map_err(|_| "GH_REPO is not set (owner/name)")?;

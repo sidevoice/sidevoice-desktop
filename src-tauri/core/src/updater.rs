@@ -70,6 +70,15 @@ pub fn progress(received: u64, total: Option<u64>) -> Option<f64> {
     Some((received.min(total) * 100 / total) as f64 / 100.0)
 }
 
+/// Whether `exe` is a macOS app's executable (`….app/Contents/MacOS/<name>`): a bare binary's folder is not an app the
+/// plugin may replace.
+pub fn in_app_bundle(exe: &std::path::Path) -> bool {
+    let mut up = exe.ancestors().skip(1).map(|p| p.file_name().unwrap_or_default().to_string_lossy());
+    up.next().as_deref() == Some("MacOS")
+        && up.next().as_deref() == Some("Contents")
+        && up.next().is_some_and(|app| app.ends_with(".app"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -93,6 +102,15 @@ mod tests {
         assert_eq!(Mode::default(), Mode::Automatic);
         assert_eq!(serde_json::from_value::<Mode>(json!("manual")).unwrap(), Mode::Manual);
         assert!(serde_json::from_value::<Mode>(json!("auto")).is_err());
+    }
+
+    #[test]
+    fn only_an_app_bundle_s_executable_is_replaceable() {
+        use std::path::Path;
+        assert!(in_app_bundle(Path::new("/Applications/Sidevoice.app/Contents/MacOS/sidevoice-desktop")));
+        assert!(!in_app_bundle(Path::new("/Users/me/src/target/release/sidevoice-desktop")), "a bare binary");
+        assert!(!in_app_bundle(Path::new("/Applications/Sidevoice/Contents/MacOS/sidevoice-desktop")));
+        assert!(!in_app_bundle(Path::new("sidevoice-desktop")));
     }
 
     #[test]
