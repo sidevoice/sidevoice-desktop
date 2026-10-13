@@ -15,8 +15,6 @@
   "engine.error": "The native engine did not answer: {error}",
   "callControls.always": "Show the call controls always",
   "callControls.alwaysHint": "During a call, when Sidevoice is not in front, a small card floats over your other apps. Its call controls appear when the pointer is near; with this on, they stay in view.",
-  "updates.autoDownload": "Download updates automatically",
-  "updates.autoDownloadHint": "Sidevoice looks for a new version when it starts and every few hours. With this on, it downloads it in the background and the room offers to restart into it; off, the room only tells you there is one, and restarting downloads it first. A restart asked for during a call waits until the call ends.",
   "shortcut.refused": "The system did not accept {shortcut} (another app may be using it), so the mute shortcut is off.",
   "shortcut.noAlternative": "Type another combination and save.",
   "shortcut.useAlternative": "Use {shortcut} instead",

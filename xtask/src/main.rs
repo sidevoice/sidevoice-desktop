@@ -64,8 +64,6 @@
 //! - `publish assets release TAG | nightly`: the installers among the build's artifacts (artifacts/) into assets/,
 //!   under their published names (fixed `_nightly_` ones for the nightly), with SHA256SUMS; a release's also every
 //!   platform's update and its `.sig`, checked, and latest.json (the notes are release TAG's).
-|nightly`: the installers among the build's artifacts (artifacts/) into assets/, under
-//!   their published names (fixed `_nightly_` ones for the nightly), with SHA256SUMS.
 //! - `publish release TAG`: assets/ attached to the draft release TAG, which is then published (a `-rc.N` as a
 //!   pre-release, never latest).
 //! - `publish nightly`: the `nightly` tag moved to this commit (`GITHUB_SHA`, or HEAD) and the `nightly` pre-release
