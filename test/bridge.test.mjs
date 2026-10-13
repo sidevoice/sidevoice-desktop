@@ -702,6 +702,8 @@ test("works on the app's own pages, whose origin may be opaque", () => {
   assert.ok(install(win, "tauri://localhost"));
   const other = fakeWindow("tauri://localhost");
   assert.equal(install(other.win, ORIGIN), null);
+  assert.equal(win.__SIDEVOICE_TARGET__, null, "the app never tells the interface where to look first");
+  assert.equal("__SIDEVOICE_TARGET__" in other.win, false, "nor anything to another origin");
 });
 
 test("the placeholders the app replaces are present exactly once", () => {
@@ -889,11 +891,11 @@ test("the host's keys: updater only where the app can update itself, build alway
   // A dev build, a .deb, a bare binary: the app passes false, and the page shows nothing to update.
   for (const offered of [undefined, false, "__SIDEVOICE_UPDATER__", "true"]) {
     const api = install(fakeWindow(ORIGIN).win, ORIGIN, null, false, false, offered, { channel: "nightly", version: "0.4.0" });
-    assert.deepEqual(Object.keys(api.host).sort(), ["app", "build", "engine", "mediaKeys", "version"], String(offered));
+    assert.deepEqual(Object.keys(api.host).sort(), ["app", "build", "callControls", "engine", "mediaKeys", "muteShortcut", "version"], String(offered));
     api.updaterEvent({ state: "idle" }); // nothing listens, nothing breaks
   }
   const api = install(fakeWindow(ORIGIN).win, ORIGIN, "native", true, true, true, { channel: "release", version: "0.4.0" });
-  assert.deepEqual(Object.keys(api.host).sort(), ["app", "build", "engine", "localHost", "mediaKeys", "updater", "version", "voice"]);
+  assert.deepEqual(Object.keys(api.host).sort(), ["app", "build", "callControls", "engine", "localHost", "mediaKeys", "muteShortcut", "updater", "version", "voice"]);
   // The AppUpdater seam, exactly.
   assert.deepEqual(Object.keys(api.host.updater).sort(), ["check", "download", "restart", "setMode", "settings", "status", "subscribe"]);
   assert.ok(Object.isFrozen(api.host.updater));
@@ -954,4 +956,75 @@ test("the app's updaterEvent hands each listener the status, until it stops", ()
   api.updaterEvent({ state: "ready", version: "0.5.0" });
   assert.deepEqual(seen, [["a", "downloading"], ["b", "downloading"], ["b", "ready"]]);
   assert.throws(() => api.host.updater.subscribe("nope"), { name: "TypeError" });
+});
+
+// ---- host.muteShortcut and host.callControls: the app's call settings, set from the page (docs/BRIDGE.md) ----
+
+function settingsWindow(answers) {
+  const { win, calls } = fakeWindow(ORIGIN);
+  win.__TAURI_INTERNALS__.invoke = (cmd, args) => {
+    calls.push([cmd, structuredClone(args)]);
+    const answer = answers[cmd]?.(args);
+    return answer instanceof Error ? Promise.reject(answer.refusal) : Promise.resolve(answer);
+  };
+  return { win, calls };
+}
+
+test("host.muteShortcut and host.callControls are exactly the web's seams", () => {
+  const install = loadFactory();
+  const { host } = install(fakeWindow(ORIGIN).win, ORIGIN);
+  assert.deepEqual(Object.keys(host.muteShortcut).sort(), ["get", "set", "subscribe"]);
+  assert.deepEqual(Object.keys(host.callControls).sort(), ["setAlwaysShown", "settings"]);
+  assert.ok(Object.isFrozen(host.muteShortcut) && Object.isFrozen(host.callControls));
+});
+
+test("host.muteShortcut gets and sets through the mute_shortcut command, refusing what is not a shortcut", async () => {
+  const install = loadFactory();
+  const on = { accelerator: "Cmd+Shift+M", label: "⇧⌘M", state: "on", alternatives: [], voiceOver: false };
+  const off = { accelerator: null, label: null, state: "off", alternatives: [], voiceOver: false };
+  const invalid = Object.assign(new Error(), { refusal: { key: "shortcut_invalid", message: "Not a shortcut: M" } });
+  const { win, calls } = settingsWindow({
+    mute_shortcut: ({ action, accelerator }) => action === "get" ? on : accelerator === null ? off : accelerator === "M" ? invalid : on,
+  });
+  const shortcut = install(win, ORIGIN).host.muteShortcut;
+  assert.deepEqual(await shortcut.get(), on);
+  assert.deepEqual(await shortcut.set("cmd+shift+m"), on);
+  assert.deepEqual(await shortcut.set(null), off);
+  await assert.rejects(shortcut.set("M"), (e) => e.key === "shortcut_invalid");
+  for (const wrong of [undefined, 5, { accelerator: "Cmd+M" }]) {
+    await assert.rejects(shortcut.set(wrong), (e) => e.key === "shortcut_invalid", String(wrong));
+  }
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "mute_shortcut").map(([, args]) => args), [
+    { action: "get" },
+    { action: "set", accelerator: "cmd+shift+m" },
+    { action: "set", accelerator: null },
+    { action: "set", accelerator: "M" },
+  ], "a wrong argument asks the app nothing");
+});
+
+test("the app's muteShortcutEvent hands each listener the shortcut, until it stops", () => {
+  const install = loadFactory();
+  const api = install(fakeWindow(ORIGIN).win, ORIGIN);
+  const seen = [];
+  const stop = api.host.muteShortcut.subscribe((shortcut) => seen.push(["a", shortcut.state]));
+  api.host.muteShortcut.subscribe(() => { throw new Error("a listener's own"); });
+  api.host.muteShortcut.subscribe((shortcut) => seen.push(["b", shortcut.state]));
+  api.muteShortcutEvent({ accelerator: "Ctrl+Alt+M", label: "⌃⌥M", state: "refused", alternatives: ["Ctrl+Alt+Shift+M"], voiceOver: false });
+  assert.deepEqual(seen, [["a", "refused"], ["b", "refused"]], "every listener, past one that throws");
+  stop();
+  api.muteShortcutEvent({ accelerator: null, label: null, state: "off", alternatives: [], voiceOver: false });
+  assert.deepEqual(seen, [["a", "refused"], ["b", "refused"], ["b", "off"]]);
+  assert.throws(() => api.host.muteShortcut.subscribe("nope"), { name: "TypeError" });
+});
+
+test("host.callControls reads and sets alwaysShown through the call_controls_settings command, booleans only", async () => {
+  const install = loadFactory();
+  const { win, calls } = settingsWindow({
+    call_controls_settings: ({ action, enabled }) => ({ alwaysShown: action === "settings" ? false : enabled }),
+  });
+  const controls = install(win, ORIGIN).host.callControls;
+  assert.deepEqual(await controls.settings(), { alwaysShown: false });
+  assert.deepEqual(await controls.setAlwaysShown(true), { alwaysShown: true });
+  await assert.rejects(controls.setAlwaysShown("yes"), (e) => e.key === "bad_request");
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "call_controls_settings").map(([, args]) => args), [{ action: "settings" }, { action: "set-always-shown", enabled: true }]);
 });

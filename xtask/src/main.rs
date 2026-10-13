@@ -34,7 +34,6 @@
 //!   ID's, `APPLE_TEAM_ID`'s, timestamped, notarized, stapled, and Gatekeeper takes it), entitlements, the icon, arm64,
 //!   no CI probe inside.
 //! - `macos first-open`: the app started with no settings: the bundled interface comes up.
-//! - `macos with-target`: the app started with a target, the stand-in node: the interface asks it, cross-origin.
 //! - `macos dmg [--signed]`: dist/Sidevoice_<version>_aarch64.dmg with the brand's window, verified, the app inside
 //!   checked; without `--signed`, docs/FIRST_OPEN.txt beside it.
 //! - `macos sign-dmg`: the .dmg signed with the Developer ID (from a keychain of its own holding
@@ -51,7 +50,7 @@
 //! - `macos voice-models`: a call on the engine's real models through the app's adapter (the ignored tests).
 //! - `macos card`: on the probe app, the call controls card over a full-screen editor (screenshots into card-shots/).
 //!
-//! The commands that start the app (`first-open`, `with-target`, `probe`, `card`) run it with the runner's home on a
+//! The commands that start the app (`first-open`, `probe`, `card`) run it with the runner's home on a
 //! runner; off one (`CI` is not `true`), with a scratch home (`/tmp/svx-<step>`) and no `SIDEVOICE_DATA_DIR`, so
 //! this machine's own settings, pairing, local core and models are never touched (`local-host` always has its own,
 //! /tmp/svhome). `probe` expects no provider key in the login keychain, as on a runner. Unsigned and probe builds
@@ -95,7 +94,7 @@ use util::Channel;
 pub type Result<T> = std::result::Result<T, String>;
 
 const USAGE: &str = "usage: cargo xtask web | lint | test | icons | two-users | bundle [--channel C] | engine-rev
-  | sherpa-libs | macos app [--signed] [--channel C] | macos check-app [--signed] | macos first-open | macos with-target
+  | sherpa-libs | macos app [--signed] [--channel C] | macos check-app [--signed] | macos first-open
   | macos dmg [--signed] | macos sign-dmg | macos checksums | macos forget-secrets | macos dmg-screens
   | macos probe-app | macos local-host | macos probe | macos voice-models | macos card
   | publish assets release TAG | publish assets nightly | publish release TAG | publish nightly
@@ -131,7 +130,6 @@ fn main() -> ExitCode {
         ["macos", "check-app"] => macos("check-app", || macos::check_app(false)),
         ["macos", "check-app", "--signed"] => macos("check-app", || macos::check_app(true)),
         ["macos", "first-open"] => macos("first-open", macos::first_open),
-        ["macos", "with-target"] => macos("with-target", macos::with_target),
         ["macos", "dmg"] => macos("dmg", || macos::dmg(false)),
         ["macos", "dmg", "--signed"] => macos("dmg", || macos::dmg(true)),
         ["macos", "sign-dmg"] => macos("sign-dmg", macos::sign_dmg),

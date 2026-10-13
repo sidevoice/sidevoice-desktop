@@ -442,6 +442,31 @@ fn from_card_window(webview: &Webview) -> Result<(), String> {
     Ok(())
 }
 
+/// `host.callControls`' one command, from the room page (not the card): `action` `settings`, or `set-always-shown` with
+/// `enabled`, kept with the app's settings and applied at once. Answers `{alwaysShown}`.
+#[tauri::command]
+pub async fn call_controls_settings(
+    app: AppHandle,
+    webview: Webview,
+    action: String,
+    enabled: Option<bool>,
+) -> Result<serde_json::Value, serde_json::Value> {
+    crate::room_page(&app, &webview).map_err(|why| crate::refusal("bad_request", why))?;
+    let always = match (action.as_str(), enabled) {
+        ("settings", _) => {
+            app.state::<AppState>().settings.lock().unwrap().as_ref().is_some_and(|s| s.call_controls_always)
+        }
+        ("set-always-shown", Some(enabled)) => {
+            crate::change_settings(&app, |s| s.call_controls_always = enabled)
+                .map_err(|e| crate::refusal("internal", e))?;
+            update(&app);
+            enabled
+        }
+        _ => return Err(crate::refusal("bad_request", format!("not a call controls action: {action}"))),
+    };
+    Ok(serde_json::json!({ "alwaysShown": always }))
+}
+
 /// The card's page is ready: it gets the whole state.
 #[tauri::command]
 pub fn call_controls_ready(app: AppHandle, webview: Webview) -> Result<(), String> {

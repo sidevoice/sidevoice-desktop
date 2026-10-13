@@ -6,6 +6,7 @@
 //   app → page : window.__sidevoiceDesktop.run({ command: 'toggle-mute' | 'hang-up' | 'skip-reply' | … })
 //                window.__sidevoiceDesktop.voiceEvent(event)  each event of the voice call the app runs (host.voice)
 //                window.__sidevoiceDesktop.updaterEvent(status)  the updates' status changed (host.updater)
+//                window.__sidevoiceDesktop.muteShortcutEvent(status)  the mute shortcut changed (host.muteShortcut)
 // It only reads the web UI's public seams (window.sidevoiceUI.store and .micLevel, window.sidevoiceActions) and
 // never touches the DOM. On any origin other than the window's page (the room's, or the app's own for the
 // bundled interface) it does nothing at all.
@@ -16,6 +17,8 @@
   "use strict";
   // scheme://host rather than location.origin: the app's own pages (tauri://localhost) may have an opaque origin.
   if (win.location.protocol + "//" + win.location.host !== roomOrigin) return null;
+  // The app never tells the interface where to look first (sidevoice-web's `__SIDEVOICE_TARGET__`): pairing does.
+  win.__SIDEVOICE_TARGET__ = null;
   if (win.__sidevoiceDesktop) return win.__sidevoiceDesktop;
 
   const BRIDGE_VERSION = 2;
@@ -324,27 +327,68 @@
   /** The app's updates: the `AppUpdater` seam, 1:1 onto the `updater` command's actions (docs/BRIDGE.md → "The updater").
    *  Only in a release or a nightly that can update itself. */
   function updater() {
-    const listeners = new Set();
+    const listeners = listened();
     const host = {
       settings: () => call("updater", { action: "settings" }),
       setMode: (mode) => call("updater", { action: "set-mode", mode }),
       status: () => call("updater", { action: "status" }),
       /** `listener(status)` on every change. Returns `stop`. */
+      subscribe: listeners.subscribe,
+      check: () => call("updater", { action: "check" }),
+      download: () => call("updater", { action: "download" }),
+      restart: () => call("updater", { action: "restart" }).then(() => undefined),
+    };
+    return { host: Object.freeze(host), changed: listeners.tell };
+  }
+
+  /** Listeners the app tells of a change (`webview.eval`): `subscribe(listener)` returns `stop`; `tell(value)` hands
+   *  each the value, past one that throws. */
+  function listened() {
+    const listeners = new Set();
+    return {
       subscribe(listener) {
         if (typeof listener !== "function") throw new TypeError("subscribe(listener)");
         listeners.add(listener);
         return () => { listeners.delete(listener); };
       },
-      check: () => call("updater", { action: "check" }),
-      download: () => call("updater", { action: "download" }),
-      restart: () => call("updater", { action: "restart" }).then(() => undefined),
+      tell(value) {
+        for (const listener of listeners) {
+          try { listener(value); } catch (_) { /* a listener's error is the page's own */ }
+        }
+      },
     };
-    function changed(status) {
-      for (const listener of listeners) {
-        try { listener(status); } catch (_) { /* a listener's error is the page's own */ }
-      }
-    }
-    return { host: Object.freeze(host), changed };
+  }
+
+  /** The global mute shortcut: sidevoice-web's `MuteShortcutBridge`, onto the `mute_shortcut` command (docs/BRIDGE.md →
+   *  "The mute shortcut"). Its `MuteShortcut` is `{accelerator, label, state, alternatives, voiceOver}`. */
+  function muteShortcut() {
+    const listeners = listened();
+    const invalid = () => ({ key: "shortcut_invalid", message: "set(accelerator) takes a string or null." });
+    const host = {
+      get: () => call("mute_shortcut", { action: "get" }),
+      /** `accelerator` as the web writes it (`Cmd+Shift+M`), or `null` for none. Rejects `{key: "shortcut_invalid"}`
+       *  for one that is not a shortcut. */
+      set: (accelerator) =>
+        typeof accelerator === "string" || accelerator === null
+          ? call("mute_shortcut", { action: "set", accelerator })
+          : Promise.reject(invalid()),
+      /** `listener(shortcut)` on every change: set here or in the settings window, or refused. Returns `stop`. */
+      subscribe: listeners.subscribe,
+    };
+    return { host: Object.freeze(host), changed: listeners.tell };
+  }
+
+  /** Whether the call controls card keeps its controls in view: sidevoice-web's `CallControlsBridge`, onto the
+   *  `call_controls_settings` command (docs/BRIDGE.md → "The call controls settings"). */
+  function callControls() {
+    return Object.freeze({
+      settings: () => call("call_controls_settings", { action: "settings" }),
+      /** Kept by the app and applied at once. `enabled` must be a boolean, else it rejects `{key: "bad_request"}`. */
+      setAlwaysShown: (enabled) =>
+        typeof enabled === "boolean"
+          ? call("call_controls_settings", { action: "set-always-shown", enabled })
+          : Promise.reject({ key: "bad_request", message: "setAlwaysShown(enabled) takes a boolean." }),
+    });
   }
 
   /** The card's devices (the web UI's call-controls `AudioDevices`), from the room's own (`facts.audioDevices`: what the
@@ -442,6 +486,7 @@
   const voiceCall = voiceOffered === true ? voice() : null;
   // Only in a release or a nightly that can update itself (core `updater::offered`).
   const updates = updaterOffered === true ? updater() : null;
+  const shortcut = muteShortcut();
 
   const api = {
     version: BRIDGE_VERSION,
@@ -462,6 +507,10 @@
       ...(voiceCall ? { voice: voiceCall.host } : {}),
       /** What this build is: a release, a nightly (both with `updater`), or a development build. */
       build: Object.freeze({ ...build }),
+      /** The global mute shortcut, and whether the call controls card keeps its controls in view: the app's, set from
+       *  the page's Settings. */
+      muteShortcut: shortcut.host,
+      callControls: callControls(),
       // Only in a release or a nightly that can update itself.
       ...(updates ? { updater: updates.host } : {}),
     }),
@@ -472,6 +521,10 @@
     /** The updates' status changed, from the app (`webview.eval`): to `host.updater.subscribe`'s listeners. */
     updaterEvent(status) {
       if (updates) updates.changed(status);
+    },
+    /** The mute shortcut changed, from the app (`webview.eval`): to `host.muteShortcut.subscribe`'s listeners. */
+    muteShortcutEvent(status) {
+      shortcut.changed(status);
     },
     snapshot,
     /** Runs one command from the app (tray, shortcut, headset, call controls card) through the web UI's own actions:

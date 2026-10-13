@@ -19,14 +19,9 @@
     <p class="lead">Con qué máquina hablas lo decide el emparejamiento: pide a tu agente «empareja un dispositivo» (o ejecuta <code>sidevoice pair-device</code> en la máquina) y pega el código en la ventana de Sidevoice → Máquinas. El código ya dice cómo llegar a la máquina.</p>
 
     <form id="settings" novalidate>
-      <label for="target">Dónde mirar primero (opcional)</label>
-      <input id="target" name="target" type="url" inputmode="url" autocomplete="url" spellcheck="false"
-             placeholder="http://127.0.0.1:8768 · https://sala.example">
-      <p class="hint">Un nodo (el núcleo de una máquina) o una sala de encuentro. Vacío está bien: el código de emparejamiento lleva sus direcciones. <code>https://</code>, o <code>http://</code> solo en este ordenador.</p>
-
       <label for="mute-shortcut">Atajo global para silenciar</label>
       <input id="mute-shortcut" name="muteShortcut" type="text" spellcheck="false" placeholder="Ctrl+Alt+M">
-      <p class="hint">Funciona aunque Sidevoice esté en segundo plano. Vacío lo desactiva. Formato: <code>CmdOrCtrl+Shift+M</code>, <code>Alt+F9</code>…</p>
+      <p class="hint">Funciona aunque Sidevoice esté en segundo plano. Vacío lo desactiva. Formato: <code>Ctrl+Alt+M</code>, <code>Cmd+Shift+M</code>, <code>Alt+F9</code>…</p>
       <div id="shortcut-status" class="notice" role="status" aria-live="polite" hidden>
         <p id="shortcut-status-text"></p>
         <button type="button" id="shortcut-alternative" class="secondary" hidden></button>

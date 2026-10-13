@@ -369,49 +369,6 @@ pub fn first_open() -> Result<()> {
     ensure(has("ready: true"), "the interface's controller never came up")
 }
 
-/// `macos with-target`: with a target (the stand-in node on loopback), the interface asks it from the app's own
-/// origin (cross-origin), with no pairing yet.
-pub fn with_target() -> Result<()> {
-    let home = AppHome::new("with-target")?;
-    let conf = &home.dir;
-    mkdir(conf)?;
-    crate::util::write(
-        &conf.join("settings.json"),
-        format!(r#"{{"target":"http://127.0.0.1:{FAKE_NODE_PORT}","muteShortcut":""}}"#),
-    )?;
-    let dir = work("with-target")?;
-    let (node_log, app_log) = (dir.join("node.log"), dir.join("target.log"));
-    let mut node = fake_node(&node_log)?;
-    let mut app = home.app(&[]).spawn(&app_log)?;
-    wait_for(&app_log, "ready: true", 0, 45);
-    sleep(5.0);
-    app.stop();
-    node.stop(); // the probe starts its own on the same port
-    let _ = fs::remove_dir_all(conf);
-    let (app_text, node_text) = (read(&app_log), read(&node_log));
-    eprintln!("--- app\n{app_text}");
-    eprintln!("--- fake node (what the interface asked, cross-origin)\n{}", uniq_count(&node_text));
-    ensure(crate::util::has(&app_text, "ready: true"), "the interface's controller never came up with a target")?;
-    ensure(
-        crate::util::has(&node_text, "origin=tauri://localhost"),
-        "the interface never asked its target from the app's origin",
-    )
-}
-
-/// `sort | uniq -c`.
-pub fn uniq_count(text: &str) -> String {
-    let mut lines: Vec<&str> = text.lines().collect();
-    lines.sort_unstable();
-    let mut out = String::new();
-    let mut at = 0;
-    while at < lines.len() {
-        let same = lines[at..].iter().take_while(|line| **line == lines[at]).count();
-        out += &format!("{same:>7} {}\n", lines[at]);
-        at += same;
-    }
-    out
-}
-
 /// `macos dmg [--signed]`: the .dmg, `dist/Sidevoice_<version>_aarch64.dmg`, with the brand's window (background,
 /// icon layout and volume icon: scripts/dmg-settings.py, dmgbuild), verified, and the app checked as shipped inside
 /// it. Without `--signed`, docs/FIRST_OPEN.txt goes beside it (`dist/LEEME-primera-apertura.txt`): how to open an app
@@ -777,10 +734,5 @@ TeamIdentifier=AB12CD34EF
     #[test]
     fn an_unsigned_build_drops_every_signing_variable() {
         assert!(SIGNING_ENV.contains(&"APPLE_SIGNING_IDENTITY") && SIGNING_ENV.contains(&"APPLE_API_KEY_P8"));
-    }
-
-    #[test]
-    fn uniq_count_counts_each_line_once_sorted() {
-        assert_eq!(uniq_count("b\na\nb\n"), "      1 a\n      2 b\n");
     }
 }

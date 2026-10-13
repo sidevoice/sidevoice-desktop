@@ -3,7 +3,8 @@ fn main() {
     // The app's own commands, declared so capabilities can grant them per window/origin:
     // the settings window gets the settings commands (and reads the native engine's state), the room window
     // `bridge_state` and `bridge_level` (+ `debug_log`), the native engine, the voice call (`voice_*`, macOS) and the
-    // local host (`local_host_*`) and the app's updates (`updater`), the call controls card its own four.
+    // local host (`local_host_*`), the mute shortcut and the call controls settings (`mute_shortcut`,
+    // `call_controls_settings`) and the app's updates (`updater`), the call controls card its own four.
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
         "get_settings",
         "save_settings",
@@ -43,6 +44,8 @@ fn main() {
         "local_host_action",
         "local_host_pairing_code",
         "local_host_pair_room",
+        "mute_shortcut",
+        "call_controls_settings",
         "updater",
     ])))
     .expect("failed to run tauri-build");

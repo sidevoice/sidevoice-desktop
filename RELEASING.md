@@ -32,7 +32,7 @@ secrets into the environment of the steps that need them, choose which steps run
   the app and on xtask), `test` (the bridge script and the Rust tests), `two-users` (CI only: it adds a user); and
   xtask's own tests, `cargo test --manifest-path xtask/Cargo.toml`.
 - `linux` and `windows` jobs: `cargo xtask bundle --channel C`, this host's installers.
-- `macos` job: `cargo xtask macos app [--signed] --channel C`, `check-app [--signed]`, `first-open`, `with-target`,
+- `macos` job: `cargo xtask macos app [--signed] --channel C`, `check-app [--signed]`, `first-open`,
   `dmg [--signed]`, `sign-dmg`, `checksums`, `forget-secrets`, `dmg-screens`; then on the CI-only probe build
   `probe-app`, `local-host`, `probe`, `voice-models`, `card`.
 - `publish` job: `cargo xtask publish assets release TAG` or `publish assets nightly`, then `publish release TAG`
@@ -40,7 +40,7 @@ secrets into the environment of the steps that need them, choose which steps run
 - `.github/actions/setup-rust`: `cargo xtask engine-rev` and `sherpa-libs`; release-please.yml and pr-title.yml:
   `release-pr-checks` and `release-pr-title`.
 
-On a laptop, `npm ci` first. The `macos` commands that start the app (`first-open`, `with-target`, `probe`,
+On a laptop, `npm ci` first. The `macos` commands that start the app (`first-open`, `probe`,
 `card`) run it off a runner with a scratch home (`/tmp/svx-<step>`), never with this machine's own settings,
 pairing, local core or models; `probe` expects no provider key in the login keychain, as on a runner. Unsigned and
 probe builds ignore any `APPLE_*` variables in the environment. Every build is a `dev` build unless `--channel`
