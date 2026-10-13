@@ -151,17 +151,35 @@ fn get_settings(app: AppHandle, state: State<'_, AppState>) -> SettingsInfo {
     }
 }
 
-/// The settings window's save: its mute shortcut and call controls; the rest stays as stored. Async so it runs off the
-/// main thread: creating a window from a synchronous command deadlocks on Windows (WebView2), and registering the
-/// shortcut waits for the main thread.
+/// What the settings window changed: only what the person changed there, so a value set meanwhile from the room page
+/// is never overwritten by the one the window loaded.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WindowChanges {
+    mute_shortcut: Option<String>,
+    call_controls_always: Option<bool>,
+}
+
+/// The settings window's save: its mute shortcut and call controls, those it changed; the rest stays as stored. Async
+/// so it runs off the main thread: creating a window from a synchronous command deadlocks on Windows (WebView2), and
+/// registering the shortcut waits for the main thread.
 #[tauri::command]
-async fn save_settings(app: AppHandle, settings: Settings) -> Result<MuteShortcut, String> {
-    let accelerator = checked_shortcut(&settings.mute_shortcut).ok_or_else(|| {
-        format!("El atajo «{}» no es válido. Ejemplo: Ctrl+Alt+M, Cmd+Shift+M.", settings.mute_shortcut.trim())
-    })?;
+async fn save_settings(app: AppHandle, changes: WindowChanges) -> Result<MuteShortcut, String> {
+    let accelerator = changes
+        .mute_shortcut
+        .as_deref()
+        .map(|text| {
+            checked_shortcut(text)
+                .ok_or_else(|| format!("El atajo «{}» no es válido. Ejemplo: Ctrl+Alt+M, Cmd+Shift+M.", text.trim()))
+        })
+        .transpose()?;
     let shortcut = change_shortcut(&app, |stored| {
-        stored.mute_shortcut = accelerator;
-        stored.call_controls_always = settings.call_controls_always;
+        if let Some(accelerator) = accelerator {
+            stored.mute_shortcut = accelerator;
+        }
+        if let Some(always) = changes.call_controls_always {
+            stored.call_controls_always = always;
+        }
     })
     .map_err(|e| format!("No se pudo guardar: {e}"))?;
     if room_window(&app).is_none() {

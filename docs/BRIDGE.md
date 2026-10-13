@@ -445,8 +445,8 @@ interface CallControlsBridge {
 
 Both commands are granted to the room window (`capabilities/room.json`) and re-check that the caller is the current
 room window on the app's own page (else `bad_request`). The app's settings (`settings.json`) have one writer
-(`change_settings`, `src-tauri/src/lib.rs`): the settings window's save and every setter of the page change only their
-own fields, under one lock, so none loses another's.
+(`change_settings`, `src-tauri/src/lib.rs`): the settings window's save (only the fields the person changed there) and
+every setter of the page change only their own fields, under one lock, so none loses another's.
 
 ## The build
 

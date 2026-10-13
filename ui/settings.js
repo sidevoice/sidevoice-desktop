@@ -38,10 +38,16 @@ function showShortcut(status) {
   $("shortcut-status").className = status.state === "refused" ? "notice error" : "notice";
 }
 
+// What the window shows as loaded or last saved: a save sends only what the person changed since, so a value the room
+// page set meanwhile is not overwritten.
+let shown = {};
+const fields = () => ({ muteShortcut: $("mute-shortcut").value, callControlsAlways: $("call-controls-always").checked });
+
 async function load() {
   const { settings, shortcut, debug } = await invoke("get_settings");
   $("mute-shortcut").value = settings.muteShortcut;
   $("call-controls-always").checked = !!settings.callControlsAlways;
+  shown = fields();
   showShortcut(shortcut);
   $("mute-shortcut").focus();
   return debug;
@@ -52,13 +58,11 @@ $("settings").addEventListener("submit", async (event) => {
   $("save").disabled = true;
   say("Guardando…");
   try {
-    const shortcut = await invoke("save_settings", {
-      settings: {
-        muteShortcut: $("mute-shortcut").value,
-        callControlsAlways: $("call-controls-always").checked,
-      },
-    });
+    const now = fields();
+    const changes = Object.fromEntries(Object.entries(now).filter(([key, value]) => value !== shown[key]));
+    const shortcut = await invoke("save_settings", { changes });
     $("mute-shortcut").value = shortcut.accelerator || "";
+    shown = fields();
     // The app shows the room itself; a shortcut the system refused is not fatal, and is said above.
     showShortcut(shortcut);
     say("Guardado.");
