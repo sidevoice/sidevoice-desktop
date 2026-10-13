@@ -56,8 +56,8 @@ the page as `host.build` (docs/BRIDGE.md → "The build").
 
 - `release`: a run called with a release's tag. The only build with the updater (`host.updater`, its checks) and
   the only one that makes update artifacts (Updates, below). A release's macOS app is always `--signed`.
-- `nightly`: a push to `main`. No updater; `host.build` gives the last release's version, the short commit and the
-  day it was built.
+- `nightly`: a push to `main`. No updater; `host.build` gives the last release's version, the short commit and that
+  commit's date.
 - `dev`: everything else, and the default: a laptop, a pull request, a manual run (a `sign` dry run too). No
   updater.
 
@@ -108,8 +108,8 @@ offered. The app installs only what is signed with the updater's key, checked ag
 
   Each comes with its `.sig`, checked by the step that made it. `publish assets release TAG` checks all three and
   their signatures are among the artifacts, writes `latest.json` (`version`, `notes` (the release's notes),
-  `pub_date`, and `platforms` `darwin-aarch64`, `windows-x86_64`, `linux-x86_64`, each `{signature, url}` of that
-  release's asset) and adds them to the assets. The nightly gets none of it.
+  `pub_date` (when the release was created), and `platforms` `darwin-aarch64`, `windows-x86_64`, `linux-x86_64`,
+  each `{signature, url}` of that release's asset) and adds them to the assets. The nightly gets none of it.
 - **What cannot update itself.** A nightly or dev build (built without the updater), a `.deb` (the package manager
   owns it), an AppImage's binary run on its own, an app run from the .dmg: the page gets no `host.updater`.
 - **The key.** The private key and its password are the repository secrets `TAURI_SIGNING_PRIVATE_KEY` and

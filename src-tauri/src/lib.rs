@@ -24,6 +24,7 @@ mod voice;
 
 use serde::Serialize;
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
+use sidevoice_desktop_core::build_info::BuildInfo;
 use sidevoice_desktop_core::settings::{Settings, APP_ORIGIN};
 use sidevoice_desktop_core::{media, settings};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -309,11 +310,15 @@ fn open_room(app: &AppHandle, settings: &Settings) -> tauri::Result<()> {
     let committed_origin: Arc<Mutex<Option<String>>> = Arc::default();
     let committed_for_load = committed_origin.clone();
     let page_app = app.clone();
+    // `host.build`: a nightly's version is the last release's (build.rs).
+    let version = app.package_info().version.to_string();
+    let (commit, date) = (env!("SIDEVOICE_BUILD_COMMIT"), env!("SIDEVOICE_BUILD_DATE"));
+    let build = BuildInfo::new(env!("SIDEVOICE_BUILD_CHANNEL"), &version, commit, date);
     let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(page.into()))
         .title("Sidevoice")
         .inner_size(1100.0, 760.0)
         .min_inner_size(420.0, 560.0)
-        .initialization_script(bridge::script_for_origin(APP_ORIGIN, updater::offered(), &updater::build(app)));
+        .initialization_script(bridge::script_for_origin(APP_ORIGIN, updater::offered(), &build));
     if let Some(target) = settings::target_script(settings) {
         builder = builder.initialization_script(target);
     }

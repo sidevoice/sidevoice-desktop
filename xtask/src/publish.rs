@@ -75,8 +75,6 @@ fn all_files(dir: &Path) -> Result<Vec<PathBuf>> {
 /// (macOS's app as a .tar.gz; Linux's and Windows' are the AppImage and the installer themselves) and the signatures.
 /// Never on the nightly: only a release is offered as an update.
 const UPDATES: &[&str] = &[".app.tar.gz", ".app.tar.gz.sig", ".AppImage.sig", "-setup.exe.sig"];
-/// The manifest a running app reads (releases/latest/download/latest.json).
-const LATEST: &str = "latest.json";
 
 pub fn is_update(file: &str) -> bool {
     UPDATES.iter().any(|end| file.ends_with(end))
@@ -89,15 +87,6 @@ pub fn update_files(version: &str) -> [(&'static str, String); 3] {
         ("windows-x86_64", format!("Sidevoice_{version}_x64-setup.exe")),
         ("linux-x86_64", format!("Sidevoice_{version}_amd64.AppImage")),
     ]
-}
-
-/// The updates or signatures for `version` missing from `names`.
-pub fn missing_updates(names: &[String], version: &str) -> Vec<String> {
-    update_files(version)
-        .into_iter()
-        .flat_map(|(_, file)| [format!("{file}.sig"), file])
-        .filter(|wanted| !names.iter().any(|name| name == wanted))
-        .collect()
 }
 
 /// latest.json (tauri-plugin-updater's static manifest): the version, the release's notes, when it was published, and
@@ -142,22 +131,21 @@ pub fn assemble(kind: &str, tag: Option<&str>) -> Result<()> {
     let missing = missing_kinds(&names);
     ensure(missing.is_empty(), format!("no {} among the artifacts", missing.join(", ")))?;
     if let Some(tag) = tag {
-        let missing = missing_updates(&names, &version);
-        ensure(missing.is_empty(), format!("no {} among the artifacts", missing.join(", ")))?;
         let mut sigs = Vec::new();
         for (platform, file) in update_files(&version) {
-            let signature =
-                fs::read_to_string(assets.join(format!("{file}.sig"))).map_err(|e| format!("{file}.sig: {e}"))?;
-            ensure(!signature.trim().is_empty(), format!("{file}.sig is empty"))?;
-            ensure(fs::metadata(assets.join(&file)).is_ok_and(|m| m.len() > 0), format!("{file} is empty"))?;
+            let signature = fs::read_to_string(assets.join(format!("{file}.sig"))).unwrap_or_default();
+            ensure(!signature.trim().is_empty(), format!("no {file}.sig among the artifacts, or it is empty"))?;
+            ensure(fs::metadata(assets.join(&file)).is_ok_and(|m| m.len() > 0), format!("no {file}, or it is empty"))?;
             sigs.push((platform, file, signature));
         }
         let repo_name = std::env::var("GH_REPO").map_err(|_| "GH_REPO is not set (owner/name)")?;
-        let notes = Cmd::new("gh").args(["release", "view", tag, "--json", "body", "-q", ".body"]).stdout()?;
-        let (day, time) = crate::util::now_utc();
+        let release = Cmd::new("gh").args(["release", "view", tag, "--json", "body,createdAt"]).stdout()?;
+        let release: serde_json::Value = serde_json::from_str(&release).map_err(|e| format!("gh release view: {e}"))?;
+        let (notes, created) = (release["body"].as_str().unwrap_or_default(), release["createdAt"].as_str());
+        let created = created.ok_or("gh release view: no createdAt")?;
         let base = format!("https://github.com/{repo_name}/releases/download/{tag}");
-        let latest = latest_json(&version, notes.trim_end(), &format!("{day}T{time}Z"), &base, &sigs);
-        write(&assets.join(LATEST), &latest)?;
+        let latest = latest_json(&version, notes.trim_end(), created, &base, &sigs);
+        write(&assets.join("latest.json"), &latest)?;
         eprint!("{latest}");
     }
     let present: Vec<PathBuf> = files(&assets)?;
@@ -335,29 +323,6 @@ mod tests {
         {
             assert!(!is_update(file), "{file}");
         }
-    }
-
-    #[test]
-    fn a_release_needs_every_platform_s_update_and_its_signature() {
-        let names = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        let all = names(&[
-            "Sidevoice_0.4.0_aarch64.app.tar.gz",
-            "Sidevoice_0.4.0_aarch64.app.tar.gz.sig",
-            "Sidevoice_0.4.0_x64-setup.exe",
-            "Sidevoice_0.4.0_x64-setup.exe.sig",
-            "Sidevoice_0.4.0_amd64.AppImage",
-            "Sidevoice_0.4.0_amd64.AppImage.sig",
-        ]);
-        assert!(missing_updates(&all, "0.4.0").is_empty());
-        assert_eq!(
-            missing_updates(&all[..3], "0.4.0"),
-            [
-                "Sidevoice_0.4.0_x64-setup.exe.sig",
-                "Sidevoice_0.4.0_amd64.AppImage.sig",
-                "Sidevoice_0.4.0_amd64.AppImage"
-            ]
-        );
-        assert_eq!(missing_updates(&all, "0.4.1").len(), 6, "another version's are not this release's");
     }
 
     #[test]

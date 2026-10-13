@@ -117,11 +117,16 @@ fn main() -> ExitCode {
         ["test"] => checks::test(),
         ["icons"] => checks::icons(),
         ["two-users"] => checks::two_users(),
-        ["bundle", rest @ ..] => Channel::with_flags(rest, &[]).and_then(|(channel, _)| checks::bundle(channel)),
+        ["bundle"] => checks::bundle(Channel::Dev),
+        ["bundle", "--channel", c] => Channel::parse(c).and_then(checks::bundle),
         ["engine-rev"] => checks::engine_rev(),
         ["sherpa-libs"] => checks::sherpa_libs(),
-        ["macos", "app", rest @ ..] => Channel::with_flags(rest, &["--signed"])
-            .and_then(|(channel, signed)| macos("app", || macos::build_app(signed[0], channel))),
+        ["macos", "app"] => macos("app", || macos::build_app(false, Channel::Dev)),
+        ["macos", "app", "--signed"] => macos("app", || macos::build_app(true, Channel::Dev)),
+        ["macos", "app", "--channel", c] => Channel::parse(c).and_then(|c| macos("app", || macos::build_app(false, c))),
+        ["macos", "app", "--signed", "--channel", c] => {
+            Channel::parse(c).and_then(|c| macos("app", || macos::build_app(true, c)))
+        }
         ["macos", "check-app"] => macos("check-app", || macos::check_app(false)),
         ["macos", "check-app", "--signed"] => macos("check-app", || macos::check_app(true)),
         ["macos", "first-open"] => macos("first-open", macos::first_open),

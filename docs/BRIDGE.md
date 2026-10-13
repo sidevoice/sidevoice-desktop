@@ -403,7 +403,7 @@ What is this app's own:
 ```
 
 `release`: a numbered release, the only build with `host.updater`. `nightly`: the rolling build of `main`; `version`
-is the last release's (the one `main` is at), with the short `commit` and the `date` it was built (`YYYY-MM-DD`, UTC).
+is the last release's (the one `main` is at), with the short `commit` and that commit's `date` (`YYYY-MM-DD`).
 `dev`: anything else (a laptop, a pull request, a manual run). Always present.
 
 ## The updater

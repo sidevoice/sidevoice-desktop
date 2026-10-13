@@ -458,60 +458,24 @@ impl Channel {
             Channel::Dev => "dev",
         }
     }
-
-    /// `[--channel NAME]` and what else a command takes (`flags`, each at most once), in any order: the channel and
-    /// which of `flags` were given.
-    pub fn with_flags(args: &[&str], flags: &[&str]) -> Result<(Channel, Vec<bool>)> {
-        let mut channel = None;
-        let mut given = vec![false; flags.len()];
-        let mut rest = args.iter();
-        while let Some(&arg) = rest.next() {
-            if arg == "--channel" {
-                let name = rest.next().ok_or("--channel needs release, nightly or dev")?;
-                ensure(channel.is_none(), "--channel twice")?;
-                channel = Some(Channel::parse(name)?);
-            } else if let Some(at) = flags.iter().position(|flag| *flag == arg) {
-                ensure(!given[at], format!("{arg} twice"))?;
-                given[at] = true;
-            } else {
-                return Err(format!("unexpected {arg:?}"));
-            }
-        }
-        Ok((channel.unwrap_or_default(), given))
-    }
 }
 
 /// What the app's build script is told (src-tauri/build.rs): the channel, and for a nightly the short commit it is
-/// built from and the day, `YYYY-MM-DD` (UTC). Every build says all three, so nothing in the environment leaks in.
-pub fn build_env(channel: Channel, commit: &str, today: &str) -> [(&'static str, String); 3] {
+/// built from and that commit's date, `YYYY-MM-DD`. Every build says all three, so nothing in the environment leaks in.
+pub fn build_env(channel: Channel, commit: &str, date: &str) -> [(&'static str, String); 3] {
     let nightly = channel == Channel::Nightly;
-    let only_nightly = |value: &str| if nightly { value.to_owned() } else { String::new() };
+    let only_nightly = |value: &str| {
+        if nightly {
+            value.to_owned()
+        } else {
+            String::new()
+        }
+    };
     [
         ("SIDEVOICE_BUILD_CHANNEL", channel.name().to_owned()),
         ("SIDEVOICE_BUILD_COMMIT", only_nightly(commit)),
-        ("SIDEVOICE_BUILD_DATE", only_nightly(today)),
+        ("SIDEVOICE_BUILD_DATE", only_nightly(date)),
     ]
-}
-
-/// The day `seconds` after 1970 falls on (UTC), `YYYY-MM-DD`, and its time, `HH:MM:SS` (H. Hinnant's
-/// days-to-civil).
-pub fn utc(seconds: u64) -> (String, String) {
-    let (days, time) = (seconds / 86_400, seconds % 86_400);
-    let z = days as i64 + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    (format!("{year:04}-{month:02}-{day:02}"), format!("{:02}:{:02}:{:02}", time / 3600, time % 3600 / 60, time % 60))
-}
-
-/// Now, as [`utc`] says it.
-pub fn now_utc() -> (String, String) {
-    utc(SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or_default())
 }
 
 /// What a release's build adds to tauri.conf.json: the update artifacts, each signed with the updater's private key
@@ -565,16 +529,21 @@ impl TauriBuild<'_> {
         } else {
             cmd = UPDATER_KEY_ENV.iter().fold(cmd, |cmd, name| cmd.env_remove(name));
         }
-        let commit = match self.channel {
-            Channel::Nightly => Cmd::new("git").args(["rev-parse", "--short=7", "HEAD"]).stdout()?.trim().to_owned(),
-            _ => String::new(),
+        // A nightly's short commit and that commit's date (`YYYY-MM-DD`).
+        let (commit, date) = match self.channel {
+            Channel::Nightly => {
+                let head = Cmd::new("git").args(["log", "-1", "--abbrev=7", "--format=%h %cs"]).stdout()?;
+                let (commit, date) = head.trim().split_once(' ').ok_or("git log: no commit")?;
+                (commit.to_owned(), date.to_owned())
+            }
+            _ => Default::default(),
         };
         eprintln!(
             "(a {} build{})",
             self.channel.name(),
             if commit.is_empty() { String::new() } else { format!(" of {commit}") }
         );
-        for (key, value) in build_env(self.channel, &commit, &now_utc().0) {
+        for (key, value) in build_env(self.channel, &commit, &date) {
             cmd = cmd.env(key, value);
         }
         Ok(cmd)
@@ -774,25 +743,6 @@ mod tests {
         assert_eq!(TauriBuild::default().channel, Channel::Dev, "a laptop's build is never a release");
     }
 
-    #[test]
-    fn the_channel_and_the_flags_come_in_any_order() {
-        assert_eq!(Channel::with_flags(&[], &["--signed"]).unwrap(), (Channel::Dev, vec![false]));
-        assert_eq!(
-            Channel::with_flags(&["--channel", "release", "--signed"], &["--signed"]).unwrap(),
-            (Channel::Release, vec![true])
-        );
-        assert_eq!(
-            Channel::with_flags(&["--signed", "--channel", "nightly"], &["--signed"]).unwrap().0,
-            Channel::Nightly
-        );
-        assert!(Channel::with_flags(&["--channel"], &[]).is_err());
-        assert!(Channel::with_flags(&["--channel", "beta"], &[]).is_err());
-        assert!(Channel::with_flags(&["--channel", "dev", "--channel", "dev"], &[]).is_err());
-        assert!(Channel::with_flags(&["--signed"], &[]).is_err());
-        assert!(Channel::with_flags(&["--signed", "--signed"], &["--signed"]).is_err());
-    }
-
-    #[test]
     fn only_a_nightly_says_its_commit_and_date() {
         let nightly = build_env(Channel::Nightly, "a1b2c3d", "2026-10-13");
         assert_eq!(nightly[0], ("SIDEVOICE_BUILD_CHANNEL", "nightly".to_owned()));
@@ -805,15 +755,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn utc_days_and_times() {
-        assert_eq!(utc(0), ("1970-01-01".to_owned(), "00:00:00".to_owned()));
-        assert_eq!(utc(951_782_400), ("2000-02-29".to_owned(), "00:00:00".to_owned()));
-        assert_eq!(utc(1_791_878_399), ("2026-10-13".to_owned(), "07:59:59".to_owned()));
-        assert_eq!(utc(4_107_542_400).0, "2100-03-01");
-    }
-
-    #[test]
     fn a_secret_argument_is_never_shown() {
         let cmd = Cmd::new("security").args(["unlock-keychain", "-p"]).secret("hunter2").arg("k.keychain-db");
         assert_eq!(cmd.shown(), "security unlock-keychain -p *** k.keychain-db");
