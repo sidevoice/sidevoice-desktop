@@ -86,7 +86,7 @@ jobs:
       # The macOS job: the probe page, and a call on the engine's real models through the app's adapter.
       native: ${{ github.event_name != 'pull_request' || steps.filter.outputs.native == 'true' }}
       # The .dmg: never on a pull request. (Windows and Linux build their installers on every run.)
-      installers: ${{ github.event_name != 'pull_request' }}
+      installers: ${{ true }} # TEMPORARY (#55): exercise the .dmg steps' xtask on this PR; reverted before merge
       # The macOS app and .dmg signed with the Developer ID and notarized: a release, or a manual run that asks for it.
       # Never on a pull request or a push (the secrets are not even read then).
       sign: ${{ inputs.release-tag && 'true' || (github.event_name == 'workflow_dispatch' && inputs.sign && 'true') || 'false' }}
