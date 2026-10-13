@@ -77,7 +77,7 @@
 //! is what a Tauri build is told (`SIDEVOICE_BUILD_CHANNEL`, `_COMMIT`, `_DATE`; src-tauri/build.rs). A release
 //! and (for now) a nightly build have the updater, make update artifacts and read `TAURI_SIGNING_PRIVATE_KEY` and
 //! `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (a dev build has them removed); a nightly is built as
-//! `<manifest version, patch + 1>-nightly.<GITHUB_RUN_NUMBER>`, reading the nightly's feed.
+//! `<manifest version, patch + 1>-nightly.<GITHUB_RUN_NUMBER>`, reading the releases' feed (to reach the next release).
 //!
 //! This tooling's own tests: `cargo test --manifest-path xtask/Cargo.toml`.
 

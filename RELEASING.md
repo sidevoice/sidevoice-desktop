@@ -100,10 +100,11 @@ Build artifacts on Actions runs are kept 7 days, for debugging only. Download fr
 A release updates itself from the releases (docs/BRIDGE.md → "The updater"): it reads
 `https://github.com/sidevoice/sidevoice-desktop/releases/latest/download/latest.json` at launch and every 6 hours.
 `latest` is the newest release that is neither a draft nor a pre-release, so a `-rc.N` and the nightly are never
-offered. For now a nightly updates itself too, from its own feed,
-`https://github.com/sidevoice/sidevoice-desktop/releases/download/nightly/latest.json` (xtask sets the endpoint and
-the version at build time with `--config`): temporary, so updating is exercised before the first release relies on
-it; an issue removes it once a release has updated itself. The app installs only what is signed with the updater's
+offered. For now a nightly has the updater too and reads that same releases' feed: an installed nightly
+(`X.Y.Z-nightly.N`, which sorts below release `X.Y.Z`; xtask sets the version at build time with `--config`)
+updates itself to the next numbered release. Temporary, to validate the nightly → release path before the first
+release relies on it; an issue removes it once a release has updated itself. (The nightly still publishes its own
+`latest.json` beside its assets; nothing reads it meanwhile.) The app installs only what is signed with the updater's
 key, checked against the public key in `src-tauri/tauri.conf.json` (`plugins.updater.pubkey`, minisign key id
 `EA1BE9B3A4CF715A`).
 
