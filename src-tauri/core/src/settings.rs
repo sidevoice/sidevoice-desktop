@@ -1,5 +1,5 @@
-//! What this device remembers: where the bundled interface looks first (its target), the mute shortcut, and how the
-//! call controls card shows its controls.
+//! What this device remembers: where the bundled interface looks first (its target), the mute shortcut, how the
+//! call controls card shows its controls, and how the app's updates arrive (set only by the room page).
 //!
 //! The window always shows the web interface bundled in the app (docs/TARGETS.md). Which machine it talks to,
 //! and how to reach it, comes from pairing (the code the node issues carries the node's addresses); the target
@@ -39,6 +39,10 @@ pub struct Settings {
     /// "Show the call controls always": the card keeps its controls in view instead of showing them near the pointer.
     #[serde(default)]
     pub call_controls_always: bool,
+    /// How the app's updates arrive (core `updater`): automatic (the default) or manual. Set only by the room page
+    /// (`host.updater.setMode`); the settings window neither shows nor sends it, and saving it keeps the stored one.
+    #[serde(default)]
+    pub update_mode: crate::updater::Mode,
 }
 
 fn default_shortcut() -> String {
@@ -82,7 +86,12 @@ fn shortcut_keys(accelerator: &str) -> Vec<String> {
 impl Settings {
     /// First run: no target (pairing will say where the machine is), the default shortcut.
     pub fn first_run() -> Self {
-        Settings { target: String::new(), mute_shortcut: default_shortcut(), call_controls_always: false }
+        Settings {
+            target: String::new(),
+            mute_shortcut: default_shortcut(),
+            call_controls_always: false,
+            update_mode: crate::updater::Mode::Automatic,
+        }
     }
 }
 
@@ -179,6 +188,7 @@ pub fn validate(input: Settings) -> Result<Settings, SettingsError> {
         target: normalize_target(&input.target)?,
         mute_shortcut: input.mute_shortcut.trim().to_string(),
         call_controls_always: input.call_controls_always,
+        update_mode: input.update_mode,
     })
 }
 
@@ -276,6 +286,7 @@ mod tests {
             target: "https://room.example.com".into(),
             mute_shortcut: "Alt+M".into(),
             call_controls_always: true,
+            update_mode: crate::updater::Mode::Manual,
         };
         save(&dir, &s).unwrap();
         assert_eq!(load(&dir), Some(s));
@@ -293,8 +304,13 @@ mod tests {
         .unwrap();
         assert_eq!(
             load(&dir),
-            Some(Settings { target: String::new(), mute_shortcut: "Alt+M".into(), call_controls_always: false }),
-            "a file from the room-page days keeps its shortcut and forgets the room"
+            Some(Settings {
+                target: String::new(),
+                mute_shortcut: "Alt+M".into(),
+                call_controls_always: false,
+                update_mode: crate::updater::Mode::Automatic,
+            }),
+            "a file from the room-page days keeps its shortcut and forgets the room; updates are automatic"
         );
         fs::remove_dir_all(&dir).unwrap();
     }

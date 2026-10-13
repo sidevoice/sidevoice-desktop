@@ -160,15 +160,17 @@ pub fn sherpa_libs() -> Result<()> {
         .run()
 }
 
-/// `bundle`: this host's installers, as a release ships them: the .deb and the AppImage on Linux, the NSIS
-/// installer on Windows (macOS: `macos app`, `macos dmg`).
-pub fn bundle() -> Result<()> {
+/// `bundle [--channel release|nightly|dev]`: this host's installers, as a release ships them: the .deb and the
+/// AppImage on Linux, the NSIS installer on Windows (macOS: `macos app`, `macos dmg`), built for the channel (default
+/// `dev`). A release's or a nightly's also signs the AppImage and the installer as updates (a `.deb` cannot update
+/// itself; its `.sig` is not published); `publish assets` checks the signatures.
+pub fn bundle(channel: crate::util::Channel) -> Result<()> {
     let bundles = match std::env::consts::OS {
         "linux" => "deb,appimage",
         "windows" => "nsis",
         os => return Err(format!("`cargo xtask bundle` is for Linux and Windows, not {os}: see `cargo xtask macos`")),
     };
-    crate::util::TauriBuild { bundles, ..Default::default() }.command().run()
+    crate::util::TauriBuild { bundles, channel, ..Default::default() }.command()?.run()
 }
 
 /// `release-pr-title [BRANCH]`: the title of the release PR on BRANCH (default `GITHUB_REF_NAME`, the branch a

@@ -32,6 +32,10 @@ serde_json = "1"
 # The system's preferred languages, for the app's native texts (core i18n).
 sys-locale = "0.3"
 url = "2.5"
+# The app's updates (src/updater.rs; docs/BRIDGE.md → "The updater"), from Rust only: the page gets none of its
+# commands. Its checks sleep on the app's Tokio runtime.
+tauri-plugin-updater = "2.13"
+tokio = { version = "1", features = ["time"] }
 
 # This computer's own core, its pairing and the page's proxy (src/local_host.rs; docs/LOCAL_HOST.md). Unix sockets.
 [target.'cfg(unix)'.dependencies]

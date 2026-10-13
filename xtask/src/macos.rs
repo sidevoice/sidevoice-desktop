@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::util::{
     contains, copy_dir, ensure, fresh_dir, in_ci, mkdir, private_file, random_hex, read, read_bytes, repo,
-    required_env, secret_path, sleep, version, wait_for, work, Cmd, PrivateFiles, SecretDir, TauriBuild,
+    required_env, secret_path, sleep, version, wait_for, work, Channel, Cmd, PrivateFiles, SecretDir, TauriBuild,
 };
 use crate::Result;
 
@@ -102,16 +102,27 @@ fn notary_key(dir: &SecretDir) -> Result<PathBuf> {
     }
 }
 
-/// `macos app [--signed]`: the app bundle (hardened runtime, src-tauri/Entitlements.plist). Ad-hoc signed; or, with
-/// `--signed`, signed by Tauri's bundler with the Developer ID (`APPLE_SIGNING_IDENTITY`; `APPLE_CERTIFICATE` and
+/// `macos app [--signed] [--channel release|nightly|dev]`: the app bundle (hardened runtime,
+/// src-tauri/Entitlements.plist), built for its channel (default `dev`). Ad-hoc signed; or, with `--signed`, signed by
+/// Tauri's bundler with the Developer ID (`APPLE_SIGNING_IDENTITY`; `APPLE_CERTIFICATE` and
 /// `APPLE_CERTIFICATE_PASSWORD`, imported into a keychain of the bundler's own, or else the login keychain's),
 /// notarized with the API key (`APPLE_API_KEY`, `APPLE_API_ISSUER`, and the key file, see [`notary_key`]) and
-/// stapled.
-pub fn build_app(signed: bool) -> Result<()> {
-    let build = TauriBuild { target: Some(TRIPLE), bundles: "app", ..TauriBuild::default() };
-    if !signed {
-        return unsigned(build.command()).run();
+/// stapled. A release's (signed only) or a nightly's also makes the update artifact ([`update_artifact`]).
+pub fn build_app(signed: bool, channel: Channel) -> Result<()> {
+    let build = TauriBuild { target: Some(TRIPLE), bundles: "app", channel, ..TauriBuild::default() };
+    ensure(signed || channel != Channel::Release, "a release's app is signed: `macos app --signed --channel release`")?;
+    if signed {
+        build_signed(build)?;
+    } else {
+        unsigned(build.command()?).run()?;
     }
+    if channel != Channel::Dev {
+        update_artifact(signed)?;
+    }
+    Ok(())
+}
+
+fn build_signed(build: TauriBuild) -> Result<()> {
     for name in ["APPLE_SIGNING_IDENTITY", "APPLE_API_KEY", "APPLE_API_ISSUER"] {
         required_env(name)?;
     }
@@ -122,11 +133,34 @@ pub fn build_app(signed: bool) -> Result<()> {
     // The bundler imports the certificate into a keychain of its own, which it adds to the search list and removes
     // when done; one it left (a build that failed half-way) is removed here.
     let before = user_keychains()?;
-    let built = build.command().env("APPLE_API_KEY_PATH", &key).run();
+    let built = build.command().and_then(|cmd| cmd.env("APPLE_API_KEY_PATH", &key).run());
     for left in user_keychains()?.into_iter().filter(|k| !before.contains(k)) {
         let _ = Cmd::new("security").arg("delete-keychain").arg(&left).attempt();
     }
     built
+}
+
+/// The update a running app downloads (docs/BRIDGE.md → "The updater"): the app as the bundler packed it,
+/// `dist/Sidevoice_<version>_aarch64.app.tar.gz`, with its `.sig` (made with the updater's key, checked by the app
+/// against tauri.conf.json's public key). A `signed` one is checked unpacked as the app is: Developer ID signed, its
+/// ticket stapled, and Gatekeeper takes it as notarized (a nightly's is ad-hoc signed, as its app).
+fn update_artifact(signed: bool) -> Result<()> {
+    let bundle = app().with_file_name("Sidevoice.app.tar.gz");
+    let dist = repo().join("dist");
+    mkdir(&dist)?;
+    let update = dist.join(format!("Sidevoice_{}_aarch64.app.tar.gz", version()?));
+    let sig = PathBuf::from(format!("{}.sig", update.display()));
+    fs::copy(&bundle, &update).map_err(|e| format!("{}: {e}", bundle.display()))?;
+    let bundle_sig = PathBuf::from(format!("{}.sig", bundle.display()));
+    fs::copy(&bundle_sig, &sig).map_err(|e| format!("{}: {e}", bundle_sig.display()))?;
+    if signed {
+        // What it unpacks to is the notarized app, its ticket stapled.
+        let unpacked = work("update-artifact")?.join("unpacked");
+        fresh_dir(&unpacked)?;
+        Cmd::new("tar").arg("-xzf").arg(&update).arg("-C").arg(&unpacked).run()?;
+        Cmd::new("xcrun").args(["stapler", "validate"]).arg(unpacked.join("Sidevoice.app")).run()?;
+    }
+    Ok(())
 }
 
 /// The signing and notarization variables a build would otherwise read: an unsigned or probe build never signs with

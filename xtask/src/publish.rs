@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use crate::util::{ensure, files, name, repo, version, write, Cmd};
+use crate::util::{ci_nightly_version, ensure, files, name, repo, version, write, Cmd};
 use crate::Result;
 
 /// The installers a run publishes, by how their names end; and the kinds (extensions) every publication must hold
@@ -28,15 +28,19 @@ pub fn is_installer(file: &str) -> bool {
     INSTALLERS.iter().any(|end| file.ends_with(end))
 }
 
-/// The name an installer is published under: as built for a release; for the nightly, `_nightly_` where its version
-/// was (`Sidevoice_0.3.0_aarch64.dmg` → `Sidevoice_nightly_aarch64.dmg`), so a link to it keeps working.
-pub fn published_name(file: &str, version: &str, nightly: bool) -> Result<String> {
+/// The name an installer or update is published under: as built for a release; for the nightly, `_nightly_` where its
+/// version was (`Sidevoice_0.3.0_aarch64.dmg`, or `Sidevoice_0.3.1-nightly.5_amd64.AppImage` as the bundler names a
+/// nightly's → `Sidevoice_nightly_aarch64.dmg`, …), so a link to it keeps working.
+pub fn published_name(file: &str, nightly: bool) -> Result<String> {
     if !nightly {
         return Ok(file.to_owned());
     }
-    let built = format!("_{version}_");
-    ensure(file.contains(&built), format!("{file} does not carry the version {version}"))?;
-    Ok(file.replacen(&built, "_nightly_", 1))
+    match file.split_once('_').and_then(|(product, rest)| Some((product, rest.split_once('_')?))) {
+        Some((product, (version, rest))) if version.starts_with(|c: char| c.is_ascii_digit()) => {
+            Ok(format!("{product}_nightly_{rest}"))
+        }
+        _ => Err(format!("{file} does not carry a version")),
+    }
 }
 
 /// The kinds of installer missing from `names`.
@@ -71,14 +75,44 @@ fn all_files(dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(found)
 }
 
-/// `publish assets release|nightly`: the installers among the build's artifacts (`artifacts/`, as
-/// actions/download-artifact leaves them) into `assets/`, under their published names, each kind there, and their
-/// `SHA256SUMS`.
-pub fn assemble(kind: &str) -> Result<()> {
-    let nightly = match kind {
-        "release" => false,
-        "nightly" => true,
-        _ => return Err(format!("publish assets: release or nightly, not {kind}")),
+/// The updates by how their names end: macOS's app as a .tar.gz (Linux's and Windows' are the installers), and the
+/// signatures.
+const UPDATES: &[&str] = &[".app.tar.gz", ".app.tar.gz.sig", ".AppImage.sig", "-setup.exe.sig"];
+
+pub fn is_update(file: &str) -> bool {
+    UPDATES.iter().any(|end| file.ends_with(end))
+}
+
+/// Each platform a release updates (latest.json's key), and its update's name for `version`.
+pub fn update_files(version: &str) -> [(&'static str, String); 3] {
+    [
+        ("darwin-aarch64", format!("Sidevoice_{version}_aarch64.app.tar.gz")),
+        ("windows-x86_64", format!("Sidevoice_{version}_x64-setup.exe")),
+        ("linux-x86_64", format!("Sidevoice_{version}_amd64.AppImage")),
+    ]
+}
+
+/// latest.json, tauri-plugin-updater's static manifest: the version and each platform's `{signature, url}` under
+/// `base` (`https://github.com/<repo>/releases/download/<tag>`); the plugin needs nothing else.
+pub fn latest_json(version: &str, base: &str, sigs: &[(&str, String, String)]) -> String {
+    let platforms: serde_json::Map<String, serde_json::Value> = sigs
+        .iter()
+        .map(|(platform, file, signature)| {
+            (platform.to_string(), serde_json::json!({ "signature": signature, "url": format!("{base}/{file}") }))
+        })
+        .collect();
+    let manifest = serde_json::json!({ "version": version, "platforms": platforms });
+    serde_json::to_string_pretty(&manifest).expect("JSON serialises") + "\n"
+}
+
+/// `publish assets release TAG | publish assets nightly`: the installers and updates among the build's artifacts
+/// (`artifacts/`) into `assets/` under their published names, each platform's update checked with its signature,
+/// latest.json (its urls on `GH_REPO`'s release), and `SHA256SUMS`.
+pub fn assemble(kind: &str, tag: Option<&str>) -> Result<()> {
+    let (tag, nightly) = match (kind, tag) {
+        ("release", Some(tag)) => (tag, false),
+        ("nightly", None) => ("nightly", true),
+        _ => return Err("publish assets release TAG | publish assets nightly".into()),
     };
     let version = version()?;
     let assets = assets();
@@ -87,15 +121,28 @@ pub fn assemble(kind: &str) -> Result<()> {
     crate::util::mkdir(&assets)?;
     for file in all_files(&artifacts())? {
         let built = name(&file);
-        if is_installer(&built) {
-            let to = assets.join(published_name(&built, &version, nightly)?);
+        if is_installer(&built) || is_update(&built) {
+            let to = assets.join(published_name(&built, nightly)?);
             fs::copy(&file, &to).map_err(|e| format!("{}: {e}", file.display()))?;
         }
     }
-    let present: Vec<PathBuf> = files(&assets)?;
-    let names: Vec<String> = present.iter().map(|p| name(p)).collect();
+    let names: Vec<String> = files(&assets)?.iter().map(|p| name(p)).collect();
     let missing = missing_kinds(&names);
     ensure(missing.is_empty(), format!("no {} among the artifacts", missing.join(", ")))?;
+    let mut sigs = Vec::new();
+    for (platform, file) in update_files(if nightly { "nightly" } else { &version }) {
+        let signature = fs::read_to_string(assets.join(format!("{file}.sig"))).unwrap_or_default();
+        ensure(!signature.trim().is_empty(), format!("no {file}.sig among the artifacts, or it is empty"))?;
+        ensure(fs::metadata(assets.join(&file)).is_ok_and(|m| m.len() > 0), format!("no {file}, or it is empty"))?;
+        sigs.push((platform, file, signature));
+    }
+    let version = if nightly { ci_nightly_version()? } else { version };
+    let repo_name = std::env::var("GH_REPO").map_err(|_| "GH_REPO is not set (owner/name)")?;
+    let base = format!("https://github.com/{repo_name}/releases/download/{tag}");
+    let latest = latest_json(&version, &base, &sigs);
+    write(&assets.join("latest.json"), &latest)?;
+    eprint!("{latest}");
+    let present: Vec<PathBuf> = files(&assets)?;
     let sums = sums(&present)?;
     write(&assets.join(SUMS), &sums)?;
     Cmd::new("ls").arg("-la").arg(&assets).run()?;
@@ -224,13 +271,17 @@ mod tests {
     #[test]
     fn the_nightly_takes_fixed_names_and_a_release_keeps_its_own() {
         let dmg = "Sidevoice_0.3.0-rc.1_aarch64.dmg";
-        assert_eq!(published_name(dmg, "0.3.0-rc.1", false).unwrap(), dmg);
-        assert_eq!(published_name(dmg, "0.3.0-rc.1", true).unwrap(), "Sidevoice_nightly_aarch64.dmg");
-        assert_eq!(
-            published_name("Sidevoice_0.3.0_amd64.AppImage", "0.3.0", true).unwrap(),
-            "Sidevoice_nightly_amd64.AppImage"
-        );
-        assert!(published_name("Sidevoice_0.2.9_amd64.deb", "0.3.0", true).is_err());
+        assert_eq!(published_name(dmg, false).unwrap(), dmg);
+        assert_eq!(published_name(dmg, true).unwrap(), "Sidevoice_nightly_aarch64.dmg");
+        // As the bundler names a nightly's (built as its own version), and the updates.
+        for (built, published) in [
+            ("Sidevoice_0.3.1-nightly.5_amd64.AppImage", "Sidevoice_nightly_amd64.AppImage"),
+            ("Sidevoice_0.3.1-nightly.5_x64-setup.exe.sig", "Sidevoice_nightly_x64-setup.exe.sig"),
+            ("Sidevoice_0.3.0_aarch64.app.tar.gz", "Sidevoice_nightly_aarch64.app.tar.gz"),
+        ] {
+            assert_eq!(published_name(built, true).unwrap(), published);
+        }
+        assert!(published_name("Sidevoice_amd64.deb", true).is_err());
     }
 
     #[test]
@@ -253,6 +304,28 @@ mod tests {
         assert_eq!(stale("Sidevoice_nightly_aarch64.dmg\nSHA256SUMS\nold.zip\n\n", &local), ["old.zip"]);
         assert!(nightly_notes("abc", "2026-10-12T10:00:00Z")
             .starts_with("Snapshot of `main` at abc (committed 2026-10-12T10:00:00Z)."));
+    }
+
+    #[test]
+    fn latest_json_is_the_updater_s_static_manifest() {
+        let sigs: Vec<(&str, String, String)> = update_files("0.4.0")
+            .into_iter()
+            .map(|(platform, file)| (platform, file.clone(), format!("sig of {file}")))
+            .collect();
+        let base = "https://github.com/sidevoice/sidevoice-desktop/releases/download/v0.4.0";
+        let text = latest_json("0.4.0", base, &sigs);
+        let manifest: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            manifest,
+            serde_json::json!({
+                "version": "0.4.0",
+                "platforms": {
+                    "darwin-aarch64": {"signature": "sig of Sidevoice_0.4.0_aarch64.app.tar.gz", "url": format!("{base}/Sidevoice_0.4.0_aarch64.app.tar.gz")},
+                    "windows-x86_64": {"signature": "sig of Sidevoice_0.4.0_x64-setup.exe", "url": format!("{base}/Sidevoice_0.4.0_x64-setup.exe")},
+                    "linux-x86_64": {"signature": "sig of Sidevoice_0.4.0_amd64.AppImage", "url": format!("{base}/Sidevoice_0.4.0_amd64.AppImage")},
+                }
+            })
+        );
     }
 
     #[test]

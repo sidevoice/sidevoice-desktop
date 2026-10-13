@@ -68,6 +68,17 @@ what the interface's own window offers — same origin, same permission rule —
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-headset error " + String(error && (error.message || error)) });
   }
 
+  // What this build is, and its updates (docs/BRIDGE.md → "The build", "The updater"): the probe app is a dev build, so
+  // `host.build` says so and the page has no `host.updater`; its commands refuse.
+  try {
+    const host = window.__sidevoiceDesktop.host;
+    const status = await window.__TAURI_INTERNALS__.invoke("updater", { action: "status" }).then(() => "answered", (error) => error && error.key);
+    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-build ok build=" + JSON.stringify(host.build) +
+      " updater=" + ("updater" in host) + " status=" + status });
+  } catch (error) {
+    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-build error " + String(error && (error.message || error)) });
+  }
+
   // The native engine through the app itself, as the interface calls it (docs/BRIDGE.md): capabilities, installs as
   // sidevoice-web's `ModelCatalogs.install(model, {build, engine, onProgress, signal})` — by a catalogue build id, by an
   // engine, by nothing (the recommended build) —, refusals by key, the machine's memory, a download cancelled by its

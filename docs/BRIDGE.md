@@ -17,6 +17,7 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 | `src-tauri/src/tray.rs` | The menu-bar icon and its menu. |
 | `bridge/call-controls-bridge.js` | Injected into the call controls card's window (below). |
 | `src-tauri/src/call_controls.rs`, `src-tauri/core/src/call_controls.rs` | The card's window, and when it shows, where it sits and how it moves (unit-tested). |
+| `src-tauri/src/updater.rs`, `src-tauri/core/src/updater.rs`, `src-tauri/core/src/build_info.rs` | The app's updates, behind `updater`, and what this build is, `build` (below). |
 
 ## What the bridge reads and calls in the web UI
 
@@ -109,7 +110,7 @@ Evaluated by the app with `webview.eval` (works with the window hidden); the com
 Joining is deliberately **not** a tray command: joining unlocks audio output, which the webview
 only allows from a click in the page. "Mostrar Sidevoice" opens the window for that.
 
-`window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", version, engine, mediaKeys, localHost?, voice? }`: the
+`window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", version, engine, mediaKeys, build, localHost?, voice?, updater? }`: the
 web UI feature-detects the desktop app by it, and each capability by its presence. `version` is the bridge's (2).
 
 ## The local host
@@ -308,6 +309,7 @@ sidevoice-engine itself fails with is one of these keys, with the engine's own c
 | `voice_settings_missing` | `code` (`settings-missing`) | a call of `host.voice` before its first `setSettings` |
 | `voice_failed` | `code` (the call's: `microphone-denied`, `audio-device-unavailable`, the engine's `model-load-failed`, …, or `stopped`) | the call could not start, or was stopped before it listened |
 | `engine_unavailable` | — | the engine did not start with the app |
+| `update_unavailable` | — | `host.updater.restart()` with no update ready, `download()` with none known, or the `updater` command where this copy has no updater |
 | `bad_request` | — | a malformed call, or a caller other than the room window's own page: a bug in the caller |
 | `internal` | — | something inside the app failed |
 
@@ -391,13 +393,74 @@ What is this app's own:
   when a provider is listed, or its model loaded or called. `host.engine.testCredential` writes nothing: its key goes
   only to a trial engine of its own.
 
+## The build
+
+`window.__sidevoiceDesktop.host.build` is what this build of the app is, decided when it was built (RELEASING.md →
+"Channels"; `src-tauri/build.rs`, core `build_info`), so the page can say it:
+
+```ts
+{ channel: "release" | "nightly" | "dev"; version: string; commit?: string; date?: string }
+```
+
+`release`: a numbered release, with `host.updater`. `nightly`: the rolling build of `main`, for now with `host.updater`
+too; `version` is its own (`X.Y.Z-nightly.N`, RELEASING.md → "Channels"), with the short `commit` and that commit's
+`date` (`YYYY-MM-DD`).
+`dev`: anything else (a laptop, a pull request, a manual run). Always present.
+
+## The updater
+
+The app's own updates (not the service's or the connector's). Only a release has it, and for now a nightly (from the
+nightly's own feed, until a release has updated itself; RELEASING.md → "Updates"); and only where that copy can
+replace itself: its `.app` run from its bundle (not translocated, not from the .dmg), the AppImage run as one, the
+Windows installer's install. Elsewhere (a dev build, a `.deb`, a bare binary) the page has no
+`host.updater`, nothing is checked, and the commands refuse `update_unavailable`.
+
+```ts
+interface AppUpdater {
+  settings(): Promise<{ mode: "automatic" | "manual" }>;            // default "automatic"; kept by the app
+  setMode(mode: "automatic" | "manual"): Promise<{ mode: "automatic" | "manual" }>;
+  status(): Promise<UpdaterStatus>;
+  subscribe(listener: (status: UpdaterStatus) => void): () => void;  // every change
+  check(): Promise<UpdaterStatus>;                                    // resolves after the check
+  download(): Promise<UpdaterStatus>;                                 // resolves once it starts
+  restart(): Promise<void>;                                           // only when "ready": restarts now into the update
+}
+interface UpdaterStatus {
+  state: "idle" | "available" | "downloading" | "ready";
+  version?: string;            // the update's (available/downloading/ready)
+  progress?: number;           // 0..1 while downloading, in hundredths (absent while the size is unknown)
+  error?: { code: "update-check-failed" | "update-download-failed" | "update-install-failed" }; // last attempt; state unchanged
+}
+```
+
+- **Automatic** (the default): checked at launch and every 6 hours, an update found is
+  downloaded and verified in the background → `ready`; the page offers "Restart to update". An update ready when the
+  person quits the app (tray, ⌘Q) is installed on the way out (Windows: its installer runs without starting the app
+  again). The app never restarts on its own.
+- **Manual**: checked only → `available` → `download()` → `downloading` → `ready`.
+- `restart()` installs the ready update and restarts the app into it, now; it knows nothing of calls (the person
+  decides when). Rejects `{key: "update_unavailable", message}` unless the state is `ready`; `download()` likewise
+  when no update is known. An update already downloading or ready is left as it is by later checks.
+- A check that fails or takes over 2 minutes, a download that fails or takes over an hour, an install that fails:
+  `error` says so, the state stays (a failed download stays `available`, and automatic mode tries it again at the
+  next check).
+- The mode is kept with the app's settings (`updateMode`), set only through `setMode` (the settings window does not
+  show it, and saving there keeps it).
+- App → page: `window.__sidevoiceDesktop.updaterEvent(status)` (`webview.eval`) on each change, to the listeners.
+- Command behind it: `updater {action, mode?}`, `action` one of `settings`, `set-mode`, `status`, `check`,
+  `download`, `restart`. Granted to the room window (`capabilities/room.json`); it re-checks that the caller is the
+  current room window on the app's own page (else `bad_request`). The page is granted none of the plugin's own
+  commands. `src-tauri/src/updater.rs` drives tauri-plugin-updater (check, download with its progress, verify,
+  install); core `updater.rs` holds the status and the mode (unit-tested). CI's macOS job checks the
+  probe app (a dev build) has `host.build.channel` `"dev"` and no `host.updater`.
+
 ## Changing the bridge
 
 - Add a command: a variant in `Command` (Rust), a `case` in `run` (JS), a test on each side.
 - Add a field: `CallSnapshot` uses `#[serde(default)]`, so old and new scripts interoperate;
   bump `version` only for a breaking change.
-- Tests: `npm test` (the script against a fake window, `host.voice` included), `cargo test -p sidevoice-desktop-core`
-  (the voice call's builds and the media rule among the rest) and `cargo test -p sidevoice-desktop-engine` (the engine
+- Tests: `npm test` (the script against a fake window, `host.voice`, `host.updater` and `host.build` included), `cargo test -p
+  sidevoice-desktop-core` (the voice call's builds, the media rule and the updater's status among the rest) and `cargo test -p sidevoice-desktop-engine` (the engine
   over a test host), `cargo test -p sidevoice-local-host` (the local host against a stand-in core; docs/LOCAL_HOST.md →
   Tests). In the real app, CI's macOS job runs the probe page (`test/fixtures/probe.html`, probe build): the engine's
   capabilities, installs, refusals and a cancelled download (CI then checks nothing of it is on disk), and the voice

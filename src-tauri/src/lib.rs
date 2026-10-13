@@ -19,10 +19,12 @@ mod local_host;
 #[cfg(feature = "probe")]
 mod probe;
 mod tray;
+mod updater;
 mod voice;
 
 use serde::Serialize;
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
+use sidevoice_desktop_core::build_info::BuildInfo;
 use sidevoice_desktop_core::settings::{Settings, APP_ORIGIN};
 use sidevoice_desktop_core::{media, settings};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -156,14 +158,19 @@ fn get_settings(app: AppHandle, state: State<'_, AppState>) -> SettingsInfo {
 // on Windows (WebView2), and the room window is (re)created here.
 #[tauri::command]
 async fn save_settings(app: AppHandle, state: State<'_, AppState>, settings: Settings) -> Result<SaveResult, String> {
-    let settings = settings::validate(settings).map_err(|e| e.to_string())?;
+    let mut settings = settings::validate(settings).map_err(|e| e.to_string())?;
     if !settings.mute_shortcut.is_empty() && settings.mute_shortcut.parse::<Shortcut>().is_err() {
         return Err(format!("El atajo «{}» no es válido. Ejemplo: CmdOrCtrl+Shift+M.", settings.mute_shortcut));
     }
     let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
-    settings::save(&dir, &settings).map_err(|e| format!("No se pudo guardar: {e}"))?;
-
-    let previous = state.settings.lock().unwrap().replace(settings.clone());
+    let previous = {
+        // The updates' mode is the room page's (`host.updater.setMode`): this window never sends it, so the stored one
+        // stays. Under the lock, so a mode set meanwhile is not lost.
+        let mut stored = state.settings.lock().unwrap();
+        settings.update_mode = stored.as_ref().map(|s| s.update_mode).unwrap_or_default();
+        settings::save(&dir, &settings).map_err(|e| format!("No se pudo guardar: {e}"))?;
+        stored.replace(settings.clone())
+    };
     apply_shortcut(&app, &settings.mute_shortcut);
     let shortcut = shortcut_status(&state);
     call_controls::update(&app);
@@ -303,11 +310,15 @@ fn open_room(app: &AppHandle, settings: &Settings) -> tauri::Result<()> {
     let committed_origin: Arc<Mutex<Option<String>>> = Arc::default();
     let committed_for_load = committed_origin.clone();
     let page_app = app.clone();
+    // `host.build`, as xtask built this copy (build.rs).
+    let version = app.package_info().version.to_string();
+    let (commit, date) = (env!("SIDEVOICE_BUILD_COMMIT"), env!("SIDEVOICE_BUILD_DATE"));
+    let build = BuildInfo::new(env!("SIDEVOICE_BUILD_CHANNEL"), &version, commit, date);
     let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(page.into()))
         .title("Sidevoice")
         .inner_size(1100.0, 760.0)
         .min_inner_size(420.0, 560.0)
-        .initialization_script(bridge::script_for_origin(APP_ORIGIN));
+        .initialization_script(bridge::script_for_origin(APP_ORIGIN, updater::offered(), &build));
     if let Some(target) = settings::target_script(settings) {
         builder = builder.initialization_script(target);
     }
@@ -426,7 +437,8 @@ macro_rules! commands {
             local_host::local_host_pairing,
             local_host::local_host_action,
             local_host::local_host_pairing_code,
-            local_host::local_host_pair_room
+            local_host::local_host_pair_room,
+            updater::updater
             $($extra)*
         ]
     };
@@ -507,6 +519,8 @@ pub fn run() {
             // First run too: the interface itself asks for a pairing code; nothing has to be set up first.
             let current = stored.unwrap_or_else(Settings::first_run);
             apply_shortcut(&handle, &current.mute_shortcut);
+            // Before the room opens, so its bridge offers `host.updater`.
+            updater::setup(&handle);
             open_room(&handle, &current)?;
             call_controls::create(&handle)?;
             Ok(())
@@ -535,9 +549,10 @@ pub fn run() {
             if let tauri::RunEvent::Reopen { has_visible_windows: false, .. } = event {
                 show_room(app);
             }
-            // Quitting: the local host's proxy stops and closes every tunnel.
+            // Quitting: the local host's proxy stops and closes every tunnel; an update ready installs (automatic mode).
             if let tauri::RunEvent::Exit = event {
                 local_host::shutdown(app);
+                updater::quit(app);
             }
             let _ = (app, event);
         });
