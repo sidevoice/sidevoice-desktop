@@ -385,6 +385,7 @@ fn the_catalogues_are_the_local_one_then_each_provider_in_the_pages_shape() {
     for key in ["family", "parametersM", "license", "installed", "builds"] {
         assert!(whisper.get(key).is_some(), "{key} in {whisper}");
     }
+    assert_eq!(whisper.get("lastUsedAt"), None, "not installed: the engine does not know");
     let build = &whisper["builds"][0];
     for key in ["id", "backend", "precision", "downloadBytes", "memoryMb", "available", "reasons", "installed"] {
         assert!(build.get(key).is_some(), "{key} in {build}");
@@ -395,6 +396,24 @@ fn the_catalogues_are_the_local_one_then_each_provider_in_the_pages_shape() {
         assert_eq!(remote.status.reason.as_ref().map(|r| r.code.as_str()), Some("credential-missing"));
     }
     assert_eq!(test.engines.refresh("no-such").unwrap_err().key, "catalog_not_found");
+}
+
+/// When the engine last loaded a local model reaches the page as `lastUsedAt`, the engine's milliseconds since the
+/// Unix epoch as a number, and is absent while the engine does not know. (No model is loaded here: the time is set on
+/// the engine's own listing of the model.)
+#[test]
+fn a_local_model_says_when_it_was_last_used_in_milliseconds_or_nothing() {
+    let test = engines("last-used", false);
+    let mut model = test.engines.models().unwrap().into_iter().find(|m| m.id == "whisper-test").unwrap();
+    model.installed = true;
+    model.last_used_at = Some(1_760_000_000_123);
+    let json = serde_json::to_value(catalogs::local_model(&model)).unwrap();
+    assert_eq!(json["lastUsedAt"], serde_json::json!(1_760_000_000_123_u64));
+    assert!(json["lastUsedAt"].is_u64());
+    model.last_used_at = None;
+    let json = serde_json::to_value(catalogs::local_model(&model)).unwrap();
+    assert_eq!(json.get("lastUsedAt"), None, "{json}");
+    assert_eq!(json.get("last_used_at"), None, "{json}");
 }
 
 /// A job holds the install lock until it has ended, its roll-back included (`roll_back` takes the lock): another
