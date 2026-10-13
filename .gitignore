@@ -9,3 +9,10 @@ ui/voice/
 ui/voice-browser/
 ui/.web-site.json
 target/web/
+# cargo xtask: its build, and what its commands leave (target/xtask/, dmg-screens/, card-shots/, artifacts/, assets/).
+xtask/target/
+target/xtask/
+dmg-screens/
+card-shots/
+/artifacts/
+/assets/
