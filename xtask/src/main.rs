@@ -12,7 +12,9 @@
 //! - `test`: the bridge script's tests (`npm test`) and the app's Rust tests (`cargo test --workspace`).
 //! - `icons`: `npm run icons`, then the icons, tray marks and .dmg window must be what is committed.
 //! - `two-users` (Linux, CI only: it adds a user with `sudo`): the local host with two users; the second gets nowhere.
-//! - `bundle` (Linux, Windows): this host's installers: the .deb and the AppImage, or the NSIS installer.
+//! - `bundle [--channel C]` (Linux, Windows): this host's installers: the .deb and the AppImage, or the NSIS
+//!   installer. With `--channel release`, the AppImage and the installer are also signed as updates (their `.sig`,
+//!   checked).
 //!
 //! Setting up a build (`.github/actions/setup-rust`):
 //!
@@ -22,11 +24,12 @@
 //!
 //! The macOS app and .dmg (Apple Silicon; the `macos` job), in the order CI runs them (macos.rs, probe.rs):
 //!
-//! - `macos app [--signed]`: the app bundle, ad-hoc signed; with `--signed`, signed with the Developer ID, notarized
-//!   and stapled by Tauri's bundler. Reads `APPLE_SIGNING_IDENTITY`, `APPLE_API_KEY`, `APPLE_API_ISSUER`, and
-//!   `APPLE_API_KEY_P8` (the .p8's contents, written to a 0600 file removed when it ends) or `APPLE_API_KEY_PATH`
-//!   (a .p8 on a laptop); `APPLE_CERTIFICATE` and `APPLE_CERTIFICATE_PASSWORD` when set (else the bundler signs from
-//!   the login keychain).
+//! - `macos app [--signed] [--channel C]`: the app bundle, ad-hoc signed; with `--signed`, signed with the Developer
+//!   ID, notarized and stapled by Tauri's bundler. Reads `APPLE_SIGNING_IDENTITY`, `APPLE_API_KEY`,
+//!   `APPLE_API_ISSUER`, and `APPLE_API_KEY_P8` (the .p8's contents, written to a 0600 file removed when it ends) or
+//!   `APPLE_API_KEY_PATH` (a .p8 on a laptop); `APPLE_CERTIFICATE` and `APPLE_CERTIFICATE_PASSWORD` when set (else
+//!   the bundler signs from the login keychain). With `--signed --channel release`, also the update artifact:
+//!   dist/Sidevoice_<version>_aarch64.app.tar.gz and its `.sig`, checked unpacked as the app is.
 //! - `macos check-app [--signed]`: what a first open depends on: Info.plist, the signature (`--signed`: the Developer
 //!   ID's, `APPLE_TEAM_ID`'s, timestamped, notarized, stapled, and Gatekeeper takes it), entitlements, the icon, arm64,
 //!   no CI probe inside.
@@ -58,7 +61,10 @@
 //!
 //! Publishing (the `publish` job; publish.rs), `gh` with `GH_TOKEN` and `GH_REPO`:
 //!
-//! - `publish assets release|nightly`: the installers among the build's artifacts (artifacts/) into assets/, under
+//! - `publish assets release TAG | nightly`: the installers among the build's artifacts (artifacts/) into assets/,
+//!   under their published names (fixed `_nightly_` ones for the nightly), with SHA256SUMS; a release's also every
+//!   platform's update and its `.sig`, checked, and latest.json (the notes are release TAG's).
+|nightly`: the installers among the build's artifacts (artifacts/) into assets/, under
 //!   their published names (fixed `_nightly_` ones for the nightly), with SHA256SUMS.
 //! - `publish release TAG`: assets/ attached to the draft release TAG, which is then published (a `-rc.N` as a
 //!   pre-release, never latest).
@@ -70,6 +76,11 @@
 //! - `release-pr-title [BRANCH]`: the PR on release-please's BRANCH (default `GITHUB_REF_NAME`) has a release title.
 //! - `release-pr-checks`: the PR-title check dispatched on every open release PR's branch.
 //!
+//! Channels (RELEASING.md): `--channel release|nightly|dev` (default `dev`, so a laptop's build is never a release)
+//! is what a Tauri build is told (`SIDEVOICE_BUILD_CHANNEL`, `_COMMIT`, `_DATE`; src-tauri/build.rs). Only a release
+//! build has the updater, makes update artifacts and reads `TAURI_SIGNING_PRIVATE_KEY` and
+//! `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; every other build has them removed.
+//!
 //! This tooling's own tests: `cargo test --manifest-path xtask/Cargo.toml`.
 
 mod checks;
@@ -80,18 +91,20 @@ mod util;
 
 use std::process::ExitCode;
 
+use util::Channel;
+
 pub type Result<T> = std::result::Result<T, String>;
 
-const USAGE: &str = "usage: cargo xtask web | lint | test | icons | two-users | bundle | engine-rev | sherpa-libs
-  | macos app [--signed] | macos check-app [--signed] | macos first-open | macos with-target
+const USAGE: &str = "usage: cargo xtask web | lint | test | icons | two-users | bundle [--channel C] | engine-rev
+  | sherpa-libs | macos app [--signed] [--channel C] | macos check-app [--signed] | macos first-open | macos with-target
   | macos dmg [--signed] | macos sign-dmg | macos checksums | macos forget-secrets | macos dmg-screens
   | macos probe-app | macos local-host | macos probe | macos voice-models | macos card
-  | publish assets release|nightly | publish release TAG | publish nightly
+  | publish assets release TAG | publish assets nightly | publish release TAG | publish nightly
   | release-pr-title [BRANCH] | release-pr-checks
-(xtask/src/main.rs says what each does)";
+(C: release, nightly or dev, the default; xtask/src/main.rs says what each does)";
 
 /// The `macos` commands run on macOS only: its tools (codesign, hdiutil, the window server) are the point.
-fn macos(command: &str, step: fn() -> Result<()>) -> Result<()> {
+fn macos(command: &str, step: impl FnOnce() -> Result<()>) -> Result<()> {
     util::require_os("macos", &format!("macos {command}"))?;
     step()
 }
@@ -106,11 +119,11 @@ fn main() -> ExitCode {
         ["test"] => checks::test(),
         ["icons"] => checks::icons(),
         ["two-users"] => checks::two_users(),
-        ["bundle"] => checks::bundle(),
+        ["bundle", rest @ ..] => Channel::with_flags(rest, &[]).and_then(|(channel, _)| checks::bundle(channel)),
         ["engine-rev"] => checks::engine_rev(),
         ["sherpa-libs"] => checks::sherpa_libs(),
-        ["macos", "app"] => macos("app", || macos::build_app(false)),
-        ["macos", "app", "--signed"] => macos("app", || macos::build_app(true)),
+        ["macos", "app", rest @ ..] => Channel::with_flags(rest, &["--signed"])
+            .and_then(|(channel, signed)| macos("app", || macos::build_app(signed[0], channel))),
         ["macos", "check-app"] => macos("check-app", || macos::check_app(false)),
         ["macos", "check-app", "--signed"] => macos("check-app", || macos::check_app(true)),
         ["macos", "first-open"] => macos("first-open", macos::first_open),
@@ -126,7 +139,8 @@ fn main() -> ExitCode {
         ["macos", "probe"] => macos("probe", probe::probe),
         ["macos", "voice-models"] => macos("voice-models", probe::voice_models),
         ["macos", "card"] => macos("card", probe::card),
-        ["publish", "assets", kind] => publish::assemble(kind),
+        ["publish", "assets", kind] => publish::assemble(kind, None),
+        ["publish", "assets", kind, tag] => publish::assemble(kind, Some(tag)),
         ["publish", "release", tag] => publish::release(tag),
         ["publish", "nightly"] => publish::nightly(),
         ["release-pr-title"] => checks::release_pr_title(None),

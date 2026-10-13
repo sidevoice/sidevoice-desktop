@@ -17,7 +17,7 @@ use crate::Result;
 /// and its switch (so the release app's check for them means something).
 pub fn probe_app() -> Result<()> {
     let build = TauriBuild { target: Some(TRIPLE), bundles: "app", features: Some("probe"), ..TauriBuild::default() };
-    crate::macos::unsigned(build.command()).run()?;
+    crate::macos::unsigned(build.command()?).run()?;
     let bytes = read_bytes(&binary())?;
     for marker in PROBE_ONLY {
         ensure(contains(&bytes, marker), format!("the probe build does not carry {marker}"))?;

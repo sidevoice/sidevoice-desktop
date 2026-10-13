@@ -92,6 +92,9 @@ jobs:
       sign: ${{ inputs.release-tag && 'true' || (github.event_name == 'workflow_dispatch' && inputs.sign && 'true') || 'false' }}
       # Where the installers go: the release that called this, or the rolling `nightly` pre-release on a push to main.
       publish: ${{ inputs.release-tag && 'release' || (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'nightly' || '' }}
+      # What the app is built as (RELEASING.md → "Channels"): a release (the only one with the updater, its update
+      # artifacts signed with the updater's key), the nightly, or a dev build (pull requests, manual runs, `sign` too).
+      channel: ${{ inputs.release-tag && 'release' || (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'nightly' || 'dev' }}
     steps:
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         if: github.event_name == 'pull_request'
@@ -134,7 +137,7 @@ jobs:
           key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs', 'scripts/web-release.mjs') }}
       - name: Build the app bundle (ad-hoc signed, hardened runtime, entitlements)
         if: needs.changes.outputs.installers == 'true' && needs.changes.outputs.sign != 'true'
-        run: cargo xtask macos app
+        run: cargo xtask macos app --channel ${{ needs.changes.outputs.channel }}
       # Tauri's bundler imports the certificate into a keychain of its own, signs every binary with the hardened runtime
       # and the entitlements (src-tauri/Entitlements.plist), then notarizes the app with the API key (the .p8 as a file
       # only the runner's user may read, removed when the step ends) and staples it.
@@ -148,7 +151,10 @@ jobs:
           APPLE_API_KEY: ${{ needs.changes.outputs.sign == 'true' && secrets.APPLE_API_KEY || '' }}
           APPLE_API_ISSUER: ${{ needs.changes.outputs.sign == 'true' && secrets.APPLE_API_ISSUER || '' }}
           APPLE_API_KEY_P8: ${{ needs.changes.outputs.sign == 'true' && secrets.APPLE_API_KEY_P8 || '' }}
-        run: cargo xtask macos app --signed
+          # A release's update artifact (the app as a .tar.gz) is signed with the updater's key; no other run reads it.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ needs.changes.outputs.channel == 'release' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.changes.outputs.channel == 'release' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
+        run: cargo xtask macos app --signed --channel ${{ needs.changes.outputs.channel }}
       - name: Check what a first open depends on
         if: needs.changes.outputs.installers == 'true'
         env:
@@ -242,13 +248,19 @@ jobs:
         with:
           path: target/web
           key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs', 'scripts/web-release.mjs') }}
-      - run: cargo xtask bundle
+      # A release signs the AppImage / the installer as updates with the updater's key; no other run reads it.
+      - name: Build the installers
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ needs.changes.outputs.channel == 'release' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.changes.outputs.channel == 'release' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
+        run: cargo xtask bundle --channel ${{ needs.changes.outputs.channel }}
       - uses: actions/upload-artifact@v4
         with:
           name: Sidevoice-Linux-x64
           path: |
             src-tauri/target/release/bundle/deb/*.deb
             src-tauri/target/release/bundle/appimage/*.AppImage
+            src-tauri/target/release/bundle/appimage/*.AppImage.sig
           retention-days: 7
           if-no-files-found: error
 
@@ -270,11 +282,18 @@ jobs:
         with:
           path: target/web
           key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs', 'scripts/web-release.mjs') }}
-      - run: cargo xtask bundle
+      # A release signs the AppImage / the installer as updates with the updater's key; no other run reads it.
+      - name: Build the installers
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ needs.changes.outputs.channel == 'release' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.changes.outputs.channel == 'release' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
+        run: cargo xtask bundle --channel ${{ needs.changes.outputs.channel }}
       - uses: actions/upload-artifact@v4
         with:
           name: Sidevoice-Windows-x64
-          path: src-tauri/target/release/bundle/nsis/*.exe
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/nsis/*.exe.sig
           retention-days: 7
           if-no-files-found: error
 
@@ -304,8 +323,9 @@ jobs:
         with:
           pattern: Sidevoice-*
           path: artifacts
+      # A release's also: every platform's update and its signature, checked, and latest.json.
       - name: The assets and their SHA256SUMS
-        run: cargo xtask publish assets "$KIND"
+        run: cargo xtask publish assets "$KIND" $TAG
       - name: Attach to the release, then publish it (a version with -rc.N is a pre-release, never latest)
         if: env.KIND == 'release'
         run: cargo xtask publish release "$TAG"

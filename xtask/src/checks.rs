@@ -160,15 +160,30 @@ pub fn sherpa_libs() -> Result<()> {
         .run()
 }
 
-/// `bundle`: this host's installers, as a release ships them: the .deb and the AppImage on Linux, the NSIS
-/// installer on Windows (macOS: `macos app`, `macos dmg`).
-pub fn bundle() -> Result<()> {
-    let bundles = match std::env::consts::OS {
-        "linux" => "deb,appimage",
-        "windows" => "nsis",
+/// `bundle [--channel release|nightly|dev]`: this host's installers, as a release ships them: the .deb and the
+/// AppImage on Linux, the NSIS installer on Windows (macOS: `macos app`, `macos dmg`), built for the channel (default
+/// `dev`). A release's also signs the AppImage and the installer as updates: each gets its `.sig` (a `.deb` cannot
+/// update itself; its own is not published), checked here.
+pub fn bundle(channel: crate::util::Channel) -> Result<()> {
+    let (bundles, updates) = match std::env::consts::OS {
+        "linux" => ("deb,appimage", ("appimage", ".AppImage")),
+        "windows" => ("nsis", ("nsis", "-setup.exe")),
         os => return Err(format!("`cargo xtask bundle` is for Linux and Windows, not {os}: see `cargo xtask macos`")),
     };
-    crate::util::TauriBuild { bundles, ..Default::default() }.command().run()
+    crate::util::TauriBuild { bundles, channel, ..Default::default() }.command()?.run()?;
+    if channel != crate::util::Channel::Release {
+        return Ok(());
+    }
+    let (dir, end) = updates;
+    let dir = repo().join("src-tauri/target/release/bundle").join(dir);
+    let built: Vec<_> = crate::util::files(&dir)?.into_iter().filter(|p| crate::util::name(p).ends_with(end)).collect();
+    ensure(!built.is_empty(), format!("no *{end} in {}", dir.display()))?;
+    for file in built {
+        let sig = std::path::PathBuf::from(format!("{}.sig", file.display()));
+        ensure(fs::metadata(&sig).is_ok_and(|m| m.len() > 0), format!("{} has no signature", file.display()))?;
+        eprintln!("signed as an update: {}", crate::util::name(&file));
+    }
+    Ok(())
 }
 
 /// `release-pr-title [BRANCH]`: the title of the release PR on BRANCH (default `GITHUB_REF_NAME`, the branch a

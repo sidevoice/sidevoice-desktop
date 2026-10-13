@@ -128,7 +128,7 @@ pub fn in_ci() -> bool {
 pub fn required_env(name: &str) -> Result<String> {
     match std::env::var(name) {
         Ok(value) if !value.is_empty() => Ok(value),
-        _ => Err(format!("{name} is not set (RELEASING.md, \"macOS signing and notarization\")")),
+        _ => Err(format!("{name} is not set (RELEASING.md: the signing secrets)")),
     }
 }
 
@@ -427,6 +427,100 @@ pub fn npm() -> &'static str {
     }
 }
 
+/// Which builds the app is made for (RELEASING.md → "Channels"); the app's build script reads it
+/// (`SIDEVOICE_BUILD_CHANNEL`, src-tauri/build.rs) and says it to the page (`host.build`). Only a release has the
+/// updater and makes update artifacts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Channel {
+    /// A numbered release, built by the release's run (`--channel release`).
+    Release,
+    /// The rolling `nightly` pre-release, built by a push to `main` (`--channel nightly`).
+    Nightly,
+    /// Anything else: a laptop, a pull request, a manual run (its `sign` dry run included). The default.
+    #[default]
+    Dev,
+}
+
+impl Channel {
+    pub fn parse(name: &str) -> Result<Channel> {
+        match name {
+            "release" => Ok(Channel::Release),
+            "nightly" => Ok(Channel::Nightly),
+            "dev" => Ok(Channel::Dev),
+            _ => Err(format!("--channel release|nightly|dev, not {name}")),
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Channel::Release => "release",
+            Channel::Nightly => "nightly",
+            Channel::Dev => "dev",
+        }
+    }
+
+    /// `[--channel NAME]` and what else a command takes (`flags`, each at most once), in any order: the channel and
+    /// which of `flags` were given.
+    pub fn with_flags(args: &[&str], flags: &[&str]) -> Result<(Channel, Vec<bool>)> {
+        let mut channel = None;
+        let mut given = vec![false; flags.len()];
+        let mut rest = args.iter();
+        while let Some(&arg) = rest.next() {
+            if arg == "--channel" {
+                let name = rest.next().ok_or("--channel needs release, nightly or dev")?;
+                ensure(channel.is_none(), "--channel twice")?;
+                channel = Some(Channel::parse(name)?);
+            } else if let Some(at) = flags.iter().position(|flag| *flag == arg) {
+                ensure(!given[at], format!("{arg} twice"))?;
+                given[at] = true;
+            } else {
+                return Err(format!("unexpected {arg:?}"));
+            }
+        }
+        Ok((channel.unwrap_or_default(), given))
+    }
+}
+
+/// What the app's build script is told (src-tauri/build.rs): the channel, and for a nightly the short commit it is
+/// built from and the day, `YYYY-MM-DD` (UTC). Every build says all three, so nothing in the environment leaks in.
+pub fn build_env(channel: Channel, commit: &str, today: &str) -> [(&'static str, String); 3] {
+    let nightly = channel == Channel::Nightly;
+    let only_nightly = |value: &str| if nightly { value.to_owned() } else { String::new() };
+    [
+        ("SIDEVOICE_BUILD_CHANNEL", channel.name().to_owned()),
+        ("SIDEVOICE_BUILD_COMMIT", only_nightly(commit)),
+        ("SIDEVOICE_BUILD_DATE", only_nightly(today)),
+    ]
+}
+
+/// The day `seconds` after 1970 falls on (UTC), `YYYY-MM-DD`, and its time, `HH:MM:SS` (H. Hinnant's
+/// days-to-civil).
+pub fn utc(seconds: u64) -> (String, String) {
+    let (days, time) = (seconds / 86_400, seconds % 86_400);
+    let z = days as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    (format!("{year:04}-{month:02}-{day:02}"), format!("{:02}:{:02}:{:02}", time / 3600, time % 3600 / 60, time % 60))
+}
+
+/// Now, as [`utc`] says it.
+pub fn now_utc() -> (String, String) {
+    utc(SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or_default())
+}
+
+/// What a release's build adds to tauri.conf.json: the update artifacts, each signed with the updater's private key
+/// (`TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; RELEASING.md → "Updates").
+pub const UPDATER_CONFIG: &str = r#"{"bundle":{"createUpdaterArtifacts":true}}"#;
+
+/// The updater's signing key: read by Tauri's bundler in a release's build only, dropped from every other.
+pub const UPDATER_KEY_ENV: &[&str] = &["TAURI_SIGNING_PRIVATE_KEY", "TAURI_SIGNING_PRIVATE_KEY_PASSWORD"];
+
 /// A `tauri build` (the Tauri CLI package.json pins).
 #[derive(Debug, Default, PartialEq)]
 pub struct TauriBuild<'a> {
@@ -438,6 +532,8 @@ pub struct TauriBuild<'a> {
     pub features: Option<&'a str>,
     /// `--config`: JSON merged into tauri.conf.json.
     pub config: Option<&'a str>,
+    /// What the build is for; a release's also makes the update artifacts ([`UPDATER_CONFIG`]).
+    pub channel: Channel,
 }
 
 impl TauriBuild<'_> {
@@ -453,12 +549,35 @@ impl TauriBuild<'_> {
         if let Some(config) = self.config {
             args.extend(["--config".into(), config.into()]);
         }
+        if self.channel == Channel::Release {
+            args.extend(["--config".into(), UPDATER_CONFIG.into()]);
+        }
         args
     }
 
-    /// The command: the CLI's script run by Node from `node_modules` (what `npx tauri` runs), the same on every OS.
-    pub fn command(&self) -> Cmd {
-        Cmd::new("node").arg(repo().join("node_modules/@tauri-apps/cli/tauri.js")).args(self.args())
+    /// The command: the CLI's script run by Node from `node_modules` (what `npx tauri` runs), the same on every OS,
+    /// told its channel ([`build_env`]). A release's needs the updater's key (`TAURI_SIGNING_PRIVATE_KEY`); any other
+    /// build never sees it.
+    pub fn command(&self) -> Result<Cmd> {
+        let mut cmd = Cmd::new("node").arg(repo().join("node_modules/@tauri-apps/cli/tauri.js")).args(self.args());
+        if self.channel == Channel::Release {
+            required_env("TAURI_SIGNING_PRIVATE_KEY")?;
+        } else {
+            cmd = UPDATER_KEY_ENV.iter().fold(cmd, |cmd, name| cmd.env_remove(name));
+        }
+        let commit = match self.channel {
+            Channel::Nightly => Cmd::new("git").args(["rev-parse", "--short=7", "HEAD"]).stdout()?.trim().to_owned(),
+            _ => String::new(),
+        };
+        eprintln!(
+            "(a {} build{})",
+            self.channel.name(),
+            if commit.is_empty() { String::new() } else { format!(" of {commit}") }
+        );
+        for (key, value) in build_env(self.channel, &commit, &now_utc().0) {
+            cmd = cmd.env(key, value);
+        }
+        Ok(cmd)
     }
 }
 
@@ -642,6 +761,56 @@ mod tests {
         assert_eq!(probe.args().join(" "), "build --target aarch64-apple-darwin --bundles app --features probe");
         let host = TauriBuild { bundles: "deb,appimage", config: Some("{}"), ..TauriBuild::default() };
         assert_eq!(host.args().join(" "), "build --bundles deb,appimage --config {}");
+    }
+
+    #[test]
+    fn a_release_build_makes_the_update_artifacts_and_only_it() {
+        let release = TauriBuild { bundles: "nsis", channel: Channel::Release, ..TauriBuild::default() };
+        assert_eq!(release.args().join(" "), format!("build --bundles nsis --config {UPDATER_CONFIG}"));
+        for channel in [Channel::Nightly, Channel::Dev] {
+            let build = TauriBuild { bundles: "nsis", channel, ..TauriBuild::default() };
+            assert_eq!(build.args().join(" "), "build --bundles nsis");
+        }
+        assert_eq!(TauriBuild::default().channel, Channel::Dev, "a laptop's build is never a release");
+    }
+
+    #[test]
+    fn the_channel_and_the_flags_come_in_any_order() {
+        assert_eq!(Channel::with_flags(&[], &["--signed"]).unwrap(), (Channel::Dev, vec![false]));
+        assert_eq!(
+            Channel::with_flags(&["--channel", "release", "--signed"], &["--signed"]).unwrap(),
+            (Channel::Release, vec![true])
+        );
+        assert_eq!(
+            Channel::with_flags(&["--signed", "--channel", "nightly"], &["--signed"]).unwrap().0,
+            Channel::Nightly
+        );
+        assert!(Channel::with_flags(&["--channel"], &[]).is_err());
+        assert!(Channel::with_flags(&["--channel", "beta"], &[]).is_err());
+        assert!(Channel::with_flags(&["--channel", "dev", "--channel", "dev"], &[]).is_err());
+        assert!(Channel::with_flags(&["--signed"], &[]).is_err());
+        assert!(Channel::with_flags(&["--signed", "--signed"], &["--signed"]).is_err());
+    }
+
+    #[test]
+    fn only_a_nightly_says_its_commit_and_date() {
+        let nightly = build_env(Channel::Nightly, "a1b2c3d", "2026-10-13");
+        assert_eq!(nightly[0], ("SIDEVOICE_BUILD_CHANNEL", "nightly".to_owned()));
+        assert_eq!(nightly[1], ("SIDEVOICE_BUILD_COMMIT", "a1b2c3d".to_owned()));
+        assert_eq!(nightly[2], ("SIDEVOICE_BUILD_DATE", "2026-10-13".to_owned()));
+        for (channel, name) in [(Channel::Release, "release"), (Channel::Dev, "dev")] {
+            let env = build_env(channel, "a1b2c3d", "2026-10-13");
+            assert_eq!(env[0].1, name);
+            assert!(env[1].1.is_empty() && env[2].1.is_empty(), "{name}");
+        }
+    }
+
+    #[test]
+    fn utc_days_and_times() {
+        assert_eq!(utc(0), ("1970-01-01".to_owned(), "00:00:00".to_owned()));
+        assert_eq!(utc(951_782_400), ("2000-02-29".to_owned(), "00:00:00".to_owned()));
+        assert_eq!(utc(1_791_878_399), ("2026-10-13".to_owned(), "07:59:59".to_owned()));
+        assert_eq!(utc(4_107_542_400).0, "2100-03-01");
     }
 
     #[test]
