@@ -18,23 +18,7 @@
     </header>
     <p class="lead">Con qué máquina hablas lo decide el emparejamiento: pide a tu agente «empareja un dispositivo» (o ejecuta <code>sidevoice pair-device</code> en la máquina) y pega el código en la ventana de Sidevoice → Máquinas. El código ya dice cómo llegar a la máquina.</p>
 
-    <form id="settings" novalidate>
-      <label for="mute-shortcut">Atajo global para silenciar</label>
-      <input id="mute-shortcut" name="muteShortcut" type="text" spellcheck="false" placeholder="Ctrl+Alt+M">
-      <p class="hint">Funciona aunque Sidevoice esté en segundo plano. Vacío lo desactiva. Formato: <code>Ctrl+Alt+M</code>, <code>Cmd+Shift+M</code>, <code>Alt+F9</code>…</p>
-      <div id="shortcut-status" class="notice" role="status" aria-live="polite" hidden>
-        <p id="shortcut-status-text"></p>
-        <button type="button" id="shortcut-alternative" class="secondary" hidden></button>
-      </div>
-
-      <label class="check" for="call-controls-always"><input id="call-controls-always" name="callControlsAlwaysShown" type="checkbox"> <span id="call-controls-always-label"></span></label>
-      <p id="call-controls-always-hint" class="hint"></p>
-
-      <p id="message" role="status" aria-live="polite"></p>
-      <div class="actions">
-        <button type="submit" id="save">Guardar</button>
-      </div>
-    </form>
+    <p id="room-settings" class="hint"></p>
 
     <section id="headset" aria-labelledby="headset-heading">
       <h2 id="headset-heading">Botones del auricular</h2>

@@ -1,10 +1,10 @@
 # The global mute shortcut
 
 The app registers one global shortcut, mute / unmute (sidevoice/sidevoice-desktop#4): `⌃⌥M` on macOS, `Ctrl+Alt+M`
-on Windows and Linux (`DEFAULT_MUTE_SHORTCUT`, core `settings.rs`), editable in the web's Settings (`host.muteShortcut`,
-docs/BRIDGE.md) and, for now, in the settings window. When the system refuses it, both say so and offer those of
-`SHORTCUT_ALTERNATIVES` that the system does take: `Ctrl+Alt+Shift+M`, then `Ctrl+Alt+Shift+K`. On macOS they also
-warn while VoiceOver is on and the shortcut holds Control and Option together.
+on Windows and Linux (`DEFAULT_MUTE_SHORTCUT`, core `settings.rs`), editable only in the web's Settings
+(`host.muteShortcut`, docs/BRIDGE.md). When the system refuses it, the app answers so with those of
+`SHORTCUT_ALTERNATIVES` that the system does take, `Ctrl+Alt+Shift+M` then `Ctrl+Alt+Shift+K`, for the page to offer.
+On macOS it also says when VoiceOver is on and the shortcut holds Control and Option together.
 
 ## Checked against the systems' published default shortcuts
 

@@ -8,7 +8,8 @@
 //! Windows:
 //! - `room-N`: the bundled interface. Created at launch, and again (N grows) when it is gone. Closing it hides it; the
 //!   app keeps running.
-//! - `settings`: bundled local page (`ui/index.html`): shortcut, call controls, diagnostics.
+//! - `settings`: bundled local page (`ui/index.html`): diagnostics only (native engine, headset buttons, this computer);
+//!   the mute shortcut and the call controls are set in the room page's Settings.
 //! - `call-controls`: the call controls card (`src/call_controls.rs`), floating over other apps during a call.
 
 mod call_controls;
@@ -26,7 +27,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
 use sidevoice_desktop_core::build_info::BuildInfo;
-use sidevoice_desktop_core::settings::{MuteShortcut, Registration, Settings, WindowChanges, APP_ORIGIN};
+use sidevoice_desktop_core::settings::{MuteShortcut, Registration, Settings, APP_ORIGIN};
 use sidevoice_desktop_core::{media, settings};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -99,7 +100,7 @@ fn checked_shortcut(text: &str) -> Option<String> {
 }
 
 /// The one writer of settings.json: `change` applied to the stored settings, saved and kept under one lock, so the
-/// settings window and the room page's setters never lose each other's fields.
+/// room page's setters never lose each other's fields.
 pub(crate) fn change_settings(app: &AppHandle, change: impl FnOnce(&mut Settings)) -> Result<Settings, String> {
     let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
     let state = app.state::<AppState>();
@@ -130,51 +131,15 @@ pub(crate) fn refusal(key: &str, message: impl std::fmt::Display) -> Value {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SettingsInfo {
-    settings: Settings,
-    shortcut: MuteShortcut,
-    first_run: bool,
     /// Diagnostics on (`SIDEVOICE_DEBUG=1`): the settings page then also reports what its webview offers.
     debug: bool,
     app_version: String,
 }
 
+/// What the settings window's diagnostics read from the app.
 #[tauri::command]
-fn get_settings(app: AppHandle, state: State<'_, AppState>) -> SettingsInfo {
-    let stored = state.settings.lock().unwrap().clone();
-    debug(&format!("get_settings (first run: {})", stored.is_none()));
-    SettingsInfo {
-        first_run: stored.is_none(),
-        settings: stored.unwrap_or_else(Settings::first_run),
-        shortcut: shortcut_status(&state),
-        debug: debugging(),
-        app_version: app.package_info().version.to_string(),
-    }
-}
-
-/// The settings window's save: its mute shortcut and call controls, only those it changed (core `WindowChanges`); the
-/// rest stays as stored. Async so it runs off the main thread: creating a window from a synchronous command deadlocks
-/// on Windows (WebView2), and registering the shortcut waits for the main thread.
-#[tauri::command]
-async fn save_settings(app: AppHandle, mut changes: WindowChanges) -> Result<MuteShortcut, String> {
-    changes.mute_shortcut = changes
-        .mute_shortcut
-        .map(|text| {
-            checked_shortcut(&text)
-                .ok_or_else(|| format!("El atajo «{}» no es válido. Ejemplo: Ctrl+Alt+M, Cmd+Shift+M.", text.trim()))
-        })
-        .transpose()?;
-    let shortcut =
-        change_shortcut(&app, |stored| changes.apply(stored)).map_err(|e| format!("No se pudo guardar: {e}"))?;
-    if room_window(&app).is_none() {
-        open_room(&app).map_err(|e| format!("No se pudo abrir la ventana: {e}"))?;
-    }
-    show_room(&app);
-    if shortcut.state != Registration::Refused {
-        if let Some(w) = app.get_webview_window(SETTINGS_LABEL) {
-            let _ = w.close();
-        }
-    }
-    Ok(shortcut)
+fn get_settings(app: AppHandle) -> SettingsInfo {
+    SettingsInfo { debug: debugging(), app_version: app.package_info().version.to_string() }
 }
 
 /// `host.muteShortcut`'s one command: `action` `get`, or `set` with `accelerator` (`null`: none). Refuses
@@ -422,7 +387,6 @@ macro_rules! commands {
     ($($extra:tt)*) => {
         tauri::generate_handler![
             get_settings,
-            save_settings,
             bridge_state,
             bridge_level,
             call_controls::call_controls_ready,

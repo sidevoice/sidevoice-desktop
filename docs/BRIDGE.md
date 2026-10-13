@@ -142,7 +142,7 @@ the app's own page.
 During a call, while the room's window is not in front and focused, a small card floats over the person's other apps
 (sidevoice/sidevoice-desktop#4): the agent, the conversation, the person's microphone, and near the pointer the call's
 controls. Hidden from the tray ("Hide call controls") it stays hidden for that call. "Always show the call controls" (the
-page's `host.callControls`, below, and for now the settings window) shows it during a call even while the room's window
+page's `host.callControls`, below) shows it during a call even while the room's window
 is in front (core `call_controls::wanted`).
 
 - **The window** (`src/call_controls.rs`, label `call-controls`) loads `voice/call-controls.html`, a second page of
@@ -423,10 +423,9 @@ interface MuteShortcut {
   core `settings::normalize_shortcut`), and answers it as `accelerator`. `Cmd` is the Command key (Super elsewhere).
   Anything else — no modifier, no key or two, a character no key makes (`µ` from Option+M on a Mac, a dead key) —
   rejects `{key: "shortcut_invalid", message}` and changes nothing. One the system refuses is kept, and answered `refused`.
-- Kept with the app's settings (`muteShortcut`); the settings window, which still shows it, and the page set the same
-  value.
+- Kept with the app's settings (`muteShortcut`), set only from the page.
 - App → page: `window.__sidevoiceDesktop.muteShortcutEvent(shortcut)` (`webview.eval`) whenever the app registers it
-  (set from the page or the settings window), to `subscribe`'s listeners. `voiceOver` is read when asked: VoiceOver
+  (set from the page), to `subscribe`'s listeners. `voiceOver` is read when asked: VoiceOver
   turned on or off tells no one.
 - Command behind it: `mute_shortcut {action, accelerator?}`, `action` `get` or `set`.
 
@@ -443,13 +442,13 @@ interface CallControlsBridge {
 ```
 
 - `setAlwaysShown` keeps it with the app's settings (`callControlsAlwaysShown`) and applies it to the card at once; a
-  non-boolean rejects `{key: "bad_request"}`. The settings window still shows it too.
+  non-boolean rejects `{key: "bad_request"}`. Set only from the page.
 - Command behind it: `call_controls_settings {action, enabled?}`, `action` `settings` or `set-always-shown`.
 
 Both commands are granted to the room window (`capabilities/room.json`) and re-check that the caller is the current
 room window on the app's own page (else `bad_request`). The app's settings (`settings.json`) have one writer
-(`change_settings`, `src-tauri/src/lib.rs`): the settings window's save (only the fields the person changed there) and
-every setter of the page change only their own fields, under one lock, so none loses another's.
+(`change_settings`, `src-tauri/src/lib.rs`): every setter of the page changes only its own fields, under one lock, so
+none loses another's. The app's settings window saves nothing; it only shows diagnostics.
 
 ## The build
 
@@ -502,8 +501,7 @@ interface UpdaterStatus {
 - A check that fails or takes over 2 minutes, a download that fails or takes over an hour, an install that fails:
   `error` says so, the state stays (a failed download stays `available`, and automatic mode tries it again at the
   next check).
-- The mode is kept with the app's settings (`updateMode`), set only through `setMode` (the settings window does not
-  show it, and saving there keeps it).
+- The mode is kept with the app's settings (`updateMode`), set only through `setMode`.
 - App → page: `window.__sidevoiceDesktop.updaterEvent(status)` (`webview.eval`) on each change, to the listeners.
 - Command behind it: `updater {action, mode?}`, `action` one of `settings`, `set-mode`, `status`, `check`,
   `download`, `restart`. Granted to the room window (`capabilities/room.json`); it re-checks that the caller is the
