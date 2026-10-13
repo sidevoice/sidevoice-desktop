@@ -47,6 +47,10 @@ catalogues: `local` first, then each provider), in the shape `/engine` gives the
 - **Remote models** need their provider's key, which the app keeps in the macOS keychain (`src-tauri/src/keychain.rs`,
   service `dev.sidevoice.desktop.providers`). The engine asks the app for it each time it needs it
   (`NativeHost::with_credentials`); the page sets and clears it (`host.engine.setCredential`) and never reads it back.
+  A key the page tries before keeping it (`host.engine.testCredential`) is listed by an engine made for that trial
+  alone, over the same host with that key as its only one (`engine/src/trial.rs`), and dropped after: the app's engine,
+  its listings and the keys it hands a provider are the keychain's throughout. `host.engine.refresh` asks a provider
+  again past the listing the engine keeps (a day for models, an hour for voices).
   Elsewhere the app keeps no keys.
 - **Echo cancellation** is the call's own: WebRTC's AEC3, fed with the call's playback (sidevoice-voice's README). The
   room window's page is never granted the microphone where the app runs the call.
