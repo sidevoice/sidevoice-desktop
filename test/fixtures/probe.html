@@ -136,9 +136,21 @@ what the interface's own window offers — same origin, same permission rule —
     const preAborted = await engine.install("whisper-small", { engine: "sherpa-onnx", signal: aborted.signal })
       .then(() => "installed", (error) => error && error.code);
 
+    // Removing a model through the app's own command: whisper-tiny, installed above, goes from the builds on disk and
+    // from the catalogue (the engine reads both from its storage), then comes back for the voice call further down;
+    // an unknown model is refused by key with the engine's code.
+    const removed = await engine.uninstall("whisper-tiny").then((value) => String(value), (error) => "error:" + JSON.stringify(error));
+    const tinyLeft = (await engine.installed()).some((b) => b.model === "whisper-tiny") ||
+      (await engine.catalogs())[0].models.some((m) => m.id === "whisper-tiny" && (m.installed || m.builds.some((b) => b.installed)));
+    const tinyGone = !tinyLeft;
+    const unknown = await engine.uninstall("no-such-model")
+      .then(() => "removed", (error) => (error && error.key) + ":" + (error && error.code));
+    await engine.install("whisper-tiny", { build: tinyBuild.id, engine: tinyBuild.backend });
+    const tinyBack = (await engine.installed()).some((b) => b.model === "whisper-tiny" && b.engine === tinyBuild.backend);
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-engine ok capabilities=" + JSON.stringify(capabilities) +
       " installed=" + installed + " progress_calls=" + progress + " refused=" + refused + " memory=" + JSON.stringify(memory) +
-      " cancel=" + outcome + " pre_aborted=" + preAborted + " cancel_gone=" + smallGone + " progress_event=" + event });
+      " cancel=" + outcome + " pre_aborted=" + preAborted + " cancel_gone=" + smallGone + " progress_event=" + event +
+      " uninstall=" + removed + "/" + tinyGone + "/" + unknown + "/" + tinyBack });
   } catch (error) {
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-engine error " + String(error && (error.message || error)) });
   }

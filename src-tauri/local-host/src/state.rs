@@ -47,7 +47,7 @@ pub enum State {
     Incompatible,
 }
 
-/// `{state, failure?, core?, product_version, service?, calls?, attempts?, limit?, reachable}`.
+/// `{state, failure?, core?, product_version, service?, calls?, attempts?, limit?, installed?, reachable}`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Report {
     pub state: State,
@@ -68,6 +68,10 @@ pub struct Report {
     pub attempts: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<u64>,
+    /// Whether the service starts at the next sign-in: the connector's own `start_at_login`, as it says it. Absent
+    /// when it does not (a connector that predates the toggle); never inferred from `service` or its `installed`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installed: Option<bool>,
     /// A core answers and the app's pairing with it works.
     pub reachable: bool,
 }
@@ -83,6 +87,7 @@ impl Report {
             calls: None,
             attempts: None,
             limit: None,
+            installed: None,
             reachable: false,
         }
     }
@@ -131,6 +136,7 @@ pub fn report(observed: Observed<'_>) -> Report {
     report.attempts = field("attempts").and_then(Value::as_u64);
     report.limit = field("limit").and_then(Value::as_u64);
     report.core = field("core").cloned();
+    report.installed = field("start_at_login").and_then(Value::as_bool);
 
     match observed.core {
         Err(CoreError::Unsafe(refusal)) => {
@@ -308,6 +314,21 @@ mod tests {
         assert_eq!((got.attempts, got.limit, got.calls), (Some(3), None, None));
         let gone = state(Some(json!({"state": "stopped"})), Err(&CoreError::Absent), &Link::Unpaired);
         assert_eq!(gone.failure.unwrap()["key"], "status.unknown", "rev. 2 has no `stopped`");
+    }
+
+    #[test]
+    fn installed_is_the_connectors_start_at_login_and_only_that() {
+        let h = health(Some(1));
+        for (says, expected) in [(json!(true), Some(true)), (json!(false), Some(false)), (json!(null), None)] {
+            let status = json!({"state": "running", "service": "launchd", "installed": true, "start_at_login": says});
+            assert_eq!(state(Some(status.clone()), Ok(&h), &Link::Paired).installed, expected);
+            assert_eq!(state(Some(status), Err(&CoreError::Absent), &Link::Unpaired).installed, expected);
+        }
+        // A connector that predates the toggle: the service's own `installed` and `service` say nothing about it.
+        let older = json!({"state": "stopped-by-person", "service": "launchd", "installed": true});
+        let got = state(Some(older), Err(&CoreError::Absent), &Link::Unpaired);
+        assert_eq!(got.installed, None);
+        assert!(json!(got).get("installed").is_none());
     }
 
     #[test]

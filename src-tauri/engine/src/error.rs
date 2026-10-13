@@ -123,6 +123,27 @@ pub fn install_cancel_failed(error: sidevoice_engine::Error, model: &str, engine
         .with("code", error.code)
 }
 
+/// `uninstall(model)` while an install job of that model is waiting or running: the page cancels it first.
+pub fn model_installing(model: &str) -> Error {
+    Error::new("model_installing", format!("{model} is being downloaded; cancel the download to remove it."))
+        .with("code", "model-installing")
+        .with("model", model)
+}
+
+/// What sidevoice-engine failed with, removing `model` from this device, as the page's key; the engine's own code goes
+/// with it as `code` (`model-not-found`, `model-in-use`, a storage failure).
+pub fn uninstall_refused(error: sidevoice_engine::Error, model: &str) -> Error {
+    let code = error.code;
+    let refusal = match code {
+        "model-not-found" => model_unknown(model),
+        "model-in-use" => {
+            Error::new("model_in_use", format!("{model} is in use by the voice call.")).with("model", model)
+        }
+        _ => Error::new("uninstall_failed", format!("Could not remove {model}: {code}")).with("model", model),
+    };
+    refusal.with("code", code)
+}
+
 /// Not the id of a provider whose key the app keeps (lowercase letters, digits and dashes).
 pub fn provider_invalid(provider: &str) -> Error {
     Error::new("provider_invalid", format!("Not a provider id: {provider:?}.")).with("provider", provider)
@@ -215,5 +236,29 @@ mod tests {
             let error = failed(code);
             assert_eq!((error.key, &error.params["code"]), (key, &serde_json::json!(code)), "{code}");
         }
+    }
+
+    #[test]
+    fn a_refused_uninstall_is_one_of_the_page_s_keys_with_a_code_the_page_reads() {
+        let refused = |code| super::uninstall_refused(sidevoice_engine::Error::new(code), "whisper-base");
+        for (code, key) in [
+            ("model-not-found", "model_unknown"),
+            ("model-in-use", "model_in_use"),
+            ("storage-failed", "uninstall_failed"),
+            ("a-code-from-a-later-engine", "uninstall_failed"),
+        ] {
+            let json = serde_json::to_value(refused(code)).unwrap();
+            assert_eq!((json["key"].as_str(), json["code"].as_str()), (Some(key), Some(code)), "{json}");
+            assert_eq!(json["model"], "whisper-base");
+        }
+        assert_eq!(
+            serde_json::to_value(super::model_installing("whisper-base")).unwrap(),
+            serde_json::json!({
+                "key": "model_installing",
+                "code": "model-installing",
+                "model": "whisper-base",
+                "message": "whisper-base is being downloaded; cancel the download to remove it."
+            })
+        );
     }
 }

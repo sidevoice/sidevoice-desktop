@@ -528,8 +528,9 @@ jobs:
           # The native engine inside the signed app, through the bridge the interface uses (docs/BRIDGE.md):
           # capabilities with the OS's real memory (the CPU for sherpa-onnx, Metal for whisper.cpp, never Core ML;
           # remote providers are catalogues of their own), downloads with progress in the web's shape (by build id, by
-          # engine, by nothing), the builds on disk by model + engine, a page engine refused rather than replaced, and a
-          # download cancelled by its AbortSignal (one already aborted never starts).
+          # engine, by nothing), the builds on disk by model + engine, a page engine refused rather than replaced, a
+          # download cancelled by its AbortSignal (one already aborted never starts), and removing a model (by key and
+          # code).
           grep -q 'probe-engine ok' /tmp/probe.log
           LINE=$(grep 'probe-engine ok' /tmp/probe.log)
           echo "$LINE" | grep -q 'capabilities={"runs":"native","os":"macos","arch":"aarch64","has":\['
@@ -541,6 +542,7 @@ jobs:
           echo "$LINE" | grep -q ' refused=yes '
           echo "$LINE" | grep -Eq ' memory=\{"total_mb":[1-9][0-9]{3,},"available_mb":[1-9][0-9]*\}'
           echo "$LINE" | grep -q ' cancel=install-cancelled/install_cancelled pre_aborted=install-cancelled cancel_gone=true progress_event=done+fraction+total:true'
+          echo "$LINE" | grep -q ' uninstall=undefined/true/model_unknown:model-not-found/true'
           # sidevoice-engine's storage: a folder per installed build, nothing of the cancelled one, nothing half written.
           ENGINE="$HOME/Library/Application Support/dev.sidevoice.desktop/sidevoice-engine"
           ls -laR "$ENGINE/models"
