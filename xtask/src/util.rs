@@ -456,9 +456,9 @@ impl Channel {
 }
 
 /// A nightly's update feed (a release's is tauri.conf.json's).
-const NIGHTLY_FEED: &str = "https://github.com/sidevoice/sidevoice-desktop/releases/download/nightly/latest.json";
-
-/// What a release or a nightly adds to tauri.conf.json: signed update artifacts; a nightly also its version and feed.
+/// What a release or a nightly adds to tauri.conf.json: signed update artifacts; a nightly also its version. Both read
+/// the releases' feed (tauri.conf.json), so an installed nightly updates itself to the next numbered release, which
+/// sorts above it (temporary, to validate nightly → release: RELEASING.md → "Updates").
 pub fn channel_config(channel: Channel, nightly_version: &str) -> Option<String> {
     let updates = serde_json::json!({ "createUpdaterArtifacts": true });
     let config = match channel {
@@ -466,7 +466,6 @@ pub fn channel_config(channel: Channel, nightly_version: &str) -> Option<String>
         Channel::Nightly => serde_json::json!({
             "version": nightly_version,
             "bundle": updates,
-            "plugins": { "updater": { "endpoints": [NIGHTLY_FEED] } },
         }),
         Channel::Dev => return None,
     };
@@ -733,7 +732,7 @@ mod tests {
     }
 
     #[test]
-    fn a_release_and_a_nightly_make_the_update_artifacts_and_a_nightly_has_its_own_version_and_feed() {
+    fn a_release_and_a_nightly_make_the_update_artifacts_and_a_nightly_has_its_own_version() {
         assert_eq!(channel_config(Channel::Release, "").unwrap(), r#"{"bundle":{"createUpdaterArtifacts":true}}"#);
         let nightly = channel_config(Channel::Nightly, "0.4.3-nightly.17").unwrap();
         assert_eq!(
@@ -741,10 +740,8 @@ mod tests {
             serde_json::json!({
                 "version": "0.4.3-nightly.17",
                 "bundle": {"createUpdaterArtifacts": true},
-                "plugins": {"updater": {"endpoints": [
-                    "https://github.com/sidevoice/sidevoice-desktop/releases/download/nightly/latest.json"
-                ]}},
-            })
+            }),
+            "no feed of its own: the releases' (tauri.conf.json)"
         );
         assert_eq!(channel_config(Channel::Dev, ""), None);
         assert_eq!(TauriBuild::default().channel, Channel::Dev, "a laptop's build is never a release");
