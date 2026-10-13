@@ -206,12 +206,15 @@ models is the voice call's (below), never the page's. `window.__sidevoiceDesktop
 
 | Call | Returns / does |
 |---|---|
-| `catalogs()` | `[{id, name, status: {reason?: {code, params}, stale, detail?}, models}]`: every catalogue of sidevoice-engine 0.3.1, `local` first (`name` `null`), then each provider (`openai`, `elevenlabs`; `name` the provider's), each with every model it lists in `/engine`'s shape: `{id, capabilities, languages, voices: [{id, name?, languages, gender?}], speed?: {min, max}}`, and for a local model also `family, parametersM, license, installed, builds: [{id, backend, accelerator?, precision, downloadBytes, memoryMb, available, reasons: [{code, params}], installed}], recommendedBuild?`. A catalogue that cannot list (a provider with no key, one that refuses) has `models: []` and says why in `status.reason` (`credential-missing`, ...), the provider's own words in `status.detail`. Rejects `{code}` only when the engine itself fails |
+| `catalogs()` | `[{id, name, status: {reason?: {code, params}, stale, detail?}, models}]`: every catalogue of sidevoice-engine 0.4.0, `local` first (`name` `null`), then each provider (`openai`, `elevenlabs`; `name` the provider's), each with every model it lists in `/engine`'s shape: `{id, capabilities, languages, voices: [{id, name?, languages, gender?}], speed?: {min, max}}`, and for a local model also `family, parametersM, license, installed, lastUsedAt?, builds: [{id, backend, accelerator?, precision, downloadBytes, memoryMb, available, reasons: [{code, params}], installed}], recommendedBuild?` (`lastUsedAt`: when the engine last loaded the model, in milliseconds since the Unix epoch, a number; absent while it does not know: not installed, or not loaded since it was). A catalogue that cannot list (a provider with no key, one that refuses) has `models: []` and says why in `status.reason` (`credential-missing`, ...), the provider's own words in `status.detail`. Rejects `{code}` only when the engine itself fails |
 | `setCredential(provider, key)` | keeps `key` for remote catalogue `provider` in the macOS keychain, or removes it (`null` or blank), then lists that provider again with it. Rejects `provider_invalid`, `credentials_failed`, and `credentials_unavailable` where the app keeps no keys (Windows, Linux) |
 | `hasCredential(provider)` | whether the keychain holds a key for `provider` (`false` where the app keeps none). The key itself never reaches the page |
+| `testCredential(provider, key)` | asks `provider` with `key` (trimmed; blank is no key) without keeping it, and answers what its catalogue says against it, `{code, params, detail?}` (`credential-rejected`, `listing-not-permitted`, `provider-unreachable`, …, as `status.reason`; `detail`, when the provider gave some, its own words as `status.detail` has them, with every occurrence of the tried key replaced by `[key]`, control characters as spaces, and cut to 300 characters with "…"), or `null` when the provider lists with it. The key is never written to the keychain, never logged, and never reaches the listings the app keeps: the trial runs on an engine of its own, made for it and dropped after it, whose only key is this one for this provider. So the kept key, its listing, and anything listed or called at the same time (a call in progress, a `catalogs()`) are the kept key's, before, during and after. Rejects `catalog_not_found` for an id that is not a provider's (`local` included), and as `setCredential` does where the app keeps no keys (`credentials_unavailable`) or for a malformed id (`provider_invalid`) |
+| `refresh(provider)` | asks `provider` again now, past any listing kept, with the key the keychain has (what Test does); `catalogs()` then lists what it said. Rejects `catalog_not_found` |
 | `capabilities()` | `{runs: "native", os: "macos"\|"windows"\|"linux", arch: "aarch64"\|"x86_64", has: ["cpu", …], memory_mb: number\|null}` — `has` is what sidevoice-engine runs a model on here (`cpu`; `metal` on Apple Silicon, for whisper.cpp), never Core ML; remote providers are catalogues of their own (`catalogs()`), `memory_mb` the machine's total, from the OS |
 | `installed()` | `[{model, engine}]` — builds whose files are on disk and whole |
 | `install(model, {build?, engine?, onProgress?, signal?})` | `ModelCatalogs.install`: downloads a build of the model, whatever of it is missing, and resolves `undefined`. `build` is the build's catalogue id (`ModelBuild.id`, `whisper-small/sherpa-onnx-int8`), `engine` its engine id (`backend`); either or both (below), or neither for the build the catalogue recommends here (`recommendedBuild`). `onProgress({fraction, done, total})` about twice a second, only with this call's own bytes (below). `signal`, an `AbortSignal`, cancels it, waiting or running: it rejects `{code: "install-cancelled", key: "install_cancelled", message}` and the model is not on disk afterwards (unless it already was before the install); a signal already aborted rejects so at once, and nothing reaches the app. Any other refusal rejects `{key, code, message, …params}` (below) |
+| `uninstall(model)` | takes `model` off this computer: every build of it, and each of its files no other installed build shares (sidevoice-engine's `uninstall(model)`). Resolves `undefined`, also when none of it was on disk. Rejects with a refusal whose `code` the page reads (`failureCode`): `model_in_use` (`model-in-use`) while the voice call holds a build of it in memory, `model_installing` (`model-installing`) while an `install` of it is waiting or running — the page aborts that install first (its `signal`), the app never cancels it for it —, `model_unknown` (`model-not-found`) for a model the local catalogue does not list, `uninstall_failed` (a storage code) when the disk refused. It waits for an install of another model that is running to end, as installs wait for each other, and no install starts while it removes |
 | `memory()` | `{total_mb, available_mb}`: the machine's memory and what is available of it now, each `null` when the OS does not say. On macOS `available_mb` is the share the kernel's memory-pressure level reports free (`kern.memorystatus_level`): a gauge, not a limit, since macOS compresses and swaps rather than fail |
 
 - `model` is the catalogue id (`whisper-small`, `kokoro-82m-v1.0`), `engine` the build's engine id (`sherpa-onnx`,
@@ -242,12 +245,14 @@ models is the voice call's (below), never the page's. `window.__sidevoiceDesktop
   `install_cancelled`, never `download_failed`. There is no overall download timeout: a slow line is not a failure,
   and the cancel is how a person stops one.
 - Commands behind it (`src-tauri/src/engine_ipc.rs`): `engine_catalogs`, `engine_set_credential {provider, key}`,
-  `engine_has_credential {provider}`, `engine_capabilities`, `engine_installed`,
+  `engine_has_credential {provider}`, `engine_test_credential {provider, key}` (the reason with its `detail?`, or
+  `null`), `engine_refresh {provider}`, `engine_capabilities`, `engine_installed`,
   `engine_install {model, build, engine, job}` (`build` and `engine` each a string or `null`) with
   `engine_progress {job}` (`{job, model, engine, done, total, bytes_per_s}` — the job's bytes and its speed, `null`
   until a second is measured — or `null` while the job waits or after it ends), `engine_cancel {job}` (what the
   signal's abort calls: `true` when the install will reject `install_cancelled`, also when it has not reached the app
-  yet, which then refuses it as it arrives; `false` when it had already ended), `engine_memory`. Granted to the room
+  yet, which then refuses it as it arrives; `false` when it had already ended), `engine_uninstall {model}`,
+  `engine_memory`. Granted to the room
   window (`capabilities/room.json`). The settings window may read `engine_capabilities` and `engine_on_disk` (what is
   on disk and its size), and nothing else of the engine.
 
@@ -272,7 +277,7 @@ sidevoice-engine itself fails with is one of these keys, with the engine's own c
 | `key` | Parameters | When |
 |---|---|---|
 | `engine_unsupported` | `engine` | no runtime in this app for that engine: unknown, a page's engine, or one a newer catalogue added |
-| `model_unknown` | `model` | not in sidevoice-engine's catalogue |
+| `model_unknown` | `model` (and the engine's `code`, `model-not-found`, when the engine said it) | not in sidevoice-engine's catalogue |
 | `build_missing` | `model`, `engine` | the model has no build for that engine, or none with the `build` id named (then `engine` is that id), or the build named is not the `engine` named |
 | `build_unfit` | `model`, `engine`, `reason` (the engine's code, when it gave one) | the build needs a feature, or an accelerator, this device lacks |
 | `model_needs_memory` | `model`, `needed_mb`, `memory_mb` | the model needs more memory than this machine has |
@@ -283,6 +288,9 @@ sidevoice-engine itself fails with is one of these keys, with the engine's own c
 | `install_failed` | — | unpacking or moving the download into place failed (disk, permissions, an archive without its files) |
 | `install_cancelled` | — | the page cancelled the install (its `signal`): not a failure, nothing to show as an error. `install` rejects it with `code: "install-cancelled"` |
 | `install_cancel_failed` | `model`, `engine`, `code` | the page cancelled after the download had ended and removing it failed (`code`, the engine's: `model-in-use`, a storage failure): it may still be on disk |
+| `model_installing` | `code` (`model-installing`), `model` | `uninstall(model)` while an install of that model is waiting or running: abort it first |
+| `model_in_use` | `code` (`model-in-use`), `model` | `uninstall(model)` while the voice call holds a build of it in memory |
+| `uninstall_failed` | `code` (the engine's: a storage failure), `model` | removing the model's files failed: some of it may still be on disk |
 | `runtime_failed` | `engine` | the engine refused, with a code this app does not map |
 | `voice_model_unknown` | `code` (`model-unknown`), `model` | a slot names a model its catalogue does not list for that task |
 | `voice_model_unfit` | `code` (`model-unfit`), `model` | a local model with no build that runs on this device |
@@ -292,9 +300,9 @@ sidevoice-engine itself fails with is one of these keys, with the engine's own c
 | `voice_vad_unavailable` | `code` (`vad-unavailable`) | no local voice activity detector runs on this device |
 | `voice_end_of_turn_unavailable` | `code` (`end-of-turn-unavailable`) | `end_of_turn: "smart-turn"` while no local model that ends turns runs here |
 | `voice_<code>` | `code` (the engine's: `credential-missing`, `credential-rejected`, ...), `model`, `detail` (the provider's words) | a slot names a provider's model while that provider lists nothing |
-| `catalog_not_found` | `code`, `catalog` | `setCredential` for a provider the engine does not have |
+| `catalog_not_found` | `code`, `catalog` | `setCredential`, `testCredential` or `refresh` for a provider the engine does not have |
 | `provider_invalid` | `provider` | not a provider id (lowercase letters, digits and dashes) |
-| `credentials_unavailable` | — | `setCredential` where the app keeps no keys (Windows, Linux) |
+| `credentials_unavailable` | — | `setCredential` or `testCredential` where the app keeps no keys (Windows, Linux) |
 | `credentials_failed` | — | the keychain would not keep, remove or read a key |
 | `voice_settings_missing` | `code` (`settings-missing`) | a call of `host.voice` before its first `setSettings` |
 | `voice_failed` | `code` (the call's: `microphone-denied`, `audio-device-unavailable`, the engine's `model-load-failed`, …, or `stopped`) | the call could not start, or was stopped before it listened |
@@ -379,7 +387,8 @@ What is this app's own:
   `event` sidevoice-voice's `SayEvent`, the last `done` with the outcome), which it hands to that handle. A handle's
   `cancel` goes behind its `voice_say`, so it never overtakes it.
 - Keys: `host.engine.setCredential` writes the macOS keychain (`src-tauri/src/keychain.rs`), and the engine reads it
-  when a provider is listed, or its model loaded or called.
+  when a provider is listed, or its model loaded or called. `host.engine.testCredential` writes nothing: its key goes
+  only to a trial engine of its own.
 
 ## Changing the bridge
 

@@ -81,6 +81,14 @@
         coded(call("engine_set_credential", { provider, key: key == null ? null : String(key) })).then(() => undefined),
       /** Whether the keychain holds a key for `provider`. The key itself never reaches the page. */
       hasCredential: (provider) => coded(call("engine_has_credential", { provider })),
+      /** Asks `provider` with `key` without keeping it (never in the keychain, never in the listings the app keeps):
+       *  what its catalogue says against it, `{code, params, detail?}` (`credential-rejected`, …; `detail` the
+       *  provider's own words, without the key, at most 300 characters), or null when it lists with it.
+       *  The kept key and its listing are as they were. */
+      testCredential: (provider, key) =>
+        coded(call("engine_test_credential", { provider, key: String(key ?? "") })).then((reason) => reason ?? null),
+      /** Asks `provider` again now, past any listing kept, with the key the keychain has. */
+      refresh: (provider) => coded(call("engine_refresh", { provider })).then(() => undefined),
       /** `{runs: "native", os, arch, has: ["cpu", "metal", …], memory_mb}` (`memory_mb` null when unknown). */
       capabilities: () => call("engine_capabilities"),
       /** `[{model, engine}]`: the builds already on disk. */
@@ -120,6 +128,10 @@
           if (signal) signal.removeEventListener("abort", abort);
         })).then(() => undefined);
       },
+      /** Takes `model` off this computer, every build of it; resolves `undefined` (also when none was on disk).
+       *  Rejects with a refusal whose `code` the page reads: `model-in-use` while the voice call holds it,
+       *  `model-installing` while an install of it is waiting or running (abort its signal first), `model-not-found`. */
+      uninstall: (model) => coded(call("engine_uninstall", { model })).then(() => undefined),
       /** `{total_mb, available_mb}` (each null when unknown). */
       memory: () => call("engine_memory"),
     };

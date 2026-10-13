@@ -274,7 +274,8 @@ test("the engine is exactly the contract: its catalogues and keys, what runs her
   const engine = install(win, ORIGIN).host.engine;
   assert.equal(install(win, ORIGIN).host.app, "sidevoice-desktop");
   assert.deepEqual(Object.keys(engine).sort(), [
-    "capabilities", "catalogs", "hasCredential", "install", "installed", "memory", "setCredential",
+    "capabilities", "catalogs", "hasCredential", "install", "installed", "memory", "refresh", "setCredential",
+    "testCredential", "uninstall",
   ]);
   assert.ok(Object.isFrozen(engine));
 
@@ -356,6 +357,65 @@ test("host.engine lists the catalogues and keeps provider keys, refusing with a 
     ["engine_has_credential", { provider: "openai" }],
     ["engine_set_credential", { provider: "Nope", key: "x" }],
   ]);
+});
+
+test("host.engine.uninstall takes a model off the computer, refusing with the engine's code", async () => {
+  const install = loadFactory();
+  const { win, calls } = fakeWindow(ORIGIN);
+  const refusals = {
+    "kokoro-82m-v1.0": { key: "model_in_use", model: "kokoro-82m-v1.0", code: "model-in-use", message: "kokoro-82m-v1.0 is in use by the voice call." },
+    "whisper-small": { key: "model_installing", model: "whisper-small", code: "model-installing", message: "whisper-small is being downloaded; cancel the download to remove it." },
+    nope: { key: "model_unknown", model: "nope", code: "model-not-found", message: "Unknown model nope." },
+  };
+  win.__TAURI_INTERNALS__.invoke = (cmd, args) => {
+    calls.push([cmd, args === undefined ? undefined : structuredClone(args)]);
+    return refusals[args?.model] ? Promise.reject(refusals[args.model]) : Promise.resolve(null);
+  };
+  const engine = install(win, ORIGIN).host.engine;
+  assert.equal(await engine.uninstall("whisper-tiny"), undefined);
+  for (const [model, refusal] of Object.entries(refusals)) {
+    const error = await engine.uninstall(model).catch((failure) => failure);
+    assert.deepEqual([error.key, error.code, error.model, error.message], [refusal.key, refusal.code, model, refusal.message]);
+  }
+  assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("engine_")), [
+    ["engine_uninstall", { model: "whisper-tiny" }],
+    ["engine_uninstall", { model: "kokoro-82m-v1.0" }],
+    ["engine_uninstall", { model: "whisper-small" }],
+    ["engine_uninstall", { model: "nope" }],
+  ]);
+});
+
+test("host.engine tries a key without keeping it, answering the catalogue's reason or null, and asks a provider again", async () => {
+  const install = loadFactory();
+  const { win, calls } = fakeWindow(ORIGIN);
+  const rejected = { code: "credential-rejected", params: {}, detail: "Incorrect API key provided: [key]." };
+  win.__TAURI_INTERNALS__.invoke = (cmd, args) => {
+    calls.push([cmd, args === undefined ? undefined : structuredClone(args)]);
+    if (cmd === "engine_test_credential") {
+      if (args.provider === "linux") return Promise.reject({ key: "credentials_unavailable", message: "No keys here." });
+      return Promise.resolve(args.key === "sk-good" ? null : rejected);
+    }
+    if (cmd === "engine_refresh" && args.provider === "nope") {
+      return Promise.reject({ key: "catalog_not_found", catalog: "nope", message: "There is no catalogue nope." });
+    }
+    return Promise.resolve(null);
+  };
+  const engine = install(win, ORIGIN).host.engine;
+  assert.deepEqual(await engine.testCredential("openai", "sk-bad"), rejected);
+  assert.equal(await engine.testCredential("openai", "sk-good"), null);
+  const unavailable = await engine.testCredential("linux", "k").catch((error) => error);
+  assert.equal(unavailable.code, "credentials-unavailable");
+  assert.equal(await engine.refresh("openai"), undefined);
+  const missing = await engine.refresh("nope").catch((error) => error);
+  assert.deepEqual([missing.code, missing.catalog], ["catalog-not-found", "nope"]);
+  assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("engine_")), [
+    ["engine_test_credential", { provider: "openai", key: "sk-bad" }],
+    ["engine_test_credential", { provider: "openai", key: "sk-good" }],
+    ["engine_test_credential", { provider: "linux", key: "k" }],
+    ["engine_refresh", { provider: "openai" }],
+    ["engine_refresh", { provider: "nope" }],
+  ]);
+  assert.ok(!calls.some(([cmd]) => cmd === "engine_set_credential"), "a key tried is never kept");
 });
 
 // ---- host.voice: the voice call the app runs (docs/BRIDGE.md → "The voice call") ----

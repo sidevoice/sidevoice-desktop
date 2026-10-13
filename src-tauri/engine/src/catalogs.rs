@@ -35,6 +35,101 @@ pub struct ReasonView {
     pub params: ReasonParams,
 }
 
+/// What a provider said against a key tried (`host.engine.testCredential`): its catalogue's reason, `{code, params}`,
+/// and the provider's own words, `detail`, when it gave some — never the key, and at most [`DETAIL_CHARS`] long.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CredentialRefusal {
+    #[serde(flatten)]
+    pub reason: ReasonView,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// The most of a provider's words a refused key is told with, in characters.
+pub const DETAIL_CHARS: usize = 300;
+
+/// The shortest run of a key's characters that marks a word as carrying it (a key the provider masked, cut or
+/// encoded): long enough that ordinary words never match it.
+const KEY_RUN: usize = 8;
+
+impl CredentialRefusal {
+    /// `reason`, with what the provider said (`detail`) made safe to hand the page: control characters made spaces,
+    /// every occurrence of `key` (the key tried, trimmed) taken out, and every word that carries any [`KEY_RUN`]
+    /// characters of it in a row (the key masked — `sk-…-***` —, cut short, or percent-encoded in part) taken out
+    /// whole; then trimmed and cut to at most [`DETAIL_CHARS`] characters, the last an "…" when cut. Nothing left, no
+    /// detail. The provider's words can say other things (they are its own message); the key is never among them.
+    pub fn new(reason: ReasonView, detail: Option<&str>, key: &str) -> Self {
+        let key = key.trim();
+        let detail = detail.and_then(|said| {
+            let said: String = said.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+            let said = if key.is_empty() { said } else { redact(&said.replace(key, "[key]"), key) };
+            let said = said.trim();
+            if said.is_empty() {
+                return None;
+            }
+            if said.chars().count() <= DETAIL_CHARS {
+                return Some(said.to_string());
+            }
+            let mut cut: String = said.chars().take(DETAIL_CHARS - 1).collect();
+            cut.push('…');
+            Some(cut)
+        });
+        CredentialRefusal { reason, detail }
+    }
+}
+
+/// `said` with each word that carries [`KEY_RUN`] characters of `key` in a row (decoded where percent-encoded)
+/// replaced by `[key]`. A word is what lies between spaces, quotes and the punctuation that ends a sentence or a
+/// field (`,;:()[]{}<>`).
+fn redact(said: &str, key: &str) -> String {
+    let runs: Vec<String> = if key.chars().count() < KEY_RUN {
+        Vec::new()
+    } else {
+        let chars: Vec<char> = key.chars().collect();
+        chars.windows(KEY_RUN).map(|run| run.iter().collect()).collect()
+    };
+    let carries = |word: &str| {
+        let decoded = percent_decoded(word);
+        runs.iter().any(|run| word.contains(run.as_str()) || decoded.contains(run.as_str()))
+    };
+    let mut out = String::with_capacity(said.len());
+    let mut word = String::new();
+    let flush = |word: &mut String, out: &mut String| {
+        out.push_str(if carries(word.as_str()) { "[key]" } else { word.as_str() });
+        word.clear();
+    };
+    for c in said.chars() {
+        if c.is_whitespace() || "\"'`,;:()[]{}<>".contains(c) {
+            flush(&mut word, &mut out);
+            out.push(c);
+        } else {
+            word.push(c);
+        }
+    }
+    flush(&mut word, &mut out);
+    out
+}
+
+/// `word` with its `%XX` escapes decoded where they make text; as it is otherwise.
+fn percent_decoded(word: &str) -> String {
+    let bytes = word.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| (b as char).to_digit(16);
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(high), Some(low)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
+                out.push((high * 16 + low) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ReasonParams {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -44,7 +139,7 @@ pub struct ReasonParams {
 }
 
 /// A model as its catalogue lists it, `{id, capabilities, languages, voices, speed?}`; a local one also has its family,
-/// size, licence, builds and what is installed.
+/// size, licence, builds, what is installed and when it was last used.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelView {
@@ -65,6 +160,10 @@ pub struct LocalView {
     pub parameters_m: u32,
     pub license: String,
     pub installed: bool,
+    /// When it was last loaded, in milliseconds since the Unix epoch (`lastUsedAt`); absent when the engine does not
+    /// know: not installed, or not loaded since it was.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_used_at: Option<u64>,
     pub builds: Vec<BuildView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recommended_build: Option<String>,
@@ -154,7 +253,7 @@ fn build(build: &ModelBuild) -> BuildView {
     }
 }
 
-/// A local model, with its family, builds and what is installed.
+/// A local model, with its family, builds, what is installed and when it was last used.
 pub(crate) fn local_model(model: &LocalModelInfo) -> ModelView {
     ModelView {
         id: model.id.clone(),
@@ -167,6 +266,7 @@ pub(crate) fn local_model(model: &LocalModelInfo) -> ModelView {
             parameters_m: model.parameters_m,
             license: model.license.clone(),
             installed: model.installed,
+            last_used_at: model.last_used_at,
             builds: model.builds.iter().map(build).collect(),
             recommended_build: model.recommended_build.clone(),
         }),
