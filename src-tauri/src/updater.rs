@@ -1,6 +1,4 @@
-//! `host.updater` (docs/BRIDGE.md → "The updater"): the schedule, the status the page reads and install-on-quit, over
-//! tauri-plugin-updater (which checks `latest.json`, downloads, verifies and installs). The page is granted none of the
-//! plugin's commands.
+//! `host.updater` (docs/BRIDGE.md → "The updater"): schedule, status and install-on-quit over tauri-plugin-updater.
 
 use serde_json::{json, Value};
 use sidevoice_desktop_core::settings::{self, Settings};
@@ -16,8 +14,7 @@ const EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 const CHECK_FOR: Duration = Duration::from_secs(2 * 60);
 const DOWNLOAD_FOR: Duration = Duration::from_secs(60 * 60);
 
-/// The status and the update it is about (its bytes once ready), under one lock. `installing`: one install at a time,
-/// and quitting waits for it.
+/// One lock over the status and its update; `installing`: an install under way, which quitting waits for.
 #[derive(Default)]
 struct Updates {
     status: Status,
@@ -26,9 +23,7 @@ struct Updates {
     installing: bool,
 }
 
-/// Only a release or a nightly (each built to read its own feed) that can replace itself: its `.app` run from its
-/// bundle on a writable volume (not the .dmg, not translocated), its AppImage, its Windows install. Never a `.deb` or
-/// a bare binary.
+/// A release or nightly that can replace itself: its `.app` bundle on a writable volume, AppImage or NSIS install.
 pub fn offered() -> bool {
     use tauri::utils::{config::BundleType, platform::bundle_type};
     static OFFERED: OnceLock<bool> = OnceLock::new();
@@ -44,6 +39,7 @@ pub fn offered() -> bool {
     })
 }
 
+/// Not on a read-only volume (the .dmg, a translocated copy).
 fn writable(folder: &std::path::Path) -> bool {
     let probe = folder.join(format!(".sidevoice-update-check-{}", std::process::id()));
     let made = std::fs::OpenOptions::new().write(true).create_new(true).open(&probe);
@@ -51,7 +47,6 @@ fn writable(folder: &std::path::Path) -> bool {
     !made.is_err_and(|e| e.kind() == std::io::ErrorKind::ReadOnlyFilesystem)
 }
 
-/// At start: the plugin, then a check at launch and every 6 hours.
 pub fn setup(app: &AppHandle) {
     if !offered() {
         return;
@@ -105,7 +100,6 @@ async fn check(app: &AppHandle) {
     }
 }
 
-/// Downloads the update `available`, in the background.
 fn download(app: &AppHandle) {
     let Some(mut update) = with(app, |u| match (u.status.state, &u.update) {
         (State::Available, Some(update)) => {
@@ -135,8 +129,7 @@ fn download(app: &AppHandle) {
     });
 }
 
-/// Installs the ready update (its bytes are the one install's: quitting waits for it); `restart`: then restarts into
-/// it (Windows: the plugin exits and the installer starts the app). The local host stops only once it is installed.
+/// Whoever takes the bytes installs; the local host stops only once the install succeeded.
 fn install(app: &AppHandle, restart: bool) {
     let claimed = with(app, |u| u.update.clone().zip(u.bytes.take()).inspect(|_| u.installing = true));
     let Some((update, bytes)) = claimed else { return };
@@ -172,7 +165,6 @@ fn unavailable() -> Value {
     json!({ "key": "update_unavailable", "message": "There is no update to install." })
 }
 
-/// Only the current room window on the app's own page, and only where the updater runs.
 fn caller(app: &AppHandle, webview: &Webview) -> Result<Status, Value> {
     crate::room_page(app, webview).map_err(|why| json!({ "key": "bad_request", "message": why }))?;
     app.try_state::<Mutex<Updates>>().ok_or_else(unavailable)?;
@@ -208,7 +200,6 @@ pub fn updater_status(app: AppHandle, webview: Webview) -> Result<Status, Value>
     caller(&app, &webview)
 }
 
-/// "Check for updates": the status once the check is done.
 #[tauri::command]
 pub async fn updater_check(app: AppHandle, webview: Webview) -> Result<Status, Value> {
     caller(&app, &webview)?;
@@ -216,7 +207,6 @@ pub async fn updater_check(app: AppHandle, webview: Webview) -> Result<Status, V
     caller(&app, &webview)
 }
 
-/// Starts downloading the update found; `update_unavailable` when none is.
 #[tauri::command]
 pub fn updater_download(app: AppHandle, webview: Webview) -> Result<Status, Value> {
     caller(&app, &webview)?;
@@ -224,7 +214,6 @@ pub fn updater_download(app: AppHandle, webview: Webview) -> Result<Status, Valu
     caller(&app, &webview).and_then(|s| if s.state == State::Idle { Err(unavailable()) } else { Ok(s) })
 }
 
-/// "Restart to update": installs the ready update and restarts now; `update_unavailable` unless one is ready.
 #[tauri::command]
 pub fn updater_restart(app: AppHandle, webview: Webview) -> Result<(), Value> {
     if caller(&app, &webview)?.state != State::Ready {

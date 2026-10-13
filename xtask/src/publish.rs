@@ -75,9 +75,8 @@ fn all_files(dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(found)
 }
 
-/// What a release adds for the updater (docs/BRIDGE.md → "The updater"), by how the names end: each platform's update
-/// (macOS's app as a .tar.gz; Linux's and Windows' are the AppImage and the installer themselves) and the signatures.
-/// Never on the nightly: only a release is offered as an update.
+/// The updates (RELEASING.md → "Updates"), by how the names end: macOS's app as a .tar.gz (Linux's and Windows' are
+/// the AppImage and the installer themselves), and the signatures.
 const UPDATES: &[&str] = &[".app.tar.gz", ".app.tar.gz.sig", ".AppImage.sig", "-setup.exe.sig"];
 
 pub fn is_update(file: &str) -> bool {

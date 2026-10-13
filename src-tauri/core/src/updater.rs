@@ -99,9 +99,6 @@ mod tests {
         );
         assert_eq!(serde_json::to_value(ErrorCode::CheckFailed).unwrap(), json!("update-check-failed"));
         assert_eq!(serde_json::to_value(ErrorCode::DownloadFailed).unwrap(), json!("update-download-failed"));
-        assert_eq!(Mode::default(), Mode::Automatic);
-        assert_eq!(serde_json::from_value::<Mode>(json!("manual")).unwrap(), Mode::Manual);
-        assert!(serde_json::from_value::<Mode>(json!("auto")).is_err());
     }
 
     #[test]

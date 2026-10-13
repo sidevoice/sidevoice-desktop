@@ -427,9 +427,7 @@ pub fn npm() -> &'static str {
     }
 }
 
-/// Which builds the app is made for (RELEASING.md → "Channels"); the app's build script reads it
-/// (`SIDEVOICE_BUILD_CHANNEL`, src-tauri/build.rs) and says it to the page (`host.build`). Only a release has the
-/// updater and makes update artifacts.
+/// What a build is for (RELEASING.md → "Channels"; `SIDEVOICE_BUILD_CHANNEL`, src-tauri/build.rs).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Channel {
     /// A numbered release, built by the release's run (`--channel release`).

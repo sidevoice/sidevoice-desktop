@@ -347,19 +347,6 @@
     return { host: Object.freeze(host), changed };
   }
 
-  /** What this build of the app is (docs/BRIDGE.md → "The build"): `{channel: "release"|"nightly"|"dev", version,
-   *  commit?, date?}`, as the app was built. */
-  function buildOf(build) {
-    const given = build && typeof build === "object" ? build : {};
-    const channel = given.channel === "release" || given.channel === "nightly" ? given.channel : "dev";
-    return Object.freeze({
-      channel,
-      version: typeof given.version === "string" ? given.version : "",
-      ...(typeof given.commit === "string" ? { commit: given.commit } : {}),
-      ...(typeof given.date === "string" ? { date: given.date } : {}),
-    });
-  }
-
   /** The card's devices (the web UI's call-controls `AudioDevices`), from the room's own (`facts.audioDevices`: what the
    *  voice lists and what is chosen). The system's default comes first, as an option of its own (id `""`); a device the
    *  system lists without a name is said by its place; the speaker can be chosen only where the voice can move it. */
@@ -474,7 +461,7 @@
       // Only where the app runs the voice call (macOS): the page then neither opens the microphone nor runs models.
       ...(voiceCall ? { voice: voiceCall.host } : {}),
       /** What this build is: a release, a nightly (both with `updater`), or a development build. */
-      build: buildOf(build),
+      build: Object.freeze({ ...build }),
       // Only in a release or a nightly that can update itself.
       ...(updates ? { updater: updates.host } : {}),
     }),

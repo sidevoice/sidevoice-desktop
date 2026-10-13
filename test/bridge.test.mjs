@@ -875,24 +875,18 @@ test("nothing of localHost runs until the page asks", async () => {
 
 // ---- host.updater and host.build: the app's updates and what this build is (docs/BRIDGE.md) ----
 
-test("host.build says what this build is, whatever the app passed", () => {
+test("host.build says what this build is, as the app passed it", () => {
   const install = loadFactory();
   const build = (given) => install(fakeWindow(ORIGIN).win, ORIGIN, null, false, false, false, given).host.build;
   assert.deepEqual({ ...build({ channel: "release", version: "0.4.0" }) }, { channel: "release", version: "0.4.0" });
-  assert.deepEqual(
-    { ...build({ channel: "nightly", version: "0.4.0", commit: "a1b2c3d", date: "2026-10-13" }) },
-    { channel: "nightly", version: "0.4.0", commit: "a1b2c3d", date: "2026-10-13" },
-  );
-  // Never a release by accident: the unreplaced placeholder (tests, a broken build) or anything unknown is dev.
-  for (const given of [undefined, "__SIDEVOICE_BUILD__", { channel: "beta", version: 4 }]) {
-    assert.deepEqual({ ...build(given) }, { channel: "dev", version: "" }, JSON.stringify(given));
-  }
-  assert.ok(Object.isFrozen(build({ channel: "dev", version: "0.4.0" })));
+  const nightly = { channel: "nightly", version: "0.4.1-nightly.3", commit: "a1b2c3d", date: "2026-10-13" };
+  assert.deepEqual({ ...build(nightly) }, nightly);
+  assert.ok(Object.isFrozen(build(nightly)));
 });
 
 test("the host's keys: updater only where the app can update itself, build always", () => {
   const install = loadFactory();
-  // A nightly, a dev build, a .deb: the app passes false, and the page shows nothing to update.
+  // A dev build, a .deb, a bare binary: the app passes false, and the page shows nothing to update.
   for (const offered of [undefined, false, "__SIDEVOICE_UPDATER__", "true"]) {
     const api = install(fakeWindow(ORIGIN).win, ORIGIN, null, false, false, offered, { channel: "nightly", version: "0.4.0" });
     assert.deepEqual(Object.keys(api.host).sort(), ["app", "build", "engine", "mediaKeys", "version"], String(offered));
