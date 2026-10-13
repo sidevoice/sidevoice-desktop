@@ -10,7 +10,7 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 |---|---|
 | `bridge/desktop-bridge.js` | Injected by the app into every page of the room window, before the page's own scripts. Bound to the app's own origin (the bundled interface). |
 | `src-tauri/core/src/bridge.rs` | The contract on the Rust side: `CallSnapshot`, `Command`, and how the tray renders a snapshot. Unit-tested. |
-| `src-tauri/src/lib.rs` | Wiring: the `bridge_state` command, `send(Command)`; `capabilities/room.json`. |
+| `src-tauri/src/lib.rs` | Wiring: the `bridge_state` command, `send(Command)`; `capabilities/room.json`. The mute shortcut, behind `muteShortcut`, and the one writer of the app's settings (below). |
 | `src-tauri/src/engine_ipc.rs` | The engine's commands, behind `engine` (below): its catalogues, provider keys and models on disk. |
 | `src-tauri/src/voice.rs`, `src-tauri/src/keychain.rs`, `src-tauri/core/src/voice.rs` | The voice call the app runs, behind `voice` (macOS; below), the keychain the engine reads provider keys from, and the models it picks from the catalogues (unit-tested). |
 | `src-tauri/src/local_host.rs`, `src-tauri/local-host/` | This computer's own core, behind `localHost` (below; docs/LOCAL_HOST.md). |
@@ -110,7 +110,7 @@ Evaluated by the app with `webview.eval` (works with the window hidden); the com
 Joining is deliberately **not** a tray command: joining unlocks audio output, which the webview
 only allows from a click in the page. "Mostrar Sidevoice" opens the window for that.
 
-`window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", version, engine, mediaKeys, build, localHost?, voice?, updater? }`: the
+`window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", version, engine, mediaKeys, build, muteShortcut, callControls, localHost?, voice?, updater? }`: the
 web UI feature-detects the desktop app by it, and each capability by its presence. `version` is the bridge's (2).
 
 ## The local host
@@ -141,8 +141,9 @@ the app's own page.
 
 During a call, while the room's window is not in front and focused, a small card floats over the person's other apps
 (sidevoice/sidevoice-desktop#4): the agent, the conversation, the person's microphone, and near the pointer the call's
-controls. Hidden from the tray ("Hide call controls") it stays hidden for that call; "Show the call controls always"
-in the settings keeps its controls in view.
+controls. Hidden from the tray ("Hide call controls") it stays hidden for that call. "Always show the call controls" (the
+page's `host.callControls`, below, and for now the settings window) shows it during a call even while the room's window
+is in front (core `call_controls::wanted`).
 
 - **The window** (`src/call_controls.rs`, label `call-controls`) loads `voice/call-controls.html`, a second page of
   the bundled web build (`apps/web/src/call-controls/`), which reuses the room's conversation list and icons.
@@ -180,7 +181,7 @@ The card's page talks to the app only through `window.__sidevoiceDesktop.host.ca
 | `drag(phase)` | `call_controls_drag`: `start`, `move`, `end`; the window follows the pointer (the app reads it) and is dropped, snapped and remembered |
 
 App → card: `window.__sidevoiceDesktop.receive(patch)` (`webview.eval`), any subset of
-`{call, level, pointerInside, outsideClicks, alwaysExpanded, muteShortcut}` — `call` is the room's snapshot above, `muteShortcut` the
+`{call, level, pointerInside, outsideClicks, muteShortcut}` — `call` is the room's snapshot above, `muteShortcut` the
 global shortcut as the person reads it (⌃⌥M, Ctrl+Alt+M). `capabilities/call-controls.json` grants the four commands
 to that window only, and each re-checks the caller's label and origin.
 
@@ -310,6 +311,7 @@ sidevoice-engine itself fails with is one of these keys, with the engine's own c
 | `voice_failed` | `code` (the call's: `microphone-denied`, `audio-device-unavailable`, the engine's `model-load-failed`, …, or `stopped`) | the call could not start, or was stopped before it listened |
 | `engine_unavailable` | — | the engine did not start with the app |
 | `update_unavailable` | — | `host.updater.restart()` with no update ready, `download()` with none known, or the `updater` command where this copy has no updater |
+| `shortcut_invalid` | — | `host.muteShortcut.set(accelerator)` with one that is not a shortcut (below) |
 | `bad_request` | — | a malformed call, or a caller other than the room window's own page: a bug in the caller |
 | `internal` | — | something inside the app failed |
 
@@ -393,6 +395,62 @@ What is this app's own:
   when a provider is listed, or its model loaded or called. `host.engine.testCredential` writes nothing: its key goes
   only to a trial engine of its own.
 
+## The mute shortcut
+
+The global shortcut that mutes and unmutes the microphone (docs/SHORTCUTS.md), set from the web's Settings. Always
+there.
+
+```ts
+interface MuteShortcutBridge {
+  get(): Promise<MuteShortcut>;
+  set(accelerator: string | null): Promise<MuteShortcut>;   // null: none
+  subscribe?(listener: (shortcut: MuteShortcut) => void): () => void;
+}
+interface MuteShortcut {
+  accelerator: string | null;   // as the app keeps it: "Ctrl+Alt+M"; null when there is none
+  label: string | null;         // as this system writes it: "⌃⌥M" on macOS, "Ctrl+Alt+M" elsewhere
+  state: "on" | "off" | "refused";  // refused: the system would not take it (another app may hold it)
+  alternatives: string[];       // refused: accelerators the system does take, to offer instead (set one as it is)
+  voiceOver: boolean;           // macOS: VoiceOver is on and the shortcut holds Control and Option together
+}
+```
+
+- `set` takes the web's form as it is: `+`-separated, any case, one or more of the modifiers `Cmd`/`Command`,
+  `Ctrl`/`Control`, `Alt`/`Option`, `Shift`, then one key as the browser names it (`event.key`: `M`, `7`, `F5`, `Space`,
+  `ArrowUp`, `;`, `+`). With Shift, a character Shift makes on a US keyboard is read as its key (`Ctrl+Shift+?` is
+  Ctrl+Shift+/, `Cmd+Shift++` is Cmd+Shift+=). The app keeps it in one form,
+  modifiers in the order `Cmd+Ctrl+Alt+Shift` and the key's first letter upper case (`shift+cmd+m` → `Cmd+Shift+M`;
+  core `settings::normalize_shortcut`), and answers it as `accelerator`. `Cmd` is the Command key (Super elsewhere).
+  Anything else — no modifier, no key or two, a character no key makes (`µ` from Option+M on a Mac, a dead key) —
+  rejects `{key: "shortcut_invalid", message}` and changes nothing. One the system refuses is kept, and answered `refused`.
+- Kept with the app's settings (`muteShortcut`); the settings window, which still shows it, and the page set the same
+  value.
+- App → page: `window.__sidevoiceDesktop.muteShortcutEvent(shortcut)` (`webview.eval`) whenever the app registers it
+  (set from the page or the settings window), to `subscribe`'s listeners. `voiceOver` is read when asked: VoiceOver
+  turned on or off tells no one.
+- Command behind it: `mute_shortcut {action, accelerator?}`, `action` `get` or `set`.
+
+## The call controls settings
+
+Whether the call controls card shows during a call always, also while the room's window is in front, or only while it is
+behind or minimised ("Always show the call controls", above), set from the web's Settings. Always there.
+
+```ts
+interface CallControlsBridge {
+  settings(): Promise<{ alwaysShown: boolean }>;            // default false
+  setAlwaysShown(enabled: boolean): Promise<{ alwaysShown: boolean }>;
+}
+```
+
+- `setAlwaysShown` keeps it with the app's settings (`callControlsAlwaysShown`) and applies it to the card at once; a
+  non-boolean rejects `{key: "bad_request"}`. The settings window still shows it too.
+- Command behind it: `call_controls_settings {action, enabled?}`, `action` `settings` or `set-always-shown`.
+
+Both commands are granted to the room window (`capabilities/room.json`) and re-check that the caller is the current
+room window on the app's own page (else `bad_request`). The app's settings (`settings.json`) have one writer
+(`change_settings`, `src-tauri/src/lib.rs`): the settings window's save (only the fields the person changed there) and
+every setter of the page change only their own fields, under one lock, so none loses another's.
+
 ## The build
 
 `window.__sidevoiceDesktop.host.build` is what this build of the app is, decided when it was built (RELEASING.md →
@@ -459,8 +517,9 @@ interface UpdaterStatus {
 - Add a command: a variant in `Command` (Rust), a `case` in `run` (JS), a test on each side.
 - Add a field: `CallSnapshot` uses `#[serde(default)]`, so old and new scripts interoperate;
   bump `version` only for a breaking change.
-- Tests: `npm test` (the script against a fake window, `host.voice`, `host.updater` and `host.build` included), `cargo test -p
-  sidevoice-desktop-core` (the voice call's builds, the media rule and the updater's status among the rest) and `cargo test -p sidevoice-desktop-engine` (the engine
+- Tests: `npm test` (the script against a fake window, `host.voice`, `host.updater`, `host.build`, `host.muteShortcut` and
+  `host.callControls` included), `cargo test -p sidevoice-desktop-core` (the voice call's builds, the media rule, the
+  updater's status and the mute shortcut's form and shape among the rest) and `cargo test -p sidevoice-desktop-engine` (the engine
   over a test host), `cargo test -p sidevoice-local-host` (the local host against a stand-in core; docs/LOCAL_HOST.md →
   Tests). In the real app, CI's macOS job runs the probe page (`test/fixtures/probe.html`, probe build): the engine's
   capabilities, installs, refusals and a cancelled download (CI then checks nothing of it is on disk), and the voice

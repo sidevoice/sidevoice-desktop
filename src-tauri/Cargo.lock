@@ -4476,6 +4476,7 @@ dependencies = [
 name = "sidevoice-desktop-core"
 version = "0.1.0"
 dependencies = [
+ "global-hotkey",
  "serde",
  "serde_json",
  "url",

@@ -1,8 +1,7 @@
 // Sidevoice call controls bridge — injected by the desktop app into its call controls card window, before the page's
 // own scripts (docs/BRIDGE.md → "The call controls card").
 //
-//   app → card : window.__sidevoiceDesktop.receive({ call, level, pointerInside, outsideClicks, alwaysExpanded,
-//                muteShortcut })
+//   app → card : window.__sidevoiceDesktop.receive({ call, level, pointerInside, outsideClicks, muteShortcut })
 //                (any subset: what changed), evaluated by the app
 //   card → app : invoke('call_controls_run' | 'call_controls_layout' | 'call_controls_drag' | 'call_controls_ready')
 //

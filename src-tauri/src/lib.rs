@@ -2,13 +2,13 @@
 //! the call through the interface's own actions (docs/BRIDGE.md).
 //!
 //! The interface is a secret-free client: it talks to a node or a rendezvous room it was paired with (the node
-//! issues a one-time code; sidevoice-core `control/devices.py`), told where to look first through
-//! `window.__SIDEVOICE_TARGET__` (docs/TARGETS.md). No remote page is ever loaded.
+//! issues a one-time code; sidevoice-core `control/devices.py`), and the app never tells it where to look
+//! (docs/TARGETS.md). No remote page is ever loaded.
 //!
 //! Windows:
-//! - `room-N`: the bundled interface. Created again when the target changes (N grows), so the scripts injected
-//!   into it carry the current target. Closing it hides it; the app keeps running.
-//! - `settings`: bundled local page (`ui/index.html`): target, shortcut, diagnostics.
+//! - `room-N`: the bundled interface. Created at launch, and again (N grows) when it is gone. Closing it hides it; the
+//!   app keeps running.
+//! - `settings`: bundled local page (`ui/index.html`): shortcut, call controls, diagnostics.
 //! - `call-controls`: the call controls card (`src/call_controls.rs`), floating over other apps during a call.
 
 mod call_controls;
@@ -23,9 +23,10 @@ mod updater;
 mod voice;
 
 use serde::Serialize;
+use serde_json::{json, Value};
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
 use sidevoice_desktop_core::build_info::BuildInfo;
-use sidevoice_desktop_core::settings::{Settings, APP_ORIGIN};
+use sidevoice_desktop_core::settings::{MuteShortcut, Registration, Settings, WindowChanges, APP_ORIGIN};
 use sidevoice_desktop_core::{media, settings};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -47,8 +48,11 @@ pub(crate) struct AppState {
     room_counter: AtomicU32,
     /// The language of the app's native texts (tray, …), the system's when there is a bundle for it (core `i18n`).
     pub(crate) language: &'static str,
-    /// The mute shortcut as the system took it, from startup and from every save (the settings window shows it).
-    shortcut: Mutex<ShortcutStatus>,
+    /// The mute shortcut as the system took it, from startup and from every change.
+    shortcut: Mutex<MuteShortcut>,
+    /// Held across a change of the mute shortcut, from keeping it to registering it, so what is kept and what is
+    /// registered never differ. Only off the main thread: registering waits for it.
+    shortcut_change: Mutex<()>,
 }
 
 impl Default for AppState {
@@ -61,51 +65,17 @@ impl Default for AppState {
             room_counter: AtomicU32::default(),
             language: sidevoice_desktop_core::i18n::language(&preferred),
             shortcut: Mutex::default(),
+            shortcut_change: Mutex::default(),
         }
     }
 }
 
-#[derive(Clone, Copy, Default, PartialEq, Serialize)]
-#[serde(rename_all = "lowercase")]
-enum Registration {
-    /// None set.
-    #[default]
-    Off,
-    On,
-    /// The system would not register it: another app may hold it.
-    Refused,
-}
-
-/// The mute shortcut as the system took it, for the settings window, which says it in its own language.
-#[derive(Clone, Default, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ShortcutStatus {
-    state: Registration,
-    /// How it reads on this system: ⌃⌥M, Ctrl+Alt+M.
-    label: String,
-    /// Refused: one the system does take, to offer instead.
-    alternative: Option<ShortcutAlternative>,
-    /// macOS: VoiceOver is on, and the shortcut holds its keys (Control and Option together).
-    voice_over: bool,
-}
-
-#[derive(Clone, Serialize)]
-struct ShortcutAlternative {
-    accelerator: String,
-    label: String,
-}
-
-fn shortcut_label(accelerator: &str) -> String {
-    sidevoice_desktop_core::call_controls::shortcut_label(accelerator, cfg!(target_os = "macos"))
-}
-
 /// The shortcut's status now: VoiceOver can be turned on or off at any time.
-fn shortcut_status(state: &AppState) -> ShortcutStatus {
+fn shortcut_status(state: &AppState) -> MuteShortcut {
     let mut status = state.shortcut.lock().unwrap().clone();
-    let accelerator = state.settings.lock().unwrap().as_ref().map(|s| s.mute_shortcut.clone());
-    let accelerator = accelerator.unwrap_or_else(|| settings::DEFAULT_MUTE_SHORTCUT.to_string());
+    let accelerator = status.accelerator.as_deref().unwrap_or_default();
     status.voice_over =
-        status.state == Registration::On && settings::uses_voice_over_keys(&accelerator) && voice_over_on();
+        status.state == Registration::On && settings::uses_voice_over_keys(accelerator) && voice_over_on();
     status
 }
 
@@ -123,22 +93,49 @@ fn voice_over_on() -> bool {
     false
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SettingsInfo {
-    settings: Settings,
-    shortcut: ShortcutStatus,
-    first_run: bool,
-    /// Diagnostics on (`SIDEVOICE_DEBUG=1`): the settings page then also reports what its webview offers.
-    debug: bool,
-    app_version: String,
+/// A mute shortcut as the app keeps it (core `normalize_shortcut`, empty for none), if the system can read its key.
+fn checked_shortcut(text: &str) -> Option<String> {
+    settings::normalize_shortcut(text).filter(|a| a.is_empty() || a.parse::<Shortcut>().is_ok())
+}
+
+/// The one writer of settings.json: `change` applied to the stored settings, saved and kept under one lock, so the
+/// settings window and the room page's setters never lose each other's fields.
+pub(crate) fn change_settings(app: &AppHandle, change: impl FnOnce(&mut Settings)) -> Result<Settings, String> {
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let state = app.state::<AppState>();
+    let mut stored = state.settings.lock().unwrap();
+    let mut changed = stored.clone().unwrap_or_else(Settings::first_run);
+    change(&mut changed);
+    settings::save(&dir, &changed).map_err(|e| e.to_string())?;
+    *stored = Some(changed.clone());
+    Ok(changed)
+}
+
+/// Changes the settings with `change`, registers the mute shortcut they then hold and tells the card: how the system
+/// took it.
+fn change_shortcut(app: &AppHandle, change: impl FnOnce(&mut Settings)) -> Result<MuteShortcut, String> {
+    let state = app.state::<AppState>();
+    let _one_at_a_time = state.shortcut_change.lock().unwrap();
+    let changed = change_settings(app, change)?;
+    apply_shortcut(app, &changed.mute_shortcut);
+    call_controls::update(app);
+    Ok(shortcut_status(&state))
+}
+
+/// A refusal as the room page reads it (docs/BRIDGE.md → "Refusals").
+pub(crate) fn refusal(key: &str, message: impl std::fmt::Display) -> Value {
+    json!({ "key": key, "message": message.to_string() })
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct SaveResult {
+struct SettingsInfo {
     settings: Settings,
-    shortcut: ShortcutStatus,
+    shortcut: MuteShortcut,
+    first_run: bool,
+    /// Diagnostics on (`SIDEVOICE_DEBUG=1`): the settings page then also reports what its webview offers.
+    debug: bool,
+    app_version: String,
 }
 
 #[tauri::command]
@@ -154,30 +151,22 @@ fn get_settings(app: AppHandle, state: State<'_, AppState>) -> SettingsInfo {
     }
 }
 
-// Async so it runs off the main thread: creating a window from a synchronous command deadlocks
-// on Windows (WebView2), and the room window is (re)created here.
+/// The settings window's save: its mute shortcut and call controls, only those it changed (core `WindowChanges`); the
+/// rest stays as stored. Async so it runs off the main thread: creating a window from a synchronous command deadlocks
+/// on Windows (WebView2), and registering the shortcut waits for the main thread.
 #[tauri::command]
-async fn save_settings(app: AppHandle, state: State<'_, AppState>, settings: Settings) -> Result<SaveResult, String> {
-    let mut settings = settings::validate(settings).map_err(|e| e.to_string())?;
-    if !settings.mute_shortcut.is_empty() && settings.mute_shortcut.parse::<Shortcut>().is_err() {
-        return Err(format!("El atajo «{}» no es válido. Ejemplo: CmdOrCtrl+Shift+M.", settings.mute_shortcut));
-    }
-    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
-    let previous = {
-        // The updates' mode is the room page's (`host.updater.setMode`): this window never sends it, so the stored one
-        // stays. Under the lock, so a mode set meanwhile is not lost.
-        let mut stored = state.settings.lock().unwrap();
-        settings.update_mode = stored.as_ref().map(|s| s.update_mode).unwrap_or_default();
-        settings::save(&dir, &settings).map_err(|e| format!("No se pudo guardar: {e}"))?;
-        stored.replace(settings.clone())
-    };
-    apply_shortcut(&app, &settings.mute_shortcut);
-    let shortcut = shortcut_status(&state);
-    call_controls::update(&app);
-
-    let target_changed = previous.as_ref().map(|p| p.target != settings.target).unwrap_or(true);
-    if target_changed || room_window(&app).is_none() {
-        open_room(&app, &settings).map_err(|e| format!("No se pudo abrir la ventana: {e}"))?;
+async fn save_settings(app: AppHandle, mut changes: WindowChanges) -> Result<MuteShortcut, String> {
+    changes.mute_shortcut = changes
+        .mute_shortcut
+        .map(|text| {
+            checked_shortcut(&text)
+                .ok_or_else(|| format!("El atajo «{}» no es válido. Ejemplo: Ctrl+Alt+M, Cmd+Shift+M.", text.trim()))
+        })
+        .transpose()?;
+    let shortcut =
+        change_shortcut(&app, |stored| changes.apply(stored)).map_err(|e| format!("No se pudo guardar: {e}"))?;
+    if room_window(&app).is_none() {
+        open_room(&app).map_err(|e| format!("No se pudo abrir la ventana: {e}"))?;
     }
     show_room(&app);
     if shortcut.state != Registration::Refused {
@@ -185,7 +174,29 @@ async fn save_settings(app: AppHandle, state: State<'_, AppState>, settings: Set
             let _ = w.close();
         }
     }
-    Ok(SaveResult { settings, shortcut })
+    Ok(shortcut)
+}
+
+/// `host.muteShortcut`'s one command: `action` `get`, or `set` with `accelerator` (`null`: none). Refuses
+/// `shortcut_invalid` for an accelerator that is not a shortcut the system can read.
+#[tauri::command]
+async fn mute_shortcut(
+    app: AppHandle,
+    webview: Webview,
+    action: String,
+    accelerator: Option<String>,
+) -> Result<MuteShortcut, Value> {
+    room_page(&app, &webview).map_err(|why| refusal("bad_request", why))?;
+    match action.as_str() {
+        "get" => Ok(shortcut_status(&app.state::<AppState>())),
+        "set" => {
+            let text = accelerator.unwrap_or_default();
+            let accelerator = checked_shortcut(&text)
+                .ok_or_else(|| refusal("shortcut_invalid", format!("Not a shortcut: {text}")))?;
+            change_shortcut(&app, |s| s.mute_shortcut = accelerator).map_err(|e| refusal("internal", e))
+        }
+        _ => Err(refusal("bad_request", format!("not a mute shortcut action: {action}"))),
+    }
 }
 
 /// Called by the bridge script in the interface. Only the current room window, on the app's own pages, may
@@ -289,8 +300,8 @@ fn reset_call_state(app: &AppHandle) {
     voice::page_changed(app);
 }
 
-/// (Re)creates the room window: the bundled interface, told its target, bound to the app's own pages.
-fn open_room(app: &AppHandle, settings: &Settings) -> tauri::Result<()> {
+/// (Re)creates the room window: the bundled interface, bound to the app's own pages.
+fn open_room(app: &AppHandle) -> tauri::Result<()> {
     let state = app.state::<AppState>();
     let label = format!("{ROOM_PREFIX}{}", state.room_counter.fetch_add(1, Ordering::SeqCst) + 1);
     #[cfg(not(feature = "probe"))]
@@ -314,18 +325,16 @@ fn open_room(app: &AppHandle, settings: &Settings) -> tauri::Result<()> {
     let version = app.package_info().version.to_string();
     let (commit, date) = (env!("SIDEVOICE_BUILD_COMMIT"), env!("SIDEVOICE_BUILD_DATE"));
     let build = BuildInfo::new(env!("SIDEVOICE_BUILD_CHANNEL"), &version, commit, date);
-    let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(page.into()))
+    let builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(page.into()))
         .title("Sidevoice")
         .inner_size(1100.0, 760.0)
         .min_inner_size(420.0, 560.0)
         .initialization_script(bridge::script_for_origin(APP_ORIGIN, updater::offered(), &build));
-    if let Some(target) = settings::target_script(settings) {
-        builder = builder.initialization_script(target);
-    }
     #[cfg(feature = "probe")]
-    if let Some(flow) = probe::local_host_flow() {
-        builder = builder.initialization_script(flow);
-    }
+    let builder = match probe::local_host_flow() {
+        Some(flow) => builder.initialization_script(flow),
+        None => builder,
+    };
     builder
         // A hidden window still carries the call: never suspend or throttle its page.
         .background_throttling(BackgroundThrottlingPolicy::Disabled)
@@ -381,28 +390,31 @@ pub(crate) fn open_settings(app: &AppHandle) {
         .build();
 }
 
-/// Registers the global mute shortcut, replacing any previous one, and keeps how it went for the settings window. A
-/// refused one comes with the first alternative the system does take.
+/// Registers the global mute shortcut, replacing any previous one, keeps how it went and tells the room page
+/// (`host.muteShortcut.subscribe`). A refused one comes with the alternatives the system does take.
 fn apply_shortcut(app: &AppHandle, accelerator: &str) {
     let shortcuts = app.global_shortcut();
     let _ = shortcuts.unregister_all();
-    let status = if accelerator.is_empty() {
-        ShortcutStatus::default()
+    let (state, alternatives) = if accelerator.is_empty() {
+        (Registration::Off, vec![])
     } else if let Err(e) = shortcuts.register(accelerator) {
         debug(&format!("shortcut {accelerator} refused: {e}"));
-        let alternative = settings::shortcut_alternatives(accelerator)
-            .find(|a| shortcuts.register(*a).is_ok() && shortcuts.unregister(*a).is_ok())
-            .map(|a| ShortcutAlternative { accelerator: a.to_string(), label: shortcut_label(a) });
-        ShortcutStatus {
-            state: Registration::Refused,
-            label: shortcut_label(accelerator),
-            alternative,
-            voice_over: false,
-        }
+        let alternatives = settings::shortcut_alternatives(accelerator)
+            .filter(|a| shortcuts.register(*a).is_ok() && shortcuts.unregister(*a).is_ok())
+            .map(str::to_owned)
+            .collect();
+        (Registration::Refused, alternatives)
     } else {
-        ShortcutStatus { state: Registration::On, label: shortcut_label(accelerator), ..Default::default() }
+        (Registration::On, vec![])
     };
-    *app.state::<AppState>().shortcut.lock().unwrap() = status;
+    let app_state = app.state::<AppState>();
+    *app_state.shortcut.lock().unwrap() =
+        MuteShortcut::new(accelerator, state, alternatives, cfg!(target_os = "macos"));
+    if let Some(window) = room_window(app) {
+        let status = json!(shortcut_status(&app_state));
+        let _ =
+            window.eval(format!("window.__sidevoiceDesktop && window.__sidevoiceDesktop.muteShortcutEvent({status})"));
+    }
 }
 
 /// The app's commands, with `$extra` (each after a comma) after them.
@@ -438,6 +450,8 @@ macro_rules! commands {
             local_host::local_host_action,
             local_host::local_host_pairing_code,
             local_host::local_host_pair_room,
+            mute_shortcut,
+            call_controls::call_controls_settings,
             updater::updater
             $($extra)*
         ]
@@ -521,7 +535,7 @@ pub fn run() {
             apply_shortcut(&handle, &current.mute_shortcut);
             // Before the room opens, so its bridge offers `host.updater`.
             updater::setup(&handle);
-            open_room(&handle, &current)?;
+            open_room(&handle)?;
             call_controls::create(&handle)?;
             Ok(())
         })

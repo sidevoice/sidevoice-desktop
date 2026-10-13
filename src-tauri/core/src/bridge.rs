@@ -50,7 +50,7 @@ pub fn call_controls_script(origin: &str) -> String {
     CALL_CONTROLS_SCRIPT_TEMPLATE.replacen(APP_ORIGIN_PLACEHOLDER, &literal, 1)
 }
 
-/// What the app pushes to the card: any subset of `{call, level, pointerInside, alwaysExpanded, muteShortcut}`.
+/// What the app pushes to the card: any subset of `{call, level, pointerInside, outsideClicks, muteShortcut}`.
 pub fn call_controls_push(patch: &serde_json::Value) -> String {
     format!("window.__sidevoiceDesktop && window.__sidevoiceDesktop.receive({patch});")
 }

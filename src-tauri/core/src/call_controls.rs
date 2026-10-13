@@ -88,10 +88,11 @@ pub fn resting_place(stored: Option<Point>, rest_size: Size, work: Rect) -> Poin
     drop_at(stored.unwrap_or_else(|| first_place(work, rest_size)), rest_size, work)
 }
 
-/// Whether the card is on screen: during a call, unless hidden for this call from the tray, and never while the room's
-/// own window is in front and focused (the same controls are there).
-pub fn wanted(joined: bool, hidden_for_call: bool, room_in_front: bool) -> bool {
-    joined && !hidden_for_call && !room_in_front
+/// Whether the card is on screen: during a call, unless hidden for this call from the tray; while the room's own window
+/// is in front and focused (the same controls are there) only when the person chose it always shown
+/// (`host.callControls.setAlwaysShown`).
+pub fn wanted(joined: bool, hidden_for_call: bool, room_in_front: bool, always_shown: bool) -> bool {
+    joined && !hidden_for_call && (always_shown || !room_in_front)
 }
 
 /// Where a card that has never been placed on this display goes: the top-right corner of its work area.
@@ -194,11 +195,15 @@ mod tests {
     const CARD: Size = Size { width: 344.0, height: 82.0 };
 
     #[test]
-    fn shown_during_a_call_unless_hidden_or_the_room_is_in_front() {
-        assert!(wanted(true, false, false));
-        assert!(!wanted(false, false, false), "no call, no card");
-        assert!(!wanted(true, true, false), "hidden from the tray for this call");
-        assert!(!wanted(true, false, true), "the room is in front: its controls are there");
+    fn shown_during_a_call_unless_hidden_or_the_room_is_in_front_and_not_always_shown() {
+        for always in [false, true] {
+            assert!(wanted(true, false, false, always), "behind or minimised: shown ({always})");
+            assert!(!wanted(false, false, false, always), "no call, no card ({always})");
+            assert!(!wanted(true, true, false, always), "hidden from the tray for this call ({always})");
+            assert!(!wanted(true, true, true, always), "hidden from the tray, the room in front ({always})");
+        }
+        assert!(!wanted(true, false, true, false), "the room is in front: its controls are there");
+        assert!(wanted(true, false, true, true), "always shown: in front of the room too");
     }
 
     #[test]

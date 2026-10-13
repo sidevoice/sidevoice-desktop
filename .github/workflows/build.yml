@@ -167,9 +167,6 @@ jobs:
       - name: First open (no settings) — the bundled interface comes up in the real WKWebView
         if: needs.changes.outputs.installers == 'true'
         run: cargo xtask macos first-open
-      - name: With a target (a fake node on loopback)
-        if: needs.changes.outputs.installers == 'true'
-        run: cargo xtask macos with-target
       - name: Make the .dmg (the brand's window, with background, icon layout and volume icon)
         if: needs.changes.outputs.installers == 'true'
         run: cargo xtask macos dmg ${{ needs.changes.outputs.sign == 'true' && '--signed' || '' }}

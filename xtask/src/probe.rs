@@ -252,6 +252,16 @@ pub fn probe() -> Result<()> {
         }),
         "the probe app is not a dev build without an updater",
     )?;
+    // The call settings through the app (the room page's own commands and grants), and no target.
+    let settings = grep(&text, "probe-settings ");
+    eprintln!("--- call settings\n{}", settings.join("\n"));
+    ensure(
+        settings.iter().any(|line| {
+            re(r"probe-settings ok target=null set=Cmd\+Shift\+F9/(on|refused) invalid=shortcut_invalid off=off always=true/true$")
+                .is_match(line)
+        }),
+        "the mute shortcut or the call controls settings did not answer as the seam says",
+    )?;
     // Headset buttons: a (simulated) call made the app the Now Playing app, and it let go after.
     ensure(text.contains("probe-headset ok"), "no probe-headset ok")?;
     ensure(text.contains("headset apply active=true in_call=true mic=true"), "the call never took the headset")?;

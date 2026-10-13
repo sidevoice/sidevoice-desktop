@@ -184,12 +184,14 @@ pub fn update(app: &AppHandle) {
     let Some(card) = card(app) else { return };
     let call = app.state::<AppState>().call.lock().unwrap().clone();
     let in_front = room_in_front(app);
+    let always_shown =
+        app.state::<AppState>().settings.lock().unwrap().as_ref().is_some_and(|s| s.call_controls_always_shown);
     let (show, hide) = {
         let mut inner = card.0.lock().unwrap();
         if !call.joined {
             inner.hidden_for_call = false;
         }
-        let wanted = logic::wanted(call.joined, inner.hidden_for_call, in_front);
+        let wanted = logic::wanted(call.joined, inner.hidden_for_call, in_front, always_shown);
         let change = (wanted && !inner.shown, !wanted && inner.shown);
         inner.shown = wanted;
         if change.1 {
@@ -255,7 +257,6 @@ fn full_state(app: &AppHandle, call: &CallSnapshot) -> serde_json::Value {
         "level": level,
         "pointerInside": pointer,
         "outsideClicks": clicks,
-        "alwaysExpanded": settings.call_controls_always,
         "muteShortcut": logic::shortcut_label(&settings.mute_shortcut, cfg!(target_os = "macos")),
     })
 }
@@ -440,6 +441,31 @@ fn from_card_window(webview: &Webview) -> Result<(), String> {
         return Err("not the app's own page".into());
     }
     Ok(())
+}
+
+/// `host.callControls`' one command, from the room page (not the card): `action` `settings`, or `set-always-shown` with
+/// `enabled`, kept with the app's settings and applied at once. Answers `{alwaysShown}`.
+#[tauri::command]
+pub async fn call_controls_settings(
+    app: AppHandle,
+    webview: Webview,
+    action: String,
+    enabled: Option<bool>,
+) -> Result<serde_json::Value, serde_json::Value> {
+    crate::room_page(&app, &webview).map_err(|why| crate::refusal("bad_request", why))?;
+    let always = match (action.as_str(), enabled) {
+        ("settings", _) => {
+            app.state::<AppState>().settings.lock().unwrap().as_ref().is_some_and(|s| s.call_controls_always_shown)
+        }
+        ("set-always-shown", Some(enabled)) => {
+            crate::change_settings(&app, |s| s.call_controls_always_shown = enabled)
+                .map_err(|e| crate::refusal("internal", e))?;
+            update(&app);
+            enabled
+        }
+        _ => return Err(crate::refusal("bad_request", format!("not a call controls action: {action}"))),
+    };
+    Ok(serde_json::json!({ "alwaysShown": always }))
 }
 
 /// The card's page is ready: it gets the whole state.

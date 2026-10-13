@@ -1,7 +1,6 @@
 //! `host.updater` (docs/BRIDGE.md → "The updater"): schedule, status and install-on-quit over tauri-plugin-updater.
 
 use serde_json::{json, Value};
-use sidevoice_desktop_core::settings::{self, Settings};
 use sidevoice_desktop_core::updater::{self as core, ErrorCode, Mode, State, Status};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -185,15 +184,7 @@ pub async fn updater(app: AppHandle, webview: Webview, action: String, mode: Opt
 
 /// Keeps the mode with the app's settings; automatic starts downloading an update already found.
 fn set_mode(app: &AppHandle, mode: Mode) -> Result<(), Value> {
-    let internal = |message: String| json!({ "key": "internal", "message": message });
-    let dir = app.path().app_config_dir().map_err(|e| internal(e.to_string()))?;
-    {
-        let state = app.state::<AppState>();
-        let mut stored = state.settings.lock().unwrap();
-        let changed = Settings { update_mode: mode, ..stored.clone().unwrap_or_else(Settings::first_run) };
-        settings::save(&dir, &changed).map_err(|e| internal(format!("not saved: {e}")))?;
-        *stored = Some(changed);
-    }
+    crate::change_settings(app, |s| s.update_mode = mode).map_err(|e| crate::refusal("internal", e))?;
     if mode == Mode::Automatic {
         download(app);
     }

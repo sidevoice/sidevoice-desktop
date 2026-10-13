@@ -21,14 +21,12 @@ which release). None of it is committed, and nothing of it is built here.
 The window only ever navigates within the app's own pages; the microphone is granted to them only; the bridge
 (`docs/BRIDGE.md`) is bound to them.
 
-## The target (optional)
+## No target
 
-Settings → "Dónde mirar primero": a node (`http://127.0.0.1:8768` for the core on this Mac) or a rendezvous room
-(`https://…`). The app injects it as `window.__SIDEVOICE_TARGET__` (the web client contract) into the app's own
-pages only. Empty is fine: the pairing code says where the machine is. A standalone static deployment sets it by
-writing `/voice/target.js` (`SIDEVOICE_TARGET` in the nginx image).
-
-`https://`, or `http://` only on this machine (a secure page may not call plain http elsewhere).
+The app never tells the interface where to look first: it injects `window.__SIDEVOICE_TARGET__ = null` (the web client
+contract) into the app's own pages (`bridge/desktop-bridge.js`), and keeps no address. Which machine the interface
+talks to, and how to reach it, comes from pairing alone. A standalone static deployment may still set one by writing
+`/voice/target.js` (`SIDEVOICE_TARGET` in the nginx image).
 
 ## What the node and the room accept from the app
 
@@ -48,7 +46,8 @@ writing `/voice/target.js` (`SIDEVOICE_TARGET` in the nginx image).
   microphone: the app owns it.
 - The voice call: `host.voice`'s seam on the probe page, and a call on the engine's real models through the app's
   adapter, recorded speech in and a spoken reply out (`src-tauri/src/voice/models/tests.rs`).
-- With a target, the interface calls it cross-origin with `Origin: tauri://localhost` (fake node).
+- A node on loopback is reached cross-origin from the interface's window, `Origin: tauri://localhost`, preflight and
+  device token included (probe page, fake node).
 
 ## Updating the bundled interface
 
