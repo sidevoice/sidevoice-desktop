@@ -250,14 +250,15 @@
   }
 
   /** This computer's own core, the local host (docs/LOCAL_HOST.md): its state, the pairing the page uses to reach it
-   *  (through the app's proxy, with this launch's secret — never the device token), and the service's actions. Each
-   *  action resolves the state after it (`{state, failure?, core?, product_version, service?, calls?, attempts?, limit?,
-   *  installed?, reachable}`) or rejects `{key, message}`.
+   *  (through the app's proxy, with this launch's secret — never the device token), the service's actions, and
+   *  installing Sidevoice here (`install`, `cancel`). Each action resolves the state after it (`{state, failure?, core?,
+   *  product_version, service?, calls?, attempts?, limit?, installed?, reachable}`) or rejects `{key, message}`.
    *  Only where the app offers a local host (macOS). */
   function localHost() {
     const listeners = new Set();
     let last = null; // the state last delivered, as JSON
     let timer = null;
+    let localInstalls = 0; // numbers each install call's job
     const poll = () =>
       call("local_host_state")
         .then((state) => {
@@ -272,8 +273,8 @@
     const action = (name) => () => call("local_host_action", { action: name });
     return {
       /** `{state, failure?, core?, product_version, service?, calls?, attempts?, limit?, installed?, reachable}`; `state`
-       *  one of `absent`, `not-installed`, `stopped-by-person`, `starting`, `backoff`, `running`, `failed`,
-       *  `service-failed`, `refused`, `incompatible`; `product_version` the installed Sidevoice's version (the
+       *  one of `absent`, `installing` (while `install` runs), `not-installed`, `stopped-by-person`, `starting`,
+       *  `backoff`, `running`, `failed`, `service-failed`, `refused`, `incompatible`; `product_version` the installed Sidevoice's version (the
        *  `sidevoice` package, not `core.version`), `null` when unknown or not installed; `installed` whether the service
        *  starts at the next sign-in (the connector's `start_at_login`), absent when the connector does not say. */
       state: () => call("local_host_state"),
@@ -321,6 +322,47 @@
       pairingCode: () => call("local_host_pairing_code"),
       /** Pairs this machine with a room (`sidevoice pair <url> <code>`): `{room}`. */
       pairRoom: (url, code) => call("local_host_pair_room", { url, code }),
+      /** "Prepare this computer": installs Sidevoice from the npm registry, without Node (docs/LOCAL_HOST.md → Install;
+       *  sidevoice-web's `LocalHostBridge.install`). Answers at once a promise of the state after it, once the app is
+       *  paired with the new core (`LocalHostInstallOperation`), carrying `job`, this call's id for `cancel`.
+       *  `onProgress({step, done, total, cancellable})` about twice a second while it runs, when that changes: `step`
+       *  `download` (its bytes; `total` null when unknown), `verification`, `staging`, `service-start`, `pairing`.
+       *  Rejects `{key, step?, params?, log_tail?, message}`: `install.cancelled` once cancelled, `install.busy` while
+       *  another install runs, the rest as docs/BRIDGE.md lists them. */
+      install(onProgress) {
+        const job = "local-install-" + ++localInstalls + "-" + Date.now().toString(36);
+        let finished = false;
+        let told = null; // the progress last handed on, as JSON
+        const operation = call("local_host_install", { job }).finally(() => { finished = true; });
+        const poll = () => {
+          if (finished) return;
+          call("local_host_install_progress", { job })
+            .then((report) => {
+              if (finished || !report || typeof report !== "object" || typeof report.step !== "string") return;
+              const progress = {
+                step: report.step,
+                done: typeof report.done === "number" ? report.done : null,
+                total: typeof report.total === "number" ? report.total : null,
+                cancellable: report.cancellable === true,
+              };
+              const key = JSON.stringify(progress);
+              if (key === told) return;
+              told = key;
+              try { onProgress(progress); } catch (_) { /* a listener's error is the page's own */ }
+            })
+            .catch(() => {});
+          win.setTimeout(poll, 500);
+        };
+        if (typeof onProgress === "function") poll();
+        operation.job = job;
+        return operation;
+      },
+      /** Stops install `job` while that is still honoured (until the package's own installer starts): true when the
+       *  install will reject `install.cancelled`, false once it is too late or for a job not under way. */
+      cancel: (job) =>
+        typeof job === "string" && job
+          ? call("local_host_install_cancel", { job }).then((accepted) => accepted === true)
+          : Promise.resolve(false),
     };
   }
 

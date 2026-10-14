@@ -2,8 +2,9 @@
 //! absolute argv prefix the install recorded in `D/install.json`. Never a shell, never a name looked up on a PATH,
 //! always a deadline; one JSON object on stdout is the answer.
 //!
-//! [`Cli::installed`] is the one place that decides what runs the CLI. Until R4 that is the `npx`-installed
-//! connector; R4 adds the executable the app ships here, and no caller changes.
+//! [`Cli::installed`] is the one place that decides what runs the CLI. Until R4 that is the installed connector
+//! (installed by `npx`, or by the app from the same package: `install`); R4 adds the executable the app ships here, and
+//! no caller changes. The install's installer runs the same way, through [`Cli::exec`].
 
 use crate::checks::Check;
 use crate::paths::DataDirs;
@@ -12,7 +13,7 @@ use crate::Refusal;
 use serde_json::Value;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::process::CommandExt;
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -61,6 +62,32 @@ impl Cli {
     /// (`service start` → launchd) or starts detached in a session of its own is not in the group, and stays.
     pub fn run(&self, args: &[&str], timeout: Duration) -> Result<Value, Refusal> {
         let failed = |why: String| Refusal::new("cli.failed", why);
+        let ran = self.exec(args, timeout, &mut || {})?;
+        let Some(status) = ran.status else {
+            return Err(Refusal::new(
+                "cli.timeout",
+                format!("`{}` did not answer within {} s.", args.join(" "), timeout.as_secs()),
+            ));
+        };
+        let stderr = String::from_utf8_lossy(&ran.stderr).into_owned();
+        let tail =
+            || stderr.lines().rev().take(5).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join(" | ");
+        let answer: Value = serde_json::from_slice(&ran.stdout)
+            .ok()
+            .filter(Value::is_object)
+            .ok_or_else(|| failed(format!("`{}` exited {status} without a JSON answer: {}", args.join(" "), tail())))?;
+        if answer.get("ok") == Some(&Value::Bool(true)) && status.success() {
+            return Ok(answer);
+        }
+        Err(refusal_of(&answer).unwrap_or_else(|| failed(format!("`{}` exited {status}: {}", args.join(" "), tail()))))
+    }
+
+    /// Runs `prefix + args` as [`Self::run`] does — a process group of its own, at most `timeout` for its exit and both
+    /// its output streams — and hands back what it left, `status` `None` when the deadline came first (the whole group
+    /// was killed). `tick` is called about every 50 ms while it runs. Only a program that cannot start is a refusal
+    /// (`cli.failed`).
+    pub fn exec(&self, args: &[&str], timeout: Duration, tick: &mut dyn FnMut()) -> Result<Ran, Refusal> {
+        let failed = |why: String| Refusal::new("cli.failed", why);
         let deadline = Instant::now() + timeout;
         let mut command = Command::new(&self.prefix[0]);
         command
@@ -108,29 +135,25 @@ impl Cli {
                 break;
             }
             drain(&mut streams, left.min(Duration::from_millis(50)));
+            tick();
         }
-        let Some(status) = status else {
+        if status.is_none() {
             kill_group();
             let _ = child.kill();
             let _ = child.wait();
-            return Err(Refusal::new(
-                "cli.timeout",
-                format!("`{}` did not answer within {} s.", args.join(" "), timeout.as_secs()),
-            ));
-        };
-        let [stdout, stderr] = streams.map(|s| s.bytes);
-        let stderr = String::from_utf8_lossy(&stderr).into_owned();
-        let tail =
-            || stderr.lines().rev().take(5).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join(" | ");
-        let answer: Value = serde_json::from_slice(&stdout)
-            .ok()
-            .filter(Value::is_object)
-            .ok_or_else(|| failed(format!("`{}` exited {status} without a JSON answer: {}", args.join(" "), tail())))?;
-        if answer.get("ok") == Some(&Value::Bool(true)) && status.success() {
-            return Ok(answer);
         }
-        Err(refusal_of(&answer).unwrap_or_else(|| failed(format!("`{}` exited {status}: {}", args.join(" "), tail()))))
+        let [stdout, stderr] = streams.map(|s| s.bytes);
+        Ok(Ran { status, stdout, stderr })
     }
+}
+
+/// What a run left ([`Cli::exec`]): its exit status, `None` when it was killed at the deadline, and what it wrote (at
+/// most 1 MiB of each stream).
+#[derive(Debug)]
+pub struct Ran {
+    pub status: Option<ExitStatus>,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
 }
 
 /// One of the program's output pipes, read without blocking past the deadline.

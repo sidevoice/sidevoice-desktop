@@ -1,4 +1,4 @@
-# The desktop bridge
+absent when the connector does not say); `state` one of `absent`, `installing` (while `install` runs, whatever the service passes through), `not-installed`, `stopped-by-person`, `starting`, `backoff`, `running`, `failed`, `service-failed`, `refused`, `incompatible` |# The desktop bridge
 
 How the native app (tray, global shortcut, headset, the call controls card) talks to the Sidevoice web UI loaded in
 its window.
@@ -138,12 +138,45 @@ docs/LOCAL_HOST.md.
 | `revealLog()` | shows the core's log in Finder (`~/.sidevoice/core.log`, else `connector.log`) |
 | `pairingCode()` | `{code, expires_in, reach}`, on the person's click only: shown, never sent — the page's convention; native authorises the caller, not a person (docs/LOCAL_HOST.md → Trust) |
 | `pairRoom(url, code)` | pairs this machine with a room (`pair … --json` only): `{room}` |
+| `install(onProgress?)` | «Prepare this computer»: installs Sidevoice from the npm registry, without Node (docs/LOCAL_HOST.md → Install). Answers at once a promise of the state after it — once the app is paired with the new core, `reachable` — that carries `job`, this call's id (sidevoice-web's `LocalHostInstallOperation`). `onProgress({step, done, total, cancellable})` about twice a second while it runs, when that changes (below). One at a time: another call meanwhile rejects `install.busy` |
+| `cancel(job)` | stops install `job` while that is honoured — `download`, `verification` and the unpacking in `staging`, never once the package's installer runs — and resolves whether it was (`true`: the install rejects `install.cancelled`); `false` too for a job not under way |
 
 Actions reject `{key, message}`. Commands behind it (`src-tauri/src/local_host.rs`): `local_host_state`,
 `local_host_pairing`, `local_host_action {action}` (`start`, `stop`, `restart`, `service-install`,
-`service-uninstall`, `start-at-login-on`, `start-at-login-off`, `reconnect`, `reveal-log`), `local_host_pairing_code`, `local_host_pair_room {url, code}`.
+`service-uninstall`, `start-at-login-on`, `start-at-login-off`, `reconnect`, `reveal-log`), `local_host_pairing_code`,
+`local_host_pair_room {url, code}`, `local_host_install {job}`, `local_host_install_progress {job}` (the progress, or
+`null` for another job or once it has ended), `local_host_install_cancel {job}`.
 Granted to the room window (`capabilities/room.json`); each re-checks that the caller is the current room window on
 the app's own page.
+
+**The install's progress**: `step` is `download` (`done` and `total` its bytes, `total` `null` when the registry does
+not say), `verification`, `staging` (unpacking, then the package's installer), `service-start` (from when the installer
+has written `install.json` until it answers) or `pairing` (the app pairing with the new core); `done`/`total` are `null`
+outside `download`; `cancellable` whether `cancel` would still be honoured.
+
+**Its failures** reject `{key, step?, params?, log_tail?, message}`: `step` where it failed, `params.check` the check
+that failed for `install.authenticity`, `log_tail` the installer's last lines of error output (when it ran), `message`
+an English sentence for a client that does not know the key. The keys:
+
+| Key | When |
+|---|---|
+| `install.cancelled` | `cancel(job)` was honoured |
+| `install.busy` | another install is under way — this app's, or one the installer's own lock holds (its `service.busy`) |
+| `install.network` | the registry could not be reached, answered an error, or the download broke off, came short or took over 15 min |
+| `install.no-bundle` | no release for this computer: the latest `sidevoice` lists no package for it, the registry has none, or the package carries no installer (also the installer's `core.package-missing`) |
+| `install.authenticity` | `params.check`: `manifest` (a registry document that is not one, no SHA-512 integrity; the installer's `core.package-mismatch`), `download` (a tarball URL or a redirect off the registry), `download-size` (over 512 MiB), `archive-path`, `archive-link`, `archive-type`, `archive-size` (docs/LOCAL_HOST.md → Install) |
+| `install.checksum` | the tarball's SHA-512 is not the registry's integrity; nothing of it was unpacked |
+| `install.disk` | the disk is full |
+| `install.unsafe` | the temporary directory is not private to this user (or its ancestry is not) |
+| `launch.failed` | the package's installer could not be started |
+| `cli.timeout` | the installer did not finish within 3 min (it was killed) |
+| `install.rollback` | the installer's `install.rolled-back`: the update did not start and the previous release runs again |
+| `install.rollback-failed` | the update did not start, and neither did the previous release |
+| `service.start.failed` | the installer's `install.verify-failed`: installed, but the service did not start |
+| `install.failed` | anything else: the app's own file errors, the installer's `install.failed` or `connector.failed`, an installer that answered nothing |
+| `unsupported`, `not_room_page`, `bad_request` | as for every command |
+
+Any other key the installer answers comes through as it is, with its `params` and `message`.
 
 ## The call controls card
 
@@ -523,11 +556,11 @@ interface UpdaterStatus {
 - Add a command: a variant in `Command` (Rust), a `case` in `run` (JS), a test on each side.
 - Add a field: `CallSnapshot` uses `#[serde(default)]`, so old and new scripts interoperate;
   bump `version` only for a breaking change.
-- Tests: `npm test` (the script against a fake window, `host.voice`, `host.updater`, `host.build`, `host.muteShortcut` and
-  `host.callControls` included), `cargo test -p sidevoice-desktop-core` (the voice call's builds, the media rule, the
+- Tests: `npm test` (the script against a fake window, `host.voice`, `host.updater`, `host.build`, `host.muteShortcut`,
+  `host.callControls` and `host.localHost`'s install included), `cargo test -p sidevoice-desktop-core` (the voice call's builds, the media rule, the
   updater's status and the mute shortcut's form and shape among the rest) and `cargo test -p sidevoice-desktop-engine` (the engine
-  over a test host), `cargo test -p sidevoice-local-host` (the local host against a stand-in core; docs/LOCAL_HOST.md →
-  Tests). In the real app, CI's macOS job runs the probe page (`test/fixtures/probe.html`, probe build): the engine's
+  over a test host), `cargo test -p sidevoice-local-host` (the local host against a stand-in core, its install against a stand-in
+  registry; docs/LOCAL_HOST.md → Tests). In the real app, CI's macOS job runs the probe page (`test/fixtures/probe.html`, probe build): the engine's
   capabilities, installs, refusals and a cancelled download (CI then checks nothing of it is on disk), and the voice
   call's seam, catalogue, builds and a start that settles. The call itself, with real models on recorded speech, is
   sidevoice-voice's own CI.

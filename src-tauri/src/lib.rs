@@ -437,6 +437,9 @@ macro_rules! commands {
             local_host::local_host_action,
             local_host::local_host_pairing_code,
             local_host::local_host_pair_room,
+            local_host::local_host_install,
+            local_host::local_host_install_progress,
+            local_host::local_host_install_cancel,
             mute_shortcut,
             call_controls::call_controls_settings,
             updater::updater

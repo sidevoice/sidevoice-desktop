@@ -21,7 +21,9 @@
 //! the core — as the person knows it: what the installation's own program says (`--version --json`, gathered by the
 //! poll), `null` when unknown or nothing is installed. It is not `core.version`, the core's own.
 //!
-//! `installing` is R4's.
+//! `installing` is the host's own, not this table's: while an install it runs is under way ([`crate::install`]),
+//! whatever is observed — the service passes through states of its own meanwhile, and the page offers nothing for
+//! them (sidevoice-web treats it as starting).
 
 use crate::core_socket::{CoreError, Health};
 use crate::Refusal;
@@ -36,6 +38,8 @@ pub const API: RangeInclusive<i64> = 1..=1;
 #[serde(rename_all = "kebab-case")]
 pub enum State {
     Absent,
+    /// An install the app runs is under way (the host sets it, not [`report`]).
+    Installing,
     NotInstalled,
     StoppedByPerson,
     Starting,
@@ -371,6 +375,7 @@ mod tests {
     fn states_serialise_as_the_bridge_names_them() {
         let names: Vec<Value> = [
             State::Absent,
+            State::Installing,
             State::NotInstalled,
             State::StoppedByPerson,
             State::Starting,
@@ -388,6 +393,7 @@ mod tests {
             names,
             [
                 "absent",
+                "installing",
                 "not-installed",
                 "stopped-by-person",
                 "starting",
