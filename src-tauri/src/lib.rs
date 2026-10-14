@@ -377,6 +377,23 @@ pub(crate) fn show_room(app: &AppHandle) {
     }
 }
 
+/// Makes the app the active one (macOS 14+). `set_focus` asks with `activateIgnoringOtherApps:`, which macOS 14
+/// deprecates for `activate`; older systems lack `activate` and need nothing more.
+fn activate_app() {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::{class, msg_send, runtime::AnyObject, sel};
+        // SAFETY: main thread (setup); `activate` only when the app answers to it.
+        unsafe {
+            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+            let responds: bool = msg_send![app, respondsToSelector: sel!(activate)];
+            if responds {
+                let _: () = msg_send![app, activate];
+            }
+        }
+    }
+}
+
 pub(crate) fn open_settings(app: &AppHandle) {
     if let Some(w) = app.get_webview_window(SETTINGS_LABEL) {
         let _ = w.show();
@@ -537,6 +554,10 @@ pub fn run() {
             updater::setup(&handle);
             open_room(&handle)?;
             call_controls::create(&handle)?;
+            // The room to the front, last so no window created after it takes it. Setup runs on Ready, after the
+            // launch's own activation, which came before any window existed: the window stayed behind (Dock only).
+            show_room(&handle);
+            activate_app();
             Ok(())
         })
         .on_window_event(|window, event| {
