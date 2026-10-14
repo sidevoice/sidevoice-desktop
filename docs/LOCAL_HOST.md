@@ -2,8 +2,8 @@
 
 The core on the computer where the app runs, as the app finds it, pairs with it and lets the bundled page talk to it
 (sidevoice design "Onboarding, hosts and settings" rev. 3, §4.1, §4.2, §4.7; release R1). Offered on macOS only
-(decision O2); the code builds and is tested on Linux too. Until R4 the app ships no connector: the machine was
-installed with `npx @sidevoice/uplink install`, and the app runs that installation's CLI.
+(decision O2); the code builds and is tested on Linux too. The app ships no connector: the machine is
+installed with `npx sidevoice@latest install`, and the app runs that installation's CLI.
 
 ## Pieces
 
