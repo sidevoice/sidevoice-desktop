@@ -12,8 +12,8 @@ use sidevoice_desktop_core::voice::{choose, CatalogCandidates, ModelChoice, Voic
 use sidevoice_desktop_engine::sidevoice_engine::NoCredentials;
 use sidevoice_desktop_engine::NativeEngines;
 use sidevoice_voice::{
-    AudioIo, Events, IoEvent, IoSink, Listening, PlaybackState, SayEvent, SayOptions, SayOutcome, TurnEvent, VoiceCall,
-    VoiceConfig, VoiceEvent,
+    AudioIo, Events, IoEvent, IoSink, Listening, PlaybackState, SayEvent, SayOptions, SayOutcome, StartOptions,
+    TurnEvent, VoiceCall, VoiceConfig, VoiceEvent,
 };
 
 use super::*;
@@ -144,7 +144,7 @@ fn a_call_on_the_engines_real_models_hears_speech_and_plays_a_reply() {
     runtime.block_on(async {
         let models = Arc::new(EngineModels::new(engines.engine(), choice));
         let (call, mut events) = VoiceCall::new(models, Box::new(io), config);
-        call.start();
+        call.start(StartOptions::default());
         let said = next(&mut events, |event| match event {
             VoiceEvent::Turn(TurnEvent::Finished { text, .. }) => Some(text),
             _ => None,
@@ -397,7 +397,7 @@ impl Live {
         let tone = Arc::new(AtomicUsize::new(0));
         let mic = Mic { sink: None, stop: Arc::default(), tone: Arc::clone(&tone) };
         let (call, events) = VoiceCall::new(models as Arc<dyn VoiceModels>, Box::new(mic), config("silence", "af_old"));
-        call.start();
+        call.start(StartOptions::default());
         Live { call, events, tone, began, listened: false }
     }
 
@@ -427,7 +427,7 @@ impl Live {
 
     /// A turn of the person's, and its words.
     async fn turn(&mut self) -> String {
-        self.tone.store(80, Ordering::SeqCst);
+        self.tone.store(150, Ordering::SeqCst);
         self.next(|event| match event {
             VoiceEvent::Turn(TurnEvent::Finished { text, .. }) => Some(text.clone()),
             _ => None,
@@ -485,7 +485,7 @@ fn a_model_switched_mid_turn_and_mid_reply_does_not_stop_the_call() {
         let mut live = Live::start(Arc::clone(&models), began);
 
         // A turn: its transcription is held while the transcriber switches.
-        live.tone.store(80, Ordering::SeqCst);
+        live.tone.store(150, Ordering::SeqCst);
         assert_eq!(live.began().await, "old");
         let switched = within(models.switch(chosen("new", "af_old", None), ALWAYS)).await.unwrap();
         assert!(switched.is_some());

@@ -30,8 +30,8 @@ use sidevoice_desktop_core::voice::{
 };
 use sidevoice_desktop_engine::{CatalogView, NativeEngines};
 use sidevoice_voice::{
-    AudioDevices, Events, Listening, NativeDevices, NativeIo, SayCancel, SayEvent, SayOptions, SayOutcome, StopReason,
-    VoiceCall, VoiceConfig, VoiceEvent, VoiceModels,
+    AudioDevices, Events, Listening, NativeDevices, NativeIo, SayCancel, SayEvent, SayOptions, SayOutcome,
+    StartOptions, StopReason, VoiceCall, VoiceConfig, VoiceEvent, VoiceModels,
 };
 use tauri::{AppHandle, Manager, State, Webview};
 use tokio::sync::oneshot;
@@ -196,7 +196,7 @@ pub async fn voice_start(app: AppHandle, webview: Webview, state: State<'_, Voic
             return Ok(());
         }
         lifecycle.waiting.push(sender);
-        call.start();
+        call.start(StartOptions::default());
     }
     match started.await {
         Ok(Ok(())) => Ok(()),
@@ -425,7 +425,7 @@ fn forward(app: AppHandle, mut events: Events, lifecycle: Arc<Mutex<Lifecycle>>)
                 VoiceEvent::Error(error) => lifecycle.lock().unwrap().settle(&Err(error.code.clone())),
                 _ => {}
             }
-            if !matches!(event, VoiceEvent::Level(_)) {
+            if !matches!(event, VoiceEvent::Level(_) | VoiceEvent::PlaybackLevel(_)) {
                 crate::debug(&format!("voice event {}", serde_json::to_string(&event).unwrap_or_default()));
             }
             if let Ok(event) = serde_json::to_value(&event) {

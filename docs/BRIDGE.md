@@ -371,7 +371,7 @@ itself over `@sidevoice/voice` in the webview, the room window granting it the m
 ### The seam
 
 `window.__sidevoiceDesktop.host.voice` implements `VoiceHost`, the page's voice seam, defined once in sidevoice-voice:
-[`js/voice-host.d.ts`](https://github.com/sidevoice/sidevoice-voice/blob/feat/voice-host/js/voice-host.d.ts) in
+[`js/voice-host.d.ts`](https://github.com/sidevoice/sidevoice-voice/blob/0400603ae6922f47af5957bb84e61a9418b1fc47/js/voice-host.d.ts) in
 `@sidevoice/voice` (sidevoice/sidevoice-voice#6), with the types it carries (`VoiceSettings`, `VoiceHostError`,
 and `js/voice-events.d.ts`'s `VoiceTurnEvent`, `VoiceCallState`, `VoiceSaying`, `VoiceSayOutcome`) and what every
 implementation promises
@@ -408,9 +408,18 @@ What is this app's own:
   loaded: the call then goes on as it was, on the models it had.
 - `start` rejects `{key: "voice_failed", code, message}` with the call's code, `{key: "voice_settings_missing", code:
   "settings-missing"}` before any settings, and `{key: "voice_failed", code: "stopped"}` when `stop` came first.
-- The seam has thirteen calls: `setSettings`, `start`, `stop`, `say`, `mute`, `cancelInput`, `onTurn`, `onState`,
-  `onLevel`, `onError`, `audioDevices`, `setAudioDevices`, `onAudioDevices`. The catalogues and provider keys are
+- The seam has fourteen calls here: `setSettings`, `start`, `stop`, `say`, `mute`, `cancelInput`, `onTurn`, `onState`,
+  `onLevel`, `onPlaybackLevel`, `onError`, `audioDevices`, `setAudioDevices`, `onAudioDevices`. The catalogues and provider keys are
   `host.engine`'s (above).
+- `onPlaybackLevel(listener)` receives a bare number from 0 to 1, just as `onLevel` does for the microphone: RMS of
+  the samples actually rendered by the speaker, after fade and gain, smoothed on the voice detector's windows
+  (normally 512 samples at 16 kHz, 32 ms). It continues while the microphone is muted. Silence and the end of
+  playback deliver exact `0`, including after cancellation, failure and stop; stop sends zero before the terminal
+  state or error. The voice module drops stale frames across stop/start and device replacement. Each subscription
+  hears only later events, survives stop/start, isolates listener exceptions and returns an idempotent unsubscribe
+  function that removes only that listener. Reload stops the call and discards the page's old subscriptions.
+  The web UI feature-detects this method and wraps its bare number in its own
+  `{threadId, level, receivedAt}` record for `window.sidevoiceUI.playbackLevel`; that record is not a bridge event.
 - The audio devices are the system's (cpal's, each id cpal's device id), chosen through sidevoice-voice's
   `NativeDevices`; `outputSelectable` is always `true`. A call that runs switches its microphone at once and its
   speaker once what it is playing has ended. `setAudioDevices` rejects `{key: "voice_audio_device_unknown", code:
@@ -427,7 +436,8 @@ What is this app's own:
   the room window (`capabilities/room.json`); each re-checks that the caller is the current room window on the app's
   own page.
 - App → page: `window.__sidevoiceDesktop.voiceEvent(event)` (`webview.eval`), each sidevoice-voice `VoiceEvent` as
-  JSON, `{type: "turn" | "state" | "level" | "error", data}`, and the devices when they change, `{type: "devices",
+  JSON, `{type: "turn" | "state" | "level" | "playback-level" | "error", data}`, with `playback-level.data` a bare
+  number, and the devices when they change, `{type: "devices",
   data}`, which the bridge hands to its listeners; and each step
   of something said, `{type: "say", data: {key, event}}` (`key` the bridge's for the handle `say` answered at once;
   `event` sidevoice-voice's `SayEvent`, the last `done` with the outcome), which it hands to that handle. A handle's
