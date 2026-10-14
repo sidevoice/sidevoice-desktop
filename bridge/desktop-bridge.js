@@ -372,7 +372,7 @@
         typeof accelerator === "string" || accelerator === null
           ? call("mute_shortcut", { action: "set", accelerator })
           : Promise.reject(invalid()),
-      /** `listener(shortcut)` on every change: set here or in the settings window, or refused. Returns `stop`. */
+      /** `listener(shortcut)` on every change: set here, or refused. Returns `stop`. */
       subscribe: listeners.subscribe,
     };
     return { host: Object.freeze(host), changed: listeners.tell };

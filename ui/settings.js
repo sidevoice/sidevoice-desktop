@@ -1,77 +1,12 @@
-// The settings / first-run window. Local page (bundled with the app); talks to the app through
-// the `get_settings` and `save_settings` commands, which only this window is granted.
+// The settings window: diagnostics only. Local page (bundled with the app); reads the app's version through
+// `get_settings`, which only this window is granted.
 "use strict";
 
 const invoke = (cmd, args) => window.__TAURI_INTERNALS__.invoke(cmd, args);
 const $ = (id) => document.getElementById(id);
 
-function say(text, isError) {
-  $("message").textContent = text;
-  $("message").className = isError ? "error" : "";
-}
-
-// The call controls card (src/call_controls.rs): whether it shows always in a call, or only while the app is behind.
-$("call-controls-always-label").textContent = i18n.t("callControls.always");
-$("call-controls-always-hint").textContent = i18n.t("callControls.alwaysHint");
-
-// The mute shortcut as the system took it (core `settings::MuteShortcut`): refused, with alternatives the system does
-// take; or on, but sharing its keys with VoiceOver while VoiceOver is on.
-function showShortcut(status) {
-  const { t } = i18n;
-  const lines = [];
-  if (status.state === "refused") {
-    lines.push(t("shortcut.refused", { shortcut: status.label }));
-    if (!status.alternatives.length) lines.push(t("shortcut.noAlternative"));
-  }
-  if (status.voiceOver) lines.push(t("shortcut.voiceOver", { shortcut: status.label }));
-  const alternative = status.state === "refused" && status.alternatives[0];
-  $("shortcut-status-text").textContent = lines.join(" ");
-  $("shortcut-alternative").hidden = !alternative;
-  if (alternative) {
-    $("shortcut-alternative").textContent = t("shortcut.useAlternative", { shortcut: alternative });
-    $("shortcut-alternative").onclick = () => {
-      $("mute-shortcut").value = alternative;
-      $("settings").requestSubmit();
-    };
-  }
-  $("shortcut-status").hidden = lines.length === 0;
-  $("shortcut-status").className = status.state === "refused" ? "notice error" : "notice";
-}
-
-// What the window shows as loaded or last saved: a save sends only what the person changed since, so a value the room
-// page set meanwhile is not overwritten.
-let shown = {};
-const fields = () => ({ muteShortcut: $("mute-shortcut").value, callControlsAlwaysShown: $("call-controls-always").checked });
-
-async function load() {
-  const { settings, shortcut, debug } = await invoke("get_settings");
-  $("mute-shortcut").value = settings.muteShortcut;
-  $("call-controls-always").checked = !!settings.callControlsAlwaysShown;
-  shown = fields();
-  showShortcut(shortcut);
-  $("mute-shortcut").focus();
-  return debug;
-}
-
-$("settings").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  $("save").disabled = true;
-  say("Guardando…");
-  try {
-    const now = fields();
-    const changes = Object.fromEntries(Object.entries(now).filter(([key, value]) => value !== shown[key]));
-    const shortcut = await invoke("save_settings", { changes });
-    $("mute-shortcut").value = shortcut.accelerator || "";
-    shown = fields();
-    // The app shows the room itself; a shortcut the system refused is not fatal, and is said above.
-    showShortcut(shortcut);
-    say("Guardado.");
-  } catch (error) {
-    say(String(error), true);
-  } finally {
-    $("save").disabled = false;
-  }
-});
+// The mute shortcut and the call controls are set in the room's Settings (docs/BRIDGE.md); this window only diagnoses.
+$("room-settings").textContent = i18n.t("roomSettings");
 
 /** Fills a <dl> with [term, description] rows. */
 function rowsInto(dl, rows) {
@@ -86,12 +21,14 @@ function rowsInto(dl, rows) {
 
 // What this webview offers the room's page (it runs in the same engine). Models run in the app's native engine,
 // never in the webview (below).
-async function diagnostics(debug) {
+async function diagnostics() {
   const rows = [];
   rows.push(["Micrófono (API)", navigator.mediaDevices && navigator.mediaDevices.getUserMedia ? "sí" : "no"]);
+  let debug = false;
   try {
     const info = await invoke("get_settings");
     rows.push(["Versión", info.appVersion]);
+    debug = info.debug;
   } catch { /* optional */ }
   rows.push(["Contexto seguro", window.isSecureContext ? "sí" : "no"]);
   rows.push(["WebCrypto (emparejamiento)", window.crypto && window.crypto.subtle ? "sí" : "no"]);
@@ -140,9 +77,7 @@ async function engine() {
   }
 }
 
-load()
-  .then((debug) => diagnostics(debug))
-  .catch((error) => say(String(error), true));
+diagnostics();
 engine();
 
 // Headset buttons: what reaches the app, refreshed every second while this window is open.

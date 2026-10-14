@@ -33,7 +33,7 @@ pub struct Settings {
     #[serde(default)]
     pub call_controls_always_shown: bool,
     /// How the app's updates arrive (core `updater`): automatic (the default) or manual. Set only by the room page
-    /// (`host.updater.setMode`); the settings window neither shows nor sends it, and saving it keeps the stored one.
+    /// (`host.updater.setMode`).
     #[serde(default)]
     pub update_mode: crate::updater::Mode,
 }
@@ -106,8 +106,8 @@ const SHIFTED: [(char, char); 21] = [
     ('~', '`'),
 ];
 
-/// The mute shortcut as the room page (`host.muteShortcut.set`, sidevoice-web's recorder) and the settings window
-/// write it: `+`-separated, any case, one or more of the modifiers `Cmd`/`Command`, `Ctrl`/`Control`, `Alt`/`Option`
+/// The mute shortcut as the room page (`host.muteShortcut.set`, sidevoice-web's recorder)
+/// writes it: `+`-separated, any case, one or more of the modifiers `Cmd`/`Command`, `Ctrl`/`Control`, `Alt`/`Option`
 /// and `Shift`, then one key as the browser names it (`M`, `5`, `F5`, `Space`, `ArrowUp`, `;`, `+`). With Shift, a
 /// character Shift makes is read as its key ([`SHIFTED`]: `Ctrl+Shift++` is Ctrl+Shift+=). Answered in the one form the
 /// app keeps, `Cmd+Ctrl+Alt+Shift+Key` (those held, in that order; the key's first letter upper case). Empty is no
@@ -161,7 +161,7 @@ pub enum Registration {
 }
 
 /// The mute shortcut as the system took it: `host.muteShortcut`'s `MuteShortcut` (docs/BRIDGE.md → "The mute
-/// shortcut"), which the settings window shows too.
+/// shortcut").
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MuteShortcut {
@@ -188,27 +188,6 @@ impl MuteShortcut {
             state,
             alternatives,
             voice_over: false,
-        }
-    }
-}
-
-/// What the settings window changed: only what the person changed there, so a value set meanwhile from the room page
-/// is never overwritten by the one the window had loaded.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WindowChanges {
-    /// Already checked by the shell (a shortcut it can register, in the form [`normalize_shortcut`] keeps).
-    pub mute_shortcut: Option<String>,
-    pub call_controls_always_shown: Option<bool>,
-}
-
-impl WindowChanges {
-    pub fn apply(self, to: &mut Settings) {
-        if let Some(accelerator) = self.mute_shortcut {
-            to.mute_shortcut = accelerator;
-        }
-        if let Some(always) = self.call_controls_always_shown {
-            to.call_controls_always_shown = always;
         }
     }
 }
@@ -345,25 +324,6 @@ mod tests {
             json!({"accelerator": "Cmd+Shift+M", "label": "Super+Shift+M", "state": "refused",
                    "alternatives": ["Ctrl+Alt+Shift+M"], "voiceOver": false})
         );
-    }
-
-    #[test]
-    fn the_settings_window_never_undoes_a_change_made_from_the_page() {
-        // The window loaded the defaults; meanwhile the page turned "always shown" on; the window saved its shortcut.
-        let mut stored = Settings::first_run();
-        stored.call_controls_always_shown = true;
-        WindowChanges { mute_shortcut: Some("Cmd+Shift+M".into()), ..WindowChanges::default() }.apply(&mut stored);
-        assert_eq!((stored.mute_shortcut.as_str(), stored.call_controls_always_shown), ("Cmd+Shift+M", true));
-        // The other way round: the page set a shortcut; the window saved its checkbox.
-        let mut stored = Settings::first_run();
-        stored.mute_shortcut = "Ctrl+Alt+K".into();
-        WindowChanges { call_controls_always_shown: Some(true), ..WindowChanges::default() }.apply(&mut stored);
-        assert_eq!((stored.mute_shortcut.as_str(), stored.call_controls_always_shown), ("Ctrl+Alt+K", true));
-        // Nothing changed there: nothing changes, the updates' mode included.
-        let mut stored = Settings { update_mode: crate::updater::Mode::Manual, ..Settings::first_run() };
-        let before = stored.clone();
-        WindowChanges::default().apply(&mut stored);
-        assert_eq!(stored, before);
     }
 
     #[test]

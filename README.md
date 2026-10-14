@@ -40,7 +40,7 @@ Beta. What works today:
 - Pairing with your machine through a one-time code, and calls with its conversations.
 - The tray (menu-bar) icon with the call state (idle, live, muted): mute, hang up, show the window, settings, quit.
   Closing the window keeps the call going.
-- A global mute shortcut (⌘⇧M on macOS, Ctrl+Shift+M elsewhere; configurable).
+- A global mute shortcut (⌘⇧M on macOS, Ctrl+Shift+M elsewhere; configurable in the room's Settings).
 - On Macs (macOS 13+), the voice call runs in the app: the microphone and the speaker with the app's own echo
   cancellation (WebRTC AEC3), transcription (Whisper, on Metal on Apple Silicon) and speech (Kokoro) downloaded the
   first time they are needed, or a provider (OpenAI, ElevenLabs) with your own key, kept in the macOS keychain.
