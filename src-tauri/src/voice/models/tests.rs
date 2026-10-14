@@ -121,14 +121,22 @@ fn a_call_on_the_engines_real_models_hears_speech_and_plays_a_reply() {
     let engines = NativeEngines::new(&root, NoCredentials, runtime.handle().clone()).unwrap();
     let views = engines.catalogs().unwrap();
     let catalogs: Vec<CatalogCandidates> = views.iter().map(crate::voice::candidates).collect();
-    // Transcribing with a build chosen, as the web's settings name one ("How it runs"): the first that runs here.
-    let build = views[0]
+    // Transcribing with the recommended build chosen explicitly, as the web's "How it runs" setting names one.
+    let local = views[0]
         .models
         .iter()
         .find(|m| m.id == "whisper-tiny")
         .and_then(|m| m.local.as_ref())
-        .and_then(|local| local.builds.iter().find(|build| build.available).map(|build| build.id.clone()));
-    let build = build.expect("a whisper-tiny build runs here");
+        .expect("whisper-tiny is a local model");
+    let build = local.recommended_build.clone().expect("a whisper-tiny build runs here");
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        let recommended = local.builds.iter().find(|candidate| candidate.id == build).unwrap();
+        assert!(recommended.available, "the recommended Whisper build runs here");
+        assert_eq!(recommended.backend, "whisper-cpp");
+        assert_eq!(recommended.accelerator.as_deref(), Some("metal"));
+        assert_eq!(recommended.accelerator_class, Some("gpu"));
+    }
     let settings: VoiceSettings = serde_json::from_value(json!({
         "stt": {"catalog": "local", "model": "whisper-tiny", "language": "en", "build": build},
         "tts": {"catalog": "local", "model": "kokoro-82m-v1.0"},
