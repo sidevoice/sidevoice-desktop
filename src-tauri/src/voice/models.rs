@@ -30,9 +30,9 @@ use sidevoice_voice::{async_trait, EndOfTurnModel, Models, Speaker, Transcriber,
 /// The rate sidevoice-voice hands the detector.
 const VAD_RATE: u32 = 16_000;
 
-/// How the detector decides: a window is speech from a probability of 0.6, speech counts from 400 ms of it, and ends
-/// after 200 ms without.
-const VAD_OPTIONS: VadOptions = VadOptions { threshold: 0.6, min_silence_ms: 200, min_speech_ms: 400 };
+/// Native Silero supplies no per-window probability (sidevoice-engine#99), so sidevoice-voice uses its speech flag.
+/// Minimize sherpa's holds to avoid stacking them with the Pipecat-style turn chain while that issue is unresolved.
+const VAD_OPTIONS: VadOptions = VadOptions { threshold: 0.6, min_silence_ms: 1, min_speech_ms: 1 };
 
 /// Loads each model the call's slots take: the engine's ([`EngineLoader`]), or a test's.
 #[async_trait]
