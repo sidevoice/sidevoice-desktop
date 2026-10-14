@@ -44,8 +44,9 @@ sidevoice-local-host = { path = "local-host" }
 [target.'cfg(windows)'.dependencies]
 # The taskbar's colour, to draw the tray mark in the brand's look for it (src/tray.rs).
 winreg = "0.55"
-# Whether a mouse button went down elsewhere, to close the call controls card's panels (src/call_controls.rs).
-windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse"] }
+# Whether a mouse button went down elsewhere, to close the call controls card's panels (src/call_controls.rs); this
+# computer's name (src/computer_name.rs).
+windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_System_SystemInformation"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # The voice call the app runs itself (src/voice.rs, `host.voice`): sidevoice-voice with its native microphone and
@@ -67,6 +68,9 @@ block2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSDictionary", "NSValue", "NSError", "NSObject"] }
 objc2-media-player = { version = "0.3", features = ["MPRemoteCommandCenter", "MPRemoteCommand", "MPRemoteCommandEvent", "MPNowPlayingInfoCenter", "MPMediaItem", "block2"] }
 objc2-avf-audio = { version = "0.3", features = ["AVAudioApplication", "block2"] }
+# This computer's name, as System Settings shows it (src/computer_name.rs).
+system-configuration-sys = "0.6"
+core-foundation = "0.10"
 
 [profile.release]
 codegen-units = 1

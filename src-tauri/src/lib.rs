@@ -13,6 +13,7 @@
 //! - `call-controls`: the call controls card (`src/call_controls.rs`), floating over other apps during a call.
 
 mod call_controls;
+mod computer_name;
 mod engine_ipc;
 mod headset;
 mod keychain;
@@ -294,7 +295,12 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
         .title("Sidevoice")
         .inner_size(1100.0, 760.0)
         .min_inner_size(420.0, 560.0)
-        .initialization_script(bridge::script_for_origin(APP_ORIGIN, updater::offered(), &build));
+        .initialization_script(bridge::script_for_origin(
+            APP_ORIGIN,
+            updater::offered(),
+            &build,
+            computer_name::read().as_deref(),
+        ));
     #[cfg(feature = "probe")]
     let builder = match probe::local_host_flow() {
         Some(flow) => builder.initialization_script(flow),
@@ -339,6 +345,23 @@ pub(crate) fn show_room(app: &AppHandle) {
             let _ = w.set_focus();
         }
         None => open_settings(app),
+    }
+}
+
+/// Makes the app the active one (macOS 14+). `set_focus` asks with `activateIgnoringOtherApps:`, which macOS 14
+/// deprecates for `activate`; older systems lack `activate` and need nothing more.
+fn activate_app() {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::{class, msg_send, runtime::AnyObject, sel};
+        // SAFETY: main thread (setup); `activate` only when the app answers to it.
+        unsafe {
+            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+            let responds: bool = msg_send![app, respondsToSelector: sel!(activate)];
+            if responds {
+                let _: () = msg_send![app, activate];
+            }
+        }
     }
 }
 
@@ -501,6 +524,10 @@ pub fn run() {
             updater::setup(&handle);
             open_room(&handle)?;
             call_controls::create(&handle)?;
+            // The room to the front, last so no window created after it takes it. Setup runs on Ready, after the
+            // launch's own activation, which came before any window existed: the window stayed behind (Dock only).
+            show_room(&handle);
+            activate_app();
             Ok(())
         })
         .on_window_event(|window, event| {

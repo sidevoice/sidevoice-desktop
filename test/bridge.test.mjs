@@ -901,6 +901,13 @@ test("the host's keys: updater only where the app can update itself, build alway
   assert.ok(Object.isFrozen(api.host.updater));
 });
 
+test("host.computerName is the name the app passed, and absent without one", () => {
+  const install = loadFactory();
+  const host = (name) => install(fakeWindow(ORIGIN).win, ORIGIN, null, false, false, false, { channel: "dev", version: "0.4.0" }, name).host;
+  assert.equal(host("Mac de Ana").computerName, "Mac de Ana");
+  for (const none of [undefined, null, "", 42]) assert.ok(!("computerName" in host(none)), String(none));
+});
+
 test("host.updater's calls go to the updater command's actions and answer what the app says", async () => {
   const install = loadFactory();
   const answers = {

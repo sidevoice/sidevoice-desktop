@@ -69,7 +69,7 @@ permission to your terminal — and allow the microphone when asked.
 
 **Pair it.** On the machine where your agents run, with the
 [connector](https://github.com/sidevoice/sidevoice-connector) installed, ask your agent to pair a device (or run
-`npx @sidevoice/uplink pair-device`). Enter the one-time code in the app's settings, under machines. Then ask the
+`npx sidevoice@latest pair-device`). Enter the one-time code in the app's settings, under machines. Then ask the
 agent to join the voice call.
 
 ## Develop
