@@ -169,14 +169,17 @@ what the interface's own window offers — same origin, same permission rule —
 
   // The voice call the app runs (docs/BRIDGE.md → "The voice call"): the seam's shape, the engine's catalogues
   // (`host.engine`), settings that name a catalogue's model, a build of it and an end-of-turn model, as the web's settings
-  // do, the audio devices, and a start that settles. A CI runner may have no microphone or
-  // speaker: then the start is refused with the call's code, which is what the probe reports.
+  // do, the audio devices, and a start that settles, asking for its take: once stopped, the take reaches `onTake` as a
+  // Float32Array before the stop resolves. A CI runner may have no microphone or speaker: then the start is refused
+  // with the call's code, which is what the probe reports, and there is no take.
   const voice = window.__sidevoiceDesktop && window.__sidevoiceDesktop.host && window.__sidevoiceDesktop.host.voice;
   if (!voice) { await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-voice none" }); return; }
   try {
     const states = [];
     const errors = [];
-    const stops = [voice.onState((s) => states.push(s.listening)), voice.onError((e) => errors.push(e.code))];
+    const takes = [];
+    const stops = [voice.onState((s) => states.push(s.listening)), voice.onError((e) => errors.push(e.code)),
+      voice.onTake((t) => takes.push(t))];
     const catalogs = await window.__sidevoiceDesktop.host.engine.catalogs();
     const models = catalogs[0].models;
     const remote = catalogs.slice(1).map((c) => c.id + ":" + (c.status.reason ? c.status.reason.code : "current")).join(",");
@@ -200,14 +203,16 @@ what the interface's own window offers — same origin, same permission rule —
     const devices = listed.inputs.length + "/" + listed.outputs.length + "/" + listed.outputSelectable;
     const unknownDevice = await voice.setAudioDevices({ input: "nowhere:nothing" })
       .then(() => "no", (error) => error && error.key + "/" + error.code);
-    const started = await voice.start().then(() => "ok", (error) => error.key + "/" + error.code);
+    const started = await voice.start({ take: true }).then(() => "ok", (error) => error.key + "/" + error.code);
     await voice.stop();
+    const take = takes.length ? Object.prototype.toString.call(takes[0].samples).slice(8, -1) + "/" + takes[0].sampleRate +
+      "/" + (takes[0].ended_at - takes[0].started_at === Math.floor(takes[0].samples.length / 16)) : "none";
     await until(() => states.includes("idle") || started !== "ok", 30000);
     stops.forEach((stop) => stop());
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-voice ok keys=" + Object.keys(voice).length +
       " catalogs=" + catalogs[0].id + "," + remote + " models=" + models.length + " vad=" + models.some((m) => m.capabilities.includes("vad")) + " unknown=" + unknown +
       " bad_build=" + badBuild + " build=" + build + " turn_model=" + turnModel +
-      " devices=" + devices + " unknown_device=" + unknownDevice + " start=" + started + " states=" + states.join(",") + " errors=" + errors.join(",") });
+      " devices=" + devices + " unknown_device=" + unknownDevice + " start=" + started + " take=" + take + " states=" + states.join(",") + " errors=" + errors.join(",") });
   } catch (error) {
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-voice error " + String(error && (error.message || error)) });
   }
