@@ -2,8 +2,8 @@
 
 ## Install and first open
 
-A release's .dmg is signed with the Developer ID and notarized (RELEASING.md): it opens like any downloaded app.
-The nightly and CI builds are ad-hoc signed; for those, see `FIRST_OPEN.txt` (in this directory). Short version:
+A release's and the nightly's .dmg are signed with the Developer ID and notarized (RELEASING.md): they open like any
+downloaded app. CI builds are ad-hoc signed; for those, see `FIRST_OPEN.txt` (in this directory). Short version:
 
 ```sh
 # after dragging Sidevoice.app to /Applications
@@ -89,7 +89,7 @@ toggles twice. CI simulates a call on a macOS runner and checks the app becomes 
    updates (stable signature).
 5. Auto-update (`tauri-plugin-updater`) needs signed builds plus an update signing key: in place, RELEASING.md →
    Updates. An update replaces the .app with one signed by the same Developer ID, so the microphone permission and
-   the keychain's trust carry over; from an ad-hoc nightly to a release macOS may ask once more.
+   the keychain's trust carry over, from the nightly to a release too.
 
 ## iPhone (out of scope)
 
