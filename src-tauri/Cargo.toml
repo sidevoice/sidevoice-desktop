@@ -54,7 +54,7 @@ windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse",
 # speaker (cpal) and WebRTC's AEC3 between them, on the models the app hands it (src/voice/models.rs: the engine's).
 # It depends on no engine. Temporary commit pin until a voice release includes playback-level. macOS only: AEC3's C++ does not
 # build on Windows, and the beta ships on macOS. Its build needs meson, ninja and pkg-config.
-sidevoice-voice = { git = "https://github.com/sidevoice/sidevoice-voice", rev = "a2cb74f243a3db7a99b25939d0d315961ca341f9" }
+sidevoice-voice = { git = "https://github.com/sidevoice/sidevoice-voice", rev = "db470e7779a0d8f4c9dc2d1e27c8a1afa7c297ad" }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 # The call runs on the app's Tokio runtime; the models' native work goes to its blocking pool (src/voice/models.rs).
 tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "time"] }
