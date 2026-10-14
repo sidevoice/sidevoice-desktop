@@ -4,7 +4,8 @@
 
 use serde::Serialize;
 use sidevoice_engine::{
-    Capability, CatalogStatus, Gender, LocalModelInfo, ModelBuild, ModelInfo, Reason, SpeedRange, Voice,
+    AcceleratorClass, Capability, CatalogStatus, Gender, LocalModelInfo, ModelBuild, ModelInfo, Reason, SpeedRange,
+    Voice,
 };
 
 use crate::accelerator_name;
@@ -169,7 +170,7 @@ pub struct LocalView {
     pub recommended_build: Option<String>,
 }
 
-/// `{id, backend, accelerator?, precision, downloadBytes, memoryMb, available, reasons, installed}`.
+/// `{id, backend, accelerator?, acceleratorClass?, precision, downloadBytes, memoryMb, available, reasons, installed}`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BuildView {
@@ -177,6 +178,8 @@ pub struct BuildView {
     pub backend: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub accelerator: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accelerator_class: Option<&'static str>,
     pub precision: String,
     pub download_bytes: u64,
     pub memory_mb: u32,
@@ -244,6 +247,7 @@ fn build(build: &ModelBuild) -> BuildView {
         id: build.id.clone(),
         backend: build.backend.clone(),
         accelerator: build.accelerator.map(accelerator_name),
+        accelerator_class: build.accelerator_class().map(AcceleratorClass::id),
         precision: build.precision.clone(),
         download_bytes: build.download_bytes,
         memory_mb: build.memory_mb,

@@ -332,7 +332,13 @@ test("host.engine lists the catalogues and keeps provider keys, refusing with a 
   const install = loadFactory();
   const { win, calls } = fakeWindow(ORIGIN);
   const catalogs = [
-    { id: "local", name: null, status: { stale: false }, models: [{ id: "whisper-tiny", capabilities: ["stt"] }] },
+    { id: "local", name: null, status: { stale: false }, models: [{
+      id: "whisper-tiny", capabilities: ["stt"], builds: [
+        { id: "whisper-tiny/whisper-cpp", accelerator: "metal", acceleratorClass: "gpu" },
+        { id: "whisper-tiny/sherpa-onnx", accelerator: "cpu", acceleratorClass: "cpu" },
+        { id: "whisper-tiny/unavailable" },
+      ],
+    }] },
     { id: "openai", name: "OpenAI", status: { stale: false, reason: { code: "credential-missing", params: {} } }, models: [] },
   ];
   const answers = { engine_catalogs: catalogs, engine_set_credential: null, engine_has_credential: true };
@@ -344,7 +350,9 @@ test("host.engine lists the catalogues and keeps provider keys, refusing with a 
     return Promise.resolve(answers[cmd]);
   };
   const engine = install(win, ORIGIN).host.engine;
-  assert.equal(JSON.stringify(await engine.catalogs()), JSON.stringify(catalogs));
+  const listed = await engine.catalogs();
+  assert.equal(JSON.stringify(listed), JSON.stringify(catalogs));
+  assert.deepEqual(listed[0].models[0].builds.map((build) => build.acceleratorClass), ["gpu", "cpu", undefined]);
   assert.equal(await engine.setCredential("openai", "sk-test"), undefined);
   await engine.setCredential("openai", null);
   assert.equal(await engine.hasCredential("openai"), true);
@@ -440,7 +448,8 @@ test("host.voice only where the app runs the call, and exactly the seam", () => 
   }
   const api = install(fakeWindow(ORIGIN).win, ORIGIN, "native", true, true);
   assert.deepEqual(Object.keys(api.host.voice).sort(), [
-    "audioDevices", "cancelInput", "mute", "onAudioDevices", "onError", "onLevel", "onPlaybackLevel", "onState", "onTurn", "say",
+    "audioDevices", "cancelInput", "mute", "onAudioDevices", "onError", "onLevel", "onPlaybackLevel", "onState",
+    "onTake", "onTurn", "say",
     "setAudioDevices", "setSettings", "start", "stop",
   ]);
   assert.ok(Object.isFrozen(api.host.voice));
@@ -463,7 +472,7 @@ test("host.voice calls go to their native commands, with their arguments", async
   await voice.stop();
   assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("voice_")), [
     ["voice_set_settings", { settings }],
-    ["voice_start", undefined],
+    ["voice_start", { take: false }],
     ["voice_say", { key: "say-1", text: "Hola.", language: "es" }],
     ["voice_say", { key: "say-2", text: "Sin idioma.", language: null }],
     ["voice_mute", { muted: true }],
@@ -1117,4 +1126,35 @@ test("host.callControls reads and sets alwaysShown through the call_controls_set
   assert.deepEqual(await controls.setAlwaysShown(true), { alwaysShown: true });
   await assert.rejects(controls.setAlwaysShown("yes"), (e) => e.key === "bad_request");
   assert.deepEqual(calls.filter(([cmd]) => cmd === "call_controls_settings").map(([, args]) => args), [{ action: "settings" }, { action: "set-always-shown", enabled: true }]);
+});
+
+test("a start that asks for a take: the take reaches onTake as a Float32Array, and stop resolves only after it", async () => {
+  const install = loadFactory();
+  const { win, calls } = voiceWindow();
+  win.atob = atob;
+  const api = install(win, ORIGIN, "native", true, true);
+  const voice = api.host.voice;
+  const takes = [];
+  voice.onTake((take) => takes.push(take));
+  await voice.start({ take: true });
+  assert.deepEqual(calls.at(-1), ["voice_start", { take: true }]);
+  // The app sends the samples as the base64 of 32-bit little-endian floats (core voice::take).
+  const samples = new Float32Array([0, 0.5, -1, 0.25]);
+  const base64 = Buffer.from(samples.buffer).toString("base64");
+  const turns = [{ turn_id: "c-turn-0", speech_ms: 0, pauses: [{ from_ms: 0, to_ms: 0 }], end_ms: null }];
+  let stopped = false;
+  const stopping = voice.stop().then(() => { stopped = true; });
+  await flush();
+  assert.equal(stopped, false, "not before the idle state that answers the stop");
+  api.voiceEvent({ type: "take", data: { sampleRate: 16000, samples: base64, started_at: 1000, ended_at: 1000, turns } });
+  api.voiceEvent({ type: "state", data: { listening: "idle", recognising: 0, playback: "idle", microphone: "live" } });
+  await stopping;
+  assert.equal(takes.length, 1);
+  assert.equal(Object.prototype.toString.call(takes[0].samples), "[object Float32Array]");
+  assert.deepEqual([...takes[0].samples], [...samples]);
+  assert.deepEqual({ ...takes[0], samples: null }, { sampleRate: 16000, samples: null, started_at: 1000, ended_at: 1000, turns });
+  // A start with no take: its stop does not wait.
+  await voice.start();
+  assert.deepEqual(calls.at(-1), ["voice_start", { take: false }]);
+  await voice.stop();
 });

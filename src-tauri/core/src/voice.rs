@@ -5,11 +5,13 @@
 //! runs (`turn_model`), the end-of-turn model, from the local catalogue, and every number the person does not choose.
 //!
 //! The result names the catalogue and model of each slot (sidevoice-voice names none) and carries sidevoice-voice's
-//! `VoiceConfig` as JSON. What cannot be made is refused with a stable code the page translates.
+//! `VoiceConfig` as JSON. What cannot be made is refused with a stable code the page translates. A take the call hands
+//! over reaches the page as `take` makes it.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+pub mod take;
 #[cfg(test)]
 mod tests;
 

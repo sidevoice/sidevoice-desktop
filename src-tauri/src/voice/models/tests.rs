@@ -121,14 +121,22 @@ fn a_call_on_the_engines_real_models_hears_speech_and_plays_a_reply() {
     let engines = NativeEngines::new(&root, NoCredentials, runtime.handle().clone()).unwrap();
     let views = engines.catalogs().unwrap();
     let catalogs: Vec<CatalogCandidates> = views.iter().map(crate::voice::candidates).collect();
-    // Transcribing with a build chosen, as the web's settings name one ("How it runs"): the first that runs here.
-    let build = views[0]
+    // Transcribing with the recommended build chosen explicitly, as the web's "How it runs" setting names one.
+    let local = views[0]
         .models
         .iter()
         .find(|m| m.id == "whisper-tiny")
         .and_then(|m| m.local.as_ref())
-        .and_then(|local| local.builds.iter().find(|build| build.available).map(|build| build.id.clone()));
-    let build = build.expect("a whisper-tiny build runs here");
+        .expect("whisper-tiny is a local model");
+    let build = local.recommended_build.clone().expect("a whisper-tiny build runs here");
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        let recommended = local.builds.iter().find(|candidate| candidate.id == build).unwrap();
+        assert!(recommended.available, "the recommended Whisper build runs here");
+        assert_eq!(recommended.backend, "whisper-cpp");
+        assert_eq!(recommended.accelerator.as_deref(), Some("metal"));
+        assert_eq!(recommended.accelerator_class, Some("gpu"));
+    }
     let settings: VoiceSettings = serde_json::from_value(json!({
         "stt": {"catalog": "local", "model": "whisper-tiny", "language": "en", "build": build},
         "tts": {"catalog": "local", "model": "kokoro-82m-v1.0"},
@@ -172,6 +180,11 @@ fn a_call_on_the_engines_real_models_hears_speech_and_plays_a_reply() {
 }
 
 // ---- A model changed mid-call (gap #31): the call goes on, and work under way ends on its own model ----
+
+/// The 10 ms frames of tone that make a turn: 1.5 s. sidevoice-voice hears speech start after 400 ms of it at the
+/// volume bar, the volume measured over the last 400 ms and smoothed (Pipecat's, sidevoice-voice#25): 800 ms of tone no
+/// longer opens a turn, a second does.
+const TURN_FRAMES: usize = 150;
 
 /// A microphone that says a tone while the test asks it to and is quiet otherwise, in real time, and a speaker that
 /// plays at once what it is given.
@@ -427,7 +440,7 @@ impl Live {
 
     /// A turn of the person's, and its words.
     async fn turn(&mut self) -> String {
-        self.tone.store(150, Ordering::SeqCst);
+        self.tone.store(TURN_FRAMES, Ordering::SeqCst);
         self.next(|event| match event {
             VoiceEvent::Turn(TurnEvent::Finished { text, .. }) => Some(text.clone()),
             _ => None,
@@ -485,7 +498,7 @@ fn a_model_switched_mid_turn_and_mid_reply_does_not_stop_the_call() {
         let mut live = Live::start(Arc::clone(&models), began);
 
         // A turn: its transcription is held while the transcriber switches.
-        live.tone.store(150, Ordering::SeqCst);
+        live.tone.store(TURN_FRAMES, Ordering::SeqCst);
         assert_eq!(live.began().await, "old");
         let switched = within(models.switch(chosen("new", "af_old", None), ALWAYS)).await.unwrap();
         assert!(switched.is_some());
