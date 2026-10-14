@@ -149,7 +149,8 @@
    *  app offers it (macOS); elsewhere the page runs the call itself. */
   function voice() {
     const listeners = {
-      turn: new Set(), state: new Set(), level: new Set(), error: new Set(), devices: new Set(), take: new Set(),
+      turn: new Set(), state: new Set(), level: new Set(), "playback-level": new Set(), error: new Set(),
+      devices: new Set(), take: new Set(),
     };
     const on = (kind) => (listener) => {
       if (typeof listener !== "function") throw new TypeError("a listener");
@@ -256,6 +257,9 @@
       onState: on("state"),
       /** The microphone's level, 0 to 1, about 30 times a second. Returns `stop`. */
       onLevel: on("level"),
+      /** The rendered speaker's level, 0 to 1, at the microphone meter's cadence, with an exact terminal zero.
+       *  Returns `stop`; it continues while the microphone is muted. */
+      onPlaybackLevel: on("playback-level"),
       /** `{code}`: something failed that the person may be told. Returns `stop`. */
       onError: on("error"),
       /** The take of a start that asked for one (`VoiceTake`: `{sampleRate, samples: Float32Array, started_at, ended_at,

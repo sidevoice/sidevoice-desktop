@@ -439,7 +439,7 @@ fn forward(app: AppHandle, mut events: Events, lifecycle: Arc<Mutex<Lifecycle>>)
                 VoiceEvent::Error(error) => lifecycle.lock().unwrap().settle(&Err(error.code.clone())),
                 _ => {}
             }
-            if !matches!(event, VoiceEvent::Level(_)) {
+            if !matches!(event, VoiceEvent::Level(_) | VoiceEvent::PlaybackLevel(_)) {
                 crate::debug(&format!("voice event {}", serde_json::to_string(&event).unwrap_or_default()));
             }
             if let Ok(event) = serde_json::to_value(&event) {
