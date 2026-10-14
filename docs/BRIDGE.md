@@ -373,7 +373,7 @@ itself over `@sidevoice/voice` in the webview, the room window granting it the m
 `window.__sidevoiceDesktop.host.voice` implements `VoiceHost`, the page's voice seam, defined once in sidevoice-voice:
 [`js/voice-host.d.ts`](https://github.com/sidevoice/sidevoice-voice/blob/feat/voice-host/js/voice-host.d.ts) in
 `@sidevoice/voice` (sidevoice/sidevoice-voice#6), with the types it carries (`VoiceSettings`, `VoiceHostError`,
-and `js/voice-events.d.ts`'s `VoiceTurnEvent`, `VoiceCallState`, `VoiceSaying`, `VoiceSayOutcome`) and what every
+and `js/voice-events.d.ts`'s `VoiceTurnEvent`, `VoiceCallState`, `VoiceSaying`, `VoiceSayOutcome`, `VoiceTake`) and what every
 implementation promises
 (that package's README, "The voice seam a page drives"). On the web the same package's `createVoiceHost(source)`
 implements it over the call in the page, with the models the page's `source` loads (sidevoice-web's adapter over its
@@ -408,9 +408,14 @@ What is this app's own:
   loaded: the call then goes on as it was, on the models it had.
 - `start` rejects `{key: "voice_failed", code, message}` with the call's code, `{key: "voice_settings_missing", code:
   "settings-missing"}` before any settings, and `{key: "voice_failed", code: "stopped"}` when `stop` came first.
-- The seam has thirteen calls: `setSettings`, `start`, `stop`, `say`, `mute`, `cancelInput`, `onTurn`, `onState`,
-  `onLevel`, `onError`, `audioDevices`, `setAudioDevices`, `onAudioDevices`. The catalogues and provider keys are
-  `host.engine`'s (above).
+- The seam has fourteen calls: `setSettings`, `start`, `stop`, `say`, `mute`, `cancelInput`, `onTurn`, `onState`,
+  `onLevel`, `onError`, `onTake`, `audioDevices`, `setAudioDevices`, `onAudioDevices`. The catalogues and provider keys
+  are `host.engine`'s (above).
+- A try's take (sidevoice-web's contract gap #40): `start({take: true})` has the call keep what the microphone gives
+  from the moment it listens until that listening ends, at most two minutes, in memory; `onTake` gets it then as
+  `VoiceTake` (`{sampleRate, samples: Float32Array, started_at, ended_at, turns}`), before the error that ended the
+  listening, and `stop()` after such a start resolves only once it was handed over (at the idle state that answers
+  the stop, which the take comes before). A start with no take records nothing. The app keeps no copy.
 - The audio devices are the system's (cpal's, each id cpal's device id), chosen through sidevoice-voice's
   `NativeDevices`; `outputSelectable` is always `true`. A call that runs switches its microphone at once and its
   speaker once what it is playing has ended. `setAudioDevices` rejects `{key: "voice_audio_device_unknown", code:
@@ -421,14 +426,15 @@ What is this app's own:
 
 ### How it travels
 
-- Page → app: the commands `voice_set_settings {settings}`, `voice_start`, `voice_stop`,
+- Page → app: the commands `voice_set_settings {settings}`, `voice_start {take}`, `voice_stop`,
   `voice_say {key, text, language}`, `voice_cancel_say {key}`, `voice_mute {muted}`, `voice_cancel_input`,
   `voice_audio_devices`, `voice_set_audio_devices {choice: {input?, output?}}` (`src-tauri/src/voice.rs`). Granted to
   the room window (`capabilities/room.json`); each re-checks that the caller is the current room window on the app's
   own page.
 - App → page: `window.__sidevoiceDesktop.voiceEvent(event)` (`webview.eval`), each sidevoice-voice `VoiceEvent` as
-  JSON, `{type: "turn" | "state" | "level" | "error", data}`, and the devices when they change, `{type: "devices",
-  data}`, which the bridge hands to its listeners; and each step
+  JSON, `{type: "turn" | "state" | "level" | "error" | "take", data}` (a take's `samples` the base64 of its 32-bit
+  little-endian floats, core `voice::take`, which the bridge turns back into a `Float32Array`), and the devices when
+  they change, `{type: "devices", data}`, which the bridge hands to its listeners; and each step
   of something said, `{type: "say", data: {key, event}}` (`key` the bridge's for the handle `say` answered at once;
   `event` sidevoice-voice's `SayEvent`, the last `done` with the outcome), which it hands to that handle. A handle's
   `cancel` goes behind its `voice_say`, so it never overtakes it.

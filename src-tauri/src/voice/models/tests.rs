@@ -12,8 +12,8 @@ use sidevoice_desktop_core::voice::{choose, CatalogCandidates, ModelChoice, Voic
 use sidevoice_desktop_engine::sidevoice_engine::NoCredentials;
 use sidevoice_desktop_engine::NativeEngines;
 use sidevoice_voice::{
-    AudioIo, Events, IoEvent, IoSink, Listening, PlaybackState, SayEvent, SayOptions, SayOutcome, TurnEvent, VoiceCall,
-    VoiceConfig, VoiceEvent,
+    AudioIo, Events, IoEvent, IoSink, Listening, PlaybackState, SayEvent, SayOptions, SayOutcome, StartOptions,
+    TurnEvent, VoiceCall, VoiceConfig, VoiceEvent,
 };
 
 use super::*;
@@ -152,7 +152,7 @@ fn a_call_on_the_engines_real_models_hears_speech_and_plays_a_reply() {
     runtime.block_on(async {
         let models = Arc::new(EngineModels::new(engines.engine(), choice));
         let (call, mut events) = VoiceCall::new(models, Box::new(io), config);
-        call.start();
+        call.start(StartOptions::default());
         let said = next(&mut events, |event| match event {
             VoiceEvent::Turn(TurnEvent::Finished { text, .. }) => Some(text),
             _ => None,
@@ -180,6 +180,11 @@ fn a_call_on_the_engines_real_models_hears_speech_and_plays_a_reply() {
 }
 
 // ---- A model changed mid-call (gap #31): the call goes on, and work under way ends on its own model ----
+
+/// The 10 ms frames of tone that make a turn: 1.5 s. sidevoice-voice hears speech start after 400 ms of it at the
+/// volume bar, the volume measured over the last 400 ms and smoothed (Pipecat's, sidevoice-voice#25): 800 ms of tone no
+/// longer opens a turn, a second does.
+const TURN_FRAMES: usize = 150;
 
 /// A microphone that says a tone while the test asks it to and is quiet otherwise, in real time, and a speaker that
 /// plays at once what it is given.
@@ -405,7 +410,7 @@ impl Live {
         let tone = Arc::new(AtomicUsize::new(0));
         let mic = Mic { sink: None, stop: Arc::default(), tone: Arc::clone(&tone) };
         let (call, events) = VoiceCall::new(models as Arc<dyn VoiceModels>, Box::new(mic), config("silence", "af_old"));
-        call.start();
+        call.start(StartOptions::default());
         Live { call, events, tone, began, listened: false }
     }
 
@@ -435,7 +440,7 @@ impl Live {
 
     /// A turn of the person's, and its words.
     async fn turn(&mut self) -> String {
-        self.tone.store(80, Ordering::SeqCst);
+        self.tone.store(TURN_FRAMES, Ordering::SeqCst);
         self.next(|event| match event {
             VoiceEvent::Turn(TurnEvent::Finished { text, .. }) => Some(text.clone()),
             _ => None,
@@ -493,7 +498,7 @@ fn a_model_switched_mid_turn_and_mid_reply_does_not_stop_the_call() {
         let mut live = Live::start(Arc::clone(&models), began);
 
         // A turn: its transcription is held while the transcriber switches.
-        live.tone.store(80, Ordering::SeqCst);
+        live.tone.store(TURN_FRAMES, Ordering::SeqCst);
         assert_eq!(live.began().await, "old");
         let switched = within(models.switch(chosen("new", "af_old", None), ALWAYS)).await.unwrap();
         assert!(switched.is_some());

@@ -4480,6 +4480,7 @@ dependencies = [
 name = "sidevoice-desktop-core"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "global-hotkey",
  "serde",
  "serde_json",
@@ -4552,7 +4553,7 @@ dependencies = [
 [[package]]
 name = "sidevoice-voice"
 version = "0.3.1"
-source = "git+https://github.com/sidevoice/sidevoice-voice?tag=v0.3.1#0b1a283f3c14dde2d560e787c625a248804b18c7"
+source = "git+https://github.com/sidevoice/sidevoice-voice?rev=da1c07f772fa450b49c483eb62f7f5199652ed0f#da1c07f772fa450b49c483eb62f7f5199652ed0f"
 dependencies = [
  "async-trait",
  "cfg_aliases",

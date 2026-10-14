@@ -148,7 +148,9 @@
    *  sends, through a handle that tells how it went. A refusal rejects with `{key, message, …params}`. Only where the
    *  app offers it (macOS); elsewhere the page runs the call itself. */
   function voice() {
-    const listeners = { turn: new Set(), state: new Set(), level: new Set(), error: new Set(), devices: new Set() };
+    const listeners = {
+      turn: new Set(), state: new Set(), level: new Set(), error: new Set(), devices: new Set(), take: new Set(),
+    };
     const on = (kind) => (listener) => {
       if (typeof listener !== "function") throw new TypeError("a listener");
       listeners[kind].add(listener);
@@ -157,6 +159,18 @@
     // What is being said, by the key this bridge gave it, until its `done` step.
     const sayings = new Map();
     let said = 0;
+    // Whether the start running asked for a take, and the stops waiting for the idle state after it: the take, which
+    // comes before that state, has then been handed over.
+    let taking = false;
+    let idle = [];
+    /** A take as the app sends it, its samples the base64 of 32-bit little-endian floats: as the seam has it, a
+     *  `Float32Array`. */
+    function takeOf(data) {
+      const binary = win.atob(String(data.samples || ""));
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return { ...data, samples: new Float32Array(bytes.buffer, 0, bytes.length >> 2) };
+    }
     /** One event of the call, sidevoice-voice's `VoiceEvent` as JSON (`{type, data}`), to its listeners; a step of
      *  something said (`{type: "say", data: {key, event}}`) to its handle. */
     function receive(event) {
@@ -165,6 +179,12 @@
         const saying = event.data && sayings.get(event.data.key);
         if (saying) saying.step(event.data.event);
         return;
+      }
+      if (event.type === "take" && event.data) event = { type: "take", data: takeOf(event.data) };
+      if (event.type === "state" && event.data && event.data.listening === "idle") {
+        const stopped = idle;
+        idle = [];
+        for (const resolve of stopped) resolve();
       }
       for (const listener of listeners[event.type] || []) {
         try { listener(event.data); } catch (_) { /* a listener's error is the page's own */ }
@@ -209,11 +229,22 @@
        *  `detail`. */
       setSettings: (settings) => call("voice_set_settings", { settings }),
       /** Loads the models (installing them if they are not), opens the microphone and the speaker and listens.
-       *  Resolves once it listens (at once if it does); rejects `{key, code, message}`, `code` the call's or `stopped`. */
-      start: () => call("voice_start"),
+       *  Resolves once it listens (at once if it does); rejects `{key, code, message}`, `code` the call's or `stopped`.
+       *  With `{take: true}` the call keeps what the microphone gives from then until that listening ends, handed to
+       *  `onTake` then. */
+      start: (options) => {
+        taking = !!(options && options.take === true);
+        return call("voice_start", { take: taking });
+      },
       /** Stops listening and speaking (the turn not told yet is cancelled, what is being said ends `stopped`); the
-       *  models stay loaded. */
-      stop: () => call("voice_stop"),
+       *  models stay loaded. After a start that asked for a take, it resolves once the take was handed to `onTake`:
+       *  at the idle state that answers the stop, which the take comes before. */
+      stop: () => {
+        const kept = taking;
+        taking = false;
+        const answered = kept ? new Promise((resolve) => idle.push(resolve)) : null;
+        return call("voice_stop").then(() => answered);
+      },
       /** Says `text` (`options`: `{language?}`) after whatever is being said, and answers its handle at once. */
       say: (text, options) => saying("say-" + ++said, text, options),
       mute: (muted) => call("voice_mute", { muted: !!muted }),
@@ -227,6 +258,9 @@
       onLevel: on("level"),
       /** `{code}`: something failed that the person may be told. Returns `stop`. */
       onError: on("error"),
+      /** The take of a start that asked for one (`VoiceTake`: `{sampleRate, samples: Float32Array, started_at, ended_at,
+       *  turns}`), as its listening ends: before `stop` resolves, before the error that ended it. Returns `stop`. */
+      onTake: on("take"),
       /** The system's microphones and speakers and the ones chosen (`VoiceAudioDevices`: `{inputs, outputs, input,
        *  output, outputSelectable, lost?}`, `null` the system's default). A chosen one that went away is the default
        *  from then, said once as `lost`. */
