@@ -491,6 +491,12 @@ impl Keychain {
             .secret(password)
             .arg(path)
             .stdout()?;
+        // codesign takes the identity from this keychain (`--keychain`), but reaches its key and certificate chain
+        // through the user's search list: off the list, signing fails with "The specified item could not be found in
+        // the keychain". So it goes on the list, as the bundler's own does; deleting it takes it off.
+        let mut keychains = user_keychains()?;
+        keychains.push(path.display().to_string());
+        set_user_keychains(&keychains)?;
         Ok(keychain)
     }
 }
@@ -499,6 +505,17 @@ impl Drop for Keychain {
     fn drop(&mut self) {
         let _ = Cmd::new("security").arg("delete-keychain").arg(&self.path).attempt();
     }
+}
+
+/// The user's keychain search list set to `keychains`.
+fn set_user_keychains(keychains: &[String]) -> Result<()> {
+    Cmd::new("security").args(["list-keychains", "-d", "user", "-s"]).args(keychains).run()
+}
+
+/// Whether a path on the search list is a signing step's own keychain ([`SIGNING`]/[`KEYCHAIN`]), however the temporary
+/// directory resolves (`/var` is `/private/var` on a Mac).
+fn signing_keychain(path: &str) -> bool {
+    Path::new(path).ends_with(Path::new(SIGNING).join(KEYCHAIN))
 }
 
 /// `macos sign-dmg`: the .dmg signed with the Developer ID (`APPLE_SIGNING_IDENTITY`; from a keychain of this
@@ -563,12 +580,17 @@ const SIGNING: &str = "sidevoice-signing";
 const KEYCHAIN: &str = "sidevoice-signing.keychain-db";
 const NOTARY: &str = "sidevoice-notary";
 
-/// `macos forget-secrets`: whatever a signing step that was cut short (cancelled, killed) left: its keychain, the
-/// certificate file, the notary's key file. Each step removes its own when it ends; CI also runs this at the end of the
-/// job, whatever happened.
+/// `macos forget-secrets`: whatever a signing step that was cut short (cancelled, killed) left: its keychain (and its
+/// place on the search list), the certificate file, the notary's key file. Each step removes its own when it ends; CI
+/// also runs this at the end of the job, whatever happened.
 pub fn forget_secrets() -> Result<()> {
     let signing = secret_path(SIGNING);
     let _ = Cmd::new("security").arg("delete-keychain").arg(signing.join(KEYCHAIN)).attempt();
+    let keychains = user_keychains()?;
+    if keychains.iter().any(|k| signing_keychain(k)) {
+        let kept: Vec<String> = keychains.into_iter().filter(|k| !signing_keychain(k)).collect();
+        set_user_keychains(&kept)?;
+    }
     for dir in [signing, secret_path(NOTARY)] {
         if dir.exists() {
             fs::remove_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -729,6 +751,14 @@ TeamIdentifier=AB12CD34EF
             keychain_list(out),
             ["/Users/me/Library/Keychains/login.keychain-db", "/private/var/folders/x/T/abc.keychain-db"]
         );
+    }
+
+    #[test]
+    fn the_signing_keychain_is_told_from_the_others_on_the_list() {
+        assert!(signing_keychain("/Users/runner/work/_temp/sidevoice-signing/sidevoice-signing.keychain-db"));
+        assert!(signing_keychain("/private/var/folders/x/T/sidevoice-signing/sidevoice-signing.keychain-db"));
+        assert!(!signing_keychain("/Users/me/Library/Keychains/login.keychain-db"));
+        assert!(!signing_keychain("/Users/runner/Library/Keychains/Nt0IPhmZAIYKjzRR.keychain-db"));
     }
 
     #[test]
