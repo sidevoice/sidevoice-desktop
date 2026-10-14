@@ -33,8 +33,10 @@ permissions:
 
 concurrency:
   # Per ref. A release (github.workflow is the caller's, release-please) never shares a group with a push.
+  # A pull request's newer push cancels its older run; on main a running build finishes (its nightly is signed and
+  # notarized, which a merge right after would otherwise cancel every time) and only the newest push waits behind it.
   group: build-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
