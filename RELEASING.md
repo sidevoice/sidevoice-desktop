@@ -112,8 +112,8 @@ key, checked against the public key in `src-tauri/tauri.conf.json` (`plugins.upd
   (`bundle.createUpdaterArtifacts`, passed by xtask as `--config`; such a build without the key fails before it
   starts):
   - macOS (`macos app --signed --channel release`): `dist/Sidevoice_X.Y.Z_aarch64.app.tar.gz`, the signed, notarized
-    and stapled app, checked again after unpacking (signature, ticket, Gatekeeper); a nightly's (`macos app --channel
-    nightly`) is its ad-hoc signed app, its signature checked;
+    and stapled app, checked again after unpacking (signature, ticket, Gatekeeper); a nightly's (`macos app --signed
+    --channel nightly`) likewise;
   - Windows and Linux (`bundle --channel release`): the NSIS installer and the AppImage themselves.
 
   Each comes with its `.sig`. `publish assets release TAG` checks all three and their signatures are among the
@@ -127,13 +127,13 @@ key, checked against the public key in `src-tauri/tauri.conf.json` (`plugins.upd
   nothing), and xtask drops them from a dev build. Keep a copy outside GitHub: without the key no update can be
   signed for the apps out there, and a new key means a new public key in the app, which those apps do not have.
 - **macOS and the signature.** An update replaces the app with one signed by the same Developer ID and team, so macOS
-  keeps the microphone permission and the keychain's trust in the app. Moving from an ad-hoc nightly to a release may
-  ask once more for both; so may each update of a nightly (ad-hoc signed, as its app).
+  keeps the microphone permission and the keychain's trust in the app. The nightly is signed the same way, so moving
+  from it to a release keeps both too.
 
 ## macOS signing and notarization
 
-Only a release's macOS app and .dmg are signed with the Developer ID and notarized (`build.yml`, job `macos`).
-Pull requests and the nightly are ad-hoc signed (`docs/FIRST_OPEN.txt` ships beside their .dmg): their signing
+A release's and the nightly's macOS app and .dmg are signed with the Developer ID and notarized (`build.yml`, job
+`macos`), so Gatekeeper opens them on managed Macs too. Pull requests are ad-hoc signed (`docs/FIRST_OPEN.txt` ships beside their .dmg): their signing
 steps are skipped, and every secret those steps name resolves to nothing unless the run signs. (A pull request
 from a fork never has the repository's secrets.)
 

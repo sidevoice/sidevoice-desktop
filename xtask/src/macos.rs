@@ -143,7 +143,7 @@ fn build_signed(build: TauriBuild) -> Result<()> {
 /// The update a running app downloads (docs/BRIDGE.md → "The updater"): the app as the bundler packed it,
 /// `dist/Sidevoice_<version>_aarch64.app.tar.gz`, with its `.sig` (made with the updater's key, checked by the app
 /// against tauri.conf.json's public key). A `signed` one is checked unpacked as the app is: Developer ID signed, its
-/// ticket stapled, and Gatekeeper takes it as notarized (a nightly's is ad-hoc signed, as its app).
+/// ticket stapled, and Gatekeeper takes it as notarized (a nightly's too).
 fn update_artifact(signed: bool) -> Result<()> {
     let bundle = app().with_file_name("Sidevoice.app.tar.gz");
     let dist = repo().join("dist");

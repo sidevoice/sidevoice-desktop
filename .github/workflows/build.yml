@@ -6,8 +6,9 @@ name: build
 #   probes change (`changes` below).
 # - push to main, manual run: everything, installers included; a green run on main replaces the `nightly` pre-release.
 # - a release (called by release-please.yml with the tag it created): everything, attached to that release.
-# The macOS app and .dmg are signed with the Developer ID and notarized only for a release, or a manual run asked to
-# (`sign`: a dry signed build, its .dmg an artifact, nothing published); otherwise they are ad-hoc signed (RELEASING.md).
+# The macOS app and .dmg are signed with the Developer ID and notarized for a release, the nightly (a push to main), or a
+# manual run asked to (`sign`: a dry signed build, its .dmg an artifact, nothing published); otherwise they are ad-hoc
+# signed (RELEASING.md).
 # Every step is a `cargo xtask` command (xtask/src/main.rs), which runs the same on a laptop: this file sets up the
 # machine, wires the secrets into the environment and chooses which steps run.
 on:
@@ -87,9 +88,9 @@ jobs:
       native: ${{ github.event_name != 'pull_request' || steps.filter.outputs.native == 'true' }}
       # The .dmg: never on a pull request. (Windows and Linux build their installers on every run.)
       installers: ${{ github.event_name != 'pull_request' }}
-      # The macOS app and .dmg signed with the Developer ID and notarized: a release, or a manual run that asks for it.
-      # Never on a pull request or a push (the secrets are not even read then).
-      sign: ${{ inputs.release-tag && 'true' || (github.event_name == 'workflow_dispatch' && inputs.sign && 'true') || 'false' }}
+      # The macOS app and .dmg signed with the Developer ID and notarized: a release, the nightly (a push to main, so
+      # Gatekeeper opens it on managed Macs too), or a manual run that asks for it. Never on a pull request.
+      sign: ${{ inputs.release-tag && 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'true' || (github.event_name == 'workflow_dispatch' && inputs.sign && 'true') || 'false' }}
       # Where the installers go: the release that called this, or the rolling `nightly` pre-release on a push to main.
       publish: ${{ inputs.release-tag && 'release' || (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'nightly' || '' }}
       # What the app is built as (RELEASING.md → "Channels"): a release or (for now) the nightly, each with the updater
@@ -155,9 +156,10 @@ jobs:
           APPLE_API_KEY: ${{ needs.changes.outputs.sign == 'true' && secrets.APPLE_API_KEY || '' }}
           APPLE_API_ISSUER: ${{ needs.changes.outputs.sign == 'true' && secrets.APPLE_API_ISSUER || '' }}
           APPLE_API_KEY_P8: ${{ needs.changes.outputs.sign == 'true' && secrets.APPLE_API_KEY_P8 || '' }}
-          # A release's update artifact (the app as a .tar.gz) is signed with the updater's key; no other run reads it.
-          TAURI_SIGNING_PRIVATE_KEY: ${{ needs.changes.outputs.channel == 'release' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.changes.outputs.channel == 'release' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
+          # A release's or the nightly's update artifact (the app as a .tar.gz) is signed with the updater's key; a dev
+          # build (a manual `sign` run) makes none.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ needs.changes.outputs.channel != 'dev' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.changes.outputs.channel != 'dev' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
         run: cargo xtask macos app --signed --channel ${{ needs.changes.outputs.channel }}
       - name: Check what a first open depends on
         if: needs.changes.outputs.installers == 'true'
