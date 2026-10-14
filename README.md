@@ -55,7 +55,8 @@ The macOS build is ad-hoc signed and not notarized yet, so macOS blocks it on fi
 From [**Releases**](https://github.com/sidevoice/sidevoice-desktop/releases). Until the first versioned release, use
 the [`nightly`](https://github.com/sidevoice/sidevoice-desktop/releases/tag/nightly) pre-release, built from the
 latest green `main`. Each carries the Apple-Silicon `.dmg`, the Windows installer, the Linux `.deb` and `.AppImage`, and
-`SHA256SUMS`.
+`SHA256SUMS`. A release updates itself to the next release, a nightly to the next nightly: to move from the nightly to
+releases, install a release (RELEASING.md → "Updates").
 
 **First open on macOS.** Drag Sidevoice to Applications, then clear the quarantine flag once:
 

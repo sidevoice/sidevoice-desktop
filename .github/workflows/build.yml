@@ -95,8 +95,9 @@ jobs:
       sign: ${{ inputs.release-tag && 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'true' || (github.event_name == 'workflow_dispatch' && inputs.sign && 'true') || 'false' }}
       # Where the installers go: the release that called this, or the rolling `nightly` pre-release on a push to main.
       publish: ${{ inputs.release-tag && 'release' || (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'nightly' || '' }}
-      # What the app is built as (RELEASING.md → "Channels"): a release or (for now) the nightly, each with the updater
-      # and its update artifacts signed with the updater's key, or a dev build (pull requests, manual runs, `sign` too).
+      # What the app is built as (RELEASING.md → "Channels"): a release or the nightly, each with the updater on its own
+      # feed and its update artifacts signed with the updater's key, or a dev build (pull requests, manual runs, `sign`
+      # too).
       channel: ${{ inputs.release-tag && 'release' || (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'nightly' || 'dev' }}
     steps:
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
@@ -140,7 +141,7 @@ jobs:
           key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs', 'scripts/web-release.mjs') }}
       - name: Build the app bundle (ad-hoc signed, hardened runtime, entitlements)
         if: needs.changes.outputs.installers == 'true' && needs.changes.outputs.sign != 'true'
-        # The nightly's update artifact (for now) is signed with the updater's key; no PR or manual run reads it.
+        # The nightly's update artifact is signed with the updater's key; no PR or manual run reads it.
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ needs.changes.outputs.channel == 'nightly' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.changes.outputs.channel == 'nightly' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
@@ -253,7 +254,7 @@ jobs:
         with:
           path: target/web
           key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs', 'scripts/web-release.mjs') }}
-      # A release (and for now the nightly) signs the AppImage / the installer as updates with the updater's key; no
+      # A release and the nightly sign the AppImage / the installer as updates with the updater's key; no
       # other run reads it.
       - name: Build the installers
         env:
@@ -288,7 +289,7 @@ jobs:
         with:
           path: target/web
           key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs', 'scripts/web-release.mjs') }}
-      # A release (and for now the nightly) signs the AppImage / the installer as updates with the updater's key; no
+      # A release and the nightly sign the AppImage / the installer as updates with the updater's key; no
       # other run reads it.
       - name: Build the installers
         env:
@@ -330,7 +331,7 @@ jobs:
         with:
           pattern: Sidevoice-*
           path: artifacts
-      # Also every platform's update and its signature, checked, and latest.json (a release's, or for now the nightly's).
+      # Also every platform's update and its signature, checked, and latest.json: a release's feed, or the nightly's.
       - name: The assets and their SHA256SUMS
         run: cargo xtask publish assets "$KIND" $TAG
       - name: Attach to the release, then publish it (a version with -rc.N is a pre-release, never latest)
