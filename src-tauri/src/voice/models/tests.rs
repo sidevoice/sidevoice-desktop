@@ -173,6 +173,11 @@ fn a_call_on_the_engines_real_models_hears_speech_and_plays_a_reply() {
 
 // ---- A model changed mid-call (gap #31): the call goes on, and work under way ends on its own model ----
 
+/// The 10 ms frames of tone that make a turn: 1.5 s. sidevoice-voice hears speech start after 400 ms of it at the
+/// volume bar, the volume measured over the last 400 ms and smoothed (Pipecat's, sidevoice-voice#25): 800 ms of tone no
+/// longer opens a turn, a second does.
+const TURN_FRAMES: usize = 150;
+
 /// A microphone that says a tone while the test asks it to and is quiet otherwise, in real time, and a speaker that
 /// plays at once what it is given.
 struct Mic {
@@ -427,7 +432,7 @@ impl Live {
 
     /// A turn of the person's, and its words.
     async fn turn(&mut self) -> String {
-        self.tone.store(80, Ordering::SeqCst);
+        self.tone.store(TURN_FRAMES, Ordering::SeqCst);
         self.next(|event| match event {
             VoiceEvent::Turn(TurnEvent::Finished { text, .. }) => Some(text.clone()),
             _ => None,
@@ -485,7 +490,7 @@ fn a_model_switched_mid_turn_and_mid_reply_does_not_stop_the_call() {
         let mut live = Live::start(Arc::clone(&models), began);
 
         // A turn: its transcription is held while the transcriber switches.
-        live.tone.store(80, Ordering::SeqCst);
+        live.tone.store(TURN_FRAMES, Ordering::SeqCst);
         assert_eq!(live.began().await, "old");
         let switched = within(models.switch(chosen("new", "af_old", None), ALWAYS)).await.unwrap();
         assert!(switched.is_some());
