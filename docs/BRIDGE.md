@@ -500,17 +500,19 @@ none loses another's. The app's settings window saves nothing; it only shows dia
 { channel: "release" | "nightly" | "dev"; version: string; commit?: string; date?: string }
 ```
 
-`release`: a numbered release, with `host.updater`. `nightly`: the rolling build of `main`, for now with `host.updater`
-too (to update itself to the next release); `version` is its own (`X.Y.Z-nightly.N`, RELEASING.md → "Channels"), with the short `commit` and that commit's
-`date` (`YYYY-MM-DD`).
+`release`: a numbered release, with `host.updater` on the releases' feed. `nightly`: the rolling build of `main`, with
+`host.updater` on the nightly's feed; `version` is its own (`X.Y.Z-nightly.N`, RELEASING.md → "Channels"), with the
+short `commit` and that commit's `date` (`YYYY-MM-DD`).
 `dev`: anything else (a laptop, a pull request, a manual run). Always present.
 
 ## The updater
 
-The app's own updates (not the service's or the connector's). Only a release has it, and for now a nightly (from the
-releases' feed, to update itself to the next release, until a release has updated itself; RELEASING.md → "Updates");
-and only where that copy can replace itself: its `.app` run from its bundle (not translocated, not from the .dmg), the AppImage run as one, the
-Windows installer's install. Elsewhere (a dev build, a `.deb`, a bare binary) the page has no
+The app's own updates (not the service's or the connector's). A release and a nightly have it, each on its own
+channel (RELEASING.md → "Updates"): a release reads the releases' feed and is offered only a newer release; a nightly
+reads the nightly's feed and is offered only a newer nightly, also after a release ships (moving to the other channel
+means installing its build by hand). The feed is the build's channel's (core `updater::feed`), never a setting. And
+only where that copy can replace itself: its `.app` run from its bundle (not translocated, not from the .dmg), the
+AppImage run as one, the Windows installer's install. Elsewhere (a dev build, a `.deb`, a bare binary) the page has no
 `host.updater`, nothing is checked, and the commands refuse `update_unavailable`.
 
 ```ts

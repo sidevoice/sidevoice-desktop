@@ -18,10 +18,16 @@ struct Updates {
     installing: bool,
 }
 
-/// A release or nightly that can replace itself: its `.app` bundle on a writable volume, AppImage or NSIS install.
+/// This build's feed (core `feed`): a release's the releases', a nightly's the nightly's; a dev build none.
+fn feed() -> Option<url::Url> {
+    core::feed(env!("SIDEVOICE_BUILD_CHANNEL"))
+}
+
+/// A build with a feed (a release or a nightly) that can replace itself: its `.app` bundle on a writable volume,
+/// AppImage or NSIS install.
 pub fn offered() -> bool {
     use tauri::utils::{config::BundleType, platform::bundle_type};
-    matches!(env!("SIDEVOICE_BUILD_CHANNEL"), "release" | "nightly")
+    feed().is_some()
         && match bundle_type() {
             Some(BundleType::App) => std::env::current_exe()
                 .is_ok_and(|exe| core::in_app_bundle(&exe) && exe.ancestors().nth(4).is_some_and(writable)),
@@ -73,9 +79,14 @@ fn with<T>(app: &AppHandle, change: impl FnOnce(&mut Updates) -> T) -> T {
     answer
 }
 
-/// A newer version is `available` (automatic mode: downloaded at once); one downloading or ready is left as it is.
+/// A newer version on this build's feed is `available` (automatic mode: downloaded at once); one downloading or ready
+/// is left as it is.
 async fn check(app: &AppHandle) {
-    let checked = async { app.updater_builder().timeout(Duration::from_secs(2 * 60)).build()?.check().await }.await;
+    let checked = async {
+        let updater = app.updater_builder().endpoints(feed().into_iter().collect())?;
+        updater.timeout(Duration::from_secs(2 * 60)).build()?.check().await
+    }
+    .await;
     with(app, |u| match checked {
         Ok(found) if matches!(u.status.state, State::Idle | State::Available) => {
             u.status = found.as_ref().map_or_else(Status::default, |f| Status::new(State::Available, &f.version));

@@ -328,6 +328,39 @@ mod tests {
         );
     }
 
+    /// The nightly's own feed (what a nightly reads, core `updater::feed`): its version as it was built, and the urls
+    /// of the `nightly` pre-release's fixed names.
+    #[test]
+    fn the_nightly_s_latest_json_gives_its_own_version_and_its_fixed_names() {
+        let sigs: Vec<(&str, String, String)> = update_files("nightly")
+            .into_iter()
+            .map(|(platform, file)| (platform, file.clone(), format!("sig of {file}")))
+            .collect();
+        let base = "https://github.com/sidevoice/sidevoice-desktop/releases/download/nightly";
+        let version = crate::util::nightly_version("0.4.2", "17").unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(&latest_json(&version, base, &sigs)).unwrap();
+        assert_eq!(
+            manifest,
+            serde_json::json!({
+                "version": "0.4.3-nightly.17",
+                "platforms": {
+                    "darwin-aarch64": {"signature": "sig of Sidevoice_nightly_aarch64.app.tar.gz", "url": format!("{base}/Sidevoice_nightly_aarch64.app.tar.gz")},
+                    "windows-x86_64": {"signature": "sig of Sidevoice_nightly_x64-setup.exe", "url": format!("{base}/Sidevoice_nightly_x64-setup.exe")},
+                    "linux-x86_64": {"signature": "sig of Sidevoice_nightly_amd64.AppImage", "url": format!("{base}/Sidevoice_nightly_amd64.AppImage")},
+                }
+            })
+        );
+        // Each is the name `publish assets nightly` gives a nightly's build of it.
+        for built in [
+            "Sidevoice_0.1.0_aarch64.app.tar.gz",
+            "Sidevoice_0.4.3-nightly.17_x64-setup.exe",
+            "Sidevoice_0.4.3-nightly.17_amd64.AppImage",
+        ] {
+            let published = published_name(built, true).unwrap();
+            assert!(sigs.iter().any(|(_, file, _)| *file == published), "{built} → {published}");
+        }
+    }
+
     #[test]
     fn sums_are_sha256sums_lines() {
         let dir = std::env::temp_dir().join(format!("xtask-sums-{}", std::process::id()));

@@ -59,6 +59,24 @@ impl Status {
     }
 }
 
+/// The releases' feed: `latest` is the newest release that is neither a draft nor a pre-release (never a `-rc.N`, never
+/// the nightly).
+const RELEASES_FEED: &str = "https://github.com/sidevoice/sidevoice-desktop/releases/latest/download/latest.json";
+/// The nightly's own feed, beside its assets on the `nightly` pre-release (`cargo xtask publish assets nightly`).
+const NIGHTLY_FEED: &str = "https://github.com/sidevoice/sidevoice-desktop/releases/download/nightly/latest.json";
+
+/// The feed a build's updater reads, by the channel it was built for (RELEASING.md → "Updates"): a release the
+/// releases', a nightly the nightly's, so each updates only to a newer build of its own channel. A dev build has none,
+/// and no updater.
+pub fn feed(channel: &str) -> Option<url::Url> {
+    let feed = match channel {
+        "release" => RELEASES_FEED,
+        "nightly" => NIGHTLY_FEED,
+        _ => return None,
+    };
+    Some(url::Url::parse(feed).expect("a feed is a URL"))
+}
+
 /// A download's progress, 0..1 in hundredths (so the page is told at most a hundred times); none while its size is
 /// unknown.
 pub fn progress(received: u64, total: Option<u64>) -> Option<f64> {
@@ -98,6 +116,22 @@ mod tests {
             serde_json::to_value(ErrorCode::DownloadFailed).unwrap(),
             json!({ "code": "update-download-failed" })
         );
+    }
+
+    #[test]
+    fn each_channel_reads_its_own_feed_and_a_dev_build_none() {
+        let feed = |channel| super::feed(channel).map(String::from);
+        assert_eq!(
+            feed("release").as_deref(),
+            Some("https://github.com/sidevoice/sidevoice-desktop/releases/latest/download/latest.json")
+        );
+        assert_eq!(
+            feed("nightly").as_deref(),
+            Some("https://github.com/sidevoice/sidevoice-desktop/releases/download/nightly/latest.json")
+        );
+        for channel in ["dev", "", "beta"] {
+            assert_eq!(feed(channel), None, "{channel:?}");
+        }
     }
 
     #[test]
