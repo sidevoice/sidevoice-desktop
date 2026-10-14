@@ -58,10 +58,26 @@ the page as `host.build` (docs/BRIDGE.md → "The build").
   and makes update artifacts (Updates, below). A release's macOS app is always `--signed`.
 - `nightly`: a push to `main`. Built as its own version, `<the release-please manifest's version, patch + 1>-nightly.
   <GITHUB_RUN_NUMBER>` (after 0.4.2, run 17: `0.4.3-nightly.17`: above the last release, below the next, higher every
-  run). For now it also has the updater, on the nightly's own feed, and makes update artifacts (Updates, below);
-  `host.build` gives that version, the short commit and that commit's date.
+  run). Has the updater on the nightly's own feed and makes update artifacts (Updates, below); `host.build` gives that
+  version, the short commit and that commit's date.
 - `dev`: everything else, and the default: a laptop, a pull request, a manual run (a `sign` dry run too). No
   updater.
+
+**A nightly's version on each platform.** The updater compares versions as semver: `X.Y.Z-nightly.N` sorts below
+`X.Y.Z`, and `N` is compared as a number (`nightly.9` < `nightly.17`). A release in between moves the manifest, so
+every nightly after it sorts above every nightly before it. The installers' own version fields take what each
+platform allows:
+
+- macOS: `CFBundleShortVersionString` is the whole version (what Finder and the app show). `CFBundleVersion` is at
+  most three numbers, so a nightly's is `X.Y.Z` without `-nightly.N` (xtask sets `bundle.macOS.bundleVersion`): the
+  same for every nightly until the next release. Nothing updates by it (the updater reads latest.json), and the
+  notary takes both.
+- Windows (NSIS): the installer's numeric `VIProductVersion` is `X.Y.Z.0` (the bundler drops the pre-release); the
+  version it shows and registers is the whole one, which it compares as semver against an installed Sidevoice. No MSI
+  is built: WiX takes no text in a pre-release, so a nightly MSI would need its own `bundle.windows.wix.version`.
+- Linux: the AppImage carries the version in its name only. The .deb's `Version` is the whole one, which dpkg reads as
+  `X.Y.Z` with the Debian revision `nightly.N`, above release `X.Y.Z`: installing exactly that release's .deb over the
+  nightly is a downgrade to dpkg (it warns). A .deb never updates itself.
 
 ## Which version comes next
 
@@ -89,24 +105,36 @@ with one empty commit (`git commit --allow-empty`) carries the footer.
 Every green `build` on `main` moves the tag `nightly` to that commit and replaces every asset of the one
 `nightly` pre-release: `Sidevoice_nightly_aarch64.dmg`, `Sidevoice_nightly_x64-setup.exe`,
 `Sidevoice_nightly_amd64.deb`, `Sidevoice_nightly_amd64.AppImage`, `SHA256SUMS`. Fixed names, so a link keeps
-working, plus its updates and `latest.json` (Updates, below). Its notes give the commit and its date. It is a
-snapshot, not a release: the app inside reports its nightly version (Channels, above), it is never latest, and
-release-please ignores the tag (it is not `vX.Y.Z`).
+working, plus its updates and `latest.json`, the nightly's feed (Updates, below). Its notes give the commit and its
+date. It is a snapshot, not a release: the app inside reports its nightly version (Channels, above), it is never
+latest, and release-please ignores the tag (it is not `vX.Y.Z`).
 
 Build artifacts on Actions runs are kept 7 days, for debugging only. Download from Releases.
 
 ## Updates
 
-A release updates itself from the releases (docs/BRIDGE.md → "The updater"): it reads
-`https://github.com/sidevoice/sidevoice-desktop/releases/latest/download/latest.json` at launch and every 6 hours.
-`latest` is the newest release that is neither a draft nor a pre-release, so a `-rc.N` and the nightly are never
-offered. For now a nightly has the updater too and reads that same releases' feed: an installed nightly
-(`X.Y.Z-nightly.N`, which sorts below release `X.Y.Z`; xtask sets the version at build time with `--config`)
-updates itself to the next numbered release. Temporary, to validate the nightly → release path before the first
-release relies on it; an issue removes it once a release has updated itself. (The nightly still publishes its own
-`latest.json` beside its assets; nothing reads it meanwhile.) The app installs only what is signed with the updater's
-key, checked against the public key in `src-tauri/tauri.conf.json` (`plugins.updater.pubkey`, minisign key id
-`EA1BE9B3A4CF715A`).
+Each channel updates itself from its own feed (docs/BRIDGE.md → "The updater"), read at launch and every 6 hours, and
+only to a higher version than its own. The app chooses the feed by the channel it was built for
+(`src-tauri/core/src/updater.rs`, `feed`), so a build of one channel is never offered the other's:
+
+- A release reads the releases' feed,
+  `https://github.com/sidevoice/sidevoice-desktop/releases/latest/download/latest.json`. `latest` is the newest
+  release that is neither a draft nor a pre-release, so a `-rc.N` and the nightly are never offered.
+- A nightly reads the nightly's own,
+  `https://github.com/sidevoice/sidevoice-desktop/releases/download/nightly/latest.json`, which every green push to
+  `main` replaces (Nightly, above): it updates itself to the next nightly, always a higher version (Channels, above).
+- **A release ships while you run a nightly:** you stay on nightlies. A nightly never reads the releases' feed; the
+  next nightly, built after the release from its version, is the one it updates to. To move to releases, install the
+  release by hand (its .dmg, installer or AppImage): from then on that copy reads the releases' feed. A release becomes
+  a nightly the same way, by installing the nightly. A release older than the nightly it replaces (`0.5.0` over
+  `0.5.1-nightly.N`) is a downgrade: Windows' installer says a newer version is installed and offers to uninstall it
+  first.
+
+The app installs only what is signed with the updater's key, checked against the public key in
+`src-tauri/tauri.conf.json` (`plugins.updater.pubkey`, minisign key id `EA1BE9B3A4CF715A`). The nightly's assets are
+replaced one by one, so a check while that happens may miss one or pair one nightly's `latest.json` with another's
+update, whose signature then does not match: nothing is installed, the check or the download fails
+(`update-check-failed`, `update-download-failed`), and a later check finds them whole.
 
 - **What a release (and a nightly) adds.** Only a `release` or `nightly` build makes them
   (`bundle.createUpdaterArtifacts`, passed by xtask as `--config`; such a build without the key fails before it

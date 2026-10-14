@@ -455,28 +455,36 @@ impl Channel {
     }
 }
 
-/// A nightly's update feed (a release's is tauri.conf.json's).
-/// What a release or a nightly adds to tauri.conf.json: signed update artifacts; a nightly also its version. Both read
-/// the releases' feed (tauri.conf.json), so an installed nightly updates itself to the next numbered release, which
-/// sorts above it (temporary, to validate nightly → release: RELEASING.md → "Updates").
+/// What a release or a nightly adds to tauri.conf.json: signed update artifacts; a nightly also its version, and on
+/// macOS a bundle version without its `-nightly.RUN` (CFBundleVersion is at most three numbers;
+/// CFBundleShortVersionString keeps the whole version). Which feed each reads is the app's to say, by the channel it
+/// was built for (core `updater::feed`): a nightly the nightly's, a release the releases' (RELEASING.md → "Updates").
 pub fn channel_config(channel: Channel, nightly_version: &str) -> Option<String> {
     let updates = serde_json::json!({ "createUpdaterArtifacts": true });
     let config = match channel {
         Channel::Release => serde_json::json!({ "bundle": updates }),
         Channel::Nightly => serde_json::json!({
             "version": nightly_version,
-            "bundle": updates,
+            "bundle": {
+                "createUpdaterArtifacts": true,
+                "macOS": { "bundleVersion": numeric_version(nightly_version) },
+            },
         }),
         Channel::Dev => return None,
     };
     Some(config.to_string())
 }
 
+/// A version's numbers, `X.Y.Z`, without a pre-release or build (`0.4.3-nightly.17` → `0.4.3`).
+pub fn numeric_version(version: &str) -> &str {
+    version.split(['-', '+']).next().unwrap_or_default()
+}
+
 /// A nightly's version: the last release's (`released`) with its patch + 1, then `-nightly.RUN` (0.4.2, run 17 →
-/// 0.4.3-nightly.17): above that release, below the next, and higher every run, as the updater needs.
+/// 0.4.3-nightly.17): above that release, below the next, and higher every run (`RUN` is a number, compared as one), as
+/// the updater needs: it offers only a higher version on the nightly's feed.
 pub fn nightly_version(released: &str, run: &str) -> Result<String> {
-    let core = released.split(['-', '+']).next().unwrap_or_default();
-    let numbers: std::result::Result<Vec<u64>, _> = core.split('.').map(str::parse).collect();
+    let numbers: std::result::Result<Vec<u64>, _> = numeric_version(released).split('.').map(str::parse).collect();
     let (Ok([major, minor, patch]), Ok(run)) = (numbers.as_deref(), run.parse::<u64>()) else {
         return Err(format!("no nightly version from release {released:?} and run {run:?}"));
     };
@@ -739,9 +747,9 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(&nightly).unwrap(),
             serde_json::json!({
                 "version": "0.4.3-nightly.17",
-                "bundle": {"createUpdaterArtifacts": true},
+                "bundle": {"createUpdaterArtifacts": true, "macOS": {"bundleVersion": "0.4.3"}},
             }),
-            "no feed of its own: the releases' (tauri.conf.json)"
+            "no feed: the app's, by its channel (core updater::feed)"
         );
         assert_eq!(channel_config(Channel::Dev, ""), None);
         assert_eq!(TauriBuild::default().channel, Channel::Dev, "a laptop's build is never a release");
@@ -751,9 +759,37 @@ mod tests {
     fn a_nightly_s_version_is_above_the_last_release_and_grows_every_run() {
         assert_eq!(nightly_version("0.4.2", "17").unwrap(), "0.4.3-nightly.17");
         assert_eq!(nightly_version("0.3.0-rc.1", "5").unwrap(), "0.3.1-nightly.5");
-        for (released, run) in [("0.4", "17"), ("0.4.x", "17"), ("0.4.2", ""), ("0.4.2", "a")] {
+        for (released, run) in [("0.4", "17"), ("0.4.x", "17"), ("0.4.2", ""), ("0.4.2", "a"), ("0.4.2", "-1")] {
             assert!(nightly_version(released, run).is_err(), "{released} {run}");
         }
+    }
+
+    /// As tauri-plugin-updater compares them (semver's order): it offers only a higher version than the running one.
+    #[test]
+    fn every_nightly_sorts_above_the_one_before_it_and_between_the_releases_around_it() {
+        let v = |s: &str| semver::Version::parse(s).unwrap();
+        let nightly = |released: &str, run: &str| v(&nightly_version(released, run).unwrap());
+        // The run is compared as a number, not as text.
+        assert!(nightly("0.4.2", "9") < nightly("0.4.2", "17"));
+        assert!(nightly("0.4.2", "17") < nightly("0.4.2", "100"));
+        // A release in between (the manifest moves to it): the nightlies after it sort above those before.
+        assert!(nightly("0.4.2", "17") < nightly("0.5.0", "18"));
+        assert!(nightly("0.3.0-rc.1", "5") < nightly("0.3.0", "6"));
+        // Above the release it is built after, below whichever comes next (a patch, a minor, a major).
+        for next in ["0.4.3", "0.5.0", "1.0.0"] {
+            assert!(v("0.4.2") < nightly("0.4.2", "17") && nightly("0.4.2", "17") < v(next), "{next}");
+        }
+    }
+
+    #[test]
+    fn a_bundle_s_numeric_version_drops_the_pre_release() {
+        assert_eq!(numeric_version("0.4.3-nightly.17"), "0.4.3");
+        assert_eq!(numeric_version("0.3.0-rc.1"), "0.3.0");
+        assert_eq!(numeric_version("0.4.2"), "0.4.2");
+        // macOS: CFBundleVersion is one to three numbers, dot-separated.
+        let nightly = nightly_version("0.4.2", "17").unwrap();
+        let parts: Vec<&str> = numeric_version(&nightly).split('.').collect();
+        assert!(parts.len() <= 3 && parts.iter().all(|p| p.parse::<u64>().is_ok()), "{parts:?}");
     }
 
     #[test]

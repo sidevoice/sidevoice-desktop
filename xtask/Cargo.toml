@@ -17,3 +17,7 @@ serde_json = "1"
 sha2 = "0.10"
 # The checks on what the app and its stand-ins log, as the YAML's grep patterns were.
 regex = "1"
+
+[dev-dependencies]
+# How tauri-plugin-updater orders versions: the tests check the nightly's against it.
+semver = "1"

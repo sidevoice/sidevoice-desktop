@@ -75,9 +75,10 @@
 //!
 //! Channels (RELEASING.md): `--channel release|nightly|dev` (default `dev`, so a laptop's build is never a release)
 //! is what a Tauri build is told (`SIDEVOICE_BUILD_CHANNEL`, `_COMMIT`, `_DATE`; src-tauri/build.rs). A release
-//! and (for now) a nightly build have the updater, make update artifacts and read `TAURI_SIGNING_PRIVATE_KEY` and
-//! `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (a dev build has them removed); a nightly is built as
-//! `<manifest version, patch + 1>-nightly.<GITHUB_RUN_NUMBER>`, reading the releases' feed (to reach the next release).
+//! and a nightly build have the updater, each on its own channel's feed (the app chooses it by its channel), make
+//! update artifacts and read `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (a dev build has
+//! them removed); a nightly is built as `<manifest version, patch + 1>-nightly.<GITHUB_RUN_NUMBER>` (its macOS bundle
+//! version without `-nightly.N`).
 //!
 //! This tooling's own tests: `cargo test --manifest-path xtask/Cargo.toml`.
 
