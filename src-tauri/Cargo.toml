@@ -38,8 +38,9 @@ tauri-plugin-updater = "2.13"
 tokio = { version = "1", features = ["time"] }
 
 # This computer's own core, its pairing and the page's proxy (src/local_host.rs; docs/LOCAL_HOST.md). Unix sockets.
+# `fetch`: its install's HTTPS client, for "Prepare this computer" (docs/LOCAL_HOST.md → Install).
 [target.'cfg(unix)'.dependencies]
-sidevoice-local-host = { path = "local-host" }
+sidevoice-local-host = { path = "local-host", features = ["fetch"] }
 
 [target.'cfg(windows)'.dependencies]
 # The taskbar's colour, to draw the tray mark in the brand's look for it (src/tray.rs).

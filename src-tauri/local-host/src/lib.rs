@@ -10,7 +10,10 @@
 //! - [`state`]: what the bridge reports, from all of the above (pure).
 //! - [`proxy`]: the page's way in — `127.0.0.1:<ephemeral>`, a per-launch secret, the Origin/Host rules — which swaps
 //!   the secret for the device token and carries the request over the socket.
-//! - [`host`]: the startup cases, the poll, and the actions, tied together.
+//! - [`npm`], [`tarball`], [`install`]: preparing this computer from the app, without Node — the `sidevoice` package
+//!   from the npm registry (HTTPS, pinned to the registry, its SHA-512 checked), unpacked by hand into a private
+//!   directory, and its own installer run from there.
+//! - [`host`]: the startup cases, the poll, the actions and the install, tied together.
 //!
 //! The trust boundary is the OS user: the device token travels only over the socket, and the page only ever holds
 //! the proxy's in-memory secret (sidevoice design "Onboarding, hosts and settings" §1, §4.1).
@@ -26,13 +29,18 @@ pub mod connector;
 pub mod core_socket;
 #[cfg(feature = "fake-core")]
 pub mod fake_core;
+#[cfg(feature = "fake-core")]
+pub mod fake_registry;
 pub mod host;
 pub mod http;
 pub mod identity;
+pub mod install;
+pub mod npm;
 pub mod paths;
 pub mod proxy;
 pub mod state;
 pub mod store;
+pub mod tarball;
 pub mod trusted;
 
 use serde::Serialize;

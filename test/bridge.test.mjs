@@ -747,8 +747,8 @@ test("host carries the bridge version; localHost only where the app offers it", 
   const { win } = fakeWindow(ORIGIN);
   const api = install(win, ORIGIN, "native", true);
   assert.deepEqual(Object.keys(api.host.localHost).sort(), [
-    "pairRoom", "pairing", "pairingCode", "reconnect", "restart", "revealLog", "serviceInstall", "serviceUninstall",
-    "setStartAtLogin", "start", "state", "stop", "subscribe",
+    "cancel", "install", "pairRoom", "pairing", "pairingCode", "reconnect", "restart", "revealLog", "serviceInstall",
+    "serviceUninstall", "setStartAtLogin", "start", "state", "stop", "subscribe",
   ]);
   assert.ok(Object.isFrozen(api.host.localHost));
 });
@@ -864,6 +864,69 @@ test("setStartAtLogin resolves the state read back, and subscribers see installe
   tick();
   await flush();
   assert.deepEqual(seen, [["stopped-by-person", false], ["stopped-by-person", true], ["stopped-by-person", false]]);
+});
+
+test("install: a promise of the state with its job, progress handed on when it changes, then no more polling", async () => {
+  const install = loadFactory();
+  let settle;
+  const steps = [
+    { step: "download", done: 0, total: 100, cancellable: true },
+    { step: "download", done: 0, total: 100, cancellable: true },
+    { step: "download", done: 60, total: null, cancellable: true },
+    { step: "service-start", done: null, total: null, cancellable: false },
+    null,
+  ];
+  const { win, calls } = localHostWindow({
+    local_host_install: () => new Promise((resolve) => { settle = resolve; }),
+    local_host_install_progress: () => (steps.length > 1 ? steps.shift() : steps[0]),
+  });
+  const local = install(win, ORIGIN, null, true).host.localHost;
+  const seen = [];
+  // Copied: the bridge makes its objects in its own realm.
+  const operation = local.install((progress) => seen.push({ ...progress }));
+  assert.equal(typeof operation.job, "string");
+  assert.match(operation.job, /^local-install-1-/);
+  assert.equal(typeof operation.then, "function");
+  for (let i = 0; i < 20 && seen.length < 3; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual(seen, [
+    { step: "download", done: 0, total: 100, cancellable: true },
+    { step: "download", done: 60, total: null, cancellable: true },
+    { step: "service-start", done: null, total: null, cancellable: false },
+  ], "unchanged progress is not handed on again; a null report is not progress");
+  settle({ state: "running", reachable: true });
+  assert.deepEqual(await operation, { state: "running", reachable: true });
+  const polls = calls.filter(([cmd]) => cmd === "local_host_install_progress").length;
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(calls.filter(([cmd]) => cmd === "local_host_install_progress").length, polls, "no polling once settled");
+  assert.deepEqual(calls.find(([cmd]) => cmd === "local_host_install"), ["local_host_install", { job: operation.job }]);
+  assert.ok(calls.filter(([cmd]) => cmd === "local_host_install_progress").every(([, args]) => args.job === operation.job));
+  assert.notEqual(local.install().job, operation.job, "each call its own job");
+});
+
+test("install rejects with the app's failure as it is; cancel goes by job and says whether it was honoured", async () => {
+  const install = loadFactory();
+  const busy = Object.assign(new Error("refused"), {
+    refusal: { key: "install.busy", message: "Sidevoice is already being installed on this computer." },
+  });
+  const { win, calls } = localHostWindow({ local_host_install: busy, local_host_install_cancel: (args) => args.job === "j1" });
+  const local = install(win, ORIGIN, null, true).host.localHost;
+  const operation = local.install();
+  await assert.rejects(operation, { key: "install.busy" });
+  assert.equal(calls.filter(([cmd]) => cmd === "local_host_install_progress").length, 0, "no onProgress, no polling");
+  assert.equal(await local.cancel("j1"), true);
+  assert.equal(await local.cancel("j2"), false);
+  for (const bad of [undefined, null, "", 3]) assert.equal(await local.cancel(bad), false, String(bad));
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "local_host_install_cancel"), [
+    ["local_host_install_cancel", { job: "j1" }],
+    ["local_host_install_cancel", { job: "j2" }],
+  ]);
+  const failed = Object.assign(new Error("refused"), {
+    refusal: { key: "install.authenticity", step: "staging", params: { check: "archive-link" }, message: "m" },
+  });
+  const other = localHostWindow({ local_host_install: failed });
+  await assert.rejects(install(other.win, ORIGIN, null, true).host.localHost.install(), {
+    key: "install.authenticity", step: "staging", params: { check: "archive-link" },
+  });
 });
 
 test("nothing of localHost runs until the page asks", async () => {

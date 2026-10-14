@@ -70,6 +70,36 @@ pub async fn local_host_pair_room(app: AppHandle, webview: Webview, url: String,
         .map_err(|e| refusal("internal", &e.to_string()))?
 }
 
+/// "Prepare this computer": installs Sidevoice from the npm registry as install `job` (the page's id for this call;
+/// docs/LOCAL_HOST.md → Install), and answers the state after it, once the app is paired with the new core (or has
+/// waited for it long enough); `{key, step?, params?, log_tail?, message}` when it fails. One at a time
+/// (`install.busy`); its progress is `local_host_install_progress`, and `local_host_install_cancel` stops it until the
+/// package's installer starts.
+#[tauri::command]
+pub async fn local_host_install(app: AppHandle, webview: Webview, job: String) -> Answer {
+    caller(&app, &webview)?;
+    // Begun here, before the blocking work: its progress and its cancel find it from the start.
+    let begun = imp::begin_install(&app, &job)?;
+    tauri::async_runtime::spawn_blocking(move || imp::run_install(begun))
+        .await
+        .map_err(|e| refusal("internal", &e.to_string()))?
+}
+
+/// `{step, done, total, cancellable}` of install `job` while it runs; `null` for another id or once it has ended.
+#[tauri::command]
+pub fn local_host_install_progress(app: AppHandle, webview: Webview, job: String) -> Answer {
+    caller(&app, &webview)?;
+    imp::install_progress(&app, &job)
+}
+
+/// Asks install `job` to stop: true while that is honoured (download, verification, unpacking), false once the
+/// package's installer runs, or for an id not under way.
+#[tauri::command]
+pub fn local_host_install_cancel(app: AppHandle, webview: Webview, job: String) -> Answer {
+    caller(&app, &webview)?;
+    imp::cancel_install(&app, &job)
+}
+
 /// At start: the proxy and the poll, for the app's lifetime (macOS).
 pub fn setup(app: &AppHandle) {
     imp::setup(app)
@@ -84,7 +114,9 @@ pub fn shutdown(app: &AppHandle) {
 mod imp {
     use super::{refusal, unsupported, Answer};
     use serde_json::{json, Value};
-    use sidevoice_local_host::host::{computer_name, Action, Config, LocalHost};
+    use sidevoice_local_host::host::{computer_name, Action, Config, Installing, LocalHost};
+    use sidevoice_local_host::install;
+    use sidevoice_local_host::npm::Https;
     use sidevoice_local_host::paths::DataDirs;
     use std::sync::Arc;
     use tauri::{AppHandle, Manager};
@@ -164,6 +196,32 @@ mod imp {
     pub fn pair_room(app: &AppHandle, url: &str, code: &str) -> Answer {
         host(app)?.pair_room(url, code).map_err(|r| json!(r))
     }
+
+    /// An install begun (the slot taken); dropped unrun, it frees it.
+    pub struct Begun(Installing);
+
+    pub fn begin_install(app: &AppHandle, job: &str) -> Result<Begun, Value> {
+        host(app)?.begin_install(job).map(Begun).map_err(|failure| json!(failure))
+    }
+
+    /// The whole install, blocking (on the async runtime's blocking pool: the HTTPS client runs a runtime of its own,
+    /// made and dropped here). The host logs how it went.
+    pub fn run_install(begun: Begun) -> Answer {
+        let Begun(installing) = begun;
+        let fetch = Https::new().map_err(|failure| json!(failure))?;
+        installing
+            .run(&fetch, &install::Options::standard())
+            .map(|report| json!(report))
+            .map_err(|failure| json!(failure))
+    }
+
+    pub fn install_progress(app: &AppHandle, job: &str) -> Answer {
+        Ok(host(app)?.install_progress(job).map(|progress| json!(progress)).unwrap_or(Value::Null))
+    }
+
+    pub fn cancel_install(app: &AppHandle, job: &str) -> Answer {
+        Ok(json!(host(app)?.cancel_install(job)))
+    }
 }
 
 #[cfg(not(unix))]
@@ -186,6 +244,19 @@ mod imp {
         Err(unsupported())
     }
     pub fn pair_room(_app: &AppHandle, _url: &str, _code: &str) -> Answer {
+        Err(unsupported())
+    }
+    pub struct Begun;
+    pub fn begin_install(_app: &AppHandle, _job: &str) -> Result<Begun, serde_json::Value> {
+        Err(unsupported())
+    }
+    pub fn run_install(_begun: Begun) -> Answer {
+        Err(unsupported())
+    }
+    pub fn install_progress(_app: &AppHandle, _job: &str) -> Answer {
+        Err(unsupported())
+    }
+    pub fn cancel_install(_app: &AppHandle, _job: &str) -> Answer {
         Err(unsupported())
     }
 }

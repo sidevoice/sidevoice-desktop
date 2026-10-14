@@ -3,7 +3,8 @@
 The core on the computer where the app runs, as the app finds it, pairs with it and lets the bundled page talk to it
 (sidevoice design "Onboarding, hosts and settings" rev. 3, §4.1, §4.2, §4.7; release R1). Offered on macOS only
 (decision O2); the code builds and is tested on Linux too. The app ships no connector: the machine is
-installed with `npx sidevoice@latest install`, and the app runs that installation's CLI.
+installed with `npx sidevoice@latest install`, or by the app itself from that same npm package, without Node («Prepare
+this computer»; Install, below); either way the app then runs that installation's CLI.
 
 ## Pieces
 
@@ -68,6 +69,7 @@ process) and right after each action; the core's health; the token check. The br
 
 | Observed | `state` |
 |---|---|
+| an install the app runs is under way (`install()`, below) | `installing`, whatever else is observed (no `failure`; `reachable` as observed) |
 | the core's directory or the socket's peer fails a check | `failed` (`identity.unsafe-directory`, `peer.uid-mismatch`) |
 | a core with an `api` outside the app's range (1–1), or the service reports one | `incompatible` |
 | a core answers; its token refused, same fingerprint | `refused` |
@@ -108,7 +110,8 @@ inferred from `service` or from the service's own `installed`.
 ## Actions
 
 Through `install.json` `command` only — an array of absolute paths, then the subcommand; never a shell, never a PATH
-lookup, always a deadline (`Cli::installed` is the one place R4 extends with the bundled executable). The deadline
+lookup, always a deadline (`Cli::installed` is the one place R4 extends with the bundled executable; the one program
+run from elsewhere is the package's own installer, from the install's private directory, Install below). The deadline
 covers the program's exit and both its output streams. Each run is a process group of its own: once the program has
 exited, whatever of its group still runs (a child holding the pipes) is killed, and on a timeout the whole group is.
 What it hands to the service manager (`service start` → launchd) or starts detached in a session of its own is not in
@@ -144,6 +147,62 @@ written. A connector that does not know it answers `--json` with `connector.usag
 The state after it reads the change back: `installed` is the connector's `start_at_login` (see `state()` above), from
 the fresh pass every action ends with, and `subscribe` listeners get it as any other change. A connector that does not
 report `start_at_login` leaves `installed` absent, and the page falls back to what it has (`service`).
+
+## Install
+
+«Prepare this computer» (`install(onProgress)`, `cancel(job)`; docs/BRIDGE.md → The local host) does what
+`npx sidevoice@latest install` does, without Node: it fetches the npm package itself and runs the installer inside it
+(`src-tauri/local-host/src/{npm,tarball,install}.rs`; the steps in `host.rs`). Only where the app offers the local
+host (macOS); one install at a time (`install.busy`), and while it runs the state is `installing`.
+
+| Step | What | Cancellable |
+|---|---|---|
+| `download` | `GET https://registry.npmjs.org/sidevoice/latest` → its `version`, and in its `optionalDependencies` this computer's platform package, `@sidevoice/sidevoice-<os>-<cpu>` in npm's names (`darwin-arm64` here), which must be listed at that same version; `GET https://registry.npmjs.org/<package>/<version>` → `dist.tarball` and `dist.integrity`; the tarball into a fresh private directory, its bytes as progress | yes |
+| `verification` | the tarball's SHA-512, computed as it came, against the integrity's `sha512-…` | yes |
+| `staging` | the tarball unpacked (rules below), then `package/bin/sidevoice-connector install --json` run from it, with `SIDEVOICE_DATA_DIR` = `D`: it stages the release under its own root with its core, writes `install.json`, defines and starts the service jobs, verifies them within 60 s (an update that does not start is rolled back) and registers the agents | until the installer starts |
+| `service-start` | from when the installer has written `install.json` (its staging done; seen as the file changing) until it answers | no |
+| `pairing` | the app pairs with the new core as on any core launch (Pairing, above), and answers the state once it is `reachable`, or after 30 s with whatever it is then | no |
+
+The private directory is removed whatever happens: on success, on a failure, on a cancel.
+
+**Trust.** The registry is the trust, as for `npx`: every request is HTTPS (rustls with the platform's verifier, the
+system's proxy, the client the engine's downloads and the updater already use) to `registry.npmjs.org`, and no redirect
+is followed. The tarball's URL, read from the registry's own document, must be
+`https://registry.npmjs.org/<package>/-/<file>.tgz` — that host, that package's path, a plain file name: no other
+host, port, user, query, fragment, escape or dot segment (`install.authenticity`, `download`). The platform package's
+name is the app's (from its OS and CPU), never the document's; versions are checked as `X.Y.Z[-pre][+build]` before
+they go into a URL. The integrity must hold exactly one SHA-512 (`manifest` otherwise), and a tarball whose digest is
+not it is refused before anything of it is unpacked (`install.checksum`). The documents may be 1 MiB, the tarball 512
+MiB (`download-size`) and 15 min; any one read 30 s. Not checked: the registry's signatures and provenance
+attestations (npm's ECDSA `dist.signatures`, sigstore) — what `npm install` checks by default is the integrity, as
+here.
+
+**Unpacking.** Into the private directory — `mkdtemp` (0700) in the system's temporary directory, then checked as the
+app's own directories are (this user's, private, every directory above it root's or this user's and closed to others,
+sticky as `/tmp` allowed; `install.unsafe`) — entry by entry, written by hand: every entry a plain file or directory
+below `package/`. Refused (`install.authenticity`, with the check): a path that is absolute, has an empty, `.` or `..`
+segment, a backslash or a control character, or is not below `package/` — GNU long names and pax `path` records are the
+entry's name and checked the same (`archive-path`); a symbolic or hard link (`archive-link`); a device, a FIFO, a sparse
+file, anything else, or an archive that does not decode (`archive-type`); more than 1 GiB or 10 000 entries
+(`archive-size`). Files are created anew (`O_EXCL`, no link followed) 0600, or 0700 where the archive marks them
+executable; directories 0700; nothing else of an entry (owner, times) is applied. An entry that is already there is
+refused (`archive-path`). No link is ever created, so a path built from checked segments stays inside. The package must
+carry `bin/sidevoice-connector` as a regular file (`install.no-bundle`), which is then made 0700.
+
+**The installer** runs as the CLI does (Actions, above): its absolute path, no shell, a process group of its own,
+`SIDEVOICE_DATA_DIR` = `D`, the rest of the app's environment as it is (the agents it registers are found with the
+app's `PATH`). It has 3 min (`cli.timeout`), which covers its own bounds: 30 s for the install lock, 30 s for the
+staged binary's self-check, 60 s to verify the service and 60 s more to verify a rollback; past them it is killed with
+its group (a release it was staging is cleaned by the next install, which the installer says is the recovery). Its
+`{ok: false, error: {key, params, message}}` reaches the page under the key sidevoice-web knows where one means the same
+(docs/BRIDGE.md lists them: `install.rolled-back` → `install.rollback`, `install.verify-failed` →
+`service.start.failed`, `core.package-missing` → `install.no-bundle`, `core.package-mismatch` → `install.authenticity`
+`manifest`, `service.busy` → `install.busy`, `connector.failed` → `install.failed`), any other key as it is; with its
+params, its message and its last 20 lines of error output (`log_tail`).
+
+**After it.** The state is read fresh (the installed version too). If the app's pairing had been refused (`refused`),
+it pairs again, as `reconnect()` does: the person asked for this computer. A core the app cannot reach within 30 s
+does not fail the install; the state says what is there.
 
 ## The proxy
 
@@ -197,6 +256,16 @@ pairing the proxy answers 503; without a core, 502.
   deadline with a child holding its pipes, a timeout with a live child, a detached service kept, a command link
   retargeted after the check; a directory swapped between check and read, links, loose modes and an ancestry others
   can write.
+- The install, against a stand-in registry (`src/fake_registry.rs`: the documents and a package built on the spot,
+  its installer a script): the real 0.8.1 documents resolved; platforms, skewed versions, documents that are not ones,
+  every tarball URL off the registry; the integrity's forms; tarballs that leave the package (`..`, absolute, a GNU long
+  name, a pax `path`), links, devices, an entry twice, the limits, a cancel; a release fetched, verified, unpacked and
+  installed by its installer (`install --json`, `D`), a tampered tarball never unpacked, the installer's keys mapped
+  with its last lines, an installer that answers nothing or hangs, a cancel mid-download, short and oversized bodies,
+  the private directory gone each time; end to end with the stand-in core, `installing` while it runs and only one at a
+  time, `running` and the pairing after it, a refused pairing paired again, a failed install that frees the slot. By
+  hand, over the network (`--features fetch -- --ignored the_real_registry`): the real latest release resolved,
+  downloaded, verified and unpacked, its installer not run.
 - `tests/real_core.rs`: pairing, the proxy and upgrade framing (101; chunked, a body, early data refused) against
   sidevoice-core itself when `SIDEVOICE_CORE_PYTHON` names a Python that imports it (skipped otherwise).
 - CI, Linux (`test` job): `examples/local-host-ci.rs serve` as the runner and `attack` as a second user — it cannot

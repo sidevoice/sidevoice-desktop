@@ -5,8 +5,10 @@
 
 use serde_json::{json, Value};
 use sidevoice_local_host::fake_core::{self, FakeCore};
+use sidevoice_local_host::fake_registry::FakeRegistry;
 use sidevoice_local_host::host::{Action, Config, LocalHost};
 use sidevoice_local_host::http;
+use sidevoice_local_host::install;
 use sidevoice_local_host::paths::DataDirs;
 use sidevoice_local_host::state::State;
 use sidevoice_local_host::store;
@@ -867,4 +869,121 @@ fn a_head_still_arriving_survives_connection_churn() {
     let _ = page.read_to_string(&mut answer);
     drop(churn.join());
     assert!(answer.starts_with("HTTP/1.1 200"), "{answer:?}");
+}
+
+// ---- the install: the package's own installer, then the app paired with the core it started ----
+
+const PLATFORM: &str = "@sidevoice/sidevoice-linux-x64";
+
+fn install_options(world: &World) -> install::Options {
+    let temp = world._tmp.path().join("t");
+    std::fs::create_dir_all(&temp).unwrap();
+    install::Options {
+        package: Some(PLATFORM.into()),
+        temp,
+        installer_time: Duration::from_secs(20),
+        settle_time: Duration::from_secs(5),
+        ..install::Options::standard()
+    }
+}
+
+/// A release whose installer answers as the real one does once the service runs, after `seconds`.
+fn release(seconds: &str) -> FakeRegistry {
+    let installer = format!(
+        "#!/bin/sh\nsleep {seconds}\necho '{{\"ok\":true,\"action\":\"installed\",\"version\":\"0.8.1\",\"state\":\"running\"}}'\n"
+    );
+    FakeRegistry::release("0.8.1", PLATFORM, &[("bin/sidevoice-connector", installer.as_bytes(), 0o755)])
+}
+
+#[test]
+fn an_install_runs_alone_says_installing_meanwhile_and_ends_with_the_core_reachable() {
+    let world = World::new();
+    // The core the installer starts (here, already up: the stand-in installer only answers).
+    let core = world.core(1);
+    let host = world.host();
+    let registry = release("1");
+    let options = install_options(&world);
+    let installing = host.begin_install("job-1").unwrap();
+    assert_eq!(installing.id(), "job-1");
+    assert_eq!(host.state().state, State::Installing, "at once, before any pass");
+    let busy = host.begin_install("job-2").map(|_| ()).unwrap_err();
+    assert_eq!(busy.key, install::BUSY);
+    assert_eq!(host.begin_install("").map(|_| ()).unwrap_err().key, "bad_request");
+    let report = std::thread::scope(|scope| {
+        let running = scope.spawn(|| installing.run(&registry, &options));
+        let mut seen = Vec::new();
+        while !running.is_finished() {
+            // Only polls the install was under way for all along (its slot frees once, before its last pass).
+            let step = host.install_progress("job-1").map(|p| p.step);
+            let state = host.poll().state;
+            if step.is_some() && host.install_progress("job-1").is_some() {
+                seen.push((state, step));
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(seen.iter().any(|(state, _)| *state == State::Installing), "{seen:?}");
+        assert!(seen.iter().all(|(state, _)| *state == State::Installing), "nothing else while it runs: {seen:?}");
+        assert!(seen.iter().any(|(_, step)| *step == Some(install::Step::Staging)), "{seen:?}");
+        assert_eq!(host.install_progress("job-2"), None);
+        running.join().unwrap()
+    })
+    .unwrap();
+    assert_eq!((report.state, report.reachable), (State::Running, true), "{report:?}");
+    assert_eq!(host.pairing().unwrap()["fp"], core.fingerprint());
+    assert_eq!(host.install_progress("job-1"), None, "over");
+    assert!(!host.cancel_install("job-1"));
+    // Free again; one begun and dropped unrun frees it too.
+    drop(host.begin_install("job-3").unwrap());
+    drop(host.begin_install("job-4").unwrap());
+    assert_eq!(std::fs::read_dir(&options.temp).unwrap().count(), 0, "nothing left behind");
+}
+
+#[test]
+fn an_install_over_a_refused_pairing_pairs_again() {
+    let world = World::new();
+    let core = world.core(1);
+    let host = world.host();
+    running(&host);
+    let before = store::load(&world.app_dir).unwrap().device_id;
+    core.revoke_all();
+    assert_eq!(host.poll().state, State::Refused);
+    // The installer restarts the core: a new launch, the same identity (an update keeps it).
+    core.relaunch();
+    let report = host.begin_install("again").unwrap().run(&release("0"), &install_options(&world)).unwrap();
+    assert_eq!((report.state, report.reachable), (State::Running, true), "{report:?}");
+    assert_ne!(store::load(&world.app_dir).unwrap().device_id, before, "a new local device");
+}
+
+#[test]
+fn a_failed_install_rejects_and_the_state_is_what_is_there() {
+    let world = World::new();
+    let host = world.host();
+    let registry = release("0");
+    registry.serve(&registry.tarball_url(), 200, b"not the tarball".to_vec());
+    let failure = host.begin_install("bad").unwrap().run(&registry, &install_options(&world)).unwrap_err();
+    assert_eq!((failure.key.as_str(), failure.step), ("install.checksum", Some(install::Step::Verification)));
+    assert_eq!(host.state().state, State::Absent);
+    assert!(host.begin_install("next").is_ok(), "free again");
+}
+
+#[test]
+fn a_cancel_is_honoured_by_id_until_the_installer_runs() {
+    let world = World::new();
+    let host = world.host();
+    let registry = release("0");
+    registry.slow(&registry.tarball_url(), Duration::from_millis(30));
+    let installing = host.begin_install("slow").unwrap();
+    let options = install_options(&world);
+    let failure = std::thread::scope(|scope| {
+        let running = scope.spawn(|| installing.run(&registry, &options));
+        while host.install_progress("slow").and_then(|p| p.done).is_none() {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!host.cancel_install("another"), "only its own id");
+        assert!(host.cancel_install("slow"));
+        running.join().unwrap()
+    })
+    .unwrap_err();
+    assert_eq!((failure.key.as_str(), failure.step), (install::CANCELLED, Some(install::Step::Download)));
+    assert_ne!(host.state().state, State::Installing);
 }

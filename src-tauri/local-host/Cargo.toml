@@ -9,8 +9,12 @@ publish = false
 
 [features]
 # A stand-in core on a Unix socket (HTTP + a WebSocket echo), for this crate's tests, its CI example and the app's CI
-# probe. Never in the app.
+# probe; and a stand-in npm registry serving a package built on the spot (`fake_registry`), for the install's tests.
+# Never in the app.
 fake-core = ["dep:sha1"]
+# The install's real HTTPS client (`npm::Https`): the app turns it on. Off for this crate's own tests, which use the
+# stand-in registry, so they build with no TLS stack.
+fetch = ["dep:reqwest"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -29,6 +33,13 @@ getrandom = "0.3"
 subtle = "2.6"
 # The stand-in core's WebSocket handshake (fake-core only).
 sha1 = { version = "0.10", optional = true }
+# The install (docs/LOCAL_HOST.md → Install): the npm package is a gzipped tar, read entry by entry and written by hand
+# (`tarball`). Both already in the app's tree (tauri-plugin-updater, sidevoice-engine); pure Rust.
+flate2 = "1"
+tar = { version = "0.4", default-features = false }
+# The registry over HTTPS, blocking (`fetch` only): the reqwest, TLS stack (rustls, the platform's verifier) and system
+# proxy the engine's model downloads and the app's updater already use; only its `blocking` client is added.
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls", "system-proxy"], optional = true }
 
 [dev-dependencies]
 # The tests and the CI example use the stand-in core.

@@ -22,11 +22,19 @@
 //! reads `install.json` and resolves its command (no process), and the program is asked again only when that resolves
 //! to another file (an install, an update or a rollback switches `R/current` to another release), after each action,
 //! and, while unknown, at most every [`FALLBACK_EVERY`]. No `install.json`, no version, at once.
+//!
+//! **The install** ([`LocalHost::begin_install`], [`Installing::run`]): one at a time ([`install::BUSY`] otherwise).
+//! While it runs the state is `installing`, whatever the service passes through. Once the package's installer has
+//! answered, the app pairs with the new core as on any core launch — again, as [`LocalHost::reconnect`] does, if its
+//! pairing was refused: the person asked for this computer — and the install answers the state once the core is
+//! reachable, or after [`install::Options::settle_time`] with whatever it is then.
 
 use crate::cli::Cli;
 use crate::connector;
 use crate::core_socket::{CoreError, CoreSocket, Health, Paired};
 use crate::identity;
+use crate::install::{self, Failure, Job, Step};
+use crate::npm::Fetch;
 use crate::paths::DataDirs;
 use crate::proxy::Proxy;
 use crate::state::{self, Link, Observed, Report, State};
@@ -158,6 +166,8 @@ pub struct LocalHost {
     inner: Mutex<Inner>,
     /// One pass at a time: the poll thread's and an action's.
     passes: Mutex<()>,
+    /// The install under way, if any: one at a time.
+    install: Mutex<Option<Arc<Job>>>,
     stopped: AtomicBool,
     log: Arc<dyn Fn(&str) + Send + Sync>,
 }
@@ -185,6 +195,7 @@ impl LocalHost {
                 force_pair: false,
             }),
             passes: Mutex::new(()),
+            install: Mutex::new(None),
             stopped: AtomicBool::new(false),
             log,
         }))
@@ -263,13 +274,19 @@ impl LocalHost {
             self.proxy.set_token(None);
         }
         let product_version = self.product_version();
+        let installing = self.install.lock().unwrap().is_some();
         let mut inner = self.inner.lock().unwrap();
-        let report = state::report(Observed {
+        let mut report = state::report(Observed {
             status: status.as_ref(),
             core: health.as_ref(),
             link: &inner.link,
             product_version: product_version.as_deref(),
         });
+        if installing {
+            // What the service passes through meanwhile is the install's, not a condition to act on.
+            report.state = State::Installing;
+            report.failure = None;
+        }
         if report.state != inner.report.state {
             (self.log)(&format!("local-host state {}", json!(report.state).as_str().unwrap_or("?")));
         }
@@ -482,6 +499,111 @@ impl LocalHost {
     pub fn log_path(&self) -> Option<PathBuf> {
         self.config.dirs.log()
     }
+
+    /// Starts install `id` (the page's id for this call: 1–128 printable ASCII characters), refused [`install::BUSY`]
+    /// while another runs. Its progress and its cancel go by that id from now on; [`Installing::run`] runs it.
+    pub fn begin_install(self: &Arc<Self>, id: &str) -> Result<Installing, Failure> {
+        if id.is_empty() || id.len() > 128 || !id.chars().all(|c| c.is_ascii_graphic()) {
+            return Err(Failure::new("bad_request", None, "That is not an install's id."));
+        }
+        let mut slot = self.install.lock().unwrap();
+        if slot.is_some() {
+            return Err(Failure::new(install::BUSY, None, "Sidevoice is already being installed on this computer."));
+        }
+        let job = Arc::new(Job::new(id));
+        *slot = Some(job.clone());
+        drop(slot);
+        // Said at once, not at the next pass.
+        let mut inner = self.inner.lock().unwrap();
+        inner.report.state = State::Installing;
+        inner.report.failure = None;
+        drop(inner);
+        (self.log)(&format!("local-host install {id} started"));
+        Ok(Installing { host: self.clone(), job })
+    }
+
+    /// Install `id`'s `{step, done, total, cancellable}` while it runs; `None` for any other id, or once it has ended.
+    pub fn install_progress(&self, id: &str) -> Option<install::Progress> {
+        self.install.lock().unwrap().as_ref().filter(|job| job.id() == id).map(|job| job.progress())
+    }
+
+    /// Asks install `id` to stop: true while that is honoured (until its installer starts), false after, or for an id
+    /// not under way.
+    pub fn cancel_install(&self, id: &str) -> bool {
+        let job = self.install.lock().unwrap().as_ref().filter(|job| job.id() == id).cloned();
+        job.is_some_and(|job| job.cancel())
+    }
+
+    fn end_install(&self, job: &Arc<Job>) {
+        let mut slot = self.install.lock().unwrap();
+        if slot.as_ref().is_some_and(|running| Arc::ptr_eq(running, job)) {
+            *slot = None;
+        }
+    }
+
+    /// The install's steps 1–4 ([`install::prepare`]), then `pairing`: the state after it, the install's slot freed
+    /// before the last pass so that it says what is there.
+    fn run_install(&self, job: &Arc<Job>, fetch: &dyn Fetch, options: &install::Options) -> Result<Report, Failure> {
+        let outcome = install::prepare(job, fetch, &self.config.dirs.data, options);
+        match &outcome {
+            Ok(answer) => {
+                (self.log)(&format!(
+                    "local-host install {}: {} {}",
+                    job.id(),
+                    answer["action"].as_str().unwrap_or("done"),
+                    answer["version"].as_str().unwrap_or("?")
+                ));
+                self.settle(job, options.settle_time);
+            }
+            Err(failure) => (self.log)(&format!("local-host install {} failed: {failure}", job.id())),
+        }
+        self.end_install(job);
+        let pass = self.invalidate();
+        let report = self.pass(&pass);
+        outcome.map(|_| report)
+    }
+
+    /// `pairing`: the new core paired with as on any core launch (again if the app's pairing was refused, as
+    /// [`Self::reconnect`] does: the person asked for this computer), until it is reachable or `limit` has passed.
+    fn settle(&self, job: &Job, limit: Duration) {
+        let _ = job.enter(Step::Pairing);
+        {
+            let mut inner = self.inner.lock().unwrap();
+            if inner.link == Link::Refused {
+                inner.force_pair = true;
+                inner.link = Link::Unpaired;
+                inner.pairing = None;
+            }
+        }
+        drop(self.invalidate());
+        let deadline = Instant::now() + limit;
+        while !self.poll().reachable && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(250).min(limit));
+        }
+    }
+}
+
+/// An install begun ([`LocalHost::begin_install`]); dropped unrun, it frees the slot.
+pub struct Installing {
+    host: Arc<LocalHost>,
+    job: Arc<Job>,
+}
+
+impl Installing {
+    pub fn id(&self) -> &str {
+        self.job.id()
+    }
+
+    /// Runs it to the end (blocking: minutes at worst): the state after it, or why it failed.
+    pub fn run(self, fetch: &dyn Fetch, options: &install::Options) -> Result<Report, Failure> {
+        self.host.run_install(&self.job, fetch, options)
+    }
+}
+
+impl Drop for Installing {
+    fn drop(&mut self) {
+        self.host.end_install(&self.job);
+    }
 }
 
 impl Drop for LocalHost {
@@ -500,7 +622,7 @@ struct Product {
 
 /// A version as a release names it, and as the page accepts it (sidevoice-web `local-host-status.ts`):
 /// `X.Y.Z[-pre][+build]`, the suffixes of ASCII letters, digits, `.` and `-`; at most 64 characters.
-fn semver(text: &str) -> bool {
+pub(crate) fn semver(text: &str) -> bool {
     let suffix = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
     let (rest, build) = match text.split_once('+') {
         Some((rest, build)) => (rest, Some(build)),
