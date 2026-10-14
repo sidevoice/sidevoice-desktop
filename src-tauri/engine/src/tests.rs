@@ -406,12 +406,81 @@ fn the_catalogues_are_the_local_one_then_each_provider_in_the_pages_shape() {
     for key in ["id", "backend", "precision", "downloadBytes", "memoryMb", "available", "reasons", "installed"] {
         assert!(build.get(key).is_some(), "{key} in {build}");
     }
+    assert_eq!(build["accelerator"], "cpu");
+    assert_eq!(build["acceleratorClass"], "cpu");
     for remote in &views[1..] {
         assert!(remote.name.is_some(), "a provider has a name");
         assert!(remote.models.is_empty(), "{} lists nothing without a key", remote.id);
         assert_eq!(remote.status.reason.as_ref().map(|r| r.code.as_str()), Some("credential-missing"));
     }
     assert_eq!(test.engines.refresh("no-such").unwrap_err().key, "catalog_not_found");
+}
+
+/// The engine owns the classification; the bridge uses its stable ids and omits both fields when no accelerator is
+/// available for a build. Serialize the actual local-model mapping, not a standalone BuildView fixture.
+#[test]
+fn a_local_build_exposes_the_engines_accelerator_class() {
+    let test = engines("accelerator-class", false);
+    let mut model = test.engines.models().unwrap().into_iter().find(|m| m.id == "whisper-test").unwrap();
+    for (accelerator, id, class) in [
+        (Some(Accelerator::Metal), Some("metal"), Some("gpu")),
+        (Some(Accelerator::CoreMl), Some("unknown"), Some("neural-engine")),
+        (Some(Accelerator::Cpu), Some("cpu"), Some("cpu")),
+        (None, None, None),
+    ] {
+        model.builds[0].accelerator = accelerator;
+        let json = serde_json::to_value(catalogs::local_model(&model)).unwrap();
+        let build = &json["builds"][0];
+        match class {
+            Some(id) => assert_eq!(build["acceleratorClass"], id),
+            None => assert!(build.get("acceleratorClass").is_none(), "{build}"),
+        }
+        match id {
+            Some(id) => assert_eq!(build["accelerator"], id),
+            None => assert!(build.get("accelerator").is_none(), "{build}"),
+        }
+        assert!(build.get("accelerator_class").is_none(), "{build}");
+    }
+}
+
+/// The two Supertonic models have different stable voice ids. Keep every display name, gender and language through
+/// the bundled engine catalogue and this bridge, without downloading any model.
+#[test]
+fn the_bundled_supertonic_voices_reach_the_page() {
+    let root = std::env::temp_dir().join(format!("sidevoice-supertonic-catalog-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+    let engines = NativeEngines::new(&root, sidevoice_engine::NoCredentials, runtime.handle().clone()).unwrap();
+    let models = serde_json::to_value(&engines.catalogs().unwrap()[0].models).unwrap();
+    for (model_id, ids, languages) in [
+        (
+            "supertonic-2",
+            (0..10).map(|i| if i < 5 { format!("F{}", i + 1) } else { format!("M{}", i - 4) }).collect::<Vec<_>>(),
+            vec!["en", "ko", "es", "pt", "fr"],
+        ),
+        (
+            "supertonic-3",
+            (0..10).map(|i| i.to_string()).collect::<Vec<_>>(),
+            vec![
+                "en", "ko", "ja", "ar", "bg", "cs", "da", "de", "el", "es", "et", "fi", "fr", "hi", "hr", "hu", "id",
+                "it", "lt", "lv", "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", "tr", "uk", "vi",
+            ],
+        ),
+    ] {
+        let model = models.as_array().unwrap().iter().find(|model| model["id"] == model_id).unwrap();
+        let expected: Vec<_> = ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| {
+                let name = if i < 5 { format!("F{}", i + 1) } else { format!("M{}", i - 4) };
+                let gender = if i < 5 { "female" } else { "male" };
+                serde_json::json!({"id": id, "name": name, "gender": gender, "languages": languages})
+            })
+            .collect();
+        assert_eq!(model["voices"], serde_json::json!(expected), "{model_id}");
+    }
+    drop(engines);
+    let _ = std::fs::remove_dir_all(root);
 }
 
 /// When the engine last loaded a local model reaches the page as `lastUsedAt`, the engine's milliseconds since the

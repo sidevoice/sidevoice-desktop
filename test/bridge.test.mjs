@@ -332,7 +332,13 @@ test("host.engine lists the catalogues and keeps provider keys, refusing with a 
   const install = loadFactory();
   const { win, calls } = fakeWindow(ORIGIN);
   const catalogs = [
-    { id: "local", name: null, status: { stale: false }, models: [{ id: "whisper-tiny", capabilities: ["stt"] }] },
+    { id: "local", name: null, status: { stale: false }, models: [{
+      id: "whisper-tiny", capabilities: ["stt"], builds: [
+        { id: "whisper-tiny/whisper-cpp", accelerator: "metal", acceleratorClass: "gpu" },
+        { id: "whisper-tiny/sherpa-onnx", accelerator: "cpu", acceleratorClass: "cpu" },
+        { id: "whisper-tiny/unavailable" },
+      ],
+    }] },
     { id: "openai", name: "OpenAI", status: { stale: false, reason: { code: "credential-missing", params: {} } }, models: [] },
   ];
   const answers = { engine_catalogs: catalogs, engine_set_credential: null, engine_has_credential: true };
@@ -344,7 +350,9 @@ test("host.engine lists the catalogues and keeps provider keys, refusing with a 
     return Promise.resolve(answers[cmd]);
   };
   const engine = install(win, ORIGIN).host.engine;
-  assert.equal(JSON.stringify(await engine.catalogs()), JSON.stringify(catalogs));
+  const listed = await engine.catalogs();
+  assert.equal(JSON.stringify(listed), JSON.stringify(catalogs));
+  assert.deepEqual(listed[0].models[0].builds.map((build) => build.acceleratorClass), ["gpu", "cpu", undefined]);
   assert.equal(await engine.setCredential("openai", "sk-test"), undefined);
   await engine.setCredential("openai", null);
   assert.equal(await engine.hasCredential("openai"), true);
