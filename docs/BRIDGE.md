@@ -18,6 +18,7 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 | `bridge/call-controls-bridge.js` | Injected into the call controls card's window (below). |
 | `src-tauri/src/call_controls.rs`, `src-tauri/core/src/call_controls.rs` | The card's window, and when it shows, where it sits and how it moves (unit-tested). |
 | `src-tauri/src/updater.rs`, `src-tauri/core/src/updater.rs`, `src-tauri/core/src/build_info.rs` | The app's updates, behind `updater`, and what this build is, `build` (below). |
+| `src-tauri/src/computer_name.rs`, `src-tauri/core/src/computer_name.rs` | This computer's name, `computerName` (below; the Linux file's parsing unit-tested). |
 
 ## What the bridge reads and calls in the web UI
 
@@ -110,8 +111,15 @@ Evaluated by the app with `webview.eval` (works with the window hidden); the com
 Joining is deliberately **not** a tray command: joining unlocks audio output, which the webview
 only allows from a click in the page. "Mostrar Sidevoice" opens the window for that.
 
-`window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", version, engine, mediaKeys, build, muteShortcut, callControls, localHost?, voice?, updater? }`: the
+`window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", version, engine, mediaKeys, build, muteShortcut, callControls, computerName?, localHost?, voice?, updater? }`: the
 web UI feature-detects the desktop app by it, and each capability by its presence. `version` is the bridge's (2).
+
+`computerName` is the name the person gave this computer, which the page proposes as the device's name: on macOS
+the Computer Name (System Settings → General → Sharing, «Mac de Ana»; SystemConfiguration's
+`SCDynamicStoreCopyComputerName`), not the `.local` hostname; on Windows the device name (the DNS host name, as typed);
+on Linux the pretty hostname (`PRETTY_HOSTNAME` in `/etc/machine-info`, `hostnamectl set-hostname --pretty`), else
+the hostname. A non-empty string, trimmed; absent when the system has none, and the page then names the device
+itself. Read each time the room window opens (`src-tauri/src/computer_name.rs`, core `computer_name`).
 
 ## The local host
 

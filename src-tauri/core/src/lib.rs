@@ -4,6 +4,7 @@
 pub mod bridge;
 pub mod build_info;
 pub mod call_controls;
+pub mod computer_name;
 pub mod headset;
 pub mod i18n;
 pub mod media;

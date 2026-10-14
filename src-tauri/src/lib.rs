@@ -12,6 +12,7 @@
 //! - `call-controls`: the call controls card (`src/call_controls.rs`), floating over other apps during a call.
 
 mod call_controls;
+mod computer_name;
 mod engine_ipc;
 mod headset;
 mod keychain;
@@ -329,7 +330,12 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
         .title("Sidevoice")
         .inner_size(1100.0, 760.0)
         .min_inner_size(420.0, 560.0)
-        .initialization_script(bridge::script_for_origin(APP_ORIGIN, updater::offered(), &build));
+        .initialization_script(bridge::script_for_origin(
+            APP_ORIGIN,
+            updater::offered(),
+            &build,
+            computer_name::read().as_deref(),
+        ));
     #[cfg(feature = "probe")]
     let builder = match probe::local_host_flow() {
         Some(flow) => builder.initialization_script(flow),

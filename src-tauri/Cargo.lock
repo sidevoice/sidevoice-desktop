@@ -4447,6 +4447,7 @@ name = "sidevoice-desktop"
 version = "0.1.0"
 dependencies = [
  "block2",
+ "core-foundation 0.10.1",
  "futures-util",
  "objc2",
  "objc2-avf-audio",
@@ -4460,6 +4461,7 @@ dependencies = [
  "sidevoice-local-host",
  "sidevoice-voice",
  "sys-locale",
+ "system-configuration-sys",
  "tauri",
  "tauri-build",
  "tauri-nspanel",
