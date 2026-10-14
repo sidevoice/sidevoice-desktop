@@ -371,7 +371,7 @@ itself over `@sidevoice/voice` in the webview, the room window granting it the m
 ### The seam
 
 `window.__sidevoiceDesktop.host.voice` implements `VoiceHost`, the page's voice seam, defined once in sidevoice-voice:
-[`js/voice-host.d.ts`](https://github.com/sidevoice/sidevoice-voice/blob/0400603ae6922f47af5957bb84e61a9418b1fc47/js/voice-host.d.ts) in
+[`js/voice-host.d.ts`](https://github.com/sidevoice/sidevoice-voice/blob/96fece41748d66c1fae91476e5bf3aca35a52e84/js/voice-host.d.ts) in
 `@sidevoice/voice` (sidevoice/sidevoice-voice#6), with the types it carries (`VoiceSettings`, `VoiceHostError`,
 and `js/voice-events.d.ts`'s `VoiceTurnEvent`, `VoiceCallState`, `VoiceSaying`, `VoiceSayOutcome`) and what every
 implementation promises
