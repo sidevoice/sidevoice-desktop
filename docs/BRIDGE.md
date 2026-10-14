@@ -250,7 +250,7 @@ models is the voice call's (below), never the page's. `window.__sidevoiceDesktop
 
 | Call | Returns / does |
 |---|---|
-| `catalogs()` | `[{id, name, status: {reason?: {code, params}, stale, detail?}, models}]`: every catalogue of sidevoice-engine 0.4.0, `local` first (`name` `null`), then each provider (`openai`, `elevenlabs`; `name` the provider's), each with every model it lists in `/engine`'s shape: `{id, capabilities, languages, voices: [{id, name?, languages, gender?}], speed?: {min, max}}`, and for a local model also `family, parametersM, license, installed, lastUsedAt?, builds: [{id, backend, accelerator?, precision, downloadBytes, memoryMb, available, reasons: [{code, params}], installed}], recommendedBuild?` (`lastUsedAt`: when the engine last loaded the model, in milliseconds since the Unix epoch, a number; absent while it does not know: not installed, or not loaded since it was). A catalogue that cannot list (a provider with no key, one that refuses) has `models: []` and says why in `status.reason` (`credential-missing`, ...), the provider's own words in `status.detail`. Rejects `{code}` only when the engine itself fails |
+| `catalogs()` | `[{id, name, status: {reason?: {code, params}, stale, detail?}, models}]`: every catalogue of sidevoice-engine 0.5.0, `local` first (`name` `null`), then each provider (`openai`, `elevenlabs`; `name` the provider's), each with every model it lists in `/engine`'s shape: `{id, capabilities, languages, voices: [{id, name?, languages, gender?}], speed?: {min, max}}`, and for a local model also `family, parametersM, license, installed, lastUsedAt?, builds: [{id, backend, accelerator?, acceleratorClass?, precision, downloadBytes, memoryMb, available, reasons: [{code, params}], installed}], recommendedBuild?`. `acceleratorClass` is the engine's optional class id, exactly `"gpu" | "neural-engine" | "cpu"`; it is absent when the build has no accelerator here. `lastUsedAt` is when the engine last loaded the model, in milliseconds since the Unix epoch, a number; absent while it does not know: not installed, or not loaded since it was. A catalogue that cannot list (a provider with no key, one that refuses) has `models: []` and says why in `status.reason` (`credential-missing`, ...), the provider's own words in `status.detail`. Rejects `{code}` only when the engine itself fails |
 | `setCredential(provider, key)` | keeps `key` for remote catalogue `provider` in the macOS keychain, or removes it (`null` or blank), then lists that provider again with it. Rejects `provider_invalid`, `credentials_failed`, and `credentials_unavailable` where the app keeps no keys (Windows, Linux) |
 | `hasCredential(provider)` | whether the keychain holds a key for `provider` (`false` where the app keeps none). The key itself never reaches the page |
 | `testCredential(provider, key)` | asks `provider` with `key` (trimmed; blank is no key) without keeping it, and answers what its catalogue says against it, `{code, params, detail?}` (`credential-rejected`, `listing-not-permitted`, `provider-unreachable`, …, as `status.reason`; `detail`, when the provider gave some, its own words as `status.detail` has them, with every occurrence of the tried key replaced by `[key]`, control characters as spaces, and cut to 300 characters with "…"), or `null` when the provider lists with it. The key is never written to the keychain, never logged, and never reaches the listings the app keeps: the trial runs on an engine of its own, made for it and dropped after it, whose only key is this one for this provider. So the kept key, its listing, and anything listed or called at the same time (a call in progress, a `catalogs()`) are the kept key's, before, during and after. Rejects `catalog_not_found` for an id that is not a provider's (`local` included), and as `setCredential` does where the app keeps no keys (`credentials_unavailable`) or for a malformed id (`provider_invalid`) |
@@ -371,9 +371,9 @@ itself over `@sidevoice/voice` in the webview, the room window granting it the m
 ### The seam
 
 `window.__sidevoiceDesktop.host.voice` implements `VoiceHost`, the page's voice seam, defined once in sidevoice-voice:
-[`js/voice-host.d.ts`](https://github.com/sidevoice/sidevoice-voice/blob/feat/voice-host/js/voice-host.d.ts) in
+[`js/voice-host.d.ts`](https://github.com/sidevoice/sidevoice-voice/blob/v0.4.0/js/voice-host.d.ts) in
 `@sidevoice/voice` (sidevoice/sidevoice-voice#6), with the types it carries (`VoiceSettings`, `VoiceHostError`,
-and `js/voice-events.d.ts`'s `VoiceTurnEvent`, `VoiceCallState`, `VoiceSaying`, `VoiceSayOutcome`) and what every
+and `js/voice-events.d.ts`'s `VoiceTurnEvent`, `VoiceCallState`, `VoiceSaying`, `VoiceSayOutcome`, `VoiceTake`) and what every
 implementation promises
 (that package's README, "The voice seam a page drives"). On the web the same package's `createVoiceHost(source)`
 implements it over the call in the page, with the models the page's `source` loads (sidevoice-web's adapter over its
@@ -408,9 +408,23 @@ What is this app's own:
   loaded: the call then goes on as it was, on the models it had.
 - `start` rejects `{key: "voice_failed", code, message}` with the call's code, `{key: "voice_settings_missing", code:
   "settings-missing"}` before any settings, and `{key: "voice_failed", code: "stopped"}` when `stop` came first.
-- The seam has thirteen calls: `setSettings`, `start`, `stop`, `say`, `mute`, `cancelInput`, `onTurn`, `onState`,
-  `onLevel`, `onError`, `audioDevices`, `setAudioDevices`, `onAudioDevices`. The catalogues and provider keys are
-  `host.engine`'s (above).
+- The seam has fifteen calls here: `setSettings`, `start`, `stop`, `say`, `mute`, `cancelInput`, `onTurn`, `onState`,
+  `onLevel`, `onPlaybackLevel`, `onError`, `onTake`, `audioDevices`, `setAudioDevices`, `onAudioDevices`. The
+  catalogues and provider keys are `host.engine`'s (above).
+- `onPlaybackLevel(listener)` receives a bare number from 0 to 1, just as `onLevel` does for the microphone: RMS of
+  the samples actually rendered by the speaker, after fade and gain, smoothed on the voice detector's windows
+  (normally 512 samples at 16 kHz, 32 ms). It continues while the microphone is muted. Silence and the end of
+  playback deliver exact `0`, including after cancellation, failure and stop; stop sends zero before the terminal
+  state or error. The voice module drops stale frames across stop/start and device replacement. Each subscription
+  hears only later events, survives stop/start, isolates listener exceptions and returns an idempotent unsubscribe
+  function that removes only that listener. Reload stops the call and discards the page's old subscriptions.
+  The web UI feature-detects this method and wraps its bare number in its own
+  `{threadId, level, receivedAt}` record for `window.sidevoiceUI.playbackLevel`; that record is not a bridge event.
+- A try's take (sidevoice-web's contract gap #40): `start({take: true})` has the call keep what the microphone gives
+  from the moment it listens until that listening ends, at most two minutes, in memory; `onTake` gets it then as
+  `VoiceTake` (`{sampleRate, samples: Float32Array, started_at, ended_at, turns}`), before the error that ended the
+  listening, and `stop()` after such a start resolves only once it was handed over (at the idle state that answers
+  the stop, which the take comes before). A start with no take records nothing. The app keeps no copy.
 - The audio devices are the system's (cpal's, each id cpal's device id), chosen through sidevoice-voice's
   `NativeDevices`; `outputSelectable` is always `true`. A call that runs switches its microphone at once and its
   speaker once what it is playing has ended. `setAudioDevices` rejects `{key: "voice_audio_device_unknown", code:
@@ -421,14 +435,16 @@ What is this app's own:
 
 ### How it travels
 
-- Page → app: the commands `voice_set_settings {settings}`, `voice_start`, `voice_stop`,
+- Page → app: the commands `voice_set_settings {settings}`, `voice_start {take}`, `voice_stop`,
   `voice_say {key, text, language}`, `voice_cancel_say {key}`, `voice_mute {muted}`, `voice_cancel_input`,
   `voice_audio_devices`, `voice_set_audio_devices {choice: {input?, output?}}` (`src-tauri/src/voice.rs`). Granted to
   the room window (`capabilities/room.json`); each re-checks that the caller is the current room window on the app's
   own page.
 - App → page: `window.__sidevoiceDesktop.voiceEvent(event)` (`webview.eval`), each sidevoice-voice `VoiceEvent` as
-  JSON, `{type: "turn" | "state" | "level" | "error", data}`, and the devices when they change, `{type: "devices",
-  data}`, which the bridge hands to its listeners; and each step
+  JSON, `{type: "turn" | "state" | "level" | "playback-level" | "error" | "take", data}` (`playback-level`'s `data` a
+  bare number; a take's `samples` the base64 of its 32-bit little-endian floats, core `voice::take`, which the bridge
+  turns back into a `Float32Array`), and the devices when they change, `{type: "devices", data}`, which the bridge
+  hands to its listeners; and each step
   of something said, `{type: "say", data: {key, event}}` (`key` the bridge's for the handle `say` answered at once;
   `event` sidevoice-voice's `SayEvent`, the last `done` with the outcome), which it hands to that handle. A handle's
   `cancel` goes behind its `voice_say`, so it never overtakes it.

@@ -1,7 +1,7 @@
 # The native engine: sidevoice-engine, and the voice call on it
 
 The app's speech models run on **sidevoice-engine** (`sidevoice/sidevoice-engine`), a Rust crate this app depends on
-(`src-tauri/engine/Cargo.toml`, pinned to one commit until the engine is tagged). The engine owns the catalogue of
+(`src-tauri/engine/Cargo.toml`, pinned to the v0.5.0 tag). The engine owns the catalogue of
 models, local and remote, the downloads, which build of a model runs on this machine, and the models in memory.
 
 On macOS the app runs the voice call itself with **sidevoice-voice** (`sidevoice/sidevoice-voice`, `src-tauri/src/voice.rs`,
@@ -31,7 +31,7 @@ catalogues: `local` first, then each provider), in the shape `/engine` gives the
 
 ## What runs, where
 
-- Backends, linked statically into the app through sidevoice-engine (the release `src-tauri/engine/Cargo.toml` pins: 0.4.0),
+- Backends, linked statically into the app through sidevoice-engine (the release `src-tauri/engine/Cargo.toml` pins: 0.5.0),
   with no Cargo features to choose: **sherpa-onnx 1.13.8** (ONNX Runtime) on the CPU, **whisper.cpp** (through
   `whisper-rs`), compiled from source, on Metal on Apple Silicon, and the **remote** OpenAI and ElevenLabs backends.
   Nothing is loaded at run time with `dlopen`, so the macOS app keeps library validation on: its only entitlement is
@@ -40,6 +40,11 @@ catalogues: `local` first, then each provider), in the shape `/engine` gives the
   (`engine.catalog(id).load(model)`: an installed build that runs here, else the recommended one). The app adds the
   voice activity detector, the local catalogue's Silero, and, for `smart-turn`, its local end-of-turn model (core
   `voice.rs`).
+- The engine ranks builds that run here by accelerator class: GPU first, then neural engine, then CPU, while still
+  preferring an installed build when loading without an explicit choice. On Apple Silicon, this recommends
+  whisper.cpp on Metal for Whisper. Its GPU implementation uses flash attention. The page receives each build's
+  optional `acceleratorClass` (`"gpu"`, `"neural-engine"`, or `"cpu"`) from the engine; the app does not infer it or
+  enable Core ML. An explicit build choice still takes precedence.
 - Models are downloaded on demand into the app's data directory, `sidevoice-engine/`
   (`~/Library/Application Support/dev.sidevoice.desktop/sidevoice-engine/` on macOS), each file checked against its
   SHA-256 as it arrives and stored only once whole. The voice call installs what it needs as it starts; the page may

@@ -6,9 +6,10 @@
 //! tells how it went.
 //!
 //! Only the room window's own page may call these (capabilities/room.json, and `room_page`). The call's events reach
-//! that page as `window.__sidevoiceDesktop.voiceEvent(event)`, each sidevoice-voice's `VoiceEvent` as JSON, and each
-//! step of something said as `{type: "say", data: {key, event}}`, and the audio devices when they change as
-//! `{type: "devices", data}`. A page that loads anew finds the call stopped, its models still loaded.
+//! that page as `window.__sidevoiceDesktop.voiceEvent(event)`, each sidevoice-voice's `VoiceEvent` as JSON (a take's
+//! samples in base64, core `voice::take`), and each step of something said as `{type: "say", data: {key, event}}`, and
+//! the audio devices when they change as `{type: "devices", data}`. A page that loads anew finds the call stopped, its
+//! models still loaded.
 //!
 //! macOS only: the echo canceller's C++ does not build on Windows yet, and the beta ships on macOS. Elsewhere the page
 //! runs the call itself.
@@ -30,8 +31,8 @@ use sidevoice_desktop_core::voice::{
 };
 use sidevoice_desktop_engine::{CatalogView, NativeEngines};
 use sidevoice_voice::{
-    AudioDevices, Events, Listening, NativeDevices, NativeIo, SayCancel, SayEvent, SayOptions, SayOutcome, StopReason,
-    VoiceCall, VoiceConfig, VoiceEvent, VoiceModels,
+    AudioDevices, Events, Listening, NativeDevices, NativeIo, SayCancel, SayEvent, SayOptions, SayOutcome,
+    StartOptions, StopReason, Take, VoiceCall, VoiceConfig, VoiceEvent, VoiceModels,
 };
 use tauri::{AppHandle, Manager, State, Webview};
 use tokio::sync::oneshot;
@@ -182,9 +183,16 @@ pub async fn voice_set_settings(
 
 /// Loads the models (installing them if they are not), opens the microphone and the speaker and listens. Resolves
 /// once the call listens (at once if it does already; with the first when one is pending); rejects with the call's
-/// error code, or `stopped` when `stop` comes first.
+/// error code, or `stopped` when `stop` comes first. With `take`, the call keeps what the microphone gives from then
+/// until that listening ends, and hands it to the page then (`{type: "take", data}`); listening already, it changes
+/// nothing.
 #[tauri::command]
-pub async fn voice_start(app: AppHandle, webview: Webview, state: State<'_, VoiceState>) -> Result<(), Refusal> {
+pub async fn voice_start(
+    app: AppHandle,
+    webview: Webview,
+    state: State<'_, VoiceState>,
+    take: Option<bool>,
+) -> Result<(), Refusal> {
     page(&app, &webview)?;
     let (sender, started) = oneshot::channel();
     {
@@ -196,7 +204,7 @@ pub async fn voice_start(app: AppHandle, webview: Webview, state: State<'_, Voic
             return Ok(());
         }
         lifecycle.waiting.push(sender);
-        call.start();
+        call.start(StartOptions { take: take.unwrap_or(false) });
     }
     match started.await {
         Ok(Ok(())) => Ok(()),
@@ -414,6 +422,12 @@ async fn with_call(
 fn forward(app: AppHandle, mut events: Events, lifecycle: Arc<Mutex<Lifecycle>>) {
     tauri::async_runtime::spawn(async move {
         while let Some(event) = events.next().await {
+            // A take goes to the page with its samples in base64, and to the log only as its size.
+            if let VoiceEvent::Take(take) = &event {
+                crate::debug(&format!("voice take: {} samples, {} turns", take.samples.len(), take.turns.len()));
+                to_page(&app, &page_take(take));
+                continue;
+            }
             match &event {
                 VoiceEvent::State(state) => {
                     let mut lifecycle = lifecycle.lock().unwrap();
@@ -425,7 +439,7 @@ fn forward(app: AppHandle, mut events: Events, lifecycle: Arc<Mutex<Lifecycle>>)
                 VoiceEvent::Error(error) => lifecycle.lock().unwrap().settle(&Err(error.code.clone())),
                 _ => {}
             }
-            if !matches!(event, VoiceEvent::Level(_)) {
+            if !matches!(event, VoiceEvent::Level(_) | VoiceEvent::PlaybackLevel(_)) {
                 crate::debug(&format!("voice event {}", serde_json::to_string(&event).unwrap_or_default()));
             }
             if let Ok(event) = serde_json::to_value(&event) {
@@ -433,6 +447,17 @@ fn forward(app: AppHandle, mut events: Events, lifecycle: Arc<Mutex<Lifecycle>>)
             }
         }
     });
+}
+
+/// A take as the page gets it (core `voice::take`).
+fn page_take(take: &Take) -> Value {
+    choice::take::page_event(
+        take.sample_rate,
+        &take.samples,
+        take.started_at,
+        take.ended_at,
+        serde_json::to_value(&take.turns).unwrap_or_default(),
+    )
 }
 
 /// Hands `event` to the room page: `window.__sidevoiceDesktop.voiceEvent(event)`.
