@@ -182,6 +182,7 @@ what the interface's own window offers — same origin, same permission rule —
       voice.onAgentInterrupted(() => {}),
       voice.onTake((t) => takes.push(t))];
     const catalogs = await window.__sidevoiceDesktop.host.engine.catalogs();
+    await voice.setCaptureBoundary("probe-initial");
     const models = catalogs[0].models;
     const remote = catalogs.slice(1).map((c) => c.id + ":" + (c.status.reason ? c.status.reason.code : "current")).join(",");
     const unknown = await voice.setSettings({ stt: { catalog: "local", model: "whisper-nope" },
@@ -199,6 +200,7 @@ what the interface's own window offers — same origin, same permission rule —
     await voice.setSettings({ stt: { catalog: "local", model: "whisper-tiny", language: "es", build },
       tts: { catalog: "local", model: "kokoro-82m-v1.0", voice: "ef_dora", speed: 1 }, patience: "fast",
       end_of_turn: "smart-turn", turn_model: turnModel, idle_unload_minutes: 10, barge_in_min_speech: 0.8 });
+    await voice.setCaptureBoundary("probe-next");
     // The system's devices (a runner may list none) and an id it does not list, refused by key and code.
     const listed = await voice.audioDevices();
     const devices = listed.inputs.length + "/" + listed.outputs.length + "/" + listed.outputSelectable;
@@ -210,7 +212,7 @@ what the interface's own window offers — same origin, same permission rule —
       "/" + (takes[0].ended_at - takes[0].started_at === Math.floor(takes[0].samples.length / 16)) : "none";
     await until(() => states.includes("idle") || started !== "ok", 30000);
     stops.forEach((stop) => stop());
-    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-voice ok keys=" + Object.keys(voice).length +
+    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-voice ok keys=" + Object.keys(voice).length + " boundary=ok" +
       " catalogs=" + catalogs[0].id + "," + remote + " models=" + models.length + " vad=" + models.some((m) => m.capabilities.includes("vad")) + " unknown=" + unknown +
       " bad_build=" + badBuild + " build=" + build + " turn_model=" + turnModel +
       " devices=" + devices + " unknown_device=" + unknownDevice + " start=" + started + " take=" + take + " states=" + states.join(",") + " errors=" + errors.join(",") });
