@@ -264,6 +264,12 @@
           muting = muting.then(() => invoke("voice_mute", { muted: !!muted })).catch(() => {});
         },
         cancelInput: () => { invoke("voice_cancel_input").catch(() => {}); },
+        // In order with mutes; resolves once native closed the turn, or at once when there is nothing to close.
+        endInput: () => {
+          const ended = muting.then(() => invoke("voice_end_input"));
+          muting = ended.then(() => undefined, () => undefined);
+          return muting;
+        },
         onTurn: on(listeners.turn),
         onState: on(listeners.state),
         onLevel: on(listeners.level),

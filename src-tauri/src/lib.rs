@@ -475,6 +475,7 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
         voice::voice_cancel_say,
         voice::voice_mute,
         voice::voice_cancel_input,
+        voice::voice_end_input,
         voice::voice_audio_devices,
         voice::voice_set_audio_devices
     ]

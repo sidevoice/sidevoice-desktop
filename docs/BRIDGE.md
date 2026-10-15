@@ -484,9 +484,14 @@ What is this app's own:
   creation: one asked before the first `setSettings` applies to the call those settings make. A muted call hears
   silence; an open turn then ends only as silence ends it (its ordinary patience). `cancelInput()` before the settings
   does nothing.
+- `endInput()` closes the call's open turn now with what was captured so far (sidevoice-voice `endInput`): it is
+  transcribed and told like any turn (`finished`, or `cancelled` with `merged` when a turn opening within the merge
+  window joins it). It resolves once the turn is closed, not transcribed, and never rejects: with nothing to close (no
+  settings yet, no open turn, the call stopped or disposing) it resolves at once. It does not mute, nor touch the
+  playback or how later turns end. It is asked in order with `mute`.
 - The host has `createCall`, `routeInput`, `audioDevices`, `setAudioDevices`, and `onAudioDevices`.
   Every `VoiceCallHost` has `id`, `setSettings`, `start`, `stop`, `dispose`, `say`, `mute`,
-  `cancelInput`, `onTurn`, `onState`, `onLevel`, `onPlaybackLevel`, `onError`, and `onTake`.
+  `cancelInput`, `endInput`, `onTurn`, `onState`, `onLevel`, `onPlaybackLevel`, `onError`, and `onTake`.
   `routeInput(call | null)` acknowledges a next-frame switch; the other started calls receive silence.
   `dispose` takes no new work, stops the call and delivers what that stop ends, as the call reports it: each saying's
   own outcome (never a made-up one), an open turn's `cancelled`, the take; then it releases only that call's lane and
@@ -521,7 +526,8 @@ What is this app's own:
   `voice_set_settings {key,settings}`, `voice_start {key,take?}`, `voice_stop {key}` (answers `true` once the page
   has what the stop ends, `false` at once before the first settings),
   `voice_dispose_call {key}` (stops first, the same way), `voice_say {key,sayKey,text,language?}`,
-  `voice_cancel_say {key,sayKey}`, `voice_mute {key,muted}`, and `voice_cancel_input {key}`.
+  `voice_cancel_say {key,sayKey}`, `voice_mute {key,muted}`, `voice_cancel_input {key}`, and
+  `voice_end_input {key}` (answers once the turn is closed).
   The shared commands are `voice_audio_devices` and `voice_set_audio_devices {choice}`.
   The room window capability grants only these fixed commands, and each checks the current page.
 - App → page: `window.__sidevoiceDesktop.voiceEvent(event)` receives `{key,type,data}`.

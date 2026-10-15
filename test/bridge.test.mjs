@@ -477,7 +477,7 @@ test("native voice offers the shared host and independent calls", async () => {
   const a = host.createCall();
   const b = host.createCall();
   assert.notEqual(a.id, b.id);
-  assert.deepEqual(Object.keys(a).sort(), ["cancelInput", "dispose", "id", "mute", "onError", "onLevel",
+  assert.deepEqual(Object.keys(a).sort(), ["cancelInput", "dispose", "endInput", "id", "mute", "onError", "onLevel",
     "onPlaybackLevel", "onState", "onTake", "onTurn", "say", "setSettings", "start", "stop"]);
   assert.ok(Object.isFrozen(host) && Object.isFrozen(a));
   await host.routeInput(a);
@@ -617,6 +617,42 @@ test("mute and cancelInput before the settings return nothing, never reject, and
   assert.deepEqual(answered, [true, false, true]);
   assert.deepEqual(calls.filter(([cmd]) => cmd === "voice_mute").map(([, args]) => [args.key, args.muted]),
     [[a.id, true], [a.id, false], [a.id, true]]);
+});
+
+test("endInput is asked in order with mutes, resolves once native closed the turn, and never rejects", async () => {
+  const { win, calls } = fakeWindow(ORIGIN);
+  const closing = [];
+  win.__TAURI_INTERNALS__.invoke = (cmd, args) => {
+    calls.push([cmd, args === undefined ? undefined : structuredClone(args)]);
+    if (cmd === "voice_mute") return new Promise((resolve) => setTimeout(() => resolve(null), 20));
+    if (cmd === "voice_end_input") return new Promise((resolve) => closing.push(resolve));
+    if (cmd === "voice_stop") return Promise.resolve(false);
+    return Promise.resolve(null);
+  };
+  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const a = api.host.voice.createCall();
+  // Nothing to end before the settings: native answers at once, and so does the bridge.
+  a.mute(true);
+  let ended = false;
+  const ending = a.endInput().then((value) => { ended = true; return value; });
+  await flush();
+  assert.ok(!calls.some(([cmd]) => cmd === "voice_end_input"), "asked after the slow mute before it");
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "voice_mute" || cmd === "voice_end_input").map(([cmd, args]) => [cmd, args.key]),
+    [["voice_mute", a.id], ["voice_end_input", a.id]]);
+  assert.equal(ended, false, "it waits for native to close the turn");
+  closing.shift()(null);
+  assert.equal(await ending, undefined);
+  // A native refusal never rejects, and a stop does not wait for it.
+  win.__TAURI_INTERNALS__.invoke = (cmd, args) => {
+    calls.push([cmd, args === undefined ? undefined : structuredClone(args)]);
+    if (cmd === "voice_end_input") return Promise.reject({ key: "bad_request", message: "Unknown voice call." });
+    return Promise.resolve(cmd === "voice_stop" ? false : null);
+  };
+  assert.equal(await a.endInput(), undefined);
+  await a.stop();
+  await a.dispose();
+  assert.equal(await a.endInput(), undefined, "after dispose, nothing to end");
 });
 
 test("stop after a recorded start and a repeated start waits for the take and the idle that answer it", async () => {

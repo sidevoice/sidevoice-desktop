@@ -268,6 +268,18 @@ impl<A: LaneAudio> VoiceState<A> {
         Ok(())
     }
 
+    /// Closes the call's open turn now with what was captured so far; resolves once it is closed (not transcribed).
+    /// With no call yet, nothing open, or the call stopped, nothing happens and it resolves.
+    async fn end_input(&self, key: &str) -> Result<(), Refusal> {
+        let lane = self.lane(key).await?;
+        let closed = match lane.call.lock().await.as_ref() {
+            Some((call, _)) => call.end_input(),
+            None => return Ok(()),
+        };
+        closed.await;
+        Ok(())
+    }
+
     /// No route and no lanes: each old call is stopped and released.
     async fn clear(&self) {
         {
@@ -634,6 +646,20 @@ pub async fn voice_cancel_input(
 ) -> Result<(), Refusal> {
     page(&app, &webview)?;
     state.cancel_input(&key).await
+}
+
+/// Closes the open turn now with what was captured so far: it is transcribed and told like any turn. It neither
+/// mutes, nor touches the playback or how later turns end. Resolves once the turn is closed, also when there is
+/// nothing to close (no settings yet, no open turn, the call stopped).
+#[tauri::command]
+pub async fn voice_end_input(
+    app: AppHandle,
+    webview: Webview,
+    state: State<'_, VoiceState>,
+    key: String,
+) -> Result<(), Refusal> {
+    page(&app, &webview)?;
+    state.end_input(&key).await
 }
 
 /// The system's microphones and speakers and the ones chosen (`null`: the system's default), as the seam's

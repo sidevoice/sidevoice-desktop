@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::Value;
-use sidevoice_voice::{AudioIo, IoEvent, IoSink, NativeDevices};
+use sidevoice_voice::{AudioIo, IoEvent, IoSink, NativeDevices, VoiceConfig};
 
 use super::models::tests::{chosen, config, within, FakeLoader, Held, TURN_FRAMES};
 use super::models::EngineModels;
@@ -219,12 +219,21 @@ fn host() -> (VoiceState<FakeAudio>, FakeAudio) {
 
 /// The call of `key`'s lane, as its first settings make it: a transcriber that answers "words", a speaker.
 async fn configure(state: &VoiceState<FakeAudio>, key: &str, page: Page) {
+    configure_with(state, key, page, config("silence", "voice")).await;
+}
+
+async fn configure_with(state: &VoiceState<FakeAudio>, key: &str, page: Page, config: VoiceConfig) {
     let (started, _) = tokio::sync::mpsc::unbounded_channel();
     let models = vec![Held::new("words", false, &started), Held::new("voice", false, &started)];
     let models = EngineModels::with(Box::new(FakeLoader::new(models, false)), chosen("words", "voice", None));
     let lane = state.lane(key).await.unwrap();
     let mut call = lane.call.lock().await;
-    lane.install(&mut call, key, Arc::new(models), config("silence", "voice"), page).unwrap();
+    lane.install(&mut call, key, Arc::new(models), config, page).unwrap();
+}
+
+/// How many of `key`'s saying steps are of `step`.
+fn say_steps(seen: &Seen, key: &str, step: &str) -> usize {
+    seen.of(key).iter().filter(|event| event["type"] == "say" && event["data"]["event"]["type"] == step).count()
 }
 
 /// Two started lanes on one microphone: each hears only while routed to (the other gets silence, and None silences
@@ -370,5 +379,48 @@ fn dispose_hands_over_the_says_end_the_open_turn_and_the_take_then_nothing() {
         let (a, b) = (seen.of("a").len(), seen.of("b").len());
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert_eq!((seen.of("a").len(), seen.of("b").len()), (a, b), "nothing after dispose");
+    });
+}
+
+/// endInput closes the open turn now, long before silence would (calm patience waits 3.5 s, then the 1.5 s merge
+/// window), without muting; with no settings yet or no turn open it resolves at once, and a saying under way goes on
+/// playing.
+#[test]
+fn end_input_closes_the_open_turn_now_and_leaves_the_playback_alone() {
+    runtime().block_on(async {
+        let (state, audio) = host();
+        let seen = Seen::default();
+        audio.hold.store(true, Ordering::SeqCst);
+        for key in ["a", "b"] {
+            state.create_call(key.into()).await.unwrap();
+        }
+        within(state.end_input("a")).await.unwrap();
+        let calm: VoiceConfig = serde_json::from_value(serde_json::json!({
+            "language": "en", "voice": "voice", "speed": 1.0, "end_of_turn": "silence", "patience": "calm",
+        }))
+        .unwrap();
+        configure_with(&state, "a", seen.page(), calm).await;
+        configure(&state, "b", seen.page()).await;
+        for key in ["a", "b"] {
+            within(state.start(key, false)).await.unwrap();
+        }
+
+        state.say("b", "say-1".into(), "Hello there.".into(), None, seen.page()).await.unwrap();
+        seen.until("B plays", |seen| say_steps(seen, "b", "playing") == 1).await;
+        within(state.end_input("b")).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(say_steps(&seen, "b", "done"), 0, "the playback goes on");
+
+        state.route_input(Some("a".into())).await.unwrap();
+        audio.speak(100_000);
+        seen.until("A's open turn", |seen| seen.count("a", "turn", Some("started")) == 1).await;
+        audio.speak(0);
+        let asked = std::time::Instant::now();
+        within(state.end_input("a")).await.unwrap();
+        seen.until("A's turn told", |seen| seen.count("a", "turn", Some("finished")) == 1).await;
+        assert!(asked.elapsed() < Duration::from_millis(3_500), "closed by endInput, not by the calm patience");
+        assert_eq!(seen.count("a", "turn", Some("cancelled")), 0);
+        assert_ne!(seen.last_listening("a").as_deref(), Some("muted"), "endInput does not mute");
+        assert_eq!(say_steps(&seen, "b", "done"), 0, "B's playback still goes on");
     });
 }
