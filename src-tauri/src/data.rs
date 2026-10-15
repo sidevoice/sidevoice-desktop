@@ -218,11 +218,11 @@ fn write_pairings(path: &Path, value: &Value) -> Answer {
     }
     #[cfg(unix)]
     {
-        return write_pairings_unix(path, value, || {});
+        write_pairings_unix(path, value, || {})
     }
     #[cfg(windows)]
     {
-        return write_pairings_windows(path, value, || {});
+        write_pairings_windows(path, value, || {})
     }
 }
 
