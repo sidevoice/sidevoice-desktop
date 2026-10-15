@@ -937,6 +937,7 @@ fn helper_lock(fd: Option<i32>) -> Option<std::fs::File> {
 #[cfg(target_os = "macos")]
 fn helper_lock_at(fd: Option<i32>, path: &Path) -> Option<std::fs::File> {
     use std::os::fd::FromRawFd;
+    use std::os::unix::fs::MetadataExt;
     let fd = fd.filter(|fd| *fd >= 3)?;
     let held = unsafe { std::fs::File::from_raw_fd(fd) };
     let named = open_reset_lock_at(path).ok()?;
