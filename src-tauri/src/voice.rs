@@ -262,7 +262,13 @@ pub async fn voice_say(
     tauri::async_runtime::spawn(async move {
         while let Some(event) = saying.next().await {
             let done = matches!(event, SayEvent::Done { .. });
-            let interrupted = matches!(event, SayEvent::Done { outcome: SayOutcome::HeardUpTo { reason: StopReason::BargeIn, .. } | SayOutcome::NotPlayed { reason: StopReason::BargeIn } });
+            let interrupted = matches!(
+                event,
+                SayEvent::Done {
+                    outcome: SayOutcome::HeardUpTo { reason: StopReason::BargeIn, .. }
+                        | SayOutcome::NotPlayed { reason: StopReason::BargeIn }
+                }
+            );
             if done {
                 sayings.lock().unwrap().remove(&key);
             }
@@ -510,19 +516,19 @@ mod turns_tests {
             ("native-a".into(), ("say-1".into(), first)),
             ("native-b".into(), ("say-2".into(), second)),
         ]));
-        for (native, key, heard, played) in [
-            ("native-a", "say-1", 3, true),
-            ("native-b", "say-2", 0, false),
-        ] {
+        for (native, key, heard, played) in [("native-a", "say-1", 3, true), ("native-b", "say-2", 0, false)] {
             let event = VoiceEvent::AgentInterrupted(AgentInterrupted {
                 utterance_id: native.into(),
                 heard_until: heard,
                 played,
             });
             let (value, sent) = event_for_page(&event, &keys).unwrap();
-            assert_eq!(value, json!({"type": "agent-interrupted", "data": {
-                "utterance_id": key, "heard_until": heard, "played": played
-            }}));
+            assert_eq!(
+                value,
+                json!({"type": "agent-interrupted", "data": {
+                    "utterance_id": key, "heard_until": heard, "played": played
+                }})
+            );
             assert!(sent.is_some());
             assert!(event_for_page(&event, &keys).is_none(), "one report per native say");
         }
