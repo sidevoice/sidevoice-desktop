@@ -5,8 +5,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::util::{
-    contains, copy_dir, ensure, fresh_dir, in_ci, mkdir, private_file, random_hex, read, read_bytes, repo,
-    required_env, secret_path, sleep, version, wait_for, work, Channel, Cmd, PrivateFiles, SecretDir, TauriBuild,
+    contains, copy_dir, ensure, fresh_dir, in_ci, mkdir, private_file, random_hex, read,
+    read_bytes, repo, required_env, secret_path, sleep, version, wait_for, work, Channel, Cmd,
+    PrivateFiles, SecretDir, TauriBuild,
 };
 use crate::Result;
 
@@ -18,7 +19,10 @@ pub const FAKE_NODE_PORT: &str = "8768";
 
 /// The bundle every `macos` command works on, as `tauri build --target aarch64-apple-darwin` leaves it.
 pub fn app() -> PathBuf {
-    repo().join("src-tauri/target").join(TRIPLE).join("release/bundle/macos/Sidevoice.app")
+    repo()
+        .join("src-tauri/target")
+        .join(TRIPLE)
+        .join("release/bundle/macos/Sidevoice.app")
 }
 
 /// The app's binary in [`app`].
@@ -28,7 +32,9 @@ pub fn binary() -> PathBuf {
 
 /// The .dmg `macos dmg` makes: `dist/Sidevoice_<version>_aarch64.dmg`.
 pub fn dmg_path() -> Result<PathBuf> {
-    Ok(repo().join("dist").join(format!("Sidevoice_{}_aarch64.dmg", version()?)))
+    Ok(repo()
+        .join("dist")
+        .join(format!("Sidevoice_{}_aarch64.dmg", version()?)))
 }
 
 /// The app's settings and data under the person's home (`~/Library/Application Support/dev.sidevoice.desktop`).
@@ -37,7 +43,9 @@ pub fn app_data(home: &Path) -> PathBuf {
 }
 
 pub fn home() -> Result<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from).ok_or_else(|| "HOME is not set".into())
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| "HOME is not set".into())
 }
 
 /// The app's binary, its diagnostics on (`SIDEVOICE_DEBUG=1`), with `env`.
@@ -51,7 +59,9 @@ pub fn app_command(env: &[(&str, &str)]) -> Cmd {
 
 /// The stand-in node (test/fixtures/fake-node.py) on loopback, logging every request with its Origin.
 pub fn fake_node(log: &Path) -> Result<crate::util::Background> {
-    Cmd::new("python3").args(["-u", "test/fixtures/fake-node.py", FAKE_NODE_PORT]).spawn(log)
+    Cmd::new("python3")
+        .args(["-u", "test/fixtures/fake-node.py", FAKE_NODE_PORT])
+        .spawn(log)
 }
 
 /// The home a step starts the app with. On a runner (`CI=true`): the person's, the app's settings and data as a
@@ -61,8 +71,6 @@ pub fn fake_node(log: &Path) -> Result<crate::util::Background> {
 /// which a home does not change: `probe` expects none there, as on a runner.)
 pub struct AppHome {
     pub home: PathBuf,
-    /// The app's settings and data under [`AppHome::home`].
-    pub dir: PathBuf,
     scratch: bool,
 }
 
@@ -70,12 +78,21 @@ impl AppHome {
     pub fn new(step: &str) -> Result<AppHome> {
         if in_ci() {
             let home = home()?;
-            return Ok(AppHome { dir: app_data(&home), home, scratch: false });
+            return Ok(AppHome {
+                home,
+                scratch: false,
+            });
         }
         let home = PathBuf::from("/tmp").join(format!("svx-{step}"));
         fresh_dir(&home)?;
-        eprintln!("(off a runner: the app runs with HOME={}, this machine's own data untouched)", home.display());
-        Ok(AppHome { dir: app_data(&home), home, scratch: true })
+        eprintln!(
+            "(off a runner: the app runs with HOME={}, this machine's own data untouched)",
+            home.display()
+        );
+        Ok(AppHome {
+            home,
+            scratch: true,
+        })
     }
 
     /// The app's binary with this home, its diagnostics on, with `env`.
@@ -97,7 +114,10 @@ fn notary_key(dir: &SecretDir) -> Result<PathBuf> {
         Ok(p8) if !p8.is_empty() => dir.file("AuthKey.p8", format!("{p8}\n").as_bytes()),
         _ => match std::env::var_os("APPLE_API_KEY_PATH") {
             Some(path) if Path::new(&path).is_file() => Ok(path.into()),
-            _ => Err("neither APPLE_API_KEY_P8 nor APPLE_API_KEY_PATH (a file) is set (RELEASING.md)".into()),
+            _ => Err(
+                "neither APPLE_API_KEY_P8 nor APPLE_API_KEY_PATH (a file) is set (RELEASING.md)"
+                    .into(),
+            ),
         },
     }
 }
@@ -109,8 +129,16 @@ fn notary_key(dir: &SecretDir) -> Result<PathBuf> {
 /// notarized with the API key (`APPLE_API_KEY`, `APPLE_API_ISSUER`, and the key file, see [`notary_key`]) and
 /// stapled. A release's (signed only) or a nightly's also makes the update artifact ([`update_artifact`]).
 pub fn build_app(signed: bool, channel: Channel) -> Result<()> {
-    let build = TauriBuild { target: Some(TRIPLE), bundles: "app", channel, ..TauriBuild::default() };
-    ensure(signed || channel != Channel::Release, "a release's app is signed: `macos app --signed --channel release`")?;
+    let build = TauriBuild {
+        target: Some(TRIPLE),
+        bundles: "app",
+        channel,
+        ..TauriBuild::default()
+    };
+    ensure(
+        signed || channel != Channel::Release,
+        "a release's app is signed: `macos app --signed --channel release`",
+    )?;
     if signed {
         build_signed(build)?;
     } else {
@@ -123,7 +151,11 @@ pub fn build_app(signed: bool, channel: Channel) -> Result<()> {
 }
 
 fn build_signed(build: TauriBuild) -> Result<()> {
-    for name in ["APPLE_SIGNING_IDENTITY", "APPLE_API_KEY", "APPLE_API_ISSUER"] {
+    for name in [
+        "APPLE_SIGNING_IDENTITY",
+        "APPLE_API_KEY",
+        "APPLE_API_ISSUER",
+    ] {
         required_env(name)?;
     }
     forget_secrets()?;
@@ -133,9 +165,17 @@ fn build_signed(build: TauriBuild) -> Result<()> {
     // The bundler imports the certificate into a keychain of its own, which it adds to the search list and removes
     // when done; one it left (a build that failed half-way) is removed here.
     let before = user_keychains()?;
-    let built = build.command().and_then(|cmd| cmd.env("APPLE_API_KEY_PATH", &key).run());
-    for left in user_keychains()?.into_iter().filter(|k| !before.contains(k)) {
-        let _ = Cmd::new("security").arg("delete-keychain").arg(&left).attempt();
+    let built = build
+        .command()
+        .and_then(|cmd| cmd.env("APPLE_API_KEY_PATH", &key).run());
+    for left in user_keychains()?
+        .into_iter()
+        .filter(|k| !before.contains(k))
+    {
+        let _ = Cmd::new("security")
+            .arg("delete-keychain")
+            .arg(&left)
+            .attempt();
     }
     built
 }
@@ -157,8 +197,16 @@ fn update_artifact(signed: bool) -> Result<()> {
         // What it unpacks to is the notarized app, its ticket stapled.
         let unpacked = work("update-artifact")?.join("unpacked");
         fresh_dir(&unpacked)?;
-        Cmd::new("tar").arg("-xzf").arg(&update).arg("-C").arg(&unpacked).run()?;
-        Cmd::new("xcrun").args(["stapler", "validate"]).arg(unpacked.join("Sidevoice.app")).run()?;
+        Cmd::new("tar")
+            .arg("-xzf")
+            .arg(&update)
+            .arg("-C")
+            .arg(&unpacked)
+            .run()?;
+        Cmd::new("xcrun")
+            .args(["stapler", "validate"])
+            .arg(unpacked.join("Sidevoice.app"))
+            .run()?;
     }
     Ok(())
 }
@@ -180,17 +228,26 @@ const SIGNING_ENV: &[&str] = &[
 
 /// `cmd` without [`SIGNING_ENV`].
 pub fn unsigned(cmd: Cmd) -> Cmd {
-    SIGNING_ENV.iter().fold(cmd, |cmd, name| cmd.env_remove(name))
+    SIGNING_ENV
+        .iter()
+        .fold(cmd, |cmd, name| cmd.env_remove(name))
 }
 
 /// The user's keychain search list (`security list-keychains -d user`).
 fn user_keychains() -> Result<Vec<String>> {
-    Ok(keychain_list(&Cmd::new("security").args(["list-keychains", "-d", "user"]).stdout()?))
+    Ok(keychain_list(
+        &Cmd::new("security")
+            .args(["list-keychains", "-d", "user"])
+            .stdout()?,
+    ))
 }
 
 /// The paths in `security list-keychains`' output: one per line, indented and quoted.
 pub fn keychain_list(text: &str) -> Vec<String> {
-    text.lines().map(|line| line.trim().trim_matches('"').to_owned()).filter(|path| !path.is_empty()).collect()
+    text.lines()
+        .map(|line| line.trim().trim_matches('"').to_owned())
+        .filter(|path| !path.is_empty())
+        .collect()
 }
 
 /// What `codesign -dvvv` says of a signature, as far as the checks go.
@@ -228,9 +285,13 @@ impl Signature {
         let Some(team) = team else {
             return ensure(signature.adhoc, "not ad-hoc signed");
         };
-        ensure(signature.developer_id, "not signed by a Developer ID Application")?;
         ensure(
-            text.lines().any(|line| line == format!("TeamIdentifier={team}")),
+            signature.developer_id,
+            "not signed by a Developer ID Application",
+        )?;
+        ensure(
+            text.lines()
+                .any(|line| line == format!("TeamIdentifier={team}")),
             format!(
                 "not signed by the team APPLE_TEAM_ID names (TeamIdentifier={})",
                 signature.team.unwrap_or_default()
@@ -248,56 +309,110 @@ pub fn notarized(spctl: &str) -> bool {
 
 /// `notarytool submit --output-format json`'s status.
 pub fn notary_status(json: &str) -> Result<String> {
-    let answer: serde_json::Value = serde_json::from_str(json).map_err(|e| format!("notarytool's answer: {e}"))?;
-    answer["status"].as_str().map(str::to_owned).ok_or_else(|| "notarytool's answer has no status".into())
+    let answer: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| format!("notarytool's answer: {e}"))?;
+    answer["status"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| "notarytool's answer has no status".into())
 }
 
 fn plist(app: &Path, key: &str) -> Result<String> {
     let info = app.join("Contents/Info.plist");
-    Ok(Cmd::new("plutil").args(["-extract", key, "raw"]).arg(info).stdout()?.trim_end_matches('\n').to_owned())
+    Ok(Cmd::new("plutil")
+        .args(["-extract", key, "raw"])
+        .arg(info)
+        .stdout()?
+        .trim_end_matches('\n')
+        .to_owned())
 }
 
 pub fn entitlements(app: &Path) -> Result<String> {
-    Cmd::new("codesign").args(["-d", "--entitlements", "-", "--xml"]).arg(app).stdout()
+    Cmd::new("codesign")
+        .args(["-d", "--entitlements", "-", "--xml"])
+        .arg(app)
+        .stdout()
 }
 
 /// What only the probe build carries (src-tauri/src/probe.rs): never in a release app.
-pub const PROBE_ONLY: &[&str] =
-    &["SIDEVOICE_DEBUG_PAGE", "probe-engine", "probe-card", "SIDEVOICE_DEBUG_LOCAL_HOST_FLOW", "local-host-flow"];
+pub const PROBE_ONLY: &[&str] = &[
+    "SIDEVOICE_DEBUG_PAGE",
+    "probe-engine",
+    "probe-card",
+    "SIDEVOICE_DEBUG_LOCAL_HOST_FLOW",
+    "local-host-flow",
+];
 
 /// `macos check-app [--signed]`: what a first open depends on, in the app as built: Info.plist, the signature (with
 /// `--signed`: the Developer ID's, `APPLE_TEAM_ID`'s, timestamped, notarized and stapled, and Gatekeeper takes it),
 /// the entitlements, the icon (its entries also copied to dmg-screens/ for the record), arm64, and no CI probe.
 pub fn check_app(signed: bool) -> Result<()> {
     let app = app();
-    ensure(app.is_dir(), format!("{} is not there: `cargo xtask macos app` first", app.display()))?;
-    let team = if signed { Some(required_env("APPLE_TEAM_ID")?) } else { None };
+    ensure(
+        app.is_dir(),
+        format!(
+            "{} is not there: `cargo xtask macos app` first",
+            app.display()
+        ),
+    )?;
+    let team = if signed {
+        Some(required_env("APPLE_TEAM_ID")?)
+    } else {
+        None
+    };
     eprintln!("--- Info.plist");
-    Cmd::new("plutil").arg("-p").arg(app.join("Contents/Info.plist")).run()?;
+    Cmd::new("plutil")
+        .arg("-p")
+        .arg(app.join("Contents/Info.plist"))
+        .run()?;
     eprintln!("{}", plist(&app, "NSMicrophoneUsageDescription")?);
-    ensure(plist(&app, "LSMinimumSystemVersion")? == "13.0", "LSMinimumSystemVersion is not 13.0")?;
+    ensure(
+        plist(&app, "LSMinimumSystemVersion")? == "13.0",
+        "LSMinimumSystemVersion is not 13.0",
+    )?;
 
     eprintln!("--- signature");
-    Cmd::new("codesign").args(["--verify", "--deep", "--strict", "--verbose=2"]).arg(&app).run()?;
+    Cmd::new("codesign")
+        .args(["--verify", "--deep", "--strict", "--verbose=2"])
+        .arg(&app)
+        .run()?;
     let signature = Cmd::new("codesign").arg("-dvvv").arg(&app).output()?;
     eprintln!("{signature}");
     Signature::check(&signature, team.as_deref())?;
     if signed {
-        Cmd::new("xcrun").args(["stapler", "validate"]).arg(&app).run()?;
-        let spctl = Cmd::new("spctl").args(["-a", "-vv", "-t", "exec"]).arg(&app).output()?;
+        Cmd::new("xcrun")
+            .args(["stapler", "validate"])
+            .arg(&app)
+            .run()?;
+        let spctl = Cmd::new("spctl")
+            .args(["-a", "-vv", "-t", "exec"])
+            .arg(&app)
+            .output()?;
         eprintln!("{spctl}");
-        ensure(notarized(&spctl), "Gatekeeper does not take the app as a notarized Developer ID app")?;
+        ensure(
+            notarized(&spctl),
+            "Gatekeeper does not take the app as a notarized Developer ID app",
+        )?;
     }
 
     eprintln!("--- entitlements");
     let entitlements = entitlements(&app)?;
     eprintln!("{entitlements}");
-    ensure(entitlements.contains("com.apple.security.device.audio-input"), "no microphone entitlement")?;
+    ensure(
+        entitlements.contains("com.apple.security.device.audio-input"),
+        "no microphone entitlement",
+    )?;
     // The engine is linked into the app: no downloaded library is loaded, so library validation stays on.
-    ensure(!entitlements.contains("com.apple.security.cs.disable-library-validation"), "library validation is off")?;
+    ensure(
+        !entitlements.contains("com.apple.security.cs.disable-library-validation"),
+        "library validation is off",
+    )?;
 
     eprintln!("--- icon");
-    ensure(plist(&app, "CFBundleIconFile")? == "icon.icns", "CFBundleIconFile is not icon.icns")?;
+    ensure(
+        plist(&app, "CFBundleIconFile")? == "icon.icns",
+        "CFBundleIconFile is not icon.icns",
+    )?;
     let iconset = work("check-app")?.join("icon.iconset");
     if iconset.exists() {
         fs::remove_dir_all(&iconset).map_err(|e| format!("{}: {e}", iconset.display()))?;
@@ -310,17 +425,29 @@ pub fn check_app(signed: bool) -> Result<()> {
     Cmd::new("ls").arg(&iconset).run()?;
     for size in ICON_SIZES {
         let file = iconset.join(format!("icon_{size}.png"));
-        ensure(fs::metadata(&file).is_ok_and(|m| m.len() > 0), format!("the icon has no {size}"))?;
+        ensure(
+            fs::metadata(&file).is_ok_and(|m| m.len() > 0),
+            format!("the icon has no {size}"),
+        )?;
     }
-    let largest = Cmd::new("sips").args(["-g", "pixelWidth"]).arg(iconset.join("icon_512x512@2x.png")).stdout()?;
-    ensure(largest.contains("1024"), "the largest icon is not 1024 pixels wide")?;
+    let largest = Cmd::new("sips")
+        .args(["-g", "pixelWidth"])
+        .arg(iconset.join("icon_512x512@2x.png"))
+        .stdout()?;
+    ensure(
+        largest.contains("1024"),
+        "the largest icon is not 1024 pixels wide",
+    )?;
     // How macOS itself decodes every entry, for the record (uploaded with the .dmg window screenshots).
     let record = repo().join("dmg-screens/icon.iconset");
     if record.exists() {
         fs::remove_dir_all(&record).map_err(|e| format!("{}: {e}", record.display()))?;
     }
     copy_dir(&iconset, &record)?;
-    ensure(plist(&app, "CFBundleName")? == "Sidevoice", "CFBundleName is not Sidevoice")?;
+    ensure(
+        plist(&app, "CFBundleName")? == "Sidevoice",
+        "CFBundleName is not Sidevoice",
+    )?;
 
     eprintln!("--- architecture");
     let archs = Cmd::new("lipo").arg("-archs").arg(binary()).stdout()?;
@@ -330,7 +457,10 @@ pub fn check_app(signed: bool) -> Result<()> {
     eprintln!("--- no CI probe in a release (src-tauri/src/probe.rs is behind the probe feature)");
     let bytes = read_bytes(&binary())?;
     for marker in PROBE_ONLY {
-        ensure(!contains(&bytes, marker), format!("the release app carries {marker}: a CI probe is in it"))?;
+        ensure(
+            !contains(&bytes, marker),
+            format!("the release app carries {marker}: a CI probe is in it"),
+        )?;
     }
     Ok(())
 }
@@ -354,7 +484,9 @@ const ICON_SIZES: [&str; 10] = [
 pub fn first_open() -> Result<()> {
     let home = AppHome::new("first-open")?;
     let log = work("first-open")?.join("app.log");
-    let mut app = home.app(&[("SIDEVOICE_DEBUG_PAGE", "probe.html")]).spawn(&log)?;
+    let mut app = home
+        .app(&[("SIDEVOICE_DEBUG_PAGE", "probe.html")])
+        .spawn(&log)?;
     wait_for(&log, "ready: true", 0, 45);
     sleep(5.0);
     if !app.running() {
@@ -364,9 +496,15 @@ pub fn first_open() -> Result<()> {
     let text = read(&log);
     eprintln!("{text}");
     let has = |pattern| crate::util::has(&text, pattern);
-    ensure(has("page tauri://localhost/voice/index.html"), "the bundled interface did not load")?;
+    ensure(
+        has("page tauri://localhost/voice/index.html"),
+        "the bundled interface did not load",
+    )?;
     ensure(!has("probe.html"), "a release ran a CI probe")?;
-    ensure(has("ready: true"), "the interface's controller never came up")
+    ensure(
+        has("ready: true"),
+        "the interface's controller never came up",
+    )
 }
 
 /// `macos dmg [--signed]`: the .dmg, `dist/Sidevoice_<version>_aarch64.dmg`, with the brand's window (background,
@@ -377,17 +515,27 @@ pub fn dmg(signed: bool) -> Result<()> {
     let work = work("dmg")?;
     let venv = work.join("dmgbuild");
     Cmd::new("python3").args(["-m", "venv"]).arg(&venv).run()?;
-    Cmd::new(venv.join("bin/pip")).args(["install", "--quiet", "dmgbuild==1.6.7"]).run()?;
+    Cmd::new(venv.join("bin/pip"))
+        .args(["install", "--quiet", "dmgbuild==1.6.7"])
+        .run()?;
     // One TIFF with the 1x and 2x drawings: Finder picks the one for the screen.
     let background = work.join("background.tiff");
     Cmd::new("tiffutil")
-        .args(["-cathidpicheck", "src-tauri/dmg/background.png", "src-tauri/dmg/background@2x.png", "-out"])
+        .args([
+            "-cathidpicheck",
+            "src-tauri/dmg/background.png",
+            "src-tauri/dmg/background@2x.png",
+            "-out",
+        ])
         .arg(&background)
         .run()?;
     // No older image beside this one, to be checksummed or uploaded with it.
     let dist = repo().join("dist");
     mkdir(&dist)?;
-    for old in crate::util::files(&dist)?.into_iter().filter(|p| crate::util::name(p).ends_with(".dmg")) {
+    for old in crate::util::files(&dist)?
+        .into_iter()
+        .filter(|p| crate::util::name(p).ends_with(".dmg"))
+    {
         fs::remove_file(&old).map_err(|e| format!("{}: {e}", old.display()))?;
     }
     let dmg = dmg_path()?;
@@ -397,7 +545,13 @@ pub fn dmg(signed: bool) -> Result<()> {
         .arg(format!("app={}", app().display()))
         .arg("-D")
         .arg(format!("background={}", background.display()))
-        .args(["-D", "layout=src-tauri/dmg/layout.json", "-D", "icon=src-tauri/icons/icon.icns", "Sidevoice"])
+        .args([
+            "-D",
+            "layout=src-tauri/dmg/layout.json",
+            "-D",
+            "icon=src-tauri/icons/icon.icns",
+            "Sidevoice",
+        ])
         .arg(&dmg)
         .run()?;
     Cmd::new("hdiutil").arg("verify").arg(&dmg).run()?;
@@ -406,12 +560,21 @@ pub fn dmg(signed: bool) -> Result<()> {
     let mnt = &mount.path;
     Cmd::new("ls").arg("-la").arg(mnt).run()?;
     for name in [".background.tiff", ".DS_Store", ".VolumeIcon.icns"] {
-        ensure(fs::metadata(mnt.join(name)).is_ok_and(|m| m.len() > 0), format!("the .dmg has no {name}"))?;
+        ensure(
+            fs::metadata(mnt.join(name)).is_ok_and(|m| m.len() > 0),
+            format!("the .dmg has no {name}"),
+        )?;
     }
     let applications = fs::symlink_metadata(mnt.join("Applications"));
-    ensure(applications.is_ok_and(|m| m.file_type().is_symlink()), "the .dmg has no Applications link")?;
+    ensure(
+        applications.is_ok_and(|m| m.file_type().is_symlink()),
+        "the .dmg has no Applications link",
+    )?;
     let inside = mnt.join("Sidevoice.app");
-    Cmd::new("codesign").args(["--verify", "--deep", "--strict", "--verbose=2"]).arg(&inside).run()?;
+    Cmd::new("codesign")
+        .args(["--verify", "--deep", "--strict", "--verbose=2"])
+        .arg(&inside)
+        .run()?;
     ensure(
         entitlements(&inside)?.contains("com.apple.security.device.audio-input"),
         "the app in the .dmg has no microphone entitlement",
@@ -420,7 +583,8 @@ pub fn dmg(signed: bool) -> Result<()> {
     mount.detach()?;
     if !signed {
         let readme = repo().join("dist/LEEME-primera-apertura.txt");
-        fs::copy(repo().join("docs/FIRST_OPEN.txt"), &readme).map_err(|e| format!("{}: {e}", readme.display()))?;
+        fs::copy(repo().join("docs/FIRST_OPEN.txt"), &readme)
+            .map_err(|e| format!("{}: {e}", readme.display()))?;
     }
     Ok(())
 }
@@ -434,8 +598,15 @@ struct Mount {
 impl Mount {
     fn attach(dmg: &Path, path: &Path) -> Result<Mount> {
         fresh_dir(path)?;
-        Cmd::new("hdiutil").args(["attach", "-readonly", "-nobrowse", "-mountpoint"]).arg(path).arg(dmg).run()?;
-        Ok(Mount { path: path.to_owned(), attached: true })
+        Cmd::new("hdiutil")
+            .args(["attach", "-readonly", "-nobrowse", "-mountpoint"])
+            .arg(path)
+            .arg(dmg)
+            .run()?;
+        Ok(Mount {
+            path: path.to_owned(),
+            attached: true,
+        })
     }
 
     fn detach(mut self) -> Result<()> {
@@ -448,7 +619,11 @@ impl Mount {
 impl Drop for Mount {
     fn drop(&mut self) {
         if self.attached {
-            let _ = Cmd::new("hdiutil").arg("detach").arg(&self.path).arg("-force").attempt();
+            let _ = Cmd::new("hdiutil")
+                .arg("detach")
+                .arg(&self.path)
+                .arg("-force")
+                .attempt();
         }
     }
 }
@@ -467,13 +642,30 @@ impl Keychain {
         let certificate = required_env("APPLE_CERTIFICATE")?;
         let certificate_password = required_env("APPLE_CERTIFICATE_PASSWORD")?;
         let dir = SecretDir::new(SIGNING)?;
-        let keychain = Keychain { path: dir.path.join(KEYCHAIN), password: random_hex(24)?, dir };
+        let keychain = Keychain {
+            path: dir.path.join(KEYCHAIN),
+            password: random_hex(24)?,
+            dir,
+        };
         let (path, password) = (&keychain.path, &keychain.password);
-        Cmd::new("security").args(["create-keychain", "-p"]).secret(password).arg(path).run()?;
-        Cmd::new("security").args(["set-keychain-settings", "-lut", "3600"]).arg(path).run()?;
-        Cmd::new("security").args(["unlock-keychain", "-p"]).secret(password).arg(path).run()?;
+        Cmd::new("security")
+            .args(["create-keychain", "-p"])
+            .secret(password)
+            .arg(path)
+            .run()?;
+        Cmd::new("security")
+            .args(["set-keychain-settings", "-lut", "3600"])
+            .arg(path)
+            .run()?;
+        Cmd::new("security")
+            .args(["unlock-keychain", "-p"])
+            .secret(password)
+            .arg(path)
+            .run()?;
         let p12 = keychain.dir.path.join("certificate.p12");
-        Cmd::new("base64").arg("--decode").pipe(certificate.as_bytes(), private_file(&p12)?)?;
+        Cmd::new("base64")
+            .arg("--decode")
+            .pipe(certificate.as_bytes(), private_file(&p12)?)?;
         let imported = Cmd::new("security")
             .arg("import")
             .arg(&p12)
@@ -487,7 +679,13 @@ impl Keychain {
         let _ = fs::remove_file(&p12);
         imported?;
         Cmd::new("security")
-            .args(["set-key-partition-list", "-S", "apple-tool:,apple:,codesign:", "-s", "-k"])
+            .args([
+                "set-key-partition-list",
+                "-S",
+                "apple-tool:,apple:,codesign:",
+                "-s",
+                "-k",
+            ])
             .secret(password)
             .arg(path)
             .stdout()?;
@@ -503,13 +701,19 @@ impl Keychain {
 
 impl Drop for Keychain {
     fn drop(&mut self) {
-        let _ = Cmd::new("security").arg("delete-keychain").arg(&self.path).attempt();
+        let _ = Cmd::new("security")
+            .arg("delete-keychain")
+            .arg(&self.path)
+            .attempt();
     }
 }
 
 /// The user's keychain search list set to `keychains`.
 fn set_user_keychains(keychains: &[String]) -> Result<()> {
-    Cmd::new("security").args(["list-keychains", "-d", "user", "-s"]).args(keychains).run()
+    Cmd::new("security")
+        .args(["list-keychains", "-d", "user", "-s"])
+        .args(keychains)
+        .run()
 }
 
 /// Whether a path on the search list is a signing step's own keychain ([`SIGNING`]/[`KEYCHAIN`]), however the temporary
@@ -530,7 +734,13 @@ pub fn sign_dmg() -> Result<()> {
     let key_id = required_env("APPLE_API_KEY")?;
     let issuer = required_env("APPLE_API_ISSUER")?;
     let dmg = dmg_path()?;
-    ensure(dmg.is_file(), format!("{} is not there: `cargo xtask macos dmg --signed` first", dmg.display()))?;
+    ensure(
+        dmg.is_file(),
+        format!(
+            "{} is not there: `cargo xtask macos dmg --signed` first",
+            dmg.display()
+        ),
+    )?;
     let keychain = match std::env::var("APPLE_CERTIFICATE") {
         Ok(certificate) if !certificate.is_empty() => Some(Keychain::with_certificate()?),
         _ if !in_ci() => None,
@@ -558,20 +768,45 @@ pub fn sign_dmg() -> Result<()> {
     eprintln!("{answer}");
     let status = notary_status(&answer)?;
     ensure(status == "Accepted", format!("notarization: {status}"))?;
-    Cmd::new("xcrun").args(["stapler", "staple"]).arg(&dmg).run()?;
-    Cmd::new("xcrun").args(["stapler", "validate"]).arg(&dmg).run()?;
+    Cmd::new("xcrun")
+        .args(["stapler", "staple"])
+        .arg(&dmg)
+        .run()?;
+    Cmd::new("xcrun")
+        .args(["stapler", "validate"])
+        .arg(&dmg)
+        .run()?;
     let spctl = Cmd::new("spctl")
-        .args(["-a", "-vv", "-t", "open", "--context", "context:primary-signature"])
+        .args([
+            "-a",
+            "-vv",
+            "-t",
+            "open",
+            "--context",
+            "context:primary-signature",
+        ])
         .arg(&dmg)
         .output()?;
     eprintln!("{spctl}");
-    ensure(notarized(&spctl), "Gatekeeper does not take the .dmg as a notarized Developer ID image")?;
+    ensure(
+        notarized(&spctl),
+        "Gatekeeper does not take the .dmg as a notarized Developer ID image",
+    )?;
     // The app inside, as a download would have it: notarized, stapled, accepted.
     let mount = Mount::attach(&dmg, &work("sign-dmg")?.join("mount"))?;
     let inside = mount.path.join("Sidevoice.app");
-    Cmd::new("xcrun").args(["stapler", "validate"]).arg(&inside).run()?;
-    let spctl = Cmd::new("spctl").args(["-a", "-vv", "-t", "exec"]).arg(&inside).output()?;
-    ensure(notarized(&spctl), "Gatekeeper does not take the app in the .dmg as a notarized Developer ID app")?;
+    Cmd::new("xcrun")
+        .args(["stapler", "validate"])
+        .arg(&inside)
+        .run()?;
+    let spctl = Cmd::new("spctl")
+        .args(["-a", "-vv", "-t", "exec"])
+        .arg(&inside)
+        .output()?;
+    ensure(
+        notarized(&spctl),
+        "Gatekeeper does not take the app in the .dmg as a notarized Developer ID app",
+    )?;
     mount.detach()
 }
 
@@ -585,10 +820,16 @@ const NOTARY: &str = "sidevoice-notary";
 /// also runs this at the end of the job, whatever happened.
 pub fn forget_secrets() -> Result<()> {
     let signing = secret_path(SIGNING);
-    let _ = Cmd::new("security").arg("delete-keychain").arg(signing.join(KEYCHAIN)).attempt();
+    let _ = Cmd::new("security")
+        .arg("delete-keychain")
+        .arg(signing.join(KEYCHAIN))
+        .attempt();
     let keychains = user_keychains()?;
     if keychains.iter().any(|k| signing_keychain(k)) {
-        let kept: Vec<String> = keychains.into_iter().filter(|k| !signing_keychain(k)).collect();
+        let kept: Vec<String> = keychains
+            .into_iter()
+            .filter(|k| !signing_keychain(k))
+            .collect();
         set_user_keychains(&kept)?;
     }
     for dir in [signing, secret_path(NOTARY)] {
@@ -602,8 +843,10 @@ pub fn forget_secrets() -> Result<()> {
 /// `macos checksums`: `dist/SHA256SUMS.txt`, the SHA-256 of each .dmg in dist/ (`shasum -a 256 *.dmg`).
 pub fn checksums() -> Result<()> {
     let dist = repo().join("dist");
-    let dmgs: Vec<PathBuf> =
-        crate::util::files(&dist)?.into_iter().filter(|p| crate::util::name(p).ends_with(".dmg")).collect();
+    let dmgs: Vec<PathBuf> = crate::util::files(&dist)?
+        .into_iter()
+        .filter(|p| crate::util::name(p).ends_with(".dmg"))
+        .collect();
     ensure(!dmgs.is_empty(), "no .dmg in dist/")?;
     let sums = crate::publish::sums(&dmgs)?;
     print!("{sums}");
@@ -617,11 +860,19 @@ pub fn dmg_screens() -> Result<()> {
     let screens = repo().join("dmg-screens");
     mkdir(&screens)?;
     let dmg = dmg_path()?;
-    let attached = Cmd::new("hdiutil").args(["attach", "-readonly"]).arg(&dmg).output()?;
+    let attached = Cmd::new("hdiutil")
+        .args(["attach", "-readonly"])
+        .arg(&dmg)
+        .output()?;
     eprintln!("{attached}");
-    let volume = crate::util::re("/Volumes/.*").find(&attached).map(|m| m.as_str().to_owned()).unwrap_or_default();
+    let volume = crate::util::re("/Volumes/.*")
+        .find(&attached)
+        .map(|m| m.as_str().to_owned())
+        .unwrap_or_default();
     // The appearance as it was, put back at the end (it matters on a laptop).
-    let dark = osa(&["tell application \"System Events\" to tell appearance preferences to get dark mode"]);
+    let dark = osa(&[
+        "tell application \"System Events\" to tell appearance preferences to get dark mode",
+    ]);
     for mode in ["false", "true"] {
         let _ = osa(&[&format!(
             "tell application \"System Events\" to tell appearance preferences to set dark mode to {mode}"
@@ -632,17 +883,30 @@ pub fn dmg_screens() -> Result<()> {
             "tell application \"Finder\" to activate",
         ]);
         sleep(4.0);
-        let bounds =
-            osa(&["tell application \"Finder\" to get bounds of front window"]).unwrap_or_default().replace(' ', "");
+        let bounds = osa(&["tell application \"Finder\" to get bounds of front window"])
+            .unwrap_or_default()
+            .replace(' ', "");
         let bounds = bounds.trim();
         eprintln!("window bounds ({mode}): {bounds}");
         let shot = screens.join(format!("dmg-dark-{mode}.png"));
-        let region = region(if bounds.is_empty() { "0,28,1440,900" } else { bounds });
+        let region = region(if bounds.is_empty() {
+            "0,28,1440,900"
+        } else {
+            bounds
+        });
         let taken = region.is_some_and(|region| {
-            Cmd::new("screencapture").arg("-x").arg(format!("-R{region}")).arg(&shot).run().is_ok()
+            Cmd::new("screencapture")
+                .arg("-x")
+                .arg(format!("-R{region}"))
+                .arg(&shot)
+                .run()
+                .is_ok()
         });
         if !taken {
-            let _ = Cmd::new("screencapture").arg("-x").arg(screens.join(format!("dmg-dark-{mode}-full.png"))).run();
+            let _ = Cmd::new("screencapture")
+                .arg("-x")
+                .arg(screens.join(format!("dmg-dark-{mode}-full.png")))
+                .run();
         }
     }
     let _ = osa(&["tell application \"Finder\" to close every window"]);
@@ -676,8 +940,13 @@ fn osa(lines: &[&str]) -> Result<String> {
 
 /// The screen region (`x,y,w,h`, the title bar's 28 points included) of a Finder window's bounds (`x1,y1,x2,y2`).
 pub fn region(bounds: &str) -> Option<String> {
-    let numbers: Vec<i64> = bounds.split(',').map(|n| n.trim().parse().ok()).collect::<Option<_>>()?;
-    let [x1, y1, x2, y2] = numbers[..] else { return None };
+    let numbers: Vec<i64> = bounds
+        .split(',')
+        .map(|n| n.trim().parse().ok())
+        .collect::<Option<_>>()?;
+    let [x1, y1, x2, y2] = numbers[..] else {
+        return None;
+    };
     Some(format!("{x1},{},{},{}", y1 - 28, x2 - x1, y2 - y1 + 28))
 }
 
@@ -713,15 +982,31 @@ TeamIdentifier=AB12CD34EF
     #[test]
     fn a_developer_id_signature_needs_the_team_and_a_timestamp() {
         assert_eq!(Signature::check(SIGNED, Some("AB12CD34EF")), Ok(()));
-        assert!(Signature::check(SIGNED, None).is_err(), "a signed app is not ad-hoc");
+        assert!(
+            Signature::check(SIGNED, None).is_err(),
+            "a signed app is not ad-hoc"
+        );
         let other_team = Signature::check(SIGNED, Some("ZZ99")).unwrap_err();
         assert!(other_team.contains("AB12CD34EF"), "{other_team}");
-        assert!(Signature::check(SIGNED, Some("AB12CD34")).is_err(), "the whole line, not a prefix");
-        assert!(Signature::check(&SIGNED.replace("Timestamp=", "Signed Time="), Some("AB12CD34EF")).is_err());
-        assert!(Signature::check(&SIGNED.replace("Developer ID Application", "Apple Development"), Some("AB12CD34EF"))
-            .is_err());
+        assert!(
+            Signature::check(SIGNED, Some("AB12CD34")).is_err(),
+            "the whole line, not a prefix"
+        );
+        assert!(Signature::check(
+            &SIGNED.replace("Timestamp=", "Signed Time="),
+            Some("AB12CD34EF")
+        )
+        .is_err());
+        assert!(Signature::check(
+            &SIGNED.replace("Developer ID Application", "Apple Development"),
+            Some("AB12CD34EF")
+        )
+        .is_err());
         let both = format!("{SIGNED}Signature=adhoc\n");
-        assert_eq!(Signature::check(&both, Some("AB12CD34EF")).unwrap_err(), "ad-hoc signed in a signed build");
+        assert_eq!(
+            Signature::check(&both, Some("AB12CD34EF")).unwrap_err(),
+            "ad-hoc signed in a signed build"
+        );
     }
 
     #[test]
@@ -729,15 +1014,23 @@ TeamIdentifier=AB12CD34EF
         assert!(notarized(
             "/x/Sidevoice.app: accepted\nsource=Notarized Developer ID\norigin=Developer ID Application: X"
         ));
-        assert!(!notarized("/x/Sidevoice.app: rejected\nsource=Unnotarized Developer ID"));
-        assert_eq!(notary_status(r#"{"id":"1","status":"Accepted","message":"ok"}"#).unwrap(), "Accepted");
+        assert!(!notarized(
+            "/x/Sidevoice.app: rejected\nsource=Unnotarized Developer ID"
+        ));
+        assert_eq!(
+            notary_status(r#"{"id":"1","status":"Accepted","message":"ok"}"#).unwrap(),
+            "Accepted"
+        );
         assert_eq!(notary_status(r#"{"status":"Invalid"}"#).unwrap(), "Invalid");
         assert!(notary_status("Error: HTTP 401").is_err());
     }
 
     #[test]
     fn a_finder_window_becomes_a_screen_region() {
-        assert_eq!(region("100,128,740,528").as_deref(), Some("100,100,640,428"));
+        assert_eq!(
+            region("100,128,740,528").as_deref(),
+            Some("100,100,640,428")
+        );
         assert_eq!(region("0,28,1440,900").as_deref(), Some("0,0,1440,900"));
         assert_eq!(region("missing value"), None);
         assert_eq!(region("1,2,3"), None);
@@ -749,20 +1042,34 @@ TeamIdentifier=AB12CD34EF
             "    \"/Users/me/Library/Keychains/login.keychain-db\"\n    \"/private/var/folders/x/T/abc.keychain-db\"\n";
         assert_eq!(
             keychain_list(out),
-            ["/Users/me/Library/Keychains/login.keychain-db", "/private/var/folders/x/T/abc.keychain-db"]
+            [
+                "/Users/me/Library/Keychains/login.keychain-db",
+                "/private/var/folders/x/T/abc.keychain-db"
+            ]
         );
     }
 
     #[test]
     fn the_signing_keychain_is_told_from_the_others_on_the_list() {
-        assert!(signing_keychain("/Users/runner/work/_temp/sidevoice-signing/sidevoice-signing.keychain-db"));
-        assert!(signing_keychain("/private/var/folders/x/T/sidevoice-signing/sidevoice-signing.keychain-db"));
-        assert!(!signing_keychain("/Users/me/Library/Keychains/login.keychain-db"));
-        assert!(!signing_keychain("/Users/runner/Library/Keychains/Nt0IPhmZAIYKjzRR.keychain-db"));
+        assert!(signing_keychain(
+            "/Users/runner/work/_temp/sidevoice-signing/sidevoice-signing.keychain-db"
+        ));
+        assert!(signing_keychain(
+            "/private/var/folders/x/T/sidevoice-signing/sidevoice-signing.keychain-db"
+        ));
+        assert!(!signing_keychain(
+            "/Users/me/Library/Keychains/login.keychain-db"
+        ));
+        assert!(!signing_keychain(
+            "/Users/runner/Library/Keychains/Nt0IPhmZAIYKjzRR.keychain-db"
+        ));
     }
 
     #[test]
     fn an_unsigned_build_drops_every_signing_variable() {
-        assert!(SIGNING_ENV.contains(&"APPLE_SIGNING_IDENTITY") && SIGNING_ENV.contains(&"APPLE_API_KEY_P8"));
+        assert!(
+            SIGNING_ENV.contains(&"APPLE_SIGNING_IDENTITY")
+                && SIGNING_ENV.contains(&"APPLE_API_KEY_P8")
+        );
     }
 }
