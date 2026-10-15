@@ -18,9 +18,12 @@ struct Updates {
     installing: bool,
 }
 
+/// The channel this build was built for (build.rs): `release`, `nightly` or `dev`.
+const CHANNEL: &str = env!("SIDEVOICE_BUILD_CHANNEL");
+
 /// This build's feed (core `feed`): a release's the releases', a nightly's the nightly's; a dev build none.
 fn feed() -> Option<url::Url> {
-    core::feed(env!("SIDEVOICE_BUILD_CHANNEL"))
+    core::feed(CHANNEL)
 }
 
 /// A build with a feed (a release or a nightly) that can replace itself: its `.app` bundle on a writable volume,
@@ -54,10 +57,11 @@ pub fn setup(app: &AppHandle) {
     }
     app.manage(Mutex::new(Updates::default()));
     let app = app.clone();
+    // At launch, then as often as its channel says (core `check_every`).
     tauri::async_runtime::spawn(async move {
         loop {
             check(&app).await;
-            tokio::time::sleep(Duration::from_secs(6 * 60 * 60)).await;
+            tokio::time::sleep(core::check_every(CHANNEL)).await;
         }
     });
 }

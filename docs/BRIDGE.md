@@ -549,14 +549,16 @@ interface UpdaterStatus {
 }
 ```
 
-- **Automatic** (the default): checked at launch and every 6 hours, an update found is
+- **Automatic** (the default): checked at launch and then every hour (a nightly every 10 minutes), an update found is
   downloaded and verified in the background → `ready`; the page offers "Restart to update". An update ready when the
   person quits the app (tray, ⌘Q) is installed on the way out (Windows: its installer runs without starting the app
   again). The app never restarts on its own.
 - **Manual**: checked only → `available` → `download()` → `downloading` → `ready`.
 - `restart()` installs the ready update and restarts the app into it, now; it knows nothing of calls (the person
   decides when). Rejects `{key: "update_unavailable", message}` unless the state is `ready`; `download()` likewise
-  when no update is known. An update already downloading or ready is left as it is by later checks.
+  when no update is known. An update already downloading or ready is left as it is by later checks (nothing is
+  downloaded twice); one still `available`, found again, is not told to the page again (only an `error` the check
+  clears is).
 - A check that fails or takes over 2 minutes, a download that fails or takes over an hour, an install that fails:
   `error` says so, the state stays (a failed download stays `available`, and automatic mode tries it again at the
   next check).

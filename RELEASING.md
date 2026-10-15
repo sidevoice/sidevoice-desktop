@@ -135,9 +135,10 @@ Build artifacts on Actions runs are kept 7 days, for debugging only. Download fr
 
 ## Updates
 
-Each channel updates itself from its own feed (docs/BRIDGE.md → "The updater"), read at launch and every 6 hours, and
-only to a higher version than its own. The app chooses the feed by the channel it was built for
-(`src-tauri/core/src/updater.rs`, `feed`), so a build of one channel is never offered the other's:
+Each channel updates itself from its own feed (docs/BRIDGE.md → "The updater"), read at launch and then every hour, a
+nightly's every 10 minutes, and only to a higher version than its own. The app chooses the feed and how often it reads
+it by the channel it was built for (`src-tauri/core/src/updater.rs`, `feed` and `check_every`), so a build of one
+channel is never offered the other's:
 
 - A release reads the releases' feed,
   `https://github.com/sidevoice/sidevoice-desktop/releases/latest/download/latest.json`. `latest` is the newest

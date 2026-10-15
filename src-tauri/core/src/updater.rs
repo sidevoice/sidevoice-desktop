@@ -2,6 +2,7 @@
 //! (`src/updater.rs`) drives tauri-plugin-updater; these are its pure parts.
 
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 /// How updates arrive, kept with the app's settings and set only by the page (`host.updater.setMode`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,6 +78,13 @@ pub fn feed(channel: &str) -> Option<url::Url> {
     Some(url::Url::parse(feed).expect("a feed is a URL"))
 }
 
+/// How long a build's updater waits after one check before the next, the first being at launch (RELEASING.md →
+/// "Updates"): a nightly 10 minutes, as every green push to `main` makes one; a release an hour.
+pub fn check_every(channel: &str) -> Duration {
+    let minutes = if channel == "nightly" { 10 } else { 60 };
+    Duration::from_secs(minutes * 60)
+}
+
 /// A download's progress, 0..1 in hundredths (so the page is told at most a hundred times); none while its size is
 /// unknown.
 pub fn progress(received: u64, total: Option<u64>) -> Option<f64> {
@@ -132,6 +140,12 @@ mod tests {
         for channel in ["dev", "", "beta"] {
             assert_eq!(feed(channel), None, "{channel:?}");
         }
+    }
+
+    #[test]
+    fn a_nightly_checks_every_ten_minutes_and_a_release_every_hour() {
+        assert_eq!(check_every("nightly"), Duration::from_secs(10 * 60));
+        assert_eq!(check_every("release"), Duration::from_secs(60 * 60));
     }
 
     #[test]
