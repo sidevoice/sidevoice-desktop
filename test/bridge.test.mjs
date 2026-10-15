@@ -43,6 +43,7 @@ function fakeWindow(origin) {
 }
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
+const plain = (value) => JSON.parse(JSON.stringify(value)); // objects made by the injected bridge live in its VM realm
 const ORIGIN = "https://voice.example.com";
 
 test("does nothing on any other origin (auth pages, other sites)", () => {
@@ -579,8 +580,8 @@ test("T01/T04b: native cut ids reach the matching played and queued say handles 
   api.voiceEvent({ type: "say", data: { key: second.id, event: { type: "done", outcome: { status: "not-played", reason: { reason: "barge-in" } } } } });
   assert.deepEqual(order.map(([kind]) => kind), ["cut", "first", "cut", "second"]);
   assert.deepEqual(order.filter(([kind]) => kind === "cut").map(([, cut]) => cut), [firstCut, queuedCut]);
-  assert.deepEqual(await first.outcome, { status: "heard-up-to", heard_chars: 1, reason: { reason: "barge-in" } });
-  assert.deepEqual(await second.outcome, { status: "not-played", reason: { reason: "barge-in" } });
+  assert.deepEqual(plain(await first.outcome), { status: "heard-up-to", heard_chars: 1, reason: "barge-in" });
+  assert.deepEqual(plain(await second.outcome), { status: "not-played", reason: "barge-in" });
   stop();
   api.voiceEvent({ type: "agent-interrupted", data: firstCut });
   assert.equal(order.length, 4);
@@ -603,7 +604,7 @@ for (const [caseId, terminal] of [
     api.voiceEvent({ type: "turn", data: terminal });
     assert.deepEqual(seen.map((step) => typeof step === "string" ? step : step.played === false ? "cut" : step.type || step.phase),
       ["started", "cut", "done", terminal.phase]);
-    assert.deepEqual(await say.outcome, { status: "not-played", reason: { reason: "barge-in" } });
+    assert.deepEqual(plain(await say.outcome), { status: "not-played", reason: "barge-in" });
   });
 }
 
@@ -620,10 +621,10 @@ test("T05: an acknowledgement, checkpoint and result keep distinct say handles a
   api.voiceEvent({ type: "say", data: { key: sayings[1].id, event: { type: "done", outcome: { status: "heard-up-to", heard_chars: 3, reason: { reason: "barge-in" } } } } });
   api.voiceEvent({ type: "agent-interrupted", data: { utterance_id: sayings[2].id, heard_until: 0, played: false } });
   api.voiceEvent({ type: "say", data: { key: sayings[2].id, event: { type: "done", outcome: { status: "not-played", reason: { reason: "barge-in" } } } } });
-  assert.deepEqual(await Promise.all(sayings.map((say) => say.outcome)), [
+  assert.deepEqual(plain(await Promise.all(sayings.map((say) => say.outcome))), [
     { status: "heard" },
-    { status: "heard-up-to", heard_chars: 3, reason: { reason: "barge-in" } },
-    { status: "not-played", reason: { reason: "barge-in" } },
+    { status: "heard-up-to", heard_chars: 3, reason: "barge-in" },
+    { status: "not-played", reason: "barge-in" },
   ]);
   assert.deepEqual(cuts.map((cut) => [cut.utterance_id, cut.heard_until]), [[sayings[1].id, 3], [sayings[2].id, 0]]);
 });
@@ -673,6 +674,19 @@ test("T07: speaker events and output loss are forwarded without inventing a turn
   api.voiceEvent({ type: "playback-level", data: 0 });
   assert.deepEqual(turns, []);
   assert.deepEqual(devices.map((device) => device.lost), [{ output: "old" }]);
+});
+
+test("native stop-reason JSON becomes the flat VoiceHost outcome, including a failure code", async () => {
+  const api = loadFactory()(voiceWindow().win, ORIGIN, "native", true, true);
+  const say = api.host.voice.say("check");
+  const steps = [];
+  say.onEvent((event) => steps.push(event));
+  api.voiceEvent({ type: "say", data: { key: say.id, event: {
+    type: "done", outcome: { status: "heard-up-to", heard_chars: 0, reason: { reason: "failed", code: "speech-failed" } },
+  } } });
+  const expected = { status: "heard-up-to", heard_chars: 0, reason: "failed", code: "speech-failed" };
+  assert.deepEqual(plain(steps), [{ type: "done", outcome: expected }]);
+  assert.deepEqual(plain(await say.outcome), expected);
 });
 
 test("the audio devices: listed, chosen by kind (null the default, a missing kind as it is), told when they change", async () => {

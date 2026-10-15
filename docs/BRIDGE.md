@@ -457,10 +457,11 @@ What is this app's own:
   mapped from the native call's id; `heard_until` counts Unicode scalar values and is zero with `played:false` for a
   queued reply that never sounded. It reaches `onAgentInterrupted` once for each displaced say. The `say` stream's
   terminal event still resolves that handle's `outcome`: `{status:"heard"}`,
-  `{status:"heard-up-to",heard_chars,reason:{reason:"barge-in"|"cancelled"|"stopped"}}`, or
-  `{status:"not-played",reason:{reason:"barge-in"|"cancelled"|"stopped"}}`; failure's nested reason is
-  `{reason:"failed",code}`. `heard_chars` is also a Unicode scalar count, with zero retained when playback began
-  but no chunk completed. The bridge passes these outcomes unchanged. Events in each native event stream and each
+  `{status:"heard-up-to",heard_chars,reason:"barge-in"|"cancelled"|"stopped"}`, or
+  `{status:"not-played",reason:"barge-in"|"cancelled"|"stopped"}`; failure carries
+  `reason:"failed",code`. Rust serializes its `StopReason` inside a `reason` object; the JS bridge flattens that
+  object to the `VoiceHost` outcome shape. `heard_chars` is a Unicode scalar count, with zero retained when playback
+  began but no chunk completed. Events in each native event stream and each
   say stream keep their order. For barge-in, the native bridge forwards `agent-interrupted` before that say's
   terminal `done`, even when the two Rust receivers wake in the opposite order. The web room deduplicates them into
   one playback report.

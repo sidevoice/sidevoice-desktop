@@ -172,13 +172,19 @@
       for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
       return { ...data, samples: new Float32Array(bytes.buffer, 0, bytes.length >> 2) };
     }
+    /** Rust serializes `StopReason` as `{reason: {reason, code?}}`; `VoiceHost` exposes its fields on the outcome. */
+    function sayStep(event) {
+      if (event?.type !== "done" || !event.outcome || typeof event.outcome.reason !== "object") return event;
+      const { reason, ...outcome } = event.outcome;
+      return { ...event, outcome: { ...outcome, ...reason } };
+    }
     /** One event of the call, sidevoice-voice's `VoiceEvent` as JSON (`{type, data}`), to its listeners; a step of
      *  something said (`{type: "say", data: {key, event}}`) to its handle. */
     function receive(event) {
       if (!event || typeof event !== "object") return;
       if (event.type === "say") {
         const saying = event.data && sayings.get(event.data.key);
-        if (saying) saying.step(event.data.event);
+        if (saying) saying.step(sayStep(event.data.event));
         return;
       }
       if (event.type === "take" && event.data) event = { type: "take", data: takeOf(event.data) };
