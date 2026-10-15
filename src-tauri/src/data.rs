@@ -838,8 +838,10 @@ fn validate_uninstall_scope_at(home: &Path, data: &Path, data_home: Option<&Path
             return Err("outside-known-dirs");
         }
         let command = value.get("command").and_then(Value::as_array).ok_or("unsafe-record")?;
+        let standard = expected_releases.join("current/bin/sidevoice-connector");
+        let recovery = expected_data.join(".uninstall-recovery/sidevoice-connector");
         if command.len() != 1
-            || command[0].as_str() != expected_releases.join("current/bin/sidevoice-connector").to_str()
+            || !matches!(command[0].as_str(), Some(path) if Path::new(path) == standard || Path::new(path) == recovery)
         {
             return Err("unsafe-record");
         }
@@ -1575,6 +1577,13 @@ mod tests {
         fs::write(
             data.join("install.json"),
             json!({"releases": releases, "command": [releases.join("current/bin/sidevoice-connector")]}).to_string(),
+        )
+        .unwrap();
+        assert!(validate_uninstall_scope_at(&home, &data, None).is_ok());
+        fs::write(
+            data.join("install.json"),
+            json!({"releases": releases, "command": [data.join(".uninstall-recovery/sidevoice-connector")]})
+                .to_string(),
         )
         .unwrap();
         assert!(validate_uninstall_scope_at(&home, &data, None).is_ok());
