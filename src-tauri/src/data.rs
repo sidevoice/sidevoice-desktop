@@ -847,7 +847,11 @@ fn walk_owned(
     if probe(fd, relative)? != *expected {
         return Err("mount-boundary");
     }
-    let copy = unsafe { libc::dup(fd) };
+    // dup shares the directory offset with the held descriptor. A fresh open lets the
+    // preflight and removal passes each enumerate the full directory.
+    let copy = unsafe {
+        libc::openat(fd, c".".as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+    };
     if copy < 0 {
         return Err("inspect");
     }
@@ -1445,7 +1449,7 @@ mod tests {
     fn pending_revocations_share_the_private_native_pairings_file() {
         use std::os::unix::fs::PermissionsExt;
         let home = tempfile::tempdir().unwrap();
-        let file = home.path().join("app/pairings.json");
+        let file = fs::canonicalize(home.path()).unwrap().join("app/pairings.json");
         let pending = json!({"fp":"fp", "public_key":"pk", "device_id":"id", "token":"live-secret", "urls":["https://example.test"]});
         let value = json!({"pairings":[], "pendingRevokes":[pending]});
         assert_eq!(write_pairings(&file, &value), Ok(Value::Null));
