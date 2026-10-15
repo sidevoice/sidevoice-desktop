@@ -57,6 +57,7 @@ pub(crate) struct AppState {
     /// registered never differ. Only off the main thread: registering waits for it.
     shortcut_change: Mutex<()>,
     resetting: std::sync::atomic::AtomicBool,
+    reset_admission: Mutex<data::Admission>,
     #[cfg(target_os = "macos")]
     reset_helper: Mutex<Option<std::process::Child>>,
 }
@@ -73,6 +74,7 @@ impl Default for AppState {
             shortcut: Mutex::default(),
             shortcut_change: Mutex::default(),
             resetting: std::sync::atomic::AtomicBool::new(false),
+            reset_admission: Mutex::default(),
             #[cfg(target_os = "macos")]
             reset_helper: Mutex::default(),
         }
@@ -481,6 +483,11 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
 }
 
 pub fn run() {
+    #[cfg(target_os = "macos")]
+    if !data::await_reset_idle() {
+        eprintln!("sidevoice: reset lock unavailable or cleanup still running");
+        return;
+    }
     let context = tauri::generate_context!();
     #[cfg(feature = "probe")]
     let context = probe::with_page(context);
@@ -581,6 +588,6 @@ pub fn run() {
 }
 
 /// The helper is the same signed executable, launched only after a confirmed reset.
-pub fn run_reset_helper(parent_pid: Option<u32>) {
-    data::run_reset_helper(parent_pid);
+pub fn run_reset_helper(parent_pid: Option<u32>, lock_fd: Option<i32>) {
+    data::run_reset_helper(parent_pid, lock_fd);
 }

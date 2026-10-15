@@ -59,6 +59,7 @@ pub async fn engine_install(
     engine: Option<String>,
     job: String,
 ) -> Result<(), Error> {
+    let _permit = crate::data::admit(&app).ok_or_else(error::reset_busy)?;
     if app.state::<crate::AppState>().resetting.load(Ordering::SeqCst) {
         return Err(error::reset_busy());
     }
@@ -89,6 +90,7 @@ pub fn engine_cancel(state: State<'_, EngineState>, job: String) -> bool {
 /// or running, `model_in_use` while the voice call holds it, `model_unknown` for a model the catalogue does not list.
 #[tauri::command]
 pub async fn engine_uninstall(app: AppHandle, state: State<'_, EngineState>, model: String) -> Result<(), Error> {
+    let _permit = crate::data::admit(&app).ok_or_else(error::reset_busy)?;
     if app.state::<crate::AppState>().resetting.load(Ordering::SeqCst) {
         return Err(error::reset_busy());
     }
@@ -114,10 +116,12 @@ pub async fn engine_catalogs(state: State<'_, EngineState>) -> Result<Vec<Catalo
 /// again with what the keychain now has.
 #[tauri::command]
 pub async fn engine_set_credential(
+    app: AppHandle,
     state: State<'_, EngineState>,
     provider: String,
     key: Option<String>,
 ) -> Result<(), Error> {
+    let _permit = crate::data::admit(&app).ok_or_else(error::reset_busy)?;
     let key = key.as_deref().map(str::trim).filter(|key| !key.is_empty()).map(str::to_string);
     credentials::write(&provider, key.as_deref())?;
     let engines = state.engines.clone();

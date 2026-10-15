@@ -4,7 +4,8 @@
 fn main() {
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--sidevoice-reset-helper")) {
         let parent = std::env::args().nth(2).and_then(|arg| arg.parse().ok());
-        sidevoice_desktop_lib::run_reset_helper(parent);
+        let lock_fd = std::env::args().nth(3).and_then(|arg| arg.parse().ok());
+        sidevoice_desktop_lib::run_reset_helper(parent, lock_fd);
         return;
     }
     sidevoice_desktop_lib::run()

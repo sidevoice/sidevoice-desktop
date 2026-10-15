@@ -104,6 +104,7 @@ async fn check(app: &AppHandle) {
 }
 
 fn download(app: &AppHandle) {
+    let Some(permit) = crate::data::admit(app) else { return };
     let Some(mut update) = with(app, |u| {
         let update = u.update.clone().filter(|_| u.status.state == State::Available)?;
         u.status = Status::new(State::Downloading, &update.version);
@@ -114,6 +115,7 @@ fn download(app: &AppHandle) {
     update.timeout = Some(Duration::from_secs(60 * 60));
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
+        let _permit = permit;
         let mut received = 0;
         let progress = |chunk: usize, total: Option<u64>| {
             received += chunk as u64;
@@ -132,6 +134,7 @@ fn download(app: &AppHandle) {
 
 /// Whoever takes the bytes installs; the local host stops only once the install succeeded.
 fn install(app: &AppHandle, restart: bool) {
+    let Some(_permit) = crate::data::admit(app) else { return };
     let claimed = with(app, |u| u.update.clone().zip(u.bytes.take()).inspect(|_| u.installing = true));
     let Some((update, bytes)) = claimed else { return };
     let installed = update.restart_after_install(restart).install(&bytes);
@@ -150,6 +153,9 @@ fn install(app: &AppHandle, restart: bool) {
 
 /// Quitting (`RunEvent::Exit`): waits for an install under way (a restart's); in automatic mode installs one ready.
 pub fn quit(app: &AppHandle) {
+    if app.state::<AppState>().resetting.load(std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
     if app.try_state::<Mutex<Updates>>().is_none() {
         return;
     }

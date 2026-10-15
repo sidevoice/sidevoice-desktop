@@ -13,8 +13,74 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tauri::{AppHandle, Manager, Webview};
 
-#[cfg(target_os = "macos")]
 use crate::AppState;
+
+#[derive(Default)]
+pub(crate) struct Admission {
+    active: usize,
+    resetting: bool,
+}
+
+impl Admission {
+    fn enter(&mut self) -> bool {
+        if self.resetting {
+            return false;
+        }
+        self.active += 1;
+        true
+    }
+    fn leave(&mut self) {
+        self.active -= 1;
+    }
+    fn begin_reset(&mut self) -> bool {
+        if self.resetting || self.active != 0 {
+            return false;
+        }
+        self.resetting = true;
+        true
+    }
+    fn end_reset(&mut self) {
+        self.resetting = false;
+    }
+}
+
+pub(crate) struct Permit(AppHandle);
+
+impl Drop for Permit {
+    fn drop(&mut self) {
+        let state = self.0.state::<AppState>();
+        let mut gate = state.reset_admission.lock().unwrap();
+        gate.leave();
+    }
+}
+
+pub(crate) fn admit(app: &AppHandle) -> Option<Permit> {
+    let state = app.state::<AppState>();
+    let mut gate = state.reset_admission.lock().unwrap();
+    if !gate.enter() {
+        return None;
+    }
+    Some(Permit(app.clone()))
+}
+
+#[cfg(target_os = "macos")]
+fn begin_exclusive(app: &AppHandle) -> bool {
+    let state = app.state::<AppState>();
+    let mut gate = state.reset_admission.lock().unwrap();
+    if !gate.begin_reset() {
+        return false;
+    }
+    state.resetting.store(true, Ordering::SeqCst);
+    true
+}
+
+#[cfg(target_os = "macos")]
+fn end_exclusive(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let mut gate = state.reset_admission.lock().unwrap();
+    gate.end_reset();
+    state.resetting.store(false, Ordering::SeqCst);
+}
 
 type Answer = Result<Value, Value>;
 
@@ -194,6 +260,12 @@ pub fn data_reset_report(app: AppHandle, webview: Webview) -> Answer {
         match fs::read(&path) {
             Ok(bytes) if bytes.len() <= 16 * 1024 => {
                 let value = serde_json::from_slice(&bytes).map_err(|_| refused("reset.failed"))?;
+                let journal = path.with_file_name("journal.json");
+                if let Err(error) = fs::remove_file(&journal) {
+                    if error.kind() != std::io::ErrorKind::NotFound {
+                        return Err(refused("reset.report-failed"));
+                    }
+                }
                 fs::remove_file(&path).map_err(|_| refused("reset.failed"))?;
                 if let Some(dir) = path.parent() {
                     let _ = fs::remove_dir(dir);
@@ -201,7 +273,26 @@ pub fn data_reset_report(app: AppHandle, webview: Webview) -> Answer {
                 Ok(value)
             }
             Ok(_) => Err(refused("reset.failed")),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Value::Null),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let journal = path.with_file_name("journal.json");
+                match fs::read(&journal) {
+                    Ok(bytes)
+                        if bytes.len() <= 16 * 1024
+                            && !fs::symlink_metadata(&journal).is_ok_and(|m| m.file_type().is_symlink()) =>
+                    {
+                        let progress: Value =
+                            serde_json::from_slice(&bytes).map_err(|_| refused("reset.report-failed"))?;
+                        let mut failed = progress.get("failed").and_then(Value::as_array).cloned().unwrap_or_default();
+                        failed.push(json!({"step":"helper", "key":"reset.interrupted"}));
+                        fs::remove_file(&journal).map_err(|_| refused("reset.report-failed"))?;
+                        Ok(
+                            json!({"state":"partial", "completed":progress.get("completed").cloned().unwrap_or_else(|| json!([])), "failed":failed, "agents":{}}),
+                        )
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Value::Null),
+                    _ => Err(refused("reset.report-failed")),
+                }
+            }
             Err(_) => Err(refused("reset.failed")),
         }
     }
@@ -222,7 +313,7 @@ pub async fn data_delete_all(app: AppHandle, webview: Webview) -> Answer {
     #[cfg(target_os = "macos")]
     {
         let state = app.state::<AppState>();
-        if state.resetting.swap(true, Ordering::SeqCst) {
+        if !begin_exclusive(&app) {
             return Err(refused("reset.busy"));
         }
         if state.call.lock().unwrap().joined
@@ -230,11 +321,11 @@ pub async fn data_delete_all(app: AppHandle, webview: Webview) -> Answer {
             || crate::updater::installing(&app)
             || app.try_state::<crate::engine_ipc::EngineState>().is_some_and(|engine| engine.jobs.busy())
         {
-            state.resetting.store(false, Ordering::SeqCst);
+            end_exclusive(&app);
             return Err(refused("reset.busy"));
         }
         if let Err(refusal) = require_confirmation(native_reset_confirmation(&app).await) {
-            state.resetting.store(false, Ordering::SeqCst);
+            end_exclusive(&app);
             return Err(refusal);
         }
         let app_for_work = app.clone();
@@ -242,7 +333,7 @@ pub async fn data_delete_all(app: AppHandle, webview: Webview) -> Answer {
             .await
             .unwrap_or_else(|_| Err(refused("reset.failed")));
         if answer.is_err() {
-            state.resetting.store(false, Ordering::SeqCst);
+            end_exclusive(&app);
         }
         answer
     }
@@ -284,9 +375,17 @@ async fn native_reset_confirmation(app: &AppHandle) -> bool {
 #[cfg(target_os = "macos")]
 fn begin_reset(app: &AppHandle) -> Answer {
     use sidevoice_local_host::{cli::Cli, paths::DataDirs};
+    let reset_lock = open_reset_lock().map_err(|_| refused("reset.helper-failed"))?;
+    if !try_lock(&reset_lock) {
+        return Err(refused("reset.busy"));
+    }
+    let inherited_lock = inherit_lock(&reset_lock).map_err(|_| refused("reset.helper-failed"))?;
     let dirs = DataDirs::from_env().ok_or_else(|| refused("reset.unavailable"))?;
     let home = std::env::var_os("HOME").map(PathBuf::from).ok_or_else(|| refused("reset.unavailable"))?;
     validate_uninstall_scope(&home, &dirs.data).map_err(|reason| json!({"key": "reset.unsafe", "reason": reason}))?;
+    let journal = report_path().ok_or_else(|| refused("reset.helper-failed"))?.with_file_name("journal.json");
+    write_atomic_json(&journal, &json!({"stage":"preflight", "completed":[], "failed":[]}))
+        .map_err(|_| refused("reset.helper-failed"))?;
     let (service, service_outcome) = match Cli::installed(&dirs) {
         Ok(cli) => (
             {
@@ -306,19 +405,33 @@ fn begin_reset(app: &AppHandle) -> Answer {
         }
         Err(_) => return Err(refused("reset.unsafe")),
     };
+    write_atomic_json(&journal, &json!({"stage":"service", "completed":["service"], "failed":[]}))
+        .map_err(|_| refused("reset.report-failed"))?;
     let mut failed = Vec::<Value>::new();
     if crate::keychain::delete_service().is_err() {
         failed.push(json!({"step": "keychain", "key": "reset.keychain-failed"}));
     }
+    write_atomic_json(
+        &journal,
+        &json!({"stage":"keychain", "completed":["service", "keychain"], "failed":failed.clone()}),
+    )
+    .map_err(|_| refused("reset.report-failed"))?;
     let exe = std::env::current_exe().map_err(|_| refused("reset.unavailable"))?;
-    let mut child = Command::new(exe)
+    let spawned = Command::new(exe)
         .arg("--sidevoice-reset-helper")
         .arg(std::process::id().to_string())
+        .arg(inherited_lock.to_string())
         .stdin(Stdio::piped())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .spawn()
-        .map_err(|_| refused("reset.helper-failed"))?;
+        .spawn();
+    {
+        use std::os::fd::AsRawFd;
+        unsafe {
+            libc::fcntl(reset_lock.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC);
+        }
+    }
+    let mut child = spawned.map_err(|_| refused("reset.helper-failed"))?;
     let agents = service.get("agents").cloned().unwrap_or_else(|| json!({}));
     for agent in retained_agents(&agents) {
         failed.push(json!({"step": "agents", "key": "reset.agent-remains", "agent": agent}));
@@ -326,6 +439,16 @@ fn begin_reset(app: &AppHandle) -> Answer {
     let initial = json!({"failed": failed, "agents": agents});
     let payload = serde_json::to_vec(&initial).map_err(|_| refused("reset.helper-failed"))?;
     if payload.len() > 16 * 1024 || child.stdin.as_mut().is_none_or(|stdin| stdin.write_all(&payload).is_err()) {
+        let _ = child.kill();
+        return Err(refused("reset.helper-failed"));
+    }
+    let mut ready = child.stdout.take().ok_or_else(|| refused("reset.helper-failed"))?;
+    let (sent, received) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let mut bytes = [0u8; 6];
+        let _ = sent.send(ready.read_exact(&mut bytes).is_ok() && &bytes == b"ready\n");
+    });
+    if received.recv_timeout(Duration::from_secs(5)) != Ok(true) {
         let _ = child.kill();
         return Err(refused("reset.helper-failed"));
     }
@@ -338,6 +461,36 @@ fn begin_reset(app: &AppHandle) -> Answer {
     Ok(json!({"state": if failed.is_empty() { "needs-restart" } else { "partial" },
         "service": service_outcome,
         "agents": agents, "failed": failed, "pending": ["app-data", "models", "webview", "cache", "saved-state", "logs", "preferences"]}))
+}
+
+#[cfg(target_os = "macos")]
+fn write_atomic_json(path: &Path, value: &Value) -> Result<(), &'static str> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let bytes = serde_json::to_vec(value).map_err(|_| "report-write")?;
+    if bytes.len() > 16 * 1024 {
+        return Err("report-write");
+    }
+    let tmp = path.with_extension(format!("json.tmp-{}", std::process::id()));
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&tmp)
+            .map_err(|_| "report-write")?;
+        file.write_all(&bytes).map_err(|_| "report-write")?;
+        file.sync_all().map_err(|_| "report-write")?;
+        fs::rename(&tmp, path).map_err(|_| "report-write")?;
+        std::fs::File::open(path.parent().ok_or("report-write")?)
+            .and_then(|dir| dir.sync_all())
+            .map_err(|_| "report-write")?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(tmp);
+    }
+    result
 }
 
 #[cfg(target_os = "macos")]
@@ -448,6 +601,75 @@ fn report_path() -> Option<PathBuf> {
         return None;
     }
     Some(dir.join("report.json"))
+}
+
+#[cfg(target_os = "macos")]
+fn open_reset_lock() -> Result<std::fs::File, &'static str> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let path = report_path().ok_or("report-unavailable")?.with_file_name("reset.lock");
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&path)
+        .map_err(|_| "lock-unavailable")?;
+    let meta = file.metadata().map_err(|_| "lock-unavailable")?;
+    if !meta.is_file() || meta.uid() != unsafe { libc::geteuid() } || meta.mode() & 0o077 != 0 {
+        return Err("unsafe-lock");
+    }
+    Ok(file)
+}
+
+#[cfg(target_os = "macos")]
+fn try_lock(file: &std::fs::File) -> bool {
+    use std::os::fd::AsRawFd;
+    unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) == 0 }
+}
+
+/// The helper inherits the locked file description. A new app waits for it before initializing writers.
+#[cfg(target_os = "macos")]
+pub fn await_reset_idle() -> bool {
+    let Ok(file) = open_reset_lock() else { return false };
+    let deadline = std::time::Instant::now() + Duration::from_secs(5 * 60);
+    while std::time::Instant::now() < deadline {
+        if try_lock(&file) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    false
+}
+
+#[cfg(target_os = "macos")]
+fn inherit_lock(file: &std::fs::File) -> Result<i32, &'static str> {
+    use std::os::fd::AsRawFd;
+    let fd = file.as_raw_fd();
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } < 0 {
+        return Err("lock-unavailable");
+    }
+    Ok(fd)
+}
+
+#[cfg(target_os = "macos")]
+fn helper_lock(fd: Option<i32>) -> Option<std::fs::File> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::fs::MetadataExt;
+    let fd = fd.filter(|fd| *fd >= 3)?;
+    let held = unsafe { std::fs::File::from_raw_fd(fd) };
+    let named = open_reset_lock().ok()?;
+    let held_meta = held.metadata().ok()?;
+    let named_meta = named.metadata().ok()?;
+    if held_meta.dev() != named_meta.dev() || held_meta.ino() != named_meta.ino() {
+        return None;
+    }
+    if !try_lock(&held) {
+        return None;
+    }
+    let _ = held.as_raw_fd();
+    Some(held)
 }
 
 #[cfg(target_os = "macos")]
@@ -766,11 +988,16 @@ fn webkit_gone(pids: &[u32]) -> bool {
 }
 
 /// Called in the helper process, after its parent closes the pipe on exit.
-pub fn run_reset_helper(parent_pid: Option<u32>) {
+pub fn run_reset_helper(parent_pid: Option<u32>, lock_fd: Option<i32>) {
     #[cfg(target_os = "macos")]
     {
+        let Some(_lock) = helper_lock(lock_fd) else { return };
         let Some(parent_pid) = parent_pid else { return };
         if unsafe { libc::getppid() as u32 } != parent_pid {
+            return;
+        }
+        let Some(report) = report_path() else { return };
+        if std::io::stdout().write_all(b"ready\n").is_err() {
             return;
         }
         let webkit = webkit_children(parent_pid);
@@ -785,9 +1012,9 @@ pub fn run_reset_helper(parent_pid: Option<u32>) {
         let Ok(initial) = serde_json::from_slice::<Value>(&drain) else { return };
         let Some(initial_failed) = initial.get("failed").and_then(Value::as_array) else { return };
         let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return };
-        let Some(report) = report_path() else { return };
         let mut completed = Vec::new();
         let mut failed = initial_failed.clone();
+        let journal = report.with_file_name("journal.json");
         let webkit_safe = webkit.as_ref().is_some_and(|children| webkit_gone(children));
         let paths = [
             ("app-data", home.join("Library/Application Support/dev.sidevoice.desktop")),
@@ -800,11 +1027,16 @@ pub fn run_reset_helper(parent_pid: Option<u32>) {
         for (name, path) in paths {
             if name == "webview" && !webkit_safe {
                 failed.push(json!({"step": "webview", "key": "reset.process-busy"}));
-                continue;
+            } else {
+                match remove_known(&path, &home) {
+                    Ok(()) => completed.push(name),
+                    Err(key) => failed.push(json!({"step": name, "key": key})),
+                }
             }
-            match remove_known(&path, &home) {
-                Ok(()) => completed.push(name),
-                Err(key) => failed.push(json!({"step": name, "key": key})),
+            if write_atomic_json(&journal, &json!({"stage":"cleanup", "completed":completed, "failed":failed})).is_err()
+            {
+                failed.push(json!({"step":"report", "key":"reset.report-failed"}));
+                break;
             }
         }
         let domains = Command::new("/usr/bin/defaults").arg("domains").output();
@@ -825,29 +1057,19 @@ pub fn run_reset_helper(parent_pid: Option<u32>) {
             }
             _ => failed.push(json!({"step": "preferences", "key": "inspect"})),
         }
+        if std::env::current_exe().ok().and_then(|exe| Command::new(exe).spawn().ok()).is_none() {
+            failed.push(json!({"step":"relaunch", "key":"reset.relaunch-failed"}));
+        }
         let value = json!({"state": if failed.is_empty() { "complete" } else { "partial" }, "completed": completed, "failed": failed,
             "agents": initial.get("agents").cloned().unwrap_or_else(|| json!({}))});
-        if let Ok(bytes) = serde_json::to_vec(&value) {
-            let tmp = report.with_extension(format!("json.tmp-{}", std::process::id()));
-            use std::os::unix::fs::OpenOptionsExt;
-            let _ = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&tmp)
-                .and_then(|mut file| {
-                    file.write_all(&bytes)?;
-                    file.sync_all()
-                })
-                .and_then(|_| fs::rename(&tmp, &report));
-        }
-        if let Ok(exe) = std::env::current_exe() {
-            let _ = Command::new(exe).spawn();
+        let persisted = write_atomic_json(&report, &value).is_ok();
+        if persisted {
+            let _ = fs::remove_file(report.with_file_name("journal.json"));
         }
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = parent_pid;
+        let _ = (parent_pid, lock_fd);
     }
 }
 
@@ -968,6 +1190,19 @@ mod tests {
     fn direct_command_requires_native_confirmation() {
         assert_eq!(require_confirmation(false), Err(refused("reset.cancelled")));
         assert_eq!(require_confirmation(true), Ok(()));
+    }
+
+    #[test]
+    fn reset_and_model_or_credential_admission_are_atomic() {
+        let mut gate = Admission::default();
+        assert!(gate.enter()); // model install, voice start, or credential write
+        assert!(!gate.begin_reset());
+        gate.leave();
+        assert!(gate.begin_reset());
+        assert!(!gate.enter());
+        gate.end_reset();
+        assert!(gate.enter());
+        gate.leave();
     }
 
     #[test]

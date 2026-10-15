@@ -47,6 +47,7 @@ pub fn local_host_pairing(app: AppHandle, webview: Webview) -> Answer {
 #[tauri::command]
 pub async fn local_host_action(app: AppHandle, webview: Webview, action: String) -> Answer {
     caller(&app, &webview)?;
+    let _permit = crate::data::admit(&app).ok_or_else(|| refusal("reset.busy", "Data reset is under way."))?;
     if app.state::<crate::AppState>().resetting.load(std::sync::atomic::Ordering::SeqCst) {
         return Err(refusal("reset.busy", "Data reset is under way."));
     }
@@ -59,6 +60,7 @@ pub async fn local_host_action(app: AppHandle, webview: Webview, action: String)
 #[tauri::command]
 pub async fn local_host_pairing_code(app: AppHandle, webview: Webview) -> Answer {
     caller(&app, &webview)?;
+    let _permit = crate::data::admit(&app).ok_or_else(|| refusal("reset.busy", "Data reset is under way."))?;
     tauri::async_runtime::spawn_blocking(move || imp::pairing_code(&app))
         .await
         .map_err(|e| refusal("internal", &e.to_string()))?
@@ -68,6 +70,7 @@ pub async fn local_host_pairing_code(app: AppHandle, webview: Webview) -> Answer
 #[tauri::command]
 pub async fn local_host_pair_room(app: AppHandle, webview: Webview, url: String, code: String) -> Answer {
     caller(&app, &webview)?;
+    let _permit = crate::data::admit(&app).ok_or_else(|| refusal("reset.busy", "Data reset is under way."))?;
     tauri::async_runtime::spawn_blocking(move || imp::pair_room(&app, &url, &code))
         .await
         .map_err(|e| refusal("internal", &e.to_string()))?
@@ -81,6 +84,7 @@ pub async fn local_host_pair_room(app: AppHandle, webview: Webview, url: String,
 #[tauri::command]
 pub async fn local_host_install(app: AppHandle, webview: Webview, job: String) -> Answer {
     caller(&app, &webview)?;
+    let _permit = crate::data::admit(&app).ok_or_else(|| refusal("reset.busy", "Data reset is under way."))?;
     if app.state::<crate::AppState>().resetting.load(std::sync::atomic::Ordering::SeqCst) {
         return Err(refusal("reset.busy", "Data reset is under way."));
     }

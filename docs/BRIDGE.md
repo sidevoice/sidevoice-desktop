@@ -64,6 +64,12 @@ symlinks and mount boundaries are refused. Connector data and release roots must
 Sidevoice roots; unsafe environment overrides or install records refuse before the installed uninstaller runs.
 No page-supplied path is deleted.
 
+Before uninstall, native creates a private operation journal and takes an interprocess reset lock.
+Model operations, voice model loads, credential writes, local-host actions and updater writes share an
+atomic admission gate with reset. The helper inherits the lock, acknowledges readiness before the app
+quits, records cleanup stages, and releases the lock only after its work ends. A newly opened app waits
+for the helper; an interrupted journal becomes a partial report on the next launch.
+
 `deleteAll()` resolves `{state: "needs-restart"|"partial", service: "removed"|"absent", agents,
 failed: {step, key, agent?}[], pending}` after the helper starts; this is **not** final deletion success. `partial`
 already identifies a Keychain or agent-registration failure. If service uninstall fails, it
