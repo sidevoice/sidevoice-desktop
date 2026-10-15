@@ -1148,19 +1148,45 @@ pub fn run_reset_helper(parent_pid: Option<u32>, lock_fd: Option<i32>) {
             }
             _ => failed.push(json!({"step": "preferences", "key": "inspect"})),
         }
-        if std::env::current_exe().ok().and_then(|exe| Command::new(exe).spawn().ok()).is_none() {
-            failed.push(json!({"step":"relaunch", "key":"reset.relaunch-failed"}));
-        }
-        let value = json!({"state": if failed.is_empty() { "complete" } else { "partial" }, "completed": completed, "failed": failed,
-            "agents": initial.get("agents").cloned().unwrap_or_else(|| json!({}))});
-        let persisted = write_atomic_json(&report, &value).is_ok();
-        if persisted {
-            let _ = fs::remove_file(report.with_file_name("journal.json"));
-        }
+        finish_reset_at(
+            &report,
+            &journal,
+            &completed,
+            failed,
+            initial.get("agents").cloned().unwrap_or_else(|| json!({})),
+            write_atomic_json,
+            || std::env::current_exe().ok().and_then(|exe| Command::new(exe).spawn().ok()).is_some(),
+        );
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = (parent_pid, lock_fd);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn finish_reset_at(
+    report: &Path,
+    journal: &Path,
+    completed: &[&str],
+    mut failed: Vec<Value>,
+    agents: Value,
+    write: impl Fn(&Path, &Value) -> Result<(), &'static str>,
+    relaunch: impl FnOnce() -> bool,
+) {
+    let _ = write(journal, &json!({"stage":"preferences", "completed":completed, "failed":failed}));
+    // The next app can read the report as soon as it starts. Publish it before spawning that app.
+    let mut value = json!({"state": if failed.is_empty() { "complete" } else { "partial" }, "completed": completed, "failed": failed,
+        "agents": agents});
+    let mut persisted = write(report, &value).is_ok();
+    if !relaunch() {
+        failed.push(json!({"step":"relaunch", "key":"reset.relaunch-failed"}));
+        value["state"] = json!("partial");
+        value["failed"] = json!(failed);
+        persisted = write(report, &value).is_ok();
+    }
+    if persisted {
+        let _ = fs::remove_file(journal);
     }
 }
 
@@ -1347,6 +1373,33 @@ mod tests {
         std::os::unix::fs::symlink(outside.path(), &report).unwrap();
         assert_eq!(consume_report_at(&report), Err(refused("reset.unsafe")));
         assert!(outside.path().exists());
+    }
+
+    #[test]
+    fn helper_publishes_report_before_relaunch_and_keeps_journal_on_write_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let report = dir.path().join("report.json");
+        let journal = dir.path().join("journal.json");
+        let mut launched = false;
+        finish_reset_at(&report, &journal, &["service", "app-data"], vec![], json!({}), write_atomic_json, || {
+            assert_eq!(fs::read_to_string(&report).unwrap().contains("\"complete\""), true);
+            launched = true;
+            true
+        });
+        assert!(launched);
+        assert!(!journal.exists());
+        assert_eq!(consume_report_at(&report).unwrap()["state"], "complete");
+
+        let bad_write = |path: &Path, value: &Value| {
+            if path == report {
+                Err("report-write")
+            } else {
+                write_atomic_json(path, value)
+            }
+        };
+        finish_reset_at(&report, &journal, &["service"], vec![], json!({}), bad_write, || true);
+        assert!(journal.exists());
+        assert_eq!(consume_report_at(&report).unwrap()["state"], "partial");
     }
 
     #[test]
