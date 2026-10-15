@@ -3,13 +3,19 @@
 
 use serde_json::{json, Value};
 use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
+#[cfg(target_os = "macos")]
+use std::io::Read;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "macos")]
 use std::process::{Command, Stdio};
+#[cfg(target_os = "macos")]
 use std::sync::atomic::Ordering;
+#[cfg(target_os = "macos")]
 use std::time::Duration;
 use tauri::{AppHandle, Manager, Webview};
 
+#[cfg(target_os = "macos")]
 use crate::AppState;
 
 type Answer = Result<Value, Value>;
@@ -18,6 +24,7 @@ fn refused(key: &str) -> Value {
     json!({ "key": key })
 }
 
+#[cfg(target_os = "macos")]
 fn retained_agents(agents: &Value) -> Vec<String> {
     agents
         .as_object()
@@ -66,7 +73,7 @@ fn pairings_file(app: &AppHandle) -> Result<PathBuf, Value> {
 
 fn checked_pairings(value: &Value) -> bool {
     let Some(rows) = value.get("pairings").and_then(Value::as_array) else { return false };
-    if rows.len() > 32 || serde_json::to_vec(value).is_err_or(|bytes| bytes.len() > 64 * 1024) {
+    if rows.len() > 32 || !serde_json::to_vec(value).is_ok_and(|bytes| bytes.len() <= 64 * 1024) {
         return false;
     }
     rows.iter().all(|row| {
@@ -340,7 +347,7 @@ fn remove_known(path: &Path, home: &Path) -> Result<(), &'static str> {
     if relative.as_os_str().is_empty() {
         return Err("home-root");
     }
-    if fs::symlink_metadata(home).is_err_or(|m| m.file_type().is_symlink() || !m.is_dir()) {
+    if !fs::symlink_metadata(home).is_ok_and(|m| !m.file_type().is_symlink() && m.is_dir()) {
         return Err("unsafe-home");
     }
     let home_name = CString::new(home.as_os_str().as_bytes()).map_err(|_| "unsafe-home")?;

@@ -18,7 +18,7 @@ use tauri::{AppHandle, Manager, State};
 pub struct EngineState {
     pub engines: Arc<NativeEngines>,
     /// Each install in flight, by the page's job id: its progress, and its cancel.
-    jobs: Arc<Jobs>,
+    pub(crate) jobs: Arc<Jobs>,
 }
 
 impl EngineState {

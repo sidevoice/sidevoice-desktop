@@ -8,7 +8,7 @@
 //! refusal is `{key, message}`, as the native engine's (docs/BRIDGE.md).
 
 use serde_json::{json, Value};
-use tauri::{AppHandle, Webview};
+use tauri::{AppHandle, Manager, Webview};
 
 /// A command's answer: a value, or a refusal `{key, message}`.
 type Answer = Result<Value, Value>;
