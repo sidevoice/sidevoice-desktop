@@ -121,7 +121,9 @@ pub fn absent(app: &AppHandle) -> bool {
     imp::absent(app)
 }
 
-pub fn installing(app: &AppHandle) -> bool { imp::installing(app) }
+pub fn installing(app: &AppHandle) -> bool {
+    imp::installing(app)
+}
 
 #[cfg(unix)]
 mod imp {
@@ -149,7 +151,7 @@ mod imp {
             crate::debug("local-host off: no home directory");
             return;
         };
-        let Ok(app_dir) = app.path().app_config_dir() else { return };
+        let Ok(app_dir) = crate::data::desktop_dir(app) else { return };
         let config = Config { dirs, app_dir, name: computer_name() };
         match LocalHost::start(config, crate::debug) {
             Ok(host) => {
@@ -251,8 +253,12 @@ mod imp {
 
     pub fn setup(_app: &AppHandle) {}
     pub fn shutdown(_app: &AppHandle) {}
-    pub fn absent(_app: &AppHandle) -> bool { false }
-    pub fn installing(_app: &AppHandle) -> bool { false }
+    pub fn absent(_app: &AppHandle) -> bool {
+        false
+    }
+    pub fn installing(_app: &AppHandle) -> bool {
+        false
+    }
     pub fn state(_app: &AppHandle) -> Answer {
         Err(unsupported())
     }

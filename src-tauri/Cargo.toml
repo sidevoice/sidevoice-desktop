@@ -75,6 +75,9 @@ objc2-avf-audio = { version = "0.3", features = ["AVAudioApplication", "block2"]
 system-configuration-sys = "0.6"
 core-foundation = "0.10"
 
+[dev-dependencies]
+tempfile = "3"
+
 [profile.release]
 codegen-units = 1
 lto = true

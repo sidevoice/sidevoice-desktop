@@ -13,8 +13,8 @@
 //! - `call-controls`: the call controls card (`src/call_controls.rs`), floating over other apps during a call.
 
 mod call_controls;
-mod data;
 mod computer_name;
+mod data;
 mod engine_ipc;
 mod headset;
 mod keychain;
@@ -108,7 +108,7 @@ fn checked_shortcut(text: &str) -> Option<String> {
 /// The one writer of settings.json: `change` applied to the stored settings, saved and kept under one lock, so the
 /// room page's setters never lose each other's fields.
 pub(crate) fn change_settings(app: &AppHandle, change: impl FnOnce(&mut Settings)) -> Result<Settings, String> {
-    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let dir = data::desktop_dir(app).map_err(|e| e.to_string())?;
     let state = app.state::<AppState>();
     let mut stored = state.settings.lock().unwrap();
     let mut changed = stored.clone().unwrap_or_else(Settings::first_run);
@@ -507,9 +507,10 @@ pub fn run() {
             let handle = app.handle().clone();
             tray::create(&handle)?;
             headset::setup(&handle);
-            // sidevoice-engine keeps the models it downloads, on demand, in the app's data directory (docs/ENGINES.md).
+            // The model root is shared per OS user on this machine (docs/ENGINES.md).
             // Without it the app still runs; the page then finds no native engine to use.
-            let engine_root = data::shared_model_root().ok_or_else(|| std::io::Error::other("no home for the shared model store"))?;
+            let engine_root =
+                data::shared_model_root().ok_or_else(|| std::io::Error::other("no home for the shared model store"))?;
             // The keys of remote providers come from the keychain (macOS); elsewhere the app keeps none.
             #[cfg(target_os = "macos")]
             let credentials = keychain::Keychain;
@@ -527,7 +528,7 @@ pub fn run() {
             }
             // This computer's own core, if any (macOS): found, paired, proxied for the page (docs/LOCAL_HOST.md).
             local_host::setup(&handle);
-            let stored = app.path().app_config_dir().ok().and_then(|dir| settings::load(&dir));
+            let stored = data::desktop_dir(&handle).ok().and_then(|dir| settings::load(&dir));
             *app.state::<AppState>().settings.lock().unwrap() = stored.clone();
             // First run too: the interface itself asks for a pairing code; nothing has to be set up first.
             let current = stored.unwrap_or_else(Settings::first_run);
@@ -578,6 +579,6 @@ pub fn run() {
 }
 
 /// The helper is the same signed executable, launched only after a confirmed reset.
-pub fn run_reset_helper() {
-    data::run_reset_helper();
+pub fn run_reset_helper(parent_pid: Option<u32>) {
+    data::run_reset_helper(parent_pid);
 }

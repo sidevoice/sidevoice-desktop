@@ -86,7 +86,7 @@ fn wayland() -> bool {
 
 /// Creates the card's window, hidden; it shows during a call ([`update`]).
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
-    let config_dir = app.path().app_config_dir().ok();
+    let config_dir = crate::data::desktop_dir(app).ok();
     let placements = config_dir.as_deref().map(Placements::load).unwrap_or_default();
     let pointer_inside = if wayland() { None } else { Some(false) };
     app.manage(Card(

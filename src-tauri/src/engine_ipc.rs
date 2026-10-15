@@ -11,9 +11,9 @@ use sidevoice_desktop_engine::error::{self, internal};
 use sidevoice_desktop_engine::{
     CatalogView, CredentialRefusal, Device, Error, Installed, Jobs, Memory, NativeEngines, OnDisk, Progress, Wanted,
 };
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tauri::{AppHandle, Manager, State};
-use std::sync::atomic::Ordering;
 
 pub struct EngineState {
     pub engines: Arc<NativeEngines>,

@@ -52,21 +52,27 @@ model download with `{key: "reset.busy"}`, and checks the current room window an
 native code. It runs the **installed connector's top-level** `uninstall --json` from its verified
 `install.json` command; `localHost.serviceUninstall()` is a different, narrower service-manager action.
 The connector removes the service, its releases, its data and registrations it owns. Native then forgets
-Sidevoice's provider keys and starts a helper from the signed app executable. The helper waits for the app to
-exit before removing its exact Application Support, shared-model, WebKit, cache, saved-state and log paths and
-its `defaults` domain. Paths are derived natively and symlinks are refused. No page-supplied path is deleted.
+Sidevoice's provider keys and starts a helper from the app executable. The helper waits for the app to
+exit and for its observed WebKit children to exit before removing its exact Application Support,
+shared-model, WebKit, cache, saved-state and log paths and its `defaults` domain. A WebKit child that
+does not exit leaves a partial result and its storage in place. Paths are derived natively and
+symlinks are refused. No page-supplied path is deleted.
 
-`deleteAll()` resolves `{state: "needs-restart", service: "removed"|"absent", agents, failed,
-pending}` after the helper starts; this is **not** final deletion success. If service uninstall fails, it
+`deleteAll()` resolves `{state: "needs-restart"|"partial", service: "removed"|"absent", agents,
+failed: {step, key, agent?}[], pending}` after the helper starts; this is **not** final deletion success. `partial`
+already identifies a Keychain or agent-registration failure. If service uninstall fails, it
 rejects `{key: "reset.service-failed"}` and leaves app data for retry. `resetReport()` resolves `null` or
 the helper's one-time `{state: "complete"|"partial", completed: string[], failed:
-{step, key}[]}` after the fresh app starts. The UI must name any failed step and its remaining data.
+{step, key, agent?}[], agents}` after the fresh app starts. Its report is held in a private temporary
+directory until read, including the pre-exit failures. The UI must name any failed step and its remaining data.
 The app bundle, remote machines, foreign/manual agent registrations, provider accounts, OS permissions and
 backups are outside this action; the connector can leave nonpersonal stop/lock markers and open conversation
 servers until they exit. The UI must state these limits before confirmation.
 
 Commands: `data_pairings_read`, `data_pairings_write {value}`, `data_delete_all`,
 `data_reset_report`; only the room capability grants them and each checks the room origin.
+
+### Call state
 
 ```js
 window.__TAURI_INTERNALS__.invoke("bridge_state", { snapshot })

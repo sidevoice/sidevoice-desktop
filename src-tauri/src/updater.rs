@@ -162,6 +162,10 @@ pub fn quit(app: &AppHandle) {
     }
 }
 
+pub fn installing(app: &AppHandle) -> bool {
+    app.try_state::<Mutex<Updates>>().is_some_and(|_| with(app, |u| u.installing))
+}
+
 fn unavailable() -> Value {
     json!({ "key": "update_unavailable", "message": "There is no update to install." })
 }
@@ -170,6 +174,11 @@ fn unavailable() -> Value {
 #[tauri::command]
 pub async fn updater(app: AppHandle, webview: Webview, action: String, mode: Option<Mode>) -> Result<Value, Value> {
     crate::room_page(&app, &webview).map_err(|why| json!({ "key": "bad_request", "message": why }))?;
+    if !matches!(action.as_str(), "settings" | "status")
+        && app.state::<AppState>().resetting.load(std::sync::atomic::Ordering::SeqCst)
+    {
+        return Err(json!({ "key": "reset.busy" }));
+    }
     app.try_state::<Mutex<Updates>>().ok_or_else(unavailable)?;
     let status = |app: &AppHandle| with(app, |u| u.status.clone());
     match (action.as_str(), mode) {
