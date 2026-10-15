@@ -1,16 +1,24 @@
 name: build
 
 # What runs when (RELEASING.md):
-# - pull request: lint + unit tests on Linux, and the Windows and Linux app builds (the repo is public: Actions
-#   minutes are free); the Apple-Silicon native-engine jobs only when the engine, its pin, the bridge or the CI
-#   probes change (`changes` below).
-# - push to main, manual run: everything, installers included; a green run on main replaces the `nightly` pre-release.
-# - a release (called by release-please.yml with the tag it created): everything, attached to that release.
+# - pull request: lint + unit tests on Linux, the Windows and Linux app builds (the repo is public: Actions minutes
+#   are free), and the Apple-Silicon native flows: the probe app's (`macos-native`) and a call on the engine's real
+#   models (`macos-call`). No .dmg.
+# - push to main, manual run: everything, installers included. On main, once the installers' jobs (`macos`, `linux`,
+#   `windows`) and the lint pass, the `nightly` pre-release is replaced; the native flows run beside them and the
+#   nightly does not wait for them (a failing one still fails the run).
+# - a release (called by release-please.yml with the tag it created): everything, attached to that release only when
+#   every job passed, the native flows included.
+# The macOS jobs run side by side: the release app and .dmg (`macos`, the only one with signing secrets), the probe
+# app's flows and the real-model call; none waits for another.
 # The macOS app and .dmg are signed with the Developer ID and notarized for a release, the nightly (a push to main), or a
 # manual run asked to (`sign`: a dry signed build, its .dmg an artifact, nothing published); otherwise they are ad-hoc
 # signed (RELEASING.md).
 # Every step is a `cargo xtask` command (xtask/src/main.rs), which runs the same on a laptop: this file sets up the
 # machine, wires the secrets into the environment and chooses which steps run.
+# The Rust build caches, sherpa-onnx's libraries and the real call's models are written only by a push to main (a
+# release too: release-please runs on one); a pull request or a manual run only restores them (RELEASING.md → "CI
+# caches").
 on:
   push:
     branches: [main]
@@ -83,12 +91,9 @@ jobs:
   changes:
     name: What this run builds
     runs-on: ubuntu-24.04
-    permissions:
-      pull-requests: read
     outputs:
-      # The macOS job: the probe page, and a call on the engine's real models through the app's adapter.
-      native: ${{ github.event_name != 'pull_request' || steps.filter.outputs.native == 'true' }}
-      # The .dmg: never on a pull request. (Windows and Linux build their installers on every run.)
+      # The macOS app and .dmg (the `macos` job): never on a pull request. (Windows and Linux build their installers on
+      # every run; the macOS native flows run on every run too.)
       installers: ${{ github.event_name != 'pull_request' }}
       # The macOS app and .dmg signed with the Developer ID and notarized: a release, the nightly (a push to main, so
       # Gatekeeper opens it on managed Macs too), or a manual run that asks for it. Never on a pull request.
@@ -100,36 +105,28 @@ jobs:
       # too).
       channel: ${{ inputs.release-tag && 'release' || (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'nightly' || 'dev' }}
     steps:
-      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
-        if: github.event_name == 'pull_request'
-        id: filter
-        with:
-          filters: |
-            native:
-              # Every native source: macOS is the only job that compiles the macOS-only code (the voice call, its
-              # adapter, the keychain), so a change to any of it must run there. And the steps it runs (xtask/).
-              - 'src-tauri/**'
-              - '.github/actions/**'
-              - '.github/workflows/build.yml'
-              - 'xtask/**'
-              - '.cargo/**'
-              - 'bridge/**'
-              - 'test/fixtures/**'
-              - 'web.pin.json'
-              - 'scripts/build-web.mjs'
-              - 'scripts/web-release.mjs'
-              - 'scripts/web-site.mjs'
+      # The decisions are the outputs above; a job runs at least one step.
+      - env:
+          TAG: ${{ inputs.release-tag }}
+        run: echo "$GITHUB_EVENT_NAME on $GITHUB_REF${TAG:+, release $TAG}"
 
+  # The app and .dmg as they ship: built, signed, notarized, checked and handed to Publish. The only job that sees the
+  # Apple signing secrets.
   macos:
-    name: macOS (Apple Silicon) .dmg and native flow
+    name: macOS (Apple Silicon) app and .dmg
     needs: changes
-    if: needs.changes.outputs.native == 'true'
+    if: needs.changes.outputs.installers == 'true'
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.release-tag }}
+      # The Rust build cache it shares with `macos-native`, which builds the same dependencies and more (the local
+      # host's CI tool) and so is the one that writes it.
       - uses: ./.github/actions/setup-rust
+        with:
+          cache: macos
+          save-cache: 'false'
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -140,7 +137,7 @@ jobs:
           path: target/web
           key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs', 'scripts/web-release.mjs') }}
       - name: Build the app bundle (ad-hoc signed, hardened runtime, entitlements)
-        if: needs.changes.outputs.installers == 'true' && needs.changes.outputs.sign != 'true'
+        if: needs.changes.outputs.sign != 'true'
         # The nightly's update artifact is signed with the updater's key; no PR or manual run reads it.
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ needs.changes.outputs.channel == 'nightly' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
@@ -165,15 +162,12 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.changes.outputs.channel != 'dev' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
         run: cargo xtask macos app --signed --channel ${{ needs.changes.outputs.channel }}
       - name: Check what a first open depends on
-        if: needs.changes.outputs.installers == 'true'
         env:
           APPLE_TEAM_ID: ${{ needs.changes.outputs.sign == 'true' && secrets.APPLE_TEAM_ID || '' }}
         run: cargo xtask macos check-app ${{ needs.changes.outputs.sign == 'true' && '--signed' || '' }}
       - name: First open (no settings) — the bundled interface comes up in the real WKWebView
-        if: needs.changes.outputs.installers == 'true'
         run: cargo xtask macos first-open
       - name: Make the .dmg (the brand's window, with background, icon layout and volume icon)
-        if: needs.changes.outputs.installers == 'true'
         run: cargo xtask macos dmg ${{ needs.changes.outputs.sign == 'true' && '--signed' || '' }}
       # The image itself: signed with the Developer ID (from a keychain of the step's own, the bundler's being gone),
       # notarized and stapled, so Gatekeeper opens it from a download without a word.
@@ -188,42 +182,58 @@ jobs:
           APPLE_API_KEY_P8: ${{ needs.changes.outputs.sign == 'true' && secrets.APPLE_API_KEY_P8 || '' }}
         run: cargo xtask macos sign-dmg
       - name: The .dmg's checksum
-        if: needs.changes.outputs.installers == 'true'
         run: cargo xtask macos checksums
       # Each signing step removes its keychain and key files when it ends; this catches one that was cut short.
       - name: Remove the signing keychain and the notary's key
         if: always() && needs.changes.outputs.sign == 'true'
         run: cargo xtask macos forget-secrets
       - name: The .dmg window as Finder shows it (screenshots, light and dark; informational)
-        if: needs.changes.outputs.installers == 'true'
         continue-on-error: true
         timeout-minutes: 4
         run: cargo xtask macos dmg-screens
       - uses: actions/upload-artifact@v4
-        if: always() && needs.changes.outputs.installers == 'true'
+        if: always()
         with:
           name: dmg-window-screenshots
           path: dmg-screens/
           retention-days: 7
           if-no-files-found: warn
       - uses: actions/upload-artifact@v4
-        if: needs.changes.outputs.installers == 'true'
         with:
           name: Sidevoice-macOS-AppleSilicon-dmg
           path: dist/
           retention-days: 7
           if-no-files-found: error
-      # CI only from here: the same app built with the `probe` feature (src-tauri/src/probe.rs), which adds the
-      # probe page and the switch that loads it into the room window. The release app above has neither. On a pull
-      # request (engine, bridge, catalogue or probe changes) only this part runs.
+
+  # CI only: the same app built with the `probe` feature (src-tauri/src/probe.rs), which adds the probe page and the
+  # switch that loads it into the room window, and the flows run on it. The release app (`macos`) has neither. No
+  # secrets: it is never signed.
+  macos-native:
+    name: macOS (Apple Silicon) native flows on the probe app
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release-tag }}
+      # The Rust build cache it shares with `macos`; this job builds all of it, so this job writes it (on main only).
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache: macos
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: actions/cache@v4
+        with:
+          path: target/web
+          key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs', 'scripts/web-release.mjs') }}
       - name: Build the CI probe app (feature probe; never shipped)
         run: cargo xtask macos probe-app
       - name: The local host from the bundled page (stand-in core on local.sock, pairing, proxy, refusals)
         run: cargo xtask macos local-host
       - name: What the interface's window offers (probe page, same origin and permission rule)
         run: cargo xtask macos probe
-      - name: A call on the engine's real models through the app's adapter (recorded speech in, a reply out)
-        run: cargo xtask macos voice-models
       - name: The call controls card over a full-screen editor (never activating, clicks, drag, typing, states)
         run: cargo xtask macos card
       - uses: actions/upload-artifact@v4
@@ -233,6 +243,38 @@ jobs:
           path: card-shots/
           retention-days: 7
           if-no-files-found: warn
+
+  # A call on the engine's real models through the app's adapter: the app's Rust tests (`cargo test`), no app bundle,
+  # so it needs neither the probe app nor the web interface, and runs beside them. No secrets.
+  macos-call:
+    name: macOS (Apple Silicon) a call on the engine's real models
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release-tag }}
+      # A Rust build cache of its own: a test build compiles the dependencies apart from the app's.
+      - uses: ./.github/actions/setup-rust
+        id: rust
+      # The models the call downloads, in the engine's storage, by the engine's commit (its catalogue names each
+      # model's files and their digests) and by the test (which models it picks). Saved only after a passing run, and
+      # only on a push to main (below).
+      - uses: actions/cache/restore@v4
+        id: models
+        with:
+          path: ${{ runner.temp }}/real-call-models
+          key: real-call-models-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.engine-rev }}-${{ hashFiles('src-tauri/src/voice/models/tests.rs') }}
+          restore-keys: real-call-models-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.engine-rev }}-
+      - name: A call on the engine's real models through the app's adapter (recorded speech in, a reply out)
+        env:
+          SIDEVOICE_REAL_CALL_MODELS: ${{ runner.temp }}/real-call-models
+        run: cargo xtask macos voice-models
+      - if: steps.models.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/real-call-models
+          key: ${{ steps.models.outputs.cache-primary-key }}
+
   linux:
     name: Linux (.deb, .AppImage)
     needs: changes
@@ -305,28 +347,32 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-  # Only after every job above passed: the installers of this run go to the release that called it, or replace the
-  # rolling `nightly` pre-release (RELEASING.md). Pull requests never get here.
-  publish:
-    name: Publish (release or nightly)
+  # Publish: the installers of this run go to the release that called it, or replace the rolling `nightly` pre-release
+  # (RELEASING.md). Pull requests never get here. Two jobs with the same steps (a YAML anchor) because a job's `needs`
+  # cannot depend on the run: the nightly waits for the installers' jobs and the lint only, while the native flows
+  # (`macos-native`, `macos-call`) run on beside it; a release waits for every job, so it never ships with a native
+  # flow failing.
+  publish-nightly:
+    name: Publish (nightly)
     needs: [changes, test, macos, linux, windows]
-    if: needs.changes.outputs.publish != ''
+    if: needs.changes.outputs.publish == 'nightly'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
-    env:
+    env: &publish-env
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       KIND: ${{ needs.changes.outputs.publish }}
       TAG: ${{ inputs.release-tag }}
-    steps:
+    steps: &publish-steps
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.release-tag }}
-      # The runner's own Rust builds the xtask.
+      # The runner's own Rust builds the xtask (one cache for both publish jobs).
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: xtask
+          shared-key: publish
       - uses: actions/download-artifact@v4
         with:
           pattern: Sidevoice-*
@@ -342,3 +388,13 @@ jobs:
         env:
           WHEN: ${{ github.event.head_commit.timestamp }}
         run: cargo xtask publish nightly
+
+  publish-release:
+    name: Publish (release)
+    needs: [changes, test, macos, macos-native, macos-call, linux, windows]
+    if: needs.changes.outputs.publish == 'release'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env: *publish-env
+    steps: *publish-steps

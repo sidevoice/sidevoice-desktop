@@ -8,9 +8,9 @@ One version for the whole app, tagged `vX.Y.Z`. It lives in `src-tauri/tauri.con
 
 | Act | Who | What happens |
 |---|---|---|
-| Open / update a PR | anyone | **Lint and unit tests** (Linux), **PR title is a conventional commit**, and the **Windows** and **Linux** app builds (installers as artifacts). The macOS native flow (probe page, a call on the engine's real models, call controls card) whenever native code (`src-tauri/`), the bridge, the web pin or the CI probes change; no .dmg (a manual run of `build` on the branch makes one). |
-| Squash-merge into `main` | reviewer | The PR title becomes the commit. `build` runs everything, installers included; when it is green, the `nightly` pre-release is replaced. release-please opens or updates the **release PR** ("chore(main): release X.Y.Z"). Nothing versioned is published. |
-| Merge the release PR | a maintainer | **This is the release.** release-please tags `vX.Y.Z` and creates a draft GitHub Release whose notes are that version's changelog; `build` builds from the tag, attaches the assets and publishes the Release. |
+| Open / update a PR | anyone | **Lint and unit tests** (Linux), **PR title is a conventional commit**, the **Windows** and **Linux** app builds (installers as artifacts), and the macOS native flows, every time: the probe app's (probe page, local host, call controls card) and a call on the engine's real models. No .dmg (a manual run of `build` on the branch makes one). |
+| Squash-merge into `main` | reviewer | The PR title becomes the commit. `build` runs everything, installers included; when the installers' jobs (macOS app and .dmg, Linux, Windows) and the lint are green, the `nightly` pre-release is replaced. The macOS native flows run beside them: the nightly does not wait for them, and a failing one fails the run without holding the nightly back. release-please opens or updates the **release PR** ("chore(main): release X.Y.Z"). Nothing versioned is published. |
+| Merge the release PR | a maintainer | **This is the release.** release-please tags `vX.Y.Z` and creates a draft GitHub Release whose notes are that version's changelog; `build` builds from the tag and, once every job passed (the macOS native flows too), attaches the assets and publishes the Release. |
 
 Assets of a release: `Sidevoice_X.Y.Z_aarch64.dmg` (Apple Silicon, Developer ID signed and notarized, below),
 `Sidevoice_X.Y.Z_x64-setup.exe`, `Sidevoice_X.Y.Z_amd64.deb`, `Sidevoice_X.Y.Z_amd64.AppImage`, `SHA256SUMS`, and
@@ -32,11 +32,16 @@ secrets into the environment of the steps that need them, choose which steps run
   the app and on xtask), `test` (the bridge script and the Rust tests), `two-users` (CI only: it adds a user); and
   xtask's own tests, `cargo test --manifest-path xtask/Cargo.toml`.
 - `linux` and `windows` jobs: `cargo xtask bundle --channel C`, this host's installers.
-- `macos` job: `cargo xtask macos app [--signed] --channel C`, `check-app [--signed]`, `first-open`,
-  `dmg [--signed]`, `sign-dmg`, `checksums`, `forget-secrets`, `dmg-screens`; then on the CI-only probe build
-  `probe-app`, `local-host`, `probe`, `voice-models`, `card`.
-- `publish` job: `cargo xtask publish assets release TAG` or `publish assets nightly`, then `publish release TAG`
-  or `publish nightly`.
+- `macos` job (the app and .dmg; not on a pull request): `cargo xtask macos app [--signed] --channel C`,
+  `check-app [--signed]`, `first-open`, `dmg [--signed]`, `sign-dmg`, `checksums`, `forget-secrets`, `dmg-screens`.
+  The only job with the Apple signing secrets.
+- `macos-native` job, beside it: on the CI-only probe build, `probe-app`, `local-host`, `probe`, `card`. It shares
+  the Rust build cache with `macos` (the same dependencies) and is the one that writes it (CI caches, below).
+- `macos-call` job, beside both: `voice-models`, with the models it downloads cached by the engine's commit
+  (`SIDEVOICE_REAL_CALL_MODELS`).
+- `publish-nightly` and `publish-release` jobs (the same steps): `cargo xtask publish assets release TAG` or
+  `publish assets nightly`, then `publish release TAG` or `publish nightly`. The nightly waits for the lint and the
+  installers' jobs only; a release waits for every job, `macos-native` and `macos-call` included.
 - `.github/actions/setup-rust`: `cargo xtask engine-rev` and `sherpa-libs`; release-please.yml and pr-title.yml:
   `release-pr-checks` and `release-pr-title`.
 
@@ -46,6 +51,23 @@ pairing, local core or models; `probe` expects no provider key in the login keyc
 probe builds ignore any `APPLE_*` variables in the environment. Every build is a `dev` build unless `--channel`
 says otherwise (Channels, below), and only a `release` or `nightly` build reads the updater's key. Ctrl-C unwinds
 cleanly; if a signing step was killed outright, `cargo xtask macos forget-secrets` removes its keychain and key files.
+
+## CI caches
+
+The repository's Actions cache holds 10 GB, and one build's caches take about 4.5 GB. They are written only by
+a push to `main`: the nightly's run, and a release's (release-please starts it from a push to `main` too). So they
+belong to `main`, which every pull request reads. A pull request or a manual run, on any branch, only restores them:
+writing its own would evict `main`'s and leave the next nightly to build from cold.
+
+- The Rust build caches (`.github/actions/setup-rust`: `Swatinem/rust-cache` with `save-if`), one per job and keyed by
+  `Cargo.lock`, except the one `macos` and `macos-native` share (`cache: macos`), which only `macos-native` writes
+  (`save-cache: 'false'` on `macos`): it builds all of it. A pull request that changes `Cargo.lock` restores
+  `main`'s closest one and builds what changed.
+- sherpa-onnx's libraries (`setup-rust`, by the engine's commit) and the real call's models (`macos-call`, by the
+  engine's commit and the test): `actions/cache/restore`, then `actions/cache/save` in a step that runs only on a
+  push to `main`; the models' after the call passed.
+- `publish-*`'s xtask cache: those jobs run only from a push to `main`.
+- The npm and web-interface caches (a few tens of MB) are written by whichever run misses them.
 
 ## Channels
 
@@ -113,9 +135,10 @@ Build artifacts on Actions runs are kept 7 days, for debugging only. Download fr
 
 ## Updates
 
-Each channel updates itself from its own feed (docs/BRIDGE.md → "The updater"), read at launch and every 6 hours, and
-only to a higher version than its own. The app chooses the feed by the channel it was built for
-(`src-tauri/core/src/updater.rs`, `feed`), so a build of one channel is never offered the other's:
+Each channel updates itself from its own feed (docs/BRIDGE.md → "The updater"), read at launch and then every hour, a
+nightly's every 10 minutes, and only to a higher version than its own. The app chooses the feed and how often it reads
+it by the channel it was built for (`src-tauri/core/src/updater.rs`, `feed` and `check_every`), so a build of one
+channel is never offered the other's:
 
 - A release reads the releases' feed,
   `https://github.com/sidevoice/sidevoice-desktop/releases/latest/download/latest.json`. `latest` is the newest
