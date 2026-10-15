@@ -55,7 +55,7 @@ windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse",
 # It depends on no engine. The candidate source: a try's take (StartOptions, VoiceEvent::Take), the pause in the
 # person's speech, and the rendered speaker's level (VoiceEvent::PlaybackLevel). macOS only: AEC3's C++ does not build
 # on Windows, and the beta ships on macOS. Its build needs meson, ninja and pkg-config.
-sidevoice-voice = { git = "https://github.com/sidevoice/sidevoice-voice", rev = "a15174b2d5eed09f1ba721d24090016a71868fbe" } # Temporary PR #31 pin.
+sidevoice-voice = { git = "https://github.com/sidevoice/sidevoice-voice", rev = "bc7b60f67d16ae11e8db2d50366a5cccb0083307" } # Temporary PR #31 pin.
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 # The call runs on the app's Tokio runtime; the models' native work goes to its blocking pool (src/voice/models.rs).
 tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "time"] }

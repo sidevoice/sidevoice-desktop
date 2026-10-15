@@ -338,7 +338,8 @@ pub async fn voice_stop(
     key: String,
 ) -> Result<(), Refusal> {
     page(&app, &webview)?;
-    stop(&lane(&state, &key).await?).await;
+    let lane = lane(&state, &key).await?;
+    stop(&lane).await;
     Ok(())
 }
 
