@@ -1017,7 +1017,7 @@ test("the host's keys: updater only where the app can update itself, build alway
   const api = install(fakeWindow(ORIGIN).win, ORIGIN, "native", true, true, true, { channel: "release", version: "0.4.0" });
   assert.deepEqual(Object.keys(api.host).sort(), ["app", "build", "callControls", "data", "engine", "localHost", "mediaKeys", "muteShortcut", "updater", "version", "voice"]);
   // The AppUpdater seam, exactly.
-  assert.deepEqual(Object.keys(api.host.updater).sort(), ["check", "download", "restart", "setMode", "settings", "status", "subscribe"]);
+  assert.deepEqual(Object.keys(api.host.updater).sort(), ["cancel", "check", "download", "restart", "setMode", "settings", "status", "subscribe"]);
   assert.ok(Object.isFrozen(api.host.updater));
 });
 
@@ -1037,6 +1037,7 @@ test("host.updater's calls go to the updater command's actions and answer what t
     check: { state: "available", version: "0.5.0" },
     download: { state: "downloading", version: "0.5.0" },
     restart: null,
+    cancel: null,
   };
   const updaterWindow = (refuse) => {
     const { win, calls } = fakeWindow(ORIGIN);
@@ -1055,6 +1056,8 @@ test("host.updater's calls go to the updater command's actions and answer what t
   assert.deepEqual(await updater.check(), { state: "available", version: "0.5.0" });
   assert.deepEqual(await updater.download(), { state: "downloading", version: "0.5.0" });
   assert.equal(await updater.restart(), undefined);
+  assert.equal(await updater.cancel(), undefined);
+  assert.equal(await updater.cancel(), undefined, "with nothing to cancel it resolves too");
   assert.deepEqual(calls.filter(([cmd]) => cmd === "updater").map(([, args]) => args), [
     { action: "settings" },
     { action: "set-mode", mode: "manual" },
@@ -1062,6 +1065,8 @@ test("host.updater's calls go to the updater command's actions and answer what t
     { action: "check" },
     { action: "download" },
     { action: "restart" },
+    { action: "cancel" },
+    { action: "cancel" },
   ]);
   const nothing = { key: "update_unavailable", message: "There is no update to install." };
   const refused = install(updaterWindow({ restart: nothing, download: nothing }).win, ORIGIN, null, false, false, true)

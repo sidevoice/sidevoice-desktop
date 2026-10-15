@@ -606,6 +606,7 @@ interface AppUpdater {
   subscribe(listener: (status: UpdaterStatus) => void): () => void;  // every change
   check(): Promise<UpdaterStatus>;                                    // resolves after the check
   download(): Promise<UpdaterStatus>;                                 // resolves once it starts
+  cancel(): Promise<void>;                                            // stops a download in progress; resolves too with none
   restart(): Promise<void>;                                           // only when "ready": restarts now into the update
 }
 interface UpdaterStatus {
@@ -626,13 +627,20 @@ interface UpdaterStatus {
   when no update is known. An update already downloading or ready is left as it is by later checks (nothing is
   downloaded twice); one still `available`, found again, is not told to the page again (only an `error` the check
   clears is).
+- `cancel()` aborts the download running and drops what it had received (the plugin downloads into memory: there is no
+  partial file); the state goes back to `available` (the update stays known, no `error`). With no download running it
+  resolves and changes nothing. The cancelled version is remembered for this run of the app (not with the settings):
+  automatic mode does not download it again by itself, at later checks or when it is switched to; a newer version found
+  is downloaded as usual, and `download()` (the person asking) lifts the cancel. A new launch starts clean.
+  Each download holds a token that `cancel()` invalidates at once: an aborted download still finishing its last step
+  cannot write progress, bytes or a result over a download that replaced it.
 - A check that fails or takes over 2 minutes, a download that fails or takes over an hour, an install that fails:
   `error` says so, the state stays (a failed download stays `available`, and automatic mode tries it again at the
   next check).
 - The mode is kept with the app's settings (`updateMode`), set only through `setMode`.
 - App → page: `window.__sidevoiceDesktop.updaterEvent(status)` (`webview.eval`) on each change, to the listeners.
 - Command behind it: `updater {action, mode?}`, `action` one of `settings`, `set-mode`, `status`, `check`,
-  `download`, `restart`. Granted to the room window (`capabilities/room.json`); it re-checks that the caller is the
+  `download`, `cancel`, `restart`. Granted to the room window (`capabilities/room.json`); it re-checks that the caller is the
   current room window on the app's own page (else `bad_request`). The page is granted none of the plugin's own
   commands. `src-tauri/src/updater.rs` drives tauri-plugin-updater (check, download with its progress, verify,
   install); core `updater.rs` holds the status and the mode (unit-tested). CI's macOS job checks the
