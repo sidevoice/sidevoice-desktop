@@ -371,7 +371,7 @@ itself over `@sidevoice/voice` in the webview, the room window granting it the m
 ### The seam
 
 `window.__sidevoiceDesktop.host.voice` implements `VoiceHost`, the page's voice seam, defined once in sidevoice-voice:
-[`js/voice-host.d.ts`](https://github.com/sidevoice/sidevoice-voice/blob/b898c55cdffbbf5fe603e2e088e530163825ce06/js/voice-host.d.ts) in
+[`js/voice-host.d.ts`](https://github.com/sidevoice/sidevoice-voice/blob/85341d78e5b0147600695a3d09124110000ed5a3/js/voice-host.d.ts) in
 `@sidevoice/voice` (sidevoice/sidevoice-voice#6), with the types it carries (`VoiceSettings`, `VoiceHostError`,
 and `js/voice-events.d.ts`'s `VoiceTurnEvent`, `VoiceCallState`, `VoiceSaying`, `VoiceSayOutcome`, `VoiceTake`) and what every
 implementation promises
@@ -410,7 +410,8 @@ What is this app's own:
   loaded: the call then goes on as it was, on the models it had.
 - `start` rejects `{key: "voice_failed", code, message}` with the call's code, `{key: "voice_settings_missing", code:
   "settings-missing"}` before any settings, and `{key: "voice_failed", code: "stopped"}` when `stop` came first.
-- The seam has sixteen calls here: `setSettings`, `start`, `stop`, `say`, `mute`, `cancelInput`, `onTurn`, `onState`,
+- The seam has seventeen calls here: `setSettings`, `start`, `stop`, `say`, `mute`, `cancelInput`,
+  `setCaptureBoundary`, `onTurn`, `onState`,
   `onLevel`, `onPlaybackLevel`, `onAgentInterrupted`, `onError`, `onTake`, `audioDevices`, `setAudioDevices`, `onAudioDevices`. The
   catalogues and provider keys are `host.engine`'s (above).
 - `onPlaybackLevel(listener)` receives a bare number from 0 to 1, just as `onLevel` does for the microphone: RMS of
@@ -439,6 +440,7 @@ What is this app's own:
 
 - Page → app: the commands `voice_set_settings {settings}`, `voice_start {take}`, `voice_stop`,
   `voice_say {key, text, language}`, `voice_cancel_say {key}`, `voice_mute {muted}`, `voice_cancel_input`,
+  `voice_set_capture_boundary {id}`,
   `voice_audio_devices`, `voice_set_audio_devices {choice: {input?, output?}}` (`src-tauri/src/voice.rs`). Granted to
   the room window (`capabilities/room.json`); each re-checks that the caller is the current room window on the app's
   own page.
@@ -450,9 +452,16 @@ What is this app's own:
   of something said, `{type: "say", data: {key, event}}` (`key` the bridge's for the handle `say` answered at once;
   `event` sidevoice-voice's `SayEvent`, the last `done` with the outcome), which it hands to that handle. A handle's
   `cancel` goes behind its `voice_say`, so it never overtakes it.
-- The turn's JSON is `{type:"turn",data:{phase:"started",turn_id,started_at}}`, then exactly one
-  `{phase:"finished",turn_id,text,language?,started_at,ended_at,merged,timings}` or
-  `{phase:"cancelled",turn_id,merged}`. A confirmed spoken turn can also send
+- The turn's JSON is `{type:"turn",data:{phase:"started",turn_id,capture_boundary_id,started_at}}`, then exactly one
+  `{phase:"finished",turn_id,capture_boundary_id,text,language?,started_at,ended_at,merged,timings}` or
+  `{phase:"cancelled",turn_id,capture_boundary_id,merged}`. The desktop forwards `capture_boundary_id` unchanged from
+  the native voice event. The page assigns a fresh opaque `id` for initial focus and every focus change, and awaits
+  `host.voice.setCaptureBoundary(id)` before speech can start for the new focus. The bridge command resolves after
+  native voice applies the fence; an ID supplied before `setSettings` is kept for the call that settings create.
+  An earlier open, held or transcribing turn retains its original ID and words, and cannot merge with a turn from the
+  new boundary. The page retains each `turn_id`'s captured target through its terminal event and routes its words to
+  that target. The ID is only a voice merge fence, and is not added to core's `voice-user-turn` frame.
+  A confirmed spoken turn can also send
   `{type:"agent-interrupted",data:{utterance_id,heard_until,played}}`: `utterance_id` is the `say` handle's bridge key,
   mapped from the native call's id; `heard_until` counts Unicode scalar values and is zero with `played:false` for a
   queued reply that never sounded. It reaches `onAgentInterrupted` once for each displaced say. The `say` stream's

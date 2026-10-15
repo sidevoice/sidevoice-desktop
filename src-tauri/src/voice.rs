@@ -532,7 +532,66 @@ fn event_for_page(
 #[cfg(test)]
 mod turns_tests {
     use super::*;
-    use sidevoice_voice::AgentInterrupted;
+    use sidevoice_voice::{AgentInterrupted, TurnEvent, TurnTimings};
+
+    #[test]
+    fn native_turn_events_keep_the_source_capture_boundary_on_every_phase() {
+        let keys = Mutex::new(HashMap::new());
+        let timings = TurnTimings { audio_ms: 100, endpoint_silence_ms: 20, recognition_ms: 5 };
+        let events = [
+            VoiceEvent::Turn(TurnEvent::Started {
+                turn_id: "a".into(),
+                capture_boundary_id: "focus-a".into(),
+                started_at: 1,
+            }),
+            VoiceEvent::Turn(TurnEvent::Started {
+                turn_id: "b".into(),
+                capture_boundary_id: "focus-b".into(),
+                started_at: 2,
+            }),
+            VoiceEvent::Turn(TurnEvent::Finished {
+                turn_id: "a".into(),
+                capture_boundary_id: "focus-a".into(),
+                text: "Private instruction for A.".into(),
+                language: None,
+                started_at: 1,
+                ended_at: 3,
+                merged: false,
+                timings,
+            }),
+            VoiceEvent::Turn(TurnEvent::Finished {
+                turn_id: "b".into(),
+                capture_boundary_id: "focus-b".into(),
+                text: "Instruction for B.".into(),
+                language: None,
+                started_at: 2,
+                ended_at: 4,
+                merged: false,
+                timings,
+            }),
+            VoiceEvent::Turn(TurnEvent::Cancelled {
+                turn_id: "c".into(),
+                capture_boundary_id: "focus-b".into(),
+                merged: false,
+            }),
+        ];
+        let forwarded: Vec<Value> = events
+            .iter()
+            .map(|event| event_for_page(event, &keys).expect("turn event reaches the page").0)
+            .collect();
+        assert_eq!(forwarded[0]["data"]["capture_boundary_id"], "focus-a");
+        assert_eq!(forwarded[1]["data"]["capture_boundary_id"], "focus-b");
+        assert_eq!(forwarded[2]["data"], json!({
+            "phase": "finished", "turn_id": "a", "capture_boundary_id": "focus-a",
+            "text": "Private instruction for A.", "started_at": 1, "ended_at": 3,
+            "merged": false, "timings": {"audio_ms": 100, "endpoint_silence_ms": 20, "recognition_ms": 5}
+        }));
+        assert_eq!(forwarded[3]["data"]["text"], "Instruction for B.");
+        assert_eq!(forwarded[3]["data"]["capture_boundary_id"], "focus-b");
+        assert_eq!(forwarded[4]["data"], json!({
+            "phase": "cancelled", "turn_id": "c", "capture_boundary_id": "focus-b", "merged": false
+        }));
+    }
 
     #[test]
     fn native_interruption_uses_the_page_handle_and_keeps_scalar_extent_and_zero() {

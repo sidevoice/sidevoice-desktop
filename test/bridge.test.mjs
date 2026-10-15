@@ -451,7 +451,7 @@ test("host.voice only where the app runs the call, and exactly the seam", () => 
   assert.deepEqual(Object.keys(api.host.voice).sort(), [
     "audioDevices", "cancelInput", "mute", "onAgentInterrupted", "onAudioDevices", "onError", "onLevel", "onPlaybackLevel", "onState",
     "onTake", "onTurn", "say",
-    "setAudioDevices", "setSettings", "start", "stop",
+    "setAudioDevices", "setCaptureBoundary", "setSettings", "start", "stop",
   ]);
   assert.ok(Object.isFrozen(api.host.voice));
 });
@@ -464,20 +464,24 @@ test("host.voice calls go to their native commands, with their arguments", async
     stt: { catalog: "local", model: "whisper-small", language: "es" },
     tts: { catalog: "local", model: "kokoro-82m-v1.0", voice: "ef_dora", speed: 1 },
   };
+  await voice.setCaptureBoundary("focus-a");
   await voice.setSettings(settings);
   await voice.start();
   voice.say("Hola.", { language: "es" });
   voice.say("Sin idioma.");
   await voice.mute(1);
   await voice.cancelInput();
+  await voice.setCaptureBoundary("focus-b");
   await voice.stop();
   assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("voice_")), [
+    ["voice_set_capture_boundary", { id: "focus-a" }],
     ["voice_set_settings", { settings }],
     ["voice_start", { take: false }],
     ["voice_say", { key: "say-1", text: "Hola.", language: "es" }],
     ["voice_say", { key: "say-2", text: "Sin idioma.", language: null }],
     ["voice_mute", { muted: true }],
     ["voice_cancel_input", undefined],
+    ["voice_set_capture_boundary", { id: "focus-b" }],
     ["voice_stop", undefined],
   ]);
 });
@@ -524,7 +528,7 @@ test("the call's events reach host.voice's listeners by their type, until they s
   const listen = (name) => api.host.voice[name]((data) => seen.push([name, JSON.stringify(data)]));
   const stops = ["onTurn", "onState", "onLevel", "onError"].map(listen);
   api.host.voice.onLevel(() => { throw new Error("a listener's own"); });
-  const turn = { phase: "started", turn_id: "c-turn-0", started_at: 1 };
+  const turn = { phase: "started", turn_id: "c-turn-0", capture_boundary_id: "focus-a", started_at: 1 };
   api.voiceEvent({ type: "turn", data: turn });
   api.voiceEvent({ type: "state", data: { listening: "listening" } });
   api.voiceEvent({ type: "level", data: 0.25 });
@@ -538,6 +542,74 @@ test("the call's events reach host.voice's listeners by their type, until they s
   api.voiceEvent({ type: "level", data: 0.5 });
   assert.equal(seen.length, 4);
   assert.throws(() => api.host.voice.onState("not a function"), { name: "TypeError" });
+});
+
+test("A to B focus fences preserve captured routing through the native host seam", async () => {
+  const { win, calls } = voiceWindow();
+  let release;
+  win.__TAURI_INTERNALS__.invoke = (command, args) => {
+    calls.push([command, args === undefined ? undefined : structuredClone(args)]);
+    if (command === "voice_set_capture_boundary" && args.id === "stt-b") {
+      return new Promise((resolve) => { release = resolve; });
+    }
+    return Promise.resolve();
+  };
+  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const voice = api.host.voice;
+  const captured = new Map();
+  const routed = [];
+  let focus = "A";
+  voice.onTurn((turn) => {
+    if (turn.phase === "started") {
+      captured.set(turn.turn_id, { focus, boundary: turn.capture_boundary_id });
+    } else if (turn.phase === "finished") {
+      const original = captured.get(turn.turn_id);
+      assert.equal(turn.capture_boundary_id, original.boundary);
+      assert.equal(turn.merged, false, "cross-focus words never merge");
+      routed.push([original.focus, turn.text]);
+    }
+  });
+  const emit = (phase, turn_id, capture_boundary_id, text) => api.voiceEvent({ type: "turn", data: {
+    phase, turn_id, capture_boundary_id,
+    ...(phase === "started" ? { started_at: 1 } : {
+      text, language: "en", started_at: 1, ended_at: 2, merged: false,
+      timings: { audio_ms: 1, endpoint_silence_ms: 0, recognition_ms: 1 },
+    }),
+  } });
+
+  // A is in STT. The new focus waits for the native call to acknowledge its fence; A may finish after B starts.
+  await voice.setCaptureBoundary("stt-a");
+  emit("started", "a-stt", "stt-a");
+  let acknowledged = false;
+  const boundary = voice.setCaptureBoundary("stt-b").then(() => { acknowledged = true; });
+  await flush();
+  assert.equal(acknowledged, false);
+  release();
+  await boundary;
+  focus = "B";
+  emit("started", "b-stt", "stt-b");
+  emit("finished", "a-stt", "stt-a", "Private instruction for A.");
+  emit("finished", "b-stt", "stt-b", "Instruction for B.");
+  assert.deepEqual(routed, [["A", "Private instruction for A."], ["B", "Instruction for B."]]);
+
+  // A's held transcript is released by the fence, before any B turn begins.
+  routed.length = 0;
+  focus = "A";
+  await voice.setCaptureBoundary("held-a");
+  emit("started", "a-held", "held-a");
+  await voice.setCaptureBoundary("held-b");
+  emit("finished", "a-held", "held-a", "Held words for A.");
+  focus = "B";
+  emit("started", "b-held", "held-b");
+  emit("finished", "b-held", "held-b", "Words for B.");
+  assert.deepEqual(routed, [["A", "Held words for A."], ["B", "Words for B."]]);
+  assert.deepEqual(calls.filter(([command]) => command === "voice_set_capture_boundary"), [
+    ["voice_set_capture_boundary", { id: "stt-a" }],
+    ["voice_set_capture_boundary", { id: "stt-b" }],
+    ["voice_set_capture_boundary", { id: "held-a" }],
+    ["voice_set_capture_boundary", { id: "held-b" }],
+  ]);
+  await assert.rejects(voice.setCaptureBoundary(""), { name: "TypeError" });
 });
 
 test("playback level forwards bare numbers and zero independently of microphone level", () => {
