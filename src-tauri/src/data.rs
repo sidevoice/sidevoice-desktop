@@ -423,7 +423,7 @@ fn begin_reset(app: &AppHandle) -> Answer {
         ),
         Err(_) if !dirs.install_record().exists() => {
             // The observer's cached "absent" is not evidence: ask launchd and the process table now.
-            if !fresh_service_absent(&home) {
+            if !fresh_service_absent(&home) || residual_connector_data(&home, &dirs.data) {
                 return Err(refused("reset.service-failed"));
             }
             (json!({"state": "absent", "agents": {}}), "absent")
@@ -495,6 +495,31 @@ fn begin_reset(app: &AppHandle) -> Answer {
 }
 
 #[cfg(target_os = "macos")]
+fn residual_connector_data(home: &Path, data: &Path) -> bool {
+    let releases = home.join(".local/share/sidevoice");
+    // A missing record is not proof that an interrupted uninstall finished its data phase.
+    if fs::symlink_metadata(releases).is_ok() {
+        return true;
+    }
+    let entries = match fs::read_dir(data) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(_) => return true,
+    };
+    for entry in entries {
+        let Ok(entry) = entry else { return true };
+        let name = entry.file_name();
+        if !["install.lock", "connector.lock", "agents.lock", "node-stopped.json"].iter().any(|kept| name == *kept) {
+            return true;
+        }
+        if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(target_os = "macos")]
 fn write_atomic_json(path: &Path, value: &Value) -> Result<(), &'static str> {
     use std::os::unix::fs::OpenOptionsExt;
     let bytes = serde_json::to_vec(value).map_err(|_| "report-write")?;
@@ -539,15 +564,20 @@ fn fresh_service_absent(home: &Path) -> bool {
         },
         || {
             let Ok(output) = Command::new("/bin/ps").args(["-axo", "comm="]).output() else { return false };
-            output.status.success()
-                && !String::from_utf8_lossy(&output.stdout).lines().any(|line| {
-                    matches!(
-                        Path::new(line.trim()).file_name().and_then(|name| name.to_str()),
-                        Some("sidevoice-core" | "sidevoice-connector")
-                    )
-                })
+            output.status.success() && !managed_process_in_ps(&output.stdout)
         },
     )
+}
+
+#[cfg(target_os = "macos")]
+fn managed_process_in_ps(output: &[u8]) -> bool {
+    String::from_utf8_lossy(output).lines().any(|line| {
+        let path = Path::new(line.trim());
+        matches!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("sidevoice-core-rust" | "sidevoice-core" | "sidevoice-connector")
+        )
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -716,17 +746,28 @@ fn inherit_lock(file: &std::fs::File) -> Result<i32, &'static str> {
 
 #[cfg(target_os = "macos")]
 fn helper_lock(fd: Option<i32>) -> Option<std::fs::File> {
+    let path = report_path()?.with_file_name("reset.lock");
+    helper_lock_at(fd, &path)
+}
+
+#[cfg(target_os = "macos")]
+fn helper_lock_at(fd: Option<i32>, path: &Path) -> Option<std::fs::File> {
     use std::os::fd::FromRawFd;
     use std::os::unix::fs::MetadataExt;
     let fd = fd.filter(|fd| *fd >= 3)?;
     let held = unsafe { std::fs::File::from_raw_fd(fd) };
-    let named = open_reset_lock().ok()?;
+    let named = open_reset_lock_at(path).ok()?;
     let held_meta = held.metadata().ok()?;
     let named_meta = named.metadata().ok()?;
     if held_meta.dev() != named_meta.dev() || held_meta.ino() != named_meta.ino() {
         return None;
     }
     if !try_lock(&held) {
+        return None;
+    }
+    use std::os::fd::AsRawFd;
+    let flags = unsafe { libc::fcntl(held.as_raw_fd(), libc::F_GETFD) };
+    if flags < 0 || unsafe { libc::fcntl(held.as_raw_fd(), libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0 {
         return None;
     }
     Some(held)
@@ -1419,6 +1460,62 @@ mod tests {
     }
 
     #[test]
+    fn lock_helper_child_mode() {
+        if std::env::var("SIDEVOICE_LOCK_HANDOFF_MODE").as_deref() != Ok("helper") {
+            return;
+        }
+        let path = PathBuf::from(std::env::var_os("SIDEVOICE_LOCK_HANDOFF_PATH").unwrap());
+        let fd: i32 = std::env::var("SIDEVOICE_LOCK_HANDOFF_FD").unwrap().parse().unwrap();
+        let _held = helper_lock_at(Some(fd), &path).expect("helper validates and retains inherited lock");
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "data::tests::lock_relaunch_child_mode", "--nocapture"])
+            .env("SIDEVOICE_LOCK_HANDOFF_MODE", "relaunch")
+            .env("SIDEVOICE_LOCK_HANDOFF_PATH", &path)
+            .env("SIDEVOICE_LOCK_HANDOFF_FD", fd.to_string())
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    #[test]
+    fn lock_relaunch_child_mode() {
+        if std::env::var("SIDEVOICE_LOCK_HANDOFF_MODE").as_deref() != Ok("relaunch") {
+            return;
+        }
+        let path = PathBuf::from(std::env::var_os("SIDEVOICE_LOCK_HANDOFF_PATH").unwrap());
+        let fd: i32 = std::env::var("SIDEVOICE_LOCK_HANDOFF_FD").unwrap().parse().unwrap();
+        let mut inherited: libc::stat = unsafe { std::mem::zeroed() };
+        let named = open_reset_lock_at(&path).unwrap();
+        use std::os::fd::AsRawFd;
+        let mut expected: libc::stat = unsafe { std::mem::zeroed() };
+        assert_eq!(unsafe { libc::fstat(named.as_raw_fd(), &mut expected) }, 0);
+        let matches_lock = unsafe { libc::fstat(fd, &mut inherited) } == 0
+            && inherited.st_dev == expected.st_dev
+            && inherited.st_ino == expected.st_ino;
+        assert!(!matches_lock, "relaunched process inherited the reset lock");
+        assert!(!try_lock(&named), "helper keeps the lock until its work finishes");
+    }
+
+    #[test]
+    fn reset_lock_handoff_closes_descriptor_before_relaunch() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = fs::canonicalize(dir.path()).unwrap().join("reset.lock");
+        let held = open_reset_lock_at(&path).unwrap();
+        assert!(try_lock(&held));
+        let fd = inherit_lock(&held).unwrap();
+        let child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "data::tests::lock_helper_child_mode", "--nocapture"])
+            .env("SIDEVOICE_LOCK_HANDOFF_MODE", "helper")
+            .env("SIDEVOICE_LOCK_HANDOFF_PATH", &path)
+            .env("SIDEVOICE_LOCK_HANDOFF_FD", fd.to_string())
+            .spawn()
+            .unwrap();
+        drop(held);
+        assert!(child.wait_with_output().unwrap().status.success());
+        assert!(try_lock(&open_reset_lock_at(&path).unwrap()));
+    }
+
+    #[test]
     fn missing_install_record_requires_fresh_launchd_and_process_absence() {
         let home = tempfile::tempdir().unwrap();
         let home = fs::canonicalize(home.path()).unwrap();
@@ -1428,6 +1525,29 @@ mod tests {
         fs::create_dir_all(home.join("Library/LaunchAgents")).unwrap();
         fs::write(home.join("Library/LaunchAgents/dev.sidevoice.core.plist"), b"orphan").unwrap();
         assert!(!fresh_service_absent_with(&home, |_| true, || true));
+    }
+
+    #[test]
+    fn production_process_parser_recognizes_bundled_core() {
+        assert!(managed_process_in_ps(b"/Users/test/.local/share/sidevoice/current/core/bin/sidevoice-core-rust\n"));
+        assert!(managed_process_in_ps(b"/Users/test/.local/share/sidevoice/current/bin/sidevoice-connector\n"));
+        assert!(!managed_process_in_ps(b"/usr/bin/other-service\n"));
+    }
+
+    #[test]
+    fn missing_record_with_residual_connector_data_refuses_absent_retry() {
+        let home = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(home.path()).unwrap();
+        let data = home.join(".sidevoice");
+        assert!(!residual_connector_data(&home, &data));
+        fs::create_dir(&data).unwrap();
+        fs::write(data.join("install.lock"), b"marker").unwrap();
+        assert!(!residual_connector_data(&home, &data));
+        fs::write(data.join("core-secret"), b"sentinel").unwrap();
+        assert!(residual_connector_data(&home, &data));
+        fs::remove_file(data.join("core-secret")).unwrap();
+        fs::create_dir_all(home.join(".local/share/sidevoice")).unwrap();
+        assert!(residual_connector_data(&home, &data));
     }
 
     #[test]
