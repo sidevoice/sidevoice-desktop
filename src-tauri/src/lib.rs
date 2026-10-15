@@ -465,14 +465,16 @@ macro_rules! commands {
 #[cfg(target_os = "macos")]
 fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
     commands![
-        , voice::voice_set_settings,
+        , voice::voice_create_call,
+        voice::voice_route_input,
+        voice::voice_dispose_call,
+        voice::voice_set_settings,
         voice::voice_start,
         voice::voice_stop,
         voice::voice_say,
         voice::voice_cancel_say,
         voice::voice_mute,
         voice::voice_cancel_input,
-        voice::voice_set_capture_boundary,
         voice::voice_audio_devices,
         voice::voice_set_audio_devices
     ]

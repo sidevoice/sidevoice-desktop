@@ -20,6 +20,7 @@
 #[cfg(test)]
 mod tests;
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
@@ -46,12 +47,19 @@ pub(crate) trait Loader: Send + Sync {
 /// The models of the choice made last: loaded into fresh [`Slots`] when the call loads, and switched in those slots
 /// while the call has them.
 pub struct EngineModels {
-    loader: Box<dyn Loader>,
+    loader: Arc<dyn Loader>,
     choice: Mutex<VoiceChoice>,
     /// The slots of the call's loaded models, while it keeps them (it drops them when idle).
     live: Mutex<Weak<Slots>>,
     /// One load or switch at a time: a switch never lands in the middle of a load, nor two switches out of order.
     turn: tokio::sync::Mutex<()>,
+}
+
+/// One cache for the desktop host. It holds weak references so idle calls still release models;
+/// concurrent calls asking for the same choice share the load and the resulting model instance.
+#[derive(Default)]
+pub struct ModelCache {
+    loaded: tokio::sync::Mutex<HashMap<String, Weak<dyn Model>>>,
 }
 
 /// The models a switch loaded for the slots that change.
@@ -65,12 +73,12 @@ pub struct Switched<'a> {
 
 impl EngineModels {
     /// The models of `choice` on `engine`.
-    pub fn new(engine: Arc<Engine>, choice: VoiceChoice) -> Self {
-        Self::with(Box::new(EngineLoader(engine)), choice)
+    pub fn new(engine: Arc<Engine>, cache: Arc<ModelCache>, choice: VoiceChoice) -> Self {
+        Self::with(Box::new(EngineLoader { engine, cache }), choice)
     }
 
     pub(crate) fn with(loader: Box<dyn Loader>, choice: VoiceChoice) -> Self {
-        Self { loader, choice: Mutex::new(choice), live: Mutex::default(), turn: tokio::sync::Mutex::new(()) }
+        Self { loader: Arc::from(loader), choice: Mutex::new(choice), live: Mutex::default(), turn: tokio::sync::Mutex::new(()) }
     }
 
     /// Makes `choice` the call's. A slot whose model changes gets the new one once it is loaded (the old one serving
@@ -149,7 +157,6 @@ impl VoiceModels for EngineModels {
     async fn load(&self) -> Result<Models, String> {
         let _turn = self.turn.lock().await;
         let choice = lock(&self.choice).clone();
-        let vad = self.loader.vad(&choice.vad).await?;
         let stt = self.loader.transcriber(&choice.stt).await?;
         let tts = self.loader.speaker(&choice.tts).await?;
         let end_of_turn = match &choice.end_of_turn {
@@ -158,17 +165,26 @@ impl VoiceModels for EngineModels {
         };
         let slots = Slots::new(stt, tts, voice_of(&choice), end_of_turn);
         *lock(&self.live) = Arc::downgrade(&slots);
+        let vad = self.loader.vad(&choice.vad).await?;
         Ok(slots.models(vad))
     }
 }
 
 /// The engine's models, each loaded by its catalogue, or as its build for a local model with a build chosen.
-struct EngineLoader(Arc<Engine>);
+struct EngineLoader {
+    engine: Arc<Engine>,
+    cache: Arc<ModelCache>,
+}
 
 impl EngineLoader {
     async fn load(&self, chosen: &ModelChoice) -> Result<Arc<dyn Model>, String> {
-        let (engine, chosen) = (Arc::clone(&self.0), chosen.clone());
-        blocking(async move {
+        let key = format!("{}:{}:{}", chosen.catalog, chosen.model, chosen.build.as_deref().unwrap_or(""));
+        let mut loaded = self.cache.loaded.lock().await;
+        if let Some(model) = loaded.get(&key).and_then(Weak::upgrade) {
+            return Ok(model);
+        }
+        let (engine, chosen) = (Arc::clone(&self.engine), chosen.clone());
+        let model = blocking(async move {
             let progress = |_: Progress| {};
             let loaded: Arc<dyn Model> = match chosen.build.as_deref() {
                 Some(build) if chosen.catalog == LOCAL_CATALOG => {
@@ -178,7 +194,9 @@ impl EngineLoader {
             };
             Ok(loaded)
         })
-        .await
+        .await?;
+        loaded.insert(key, Arc::downgrade(&model));
+        Ok(model)
     }
 }
 

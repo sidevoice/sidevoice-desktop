@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use models::EngineModels;
+use models::{EngineModels, ModelCache};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use sidevoice_desktop_core::voice::{
@@ -31,31 +31,128 @@ use sidevoice_desktop_core::voice::{
 };
 use sidevoice_desktop_engine::{CatalogView, NativeEngines};
 use sidevoice_voice::{
-    AudioDevices, Events, Listening, NativeDevices, NativeIo, SayCancel, SayEvent, SayOptions, SayOutcome,
-    StartOptions, StopReason, Take, VoiceCall, VoiceConfig, VoiceEvent, VoiceModels,
+    AudioDevices, AudioIo, Events, InputPort, Listening, NativeDevices, SayCancel, SayEvent, SayOptions, SayOutcome,
+    SharedNativeAudio, StartOptions, StopReason, Take, VoiceCall, VoiceConfig, VoiceEvent, VoiceModels,
 };
 use tauri::{AppHandle, Manager, State, Webview};
-use tokio::sync::{oneshot, watch};
+use tokio::sync::oneshot;
 
 use crate::engine_ipc::EngineState;
 
-/// The call, once the page has set its settings, with the models it runs on (whose choice changes in place).
-#[derive(Default)]
+/// One native host owns the devices and the loaded model instances. Every call has its own
+/// audio lane, VAD stream, recognition state, playback, and event stream.
 pub struct VoiceState {
+    calls: tokio::sync::Mutex<HashMap<String, Arc<CallLane>>>,
+    audio: SharedNativeAudio,
+    model_cache: Arc<ModelCache>,
+    route: tokio::sync::Mutex<Option<String>>,
+    devices: NativeDevices,
+    watching: AtomicBool,
+}
+
+struct CallLane {
     call: tokio::sync::Mutex<Option<(VoiceCall, Arc<EngineModels>)>>,
-    /// The host's opaque capture fence, including when it arrives before the first settings make a call.
-    capture_boundary_id: tokio::sync::Mutex<Option<String>>,
-    /// The `setSettings` asked for so far, numbered as they arrive: only the latest changes the call.
+    io: Mutex<Option<Box<dyn AudioIo>>>,
+    input: InputPort,
     settings: Arc<AtomicU64>,
     lifecycle: Arc<Mutex<Lifecycle>>,
-    /// What is being said, by the page's key for it, until it is done.
     sayings: Arc<Mutex<HashMap<String, SayCancel>>>,
-    /// Native say ids in `agent-interrupted` become the bridge keys returned by `host.voice.say`.
-    native_keys: Arc<Mutex<HashMap<String, (String, watch::Sender<bool>)>>>,
-    /// Which microphone and speaker the call uses; the call has a clone.
-    devices: NativeDevices,
-    /// Whether the devices are watched for changes (from the first time the page asks for them).
-    watching: AtomicBool,
+}
+
+impl Default for VoiceState {
+    fn default() -> Self {
+        let devices = NativeDevices::default();
+        Self {
+            calls: tokio::sync::Mutex::new(HashMap::new()),
+            audio: SharedNativeAudio::new(devices.clone()),
+            model_cache: Arc::new(ModelCache::default()),
+            route: tokio::sync::Mutex::new(None),
+            devices,
+            watching: AtomicBool::new(false),
+        }
+    }
+}
+
+fn valid_key(key: &str) -> bool {
+    !key.is_empty() && key.len() <= 64 && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+async fn lane(state: &VoiceState, key: &str) -> Result<Arc<CallLane>, Refusal> {
+    state.calls.lock().await.get(key).cloned().ok_or_else(|| refusal("bad_request", "Unknown voice call."))
+}
+
+/// Attaches a lane now, so routing may be chosen before its settings or start.
+#[tauri::command]
+pub async fn voice_create_call(
+    app: AppHandle,
+    webview: Webview,
+    state: State<'_, VoiceState>,
+    key: String,
+) -> Result<(), Refusal> {
+    page(&app, &webview)?;
+    if !valid_key(&key) {
+        return Err(refusal("bad_request", "Invalid voice call key."));
+    }
+    let mut calls = state.calls.lock().await;
+    if calls.contains_key(&key) {
+        return Err(refusal("bad_request", "Voice call key already exists."));
+    }
+    let (io, input) = state.audio.attach();
+    calls.insert(
+        key,
+        Arc::new(CallLane {
+            call: tokio::sync::Mutex::new(None),
+            io: Mutex::new(Some(io)),
+            input,
+            settings: Arc::new(AtomicU64::new(0)),
+            lifecycle: Arc::new(Mutex::new(Lifecycle::default())),
+            sayings: Arc::new(Mutex::new(HashMap::new())),
+        }),
+    );
+    Ok(())
+}
+
+/// The acknowledged next-frame microphone route; None sends silence to all running lanes.
+#[tauri::command]
+pub async fn voice_route_input(
+    app: AppHandle,
+    webview: Webview,
+    state: State<'_, VoiceState>,
+    key: Option<String>,
+) -> Result<(), Refusal> {
+    page(&app, &webview)?;
+    let mut route = state.route.lock().await;
+    let target = match key.as_deref() {
+        Some(key) => Some(lane(&state, key).await?),
+        None => None,
+    };
+    state.audio.route_input(target.as_ref().map(|lane| &lane.input)).await.map_err(|code| {
+        let mut refused = refusal("voice_failed", format!("The microphone route failed: {code}."));
+        refused.params.insert("code".into(), json!(code));
+        refused
+    })?;
+    *route = key;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn voice_dispose_call(
+    app: AppHandle,
+    webview: Webview,
+    state: State<'_, VoiceState>,
+    key: String,
+) -> Result<(), Refusal> {
+    page(&app, &webview)?;
+    let mut route = state.route.lock().await;
+    if route.as_deref() == Some(&key) {
+        state.audio.route_input(None).await.map_err(|code| refusal("voice_failed", code))?;
+        *route = None;
+    }
+    let removed = state.calls.lock().await.remove(&key);
+    if let Some(lane) = removed {
+        stop(&lane).await;
+    }
+    Ok(())
 }
 
 /// How often the devices are listed to tell the page when they change: the system tells cpal of no change.
@@ -130,12 +227,14 @@ pub async fn voice_set_settings(
     webview: Webview,
     state: State<'_, VoiceState>,
     settings: VoiceSettings,
+    key: String,
 ) -> Result<(), Refusal> {
     page(&app, &webview)?;
+    let lane = lane(&state, &key).await?;
     let _permit = crate::data::admit(&app).ok_or_else(|| refusal("reset.busy", "Data reset is under way."))?;
     // Numbered on arrival, before anything is awaited: a later one wins however long this one takes.
-    let number = state.settings.fetch_add(1, Ordering::SeqCst) + 1;
-    let counter = Arc::clone(&state.settings);
+    let number = lane.settings.fetch_add(1, Ordering::SeqCst) + 1;
+    let counter = Arc::clone(&lane.settings);
     let latest = move || counter.load(Ordering::SeqCst) == number;
     let engines = engines(&app)?;
     let catalogs = {
@@ -150,7 +249,7 @@ pub async fn voice_set_settings(
     let config: VoiceConfig =
         serde_json::from_value(choice.config.clone()).map_err(|e| refusal("internal", e.to_string()))?;
     crate::debug(&format!("voice settings: {}", serde_json::to_string(&choice).unwrap_or_default()));
-    let mut call = state.call.lock().await;
+    let mut call = lane.call.lock().await;
     let existing = call.as_ref().map(|(_, models)| Arc::clone(models));
     match existing {
         Some(models) => {
@@ -169,20 +268,22 @@ pub async fn voice_set_settings(
             })?;
             // A later setSettings overtook this one: it applies instead, models and configuration.
             let Some(_switched) = switched else { return Ok(()) };
-            if let Some((call, _)) = state.call.lock().await.as_ref() {
+            if let Some((call, _)) = lane.call.lock().await.as_ref() {
                 call.set_config(config);
             }
         }
         None => {
             // The first settings make the call even when later ones came meanwhile (they move it to theirs as they
             // land), so that a start right after these finds a call.
-            let models = Arc::new(EngineModels::new(engines.engine(), choice));
-            let io = Box::new(NativeIo::with_devices(state.devices.clone()));
+            let models = Arc::new(EngineModels::new(engines.engine(), Arc::clone(&state.model_cache), choice));
+            let io = lane
+                .io
+                .lock()
+                .unwrap()
+                .take()
+                .ok_or_else(|| refusal("internal", "Voice lane audio was already taken."))?;
             let (created, events) = VoiceCall::new(Arc::clone(&models) as Arc<dyn VoiceModels>, io, config);
-            forward(app.clone(), events, Arc::clone(&state.lifecycle), Arc::clone(&state.native_keys));
-            if let Some(id) = state.capture_boundary_id.lock().await.clone() {
-                created.set_capture_boundary(id).await;
-            }
+            forward(app.clone(), key, events, Arc::clone(&lane.lifecycle));
             *call = Some((created, models));
         }
     }
@@ -200,15 +301,17 @@ pub async fn voice_start(
     webview: Webview,
     state: State<'_, VoiceState>,
     take: Option<bool>,
+    key: String,
 ) -> Result<(), Refusal> {
     page(&app, &webview)?;
+    let lane = lane(&state, &key).await?;
     let _permit = crate::data::admit(&app).ok_or_else(|| refusal("reset.busy", "Data reset is under way."))?;
     let (sender, started) = oneshot::channel();
     {
-        let call = state.call.lock().await;
+        let call = lane.call.lock().await;
         let (call, _) =
             call.as_ref().ok_or_else(|| refusal("voice_settings_missing", "Set the voice settings first."))?;
-        let mut lifecycle = state.lifecycle.lock().unwrap();
+        let mut lifecycle = lane.lifecycle.lock().unwrap();
         if lifecycle.listening {
             return Ok(());
         }
@@ -228,72 +331,48 @@ pub async fn voice_start(
 
 /// Stops listening and speaking; the models stay loaded. A `start` still waiting rejects with `stopped`.
 #[tauri::command]
-pub async fn voice_stop(app: AppHandle, webview: Webview, state: State<'_, VoiceState>) -> Result<(), Refusal> {
+pub async fn voice_stop(
+    app: AppHandle,
+    webview: Webview,
+    state: State<'_, VoiceState>,
+    key: String,
+) -> Result<(), Refusal> {
     page(&app, &webview)?;
-    stop(&state).await;
+    stop(&lane(&state, &key).await?).await;
     Ok(())
 }
 
-/// Says `text` (in `language`, the settings' when absent) after whatever is being said, under `key`, the page's handle
-/// for it: each step reaches the page as `voiceEvent({type: "say", data: {key, event}})`, the last being `done` with
-/// its outcome. With no call yet it is not played (`stopped`).
+/// Says text on one call; its keyed events return only to that call's handle.
 #[tauri::command]
 pub async fn voice_say(
     app: AppHandle,
     webview: Webview,
     state: State<'_, VoiceState>,
     key: String,
+    say_key: String,
     text: String,
     language: Option<String>,
 ) -> Result<(), Refusal> {
     page(&app, &webview)?;
-    if key.is_empty() || key.len() > 64 || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
-        return Err(refusal("bad_request", format!("not a say key: {key:?}")));
+    if !valid_key(&say_key) {
+        return Err(refusal("bad_request", "Invalid say key."));
     }
-    let call = state.call.lock().await;
+    let lane = lane(&state, &key).await?;
+    let call = lane.call.lock().await;
     let Some((call, _)) = call.as_ref() else {
         let stopped = SayEvent::Done { outcome: SayOutcome::NotPlayed { reason: StopReason::Stopped } };
-        to_page(&app, &json!({"type": "say", "data": {"key": key, "event": stopped}}));
+        to_page(&app, &json!({"key": key, "type": "say", "data": {"key": say_key, "event": stopped}}));
         return Ok(());
     };
-    // Hold the reverse map lock while the call accepts the say: its event loop may emit an interruption immediately.
-    let mut native_keys = state.native_keys.lock().unwrap();
     let mut saying = call.say(text, SayOptions { language });
-    let native_id = saying.id().to_owned();
-    let (cut_sent, mut cut_forwarded) = watch::channel(false);
-    native_keys.insert(native_id.clone(), (key.clone(), cut_sent));
-    state.sayings.lock().unwrap().insert(key.clone(), saying.canceller());
-    drop(native_keys);
-    let sayings = Arc::clone(&state.sayings);
-    let native_keys = Arc::clone(&state.native_keys);
+    lane.sayings.lock().unwrap().insert(say_key.clone(), saying.canceller());
+    let sayings = Arc::clone(&lane.sayings);
     tauri::async_runtime::spawn(async move {
         while let Some(event) = saying.next().await {
-            let done = matches!(event, SayEvent::Done { .. });
-            let interrupted = matches!(
-                event,
-                SayEvent::Done {
-                    outcome: SayOutcome::HeardUpTo { reason: StopReason::BargeIn, .. }
-                        | SayOutcome::NotPlayed { reason: StopReason::BargeIn }
-                }
-            );
-            if done {
-                sayings.lock().unwrap().remove(&key);
+            if matches!(event, SayEvent::Done { .. }) {
+                sayings.lock().unwrap().remove(&say_key);
             }
-            if interrupted {
-                // The call emits the cut before this terminal step, but the two Rust streams have separate tasks.
-                // Keep the web's deduplication order even when the terminal receiver is scheduled first.
-                while !*cut_forwarded.borrow_and_update() {
-                    if cut_forwarded.changed().await.is_err() {
-                        break;
-                    }
-                }
-            }
-            to_page(&app, &json!({"type": "say", "data": {"key": key, "event": event}}));
-            // The call emits `agent-interrupted` separately from the terminal say event. Keep this mapping until
-            // that event is forwarded, even if the two receiver tasks are scheduled in the opposite order.
-            if done && !interrupted {
-                native_keys.lock().unwrap().remove(&native_id);
-            }
+            to_page(&app, &json!({"key": key, "type": "say", "data": {"key": say_key, "event": event}}));
         }
     });
     Ok(())
@@ -307,9 +386,11 @@ pub async fn voice_cancel_say(
     webview: Webview,
     state: State<'_, VoiceState>,
     key: String,
+    say_key: String,
 ) -> Result<(), Refusal> {
     page(&app, &webview)?;
-    if let Some(cancel) = state.sayings.lock().unwrap().get(&key) {
+    let lane = lane(&state, &key).await?;
+    if let Some(cancel) = lane.sayings.lock().unwrap().get(&say_key) {
         cancel.cancel();
     }
     Ok(())
@@ -322,35 +403,20 @@ pub async fn voice_mute(
     webview: Webview,
     state: State<'_, VoiceState>,
     muted: bool,
+    key: String,
 ) -> Result<(), Refusal> {
-    with_call(&app, &webview, &state, |call| call.mute(muted)).await
+    with_call(&app, &webview, &state, &key, |call| call.mute(muted)).await
 }
 
 /// Cancels what the person said that is not reported yet.
 #[tauri::command]
-pub async fn voice_cancel_input(app: AppHandle, webview: Webview, state: State<'_, VoiceState>) -> Result<(), Refusal> {
-    with_call(&app, &webview, &state, VoiceCall::cancel_input).await
-}
-
-/// Installs the host's opaque capture/merge fence. The command answers only after voice has applied it, so the page
-/// can await it before speech for a new focus. A fence set before the first settings is applied when the call exists.
-#[tauri::command]
-pub async fn voice_set_capture_boundary(
+pub async fn voice_cancel_input(
     app: AppHandle,
     webview: Webview,
     state: State<'_, VoiceState>,
-    id: String,
+    key: String,
 ) -> Result<(), Refusal> {
-    page(&app, &webview)?;
-    if id.is_empty() {
-        return Err(refusal("bad_request", "A capture boundary ID is required."));
-    }
-    let call = state.call.lock().await;
-    *state.capture_boundary_id.lock().await = Some(id.clone());
-    if let Some((call, _)) = call.as_ref() {
-        call.set_capture_boundary(id).await;
-    }
-    Ok(())
+    with_call(&app, &webview, &state, &key, VoiceCall::cancel_input).await
 }
 
 /// The system's microphones and speakers and the ones chosen (`null`: the system's default), as the seam's
@@ -446,19 +512,25 @@ fn watch_devices(app: &AppHandle, state: &VoiceState) {
     });
 }
 
-/// The room page loaded anew: its call is stopped, and the next page starts it again.
+/// A reloaded page owns none of its previous lanes.
 pub fn page_changed(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         if let Some(state) = app.try_state::<VoiceState>() {
-            stop(&state).await;
+            let mut route = state.route.lock().await;
+            let _ = state.audio.route_input(None).await;
+            *route = None;
+            let old = std::mem::take(&mut *state.calls.lock().await);
+            for (_, lane) in old {
+                stop(&lane).await;
+            }
         }
     });
 }
 
-async fn stop(state: &VoiceState) {
-    if let Some((call, _)) = state.call.lock().await.as_ref() {
-        state.lifecycle.lock().unwrap().settle(&Err("stopped".into()));
+async fn stop(lane: &CallLane) {
+    if let Some((call, _)) = lane.call.lock().await.as_ref() {
+        lane.lifecycle.lock().unwrap().settle(&Err("stopped".into()));
         call.stop();
     }
 }
@@ -467,29 +539,26 @@ async fn with_call(
     app: &AppHandle,
     webview: &Webview,
     state: &VoiceState,
+    key: &str,
     action: impl FnOnce(&VoiceCall),
 ) -> Result<(), Refusal> {
     page(app, webview)?;
-    let call = state.call.lock().await;
+    let lane = lane(state, key).await?;
+    let call = lane.call.lock().await;
     let (call, _) = call.as_ref().ok_or_else(|| refusal("voice_settings_missing", "Set the voice settings first."))?;
     action(call);
     Ok(())
 }
 
-/// Hands every event of the call to the room page, in order, and keeps the lifecycle: the call listens from its first
-/// state other than idle, which settles the `start`s waiting, as does the first error while they wait.
-fn forward(
-    app: AppHandle,
-    mut events: Events,
-    lifecycle: Arc<Mutex<Lifecycle>>,
-    native_keys: Arc<Mutex<HashMap<String, (String, watch::Sender<bool>)>>>,
-) {
+/// Forward events with their immutable call key. Asynchronous delivery never consults the current input route.
+fn forward(app: AppHandle, key: String, mut events: Events, lifecycle: Arc<Mutex<Lifecycle>>) {
     tauri::async_runtime::spawn(async move {
         while let Some(event) = events.next().await {
-            // A take goes to the page with its samples in base64, and to the log only as its size.
             if let VoiceEvent::Take(take) = &event {
                 crate::debug(&format!("voice take: {} samples, {} turns", take.samples.len(), take.turns.len()));
-                to_page(&app, &page_take(take));
+                let mut value = page_take(take);
+                value["key"] = json!(key);
+                to_page(&app, &value);
                 continue;
             }
             match &event {
@@ -506,172 +575,12 @@ fn forward(
             if !matches!(event, VoiceEvent::Level(_) | VoiceEvent::PlaybackLevel(_)) {
                 crate::debug(&format!("voice event {}", serde_json::to_string(&event).unwrap_or_default()));
             }
-            if let Some((value, cut_sent)) = event_for_page(&event, &native_keys) {
+            if let Ok(mut value) = serde_json::to_value(&event) {
+                value["key"] = json!(key);
                 to_page(&app, &value);
-                if let Some(sent) = cut_sent {
-                    sent.send_replace(true);
-                }
             }
         }
     });
-}
-
-/// Only the native say id changes: the page knows the bridge key returned by its `say` handle.
-fn event_for_page(
-    event: &VoiceEvent,
-    native_keys: &Mutex<HashMap<String, (String, watch::Sender<bool>)>>,
-) -> Option<(Value, Option<watch::Sender<bool>>)> {
-    let mut value = serde_json::to_value(event).ok()?;
-    let mut cut_sent = None;
-    if let VoiceEvent::AgentInterrupted(cut) = event {
-        let (key, sent) = native_keys.lock().unwrap().remove(&cut.utterance_id)?;
-        value["data"]["utterance_id"] = json!(key);
-        cut_sent = Some(sent);
-    }
-    Some((value, cut_sent))
-}
-
-#[cfg(test)]
-mod turns_tests {
-    use super::*;
-    use sidevoice_voice::{AgentInterrupted, TurnEvent, TurnTimings};
-
-    #[test]
-    fn delayed_native_turn_events_keep_the_capture_boundary_set_at_speech_start() {
-        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        runtime.block_on(async {
-            let state = VoiceState::default();
-            *state.capture_boundary_id.lock().await = Some("capture-a-old".into());
-            let queued = [
-                VoiceEvent::Turn(TurnEvent::Started {
-                    turn_id: "a-turn".into(),
-                    capture_boundary_id: "capture-a-old".into(),
-                    started_at: 1,
-                }),
-                VoiceEvent::Turn(TurnEvent::Finished {
-                    turn_id: "a-turn".into(),
-                    capture_boundary_id: "capture-a-old".into(),
-                    text: "Private words for A.".into(),
-                    language: None,
-                    started_at: 1,
-                    ended_at: 3,
-                    merged: false,
-                    timings: TurnTimings { audio_ms: 100, endpoint_silence_ms: 20, recognition_ms: 5 },
-                }),
-                VoiceEvent::Turn(TurnEvent::Cancelled {
-                    turn_id: "a-cancel".into(),
-                    capture_boundary_id: "capture-a-old".into(),
-                    merged: false,
-                }),
-            ];
-            // The native command can be acknowledged before queued webview.eval calls run.
-            *state.capture_boundary_id.lock().await = Some("capture-b".into());
-            tokio::task::yield_now().await;
-            let keys = Mutex::new(HashMap::new());
-            let delivered: Vec<Value> =
-                queued.iter().map(|event| event_for_page(event, &keys).expect("turn reaches page").0).collect();
-            assert_eq!(*state.capture_boundary_id.lock().await, Some("capture-b".into()));
-            assert_eq!(
-                delivered
-                    .iter()
-                    .map(|event| event["data"]["capture_boundary_id"].as_str().unwrap())
-                    .collect::<Vec<_>>(),
-                vec!["capture-a-old", "capture-a-old", "capture-a-old"]
-            );
-            assert_eq!(delivered[0]["data"]["turn_id"], "a-turn");
-            assert_eq!(delivered[1]["data"]["text"], "Private words for A.");
-            assert_eq!(delivered[2]["data"]["phase"], "cancelled");
-        });
-    }
-
-    #[test]
-    fn native_turn_events_keep_the_source_capture_boundary_on_every_phase() {
-        let keys = Mutex::new(HashMap::new());
-        let timings = TurnTimings { audio_ms: 100, endpoint_silence_ms: 20, recognition_ms: 5 };
-        let events = [
-            VoiceEvent::Turn(TurnEvent::Started {
-                turn_id: "a".into(),
-                capture_boundary_id: "focus-a".into(),
-                started_at: 1,
-            }),
-            VoiceEvent::Turn(TurnEvent::Started {
-                turn_id: "b".into(),
-                capture_boundary_id: "focus-b".into(),
-                started_at: 2,
-            }),
-            VoiceEvent::Turn(TurnEvent::Finished {
-                turn_id: "a".into(),
-                capture_boundary_id: "focus-a".into(),
-                text: "Private instruction for A.".into(),
-                language: None,
-                started_at: 1,
-                ended_at: 3,
-                merged: false,
-                timings,
-            }),
-            VoiceEvent::Turn(TurnEvent::Finished {
-                turn_id: "b".into(),
-                capture_boundary_id: "focus-b".into(),
-                text: "Instruction for B.".into(),
-                language: None,
-                started_at: 2,
-                ended_at: 4,
-                merged: false,
-                timings,
-            }),
-            VoiceEvent::Turn(TurnEvent::Cancelled {
-                turn_id: "c".into(),
-                capture_boundary_id: "focus-b".into(),
-                merged: false,
-            }),
-        ];
-        let forwarded: Vec<Value> =
-            events.iter().map(|event| event_for_page(event, &keys).expect("turn event reaches the page").0).collect();
-        assert_eq!(forwarded[0]["data"]["capture_boundary_id"], "focus-a");
-        assert_eq!(forwarded[1]["data"]["capture_boundary_id"], "focus-b");
-        assert_eq!(
-            forwarded[2]["data"],
-            json!({
-                "phase": "finished", "turn_id": "a", "capture_boundary_id": "focus-a",
-                "text": "Private instruction for A.", "started_at": 1, "ended_at": 3,
-                "merged": false, "timings": {"audio_ms": 100, "endpoint_silence_ms": 20, "recognition_ms": 5}
-            })
-        );
-        assert_eq!(forwarded[3]["data"]["text"], "Instruction for B.");
-        assert_eq!(forwarded[3]["data"]["capture_boundary_id"], "focus-b");
-        assert_eq!(
-            forwarded[4]["data"],
-            json!({
-                "phase": "cancelled", "turn_id": "c", "capture_boundary_id": "focus-b", "merged": false
-            })
-        );
-    }
-
-    #[test]
-    fn native_interruption_uses_the_page_handle_and_keeps_scalar_extent_and_zero() {
-        let (first, _) = watch::channel(false);
-        let (second, _) = watch::channel(false);
-        let keys = Mutex::new(HashMap::from([
-            ("native-a".into(), ("say-1".into(), first)),
-            ("native-b".into(), ("say-2".into(), second)),
-        ]));
-        for (native, key, heard, played) in [("native-a", "say-1", 3, true), ("native-b", "say-2", 0, false)] {
-            let event = VoiceEvent::AgentInterrupted(AgentInterrupted {
-                utterance_id: native.into(),
-                heard_until: heard,
-                played,
-            });
-            let (value, sent) = event_for_page(&event, &keys).unwrap();
-            assert_eq!(
-                value,
-                json!({"type": "agent-interrupted", "data": {
-                    "utterance_id": key, "heard_until": heard, "played": played
-                }})
-            );
-            assert!(sent.is_some());
-            assert!(event_for_page(&event, &keys).is_none(), "one report per native say");
-        }
-    }
 }
 
 /// A take as the page gets it (core `voice::take`).

@@ -155,7 +155,7 @@ fn a_call_on_the_engines_real_models_hears_speech_and_plays_a_reply() {
     let played = Arc::new(Mutex::new(Vec::new()));
     let io = Fixture { sink: None, stop: Arc::default(), played: Arc::clone(&played) };
     runtime.block_on(async {
-        let models = Arc::new(EngineModels::new(engines.engine(), choice));
+        let models = Arc::new(EngineModels::new(engines.engine(), Arc::new(ModelCache::default()), choice));
         let (call, mut events) = VoiceCall::new(models, Box::new(io), config);
         call.start(StartOptions::default());
         let said = next(&mut events, |event| match event {

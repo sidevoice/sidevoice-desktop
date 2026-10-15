@@ -147,147 +147,130 @@
    *  nothing of the room: the page tells the room the turns `onTurn` gives it, and has the call `say` what the room
    *  sends, through a handle that tells how it went. A refusal rejects with `{key, message, …params}`. Only where the
    *  app offers it (macOS); elsewhere the page runs the call itself. */
+  /** Native implementation of sidevoice-voice's VoiceHost. The host owns one microphone, speaker and model pool;
+   *  every created call owns its events, playback and recognition state. */
   function voice() {
-    const listeners = {
-      turn: new Set(), state: new Set(), level: new Set(), "playback-level": new Set(), "agent-interrupted": new Set(), error: new Set(),
-      devices: new Set(), take: new Set(),
-    };
-    const on = (kind) => (listener) => {
+    const calls = new Map();
+    const deviceListeners = new Set();
+    const epoch = Math.random().toString(36).slice(2, 10);
+    let nextCall = 0;
+    let route = Promise.resolve();
+    const on = (set) => (listener) => {
       if (typeof listener !== "function") throw new TypeError("a listener");
-      listeners[kind].add(listener);
-      return () => listeners[kind].delete(listener);
+      set.add(listener);
+      return () => set.delete(listener);
     };
-    // What is being said, by the key this bridge gave it, until its `done` step.
-    const sayings = new Map();
-    let said = 0;
-    // Whether the start running asked for a take, and the stops waiting for the idle state after it: the take, which
-    // comes before that state, has then been handed over.
-    let taking = false;
-    let idle = [];
-    /** A take as the app sends it, its samples the base64 of 32-bit little-endian floats: as the seam has it, a
-     *  `Float32Array`. */
+    const dispatch = (set, data) => {
+      for (const listener of set) {
+        try { listener(data); } catch (_) { /* a listener's error is the page's own */ }
+      }
+    };
     function takeOf(data) {
       const binary = win.atob(String(data.samples || ""));
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
       return { ...data, samples: new Float32Array(bytes.buffer, 0, bytes.length >> 2) };
     }
-    /** Rust serializes `StopReason` as `{reason: {reason, code?}}`; `VoiceHost` exposes its fields on the outcome. */
     function sayStep(event) {
       if (event?.type !== "done" || !event.outcome || typeof event.outcome.reason !== "object") return event;
       const { reason, ...outcome } = event.outcome;
       return { ...event, outcome: { ...outcome, ...reason } };
     }
-    /** One event of the call, sidevoice-voice's `VoiceEvent` as JSON (`{type, data}`), to its listeners; a step of
-     *  something said (`{type: "say", data: {key, event}}`) to its handle. */
-    function receive(event) {
-      if (!event || typeof event !== "object") return;
-      if (event.type === "say") {
-        const saying = event.data && sayings.get(event.data.key);
-        if (saying) saying.step(sayStep(event.data.event));
-        return;
-      }
-      if (event.type === "take" && event.data) event = { type: "take", data: takeOf(event.data) };
-      if (event.type === "state" && event.data && event.data.listening === "idle") {
-        const stopped = idle;
-        idle = [];
-        for (const resolve of stopped) resolve();
-      }
-      for (const listener of listeners[event.type] || []) {
-        try { listener(event.data); } catch (_) { /* a listener's error is the page's own */ }
-      }
-    }
-    /** A handle (`VoiceSaying`) for `text` said under `key`: its steps reach the listeners subscribed when each comes,
-     *  `done` settles `outcome`, and `cancel` goes behind the `say` itself, so it never overtakes it. */
-    function saying(key, text, options) {
-      const heard = new Set();
-      let settle;
-      const outcome = new Promise((resolve) => { settle = resolve; });
-      const asked = call("voice_say", { key, text: String(text), language: (options && options.language) ?? null })
-        .catch((error) => step({ type: "done", outcome: { status: "not-played", reason: "failed", code: (error && (error.code || error.key)) || "voice-failed" } }));
-      function step(event) {
-        for (const listener of heard) {
-          try { listener(event); } catch (_) { /* a listener's error is the page's own */ }
-        }
-        if (event && event.type === "done") {
-          sayings.delete(key);
-          settle(event.outcome);
-        }
-      }
-      const handle = Object.freeze({
-        id: key,
-        cancel: () => { asked.then(() => sayings.has(key) && call("voice_cancel_say", { key })).catch(() => {}); },
-        onEvent(listener) {
-          if (typeof listener !== "function") throw new TypeError("a listener");
-          heard.add(listener);
-        },
-        outcome,
+    function createCall() {
+      const id = `call-${epoch}-${++nextCall}`;
+      const listeners = {
+        turn: new Set(), state: new Set(), level: new Set(), "playback-level": new Set(), error: new Set(), take: new Set(),
+      };
+      const sayings = new Map();
+      let said = 0;
+      let taking = false;
+      let idle = [];
+      let disposed = false;
+      const created = call("voice_create_call", { key: id });
+      const invoke = (command, args) => created.then(() => {
+        if (disposed && command !== "voice_dispose_call") throw Object.assign(new Error("call disposed"), { code: "stopped" });
+        return call(command, { key: id, ...args });
       });
-      sayings.set(key, { step });
-      return handle;
+      function saying(text, options) {
+        const key = `say-${++said}`;
+        const heard = new Set();
+        let settle;
+        const outcome = new Promise((resolve) => { settle = resolve; });
+        function step(event) {
+          if (!sayings.has(key)) return;
+          dispatch(heard, event);
+          if (event?.type === "done") { sayings.delete(key); settle(event.outcome); }
+        }
+        sayings.set(key, { step });
+        const asked = invoke("voice_say", { sayKey: key, text: String(text), language: options?.language ?? null })
+          .catch((error) => step({ type: "done", outcome: { status: "not-played", reason: "failed", code: error?.code || error?.key || "voice-failed" } }));
+        return Object.freeze({
+          id: key,
+          cancel: () => { asked.then(() => sayings.has(key) && invoke("voice_cancel_say", { sayKey: key })).catch(() => {}); },
+          onEvent(listener) { if (typeof listener !== "function") throw new TypeError("a listener"); heard.add(listener); },
+          outcome,
+        });
+      }
+      const host = Object.freeze({
+        id,
+        setSettings: (settings) => invoke("voice_set_settings", { settings }),
+        start: (options) => { taking = options?.take === true; return invoke("voice_start", { take: taking }); },
+        stop: () => {
+          const kept = taking;
+          taking = false;
+          const answered = kept ? new Promise((resolve) => idle.push(resolve)) : null;
+          return invoke("voice_stop").then(() => answered);
+        },
+        dispose: async () => {
+          if (disposed) return;
+          disposed = true;
+          for (const saying of sayings.values()) saying.step({ type: "done", outcome: { status: "not-played", reason: "stopped" } });
+          await route;
+          await invoke("voice_dispose_call");
+          calls.delete(id);
+          for (const set of Object.values(listeners)) set.clear();
+          for (const resolve of idle) resolve();
+          idle = [];
+        },
+        say: saying,
+        mute: (muted) => invoke("voice_mute", { muted: !!muted }),
+        cancelInput: () => invoke("voice_cancel_input"),
+        onTurn: on(listeners.turn),
+        onState: on(listeners.state),
+        onLevel: on(listeners.level),
+        onPlaybackLevel: on(listeners["playback-level"]),
+        onError: on(listeners.error),
+        onTake: on(listeners.take),
+      });
+      calls.set(id, { host, created, listeners, sayings, receive(event) {
+        if (disposed) return;
+        if (event.type === "say") {
+          sayings.get(event.data?.key)?.step(sayStep(event.data.event));
+          return;
+        }
+        const data = event.type === "take" ? takeOf(event.data) : event.data;
+        if (event.type === "state" && data?.listening === "idle") {
+          const stopped = idle;
+          idle = [];
+          for (const resolve of stopped) resolve();
+        }
+        if (listeners[event.type]) dispatch(listeners[event.type], data);
+      } });
+      return host;
     }
-    const host = {
-      /** The person's choices (`VoiceSettings`): each slot a model of a catalogue, `stt: {catalog, model, language,
-       *  build?}`, `tts: {catalog, model, voice, speed, build?}`, with `patience`, `end_of_turn`, `idle_unload_minutes`,
-       *  `barge_in_min_speech` (seconds of qualified speech before sounding audio is cut)
-       *  and `turn_model?`. A local model loads the build named, else the one its catalogue picks; the app adds the voice
-       *  activity detector and, unless `turn_model` names one that runs, the end-of-turn model. Rejects `{key, code,
-       *  message}`: `model-unknown`, `model-unfit`, `catalog-not-found`, `build-not-found`, `vad-unavailable`,
-       *  `end-of-turn-unavailable`, or the engine's own code (`credential-missing`, `memory`, ...) with the provider's
-       *  `detail`. */
-      setSettings: (settings) => call("voice_set_settings", { settings }),
-      /** Loads the models (installing them if they are not), opens the microphone and the speaker and listens.
-       *  Resolves once it listens (at once if it does); rejects `{key, code, message}`, `code` the call's or `stopped`.
-       *  With `{take: true}` the call keeps what the microphone gives from then until that listening ends, handed to
-       *  `onTake` then. */
-      start: (options) => {
-        taking = !!(options && options.take === true);
-        return call("voice_start", { take: taking });
+    const host = Object.freeze({
+      createCall,
+      routeInput(target) {
+        if (target !== null && (!target || calls.get(target.id)?.host !== target)) {
+          return Promise.reject(new TypeError("a call from this voice host or null"));
+        }
+        route = route.catch(() => {}).then(async () => {
+          if (target) await calls.get(target.id).created;
+          return call("voice_route_input", { key: target?.id ?? null });
+        });
+        return route;
       },
-      /** Stops listening and speaking (the turn not told yet is cancelled, what is being said ends `stopped`); the
-       *  models stay loaded. After a start that asked for a take, it resolves once the take was handed to `onTake`:
-       *  at the idle state that answers the stop, which the take comes before. */
-      stop: () => {
-        const kept = taking;
-        taking = false;
-        const answered = kept ? new Promise((resolve) => idle.push(resolve)) : null;
-        return call("voice_stop").then(() => answered);
-      },
-      /** Says `text` (`options`: `{language?}`) after whatever is being said, and answers its handle at once. */
-      say: (text, options) => saying("say-" + ++said, text, options),
-      mute: (muted) => call("voice_mute", { muted: !!muted }),
-      cancelInput: () => call("voice_cancel_input"),
-      /** Installs a fresh opaque fence for initial focus and every focus change. The promise resolves once native
-       *  voice has applied it; await it before speech can start for the new focus. */
-      async setCaptureBoundary(id) {
-        if (typeof id !== "string" || !id) throw new TypeError("a nonempty capture boundary id");
-        await call("voice_set_capture_boundary", { id });
-      },
-      /** A turn of the person's under the call's own `turn_id`: `started`, then `finished` (the words) or
-       *  `cancelled`. Returns `stop`. */
-      onTurn: on("turn"),
-      /** `{listening, recognising, playback}` when it changes. Returns `stop`. */
-      onState: on("state"),
-      /** The microphone's level, 0 to 1, about 30 times a second. Returns `stop`. */
-      onLevel: on("level"),
-      /** The rendered speaker's level, 0 to 1, at the microphone meter's cadence, with an exact terminal zero.
-       *  Returns `stop`; it continues while the microphone is muted. */
-      onPlaybackLevel: on("playback-level"),
-      /** Every say displaced by a confirmed spoken turn. `utterance_id` is this bridge's `say` handle id,
-       *  `heard_until` counts Unicode scalar values, and queued says report `played: false`, `heard_until: 0`. */
-      onAgentInterrupted: on("agent-interrupted"),
-      /** `{code}`: something failed that the person may be told. Returns `stop`. */
-      onError: on("error"),
-      /** The take of a start that asked for one (`VoiceTake`: `{sampleRate, samples: Float32Array, started_at, ended_at,
-       *  turns}`), as its listening ends: before `stop` resolves, before the error that ended it. Returns `stop`. */
-      onTake: on("take"),
-      /** The system's microphones and speakers and the ones chosen (`VoiceAudioDevices`: `{inputs, outputs, input,
-       *  output, outputSelectable, lost?}`, `null` the system's default). A chosen one that went away is the default
-       *  from then, said once as `lost`. */
       audioDevices: () => call("voice_audio_devices"),
-      /** Chooses the microphone, the speaker or both (`{input?, output?}`: a missing kind stays, `null` is the
-       *  default), mid-call too: the microphone switches at once, the speaker once what is playing has ended. Answers
-       *  the devices; rejects `{key, code: "audio-device-unknown", message}` for an id not listed. */
       setAudioDevices: (choice) => {
         const chosen = {};
         for (const kind of ["input", "output"]) {
@@ -296,11 +279,13 @@
         }
         return call("voice_set_audio_devices", { choice: chosen });
       },
-      /** The devices, as `audioDevices` answers them, each time they change once they have been asked for. Returns
-       *  `stop`. */
-      onAudioDevices: on("devices"),
-    };
-    return { host: Object.freeze(host), receive };
+      onAudioDevices: on(deviceListeners),
+    });
+    return { host, receive(event) {
+      if (!event || typeof event !== "object") return;
+      if (event.type === "devices") dispatch(deviceListeners, event.data);
+      else calls.get(event.key)?.receive(event);
+    } };
   }
 
   /** This computer's own core, the local host (docs/LOCAL_HOST.md): its state, the pairing the page uses to reach it

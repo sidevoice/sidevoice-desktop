@@ -175,21 +175,24 @@ what the interface's own window offers — same origin, same permission rule —
   const voice = window.__sidevoiceDesktop && window.__sidevoiceDesktop.host && window.__sidevoiceDesktop.host.voice;
   if (!voice) { await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-voice none" }); return; }
   try {
+    const first = voice.createCall();
+    const second = voice.createCall();
     const states = [];
     const errors = [];
     const takes = [];
-    const stops = [voice.onState((s) => states.push(s.listening)), voice.onError((e) => errors.push(e.code)),
-      voice.onAgentInterrupted(() => {}),
-      voice.onTake((t) => takes.push(t))];
+    const stops = [first.onState((s) => states.push(s.listening)), first.onError((e) => errors.push(e.code)),
+      first.onTake((t) => takes.push(t))];
+    await voice.routeInput(first);
+    await voice.routeInput(second);
+    await voice.routeInput(first);
     const catalogs = await window.__sidevoiceDesktop.host.engine.catalogs();
-    await voice.setCaptureBoundary("probe-initial");
     const models = catalogs[0].models;
     const remote = catalogs.slice(1).map((c) => c.id + ":" + (c.status.reason ? c.status.reason.code : "current")).join(",");
-    const unknown = await voice.setSettings({ stt: { catalog: "local", model: "whisper-nope" },
+    const unknown = await first.setSettings({ stt: { catalog: "local", model: "whisper-nope" },
       tts: { catalog: "local", model: "kokoro-82m-v1.0" } }).then(() => "no", (error) => error && error.key + "/" + error.code);
     // A build that is not the model's is refused; one that runs here is loaded, and so is the end-of-turn model chosen
     // (the last that runs here: with several, not the one the app would take anyway).
-    const badBuild = await voice.setSettings({ stt: { catalog: "local", model: "whisper-tiny", build: "whisper-tiny/nope" },
+    const badBuild = await first.setSettings({ stt: { catalog: "local", model: "whisper-tiny", build: "whisper-tiny/nope" },
       tts: { catalog: "local", model: "kokoro-82m-v1.0" } }).then(() => "no", (error) => error && error.key + "/" + error.code);
     const tiny = models.find((m) => m.id === "whisper-tiny");
     // One the catalogue would not pick on its own when there is such a build.
@@ -197,40 +200,43 @@ what the interface's own window offers — same origin, same permission rule —
     const build = (runnable.find((b) => b.id !== tiny.recommendedBuild) || runnable[0] || { id: "none" }).id;
     const turns = models.filter((m) => m.capabilities.includes("end-of-turn") && m.builds.some((b) => b.available));
     const turnModel = turns.length ? turns[turns.length - 1].id : "none";
-    await voice.setSettings({ stt: { catalog: "local", model: "whisper-tiny", language: "es", build },
+    await first.setSettings({ stt: { catalog: "local", model: "whisper-tiny", language: "es", build },
       tts: { catalog: "local", model: "kokoro-82m-v1.0", voice: "ef_dora", speed: 1 }, patience: "fast",
       end_of_turn: "smart-turn", turn_model: turnModel, idle_unload_minutes: 10, barge_in_min_speech: 0.8 });
-    await voice.setCaptureBoundary("probe-next");
     // The system's devices (a runner may list none) and an id it does not list, refused by key and code.
     const listed = await voice.audioDevices();
     const devices = listed.inputs.length + "/" + listed.outputs.length + "/" + listed.outputSelectable;
     const unknownDevice = await voice.setAudioDevices({ input: "nowhere:nothing" })
       .then(() => "no", (error) => error && error.key + "/" + error.code);
-    const started = await voice.start({ take: true }).then(() => "ok", (error) => error.key + "/" + error.code);
-    await voice.stop();
+    const started = await first.start({ take: true }).then(() => "ok", (error) => error.key + "/" + error.code);
+    await first.stop();
     const take = takes.length ? Object.prototype.toString.call(takes[0].samples).slice(8, -1) + "/" + takes[0].sampleRate +
       "/" + (takes[0].ended_at - takes[0].started_at === Math.floor(takes[0].samples.length / 16)) : "none";
     await until(() => states.includes("idle") || started !== "ok", 30000);
     const delayedTurns = [];
-    const stopTurn = voice.onTurn((turn) => delayedTurns.push([turn.phase, turn.turn_id, turn.capture_boundary_id]));
-    await voice.setCaptureBoundary("probe-a");
-    await voice.setCaptureBoundary("probe-b");
-    // Exercise the real WKWebView bridge after the boundary command has answered, as a queued native eval may do.
+    const stopFirst = first.onTurn((turn) => delayedTurns.push(["first", turn.phase, turn.turn_id]));
+    const stopSecond = second.onTurn((turn) => delayedTurns.push(["second", turn.phase, turn.turn_id]));
+    // The webview may deliver an earlier call's start after the input route has changed.
+    await voice.routeInput(second);
     await new Promise((resolve) => setTimeout(() => {
-      const send = (data) => window.__sidevoiceDesktop.voiceEvent({ type: "turn", data });
-      send({ phase: "started", turn_id: "probe-a-turn", capture_boundary_id: "probe-a", started_at: 1 });
-      send({ phase: "finished", turn_id: "probe-a-turn", capture_boundary_id: "probe-a", text: "A",
-        started_at: 1, ended_at: 2, merged: false, timings: { audio_ms: 1, endpoint_silence_ms: 0, recognition_ms: 1 } });
-      send({ phase: "cancelled", turn_id: "probe-a-empty", capture_boundary_id: "probe-a", merged: false });
+      const send = (key, data) => window.__sidevoiceDesktop.voiceEvent({ key, type: "turn", data });
+      send(first.id, { phase: "started", turn_id: "probe-a-turn", started_at: 1 });
+      send(second.id, { phase: "started", turn_id: "probe-b-turn", started_at: 2 });
+      send(second.id, { phase: "finished", turn_id: "probe-b-turn", text: "B" });
+      send(first.id, { phase: "finished", turn_id: "probe-a-turn", text: "A" });
       resolve();
     }, 0));
     const delayedTurn = JSON.stringify(delayedTurns) === JSON.stringify([
-      ["started", "probe-a-turn", "probe-a"], ["finished", "probe-a-turn", "probe-a"],
-      ["cancelled", "probe-a-empty", "probe-a"],
+      ["first", "started", "probe-a-turn"], ["second", "started", "probe-b-turn"],
+      ["second", "finished", "probe-b-turn"], ["first", "finished", "probe-a-turn"],
     ]);
-    stopTurn();
+    stopFirst();
+    stopSecond();
+    await first.dispose();
+    await voice.routeInput(second);
+    await second.dispose();
     stops.forEach((stop) => stop());
-    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-voice ok keys=" + Object.keys(voice).length + " boundary=ok delayed_turn=" + delayedTurn +
+    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-voice ok keys=" + Object.keys(voice).length + " calls=2 route=ok delayed_turn=" + delayedTurn +
       " catalogs=" + catalogs[0].id + "," + remote + " models=" + models.length + " vad=" + models.some((m) => m.capabilities.includes("vad")) + " unknown=" + unknown +
       " bad_build=" + badBuild + " build=" + build + " turn_model=" + turnModel +
       " devices=" + devices + " unknown_device=" + unknownDevice + " start=" + started + " take=" + take + " states=" + states.join(",") + " errors=" + errors.join(",") });
