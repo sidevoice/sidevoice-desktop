@@ -53,8 +53,9 @@ path. Browser pages keep their own browser storage. `deleteAll()` and `resetRepo
 with Cancel as its default button on every invocation; cancelling rejects `{key: "reset.cancelled"}` before
 any uninstall or deletion. A room script calling the bridge directly cannot bypass that confirmation. It refuses a running call, service install or
 model download with `{key: "reset.busy"}`, and checks the current room window and bundled origin again in
-native code. It first requires `safe_uninstall: 1` from the installed connector's `--version --json` response;
-an older connector refuses with `{key: "reset.unsupported-connector"}` before uninstall. It runs the
+native code. It first requires a top-level integer `safe_uninstall` of at least `1` from the installed
+connector's `--version --json` response. An older, silent, malformed or timed-out connector refuses with
+`{key: "reset.unsupported-connector"}` before a new reset journal or uninstall is started. It runs the
 **installed connector's top-level** `uninstall --json` from its verified
 `install.json` command; `localHost.serviceUninstall()` is a different, narrower service-manager action.
 The connector removes the service, its releases, its data and registrations it owns. Native then forgets
@@ -69,7 +70,8 @@ private, fixed reset area before traversal; a source replaced at the claim bound
 its moved contents are not erased. Connector data and release roots must be the exact default
 Sidevoice roots; unsafe environment overrides or install records refuse before the installed uninstaller runs.
 If installation metadata is absent, a fresh service/process check and a check for residual connector data
-must both pass before the service is called absent. Custom profiles and separately installed cores are excluded.
+must both pass before the service is called absent. A retained recovery executable named by `install.json`
+is used on a partial-uninstall retry. Custom profiles and separately installed cores are excluded.
 No page-supplied path is deleted.
 
 Before uninstall, native creates a private operation journal and takes an interprocess reset lock.
