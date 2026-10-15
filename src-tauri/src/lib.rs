@@ -499,8 +499,12 @@ pub fn run() {
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_nspanel::init());
     // The voice call the app runs (`host.voice`, src/voice.rs).
+    // Its shared audio starts its dispatcher on Tokio, so it is built inside the runtime the commands run on.
     #[cfg(target_os = "macos")]
-    let builder = builder.manage(voice::VoiceState::default());
+    let builder = {
+        let _runtime = tauri::async_runtime::handle().inner().enter();
+        builder.manage(voice::VoiceState::default())
+    };
     builder
         // A second launch (Finder, Spotlight) brings the running one forward instead.
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| show_room(app)))
