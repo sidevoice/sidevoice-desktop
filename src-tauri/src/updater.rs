@@ -10,7 +10,8 @@ use tauri_plugin_updater::{Update, UpdaterExt};
 use crate::AppState;
 
 /// One lock over the status and its update; `installing`: an install under way, which quitting waits for; `task`: the
-/// download running, which `cancel` aborts; `cancelled`: the version the person stopped, kept for this run of the app.
+/// download running, which `cancel` aborts; `downloads`: which download may write and
+/// the version the person stopped, kept for this run of the app.
 #[derive(Default)]
 struct Updates {
     status: Status,
@@ -18,7 +19,7 @@ struct Updates {
     bytes: Option<Vec<u8>>,
     installing: bool,
     task: Option<tauri::async_runtime::JoinHandle<()>>,
-    cancelled: core::Cancelled,
+    downloads: core::Downloads,
 }
 
 /// The channel this build was built for (build.rs): `release`, `nightly` or `dev`.
@@ -116,32 +117,31 @@ fn download(app: &AppHandle, asked: bool) {
     let Some(permit) = crate::data::admit(app) else { return };
     with(app, |u| {
         let mut update = u.update.clone().filter(|_| u.status.state == State::Available)?;
-        if !u.cancelled.start(&update.version, asked) {
-            return None;
-        }
+        let token = u.downloads.start(&update.version, asked)?;
         u.status = Status::new(State::Downloading, &update.version);
         update.timeout = Some(Duration::from_secs(60 * 60));
         // Spawned under the lock, so `cancel` finds the task whenever the status says downloading.
-        u.task = Some(tauri::async_runtime::spawn(download_task(app.clone(), update, permit)));
+        u.task = Some(tauri::async_runtime::spawn(download_task(app.clone(), update, token, permit)));
         Some(())
     });
 }
 
-/// The download itself, in memory (the plugin hands back the bytes; there is no partial file). A result that comes
-/// after a cancel finds the state no longer downloading and is dropped.
-async fn download_task(app: AppHandle, update: Update, _permit: crate::data::Permit) {
+/// The download itself, in memory (the plugin hands back the bytes; there is no partial file). Aborting only stops it
+/// at its next await, so what it writes (progress, bytes, result) is accepted only while its `token` is the current
+/// one: a cancel, and any download after it, make a late write a no-op.
+async fn download_task(app: AppHandle, update: Update, token: core::Token, _permit: crate::data::Permit) {
     let mut received = 0;
     let progress = |chunk: usize, total: Option<u64>| {
         received += chunk as u64;
         with(&app, |u| {
-            if u.status.state == State::Downloading {
+            if u.downloads.owns(token) {
                 u.status.progress = core::progress(received, total);
             }
         });
     };
     let downloaded = update.download(progress, || {}).await;
     with(&app, |u| {
-        if u.status.state != State::Downloading {
+        if !u.downloads.owns(token) {
             return;
         }
         u.task = None;
@@ -159,7 +159,7 @@ async fn download_task(app: AppHandle, update: Update, _permit: crate::data::Per
 /// nothing happens.
 fn cancel(app: &AppHandle) {
     with(app, |u| {
-        if let Some(status) = u.cancelled.cancel(&u.status) {
+        if let Some(status) = u.downloads.cancel(&u.status) {
             if let Some(task) = u.task.take() {
                 task.abort();
             }

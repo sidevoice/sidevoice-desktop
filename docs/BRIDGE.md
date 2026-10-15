@@ -632,6 +632,8 @@ interface UpdaterStatus {
   resolves and changes nothing. The cancelled version is remembered for this run of the app (not with the settings):
   automatic mode does not download it again by itself, at later checks or when it is switched to; a newer version found
   is downloaded as usual, and `download()` (the person asking) lifts the cancel. A new launch starts clean.
+  Each download holds a token that `cancel()` invalidates at once: an aborted download still finishing its last step
+  cannot write progress, bytes or a result over a download that replaced it.
 - A check that fails or takes over 2 minutes, a download that fails or takes over an hour, an install that fails:
   `error` says so, the state stays (a failed download stays `available`, and automatic mode tries it again at the
   next check).
