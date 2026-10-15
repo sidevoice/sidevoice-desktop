@@ -257,6 +257,12 @@
       say: (text, options) => saying("say-" + ++said, text, options),
       mute: (muted) => call("voice_mute", { muted: !!muted }),
       cancelInput: () => call("voice_cancel_input"),
+      /** Installs a fresh opaque fence for initial focus and every focus change. The promise resolves once native
+       *  voice has applied it; await it before speech can start for the new focus. */
+      async setCaptureBoundary(id) {
+        if (typeof id !== "string" || !id) throw new TypeError("a nonempty capture boundary id");
+        await call("voice_set_capture_boundary", { id });
+      },
       /** A turn of the person's under the call's own `turn_id`: `started`, then `finished` (the words) or
        *  `cancelled`. Returns `stop`. */
       onTurn: on("turn"),

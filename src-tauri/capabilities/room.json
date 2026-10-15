@@ -26,6 +26,7 @@
     "allow-voice-cancel-say",
     "allow-voice-mute",
     "allow-voice-cancel-input",
+    "allow-voice-set-capture-boundary",
     "allow-voice-audio-devices",
     "allow-voice-set-audio-devices",
     "allow-local-host-state",

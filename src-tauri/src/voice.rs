@@ -43,6 +43,8 @@ use crate::engine_ipc::EngineState;
 #[derive(Default)]
 pub struct VoiceState {
     call: tokio::sync::Mutex<Option<(VoiceCall, Arc<EngineModels>)>>,
+    /// The host's opaque capture fence, including when it arrives before the first settings make a call.
+    capture_boundary_id: tokio::sync::Mutex<Option<String>>,
     /// The `setSettings` asked for so far, numbered as they arrive: only the latest changes the call.
     settings: Arc<AtomicU64>,
     lifecycle: Arc<Mutex<Lifecycle>>,
@@ -177,6 +179,9 @@ pub async fn voice_set_settings(
             let io = Box::new(NativeIo::with_devices(state.devices.clone()));
             let (created, events) = VoiceCall::new(Arc::clone(&models) as Arc<dyn VoiceModels>, io, config);
             forward(app.clone(), events, Arc::clone(&state.lifecycle), Arc::clone(&state.native_keys));
+            if let Some(id) = state.capture_boundary_id.lock().await.clone() {
+                created.set_capture_boundary(id).await;
+            }
             *call = Some((created, models));
         }
     }
@@ -323,6 +328,27 @@ pub async fn voice_mute(
 #[tauri::command]
 pub async fn voice_cancel_input(app: AppHandle, webview: Webview, state: State<'_, VoiceState>) -> Result<(), Refusal> {
     with_call(&app, &webview, &state, VoiceCall::cancel_input).await
+}
+
+/// Installs the host's opaque capture/merge fence. The command answers only after voice has applied it, so the page
+/// can await it before speech for a new focus. A fence set before the first settings is applied when the call exists.
+#[tauri::command]
+pub async fn voice_set_capture_boundary(
+    app: AppHandle,
+    webview: Webview,
+    state: State<'_, VoiceState>,
+    id: String,
+) -> Result<(), Refusal> {
+    page(&app, &webview)?;
+    if id.is_empty() {
+        return Err(refusal("bad_request", "A capture boundary ID is required."));
+    }
+    let call = state.call.lock().await;
+    *state.capture_boundary_id.lock().await = Some(id.clone());
+    if let Some((call, _)) = call.as_ref() {
+        call.set_capture_boundary(id).await;
+    }
+    Ok(())
 }
 
 /// The system's microphones and speakers and the ones chosen (`null`: the system's default), as the seam's

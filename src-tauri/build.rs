@@ -36,6 +36,7 @@ fn main() {
         "voice_cancel_say",
         "voice_mute",
         "voice_cancel_input",
+        "voice_set_capture_boundary",
         "voice_audio_devices",
         "voice_set_audio_devices",
         "local_host_state",
