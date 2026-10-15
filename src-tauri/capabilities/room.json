@@ -36,6 +36,10 @@
     "allow-local-host-install",
     "allow-local-host-install-progress",
     "allow-local-host-install-cancel",
+    "allow-data-pairings-read",
+    "allow-data-pairings-write",
+    "allow-data-delete-all",
+    "allow-data-reset-report",
     "allow-mute-shortcut",
     "allow-call-controls-settings",
     "allow-updater"

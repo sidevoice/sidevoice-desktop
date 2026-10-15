@@ -13,6 +13,7 @@
 //! - `call-controls`: the call controls card (`src/call_controls.rs`), floating over other apps during a call.
 
 mod call_controls;
+mod data;
 mod computer_name;
 mod engine_ipc;
 mod headset;
@@ -55,6 +56,8 @@ pub(crate) struct AppState {
     /// Held across a change of the mute shortcut, from keeping it to registering it, so what is kept and what is
     /// registered never differ. Only off the main thread: registering waits for it.
     shortcut_change: Mutex<()>,
+    resetting: std::sync::atomic::AtomicBool,
+    reset_helper: Mutex<Option<std::process::Child>>,
 }
 
 impl Default for AppState {
@@ -68,6 +71,8 @@ impl Default for AppState {
             language: sidevoice_desktop_core::i18n::language(&preferred),
             shortcut: Mutex::default(),
             shortcut_change: Mutex::default(),
+            resetting: std::sync::atomic::AtomicBool::new(false),
+            reset_helper: Mutex::default(),
         }
     }
 }
@@ -440,6 +445,10 @@ macro_rules! commands {
             local_host::local_host_install,
             local_host::local_host_install_progress,
             local_host::local_host_install_cancel,
+            data::data_pairings_read,
+            data::data_pairings_write,
+            data::data_delete_all,
+            data::data_reset_report,
             mute_shortcut,
             call_controls::call_controls_settings,
             updater::updater
@@ -500,7 +509,7 @@ pub fn run() {
             headset::setup(&handle);
             // sidevoice-engine keeps the models it downloads, on demand, in the app's data directory (docs/ENGINES.md).
             // Without it the app still runs; the page then finds no native engine to use.
-            let engine_root = app.path().app_data_dir()?.join("sidevoice-engine");
+            let engine_root = data::shared_model_root().ok_or_else(|| std::io::Error::other("no home for the shared model store"))?;
             // The keys of remote providers come from the keychain (macOS); elsewhere the app keeps none.
             #[cfg(target_os = "macos")]
             let credentials = keychain::Keychain;
@@ -560,8 +569,15 @@ pub fn run() {
             // Quitting: the local host's proxy stops and closes every tunnel; an update ready installs (automatic mode).
             if let tauri::RunEvent::Exit = event {
                 local_host::shutdown(app);
-                updater::quit(app);
+                if !app.state::<AppState>().resetting.load(Ordering::SeqCst) {
+                    updater::quit(app);
+                }
             }
             let _ = (app, event);
         });
+}
+
+/// The helper is the same signed executable, launched only after a confirmed reset.
+pub fn run_reset_helper() {
+    data::run_reset_helper();
 }

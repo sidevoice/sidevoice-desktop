@@ -47,6 +47,9 @@ pub fn local_host_pairing(app: AppHandle, webview: Webview) -> Answer {
 #[tauri::command]
 pub async fn local_host_action(app: AppHandle, webview: Webview, action: String) -> Answer {
     caller(&app, &webview)?;
+    if app.state::<crate::AppState>().resetting.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(refusal("reset.busy", "Data reset is under way."));
+    }
     tauri::async_runtime::spawn_blocking(move || imp::action(&app, &action))
         .await
         .map_err(|e| refusal("internal", &e.to_string()))?
@@ -78,6 +81,9 @@ pub async fn local_host_pair_room(app: AppHandle, webview: Webview, url: String,
 #[tauri::command]
 pub async fn local_host_install(app: AppHandle, webview: Webview, job: String) -> Answer {
     caller(&app, &webview)?;
+    if app.state::<crate::AppState>().resetting.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(refusal("reset.busy", "Data reset is under way."));
+    }
     // Begun here, before the blocking work: its progress and its cancel find it from the start.
     let begun = imp::begin_install(&app, &job)?;
     tauri::async_runtime::spawn_blocking(move || imp::run_install(begun))
@@ -109,6 +115,13 @@ pub fn setup(app: &AppHandle) {
 pub fn shutdown(app: &AppHandle) {
     imp::shutdown(app)
 }
+
+/// A missing install record is safe to treat as absent only when the observer also sees no service.
+pub fn absent(app: &AppHandle) -> bool {
+    imp::absent(app)
+}
+
+pub fn installing(app: &AppHandle) -> bool { imp::installing(app) }
 
 #[cfg(unix)]
 mod imp {
@@ -155,6 +168,13 @@ mod imp {
 
     pub fn state(app: &AppHandle) -> Answer {
         Ok(json!(host(app)?.state()))
+    }
+
+    pub fn absent(app: &AppHandle) -> bool {
+        host(app).is_ok_and(|host| json!(host.state())["state"] == "absent")
+    }
+    pub fn installing(app: &AppHandle) -> bool {
+        host(app).is_ok_and(|host| json!(host.state())["state"] == "installing")
     }
 
     pub fn pairing(app: &AppHandle) -> Answer {
@@ -231,6 +251,8 @@ mod imp {
 
     pub fn setup(_app: &AppHandle) {}
     pub fn shutdown(_app: &AppHandle) {}
+    pub fn absent(_app: &AppHandle) -> bool { false }
+    pub fn installing(_app: &AppHandle) -> bool { false }
     pub fn state(_app: &AppHandle) -> Answer {
         Err(unsupported())
     }

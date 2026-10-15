@@ -61,6 +61,7 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "time"] }
 # The keys of remote providers, in the keychain (src/keychain.rs).
 security-framework = "3"
+libc = "0.2"
 # The call controls card as a non-activating panel: over full-screen apps, on every Space, never taking focus
 # (src/call_controls.rs).
 tauri-nspanel = "2.1"

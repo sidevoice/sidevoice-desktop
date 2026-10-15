@@ -45,8 +45,8 @@ catalogues: `local` first, then each provider), in the shape `/engine` gives the
   whisper.cpp on Metal for Whisper. Its GPU implementation uses flash attention. The page receives each build's
   optional `acceleratorClass` (`"gpu"`, `"neural-engine"`, or `"cpu"`) from the engine; the app does not infer it or
   enable Core ML. An explicit build choice still takes precedence.
-- Models are downloaded on demand into the app's data directory, `sidevoice-engine/`
-  (`~/Library/Application Support/dev.sidevoice.desktop/sidevoice-engine/` on macOS), each file checked against its
+- Models are downloaded on demand into the per-user shared machine store
+  (`~/Library/Application Support/Sidevoice/Models` on macOS), each file checked against its
   SHA-256 as it arrives and stored only once whole. The voice call installs what it needs as it starts; the page may
   install a model before (`engine.install(model, {build, engine, onProgress, signal})`, sidevoice-web's
   `ModelCatalogs.install`), to show its progress and cancel it, and takes one off the computer with

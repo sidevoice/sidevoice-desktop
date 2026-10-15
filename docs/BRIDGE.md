@@ -40,6 +40,34 @@ Keeping these two names stable is the web UI's side of the contract.
 
 ## Page → app
 
+### Private data and reset (`host.data`, macOS)
+
+The bundled room page alone receives `host.data`. Its `pairings.read()` resolves `{pairings: [...]}` and
+`pairings.write({pairings})` resolves `undefined` after a bounded, private, atomic write under the app's
+Application Support directory. Local-host pairing is derived from the verified socket and is never stored
+there. Neither call accepts a path. Browser pages keep their own browser storage.
+
+`deleteAll()` is the confirmed Settings › Advanced action. It refuses a running call, service install or
+model download with `{key: "reset.busy"}`, and checks the current room window and bundled origin again in
+native code. It runs the **installed connector's top-level** `uninstall --json` from its verified
+`install.json` command; `localHost.serviceUninstall()` is a different, narrower service-manager action.
+The connector removes the service, its releases, its data and registrations it owns. Native then forgets
+Sidevoice's provider keys and starts a helper from the signed app executable. The helper waits for the app to
+exit before removing its exact Application Support, shared-model, WebKit, cache, saved-state and log paths and
+its `defaults` domain. Paths are derived natively and symlinks are refused. No page-supplied path is deleted.
+
+`deleteAll()` resolves `{state: "needs-restart", service: "removed"|"absent", agents, failed,
+pending}` after the helper starts; this is **not** final deletion success. If service uninstall fails, it
+rejects `{key: "reset.service-failed"}` and leaves app data for retry. `resetReport()` resolves `null` or
+the helper's one-time `{state: "complete"|"partial", completed: string[], failed:
+{step, key}[]}` after the fresh app starts. The UI must name any failed step and its remaining data.
+The app bundle, remote machines, foreign/manual agent registrations, provider accounts, OS permissions and
+backups are outside this action; the connector can leave nonpersonal stop/lock markers and open conversation
+servers until they exit. The UI must state these limits before confirmation.
+
+Commands: `data_pairings_read`, `data_pairings_write {value}`, `data_delete_all`,
+`data_reset_report`; only the room capability grants them and each checks the room origin.
+
 ```js
 window.__TAURI_INTERNALS__.invoke("bridge_state", { snapshot })
 ```

@@ -4451,6 +4451,7 @@ dependencies = [
  "block2",
  "core-foundation 0.10.1",
  "futures-util",
+ "libc",
  "objc2",
  "objc2-avf-audio",
  "objc2-foundation",
