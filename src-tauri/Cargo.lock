@@ -4553,7 +4553,7 @@ dependencies = [
 [[package]]
 name = "sidevoice-voice"
 version = "0.4.0"
-source = "git+https://github.com/sidevoice/sidevoice-voice?tag=v0.4.0#b3b4dd4e8ed8e99b892042c7cc0d814292f34f06"
+source = "git+https://github.com/sidevoice/sidevoice-voice?rev=b898c55cdffbbf5fe603e2e088e530163825ce06#b898c55cdffbbf5fe603e2e088e530163825ce06"
 dependencies = [
  "async-trait",
  "cfg_aliases",

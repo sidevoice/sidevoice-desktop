@@ -149,7 +149,7 @@
    *  app offers it (macOS); elsewhere the page runs the call itself. */
   function voice() {
     const listeners = {
-      turn: new Set(), state: new Set(), level: new Set(), "playback-level": new Set(), error: new Set(),
+      turn: new Set(), state: new Set(), level: new Set(), "playback-level": new Set(), "agent-interrupted": new Set(), error: new Set(),
       devices: new Set(), take: new Set(),
     };
     const on = (kind) => (listener) => {
@@ -222,7 +222,8 @@
     }
     const host = {
       /** The person's choices (`VoiceSettings`): each slot a model of a catalogue, `stt: {catalog, model, language,
-       *  build?}`, `tts: {catalog, model, voice, speed, build?}`, with `patience`, `end_of_turn`, `idle_unload_minutes`
+       *  build?}`, `tts: {catalog, model, voice, speed, build?}`, with `patience`, `end_of_turn`, `idle_unload_minutes`,
+       *  `barge_in_min_speech` (seconds of qualified speech before sounding audio is cut)
        *  and `turn_model?`. A local model loads the build named, else the one its catalogue picks; the app adds the voice
        *  activity detector and, unless `turn_model` names one that runs, the end-of-turn model. Rejects `{key, code,
        *  message}`: `model-unknown`, `model-unfit`, `catalog-not-found`, `build-not-found`, `vad-unavailable`,
@@ -260,6 +261,9 @@
       /** The rendered speaker's level, 0 to 1, at the microphone meter's cadence, with an exact terminal zero.
        *  Returns `stop`; it continues while the microphone is muted. */
       onPlaybackLevel: on("playback-level"),
+      /** Every say displaced by a confirmed spoken turn. `utterance_id` is this bridge's `say` handle id,
+       *  `heard_until` counts Unicode scalar values, and queued says report `played: false`, `heard_until: 0`. */
+      onAgentInterrupted: on("agent-interrupted"),
       /** `{code}`: something failed that the person may be told. Returns `stop`. */
       onError: on("error"),
       /** The take of a start that asked for one (`VoiceTake`: `{sampleRate, samples: Float32Array, started_at, ended_at,

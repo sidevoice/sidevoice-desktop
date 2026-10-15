@@ -48,6 +48,8 @@ pub struct VoiceState {
     lifecycle: Arc<Mutex<Lifecycle>>,
     /// What is being said, by the page's key for it, until it is done.
     sayings: Arc<Mutex<HashMap<String, SayCancel>>>,
+    /// Native say ids in `agent-interrupted` become the bridge keys returned by `host.voice.say`.
+    native_keys: Arc<Mutex<HashMap<String, String>>>,
     /// Which microphone and speaker the call uses; the call has a clone.
     devices: NativeDevices,
     /// Whether the devices are watched for changes (from the first time the page asks for them).
@@ -174,7 +176,7 @@ pub async fn voice_set_settings(
             let models = Arc::new(EngineModels::new(engines.engine(), choice));
             let io = Box::new(NativeIo::with_devices(state.devices.clone()));
             let (created, events) = VoiceCall::new(Arc::clone(&models) as Arc<dyn VoiceModels>, io, config);
-            forward(app.clone(), events, Arc::clone(&state.lifecycle));
+            forward(app.clone(), events, Arc::clone(&state.lifecycle), Arc::clone(&state.native_keys));
             *call = Some((created, models));
         }
     }
@@ -247,15 +249,28 @@ pub async fn voice_say(
         to_page(&app, &json!({"type": "say", "data": {"key": key, "event": stopped}}));
         return Ok(());
     };
+    // Hold the reverse map lock while the call accepts the say: its event loop may emit an interruption immediately.
+    let mut native_keys = state.native_keys.lock().unwrap();
     let mut saying = call.say(text, SayOptions { language });
+    let native_id = saying.id().to_owned();
+    native_keys.insert(native_id.clone(), key.clone());
     state.sayings.lock().unwrap().insert(key.clone(), saying.canceller());
+    drop(native_keys);
     let sayings = Arc::clone(&state.sayings);
+    let native_keys = Arc::clone(&state.native_keys);
     tauri::async_runtime::spawn(async move {
         while let Some(event) = saying.next().await {
-            if matches!(event, SayEvent::Done { .. }) {
+            let done = matches!(event, SayEvent::Done { .. });
+            let interrupted = matches!(event, SayEvent::Done { outcome: SayOutcome::HeardUpTo { reason: StopReason::BargeIn, .. } | SayOutcome::NotPlayed { reason: StopReason::BargeIn } });
+            if done {
                 sayings.lock().unwrap().remove(&key);
             }
             to_page(&app, &json!({"type": "say", "data": {"key": key, "event": event}}));
+            // The call emits `agent-interrupted` separately from the terminal say event. Keep this mapping until
+            // that event is forwarded, even if the two receiver tasks are scheduled in the opposite order.
+            if done && !interrupted {
+                native_keys.lock().unwrap().remove(&native_id);
+            }
         }
     });
     Ok(())
@@ -419,7 +434,12 @@ async fn with_call(
 
 /// Hands every event of the call to the room page, in order, and keeps the lifecycle: the call listens from its first
 /// state other than idle, which settles the `start`s waiting, as does the first error while they wait.
-fn forward(app: AppHandle, mut events: Events, lifecycle: Arc<Mutex<Lifecycle>>) {
+fn forward(
+    app: AppHandle,
+    mut events: Events,
+    lifecycle: Arc<Mutex<Lifecycle>>,
+    native_keys: Arc<Mutex<HashMap<String, String>>>,
+) {
     tauri::async_runtime::spawn(async move {
         while let Some(event) = events.next().await {
             // A take goes to the page with its samples in base64, and to the log only as its size.
@@ -442,8 +462,14 @@ fn forward(app: AppHandle, mut events: Events, lifecycle: Arc<Mutex<Lifecycle>>)
             if !matches!(event, VoiceEvent::Level(_) | VoiceEvent::PlaybackLevel(_)) {
                 crate::debug(&format!("voice event {}", serde_json::to_string(&event).unwrap_or_default()));
             }
-            if let Ok(event) = serde_json::to_value(&event) {
-                to_page(&app, &event);
+            if let Ok(mut value) = serde_json::to_value(&event) {
+                if let VoiceEvent::AgentInterrupted(cut) = &event {
+                    let Some(key) = native_keys.lock().unwrap().remove(&cut.utterance_id) else {
+                        continue;
+                    };
+                    value["data"]["utterance_id"] = json!(key);
+                }
+                to_page(&app, &value);
             }
         }
     });

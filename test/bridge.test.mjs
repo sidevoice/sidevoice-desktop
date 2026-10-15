@@ -448,7 +448,7 @@ test("host.voice only where the app runs the call, and exactly the seam", () => 
   }
   const api = install(fakeWindow(ORIGIN).win, ORIGIN, "native", true, true);
   assert.deepEqual(Object.keys(api.host.voice).sort(), [
-    "audioDevices", "cancelInput", "mute", "onAudioDevices", "onError", "onLevel", "onPlaybackLevel", "onState",
+    "audioDevices", "cancelInput", "mute", "onAgentInterrupted", "onAudioDevices", "onError", "onLevel", "onPlaybackLevel", "onState",
     "onTake", "onTurn", "say",
     "setAudioDevices", "setSettings", "start", "stop",
   ]);

@@ -85,6 +85,18 @@ fn each_slot_is_a_catalogues_model_and_the_detector_is_the_local_silero() {
 }
 
 #[test]
+fn barge_in_duration_reaches_the_native_voice_config_without_changing_model_choice() {
+    let original = settings(("local", "whisper-small"), ("local", "kokoro-82m-v1.0"));
+    let mut changed = original.clone();
+    changed.barge_in_min_speech = Some(0.8);
+    let before = choose(&original, &catalogs(true)).unwrap();
+    let after = choose(&changed, &catalogs(true)).unwrap();
+    assert!(before.same_models(&after));
+    assert_eq!(after.config["barge_in_min_speech"], json!(0.8));
+    assert!(before.config.get("barge_in_min_speech").is_none());
+}
+
+#[test]
 fn smart_turn_takes_the_local_model_that_ends_turns() {
     let mut chosen = settings(("local", "whisper-small"), ("local", "kokoro-82m-v1.0"));
     chosen.end_of_turn = Some(EndOfTurn::SmartTurn);
