@@ -218,6 +218,8 @@ jobs:
       # request (engine, bridge, catalogue or probe changes) only this part runs.
       - name: Build the CI probe app (feature probe; never shipped)
         run: cargo xtask macos probe-app
+      - name: Reset cleanup safety tests (temporary directories only)
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib data::tests -- --test-threads=1
       - name: The local host from the bundled page (stand-in core on local.sock, pairing, proxy, refusals)
         run: cargo xtask macos local-host
       - name: What the interface's window offers (probe page, same origin and permission rule)
