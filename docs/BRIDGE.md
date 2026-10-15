@@ -178,7 +178,7 @@ Evaluated by the app with `webview.eval` (works with the window hidden); the com
 Joining is deliberately **not** a tray command: joining unlocks audio output, which the webview
 only allows from a click in the page. "Mostrar Sidevoice" opens the window for that.
 
-`window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", version, engine, mediaKeys, build, muteShortcut, callControls, computerName?, localHost?, voice?, updater? }`: the
+`window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", version, engine, mediaKeys, build, muteShortcut, callControls, computerName?, localHost?, voice?, microphone?, updater? }`: the
 web UI feature-detects the desktop app by it, and each capability by its presence. `version` is the bridge's (2).
 
 `computerName` is the name the person gave this computer, which the page proposes as the device's name: on macOS
@@ -519,6 +519,35 @@ What is this app's own:
   when a provider is listed, or its model loaded or called. `host.engine.testCredential` writes nothing: its key goes
   only to a trial engine of its own.
 
+## The microphone permission
+
+Where the app runs the voice call (`host.voice`, macOS), the room page is never granted `getUserMedia`, so it can
+neither trigger macOS's microphone prompt (TCC) nor read its answer. `window.__sidevoiceDesktop.host.microphone` does
+it for the page, on the app's own privacy entry, the one the voice call uses: the web's first-run setup asks for the
+microphone early through it, rather than at the first call. Present exactly where `host.voice` is; a frozen object:
+
+```ts
+interface MicrophonePermission {
+  state(): Promise<"prompt" | "granted" | "denied">;
+  request(): Promise<"granted" | "denied">;
+  openSettings(): Promise<void>;
+}
+```
+
+- `state()`: `AVCaptureDevice.authorizationStatus(for: .audio)`: not determined → `"prompt"`, authorized →
+  `"granted"`, denied or restricted → `"denied"`. Never prompts.
+- `request()`: `AVCaptureDevice.requestAccess(for: .audio)`: macOS's own prompt the first time (with
+  `NSMicrophoneUsageDescription`, `src-tauri/Info.plist`); afterwards it answers at once with the stored answer, no
+  prompt.
+- `openSettings()`: opens System Settings at Privacy & Security › Microphone
+  (`x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone`, through `/usr/bin/open`), where a
+  denial is undone.
+- A refusal rejects `{key, message}`: `bad_request` for a malformed call or another caller, `internal` when the system
+  does not answer or System Settings does not open.
+- Command behind it: `microphone {action}`, `action` `state`, `request` or `open-settings` (`src-tauri/src/microphone.rs`),
+  macOS only. Granted to the room window (`capabilities/room.json`); it re-checks that the caller is the current room
+  window on the app's own page.
+
 ## The mute shortcut
 
 The global shortcut that mutes and unmutes the microphone (docs/SHORTCUTS.md), set from the web's Settings. Always
@@ -651,7 +680,7 @@ interface UpdaterStatus {
 - Add a command: a variant in `Command` (Rust), a `case` in `run` (JS), a test on each side.
 - Add a field: `CallSnapshot` uses `#[serde(default)]`, so old and new scripts interoperate;
   bump `version` only for a breaking change.
-- Tests: `npm test` (the script against a fake window, `host.voice`, `host.updater`, `host.build`, `host.muteShortcut`,
+- Tests: `npm test` (the script against a fake window, `host.voice`, `host.microphone`, `host.updater`, `host.build`, `host.muteShortcut`,
   `host.callControls` and `host.localHost`'s install included), `cargo test -p sidevoice-desktop-core` (the voice call's builds, the media rule, the
   updater's status and the mute shortcut's form and shape among the rest) and `cargo test -p sidevoice-desktop-engine` (the engine
   over a test host), `cargo test -p sidevoice-local-host` (the local host against a stand-in core, its install against a stand-in

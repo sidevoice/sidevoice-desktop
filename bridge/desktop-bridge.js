@@ -287,6 +287,21 @@
     return { host: Object.freeze(host), receive };
   }
 
+  /** The app's microphone permission (docs/BRIDGE.md → "The microphone permission"), onto the `microphone` command:
+   *  where the app runs the voice call, the page is never granted `getUserMedia`, so it can neither ask macOS for the
+   *  microphone nor read whether it may. The first-run setup asks through this. Only with `voice` (macOS). */
+  function microphone() {
+    return Object.freeze({
+      /** `"prompt"` (not asked yet), `"granted"` or `"denied"` (denied, or forbidden by the system). Never prompts. */
+      state: () => call("microphone", { action: "state" }),
+      /** macOS's own prompt the first time; afterwards the stored answer at once, with no prompt: `"granted"` or
+       *  `"denied"`. */
+      request: () => call("microphone", { action: "request" }),
+      /** Opens System Settings at Privacy & Security › Microphone, where a denial is undone. */
+      openSettings: () => call("microphone", { action: "open-settings" }).then(() => undefined),
+    });
+  }
+
   /** This computer's own core, the local host (docs/LOCAL_HOST.md): its state, the pairing the page uses to reach it
    *  (through the app's proxy, with this launch's secret — never the device token), the service's actions, and
    *  installing Sidevoice here (`install`, `cancel`). Each action resolves the state after it (`{state, failure?, core?,
@@ -573,7 +588,7 @@
     version: BRIDGE_VERSION,
     /** What this host offers the page besides the webview itself. The web UI feature-detects it.
      *  `engine`: the app's engine, its catalogues, keys and models on disk (docs/ENGINES.md); `voice`: the call the
-     *  app runs. */
+     *  app runs; `microphone`: the app's microphone permission, with `voice`. */
     host: Object.freeze({
       app: "sidevoice-desktop",
       /** The bridge's version: what the page may rely on (docs/BRIDGE.md). */
@@ -597,6 +612,8 @@
       }),
       // Only where the app runs the voice call (macOS): the page then neither opens the microphone nor runs models.
       ...(voiceCall ? { voice: voiceCall.host } : {}),
+      // With `voice`: the app's microphone permission, which the page cannot ask for itself there.
+      ...(voiceCall ? { microphone: microphone() } : {}),
       /** What this build is: a release, a nightly (both with `updater`), or a development build. */
       build: Object.freeze({ ...build }),
       // The name the person gave this computer ("Mac de Ana"): the page proposes it as the device's name. Only
