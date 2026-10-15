@@ -78,7 +78,12 @@ impl EngineModels {
     }
 
     pub(crate) fn with(loader: Box<dyn Loader>, choice: VoiceChoice) -> Self {
-        Self { loader: Arc::from(loader), choice: Mutex::new(choice), live: Mutex::default(), turn: tokio::sync::Mutex::new(()) }
+        Self {
+            loader: Arc::from(loader),
+            choice: Mutex::new(choice),
+            live: Mutex::default(),
+            turn: tokio::sync::Mutex::new(()),
+        }
     }
 
     /// Makes `choice` the call's. A slot whose model changes gets the new one once it is loaded (the old one serving
