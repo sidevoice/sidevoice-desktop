@@ -8,9 +8,9 @@ One version for the whole app, tagged `vX.Y.Z`. It lives in `src-tauri/tauri.con
 
 | Act | Who | What happens |
 |---|---|---|
-| Open / update a PR | anyone | **Lint and unit tests** (Linux), **PR title is a conventional commit**, and the **Windows** and **Linux** app builds (installers as artifacts). The macOS native flow (probe page, a call on the engine's real models, call controls card) whenever native code (`src-tauri/`), the bridge, the web pin or the CI probes change; no .dmg (a manual run of `build` on the branch makes one). |
-| Squash-merge into `main` | reviewer | The PR title becomes the commit. `build` runs everything, installers included; when it is green, the `nightly` pre-release is replaced. release-please opens or updates the **release PR** ("chore(main): release X.Y.Z"). Nothing versioned is published. |
-| Merge the release PR | a maintainer | **This is the release.** release-please tags `vX.Y.Z` and creates a draft GitHub Release whose notes are that version's changelog; `build` builds from the tag, attaches the assets and publishes the Release. |
+| Open / update a PR | anyone | **Lint and unit tests** (Linux), **PR title is a conventional commit**, the **Windows** and **Linux** app builds (installers as artifacts), and the macOS native flows, every time: the probe app's (probe page, local host, call controls card) and a call on the engine's real models. No .dmg (a manual run of `build` on the branch makes one). |
+| Squash-merge into `main` | reviewer | The PR title becomes the commit. `build` runs everything, installers included; when the installers' jobs (macOS app and .dmg, Linux, Windows) and the lint are green, the `nightly` pre-release is replaced. The macOS native flows run beside them: the nightly does not wait for them, and a failing one fails the run without holding the nightly back. release-please opens or updates the **release PR** ("chore(main): release X.Y.Z"). Nothing versioned is published. |
+| Merge the release PR | a maintainer | **This is the release.** release-please tags `vX.Y.Z` and creates a draft GitHub Release whose notes are that version's changelog; `build` builds from the tag and, once every job passed (the macOS native flows too), attaches the assets and publishes the Release. |
 
 Assets of a release: `Sidevoice_X.Y.Z_aarch64.dmg` (Apple Silicon, Developer ID signed and notarized, below),
 `Sidevoice_X.Y.Z_x64-setup.exe`, `Sidevoice_X.Y.Z_amd64.deb`, `Sidevoice_X.Y.Z_amd64.AppImage`, `SHA256SUMS`, and
@@ -32,11 +32,16 @@ secrets into the environment of the steps that need them, choose which steps run
   the app and on xtask), `test` (the bridge script and the Rust tests), `two-users` (CI only: it adds a user); and
   xtask's own tests, `cargo test --manifest-path xtask/Cargo.toml`.
 - `linux` and `windows` jobs: `cargo xtask bundle --channel C`, this host's installers.
-- `macos` job: `cargo xtask macos app [--signed] --channel C`, `check-app [--signed]`, `first-open`,
-  `dmg [--signed]`, `sign-dmg`, `checksums`, `forget-secrets`, `dmg-screens`; then on the CI-only probe build
-  `probe-app`, `local-host`, `probe`, `voice-models`, `card`.
-- `publish` job: `cargo xtask publish assets release TAG` or `publish assets nightly`, then `publish release TAG`
-  or `publish nightly`.
+- `macos` job (the app and .dmg; not on a pull request): `cargo xtask macos app [--signed] --channel C`,
+  `check-app [--signed]`, `first-open`, `dmg [--signed]`, `sign-dmg`, `checksums`, `forget-secrets`, `dmg-screens`.
+  The only job with the Apple signing secrets.
+- `macos-native` job, beside it: on the CI-only probe build, `probe-app`, `local-host`, `probe`, `card`. It shares
+  the Rust build cache with `macos` (the same dependencies) and is the one that writes it.
+- `macos-call` job, beside both: `voice-models`, with the models it downloads cached by the engine's commit
+  (`SIDEVOICE_REAL_CALL_MODELS`).
+- `publish-nightly` and `publish-release` jobs (the same steps): `cargo xtask publish assets release TAG` or
+  `publish assets nightly`, then `publish release TAG` or `publish nightly`. The nightly waits for the lint and the
+  installers' jobs only; a release waits for every job, `macos-native` and `macos-call` included.
 - `.github/actions/setup-rust`: `cargo xtask engine-rev` and `sherpa-libs`; release-please.yml and pr-title.yml:
   `release-pr-checks` and `release-pr-title`.
 

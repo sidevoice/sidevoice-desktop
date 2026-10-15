@@ -117,7 +117,12 @@ async fn next<T>(events: &mut Events, want: impl Fn(VoiceEvent) -> Option<T>) ->
 #[ignore = "downloads real models; the macOS CI job runs it"]
 fn a_call_on_the_engines_real_models_hears_speech_and_plays_a_reply() {
     let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build().unwrap();
-    let root = std::env::temp_dir().join(format!("sidevoice-real-call-{}", std::process::id()));
+    // The engine's storage: a scratch folder of this run's, removed at the end; or SIDEVOICE_REAL_CALL_MODELS, kept (CI
+    // caches it by the engine's commit, so a model it already holds is not downloaded again).
+    let kept = std::env::var_os("SIDEVOICE_REAL_CALL_MODELS").map(std::path::PathBuf::from);
+    let root = kept
+        .clone()
+        .unwrap_or_else(|| std::env::temp_dir().join(format!("sidevoice-real-call-{}", std::process::id())));
     let engines = NativeEngines::new(&root, NoCredentials, runtime.handle().clone()).unwrap();
     let views = engines.catalogs().unwrap();
     let catalogs: Vec<CatalogCandidates> = views.iter().map(crate::voice::candidates).collect();
@@ -176,7 +181,9 @@ fn a_call_on_the_engines_real_models_hears_speech_and_plays_a_reply() {
         call.stop();
     });
     drop(engines);
-    let _ = std::fs::remove_dir_all(&root);
+    if kept.is_none() {
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
 
 // ---- A model changed mid-call (gap #31): the call goes on, and work under way ends on its own model ----
