@@ -534,6 +534,48 @@ mod turns_tests {
     use super::*;
     use sidevoice_voice::{AgentInterrupted, TurnEvent, TurnTimings};
 
+    #[tokio::test]
+    async fn delayed_native_turn_events_keep_the_capture_boundary_set_at_speech_start() {
+        let state = VoiceState::default();
+        *state.capture_boundary_id.lock().await = Some("capture-a-old".into());
+        let queued = [
+            VoiceEvent::Turn(TurnEvent::Started {
+                turn_id: "a-turn".into(),
+                capture_boundary_id: "capture-a-old".into(),
+                started_at: 1,
+            }),
+            VoiceEvent::Turn(TurnEvent::Finished {
+                turn_id: "a-turn".into(),
+                capture_boundary_id: "capture-a-old".into(),
+                text: "Private words for A.".into(),
+                language: None,
+                started_at: 1,
+                ended_at: 3,
+                merged: false,
+                timings: TurnTimings { audio_ms: 100, endpoint_silence_ms: 20, recognition_ms: 5 },
+            }),
+            VoiceEvent::Turn(TurnEvent::Cancelled {
+                turn_id: "a-cancel".into(),
+                capture_boundary_id: "capture-a-old".into(),
+                merged: false,
+            }),
+        ];
+        // The native command can be acknowledged before queued webview.eval calls run.
+        *state.capture_boundary_id.lock().await = Some("capture-b".into());
+        tokio::task::yield_now().await;
+        let keys = Mutex::new(HashMap::new());
+        let delivered: Vec<Value> =
+            queued.iter().map(|event| event_for_page(event, &keys).expect("turn reaches page").0).collect();
+        assert_eq!(*state.capture_boundary_id.lock().await, Some("capture-b".into()));
+        assert_eq!(
+            delivered.iter().map(|event| event["data"]["capture_boundary_id"].as_str().unwrap()).collect::<Vec<_>>(),
+            vec!["capture-a-old", "capture-a-old", "capture-a-old"]
+        );
+        assert_eq!(delivered[0]["data"]["turn_id"], "a-turn");
+        assert_eq!(delivered[1]["data"]["text"], "Private words for A.");
+        assert_eq!(delivered[2]["data"]["phase"], "cancelled");
+    }
+
     #[test]
     fn native_turn_events_keep_the_source_capture_boundary_on_every_phase() {
         let keys = Mutex::new(HashMap::new());

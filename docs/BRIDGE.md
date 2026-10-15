@@ -460,7 +460,12 @@ What is this app's own:
   native voice applies the fence; an ID supplied before `setSettings` is kept for the call that settings create.
   An earlier open, held or transcribing turn retains its original ID and words, and cannot merge with a turn from the
   new boundary. The page retains each `turn_id`'s captured target through its terminal event and routes its words to
-  that target. The ID is only a voice merge fence, and is not added to core's `voice-user-turn` frame.
+  that target. A native `webview.eval` for an earlier `started` may reach the page after a focus change and after the
+  boundary command has resolved. The native bridge forwards that event's original marker without consulting current
+  focus; boundary acknowledgement does not acknowledge delivery of earlier events. The page sends the captured
+  `thread_id` and focus `binding_id` on the `voice-user-turn` **started** frame, so core admits the turn against its
+  original conversation even if selection or its binding changed before event delivery. The marker is only a voice
+  merge fence, and is not added to core's `voice-user-turn` frame.
   A confirmed spoken turn can also send
   `{type:"agent-interrupted",data:{utterance_id,heard_until,played}}`: `utterance_id` is the `say` handle's bridge key,
   mapped from the native call's id; `heard_until` counts Unicode scalar values and is zero with `played:false` for a

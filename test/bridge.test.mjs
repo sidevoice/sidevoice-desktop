@@ -2,6 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import vm from "node:vm";
 
 const source = readFileSync(new URL("../bridge/desktop-bridge.js", import.meta.url), "utf8");
@@ -610,6 +611,109 @@ test("A to B focus fences preserve captured routing through the native host seam
     ["voice_set_capture_boundary", { id: "held-b" }],
   ]);
   await assert.rejects(voice.setCaptureBoundary(""), { name: "TypeError" });
+});
+
+test("R7 delayed native start keeps A's boundary after focus and binding replacement", async () => {
+  const api = loadFactory()(voiceWindow().win, ORIGIN, "native", true, true);
+  const voice = api.host.voice;
+  const pending = [];
+  const seen = [];
+  voice.onTurn((turn) => seen.push(plain(turn)));
+  const queueNative = (data) => pending.push(JSON.stringify({ type: "turn", data }));
+  const deliver = () => api.voiceEvent(JSON.parse(pending.shift()));
+
+  await voice.setCaptureBoundary("capture-a-old");
+  queueNative({ phase: "started", turn_id: "a-turn", capture_boundary_id: "capture-a-old", started_at: 1 });
+  queueNative({ phase: "started", turn_id: "a-cancel", capture_boundary_id: "capture-a-old", started_at: 1 });
+  // Native has observed A's start, but its webview.eval has not yet delivered it to the page.
+  await voice.setCaptureBoundary("capture-b");
+  const currentFocus = { thread_id: "b", binding_id: "binding-b" };
+  const replacementForA = { thread_id: "a", binding_id: "binding-a-new" };
+  assert.equal(currentFocus.thread_id, "b");
+  assert.notEqual(replacementForA.binding_id, "binding-a-old");
+  deliver();
+  deliver();
+  queueNative({ phase: "started", turn_id: "b-turn", capture_boundary_id: "capture-b", started_at: 2 });
+  deliver();
+  // The two STT completions may arrive in reverse order; neither phase is rebound to current focus.
+  queueNative({ phase: "finished", turn_id: "b-turn", capture_boundary_id: "capture-b", text: "Words for B.",
+    started_at: 2, ended_at: 3, merged: false, timings: { audio_ms: 1, endpoint_silence_ms: 0, recognition_ms: 1 } });
+  queueNative({ phase: "finished", turn_id: "a-turn", capture_boundary_id: "capture-a-old", text: "Private words for A.",
+    started_at: 1, ended_at: 4, merged: false, timings: { audio_ms: 1, endpoint_silence_ms: 0, recognition_ms: 1 } });
+  queueNative({ phase: "cancelled", turn_id: "a-cancel", capture_boundary_id: "capture-a-old", merged: false });
+  deliver();
+  deliver();
+  deliver();
+  assert.deepEqual(seen.map(({ phase, turn_id, capture_boundary_id }) => [phase, turn_id, capture_boundary_id]), [
+    ["started", "a-turn", "capture-a-old"], ["started", "a-cancel", "capture-a-old"],
+    ["started", "b-turn", "capture-b"], ["finished", "b-turn", "capture-b"],
+    ["finished", "a-turn", "capture-a-old"], ["cancelled", "a-cancel", "capture-a-old"],
+  ]);
+  assert.deepEqual(seen.filter((turn) => turn.phase === "finished").map(({ turn_id, text }) => [turn_id, text]), [
+    ["b-turn", "Words for B."], ["a-turn", "Private words for A."],
+  ]);
+});
+
+test("R7 candidate web frames admit delayed native starts to their captured core targets", {
+  skip: !process.env.SIDEVOICE_CANDIDATE_WEB_SOURCE,
+}, async () => {
+  const source = readFileSync(path.join(process.env.SIDEVOICE_CANDIDATE_WEB_SOURCE,
+    "apps/web/src/services/voice-room.js"), "utf8");
+  const { turnMessage } = await import(`data:text/javascript,${encodeURIComponent(source)}`);
+  const api = loadFactory()(voiceWindow().win, ORIGIN, "native", true, true);
+  const voice = api.host.voice;
+  const targets = new Map([
+    ["capture-a-old", { thread_id: "a", binding_id: "binding-a-old" }],
+    ["capture-b", { thread_id: "b", binding_id: "binding-b" }],
+  ]);
+  const admitted = new Map();
+  const epochs = { a: 0, b: 0 };
+  const queues = { a: [], b: [] };
+  let current = { thread_id: "a", binding_id: "binding-a-old" };
+  const recentFocusPairs = new Set(["a:binding-a-old", "a:binding-a-new", "b:binding-b"]);
+  const frames = [];
+  voice.onTurn((turn) => {
+    const target = targets.get(turn.capture_boundary_id);
+    assert.ok(target, "every native turn names its source capture boundary");
+    const frame = turnMessage(turn, target);
+    frames.push(plain(frame));
+    if (frame.phase === "started") {
+      // Model core's admission point. The old producer omitted this pair and admitted against current B.
+      const admittedTarget = frame.thread_id && frame.binding_id
+        ? { thread_id: frame.thread_id, binding_id: frame.binding_id } : current;
+      assert.ok(recentFocusPairs.has(`${admittedTarget.thread_id}:${admittedTarget.binding_id}`));
+      admitted.set(frame.turn_id, { ...admittedTarget });
+      epochs[admittedTarget.thread_id] += 1;
+    } else if (frame.phase === "finished") {
+      const bound = admitted.get(frame.turn_id);
+      assert.ok(bound, "a terminal requires its admitted start");
+      queues[bound.thread_id].push(frame.text);
+    }
+  });
+  const pending = [];
+  const native = (data) => pending.push(JSON.stringify({ type: "turn", data }));
+  const deliver = () => api.voiceEvent(JSON.parse(pending.shift()));
+  await voice.setCaptureBoundary("capture-a-old");
+  native({ phase: "started", turn_id: "a-turn", capture_boundary_id: "capture-a-old", started_at: 1 });
+  current = { thread_id: "b", binding_id: "binding-b" };
+  await voice.setCaptureBoundary("capture-b");
+  // A's binding was replaced while the native start was in flight. Its old captured pair remains valid.
+  const replacementForA = { thread_id: "a", binding_id: "binding-a-new" };
+  assert.notEqual(targets.get("capture-a-old").binding_id, replacementForA.binding_id);
+  assert.equal(current.thread_id, "b");
+  deliver();
+  native({ phase: "started", turn_id: "b-turn", capture_boundary_id: "capture-b", started_at: 2 });
+  deliver();
+  native({ phase: "finished", turn_id: "b-turn", capture_boundary_id: "capture-b", text: "Words for B.",
+    started_at: 2, ended_at: 3, merged: false, timings: { audio_ms: 1, endpoint_silence_ms: 0, recognition_ms: 1 } });
+  native({ phase: "finished", turn_id: "a-turn", capture_boundary_id: "capture-a-old", text: "Private words for A.",
+    started_at: 1, ended_at: 4, merged: false, timings: { audio_ms: 1, endpoint_silence_ms: 0, recognition_ms: 1 } });
+  deliver();
+  deliver();
+  assert.deepEqual([frames[0].thread_id, frames[0].binding_id], ["a", "binding-a-old"]);
+  assert.deepEqual([frames[1].thread_id, frames[1].binding_id], ["b", "binding-b"]);
+  assert.deepEqual(epochs, { a: 1, b: 1 });
+  assert.deepEqual(queues, { a: ["Private words for A."], b: ["Words for B."] });
 });
 
 test("playback level forwards bare numbers and zero independently of microphone level", () => {
