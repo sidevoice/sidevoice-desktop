@@ -1862,6 +1862,37 @@ mod tests {
     }
 
     #[test]
+    fn retained_connector_record_uses_recovery_executable_on_retry() {
+        use sidevoice_local_host::{cli::Cli, paths::DataDirs};
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(home.path()).unwrap();
+        let data = home.join(".sidevoice");
+        let recovery = data.join(".uninstall-recovery");
+        fs::create_dir_all(&recovery).unwrap();
+        let script = recovery.join("sidevoice-connector");
+        let marker = home.join("retry-invoked");
+        fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf '%s\\n' '{{\"ok\":true,\"safe_uninstall\":1}}'\nelse\n  : > '{}'\n  printf '%s\\n' '{{\"ok\":true,\"state\":\"removed\"}}'\nfi\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+        let releases = home.join(".local/share/sidevoice");
+        fs::write(data.join("install.json"), json!({"releases": releases.clone(), "command": [script]}).to_string())
+            .unwrap();
+        assert_eq!(validate_uninstall_scope_at(&home, &data, None), Ok(releases));
+        let cli = Cli::installed(&DataDirs::new(&data)).unwrap();
+        assert_eq!(probe_safe_connector(&cli, Duration::from_secs(2)), Ok(()));
+        assert!(!marker.exists());
+        assert_eq!(cli.run(&["uninstall", "--json"], Duration::from_secs(2)).unwrap()["state"], "removed");
+        assert!(marker.exists());
+    }
+
+    #[test]
     fn retained_agent_outcomes_are_reported() {
         let agents = json!({"claude": "removed", "codex": {"outcome": "foreign"}, "cursor": {"outcome": "failed"}});
         assert_eq!(retained_agents(&agents), ["codex", "cursor"]);
@@ -2059,6 +2090,9 @@ mod tests {
         fs::write(data.join("core-secret"), b"sentinel").unwrap();
         assert!(residual_connector_data(&home, &data));
         fs::remove_file(data.join("core-secret")).unwrap();
+        fs::create_dir(data.join(".uninstall-recovery")).unwrap();
+        assert!(residual_connector_data(&home, &data));
+        fs::remove_dir(data.join(".uninstall-recovery")).unwrap();
         fs::create_dir_all(home.join(".local/share/sidevoice")).unwrap();
         assert!(residual_connector_data(&home, &data));
     }
