@@ -583,6 +583,10 @@ fn begin_reset(app: &AppHandle) -> Answer {
     let (service, service_outcome) = match Cli::installed(&dirs) {
         Ok(cli) => (
             {
+                let version = cli
+                    .run(&["--version", "--json"], Duration::from_secs(10))
+                    .map_err(|_| refused("reset.unsupported-connector"))?;
+                require_safe_uninstall(&version)?;
                 run_checked_uninstall(&home, &dirs.data, || {
                     cli.run(&["uninstall", "--json"], Duration::from_secs(180))
                         .map_err(|_| refused("reset.service-failed"))
@@ -661,6 +665,15 @@ fn begin_reset(app: &AppHandle) -> Answer {
     Ok(json!({"state": if failed.is_empty() { "needs-restart" } else { "partial" },
         "service": service_outcome,
         "agents": agents, "failed": failed, "pending": ["app-data", "models", "webview", "cache", "saved-state", "logs", "preferences"]}))
+}
+
+#[cfg(target_os = "macos")]
+fn require_safe_uninstall(version: &Value) -> Result<(), Value> {
+    if version.get("ok") == Some(&Value::Bool(true)) && version.get("safe_uninstall") == Some(&json!(1)) {
+        Ok(())
+    } else {
+        Err(refused("reset.unsupported-connector"))
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -1568,6 +1581,18 @@ mod tests {
         fs::write(data.join("install.json"), json!({"releases": releases, "command": ["/usr/bin/rm"]}).to_string())
             .unwrap();
         assert_eq!(validate_uninstall_scope_at(&home, &data, None), Err("unsafe-record"));
+    }
+
+    #[test]
+    fn installed_connector_must_advertise_safe_uninstall_before_reset() {
+        for value in [
+            json!({"ok":true,"version":"0.6.0"}),
+            json!({"ok":true,"safe_uninstall":0}),
+            json!({"ok":false,"safe_uninstall":1}),
+        ] {
+            assert_eq!(require_safe_uninstall(&value), Err(refused("reset.unsupported-connector")));
+        }
+        assert_eq!(require_safe_uninstall(&json!({"ok":true,"safe_uninstall":1})), Ok(()));
     }
 
     #[test]

@@ -53,7 +53,9 @@ path. Browser pages keep their own browser storage. `deleteAll()` and `resetRepo
 with Cancel as its default button on every invocation; cancelling rejects `{key: "reset.cancelled"}` before
 any uninstall or deletion. A room script calling the bridge directly cannot bypass that confirmation. It refuses a running call, service install or
 model download with `{key: "reset.busy"}`, and checks the current room window and bundled origin again in
-native code. It runs the **installed connector's top-level** `uninstall --json` from its verified
+native code. It first requires `safe_uninstall: 1` from the installed connector's `--version --json` response;
+an older connector refuses with `{key: "reset.unsupported-connector"}` before uninstall. It runs the
+**installed connector's top-level** `uninstall --json` from its verified
 `install.json` command; `localHost.serviceUninstall()` is a different, narrower service-manager action.
 The connector removes the service, its releases, its data and registrations it owns. Native then forgets
 Sidevoice's provider keys and starts a helper from the app executable. The helper waits for the app to
@@ -64,13 +66,17 @@ store remain. A WebKit child that
 does not exit leaves a partial result and its storage in place. Paths are derived natively and
 symlinks and mount boundaries are refused. Connector data and release roots must be the exact default
 Sidevoice roots; unsafe environment overrides or install records refuse before the installed uninstaller runs.
+If installation metadata is absent, a fresh service/process check and a check for residual connector data
+must both pass before the service is called absent. Custom profiles and separately installed cores are excluded.
 No page-supplied path is deleted.
 
 Before uninstall, native creates a private operation journal and takes an interprocess reset lock.
 Model operations, voice model loads, credential writes, local-host actions and updater writes share an
 atomic admission gate with reset. The helper inherits the lock, acknowledges readiness before the app
-quits, records cleanup stages, and releases the lock only after its work ends. A newly opened app waits
-for the helper; an interrupted journal becomes a partial report on the next launch.
+quits, records cleanup stages, and releases the lock only after its work ends. The helper marks the
+inherited lock descriptor close-on-exec, so the relaunched app acquires the lock independently.
+The helper records an awaiting-relaunch journal; only the new app after its setup publishes a complete
+report. A failed startup leaves the journal as a partial report for the next launch.
 
 `deleteAll()` resolves `{state: "needs-restart"|"partial", service: "removed"|"absent", agents,
 failed: {step, key, agent?}[], pending}` after the helper starts; this is **not** final deletion success. `partial`
