@@ -234,16 +234,17 @@ pub async fn data_delete_all(app: AppHandle, webview: Webview) -> Answer {
 fn begin_reset(app: &AppHandle) -> Answer {
     use sidevoice_local_host::{cli::Cli, paths::DataDirs};
     let dirs = DataDirs::from_env().ok_or_else(|| refused("reset.unavailable"))?;
-    let service = match Cli::installed(&dirs) {
-        Ok(cli) => {
-            cli.run(&["uninstall", "--json"], Duration::from_secs(180)).map_err(|_| refused("reset.service-failed"))?
-        }
+    let (service, service_outcome) = match Cli::installed(&dirs) {
+        Ok(cli) => (
+            cli.run(&["uninstall", "--json"], Duration::from_secs(180)).map_err(|_| refused("reset.service-failed"))?,
+            "removed",
+        ),
         Err(_) if !dirs.install_record().exists() => {
             // The local host must also agree that there is no managed installation.
             if !crate::local_host::absent(app) {
                 return Err(refused("reset.service-failed"));
             }
-            json!({"state": "absent", "agents": {}})
+            (json!({"state": "absent", "agents": {}}), "absent")
         }
         Err(_) => return Err(refused("reset.unsafe")),
     };
@@ -277,7 +278,7 @@ fn begin_reset(app: &AppHandle) -> Answer {
         app_to_quit.exit(0);
     });
     Ok(json!({"state": if failed.is_empty() { "needs-restart" } else { "partial" },
-        "service": if service.get("state").and_then(Value::as_str) == Some("absent") { "absent" } else { "removed" },
+        "service": service_outcome,
         "agents": agents, "failed": failed, "pending": ["app-data", "models", "webview", "cache", "saved-state", "logs", "preferences"]}))
 }
 

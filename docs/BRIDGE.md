@@ -65,6 +65,9 @@ rejects `{key: "reset.service-failed"}` and leaves app data for retry. `resetRep
 the helper's one-time `{state: "complete"|"partial", completed: string[], failed:
 {step, key, agent?}[], agents}` after the fresh app starts. Its report is held in a private temporary
 directory until read, including the pre-exit failures. The UI must name any failed step and its remaining data.
+The current installed connector reports no per-agent rows in its successful JSON response, so an empty
+`agents` object does not prove that every registration was removed. The confirmation always states that
+manual or foreign registrations may remain.
 The app bundle, remote machines, foreign/manual agent registrations, provider accounts, OS permissions and
 backups are outside this action; the connector can leave nonpersonal stop/lock markers and open conversation
 servers until they exit. The UI must state these limits before confirmation.
