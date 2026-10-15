@@ -221,7 +221,7 @@ pub fn probe() -> Result<()> {
     ensure(!engine.is_empty(), "no probe-engine ok")?;
     check_engine_line(&engine.join("\n"))?;
     // sidevoice-engine's storage: a folder per installed build, nothing of the cancelled one, nothing half written.
-    let storage = data.dir.join("sidevoice-engine");
+    let storage = data.home.join("Library/Application Support/Sidevoice/Models");
     Cmd::new("ls").arg("-laR").arg(storage.join("models")).run()?;
     let cancelled = paths(&storage.join("models")).into_iter().any(|p| p.to_string_lossy().contains("whisper-small"));
     ensure(!cancelled, "a cancelled download left files")?;
