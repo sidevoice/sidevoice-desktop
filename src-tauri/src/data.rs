@@ -32,6 +32,7 @@ impl Admission {
     fn leave(&mut self) {
         self.active -= 1;
     }
+    #[cfg(target_os = "macos")]
     fn begin_reset(&mut self) -> bool {
         if self.resetting || self.active != 0 {
             return false;
@@ -39,6 +40,7 @@ impl Admission {
         self.resetting = true;
         true
     }
+    #[cfg(target_os = "macos")]
     fn end_reset(&mut self) {
         self.resetting = false;
     }
@@ -141,7 +143,19 @@ fn pairings_file(app: &AppHandle) -> Result<PathBuf, Value> {
 
 fn pairings_path_is_safe(path: &Path) -> bool {
     path.ancestors().filter(|part| part.parent().is_some()).all(|part| match fs::symlink_metadata(part) {
-        Ok(meta) => !meta.file_type().is_symlink(),
+        Ok(meta) => {
+            if meta.file_type().is_symlink() {
+                return false;
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                if meta.file_attributes() & 0x400 != 0 {
+                    return false;
+                } // FILE_ATTRIBUTE_REPARSE_POINT, including junctions
+            }
+            true
+        }
         Err(error) => error.kind() == std::io::ErrorKind::NotFound,
     })
 }
@@ -177,6 +191,11 @@ fn read_pairings(path: &Path) -> Answer {
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(0x0020_0000); // FILE_FLAG_OPEN_REPARSE_POINT
     }
     match options.open(path).and_then(|file| {
         let mut bytes = Vec::new();
@@ -254,51 +273,52 @@ pub fn data_reset_report(app: AppHandle, webview: Webview) -> Answer {
     #[cfg(target_os = "macos")]
     {
         let path = report_path().ok_or_else(|| refused("reset.unavailable"))?;
-        if fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
-            return Err(refused("reset.unsafe"));
-        }
-        match fs::read(&path) {
-            Ok(bytes) if bytes.len() <= 16 * 1024 => {
-                let value = serde_json::from_slice(&bytes).map_err(|_| refused("reset.failed"))?;
-                let journal = path.with_file_name("journal.json");
-                if let Err(error) = fs::remove_file(&journal) {
-                    if error.kind() != std::io::ErrorKind::NotFound {
-                        return Err(refused("reset.report-failed"));
-                    }
-                }
-                fs::remove_file(&path).map_err(|_| refused("reset.failed"))?;
-                if let Some(dir) = path.parent() {
-                    let _ = fs::remove_dir(dir);
-                }
-                Ok(value)
-            }
-            Ok(_) => Err(refused("reset.failed")),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let journal = path.with_file_name("journal.json");
-                match fs::read(&journal) {
-                    Ok(bytes)
-                        if bytes.len() <= 16 * 1024
-                            && !fs::symlink_metadata(&journal).is_ok_and(|m| m.file_type().is_symlink()) =>
-                    {
-                        let progress: Value =
-                            serde_json::from_slice(&bytes).map_err(|_| refused("reset.report-failed"))?;
-                        let mut failed = progress.get("failed").and_then(Value::as_array).cloned().unwrap_or_default();
-                        failed.push(json!({"step":"helper", "key":"reset.interrupted"}));
-                        fs::remove_file(&journal).map_err(|_| refused("reset.report-failed"))?;
-                        Ok(
-                            json!({"state":"partial", "completed":progress.get("completed").cloned().unwrap_or_else(|| json!([])), "failed":failed, "agents":{}}),
-                        )
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Value::Null),
-                    _ => Err(refused("reset.report-failed")),
-                }
-            }
-            Err(_) => Err(refused("reset.failed")),
-        }
+        consume_report_at(&path)
     }
     #[cfg(not(target_os = "macos"))]
     {
         Err(refused("reset.unavailable"))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn consume_report_at(path: &Path) -> Answer {
+    if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(refused("reset.unsafe"));
+    }
+    match fs::read(path) {
+        Ok(bytes) if bytes.len() <= 16 * 1024 => {
+            let value: Value = serde_json::from_slice(&bytes).map_err(|_| refused("reset.failed"))?;
+            let journal = path.with_file_name("journal.json");
+            if let Err(error) = fs::remove_file(&journal) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    return Err(refused("reset.report-failed"));
+                }
+            }
+            fs::remove_file(path).map_err(|_| refused("reset.failed"))?;
+            Ok(value)
+        }
+        Ok(_) => Err(refused("reset.failed")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let journal = path.with_file_name("journal.json");
+            if fs::symlink_metadata(&journal).is_ok_and(|m| m.file_type().is_symlink()) {
+                return Err(refused("reset.unsafe"));
+            }
+            match fs::read(&journal) {
+                Ok(bytes) if bytes.len() <= 16 * 1024 => {
+                    let progress: Value = serde_json::from_slice(&bytes).map_err(|_| refused("reset.report-failed"))?;
+                    let mut failed = progress.get("failed").and_then(Value::as_array).cloned().unwrap_or_default();
+                    failed.push(json!({"step":"helper", "key":"reset.interrupted"}));
+                    fs::remove_file(&journal).map_err(|_| refused("reset.report-failed"))?;
+                    Ok(
+                        json!({"state":"partial", "completed":progress.get("completed").cloned().unwrap_or_else(|| json!([])), "failed":failed, "agents":{}}),
+                    )
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Value::Null),
+                _ => Err(refused("reset.report-failed")),
+            }
+        }
+        Err(_) => Err(refused("reset.failed")),
     }
 }
 
@@ -379,11 +399,16 @@ fn begin_reset(app: &AppHandle) -> Answer {
     if !try_lock(&reset_lock) {
         return Err(refused("reset.busy"));
     }
-    let inherited_lock = inherit_lock(&reset_lock).map_err(|_| refused("reset.helper-failed"))?;
     let dirs = DataDirs::from_env().ok_or_else(|| refused("reset.unavailable"))?;
     let home = std::env::var_os("HOME").map(PathBuf::from).ok_or_else(|| refused("reset.unavailable"))?;
     validate_uninstall_scope(&home, &dirs.data).map_err(|reason| json!({"key": "reset.unsafe", "reason": reason}))?;
-    let journal = report_path().ok_or_else(|| refused("reset.helper-failed"))?.with_file_name("journal.json");
+    let report = report_path().ok_or_else(|| refused("reset.helper-failed"))?;
+    if let Err(error) = fs::remove_file(&report) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            return Err(refused("reset.report-failed"));
+        }
+    }
+    let journal = report.with_file_name("journal.json");
     write_atomic_json(&journal, &json!({"stage":"preflight", "completed":[], "failed":[]}))
         .map_err(|_| refused("reset.helper-failed"))?;
     let (service, service_outcome) = match Cli::installed(&dirs) {
@@ -416,7 +441,17 @@ fn begin_reset(app: &AppHandle) -> Answer {
         &json!({"stage":"keychain", "completed":["service", "keychain"], "failed":failed.clone()}),
     )
     .map_err(|_| refused("reset.report-failed"))?;
+    let agents = service.get("agents").cloned().unwrap_or_else(|| json!({}));
+    for agent in retained_agents(&agents) {
+        failed.push(json!({"step": "agents", "key": "reset.agent-remains", "agent": agent}));
+    }
+    write_atomic_json(
+        &journal,
+        &json!({"stage":"agent-results", "completed":["service", "keychain"], "failed":failed.clone()}),
+    )
+    .map_err(|_| refused("reset.report-failed"))?;
     let exe = std::env::current_exe().map_err(|_| refused("reset.unavailable"))?;
+    let inherited_lock = inherit_lock(&reset_lock).map_err(|_| refused("reset.helper-failed"))?;
     let spawned = Command::new(exe)
         .arg("--sidevoice-reset-helper")
         .arg(std::process::id().to_string())
@@ -432,10 +467,6 @@ fn begin_reset(app: &AppHandle) -> Answer {
         }
     }
     let mut child = spawned.map_err(|_| refused("reset.helper-failed"))?;
-    let agents = service.get("agents").cloned().unwrap_or_else(|| json!({}));
-    for agent in retained_agents(&agents) {
-        failed.push(json!({"step": "agents", "key": "reset.agent-remains", "agent": agent}));
-    }
     let initial = json!({"failed": failed, "agents": agents});
     let payload = serde_json::to_vec(&initial).map_err(|_| refused("reset.helper-failed"))?;
     if payload.len() > 16 * 1024 || child.stdin.as_mut().is_none_or(|stdin| stdin.write_all(&payload).is_err()) {
@@ -548,8 +579,26 @@ fn run_checked_uninstall<T>(home: &Path, data: &Path, invoke: impl FnOnce() -> R
 
 #[cfg(target_os = "macos")]
 fn validate_uninstall_scope(home: &Path, data: &Path) -> Result<PathBuf, &'static str> {
+    if account_home().as_deref() != Some(home) {
+        return Err("unsafe-home");
+    }
     let data_home = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from);
     validate_uninstall_scope_at(home, data, data_home.as_deref())
+}
+
+#[cfg(target_os = "macos")]
+fn account_home() -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut found: *mut libc::passwd = std::ptr::null_mut();
+    let mut buffer = vec![0u8; 16 * 1024];
+    let result =
+        unsafe { libc::getpwuid_r(libc::geteuid(), &mut entry, buffer.as_mut_ptr().cast(), buffer.len(), &mut found) };
+    if result != 0 || found.is_null() || entry.pw_dir.is_null() {
+        return None;
+    }
+    let bytes = unsafe { std::ffi::CStr::from_ptr(entry.pw_dir) }.to_bytes();
+    Some(PathBuf::from(std::ffi::OsStr::from_bytes(bytes)))
 }
 
 #[cfg(target_os = "macos")]
@@ -575,6 +624,12 @@ fn validate_uninstall_scope_at(home: &Path, data: &Path, data_home: Option<&Path
         let releases = value.get("releases").and_then(Value::as_str).ok_or("unsafe-record")?;
         if Path::new(releases) != expected_releases || !clean_absolute(Path::new(releases)) {
             return Err("outside-known-dirs");
+        }
+        let command = value.get("command").and_then(Value::as_array).ok_or("unsafe-record")?;
+        if command.len() != 1
+            || command[0].as_str() != expected_releases.join("current/bin/sidevoice-connector").to_str()
+        {
+            return Err("unsafe-record");
         }
     } else if fs::symlink_metadata(&record).is_err_and(|error| error.kind() != std::io::ErrorKind::NotFound) {
         return Err("unsafe-record");
@@ -606,8 +661,13 @@ fn report_path() -> Option<PathBuf> {
 
 #[cfg(target_os = "macos")]
 fn open_reset_lock() -> Result<std::fs::File, &'static str> {
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     let path = report_path().ok_or("report-unavailable")?.with_file_name("reset.lock");
+    open_reset_lock_at(&path)
+}
+
+#[cfg(target_os = "macos")]
+fn open_reset_lock_at(path: &Path) -> Result<std::fs::File, &'static str> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -656,7 +716,7 @@ fn inherit_lock(file: &std::fs::File) -> Result<i32, &'static str> {
 
 #[cfg(target_os = "macos")]
 fn helper_lock(fd: Option<i32>) -> Option<std::fs::File> {
-    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::fd::FromRawFd;
     use std::os::unix::fs::MetadataExt;
     let fd = fd.filter(|fd| *fd >= 3)?;
     let held = unsafe { std::fs::File::from_raw_fd(fd) };
@@ -669,7 +729,6 @@ fn helper_lock(fd: Option<i32>) -> Option<std::fs::File> {
     if !try_lock(&held) {
         return None;
     }
-    let _ = held.as_raw_fd();
     Some(held)
 }
 
@@ -1024,10 +1083,10 @@ pub fn run_reset_helper(parent_pid: Option<u32>, lock_fd: Option<i32>) {
             return;
         }
         let Some(report) = report_path() else { return };
+        let webkit = webkit_children(parent_pid);
         if std::io::stdout().write_all(b"ready\n").is_err() {
             return;
         }
-        let webkit = webkit_children(parent_pid);
         // The parent writes the pre-exit failures then keeps the pipe open until it exits.
         let mut drain = Vec::new();
         if std::io::stdin().read_to_end(&mut drain).is_err() {
@@ -1039,6 +1098,9 @@ pub fn run_reset_helper(parent_pid: Option<u32>, lock_fd: Option<i32>) {
         let Ok(initial) = serde_json::from_slice::<Value>(&drain) else { return };
         let Some(initial_failed) = initial.get("failed").and_then(Value::as_array) else { return };
         let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return };
+        if account_home().as_deref() != Some(home.as_path()) {
+            return;
+        }
         let mut completed = Vec::new();
         let mut failed = initial_failed.clone();
         let journal = report.with_file_name("journal.json");
@@ -1222,9 +1284,16 @@ mod tests {
         fs::write(data.join("install.json"), json!({"releases": home.join("Documents/sidevoice")}).to_string())
             .unwrap();
         assert_eq!(validate_uninstall_scope_at(&home, &data, None), Err("outside-known-dirs"));
-        fs::write(data.join("install.json"), json!({"releases": home.join(".local/share/sidevoice")}).to_string())
-            .unwrap();
+        let releases = home.join(".local/share/sidevoice");
+        fs::write(
+            data.join("install.json"),
+            json!({"releases": releases, "command": [releases.join("current/bin/sidevoice-connector")]}).to_string(),
+        )
+        .unwrap();
         assert!(validate_uninstall_scope_at(&home, &data, None).is_ok());
+        fs::write(data.join("install.json"), json!({"releases": releases, "command": ["/usr/bin/rm"]}).to_string())
+            .unwrap();
+        assert_eq!(validate_uninstall_scope_at(&home, &data, None), Err("unsafe-record"));
     }
 
     #[test]
@@ -1250,6 +1319,46 @@ mod tests {
         gate.end_reset();
         assert!(gate.enter());
         gate.leave();
+    }
+
+    #[test]
+    fn durable_journal_reports_interruption_then_allows_retry() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let report = dir.path().join("report.json");
+        let journal = dir.path().join("journal.json");
+        write_atomic_json(&journal, &json!({"stage":"service", "completed":["service"], "failed":[]})).unwrap();
+        assert_eq!(fs::metadata(&journal).unwrap().permissions().mode() & 0o077, 0);
+        let interrupted = consume_report_at(&report).unwrap();
+        assert_eq!(interrupted["state"], "partial");
+        assert_eq!(interrupted["completed"], json!(["service"]));
+        assert_eq!(interrupted["failed"][0]["key"], "reset.interrupted");
+        assert_eq!(consume_report_at(&report), Ok(Value::Null));
+        write_atomic_json(&journal, &json!({"stage":"cleanup", "completed":["service", "models"], "failed":[]}))
+            .unwrap();
+        write_atomic_json(
+            &report,
+            &json!({"state":"complete", "completed":["service", "models"], "failed":[], "agents":{}}),
+        )
+        .unwrap();
+        assert_eq!(consume_report_at(&report).unwrap()["state"], "complete");
+        assert_eq!(consume_report_at(&report), Ok(Value::Null));
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        std::os::unix::fs::symlink(outside.path(), &report).unwrap();
+        assert_eq!(consume_report_at(&report), Err(refused("reset.unsafe")));
+        assert!(outside.path().exists());
+    }
+
+    #[test]
+    fn helper_lock_blocks_a_second_app_until_released() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("reset.lock");
+        let parent = open_reset_lock_at(&path).unwrap();
+        let newcomer = open_reset_lock_at(&path).unwrap();
+        assert!(try_lock(&parent));
+        assert!(!try_lock(&newcomer));
+        drop(parent);
+        assert!(try_lock(&newcomer));
     }
 
     #[test]
