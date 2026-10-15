@@ -529,8 +529,9 @@ fn fresh_service_absent_with(
         return false;
     }
     for label in ["dev.sidevoice.core", "dev.sidevoice.connector"] {
-        if fs::symlink_metadata(home.join("Library/LaunchAgents").join(format!("{label}.plist"))).is_ok() {
-            return false;
+        match fs::symlink_metadata(home.join("Library/LaunchAgents").join(format!("{label}.plist"))) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            _ => return false,
         }
         if !launchd_absent(label) {
             return false;
@@ -706,7 +707,9 @@ fn known_cleanup_path(path: &Path, home: &Path) -> Result<(), &'static str> {
     }
     let allowed = [
         home.join("Library/Application Support/dev.sidevoice.desktop"),
-        home.join("Library/Application Support/Sidevoice/Models"),
+        home.join("Library/Application Support/Sidevoice/Models/blobs"),
+        home.join("Library/Application Support/Sidevoice/Models/models"),
+        home.join("Library/Application Support/Sidevoice/Models/partial"),
         home.join("Library/WebKit/dev.sidevoice.desktop"),
         home.join("Library/Caches/dev.sidevoice.desktop"),
         home.join("Library/Saved Application State/dev.sidevoice.desktop.savedState"),
@@ -796,9 +799,16 @@ fn walk_owned(
     }
     let result = (|| {
         loop {
+            unsafe {
+                *libc::__error() = 0;
+            }
             let entry = unsafe { libc::readdir(stream) };
             if entry.is_null() {
-                break;
+                if unsafe { *libc::__error() } != 0 {
+                    return Err("inspect");
+                } else {
+                    break;
+                }
             }
             let name = unsafe { std::ffi::CStr::from_ptr((*entry).d_name.as_ptr()) };
             if name.to_bytes() == b"." || name.to_bytes() == b".." {
@@ -934,6 +944,23 @@ fn remove_known(path: &Path, home: &Path) -> Result<(), &'static str> {
 }
 
 #[cfg(target_os = "macos")]
+fn remove_model_store(root: &Path, home: &Path) -> Result<(), &'static str> {
+    if root != home.join("Library/Application Support/Sidevoice/Models") {
+        return Err("outside-known-dirs");
+    }
+    let children = ["blobs", "models", "partial"].map(|name| root.join(name));
+    // Validate every owned child before removing any. Other programs may have their own siblings here.
+    for child in &children {
+        known_cleanup_path(child, home)?;
+        guarded_tree(child, home, false, false, &mount_identity)?;
+    }
+    for child in &children {
+        remove_known(child, home)?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
 fn parent_path_exists(parent: i32, name: &std::ffi::OsStr) -> bool {
     use std::os::unix::ffi::OsStrExt;
     let Ok(name) = std::ffi::CString::new(name.as_bytes()) else { return true };
@@ -1028,7 +1055,9 @@ pub fn run_reset_helper(parent_pid: Option<u32>, lock_fd: Option<i32>) {
             if name == "webview" && !webkit_safe {
                 failed.push(json!({"step": "webview", "key": "reset.process-busy"}));
             } else {
-                match remove_known(&path, &home) {
+                let removed =
+                    if name == "models" { remove_model_store(&path, &home) } else { remove_known(&path, &home) };
+                match removed {
                     Ok(()) => completed.push(name),
                     Err(key) => failed.push(json!({"step": name, "key": key})),
                 }
@@ -1119,6 +1148,24 @@ mod tests {
         assert_eq!(remove_known(&target, root), Ok(()));
         assert!(!target.exists());
         assert!(parent.join("unrelated").exists());
+    }
+
+    #[test]
+    fn shared_store_removes_only_engine_owned_children() {
+        let home = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(home.path()).unwrap();
+        let root = home.join("Library/Application Support/Sidevoice/Models");
+        for child in ["blobs", "models", "partial"] {
+            fs::create_dir_all(root.join(child)).unwrap();
+            fs::write(root.join(child).join("owned"), b"model").unwrap();
+        }
+        fs::create_dir(root.join("other-program")).unwrap();
+        fs::write(root.join("other-program/sentinel"), b"unrelated").unwrap();
+        assert_eq!(remove_model_store(&root, &home), Ok(()));
+        for child in ["blobs", "models", "partial"] {
+            assert!(!root.join(child).exists());
+        }
+        assert_eq!(fs::read(root.join("other-program/sentinel")).unwrap(), b"unrelated");
     }
 
     #[test]

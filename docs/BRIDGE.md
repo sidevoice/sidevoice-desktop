@@ -58,7 +58,9 @@ native code. It runs the **installed connector's top-level** `uninstall --json` 
 The connector removes the service, its releases, its data and registrations it owns. Native then forgets
 Sidevoice's provider keys and starts a helper from the app executable. The helper waits for the app to
 exit and for its observed WebKit children to exit before removing its exact Application Support,
-shared-model, WebKit, cache, saved-state and log paths and its `defaults` domain. A WebKit child that
+shared-model store's engine-owned `blobs`, `models` and `partial` children, WebKit, cache,
+saved-state and log paths and its `defaults` domain. Other programs' siblings in the shared model
+store remain. A WebKit child that
 does not exit leaves a partial result and its storage in place. Paths are derived natively and
 symlinks and mount boundaries are refused. Connector data and release roots must be the exact default
 Sidevoice roots; unsafe environment overrides or install records refuse before the installed uninstaller runs.
