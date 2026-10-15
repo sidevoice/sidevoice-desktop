@@ -586,6 +586,48 @@ test("T01/T04b: native cut ids reach the matching played and queued say handles 
   assert.equal(order.length, 4);
 });
 
+for (const [caseId, terminal] of [
+  ["T02a", { phase: "finished", turn_id: "user", text: "new words", started_at: 10, ended_at: 1200, merged: false }],
+  ["T02b", { phase: "cancelled", turn_id: "user", merged: false }],
+]) {
+  test(`${caseId}: accepted but unsounded reply stays unplayed through the turn terminal`, async () => {
+    const api = loadFactory()(voiceWindow().win, ORIGIN, "native", true, true);
+    const say = api.host.voice.say("accepted first");
+    const seen = [];
+    api.host.voice.onTurn((turn) => seen.push(turn.phase));
+    api.host.voice.onAgentInterrupted((cut) => seen.push(cut));
+    say.onEvent((event) => seen.push(event));
+    api.voiceEvent({ type: "turn", data: { phase: "started", turn_id: "user", started_at: 10 } });
+    api.voiceEvent({ type: "agent-interrupted", data: { utterance_id: say.id, heard_until: 0, played: false } });
+    api.voiceEvent({ type: "say", data: { key: say.id, event: { type: "done", outcome: { status: "not-played", reason: { reason: "barge-in" } } } } });
+    api.voiceEvent({ type: "turn", data: terminal });
+    assert.deepEqual(seen.map((step) => typeof step === "string" ? step : step.played === false ? "cut" : step.type || step.phase),
+      ["started", "cut", "done", terminal.phase]);
+    assert.deepEqual(await say.outcome, { status: "not-played", reason: { reason: "barge-in" } });
+  });
+}
+
+test("T05: an acknowledgement, checkpoint and result keep distinct say handles and checkpoint cut extent", async () => {
+  const { win, calls } = voiceWindow();
+  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const sayings = ["ack", "checkpoint", "result"].map((text) => api.host.voice.say(text));
+  const cuts = [];
+  api.host.voice.onAgentInterrupted((cut) => cuts.push(cut));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "voice_say").map(([, args]) => args.key), sayings.map((say) => say.id));
+  api.voiceEvent({ type: "say", data: { key: sayings[0].id, event: { type: "done", outcome: { status: "heard" } } } });
+  api.voiceEvent({ type: "agent-interrupted", data: { utterance_id: sayings[1].id, heard_until: 3, played: true } });
+  api.voiceEvent({ type: "say", data: { key: sayings[1].id, event: { type: "done", outcome: { status: "heard-up-to", heard_chars: 3, reason: { reason: "barge-in" } } } } });
+  api.voiceEvent({ type: "agent-interrupted", data: { utterance_id: sayings[2].id, heard_until: 0, played: false } });
+  api.voiceEvent({ type: "say", data: { key: sayings[2].id, event: { type: "done", outcome: { status: "not-played", reason: { reason: "barge-in" } } } } });
+  assert.deepEqual(await Promise.all(sayings.map((say) => say.outcome)), [
+    { status: "heard" },
+    { status: "heard-up-to", heard_chars: 3, reason: { reason: "barge-in" } },
+    { status: "not-played", reason: { reason: "barge-in" } },
+  ]);
+  assert.deepEqual(cuts.map((cut) => [cut.utterance_id, cut.heard_until]), [[sayings[1].id, 3], [sayings[2].id, 0]]);
+});
+
 test("T04a/T12: cancelling a sounding reply sends only its key and preserves its queued successor", async () => {
   const { win, calls } = voiceWindow();
   const api = loadFactory()(win, ORIGIN, "native", true, true);
