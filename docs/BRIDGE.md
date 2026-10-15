@@ -42,10 +42,12 @@ Keeping these two names stable is the web UI's side of the contract.
 
 ### Private data and reset (`host.data`, macOS)
 
-The bundled room page alone receives `host.data`. Its `pairings.read()` resolves `{pairings: [...]}` and
-`pairings.write({pairings})` resolves `undefined` after a bounded, private, atomic write under the app's
-Application Support directory. Local-host pairing is derived from the verified socket and is never stored
-there. Neither call accepts a path. Browser pages keep their own browser storage.
+The bundled room page receives `host.data.pairings` on macOS, Windows and Linux. Its `read()` resolves
+`{pairings: [...], pendingRevokes: [...]}` and `write({pairings, pendingRevokes})` resolves `undefined`
+after a bounded, private, atomic write under the app's Application Support directory. Both arrays contain
+remote pairing credentials; pending revocations remain native until the remote machine acknowledges them.
+Local-host pairing is derived from the verified socket and is never stored there. Neither call accepts a
+path. Browser pages keep their own browser storage. `deleteAll()` and `resetReport()` are macOS-only.
 
 `deleteAll()` is the confirmed Settings › Advanced action. Native also displays an OS-owned confirmation
 with Cancel as its default button on every invocation; cancelling rejects `{key: "reset.cancelled"}` before

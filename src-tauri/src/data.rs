@@ -82,10 +82,14 @@ fn pairings_path_is_safe(path: &Path) -> bool {
 
 fn checked_pairings(value: &Value) -> bool {
     let Some(rows) = value.get("pairings").and_then(Value::as_array) else { return false };
-    if rows.len() > 32 || !serde_json::to_vec(value).is_ok_and(|bytes| bytes.len() <= 64 * 1024) {
+    let pending = value.get("pendingRevokes").and_then(Value::as_array);
+    if rows.len() > 32
+        || pending.is_some_and(|rows| rows.len() > 32)
+        || !serde_json::to_vec(value).is_ok_and(|bytes| bytes.len() <= 64 * 1024)
+    {
         return false;
     }
-    rows.iter().all(|row| {
+    let valid = |row: &Value| {
         row.get("local").is_none()
             && ["fp", "public_key", "device_id", "token"]
                 .iter()
@@ -93,7 +97,8 @@ fn checked_pairings(value: &Value) -> bool {
             && row.get("urls").and_then(Value::as_array).is_some_and(|urls| {
                 urls.len() <= 16 && urls.iter().all(|url| url.as_str().is_some_and(|s| s.len() <= 2048))
             })
-    })
+    };
+    rows.iter().all(valid) && pending.is_none_or(|rows| rows.iter().all(valid))
 }
 
 fn read_pairings(path: &Path) -> Answer {
@@ -102,7 +107,7 @@ fn read_pairings(path: &Path) -> Answer {
     }
     let mut options = OpenOptions::new();
     options.read(true);
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(libc::O_NOFOLLOW);
@@ -117,7 +122,7 @@ fn read_pairings(path: &Path) -> Answer {
             .filter(checked_pairings)
             .ok_or_else(|| refused("data.pairings-invalid")),
         Ok(_) => Err(refused("data.pairings-invalid")),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(json!({"pairings": []})),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(json!({"pairings": [], "pendingRevokes": []})),
         Err(_) => Err(refused("data.pairings-read")),
     }
 }
@@ -131,6 +136,15 @@ fn write_pairings(path: &Path, value: &Value) -> Answer {
     }
     let parent = path.parent().ok_or_else(|| refused("data.pairings-write"))?;
     fs::create_dir_all(parent).map_err(|_| refused("data.pairings-write"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let meta = fs::symlink_metadata(parent).map_err(|_| refused("data.pairings-write"))?;
+        if meta.uid() != unsafe { libc::geteuid() } || !meta.is_dir() {
+            return Err(refused("reset.unsafe"));
+        }
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).map_err(|_| refused("data.pairings-write"))?;
+    }
     if !pairings_path_is_safe(path) {
         return Err(refused("reset.unsafe"));
     }
@@ -171,7 +185,7 @@ pub fn data_pairings_write(app: AppHandle, webview: Webview, value: Value) -> An
 #[tauri::command]
 pub fn data_reset_report(app: AppHandle, webview: Webview) -> Answer {
     caller(&app, &webview)?;
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     {
         let path = report_path().ok_or_else(|| refused("reset.unavailable"))?;
         if fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
@@ -981,5 +995,18 @@ mod tests {
         std::os::unix::fs::symlink(outside.path().join("other.json"), &file).unwrap();
         assert_eq!(read_pairings(&file), Err(refused("reset.unsafe")));
         assert!(!outside.path().join("other.json").exists());
+    }
+
+    #[test]
+    fn pending_revocations_share_the_private_native_pairings_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        let file = home.path().join("app/pairings.json");
+        let pending = json!({"fp":"fp", "public_key":"pk", "device_id":"id", "token":"live-secret", "urls":["https://example.test"]});
+        let value = json!({"pairings":[], "pendingRevokes":[pending]});
+        assert_eq!(write_pairings(&file, &value), Ok(Value::Null));
+        assert_eq!(read_pairings(&file), Ok(value));
+        assert_eq!(fs::metadata(&file).unwrap().permissions().mode() & 0o077, 0);
+        assert_eq!(fs::metadata(file.parent().unwrap()).unwrap().permissions().mode() & 0o077, 0);
     }
 }

@@ -62,6 +62,7 @@ tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "time"] }
 # The keys of remote providers, in the keychain (src/keychain.rs).
 security-framework = "3"
 libc = "0.2"
+
 # The call controls card as a non-activating panel: over full-screen apps, on every Space, never taking focus
 # (src/call_controls.rs).
 tauri-nspanel = "2.1"
@@ -74,6 +75,9 @@ objc2-avf-audio = { version = "0.3", features = ["AVAudioApplication", "block2"]
 # This computer's name, as System Settings shows it (src/computer_name.rs).
 system-configuration-sys = "0.6"
 core-foundation = "0.10"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
