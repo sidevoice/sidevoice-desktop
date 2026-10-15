@@ -13,7 +13,7 @@ import { installSite } from "../scripts/web-site.mjs";
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const candidate = process.env.SIDEVOICE_CANDIDATE_WEB_SITE;
 // Scratch integration head for this draft PR; web.pin.json remains the published archive.
-const candidateSha = "de9d30781925883df363682bc1cc11ab45a8f0d7";
+const candidateSha = "086dea2b57329232e10cdd2fac52f2f180295b14";
 
 test("the lasting web pin remains a release tag with its archive digest", () => {
   const pin = readPin(JSON.parse(readFileSync(path.join(root, "web.pin.json"), "utf8")));
