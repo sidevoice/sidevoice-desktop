@@ -55,6 +55,30 @@ test("does nothing on any other origin (auth pages, other sites)", () => {
   assert.equal(calls.length, 0);
 });
 
+test("the macOS data bridge uses fixed native commands and no page-supplied paths", async () => {
+  const install = loadFactory();
+  const { win, calls } = fakeWindow(ORIGIN);
+  const api = install(win, ORIGIN, null, true);
+  assert.equal(typeof api.host.data.deleteAll, "function");
+  assert.equal(typeof api.host.data.resetReport, "function");
+  await api.host.data.pairings.read();
+  await api.host.data.pairings.write({ pairings: [], pendingRevokes: [] });
+  await api.host.data.deleteAll();
+  await api.host.data.resetReport();
+  assert.deepEqual(calls.slice(-4), [
+    ["data_pairings_read", undefined],
+    ["data_pairings_write", { value: { pairings: [], pendingRevokes: [] } }],
+    ["data_delete_all", undefined],
+    ["data_reset_report", undefined],
+  ]);
+  const other = fakeWindow(ORIGIN);
+  const otherData = install(other.win, ORIGIN).host.data;
+  assert.equal(typeof otherData.pairings.read, "function");
+  assert.equal(typeof otherData.pairings.write, "function");
+  assert.equal(otherData.deleteAll, undefined);
+  assert.equal(otherData.resetReport, undefined);
+});
+
 test("reports not-ready first, then the real state once the room's controller exists", async () => {
   const install = loadFactory();
   const { win, calls, tick } = fakeWindow(ORIGIN);
@@ -1323,11 +1347,11 @@ test("the host's keys: updater only where the app can update itself, build alway
   // A dev build, a .deb, a bare binary: the app passes false, and the page shows nothing to update.
   for (const offered of [undefined, false, "__SIDEVOICE_UPDATER__", "true"]) {
     const api = install(fakeWindow(ORIGIN).win, ORIGIN, null, false, false, offered, { channel: "nightly", version: "0.4.0" });
-    assert.deepEqual(Object.keys(api.host).sort(), ["app", "build", "callControls", "engine", "mediaKeys", "muteShortcut", "version"], String(offered));
+    assert.deepEqual(Object.keys(api.host).sort(), ["app", "build", "callControls", "data", "engine", "mediaKeys", "muteShortcut", "version"], String(offered));
     api.updaterEvent({ state: "idle" }); // nothing listens, nothing breaks
   }
   const api = install(fakeWindow(ORIGIN).win, ORIGIN, "native", true, true, true, { channel: "release", version: "0.4.0" });
-  assert.deepEqual(Object.keys(api.host).sort(), ["app", "build", "callControls", "engine", "localHost", "mediaKeys", "muteShortcut", "updater", "version", "voice"]);
+  assert.deepEqual(Object.keys(api.host).sort(), ["app", "build", "callControls", "data", "engine", "localHost", "mediaKeys", "muteShortcut", "updater", "version", "voice"]);
   // The AppUpdater seam, exactly.
   assert.deepEqual(Object.keys(api.host.updater).sort(), ["check", "download", "restart", "setMode", "settings", "status", "subscribe"]);
   assert.ok(Object.isFrozen(api.host.updater));

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-data-reset-report"
+description = "Enables the data_reset_report command without any pre-configured scope."
+commands.allow = ["data_reset_report"]
+
+[[permission]]
+identifier = "deny-data-reset-report"
+description = "Denies the data_reset_report command without any pre-configured scope."
+commands.deny = ["data_reset_report"]

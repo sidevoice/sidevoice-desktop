@@ -14,6 +14,7 @@
 
 mod call_controls;
 mod computer_name;
+mod data;
 mod engine_ipc;
 mod headset;
 mod keychain;
@@ -55,6 +56,10 @@ pub(crate) struct AppState {
     /// Held across a change of the mute shortcut, from keeping it to registering it, so what is kept and what is
     /// registered never differ. Only off the main thread: registering waits for it.
     shortcut_change: Mutex<()>,
+    resetting: std::sync::atomic::AtomicBool,
+    reset_admission: Mutex<data::Admission>,
+    #[cfg(target_os = "macos")]
+    reset_helper: Mutex<Option<std::process::Child>>,
 }
 
 impl Default for AppState {
@@ -68,6 +73,10 @@ impl Default for AppState {
             language: sidevoice_desktop_core::i18n::language(&preferred),
             shortcut: Mutex::default(),
             shortcut_change: Mutex::default(),
+            resetting: std::sync::atomic::AtomicBool::new(false),
+            reset_admission: Mutex::default(),
+            #[cfg(target_os = "macos")]
+            reset_helper: Mutex::default(),
         }
     }
 }
@@ -103,7 +112,7 @@ fn checked_shortcut(text: &str) -> Option<String> {
 /// The one writer of settings.json: `change` applied to the stored settings, saved and kept under one lock, so the
 /// room page's setters never lose each other's fields.
 pub(crate) fn change_settings(app: &AppHandle, change: impl FnOnce(&mut Settings)) -> Result<Settings, String> {
-    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let dir = data::desktop_dir(app).map_err(|e| e.to_string())?;
     let state = app.state::<AppState>();
     let mut stored = state.settings.lock().unwrap();
     let mut changed = stored.clone().unwrap_or_else(Settings::first_run);
@@ -440,6 +449,10 @@ macro_rules! commands {
             local_host::local_host_install,
             local_host::local_host_install_progress,
             local_host::local_host_install_cancel,
+            data::data_pairings_read,
+            data::data_pairings_write,
+            data::data_delete_all,
+            data::data_reset_report,
             mute_shortcut,
             call_controls::call_controls_settings,
             updater::updater
@@ -471,6 +484,11 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
 }
 
 pub fn run() {
+    #[cfg(target_os = "macos")]
+    if !data::await_reset_idle() {
+        eprintln!("sidevoice: reset lock unavailable or cleanup still running");
+        return;
+    }
     let context = tauri::generate_context!();
     #[cfg(feature = "probe")]
     let context = probe::with_page(context);
@@ -499,9 +517,10 @@ pub fn run() {
             let handle = app.handle().clone();
             tray::create(&handle)?;
             headset::setup(&handle);
-            // sidevoice-engine keeps the models it downloads, on demand, in the app's data directory (docs/ENGINES.md).
+            // The model root is shared per OS user on this machine (docs/ENGINES.md).
             // Without it the app still runs; the page then finds no native engine to use.
-            let engine_root = app.path().app_data_dir()?.join("sidevoice-engine");
+            let engine_root =
+                data::shared_model_root().ok_or_else(|| std::io::Error::other("no home for the shared model store"))?;
             // The keys of remote providers come from the keychain (macOS); elsewhere the app keeps none.
             #[cfg(target_os = "macos")]
             let credentials = keychain::Keychain;
@@ -519,7 +538,7 @@ pub fn run() {
             }
             // This computer's own core, if any (macOS): found, paired, proxied for the page (docs/LOCAL_HOST.md).
             local_host::setup(&handle);
-            let stored = app.path().app_config_dir().ok().and_then(|dir| settings::load(&dir));
+            let stored = data::desktop_dir(&handle).ok().and_then(|dir| settings::load(&dir));
             *app.state::<AppState>().settings.lock().unwrap() = stored.clone();
             // First run too: the interface itself asks for a pairing code; nothing has to be set up first.
             let current = stored.unwrap_or_else(Settings::first_run);
@@ -532,6 +551,8 @@ pub fn run() {
             // launch's own activation, which came before any window existed: the window stayed behind (Dock only).
             show_room(&handle);
             activate_app();
+            #[cfg(target_os = "macos")]
+            data::finalize_relaunched_reset();
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -561,8 +582,15 @@ pub fn run() {
             // Quitting: the local host's proxy stops and closes every tunnel; an update ready installs (automatic mode).
             if let tauri::RunEvent::Exit = event {
                 local_host::shutdown(app);
-                updater::quit(app);
+                if !app.state::<AppState>().resetting.load(Ordering::SeqCst) {
+                    updater::quit(app);
+                }
             }
             let _ = (app, event);
         });
+}
+
+/// The helper is the same signed executable, launched only after a confirmed reset.
+pub fn run_reset_helper(parent_pid: Option<u32>, lock_fd: Option<i32>) {
+    data::run_reset_helper(parent_pid, lock_fd);
 }

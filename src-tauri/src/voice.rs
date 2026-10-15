@@ -132,6 +132,7 @@ pub async fn voice_set_settings(
     settings: VoiceSettings,
 ) -> Result<(), Refusal> {
     page(&app, &webview)?;
+    let _permit = crate::data::admit(&app).ok_or_else(|| refusal("reset.busy", "Data reset is under way."))?;
     // Numbered on arrival, before anything is awaited: a later one wins however long this one takes.
     let number = state.settings.fetch_add(1, Ordering::SeqCst) + 1;
     let counter = Arc::clone(&state.settings);
@@ -201,6 +202,7 @@ pub async fn voice_start(
     take: Option<bool>,
 ) -> Result<(), Refusal> {
     page(&app, &webview)?;
+    let _permit = crate::data::admit(&app).ok_or_else(|| refusal("reset.busy", "Data reset is under way."))?;
     let (sender, started) = oneshot::channel();
     {
         let call = state.call.lock().await;

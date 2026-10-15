@@ -61,8 +61,6 @@ pub fn fake_node(log: &Path) -> Result<crate::util::Background> {
 /// which a home does not change: `probe` expects none there, as on a runner.)
 pub struct AppHome {
     pub home: PathBuf,
-    /// The app's settings and data under [`AppHome::home`].
-    pub dir: PathBuf,
     scratch: bool,
 }
 
@@ -70,12 +68,12 @@ impl AppHome {
     pub fn new(step: &str) -> Result<AppHome> {
         if in_ci() {
             let home = home()?;
-            return Ok(AppHome { dir: app_data(&home), home, scratch: false });
+            return Ok(AppHome { home, scratch: false });
         }
         let home = PathBuf::from("/tmp").join(format!("svx-{step}"));
         fresh_dir(&home)?;
         eprintln!("(off a runner: the app runs with HOME={}, this machine's own data untouched)", home.display());
-        Ok(AppHome { dir: app_data(&home), home, scratch: true })
+        Ok(AppHome { home, scratch: true })
     }
 
     /// The app's binary with this home, its diagnostics on, with `env`.

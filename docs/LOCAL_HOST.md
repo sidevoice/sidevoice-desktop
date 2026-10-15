@@ -20,6 +20,13 @@ this computer»; Install, below); either way the app then runs that installation
 writes in neither. Its own file is `local-host.json` (0600) in its config directory:
 `{fp, public_key, device_id, token, host, paired_at}`, the only copy of its device token.
 
+The app now uses Tauri's app data directory for this file, settings, call-control placement and
+remote pairings; on macOS it is `~/Library/Application Support/dev.sidevoice.desktop`. The
+shared downloaded-model directory is `~/Library/Application Support/Sidevoice/Models`. Settings ›
+Advanced can run the **installed connector's top-level** `uninstall --json` before clearing the
+app's own data after exit. `localHost.serviceUninstall()` below remains a service-manager action
+and does not remove connector releases, conversations or agent registrations.
+
 ## Trust
 
 The boundary is the OS user. Before any connect to `C/local.sock` the app checks that `C` is a directory (not a

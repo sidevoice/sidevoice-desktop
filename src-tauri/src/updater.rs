@@ -108,6 +108,7 @@ async fn check(app: &AppHandle) {
 }
 
 fn download(app: &AppHandle) {
+    let Some(permit) = crate::data::admit(app) else { return };
     let Some(mut update) = with(app, |u| {
         let update = u.update.clone().filter(|_| u.status.state == State::Available)?;
         u.status = Status::new(State::Downloading, &update.version);
@@ -118,6 +119,7 @@ fn download(app: &AppHandle) {
     update.timeout = Some(Duration::from_secs(60 * 60));
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
+        let _permit = permit;
         let mut received = 0;
         let progress = |chunk: usize, total: Option<u64>| {
             received += chunk as u64;
@@ -136,6 +138,7 @@ fn download(app: &AppHandle) {
 
 /// Whoever takes the bytes installs; the local host stops only once the install succeeded.
 fn install(app: &AppHandle, restart: bool) {
+    let Some(_permit) = crate::data::admit(app) else { return };
     let claimed = with(app, |u| u.update.clone().zip(u.bytes.take()).inspect(|_| u.installing = true));
     let Some((update, bytes)) = claimed else { return };
     let installed = update.restart_after_install(restart).install(&bytes);
@@ -154,6 +157,9 @@ fn install(app: &AppHandle, restart: bool) {
 
 /// Quitting (`RunEvent::Exit`): waits for an install under way (a restart's); in automatic mode installs one ready.
 pub fn quit(app: &AppHandle) {
+    if app.state::<AppState>().resetting.load(std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
     if app.try_state::<Mutex<Updates>>().is_none() {
         return;
     }
@@ -166,6 +172,11 @@ pub fn quit(app: &AppHandle) {
     }
 }
 
+#[cfg(target_os = "macos")]
+pub fn installing(app: &AppHandle) -> bool {
+    app.try_state::<Mutex<Updates>>().is_some_and(|_| with(app, |u| u.installing))
+}
+
 fn unavailable() -> Value {
     json!({ "key": "update_unavailable", "message": "There is no update to install." })
 }
@@ -174,6 +185,11 @@ fn unavailable() -> Value {
 #[tauri::command]
 pub async fn updater(app: AppHandle, webview: Webview, action: String, mode: Option<Mode>) -> Result<Value, Value> {
     crate::room_page(&app, &webview).map_err(|why| json!({ "key": "bad_request", "message": why }))?;
+    if !matches!(action.as_str(), "settings" | "status")
+        && app.state::<AppState>().resetting.load(std::sync::atomic::Ordering::SeqCst)
+    {
+        return Err(json!({ "key": "reset.busy" }));
+    }
     app.try_state::<Mutex<Updates>>().ok_or_else(unavailable)?;
     let status = |app: &AppHandle| with(app, |u| u.status.clone());
     match (action.as_str(), mode) {

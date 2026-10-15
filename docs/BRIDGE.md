@@ -40,6 +40,73 @@ Keeping these two names stable is the web UI's side of the contract.
 
 ## Page → app
 
+### Private data and reset (`host.data`, macOS)
+
+The bundled room page receives `host.data.pairings` on macOS, Windows and Linux. Its `read()` resolves
+`{pairings: [...], pendingRevokes: [...]}` and `write({pairings, pendingRevokes})` resolves `undefined`
+after a bounded, private, atomic write under the app's Application Support directory. Both arrays contain
+remote pairing credentials; pending revocations remain native until the remote machine acknowledges them.
+Local-host pairing is derived from the verified socket and is never stored there. Neither call accepts a
+path. Browser pages keep their own browser storage. `deleteAll()` and `resetReport()` are macOS-only.
+
+`deleteAll()` is the confirmed Settings › Advanced action. Native also displays an OS-owned confirmation
+with Cancel as its default button on every invocation; cancelling rejects `{key: "reset.cancelled"}` before
+any uninstall or deletion. A room script calling the bridge directly cannot bypass that confirmation. It refuses a running call, service install or
+model download with `{key: "reset.busy"}`, and checks the current room window and bundled origin again in
+native code. It first requires a top-level integer `safe_uninstall` of at least `1` from the installed
+connector's `--version --json` response. An older, silent, malformed or timed-out connector refuses with
+`{key: "reset.unsupported-connector"}` before a new reset journal or uninstall is started. It runs the
+**installed connector's top-level** `uninstall --json` from its verified
+`install.json` command; `localHost.serviceUninstall()` is a different, narrower service-manager action.
+The connector removes the service, its releases, its data and registrations it owns. Native then forgets
+Sidevoice's provider keys and starts a helper from the app executable. The helper waits for the app to
+exit and for its observed WebKit children to exit before removing its exact Application Support,
+shared-model store's engine-owned `blobs`, `models` and `partial` children, WebKit, cache,
+saved-state and log paths and its `defaults` domain. Other programs' siblings in the shared model
+store remain. A WebKit child that
+does not exit leaves a partial result and its storage in place. Paths are derived natively from an
+exact allowlist, checked again before each top-level removal, and traversed without following
+symlinks or crossing a mount/device boundary. A failed check is reported, with that directory left
+in place. Connector data and release roots must be the exact default
+Sidevoice roots; unsafe environment overrides or install records refuse before the installed uninstaller runs.
+If installation metadata is absent, a fresh service/process check and a check for residual connector data
+must both pass before the service is called absent. A retained recovery executable named by `install.json`
+is used on a partial-uninstall retry. Custom profiles and separately installed cores are excluded.
+No page-supplied path is deleted.
+
+Accepted beta limit: a hostile process running in the same user account can race these checks by
+moving, replacing or mounting folders during deletion, or by replacing pairing-store ancestors
+during a write. This operation does not provide atomic confinement against that process; it already
+has direct access to the account's files. This limit does not relax the exact-root, no-follow and
+mount/device checks for a stable filesystem layout.
+
+Before uninstall, native creates a private operation journal and takes an interprocess reset lock.
+Model operations, voice model loads, credential writes, local-host actions and updater writes share an
+atomic admission gate with reset. The helper inherits the lock, acknowledges readiness before the app
+quits, records cleanup stages, and releases the lock only after its work ends. The helper marks the
+inherited lock descriptor close-on-exec, so the relaunched app acquires the lock independently.
+The helper records an awaiting-relaunch journal; only the new app after its setup publishes a complete
+report. A failed startup leaves the journal as a partial report for the next launch.
+
+`deleteAll()` resolves `{state: "needs-restart"|"partial", service: "removed"|"absent", agents,
+failed: {step, key, agent?}[], pending}` after the helper starts; this is **not** final deletion success. `partial`
+already identifies a Keychain or agent-registration failure. If service uninstall fails, it
+rejects `{key: "reset.service-failed"}` and leaves app data for retry. `resetReport()` resolves `null` or
+the helper's one-time `{state: "complete"|"partial", completed: string[], failed:
+{step, key, agent?}[], agents}` after the fresh app starts. Its report is held in a private temporary
+directory until read, including the pre-exit failures. The UI must name any failed step and its remaining data.
+The current installed connector reports no per-agent rows in its successful JSON response, so an empty
+`agents` object does not prove that every registration was removed. The confirmation always states that
+manual or foreign registrations may remain.
+The app bundle, remote machines, foreign/manual agent registrations, provider accounts, OS permissions and
+backups are outside this action; the connector can leave nonpersonal stop/lock markers and open conversation
+servers until they exit. The UI must state these limits before confirmation.
+
+Commands: `data_pairings_read`, `data_pairings_write {value}`, `data_delete_all`,
+`data_reset_report`; only the room capability grants them and each checks the room origin.
+
+### Call state
+
 ```js
 window.__TAURI_INTERNALS__.invoke("bridge_state", { snapshot })
 ```

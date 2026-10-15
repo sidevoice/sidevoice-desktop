@@ -45,13 +45,16 @@ catalogues: `local` first, then each provider), in the shape `/engine` gives the
   whisper.cpp on Metal for Whisper. Its GPU implementation uses flash attention. The page receives each build's
   optional `acceleratorClass` (`"gpu"`, `"neural-engine"`, or `"cpu"`) from the engine; the app does not infer it or
   enable Core ML. An explicit build choice still takes precedence.
-- Models are downloaded on demand into the app's data directory, `sidevoice-engine/`
-  (`~/Library/Application Support/dev.sidevoice.desktop/sidevoice-engine/` on macOS), each file checked against its
+- Models are downloaded on demand into the per-user shared machine store
+  (`~/Library/Application Support/Sidevoice/Models` on macOS), each file checked against its
   SHA-256 as it arrives and stored only once whole. The voice call installs what it needs as it starts; the page may
   install a model before (`engine.install(model, {build, engine, onProgress, signal})`, sidevoice-web's
   `ModelCatalogs.install`), to show its progress and cancel it, and takes one off the computer with
   `engine.uninstall(model)`: every build of it, never while the call holds it in memory (`model-in-use`) or an install
   of it is under way (`model-installing`).
+  Today this app is the only writer. The root is reserved for another Sidevoice program, but a
+  second writer must wait until both programs use an OS file lock around install, uninstall and
+  metadata updates; the engine's current mutex protects only one process.
 - The engine notes when each local model was last loaded, by any build, in that same directory, so it outlives the
   app; the page reads it as the model's `lastUsedAt` in `host.engine.catalogs()` (milliseconds since the Unix epoch,
   absent while the engine does not know), to show it and to find models not used for a while.

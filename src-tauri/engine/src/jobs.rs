@@ -49,6 +49,10 @@ const SPEED_SAMPLE: Duration = Duration::from_secs(1);
 const REMEMBERED: usize = 64;
 
 impl Jobs {
+    /// A download that could still write into the shared store.
+    pub fn busy(&self) -> bool {
+        !self.state().jobs.is_empty()
+    }
     fn state(&self) -> MutexGuard<'_, JobsState> {
         self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
