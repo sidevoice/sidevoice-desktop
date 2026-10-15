@@ -47,7 +47,7 @@ sidevoice-local-host = { path = "local-host", features = ["fetch"] }
 winreg = "0.55"
 # Whether a mouse button went down elsewhere, to close the call controls card's panels (src/call_controls.rs); this
 # computer's name (src/computer_name.rs).
-windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_System_SystemInformation"] }
+windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_System_SystemInformation", "Win32_Storage_FileSystem"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # The voice call the app runs itself (src/voice.rs, `host.voice`): sidevoice-voice with its native microphone and
