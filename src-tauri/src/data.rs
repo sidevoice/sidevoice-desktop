@@ -1352,6 +1352,26 @@ fn remove_known_with_hook(
             }
             return Err("changed-path");
         }
+        let named_parent = open_absolute_dir(path.parent().ok_or("unsafe-path")?).map_err(|_| "changed-path")?;
+        let mut held_parent: libc::stat = unsafe { std::mem::zeroed() };
+        let mut current_parent: libc::stat = unsafe { std::mem::zeroed() };
+        if unsafe { libc::fstat(source_parent.as_raw_fd(), &mut held_parent) } != 0
+            || unsafe { libc::fstat(named_parent.as_raw_fd(), &mut current_parent) } != 0
+            || held_parent.st_dev != current_parent.st_dev
+            || held_parent.st_ino != current_parent.st_ino
+        {
+            return Err("changed-path");
+        }
+        let named_claim = open_absolute_dir(&claim_path).map_err(|_| "changed-path")?;
+        let mut held_claim: libc::stat = unsafe { std::mem::zeroed() };
+        let mut current_claim: libc::stat = unsafe { std::mem::zeroed() };
+        if unsafe { libc::fstat(claim.as_raw_fd(), &mut held_claim) } != 0
+            || unsafe { libc::fstat(named_claim.as_raw_fd(), &mut current_claim) } != 0
+            || held_claim.st_dev != current_claim.st_dev
+            || held_claim.st_ino != current_claim.st_ino
+        {
+            return Err("changed-path");
+        }
         guarded_tree(&claimed, home, true, false, probe)?;
     }
     // An empty claim area has no data to retain between resets.
@@ -1664,6 +1684,26 @@ mod tests {
         assert_eq!(result, Err("changed-path"));
         assert_eq!(fs::read(moved.join("sentinel")).unwrap(), b"unrelated");
         assert!(!target.exists() || fs::symlink_metadata(&target).unwrap().file_type().is_symlink());
+    }
+
+    #[test]
+    fn cleanup_refuses_parent_moved_at_claim_boundary_before_traversal() {
+        let home = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(home.path()).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let outside = fs::canonicalize(outside.path()).unwrap();
+        let parent = home.join("Library/Caches");
+        let target = parent.join("dev.sidevoice.desktop");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("sentinel"), b"unrelated").unwrap();
+        let moved_parent = outside.join("moved-caches");
+        let result = remove_known_with_hook(&target, &home, &mount_identity, &|| {
+            fs::rename(&parent, &moved_parent).unwrap();
+            std::os::unix::fs::symlink(&moved_parent, &parent).unwrap();
+        });
+        assert_eq!(result, Err("changed-path"));
+        let claimed = home.join("Library/Application Support/dev.sidevoice.desktop-reset-claim/cache/sentinel");
+        assert_eq!(fs::read(claimed).unwrap(), b"unrelated");
     }
 
     #[test]
