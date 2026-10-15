@@ -219,6 +219,10 @@ pub async fn data_delete_all(app: AppHandle, webview: Webview) -> Answer {
             state.resetting.store(false, Ordering::SeqCst);
             return Err(refused("reset.busy"));
         }
+        if let Err(refusal) = require_confirmation(native_reset_confirmation(&app).await) {
+            state.resetting.store(false, Ordering::SeqCst);
+            return Err(refusal);
+        }
         let app_for_work = app.clone();
         let answer = tauri::async_runtime::spawn_blocking(move || begin_reset(&app_for_work))
             .await
@@ -228,6 +232,39 @@ pub async fn data_delete_all(app: AppHandle, webview: Webview) -> Answer {
         }
         answer
     }
+}
+
+#[cfg(target_os = "macos")]
+fn require_confirmation(accepted: bool) -> Result<(), Value> {
+    accepted.then_some(()).ok_or_else(|| refused("reset.cancelled"))
+}
+
+#[cfg(target_os = "macos")]
+async fn native_reset_confirmation(app: &AppHandle) -> bool {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    if app.run_on_main_thread(move || {
+        use objc2::{class, msg_send, runtime::AnyObject};
+        use objc2_foundation::NSString;
+        // NSAlert's first button is the default. The destructive button is deliberately second.
+        let confirmed = unsafe {
+            let alert: *mut AnyObject = msg_send![class!(NSAlert), new];
+            if alert.is_null() { false } else {
+                let title = NSString::from_str("Delete all Sidevoice data?");
+                let detail = NSString::from_str("This uninstalls the connector and deletes local Sidevoice data, models and saved keys. Remote machines and backups remain. This cannot be undone.");
+                let cancel = NSString::from_str("Cancel");
+                let delete = NSString::from_str("Delete all Sidevoice data");
+                let _: () = msg_send![alert, setMessageText: &*title];
+                let _: () = msg_send![alert, setInformativeText: &*detail];
+                let _: *mut AnyObject = msg_send![alert, addButtonWithTitle: &*cancel];
+                let _: *mut AnyObject = msg_send![alert, addButtonWithTitle: &*delete];
+                let answer: isize = msg_send![alert, runModal];
+                let _: () = msg_send![alert, release];
+                answer == 1001 // NSAlertSecondButtonReturn
+            }
+        };
+        let _ = sender.send(confirmed);
+    }).is_err() { return false }
+    tauri::async_runtime::spawn_blocking(move || receiver.recv().unwrap_or(false)).await.unwrap_or(false)
 }
 
 #[cfg(target_os = "macos")]
@@ -247,8 +284,8 @@ fn begin_reset(app: &AppHandle) -> Answer {
             "removed",
         ),
         Err(_) if !dirs.install_record().exists() => {
-            // The local host must also agree that there is no managed installation.
-            if !crate::local_host::absent(app) {
+            // The observer's cached "absent" is not evidence: ask launchd and the process table now.
+            if !fresh_service_absent(&home) {
                 return Err(refused("reset.service-failed"));
             }
             (json!({"state": "absent", "agents": {}}), "absent")
@@ -287,6 +324,52 @@ fn begin_reset(app: &AppHandle) -> Answer {
     Ok(json!({"state": if failed.is_empty() { "needs-restart" } else { "partial" },
         "service": service_outcome,
         "agents": agents, "failed": failed, "pending": ["app-data", "models", "webview", "cache", "saved-state", "logs", "preferences"]}))
+}
+
+#[cfg(target_os = "macos")]
+fn fresh_service_absent(home: &Path) -> bool {
+    fresh_service_absent_with(
+        home,
+        |label| {
+            let target = format!("gui/{}/{label}", unsafe { libc::geteuid() });
+            let Ok(output) = Command::new("/bin/launchctl").args(["print", &target]).output() else { return false };
+            if output.status.success() {
+                return false;
+            }
+            let detail = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
+            output.status.code() == Some(113) || detail.contains("could not find service")
+        },
+        || {
+            let Ok(output) = Command::new("/bin/ps").args(["-axo", "comm="]).output() else { return false };
+            output.status.success()
+                && !String::from_utf8_lossy(&output.stdout).lines().any(|line| {
+                    matches!(
+                        Path::new(line.trim()).file_name().and_then(|name| name.to_str()),
+                        Some("sidevoice-core" | "sidevoice-connector")
+                    )
+                })
+        },
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn fresh_service_absent_with(
+    home: &Path,
+    launchd_absent: impl Fn(&str) -> bool,
+    processes_absent: impl Fn() -> bool,
+) -> bool {
+    if fs::canonicalize(home).ok().as_deref() != Some(home) {
+        return false;
+    }
+    for label in ["dev.sidevoice.core", "dev.sidevoice.connector"] {
+        if fs::symlink_metadata(home.join("Library/LaunchAgents").join(format!("{label}.plist"))).is_ok() {
+            return false;
+        }
+        if !launchd_absent(label) {
+            return false;
+        }
+    }
+    processes_absent()
 }
 
 #[cfg(target_os = "macos")]
@@ -865,6 +948,24 @@ mod tests {
     fn retained_agent_outcomes_are_reported() {
         let agents = json!({"claude": "removed", "codex": {"outcome": "foreign"}, "cursor": {"outcome": "failed"}});
         assert_eq!(retained_agents(&agents), ["codex", "cursor"]);
+    }
+
+    #[test]
+    fn direct_command_requires_native_confirmation() {
+        assert_eq!(require_confirmation(false), Err(refused("reset.cancelled")));
+        assert_eq!(require_confirmation(true), Ok(()));
+    }
+
+    #[test]
+    fn missing_install_record_requires_fresh_launchd_and_process_absence() {
+        let home = tempfile::tempdir().unwrap();
+        let home = fs::canonicalize(home.path()).unwrap();
+        assert!(!fresh_service_absent_with(&home, |_| false, || true));
+        assert!(!fresh_service_absent_with(&home, |_| true, || false));
+        assert!(fresh_service_absent_with(&home, |_| true, || true));
+        fs::create_dir_all(home.join("Library/LaunchAgents")).unwrap();
+        fs::write(home.join("Library/LaunchAgents/dev.sidevoice.core.plist"), b"orphan").unwrap();
+        assert!(!fresh_service_absent_with(&home, |_| true, || true));
     }
 
     #[test]

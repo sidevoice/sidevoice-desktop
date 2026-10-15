@@ -47,7 +47,9 @@ The bundled room page alone receives `host.data`. Its `pairings.read()` resolves
 Application Support directory. Local-host pairing is derived from the verified socket and is never stored
 there. Neither call accepts a path. Browser pages keep their own browser storage.
 
-`deleteAll()` is the confirmed Settings › Advanced action. It refuses a running call, service install or
+`deleteAll()` is the confirmed Settings › Advanced action. Native also displays an OS-owned confirmation
+with Cancel as its default button on every invocation; cancelling rejects `{key: "reset.cancelled"}` before
+any uninstall or deletion. A room script calling the bridge directly cannot bypass that confirmation. It refuses a running call, service install or
 model download with `{key: "reset.busy"}`, and checks the current room window and bundled origin again in
 native code. It runs the **installed connector's top-level** `uninstall --json` from its verified
 `install.json` command; `localHost.serviceUninstall()` is a different, narrower service-manager action.
@@ -56,7 +58,9 @@ Sidevoice's provider keys and starts a helper from the app executable. The helpe
 exit and for its observed WebKit children to exit before removing its exact Application Support,
 shared-model, WebKit, cache, saved-state and log paths and its `defaults` domain. A WebKit child that
 does not exit leaves a partial result and its storage in place. Paths are derived natively and
-symlinks are refused. No page-supplied path is deleted.
+symlinks and mount boundaries are refused. Connector data and release roots must be the exact default
+Sidevoice roots; unsafe environment overrides or install records refuse before the installed uninstaller runs.
+No page-supplied path is deleted.
 
 `deleteAll()` resolves `{state: "needs-restart"|"partial", service: "removed"|"absent", agents,
 failed: {step, key, agent?}[], pending}` after the helper starts; this is **not** final deletion success. `partial`
