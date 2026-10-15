@@ -416,6 +416,7 @@
       subscribe: listeners.subscribe,
       check: () => call("updater", { action: "check" }),
       download: () => call("updater", { action: "download" }),
+      cancel: () => call("updater", { action: "cancel" }).then(() => undefined),
       restart: () => call("updater", { action: "restart" }).then(() => undefined),
     };
     return { host: Object.freeze(host), changed: listeners.tell };

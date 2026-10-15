@@ -9,13 +9,16 @@ use tauri_plugin_updater::{Update, UpdaterExt};
 
 use crate::AppState;
 
-/// One lock over the status and its update; `installing`: an install under way, which quitting waits for.
+/// One lock over the status and its update; `installing`: an install under way, which quitting waits for; `task`: the
+/// download running, which `cancel` aborts; `cancelled`: the version the person stopped, kept for this run of the app.
 #[derive(Default)]
 struct Updates {
     status: Status,
     update: Option<Update>,
     bytes: Option<Vec<u8>>,
     installing: bool,
+    task: Option<tauri::async_runtime::JoinHandle<()>>,
+    cancelled: core::Cancelled,
 }
 
 /// The channel this build was built for (build.rs): `release`, `nightly` or `dev`.
@@ -103,36 +106,65 @@ async fn check(app: &AppHandle) {
         }
     });
     if current_mode(app) == Mode::Automatic {
-        download(app);
+        download(app, false);
     }
 }
 
-fn download(app: &AppHandle) {
+/// Starts downloading the update known. `asked`: the person asked (`download`), which also lifts a cancel; otherwise
+/// (automatic mode) a version the person cancelled is left alone.
+fn download(app: &AppHandle, asked: bool) {
     let Some(permit) = crate::data::admit(app) else { return };
-    let Some(mut update) = with(app, |u| {
-        let update = u.update.clone().filter(|_| u.status.state == State::Available)?;
+    with(app, |u| {
+        let mut update = u.update.clone().filter(|_| u.status.state == State::Available)?;
+        if !u.cancelled.start(&update.version, asked) {
+            return None;
+        }
         u.status = Status::new(State::Downloading, &update.version);
-        Some(update)
-    }) else {
-        return;
+        update.timeout = Some(Duration::from_secs(60 * 60));
+        // Spawned under the lock, so `cancel` finds the task whenever the status says downloading.
+        u.task = Some(tauri::async_runtime::spawn(download_task(app.clone(), update, permit)));
+        Some(())
+    });
+}
+
+/// The download itself, in memory (the plugin hands back the bytes; there is no partial file). A result that comes
+/// after a cancel finds the state no longer downloading and is dropped.
+async fn download_task(app: AppHandle, update: Update, _permit: crate::data::Permit) {
+    let mut received = 0;
+    let progress = |chunk: usize, total: Option<u64>| {
+        received += chunk as u64;
+        with(&app, |u| {
+            if u.status.state == State::Downloading {
+                u.status.progress = core::progress(received, total);
+            }
+        });
     };
-    update.timeout = Some(Duration::from_secs(60 * 60));
-    let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        let _permit = permit;
-        let mut received = 0;
-        let progress = |chunk: usize, total: Option<u64>| {
-            received += chunk as u64;
-            with(&app, |u| u.status.progress = core::progress(received, total));
-        };
-        let downloaded = update.download(progress, || {}).await;
-        with(&app, |u| match downloaded {
+    let downloaded = update.download(progress, || {}).await;
+    with(&app, |u| {
+        if u.status.state != State::Downloading {
+            return;
+        }
+        u.task = None;
+        match downloaded {
             Ok(bytes) => (u.status, u.bytes) = (Status::new(State::Ready, &update.version), Some(bytes)),
             Err(e) => {
                 crate::debug(&format!("updater download failed: {e}"));
                 u.status = Status::new(State::Available, &update.version).failed(ErrorCode::DownloadFailed);
             }
-        });
+        }
+    });
+}
+
+/// Stops the download running, dropping what it had received; the update stays known, `available`. With none running,
+/// nothing happens.
+fn cancel(app: &AppHandle) {
+    with(app, |u| {
+        if let Some(status) = u.cancelled.cancel(&u.status) {
+            if let Some(task) = u.task.take() {
+                task.abort();
+            }
+            u.status = status;
+        }
     });
 }
 
@@ -181,7 +213,7 @@ fn unavailable() -> Value {
     json!({ "key": "update_unavailable", "message": "There is no update to install." })
 }
 
-/// `host.updater`'s one command: `action` is settings, set-mode (with `mode`), status, check, download or restart.
+/// `host.updater`'s one command: `action` is settings, set-mode (with `mode`), status, check, download, cancel or restart.
 #[tauri::command]
 pub async fn updater(app: AppHandle, webview: Webview, action: String, mode: Option<Mode>) -> Result<Value, Value> {
     crate::room_page(&app, &webview).map_err(|why| json!({ "key": "bad_request", "message": why }))?;
@@ -201,8 +233,12 @@ pub async fn updater(app: AppHandle, webview: Webview, action: String, mode: Opt
             Ok(json!(status(&app)))
         }
         ("download", _) => {
-            download(&app);
+            download(&app, true);
             Some(status(&app)).filter(|s| s.state != State::Idle).map(|s| json!(s)).ok_or_else(unavailable)
+        }
+        ("cancel", _) => {
+            cancel(&app);
+            Ok(Value::Null)
         }
         ("restart", _) if status(&app).state == State::Ready => {
             tauri::async_runtime::spawn_blocking(move || install(&app, true));
@@ -217,7 +253,7 @@ pub async fn updater(app: AppHandle, webview: Webview, action: String, mode: Opt
 fn set_mode(app: &AppHandle, mode: Mode) -> Result<(), Value> {
     crate::change_settings(app, |s| s.update_mode = mode).map_err(|e| crate::refusal("internal", e))?;
     if mode == Mode::Automatic {
-        download(app);
+        download(app, false);
     }
     Ok(())
 }

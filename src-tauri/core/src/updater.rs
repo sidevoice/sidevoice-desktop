@@ -60,6 +60,30 @@ impl Status {
     }
 }
 
+/// The version the person stopped downloading, kept for this run of the app (not with the settings: a new launch
+/// downloads it again, automatic mode included).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Cancelled(Option<String>);
+
+impl Cancelled {
+    /// `host.updater.cancel()`: the status a download in progress returns to (`available`, the update still known),
+    /// remembering its version; none when nothing is downloading.
+    pub fn cancel(&mut self, status: &Status) -> Option<Status> {
+        let version = status.version.as_deref().filter(|_| status.state == State::Downloading)?;
+        self.0 = Some(version.to_owned());
+        Some(Status::new(State::Available, version))
+    }
+
+    /// Whether `version` may start downloading: when the person `asked` (which lifts the cancel) or it is not the one
+    /// cancelled; a newer version always is.
+    pub fn start(&mut self, version: &str, asked: bool) -> bool {
+        if asked {
+            self.0 = None;
+        }
+        self.0.as_deref() != Some(version)
+    }
+}
+
 /// The releases' feed: `latest` is the newest release that is neither a draft nor a pre-release (never a `-rc.N`, never
 /// the nightly).
 const RELEASES_FEED: &str = "https://github.com/sidevoice/sidevoice-desktop/releases/latest/download/latest.json";
@@ -124,6 +148,29 @@ mod tests {
             serde_json::to_value(ErrorCode::DownloadFailed).unwrap(),
             json!({ "code": "update-download-failed" })
         );
+    }
+
+    #[test]
+    fn cancelling_returns_a_download_to_available_and_nothing_else() {
+        let mut cancelled = Cancelled::default();
+        let downloading = Status { progress: progress(42, Some(100)), ..Status::new(State::Downloading, "0.5.0") };
+        assert_eq!(cancelled.cancel(&downloading), Some(Status::new(State::Available, "0.5.0")));
+        for status in [Status::default(), Status::new(State::Available, "0.5.0"), Status::new(State::Ready, "0.5.0")] {
+            assert_eq!(Cancelled::default().cancel(&status), None, "{status:?}");
+        }
+        assert_eq!(cancelled.cancel(&Status::new(State::Available, "0.5.0")), None, "a second cancel is nothing");
+    }
+
+    #[test]
+    fn a_cancelled_version_is_not_downloaded_again_by_itself_until_asked_or_a_newer_one_appears() {
+        let mut cancelled = Cancelled::default();
+        assert!(cancelled.start("0.5.0", false), "nothing cancelled yet");
+        cancelled.cancel(&Status::new(State::Downloading, "0.5.0"));
+        assert!(!cancelled.start("0.5.0", false), "automatic mode leaves it");
+        assert!(!cancelled.start("0.5.0", false), "at every later check");
+        assert!(cancelled.start("0.5.1", false), "a newer version is downloaded");
+        assert!(cancelled.start("0.5.0", true), "the person asks");
+        assert!(cancelled.start("0.5.0", false), "and the cancel is lifted");
     }
 
     #[test]
