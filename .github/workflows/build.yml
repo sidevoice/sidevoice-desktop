@@ -16,6 +16,9 @@ name: build
 # signed (RELEASING.md).
 # Every step is a `cargo xtask` command (xtask/src/main.rs), which runs the same on a laptop: this file sets up the
 # machine, wires the secrets into the environment and chooses which steps run.
+# The Rust build caches, sherpa-onnx's libraries and the real call's models are written only by a push to main (a
+# release too: release-please runs on one); a pull request or a manual run only restores them (RELEASING.md → "CI
+# caches").
 on:
   push:
     branches: [main]
@@ -212,7 +215,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.release-tag }}
-      # The Rust build cache it shares with `macos`; this job builds all of it, so this job writes it.
+      # The Rust build cache it shares with `macos`; this job builds all of it, so this job writes it (on main only).
       - uses: ./.github/actions/setup-rust
         with:
           cache: macos
@@ -254,8 +257,10 @@ jobs:
       - uses: ./.github/actions/setup-rust
         id: rust
       # The models the call downloads, in the engine's storage, by the engine's commit (its catalogue names each
-      # model's files and their digests) and by the test (which models it picks). Saved only after a passing run.
-      - uses: actions/cache@v4
+      # model's files and their digests) and by the test (which models it picks). Saved only after a passing run, and
+      # only on a push to main (below).
+      - uses: actions/cache/restore@v4
+        id: models
         with:
           path: ${{ runner.temp }}/real-call-models
           key: real-call-models-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.engine-rev }}-${{ hashFiles('src-tauri/src/voice/models/tests.rs') }}
@@ -264,6 +269,11 @@ jobs:
         env:
           SIDEVOICE_REAL_CALL_MODELS: ${{ runner.temp }}/real-call-models
         run: cargo xtask macos voice-models
+      - if: steps.models.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/real-call-models
+          key: ${{ steps.models.outputs.cache-primary-key }}
 
   linux:
     name: Linux (.deb, .AppImage)

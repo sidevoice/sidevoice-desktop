@@ -36,7 +36,7 @@ secrets into the environment of the steps that need them, choose which steps run
   `check-app [--signed]`, `first-open`, `dmg [--signed]`, `sign-dmg`, `checksums`, `forget-secrets`, `dmg-screens`.
   The only job with the Apple signing secrets.
 - `macos-native` job, beside it: on the CI-only probe build, `probe-app`, `local-host`, `probe`, `card`. It shares
-  the Rust build cache with `macos` (the same dependencies) and is the one that writes it.
+  the Rust build cache with `macos` (the same dependencies) and is the one that writes it (CI caches, below).
 - `macos-call` job, beside both: `voice-models`, with the models it downloads cached by the engine's commit
   (`SIDEVOICE_REAL_CALL_MODELS`).
 - `publish-nightly` and `publish-release` jobs (the same steps): `cargo xtask publish assets release TAG` or
@@ -51,6 +51,23 @@ pairing, local core or models; `probe` expects no provider key in the login keyc
 probe builds ignore any `APPLE_*` variables in the environment. Every build is a `dev` build unless `--channel`
 says otherwise (Channels, below), and only a `release` or `nightly` build reads the updater's key. Ctrl-C unwinds
 cleanly; if a signing step was killed outright, `cargo xtask macos forget-secrets` removes its keychain and key files.
+
+## CI caches
+
+The repository's Actions cache holds 10 GB, and one build's caches take about 4.5 GB. They are written only by
+a push to `main`: the nightly's run, and a release's (release-please starts it from a push to `main` too). So they
+belong to `main`, which every pull request reads. A pull request or a manual run, on any branch, only restores them:
+writing its own would evict `main`'s and leave the next nightly to build from cold.
+
+- The Rust build caches (`.github/actions/setup-rust`: `Swatinem/rust-cache` with `save-if`), one per job and keyed by
+  `Cargo.lock`, except the one `macos` and `macos-native` share (`cache: macos`), which only `macos-native` writes
+  (`save-cache: 'false'` on `macos`): it builds all of it. A pull request that changes `Cargo.lock` restores
+  `main`'s closest one and builds what changed.
+- sherpa-onnx's libraries (`setup-rust`, by the engine's commit) and the real call's models (`macos-call`, by the
+  engine's commit and the test): `actions/cache/restore`, then `actions/cache/save` in a step that runs only on a
+  push to `main`; the models' after the call passed.
+- `publish-*`'s xtask cache: those jobs run only from a push to `main`.
+- The npm and web-interface caches (a few tens of MB) are written by whichever run misses them.
 
 ## Channels
 

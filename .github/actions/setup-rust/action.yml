@@ -5,6 +5,8 @@ description: >-
   static libraries that sidevoice-engine links with `cargo xtask sherpa-libs` (that engine's own command, at the
   commit src-tauri/Cargo.lock pins): checked against the digests it pins, kept outside target/ and linked through
   SHERPA_ONNX_LIB_DIR (which the command exports), so no build script downloads anything unchecked.
+  Both caches are written only by a push to main (the nightly, and a release: release-please runs on one); a pull
+  request or a manual run only restores them, so its caches never evict main's from the repository's 10 GB.
 
 inputs:
   cache:
@@ -15,8 +17,8 @@ inputs:
     default: ''
   save-cache:
     description: >-
-      Whether this job writes the build cache when it found none for this Cargo.lock: 'false' for a job that only reads
-      a shared cache another job (the one that builds all of it) writes.
+      Whether this job writes the build cache when it found none for this Cargo.lock, on a push to main (no other run
+      writes it): 'false' for a job that only reads a shared cache another job (the one that builds all of it) writes.
     required: false
     default: 'true'
 
@@ -46,7 +48,7 @@ runs:
           src-tauri
           xtask
         shared-key: ${{ inputs.cache }}
-        save-if: ${{ inputs.save-cache }}
+        save-if: ${{ inputs.save-cache == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     - name: The engine at the commit Cargo.lock pins
       id: engine
       shell: bash
@@ -54,7 +56,8 @@ runs:
         set -euo pipefail
         REV=$(cargo xtask engine-rev)
         echo "rev=$REV" >> "$GITHUB_OUTPUT"
-    - uses: actions/cache@v4
+    - uses: actions/cache/restore@v4
+      id: sherpa
       with:
         path: ~/.cache/sidevoice-engine/sherpa-onnx
         # By the engine's commit: its xtask/sherpa-onnx-libs.json is outside the workspace, where hashFiles cannot see.
@@ -62,3 +65,9 @@ runs:
     - name: sherpa-onnx's libraries (cargo xtask sherpa-libs)
       shell: bash
       run: cargo xtask sherpa-libs
+    # What the step above fetched and checked against the engine's digests; on a push to main only.
+    - if: steps.sherpa.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: actions/cache/save@v4
+      with:
+        path: ~/.cache/sidevoice-engine/sherpa-onnx
+        key: ${{ steps.sherpa.outputs.cache-primary-key }}
