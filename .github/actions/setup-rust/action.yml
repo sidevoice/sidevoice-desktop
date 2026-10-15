@@ -6,6 +6,25 @@ description: >-
   commit src-tauri/Cargo.lock pins): checked against the digests it pins, kept outside target/ and linked through
   SHERPA_ONNX_LIB_DIR (which the command exports), so no build script downloads anything unchecked.
 
+inputs:
+  cache:
+    description: >-
+      The Rust build cache, by name: one that several jobs building the same dependencies share. Empty (the default):
+      this job's own.
+    required: false
+    default: ''
+  save-cache:
+    description: >-
+      Whether this job writes the build cache when it found none for this Cargo.lock: 'false' for a job that only reads
+      a shared cache another job (the one that builds all of it) writes.
+    required: false
+    default: 'true'
+
+outputs:
+  engine-rev:
+    description: The sidevoice-engine commit src-tauri/Cargo.lock pins (`cargo xtask engine-rev`).
+    value: ${{ steps.engine.outputs.rev }}
+
 runs:
   using: composite
   steps:
@@ -26,6 +45,8 @@ runs:
         workspaces: |
           src-tauri
           xtask
+        shared-key: ${{ inputs.cache }}
+        save-if: ${{ inputs.save-cache }}
     - name: The engine at the commit Cargo.lock pins
       id: engine
       shell: bash

@@ -22,7 +22,9 @@
 //! - `sherpa-libs`: sherpa-onnx's libraries, checked, by that engine's own `cargo xtask sherpa-libs`; prints their
 //!   directory (`export SHERPA_ONNX_LIB_DIR="$(cargo xtask sherpa-libs)"`) and, on a runner, exports it.
 //!
-//! The macOS app and .dmg (Apple Silicon; the `macos` job), in the order CI runs them (macos.rs, probe.rs):
+//! The macOS app and .dmg (Apple Silicon), in the order CI runs them (macos.rs, probe.rs): `app` to `dmg-screens` in
+//! the `macos` job; beside it, `probe-app`, `local-host`, `probe` and `card` in `macos-native`, and `voice-models` in
+//! `macos-call`:
 //!
 //! - `macos app [--signed] [--channel C]`: the app bundle, ad-hoc signed; with `--signed`, signed with the Developer
 //!   ID, notarized and stapled by Tauri's bundler. Reads `APPLE_SIGNING_IDENTITY`, `APPLE_API_KEY`,
@@ -47,7 +49,8 @@
 //! - `macos probe-app`: the app built with the `probe` feature (CI only, never shipped) over the release app.
 //! - `macos local-host`: on the probe app, the local host from the bundled page: pairing, the proxy, its refusals.
 //! - `macos probe`: on the probe app, the probe page: origin, loopback, the native engine, the voice call, the headset.
-//! - `macos voice-models`: a call on the engine's real models through the app's adapter (the ignored tests).
+//! - `macos voice-models`: a call on the engine's real models through the app's adapter (the ignored tests). Reads
+//!   `SIDEVOICE_REAL_CALL_MODELS`: a folder to keep the models in between runs (CI caches it); unset, a scratch one.
 //! - `macos card`: on the probe app, the call controls card over a full-screen editor (screenshots into card-shots/).
 //!
 //! The commands that start the app (`first-open`, `probe`, `card`) run it with the runner's home on a
