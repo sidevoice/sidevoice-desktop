@@ -35,7 +35,7 @@ use sidevoice_voice::{
     StartOptions, StopReason, Take, VoiceCall, VoiceConfig, VoiceEvent, VoiceModels,
 };
 use tauri::{AppHandle, Manager, State, Webview};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 
 use crate::engine_ipc::EngineState;
 
@@ -49,7 +49,7 @@ pub struct VoiceState {
     /// What is being said, by the page's key for it, until it is done.
     sayings: Arc<Mutex<HashMap<String, SayCancel>>>,
     /// Native say ids in `agent-interrupted` become the bridge keys returned by `host.voice.say`.
-    native_keys: Arc<Mutex<HashMap<String, String>>>,
+    native_keys: Arc<Mutex<HashMap<String, (String, watch::Sender<bool>)>>>,
     /// Which microphone and speaker the call uses; the call has a clone.
     devices: NativeDevices,
     /// Whether the devices are watched for changes (from the first time the page asks for them).
@@ -253,7 +253,8 @@ pub async fn voice_say(
     let mut native_keys = state.native_keys.lock().unwrap();
     let mut saying = call.say(text, SayOptions { language });
     let native_id = saying.id().to_owned();
-    native_keys.insert(native_id.clone(), key.clone());
+    let (cut_sent, mut cut_forwarded) = watch::channel(false);
+    native_keys.insert(native_id.clone(), (key.clone(), cut_sent));
     state.sayings.lock().unwrap().insert(key.clone(), saying.canceller());
     drop(native_keys);
     let sayings = Arc::clone(&state.sayings);
@@ -264,6 +265,15 @@ pub async fn voice_say(
             let interrupted = matches!(event, SayEvent::Done { outcome: SayOutcome::HeardUpTo { reason: StopReason::BargeIn, .. } | SayOutcome::NotPlayed { reason: StopReason::BargeIn } });
             if done {
                 sayings.lock().unwrap().remove(&key);
+            }
+            if interrupted {
+                // The call emits the cut before this terminal step, but the two Rust streams have separate tasks.
+                // Keep the web's deduplication order even when the terminal receiver is scheduled first.
+                while !*cut_forwarded.borrow_and_update() {
+                    if cut_forwarded.changed().await.is_err() {
+                        break;
+                    }
+                }
             }
             to_page(&app, &json!({"type": "say", "data": {"key": key, "event": event}}));
             // The call emits `agent-interrupted` separately from the terminal say event. Keep this mapping until
@@ -438,7 +448,7 @@ fn forward(
     app: AppHandle,
     mut events: Events,
     lifecycle: Arc<Mutex<Lifecycle>>,
-    native_keys: Arc<Mutex<HashMap<String, String>>>,
+    native_keys: Arc<Mutex<HashMap<String, (String, watch::Sender<bool>)>>>,
 ) {
     tauri::async_runtime::spawn(async move {
         while let Some(event) = events.next().await {
@@ -462,17 +472,61 @@ fn forward(
             if !matches!(event, VoiceEvent::Level(_) | VoiceEvent::PlaybackLevel(_)) {
                 crate::debug(&format!("voice event {}", serde_json::to_string(&event).unwrap_or_default()));
             }
-            if let Ok(mut value) = serde_json::to_value(&event) {
-                if let VoiceEvent::AgentInterrupted(cut) = &event {
-                    let Some(key) = native_keys.lock().unwrap().remove(&cut.utterance_id) else {
-                        continue;
-                    };
-                    value["data"]["utterance_id"] = json!(key);
-                }
+            if let Some((value, cut_sent)) = event_for_page(&event, &native_keys) {
                 to_page(&app, &value);
+                if let Some(sent) = cut_sent {
+                    sent.send_replace(true);
+                }
             }
         }
     });
+}
+
+/// Only the native say id changes: the page knows the bridge key returned by its `say` handle.
+fn event_for_page(
+    event: &VoiceEvent,
+    native_keys: &Mutex<HashMap<String, (String, watch::Sender<bool>)>>,
+) -> Option<(Value, Option<watch::Sender<bool>>)> {
+    let mut value = serde_json::to_value(event).ok()?;
+    let mut cut_sent = None;
+    if let VoiceEvent::AgentInterrupted(cut) = event {
+        let (key, sent) = native_keys.lock().unwrap().remove(&cut.utterance_id)?;
+        value["data"]["utterance_id"] = json!(key);
+        cut_sent = Some(sent);
+    }
+    Some((value, cut_sent))
+}
+
+#[cfg(test)]
+mod turns_tests {
+    use super::*;
+    use sidevoice_voice::AgentInterrupted;
+
+    #[test]
+    fn native_interruption_uses_the_page_handle_and_keeps_scalar_extent_and_zero() {
+        let (first, _) = watch::channel(false);
+        let (second, _) = watch::channel(false);
+        let keys = Mutex::new(HashMap::from([
+            ("native-a".into(), ("say-1".into(), first)),
+            ("native-b".into(), ("say-2".into(), second)),
+        ]));
+        for (native, key, heard, played) in [
+            ("native-a", "say-1", 3, true),
+            ("native-b", "say-2", 0, false),
+        ] {
+            let event = VoiceEvent::AgentInterrupted(AgentInterrupted {
+                utterance_id: native.into(),
+                heard_until: heard,
+                played,
+            });
+            let (value, sent) = event_for_page(&event, &keys).unwrap();
+            assert_eq!(value, json!({"type": "agent-interrupted", "data": {
+                "utterance_id": key, "heard_until": heard, "played": played
+            }}));
+            assert!(sent.is_some());
+            assert!(event_for_page(&event, &keys).is_none(), "one report per native say");
+        }
+    }
 }
 
 /// A take as the page gets it (core `voice::take`).

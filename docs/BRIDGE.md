@@ -371,7 +371,7 @@ itself over `@sidevoice/voice` in the webview, the room window granting it the m
 ### The seam
 
 `window.__sidevoiceDesktop.host.voice` implements `VoiceHost`, the page's voice seam, defined once in sidevoice-voice:
-[`js/voice-host.d.ts`](https://github.com/sidevoice/sidevoice-voice/blob/v0.4.0/js/voice-host.d.ts) in
+[`js/voice-host.d.ts`](https://github.com/sidevoice/sidevoice-voice/blob/b898c55cdffbbf5fe603e2e088e530163825ce06/js/voice-host.d.ts) in
 `@sidevoice/voice` (sidevoice/sidevoice-voice#6), with the types it carries (`VoiceSettings`, `VoiceHostError`,
 and `js/voice-events.d.ts`'s `VoiceTurnEvent`, `VoiceCallState`, `VoiceSaying`, `VoiceSayOutcome`, `VoiceTake`) and what every
 implementation promises
@@ -384,7 +384,9 @@ What is this app's own:
 
 - `setSettings` takes the web's settings (sidevoice-web `voice-settings.js`, `DeviceVoiceSettings`), each slot a model
   of a catalogue: `stt: {catalog, model, language, build?}`, `tts: {catalog, model, voice, speed, build?}`, with
-  `patience`, `end_of_turn`, `idle_unload_minutes` and `turn_model?` (core `voice.rs`; any other key is refused).
+  `patience`, `end_of_turn`, `idle_unload_minutes`, `barge_in_min_speech?` and `turn_model?` (core `voice.rs`;
+  any other key is refused). `barge_in_min_speech` is a finite number of seconds greater than zero and at most 60;
+  when absent, native voice uses 1.0 s. It changes the active call configuration without reloading models.
   A slot is loaded as `engine.catalog(catalog).load(model)`, which picks the build, or, for a local model with a
   `build` (Settings, "How it runs"; an empty one names none), as that build (`engine.load(model, build)`): once the
   model is found and runs here (else `model-unknown`, `model-unfit`), the build must be one of its builds
@@ -408,8 +410,8 @@ What is this app's own:
   loaded: the call then goes on as it was, on the models it had.
 - `start` rejects `{key: "voice_failed", code, message}` with the call's code, `{key: "voice_settings_missing", code:
   "settings-missing"}` before any settings, and `{key: "voice_failed", code: "stopped"}` when `stop` came first.
-- The seam has fifteen calls here: `setSettings`, `start`, `stop`, `say`, `mute`, `cancelInput`, `onTurn`, `onState`,
-  `onLevel`, `onPlaybackLevel`, `onError`, `onTake`, `audioDevices`, `setAudioDevices`, `onAudioDevices`. The
+- The seam has sixteen calls here: `setSettings`, `start`, `stop`, `say`, `mute`, `cancelInput`, `onTurn`, `onState`,
+  `onLevel`, `onPlaybackLevel`, `onAgentInterrupted`, `onError`, `onTake`, `audioDevices`, `setAudioDevices`, `onAudioDevices`. The
   catalogues and provider keys are `host.engine`'s (above).
 - `onPlaybackLevel(listener)` receives a bare number from 0 to 1, just as `onLevel` does for the microphone: RMS of
   the samples actually rendered by the speaker, after fade and gain, smoothed on the voice detector's windows
@@ -441,13 +443,34 @@ What is this app's own:
   the room window (`capabilities/room.json`); each re-checks that the caller is the current room window on the app's
   own page.
 - App → page: `window.__sidevoiceDesktop.voiceEvent(event)` (`webview.eval`), each sidevoice-voice `VoiceEvent` as
-  JSON, `{type: "turn" | "state" | "level" | "playback-level" | "error" | "take", data}` (`playback-level`'s `data` a
+  JSON, `{type: "turn" | "state" | "level" | "playback-level" | "agent-interrupted" | "error" | "take", data}` (`playback-level`'s `data` a
   bare number; a take's `samples` the base64 of its 32-bit little-endian floats, core `voice::take`, which the bridge
   turns back into a `Float32Array`), and the devices when they change, `{type: "devices", data}`, which the bridge
   hands to its listeners; and each step
   of something said, `{type: "say", data: {key, event}}` (`key` the bridge's for the handle `say` answered at once;
   `event` sidevoice-voice's `SayEvent`, the last `done` with the outcome), which it hands to that handle. A handle's
   `cancel` goes behind its `voice_say`, so it never overtakes it.
+- The turn's JSON is `{type:"turn",data:{phase:"started",turn_id,started_at}}`, then exactly one
+  `{phase:"finished",turn_id,text,language?,started_at,ended_at,merged,timings}` or
+  `{phase:"cancelled",turn_id,merged}`. A confirmed spoken turn can also send
+  `{type:"agent-interrupted",data:{utterance_id,heard_until,played}}`: `utterance_id` is the `say` handle's bridge key,
+  mapped from the native call's id; `heard_until` counts Unicode scalar values and is zero with `played:false` for a
+  queued reply that never sounded. It reaches `onAgentInterrupted` once for each displaced say. The `say` stream's
+  terminal event still resolves that handle's `outcome`: `{status:"heard"}`,
+  `{status:"heard-up-to",heard_chars,reason:{reason:"barge-in"|"cancelled"|"stopped"}}`, or
+  `{status:"not-played",reason:{reason:"barge-in"|"cancelled"|"stopped"}}`; failure's nested reason is
+  `{reason:"failed",code}`. `heard_chars` is also a Unicode scalar count, with zero retained when playback began
+  but no chunk completed. The bridge passes these outcomes unchanged. Events in each native event stream and each
+  say stream keep their order. For barge-in, the native bridge forwards `agent-interrupted` before that say's
+  terminal `done`, even when the two Rust receivers wake in the opposite order. The web room deduplicates them into
+  one playback report.
+- `voice_mute {muted:true}` feeds native voice silence and lets an open turn end under its normal turn rules. It
+  does not mute the speaker: playback level and say outcomes continue. Agents mute, voice off and focus changes are
+  web actions; the web cancels local playback when needed and reports the resulting outcome to core. Skip cancels
+  only the sounding say handle, lets its queued successor play, and tells core `user_skipped` through the web's
+  playback report. Neither skip nor mute creates an epoch. Core owns conversation IDs, eligibility, epochs,
+  history, receipts, notices and agent messages. The native speaker output remains the echo canceller's reference
+  when the output device changes.
 - Keys: `host.engine.setCredential` writes the macOS keychain (`src-tauri/src/keychain.rs`), and the engine reads it
   when a provider is listed, or its model loaded or called. `host.engine.testCredential` writes nothing: its key goes
   only to a trial engine of its own.

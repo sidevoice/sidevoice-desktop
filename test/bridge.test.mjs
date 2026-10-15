@@ -563,6 +563,76 @@ test("playback level forwards bare numbers and zero independently of microphone 
   assert.throws(() => api.host.voice.onPlaybackLevel(null), { name: "TypeError" });
 });
 
+test("T01/T04b: native cut ids reach the matching played and queued say handles with scalar extents", async () => {
+  const api = loadFactory()(voiceWindow().win, ORIGIN, "native", true, true);
+  const first = api.host.voice.say("😀reply one");
+  const second = api.host.voice.say("reply two");
+  const order = [];
+  const stop = api.host.voice.onAgentInterrupted((cut) => order.push(["cut", cut]));
+  first.onEvent((step) => order.push(["first", step]));
+  second.onEvent((step) => order.push(["second", step]));
+  const firstCut = { utterance_id: first.id, heard_until: 1, played: true };
+  const queuedCut = { utterance_id: second.id, heard_until: 0, played: false };
+  api.voiceEvent({ type: "agent-interrupted", data: firstCut });
+  api.voiceEvent({ type: "say", data: { key: first.id, event: { type: "done", outcome: { status: "heard-up-to", heard_chars: 1, reason: { reason: "barge-in" } } } } });
+  api.voiceEvent({ type: "agent-interrupted", data: queuedCut });
+  api.voiceEvent({ type: "say", data: { key: second.id, event: { type: "done", outcome: { status: "not-played", reason: { reason: "barge-in" } } } } });
+  assert.deepEqual(order.map(([kind]) => kind), ["cut", "first", "cut", "second"]);
+  assert.deepEqual(order.filter(([kind]) => kind === "cut").map(([, cut]) => cut), [firstCut, queuedCut]);
+  assert.deepEqual(await first.outcome, { status: "heard-up-to", heard_chars: 1, reason: { reason: "barge-in" } });
+  assert.deepEqual(await second.outcome, { status: "not-played", reason: { reason: "barge-in" } });
+  stop();
+  api.voiceEvent({ type: "agent-interrupted", data: firstCut });
+  assert.equal(order.length, 4);
+});
+
+test("T04a/T12: cancelling a sounding reply sends only its key and preserves its queued successor", async () => {
+  const { win, calls } = voiceWindow();
+  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const first = api.host.voice.say("first");
+  const next = api.host.voice.say("next");
+  api.voiceEvent({ type: "say", data: { key: first.id, event: { type: "playing" } } });
+  first.cancel();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "voice_say" || cmd === "voice_cancel_say").map(([cmd, args]) => [cmd, args.key]), [
+    ["voice_say", first.id], ["voice_say", next.id], ["voice_cancel_say", first.id],
+  ]);
+  api.voiceEvent({ type: "say", data: { key: first.id, event: { type: "done", outcome: { status: "heard-up-to", heard_chars: 2, reason: { reason: "cancelled" } } } } });
+  api.voiceEvent({ type: "say", data: { key: next.id, event: { type: "playing" } } });
+  api.voiceEvent({ type: "say", data: { key: next.id, event: { type: "done", outcome: { status: "heard" } } } });
+  assert.equal((await first.outcome).heard_chars, 2);
+  assert.deepEqual(await next.outcome, { status: "heard" });
+});
+
+test("T02/T09b/T13: mute forwards silence semantics and preserves turn start, terminal and playback", async () => {
+  const { win, calls } = voiceWindow();
+  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const seen = [];
+  api.host.voice.onTurn((turn) => seen.push(turn));
+  api.host.voice.onPlaybackLevel((level) => seen.push(level));
+  api.voiceEvent({ type: "turn", data: { phase: "started", turn_id: "u1", started_at: 100 } });
+  await api.host.voice.mute(true);
+  api.voiceEvent({ type: "playback-level", data: 0.6 });
+  api.voiceEvent({ type: "turn", data: { phase: "finished", turn_id: "u1", text: "yes", started_at: 100, ended_at: 1200, merged: false } });
+  api.voiceEvent({ type: "turn", data: { phase: "started", turn_id: "u2", started_at: 1300 } });
+  api.voiceEvent({ type: "turn", data: { phase: "cancelled", turn_id: "u2", merged: true } });
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "voice_mute"), [["voice_mute", { muted: true }]]);
+  assert.deepEqual(seen.map((event) => event.phase || event), ["started", 0.6, "finished", "started", "cancelled"]);
+});
+
+test("T07: speaker events and output loss are forwarded without inventing a turn or replay", () => {
+  const api = loadFactory()(voiceWindow().win, ORIGIN, "native", true, true);
+  const turns = [];
+  const devices = [];
+  api.host.voice.onTurn((turn) => turns.push(turn));
+  api.host.voice.onAudioDevices((device) => devices.push(device));
+  api.voiceEvent({ type: "playback-level", data: 0.8 });
+  api.voiceEvent({ type: "devices", data: { inputs: [], outputs: [], input: null, output: null, outputSelectable: true, lost: { output: "old" } } });
+  api.voiceEvent({ type: "playback-level", data: 0 });
+  assert.deepEqual(turns, []);
+  assert.deepEqual(devices.map((device) => device.lost), [{ output: "old" }]);
+});
+
 test("the audio devices: listed, chosen by kind (null the default, a missing kind as it is), told when they change", async () => {
   const install = loadFactory();
   const devices = {

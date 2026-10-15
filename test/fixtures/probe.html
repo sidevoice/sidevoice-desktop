@@ -179,6 +179,7 @@ what the interface's own window offers — same origin, same permission rule —
     const errors = [];
     const takes = [];
     const stops = [voice.onState((s) => states.push(s.listening)), voice.onError((e) => errors.push(e.code)),
+      voice.onAgentInterrupted(() => {}),
       voice.onTake((t) => takes.push(t))];
     const catalogs = await window.__sidevoiceDesktop.host.engine.catalogs();
     const models = catalogs[0].models;
@@ -197,7 +198,7 @@ what the interface's own window offers — same origin, same permission rule —
     const turnModel = turns.length ? turns[turns.length - 1].id : "none";
     await voice.setSettings({ stt: { catalog: "local", model: "whisper-tiny", language: "es", build },
       tts: { catalog: "local", model: "kokoro-82m-v1.0", voice: "ef_dora", speed: 1 }, patience: "fast",
-      end_of_turn: "smart-turn", turn_model: turnModel, idle_unload_minutes: 10 });
+      end_of_turn: "smart-turn", turn_model: turnModel, idle_unload_minutes: 10, barge_in_min_speech: 0.8 });
     // The system's devices (a runner may list none) and an id it does not list, refused by key and code.
     const listed = await voice.audioDevices();
     const devices = listed.inputs.length + "/" + listed.outputs.length + "/" + listed.outputSelectable;

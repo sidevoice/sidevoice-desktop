@@ -92,7 +92,7 @@ fn barge_in_duration_reaches_the_native_voice_config_without_changing_model_choi
     let before = choose(&original, &catalogs(true)).unwrap();
     let after = choose(&changed, &catalogs(true)).unwrap();
     assert!(before.same_models(&after));
-    assert_eq!(after.config["barge_in_min_speech"], json!(0.8));
+    assert_eq!(after.config["barge_in_min_speech"], json!(0.8f32));
     assert!(before.config.get("barge_in_min_speech").is_none());
 }
 
