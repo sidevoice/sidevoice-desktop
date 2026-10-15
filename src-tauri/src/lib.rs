@@ -57,6 +57,7 @@ pub(crate) struct AppState {
     /// registered never differ. Only off the main thread: registering waits for it.
     shortcut_change: Mutex<()>,
     resetting: std::sync::atomic::AtomicBool,
+    #[cfg(target_os = "macos")]
     reset_helper: Mutex<Option<std::process::Child>>,
 }
 
@@ -72,6 +73,7 @@ impl Default for AppState {
             shortcut: Mutex::default(),
             shortcut_change: Mutex::default(),
             resetting: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(target_os = "macos")]
             reset_helper: Mutex::default(),
         }
     }

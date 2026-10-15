@@ -162,6 +162,7 @@ pub fn quit(app: &AppHandle) {
     }
 }
 
+#[cfg(target_os = "macos")]
 pub fn installing(app: &AppHandle) -> bool {
     app.try_state::<Mutex<Updates>>().is_some_and(|_| with(app, |u| u.installing))
 }

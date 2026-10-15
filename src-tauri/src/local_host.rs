@@ -117,10 +117,12 @@ pub fn shutdown(app: &AppHandle) {
 }
 
 /// A missing install record is safe to treat as absent only when the observer also sees no service.
+#[cfg(target_os = "macos")]
 pub fn absent(app: &AppHandle) -> bool {
     imp::absent(app)
 }
 
+#[cfg(target_os = "macos")]
 pub fn installing(app: &AppHandle) -> bool {
     imp::installing(app)
 }
@@ -172,9 +174,11 @@ mod imp {
         Ok(json!(host(app)?.state()))
     }
 
+    #[cfg(target_os = "macos")]
     pub fn absent(app: &AppHandle) -> bool {
         host(app).is_ok_and(|host| json!(host.state())["state"] == "absent")
     }
+    #[cfg(target_os = "macos")]
     pub fn installing(app: &AppHandle) -> bool {
         host(app).is_ok_and(|host| json!(host.state())["state"] == "installing")
     }
@@ -253,12 +257,6 @@ mod imp {
 
     pub fn setup(_app: &AppHandle) {}
     pub fn shutdown(_app: &AppHandle) {}
-    pub fn absent(_app: &AppHandle) -> bool {
-        false
-    }
-    pub fn installing(_app: &AppHandle) -> bool {
-        false
-    }
     pub fn state(_app: &AppHandle) -> Answer {
         Err(unsupported())
     }

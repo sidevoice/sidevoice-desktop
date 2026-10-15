@@ -3,9 +3,7 @@
 
 use serde_json::{json, Value};
 use std::fs::{self, OpenOptions};
-#[cfg(target_os = "macos")]
-use std::io::Read;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "macos")]
 use std::process::{Command, Stdio};
@@ -50,25 +48,36 @@ pub(crate) fn desktop_dir(app: &AppHandle) -> Result<PathBuf, Value> {
 pub fn shared_model_root() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
-        Some(PathBuf::from(std::env::var_os("HOME")?).join("Library/Application Support/Sidevoice/Models"))
+        let home = PathBuf::from(std::env::var_os("HOME")?);
+        home.is_absolute().then(|| home.join("Library/Application Support/Sidevoice/Models"))
     }
     #[cfg(target_os = "linux")]
     {
-        Some(
-            std::env::var_os("XDG_DATA_HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/share"))
-                .join("sidevoice-shared/models"),
-        )
+        let base =
+            std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).filter(|path| path.is_absolute()).or_else(|| {
+                std::env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .filter(|path| path.is_absolute())
+                    .map(|home| home.join(".local/share"))
+            })?;
+        Some(base.join("sidevoice-shared/models"))
     }
     #[cfg(target_os = "windows")]
     {
-        Some(PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("Sidevoice/Models"))
+        let base = PathBuf::from(std::env::var_os("LOCALAPPDATA")?);
+        base.is_absolute().then(|| base.join("Sidevoice/Models"))
     }
 }
 
 fn pairings_file(app: &AppHandle) -> Result<PathBuf, Value> {
     Ok(desktop_dir(app)?.join("pairings.json"))
+}
+
+fn pairings_path_is_safe(path: &Path) -> bool {
+    path.ancestors().filter(|part| part.parent().is_some()).all(|part| match fs::symlink_metadata(part) {
+        Ok(meta) => !meta.file_type().is_symlink(),
+        Err(error) => error.kind() == std::io::ErrorKind::NotFound,
+    })
 }
 
 fn checked_pairings(value: &Value) -> bool {
@@ -88,12 +97,21 @@ fn checked_pairings(value: &Value) -> bool {
 }
 
 fn read_pairings(path: &Path) -> Answer {
-    if path.parent().is_some_and(|parent| fs::symlink_metadata(parent).is_ok_and(|m| m.file_type().is_symlink()))
-        || fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
-    {
+    if !pairings_path_is_safe(path) {
         return Err(refused("reset.unsafe"));
     }
-    match fs::read(path) {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    match options.open(path).and_then(|file| {
+        let mut bytes = Vec::new();
+        file.take(64 * 1024 + 1).read_to_end(&mut bytes)?;
+        Ok(bytes)
+    }) {
         Ok(bytes) if bytes.len() <= 64 * 1024 => serde_json::from_slice::<Value>(&bytes)
             .ok()
             .filter(checked_pairings)
@@ -108,11 +126,12 @@ fn write_pairings(path: &Path, value: &Value) -> Answer {
     if !checked_pairings(value) {
         return Err(refused("data.pairings-invalid"));
     }
+    if !pairings_path_is_safe(path) {
+        return Err(refused("reset.unsafe"));
+    }
     let parent = path.parent().ok_or_else(|| refused("data.pairings-write"))?;
     fs::create_dir_all(parent).map_err(|_| refused("data.pairings-write"))?;
-    if fs::symlink_metadata(parent).is_ok_and(|m| m.file_type().is_symlink())
-        || fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
-    {
+    if !pairings_path_is_safe(path) {
         return Err(refused("reset.unsafe"));
     }
     let tmp = path.with_extension(format!("json.tmp-{}", std::process::id()));
@@ -184,7 +203,7 @@ pub async fn data_delete_all(app: AppHandle, webview: Webview) -> Answer {
     #[cfg(not(target_os = "macos"))]
     {
         let _ = app;
-        return Err(refused("reset.unavailable"));
+        Err(refused("reset.unavailable"))
     }
     #[cfg(target_os = "macos")]
     {
@@ -567,5 +586,20 @@ mod tests {
     fn retained_agent_outcomes_are_reported() {
         let agents = json!({"claude": "removed", "codex": {"outcome": "foreign"}, "cursor": {"outcome": "failed"}});
         assert_eq!(retained_agents(&agents), ["codex", "cursor"]);
+    }
+
+    #[test]
+    fn pairings_refuse_symlinked_parent_and_file() {
+        let home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::create_dir(home.path().join("app")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), home.path().join("app/redirect")).unwrap();
+        let redirected = home.path().join("app/redirect/pairings.json");
+        assert_eq!(read_pairings(&redirected), Err(refused("reset.unsafe")));
+        assert_eq!(write_pairings(&redirected, &json!({"pairings": []})), Err(refused("reset.unsafe")));
+        let file = home.path().join("app/pairings.json");
+        std::os::unix::fs::symlink(outside.path().join("other.json"), &file).unwrap();
+        assert_eq!(read_pairings(&file), Err(refused("reset.unsafe")));
+        assert!(!outside.path().join("other.json").exists());
     }
 }
