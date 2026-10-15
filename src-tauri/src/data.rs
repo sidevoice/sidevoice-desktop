@@ -571,6 +571,20 @@ fn begin_reset(app: &AppHandle) -> Answer {
     let dirs = DataDirs::from_env().ok_or_else(|| refused("reset.unavailable"))?;
     let home = std::env::var_os("HOME").map(PathBuf::from).ok_or_else(|| refused("reset.unavailable"))?;
     validate_uninstall_scope(&home, &dirs.data).map_err(|reason| json!({"key": "reset.unsafe", "reason": reason}))?;
+    let installed_cli = match Cli::installed(&dirs) {
+        Ok(cli) => {
+            probe_safe_connector(&cli, Duration::from_secs(10))?;
+            Some(cli)
+        }
+        Err(_) if !dirs.install_record().exists() => {
+            // A missing record is only an absent service when all owned data is gone too.
+            if !fresh_service_absent(&home) || residual_connector_data(&home, &dirs.data) {
+                return Err(refused("reset.service-failed"));
+            }
+            None
+        }
+        Err(_) => return Err(refused("reset.unsafe")),
+    };
     let report = report_path().ok_or_else(|| refused("reset.helper-failed"))?;
     if let Err(error) = fs::remove_file(&report) {
         if error.kind() != std::io::ErrorKind::NotFound {
@@ -580,28 +594,14 @@ fn begin_reset(app: &AppHandle) -> Answer {
     let journal = report.with_file_name("journal.json");
     write_atomic_json(&journal, &json!({"stage":"preflight", "completed":[], "failed":[]}))
         .map_err(|_| refused("reset.helper-failed"))?;
-    let (service, service_outcome) = match Cli::installed(&dirs) {
-        Ok(cli) => (
-            {
-                let version = cli
-                    .run(&["--version", "--json"], Duration::from_secs(10))
-                    .map_err(|_| refused("reset.unsupported-connector"))?;
-                require_safe_uninstall(&version)?;
-                run_checked_uninstall(&home, &dirs.data, || {
-                    cli.run(&["uninstall", "--json"], Duration::from_secs(180))
-                        .map_err(|_| refused("reset.service-failed"))
-                })?
-            },
+    let (service, service_outcome) = match installed_cli {
+        Some(cli) => (
+            run_checked_uninstall(&home, &dirs.data, || {
+                cli.run(&["uninstall", "--json"], Duration::from_secs(180)).map_err(|_| refused("reset.service-failed"))
+            })?,
             "removed",
         ),
-        Err(_) if !dirs.install_record().exists() => {
-            // The observer's cached "absent" is not evidence: ask launchd and the process table now.
-            if !fresh_service_absent(&home) || residual_connector_data(&home, &dirs.data) {
-                return Err(refused("reset.service-failed"));
-            }
-            (json!({"state": "absent", "agents": {}}), "absent")
-        }
-        Err(_) => return Err(refused("reset.unsafe")),
+        None => (json!({"state": "absent", "agents": {}}), "absent"),
     };
     write_atomic_json(&journal, &json!({"stage":"service", "completed":["service"], "failed":[]}))
         .map_err(|_| refused("reset.report-failed"))?;
@@ -669,11 +669,19 @@ fn begin_reset(app: &AppHandle) -> Answer {
 
 #[cfg(target_os = "macos")]
 fn require_safe_uninstall(version: &Value) -> Result<(), Value> {
-    if version.get("ok") == Some(&Value::Bool(true)) && version.get("safe_uninstall") == Some(&json!(1)) {
+    if version.get("ok") == Some(&Value::Bool(true))
+        && version.get("safe_uninstall").and_then(Value::as_u64).is_some_and(|level| level >= 1)
+    {
         Ok(())
     } else {
         Err(refused("reset.unsupported-connector"))
     }
+}
+
+#[cfg(target_os = "macos")]
+fn probe_safe_connector(cli: &sidevoice_local_host::cli::Cli, timeout: Duration) -> Result<(), Value> {
+    let version = cli.run(&["--version", "--json"], timeout).map_err(|_| refused("reset.unsupported-connector"))?;
+    require_safe_uninstall(&version)
 }
 
 #[cfg(target_os = "macos")]
@@ -1803,11 +1811,54 @@ mod tests {
         for value in [
             json!({"ok":true,"version":"0.6.0"}),
             json!({"ok":true,"safe_uninstall":0}),
+            json!({"ok":true,"safe_uninstall":"1"}),
+            json!({"ok":true,"safe_uninstall":1.0}),
             json!({"ok":false,"safe_uninstall":1}),
         ] {
             assert_eq!(require_safe_uninstall(&value), Err(refused("reset.unsupported-connector")));
         }
         assert_eq!(require_safe_uninstall(&json!({"ok":true,"safe_uninstall":1})), Ok(()));
+        assert_eq!(require_safe_uninstall(&json!({"ok":true,"safe_uninstall":2})), Ok(()));
+    }
+
+    #[test]
+    fn fake_installed_connectors_refuse_without_safe_capability() {
+        use sidevoice_local_host::cli::Cli;
+        use std::os::unix::fs::PermissionsExt;
+        let cases = [
+            ("missing", r#"{"ok":true,"version":"0.6.0"}"#, false),
+            ("zero", r#"{"ok":true,"safe_uninstall":0}"#, false),
+            ("one", r#"{"ok":true,"safe_uninstall":1}"#, true),
+            ("two", r#"{"ok":true,"safe_uninstall":2}"#, true),
+            ("garbage", "not-json", false),
+        ];
+        for (name, answer, accepted) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            let script = dir.path().join("sidevoice-connector");
+            let marker = dir.path().join("uninstall-invoked");
+            fs::write(
+                &script,
+                format!(
+                    "#!/bin/sh\nif [ \"$1\" = \"--version\" ] && [ \"$2\" = \"--json\" ]; then\n  printf '%s\\n' '{answer}'\nelse\n  : > '{}'\n  printf '%s\\n' '{{\"ok\":true}}'\nfi\n",
+                    marker.display()
+                ),
+            )
+            .unwrap();
+            fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+            let cli = Cli { prefix: vec![script.to_string_lossy().into_owned()], data: dir.path().join(".sidevoice") };
+            let checked = probe_safe_connector(&cli, Duration::from_secs(2));
+            assert_eq!(checked.is_ok(), accepted, "{name}");
+            if checked.is_ok() {
+                cli.run(&["uninstall", "--json"], Duration::from_secs(2)).unwrap();
+            }
+            assert_eq!(marker.exists(), accepted, "{name}: unsafe uninstall invocation");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("slow-sidevoice-connector");
+        fs::write(&script, "#!/bin/sh\nsleep 2\n").unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+        let cli = Cli { prefix: vec![script.to_string_lossy().into_owned()], data: dir.path().join(".sidevoice") };
+        assert_eq!(probe_safe_connector(&cli, Duration::from_millis(100)), Err(refused("reset.unsupported-connector")));
     }
 
     #[test]
