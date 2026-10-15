@@ -12,7 +12,8 @@ import { installSite } from "../scripts/web-site.mjs";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const candidate = process.env.SIDEVOICE_CANDIDATE_WEB_SITE;
-const candidateSha = process.env.SIDEVOICE_CANDIDATE_WEB_SHA;
+// Scratch integration head for this draft PR; web.pin.json remains the published archive.
+const candidateSha = "de9d30781925883df363682bc1cc11ab45a8f0d7";
 
 test("the lasting web pin remains a release tag with its archive digest", () => {
   const pin = readPin(JSON.parse(readFileSync(path.join(root, "web.pin.json"), "utf8")));
@@ -21,7 +22,7 @@ test("the lasting web pin remains a release tag with its archive digest", () => 
 });
 
 test("candidate T web site assembles at the desktop paths with the voice turn and playback contracts", {
-  skip: !candidate || !candidateSha,
+  skip: !candidate,
 }, () => {
   assert.match(candidateSha, /^[0-9a-f]{40}$/);
   assert.equal(JSON.parse(readFileSync(path.join(candidate, "voice/build-id.json"), "utf8")).build_id,
