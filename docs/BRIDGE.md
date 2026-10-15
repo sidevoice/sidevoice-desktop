@@ -371,7 +371,7 @@ itself over `@sidevoice/voice` in the webview, the room window granting it the m
 ### The seam
 
 `window.__sidevoiceDesktop.host.voice` implements `VoiceHost`, the page's voice seam, defined once in sidevoice-voice:
-[`js/voice-host.d.ts`](https://github.com/sidevoice/sidevoice-voice/blob/85341d78e5b0147600695a3d09124110000ed5a3/js/voice-host.d.ts) in
+[`js/voice-host.d.ts`](https://github.com/sidevoice/sidevoice-voice/blob/1aa57b0c05f15207def0fda0572b47b1dfd36712/js/voice-host.d.ts) in
 `@sidevoice/voice` (sidevoice/sidevoice-voice#6), with the types it carries (`VoiceSettings`, `VoiceHostError`,
 and `js/voice-events.d.ts`'s `VoiceTurnEvent`, `VoiceCallState`, `VoiceSaying`, `VoiceSayOutcome`, `VoiceTake`) and what every
 implementation promises
@@ -481,11 +481,15 @@ What is this app's own:
   one playback report.
 - `voice_mute {muted:true}` feeds native voice silence and lets an open turn end under its normal turn rules. It
   does not mute the speaker: playback level and say outcomes continue. Agents mute, voice off and focus changes are
-  web actions; the web cancels local playback when needed and reports the resulting outcome to core. Skip cancels
-  only the sounding say handle, lets its queued successor play, and tells core `user_skipped` through the web's
-  playback report. Neither skip nor mute creates an epoch. Core owns conversation IDs, eligibility, epochs,
-  history, receipts, notices and agent messages. The native speaker output remains the echo canceller's reference
-  when the output device changes.
+  web actions; the web cancels local playback when needed. The native bridge reports the physical say outcome to
+  the web unchanged apart from flattening Rust's stop reason. The web sends `voice-playback` for audio diagnostics
+  and a separate reliable `reply-hearing` with `history_id`, `utterance_id`, and `outcome: "heard" | "partial" |
+  "not_heard"` (plus Unicode-scalar `heard_chars` only for partial). Skip cancels only the sounding say handle and
+  lets its queued successor play. The web's current local policy counts Skip as heard; Skip is not a core reason,
+  status, notice or agent-visible fate. Web also decides hearing for written replies without a native say handle.
+  Neither skip nor mute creates an epoch. Core owns conversation IDs, eligibility, epochs, history, receipts,
+  notices and agent messages. The native speaker output remains the echo canceller's reference when the output
+  device changes.
 - Keys: `host.engine.setCredential` writes the macOS keychain (`src-tauri/src/keychain.rs`), and the engine reads it
   when a provider is listed, or its model loaded or called. `host.engine.testCredential` writes nothing: its key goes
   only to a trial engine of its own.

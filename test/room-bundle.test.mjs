@@ -13,7 +13,7 @@ import { installSite } from "../scripts/web-site.mjs";
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const candidate = process.env.SIDEVOICE_CANDIDATE_WEB_SITE;
 // Scratch integration head for this draft PR; web.pin.json remains the published archive.
-const candidateSha = "e3ec20f983c0e850561fd5a327e3c495efb591ba";
+const candidateSha = "2f4e853a5c6e57e64cb36ff1220857d01cb33d10";
 
 test("the lasting web pin remains a release tag with its archive digest", () => {
   const pin = readPin(JSON.parse(readFileSync(path.join(root, "web.pin.json"), "utf8")));
@@ -21,7 +21,7 @@ test("the lasting web pin remains a release tag with its archive digest", () => 
   assert.match(pin.sha256, /^[0-9a-f]{64}$/);
 });
 
-test("candidate T web site assembles at the desktop paths with the voice turn and playback contracts", {
+test("candidate T web site assembles at the desktop paths with turn, playback and hearing contracts", {
   skip: !candidate,
 }, () => {
   assert.match(candidateSha, /^[0-9a-f]{40}$/);
@@ -38,6 +38,7 @@ test("candidate T web site assembles at the desktop paths with the voice turn an
       .map((name) => readFileSync(path.join(assets, name), "utf8"));
     assert.ok(javascript.some((source) => source.includes("agent-interrupted")), "T voice interruption event");
     assert.ok(javascript.some((source) => source.includes("voice-playback")), "T room playback report");
+    assert.ok(javascript.some((source) => source.includes("reply-hearing")), "T semantic hearing report");
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }

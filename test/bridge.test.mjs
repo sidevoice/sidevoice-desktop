@@ -522,6 +522,40 @@ test("something said answers its handle at once: its steps, its outcome, and a c
   assert.equal(JSON.stringify(await refused.outcome), '{"status":"not-played","reason":"failed","code":"bad-request"}');
 });
 
+test("candidate hearing policy consumes native physical outcomes without a protocol skip cause", {
+  skip: !process.env.SIDEVOICE_CANDIDATE_WEB_SOURCE,
+}, async () => {
+  const services = path.join(process.env.SIDEVOICE_CANDIDATE_WEB_SOURCE, "apps/web/src/services");
+  const voiceSource = readFileSync(path.join(services, "voice-room.js"), "utf8");
+  const policySource = readFileSync(path.join(services, "reply-hearing-policy.js"), "utf8");
+  const { playbackReport } = await import(`data:text/javascript,${encodeURIComponent(voiceSource)}`);
+  const { playbackHearing } = await import(`data:text/javascript,${encodeURIComponent(policySource)}`);
+  const api = loadFactory()(voiceWindow().win, ORIGIN, "native", true, true);
+  const text = "é🐙ab";
+  async function nativeOutcome(outcome) {
+    const saying = api.host.voice.say(text);
+    let done;
+    saying.onEvent((step) => { if (step.type === "done") done = plain(step.outcome); });
+    api.voiceEvent({ type: "say", data: { key: saying.id, event: { type: "done", outcome } } });
+    const promised = plain(await saying.outcome);
+    assert.deepEqual(done, promised, "native done event and promise have the same flat host outcome");
+    return promised;
+  }
+
+  const skipped = await nativeOutcome({ status: "heard-up-to", heard_chars: 2, reason: { reason: "cancelled" } });
+  const skipPlayback = playbackReport(skipped, text, null, "user_skipped");
+  assert.deepEqual(skipPlayback, { status: "interrupted", heard_chars: 2 });
+  assert.deepEqual(playbackHearing(skipPlayback, text, "user_skipped"), { outcome: "heard" });
+
+  const interrupted = await nativeOutcome({ status: "heard-up-to", heard_chars: 2, reason: { reason: "barge-in" } });
+  const cutPlayback = playbackReport(interrupted, text);
+  assert.deepEqual(cutPlayback, { status: "interrupted", heard_chars: 2, reason: "user_interrupted" });
+  assert.deepEqual(playbackHearing(cutPlayback, text), { outcome: "partial", heard_chars: 2 });
+
+  const unplayed = await nativeOutcome({ status: "not-played", reason: { reason: "cancelled" } });
+  assert.deepEqual(playbackHearing(playbackReport(unplayed, text), text), { outcome: "not_heard" });
+});
+
 test("the call's events reach host.voice's listeners by their type, until they stop", () => {
   const install = loadFactory();
   const api = install(voiceWindow().win, ORIGIN, "native", true, true);
