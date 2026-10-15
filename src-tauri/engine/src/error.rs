@@ -42,6 +42,10 @@ pub fn bad_request(detail: impl Into<String>) -> Error {
     Error::new("bad_request", detail)
 }
 
+pub fn reset_busy() -> Error {
+    Error::new("reset_busy", "Data reset is under way.")
+}
+
 /// Something inside the app went wrong (a poisoned lock, a worker thread that died).
 pub fn internal(detail: impl fmt::Display) -> Error {
     Error::new("internal", format!("The native engine failed: {detail}"))

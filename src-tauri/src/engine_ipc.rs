@@ -11,13 +11,14 @@ use sidevoice_desktop_engine::error::{self, internal};
 use sidevoice_desktop_engine::{
     CatalogView, CredentialRefusal, Device, Error, Installed, Jobs, Memory, NativeEngines, OnDisk, Progress, Wanted,
 };
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 pub struct EngineState {
     pub engines: Arc<NativeEngines>,
     /// Each install in flight, by the page's job id: its progress, and its cancel.
-    jobs: Arc<Jobs>,
+    pub(crate) jobs: Arc<Jobs>,
 }
 
 impl EngineState {
@@ -51,12 +52,17 @@ pub async fn engine_on_disk(state: State<'_, EngineState>) -> Result<OnDisk, Err
 /// it runs, cancellable with `engine_cancel` until it ends.
 #[tauri::command]
 pub async fn engine_install(
+    app: AppHandle,
     state: State<'_, EngineState>,
     model: String,
     build: Option<String>,
     engine: Option<String>,
     job: String,
 ) -> Result<(), Error> {
+    let _permit = crate::data::admit(&app).ok_or_else(error::reset_busy)?;
+    if app.state::<crate::AppState>().resetting.load(Ordering::SeqCst) {
+        return Err(error::reset_busy());
+    }
     let (engines, jobs) = (state.engines.clone(), state.jobs.clone());
     tauri::async_runtime::spawn_blocking(move || {
         let wanted = Wanted { build: build.as_deref(), engine: engine.as_deref() };
@@ -83,7 +89,11 @@ pub fn engine_cancel(state: State<'_, EngineState>, job: String) -> bool {
 /// Takes `model` off this device, every build of it. Refused `model_installing` while an install job of it is waiting
 /// or running, `model_in_use` while the voice call holds it, `model_unknown` for a model the catalogue does not list.
 #[tauri::command]
-pub async fn engine_uninstall(state: State<'_, EngineState>, model: String) -> Result<(), Error> {
+pub async fn engine_uninstall(app: AppHandle, state: State<'_, EngineState>, model: String) -> Result<(), Error> {
+    let _permit = crate::data::admit(&app).ok_or_else(error::reset_busy)?;
+    if app.state::<crate::AppState>().resetting.load(Ordering::SeqCst) {
+        return Err(error::reset_busy());
+    }
     let (engines, jobs) = (state.engines.clone(), state.jobs.clone());
     tauri::async_runtime::spawn_blocking(move || engines.uninstall(&jobs, &model)).await.map_err(internal)?
 }
@@ -106,10 +116,12 @@ pub async fn engine_catalogs(state: State<'_, EngineState>) -> Result<Vec<Catalo
 /// again with what the keychain now has.
 #[tauri::command]
 pub async fn engine_set_credential(
+    app: AppHandle,
     state: State<'_, EngineState>,
     provider: String,
     key: Option<String>,
 ) -> Result<(), Error> {
+    let _permit = crate::data::admit(&app).ok_or_else(error::reset_busy)?;
     let key = key.as_deref().map(str::trim).filter(|key| !key.is_empty()).map(str::to_string);
     credentials::write(&provider, key.as_deref())?;
     let engines = state.engines.clone();

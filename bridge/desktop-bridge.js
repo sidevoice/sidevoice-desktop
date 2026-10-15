@@ -583,6 +583,17 @@
       mediaKeys: mediaKeys === "native" ? "native" : null,
       // Only where the app offers this computer's own core (O2: macOS): the page hides what is not there.
       ...(localHostOffered === true ? { localHost: Object.freeze(localHost()) } : {}),
+      // Private pairings are available on every desktop platform; machine reset is macOS-only.
+      data: Object.freeze({
+        pairings: Object.freeze({
+          read: () => call("data_pairings_read"),
+          write: (value) => call("data_pairings_write", { value }).then(() => undefined),
+        }),
+        ...(localHostOffered === true ? {
+          deleteAll: () => call("data_delete_all"),
+          resetReport: () => call("data_reset_report"),
+        } : {}),
+      }),
       // Only where the app runs the voice call (macOS): the page then neither opens the microphone nor runs models.
       ...(voiceCall ? { voice: voiceCall.host } : {}),
       /** What this build is: a release, a nightly (both with `updater`), or a development build. */

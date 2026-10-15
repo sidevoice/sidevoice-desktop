@@ -8,7 +8,7 @@
 //! refusal is `{key, message}`, as the native engine's (docs/BRIDGE.md).
 
 use serde_json::{json, Value};
-use tauri::{AppHandle, Webview};
+use tauri::{AppHandle, Manager, Webview};
 
 /// A command's answer: a value, or a refusal `{key, message}`.
 type Answer = Result<Value, Value>;
@@ -47,6 +47,10 @@ pub fn local_host_pairing(app: AppHandle, webview: Webview) -> Answer {
 #[tauri::command]
 pub async fn local_host_action(app: AppHandle, webview: Webview, action: String) -> Answer {
     caller(&app, &webview)?;
+    let _permit = crate::data::admit(&app).ok_or_else(|| refusal("reset.busy", "Data reset is under way."))?;
+    if app.state::<crate::AppState>().resetting.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(refusal("reset.busy", "Data reset is under way."));
+    }
     tauri::async_runtime::spawn_blocking(move || imp::action(&app, &action))
         .await
         .map_err(|e| refusal("internal", &e.to_string()))?
@@ -56,6 +60,7 @@ pub async fn local_host_action(app: AppHandle, webview: Webview, action: String)
 #[tauri::command]
 pub async fn local_host_pairing_code(app: AppHandle, webview: Webview) -> Answer {
     caller(&app, &webview)?;
+    let _permit = crate::data::admit(&app).ok_or_else(|| refusal("reset.busy", "Data reset is under way."))?;
     tauri::async_runtime::spawn_blocking(move || imp::pairing_code(&app))
         .await
         .map_err(|e| refusal("internal", &e.to_string()))?
@@ -65,6 +70,7 @@ pub async fn local_host_pairing_code(app: AppHandle, webview: Webview) -> Answer
 #[tauri::command]
 pub async fn local_host_pair_room(app: AppHandle, webview: Webview, url: String, code: String) -> Answer {
     caller(&app, &webview)?;
+    let _permit = crate::data::admit(&app).ok_or_else(|| refusal("reset.busy", "Data reset is under way."))?;
     tauri::async_runtime::spawn_blocking(move || imp::pair_room(&app, &url, &code))
         .await
         .map_err(|e| refusal("internal", &e.to_string()))?
@@ -78,6 +84,10 @@ pub async fn local_host_pair_room(app: AppHandle, webview: Webview, url: String,
 #[tauri::command]
 pub async fn local_host_install(app: AppHandle, webview: Webview, job: String) -> Answer {
     caller(&app, &webview)?;
+    let _permit = crate::data::admit(&app).ok_or_else(|| refusal("reset.busy", "Data reset is under way."))?;
+    if app.state::<crate::AppState>().resetting.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(refusal("reset.busy", "Data reset is under way."));
+    }
     // Begun here, before the blocking work: its progress and its cancel find it from the start.
     let begun = imp::begin_install(&app, &job)?;
     tauri::async_runtime::spawn_blocking(move || imp::run_install(begun))
@@ -110,6 +120,17 @@ pub fn shutdown(app: &AppHandle) {
     imp::shutdown(app)
 }
 
+/// A missing install record is safe to treat as absent only when the observer also sees no service.
+#[cfg(target_os = "macos")]
+pub fn absent(app: &AppHandle) -> bool {
+    imp::absent(app)
+}
+
+#[cfg(target_os = "macos")]
+pub fn installing(app: &AppHandle) -> bool {
+    imp::installing(app)
+}
+
 #[cfg(unix)]
 mod imp {
     use super::{refusal, unsupported, Answer};
@@ -136,7 +157,7 @@ mod imp {
             crate::debug("local-host off: no home directory");
             return;
         };
-        let Ok(app_dir) = app.path().app_config_dir() else { return };
+        let Ok(app_dir) = crate::data::desktop_dir(app) else { return };
         let config = Config { dirs, app_dir, name: computer_name() };
         match LocalHost::start(config, crate::debug) {
             Ok(host) => {
@@ -155,6 +176,15 @@ mod imp {
 
     pub fn state(app: &AppHandle) -> Answer {
         Ok(json!(host(app)?.state()))
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn absent(app: &AppHandle) -> bool {
+        host(app).is_ok_and(|host| json!(host.state())["state"] == "absent")
+    }
+    #[cfg(target_os = "macos")]
+    pub fn installing(app: &AppHandle) -> bool {
+        host(app).is_ok_and(|host| json!(host.state())["state"] == "installing")
     }
 
     pub fn pairing(app: &AppHandle) -> Answer {

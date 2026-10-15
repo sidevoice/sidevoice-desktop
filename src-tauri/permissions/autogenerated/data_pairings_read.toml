@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-data-pairings-read"
+description = "Enables the data_pairings_read command without any pre-configured scope."
+commands.allow = ["data_pairings_read"]
+
+[[permission]]
+identifier = "deny-data-pairings-read"
+description = "Denies the data_pairings_read command without any pre-configured scope."
+commands.deny = ["data_pairings_read"]
