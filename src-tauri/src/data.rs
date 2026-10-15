@@ -251,7 +251,7 @@ pub fn data_pairings_write(app: AppHandle, webview: Webview, value: Value) -> An
 #[tauri::command]
 pub fn data_reset_report(app: AppHandle, webview: Webview) -> Answer {
     caller(&app, &webview)?;
-    #[cfg(unix)]
+    #[cfg(target_os = "macos")]
     {
         let path = report_path().ok_or_else(|| refused("reset.unavailable"))?;
         if fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
