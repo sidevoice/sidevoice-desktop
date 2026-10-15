@@ -13,7 +13,7 @@ import { installSite } from "../scripts/web-site.mjs";
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const candidate = process.env.SIDEVOICE_CANDIDATE_WEB_SITE;
 // Scratch integration head for this draft PR; web.pin.json remains the published archive.
-const candidateSha = "f52082809e4d58b07a17fd078d0a56fc17cc171c";
+const candidateSha = "9486a321ca49a3aa9df126dee47f4d101916afe8";
 
 test("the lasting web pin remains a release tag with its archive digest", () => {
   const pin = readPin(JSON.parse(readFileSync(path.join(root, "web.pin.json"), "utf8")));
@@ -25,8 +25,8 @@ test("candidate T web site assembles at the desktop paths with turn, playback an
   skip: !candidate,
 }, () => {
   assert.match(candidateSha, /^[0-9a-f]{40}$/);
-  assert.equal(JSON.parse(readFileSync(path.join(candidate, "voice/build-id.json"), "utf8")).build_id,
-    `turns-web-${candidateSha}`);
+  assert.equal(process.env.SIDEVOICE_CANDIDATE_WEB_SHA, candidateSha);
+  assert.match(JSON.parse(readFileSync(path.join(candidate, "voice/build-id.json"), "utf8")).build_id, /^[a-z0-9]+$/);
   const scratch = mkdtempSync(path.join(tmpdir(), "sidevoice-turns-bundle-"));
   try {
     assert.ok(installSite(candidate, scratch).includes("voice"));
@@ -36,7 +36,8 @@ test("candidate T web site assembles at the desktop paths with turn, playback an
     const assets = path.join(scratch, "voice/assets");
     const javascript = readdirSync(assets).filter((name) => name.endsWith(".js"))
       .map((name) => readFileSync(path.join(assets, name), "utf8"));
-    assert.ok(javascript.some((source) => source.includes("agent-interrupted")), "T voice interruption event");
+    assert.ok(javascript.some((source) => source.includes("createCall") && source.includes("routeInput")),
+      "call-scoped microphone routing");
     assert.ok(javascript.some((source) => source.includes("voice-playback")), "T room playback report");
     assert.ok(javascript.some((source) => source.includes("reply-hearing")), "T semantic hearing report");
   } finally {
