@@ -550,6 +550,8 @@ pub fn run() {
             // launch's own activation, which came before any window existed: the window stayed behind (Dock only).
             show_room(&handle);
             activate_app();
+            #[cfg(target_os = "macos")]
+            data::finalize_relaunched_reset();
             Ok(())
         })
         .on_window_event(|window, event| {

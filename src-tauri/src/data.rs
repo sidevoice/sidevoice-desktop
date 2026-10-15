@@ -1122,7 +1122,7 @@ fn webkit_gone(pids: &[u32]) -> bool {
 pub fn run_reset_helper(parent_pid: Option<u32>, lock_fd: Option<i32>) {
     #[cfg(target_os = "macos")]
     {
-        let Some(_lock) = helper_lock(lock_fd) else { return };
+        let Some(lock) = helper_lock(lock_fd) else { return };
         let Some(parent_pid) = parent_pid else { return };
         if unsafe { libc::getppid() as u32 } != parent_pid {
             return;
@@ -1200,7 +1200,14 @@ pub fn run_reset_helper(parent_pid: Option<u32>, lock_fd: Option<i32>) {
             failed,
             initial.get("agents").cloned().unwrap_or_else(|| json!({})),
             write_atomic_json,
-            || std::env::current_exe().ok().and_then(|exe| Command::new(exe).spawn().ok()).is_some(),
+            || {
+                // Cleanup is over. A new app must acquire this lock independently.
+                drop(lock);
+                std::env::current_exe()
+                    .ok()
+                    .and_then(|exe| Command::new(exe).env("SIDEVOICE_RESET_RELAUNCH", "1").spawn().ok())
+                    .is_some()
+            },
         );
     }
     #[cfg(not(target_os = "macos"))]
@@ -1219,20 +1226,47 @@ fn finish_reset_at(
     write: impl Fn(&Path, &Value) -> Result<(), &'static str>,
     relaunch: impl FnOnce() -> bool,
 ) {
-    let _ = write(journal, &json!({"stage":"preferences", "completed":completed, "failed":failed}));
-    // The next app can read the report as soon as it starts. Publish it before spawning that app.
-    let mut value = json!({"state": if failed.is_empty() { "complete" } else { "partial" }, "completed": completed, "failed": failed,
-        "agents": agents});
-    let mut persisted = write(report, &value).is_ok();
+    // A successful spawn is not proof that the new app finished startup. Its setup code
+    // publishes the final report; until then the journal is an interrupted partial result.
+    let pending = json!({"stage":"awaiting-relaunch", "completed":completed, "failed":failed, "agents":agents});
+    if write(journal, &pending).is_err() {
+        return;
+    }
     if !relaunch() {
         failed.push(json!({"step":"relaunch", "key":"reset.relaunch-failed"}));
-        value["state"] = json!("partial");
-        value["failed"] = json!(failed);
-        persisted = write(report, &value).is_ok();
+        let value = json!({"state":"partial", "completed":completed, "failed":failed, "agents":agents});
+        if write(report, &value).is_ok() {
+            let _ = fs::remove_file(journal);
+        }
     }
-    if persisted {
-        let _ = fs::remove_file(journal);
+}
+
+#[cfg(target_os = "macos")]
+pub fn finalize_relaunched_reset() {
+    if std::env::var("SIDEVOICE_RESET_RELAUNCH").as_deref() != Ok("1") {
+        return;
     }
+    let Some(report) = report_path() else { return };
+    let journal = report.with_file_name("journal.json");
+    let _ = finalize_relaunched_reset_at(&report, &journal);
+}
+
+#[cfg(target_os = "macos")]
+fn finalize_relaunched_reset_at(report: &Path, journal: &Path) -> Result<(), &'static str> {
+    let bytes = fs::read(journal).map_err(|_| "report-read")?;
+    if bytes.len() > 16 * 1024 {
+        return Err("report-read");
+    }
+    let pending: Value = serde_json::from_slice(&bytes).map_err(|_| "report-read")?;
+    if pending["stage"] != "awaiting-relaunch" {
+        return Err("report-stage");
+    }
+    let failed = pending.get("failed").and_then(Value::as_array).ok_or("report-stage")?;
+    let value = json!({"state":if failed.is_empty() {"complete"} else {"partial"},
+        "completed":pending["completed"],"failed":failed,"agents":pending["agents"]});
+    write_atomic_json(report, &value)?;
+    fs::remove_file(journal).map_err(|_| "report-remove")?;
+    Ok(())
 }
 
 #[cfg(all(test, target_os = "macos"))]
@@ -1421,17 +1455,20 @@ mod tests {
     }
 
     #[test]
-    fn helper_publishes_report_before_relaunch_and_keeps_journal_on_write_failure() {
+    fn helper_reports_complete_only_after_relaunched_setup_and_keeps_failed_writes() {
         let dir = tempfile::tempdir().unwrap();
         let report = dir.path().join("report.json");
         let journal = dir.path().join("journal.json");
         let mut launched = false;
         finish_reset_at(&report, &journal, &["service", "app-data"], vec![], json!({}), write_atomic_json, || {
-            assert_eq!(fs::read_to_string(&report).unwrap().contains("\"complete\""), true);
+            assert!(journal.exists());
+            assert!(!report.exists());
             launched = true;
             true
         });
         assert!(launched);
+        assert!(journal.exists());
+        finalize_relaunched_reset_at(&report, &journal).unwrap();
         assert!(!journal.exists());
         assert_eq!(consume_report_at(&report).unwrap()["state"], "complete");
 
@@ -1445,6 +1482,11 @@ mod tests {
         finish_reset_at(&report, &journal, &["service"], vec![], json!({}), bad_write, || true);
         assert!(journal.exists());
         assert_eq!(consume_report_at(&report).unwrap()["state"], "partial");
+
+        finish_reset_at(&report, &journal, &["service"], vec![], json!({}), write_atomic_json, || false);
+        let failed = consume_report_at(&report).unwrap();
+        assert_eq!(failed["state"], "partial");
+        assert_eq!(failed["failed"][0]["key"], "reset.relaunch-failed");
     }
 
     #[test]
