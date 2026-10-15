@@ -64,15 +64,21 @@ exit and for its observed WebKit children to exit before removing its exact Appl
 shared-model store's engine-owned `blobs`, `models` and `partial` children, WebKit, cache,
 saved-state and log paths and its `defaults` domain. Other programs' siblings in the shared model
 store remain. A WebKit child that
-does not exit leaves a partial result and its storage in place. Paths are derived natively and
-symlinks and mount boundaries are refused. Each app cleanup target is atomically claimed into a
-private, fixed reset area before traversal; a source replaced at the claim boundary is refused and
-its moved contents are not erased. Connector data and release roots must be the exact default
+does not exit leaves a partial result and its storage in place. Paths are derived natively from an
+exact allowlist, checked again before each top-level removal, and traversed without following
+symlinks or crossing a mount/device boundary. A failed check is reported, with that directory left
+in place. Connector data and release roots must be the exact default
 Sidevoice roots; unsafe environment overrides or install records refuse before the installed uninstaller runs.
 If installation metadata is absent, a fresh service/process check and a check for residual connector data
 must both pass before the service is called absent. A retained recovery executable named by `install.json`
 is used on a partial-uninstall retry. Custom profiles and separately installed cores are excluded.
 No page-supplied path is deleted.
+
+Accepted beta limit: a hostile process running in the same user account can race these checks by
+moving, replacing or mounting folders during deletion, or by replacing pairing-store ancestors
+during a write. This operation does not provide atomic confinement against that process; it already
+has direct access to the account's files. This limit does not relax the exact-root, no-follow and
+mount/device checks for a stable filesystem layout.
 
 Before uninstall, native creates a private operation journal and takes an interprocess reset lock.
 Model operations, voice model loads, credential writes, local-host actions and updater writes share an

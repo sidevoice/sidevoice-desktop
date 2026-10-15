@@ -1230,172 +1230,19 @@ fn remove_known_with(
     home: &Path,
     probe: &impl Fn(i32, &Path) -> Result<MountIdentity, &'static str>,
 ) -> Result<(), &'static str> {
-    remove_known_with_hook(path, home, probe, &|| {})
-}
-
-#[cfg(target_os = "macos")]
-fn claim_name(path: &Path, home: &Path) -> Result<&'static str, &'static str> {
-    let relative = path.strip_prefix(home).map_err(|_| "outside-known-dirs")?;
-    match relative.to_str() {
-        Some("Library/Application Support/dev.sidevoice.desktop") => Ok("app-data"),
-        Some("Library/Application Support/Sidevoice/Models/blobs") => Ok("models-blobs"),
-        Some("Library/Application Support/Sidevoice/Models/models") => Ok("models-models"),
-        Some("Library/Application Support/Sidevoice/Models/partial") => Ok("models-partial"),
-        Some("Library/WebKit/dev.sidevoice.desktop") => Ok("webview"),
-        Some("Library/Caches/dev.sidevoice.desktop") => Ok("cache"),
-        Some("Library/Saved Application State/dev.sidevoice.desktop.savedState") => Ok("saved-state"),
-        Some("Library/Logs/dev.sidevoice.desktop") => Ok("logs"),
-        _ => Err("outside-known-dirs"),
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn claim_area(
-    home: &Path,
-    probe: &impl Fn(i32, &Path) -> Result<MountIdentity, &'static str>,
-) -> Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd, PathBuf), &'static str> {
-    use std::os::fd::AsRawFd;
-    let parent_path = home.join("Library/Application Support");
-    let home_fd = open_absolute_dir(home)?;
-    let expected = probe(home_fd.as_raw_fd(), Path::new(""))?;
-    let mut current = home_fd;
-    for part in ["Library", "Application Support"] {
-        let name = std::ffi::CString::new(part).map_err(|_| "unsafe-name")?;
-        if unsafe { libc::mkdirat(current.as_raw_fd(), name.as_ptr(), 0o700) } != 0
-            && std::io::Error::last_os_error().kind() != std::io::ErrorKind::AlreadyExists
-        {
-            return Err("claim-create");
-        }
-        current = open_dir_at(current.as_raw_fd(), std::ffi::OsStr::new(part))?;
-        if probe(current.as_raw_fd(), Path::new(part))? != expected {
-            return Err("mount-boundary");
-        }
-    }
-    let parent = current;
-    if probe(parent.as_raw_fd(), Path::new("Library/Application Support"))? != expected {
-        return Err("mount-boundary");
-    }
-    let name = c"dev.sidevoice.desktop-reset-claim";
-    if unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o700) } != 0
-        && std::io::Error::last_os_error().kind() != std::io::ErrorKind::AlreadyExists
-    {
-        return Err("claim-create");
-    }
-    let claim = open_dir_at(parent.as_raw_fd(), std::ffi::OsStr::new("dev.sidevoice.desktop-reset-claim"))?;
-    let mut meta: libc::stat = unsafe { std::mem::zeroed() };
-    if unsafe { libc::fstat(claim.as_raw_fd(), &mut meta) } != 0 {
-        return Err("claim-inspect");
-    }
-    if meta.st_uid != unsafe { libc::geteuid() }
-        || meta.st_mode & 0o077 != 0
-        || probe(claim.as_raw_fd(), Path::new("Library/Application Support/dev.sidevoice.desktop-reset-claim"))?
-            != expected
-    {
-        return Err("unsafe-claim");
-    }
-    Ok((parent, claim, parent_path.join("dev.sidevoice.desktop-reset-claim")))
-}
-
-#[cfg(target_os = "macos")]
-fn remove_known_with_hook(
-    path: &Path,
-    home: &Path,
-    probe: &impl Fn(i32, &Path) -> Result<MountIdentity, &'static str>,
-    before_claim: &impl Fn(),
-) -> Result<(), &'static str> {
-    use std::os::fd::AsRawFd;
-    use std::os::unix::ffi::OsStrExt;
     known_cleanup_path(path, home)?;
-    let name = claim_name(path, home)?;
-    guarded_tree(path, home, false, false, probe)?;
-    let (claim_parent, claim, claim_path) = claim_area(home, probe)?;
-    let claimed = claim_path.join(name);
-    if parent_path_exists(claim.as_raw_fd(), std::ffi::OsStr::new(name)) {
-        guarded_tree(&claimed, home, true, false, probe)?;
-    }
-    let source_parent = match open_absolute_dir(path.parent().ok_or("unsafe-path")?) {
-        Ok(parent) => parent,
-        Err(_)
-            if fs::symlink_metadata(path.parent().ok_or("unsafe-path")?)
-                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
-        {
-            remove_empty_claim_area(claim_parent.as_raw_fd())?;
-            return Ok(());
-        }
-        Err(error) => return Err(error),
-    };
-    let source_name =
-        std::ffi::CString::new(path.file_name().ok_or("unsafe-path")?.as_bytes()).map_err(|_| "unsafe-name")?;
-    let dest_name = std::ffi::CString::new(name).map_err(|_| "unsafe-name")?;
-    let mut before: libc::stat = unsafe { std::mem::zeroed() };
-    if unsafe { libc::fstatat(source_parent.as_raw_fd(), source_name.as_ptr(), &mut before, libc::AT_SYMLINK_NOFOLLOW) }
-        != 0
-    {
-        if std::io::Error::last_os_error().kind() != std::io::ErrorKind::NotFound {
-            return Err("inspect");
-        }
-    } else {
-        if before.st_mode & libc::S_IFMT != libc::S_IFDIR {
-            return Err("unsafe-directory");
-        }
-        let source = open_dir_at(source_parent.as_raw_fd(), path.file_name().ok_or("unsafe-path")?)?;
-        let home_fd = open_absolute_dir(home)?;
-        let expected = probe(home_fd.as_raw_fd(), Path::new(""))?;
-        if probe(source.as_raw_fd(), path.strip_prefix(home).map_err(|_| "outside-home")?)? != expected {
-            return Err("mount-boundary");
-        }
-        before_claim();
-        if unsafe {
-            libc::renameat(source_parent.as_raw_fd(), source_name.as_ptr(), claim.as_raw_fd(), dest_name.as_ptr())
-        } != 0
-        {
-            return Err("claim-move");
-        }
-        let mut after: libc::stat = unsafe { std::mem::zeroed() };
-        if unsafe { libc::fstatat(claim.as_raw_fd(), dest_name.as_ptr(), &mut after, libc::AT_SYMLINK_NOFOLLOW) } != 0
-            || before.st_dev != after.st_dev
-            || before.st_ino != after.st_ino
-        {
-            if after.st_mode & libc::S_IFMT == libc::S_IFLNK {
-                unsafe { libc::unlinkat(claim.as_raw_fd(), dest_name.as_ptr(), 0) };
+    // Recheck the exact top-level name immediately before guarded traversal. A missing
+    // directory is already gone; a link, alias or changed ancestor is a reported refusal.
+    match fs::symlink_metadata(path) {
+        Ok(meta) => {
+            if !meta.is_dir() || meta.file_type().is_symlink() || fs::canonicalize(path).ok().as_deref() != Some(path) {
+                return Err("changed-path");
             }
-            return Err("changed-path");
         }
-        let named_parent = open_absolute_dir(path.parent().ok_or("unsafe-path")?).map_err(|_| "changed-path")?;
-        let mut held_parent: libc::stat = unsafe { std::mem::zeroed() };
-        let mut current_parent: libc::stat = unsafe { std::mem::zeroed() };
-        if unsafe { libc::fstat(source_parent.as_raw_fd(), &mut held_parent) } != 0
-            || unsafe { libc::fstat(named_parent.as_raw_fd(), &mut current_parent) } != 0
-            || held_parent.st_dev != current_parent.st_dev
-            || held_parent.st_ino != current_parent.st_ino
-        {
-            return Err("changed-path");
-        }
-        let named_claim = open_absolute_dir(&claim_path).map_err(|_| "changed-path")?;
-        let mut held_claim: libc::stat = unsafe { std::mem::zeroed() };
-        let mut current_claim: libc::stat = unsafe { std::mem::zeroed() };
-        if unsafe { libc::fstat(claim.as_raw_fd(), &mut held_claim) } != 0
-            || unsafe { libc::fstat(named_claim.as_raw_fd(), &mut current_claim) } != 0
-            || held_claim.st_dev != current_claim.st_dev
-            || held_claim.st_ino != current_claim.st_ino
-        {
-            return Err("changed-path");
-        }
-        guarded_tree(&claimed, home, true, false, probe)?;
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err("inspect"),
     }
-    // An empty claim area has no data to retain between resets.
-    remove_empty_claim_area(claim_parent.as_raw_fd())
-}
-
-#[cfg(target_os = "macos")]
-fn remove_empty_claim_area(parent: i32) -> Result<(), &'static str> {
-    let claim_name = c"dev.sidevoice.desktop-reset-claim";
-    if unsafe { libc::unlinkat(parent, claim_name.as_ptr(), libc::AT_REMOVEDIR) } != 0
-        && std::io::Error::last_os_error().kind() != std::io::ErrorKind::DirectoryNotEmpty
-    {
-        return Err("claim-remove");
-    }
-    Ok(())
+    guarded_tree(path, home, true, false, probe)
 }
 
 #[cfg(target_os = "macos")]
@@ -1671,48 +1518,6 @@ mod tests {
         assert_eq!(remove_known(&target, root), Ok(()));
         assert!(!target.exists());
         assert!(parent.join("unrelated").exists());
-    }
-
-    #[test]
-    fn cleanup_claim_boundary_preserves_directory_moved_outside_owned_tree() {
-        let home = tempfile::tempdir().unwrap();
-        let home = fs::canonicalize(home.path()).unwrap();
-        let outside = tempfile::tempdir().unwrap();
-        let outside = fs::canonicalize(outside.path()).unwrap();
-        let target = home.join("Library/Caches/dev.sidevoice.desktop");
-        let moved = outside.join("moved-app-cache");
-        fs::create_dir_all(&target).unwrap();
-        fs::write(target.join("sentinel"), b"unrelated").unwrap();
-        let swapped = std::cell::Cell::new(false);
-        let result = remove_known_with_hook(&target, &home, &mount_identity, &|| {
-            if !swapped.replace(true) {
-                fs::rename(&target, &moved).unwrap();
-                std::os::unix::fs::symlink(&moved, &target).unwrap();
-            }
-        });
-        assert_eq!(result, Err("changed-path"));
-        assert_eq!(fs::read(moved.join("sentinel")).unwrap(), b"unrelated");
-        assert!(!target.exists() || fs::symlink_metadata(&target).unwrap().file_type().is_symlink());
-    }
-
-    #[test]
-    fn cleanup_refuses_parent_moved_at_claim_boundary_before_traversal() {
-        let home = tempfile::tempdir().unwrap();
-        let home = fs::canonicalize(home.path()).unwrap();
-        let outside = tempfile::tempdir().unwrap();
-        let outside = fs::canonicalize(outside.path()).unwrap();
-        let parent = home.join("Library/Caches");
-        let target = parent.join("dev.sidevoice.desktop");
-        fs::create_dir_all(&target).unwrap();
-        fs::write(target.join("sentinel"), b"unrelated").unwrap();
-        let moved_parent = outside.join("moved-caches");
-        let result = remove_known_with_hook(&target, &home, &mount_identity, &|| {
-            fs::rename(&parent, &moved_parent).unwrap();
-            std::os::unix::fs::symlink(&moved_parent, &parent).unwrap();
-        });
-        assert_eq!(result, Err("changed-path"));
-        let claimed = home.join("Library/Application Support/dev.sidevoice.desktop-reset-claim/cache/sentinel");
-        assert_eq!(fs::read(claimed).unwrap(), b"unrelated");
     }
 
     #[test]
