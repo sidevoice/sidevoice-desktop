@@ -292,10 +292,11 @@ fn paths(dir: &Path) -> Vec<std::path::PathBuf> {
 /// `macos voice-models`: a call on the engine's real models through the app's adapter: Silero, Whisper tiny on
 /// whisper.cpp and Kokoro, downloaded into a scratch folder, or kept in `SIDEVOICE_REAL_CALL_MODELS` (CI caches it);
 /// the turn must come back as the clip's words and the reply must be spoken and heard
-/// (src-tauri/src/voice/models/tests.rs).
+/// (src-tauri/src/voice/models/tests.rs). With them, the rest of the macOS-only voice tests: the native host's lanes
+/// over stand-in shared devices (src-tauri/src/voice/tests.rs).
 pub fn voice_models() -> Result<()> {
     Cmd::new("cargo")
-        .args(["test", "--release", "--lib", "voice::models::tests", "--", "--include-ignored", "--nocapture"])
+        .args(["test", "--release", "--lib", "voice::", "--", "--include-ignored", "--nocapture"])
         .dir(repo().join("src-tauri"))
         .run()
 }

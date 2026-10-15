@@ -512,9 +512,10 @@ test("per-call commands carry the call key and say handles remain separate", asy
   } } } });
   assert.deepEqual(plain(await saidB.outcome), { status: "heard-up-to", heard_chars: 1, reason: "cancelled" });
   assert.deepEqual(plain(await saidA.outcome), { status: "not-played", reason: "failed", code: "speaker-unavailable" });
-  await a.mute(true);
-  await b.cancelInput();
+  assert.equal(a.mute(true), undefined);
+  assert.equal(b.cancelInput(), undefined);
   await a.stop();
+  await flush();
   const commands = calls.filter(([cmd]) => cmd.startsWith("voice_") && !["voice_create_call"].includes(cmd));
   assert.ok(commands.every(([, args]) => args && (args.key === a.id || args.key === b.id)));
   assert.deepEqual(commands.filter(([cmd]) => cmd === "voice_say").map(([, args]) => [args.key, args.sayKey]),
@@ -546,7 +547,7 @@ test("A to B routing keeps delayed per-call turns on A despite a later switch", 
 });
 
 test("per-call state, levels, takes and saying outcomes are isolated after dispose", async () => {
-  const { win } = voiceWindow();
+  const { win } = voiceWindow({ voice_stop: true });
   win.atob = atob;
   const api = loadFactory()(win, ORIGIN, "native", true, true);
   const a = api.host.voice.createCall();
@@ -571,10 +572,124 @@ test("per-call state, levels, takes and saying outcomes are isolated after dispo
   api.voiceEvent({ key: a.id, type: "state", data: { listening: "idle" } });
   await stopping;
   assert.deepEqual([...takes[0].samples], [...samples]);
-  await a.dispose();
+  const disposing = a.dispose();
+  await flush();
+  api.voiceEvent({ key: a.id, type: "state", data: { listening: "idle" } });
+  await disposing;
   api.voiceEvent({ key: a.id, type: "level", data: 0.9 });
   api.voiceEvent({ key: b.id, type: "playback-level", data: 0.5 });
   assert.deepEqual(heard.at(-1), ["B", "speaker", 0.5]);
+});
+
+test("mute and cancelInput before the settings return nothing, never reject, and mutes keep their order", async () => {
+  const { win, calls } = fakeWindow(ORIGIN);
+  const answered = [];
+  const unhandled = [];
+  const onUnhandled = (reason) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  win.__TAURI_INTERNALS__.invoke = (cmd, args) => {
+    calls.push([cmd, args === undefined ? undefined : structuredClone(args)]);
+    if (cmd === "voice_mute") {
+      // The first mute is slow and refused; a later one must not overtake it.
+      const slow = calls.filter(([name]) => name === "voice_mute").length === 1;
+      return new Promise((resolve, reject) => setTimeout(() => {
+        answered.push(args.muted);
+        if (slow) reject({ key: "voice_settings_missing", code: "settings-missing", message: "Set the voice settings first." });
+        else resolve(null);
+      }, slow ? 20 : 0));
+    }
+    if (cmd === "voice_cancel_input") {
+      return Promise.reject({ key: "voice_settings_missing", code: "settings-missing", message: "Set the voice settings first." });
+    }
+    return Promise.resolve(null);
+  };
+  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const a = api.host.voice.createCall();
+  assert.equal(a.mute(true), undefined);
+  assert.equal(a.mute(false), undefined);
+  assert.equal(a.mute(true), undefined);
+  assert.equal(a.cancelInput(), undefined);
+  await a.setSettings({ stt: { catalog: "local", model: "whisper" }, tts: { catalog: "local", model: "kokoro" } });
+  await a.start();
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  process.off("unhandledRejection", onUnhandled);
+  assert.deepEqual(unhandled, []);
+  assert.deepEqual(answered, [true, false, true]);
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "voice_mute").map(([, args]) => [args.key, args.muted]),
+    [[a.id, true], [a.id, false], [a.id, true]]);
+});
+
+test("stop after a recorded start and a repeated start waits for the take and the idle that answer it", async () => {
+  const { win, calls } = voiceWindow({ voice_stop: true });
+  win.atob = atob;
+  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const a = api.host.voice.createCall();
+  const takes = [];
+  a.onTake((take) => takes.push(take));
+  await a.start({ take: true });
+  await a.start();
+  let stopped = false;
+  const stopping = a.stop().then(() => { stopped = true; });
+  await flush();
+  await flush();
+  assert.equal(stopped, false, "no idle has answered the stop yet");
+  api.voiceEvent({ key: a.id, type: "take", data: { sampleRate: 16000,
+    samples: Buffer.from(new Float32Array([0.25]).buffer).toString("base64"), started_at: 1, ended_at: 2, turns: [] } });
+  assert.equal(stopped, false);
+  api.voiceEvent({ key: a.id, type: "state", data: { listening: "idle" } });
+  await stopping;
+  assert.equal(takes.length, 1, "the take came before the stop resolved");
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "voice_start").map(([, args]) => args.take), [true, false]);
+});
+
+test("dispose stops first and delivers the call's own ends: the partial saying, the open turn and the take", async () => {
+  const { win, calls } = voiceWindow({ voice_stop: true });
+  win.atob = atob;
+  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const host = api.host.voice;
+  const a = host.createCall();
+  const turns = [];
+  const takes = [];
+  a.onTurn((turn) => turns.push(turn.phase));
+  a.onTake((take) => takes.push(take));
+  await a.start({ take: true });
+  const said = a.say("Hello there, again.");
+  const steps = [];
+  said.onEvent((event) => steps.push(event.type));
+  await flush();
+  api.voiceEvent({ key: a.id, type: "say", data: { key: said.id, event: { type: "playing" } } });
+  api.voiceEvent({ key: a.id, type: "say", data: { key: said.id, event: { type: "progress", heard_chars: 8 } } });
+  api.voiceEvent({ key: a.id, type: "turn", data: { phase: "started", turn_id: "a-1", started_at: 1 } });
+  let disposed = false;
+  const disposing = a.dispose().then(() => { disposed = true; });
+  await flush();
+  assert.ok(calls.some(([cmd, args]) => cmd === "voice_stop" && args.key === a.id), "dispose stops the call first");
+  assert.ok(!calls.some(([cmd]) => cmd === "voice_dispose_call"), "the lane is kept until the call's ends came");
+  assert.equal(disposed, false);
+  // What native stop answers, in its order: the saying's end, the open turn's, the take, then the idle state.
+  api.voiceEvent({ key: a.id, type: "say", data: { key: said.id, event: { type: "done", outcome: {
+    status: "heard-up-to", heard_chars: 8, reason: { reason: "stopped" },
+  } } } });
+  api.voiceEvent({ key: a.id, type: "turn", data: { phase: "cancelled", turn_id: "a-1", merged: false } });
+  api.voiceEvent({ key: a.id, type: "take", data: { sampleRate: 16000,
+    samples: Buffer.from(new Float32Array([0.5]).buffer).toString("base64"), started_at: 1, ended_at: 2, turns: [] } });
+  api.voiceEvent({ key: a.id, type: "state", data: { listening: "idle" } });
+  await disposing;
+  assert.deepEqual(plain(await said.outcome), { status: "heard-up-to", heard_chars: 8, reason: "stopped" });
+  assert.deepEqual(steps, ["playing", "progress", "done"], "one terminal, the call's own");
+  assert.deepEqual(turns, ["started", "cancelled"]);
+  assert.equal(takes.length, 1);
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "voice_dispose_call").map(([, args]) => args.key), [a.id]);
+  // Nothing reaches the disposed call, nor a call made after it.
+  const b = host.createCall();
+  const late = [];
+  b.onTurn((turn) => late.push(turn));
+  api.voiceEvent({ key: a.id, type: "turn", data: { phase: "started", turn_id: "a-2", started_at: 3 } });
+  api.voiceEvent({ key: a.id, type: "say", data: { key: said.id, event: { type: "done", outcome: { status: "heard" } } } });
+  assert.deepEqual(turns, ["started", "cancelled"]);
+  assert.deepEqual(late, []);
+  assert.deepEqual(steps, ["playing", "progress", "done"]);
+  assert.equal(a.say("late").id.startsWith("say-"), true);
 });
 
 test("shared audio devices stay at host scope", async () => {

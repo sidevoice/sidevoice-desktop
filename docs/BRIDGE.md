@@ -415,7 +415,7 @@ sidevoice-engine itself fails with is one of these keys, with the engine's own c
 | `provider_invalid` | `provider` | not a provider id (lowercase letters, digits and dashes) |
 | `credentials_unavailable` | — | `setCredential` or `testCredential` where the app keeps no keys (Windows, Linux) |
 | `credentials_failed` | — | the keychain would not keep, remove or read a key |
-| `voice_settings_missing` | `code` (`settings-missing`) | a call of `host.voice` before its first `setSettings` |
+| `voice_settings_missing` | `code` (`settings-missing`) | a call's `start` before its first `setSettings` |
 | `voice_failed` | `code` (the call's: `microphone-denied`, `audio-device-unavailable`, the engine's `model-load-failed`, …, or `stopped`) | the call could not start, or was stopped before it listened |
 | `engine_unavailable` | — | the engine did not start with the app |
 | `update_unavailable` | — | `host.updater.restart()` with no update ready, `download()` with none known, or the `updater` command where this copy has no updater |
@@ -475,12 +475,22 @@ What is this app's own:
   engine's own with the provider's `detail`), and with `{key: "voice_failed", code}` when the new model cannot be
   loaded: the call then goes on as it was, on the models it had.
 - `start` rejects `{key: "voice_failed", code, message}` with the call's code, `{key: "voice_settings_missing", code:
-  "settings-missing"}` before any settings, and `{key: "voice_failed", code: "stopped"}` when `stop` came first.
+  "settings-missing"}` before any settings, and `{key: "voice_failed", code: "stopped"}` when `stop` came first. A
+  start after a stop starts the call again, whether or not that stop has resolved; a start while one is already asked
+  or the call listens changes nothing (the first start's `take` stays).
+- `stop()` resolves once the idle state that answers it has reached the page, after the take and the end of an open
+  turn, and once every saying under way has its outcome; before the first `setSettings` it resolves at once.
+- `mute(muted)` and `cancelInput()` return nothing and never reject, as in a browser. A call keeps its mute from its
+  creation: one asked before the first `setSettings` applies to the call those settings make. A muted call hears
+  silence; an open turn then ends only as silence ends it (its ordinary patience). `cancelInput()` before the settings
+  does nothing.
 - The host has `createCall`, `routeInput`, `audioDevices`, `setAudioDevices`, and `onAudioDevices`.
   Every `VoiceCallHost` has `id`, `setSettings`, `start`, `stop`, `dispose`, `say`, `mute`,
   `cancelInput`, `onTurn`, `onState`, `onLevel`, `onPlaybackLevel`, `onError`, and `onTake`.
   `routeInput(call | null)` acknowledges a next-frame switch; the other started calls receive silence.
-  `dispose` releases only that call's lane. Stopping one call leaves the other calls and shared devices running.
+  `dispose` takes no new work, stops the call and delivers what that stop ends, as the call reports it: each saying's
+  own outcome (never a made-up one), an open turn's `cancelled`, the take; then it releases only that call's lane and
+  delivers nothing more. Stopping one call leaves the other calls and shared devices running.
   The final stopped lane closes the physical microphone and speaker. The catalogues and provider keys are
   `host.engine`'s (above).
 - `onPlaybackLevel(listener)` receives a bare number from 0 to 1, just as `onLevel` does for the microphone: RMS of
@@ -508,8 +518,9 @@ What is this app's own:
 ### How it travels
 
 - Page → app: `voice_create_call {key}`, `voice_route_input {key?}`, then per-call
-  `voice_set_settings {key,settings}`, `voice_start {key,take?}`, `voice_stop {key}`,
-  `voice_dispose_call {key}`, `voice_say {key,sayKey,text,language?}`,
+  `voice_set_settings {key,settings}`, `voice_start {key,take?}`, `voice_stop {key}` (answers `true` once the page
+  has what the stop ends, `false` at once before the first settings),
+  `voice_dispose_call {key}` (stops first, the same way), `voice_say {key,sayKey,text,language?}`,
   `voice_cancel_say {key,sayKey}`, `voice_mute {key,muted}`, and `voice_cancel_input {key}`.
   The shared commands are `voice_audio_devices` and `voice_set_audio_devices {choice}`.
   The room window capability grants only these fixed commands, and each checks the current page.
@@ -670,5 +681,9 @@ interface UpdaterStatus {
   over a test host), `cargo test -p sidevoice-local-host` (the local host against a stand-in core, its install against a stand-in
   registry; docs/LOCAL_HOST.md → Tests). In the real app, CI's macOS job runs the probe page (`test/fixtures/probe.html`, probe build): the engine's
   capabilities, installs, refusals and a cancelled download (CI then checks nothing of it is on disk), and the voice
-  call's seam, catalogue, builds and a start that settles. The call itself, with real models on recorded speech, is
-  sidevoice-voice's own CI.
+  call's seam, catalogue, builds and a start that settles. CI's macOS job also runs the app's `voice::` tests: the
+  native host's lanes through the commands' own methods over stand-in shared devices (two started lanes, the route
+  to one, the other, none; a device failure on one; dispose releasing one lane and the last closing the devices; a
+  mute before the settings; start after stop; dispose's delivered ends), and a call on the engine's real models
+  through the app's adapter. The shared audio itself (`SharedNativeAudio`: one capture, silence to unrouted lanes,
+  the mixed echo reference) is sidevoice-voice's, tested in its own CI.
