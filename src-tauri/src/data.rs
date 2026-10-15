@@ -2029,13 +2029,14 @@ mod tests {
         let path = PathBuf::from(std::env::var_os("SIDEVOICE_LOCK_HANDOFF_PATH").unwrap());
         let fd: i32 = std::env::var("SIDEVOICE_LOCK_HANDOFF_FD").unwrap().parse().unwrap();
         let mut inherited: libc::stat = unsafe { std::mem::zeroed() };
+        // Inspect the inherited number before opening the named lock: that open may reuse a
+        // correctly closed descriptor number and otherwise make the test report a false leak.
+        let inherited_open = unsafe { libc::fstat(fd, &mut inherited) } == 0;
         let named = open_reset_lock_at(&path).unwrap();
         use std::os::fd::AsRawFd;
         let mut expected: libc::stat = unsafe { std::mem::zeroed() };
         assert_eq!(unsafe { libc::fstat(named.as_raw_fd(), &mut expected) }, 0);
-        let matches_lock = unsafe { libc::fstat(fd, &mut inherited) } == 0
-            && inherited.st_dev == expected.st_dev
-            && inherited.st_ino == expected.st_ino;
+        let matches_lock = inherited_open && inherited.st_dev == expected.st_dev && inherited.st_ino == expected.st_ino;
         assert!(!matches_lock, "relaunched process inherited the reset lock");
         assert!(!try_lock(&named), "helper keeps the lock until its work finishes");
     }
