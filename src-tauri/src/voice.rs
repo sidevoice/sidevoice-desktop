@@ -88,6 +88,9 @@ struct CallLane<P> {
     muted: AtomicBool,
     settings: Arc<AtomicU64>,
     lifecycle: Arc<Mutex<Lifecycle>>,
+    /// Whether the lane was released; held while an event is handed to the page, so that once it is set nothing
+    /// reaches the page again (see `CallLane::release`).
+    released: Arc<Mutex<bool>>,
     sayings: Arc<Mutex<HashMap<String, SayCancel>>>,
     /// The tasks handing each saying's steps to the page, up to its `done`.
     telling: Mutex<Vec<JoinHandle<()>>>,
@@ -171,6 +174,7 @@ impl<A: LaneAudio> VoiceState<A> {
         let Some(lane) = self.calls.lock().await.get(key).cloned() else { return Ok(()) };
         lane.stop().await;
         self.calls.lock().await.remove(key);
+        lane.release();
         Ok(())
     }
 
@@ -290,6 +294,7 @@ impl<A: LaneAudio> VoiceState<A> {
         let old = std::mem::take(&mut *self.calls.lock().await);
         for lane in old.into_values() {
             lane.stop().await;
+            lane.release();
         }
     }
 }
@@ -303,6 +308,7 @@ impl<P> CallLane<P> {
             muted: AtomicBool::new(false),
             settings: Arc::new(AtomicU64::new(0)),
             lifecycle: Arc::new(Mutex::new(Lifecycle::default())),
+            released: Arc::new(Mutex::new(false)),
             sayings: Arc::new(Mutex::new(HashMap::new())),
             telling: Mutex::new(Vec::new()),
         }
@@ -322,9 +328,16 @@ impl<P> CallLane<P> {
             self.io.lock().unwrap().take().ok_or_else(|| refusal("internal", "Voice lane audio was already taken."))?;
         let (created, events) = VoiceCall::new(Arc::clone(&models) as Arc<dyn VoiceModels>, io, config);
         created.mute(self.muted.load(Ordering::SeqCst));
-        forward(page, key.to_owned(), events, Arc::clone(&self.lifecycle));
+        forward(page, key.to_owned(), events, Arc::clone(&self.lifecycle), Arc::clone(&self.released));
         *call = Some((created, models));
         Ok(())
+    }
+
+    /// The lane is gone: nothing more reaches the page from it. Dropping the call makes its task close the call once
+    /// more (a last playback level and an idle state) after `stop` has answered, at a time of its own; those belong
+    /// to no one. Waits for the event being handed over, if any.
+    fn release(&self) {
+        *self.released.lock().unwrap() = true;
     }
 
     /// Stops listening and speaking; the models stay loaded. A `start` still waiting rejects with `stopped`. Returns
@@ -767,7 +780,7 @@ pub fn page_changed(app: &AppHandle) {
 
 /// Forward events with their immutable call key. Asynchronous delivery never consults the current input route. The
 /// idle state that answers a stop answers it once it is handed to the page.
-fn forward(page: Page, key: String, mut events: Events, lifecycle: Arc<Mutex<Lifecycle>>) {
+fn forward(page: Page, key: String, mut events: Events, lifecycle: Arc<Mutex<Lifecycle>>, released: Arc<Mutex<bool>>) {
     tokio::spawn(async move {
         while let Some(event) = events.next().await {
             let mut answered = None;
@@ -792,7 +805,11 @@ fn forward(page: Page, key: String, mut events: Events, lifecycle: Arc<Mutex<Lif
             };
             if !value.is_null() {
                 value["key"] = json!(key);
-                page(value);
+                // Held across the hand-over: `release` waits for the event in hand, and nothing follows it.
+                let released = released.lock().unwrap();
+                if !*released {
+                    page(value);
+                }
             }
             if let Some(answered) = answered {
                 let _ = answered.send(());
