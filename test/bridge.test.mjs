@@ -61,14 +61,17 @@ test("the macOS data bridge uses fixed native commands and no page-supplied path
   const api = install(win, ORIGIN, null, true);
   assert.equal(typeof api.host.data.deleteAll, "function");
   assert.equal(typeof api.host.data.resetReport, "function");
+  assert.equal(typeof api.host.data.uninstall, "function");
   await api.host.data.pairings.read();
   await api.host.data.pairings.write({ pairings: [], pendingRevokes: [] });
   await api.host.data.deleteAll();
+  await api.host.data.uninstall();
   await api.host.data.resetReport();
-  assert.deepEqual(calls.slice(-4), [
+  assert.deepEqual(calls.slice(-5), [
     ["data_pairings_read", undefined],
     ["data_pairings_write", { value: { pairings: [], pendingRevokes: [] } }],
     ["data_delete_all", undefined],
+    ["data_uninstall", undefined],
     ["data_reset_report", undefined],
   ]);
   const other = fakeWindow(ORIGIN);
@@ -77,6 +80,7 @@ test("the macOS data bridge uses fixed native commands and no page-supplied path
   assert.equal(typeof otherData.pairings.write, "function");
   assert.equal(otherData.deleteAll, undefined);
   assert.equal(otherData.resetReport, undefined);
+  assert.equal(otherData.uninstall, undefined);
 });
 
 test("reports not-ready first, then the real state once the room's controller exists", async () => {

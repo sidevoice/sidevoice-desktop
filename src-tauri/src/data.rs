@@ -474,31 +474,59 @@ pub async fn data_delete_all(app: AppHandle, webview: Webview) -> Answer {
     }
     #[cfg(target_os = "macos")]
     {
-        let state = app.state::<AppState>();
-        if !begin_exclusive(&app) {
-            return Err(refused("reset.busy"));
-        }
-        if state.call.lock().unwrap().joined
-            || crate::local_host::installing(&app)
-            || crate::updater::installing(&app)
-            || app.try_state::<crate::engine_ipc::EngineState>().is_some_and(|engine| engine.jobs.busy())
-        {
-            end_exclusive(&app);
-            return Err(refused("reset.busy"));
-        }
-        if let Err(refusal) = require_confirmation(native_reset_confirmation(&app).await) {
-            end_exclusive(&app);
-            return Err(refusal);
-        }
-        let app_for_work = app.clone();
-        let answer = tauri::async_runtime::spawn_blocking(move || begin_reset(&app_for_work))
-            .await
-            .unwrap_or_else(|_| Err(refused("reset.failed")));
-        if answer.is_err() {
-            end_exclusive(&app);
-        }
-        answer
+        confirmed_reset(app, false).await
     }
+}
+
+/// `deleteAll()` and then the app bundle: the helper moves it to the Trash after the app quits and does not relaunch.
+#[tauri::command]
+pub async fn data_uninstall(app: AppHandle, webview: Webview) -> Answer {
+    caller(&app, &webview)?;
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Err(refused("reset.unavailable"))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        confirmed_reset(app, true).await
+    }
+}
+
+#[cfg(target_os = "macos")]
+async fn confirmed_reset(app: AppHandle, uninstall: bool) -> Answer {
+    let state = app.state::<AppState>();
+    if !begin_exclusive(&app) {
+        return Err(refused("reset.busy"));
+    }
+    if state.call.lock().unwrap().joined
+        || crate::local_host::installing(&app)
+        || crate::updater::installing(&app)
+        || app.try_state::<crate::engine_ipc::EngineState>().is_some_and(|engine| engine.jobs.busy())
+    {
+        end_exclusive(&app);
+        return Err(refused("reset.busy"));
+    }
+    // An app that cannot remove its own bundle (a disk image, a translocated or read-only copy) refuses
+    // before the confirmation and before any data is touched.
+    if uninstall {
+        if let Err(key) = removable_app_bundle() {
+            end_exclusive(&app);
+            return Err(refused(key));
+        }
+    }
+    if let Err(refusal) = require_confirmation(native_reset_confirmation(&app, uninstall).await) {
+        end_exclusive(&app);
+        return Err(refusal);
+    }
+    let app_for_work = app.clone();
+    let answer = tauri::async_runtime::spawn_blocking(move || begin_reset(&app_for_work, uninstall))
+        .await
+        .unwrap_or_else(|_| Err(refused("reset.failed")));
+    if answer.is_err() {
+        end_exclusive(&app);
+    }
+    answer
 }
 
 #[cfg(target_os = "macos")]
@@ -507,7 +535,7 @@ fn require_confirmation(accepted: bool) -> Result<(), Value> {
 }
 
 #[cfg(target_os = "macos")]
-async fn native_reset_confirmation(app: &AppHandle) -> bool {
+async fn native_reset_confirmation(app: &AppHandle, uninstall: bool) -> bool {
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     if app
         .run_on_main_thread(move || {
@@ -524,7 +552,8 @@ async fn native_reset_confirmation(app: &AppHandle) -> bool {
                     let utf8: *const libc::c_char = msg_send![code, UTF8String];
                     let language =
                         if utf8.is_null() { "en" } else { std::ffi::CStr::from_ptr(utf8).to_str().unwrap_or("en") };
-                    let (title_text, detail_text, cancel_text, delete_text) = native_reset_words(language);
+                    let (title_text, detail_text, cancel_text, delete_text) =
+                        if uninstall { native_uninstall_words(language) } else { native_reset_words(language) };
                     let title = NSString::from_str(title_text);
                     let detail = NSString::from_str(detail_text);
                     let cancel = NSString::from_str(cancel_text);
@@ -562,7 +591,86 @@ fn native_reset_words(locale: &str) -> (&'static str, &'static str, &'static str
 }
 
 #[cfg(target_os = "macos")]
-fn begin_reset(app: &AppHandle) -> Answer {
+fn native_uninstall_words(locale: &str) -> (&'static str, &'static str, &'static str, &'static str) {
+    match locale.split(['-', '_']).next().unwrap_or("en") {
+        "de" => ("Sidevoice deinstallieren?", "Alle Sidevoice-Daten werden gelöscht: der Sidevoice-Dienst, lokale App-Daten, Modelle und gespeicherte Schlüssel. Danach wird Sidevoice beendet und in den Papierkorb gelegt. Eigene Profile, ein separat installierter Core, andere Geräte und Backups bleiben erhalten. Dies kann nicht rückgängig gemacht werden.", "Abbrechen", "Sidevoice deinstallieren"),
+        "es" => ("¿Desinstalar Sidevoice?", "Se borrarán todos los datos de Sidevoice: el servicio Sidevoice, los datos locales de la app, los modelos y las claves guardadas. Después Sidevoice se cerrará y se moverá a la Papelera. Permanecen los perfiles personalizados, un núcleo instalado por separado, otros dispositivos y las copias de seguridad. No se puede deshacer.", "Cancelar", "Desinstalar Sidevoice"),
+        "fr" => ("Désinstaller Sidevoice ?", "Toutes les données Sidevoice seront supprimées : le service Sidevoice, les données locales de l’app, les modèles et les clés enregistrées. Sidevoice se fermera ensuite et sera placé dans la Corbeille. Les profils personnalisés, un cœur installé séparément, les autres appareils et les sauvegardes restent. Cette action est irréversible.", "Annuler", "Désinstaller Sidevoice"),
+        "it" => ("Disinstallare Sidevoice?", "Verranno eliminati tutti i dati di Sidevoice: il servizio Sidevoice, i dati locali dell’app, i modelli e le chiavi salvate. Poi Sidevoice si chiuderà e verrà spostato nel Cestino. Restano i profili personalizzati, un core installato separatamente, gli altri dispositivi e i backup. L’azione non può essere annullata.", "Annulla", "Disinstalla Sidevoice"),
+        "ja" => ("Sidevoice をアンインストールしますか？", "Sidevoice のすべてのデータ（Sidevoice サービス、アプリ内のデータ、モデル、保存したキー）を削除します。その後 Sidevoice は終了し、ゴミ箱に移動されます。カスタムプロファイル、別途インストールしたコア、ほかの端末、バックアップは残ります。この操作は取り消せません。", "キャンセル", "Sidevoice をアンインストール"),
+        "pl" => ("Odinstalować Sidevoice?", "Wszystkie dane Sidevoice zostaną usunięte: usługa Sidevoice, lokalne dane aplikacji, modele i zapisane klucze. Następnie Sidevoice zamknie się i zostanie przeniesiony do Kosza. Niestandardowe profile, osobno zainstalowany rdzeń, inne urządzenia i kopie zapasowe pozostaną. Nie można tego cofnąć.", "Anuluj", "Odinstaluj Sidevoice"),
+        "zh" => ("卸载 Sidevoice？", "将删除所有 Sidevoice 数据：Sidevoice 服务、本应用的本地数据、模型和保存的密钥。随后 Sidevoice 会退出并移到废纸篓。自定义配置、单独安装的核心、其他设备和备份会保留。此操作无法撤销。", "取消", "卸载 Sidevoice"),
+        _ => ("Uninstall Sidevoice?", "This deletes all Sidevoice data: the Sidevoice service, this app’s local data, models and saved keys. Sidevoice then quits and moves itself to the Trash. Custom profiles, a separately installed core, other devices and backups remain. This cannot be undone.", "Cancel", "Uninstall Sidevoice"),
+    }
+}
+
+/// The `.app` bundle this executable runs from: `<bundle>.app/Contents/MacOS/<executable>`. Anything else (a
+/// development build, a path with `..`, a translocated copy) has no bundle the uninstall may remove.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn app_bundle_of(exe: &Path) -> Result<PathBuf, &'static str> {
+    let clean = exe.is_absolute()
+        && exe.components().all(|part| matches!(part, std::path::Component::RootDir | std::path::Component::Normal(_)));
+    if !clean || exe.components().any(|part| part.as_os_str() == "AppTranslocation") {
+        return Err("reset.app-unremovable");
+    }
+    let macos = exe.parent().filter(|dir| dir.file_name().is_some_and(|name| name == "MacOS"));
+    let contents = macos.and_then(Path::parent).filter(|dir| dir.file_name().is_some_and(|name| name == "Contents"));
+    let bundle = contents.and_then(Path::parent).filter(|dir| {
+        dir.extension().is_some_and(|ext| ext == "app") && dir.parent().is_some_and(|parent| parent != Path::new("/"))
+    });
+    bundle.map(Path::to_path_buf).ok_or("reset.app-unremovable")
+}
+
+/// This app's own bundle, checked again by the helper right before it moves it: a real directory under its
+/// canonical path, with its Info.plist, in a folder this user may write.
+#[cfg(target_os = "macos")]
+fn removable_app_bundle() -> Result<PathBuf, &'static str> {
+    use std::os::unix::ffi::OsStrExt;
+    let exe = std::env::current_exe().and_then(fs::canonicalize).map_err(|_| "reset.app-unremovable")?;
+    let bundle = app_bundle_of(&exe)?;
+    let meta = fs::symlink_metadata(&bundle).map_err(|_| "reset.app-unremovable")?;
+    if !meta.is_dir()
+        || meta.file_type().is_symlink()
+        || fs::canonicalize(&bundle).ok().as_deref() != Some(bundle.as_path())
+        || !bundle.join("Contents/Info.plist").is_file()
+    {
+        return Err("reset.app-unremovable");
+    }
+    let parent = bundle.parent().ok_or("reset.app-unremovable")?;
+    let parent = std::ffi::CString::new(parent.as_os_str().as_bytes()).map_err(|_| "reset.app-unremovable")?;
+    if unsafe { libc::access(parent.as_ptr(), libc::W_OK) } != 0 {
+        return Err("reset.app-unremovable");
+    }
+    Ok(bundle)
+}
+
+/// Finder's own move to the Trash (`NSFileManager trashItemAtURL:`), so the app can be put back from there.
+#[cfg(target_os = "macos")]
+fn move_to_trash(bundle: &Path) -> Result<(), &'static str> {
+    use objc2::{class, msg_send, rc::autoreleasepool, runtime::AnyObject};
+    use objc2_foundation::NSString;
+    let text = bundle.to_str().ok_or("reset.app-unremovable")?;
+    let moved = autoreleasepool(|_| unsafe {
+        let manager: *mut AnyObject = msg_send![class!(NSFileManager), defaultManager];
+        let path = NSString::from_str(text);
+        let url: *mut AnyObject = msg_send![class!(NSURL), fileURLWithPath: &*path, isDirectory: true];
+        if manager.is_null() || url.is_null() {
+            return false;
+        }
+        let resulting: *mut *mut AnyObject = std::ptr::null_mut();
+        let error: *mut *mut AnyObject = std::ptr::null_mut();
+        let moved: bool = msg_send![manager, trashItemAtURL: url, resultingItemURL: resulting, error: error];
+        moved
+    });
+    if moved {
+        Ok(())
+    } else {
+        Err("reset.app-trash-failed")
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn begin_reset(app: &AppHandle, uninstall: bool) -> Answer {
     use sidevoice_local_host::{cli::Cli, paths::DataDirs};
     let reset_lock = open_reset_lock().map_err(|_| refused("reset.helper-failed"))?;
     if !try_lock(&reset_lock) {
@@ -629,6 +737,7 @@ fn begin_reset(app: &AppHandle) -> Answer {
         .arg("--sidevoice-reset-helper")
         .arg(std::process::id().to_string())
         .arg(inherited_lock.to_string())
+        .args(uninstall.then_some("uninstall"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -662,9 +771,16 @@ fn begin_reset(app: &AppHandle) -> Answer {
         std::thread::sleep(Duration::from_millis(700));
         app_to_quit.exit(0);
     });
-    Ok(json!({"state": if failed.is_empty() { "needs-restart" } else { "partial" },
-        "service": service_outcome,
-        "agents": agents, "failed": failed, "pending": ["app-data", "models", "webview", "cache", "saved-state", "logs", "preferences"]}))
+    let mut pending = vec!["app-data", "models", "webview", "cache", "saved-state", "logs", "preferences"];
+    if uninstall {
+        pending.push("app");
+    }
+    let state = match (failed.is_empty(), uninstall) {
+        (false, _) => "partial",
+        (true, false) => "needs-restart",
+        (true, true) => "needs-quit",
+    };
+    Ok(json!({"state": state, "service": service_outcome, "agents": agents, "failed": failed, "pending": pending}))
 }
 
 #[cfg(target_os = "macos")]
@@ -1321,8 +1437,8 @@ fn webkit_gone(pids: &[u32]) -> bool {
     false
 }
 
-/// Called in the helper process, after its parent closes the pipe on exit.
-pub fn run_reset_helper(parent_pid: Option<u32>, lock_fd: Option<i32>) {
+/// Called in the helper process, after its parent closes the pipe on exit. `uninstall`: then the app bundle too.
+pub fn run_reset_helper(parent_pid: Option<u32>, lock_fd: Option<i32>, uninstall: bool) {
     #[cfg(target_os = "macos")]
     {
         let Some(lock) = helper_lock(lock_fd) else { return };
@@ -1396,30 +1512,29 @@ pub fn run_reset_helper(parent_pid: Option<u32>, lock_fd: Option<i32>) {
             }
             _ => failed.push(json!({"step": "preferences", "key": "inspect"})),
         }
-        finish_reset_at(
-            &report,
-            &journal,
-            &completed,
-            failed,
-            initial.get("agents").cloned().unwrap_or_else(|| json!({})),
-            write_atomic_json,
-            || {
-                // Cleanup is over. A new app must acquire this lock independently.
-                drop(lock);
-                std::env::current_exe()
-                    .ok()
-                    .and_then(|exe| Command::new(exe).env("SIDEVOICE_RESET_RELAUNCH", "1").spawn().ok())
-                    .is_some()
-            },
-        );
+        let agents = initial.get("agents").cloned().unwrap_or_else(|| json!({}));
+        let relaunch = || {
+            // Cleanup is over. A new app must acquire this lock independently.
+            drop(lock);
+            std::env::current_exe()
+                .ok()
+                .and_then(|exe| Command::new(exe).env("SIDEVOICE_RESET_RELAUNCH", "1").spawn().ok())
+                .is_some()
+        };
+        if uninstall {
+            let trash = || removable_app_bundle().and_then(|bundle| move_to_trash(&bundle));
+            finish_uninstall_at(&report, &journal, &completed, failed, agents, write_atomic_json, trash, relaunch);
+        } else {
+            finish_reset_at(&report, &journal, &completed, failed, agents, write_atomic_json, relaunch);
+        }
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (parent_pid, lock_fd);
+        let _ = (parent_pid, lock_fd, uninstall);
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn finish_reset_at(
     report: &Path,
     journal: &Path,
@@ -1442,6 +1557,40 @@ fn finish_reset_at(
             let _ = fs::remove_file(journal);
         }
     }
+}
+
+/// The uninstall's last step. Only a clean run moves the app to the Trash, and it leaves no report: nothing is left
+/// to read it. A failed data step (anything but a retained agent registration, which the confirmation already names)
+/// keeps the app, and so does a failed move: the app relaunches, as after `deleteAll()`, and reports it.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[allow(clippy::too_many_arguments)]
+fn finish_uninstall_at(
+    report: &Path,
+    journal: &Path,
+    completed: &[&str],
+    mut failed: Vec<Value>,
+    agents: Value,
+    write: impl Fn(&Path, &Value) -> Result<(), &'static str>,
+    trash: impl FnOnce() -> Result<(), &'static str>,
+    relaunch: impl FnOnce() -> bool,
+) {
+    if failed.iter().any(|row| row["step"] != "agents") {
+        failed.push(json!({"step":"app", "key":"reset.app-kept"}));
+    } else if write(journal, &json!({"stage":"app", "completed":completed, "failed":failed, "agents":agents})).is_err()
+    {
+        failed.push(json!({"step":"report", "key":"reset.report-failed"}));
+        failed.push(json!({"step":"app", "key":"reset.app-kept"}));
+    } else {
+        match trash() {
+            Ok(()) => {
+                let _ = fs::remove_file(journal);
+                let _ = fs::remove_file(report);
+                return;
+            }
+            Err(key) => failed.push(json!({"step":"app", "key":key})),
+        }
+    }
+    finish_reset_at(report, journal, completed, failed, agents, write, relaunch);
 }
 
 #[cfg(target_os = "macos")]
@@ -1721,6 +1870,20 @@ mod tests {
     }
 
     #[test]
+    fn native_uninstall_confirmation_names_the_trash_in_all_supported_languages() {
+        for locale in ["en", "es", "de", "fr", "it", "ja", "pl", "zh-Hans"] {
+            let (title, detail, cancel, uninstall) = native_uninstall_words(locale);
+            assert!(!title.is_empty() && !detail.is_empty() && !cancel.is_empty() && !uninstall.is_empty());
+            assert!(detail.contains("Sidevoice") && !detail.contains("connector"));
+            assert_eq!(cancel, native_reset_words(locale).2);
+            assert_ne!(title, native_reset_words(locale).0);
+            assert_ne!(cancel, uninstall);
+        }
+        assert_eq!(native_uninstall_words("xx"), native_uninstall_words("en"));
+        assert!(native_uninstall_words("en").1.contains("Trash"));
+    }
+
+    #[test]
     fn reset_and_model_or_credential_admission_are_atomic() {
         let mut gate = Admission::default();
         assert!(gate.enter()); // model install, voice start, or credential write
@@ -1949,5 +2112,133 @@ mod tests {
         assert_eq!(result, Err(refused("reset.unsafe")));
         assert_eq!(fs::read(outside.join("sentinel")).unwrap(), b"unrelated");
         assert!(!outside.join("pairings.json").exists());
+    }
+}
+
+/// The uninstall's platform-neutral decisions run on every platform's tests; the macOS-only parts above do not.
+#[cfg(test)]
+mod uninstall_tests {
+    use super::*;
+
+    fn plain_write(path: &Path, value: &Value) -> Result<(), &'static str> {
+        fs::write(path, serde_json::to_vec(value).unwrap()).map_err(|_| "report-write")
+    }
+
+    fn read(path: &Path) -> Value {
+        serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn only_a_real_app_bundle_can_be_removed() {
+        let ok = |exe: &str| app_bundle_of(Path::new(exe));
+        assert_eq!(
+            ok("/Applications/Sidevoice.app/Contents/MacOS/sidevoice-desktop"),
+            Ok(PathBuf::from("/Applications/Sidevoice.app"))
+        );
+        assert_eq!(
+            ok("/Users/ana/Applications/Sidevoice Nightly.app/Contents/MacOS/sidevoice-desktop"),
+            Ok(PathBuf::from("/Users/ana/Applications/Sidevoice Nightly.app"))
+        );
+        for refused in [
+            // A development build has no bundle.
+            "/Users/ana/sidevoice-desktop/src-tauri/target/debug/sidevoice-desktop",
+            "/Applications/Sidevoice/Contents/MacOS/sidevoice-desktop",
+            "/Applications/Sidevoice.app/Contents/Resources/sidevoice-desktop",
+            "/Applications/Sidevoice.app/MacOS/sidevoice-desktop",
+            "/Sidevoice.app/Contents/MacOS/sidevoice-desktop",
+            "/Applications/../Sidevoice.app/Contents/MacOS/sidevoice-desktop",
+            "Sidevoice.app/Contents/MacOS/sidevoice-desktop",
+            "/private/var/folders/x/T/AppTranslocation/ABC/d/Sidevoice.app/Contents/MacOS/sidevoice-desktop",
+        ] {
+            assert_eq!(ok(refused), Err("reset.app-unremovable"), "{refused}");
+        }
+    }
+
+    #[test]
+    fn a_clean_uninstall_trashes_the_app_without_relaunch_or_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let (report, journal) = (dir.path().join("report.json"), dir.path().join("journal.json"));
+        let mut trashed = false;
+        let agents = json!({"codex": "foreign"});
+        let failed = vec![json!({"step": "agents", "key": "reset.agent-remains", "agent": "codex"})];
+        finish_uninstall_at(
+            &report,
+            &journal,
+            &["service", "app-data"],
+            failed,
+            agents,
+            |path, value| {
+                assert_eq!(value["stage"], "app");
+                plain_write(path, value)
+            },
+            || {
+                assert!(journal.exists(), "the journal names the step in progress");
+                trashed = true;
+                Ok(())
+            },
+            || panic!("an uninstalled app is not relaunched"),
+        );
+        assert!(trashed);
+        assert!(!journal.exists() && !report.exists());
+    }
+
+    #[test]
+    fn a_failed_data_step_keeps_the_app_and_relaunches_to_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let (report, journal) = (dir.path().join("report.json"), dir.path().join("journal.json"));
+        let mut relaunched = false;
+        finish_uninstall_at(
+            &report,
+            &journal,
+            &["service"],
+            vec![json!({"step": "webview", "key": "reset.process-busy"})],
+            json!({}),
+            plain_write,
+            || panic!("an app whose data remains is not trashed"),
+            || {
+                relaunched = true;
+                true
+            },
+        );
+        assert!(relaunched);
+        let pending = read(&journal);
+        assert_eq!(pending["stage"], "awaiting-relaunch");
+        assert_eq!(pending["failed"][1], json!({"step": "app", "key": "reset.app-kept"}));
+    }
+
+    #[test]
+    fn a_failed_move_relaunches_and_reports_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (report, journal) = (dir.path().join("report.json"), dir.path().join("journal.json"));
+        finish_uninstall_at(
+            &report,
+            &journal,
+            &["service"],
+            vec![],
+            json!({}),
+            plain_write,
+            || Err("reset.app-trash-failed"),
+            || true,
+        );
+        let pending = read(&journal);
+        assert_eq!(pending["stage"], "awaiting-relaunch");
+        assert_eq!(pending["failed"], json!([{"step": "app", "key": "reset.app-trash-failed"}]));
+
+        // Neither moved nor relaunched: the next launch reads a partial report.
+        fs::remove_file(&journal).unwrap();
+        finish_uninstall_at(
+            &report,
+            &journal,
+            &["service"],
+            vec![],
+            json!({}),
+            plain_write,
+            || Err("reset.app-trash-failed"),
+            || false,
+        );
+        let value = read(&report);
+        assert_eq!(value["state"], "partial");
+        assert_eq!(value["failed"][0]["key"], "reset.app-trash-failed");
+        assert_eq!(value["failed"][1]["key"], "reset.relaunch-failed");
     }
 }

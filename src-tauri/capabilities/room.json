@@ -43,6 +43,7 @@
     "allow-data-pairings-read",
     "allow-data-pairings-write",
     "allow-data-delete-all",
+    "allow-data-uninstall",
     "allow-data-reset-report",
     "allow-mute-shortcut",
     "allow-call-controls-settings",

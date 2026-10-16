@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-data-uninstall"
+description = "Enables the data_uninstall command without any pre-configured scope."
+commands.allow = ["data_uninstall"]
+
+[[permission]]
+identifier = "deny-data-uninstall"
+description = "Denies the data_uninstall command without any pre-configured scope."
+commands.deny = ["data_uninstall"]

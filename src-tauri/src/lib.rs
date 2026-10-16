@@ -453,6 +453,7 @@ macro_rules! commands {
             data::data_pairings_read,
             data::data_pairings_write,
             data::data_delete_all,
+            data::data_uninstall,
             data::data_reset_report,
             mute_shortcut,
             call_controls::call_controls_settings,
@@ -600,7 +601,7 @@ pub fn run() {
         });
 }
 
-/// The helper is the same signed executable, launched only after a confirmed reset.
-pub fn run_reset_helper(parent_pid: Option<u32>, lock_fd: Option<i32>) {
-    data::run_reset_helper(parent_pid, lock_fd);
+/// The helper is the same signed executable, launched only after a confirmed reset or uninstall.
+pub fn run_reset_helper(parent_pid: Option<u32>, lock_fd: Option<i32>, uninstall: bool) {
+    data::run_reset_helper(parent_pid, lock_fd, uninstall);
 }
