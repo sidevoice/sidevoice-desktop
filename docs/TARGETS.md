@@ -5,7 +5,7 @@ By design:
   loads a remote page. The interface is a secret-free static client; the same build is also a standalone static
   site (sidevoice-web `deploy/web-static/`) for people who cannot install the app.
 - **Auth is device pairing** with the node: the node issues a one-time code (its agent shows it with the MCP
-  tool `voice_pair_device`, or `sidevoice pair-device` on the machine), and the person pastes it in the
+  tool `voice_pair_device`, or `npx sidevoice pair-device` on the machine), and the person pastes it in the
   interface (Máquinas → Emparejar). The code carries the node's id, how to reach it (its own URLs and/or a
   rendezvous room), a one-time secret and the fingerprint of the node's identity key, which the interface pins.
   The node side of the contract is sidevoice-core's `server/devices.py`.
