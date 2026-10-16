@@ -291,14 +291,47 @@
    *  where the app runs the voice call, the page is never granted `getUserMedia`, so it can neither ask macOS for the
    *  microphone nor read whether it may. The first-run setup asks through this. Only with `voice` (macOS). */
   function microphone() {
+    const listeners = new Set();
+    let timer = null;
+    let last = null;
+    const poll = () =>
+      call("microphone", { action: "state" })
+        .then((state) => {
+          if (last !== null && state !== last) {
+            for (const listener of [...listeners]) {
+              try { listener(); } catch (_) { /* a listener's error is the page's own */ }
+            }
+          }
+          last = state;
+        })
+        .catch(() => {});
     return Object.freeze({
-      /** `"prompt"` (not asked yet), `"granted"` or `"denied"` (denied, or forbidden by the system). Never prompts. */
+      /** `"prompt"` (not asked yet), `"granted"`, `"denied"` (denied, or forbidden by the system) or `"missing"` (not
+       *  denied, and no audio input device exists). Never prompts. */
       state: () => call("microphone", { action: "state" }),
       /** macOS's own prompt the first time; afterwards the stored answer at once, with no prompt: `"granted"` or
        *  `"denied"`. */
       request: () => call("microphone", { action: "request" }),
       /** Opens System Settings at Privacy & Security › Microphone, where a denial is undone. */
       openSettings: () => call("microphone", { action: "open-settings" }).then(() => undefined),
+      /** `listener()` whenever `state()` changes: the permission (in System Settings) or a microphone plugged in or
+       *  out; read it with `state()`. Polled every 2 s while anyone listens. Returns `stop`. */
+      onChange(listener) {
+        if (typeof listener !== "function") throw new TypeError("onChange(listener)");
+        listeners.add(listener);
+        if (timer === null) {
+          poll();
+          timer = win.setInterval(poll, 2000);
+        }
+        return () => {
+          listeners.delete(listener);
+          if (listeners.size === 0 && timer !== null) {
+            win.clearInterval(timer);
+            timer = null;
+            last = null;
+          }
+        };
+      },
     });
   }
 

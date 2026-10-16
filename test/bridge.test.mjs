@@ -1100,7 +1100,7 @@ test("host.microphone only with host.voice, and exactly its three calls", () => 
   }
   const api = install(fakeWindow(ORIGIN).win, ORIGIN, "native", true, true);
   assert.ok("voice" in api.host);
-  assert.deepEqual(Object.keys(api.host.microphone).sort(), ["openSettings", "request", "state"]);
+  assert.deepEqual(Object.keys(api.host.microphone).sort(), ["onChange", "openSettings", "request", "state"]);
   assert.ok(Object.isFrozen(api.host.microphone));
 });
 
@@ -1126,16 +1126,41 @@ test("host.microphone calls the microphone command with its action, and passes r
   await assert.rejects(host.microphone.openSettings(), (error) => error === refusal);
 });
 
+test("host.microphone.onChange fires when state() changes (permission or device), until stopped", async () => {
+  const install = loadFactory();
+  let answer = "granted";
+  const { win, tick } = settingsWindow({ microphone: () => answer });
+  const microphone = install(win, ORIGIN, "native", true, true).host.microphone;
+  assert.throws(() => microphone.onChange("nope"), { name: "TypeError" });
+  let fired = 0;
+  const stop = microphone.onChange(() => { fired++; });
+  await flush(); // the first read is the baseline, not a change
+  assert.equal(fired, 0);
+  tick(); await flush();
+  assert.equal(fired, 0);
+  answer = "missing"; // unplugged
+  tick(); await flush();
+  assert.equal(fired, 1);
+  answer = "prompt"; // plugged in, not asked yet
+  tick(); await flush();
+  assert.equal(fired, 2);
+  stop();
+  answer = "denied";
+  tick(); await flush();
+  assert.equal(fired, 2);
+});
+
 // ---- host.muteShortcut and host.callControls: the app's call settings, set from the page (docs/BRIDGE.md) ----
 
 function settingsWindow(answers) {
-  const { win, calls } = fakeWindow(ORIGIN);
+  const fake = fakeWindow(ORIGIN);
+  const { win, calls } = fake;
   win.__TAURI_INTERNALS__.invoke = (cmd, args) => {
     calls.push([cmd, structuredClone(args)]);
     const answer = answers[cmd]?.(args);
     return answer instanceof Error ? Promise.reject(answer.refusal) : Promise.resolve(answer);
   };
-  return { win, calls };
+  return { win, calls, tick: fake.tick };
 }
 
 test("host.muteShortcut and host.callControls are exactly the web's seams", () => {

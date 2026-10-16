@@ -528,14 +528,19 @@ microphone early through it, rather than at the first call. Present exactly wher
 
 ```ts
 interface MicrophonePermission {
-  state(): Promise<"prompt" | "granted" | "denied">;
+  state(): Promise<"prompt" | "granted" | "denied" | "missing">;
   request(): Promise<"granted" | "denied">;
   openSettings(): Promise<void>;
+  onChange(listener: () => void): () => void;
 }
 ```
 
 - `state()`: `AVCaptureDevice.authorizationStatus(for: .audio)`: not determined → `"prompt"`, authorized →
-  `"granted"`, denied or restricted → `"denied"`. Never prompts.
+  `"granted"`, denied or restricted → `"denied"`. Where it is not denied and no audio input device exists
+  (`AVCaptureDevice.default(for: .audio)` is nil), `"missing"`: the OS knows the devices, so the bridge owns device
+  availability, and a denial stands whatever is plugged in. Never prompts.
+- `onChange(listener)`: `listener()` whenever `state()` changes, so on a permission change and on a microphone
+  plugged in or out; the page reads `state()` again. Polled every 2 s while anyone listens; returns `stop`.
 - `request()`: `AVCaptureDevice.requestAccess(for: .audio)`: macOS's own prompt the first time (with
   `NSMicrophoneUsageDescription`, `src-tauri/Info.plist`); afterwards it answers at once with the stored answer, no
   prompt.

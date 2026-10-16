@@ -5,7 +5,8 @@
 //! uses: the page's first-run setup asks early instead of at the first call.
 //!
 //! - `state`: `AVCaptureDevice.authorizationStatus(for: .audio)`: `prompt` (not determined), `granted`, `denied`
-//!   (denied or restricted). Never prompts.
+//!   (denied or restricted), or `missing` when the permission is not denied and no audio input device exists
+//!   (`AVCaptureDevice.default(for: .audio)` is nil). Never prompts.
 //! - `request`: `AVCaptureDevice.requestAccess(for: .audio)`: macOS's own prompt the first time; afterwards the stored
 //!   answer at once, with no prompt.
 //! - `open-settings`: System Settings at Privacy & Security › Microphone, where a denial is undone.
@@ -29,13 +30,18 @@ use crate::refusal;
 const SETTINGS_URL: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone";
 
 /// `host.microphone`'s one command: `action` `state`, `request` or `open-settings`. `state` and `request` answer the
-/// permission as the page reads it (`"prompt" | "granted" | "denied"`; `request` never `"prompt"`), `open-settings`
-/// nothing. Refuses `bad_request` for another action or caller, `internal` when the system does not answer.
+/// permission as the page reads it (`"prompt" | "granted" | "denied"`, `state` also `"missing"`; `request` only
+/// `"granted" | "denied"`), `open-settings` nothing. Refuses `bad_request` for another action or caller, `internal` when the system does not answer.
 #[tauri::command]
 pub async fn microphone(app: AppHandle, webview: Webview, action: String) -> Result<Value, Value> {
     crate::room_page(&app, &webview).map_err(|why| refusal("bad_request", why))?;
     match action.as_str() {
-        "state" => Ok(json!(permission(authorization()?))),
+        "state" => {
+            let permission = permission(authorization()?);
+            // A denial stands whatever is plugged in; otherwise no input device at all is the answer.
+            let missing = permission != "denied" && !input_device()?;
+            Ok(json!(if missing { "missing" } else { permission }))
+        }
         "request" => {
             let granted = request_access()?
                 .await
@@ -56,6 +62,13 @@ fn permission(status: AVAuthorizationStatus) -> &'static str {
         // page cannot get the microphone by asking.
         _ => "denied",
     }
+}
+
+/// Whether an audio input device exists (`AVCaptureDevice.default(for: .audio)`), which needs no permission.
+fn input_device() -> Result<bool, Value> {
+    let audio = audio()?;
+    // SAFETY: AVMediaTypeAudio is one of the two media types the method accepts.
+    Ok(unsafe { AVCaptureDevice::defaultDeviceWithMediaType(audio) }.is_some())
 }
 
 fn audio() -> Result<&'static AVMediaType, Value> {
