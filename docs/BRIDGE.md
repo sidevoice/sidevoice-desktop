@@ -47,7 +47,8 @@ The bundled room page receives `host.data.pairings` on macOS, Windows and Linux.
 after a bounded, private, atomic write under the app's Application Support directory. Both arrays contain
 remote pairing credentials; pending revocations remain native until the remote machine acknowledges them.
 Local-host pairing is derived from the verified socket and is never stored there. Neither call accepts a
-path. Browser pages keep their own browser storage. `deleteAll()` and `resetReport()` are macOS-only.
+path. Browser pages keep their own browser storage. `deleteAll()`, `uninstall()` and `resetReport()` are
+macOS-only; elsewhere the bridge omits them and the native commands refuse `{key: "reset.unavailable"}`.
 
 `deleteAll()` is the confirmed Settings › Advanced action. Native also displays an OS-owned confirmation
 with Cancel as its default button on every invocation; cancelling rejects `{key: "reset.cancelled"}` before
@@ -102,7 +103,20 @@ The app bundle, remote machines, foreign/manual agent registrations, provider ac
 backups are outside this action; the connector can leave nonpersonal stop/lock markers and open conversation
 servers until they exit. The UI must state these limits before confirmation.
 
-Commands: `data_pairings_read`, `data_pairings_write {value}`, `data_delete_all`,
+`uninstall()` is `deleteAll()` plus the app bundle: the same busy, connector, scope, journal, lock and helper
+steps, behind its own OS-owned confirmation (Cancel default, `{key: "reset.cancelled"}`), which says the app
+quits and moves itself to the Trash. Before that confirmation it derives its bundle from its own executable
+(`<name>.app/Contents/MacOS/<executable>`, canonical, not translocated, with its `Info.plist`, in a folder the
+user may write) and refuses `{key: "reset.app-unremovable"}` otherwise, so a development build or a copy run
+from a disk image deletes nothing. It resolves the same shape as `deleteAll()` with `state: "needs-quit"`
+(or `"partial"`) and `"app"` in `pending`. The helper repeats the bundle check after the app and its WebKit
+children exit, and only when every data step succeeded (a retained agent registration does not count) moves
+the bundle to the Trash with `NSFileManager trashItemAtURL:`, removes its journal and exits without relaunching:
+no report remains. Otherwise it keeps the app, adds `{step: "app", key: "reset.app-kept"}` or
+`{step: "app", key: "reset.app-trash-failed"}` to `failed`, and relaunches it exactly as `deleteAll()` does, so
+`resetReport()` names what remains and the person can retry.
+
+Commands: `data_pairings_read`, `data_pairings_write {value}`, `data_delete_all`, `data_uninstall`,
 `data_reset_report`; only the room capability grants them and each checks the room origin.
 
 ### Call state

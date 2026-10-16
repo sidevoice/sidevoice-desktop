@@ -49,6 +49,7 @@ fn main() {
         "data_pairings_read",
         "data_pairings_write",
         "data_delete_all",
+        "data_uninstall",
         "data_reset_report",
         "mute_shortcut",
         "call_controls_settings",

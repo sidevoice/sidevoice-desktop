@@ -592,6 +592,7 @@
         }),
         ...(localHostOffered === true ? {
           deleteAll: () => call("data_delete_all"),
+          uninstall: () => call("data_uninstall"),
           resetReport: () => call("data_reset_report"),
         } : {}),
       }),
