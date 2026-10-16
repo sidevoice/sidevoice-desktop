@@ -155,7 +155,7 @@ fn a_call_on_the_engines_real_models_hears_speech_and_plays_a_reply() {
     let played = Arc::new(Mutex::new(Vec::new()));
     let io = Fixture { sink: None, stop: Arc::default(), played: Arc::clone(&played) };
     runtime.block_on(async {
-        let models = Arc::new(EngineModels::new(engines.engine(), choice));
+        let models = Arc::new(EngineModels::new(engines.engine(), Arc::new(ModelCache::default()), choice));
         let (call, mut events) = VoiceCall::new(models, Box::new(io), config);
         call.start(StartOptions::default());
         let said = next(&mut events, |event| match event {
@@ -191,7 +191,7 @@ fn a_call_on_the_engines_real_models_hears_speech_and_plays_a_reply() {
 /// The 10 ms frames of tone that make a turn: 1.5 s. sidevoice-voice hears speech start after 400 ms of it at the
 /// volume bar, the volume measured over the last 400 ms and smoothed (Pipecat's, sidevoice-voice#25): 800 ms of tone no
 /// longer opens a turn, a second does.
-const TURN_FRAMES: usize = 150;
+pub(crate) const TURN_FRAMES: usize = 150;
 
 /// A microphone that says a tone while the test asks it to and is quiet otherwise, in real time, and a speaker that
 /// plays at once what it is given.
@@ -270,7 +270,7 @@ impl Vad for LoudVad {
 }
 
 /// A model that answers `name`, each call telling `started` it began and, held, waiting until it is released.
-struct Held {
+pub(crate) struct Held {
     name: &'static str,
     started: tokio::sync::mpsc::UnboundedSender<&'static str>,
     /// Open: its calls end at once.
@@ -279,7 +279,11 @@ struct Held {
 }
 
 impl Held {
-    fn new(name: &'static str, held: bool, started: &tokio::sync::mpsc::UnboundedSender<&'static str>) -> Arc<Self> {
+    pub(crate) fn new(
+        name: &'static str,
+        held: bool,
+        started: &tokio::sync::mpsc::UnboundedSender<&'static str>,
+    ) -> Arc<Self> {
         let (gate, _) = tokio::sync::watch::channel(!held);
         Arc::new(Held { name, started: started.clone(), gate, calls: AtomicUsize::new(0) })
     }
@@ -335,7 +339,7 @@ impl EndOfTurnModel for Held {
 
 /// Models by id, as the engine would load them: `fail` cannot be loaded, and while `slow` is shut a load of `slow-…`
 /// waits.
-struct FakeLoader {
+pub(crate) struct FakeLoader {
     models: Vec<Arc<Held>>,
     slow: tokio::sync::watch::Sender<bool>,
     /// Whether a load of `slow-…` has begun waiting.
@@ -343,7 +347,7 @@ struct FakeLoader {
 }
 
 impl FakeLoader {
-    fn new(models: Vec<Arc<Held>>, slow: bool) -> Arc<Self> {
+    pub(crate) fn new(models: Vec<Arc<Held>>, slow: bool) -> Arc<Self> {
         Arc::new(FakeLoader { models, slow: tokio::sync::watch::channel(!slow).0, waiting: AtomicBool::new(false) })
     }
 }
@@ -378,7 +382,7 @@ impl Loader for Arc<FakeLoader> {
 }
 
 /// The choice of `stt` and `tts` (and its voice, the same name), with `end_of_turn` when smart.
-fn chosen(stt: &str, tts: &str, end_of_turn: Option<&str>) -> VoiceChoice {
+pub(crate) fn chosen(stt: &str, tts: &str, end_of_turn: Option<&str>) -> VoiceChoice {
     VoiceChoice {
         vad: ModelChoice::local("vad"),
         stt: ModelChoice::local(stt),
@@ -388,7 +392,7 @@ fn chosen(stt: &str, tts: &str, end_of_turn: Option<&str>) -> VoiceChoice {
     }
 }
 
-fn config(end_of_turn: &str, voice: &str) -> VoiceConfig {
+pub(crate) fn config(end_of_turn: &str, voice: &str) -> VoiceConfig {
     serde_json::from_value(json!({
         "language": "en", "voice": voice, "speed": 1.0, "end_of_turn": end_of_turn, "patience": "fast",
     }))
@@ -398,7 +402,7 @@ fn config(end_of_turn: &str, voice: &str) -> VoiceConfig {
 const ALWAYS: &(dyn Fn() -> bool + Send + Sync) = &|| true;
 
 /// `work`, within thirty seconds.
-async fn within<T>(work: impl std::future::Future<Output = T>) -> T {
+pub(crate) async fn within<T>(work: impl std::future::Future<Output = T>) -> T {
     tokio::time::timeout(Duration::from_secs(30), work).await.expect("in time")
 }
 

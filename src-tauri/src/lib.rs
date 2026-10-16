@@ -467,13 +467,17 @@ macro_rules! commands {
 #[cfg(target_os = "macos")]
 fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
     commands![
-        , voice::voice_set_settings,
+        , voice::voice_create_call,
+        voice::voice_route_input,
+        voice::voice_dispose_call,
+        voice::voice_set_settings,
         voice::voice_start,
         voice::voice_stop,
         voice::voice_say,
         voice::voice_cancel_say,
         voice::voice_mute,
         voice::voice_cancel_input,
+        voice::voice_end_input,
         voice::voice_audio_devices,
         voice::voice_set_audio_devices,
         microphone::microphone
@@ -499,8 +503,12 @@ pub fn run() {
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_nspanel::init());
     // The voice call the app runs (`host.voice`, src/voice.rs).
+    // Its shared audio starts its dispatcher on Tokio, so it is built inside the runtime the commands run on.
     #[cfg(target_os = "macos")]
-    let builder = builder.manage(voice::VoiceState::default());
+    let builder = {
+        let _runtime = tauri::async_runtime::handle().inner().enter();
+        builder.manage(voice::VoiceState::default())
+    };
     builder
         // A second launch (Finder, Spotlight) brings the running one forward instead.
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| show_room(app)))

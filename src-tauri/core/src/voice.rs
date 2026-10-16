@@ -33,6 +33,9 @@ pub struct VoiceSettings {
     /// How long the models stay in memory with the call stopped, in minutes; absent for the call's default (10).
     #[serde(default)]
     pub idle_unload_minutes: Option<u32>,
+    /// Continuous raised-bar speech required to cut sounding agent audio, in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub barge_in_min_speech: Option<f32>,
     /// The local end-of-turn model `smart-turn` takes, when it runs here; else (or absent) the first that does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_model: Option<String>,
@@ -206,6 +209,9 @@ pub fn choose(settings: &VoiceSettings, catalogs: &[CatalogCandidates]) -> Resul
     }
     if let Some(minutes) = settings.idle_unload_minutes {
         config["idle_unload_minutes"] = json!(minutes);
+    }
+    if let Some(seconds) = settings.barge_in_min_speech {
+        config["barge_in_min_speech"] = json!(seconds);
     }
     Ok(VoiceChoice { vad, stt, tts, end_of_turn: ends_turns, config })
 }
