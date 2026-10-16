@@ -178,7 +178,7 @@ Evaluated by the app with `webview.eval` (works with the window hidden); the com
 Joining is deliberately **not** a tray command: joining unlocks audio output, which the webview
 only allows from a click in the page. "Mostrar Sidevoice" opens the window for that.
 
-`window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", version, engine, mediaKeys, build, muteShortcut, callControls, computerName?, localHost?, voice?, updater? }`: the
+`window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", version, engine, mediaKeys, build, muteShortcut, callControls, computerName?, localHost?, voice?, microphone?, updater? }`: the
 web UI feature-detects the desktop app by it, and each capability by its presence. `version` is the bridge's (2).
 
 `computerName` is the name the person gave this computer, which the page proposes as the device's name: on macOS
@@ -557,6 +557,40 @@ What is this app's own:
   when a provider is listed, or its model loaded or called. `host.engine.testCredential` writes nothing: its key goes
   only to a trial engine of its own.
 
+## The microphone permission
+
+Where the app runs the voice call (`host.voice`, macOS), the room page is never granted `getUserMedia`, so it can
+neither trigger macOS's microphone prompt (TCC) nor read its answer. `window.__sidevoiceDesktop.host.microphone` does
+it for the page, on the app's own privacy entry, the one the voice call uses: the web's first-run setup asks for the
+microphone early through it, rather than at the first call. Present exactly where `host.voice` is; a frozen object:
+
+```ts
+interface MicrophonePermission {
+  state(): Promise<"prompt" | "granted" | "denied" | "missing">;
+  request(): Promise<"granted" | "denied">;
+  openSettings(): Promise<void>;
+  onChange(listener: () => void): () => void;
+}
+```
+
+- `state()`: `AVCaptureDevice.authorizationStatus(for: .audio)`: not determined → `"prompt"`, authorized →
+  `"granted"`, denied or restricted → `"denied"`. Where it is not denied and no audio input device exists
+  (`AVCaptureDevice.default(for: .audio)` is nil), `"missing"`: the OS knows the devices, so the bridge owns device
+  availability, and a denial stands whatever is plugged in. Never prompts.
+- `onChange(listener)`: `listener()` whenever `state()` changes, so on a permission change and on a microphone
+  plugged in or out; the page reads `state()` again. Polled every 2 s while anyone listens; returns `stop`.
+- `request()`: `AVCaptureDevice.requestAccess(for: .audio)`: macOS's own prompt the first time (with
+  `NSMicrophoneUsageDescription`, `src-tauri/Info.plist`); afterwards it answers at once with the stored answer, no
+  prompt.
+- `openSettings()`: opens System Settings at Privacy & Security › Microphone
+  (`x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone`, through `/usr/bin/open`), where a
+  denial is undone.
+- A refusal rejects `{key, message}`: `bad_request` for a malformed call or another caller, `internal` when the system
+  does not answer or System Settings does not open.
+- Command behind it: `microphone {action}`, `action` `state`, `request` or `open-settings` (`src-tauri/src/microphone.rs`),
+  macOS only. Granted to the room window (`capabilities/room.json`); it re-checks that the caller is the current room
+  window on the app's own page.
+
 ## The mute shortcut
 
 The global shortcut that mutes and unmutes the microphone (docs/SHORTCUTS.md), set from the web's Settings. Always
@@ -644,6 +678,7 @@ interface AppUpdater {
   subscribe(listener: (status: UpdaterStatus) => void): () => void;  // every change
   check(): Promise<UpdaterStatus>;                                    // resolves after the check
   download(): Promise<UpdaterStatus>;                                 // resolves once it starts
+  cancel(): Promise<void>;                                            // stops a download in progress; resolves too with none
   restart(): Promise<void>;                                           // only when "ready": restarts now into the update
 }
 interface UpdaterStatus {
@@ -664,13 +699,20 @@ interface UpdaterStatus {
   when no update is known. An update already downloading or ready is left as it is by later checks (nothing is
   downloaded twice); one still `available`, found again, is not told to the page again (only an `error` the check
   clears is).
+- `cancel()` aborts the download running and drops what it had received (the plugin downloads into memory: there is no
+  partial file); the state goes back to `available` (the update stays known, no `error`). With no download running it
+  resolves and changes nothing. The cancelled version is remembered for this run of the app (not with the settings):
+  automatic mode does not download it again by itself, at later checks or when it is switched to; a newer version found
+  is downloaded as usual, and `download()` (the person asking) lifts the cancel. A new launch starts clean.
+  Each download holds a token that `cancel()` invalidates at once: an aborted download still finishing its last step
+  cannot write progress, bytes or a result over a download that replaced it.
 - A check that fails or takes over 2 minutes, a download that fails or takes over an hour, an install that fails:
   `error` says so, the state stays (a failed download stays `available`, and automatic mode tries it again at the
   next check).
 - The mode is kept with the app's settings (`updateMode`), set only through `setMode`.
 - App → page: `window.__sidevoiceDesktop.updaterEvent(status)` (`webview.eval`) on each change, to the listeners.
 - Command behind it: `updater {action, mode?}`, `action` one of `settings`, `set-mode`, `status`, `check`,
-  `download`, `restart`. Granted to the room window (`capabilities/room.json`); it re-checks that the caller is the
+  `download`, `cancel`, `restart`. Granted to the room window (`capabilities/room.json`); it re-checks that the caller is the
   current room window on the app's own page (else `bad_request`). The page is granted none of the plugin's own
   commands. `src-tauri/src/updater.rs` drives tauri-plugin-updater (check, download with its progress, verify,
   install); core `updater.rs` holds the status and the mode (unit-tested). CI's macOS job checks the
@@ -681,7 +723,7 @@ interface UpdaterStatus {
 - Add a command: a variant in `Command` (Rust), a `case` in `run` (JS), a test on each side.
 - Add a field: `CallSnapshot` uses `#[serde(default)]`, so old and new scripts interoperate;
   bump `version` only for a breaking change.
-- Tests: `npm test` (the script against a fake window, `host.voice`, `host.updater`, `host.build`, `host.muteShortcut`,
+- Tests: `npm test` (the script against a fake window, `host.voice`, `host.microphone`, `host.updater`, `host.build`, `host.muteShortcut`,
   `host.callControls` and `host.localHost`'s install included), `cargo test -p sidevoice-desktop-core` (the voice call's builds, the media rule, the
   updater's status and the mute shortcut's form and shape among the rest) and `cargo test -p sidevoice-desktop-engine` (the engine
   over a test host), `cargo test -p sidevoice-local-host` (the local host against a stand-in core, its install against a stand-in

@@ -72,6 +72,8 @@ block2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSDictionary", "NSValue", "NSError", "NSObject"] }
 objc2-media-player = { version = "0.3", features = ["MPRemoteCommandCenter", "MPRemoteCommand", "MPRemoteCommandEvent", "MPNowPlayingInfoCenter", "MPMediaItem", "block2"] }
 objc2-avf-audio = { version = "0.3", features = ["AVAudioApplication", "block2"] }
+# The microphone permission the room page asks for in its first-run setup (src/microphone.rs, `host.microphone`).
+objc2-av-foundation = { version = "0.3", default-features = false, features = ["std", "AVCaptureDevice", "AVMediaFormat", "block2"] }
 # This computer's name, as System Settings shows it (src/computer_name.rs).
 system-configuration-sys = "0.6"
 core-foundation = "0.10"

@@ -4,7 +4,8 @@ fn main() {
     // the settings window its diagnostics (`get_settings`, the headset's, the native engine's state), the room window
     // `bridge_state` and `bridge_level` (+ `debug_log`), the native engine, the voice call (`voice_*`, macOS) and the
     // local host (`local_host_*`), the mute shortcut and the call controls settings (`mute_shortcut`,
-    // `call_controls_settings`) and the app's updates (`updater`), the call controls card its own four.
+    // `call_controls_settings`), the app's updates (`updater`) and the microphone permission (`microphone`, macOS), the
+    // call controls card its own four.
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
         "get_settings",
         "bridge_state",
@@ -57,6 +58,7 @@ fn main() {
         "mute_shortcut",
         "call_controls_settings",
         "updater",
+        "microphone",
     ])))
     .expect("failed to run tauri-build");
 }

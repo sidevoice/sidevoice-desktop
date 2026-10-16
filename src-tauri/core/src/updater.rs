@@ -60,6 +60,47 @@ impl Status {
     }
 }
 
+/// Which download may write, and the version the person stopped, both kept for this run of the app (not with the
+/// settings: a new launch downloads that version again, automatic mode included). Every download holds a token from
+/// `start`; `cancel` invalidates it at once, so a task that was aborted but is still running its last synchronous step
+/// can no longer write progress, bytes or a result over the state of a replacement download.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Downloads {
+    cancelled: Option<String>,
+    generation: u64,
+}
+
+/// A download's claim to write: the generation `start` gave it.
+pub type Token = u64;
+
+impl Downloads {
+    /// `host.updater.cancel()`: the status a download in progress returns to (`available`, the update still known),
+    /// remembering its version; none when nothing is downloading.
+    pub fn cancel(&mut self, status: &Status) -> Option<Status> {
+        let version = status.version.as_deref().filter(|_| status.state == State::Downloading)?;
+        self.cancelled = Some(version.to_owned());
+        self.generation += 1;
+        Some(Status::new(State::Available, version))
+    }
+
+    /// The token of a download of `version` that may start: when the person `asked` (which lifts the cancel) or it is
+    /// not the one cancelled (a newer version always is); none otherwise.
+    pub fn start(&mut self, version: &str, asked: bool) -> Option<Token> {
+        if asked {
+            self.cancelled = None;
+        }
+        (self.cancelled.as_deref() != Some(version)).then(|| {
+            self.generation += 1;
+            self.generation
+        })
+    }
+
+    /// Whether `token` is still the download that may write: not cancelled, not replaced.
+    pub fn owns(&self, token: Token) -> bool {
+        self.generation == token
+    }
+}
+
 /// The releases' feed: `latest` is the newest release that is neither a draft nor a pre-release (never a `-rc.N`, never
 /// the nightly).
 const RELEASES_FEED: &str = "https://github.com/sidevoice/sidevoice-desktop/releases/latest/download/latest.json";
@@ -124,6 +165,50 @@ mod tests {
             serde_json::to_value(ErrorCode::DownloadFailed).unwrap(),
             json!({ "code": "update-download-failed" })
         );
+    }
+
+    #[test]
+    fn cancelling_returns_a_download_to_available_and_nothing_else() {
+        let mut cancelled = Downloads::default();
+        let downloading = Status { progress: progress(42, Some(100)), ..Status::new(State::Downloading, "0.5.0") };
+        assert_eq!(cancelled.cancel(&downloading), Some(Status::new(State::Available, "0.5.0")));
+        for status in [Status::default(), Status::new(State::Available, "0.5.0"), Status::new(State::Ready, "0.5.0")] {
+            assert_eq!(Downloads::default().cancel(&status), None, "{status:?}");
+        }
+        assert_eq!(cancelled.cancel(&Status::new(State::Available, "0.5.0")), None, "a second cancel is nothing");
+    }
+
+    #[test]
+    fn a_cancelled_version_is_not_downloaded_again_by_itself_until_asked_or_a_newer_one_appears() {
+        let mut cancelled = Downloads::default();
+        assert!(cancelled.start("0.5.0", false).is_some(), "nothing cancelled yet");
+        cancelled.cancel(&Status::new(State::Downloading, "0.5.0"));
+        assert!(cancelled.start("0.5.0", false).is_none(), "automatic mode leaves it");
+        assert!(cancelled.start("0.5.0", false).is_none(), "at every later check");
+        assert!(cancelled.start("0.5.1", false).is_some(), "a newer version is downloaded");
+        assert!(cancelled.start("0.5.0", true).is_some(), "the person asks");
+        assert!(cancelled.start("0.5.0", false).is_some(), "and the cancel is lifted");
+    }
+
+    /// Cancel, then a replacement download (the same version asked again, or a newer one found): the aborted task's
+    /// late progress or result is refused, the replacement's own is accepted.
+    #[test]
+    fn a_cancelled_download_cannot_write_over_its_replacement() {
+        for (version, asked) in [("0.5.0", true), ("0.5.1", false)] {
+            let mut downloads = Downloads::default();
+            let old = downloads.start("0.5.0", false).unwrap();
+            assert!(downloads.owns(old));
+            downloads.cancel(&Status::new(State::Downloading, "0.5.0")).unwrap();
+            assert!(!downloads.owns(old), "cancelled: it owns nothing at once");
+            let new = downloads.start(version, asked).unwrap();
+            assert!(!downloads.owns(old), "{version}: the replacement does not give it back");
+            assert!(downloads.owns(new), "{version}");
+            assert_ne!(old, new);
+        }
+        let mut downloads = Downloads::default();
+        let first = downloads.start("0.5.0", false).unwrap();
+        assert_eq!(downloads.cancel(&Status::new(State::Available, "0.5.0")), None);
+        assert!(downloads.owns(first), "a cancel that cancels nothing leaves the download its own");
     }
 
     #[test]
