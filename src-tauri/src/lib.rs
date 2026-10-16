@@ -19,6 +19,7 @@ mod engine_ipc;
 mod headset;
 mod keychain;
 mod local_host;
+mod microphone;
 #[cfg(feature = "probe")]
 mod probe;
 mod tray;
@@ -461,7 +462,8 @@ macro_rules! commands {
     };
 }
 
-/// Every command, the voice call's where the app runs it (`host.voice`, macOS).
+/// Every command, the voice call's and the microphone permission's where the app runs the call (`host.voice`,
+/// `host.microphone`: macOS).
 #[cfg(target_os = "macos")]
 fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
     commands![
@@ -473,7 +475,8 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
         voice::voice_mute,
         voice::voice_cancel_input,
         voice::voice_audio_devices,
-        voice::voice_set_audio_devices
+        voice::voice_set_audio_devices,
+        microphone::microphone
     ]
 }
 

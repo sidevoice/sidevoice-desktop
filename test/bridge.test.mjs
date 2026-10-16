@@ -1015,7 +1015,7 @@ test("the host's keys: updater only where the app can update itself, build alway
     api.updaterEvent({ state: "idle" }); // nothing listens, nothing breaks
   }
   const api = install(fakeWindow(ORIGIN).win, ORIGIN, "native", true, true, true, { channel: "release", version: "0.4.0" });
-  assert.deepEqual(Object.keys(api.host).sort(), ["app", "build", "callControls", "data", "engine", "localHost", "mediaKeys", "muteShortcut", "updater", "version", "voice"]);
+  assert.deepEqual(Object.keys(api.host).sort(), ["app", "build", "callControls", "data", "engine", "localHost", "mediaKeys", "microphone", "muteShortcut", "updater", "version", "voice"]);
   // The AppUpdater seam, exactly.
   assert.deepEqual(Object.keys(api.host.updater).sort(), ["cancel", "check", "download", "restart", "setMode", "settings", "status", "subscribe"]);
   assert.ok(Object.isFrozen(api.host.updater));
@@ -1090,16 +1090,77 @@ test("the app's updaterEvent hands each listener the status, until it stops", ()
   assert.throws(() => api.host.updater.subscribe("nope"), { name: "TypeError" });
 });
 
+// ---- host.microphone: the app's microphone permission, for the page's first-run setup (docs/BRIDGE.md) ----
+
+test("host.microphone only with host.voice, and exactly its three calls", () => {
+  const install = loadFactory();
+  for (const offered of [undefined, false, "__SIDEVOICE_VOICE__", "true"]) {
+    const api = install(fakeWindow(ORIGIN).win, ORIGIN, null, true, offered);
+    assert.equal("microphone" in api.host, false, String(offered));
+  }
+  const api = install(fakeWindow(ORIGIN).win, ORIGIN, "native", true, true);
+  assert.ok("voice" in api.host);
+  assert.deepEqual(Object.keys(api.host.microphone).sort(), ["onChange", "openSettings", "request", "state"]);
+  assert.ok(Object.isFrozen(api.host.microphone));
+});
+
+test("host.microphone calls the microphone command with its action, and passes refusals on", async () => {
+  const install = loadFactory();
+  let answer = "prompt";
+  const { win, calls } = settingsWindow({
+    microphone: ({ action }) => (action === "open-settings" ? null : answer),
+  });
+  const microphone = install(win, ORIGIN, "native", true, true).host.microphone;
+  assert.equal(await microphone.state(), "prompt");
+  answer = "granted";
+  assert.equal(await microphone.request(), "granted");
+  assert.equal(await microphone.openSettings(), undefined);
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "microphone"), [
+    ["microphone", { action: "state" }],
+    ["microphone", { action: "request" }],
+    ["microphone", { action: "open-settings" }],
+  ]);
+  const refusal = { key: "internal", message: "System Settings could not be opened." };
+  const failing = settingsWindow({ microphone: () => Object.assign(new Error(), { refusal }) });
+  const host = install(failing.win, ORIGIN, "native", true, true).host;
+  await assert.rejects(host.microphone.openSettings(), (error) => error === refusal);
+});
+
+test("host.microphone.onChange fires when state() changes (permission or device), until stopped", async () => {
+  const install = loadFactory();
+  let answer = "granted";
+  const { win, tick } = settingsWindow({ microphone: () => answer });
+  const microphone = install(win, ORIGIN, "native", true, true).host.microphone;
+  assert.throws(() => microphone.onChange("nope"), { name: "TypeError" });
+  let fired = 0;
+  const stop = microphone.onChange(() => { fired++; });
+  await flush(); // the first read is the baseline, not a change
+  assert.equal(fired, 0);
+  tick(); await flush();
+  assert.equal(fired, 0);
+  answer = "missing"; // unplugged
+  tick(); await flush();
+  assert.equal(fired, 1);
+  answer = "prompt"; // plugged in, not asked yet
+  tick(); await flush();
+  assert.equal(fired, 2);
+  stop();
+  answer = "denied";
+  tick(); await flush();
+  assert.equal(fired, 2);
+});
+
 // ---- host.muteShortcut and host.callControls: the app's call settings, set from the page (docs/BRIDGE.md) ----
 
 function settingsWindow(answers) {
-  const { win, calls } = fakeWindow(ORIGIN);
+  const fake = fakeWindow(ORIGIN);
+  const { win, calls } = fake;
   win.__TAURI_INTERNALS__.invoke = (cmd, args) => {
     calls.push([cmd, structuredClone(args)]);
     const answer = answers[cmd]?.(args);
     return answer instanceof Error ? Promise.reject(answer.refusal) : Promise.resolve(answer);
   };
-  return { win, calls };
+  return { win, calls, tick: fake.tick };
 }
 
 test("host.muteShortcut and host.callControls are exactly the web's seams", () => {
