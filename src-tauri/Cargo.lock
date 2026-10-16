@@ -4447,7 +4447,7 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "sidevoice-desktop"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "block2",
  "core-foundation 0.10.1",
@@ -4482,7 +4482,7 @@ dependencies = [
 
 [[package]]
 name = "sidevoice-desktop-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "global-hotkey",
@@ -4493,7 +4493,7 @@ dependencies = [
 
 [[package]]
 name = "sidevoice-desktop-engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libc",
  "serde",
