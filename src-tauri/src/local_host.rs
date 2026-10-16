@@ -56,7 +56,7 @@ pub async fn local_host_action(app: AppHandle, webview: Webview, action: String)
         .map_err(|e| refusal("internal", &e.to_string()))?
 }
 
-/// `sidevoice pair-device --json`, on the person's click: `{code, expires_in, reach}`.
+/// `npx sidevoice pair-device --json`, on the person's click: `{code, expires_in, reach}`.
 #[tauri::command]
 pub async fn local_host_pairing_code(app: AppHandle, webview: Webview) -> Answer {
     caller(&app, &webview)?;
@@ -66,7 +66,7 @@ pub async fn local_host_pairing_code(app: AppHandle, webview: Webview) -> Answer
         .map_err(|e| refusal("internal", &e.to_string()))?
 }
 
-/// `sidevoice pair <url> <code> --json`: `{room}`.
+/// `npx sidevoice pair <url> <code> --json`: `{room}`.
 #[tauri::command]
 pub async fn local_host_pair_room(app: AppHandle, webview: Webview, url: String, code: String) -> Answer {
     caller(&app, &webview)?;

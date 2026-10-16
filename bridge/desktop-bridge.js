@@ -441,7 +441,7 @@
       revealLog: action("reveal-log"),
       /** A code for another device, on the person's click only: `{code, expires_in, reach}`. Shown, never sent. */
       pairingCode: () => call("local_host_pairing_code"),
-      /** Pairs this machine with a room (`sidevoice pair <url> <code>`): `{room}`. */
+      /** Pairs this machine with a room (`npx sidevoice pair <url> <code>`): `{room}`. */
       pairRoom: (url, code) => call("local_host_pair_room", { url, code }),
       /** "Prepare this computer": installs Sidevoice from the npm registry, without Node (docs/LOCAL_HOST.md → Install;
        *  sidevoice-web's `LocalHostBridge.install`). Answers at once a promise of the state after it, once the app is
