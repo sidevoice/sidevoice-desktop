@@ -504,12 +504,20 @@ What is this app's own:
   settings yet, no open turn, the call stopped or disposing) it resolves at once. It does not mute, nor touch the
   playback or how later turns end. It is asked in order with `mute`.
 - The host has `createCall`, `routeInput`, `audioDevices`, `setAudioDevices`, and `onAudioDevices`.
-  Every `VoiceCallHost` has `id`, `setSettings`, `start`, `stop`, `dispose`, `say`, `mute`,
+  Every `VoiceCallHost` has `id`, `setSettings`, `start`, `stop`, `dispose`, `say`, `markEvidence`, `mute`,
   `cancelInput`, `endInput`, `onTurn`, `onState`, `onLevel`, `onPlaybackLevel`, `onError`, and `onTake`.
   `routeInput(call | null)` acknowledges a next-frame switch; the other started calls receive silence.
   `dispose` takes no new work, stops the call and delivers what that stop ends, as the call reports it: each saying's
   own outcome (never a made-up one), an open turn's `cancelled`, the take; then it releases only that call's lane and
   delivers nothing more. Stopping one call leaves the other calls and shared devices running.
+  `markEvidence(mark)` forwards an opaque page marker to the Voice state machine; native microphone capture does
+  not provide the browser graph's shared playback frame clock, so acoustic playback at a candidate onset remains
+  `unknown` on this bridge. A `say()` handle also offers `cancelPending()`: it returns `true` immediately if its
+  `voice_say` command has not been submitted, or resolves a Boolean from `voice_cancel_pending_say` once native
+  has accepted it. The native audio source locks its queue and in-flight frames for that decision. `true` certifies
+  that no frame of that saying entered the physical output queue; `false` preserves a possibly sounding handle and
+  its later outcome. If the native command rejects, `cancelPending()` rejects too; the page cancels the saying and
+  stops that call without certifying zero hearing. A delayed page `playing` event is not used as that source decision.
   The final stopped lane closes the physical microphone and speaker. The catalogues and provider keys are
   `host.engine`'s (above).
 - `onPlaybackLevel(listener)` receives a bare number from 0 to 1, just as `onLevel` does for the microphone: RMS of
@@ -540,17 +548,20 @@ What is this app's own:
   `voice_set_settings {key,settings}`, `voice_start {key,take?}`, `voice_stop {key}` (answers `true` once the page
   has what the stop ends, `false` at once before the first settings),
   `voice_dispose_call {key}` (stops first, the same way), `voice_say {key,sayKey,text,language?}`,
+  `voice_mark_evidence {key,mark}` (a nonnegative safe integer, queued as an opaque source-capture watermark),
   `voice_cancel_say {key,sayKey}`, `voice_mute {key,muted}`, `voice_cancel_input {key}`, and
   `voice_end_input {key}` (answers once the turn is closed).
   The shared commands are `voice_audio_devices` and `voice_set_audio_devices {choice}`.
-  The room window capability grants only these fixed commands, and each checks the current page.
+  The room window capability grants only these fixed commands, and each checks the current page. A mark has no
+  playback or turn effect. It appears in later candidate playback evidence only after the native call processed it;
+  a publication whose mark missed microphone ingress remains outside that immutable onset snapshot.
 - App → page: `window.__sidevoiceDesktop.voiceEvent(event)` receives `{key,type,data}`.
   `key` is the immutable call ID captured before asynchronous native forwarding. `type` is
   `turn`, `state`, `level`, `playback-level`, `error`, `take`, or `say`.
   `say` uses `{key,type:"say",data:{key:sayKey,event}}`; its last event is `done` with the terminal outcome.
   Device changes use `{type:"devices",data}` and have no call key. Take samples are base64 on the native
   wire and become `Float32Array` in the bridge.
-- A turn's `started`, `finished`, and `cancelled` retain their voice fields and order within their
+- A turn's `candidate`, `candidate-cancelled`, `started`, `finished`, and `cancelled` retain their voice fields and order within their
   source call. The native bridge never reads the current route when forwarding them. The page attaches its
   conversation destination and captured binding to that call's events, including a delayed `started` that
   arrives after another call becomes routed. STT and merge state stay with the source call; silence to an

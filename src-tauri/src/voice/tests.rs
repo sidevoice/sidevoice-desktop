@@ -3,7 +3,7 @@
 //! plays at once, or holds what it is given. Real `VoiceCall`s on the adapter's models with fake loaders; the page is
 //! a list of what reached it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -27,6 +27,8 @@ struct Devices {
     /// How often the last running lane closed the devices.
     closed: usize,
     sinks: HashMap<u64, IoSink>,
+    started: HashSet<String>,
+    fenced: HashSet<String>,
 }
 
 #[derive(Clone, Default)]
@@ -78,6 +80,27 @@ impl LaneAudio for FakeAudio {
         self.devices.lock().unwrap().routed = target.copied();
         std::future::ready(Ok(()))
     }
+
+    fn fence_pending(&self, _target: &u64, utterance: &str) -> bool {
+        let mut devices = self.devices.lock().unwrap();
+        if devices.started.contains(utterance) {
+            return false;
+        }
+        devices.fenced.insert(utterance.to_owned());
+        true
+    }
+}
+
+#[test]
+fn fake_source_pending_fence_is_atomic_with_the_source_start() {
+    let audio = FakeAudio::default();
+    let (mut lane, port) = audio.attach();
+    assert!(audio.fence_pending(&port, "queued"));
+    lane.play("queued", 0, vec![0.4], 16_000);
+    assert!(!audio.devices.lock().unwrap().started.contains("queued"));
+    lane.play("active", 0, vec![0.4], 16_000);
+    assert!(!audio.fence_pending(&port, "active"));
+    assert!(audio.devices.lock().unwrap().started.contains("active"));
 }
 
 /// One lane of the stand-in devices.
@@ -125,6 +148,13 @@ impl AudioIo for Lane {
     }
 
     fn play(&mut self, utterance: &str, chunk: usize, _samples: Vec<f32>, _sample_rate: u32) {
+        {
+            let mut devices = self.audio.devices.lock().unwrap();
+            if devices.fenced.contains(utterance) {
+                return;
+            }
+            devices.started.insert(utterance.to_owned());
+        }
         if let Some(sink) = &self.sink {
             sink.send(IoEvent::ChunkStarted { utterance: utterance.into(), chunk });
             if !self.audio.hold.load(Ordering::SeqCst) {

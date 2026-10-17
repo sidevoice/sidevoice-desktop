@@ -481,7 +481,7 @@ test("native voice offers the shared host and independent calls", async () => {
   const a = host.createCall();
   const b = host.createCall();
   assert.notEqual(a.id, b.id);
-  assert.deepEqual(Object.keys(a).sort(), ["cancelInput", "dispose", "endInput", "id", "mute", "onError", "onLevel",
+  assert.deepEqual(Object.keys(a).sort(), ["cancelInput", "dispose", "endInput", "id", "markEvidence", "mute", "onError", "onLevel",
     "onPlaybackLevel", "onState", "onTake", "onTurn", "say", "setSettings", "start", "stop"]);
   assert.ok(Object.isFrozen(host) && Object.isFrozen(a));
   await host.routeInput(a);
@@ -506,6 +506,9 @@ test("per-call commands carry the call key and say handles remain separate", asy
   await Promise.all([a.start(), b.start()]);
   const saidA = a.say("A");
   const saidB = b.say("B");
+  a.markEvidence(7);
+  b.markEvidence(8);
+  a.markEvidence(-1);
   assert.equal(saidA.id, saidB.id, "say IDs may repeat on different calls");
   await flush();
   api.voiceEvent({ key: b.id, type: "say", data: { key: saidB.id, event: { type: "done", outcome: {
@@ -524,8 +527,41 @@ test("per-call commands carry the call key and say handles remain separate", asy
   assert.ok(commands.every(([, args]) => args && (args.key === a.id || args.key === b.id)));
   assert.deepEqual(commands.filter(([cmd]) => cmd === "voice_say").map(([, args]) => [args.key, args.sayKey]),
     [[a.id, saidA.id], [b.id, saidB.id]]);
+  assert.deepEqual(commands.filter(([cmd]) => cmd === "voice_mark_evidence").map(([, args]) => [args.key, args.mark]),
+    [[a.id, 7], [b.id, 8]]);
   assert.ok(commands.some(([cmd, args]) => cmd === "voice_mute" && args.key === a.id && args.muted));
   assert.ok(commands.some(([cmd, args]) => cmd === "voice_cancel_input" && args.key === b.id));
+});
+
+test("pending native say is fenced before submission or by an acknowledged source command", async () => {
+  let releaseCreate;
+  const { win, calls } = voiceWindow({ voice_create_call: new Promise((resolve) => { releaseCreate = resolve; }),
+    voice_cancel_pending_say: true });
+  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const call = api.host.voice.createCall();
+  const before = call.say("not submitted");
+  assert.equal(before.cancelPending(), true);
+  releaseCreate();
+  await flush();
+  assert.equal(calls.some(([command]) => command === "voice_say"), false);
+  assert.equal((await before.outcome).status, "not-played");
+  const after = call.say("submitted");
+  await flush();
+  assert.equal(await after.cancelPending(), true);
+  assert.deepEqual(calls.filter(([command]) => command === "voice_cancel_pending_say"),
+    [["voice_cancel_pending_say", { key: call.id, sayKey: after.id }]]);
+});
+
+test("a rejected native pending fence is an error, not an already-started decision", async () => {
+  const rejected = Object.assign(new Error("ipc refused"), { refusal: { key: "ipc_refused" } });
+  const { win, calls } = voiceWindow({ voice_cancel_pending_say: rejected });
+  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const call = api.host.voice.createCall();
+  const saying = call.say("awaiting synthesis");
+  await flush();
+  await assert.rejects(saying.cancelPending());
+  assert.deepEqual(calls.filter(([command]) => command === "voice_cancel_pending_say"),
+    [["voice_cancel_pending_say", { key: call.id, sayKey: saying.id }]]);
 });
 
 test("A to B routing keeps delayed per-call turns on A despite a later switch", async () => {

@@ -52,6 +52,8 @@ pub trait LaneAudio: Send + Sync + 'static {
     fn attach(&self) -> (Box<dyn AudioIo>, Self::Port);
     /// Routes the microphone to `target`'s lane from the next frame on, silence to every other; `None` silences all.
     fn route_input(&self, target: Option<&Self::Port>) -> impl Future<Output = Result<(), String>> + Send;
+    /// Atomically fence a source that has not handed any frame to the speaker.
+    fn fence_pending(&self, target: &Self::Port, utterance: &str) -> bool;
 }
 
 impl LaneAudio for SharedNativeAudio {
@@ -63,6 +65,10 @@ impl LaneAudio for SharedNativeAudio {
 
     fn route_input(&self, target: Option<&InputPort>) -> impl Future<Output = Result<(), String>> + Send {
         SharedNativeAudio::route_input(self, target)
+    }
+
+    fn fence_pending(&self, target: &InputPort, utterance: &str) -> bool {
+        target.fence_pending(utterance)
     }
 }
 
@@ -227,7 +233,7 @@ impl<A: LaneAudio> VoiceState<A> {
             page(json!({"key": key, "type": "say", "data": {"key": say_key, "event": stopped}}));
             return Ok(());
         };
-        let mut saying = call.say(text, SayOptions { language });
+        let mut saying = call.say(text, SayOptions { language, evidence_key: Some(say_key.clone()) });
         lane.sayings.lock().unwrap().insert(say_key.clone(), saying.canceller());
         let sayings = Arc::clone(&lane.sayings);
         let key = key.to_owned();
@@ -245,12 +251,35 @@ impl<A: LaneAudio> VoiceState<A> {
         Ok(())
     }
 
+    async fn mark_evidence(&self, key: &str, mark: u64) -> Result<(), Refusal> {
+        if mark > 9_007_199_254_740_991 {
+            return Err(refusal("bad_request", "Invalid evidence marker."));
+        }
+        let lane = self.lane(key).await?;
+        let call = lane.call.lock().await;
+        if let Some((call, _)) = call.as_ref() {
+            call.mark_evidence(mark);
+        }
+        Ok(())
+    }
+
     async fn cancel_say(&self, key: &str, say_key: &str) -> Result<(), Refusal> {
         let lane = self.lane(key).await?;
         if let Some(cancel) = lane.sayings.lock().unwrap().get(say_key) {
             cancel.cancel();
         }
         Ok(())
+    }
+
+    async fn cancel_pending_say(&self, key: &str, say_key: &str) -> Result<bool, Refusal> {
+        let lane = self.lane(key).await?;
+        let cancel = lane.sayings.lock().unwrap().get(say_key).cloned();
+        let Some(cancel) = cancel else { return Ok(false) };
+        if !self.audio.fence_pending(&lane.input, cancel.id()) {
+            return Ok(false);
+        }
+        cancel.cancel();
+        Ok(true)
     }
 
     /// Kept for the call from the lane's creation on, and applied to it once it exists.
@@ -621,6 +650,19 @@ pub async fn voice_say(
     state.say(&key, say_key, text, language, page_sink(&app)).await
 }
 
+/// Places an opaque host marker before later microphone capture in this call.
+#[tauri::command]
+pub async fn voice_mark_evidence(
+    app: AppHandle,
+    webview: Webview,
+    state: State<'_, VoiceState>,
+    key: String,
+    mark: u64,
+) -> Result<(), Refusal> {
+    page(&app, &webview)?;
+    state.mark_evidence(&key, mark).await
+}
+
 /// Cancels what is being said under `key`: the part not yet heard is dropped, and its outcome says `cancelled`. Once
 /// it has ended, nothing.
 #[tauri::command]
@@ -633,6 +675,19 @@ pub async fn voice_cancel_say(
 ) -> Result<(), Refusal> {
     page(&app, &webview)?;
     state.cancel_say(&key, &say_key).await
+}
+
+/// Cancels only if no frame of this saying has reached the native output queue.
+#[tauri::command]
+pub async fn voice_cancel_pending_say(
+    app: AppHandle,
+    webview: Webview,
+    state: State<'_, VoiceState>,
+    key: String,
+    say_key: String,
+) -> Result<bool, Refusal> {
+    page(&app, &webview)?;
+    state.cancel_pending_say(&key, &say_key).await
 }
 
 /// Mutes or unmutes the microphone for this call: it hears silence, and an open turn ends only as silence ends it.

@@ -202,6 +202,7 @@
         const key = `say-${++said}`;
         const heard = new Set();
         let settle;
+        let submitted = false, pendingFenced = false;
         const outcome = new Promise((resolve) => { settle = resolve; });
         function step(event) {
           if (!sayings.has(key)) return;
@@ -209,13 +210,29 @@
           if (event?.type === "done") { sayings.delete(key); settle(event.outcome); }
         }
         sayings.set(key, { step, outcome });
-        const asked = invoke("voice_say", { sayKey: key, text: String(text), language: options?.language ?? null })
+        const asked = created.then(() => {
+          if (pendingFenced) { step({ type: "done", outcome: { status: "not-played", reason: "cancelled" } }); return; }
+          if (closing) throw closed();
+          submitted = true;
+          return call("voice_say", { key: id, sayKey: key, text: String(text), language: options?.language ?? null });
+        })
           .catch((error) => step({ type: "done", outcome: error?.closed
             ? { status: "not-played", reason: "stopped" }
             : { status: "not-played", reason: "failed", code: error?.code || error?.key || "voice-failed" } }));
         return Object.freeze({
           id: key,
           cancel: () => { asked.then(() => sayings.has(key) && invoke("voice_cancel_say", { sayKey: key })).catch(() => {}); },
+          cancelPending: () => {
+            if (!submitted) {
+              pendingFenced = true;
+              return true;
+            }
+            // A rejected IPC command is not a source decision that sound has
+            // started. Let the room controller fail closed on that error.
+            return asked.then(() => sayings.has(key)
+              ? invoke("voice_cancel_pending_say", { sayKey: key })
+              : false);
+          },
           onEvent(listener) { if (typeof listener !== "function") throw new TypeError("a listener"); heard.add(listener); },
           outcome,
         });
@@ -260,6 +277,9 @@
           return disposing;
         },
         say: saying,
+        markEvidence: (mark) => {
+          if (Number.isSafeInteger(mark) && mark >= 0) invoke("voice_mark_evidence", { mark }).catch(() => {});
+        },
         mute: (muted) => {
           muting = muting.then(() => invoke("voice_mute", { muted: !!muted })).catch(() => {});
         },
