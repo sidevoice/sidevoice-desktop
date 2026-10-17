@@ -166,7 +166,7 @@ fn a_call_on_the_engines_real_models_hears_speech_and_plays_a_reply() {
         assert!(said.to_lowercase().contains("quilter"), "heard {said:?}");
 
         let text = "The tests pass on every platform.";
-        let mut saying = call.say(text, SayOptions { language: Some("en".into()) });
+        let mut saying = call.say(text, SayOptions { language: Some("en".into()), evidence_key: None });
         let mut steps = Vec::new();
         while let Some(step) = tokio::time::timeout(Duration::from_secs(600), saying.next()).await.expect("in time") {
             steps.push(step);
