@@ -207,7 +207,9 @@ what the interface's own window offers — same origin, same permission rule —
     const unknownDevice = await voice.setAudioDevices({ input: "nowhere:nothing" })
       .then(() => "no", (error) => error && error.key + "/" + error.code);
     const started = await first.start({ take: true }).then(() => "ok", (error) => error.key + "/" + error.code);
-    if (started === "ok") await voice.routeInput(first);
+    // A headless runner may let the call start but have no active capture input when the route is selected.
+    // Keep that refusal separate from a successful route and still check stop, turns and disposal below.
+    const routed = started === "ok" ? await voice.routeInput(first).then(() => "ok", (error) => error.key + "/" + error.code) : "not-attempted";
     await voice.routeInput(null);
     await first.stop();
     const take = takes.length ? Object.prototype.toString.call(takes[0].samples).slice(8, -1) + "/" + takes[0].sampleRate +
@@ -236,7 +238,7 @@ what the interface's own window offers — same origin, same permission rule —
     await voice.routeInput(null);
     await second.dispose();
     stops.forEach((stop) => stop());
-    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-voice ok keys=" + Object.keys(voice).length + " calls=2 route=ok delayed_turn=" + delayedTurn +
+    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-voice ok keys=" + Object.keys(voice).length + " calls=2 route=" + routed + " delayed_turn=" + delayedTurn +
       " catalogs=" + catalogs[0].id + "," + remote + " models=" + models.length + " vad=" + models.some((m) => m.capabilities.includes("vad")) + " unknown=" + unknown +
       " bad_build=" + badBuild + " build=" + build + " turn_model=" + turnModel +
       " devices=" + devices + " unknown_device=" + unknownDevice + " start=" + started + " take=" + take + " states=" + states.join(",") + " errors=" + errors.join(",") });

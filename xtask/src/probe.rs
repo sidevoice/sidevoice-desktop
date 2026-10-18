@@ -163,12 +163,13 @@ pub fn check_engine_line(line: &str) -> Result<()> {
 /// The checks on the probe page's `probe-voice ok` line: the voice call the app runs (host.voice): the seam's
 /// call-scoped methods and acknowledged route, the engine's catalogues (host.engine) with the voice activity detector, an unknown model refused
 /// by key and code, the system's audio devices (the speaker selectable, an unlisted id refused), and a start that
-/// settles: listening, or refused only for want of a microphone or a speaker here. Returns the build and the
-/// end-of-turn model the web's settings named. A start that listened asked for its take, which reached the page as a
-/// `Float32Array` at 16 kHz, its length its time, before the stop resolved.
+/// settles: listening, or refused only for want of a microphone or a speaker here. A headless runner may also let
+/// start succeed and reject the input route because capture is inactive. Returns the build and the end-of-turn
+/// model the web's settings named. A routed call asked for its take, which reached the page as a `Float32Array`
+/// at 16 kHz, its length its time, before the stop resolved.
 pub fn check_voice_line(line: &str) -> Result<(String, String)> {
     let must = |pattern: &str| ensure(has(line, pattern), format!("probe-voice: no {pattern}"));
-    must(" keys=5 calls=2 route=ok delayed_turn=true ")?;
+    must(" keys=5 calls=2 route=(ok|not-attempted|voice_failed/audio-input-inactive) delayed_turn=true ")?;
     must(" devices=[0-9]+/[0-9]+/true unknown_device=voice_audio_device_unknown/audio-device-unknown ")?;
     // The local catalogue first; a provider with no key lists nothing and says so.
     must(" catalogs=local,[a-z-]+:credential-missing")?;
@@ -179,7 +180,12 @@ pub fn check_voice_line(line: &str) -> Result<(String, String)> {
     let build = last_word_after(first, "build");
     let turn = last_word_after(first, "turn_model");
     ensure(build != "none" && turn != "none", format!("no build ({build}) or end-of-turn model ({turn}) chosen"))?;
-    must(" start=(ok take=Float32Array/16000/true|voice_failed/(microphone-unavailable|microphone-denied|speaker-unavailable|audio-device-unavailable|audio-device-failed) take=none) ")?;
+    ensure(
+        has(line, r" route=ok .* start=ok take=Float32Array/16000/true ")
+            || has(line, r" route=not-attempted .* start=voice_failed/(microphone-unavailable|microphone-denied|speaker-unavailable|audio-device-unavailable|audio-device-failed) take=none ")
+            || has(line, r" route=voice_failed/audio-input-inactive .* start=ok take=none "),
+        "probe-voice: start, route and take disagree",
+    )?;
     Ok((build, turn))
 }
 
@@ -612,7 +618,7 @@ mod tests {
 
     const ENGINE: &str = r#"probe-engine ok capabilities={"runs":"native","os":"macos","arch":"aarch64","has":["cpu","metal"],"memory_mb":16384} installed=kokoro-82m-v1.0@sherpa-onnx,silero-vad@sherpa-onnx,whisper-tiny@whisper-cpp progress_calls=12 refused=yes memory={"total_mb":16384,"available_mb":9000} cancel=install-cancelled/install_cancelled pre_aborted=install-cancelled cancel_gone=true progress_event=done+fraction+total:true uninstall=undefined/true/model_unknown:model-not-found/true"#;
 
-    const VOICE: &str = "probe-voice ok keys=5 calls=2 route=ok delayed_turn=true devices=2/3/true unknown_device=voice_audio_device_unknown/audio-device-unknown catalogs=local,openai:credential-missing models=7 vad=true unknown=voice_model_unknown/model-unknown bad_build=voice_build_not_found/build-not-found build=whisper-tiny@whisper-cpp turn_model=smart-turn-v3 start=voice_failed/microphone-unavailable take=none ";
+    const VOICE: &str = "probe-voice ok keys=5 calls=2 route=not-attempted delayed_turn=true devices=2/3/true unknown_device=voice_audio_device_unknown/audio-device-unknown catalogs=local,openai:credential-missing models=7 vad=true unknown=voice_model_unknown/model-unknown bad_build=voice_build_not_found/build-not-found build=whisper-tiny@whisper-cpp turn_model=smart-turn-v3 start=voice_failed/microphone-unavailable take=none ";
 
     #[test]
     fn the_engine_line_as_the_probe_writes_it_passes() {
@@ -641,14 +647,20 @@ mod tests {
             &VOICE.replace("start=voice_failed/microphone-unavailable", "start=voice_failed/model-failed")
         )
         .is_err());
-        let listened = VOICE
+        let listened = VOICE.replace("route=not-attempted", "route=ok")
             .replace("start=voice_failed/microphone-unavailable take=none", "start=ok take=Float32Array/16000/true");
         assert!(check_voice_line(&listened).is_ok());
+        let unavailable_route = VOICE.replace("route=not-attempted", "route=voice_failed/audio-input-inactive")
+            .replace("start=voice_failed/microphone-unavailable", "start=ok");
+        assert!(check_voice_line(&unavailable_route).is_ok());
+        assert!(check_voice_line(&unavailable_route.replace("route=voice_failed/audio-input-inactive", "route=ok")).is_err());
+        assert!(check_voice_line(&listened.replace("route=ok", "route=voice_failed/audio-input-inactive")).is_err());
         // A start that listened hands its take; one refused has none.
         assert!(check_voice_line(&VOICE.replace("start=voice_failed/microphone-unavailable", "start=ok")).is_err());
         assert!(check_voice_line(&listened.replace("Float32Array", "Array")).is_err());
         assert!(check_voice_line(&VOICE.replace("keys=5", "keys=4")).is_err());
-        assert!(check_voice_line(&VOICE.replace("route=ok", "route=missing")).is_err());
+        assert!(check_voice_line(&VOICE.replace("route=not-attempted", "route=missing")).is_err());
+        assert!(check_voice_line(&VOICE.replace("route=not-attempted", "route=ok")).is_err());
         assert!(check_voice_line(&VOICE.replace("delayed_turn=true", "delayed_turn=false")).is_err());
     }
 
