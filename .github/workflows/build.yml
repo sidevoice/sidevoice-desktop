@@ -116,7 +116,7 @@ jobs:
     name: macOS (Apple Silicon) app and .dmg
     needs: changes
     if: needs.changes.outputs.installers == 'true'
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -210,7 +210,7 @@ jobs:
   # secrets: it is never signed.
   macos-native:
     name: macOS (Apple Silicon) native flows on the probe app
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -250,7 +250,7 @@ jobs:
   # so it needs neither the probe app nor the web interface, and runs beside them. No secrets.
   macos-call:
     name: macOS (Apple Silicon) a call on the engine's real models
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
         with:
