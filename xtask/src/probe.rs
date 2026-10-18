@@ -182,7 +182,10 @@ pub fn check_voice_line(line: &str) -> Result<(String, String)> {
     ensure(build != "none" && turn != "none", format!("no build ({build}) or end-of-turn model ({turn}) chosen"))?;
     ensure(
         has(line, r" route=ok .* start=ok take=Float32Array/16000/true ")
-            || has(line, r" route=not-attempted .* start=voice_failed/(microphone-unavailable|microphone-denied|speaker-unavailable|audio-device-unavailable|audio-device-failed) take=none ")
+            || has(
+                line,
+                r" route=not-attempted .* start=voice_failed/(microphone-unavailable|microphone-denied|speaker-unavailable|audio-device-unavailable|audio-device-failed) take=none ",
+            )
             || has(line, r" route=voice_failed/audio-input-inactive .* start=ok take=none "),
         "probe-voice: start, route and take disagree",
     )?;
@@ -647,13 +650,16 @@ mod tests {
             &VOICE.replace("start=voice_failed/microphone-unavailable", "start=voice_failed/model-failed")
         )
         .is_err());
-        let listened = VOICE.replace("route=not-attempted", "route=ok")
+        let listened = VOICE
+            .replace("route=not-attempted", "route=ok")
             .replace("start=voice_failed/microphone-unavailable take=none", "start=ok take=Float32Array/16000/true");
         assert!(check_voice_line(&listened).is_ok());
-        let unavailable_route = VOICE.replace("route=not-attempted", "route=voice_failed/audio-input-inactive")
+        let unavailable_route = VOICE
+            .replace("route=not-attempted", "route=voice_failed/audio-input-inactive")
             .replace("start=voice_failed/microphone-unavailable", "start=ok");
         assert!(check_voice_line(&unavailable_route).is_ok());
-        assert!(check_voice_line(&unavailable_route.replace("route=voice_failed/audio-input-inactive", "route=ok")).is_err());
+        assert!(check_voice_line(&unavailable_route.replace("route=voice_failed/audio-input-inactive", "route=ok"))
+            .is_err());
         assert!(check_voice_line(&listened.replace("route=ok", "route=voice_failed/audio-input-inactive")).is_err());
         // A start that listened hands its take; one refused has none.
         assert!(check_voice_line(&VOICE.replace("start=voice_failed/microphone-unavailable", "start=ok")).is_err());
