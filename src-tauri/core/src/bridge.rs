@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::build_info::BuildInfo;
 
+/// Removes the WebView's default context menu (bridge/no-context-menu.js); appended to the scripts of every window.
+pub const NO_CONTEXT_MENU_SCRIPT: &str = include_str!("../../../bridge/no-context-menu.js");
+
 /// The bridge script, with its room-origin placeholder still in place.
 pub const SCRIPT_TEMPLATE: &str = include_str!("../../../bridge/desktop-bridge.js");
 const ORIGIN_PLACEHOLDER: &str = "\"__SIDEVOICE_ROOM_ORIGIN__\"";
@@ -48,7 +51,8 @@ const APP_ORIGIN_PLACEHOLDER: &str = "\"__SIDEVOICE_APP_ORIGIN__\"";
 /// The script injected into the call controls card's window, bound to the app's own origin.
 pub fn call_controls_script(origin: &str) -> String {
     let literal = serde_json::to_string(origin).expect("a string serialises");
-    CALL_CONTROLS_SCRIPT_TEMPLATE.replacen(APP_ORIGIN_PLACEHOLDER, &literal, 1)
+    let bridge = CALL_CONTROLS_SCRIPT_TEMPLATE.replacen(APP_ORIGIN_PLACEHOLDER, &literal, 1);
+    format!("{bridge}\n{NO_CONTEXT_MENU_SCRIPT}")
 }
 
 /// What the app pushes to the card: any subset of `{call, level, pointerInside, outsideClicks, muteShortcut}`.
@@ -222,6 +226,12 @@ mod tests {
             title: "Claude".into(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn every_window_script_removes_the_default_context_menu() {
+        assert!(call_controls_script("tauri://localhost").contains("contextmenu"));
+        assert!(NO_CONTEXT_MENU_SCRIPT.contains("contextmenu"));
     }
 
     #[test]
