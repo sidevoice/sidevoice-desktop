@@ -1,6 +1,6 @@
 [package]
 name = "sidevoice-desktop-core"
-version = "0.1.0"
+version = "0.2.0"
 description = "The desktop app's pure logic: settings, the bridge contract, media permissions. No Tauri, so it is tested anywhere."
 edition = "2021"
 rust-version = "1.98"
