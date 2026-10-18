@@ -305,6 +305,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
         .title("Sidevoice")
         .inner_size(1100.0, 760.0)
         .min_inner_size(420.0, 560.0)
+        .initialization_script(bridge::NO_CONTEXT_MENU_SCRIPT)
         .initialization_script(bridge::script_for_origin(
             APP_ORIGIN,
             updater::offered(),
@@ -383,6 +384,7 @@ pub(crate) fn open_settings(app: &AppHandle) {
     }
     let _ = WebviewWindowBuilder::new(app, SETTINGS_LABEL, WebviewUrl::App("index.html".into()))
         .title("Sidevoice · Ajustes")
+        .initialization_script(bridge::NO_CONTEXT_MENU_SCRIPT)
         .inner_size(600.0, 640.0)
         .min_inner_size(420.0, 480.0)
         .build();
