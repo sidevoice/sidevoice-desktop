@@ -214,6 +214,7 @@ what the interface's own window offers — same origin, same permission rule —
     await first.stop();
     const take = takes.length ? Object.prototype.toString.call(takes[0].samples).slice(8, -1) + "/" + takes[0].sampleRate +
       "/" + (takes[0].ended_at - takes[0].started_at === Math.floor(takes[0].samples.length / 16)) : "none";
+    const samples = takes.length ? takes.map((t) => t.samples.length).join(",") : "none";
     await until(() => states.includes("idle") || started !== "ok", 30000);
     const delayedTurns = [];
     const stopFirst = first.onTurn((turn) => delayedTurns.push(["first", turn.phase, turn.turn_id]));
@@ -241,7 +242,7 @@ what the interface's own window offers — same origin, same permission rule —
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-voice ok keys=" + Object.keys(voice).length + " calls=2 route=" + routed + " delayed_turn=" + delayedTurn +
       " catalogs=" + catalogs[0].id + "," + remote + " models=" + models.length + " vad=" + models.some((m) => m.capabilities.includes("vad")) + " unknown=" + unknown +
       " bad_build=" + badBuild + " build=" + build + " turn_model=" + turnModel +
-      " devices=" + devices + " unknown_device=" + unknownDevice + " start=" + started + " take=" + take + " states=" + states.join(",") + " errors=" + errors.join(",") });
+      " devices=" + devices + " unknown_device=" + unknownDevice + " start=" + started + " take=" + take + " samples=" + samples + " states=" + states.join(",") + " errors=" + errors.join(",") });
   } catch (error) {
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-voice error " + String(error && (error.message || error)) });
   }
