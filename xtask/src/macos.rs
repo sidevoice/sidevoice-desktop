@@ -679,6 +679,23 @@ pub fn region(bounds: &str) -> Option<String> {
     Some(format!("{x1},{},{},{}", y1 - 28, x2 - x1, y2 - y1 + 28))
 }
 
+/// `xcrun stapler <action> <path>`, retried: both actions ask Apple's ticket service (CloudKit), and a runner's
+/// connection to it drops now and then ("The network connection was lost", error 68) though the ticket is fine.
+fn stapler(action: &str, path: impl AsRef<Path>) -> Result<()> {
+    let path = path.as_ref();
+    let waits = [15.0, 30.0, 60.0];
+    for (attempt, wait) in waits.iter().enumerate() {
+        match Cmd::new("xcrun").args(["stapler", action]).arg(path).run() {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                eprintln!("xtask: {e}; retrying in {wait} s ({} of {})", attempt + 1, waits.len());
+                crate::util::sleep(*wait);
+            }
+        }
+    }
+    Cmd::new("xcrun").args(["stapler", action]).arg(path).run()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -763,21 +780,4 @@ TeamIdentifier=AB12CD34EF
     fn an_unsigned_build_drops_every_signing_variable() {
         assert!(SIGNING_ENV.contains(&"APPLE_SIGNING_IDENTITY") && SIGNING_ENV.contains(&"APPLE_API_KEY_P8"));
     }
-}
-
-/// `xcrun stapler <action> <path>`, retried: both actions ask Apple's ticket service (CloudKit), and a runner's
-/// connection to it drops now and then ("The network connection was lost", error 68) though the ticket is fine.
-fn stapler(action: &str, path: impl AsRef<Path>) -> Result<()> {
-    let path = path.as_ref();
-    let waits = [15.0, 30.0, 60.0];
-    for (attempt, wait) in waits.iter().enumerate() {
-        match Cmd::new("xcrun").args(["stapler", action]).arg(path).run() {
-            Ok(()) => return Ok(()),
-            Err(e) => {
-                eprintln!("xtask: {e}; retrying in {wait} s ({} of {})", attempt + 1, waits.len());
-                crate::util::sleep(*wait);
-            }
-        }
-    }
-    Cmd::new("xcrun").args(["stapler", action]).arg(path).run()
 }
