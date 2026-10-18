@@ -156,7 +156,7 @@ fn update_artifact(signed: bool) -> Result<()> {
         let unpacked = work("update-artifact")?.join("unpacked");
         fresh_dir(&unpacked)?;
         Cmd::new("tar").arg("-xzf").arg(&update).arg("-C").arg(&unpacked).run()?;
-        Cmd::new("xcrun").args(["stapler", "validate"]).arg(unpacked.join("Sidevoice.app")).run()?;
+        stapler("validate", unpacked.join("Sidevoice.app"))?;
     }
     Ok(())
 }
@@ -281,7 +281,7 @@ pub fn check_app(signed: bool) -> Result<()> {
     eprintln!("{signature}");
     Signature::check(&signature, team.as_deref())?;
     if signed {
-        Cmd::new("xcrun").args(["stapler", "validate"]).arg(&app).run()?;
+        stapler("validate", &app)?;
         let spctl = Cmd::new("spctl").args(["-a", "-vv", "-t", "exec"]).arg(&app).output()?;
         eprintln!("{spctl}");
         ensure(notarized(&spctl), "Gatekeeper does not take the app as a notarized Developer ID app")?;
@@ -556,8 +556,8 @@ pub fn sign_dmg() -> Result<()> {
     eprintln!("{answer}");
     let status = notary_status(&answer)?;
     ensure(status == "Accepted", format!("notarization: {status}"))?;
-    Cmd::new("xcrun").args(["stapler", "staple"]).arg(&dmg).run()?;
-    Cmd::new("xcrun").args(["stapler", "validate"]).arg(&dmg).run()?;
+    stapler("staple", &dmg)?;
+    stapler("validate", &dmg)?;
     let spctl = Cmd::new("spctl")
         .args(["-a", "-vv", "-t", "open", "--context", "context:primary-signature"])
         .arg(&dmg)
@@ -567,7 +567,7 @@ pub fn sign_dmg() -> Result<()> {
     // The app inside, as a download would have it: notarized, stapled, accepted.
     let mount = Mount::attach(&dmg, &work("sign-dmg")?.join("mount"))?;
     let inside = mount.path.join("Sidevoice.app");
-    Cmd::new("xcrun").args(["stapler", "validate"]).arg(&inside).run()?;
+    stapler("validate", &inside)?;
     let spctl = Cmd::new("spctl").args(["-a", "-vv", "-t", "exec"]).arg(&inside).output()?;
     ensure(notarized(&spctl), "Gatekeeper does not take the app in the .dmg as a notarized Developer ID app")?;
     mount.detach()
@@ -677,6 +677,23 @@ pub fn region(bounds: &str) -> Option<String> {
     let numbers: Vec<i64> = bounds.split(',').map(|n| n.trim().parse().ok()).collect::<Option<_>>()?;
     let [x1, y1, x2, y2] = numbers[..] else { return None };
     Some(format!("{x1},{},{},{}", y1 - 28, x2 - x1, y2 - y1 + 28))
+}
+
+/// `xcrun stapler <action> <path>`, retried: both actions ask Apple's ticket service (CloudKit), and a runner's
+/// connection to it drops now and then ("The network connection was lost", error 68) though the ticket is fine.
+fn stapler(action: &str, path: impl AsRef<Path>) -> Result<()> {
+    let path = path.as_ref();
+    let waits = [15.0, 30.0, 60.0];
+    for (attempt, wait) in waits.iter().enumerate() {
+        match Cmd::new("xcrun").args(["stapler", action]).arg(path).run() {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                eprintln!("xtask: {e}; retrying in {wait} s ({} of {})", attempt + 1, waits.len());
+                crate::util::sleep(*wait);
+            }
+        }
+    }
+    Cmd::new("xcrun").args(["stapler", action]).arg(path).run()
 }
 
 #[cfg(test)]
