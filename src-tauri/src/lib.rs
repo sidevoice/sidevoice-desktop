@@ -625,8 +625,10 @@ pub fn run() {
             if let tauri::RunEvent::Reopen { has_visible_windows: false, .. } = event {
                 show_room(app);
             }
-            // Quitting: the local host's proxy stops and closes every tunnel; an update ready installs (automatic mode).
+            // Quitting: the voice call stops and releases its devices and models; the local host's proxy stops and closes
+            // every tunnel; an update ready installs (automatic mode).
             if let tauri::RunEvent::Exit = event {
+                voice::shutdown(app);
                 local_host::shutdown(app);
                 if !app.state::<AppState>().resetting.load(Ordering::SeqCst) {
                     updater::quit(app);

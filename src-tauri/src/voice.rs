@@ -768,6 +768,16 @@ fn watch_devices(app: &AppHandle, state: &VoiceState) {
     });
 }
 
+/// Quitting or restarting (`RunEvent::Exit`): every call is stopped and released, so the devices close and the models
+/// drop before `exit()` runs the C++ static destructors of WebRTC audio processing and ONNX Runtime; with a call
+/// still live, one of them aborted (macOS reported a crash on every restart after an update). Bounded: a stuck call
+/// must not hold the quit.
+pub fn shutdown(app: &AppHandle) {
+    if let Some(state) = app.try_state::<VoiceState>() {
+        let _ = tauri::async_runtime::block_on(tokio::time::timeout(Duration::from_secs(3), state.clear()));
+    }
+}
+
 /// A reloaded page owns none of its previous lanes.
 pub fn page_changed(app: &AppHandle) {
     let app = app.clone();
