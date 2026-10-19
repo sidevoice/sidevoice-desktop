@@ -89,7 +89,7 @@ pub fn resting_place(stored: Option<Point>, rest_size: Size, work: Rect) -> Poin
 }
 
 /// Whether the card is on screen: during a call, unless hidden for this call from the tray; while the room's own window
-/// is in front and focused (the same controls are there) only when the person chose it always shown
+/// is in view (the same controls are there) only when the person chose it always shown
 /// (`host.callControls.setAlwaysShown`).
 pub fn wanted(joined: bool, hidden_for_call: bool, room_in_front: bool, always_shown: bool) -> bool {
     joined && !hidden_for_call && (always_shown || !room_in_front)
