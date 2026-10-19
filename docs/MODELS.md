@@ -3,7 +3,7 @@
 In the app, speech models run only natively, never in the page: on macOS the voice call itself is native
 (`host.voice`, docs/BRIDGE.md → "The voice call"), and its models run on the app's engine (docs/ENGINES.md). The
 page chooses models and voices from the engine's catalogues (`host.engine.catalogs()`) and hands the person's choices
-to the call (`host.voice.setSettings`), each a catalogue's model; the catalogue picks the build. The same interface
+to the call (`host.voice.start`, `update`, `preload`), each a catalogue's model; the catalogue picks the build. The same interface
 in a browser runs the call in the page, over `@sidevoice/voice` and the page's own engine.
 
 ## Why not the webview (macOS)

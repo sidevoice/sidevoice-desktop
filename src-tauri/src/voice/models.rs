@@ -1,39 +1,29 @@
-//! The voice call's models on the app's engine: sidevoice-voice's interfaces (`VoiceModels` and its slots) filled
-//! with the models core's `voice::choose` picks, each loaded by its catalogue (`engine.catalog(id).load(model)`: the
-//! catalogue picks the build), or, for a local model with a build chosen, as that build (`engine.load(model, build)`),
-//! a local one installed first if it is not, and called through what it can do
-//! (`as_vad`, `as_stt`, `as_tts`, `as_end_of_turn`). Failures are the engine's codes.
+//! The voice call's models on the app's engine: sidevoice-voice's interfaces (`InputModels` for the input half,
+//! `OutputModels` for the output half, each slot asked for on its own) filled with the models core's `voice::choose`
+//! picks, each loaded by its catalogue (`engine.catalog(id).load(model)`: the catalogue picks the build), or, for a
+//! local model with a build chosen, as that build (`engine.load(model, build)`), a local one installed first if it is
+//! not. Failures are the engine's codes.
 //!
-//! A call keeps its models while the person changes them (sidevoice-web #75, gap #31): the call holds one stable
-//! interface per slot ([`Slots`]), and each calls whichever model the slot holds now. Changing a model
-//! ([`EngineModels::switch`]) loads the new one while the old one goes on serving, then moves the slot to it; work
-//! already under way finishes on the model it started with, which it holds. The call is never stopped for it. The voice
-//! activity detector is the app's own choice and a stream with a position, so it stays: a different one is taken at the
-//! call's next load. Text to speech keeps the voice chosen with its model, so a reply never asks a model for another's
-//! voice.
-//!
-//! Nothing native runs on an async worker of the app's runtime. Loading each model and opening the detector's stream
-//! (reading model files, building ONNX sessions, initialising Metal), transcribing, speaking and ending turns run on
-//! a blocking thread each. The detector runs one 32 ms window at a time where it is called, inside `block_in_place`,
-//! so the worker hands its other tasks on for that while.
+//! A call loads only the slots its halves use, and keeps what it loaded while it changes (sidevoice-voice's `update`:
+//! a half whose models are the same `Arc` keeps them; [`Halves::new`] hands the same one back while a half's slots
+//! stay). Calls share what is loaded: a model is loaded once while any call, or a preload, holds it ([`ModelCache`],
+//! weak, per model), so a transcription try followed by a call loads the transcriber and the detector once.
+//! The engine itself is `engine`'s.
 
 #[cfg(test)]
 pub(crate) mod tests;
 
-use std::collections::HashMap;
-use std::future::Future;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+mod engine;
 
-use sidevoice_desktop_core::voice::{ModelChoice, VoiceChoice, LOCAL_CATALOG};
-use sidevoice_desktop_engine::sidevoice_engine::{Cancel, Engine, Error, Model, Progress, VadOptions, VadStream};
-use sidevoice_voice::{async_trait, EndOfTurnModel, Models, Speaker, Transcriber, Vad, VadFrame, VoiceModels};
+use std::sync::Arc;
 
-/// The rate sidevoice-voice hands the detector.
-const VAD_RATE: u32 = 16_000;
+use sidevoice_desktop_core::voice::{InputChoice, ModelChoice, OutputChoice, VoiceChoice};
+use sidevoice_voice::{
+    async_trait, EndOfTurnModel, InputConfig, InputModels, OutputConfig, OutputModels, Speaker, Transcriber, Vad,
+    VoiceConfig, VoiceInput, VoiceOutput, VoiceSetup,
+};
 
-/// Native Silero supplies no per-window probability (sidevoice-engine#99), so sidevoice-voice uses its speech flag.
-/// Minimize sherpa's holds to avoid stacking them with the Pipecat-style turn chain while that issue is unresolved.
-const VAD_OPTIONS: VadOptions = VadOptions { threshold: 0.6, min_silence_ms: 1, min_speech_ms: 1 };
+pub(crate) use engine::{EngineLoader, ModelCache};
 
 /// Loads each model the call's slots take: the engine's ([`EngineLoader`]), or a test's.
 #[async_trait]
@@ -44,373 +34,154 @@ pub(crate) trait Loader: Send + Sync {
     async fn end_of_turn(&self, chosen: &ModelChoice) -> Result<Arc<dyn EndOfTurnModel>, String>;
 }
 
-/// The models of the choice made last: loaded into fresh [`Slots`] when the call loads, and switched in those slots
-/// while the call has them.
-pub struct EngineModels {
+/// The input half's models: the detector, the transcriber and, for `smart`, the end-of-turn model, each loaded when
+/// the call asks for it.
+pub(crate) struct EngineInput {
     loader: Arc<dyn Loader>,
-    choice: Mutex<VoiceChoice>,
-    /// The slots of the call's loaded models, while it keeps them (it drops them when idle).
-    live: Mutex<Weak<Slots>>,
-    /// One load or switch at a time: a switch never lands in the middle of a load, nor two switches out of order.
-    turn: tokio::sync::Mutex<()>,
-}
-
-/// One cache for the desktop host. It holds weak references so idle calls still release models;
-/// concurrent calls asking for the same choice share the load and the resulting model instance.
-#[derive(Default)]
-pub struct ModelCache {
-    loaded: tokio::sync::Mutex<HashMap<String, Weak<dyn Model>>>,
-}
-
-/// The models a switch loaded for the slots that change.
-type Changed = (Option<Arc<dyn Transcriber>>, Option<Arc<dyn Speaker>>, Option<Arc<dyn EndOfTurnModel>>);
-
-/// A switch that took place: the slots hold its models, and no other switch moves them while this is held, so the
-/// configuration that goes with them is applied before any later one.
-pub struct Switched<'a> {
-    _turn: tokio::sync::MutexGuard<'a, ()>,
-}
-
-impl EngineModels {
-    /// The models of `choice` on `engine`.
-    pub fn new(engine: Arc<Engine>, cache: Arc<ModelCache>, choice: VoiceChoice) -> Self {
-        Self::with(Box::new(EngineLoader { engine, cache }), choice)
-    }
-
-    pub(crate) fn with(loader: Box<dyn Loader>, choice: VoiceChoice) -> Self {
-        Self {
-            loader: Arc::from(loader),
-            choice: Mutex::new(choice),
-            live: Mutex::default(),
-            turn: tokio::sync::Mutex::new(()),
-        }
-    }
-
-    /// Makes `choice` the call's. A slot whose model changes gets the new one once it is loaded (the old one serving
-    /// until then, and finishing what it started: a transcription, a chunk of a reply, a pause asked); text to speech
-    /// its voice with it, from its next chunk. The end of turn keeps its classifier when the choice
-    /// has none (`silence`): a pause already asked of it is answered. Without loaded slots (no call yet, or one that
-    /// dropped its models), the choice is what the next load takes.
-    ///
-    /// The latest change wins: while `latest` says another came after this one (as this one waited, or as its models
-    /// loaded) this one changes nothing and answers `None`. A model that cannot be loaded leaves the slots and the
-    /// choice as they were: its code. `Some` holds off any later switch until it is dropped, for the configuration that
-    /// goes with these models to apply first.
-    pub async fn switch(
-        &self,
-        choice: VoiceChoice,
-        latest: &(dyn Fn() -> bool + Send + Sync),
-    ) -> Result<Option<Switched<'_>>, String> {
-        // Loaded with nothing held, so that a later change goes ahead meanwhile (a revert need not wait for a download
-        // no longer wanted); only the latest change, at the end, moves the slots. Every change that moved them since
-        // this one began is a later one, so the choice it compares with is still the one in place when it may apply.
-        let current = lock(&self.choice).clone();
-        let changes = !current.same_models(&choice);
-        let loading = changes && lock(&self.live).upgrade().is_some();
-        let early = if loading { Some(self.changed(&current, &choice).await) } else { None };
-        let turn = self.turn.lock().await;
-        if !latest() {
-            // Overtaken: what loaded (or failed to) is dropped, and the later change applies instead.
-            return Ok(None);
-        }
-        let live = lock(&self.live).upgrade();
-        let Some(slots) = live.filter(|_| changes) else {
-            if let Some(slots) = lock(&self.live).upgrade() {
-                slots.set_voice(voice_of(&choice));
-            }
-            *lock(&self.choice) = choice;
-            return Ok(Some(Switched { _turn: turn }));
-        };
-        // The call loaded its models while this one began: what changed is loaded now.
-        let loaded = match early {
-            Some(loaded) => loaded,
-            None => self.changed(&current, &choice).await,
-        };
-        let (stt, tts, end_of_turn) = loaded?;
-        if let Some(stt) = stt {
-            slots.set_transcriber(stt);
-        }
-        match tts {
-            Some(tts) => slots.set_speaker(tts, voice_of(&choice)),
-            None => slots.set_voice(voice_of(&choice)),
-        }
-        if let Some(end_of_turn) = end_of_turn {
-            slots.set_end_of_turn(end_of_turn);
-        }
-        *lock(&self.choice) = choice;
-        Ok(Some(Switched { _turn: turn }))
-    }
-
-    /// The models `choice` has that `current` does not, loaded: each slot's, or `None` where it stays. The end of turn
-    /// keeps its classifier when the choice has none. Everything is loaded before anything moves, so a failure changes
-    /// nothing.
-    async fn changed(&self, current: &VoiceChoice, choice: &VoiceChoice) -> Result<Changed, String> {
-        let stt = if current.stt == choice.stt { None } else { Some(self.loader.transcriber(&choice.stt).await?) };
-        let tts = if current.tts == choice.tts { None } else { Some(self.loader.speaker(&choice.tts).await?) };
-        let end_of_turn = match &choice.end_of_turn {
-            Some(chosen) if current.end_of_turn.as_ref() != Some(chosen) => {
-                Some(self.loader.end_of_turn(chosen).await?)
-            }
-            _ => None,
-        };
-        Ok((stt, tts, end_of_turn))
-    }
+    choice: InputChoice,
 }
 
 #[async_trait]
-impl VoiceModels for EngineModels {
-    async fn load(&self) -> Result<Models, String> {
-        let _turn = self.turn.lock().await;
-        let choice = lock(&self.choice).clone();
-        let stt = self.loader.transcriber(&choice.stt).await?;
-        let tts = self.loader.speaker(&choice.tts).await?;
-        let end_of_turn = match &choice.end_of_turn {
-            Some(chosen) => Some(self.loader.end_of_turn(chosen).await?),
+impl InputModels for EngineInput {
+    async fn vad(&self) -> Result<Box<dyn Vad>, String> {
+        self.loader.vad(&self.choice.vad).await
+    }
+
+    async fn transcriber(&self) -> Result<Arc<dyn Transcriber>, String> {
+        self.loader.transcriber(&self.choice.stt).await
+    }
+
+    async fn end_of_turn(&self) -> Result<Arc<dyn EndOfTurnModel>, String> {
+        match &self.choice.end_of_turn {
+            Some(chosen) => self.loader.end_of_turn(chosen).await,
+            None => Err("end-of-turn-missing".into()),
+        }
+    }
+}
+
+/// The output half's model: the speaker.
+pub(crate) struct EngineOutput {
+    loader: Arc<dyn Loader>,
+    choice: ModelChoice,
+}
+
+#[async_trait]
+impl OutputModels for EngineOutput {
+    async fn speaker(&self) -> Result<Arc<dyn Speaker>, String> {
+        self.loader.speaker(&self.choice).await
+    }
+}
+
+/// The halves of a call as the app made them from the person's choices: each half's choice and its models. The same
+/// models (one `Arc`) come back from [`Halves::new`] for a half whose slots did not change, so that
+/// `VoiceCall::update` keeps what that half loaded.
+#[derive(Clone)]
+pub(crate) struct Halves {
+    input: Option<(InputChoice, Arc<EngineInput>)>,
+    output: Option<(OutputChoice, Arc<EngineOutput>)>,
+    /// `VoiceConfig`: what holds for the whole call.
+    config: serde_json::Value,
+}
+
+/// What a load holds: the models of every slot the halves use, kept for as long as this is.
+#[derive(Default)]
+pub(crate) struct Loaded {
+    _vad: Option<Box<dyn Vad>>,
+    _transcriber: Option<Arc<dyn Transcriber>>,
+    _end_of_turn: Option<Arc<dyn EndOfTurnModel>>,
+    _speaker: Option<Arc<dyn Speaker>>,
+}
+
+impl Halves {
+    /// The halves of `choice`, over `loader`; a half that has the same models as `previous`' keeps them.
+    pub(crate) fn new(loader: &Arc<dyn Loader>, choice: &VoiceChoice, previous: Option<&Halves>) -> Halves {
+        let input = choice.input.as_ref().map(|input| {
+            let same = previous.and_then(|p| p.input.as_ref()).filter(|(old, _)| old.same_models(input));
+            let models = same.map_or_else(
+                || Arc::new(EngineInput { loader: Arc::clone(loader), choice: input.clone() }),
+                |(_, models)| Arc::clone(models),
+            );
+            (input.clone(), models)
+        });
+        let output = choice.output.as_ref().map(|output| {
+            let same = previous.and_then(|p| p.output.as_ref()).filter(|(old, _)| old.same_models(output));
+            let models = same.map_or_else(
+                || Arc::new(EngineOutput { loader: Arc::clone(loader), choice: output.tts.clone() }),
+                |(_, models)| Arc::clone(models),
+            );
+            (output.clone(), models)
+        });
+        Halves { input, output, config: choice.config.clone() }
+    }
+
+    /// What `VoiceCall::new` and `update` take: the halves with their configuration, and the call's own.
+    pub(crate) fn setup(&self) -> Result<VoiceSetup, String> {
+        let invalid = |what: &str, error: serde_json::Error| format!("invalid-{what}-config: {error}");
+        let input = match &self.input {
+            Some((choice, models)) => Some(VoiceInput {
+                models: Arc::clone(models) as Arc<dyn InputModels>,
+                config: serde_json::from_value::<InputConfig>(choice.config.clone())
+                    .map_err(|e| invalid("input", e))?,
+            }),
             None => None,
         };
-        let slots = Slots::new(stt, tts, voice_of(&choice), end_of_turn);
-        *lock(&self.live) = Arc::downgrade(&slots);
-        let vad = self.loader.vad(&choice.vad).await?;
-        Ok(slots.models(vad))
+        let output = match &self.output {
+            Some((choice, models)) => Some(VoiceOutput {
+                models: Arc::clone(models) as Arc<dyn OutputModels>,
+                config: serde_json::from_value::<OutputConfig>(choice.config.clone())
+                    .map_err(|e| invalid("output", e))?,
+            }),
+            None => None,
+        };
+        let config = serde_json::from_value::<VoiceConfig>(self.config.clone()).map_err(|e| invalid("call", e))?;
+        Ok(VoiceSetup { input, output, config })
     }
-}
 
-/// The engine's models, each loaded by its catalogue, or as its build for a local model with a build chosen.
-struct EngineLoader {
-    engine: Arc<Engine>,
-    cache: Arc<ModelCache>,
-}
-
-impl EngineLoader {
-    async fn load(&self, chosen: &ModelChoice) -> Result<Arc<dyn Model>, String> {
-        let key = format!("{}:{}:{}", chosen.catalog, chosen.model, chosen.build.as_deref().unwrap_or(""));
-        let mut loaded = self.cache.loaded.lock().await;
-        if let Some(model) = loaded.get(&key).and_then(Weak::upgrade) {
-            return Ok(model);
-        }
-        let (engine, chosen) = (Arc::clone(&self.engine), chosen.clone());
-        let model = blocking(async move {
-            let progress = |_: Progress| {};
-            let loaded: Arc<dyn Model> = match chosen.build.as_deref() {
-                Some(build) if chosen.catalog == LOCAL_CATALOG => {
-                    Arc::new(engine.load(&chosen.model, Some(build), &progress, &Cancel::new()).await?)
+    /// Loads every slot the halves use, all at once, as a call starting on them would. What loaded is held by the
+    /// answer even when a slot did not (its code is the second): the others stay loaded for the next ask.
+    pub(crate) async fn load(&self) -> (Loaded, Option<String>) {
+        let input = async {
+            match &self.input {
+                None => (None, None, None),
+                Some((choice, models)) => {
+                    let ends_turns = async {
+                        if choice.end_of_turn.is_some() {
+                            Some(models.end_of_turn().await)
+                        } else {
+                            None
+                        }
+                    };
+                    let (vad, transcriber, end_of_turn) = tokio::join!(models.vad(), models.transcriber(), ends_turns);
+                    (Some(vad), Some(transcriber), end_of_turn)
                 }
-                _ => Arc::from(engine.catalog(&chosen.catalog)?.load(&chosen.model, &progress, &Cancel::new()).await?),
-            };
-            Ok(loaded)
-        })
-        .await?;
-        loaded.insert(key, Arc::downgrade(&model));
-        Ok(model)
+            }
+        };
+        let output = async {
+            match &self.output {
+                None => None,
+                Some((_, models)) => Some(models.speaker().await),
+            }
+        };
+        let ((vad, transcriber, end_of_turn), speaker) = tokio::join!(input, output);
+        let mut failed = None;
+        let loaded = Loaded {
+            _vad: kept(vad, &mut failed),
+            _transcriber: kept(transcriber, &mut failed),
+            _end_of_turn: kept(end_of_turn, &mut failed),
+            _speaker: kept(speaker, &mut failed),
+        };
+        (loaded, failed)
     }
 }
 
-#[async_trait]
-impl Loader for EngineLoader {
-    async fn vad(&self, chosen: &ModelChoice) -> Result<Box<dyn Vad>, String> {
-        let detector = self.load(chosen).await?;
-        let vad = blocking(async move {
-            let vad = detector.as_vad().ok_or(Error::new("model-cannot-detect"))?;
-            vad.stream(VAD_OPTIONS).await
-        })
-        .await?;
-        if vad.sample_rate() != VAD_RATE {
-            return Err("vad-sample-rate".into());
+/// The model a load gave, or, when it failed, nothing, and the first code to have failed noted in `failed`.
+fn kept<T>(result: Option<Result<T, String>>, failed: &mut Option<String>) -> Option<T> {
+    match result {
+        Some(Ok(model)) => Some(model),
+        Some(Err(code)) => {
+            failed.get_or_insert(code);
+            None
         }
-        Ok(Box::new(EngineVad(vad)))
+        None => None,
     }
-
-    async fn transcriber(&self, chosen: &ModelChoice) -> Result<Arc<dyn Transcriber>, String> {
-        Ok(Arc::new(EngineStt(self.load(chosen).await?)))
-    }
-
-    async fn speaker(&self, chosen: &ModelChoice) -> Result<Arc<dyn Speaker>, String> {
-        Ok(Arc::new(EngineTts(self.load(chosen).await?)))
-    }
-
-    async fn end_of_turn(&self, chosen: &ModelChoice) -> Result<Arc<dyn EndOfTurnModel>, String> {
-        Ok(Arc::new(EngineEndOfTurn(self.load(chosen).await?)))
-    }
-}
-
-/// The voice chosen with the text-to-speech model, from the configuration it came with (`None`: the model's first).
-fn voice_of(choice: &VoiceChoice) -> Option<String> {
-    choice.config.get("voice").and_then(|voice| voice.as_str()).map(str::to_string)
-}
-
-/// What fills each slot of a call now. The call holds these through [`Slots::models`]; each call to a slot takes the
-/// model the slot holds as it starts, and keeps it to the end.
-pub(crate) struct Slots {
-    transcriber: Mutex<Arc<dyn Transcriber>>,
-    /// The speaker, and the voice chosen with it.
-    speaker: Mutex<(Arc<dyn Speaker>, Option<String>)>,
-    end_of_turn: Mutex<Option<Arc<dyn EndOfTurnModel>>>,
-}
-
-impl Slots {
-    pub(crate) fn new(
-        transcriber: Arc<dyn Transcriber>,
-        speaker: Arc<dyn Speaker>,
-        voice: Option<String>,
-        end_of_turn: Option<Arc<dyn EndOfTurnModel>>,
-    ) -> Arc<Self> {
-        Arc::new(Slots {
-            transcriber: Mutex::new(transcriber),
-            speaker: Mutex::new((speaker, voice)),
-            end_of_turn: Mutex::new(end_of_turn),
-        })
-    }
-
-    /// The call's models over these slots, with `vad`. The end of turn is always there, so that a call may turn to
-    /// `smart-turn` without loading again; asked while its slot is empty, it says `end-of-turn-missing`.
-    pub(crate) fn models(self: &Arc<Self>, vad: Box<dyn Vad>) -> Models {
-        let mut models =
-            Models::new(vad, Arc::new(SlotTranscriber(Arc::clone(self))), Arc::new(SlotSpeaker(Arc::clone(self))));
-        models.end_of_turn = Some(Arc::new(SlotEndOfTurn(Arc::clone(self))));
-        models
-    }
-
-    pub(crate) fn set_transcriber(&self, transcriber: Arc<dyn Transcriber>) {
-        *lock(&self.transcriber) = transcriber;
-    }
-
-    /// `speaker` with `voice`, from the next chunk the call asks it for.
-    pub(crate) fn set_speaker(&self, speaker: Arc<dyn Speaker>, voice: Option<String>) {
-        *lock(&self.speaker) = (speaker, voice);
-    }
-
-    pub(crate) fn set_voice(&self, voice: Option<String>) {
-        lock(&self.speaker).1 = voice;
-    }
-
-    pub(crate) fn set_end_of_turn(&self, end_of_turn: Arc<dyn EndOfTurnModel>) {
-        *lock(&self.end_of_turn) = Some(end_of_turn);
-    }
-}
-
-struct SlotTranscriber(Arc<Slots>);
-
-#[async_trait]
-impl Transcriber for SlotTranscriber {
-    async fn transcribe(&self, pcm: Vec<f32>, sample_rate: u32, language: Option<String>) -> Result<String, String> {
-        let model = Arc::clone(&*lock(&self.0.transcriber));
-        model.transcribe(pcm, sample_rate, language).await
-    }
-}
-
-struct SlotSpeaker(Arc<Slots>);
-
-#[async_trait]
-impl Speaker for SlotSpeaker {
-    /// With the voice chosen with the model the slot holds (the call's own may name the model before).
-    async fn speak(
-        &self,
-        text: String,
-        _voice: Option<String>,
-        language: Option<String>,
-        speed: f32,
-    ) -> Result<(Vec<f32>, u32), String> {
-        let (model, voice) = lock(&self.0.speaker).clone();
-        model.speak(text, voice, language, speed).await
-    }
-}
-
-struct SlotEndOfTurn(Arc<Slots>);
-
-#[async_trait]
-impl EndOfTurnModel for SlotEndOfTurn {
-    async fn end_of_turn(&self, pcm: Vec<f32>, sample_rate: u32) -> Result<f32, String> {
-        let model = lock(&self.0.end_of_turn).clone().ok_or_else(|| "end-of-turn-missing".to_string())?;
-        model.end_of_turn(pcm, sample_rate).await
-    }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-struct EngineVad(VadStream);
-
-#[async_trait]
-impl Vad for EngineVad {
-    async fn accept(&mut self, pcm: &[f32]) -> Result<Vec<VadFrame>, String> {
-        let stream = &mut self.0;
-        let output = tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(stream.accept(pcm)))
-            .map_err(code)?;
-        Ok(output
-            .frames
-            .into_iter()
-            .map(|frame| VadFrame { end: frame.end, speech: frame.speech, probability: frame.probability })
-            .collect())
-    }
-
-    async fn reset(&mut self) {
-        self.0.reset();
-    }
-}
-
-struct EngineStt(Arc<dyn Model>);
-
-#[async_trait]
-impl Transcriber for EngineStt {
-    async fn transcribe(&self, pcm: Vec<f32>, sample_rate: u32, language: Option<String>) -> Result<String, String> {
-        let model = Arc::clone(&self.0);
-        blocking(async move {
-            let stt = model.as_stt().ok_or(Error::new("model-cannot-transcribe"))?;
-            stt.transcribe(&pcm, sample_rate, language.as_deref()).await
-        })
-        .await
-    }
-}
-
-struct EngineTts(Arc<dyn Model>);
-
-#[async_trait]
-impl Speaker for EngineTts {
-    /// With no `voice`, the model's first.
-    async fn speak(
-        &self,
-        text: String,
-        voice: Option<String>,
-        language: Option<String>,
-        speed: f32,
-    ) -> Result<(Vec<f32>, u32), String> {
-        let model = Arc::clone(&self.0);
-        blocking(async move {
-            let tts = model.as_tts().ok_or(Error::new("model-cannot-speak"))?;
-            let voice = match voice {
-                Some(voice) => voice,
-                None => tts.voices().await.into_iter().next().ok_or(Error::new("unknown-voice"))?.id,
-            };
-            let audio = tts.speak(&text, &voice, language.as_deref(), Some(speed)).await?;
-            Ok((audio.samples, audio.sample_rate))
-        })
-        .await
-    }
-}
-
-struct EngineEndOfTurn(Arc<dyn Model>);
-
-#[async_trait]
-impl EndOfTurnModel for EngineEndOfTurn {
-    async fn end_of_turn(&self, pcm: Vec<f32>, sample_rate: u32) -> Result<f32, String> {
-        let model = Arc::clone(&self.0);
-        blocking(async move {
-            let classifier = model.as_end_of_turn().ok_or(Error::new("model-cannot-end-turns"))?;
-            classifier.probability(&pcm, sample_rate).await
-        })
-        .await
-    }
-}
-
-/// Runs `work` to its end on a blocking thread of the runtime it is called on (the app's), off its async workers.
-async fn blocking<T: Send + 'static>(
-    work: impl Future<Output = Result<T, Error>> + Send + 'static,
-) -> Result<T, String> {
-    let runtime = tokio::runtime::Handle::current();
-    tokio::task::spawn_blocking(move || runtime.block_on(work)).await.map_err(|_| "internal".to_string())?.map_err(code)
-}
-
-fn code(error: Error) -> String {
-    error.code.to_string()
 }

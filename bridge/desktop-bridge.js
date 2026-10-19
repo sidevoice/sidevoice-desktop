@@ -148,7 +148,8 @@
    *  sends, through a handle that tells how it went. A refusal rejects with `{key, message, …params}`. Only where the
    *  app offers it (macOS); elsewhere the page runs the call itself. */
   /** Native implementation of sidevoice-voice's VoiceHost. The host owns one microphone, speaker and model pool;
-   *  every created call owns its events, playback and recognition state. */
+   *  `start(settings)` makes a call with an input half, an output half or both, which owns its events, playback and
+   *  recognition state, and `preload(settings)` loads the models a call of them would use. */
   function voice() {
     const calls = new Map();
     const deviceListeners = new Set();
@@ -176,7 +177,9 @@
       const { reason, ...outcome } = event.outcome;
       return { ...event, outcome: { ...outcome, ...reason } };
     }
-    function createCall() {
+    const needsAHalf = () => new TypeError("voice settings with an input or an output half");
+    function start(settings, options) {
+      if (!settings || typeof settings !== "object" || (!settings.input && !settings.output)) throw needsAHalf();
       const id = `call-${epoch}-${++nextCall}`;
       const listeners = {
         turn: new Set(), state: new Set(), level: new Set(), "playback-level": new Set(), error: new Set(), take: new Set(),
@@ -186,18 +189,35 @@
       // Each stop waits for the idle state that answers it, which the take and the end of an open turn come before.
       let stopping = 0;
       let answers = [];
-      // Mutes reach the app in the order they were asked; each settles quietly, as the browser's `mute` returns nothing.
+      // Mutes and turn ends reach the app in the order they were asked; each settles quietly, as the browser's `mute`
+      // returns nothing. Changes of the call's settings are made one after the other too.
       let muting = Promise.resolve();
-      // Disposing: nothing new is asked, but the call's own ends still come in. Disposed: nothing more is delivered.
+      let updating = Promise.resolve();
+      // Ending: nothing new is asked, but the call's own ends still come in. Ended: nothing more is delivered.
       let closing = false;
       let disposed = false;
-      let disposing = null;
-      const closed = () => Object.assign(new Error("call disposed"), { code: "stopped", closed: true });
+      let ending = null;
+      const closed = () => Object.assign(new Error("call stopped"), { code: "stopped", closed: true });
+      // The lane is made at once, so that the microphone may be routed to the call before it works; the call is made on
+      // it (the app refuses here what its catalogues cannot fill); `ready` is when it works.
       const created = call("voice_create_call", { key: id });
-      const invoke = (command, args) => created.then(() => {
-        if (closing && command !== "voice_stop" && command !== "voice_dispose_call") throw closed();
+      const installed = created.then(() => call("voice_start", { key: id, settings, take: options?.take === true }));
+      // It works when the app says so and the page has the state that says it (the app's events and its answers reach the
+      // page by different ways, and a page that hears `ready` must find the state it comes with).
+      let sawWorking;
+      let failWorking;
+      const working = new Promise((resolve, reject) => { sawWorking = resolve; failWorking = reject; });
+      working.catch(() => {});
+      const ready = installed.then(() => call("voice_ready", { key: id })).then(() => working);
+      // The page reads `ready`; one it never reads is no unhandled rejection of the bridge's.
+      ready.catch(() => {});
+      const asked = (after) => (command, args) => after.then(() => {
+        if (closing) throw closed();
         return call(command, { key: id, ...args });
       });
+      // What needs the lane only (the app keeps a mute from the lane's creation), and what needs the call.
+      const onLane = asked(created);
+      const onCall = asked(installed);
       function saying(text, options) {
         const key = `say-${++said}`;
         const heard = new Set();
@@ -209,18 +229,19 @@
           if (event?.type === "done") { sayings.delete(key); settle(event.outcome); }
         }
         sayings.set(key, { step, outcome });
-        const asked = invoke("voice_say", { sayKey: key, text: String(text), language: options?.language ?? null })
+        const asking = onCall("voice_say", { sayKey: key, text: String(text), language: options?.language ?? null })
           .catch((error) => step({ type: "done", outcome: error?.closed
             ? { status: "not-played", reason: "stopped" }
             : { status: "not-played", reason: "failed", code: error?.code || error?.key || "voice-failed" } }));
         return Object.freeze({
           id: key,
-          cancel: () => { asked.then(() => sayings.has(key) && invoke("voice_cancel_say", { sayKey: key })).catch(() => {}); },
+          cancel: () => { asking.then(() => sayings.has(key) && call("voice_cancel_say", { key: id, sayKey: key })).catch(() => {}); },
           onEvent(listener) { if (typeof listener !== "function") throw new TypeError("a listener"); heard.add(listener); },
           outcome,
         });
       }
-      function stop() {
+      // Stops the call's listening and speaking, answering once its idle state came with what the stop ends.
+      function halt() {
         let answer;
         const answered = new Promise((resolve) => { answer = resolve; });
         stopping++;
@@ -229,44 +250,52 @@
           const at = answers.indexOf(answer);
           if (at >= 0) { answers.splice(at, 1); stopping--; }
         };
-        // Native answers true once it stopped a call; before the first settings there is none, and no idle comes.
-        return invoke("voice_stop").then((ran) => {
+        // Native answers true once it stopped a call; where none was made, no idle comes.
+        return call("voice_stop", { key: id }).then((ran) => {
           if (ran === true) return answered;
           forget();
           return undefined;
         }, (error) => { forget(); throw error; });
       }
+      function stop() {
+        if (ending) return ending;
+        closing = true;
+        ending = (async () => {
+          await route.catch(() => {});
+          // The call is made, or the app refused it: nothing to stop then, and no lane to release when there is none.
+          await installed.catch(() => {});
+          if (!await created.then(() => true, () => false)) return;
+          await halt().catch(() => {});
+          // Stopped, each saying under way ends as the call says it did.
+          await Promise.all([...sayings.values()].map((pending) => pending.outcome));
+          await call("voice_dispose_call", { key: id });
+        })().finally(() => {
+          disposed = true;
+          failWorking(closed());
+          calls.delete(id);
+          for (const set of Object.values(listeners)) set.clear();
+          for (const resolve of answers) resolve();
+          answers = [];
+        });
+        return ending;
+      }
       const host = Object.freeze({
         id,
-        setSettings: (settings) => invoke("voice_set_settings", { settings }),
-        start: (options) => invoke("voice_start", { take: options?.take === true }),
-        stop,
-        dispose: () => {
-          if (disposing) return disposing;
-          closing = true;
-          disposing = (async () => {
-            await route.catch(() => {});
-            await stop().catch(() => {});
-            // Stopped, each saying under way ends as the call says it did.
-            await Promise.all([...sayings.values()].map((pending) => pending.outcome));
-            await invoke("voice_dispose_call");
-          })().finally(() => {
-            disposed = true;
-            calls.delete(id);
-            for (const set of Object.values(listeners)) set.clear();
-            for (const resolve of answers) resolve();
-            answers = [];
-          });
-          return disposing;
+        ready,
+        update: (change) => {
+          if (!change || typeof change !== "object") return Promise.reject(new TypeError("a change of voice settings"));
+          updating = updating.catch(() => {}).then(() => onCall("voice_update", { change }));
+          return updating;
         },
+        stop,
         say: saying,
         mute: (muted) => {
-          muting = muting.then(() => invoke("voice_mute", { muted: !!muted })).catch(() => {});
+          muting = muting.then(() => onLane("voice_mute", { muted: !!muted })).catch(() => {});
         },
-        cancelInput: () => { invoke("voice_cancel_input").catch(() => {}); },
+        cancelInput: () => { onLane("voice_cancel_input").catch(() => {}); },
         // In order with mutes; resolves once native closed the turn, or at once when there is nothing to close.
         endInput: () => {
-          const ended = muting.then(() => invoke("voice_end_input"));
+          const ended = muting.then(() => onLane("voice_end_input"));
           muting = ended.then(() => undefined, () => undefined);
           return muting;
         },
@@ -285,6 +314,7 @@
         }
         const data = event.type === "take" ? takeOf(event.data) : event.data;
         if (listeners[event.type]) dispatch(listeners[event.type], data);
+        if (event.type === "state" && data?.listening !== "idle") sawWorking();
         if (event.type === "state" && data?.listening === "idle" && stopping > 0) {
           stopping--;
           answers.shift()?.();
@@ -293,7 +323,13 @@
       return host;
     }
     const host = Object.freeze({
-      createCall,
+      start,
+      preload(settings) {
+        if (!settings || typeof settings !== "object" || (!settings.input && !settings.output)) {
+          return Promise.reject(needsAHalf());
+        }
+        return call("voice_preload", { settings });
+      },
       routeInput(target) {
         if (target !== null && (!target || calls.get(target.id)?.host !== target)) {
           return Promise.reject(new TypeError("a call from this voice host or null"));
