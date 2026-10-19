@@ -568,6 +568,15 @@ pub fn run() {
         .invoke_handler(handler())
         .setup(|app| {
             let handle = app.handle().clone();
+            // A regular app with its Dock tile, asked for before any window or panel exists (#117). The policy is
+            // already Regular (Tao sets it at launch, no bundle key says otherwise) yet the operator's Mac showed no
+            // tile: the Dock one asks the process manager itself (`TransformProcessType` to foreground).
+            #[cfg(target_os = "macos")]
+            {
+                handle.set_activation_policy(tauri::ActivationPolicy::Regular)?;
+                handle.set_dock_visibility(true)?;
+            }
+            debug(&format!("launch {}", call_controls::app_active()));
             tray::create(&handle)?;
             headset::setup(&handle);
             // The model root is shared per OS user on this machine (docs/ENGINES.md).

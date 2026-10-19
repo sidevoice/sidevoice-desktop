@@ -370,7 +370,7 @@ fn describe(panel: &tauri_nspanel::objc2_app_kit::NSPanel) -> String {
 }
 
 /// Whether the app is the active one: showing, hovering or clicking the card must never make it so (CI's log).
-fn app_active() -> String {
+pub(crate) fn app_active() -> String {
     #[cfg(target_os = "macos")]
     {
         use tauri_nspanel::objc2::{class, msg_send, runtime::AnyObject};
