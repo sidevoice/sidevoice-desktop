@@ -579,8 +579,6 @@ pub fn run() {
                     let _ = window.hide();
                     call_controls::update(window.app_handle());
                 }
-                // In front, the room has the call's controls; behind, the card does.
-                WindowEvent::Focused(_) => call_controls::update(window.app_handle()),
                 _ => {}
             }
         })

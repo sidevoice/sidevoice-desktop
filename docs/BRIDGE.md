@@ -261,7 +261,8 @@ Any other key the installer answers comes through as it is, with its `params` an
 
 ## The call controls card
 
-During a call, while the room's window is not in front and focused, a small card floats over the person's other apps
+During a call, while the room's window is not in view (hidden, minimised, or on macOS fully covered or on another
+Space), a small card floats over the person's other apps
 (sidevoice/sidevoice-desktop#4): the agent, the conversation, the person's microphone, and near the pointer the call's
 controls. Hidden from the tray ("Hide call controls") it stays hidden for that call. "Always show the call controls" (the
 page's `host.callControls`, below) shows it during a call even while the room's window
