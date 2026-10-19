@@ -725,8 +725,9 @@ interface UpdaterStatus {
 - `restart()` installs the ready update and restarts the app into it, now; it knows nothing of calls (the person
   decides when). Rejects `{key: "update_unavailable", message}` unless the state is `ready`; `download()` likewise
   when no update is known. An update already downloading or ready is left as it is by later checks (nothing is
-  downloaded twice); one still `available`, found again, is not told to the page again (only an `error` the check
-  clears is).
+  downloaded twice), unless the feed now offers another version: that one replaces it (a nightly comes with every
+  merge, and the older would install and be offered the newer again after the restart). One still `available`,
+  found again, is not told to the page again (only an `error` the check clears is).
 - `cancel()` aborts the download running and drops what it had received (the plugin downloads into memory: there is no
   partial file); the state goes back to `available` (the update stays known, no `error`). With no download running it
   resolves and changes nothing. The cancelled version is remembered for this run of the app (not with the settings):
