@@ -1,0 +1,73 @@
+name: Set up Rust and the native engine's libraries
+description: >-
+  Installs the Rust toolchain src-tauri/rust-toolchain.toml pins (and on macOS the voice call's build tools: meson,
+  ninja, pkg-config), restores the Rust build cache (the app's workspace and xtask/), and fetches the sherpa-onnx
+  static libraries that sidevoice-engine links with `cargo xtask sherpa-libs` (that engine's own command, at the
+  commit src-tauri/Cargo.lock pins): checked against the digests it pins, kept outside target/ and linked through
+  SHERPA_ONNX_LIB_DIR (which the command exports), so no build script downloads anything unchecked.
+  Both caches are written only by a push to main (the nightly, and a release: release-please runs on one); a pull
+  request or a manual run only restores them, so its caches never evict main's from the repository's 10 GB.
+
+inputs:
+  cache:
+    description: >-
+      The Rust build cache, by name: one that several jobs building the same dependencies share. Empty (the default):
+      this job's own.
+    required: false
+    default: ''
+  save-cache:
+    description: >-
+      Whether this job writes the build cache when it found none for this Cargo.lock, on a push to main (no other run
+      writes it): 'false' for a job that only reads a shared cache another job (the one that builds all of it) writes.
+    required: false
+    default: 'true'
+
+outputs:
+  engine-rev:
+    description: The sidevoice-engine commit src-tauri/Cargo.lock pins (`cargo xtask engine-rev`).
+    value: ${{ steps.engine.outputs.rev }}
+
+runs:
+  using: composite
+  steps:
+    - name: Toolchain (src-tauri/rust-toolchain.toml)
+      shell: bash
+      working-directory: src-tauri
+      run: |
+        set -euo pipefail
+        rustup toolchain install
+        rustc --version
+    # WebRTC's audio processing (sidevoice-voice's echo cancellation, macOS) builds its C++ with meson and ninja.
+    - name: The voice call's build tools (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: brew install meson ninja pkg-config
+    - uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: |
+          src-tauri
+          xtask
+        shared-key: ${{ inputs.cache }}
+        save-if: ${{ inputs.save-cache == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    - name: The engine at the commit Cargo.lock pins
+      id: engine
+      shell: bash
+      run: |
+        set -euo pipefail
+        REV=$(cargo xtask engine-rev)
+        echo "rev=$REV" >> "$GITHUB_OUTPUT"
+    - uses: actions/cache/restore@v4
+      id: sherpa
+      with:
+        path: ~/.cache/sidevoice-engine/sherpa-onnx
+        # By the engine's commit: its xtask/sherpa-onnx-libs.json is outside the workspace, where hashFiles cannot see.
+        key: sherpa-onnx-libs-${{ runner.os }}-${{ runner.arch }}-${{ steps.engine.outputs.rev }}
+    - name: sherpa-onnx's libraries (cargo xtask sherpa-libs)
+      shell: bash
+      run: cargo xtask sherpa-libs
+    # What the step above fetched and checked against the engine's digests; on a push to main only.
+    - if: steps.sherpa.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: actions/cache/save@v4
+      with:
+        path: ~/.cache/sidevoice-engine/sherpa-onnx
+        key: ${{ steps.sherpa.outputs.cache-primary-key }}

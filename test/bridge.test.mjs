@@ -2,6 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import vm from "node:vm";
 
 const source = readFileSync(new URL("../bridge/desktop-bridge.js", import.meta.url), "utf8");
@@ -43,6 +44,7 @@ function fakeWindow(origin) {
 }
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
+const plain = (value) => JSON.parse(JSON.stringify(value)); // objects made by the injected bridge live in its VM realm
 const ORIGIN = "https://voice.example.com";
 
 test("does nothing on any other origin (auth pages, other sites)", () => {
@@ -51,6 +53,34 @@ test("does nothing on any other origin (auth pages, other sites)", () => {
   assert.equal(install(win, ORIGIN), null);
   assert.equal(win.__sidevoiceDesktop, undefined);
   assert.equal(calls.length, 0);
+});
+
+test("the macOS data bridge uses fixed native commands and no page-supplied paths", async () => {
+  const install = loadFactory();
+  const { win, calls } = fakeWindow(ORIGIN);
+  const api = install(win, ORIGIN, null, true);
+  assert.equal(typeof api.host.data.deleteAll, "function");
+  assert.equal(typeof api.host.data.resetReport, "function");
+  assert.equal(typeof api.host.data.uninstall, "function");
+  await api.host.data.pairings.read();
+  await api.host.data.pairings.write({ pairings: [], pendingRevokes: [] });
+  await api.host.data.deleteAll();
+  await api.host.data.uninstall();
+  await api.host.data.resetReport();
+  assert.deepEqual(calls.slice(-5), [
+    ["data_pairings_read", undefined],
+    ["data_pairings_write", { value: { pairings: [], pendingRevokes: [] } }],
+    ["data_delete_all", undefined],
+    ["data_uninstall", undefined],
+    ["data_reset_report", undefined],
+  ]);
+  const other = fakeWindow(ORIGIN);
+  const otherData = install(other.win, ORIGIN).host.data;
+  assert.equal(typeof otherData.pairings.read, "function");
+  assert.equal(typeof otherData.pairings.write, "function");
+  assert.equal(otherData.deleteAll, undefined);
+  assert.equal(otherData.resetReport, undefined);
+  assert.equal(otherData.uninstall, undefined);
 });
 
 test("reports not-ready first, then the real state once the room's controller exists", async () => {
@@ -119,8 +149,10 @@ test("the call controls card's view: the agent, you, the clock, the conversation
     { threadId: "a", title: "mini", selected: true, reach: "listening", machine: "daimon", harness: "claude", working: false, subtitle: "", karaoke: "not relayed" },
     { threadId: "b", title: "web", selected: false, reach: "holding", machine: "nas", harness: "codex", working: true, subtitle: "2 sin leer" },
   ];
-  const audioDevices = { inputs: [{ id: "default", label: "x" }], outputs: [], inputId: "default", outputId: "default", available: true, outputAvailable: false, busy: false, extra: 1 };
-  const store = fakeStore({ call: { joined: false }, mic: { enabled: true }, title: "a browsed transcript", participants, audioDevices,
+  // The room's facts, as its voice lists the devices (room-session-state.d.ts SessionFacts.audioDevices).
+  const audioDevices = { inputs: [{ id: "CoreAudio:mbp", label: "MacBook Pro Microphone" }, { id: "CoreAudio:usb", label: "" }],
+    outputs: [{ id: "CoreAudio:speakers", label: "Speakers" }], input: "CoreAudio:usb", output: "CoreAudio:speakers", outputSelectable: false };
+  const store = fakeStore({ call: { joined: false }, mic: { enabled: true }, title: "a browsed transcript", participants, facts: { audioDevices },
     callCard: { agent: "idle", youTalking: false, canSkip: false, title: "mini" } });
   win.sidevoiceUI = { store };
   win.sidevoiceActions = { toggleMic() {}, toggleCall: async () => {} };
@@ -131,7 +163,18 @@ test("the call controls card's view: the agent, you, the clock, the conversation
   assert.equal(s.since, null, "no clock outside a call");
   const plain = (value) => JSON.parse(JSON.stringify(value)); // objects made in the bridge's own realm
   assert.deepEqual(plain(s.participants[0]), { threadId: "a", title: "mini", selected: true, reach: "listening", machine: "daimon", harness: "claude", working: false, subtitle: "" });
-  assert.deepEqual(plain(s.devices), { inputs: [{ id: "default", label: "x" }], outputs: [], inputId: "default", outputId: "default", available: true, outputAvailable: false, busy: false });
+  // As the card reads them (call-controls/host.ts AudioDevices): the system's default first, an unnamed device by its
+  // place, and a speaker the voice cannot move shown as the system's.
+  const system = { id: "", label: "", system: true };
+  assert.deepEqual(plain(s.devices), {
+    inputs: [system, { id: "CoreAudio:mbp", label: "MacBook Pro Microphone" }, { id: "CoreAudio:usb", label: "", number: 2 }],
+    outputs: [system, { id: "CoreAudio:speakers", label: "Speakers" }],
+    inputId: "CoreAudio:usb", outputId: "", available: true, outputAvailable: false, busy: false });
+  store.set({ facts: { audioDevices: { ...audioDevices, input: null, outputSelectable: true } } });
+  s = api.snapshot();
+  assert.deepEqual([s.devices.inputId, s.devices.outputId, s.devices.outputAvailable], ["", "CoreAudio:speakers", true]);
+  store.set({ facts: { audioDevices: null } });
+  assert.equal(api.snapshot().devices, null, "none until the voice has listed them");
 
   assert.equal(s.title, "mini", "the conversation the call is on, not the transcript being browsed");
   const before = Date.now();
@@ -165,7 +208,7 @@ test("the card's commands: skip, switch conversation and choose a device, each o
     toggleMic() {}, toggleCall: async () => {},
     skipReply: async () => did.push("skip"),
     selectParticipant: (id) => did.push("select " + id),
-    selectAudioDevice: async (kind, id) => did.push("device " + kind + " " + id),
+    setAudioDevices: async (choice) => did.push("devices " + JSON.stringify(choice)),
   };
   const api = install(win, ORIGIN);
   assert.equal(api.run({ command: "skip-reply" }), false, "nothing playing");
@@ -175,9 +218,44 @@ test("the card's commands: skip, switch conversation and choose a device, each o
   assert.equal(api.run({ command: "select-participant", threadId: "zzz" }), false, "only a conversation the room lists");
   assert.equal(api.run({ command: "select-participant", threadId: "c" }), false, "and one the call can go to");
   assert.equal(api.run({ command: "select-audio-device", kind: "input", id: "mbp" }), true);
+  assert.equal(api.run({ command: "select-audio-device", kind: "output", id: "" }), true, "the system's default");
   assert.equal(api.run({ command: "select-audio-device", kind: "camera", id: "x" }), false);
+  assert.equal(api.run({ command: "select-audio-device", kind: "input", id: 3 }), false);
   await flush();
-  assert.deepEqual(did, ["skip", "select b", "device input mbp"]);
+  assert.deepEqual(did, ["skip", "select b", 'devices {"input":"mbp"}', 'devices {"output":null}']);
+});
+
+test("the card's choices go to the room one after another, busy until the last has been answered, refused or not", async () => {
+  const install = loadFactory();
+  const { win, calls } = fakeWindow(ORIGIN);
+  const audioDevices = { inputs: [{ id: "mbp", label: "mbp" }], outputs: [], input: null, output: null, outputSelectable: false };
+  const store = fakeStore({ call: { joined: true }, mic: { enabled: true }, participants: [], callCard: {}, facts: { audioDevices } });
+  win.sidevoiceUI = { store };
+  const answers = [];
+  const asked = [];
+  const plain = (value) => JSON.parse(JSON.stringify(value)); // objects made in the bridge's own realm
+  win.sidevoiceActions = { toggleMic() {}, toggleCall: async () => {},
+    setAudioDevices: (choice) => new Promise((resolve, reject) => { asked.push(choice); answers.push({ resolve, reject }); }) };
+  const api = install(win, ORIGIN);
+  await flush();
+  const busy = () => calls.filter(([cmd]) => cmd === "bridge_state").at(-1)[1].snapshot.devices.busy;
+  assert.equal(busy(), false);
+  assert.equal(api.run({ command: "select-audio-device", kind: "input", id: "mbp" }), true);
+  await flush();
+  assert.equal(busy(), true, "told to the card at once");
+  assert.equal(api.run({ command: "select-audio-device", kind: "input", id: "" }), true);
+  await flush();
+  assert.deepEqual(plain(asked), [{ input: "mbp" }], "the second waits for the first's answer");
+  answers[0].reject(Object.assign(Error("no"), { code: "audio-device-unknown" }));
+  await flush();
+  assert.deepEqual(plain(asked), [{ input: "mbp" }, { input: null }], "then goes, the first refused or not");
+  assert.equal(busy(), true, "until every choice is answered");
+  answers[1].resolve({});
+  await flush();
+  assert.equal(busy(), false);
+  assert.equal(api.run({ command: "select-audio-device", kind: "output", id: "x" }), true);
+  await flush();
+  assert.deepEqual(plain(asked.at(-1)), { output: "x" }, "a later choice goes at once");
 });
 
 test("the microphone's level reaches the app during a call only, throttled, and 0 when it stops", async () => {
@@ -208,20 +286,14 @@ test("installs once per page and survives a missing Tauri runtime", async () => 
   await flush();
 });
 
-test("the native engine is exactly the contract, keyed by catalogue model id + engine, audio as raw bytes", async () => {
+test("the engine is exactly the contract: its catalogues and keys, what runs here, what is on disk, installs and memory", async () => {
   const install = loadFactory();
   const { win, calls } = fakeWindow(ORIGIN);
-  const capabilities = { runs: "native", os: "macos", arch: "aarch64", has: ["cpu", "coreml"], memory_mb: 16384 };
+  const capabilities = { runs: "native", os: "macos", arch: "aarch64", has: ["cpu", "metal", "remote"], memory_mb: 16384 };
   const answers = {
     engine_capabilities: capabilities,
     engine_installed: [{ model: "whisper-tiny", engine: "sherpa-onnx" }],
-    engine_synthesize: (() => {
-      const buffer = new ArrayBuffer(4 + 8);
-      new DataView(buffer).setUint32(0, 24000, true);
-      new Float32Array(buffer, 4, 2).set([0.5, -0.25]);
-      return buffer;
-    })(),
-    engine_transcribe: "hola",
+    engine_memory: { total_mb: 16384, available_mb: 9000 },
     engine_install: () => new Promise((resolve) => setTimeout(() => resolve(null), 20)), // long enough to poll
     engine_progress: { job: "?", model: "whisper-small", engine: "sherpa-onnx", done: 5, total: 10, bytes_per_s: null },
   };
@@ -229,83 +301,461 @@ test("the native engine is exactly the contract, keyed by catalogue model id + e
     calls.push([cmd, args, options]);
     return Promise.resolve(typeof answers[cmd] === "function" ? answers[cmd]() : answers[cmd]);
   };
-  const engine = install(win, ORIGIN).host.nativeEngine;
+  const engine = install(win, ORIGIN).host.engine;
   assert.equal(install(win, ORIGIN).host.app, "sidevoice-desktop");
-  assert.deepEqual(Object.keys(engine).sort(),
-    ["cancel", "capabilities", "install", "installed", "load", "loaded", "memory", "synthesize", "transcribe", "unload"]);
+  assert.deepEqual(Object.keys(engine).sort(), [
+    "capabilities", "catalogs", "hasCredential", "install", "installed", "memory", "refresh", "setCredential",
+    "testCredential", "uninstall",
+  ]);
   assert.ok(Object.isFrozen(engine));
 
   assert.equal(JSON.stringify(await engine.capabilities()), JSON.stringify(capabilities));
   assert.equal(JSON.stringify(await engine.installed()), JSON.stringify([{ model: "whisper-tiny", engine: "sherpa-onnx" }]));
+  assert.equal(JSON.stringify(await engine.memory()), '{"total_mb":16384,"available_mb":9000}');
 
-  const samples = new Float32Array([0.1, 0.2, 0.3]);
-  assert.equal(await engine.transcribe("whisper-small", "sherpa-onnx", samples, 16000, "es"), "hola");
-  const [, body, options] = calls.find(([cmd]) => cmd === "engine_transcribe");
-  assert.ok(body.constructor.name === "Uint8Array" && body.byteLength === 12, "raw f32 bytes");
-  // (objects built inside the vm context: compare their JSON, not their prototypes)
-  assert.equal(JSON.stringify(options.headers), JSON.stringify({
-    "x-model": "whisper-small", "x-engine": "sherpa-onnx", "x-accelerator": "", "x-language": "es", "x-sample-rate": "16000",
-  }));
-  await engine.transcribe("whisper-small", "sherpa-onnx", samples, 16000, "", "coreml");
-  assert.equal(calls.filter(([cmd]) => cmd === "engine_transcribe")[1][2].headers["x-accelerator"], "coreml");
-
-  const audio = await engine.synthesize("kokoro-82m-v1.0", "sherpa-onnx", "ef_dora", 1, "hola");
-  assert.equal(audio.sampleRate, 24000);
-  assert.deepEqual(Array.from(audio.samples), [0.5, -0.25]);
-  assert.equal(JSON.stringify(calls.find(([cmd]) => cmd === "engine_synthesize")[1]), JSON.stringify({
-    model: "kokoro-82m-v1.0", engine: "sherpa-onnx", accelerator: null, voice: "ef_dora", speed: 1, text: "hola",
-  }));
-  await engine.synthesize("kokoro-82m-v1.0", "sherpa-onnx", "ef_dora", 1, "hola", "cpu");
-  assert.equal(calls.filter(([cmd]) => cmd === "engine_synthesize")[1][1].accelerator, "cpu");
-
-  answers.engine_synthesize = Array.from(new Uint8Array(answers.engine_synthesize));
-  assert.equal((await engine.synthesize("kokoro-82m-v1.0", "sherpa-onnx", "ef_dora", 1, "x")).sampleRate, 24000, "postMessage fallback");
-
+  // sidevoice-web's `ModelCatalogs.install(model, {build, engine, onProgress, signal})`, as its settings call it.
   const seen = [];
-  const installing = engine.install("whisper-small", "sherpa-onnx", (progress) => seen.push(progress));
-  assert.match(installing.job, /^install-/, "the call's own job, there from the start");
-  await installing;
+  const build = "whisper-small/sherpa-onnx-int8";
+  assert.equal(await engine.install("whisper-small", { build, engine: "sherpa-onnx", onProgress: (p) => seen.push(p) }), undefined);
   const installArgs = calls.find(([cmd]) => cmd === "engine_install")[1];
-  assert.deepEqual([installArgs.model, installArgs.engine, installArgs.job], ["whisper-small", "sherpa-onnx", installing.job]);
+  assert.deepEqual(Object.keys(installArgs).sort(), ["build", "engine", "job", "model"]);
+  assert.deepEqual([installArgs.model, installArgs.build, installArgs.engine], ["whisper-small", build, "sherpa-onnx"]);
+  assert.match(installArgs.job, /^install-/, "the call's own job");
   assert.equal(calls.find(([cmd]) => cmd === "engine_progress")[1].job, installArgs.job, "polled by that job");
-  assert.equal(JSON.stringify(seen[0]), JSON.stringify(answers.engine_progress), "one object per report, as the app sent it");
-  assert.match(engine.install("whisper-tiny", "sherpa-onnx").job, /^install-/, "without onProgress too");
+  assert.equal(JSON.stringify(seen[0]), '{"fraction":0.5,"done":5,"total":10}', "the app's bytes as the share done");
+  // With nothing named the app installs the build the catalogue recommends; without onProgress nothing is polled.
+  const polled = calls.filter(([cmd]) => cmd === "engine_progress").length;
+  await engine.install("whisper-tiny");
+  const bare = calls.filter(([cmd]) => cmd === "engine_install")[1][1];
+  assert.deepEqual([bare.model, bare.build, bare.engine], ["whisper-tiny", null, null]);
+  assert.notEqual(bare.job, installArgs.job, "a job per call");
+  assert.equal(calls.filter(([cmd]) => cmd === "engine_progress").length, polled);
 });
 
-test("load, unload, loaded and memory: the build in memory, by catalogue model id + engine", async () => {
+test("install progress: the share done of the app's bytes, null while the size is unknown", async () => {
+  const install = loadFactory();
+  const { win } = fakeWindow(ORIGIN);
+  const reports = [
+    { job: "j", model: "m", engine: "e", done: 0, total: 0, bytes_per_s: null },
+    { job: "j", model: "m", engine: "e", done: 30, total: 120, bytes_per_s: null },
+    { job: "j", model: "m", engine: "e", done: 130, total: 120, bytes_per_s: 7 },
+  ];
+  let finish;
+  win.__TAURI_INTERNALS__.invoke = (cmd) => {
+    if (cmd === "engine_install") return new Promise((resolve) => { finish = resolve; });
+    if (cmd === "engine_progress") return Promise.resolve(reports.length > 1 ? reports.shift() : reports[0]);
+    return Promise.resolve(null);
+  };
+  const seen = [];
+  const installing = install(win, ORIGIN).host.engine.install("m", { onProgress: (p) => seen.push(JSON.stringify(p)) });
+  while (seen.length < 3) await new Promise((resolve) => setTimeout(resolve, 5));
+  finish(null);
+  await installing;
+  assert.deepEqual(seen.slice(0, 3), [
+    '{"fraction":null,"done":0,"total":0}',
+    '{"fraction":0.25,"done":30,"total":120}',
+    '{"fraction":1,"done":130,"total":120}',
+  ]);
+});
+
+test("host.engine lists the catalogues and keeps provider keys, refusing with a code", async () => {
   const install = loadFactory();
   const { win, calls } = fakeWindow(ORIGIN);
-  const resident = [{ model: "whisper-small", engine: "sherpa-onnx", accelerator: "coreml", since: 1, last_used: 2 }];
-  const answers = {
-    engine_load: { load_ms: 840 },
-    engine_unload: null,
-    engine_loaded: resident,
-    engine_memory: { total_mb: 16384, available_mb: 9000 },
+  const catalogs = [
+    { id: "local", name: null, status: { stale: false }, models: [{
+      id: "whisper-tiny", capabilities: ["stt"], builds: [
+        { id: "whisper-tiny/whisper-cpp", accelerator: "metal", acceleratorClass: "gpu" },
+        { id: "whisper-tiny/sherpa-onnx", accelerator: "cpu", acceleratorClass: "cpu" },
+        { id: "whisper-tiny/unavailable" },
+      ],
+    }] },
+    { id: "openai", name: "OpenAI", status: { stale: false, reason: { code: "credential-missing", params: {} } }, models: [] },
+  ];
+  const answers = { engine_catalogs: catalogs, engine_set_credential: null, engine_has_credential: true };
+  win.__TAURI_INTERNALS__.invoke = (cmd, args) => {
+    calls.push([cmd, args === undefined ? undefined : structuredClone(args)]);
+    if (cmd === "engine_set_credential" && args.provider === "Nope") {
+      return Promise.reject({ key: "provider_invalid", provider: "Nope", message: "Not a provider id." });
+    }
+    return Promise.resolve(answers[cmd]);
   };
-  win.__TAURI_INTERNALS__.invoke = (cmd, args) => (calls.push([cmd, structuredClone(args)]), Promise.resolve(answers[cmd]));
-  const engine = install(win, ORIGIN).host.nativeEngine;
-
-  assert.equal(JSON.stringify(await engine.load("whisper-small", "sherpa-onnx", "coreml")), '{"load_ms":840}');
-  await engine.load("kokoro-82m-v1.0", "sherpa-onnx");
-  assert.equal(await engine.unload("whisper-small", "sherpa-onnx"), null);
-  await engine.unload("whisper-small", "sherpa-onnx", "coreml");
-  assert.equal(JSON.stringify(await engine.loaded()), JSON.stringify(resident));
-  assert.equal(JSON.stringify(await engine.memory()), '{"total_mb":16384,"available_mb":9000}');
+  const engine = install(win, ORIGIN).host.engine;
+  const listed = await engine.catalogs();
+  assert.equal(JSON.stringify(listed), JSON.stringify(catalogs));
+  assert.deepEqual(listed[0].models[0].builds.map((build) => build.acceleratorClass), ["gpu", "cpu", undefined]);
+  assert.equal(await engine.setCredential("openai", "sk-test"), undefined);
+  await engine.setCredential("openai", null);
+  assert.equal(await engine.hasCredential("openai"), true);
+  const refused = await engine.setCredential("Nope", "x").catch((error) => error);
+  assert.deepEqual([refused.key, refused.code], ["provider_invalid", "provider-invalid"]);
   assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("engine_")), [
-    ["engine_load", { model: "whisper-small", engine: "sherpa-onnx", accelerator: "coreml" }],
-    ["engine_load", { model: "kokoro-82m-v1.0", engine: "sherpa-onnx", accelerator: null }],
-    ["engine_unload", { model: "whisper-small", engine: "sherpa-onnx", accelerator: null }],
-    ["engine_unload", { model: "whisper-small", engine: "sherpa-onnx", accelerator: "coreml" }],
-    ["engine_loaded", undefined],
-    ["engine_memory", undefined],
+    ["engine_catalogs", undefined],
+    ["engine_set_credential", { provider: "openai", key: "sk-test" }],
+    ["engine_set_credential", { provider: "openai", key: null }],
+    ["engine_has_credential", { provider: "openai" }],
+    ["engine_set_credential", { provider: "Nope", key: "x" }],
   ]);
-
-  const refusal = { key: "runtime_failed", engine: "sherpa-onnx", message: "sherpa-onnx failed: …" };
-  win.__TAURI_INTERNALS__.invoke = () => Promise.reject(refusal);
-  await assert.rejects(engine.load("whisper-small", "sherpa-onnx"), (error) => error === refusal, "refusals pass through as sent");
 });
 
-test("cancel: by the job install carries from the start; the install rejects as the app refuses it", async () => {
+test("host.engine.uninstall takes a model off the computer, refusing with the engine's code", async () => {
+  const install = loadFactory();
+  const { win, calls } = fakeWindow(ORIGIN);
+  const refusals = {
+    "kokoro-82m-v1.0": { key: "model_in_use", model: "kokoro-82m-v1.0", code: "model-in-use", message: "kokoro-82m-v1.0 is in use by the voice call." },
+    "whisper-small": { key: "model_installing", model: "whisper-small", code: "model-installing", message: "whisper-small is being downloaded; cancel the download to remove it." },
+    nope: { key: "model_unknown", model: "nope", code: "model-not-found", message: "Unknown model nope." },
+  };
+  win.__TAURI_INTERNALS__.invoke = (cmd, args) => {
+    calls.push([cmd, args === undefined ? undefined : structuredClone(args)]);
+    return refusals[args?.model] ? Promise.reject(refusals[args.model]) : Promise.resolve(null);
+  };
+  const engine = install(win, ORIGIN).host.engine;
+  assert.equal(await engine.uninstall("whisper-tiny"), undefined);
+  for (const [model, refusal] of Object.entries(refusals)) {
+    const error = await engine.uninstall(model).catch((failure) => failure);
+    assert.deepEqual([error.key, error.code, error.model, error.message], [refusal.key, refusal.code, model, refusal.message]);
+  }
+  assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("engine_")), [
+    ["engine_uninstall", { model: "whisper-tiny" }],
+    ["engine_uninstall", { model: "kokoro-82m-v1.0" }],
+    ["engine_uninstall", { model: "whisper-small" }],
+    ["engine_uninstall", { model: "nope" }],
+  ]);
+});
+
+test("host.engine tries a key without keeping it, answering the catalogue's reason or null, and asks a provider again", async () => {
+  const install = loadFactory();
+  const { win, calls } = fakeWindow(ORIGIN);
+  const rejected = { code: "credential-rejected", params: {}, detail: "Incorrect API key provided: [key]." };
+  win.__TAURI_INTERNALS__.invoke = (cmd, args) => {
+    calls.push([cmd, args === undefined ? undefined : structuredClone(args)]);
+    if (cmd === "engine_test_credential") {
+      if (args.provider === "linux") return Promise.reject({ key: "credentials_unavailable", message: "No keys here." });
+      return Promise.resolve(args.key === "sk-good" ? null : rejected);
+    }
+    if (cmd === "engine_refresh" && args.provider === "nope") {
+      return Promise.reject({ key: "catalog_not_found", catalog: "nope", message: "There is no catalogue nope." });
+    }
+    return Promise.resolve(null);
+  };
+  const engine = install(win, ORIGIN).host.engine;
+  assert.deepEqual(await engine.testCredential("openai", "sk-bad"), rejected);
+  assert.equal(await engine.testCredential("openai", "sk-good"), null);
+  const unavailable = await engine.testCredential("linux", "k").catch((error) => error);
+  assert.equal(unavailable.code, "credentials-unavailable");
+  assert.equal(await engine.refresh("openai"), undefined);
+  const missing = await engine.refresh("nope").catch((error) => error);
+  assert.deepEqual([missing.code, missing.catalog], ["catalog-not-found", "nope"]);
+  assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("engine_")), [
+    ["engine_test_credential", { provider: "openai", key: "sk-bad" }],
+    ["engine_test_credential", { provider: "openai", key: "sk-good" }],
+    ["engine_test_credential", { provider: "linux", key: "k" }],
+    ["engine_refresh", { provider: "openai" }],
+    ["engine_refresh", { provider: "nope" }],
+  ]);
+  assert.ok(!calls.some(([cmd]) => cmd === "engine_set_credential"), "a key tried is never kept");
+});
+
+// ---- host.voice: the voice call the app runs (docs/BRIDGE.md → "The voice call") ----
+
+function voiceWindow(answers = {}) {
+  const { win, calls } = fakeWindow(ORIGIN);
+  win.__TAURI_INTERNALS__.invoke = (cmd, args) => {
+    calls.push([cmd, args === undefined ? undefined : structuredClone(args)]);
+    const answer = answers[cmd];
+    if (answer instanceof Error) return Promise.reject(answer.refusal);
+    return Promise.resolve(answer);
+  };
+  return { win, calls };
+}
+
+test("native voice offers the shared host and independent calls", async () => {
+  const install = loadFactory();
+  for (const offered of [undefined, false, "__SIDEVOICE_VOICE__", "true"]) {
+    assert.equal("voice" in install(fakeWindow(ORIGIN).win, ORIGIN, null, true, offered).host, false);
+  }
+  const { win, calls } = voiceWindow();
+  const api = install(win, ORIGIN, "native", true, true);
+  const host = api.host.voice;
+  assert.deepEqual(Object.keys(host).sort(), ["audioDevices", "createCall", "onAudioDevices", "routeInput", "setAudioDevices"]);
+  const a = host.createCall();
+  const b = host.createCall();
+  assert.notEqual(a.id, b.id);
+  assert.deepEqual(Object.keys(a).sort(), ["cancelInput", "dispose", "endInput", "id", "mute", "onError", "onLevel",
+    "onPlaybackLevel", "onState", "onTake", "onTurn", "say", "setSettings", "start", "stop"]);
+  assert.ok(Object.isFrozen(host) && Object.isFrozen(a));
+  await host.routeInput(a);
+  await host.routeInput(b);
+  await host.routeInput(null);
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "voice_route_input"), [
+    ["voice_route_input", { key: a.id }], ["voice_route_input", { key: b.id }], ["voice_route_input", { key: null }],
+  ]);
+  await assert.rejects(host.routeInput({ id: a.id }), { name: "TypeError" });
+  await a.dispose();
+  await b.dispose();
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "voice_dispose_call").map(([, args]) => args.key), [a.id, b.id]);
+});
+
+test("per-call commands carry the call key and say handles remain separate", async () => {
+  const { win, calls } = voiceWindow();
+  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const a = api.host.voice.createCall();
+  const b = api.host.voice.createCall();
+  const settings = { stt: { catalog: "local", model: "whisper" }, tts: { catalog: "local", model: "kokoro" } };
+  await Promise.all([a.setSettings(settings), b.setSettings(settings)]);
+  await Promise.all([a.start(), b.start()]);
+  const saidA = a.say("A");
+  const saidB = b.say("B");
+  assert.equal(saidA.id, saidB.id, "say IDs may repeat on different calls");
+  await flush();
+  api.voiceEvent({ key: b.id, type: "say", data: { key: saidB.id, event: { type: "done", outcome: {
+    status: "heard-up-to", heard_chars: 1, reason: { reason: "cancelled" },
+  } } } });
+  api.voiceEvent({ key: a.id, type: "say", data: { key: saidA.id, event: { type: "done", outcome: {
+    status: "not-played", reason: { reason: "failed", code: "speaker-unavailable" },
+  } } } });
+  assert.deepEqual(plain(await saidB.outcome), { status: "heard-up-to", heard_chars: 1, reason: "cancelled" });
+  assert.deepEqual(plain(await saidA.outcome), { status: "not-played", reason: "failed", code: "speaker-unavailable" });
+  assert.equal(a.mute(true), undefined);
+  assert.equal(b.cancelInput(), undefined);
+  await a.stop();
+  await flush();
+  const commands = calls.filter(([cmd]) => cmd.startsWith("voice_") && !["voice_create_call"].includes(cmd));
+  assert.ok(commands.every(([, args]) => args && (args.key === a.id || args.key === b.id)));
+  assert.deepEqual(commands.filter(([cmd]) => cmd === "voice_say").map(([, args]) => [args.key, args.sayKey]),
+    [[a.id, saidA.id], [b.id, saidB.id]]);
+  assert.ok(commands.some(([cmd, args]) => cmd === "voice_mute" && args.key === a.id && args.muted));
+  assert.ok(commands.some(([cmd, args]) => cmd === "voice_cancel_input" && args.key === b.id));
+});
+
+test("A to B routing keeps delayed per-call turns on A despite a later switch", async () => {
+  const { win, calls } = voiceWindow();
+  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const host = api.host.voice;
+  const a = host.createCall();
+  const b = host.createCall();
+  const seen = [];
+  a.onTurn((turn) => seen.push(["A", turn.phase, turn.text]));
+  b.onTurn((turn) => seen.push(["B", turn.phase, turn.text]));
+  await host.routeInput(a);
+  // Native accepted A's speech, but webview.eval delivers its start after the route to B.
+  const delayedA = { key: a.id, type: "turn", data: { phase: "started", turn_id: "a-1", started_at: 1 } };
+  await host.routeInput(b);
+  api.voiceEvent(delayedA);
+  api.voiceEvent({ key: b.id, type: "turn", data: { phase: "started", turn_id: "b-1", started_at: 2 } });
+  api.voiceEvent({ key: b.id, type: "turn", data: { phase: "finished", turn_id: "b-1", text: "B words" } });
+  api.voiceEvent({ key: a.id, type: "turn", data: { phase: "finished", turn_id: "a-1", text: "A words" } });
+  assert.deepEqual(seen, [["A", "started", undefined], ["B", "started", undefined],
+    ["B", "finished", "B words"], ["A", "finished", "A words"]]);
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "voice_route_input").map(([, args]) => args.key), [a.id, b.id]);
+});
+
+test("per-call state, levels, takes and saying outcomes are isolated after dispose", async () => {
+  const { win } = voiceWindow({ voice_stop: true });
+  win.atob = atob;
+  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const a = api.host.voice.createCall();
+  const b = api.host.voice.createCall();
+  const heard = [];
+  a.onLevel((level) => heard.push(["A", "mic", level]));
+  b.onPlaybackLevel((level) => heard.push(["B", "speaker", level]));
+  api.voiceEvent({ key: a.id, type: "level", data: 0.7 });
+  api.voiceEvent({ key: b.id, type: "playback-level", data: 0.3 });
+  api.voiceEvent({ key: b.id, type: "playback-level", data: 0 });
+  assert.deepEqual(heard, [["A", "mic", 0.7], ["B", "speaker", 0.3], ["B", "speaker", 0]]);
+  const takes = [];
+  a.onTake((take) => takes.push(take));
+  await a.start({ take: true });
+  let stopped = false;
+  const stopping = a.stop().then(() => { stopped = true; });
+  await flush();
+  assert.equal(stopped, false);
+  const samples = new Float32Array([0, 0.5]);
+  api.voiceEvent({ key: a.id, type: "take", data: { sampleRate: 16000,
+    samples: Buffer.from(samples.buffer).toString("base64"), started_at: 1, ended_at: 2, turns: [] } });
+  api.voiceEvent({ key: a.id, type: "state", data: { listening: "idle" } });
+  await stopping;
+  assert.deepEqual([...takes[0].samples], [...samples]);
+  const disposing = a.dispose();
+  await flush();
+  api.voiceEvent({ key: a.id, type: "state", data: { listening: "idle" } });
+  await disposing;
+  api.voiceEvent({ key: a.id, type: "level", data: 0.9 });
+  api.voiceEvent({ key: b.id, type: "playback-level", data: 0.5 });
+  assert.deepEqual(heard.at(-1), ["B", "speaker", 0.5]);
+});
+
+test("mute and cancelInput before the settings return nothing, never reject, and mutes keep their order", async () => {
+  const { win, calls } = fakeWindow(ORIGIN);
+  const answered = [];
+  const unhandled = [];
+  const onUnhandled = (reason) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  win.__TAURI_INTERNALS__.invoke = (cmd, args) => {
+    calls.push([cmd, args === undefined ? undefined : structuredClone(args)]);
+    if (cmd === "voice_mute") {
+      // The first mute is slow and refused; a later one must not overtake it.
+      const slow = calls.filter(([name]) => name === "voice_mute").length === 1;
+      return new Promise((resolve, reject) => setTimeout(() => {
+        answered.push(args.muted);
+        if (slow) reject({ key: "voice_settings_missing", code: "settings-missing", message: "Set the voice settings first." });
+        else resolve(null);
+      }, slow ? 20 : 0));
+    }
+    if (cmd === "voice_cancel_input") {
+      return Promise.reject({ key: "voice_settings_missing", code: "settings-missing", message: "Set the voice settings first." });
+    }
+    return Promise.resolve(null);
+  };
+  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const a = api.host.voice.createCall();
+  assert.equal(a.mute(true), undefined);
+  assert.equal(a.mute(false), undefined);
+  assert.equal(a.mute(true), undefined);
+  assert.equal(a.cancelInput(), undefined);
+  await a.setSettings({ stt: { catalog: "local", model: "whisper" }, tts: { catalog: "local", model: "kokoro" } });
+  await a.start();
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  process.off("unhandledRejection", onUnhandled);
+  assert.deepEqual(unhandled, []);
+  assert.deepEqual(answered, [true, false, true]);
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "voice_mute").map(([, args]) => [args.key, args.muted]),
+    [[a.id, true], [a.id, false], [a.id, true]]);
+});
+
+test("endInput is asked in order with mutes, resolves once native closed the turn, and never rejects", async () => {
+  const { win, calls } = fakeWindow(ORIGIN);
+  const closing = [];
+  win.__TAURI_INTERNALS__.invoke = (cmd, args) => {
+    calls.push([cmd, args === undefined ? undefined : structuredClone(args)]);
+    if (cmd === "voice_mute") return new Promise((resolve) => setTimeout(() => resolve(null), 20));
+    if (cmd === "voice_end_input") return new Promise((resolve) => closing.push(resolve));
+    if (cmd === "voice_stop") return Promise.resolve(false);
+    return Promise.resolve(null);
+  };
+  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const a = api.host.voice.createCall();
+  // Nothing to end before the settings: native answers at once, and so does the bridge.
+  a.mute(true);
+  let ended = false;
+  const ending = a.endInput().then((value) => { ended = true; return value; });
+  await flush();
+  assert.ok(!calls.some(([cmd]) => cmd === "voice_end_input"), "asked after the slow mute before it");
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "voice_mute" || cmd === "voice_end_input").map(([cmd, args]) => [cmd, args.key]),
+    [["voice_mute", a.id], ["voice_end_input", a.id]]);
+  assert.equal(ended, false, "it waits for native to close the turn");
+  closing.shift()(null);
+  assert.equal(await ending, undefined);
+  // A native refusal never rejects, and a stop does not wait for it.
+  win.__TAURI_INTERNALS__.invoke = (cmd, args) => {
+    calls.push([cmd, args === undefined ? undefined : structuredClone(args)]);
+    if (cmd === "voice_end_input") return Promise.reject({ key: "bad_request", message: "Unknown voice call." });
+    return Promise.resolve(cmd === "voice_stop" ? false : null);
+  };
+  assert.equal(await a.endInput(), undefined);
+  await a.stop();
+  await a.dispose();
+  assert.equal(await a.endInput(), undefined, "after dispose, nothing to end");
+});
+
+test("stop after a recorded start and a repeated start waits for the take and the idle that answer it", async () => {
+  const { win, calls } = voiceWindow({ voice_stop: true });
+  win.atob = atob;
+  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const a = api.host.voice.createCall();
+  const takes = [];
+  a.onTake((take) => takes.push(take));
+  await a.start({ take: true });
+  await a.start();
+  let stopped = false;
+  const stopping = a.stop().then(() => { stopped = true; });
+  await flush();
+  await flush();
+  assert.equal(stopped, false, "no idle has answered the stop yet");
+  api.voiceEvent({ key: a.id, type: "take", data: { sampleRate: 16000,
+    samples: Buffer.from(new Float32Array([0.25]).buffer).toString("base64"), started_at: 1, ended_at: 2, turns: [] } });
+  assert.equal(stopped, false);
+  api.voiceEvent({ key: a.id, type: "state", data: { listening: "idle" } });
+  await stopping;
+  assert.equal(takes.length, 1, "the take came before the stop resolved");
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "voice_start").map(([, args]) => args.take), [true, false]);
+});
+
+test("dispose stops first and delivers the call's own ends: the partial saying, the open turn and the take", async () => {
+  const { win, calls } = voiceWindow({ voice_stop: true });
+  win.atob = atob;
+  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const host = api.host.voice;
+  const a = host.createCall();
+  const turns = [];
+  const takes = [];
+  a.onTurn((turn) => turns.push(turn.phase));
+  a.onTake((take) => takes.push(take));
+  await a.start({ take: true });
+  const said = a.say("Hello there, again.");
+  const steps = [];
+  said.onEvent((event) => steps.push(event.type));
+  await flush();
+  api.voiceEvent({ key: a.id, type: "say", data: { key: said.id, event: { type: "playing" } } });
+  api.voiceEvent({ key: a.id, type: "say", data: { key: said.id, event: { type: "progress", heard_chars: 8 } } });
+  api.voiceEvent({ key: a.id, type: "turn", data: { phase: "started", turn_id: "a-1", started_at: 1 } });
+  let disposed = false;
+  const disposing = a.dispose().then(() => { disposed = true; });
+  await flush();
+  assert.ok(calls.some(([cmd, args]) => cmd === "voice_stop" && args.key === a.id), "dispose stops the call first");
+  assert.ok(!calls.some(([cmd]) => cmd === "voice_dispose_call"), "the lane is kept until the call's ends came");
+  assert.equal(disposed, false);
+  // What native stop answers, in its order: the saying's end, the open turn's, the take, then the idle state.
+  api.voiceEvent({ key: a.id, type: "say", data: { key: said.id, event: { type: "done", outcome: {
+    status: "heard-up-to", heard_chars: 8, reason: { reason: "stopped" },
+  } } } });
+  api.voiceEvent({ key: a.id, type: "turn", data: { phase: "cancelled", turn_id: "a-1", merged: false } });
+  api.voiceEvent({ key: a.id, type: "take", data: { sampleRate: 16000,
+    samples: Buffer.from(new Float32Array([0.5]).buffer).toString("base64"), started_at: 1, ended_at: 2, turns: [] } });
+  api.voiceEvent({ key: a.id, type: "state", data: { listening: "idle" } });
+  await disposing;
+  assert.deepEqual(plain(await said.outcome), { status: "heard-up-to", heard_chars: 8, reason: "stopped" });
+  assert.deepEqual(steps, ["playing", "progress", "done"], "one terminal, the call's own");
+  assert.deepEqual(turns, ["started", "cancelled"]);
+  assert.equal(takes.length, 1);
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "voice_dispose_call").map(([, args]) => args.key), [a.id]);
+  // Nothing reaches the disposed call, nor a call made after it.
+  const b = host.createCall();
+  const late = [];
+  b.onTurn((turn) => late.push(turn));
+  api.voiceEvent({ key: a.id, type: "turn", data: { phase: "started", turn_id: "a-2", started_at: 3 } });
+  api.voiceEvent({ key: a.id, type: "say", data: { key: said.id, event: { type: "done", outcome: { status: "heard" } } } });
+  assert.deepEqual(turns, ["started", "cancelled"]);
+  assert.deepEqual(late, []);
+  assert.deepEqual(steps, ["playing", "progress", "done"]);
+  assert.equal(a.say("late").id.startsWith("say-"), true);
+});
+
+test("shared audio devices stay at host scope", async () => {
+  const devices = { inputs: [], outputs: [], input: null, output: null, outputSelectable: true };
+  const { win, calls } = voiceWindow({ voice_audio_devices: devices, voice_set_audio_devices: devices });
+  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const seen = [];
+  const stop = api.host.voice.onAudioDevices((value) => seen.push(value));
+  assert.deepEqual(plain(await api.host.voice.audioDevices()), devices);
+  await api.host.voice.setAudioDevices({ input: null });
+  api.voiceEvent({ type: "devices", data: devices });
+  stop();
+  api.voiceEvent({ type: "devices", data: devices });
+  assert.equal(seen.length, 1);
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "voice_set_audio_devices"),
+    [["voice_set_audio_devices", { choice: { input: null } }]]);
+});
+
+test("a refused per-call start carries the native code", async () => {
+  const refusal = { key: "voice_failed", code: "microphone-denied", message: "The call could not start." };
+  const api = loadFactory()(voiceWindow({ voice_start: Object.assign(new Error(), { refusal }) }).win, ORIGIN, null, true, true);
+  const lane = api.host.voice.createCall();
+  await assert.rejects(lane.start(), (error) => error === refusal);
+});
+
+test("cancel: the signal's abort cancels the install's own job, which rejects install-cancelled", async () => {
   const install = loadFactory();
   const { win, calls } = fakeWindow(ORIGIN);
   const pending = new Map();
@@ -321,16 +771,52 @@ test("cancel: by the job install carries from the start; the install rejects as 
     }
     return Promise.resolve(null);
   };
-  const engine = install(win, ORIGIN).host.nativeEngine;
+  const engine = install(win, ORIGIN).host.engine;
   const seen = [];
-  const installing = engine.install("whisper-small", "sherpa-onnx", (p) => seen.push(p));
+  const abort = new AbortController();
+  const installing = engine.install("whisper-small", { engine: "sherpa-onnx", onProgress: (p) => seen.push(p), signal: abort.signal });
   await flush();
-  assert.equal(await engine.cancel(installing.job), true);
-  await assert.rejects(installing, (error) => error.key === "install_cancelled" && error.message === "The download was cancelled.");
-  assert.equal(await engine.cancel(installing.job), false, "an ended job: nothing to cancel, no throw");
-  assert.deepEqual(calls.filter(([cmd]) => cmd === "engine_cancel").map(([, args]) => args), [{ job: installing.job }, { job: installing.job }]);
+  abort.abort();
+  await assert.rejects(installing, (error) =>
+    error.code === "install-cancelled" && error.key === "install_cancelled" && error.message === "The download was cancelled.");
+  const job = calls.find(([cmd]) => cmd === "engine_install")[1].job;
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "engine_cancel").map(([, args]) => args), [{ job }]);
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.deepEqual(seen, [], "no progress for it once it ended");
+
+  // Aborted in the same tick as the call: the cancel goes behind the install, never ahead of it.
+  const now = new AbortController();
+  const immediate = engine.install("kokoro-82m-v1.0", { signal: now.signal });
+  now.abort();
+  await assert.rejects(immediate, (error) => error.code === "install-cancelled");
+  const order = calls.filter(([cmd]) => cmd === "engine_install" || cmd === "engine_cancel").slice(-2);
+  assert.deepEqual(order.map(([cmd]) => cmd), ["engine_install", "engine_cancel"]);
+  assert.equal(order[0][1].job, order[1][1].job);
+
+  // An abort after the install ended asks the app nothing.
+  const late = new AbortController();
+  const ended = engine.install("whisper-tiny", { signal: late.signal });
+  await flush();
+  [...pending.values()][0].resolve(null);
+  await ended;
+  late.abort();
+  await flush();
+  assert.equal(calls.filter(([cmd]) => cmd === "engine_cancel").length, 2);
+});
+
+test("an install whose signal is already aborted rejects install-cancelled at once, asking the app nothing", async () => {
+  const install = loadFactory();
+  const { win, calls } = fakeWindow(ORIGIN);
+  const abort = new AbortController();
+  abort.abort();
+  const progress = [];
+  await assert.rejects(
+    install(win, ORIGIN).host.engine.install("whisper-small", { build: "b", onProgress: (p) => progress.push(p), signal: abort.signal }),
+    (error) => error.code === "install-cancelled" && error.key === "install_cancelled",
+  );
+  await flush();
+  assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("engine_")), []);
+  assert.deepEqual(progress, []);
 });
 
 test("concurrent installs: each callback gets its own job's bytes, and none while its job waits", async () => {
@@ -351,11 +837,11 @@ test("concurrent installs: each callback gets its own job's bytes, and none whil
     }
     return Promise.resolve(null);
   };
-  const engine = install(win, ORIGIN).host.nativeEngine;
+  const engine = install(win, ORIGIN).host.engine;
   const whisper = [];
   const kokoro = [];
-  const a = engine.install("whisper-small", "sherpa-onnx", (p) => whisper.push([p.done, p.total, p.job]));
-  const b = engine.install("kokoro-82m-v1.0", "sherpa-onnx", (p) => kokoro.push([p.done, p.total, p.job]));
+  const a = engine.install("whisper-small", { engine: "sherpa-onnx", onProgress: (p) => whisper.push([p.done, p.total]) });
+  const b = engine.install("kokoro-82m-v1.0", { engine: "sherpa-onnx", onProgress: (p) => kokoro.push([p.done, p.total]) });
   await flush(); // the bridge reaches the app on a later tick
   try {
     assert.equal(jobs.length, 2);
@@ -368,8 +854,8 @@ test("concurrent installs: each callback gets its own job's bytes, and none whil
     await a;
     progress.set(jobs[1], [10, 132]);
     await new Promise((resolve) => setTimeout(resolve, 30));
-    assert.ok(kokoro.every(([, t, job]) => t === 132 && job === b.job) && kokoro.length > 0, "B sees only its own");
-    assert.ok(whisper.every(([, , job]) => job === a.job));
+    assert.ok(kokoro.every(([, t]) => t === 132) && kokoro.length > 0, "B sees only its own");
+    assert.ok(whisper.every(([, t]) => t === 100));
     finish.get(jobs[1])();
     await b;
   } finally {
@@ -380,12 +866,15 @@ test("concurrent installs: each callback gets its own job's bytes, and none whil
 test("a refusal reaches the page as the app sent it: a key, its parameters and an English message", async () => {
   const install = loadFactory();
   const { win } = fakeWindow(ORIGIN);
-  const refusal = { key: "not_installed", model: "whisper-small", engine: "sherpa-onnx", message: "whisper-small on sherpa-onnx is not downloaded yet." };
+  const refusal = { key: "model_needs_memory", model: "whisper-large-v3", needed_mb: 4000, memory_mb: 2000,
+    message: "whisper-large-v3 needs 4000 MB of memory; this machine has 2000 MB." };
   win.__TAURI_INTERNALS__.invoke = () => Promise.reject(refusal);
-  const engine = install(win, ORIGIN).host.nativeEngine;
-  await assert.rejects(engine.transcribe("whisper-small", "sherpa-onnx", new Float32Array(1), 16000, "es"), (error) => {
-    assert.equal(error.key, "not_installed");
-    assert.equal(error.model, "whisper-small");
+  const engine = install(win, ORIGIN).host.engine;
+  await assert.rejects(engine.install("whisper-large-v3", { engine: "sherpa-onnx" }), (error) => {
+    assert.equal(error.key, "model_needs_memory");
+    assert.equal(error.code, "model-needs-memory", "the code the page reads");
+    assert.equal(error.needed_mb, 4000);
+    assert.equal(error.model, "whisper-large-v3");
     assert.equal(error.message, refusal.message);
     return true;
   });
@@ -397,11 +886,15 @@ test("works on the app's own pages, whose origin may be opaque", () => {
   assert.ok(install(win, "tauri://localhost"));
   const other = fakeWindow("tauri://localhost");
   assert.equal(install(other.win, ORIGIN), null);
+  assert.equal(win.__SIDEVOICE_TARGET__, null, "the app never tells the interface where to look first");
+  assert.equal("__SIDEVOICE_TARGET__" in other.win, false, "nor anything to another origin");
 });
 
 test("the placeholders the app replaces are present exactly once", () => {
   assert.equal(source.split("__SIDEVOICE_ROOM_ORIGIN__").length, 2);
   assert.equal(source.split("__SIDEVOICE_MEDIA_KEYS__").length, 2);
+  assert.equal(source.split("__SIDEVOICE_LOCAL_HOST__").length, 2);
+  assert.equal(source.split("__SIDEVOICE_VOICE__").length, 2);
 });
 
 test("says who answers the media keys", () => {
@@ -432,14 +925,14 @@ test("host carries the bridge version; localHost only where the app offers it", 
     const api = install(win, ORIGIN, null, offered);
     assert.equal(api.host.version, 2);
     assert.equal(api.host.app, "sidevoice-desktop");
-    assert.ok(api.host.nativeEngine, "the rest of the host is untouched");
+    assert.ok(api.host.engine, "the rest of the host is untouched");
     assert.equal("localHost" in api.host, false, String(offered));
   }
   const { win } = fakeWindow(ORIGIN);
   const api = install(win, ORIGIN, "native", true);
   assert.deepEqual(Object.keys(api.host.localHost).sort(), [
-    "pairRoom", "pairing", "pairingCode", "reconnect", "restart", "revealLog", "serviceInstall", "serviceUninstall",
-    "start", "state", "stop", "subscribe",
+    "cancel", "install", "pairRoom", "pairing", "pairingCode", "reconnect", "restart", "revealLog", "serviceInstall",
+    "serviceUninstall", "setStartAtLogin", "start", "state", "stop", "subscribe",
   ]);
   assert.ok(Object.isFrozen(api.host.localHost));
 });
@@ -459,6 +952,8 @@ test("localHost calls go to their native commands and resolve what the app answe
   assert.deepEqual(await local.pairing(), pairing);
   assert.deepEqual(await local.stop(), { state: "stopped-by-person" });
   for (const name of ["start", "restart", "serviceInstall", "serviceUninstall", "reconnect", "revealLog"]) await local[name]();
+  await local.setStartAtLogin(true);
+  await local.setStartAtLogin(false);
   assert.deepEqual(await local.pairingCode(), { code: "SV1", expires_in: 600, reach: "room" });
   assert.deepEqual(await local.pairRoom("https://room.example", "CODE"), { room: "https://room.example" });
   assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("local_host")), [
@@ -471,6 +966,8 @@ test("localHost calls go to their native commands and resolve what the app answe
     ["local_host_action", { action: "service-uninstall" }],
     ["local_host_action", { action: "reconnect" }],
     ["local_host_action", { action: "reveal-log" }],
+    ["local_host_action", { action: "start-at-login-on" }],
+    ["local_host_action", { action: "start-at-login-off" }],
     ["local_host_pairing_code", undefined],
     ["local_host_pair_room", { url: "https://room.example", code: "CODE" }],
   ]);
@@ -481,6 +978,23 @@ test("a refused action rejects with the app's {key, message}", async () => {
   const refused = Object.assign(new Error("refused"), { refusal: { key: "service.not-loaded", message: "m" } });
   const { win } = localHostWindow({ local_host_action: refused });
   await assert.rejects(install(win, ORIGIN, null, true).host.localHost.start(), { key: "service.not-loaded", message: "m" });
+});
+
+test("setStartAtLogin takes a boolean only, and a connector without it rejects with its key", async () => {
+  const install = loadFactory();
+  const unsupported = Object.assign(new Error("refused"), {
+    refusal: { key: "service.login-unsupported", message: "m" },
+  });
+  const { win, calls } = localHostWindow({ local_host_action: unsupported });
+  const local = install(win, ORIGIN, null, true).host.localHost;
+  for (const bad of [undefined, null, 1, "true", {}]) {
+    await assert.rejects(local.setStartAtLogin(bad), { key: "bad_request" }, String(bad));
+  }
+  assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("local_host")), [], "nothing runs on a bad argument");
+  await assert.rejects(local.setStartAtLogin(false), { key: "service.login-unsupported", message: "m" });
+  assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("local_host")), [
+    ["local_host_action", { action: "start-at-login-off" }],
+  ]);
 });
 
 test("subscribe: the state now, then only changes; polling stops with the last listener", async () => {
@@ -513,6 +1027,92 @@ test("subscribe: the state now, then only changes; polling stops with the last l
   assert.ok(polls >= 3);
 });
 
+test("setStartAtLogin resolves the state read back, and subscribers see installed change alone", async () => {
+  const install = loadFactory();
+  let state = { state: "stopped-by-person", service: "launchd", installed: false, reachable: false };
+  const { win, tick } = localHostWindow({
+    local_host_state: () => state,
+    local_host_action: ({ action }) => {
+      state = { ...state, installed: action === "start-at-login-on" };
+      return state;
+    },
+  });
+  const local = install(win, ORIGIN, null, true).host.localHost;
+  const seen = [];
+  local.subscribe((s) => seen.push([s.state, s.installed]));
+  await flush();
+  assert.deepEqual(await local.setStartAtLogin(true), { ...state, installed: true });
+  tick();
+  await flush();
+  assert.deepEqual(await local.setStartAtLogin(false), { ...state, installed: false });
+  tick();
+  await flush();
+  assert.deepEqual(seen, [["stopped-by-person", false], ["stopped-by-person", true], ["stopped-by-person", false]]);
+});
+
+test("install: a promise of the state with its job, progress handed on when it changes, then no more polling", async () => {
+  const install = loadFactory();
+  let settle;
+  const steps = [
+    { step: "download", done: 0, total: 100, cancellable: true },
+    { step: "download", done: 0, total: 100, cancellable: true },
+    { step: "download", done: 60, total: null, cancellable: true },
+    { step: "service-start", done: null, total: null, cancellable: false },
+    null,
+  ];
+  const { win, calls } = localHostWindow({
+    local_host_install: () => new Promise((resolve) => { settle = resolve; }),
+    local_host_install_progress: () => (steps.length > 1 ? steps.shift() : steps[0]),
+  });
+  const local = install(win, ORIGIN, null, true).host.localHost;
+  const seen = [];
+  // Copied: the bridge makes its objects in its own realm.
+  const operation = local.install((progress) => seen.push({ ...progress }));
+  assert.equal(typeof operation.job, "string");
+  assert.match(operation.job, /^local-install-1-/);
+  assert.equal(typeof operation.then, "function");
+  for (let i = 0; i < 20 && seen.length < 3; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual(seen, [
+    { step: "download", done: 0, total: 100, cancellable: true },
+    { step: "download", done: 60, total: null, cancellable: true },
+    { step: "service-start", done: null, total: null, cancellable: false },
+  ], "unchanged progress is not handed on again; a null report is not progress");
+  settle({ state: "running", reachable: true });
+  assert.deepEqual(await operation, { state: "running", reachable: true });
+  const polls = calls.filter(([cmd]) => cmd === "local_host_install_progress").length;
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(calls.filter(([cmd]) => cmd === "local_host_install_progress").length, polls, "no polling once settled");
+  assert.deepEqual(calls.find(([cmd]) => cmd === "local_host_install"), ["local_host_install", { job: operation.job }]);
+  assert.ok(calls.filter(([cmd]) => cmd === "local_host_install_progress").every(([, args]) => args.job === operation.job));
+  assert.notEqual(local.install().job, operation.job, "each call its own job");
+});
+
+test("install rejects with the app's failure as it is; cancel goes by job and says whether it was honoured", async () => {
+  const install = loadFactory();
+  const busy = Object.assign(new Error("refused"), {
+    refusal: { key: "install.busy", message: "Sidevoice is already being installed on this computer." },
+  });
+  const { win, calls } = localHostWindow({ local_host_install: busy, local_host_install_cancel: (args) => args.job === "j1" });
+  const local = install(win, ORIGIN, null, true).host.localHost;
+  const operation = local.install();
+  await assert.rejects(operation, { key: "install.busy" });
+  assert.equal(calls.filter(([cmd]) => cmd === "local_host_install_progress").length, 0, "no onProgress, no polling");
+  assert.equal(await local.cancel("j1"), true);
+  assert.equal(await local.cancel("j2"), false);
+  for (const bad of [undefined, null, "", 3]) assert.equal(await local.cancel(bad), false, String(bad));
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "local_host_install_cancel"), [
+    ["local_host_install_cancel", { job: "j1" }],
+    ["local_host_install_cancel", { job: "j2" }],
+  ]);
+  const failed = Object.assign(new Error("refused"), {
+    refusal: { key: "install.authenticity", step: "staging", params: { check: "archive-link" }, message: "m" },
+  });
+  const other = localHostWindow({ local_host_install: failed });
+  await assert.rejects(install(other.win, ORIGIN, null, true).host.localHost.install(), {
+    key: "install.authenticity", step: "staging", params: { check: "archive-link" },
+  });
+});
+
 test("nothing of localHost runs until the page asks", async () => {
   const install = loadFactory();
   const { win, calls, tick } = localHostWindow({ local_host_state: { state: "running" } });
@@ -520,4 +1120,227 @@ test("nothing of localHost runs until the page asks", async () => {
   tick();
   await flush();
   assert.equal(calls.filter(([cmd]) => cmd.startsWith("local_host")).length, 0);
+});
+
+// ---- host.updater and host.build: the app's updates and what this build is (docs/BRIDGE.md) ----
+
+test("host.build says what this build is, as the app passed it", () => {
+  const install = loadFactory();
+  const build = (given) => install(fakeWindow(ORIGIN).win, ORIGIN, null, false, false, false, given).host.build;
+  assert.deepEqual({ ...build({ channel: "release", version: "0.4.0" }) }, { channel: "release", version: "0.4.0" });
+  const nightly = { channel: "nightly", version: "0.4.1-nightly.3", commit: "a1b2c3d", date: "2026-10-13" };
+  assert.deepEqual({ ...build(nightly) }, nightly);
+  assert.ok(Object.isFrozen(build(nightly)));
+});
+
+test("the host's keys: updater only where the app can update itself, build always", () => {
+  const install = loadFactory();
+  // A dev build, a .deb, a bare binary: the app passes false, and the page shows nothing to update.
+  for (const offered of [undefined, false, "__SIDEVOICE_UPDATER__", "true"]) {
+    const api = install(fakeWindow(ORIGIN).win, ORIGIN, null, false, false, offered, { channel: "nightly", version: "0.4.0" });
+    assert.deepEqual(Object.keys(api.host).sort(), ["app", "build", "callControls", "data", "engine", "mediaKeys", "muteShortcut", "version"], String(offered));
+    api.updaterEvent({ state: "idle" }); // nothing listens, nothing breaks
+  }
+  const api = install(fakeWindow(ORIGIN).win, ORIGIN, "native", true, true, true, { channel: "release", version: "0.4.0" });
+  assert.deepEqual(Object.keys(api.host).sort(), ["app", "build", "callControls", "data", "engine", "localHost", "mediaKeys", "microphone", "muteShortcut", "updater", "version", "voice"]);
+  // The AppUpdater seam, exactly.
+  assert.deepEqual(Object.keys(api.host.updater).sort(), ["cancel", "check", "download", "restart", "setMode", "settings", "status", "subscribe"]);
+  assert.ok(Object.isFrozen(api.host.updater));
+});
+
+test("host.computerName is the name the app passed, and absent without one", () => {
+  const install = loadFactory();
+  const host = (name) => install(fakeWindow(ORIGIN).win, ORIGIN, null, false, false, false, { channel: "dev", version: "0.4.0" }, name).host;
+  assert.equal(host("Mac de Ana").computerName, "Mac de Ana");
+  for (const none of [undefined, null, "", 42]) assert.ok(!("computerName" in host(none)), String(none));
+});
+
+test("host.updater's calls go to the updater command's actions and answer what the app says", async () => {
+  const install = loadFactory();
+  const answers = {
+    settings: { mode: "automatic" },
+    "set-mode": { mode: "manual" },
+    status: { state: "downloading", version: "0.5.0", progress: 0.42 },
+    check: { state: "available", version: "0.5.0" },
+    download: { state: "downloading", version: "0.5.0" },
+    restart: null,
+    cancel: null,
+  };
+  const updaterWindow = (refuse) => {
+    const { win, calls } = fakeWindow(ORIGIN);
+    win.__TAURI_INTERNALS__.invoke = (cmd, args) => {
+      calls.push([cmd, args === undefined ? undefined : structuredClone(args)]);
+      if (cmd !== "updater") return Promise.resolve(null);
+      return refuse?.[args.action] ? Promise.reject(refuse[args.action]) : Promise.resolve(answers[args.action]);
+    };
+    return { win, calls };
+  };
+  const { win, calls } = updaterWindow();
+  const updater = install(win, ORIGIN, null, false, false, true).host.updater;
+  assert.deepEqual(await updater.settings(), { mode: "automatic" });
+  assert.deepEqual(await updater.setMode("manual"), { mode: "manual" });
+  assert.deepEqual(await updater.status(), { state: "downloading", version: "0.5.0", progress: 0.42 });
+  assert.deepEqual(await updater.check(), { state: "available", version: "0.5.0" });
+  assert.deepEqual(await updater.download(), { state: "downloading", version: "0.5.0" });
+  assert.equal(await updater.restart(), undefined);
+  assert.equal(await updater.cancel(), undefined);
+  assert.equal(await updater.cancel(), undefined, "with nothing to cancel it resolves too");
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "updater").map(([, args]) => args), [
+    { action: "settings" },
+    { action: "set-mode", mode: "manual" },
+    { action: "status" },
+    { action: "check" },
+    { action: "download" },
+    { action: "restart" },
+    { action: "cancel" },
+    { action: "cancel" },
+  ]);
+  const nothing = { key: "update_unavailable", message: "There is no update to install." };
+  const refused = install(updaterWindow({ restart: nothing, download: nothing }).win, ORIGIN, null, false, false, true)
+    .host.updater;
+  await assert.rejects(refused.restart(), (e) => e === nothing);
+  await assert.rejects(refused.download(), (e) => e === nothing);
+});
+
+test("the app's updaterEvent hands each listener the status, until it stops", () => {
+  const install = loadFactory();
+  const api = install(fakeWindow(ORIGIN).win, ORIGIN, null, false, false, true);
+  const seen = [];
+  const stop = api.host.updater.subscribe((status) => seen.push(["a", status.state]));
+  api.host.updater.subscribe(() => { throw new Error("a listener's own"); });
+  api.host.updater.subscribe((status) => seen.push(["b", status.state]));
+  api.updaterEvent({ state: "downloading", version: "0.5.0", progress: 0.1 });
+  assert.deepEqual(seen, [["a", "downloading"], ["b", "downloading"]], "every listener, past one that throws");
+  stop();
+  api.updaterEvent({ state: "ready", version: "0.5.0" });
+  assert.deepEqual(seen, [["a", "downloading"], ["b", "downloading"], ["b", "ready"]]);
+  assert.throws(() => api.host.updater.subscribe("nope"), { name: "TypeError" });
+});
+
+// ---- host.microphone: the app's microphone permission, for the page's first-run setup (docs/BRIDGE.md) ----
+
+test("host.microphone only with host.voice, and exactly its three calls", () => {
+  const install = loadFactory();
+  for (const offered of [undefined, false, "__SIDEVOICE_VOICE__", "true"]) {
+    const api = install(fakeWindow(ORIGIN).win, ORIGIN, null, true, offered);
+    assert.equal("microphone" in api.host, false, String(offered));
+  }
+  const api = install(fakeWindow(ORIGIN).win, ORIGIN, "native", true, true);
+  assert.ok("voice" in api.host);
+  assert.deepEqual(Object.keys(api.host.microphone).sort(), ["onChange", "openSettings", "request", "state"]);
+  assert.ok(Object.isFrozen(api.host.microphone));
+});
+
+test("host.microphone calls the microphone command with its action, and passes refusals on", async () => {
+  const install = loadFactory();
+  let answer = "prompt";
+  const { win, calls } = settingsWindow({
+    microphone: ({ action }) => (action === "open-settings" ? null : answer),
+  });
+  const microphone = install(win, ORIGIN, "native", true, true).host.microphone;
+  assert.equal(await microphone.state(), "prompt");
+  answer = "granted";
+  assert.equal(await microphone.request(), "granted");
+  assert.equal(await microphone.openSettings(), undefined);
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "microphone"), [
+    ["microphone", { action: "state" }],
+    ["microphone", { action: "request" }],
+    ["microphone", { action: "open-settings" }],
+  ]);
+  const refusal = { key: "internal", message: "System Settings could not be opened." };
+  const failing = settingsWindow({ microphone: () => Object.assign(new Error(), { refusal }) });
+  const host = install(failing.win, ORIGIN, "native", true, true).host;
+  await assert.rejects(host.microphone.openSettings(), (error) => error === refusal);
+});
+
+test("host.microphone.onChange fires when state() changes (permission or device), until stopped", async () => {
+  const install = loadFactory();
+  let answer = "granted";
+  const { win, tick } = settingsWindow({ microphone: () => answer });
+  const microphone = install(win, ORIGIN, "native", true, true).host.microphone;
+  assert.throws(() => microphone.onChange("nope"), { name: "TypeError" });
+  let fired = 0;
+  const stop = microphone.onChange(() => { fired++; });
+  await flush(); // the first read is the baseline, not a change
+  assert.equal(fired, 0);
+  tick(); await flush();
+  assert.equal(fired, 0);
+  answer = "missing"; // unplugged
+  tick(); await flush();
+  assert.equal(fired, 1);
+  answer = "prompt"; // plugged in, not asked yet
+  tick(); await flush();
+  assert.equal(fired, 2);
+  stop();
+  answer = "denied";
+  tick(); await flush();
+  assert.equal(fired, 2);
+});
+
+// ---- host.muteShortcut and host.callControls: the app's call settings, set from the page (docs/BRIDGE.md) ----
+
+function settingsWindow(answers) {
+  const fake = fakeWindow(ORIGIN);
+  const { win, calls } = fake;
+  win.__TAURI_INTERNALS__.invoke = (cmd, args) => {
+    calls.push([cmd, structuredClone(args)]);
+    const answer = answers[cmd]?.(args);
+    return answer instanceof Error ? Promise.reject(answer.refusal) : Promise.resolve(answer);
+  };
+  return { win, calls, tick: fake.tick };
+}
+
+test("host.muteShortcut and host.callControls are exactly the web's seams", () => {
+  const install = loadFactory();
+  const { host } = install(fakeWindow(ORIGIN).win, ORIGIN);
+  assert.deepEqual(Object.keys(host.muteShortcut).sort(), ["get", "set", "subscribe"]);
+  assert.deepEqual(Object.keys(host.callControls).sort(), ["setAlwaysShown", "settings"]);
+  assert.ok(Object.isFrozen(host.muteShortcut) && Object.isFrozen(host.callControls));
+});
+
+test("host.muteShortcut gets and sets through the mute_shortcut command, refusing what is not a shortcut", async () => {
+  const install = loadFactory();
+  const on = { accelerator: "Cmd+Shift+M", label: "⇧⌘M", state: "on", alternatives: [], voiceOver: false };
+  const off = { accelerator: null, label: null, state: "off", alternatives: [], voiceOver: false };
+  const invalid = Object.assign(new Error(), { refusal: { key: "shortcut_invalid", message: "Not a shortcut: M" } });
+  const { win, calls } = settingsWindow({
+    mute_shortcut: ({ action, accelerator }) => action === "get" ? on : accelerator === null ? off : accelerator === "M" ? invalid : on,
+  });
+  const shortcut = install(win, ORIGIN).host.muteShortcut;
+  assert.deepEqual(await shortcut.get(), on);
+  assert.deepEqual(await shortcut.set("cmd+shift+m"), on);
+  assert.deepEqual(await shortcut.set(null), off);
+  await assert.rejects(shortcut.set("M"), (e) => e.key === "shortcut_invalid");
+  for (const wrong of [undefined, 5, { accelerator: "Cmd+M" }]) {
+    await assert.rejects(shortcut.set(wrong), (e) => e.key === "shortcut_invalid", String(wrong));
+  }
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "mute_shortcut").map(([, args]) => args), [
+    { action: "get" },
+    { action: "set", accelerator: "cmd+shift+m" },
+    { action: "set", accelerator: null },
+    { action: "set", accelerator: "M" },
+  ], "a wrong argument asks the app nothing");
+});
+
+test("the app's muteShortcutEvent reaches host.muteShortcut's listeners, until they stop", () => {
+  const install = loadFactory();
+  const api = install(fakeWindow(ORIGIN).win, ORIGIN);
+  const seen = [];
+  const stop = api.host.muteShortcut.subscribe((shortcut) => seen.push(shortcut.state));
+  api.muteShortcutEvent({ accelerator: "Ctrl+Alt+M", label: "⌃⌥M", state: "refused", alternatives: ["Ctrl+Alt+Shift+M"], voiceOver: false });
+  stop();
+  api.muteShortcutEvent({ accelerator: null, label: null, state: "off", alternatives: [], voiceOver: false });
+  assert.deepEqual(seen, ["refused"]);
+});
+
+test("host.callControls reads and sets alwaysShown through the call_controls_settings command, booleans only", async () => {
+  const install = loadFactory();
+  const { win, calls } = settingsWindow({
+    call_controls_settings: ({ action, enabled }) => ({ alwaysShown: action === "settings" ? false : enabled }),
+  });
+  const controls = install(win, ORIGIN).host.callControls;
+  assert.deepEqual(await controls.settings(), { alwaysShown: false });
+  assert.deepEqual(await controls.setAlwaysShown(true), { alwaysShown: true });
+  await assert.rejects(controls.setAlwaysShown("yes"), (e) => e.key === "bad_request");
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "call_controls_settings").map(([, args]) => args), [{ action: "settings" }, { action: "set-always-shown", enabled: true }]);
 });

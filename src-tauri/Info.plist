@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <!-- Merged into the generated Info.plist by the Tauri bundler. Without this key macOS kills the
-       app the moment the room asks for the microphone. -->
+       app the moment its voice call opens the microphone. -->
   <key>NSMicrophoneUsageDescription</key>
   <string>Sidevoice usa el micrófono para que hables con tus agentes durante una llamada.</string>
   <key>LSApplicationCategoryType</key>

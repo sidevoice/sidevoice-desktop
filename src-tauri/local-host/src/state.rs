@@ -17,7 +17,13 @@
 //! `reachable` (always present) is whether a core answers and the app's pairing with it works — then the page can use
 //! the host (`pairing()` is non-null) whatever `state` says, as SEAMS §5 pins.
 //!
-//! `installing` is R4's.
+//! `product_version` (always present) is the installed Sidevoice's version — the `sidevoice` package, which bundles
+//! the core — as the person knows it: what the installation's own program says (`--version --json`, gathered by the
+//! poll), `null` when unknown or nothing is installed. It is not `core.version`, the core's own.
+//!
+//! `installing` is the host's own, not this table's: while an install it runs is under way ([`crate::install`]),
+//! whatever is observed — the service passes through states of its own meanwhile, and the page offers nothing for
+//! them (sidevoice-web treats it as starting).
 
 use crate::core_socket::{CoreError, Health};
 use crate::Refusal;
@@ -32,6 +38,8 @@ pub const API: RangeInclusive<i64> = 1..=1;
 #[serde(rename_all = "kebab-case")]
 pub enum State {
     Absent,
+    /// An install the app runs is under way (the host sets it, not [`report`]).
+    Installing,
     NotInstalled,
     StoppedByPerson,
     Starting,
@@ -43,7 +51,7 @@ pub enum State {
     Incompatible,
 }
 
-/// `{state, failure?, core?, service?, calls?, attempts?, limit?, reachable}`.
+/// `{state, failure?, core?, product_version, service?, calls?, attempts?, limit?, installed?, reachable}`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Report {
     pub state: State,
@@ -51,6 +59,8 @@ pub struct Report {
     pub failure: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub core: Option<Value>,
+    /// The installed Sidevoice's version; `null` when unknown or nothing is installed.
+    pub product_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service: Option<String>,
     /// `null` from the service means unknown (no core answering), not zero: then absent here.
@@ -62,6 +72,10 @@ pub struct Report {
     pub attempts: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<u64>,
+    /// Whether the service starts at the next sign-in: the connector's own `start_at_login`, as it says it. Absent
+    /// when it does not (a connector that predates the toggle); never inferred from `service` or its `installed`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installed: Option<bool>,
     /// A core answers and the app's pairing with it works.
     pub reachable: bool,
 }
@@ -72,10 +86,12 @@ impl Report {
             state,
             failure: None,
             core: None,
+            product_version: None,
             service: None,
             calls: None,
             attempts: None,
             limit: None,
+            installed: None,
             reachable: false,
         }
     }
@@ -102,6 +118,8 @@ pub struct Observed<'a> {
     pub status: Option<&'a Value>,
     pub core: Result<&'a Health, &'a CoreError>,
     pub link: &'a Link,
+    /// What the installation's program says its version is, when known.
+    pub product_version: Option<&'a str>,
 }
 
 fn compatible(api: Option<i64>) -> bool {
@@ -116,11 +134,13 @@ pub fn report(observed: Observed<'_>) -> Report {
     let status = observed.status;
     let field = |name: &str| status.and_then(|s| s.get(name)).filter(|v| !v.is_null());
     let mut report = Report::new(State::Absent);
+    report.product_version = observed.product_version.map(str::to_string);
     report.service = field("service").and_then(Value::as_str).map(str::to_string);
     report.calls = field("calls").and_then(Value::as_u64);
     report.attempts = field("attempts").and_then(Value::as_u64);
     report.limit = field("limit").and_then(Value::as_u64);
     report.core = field("core").cloned();
+    report.installed = field("start_at_login").and_then(Value::as_bool);
 
     match observed.core {
         Err(CoreError::Unsafe(refusal)) => {
@@ -203,7 +223,7 @@ mod tests {
     }
 
     fn state(status: Option<Value>, core: Result<&Health, &CoreError>, link: &Link) -> Report {
-        report(Observed { status: status.as_ref(), core, link })
+        report(Observed { status: status.as_ref(), core, link, product_version: None })
     }
 
     #[test]
@@ -291,13 +311,49 @@ mod tests {
         assert_eq!(
             json!(got),
             json!({"state": "backoff", "service": "systemd", "failure": {"key": "launch.exited"}, "attempts": 2,
-                "limit": 5, "reachable": false})
+                "limit": 5, "product_version": null, "reachable": false})
         );
         let launchd = json!({"state": "backoff", "service": "launchd", "attempts": 3, "limit": null, "calls": null});
         let got = state(Some(launchd), Err(&CoreError::Absent), &Link::Unpaired);
         assert_eq!((got.attempts, got.limit, got.calls), (Some(3), None, None));
         let gone = state(Some(json!({"state": "stopped"})), Err(&CoreError::Absent), &Link::Unpaired);
         assert_eq!(gone.failure.unwrap()["key"], "status.unknown", "rev. 2 has no `stopped`");
+    }
+
+    #[test]
+    fn installed_is_the_connectors_start_at_login_and_only_that() {
+        let h = health(Some(1));
+        for (says, expected) in [(json!(true), Some(true)), (json!(false), Some(false)), (json!(null), None)] {
+            let status = json!({"state": "running", "service": "launchd", "installed": true, "start_at_login": says});
+            assert_eq!(state(Some(status.clone()), Ok(&h), &Link::Paired).installed, expected);
+            assert_eq!(state(Some(status), Err(&CoreError::Absent), &Link::Unpaired).installed, expected);
+        }
+        // A connector that predates the toggle: the service's own `installed` and `service` say nothing about it.
+        let older = json!({"state": "stopped-by-person", "service": "launchd", "installed": true});
+        let got = state(Some(older), Err(&CoreError::Absent), &Link::Unpaired);
+        assert_eq!(got.installed, None);
+        assert!(json!(got).get("installed").is_none());
+    }
+
+    #[test]
+    fn the_product_version_is_the_installations_whatever_the_state_and_not_the_cores() {
+        let h = health(Some(1));
+        let core_err = CoreError::Absent;
+        let unsafe_dir = CoreError::Unsafe(Refusal::new("identity.unsafe-directory", "m"));
+        let cases: [(Option<Value>, Result<&Health, &CoreError>, Link); 4] = [
+            (None, Ok(&h), Link::Paired),
+            (Some(json!({"state": "stopped-by-person"})), Err(&core_err), Link::Unpaired),
+            (None, Err(&core_err), Link::Unpaired),
+            (None, Err(&unsafe_dir), Link::Unpaired),
+        ];
+        for (status, core, link) in cases {
+            let got = report(Observed { status: status.as_ref(), core, link: &link, product_version: Some("0.8.1") });
+            assert_eq!(json!(got)["product_version"], "0.8.1", "{:?}", got.state);
+        }
+        let running = state(None, Ok(&h), &Link::Paired);
+        assert_eq!(running.product_version, None, "unknown is null, never the core's version");
+        assert_eq!(json!(running)["product_version"], Value::Null);
+        assert_eq!(running.core.unwrap()["version"], "0.2.0");
     }
 
     #[test]
@@ -319,6 +375,7 @@ mod tests {
     fn states_serialise_as_the_bridge_names_them() {
         let names: Vec<Value> = [
             State::Absent,
+            State::Installing,
             State::NotInstalled,
             State::StoppedByPerson,
             State::Starting,
@@ -336,6 +393,7 @@ mod tests {
             names,
             [
                 "absent",
+                "installing",
                 "not-installed",
                 "stopped-by-person",
                 "starting",
@@ -347,6 +405,9 @@ mod tests {
                 "incompatible"
             ]
         );
-        assert_eq!(json!(Report::new(State::Running)), json!({"state": "running", "reachable": false}));
+        assert_eq!(
+            json!(Report::new(State::Running)),
+            json!({"state": "running", "product_version": null, "reachable": false})
+        );
     }
 }

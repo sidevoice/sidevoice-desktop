@@ -30,6 +30,9 @@ jobs:
     steps:
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         id: release
+      # The runner's own Rust builds the xtask.
+      - uses: actions/checkout@v4
+        if: steps.release.outputs.prs_created == 'true'
       - name: Run the PR-title check on the release PR (its own pushes start no workflow)
         if: steps.release.outputs.prs_created == 'true'
         env:
@@ -37,10 +40,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
         # The release PR's branch, read from the PR itself: the action's `pr` output can be empty while
         # `prs_created` is true, and fromJSON('') then fails the whole job.
-        run: |
-          for branch in $(gh pr list --state open --label 'autorelease: pending' --json headRefName --jq '.[].headRefName'); do
-            gh workflow run pr-title.yml --ref "$branch"
-          done
+        run: cargo xtask release-pr-checks
 
   assets:
     name: Release assets
@@ -48,7 +48,8 @@ jobs:
     if: needs.release-please.outputs.release_created == 'true'
     permissions:
       contents: write
-      pull-requests: read
     uses: ./.github/workflows/build.yml
     with:
       release-tag: ${{ needs.release-please.outputs.tag_name }}
+    # The macOS signing and notarization secrets (build.yml signs a release's app and .dmg).
+    secrets: inherit

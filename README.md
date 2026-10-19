@@ -19,14 +19,17 @@ already have with your agent into a voice call. The agent keeps its context and 
 speaks its replies, and you answer by voice and can interrupt it — from the sofa or on a walk, not only at your desk.
 
 **sidevoice-desktop** is the app you call from, for macOS, Windows and Linux. A call lives in its own window with a
-tray icon and a global mute shortcut, and on Apple-Silicon Macs speech models run natively on your computer.
+tray icon and a global mute shortcut. On Macs the call itself runs natively: your microphone, turns, transcription,
+the agent's voice and its echo cancellation, on your computer.
 
 ## How it fits
 
 | Piece | Role |
 |---|---|
 | [sidevoice-connector](https://github.com/sidevoice/sidevoice-connector) | What you install on the machine where your agents run: their voice tools, and the supervisor of that machine's core. |
-| [sidevoice-core](https://github.com/sidevoice/sidevoice-core) | The conversations and the voice pipeline, next to the agents. The app talks to it. |
+| [sidevoice-core](https://github.com/sidevoice/sidevoice-core) | The room: the conversations, presence and routing to the agents. Text and events only; the app talks to it. |
+| [sidevoice-voice](https://github.com/sidevoice/sidevoice-voice) | The voice call: turns, transcription, speech, playback, barge-in, echo cancellation. Compiled into the app on macOS. |
+| [sidevoice-engine](https://github.com/sidevoice/sidevoice-engine) | The models, local and remote, and their catalogue. Compiled into the app. |
 | **sidevoice-desktop** (this repository) | The app you call from. |
 | [sidevoice-web](https://github.com/sidevoice/sidevoice-web) | The call interface. The app bundles a recorded build of it and never loads a remote page. |
 
@@ -37,10 +40,13 @@ Beta. What works today:
 - Pairing with your machine through a one-time code, and calls with its conversations.
 - The tray (menu-bar) icon with the call state (idle, live, muted): mute, hang up, show the window, settings, quit.
   Closing the window keeps the call going.
-- A global mute shortcut (⌘⇧M on macOS, Ctrl+Shift+M elsewhere; configurable).
-- On Apple-Silicon Macs (macOS 13+), transcription (Whisper) and speech (Kokoro) in the app's native engine,
-  downloaded the first time you choose a model. On every platform, a provider (OpenAI, ElevenLabs) with your own
-  key, kept on your machine. The Windows and Linux builds do not include a local speech engine yet.
+- A global mute shortcut (⌘⇧M on macOS, Ctrl+Shift+M elsewhere; configurable in the room's Settings).
+- On Macs (macOS 13+), the voice call runs in the app: the microphone and the speaker with the app's own echo
+  cancellation (WebRTC AEC3), transcription (Whisper, on Metal on Apple Silicon) and speech (Kokoro) downloaded the
+  first time they are needed, or a provider (OpenAI, ElevenLabs) with your own key, kept in the macOS keychain.
+  **For now the voice call is macOS only:** the Windows and Linux builds run the call in the page, and the page they
+  bundle cannot load its voice modules until `@sidevoice/voice` and `@sidevoice/engine` are published on npm, so
+  they open rooms but cannot talk yet.
 
 The macOS build is ad-hoc signed and not notarized yet, so macOS blocks it on first open (below).
 
@@ -49,7 +55,8 @@ The macOS build is ad-hoc signed and not notarized yet, so macOS blocks it on fi
 From [**Releases**](https://github.com/sidevoice/sidevoice-desktop/releases). Until the first versioned release, use
 the [`nightly`](https://github.com/sidevoice/sidevoice-desktop/releases/tag/nightly) pre-release, built from the
 latest green `main`. Each carries the Apple-Silicon `.dmg`, the Windows installer, the Linux `.deb` and `.AppImage`, and
-`SHA256SUMS`.
+`SHA256SUMS`. A release updates itself to the next release, a nightly to the next nightly: to move from the nightly to
+releases, install a release (RELEASING.md → "Updates").
 
 **First open on macOS.** Drag Sidevoice to Applications, then clear the quarantine flag once:
 
@@ -63,7 +70,7 @@ permission to your terminal — and allow the microphone when asked.
 
 **Pair it.** On the machine where your agents run, with the
 [connector](https://github.com/sidevoice/sidevoice-connector) installed, ask your agent to pair a device (or run
-`npx @sidevoice/uplink pair-device`). Enter the one-time code in the app's settings, under machines. Then ask the
+`npx sidevoice@latest pair-device`). Enter the one-time code in the app's settings, under machines. Then ask the
 agent to join the voice call.
 
 ## Develop
@@ -76,23 +83,25 @@ OpenSSL and xdo development packages).
 npm ci
 npm test                                   # the bridge script
 cd src-tauri
-cargo test -p sidevoice-desktop-core       # settings, bridge contract, media rules
+cargo test -p sidevoice-desktop-core       # settings, bridge contract, media rules, the voice call's builds
 cargo clippy --workspace --all-targets -- -D warnings
 npx tauri dev                              # needs a desktop: macOS, Windows, or Linux with WebKitGTK 4.1
 ```
 
 ```
-src-tauri/src/       the shell: windows, tray, shortcut, commands
-src-tauri/core/      pure logic (settings, bridge contract, media rules), testable without Tauri
-src-tauri/engine/    the native speech engine
+src-tauri/src/       the shell: windows, tray, shortcut, commands, the voice call (voice.rs) and its keychain
+src-tauri/core/      pure logic (settings, bridge contract, media rules, voice builds), testable without Tauri
+src-tauri/engine/    the app's side of sidevoice-engine (ids, install jobs, refusals)
 bridge/              the script injected into the call page: the page side of the bridge
-ui/                  the settings window; ui/voice*/ hold the bundled web interface
+ui/                  the settings window; ui/voice/ holds the web interface, the pinned release (not committed)
 brand/               the brand files the icons and installer art are generated from
 docs/                the bridge, the engines and models, targets, macOS notes, the brand
 ```
 
-The bundled interface is a build of [sidevoice-web](https://github.com/sidevoice/sidevoice-web), vendored with
-`scripts/vendor-web.mjs`, which records the commit it came from in `ui/voice/web-source.json` ([`docs/TARGETS.md`](docs/TARGETS.md)). The app drives it only through an explicit bridge
+The bundled interface is the [sidevoice-web](https://github.com/sidevoice/sidevoice-web) release `web.pin.json`
+names, by tag and its tarball's SHA-256: `npm run web` (`scripts/build-web.mjs`, run by every Tauri build and dev
+run) downloads that release's static site, checks its digest and attestation, and puts it in `ui/voice/`, and
+`ui/voice/web-source.json` says which release it is ([`docs/TARGETS.md`](docs/TARGETS.md)). The app drives it only through an explicit bridge
 ([`docs/BRIDGE.md`](docs/BRIDGE.md)), never through its DOM.
 
 ## Contributing

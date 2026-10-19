@@ -2,8 +2,9 @@
 
 The core on the computer where the app runs, as the app finds it, pairs with it and lets the bundled page talk to it
 (sidevoice design "Onboarding, hosts and settings" rev. 3, §4.1, §4.2, §4.7; release R1). Offered on macOS only
-(decision O2); the code builds and is tested on Linux too. Until R4 the app ships no connector: the machine was
-installed with `npx @sidevoice/uplink install`, and the app runs that installation's CLI.
+(decision O2); the code builds and is tested on Linux too. The app ships no connector: the machine is
+installed with `npx sidevoice@latest install`, or by the app itself from that same npm package, without Node («Prepare
+this computer»; Install, below); either way the app then runs that installation's CLI.
 
 ## Pieces
 
@@ -18,6 +19,13 @@ installed with `npx @sidevoice/uplink install`, and the app runs that installati
 `D` is the connector's data directory (`$SIDEVOICE_DATA_DIR`, else `~/.sidevoice`), `C` = `D/core` the core's. The app
 writes in neither. Its own file is `local-host.json` (0600) in its config directory:
 `{fp, public_key, device_id, token, host, paired_at}`, the only copy of its device token.
+
+The app now uses Tauri's app data directory for this file, settings, call-control placement and
+remote pairings; on macOS it is `~/Library/Application Support/dev.sidevoice.desktop`. The
+shared downloaded-model directory is `~/Library/Application Support/Sidevoice/Models`. Settings ›
+Advanced can run the **installed connector's top-level** `uninstall --json` before clearing the
+app's own data after exit. `localHost.serviceUninstall()` below remains a service-manager action
+and does not remove connector releases, conversations or agent registrations.
 
 ## Trust
 
@@ -68,6 +76,7 @@ process) and right after each action; the core's health; the token check. The br
 
 | Observed | `state` |
 |---|---|
+| an install the app runs is under way (`install()`, below) | `installing`, whatever else is observed (no `failure`; `reachable` as observed) |
 | the core's directory or the socket's peer fails a check | `failed` (`identity.unsafe-directory`, `peer.uid-mismatch`) |
 | a core with an `api` outside the app's range (1–1), or the service reports one | `incompatible` |
 | a core answers; its token refused, same fingerprint | `refused` |
@@ -85,16 +94,31 @@ else `service status --json`, which computes the same object.
 `reachable` is whether a core answers and the app's pairing with it works; `pairing()` is non-null exactly then,
 whatever `state` says — the page uses the host when `pairing()` is non-null (SEAMS §5).
 
-`state()` → `{state, failure?, core?, service?, calls?, attempts?, limit?, reachable}`: `failure` as the service
-reports it (`{key, step, message, at, log_tail, …}`) or the app's own `{key, message}`; `core` `{pid, version, api,
-launch_id}`; `calls` absent when unknown (the service says `null` with no core answering); `attempts` the manager's
-restarts so far and `limit` its limit when it has one (systemd; launchd has none) — «(2 de 5)» only with `limit`. The
-service's `since`, `window_started` and `next_retry_at` are null in rev. 2 and not passed on.
+`state()` → `{state, failure?, core?, product_version, service?, calls?, attempts?, limit?, installed?, reachable}`: `failure`
+as the service reports it (`{key, step, message, at, log_tail, …}`) or the app's own `{key, message}`; `core` `{pid,
+version, api, launch_id}` (the core's own version); `product_version` the installed Sidevoice's version — the
+`sidevoice` package, which bundles the core — as the person knows it («Sidevoice 0.8.1»), `null` when unknown or
+nothing is installed; `calls` absent when unknown (the service says `null` with no core answering); `attempts` the
+manager's restarts so far and `limit` its limit when it has one (systemd; launchd has none) — «(2 de 5)» only with
+`limit`. The service's `since`, `window_started` and `next_retry_at` are null in rev. 2 and not passed on.
+
+`product_version` is what `install.json`'s command answers to `--version --json` (its `version`): the release the
+installation runs. Neither `node.status` nor `service status --json` carries it, and it starts a process, so it is
+asked once per installed program: each poll reads `install.json` and resolves its command (no process), and the
+program is asked again only when that resolves to another file (an install, an update or a rollback switches
+`R/current` to another release), after each action (once any pass under way has ended), and, while unknown, at most
+every 10 s. No `install.json`: `null` at once. An answer that is not `X.Y.Z[-pre][+build]` (as the page accepts it),
+or is longer than 64 characters, is unknown.
+
+`installed` is whether the service starts at the next sign-in: the connector's own `start_at_login` (in `node.status`
+and `service status --json`), as it says it; absent when it does not say (a connector that predates the toggle), never
+inferred from `service` or from the service's own `installed`.
 
 ## Actions
 
 Through `install.json` `command` only — an array of absolute paths, then the subcommand; never a shell, never a PATH
-lookup, always a deadline (`Cli::installed` is the one place R4 extends with the bundled executable). The deadline
+lookup, always a deadline (`Cli::installed` is the one place R4 extends with the bundled executable; the one program
+run from elsewhere is the package's own installer, from the install's private directory, Install below). The deadline
 covers the program's exit and both its output streams. Each run is a process group of its own: once the program has
 exited, whatever of its group still runs (a child holding the pipes) is killed, and on a timeout the whole group is.
 What it hands to the service manager (`service start` → launchd) or starts detached in a session of its own is not in
@@ -104,14 +128,88 @@ the group and stays.
 |---|---|---|
 | `start()` / `stop()` / `restart()` | `service start\|stop\|restart --json` | 30 / 45 / 30 s |
 | `serviceInstall()` / `serviceUninstall()` | `service install\|uninstall --json` | 45 s |
+| `setStartAtLogin(enabled)` | `service login on\|off --json` | 45 s |
 | `pairingCode()` | `pair-device --json` → `{code, expires_in, reach}` | 30 s |
 | `pairRoom(url, code)` | `pair <url> <code> --json` → `{room}`, nothing else (the core follows the new credentials) | 60 s |
 | `reconnect()` | a new local pairing over the socket | — |
-| `revealLog()` | `/usr/bin/open -R D/core.log` (else `D/connector.log`) | — |
+| `revealLog()` | `/usr/bin/open -R` the app log (docs/BRIDGE.md → The app log) and `D/core.log` (else `D/connector.log`), whichever exist | — |
 
 `pairRoom` refuses (`bad_request`) a URL that is not `http(s)://…` or a code with blanks or starting with `-`, so neither
 can become an option. A CLI refusal is its `{key, message}`; the app's own: `cli.unavailable`, `cli.failed`,
-`cli.timeout`, `install.unsafe`, `install.unreadable`, `log.missing`, `reveal.failed`, `unsupported`.
+`cli.timeout`, `install.unsafe`, `install.unreadable`, `log.missing`, `reveal.failed`, `unsupported`,
+`service.login-unsupported`.
+
+### Start at sign-in
+
+`setStartAtLogin(enabled)` changes whether the service starts at the next sign-in, and only that: a running service
+keeps running, a stopped one stays stopped (`serviceInstall`/`serviceUninstall` also start and stop it). It answers
+the state after it, as every action; anything but a boolean is refused (`bad_request`) before anything runs.
+
+**Depends on the connector's `service login on|off --json`** (in progress in sidevoice-connector, `service/mod.rs`):
+the same reply shape as the other `service … --json` verbs (`{ok: true, state, service, …}`, or `{ok: false, error:
+{key, params, message}}`). The verb is `LOGIN_VERB` in `src-tauri/local-host/src/host.rs`, the one place it is
+written. A connector that does not know it answers `--json` with `connector.usage`, and the app refuses the call with
+`service.login-unsupported`, at once; an older connector that answers no JSON at all is `cli.failed`.
+
+The state after it reads the change back: `installed` is the connector's `start_at_login` (see `state()` above), from
+the fresh pass every action ends with, and `subscribe` listeners get it as any other change. A connector that does not
+report `start_at_login` leaves `installed` absent, and the page falls back to what it has (`service`).
+
+## Install
+
+«Prepare this computer» (`install(onProgress)`, `cancel(job)`; docs/BRIDGE.md → The local host) does what
+`npx sidevoice@latest install` does, without Node: it fetches the npm package itself and runs the installer inside it
+(`src-tauri/local-host/src/{npm,tarball,install}.rs`; the steps in `host.rs`). Only where the app offers the local
+host (macOS); one install at a time (`install.busy`), and while it runs the state is `installing`.
+
+| Step | What | Cancellable |
+|---|---|---|
+| `download` | `GET https://registry.npmjs.org/sidevoice/latest` → its `version`, and in its `optionalDependencies` this computer's platform package, `@sidevoice/sidevoice-<os>-<cpu>` in npm's names (`darwin-arm64` here), which must be listed at that same version; `GET https://registry.npmjs.org/<package>/<version>` → `dist.tarball` and `dist.integrity`; the tarball into a fresh private directory, its bytes as progress | yes |
+| `verification` | the tarball's SHA-512, computed as it came, against the integrity's `sha512-…` | yes |
+| `staging` | the tarball unpacked (rules below), then `package/bin/sidevoice-connector install --json` run from it, with `SIDEVOICE_DATA_DIR` = `D`: it stages the release under its own root with its core, writes `install.json`, defines and starts the service jobs, verifies them within 60 s (an update that does not start is rolled back) and registers the agents | until the installer starts |
+| `service-start` | from when the installer has written `install.json` (its staging done; seen as the file changing) until it answers | no |
+| `pairing` | the app pairs with the new core as on any core launch (Pairing, above), and answers the state once it is `reachable`, or after 30 s with whatever it is then | no |
+
+The private directory is removed whatever happens: on success, on a failure, on a cancel.
+
+**Trust.** The registry is the trust, as for `npx`: every request is HTTPS (rustls with the platform's verifier, the
+system's proxy, the client the engine's downloads and the updater already use) to `registry.npmjs.org`, and no redirect
+is followed. The tarball's URL, read from the registry's own document, must be
+`https://registry.npmjs.org/<package>/-/<file>.tgz` — that host, that package's path, a plain file name: no other
+host, port, user, query, fragment, escape or dot segment (`install.authenticity`, `download`). The platform package's
+name is the app's (from its OS and CPU), never the document's; versions are checked as `X.Y.Z[-pre][+build]` before
+they go into a URL. The integrity must hold exactly one SHA-512 (`manifest` otherwise), and a tarball whose digest is
+not it is refused before anything of it is unpacked (`install.checksum`). The documents may be 1 MiB, the tarball 512
+MiB (`download-size`) and 15 min; any one read 30 s. Not checked: the registry's signatures and provenance
+attestations (npm's ECDSA `dist.signatures`, sigstore) — what `npm install` checks by default is the integrity, as
+here.
+
+**Unpacking.** Into the private directory — `mkdtemp` (0700) in the system's temporary directory, then checked as the
+app's own directories are (this user's, private, every directory above it root's or this user's and closed to others,
+sticky as `/tmp` allowed; `install.unsafe`) — entry by entry, written by hand: every entry a plain file or directory
+below `package/`. Refused (`install.authenticity`, with the check): a path that is absolute, has an empty, `.` or `..`
+segment, a backslash or a control character, or is not below `package/` — GNU long names and pax `path` records are the
+entry's name and checked the same (`archive-path`); a symbolic or hard link (`archive-link`); a device, a FIFO, a sparse
+file, anything else, or an archive that does not decode (`archive-type`); more than 1 GiB or 10 000 entries
+(`archive-size`). Files are created anew (`O_EXCL`, no link followed) 0600, or 0700 where the archive marks them
+executable; directories 0700; nothing else of an entry (owner, times) is applied. An entry that is already there is
+refused (`archive-path`). No link is ever created, so a path built from checked segments stays inside. The package must
+carry `bin/sidevoice-connector` as a regular file (`install.no-bundle`), which is then made 0700.
+
+**The installer** runs as the CLI does (Actions, above): its absolute path, no shell, a process group of its own,
+`SIDEVOICE_DATA_DIR` = `D`, the rest of the app's environment as it is (the agents it registers are found with the
+app's `PATH`). It has 3 min (`cli.timeout`), which covers its own bounds: 30 s for the install lock, 30 s for the
+staged binary's self-check, 60 s to verify the service and 60 s more to verify a rollback; past them it is killed with
+its group (a release it was staging is cleaned by the next install, which the installer says is the recovery). Its
+`{ok: false, error: {key, params, message}}` reaches the page under the key sidevoice-web knows where one means the same
+(docs/BRIDGE.md lists them: `install.rolled-back` → `install.rollback`, `install.verify-failed` →
+`service.start.failed`, `core.package-missing` → `install.no-bundle`, `core.package-mismatch` → `install.authenticity`
+`manifest`, `service.busy` → `install.busy`, `connector.failed` → `install.failed`), any other key as it is; with its
+params, its message and its last 20 lines of error output (`log_tail`).
+
+**After it.** The state is read fresh (the installed version too). If the app's pairing had been refused (`refused`),
+it pairs again, as `reconnect()` does: the person asked for this computer. A core the app cannot reach within 30 s
+does not fail the install; the state says what is there.
 
 ## The proxy
 
@@ -165,12 +263,22 @@ pairing the proxy answers 503; without a core, 502.
   deadline with a child holding its pipes, a timeout with a live child, a detached service kept, a command link
   retargeted after the check; a directory swapped between check and read, links, loose modes and an ancestry others
   can write.
+- The install, against a stand-in registry (`src/fake_registry.rs`: the documents and a package built on the spot,
+  its installer a script): the real 0.8.1 documents resolved; platforms, skewed versions, documents that are not ones,
+  every tarball URL off the registry; the integrity's forms; tarballs that leave the package (`..`, absolute, a GNU long
+  name, a pax `path`), links, devices, an entry twice, the limits, a cancel; a release fetched, verified, unpacked and
+  installed by its installer (`install --json`, `D`), a tampered tarball never unpacked, the installer's keys mapped
+  with its last lines, an installer that answers nothing or hangs, a cancel mid-download, short and oversized bodies,
+  the private directory gone each time; end to end with the stand-in core, `installing` while it runs and only one at a
+  time, `running` and the pairing after it, a refused pairing paired again, a failed install that frees the slot. By
+  hand, over the network (`--features fetch -- --ignored the_real_registry`): the real latest release resolved,
+  downloaded, verified and unpacked, its installer not run.
 - `tests/real_core.rs`: pairing, the proxy and upgrade framing (101; chunked, a body, early data refused) against
   sidevoice-core itself when `SIDEVOICE_CORE_PYTHON` names a Python that imports it (skipped otherwise).
 - CI, Linux (`test` job): `examples/local-host-ci.rs serve` as the runner and `attack` as a second user — it cannot
   open `local.sock` (so neither pair nor link as a connector), read the app's pairing, or use the proxy without the
   secret; the same attempts as the first user, as a control, do get through.
-- CI, macOS (probe build): the app with a temporary `HOME` against `local-host-ci core`; the vendored room's own page
+- CI, macOS (probe build): the app with a temporary `HOME` against `local-host-ci core`; the bundled room's own page
   (`test/fixtures/local-host-flow.js`) sees `running` and the pairing, fetches through the proxy (WebKit's preflight,
   then the request with the token swapped in), is refused without the secret and on native routes, and opens a
   WebSocket through it; `curl` sends what a page cannot (hostile, missing, empty, `null` Origin; a wrong or rebound

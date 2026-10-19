@@ -68,85 +68,183 @@ what the interface's own window offers — same origin, same permission rule —
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-headset error " + String(error && (error.message || error)) });
   }
 
-  // The native engine through the app itself, as the interface calls it (docs/BRIDGE.md): capabilities, install,
-  // run by catalogue model id + engine — hardened runtime, dlopen of the downloaded package, raw-byte IPC.
-  const engine = window.__sidevoiceDesktop && window.__sidevoiceDesktop.host && window.__sidevoiceDesktop.host.nativeEngine;
+  // What this build is, and its updates (docs/BRIDGE.md → "The build", "The updater"): the probe app is a dev build, so
+  // `host.build` says so and the page has no `host.updater`; its commands refuse.
+  try {
+    const host = window.__sidevoiceDesktop.host;
+    const status = await window.__TAURI_INTERNALS__.invoke("updater", { action: "status" }).then(() => "answered", (error) => error && error.key);
+    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-build ok build=" + JSON.stringify(host.build) +
+      " updater=" + ("updater" in host) + " status=" + status });
+  } catch (error) {
+    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-build error " + String(error && (error.message || error)) });
+  }
+
+  // The app's call settings through the app itself (docs/BRIDGE.md → "The mute shortcut", "The call controls
+  // settings"), and no target (docs/TARGETS.md): the web's shortcut form kept in the app's, one that is not a shortcut
+  // refused, none, and the card's controls always shown and back.
+  try {
+    const { muteShortcut, callControls } = window.__sidevoiceDesktop.host;
+    const set = await muteShortcut.set("shift+cmd+f9");
+    const invalid = await muteShortcut.set("M").then(() => "answered", (error) => error && error.key);
+    const off = await muteShortcut.set(null);
+    const shown = await callControls.setAlwaysShown(true);
+    const read = await callControls.settings();
+    await callControls.setAlwaysShown(false);
+    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-settings ok target=" + window.__SIDEVOICE_TARGET__ +
+      " set=" + set.accelerator + "/" + set.state + " invalid=" + invalid + " off=" + off.state +
+      " always=" + shown.alwaysShown + "/" + read.alwaysShown });
+  } catch (error) {
+    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-settings error " + String(error && (error.message || error)) });
+  }
+
+  // The native engine through the app itself, as the interface calls it (docs/BRIDGE.md): capabilities, installs as
+  // sidevoice-web's `ModelCatalogs.install(model, {build, engine, onProgress, signal})` — by a catalogue build id, by an
+  // engine, by nothing (the recommended build) —, refusals by key, the machine's memory, a download cancelled by its
+  // signal.
+  const engine = window.__sidevoiceDesktop && window.__sidevoiceDesktop.host && window.__sidevoiceDesktop.host.engine;
   if (!engine) { await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-engine none" }); return; }
+  async function until(check, ms) {
+    const end = Date.now() + ms;
+    for (;;) {
+      const value = await check();
+      if (value) return value;
+      if (Date.now() > end) throw new Error("timed out");
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  }
   try {
     const capabilities = await engine.capabilities();
     let progress = 0;
-    await engine.install("kokoro-82m-v1.0", "sherpa-onnx", () => { progress++; });
-    await engine.install("whisper-tiny", "sherpa-onnx");
+    await engine.install("kokoro-82m-v1.0", { engine: "sherpa-onnx", onProgress: () => { progress++; } });
+    // As the web's settings do: the build the person chose, by its catalogue id and its engine.
+    const tiny = (await engine.catalogs())[0].models.find((m) => m.id === "whisper-tiny");
+    const tinyBuild = tiny.builds.find((b) => b.backend === "whisper-cpp" && b.available);
+    await engine.install("whisper-tiny", { build: tinyBuild.id, engine: tinyBuild.backend });
+    await engine.install("silero-vad");
     const installed = (await engine.installed()).map((b) => b.model + "@" + b.engine).sort().join(",");
-    const started = performance.now();
-    const audio = await engine.synthesize("kokoro-82m-v1.0", "sherpa-onnx", "ef_dora", 1, "Hola, esto es una prueba de voz.");
-    const spoken = performance.now() - started;
-    const text = await engine.transcribe("whisper-tiny", "sherpa-onnx", audio.samples, audio.sampleRate, "es", "cpu");
-    // A page engine is never run natively, nor replaced by another: refused, by key (docs/BRIDGE.md → "Refusals").
-    const refused = await engine.transcribe("whisper-tiny", "transformers-js", audio.samples, audio.sampleRate, "es")
+    // A page engine is never installed natively, nor replaced by another: refused, by key (docs/BRIDGE.md → "Refusals").
+    const refused = await engine.install("whisper-tiny", { engine: "transformers-js" })
       .then(() => "no", (error) => (error && error.key === "engine_unsupported" ? "yes" : "other:" + JSON.stringify(error)));
-
-    // Load → transcribe → unload, as the interface selects a model (sidevoice-core#21 phase 3), then D13 with this app's idle time
-    // shortened (SIDEVOICE_DEBUG_IDLE_UNLOAD_SECS): unloaded once the call ends and the time passes, loaded again as
-    // the next call connects. In a call meanwhile, so nothing is unloaded under the checks.
-    const names = (list) => list.map((l) => l.model + "@" + l.engine + "/" + l.accelerator).sort().join(",");
-    const resident = async () => names(await engine.loaded());
-    async function until(check, ms) {
-      const end = Date.now() + ms;
-      for (;;) {
-        const value = await check();
-        if (value) return value;
-        if (Date.now() > end) throw new Error("timed out; loaded=" + (await resident()));
-        await new Promise((r) => setTimeout(r, 250));
-      }
-    }
-    await call(true, true);
-    await engine.unload("whisper-tiny", "sherpa-onnx");
-    const before = await resident();
-    const load = await engine.load("whisper-tiny", "sherpa-onnx", "cpu");
-    const again = await engine.load("whisper-tiny", "sherpa-onnx", "cpu");
-    const loaded = await engine.loaded();
-    const afterLoad = names(loaded);
-    const english = await engine.synthesize("kokoro-82m-v1.0", "sherpa-onnx", "af_heart", 1, "Hello, this is a voice test.");
-    const heardEnglish = await engine.transcribe("whisper-tiny", "sherpa-onnx", english.samples, english.sampleRate, "en", "cpu");
-    const sameModels = (await resident()) === afterLoad;
-    await engine.unload("whisper-tiny", "sherpa-onnx");
-    const afterUnload = await resident();
     const memory = await engine.memory();
-    await engine.load("whisper-tiny", "sherpa-onnx", "cpu");
-    await call(false, true); // the last one leaves: the idle time starts
-    const idleStarted = Date.now();
-    await until(async () => (await engine.loaded()).length === 0, 60000);
-    const idleMs = Date.now() - idleStarted;
-    await call(true, true); // the next call connects
-    const preloaded = await until(async () => { const r = await resident(); return r.split(",").length === 2 && r; }, 60000);
-    await call(false, true);
 
-    // Cancel: a big download, cancelled once its speed is measured; the install rejects by key and leaves nothing
-    // (CI then checks the disk).
+    // Cancel: a big download, its signal aborted once it is under way; the install rejects install-cancelled and
+    // leaves nothing (CI then checks the disk). A signal already aborted rejects so without starting.
     let measured = null;
     let ended = false;
-    const small = engine.install("whisper-small", "sherpa-onnx", (p) => { if (p.bytes_per_s && !measured) measured = p; });
+    const abort = new AbortController();
+    // Aborted from its first report with bytes, as early as the page could, so a fast line cannot finish it first.
+    const small = engine.install("whisper-small", { engine: "sherpa-onnx", signal: abort.signal,
+      onProgress: (p) => { if (p.fraction > 0 && !measured) { measured = p; abort.abort(); } } });
     small.then(() => { ended = true; }, () => { ended = true; });
     await until(() => measured || ended, 120000);
-    const cancelled = await engine.cancel(small.job);
-    const outcome = await small.then(() => "installed", (error) => error && error.key);
-    const cancelAgain = await engine.cancel(small.job);
+    abort.abort();
+    const outcome = await small.then(() => "installed", (error) => error && error.code + "/" + error.key);
     const smallGone = !(await engine.installed()).some((b) => b.model === "whisper-small");
-    const event = measured ? Object.keys(measured).sort().join("+") + ":" + (measured.job === small.job && measured.model === "whisper-small") : "none";
+    const event = measured
+      ? Object.keys(measured).sort().join("+") + ":" + (measured.total > 0 && measured.done > 0 && measured.fraction <= 1)
+      : "none";
+    const aborted = new AbortController();
+    aborted.abort();
+    const preAborted = await engine.install("whisper-small", { engine: "sherpa-onnx", signal: aborted.signal })
+      .then(() => "installed", (error) => error && error.code);
 
+    // Removing a model through the app's own command: whisper-tiny, installed above, goes from the builds on disk and
+    // from the catalogue (the engine reads both from its storage), then comes back for the voice call further down;
+    // an unknown model is refused by key with the engine's code.
+    const removed = await engine.uninstall("whisper-tiny").then((value) => String(value), (error) => "error:" + JSON.stringify(error));
+    const tinyLeft = (await engine.installed()).some((b) => b.model === "whisper-tiny") ||
+      (await engine.catalogs())[0].models.some((m) => m.id === "whisper-tiny" && (m.installed || m.builds.some((b) => b.installed)));
+    const tinyGone = !tinyLeft;
+    const unknown = await engine.uninstall("no-such-model")
+      .then(() => "removed", (error) => (error && error.key) + ":" + (error && error.code));
+    await engine.install("whisper-tiny", { build: tinyBuild.id, engine: tinyBuild.backend });
+    const tinyBack = (await engine.installed()).some((b) => b.model === "whisper-tiny" && b.engine === tinyBuild.backend);
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-engine ok capabilities=" + JSON.stringify(capabilities) +
-      " installed=" + installed + " progress_calls=" + progress + " refused=" + refused +
-      " audio=" + (audio.samples.length / audio.sampleRate).toFixed(2) + "s@" + audio.sampleRate + " synth_ms=" + Math.round(spoken) +
-      " before_load=" + before + " load_ms=" + load.load_ms + " load_again_ms=" + again.load_ms + " loaded=" + afterLoad +
-      " since_ok=" + loaded.every((l) => l.since > 1.7e12 && l.last_used >= l.since) +
-      " same_models=" + sameModels + " unloaded=" + afterUnload + " memory=" + JSON.stringify(memory) +
-      " idle_unloaded_ms=" + idleMs + " preloaded=" + preloaded +
-      " cancel=" + cancelled + "/" + outcome + "/" + cancelAgain + " cancel_gone=" + smallGone + " progress_event=" + event +
-      " speed=" + (measured ? measured.bytes_per_s : 0) + " cancelled_at=" + (measured ? measured.done + "/" + measured.total : "") +
-      " text=" + JSON.stringify(text) + " text_en=" + JSON.stringify(heardEnglish) });
+      " installed=" + installed + " progress_calls=" + progress + " refused=" + refused + " memory=" + JSON.stringify(memory) +
+      " cancel=" + outcome + " pre_aborted=" + preAborted + " cancel_gone=" + smallGone + " progress_event=" + event +
+      " uninstall=" + removed + "/" + tinyGone + "/" + unknown + "/" + tinyBack });
   } catch (error) {
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-engine error " + String(error && (error.message || error)) });
+  }
+
+  // The voice call the app runs (docs/BRIDGE.md → "The voice call"): the seam's shape, the engine's catalogues
+  // (`host.engine`), settings that name a catalogue's model, a build of it and an end-of-turn model, as the web's settings
+  // do, the audio devices, and a start that settles, asking for its take: once stopped, the take reaches `onTake` as a
+  // Float32Array before the stop resolves. A CI runner may have no microphone or speaker: then the start is refused
+  // with the call's code, which is what the probe reports, and there is no take.
+  const voice = window.__sidevoiceDesktop && window.__sidevoiceDesktop.host && window.__sidevoiceDesktop.host.voice;
+  if (!voice) { await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-voice none" }); return; }
+  try {
+    const first = voice.createCall();
+    const second = voice.createCall();
+    const states = [];
+    const errors = [];
+    const takes = [];
+    const stops = [first.onState((s) => states.push(s.listening)), first.onError((e) => errors.push(e.code)),
+      first.onTake((t) => takes.push(t))];
+    await voice.routeInput(null);
+    const catalogs = await window.__sidevoiceDesktop.host.engine.catalogs();
+    const models = catalogs[0].models;
+    const remote = catalogs.slice(1).map((c) => c.id + ":" + (c.status.reason ? c.status.reason.code : "current")).join(",");
+    const unknown = await first.setSettings({ stt: { catalog: "local", model: "whisper-nope" },
+      tts: { catalog: "local", model: "kokoro-82m-v1.0" } }).then(() => "no", (error) => error && error.key + "/" + error.code);
+    // A build that is not the model's is refused; one that runs here is loaded, and so is the end-of-turn model chosen
+    // (the last that runs here: with several, not the one the app would take anyway).
+    const badBuild = await first.setSettings({ stt: { catalog: "local", model: "whisper-tiny", build: "whisper-tiny/nope" },
+      tts: { catalog: "local", model: "kokoro-82m-v1.0" } }).then(() => "no", (error) => error && error.key + "/" + error.code);
+    const tiny = models.find((m) => m.id === "whisper-tiny");
+    // One the catalogue would not pick on its own when there is such a build.
+    const runnable = tiny ? tiny.builds.filter((b) => b.available) : [];
+    const build = (runnable.find((b) => b.id !== tiny.recommendedBuild) || runnable[0] || { id: "none" }).id;
+    const turns = models.filter((m) => m.capabilities.includes("end-of-turn") && m.builds.some((b) => b.available));
+    const turnModel = turns.length ? turns[turns.length - 1].id : "none";
+    await first.setSettings({ stt: { catalog: "local", model: "whisper-tiny", language: "es", build },
+      tts: { catalog: "local", model: "kokoro-82m-v1.0", voice: "ef_dora", speed: 1 }, patience: "fast",
+      end_of_turn: "smart-turn", turn_model: turnModel, idle_unload_minutes: 10, barge_in_min_speech: 0.8 });
+    // The system's devices (a runner may list none) and an id it does not list, refused by key and code.
+    const listed = await voice.audioDevices();
+    const devices = listed.inputs.length + "/" + listed.outputs.length + "/" + listed.outputSelectable;
+    const unknownDevice = await voice.setAudioDevices({ input: "nowhere:nothing" })
+      .then(() => "no", (error) => error && error.key + "/" + error.code);
+    const started = await first.start({ take: true }).then(() => "ok", (error) => error.key + "/" + error.code);
+    // A headless runner may let the call start but have no active capture input when the route is selected.
+    // Keep that refusal separate from a successful route and still check stop, turns and disposal below.
+    const routed = started === "ok" ? await voice.routeInput(first).then(() => "ok", (error) => error.key + "/" + error.code) : "not-attempted";
+    await voice.routeInput(null);
+    await first.stop();
+    const take = takes.length ? Object.prototype.toString.call(takes[0].samples).slice(8, -1) + "/" + takes[0].sampleRate +
+      "/" + (takes[0].ended_at - takes[0].started_at === Math.floor(takes[0].samples.length / 16)) : "none";
+    const samples = takes.length ? takes.map((t) => t.samples.length).join(",") : "none";
+    await until(() => states.includes("idle") || started !== "ok", 30000);
+    const delayedTurns = [];
+    const stopFirst = first.onTurn((turn) => delayedTurns.push(["first", turn.phase, turn.turn_id]));
+    const stopSecond = second.onTurn((turn) => delayedTurns.push(["second", turn.phase, turn.turn_id]));
+    // The webview may deliver an earlier call's start after the input route has changed.
+    await voice.routeInput(null);
+    await new Promise((resolve) => setTimeout(() => {
+      const send = (key, data) => window.__sidevoiceDesktop.voiceEvent({ key, type: "turn", data });
+      send(first.id, { phase: "started", turn_id: "probe-a-turn", started_at: 1 });
+      send(second.id, { phase: "started", turn_id: "probe-b-turn", started_at: 2 });
+      send(second.id, { phase: "finished", turn_id: "probe-b-turn", text: "B" });
+      send(first.id, { phase: "finished", turn_id: "probe-a-turn", text: "A" });
+      resolve();
+    }, 0));
+    const delayedTurn = JSON.stringify(delayedTurns) === JSON.stringify([
+      ["first", "started", "probe-a-turn"], ["second", "started", "probe-b-turn"],
+      ["second", "finished", "probe-b-turn"], ["first", "finished", "probe-a-turn"],
+    ]);
+    stopFirst();
+    stopSecond();
+    await first.dispose();
+    await voice.routeInput(null);
+    await second.dispose();
+    stops.forEach((stop) => stop());
+    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-voice ok keys=" + Object.keys(voice).length + " calls=2 route=" + routed + " delayed_turn=" + delayedTurn +
+      " catalogs=" + catalogs[0].id + "," + remote + " models=" + models.length + " vad=" + models.some((m) => m.capabilities.includes("vad")) + " unknown=" + unknown +
+      " bad_build=" + badBuild + " build=" + build + " turn_model=" + turnModel +
+      " devices=" + devices + " unknown_device=" + unknownDevice + " start=" + started + " take=" + take + " samples=" + samples + " states=" + states.join(",") + " errors=" + errors.join(",") });
+  } catch (error) {
+    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-voice error " + String(error && (error.message || error)) });
   }
 })();
 </script>

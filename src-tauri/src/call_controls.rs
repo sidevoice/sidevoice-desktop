@@ -1,7 +1,8 @@
 //! The call controls card (sidevoice/sidevoice-desktop#4): a small window that floats over the person's other apps
-//! during a call, while the room's window is not in front, and never takes focus from them. It shows the web build's
-//! `call-controls.html`, which talks only to `bridge/call-controls-bridge.js` (docs/BRIDGE.md → "The call controls
-//! card"); the app relays the call to it from the room window and carries its buttons back.
+//! during a call, while the room's window is not in view (hidden, minimised or covered), and never takes focus from
+//! them. It shows the web build's `call-controls.html`, which talks only to `bridge/call-controls-bridge.js`
+//! (docs/BRIDGE.md → "The call controls card"); the app relays the call to it from the room window and carries its
+//! buttons back.
 //!
 //! - macOS: a non-activating `NSPanel` (tauri-nspanel) at the status level, on every Space and over full-screen apps.
 //! - Windows / Linux X11: a borderless, transparent, always-on-top window that is never focused (no taskbar button).
@@ -29,6 +30,8 @@ const FIRST_SIZE: Size = Size { width: 344.0, height: 82.0 };
 /// How often the app looks at the pointer while the card shows: a window that never takes focus may get no hover
 /// events (WebKit tracks the mouse in the key window only), so the app tells the card when the pointer is over it.
 const POINTER_EVERY: Duration = Duration::from_millis(80);
+/// How often the app looks at whether the room window is in view ([`watch_view`]).
+const VIEW_EVERY: Duration = Duration::from_millis(500);
 /// The card's shadow margin inside its window (the web build's CARD_MARGIN): the pointer over it is not over the card.
 const MARGIN: f64 = 12.0;
 
@@ -86,7 +89,7 @@ fn wayland() -> bool {
 
 /// Creates the card's window, hidden; it shows during a call ([`update`]).
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
-    let config_dir = app.path().app_config_dir().ok();
+    let config_dir = crate::data::desktop_dir(app).ok();
     let placements = config_dir.as_deref().map(Placements::load).unwrap_or_default();
     let pointer_inside = if wayland() { None } else { Some(false) };
     app.manage(Card(
@@ -115,9 +118,11 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             .hides_on_deactivate(false)
             .has_shadow(false)
             .transparent(true)
-            .no_activate(true)
             .with_window(move |w| window_options(w, script))
             .build()?;
+        // No `.no_activate(true)` above: it parks the app at `Prohibited` while the panel is built, and macOS does not
+        // bring the Dock icon back when the policy returns to `Regular` (#117). The card is created before the room is
+        // shown and the app activated (lib.rs setup), so there is no focus for it to steal.
         prevent_activation(app);
         watch_clicks(app);
     }
@@ -135,6 +140,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     if !wayland() {
         watch_pointer(app.clone());
     }
+    watch_view(app.clone());
     debug("call-controls created");
     Ok(())
 }
@@ -173,9 +179,53 @@ fn card(app: &AppHandle) -> Option<tauri::State<'_, Card>> {
     app.try_state::<Card>()
 }
 
-/// Whether the room's window is in front and focused (its own controls are there).
+/// Whether the person can see the room's window (its own controls are there): shown, not minimised and, on macOS,
+/// not fully covered or on another Space. Focus does not matter: a room side by side with another app is in view.
+/// Windows and Linux have no occlusion query, so there a window covered by others still counts as in view.
 fn room_in_front(app: &AppHandle) -> bool {
-    crate::room_window(app).is_some_and(|w| w.is_visible().unwrap_or(false) && w.is_focused().unwrap_or(false))
+    crate::room_window(app)
+        .is_some_and(|w| w.is_visible().unwrap_or(false) && !w.is_minimized().unwrap_or(false) && !occluded(&w))
+}
+
+#[cfg(target_os = "macos")]
+fn occluded(w: &WebviewWindow) -> bool {
+    use tauri_nspanel::objc2::{msg_send, runtime::AnyObject};
+    // NSWindowOcclusionStateVisible: set while any part of the window is on screen.
+    const VISIBLE: usize = 1 << 1;
+    // SAFETY: the window's own NSWindow, read on the main thread (`watch_view`, window events).
+    w.ns_window().is_ok_and(|ns| unsafe {
+        let state: usize = msg_send![ns as *mut AnyObject, occlusionState];
+        state & VISIBLE == 0
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn occluded(_: &WebviewWindow) -> bool {
+    false
+}
+
+/// Minimising, covering and Space changes raise no window event Tauri forwards, so the app looks at the room's view
+/// twice a second and updates the card when it changes. One thread for the app's lifetime.
+fn watch_view(app: AppHandle) {
+    std::thread::spawn(move || {
+        let mut was = None;
+        loop {
+            std::thread::sleep(VIEW_EVERY);
+            let (tx, rx) = std::sync::mpsc::channel();
+            let a = app.clone();
+            // AppKit and the window handles want the main thread.
+            let sent = app.run_on_main_thread(move || {
+                let _ = tx.send(room_in_front(&a));
+            });
+            if sent.is_err() {
+                return;
+            }
+            let Ok(now) = rx.recv() else { return };
+            if was.replace(now).is_some_and(|before| before != now) {
+                update(&app);
+            }
+        }
+    });
 }
 
 /// Shows or hides the card for the call as it is now, and tells it what changed. Called on every change of the call,
@@ -184,12 +234,14 @@ pub fn update(app: &AppHandle) {
     let Some(card) = card(app) else { return };
     let call = app.state::<AppState>().call.lock().unwrap().clone();
     let in_front = room_in_front(app);
+    let always_shown =
+        app.state::<AppState>().settings.lock().unwrap().as_ref().is_some_and(|s| s.call_controls_always_shown);
     let (show, hide) = {
         let mut inner = card.0.lock().unwrap();
         if !call.joined {
             inner.hidden_for_call = false;
         }
-        let wanted = logic::wanted(call.joined, inner.hidden_for_call, in_front);
+        let wanted = logic::wanted(call.joined, inner.hidden_for_call, in_front, always_shown);
         let change = (wanted && !inner.shown, !wanted && inner.shown);
         inner.shown = wanted;
         if change.1 {
@@ -255,7 +307,6 @@ fn full_state(app: &AppHandle, call: &CallSnapshot) -> serde_json::Value {
         "level": level,
         "pointerInside": pointer,
         "outsideClicks": clicks,
-        "alwaysExpanded": settings.call_controls_always,
         "muteShortcut": logic::shortcut_label(&settings.mute_shortcut, cfg!(target_os = "macos")),
     })
 }
@@ -327,7 +378,12 @@ fn app_active() -> String {
             let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
             msg_send![app, isActive]
         };
-        format!("app_active={active}")
+        // NSApplicationActivationPolicyRegular is 0: the Dock icon, Dock Quit and Cmd+Tab (the card must not change it).
+        let policy: isize = unsafe {
+            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+            msg_send![app, activationPolicy]
+        };
+        format!("app_active={active} regular={}", policy == 0)
     }
     #[cfg(not(target_os = "macos"))]
     String::new()
@@ -442,6 +498,31 @@ fn from_card_window(webview: &Webview) -> Result<(), String> {
     Ok(())
 }
 
+/// `host.callControls`' one command, from the room page (not the card): `action` `settings`, or `set-always-shown` with
+/// `enabled`, kept with the app's settings and applied at once. Answers `{alwaysShown}`.
+#[tauri::command]
+pub async fn call_controls_settings(
+    app: AppHandle,
+    webview: Webview,
+    action: String,
+    enabled: Option<bool>,
+) -> Result<serde_json::Value, serde_json::Value> {
+    crate::room_page(&app, &webview).map_err(|why| crate::refusal("bad_request", why))?;
+    let always = match (action.as_str(), enabled) {
+        ("settings", _) => {
+            app.state::<AppState>().settings.lock().unwrap().as_ref().is_some_and(|s| s.call_controls_always_shown)
+        }
+        ("set-always-shown", Some(enabled)) => {
+            crate::change_settings(&app, |s| s.call_controls_always_shown = enabled)
+                .map_err(|e| crate::refusal("internal", e))?;
+            update(&app);
+            enabled
+        }
+        _ => return Err(crate::refusal("bad_request", format!("not a call controls action: {action}"))),
+    };
+    Ok(serde_json::json!({ "alwaysShown": always }))
+}
+
 /// The card's page is ready: it gets the whole state.
 #[tauri::command]
 pub fn call_controls_ready(app: AppHandle, webview: Webview) -> Result<(), String> {
@@ -479,7 +560,7 @@ pub fn call_controls_layout(app: AppHandle, webview: Webview, width: f64, height
     if let Some(card) = card(&app) {
         let mut inner = card.0.lock().unwrap();
         inner.size = Some(size);
-        if inner.rest_size.map_or(true, |rest| height < rest.height) {
+        if inner.rest_size.is_none_or(|rest| height < rest.height) {
             inner.rest_size = Some(size);
         }
     }

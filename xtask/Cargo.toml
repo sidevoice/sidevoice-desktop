@@ -1,0 +1,23 @@
+[package]
+name = "xtask"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "Build tooling for the desktop app: every CI step, run as `cargo xtask <command>` (.cargo/config.toml)."
+
+# A package of its own, beside the app's workspace (src-tauri/): it builds with no webview, native engine or C
+# toolchain, on any machine with Rust.
+[workspace]
+
+[dependencies]
+# tauri.conf.json's version, notarytool's answer.
+serde_json = "1"
+# SHA256SUMS.
+sha2 = "0.10"
+# The checks on what the app and its stand-ins log, as the YAML's grep patterns were.
+regex = "1"
+
+[dev-dependencies]
+# How tauri-plugin-updater orders versions: the tests check the nightly's against it.
+semver = "1"

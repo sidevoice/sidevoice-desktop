@@ -1,11 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Sidevoice",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "dev.sidevoice.desktop",
   "build": {
     "frontendDist": "../ui",
-    "beforeBuildCommand": "npm run web-assets"
+    "beforeDevCommand": "npm run web",
+    "beforeBuildCommand": "npm run web"
   },
   "app": {
     "windows": [],
@@ -44,5 +45,10 @@
     "longDescription": "Sidevoice: give your coding agent a voice. Keep the conversation.",
     "license": "Apache-2.0",
     "copyright": "Copyright 2026 Ruben Pahino"
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEVBMUJFOUIzQTRDRjcxNUEKUldSYWNjK2tzK2tiNnVpZUtXdXRwUHlQaktTZDFqcjRyeDFNVXp6VjZHWWxCZFBaR1BMeHkyVlgK"
+    }
   }
 }

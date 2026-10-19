@@ -1,9 +1,9 @@
 [package]
 name = "sidevoice-desktop"
-version = "0.1.0"
+version = "0.2.0"
 description = "Sidevoice desktop client: a native shell around the Sidevoice web UI"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.98"
 license = "Apache-2.0"
 publish = false
 
@@ -32,18 +32,41 @@ serde_json = "1"
 # The system's preferred languages, for the app's native texts (core i18n).
 sys-locale = "0.3"
 url = "2.5"
+# The app's updates (src/updater.rs; docs/BRIDGE.md → "The updater"), from Rust only: the page gets none of its
+# commands. Its checks sleep on the app's Tokio runtime.
+tauri-plugin-updater = "2.13"
+tokio = { version = "1", features = ["time"] }
+# The app log (src/lib.rs `applog`): a rotating, size-capped file in the platform's log directory, fed by the Rust side and
+# by the room page's console errors (bridge/webview-log.js).
+tauri-plugin-log = "2"
+log = "0.4"
 
 # This computer's own core, its pairing and the page's proxy (src/local_host.rs; docs/LOCAL_HOST.md). Unix sockets.
+# `fetch`: its install's HTTPS client, for "Prepare this computer" (docs/LOCAL_HOST.md → Install).
 [target.'cfg(unix)'.dependencies]
-sidevoice-local-host = { path = "local-host" }
+sidevoice-local-host = { path = "local-host", features = ["fetch"] }
 
 [target.'cfg(windows)'.dependencies]
 # The taskbar's colour, to draw the tray mark in the brand's look for it (src/tray.rs).
 winreg = "0.55"
-# Whether a mouse button went down elsewhere, to close the call controls card's panels (src/call_controls.rs).
-windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse"] }
+# Whether a mouse button went down elsewhere, to close the call controls card's panels (src/call_controls.rs); this
+# computer's name (src/computer_name.rs).
+windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_System_SystemInformation", "Win32_Storage_FileSystem"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+# The voice call the app runs itself (src/voice.rs, `host.voice`): sidevoice-voice with its native microphone and
+# speaker (cpal) and WebRTC's AEC3 between them, on the models the app hands it (src/voice/models.rs: the engine's).
+# It depends on no engine. The candidate source: a try's take (StartOptions, VoiceEvent::Take), the pause in the
+# person's speech, and the rendered speaker's level (VoiceEvent::PlaybackLevel). macOS only: AEC3's C++ does not build
+# on Windows, and the beta ships on macOS. Its build needs meson, ninja and pkg-config.
+sidevoice-voice = { git = "https://github.com/sidevoice/sidevoice-voice", tag = "v0.5.2" }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+# The call runs on the app's Tokio runtime; the models' native work goes to its blocking pool (src/voice/models.rs).
+tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "time"] }
+# The keys of remote providers, in the keychain (src/keychain.rs).
+security-framework = "3"
+libc = "0.2"
+
 # The call controls card as a non-activating panel: over full-screen apps, on every Space, never taking focus
 # (src/call_controls.rs).
 tauri-nspanel = "2.1"
@@ -53,6 +76,17 @@ block2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSDictionary", "NSValue", "NSError", "NSObject"] }
 objc2-media-player = { version = "0.3", features = ["MPRemoteCommandCenter", "MPRemoteCommand", "MPRemoteCommandEvent", "MPNowPlayingInfoCenter", "MPMediaItem", "block2"] }
 objc2-avf-audio = { version = "0.3", features = ["AVAudioApplication", "block2"] }
+# The microphone permission the room page asks for in its first-run setup (src/microphone.rs, `host.microphone`).
+objc2-av-foundation = { version = "0.3", default-features = false, features = ["std", "AVCaptureDevice", "AVMediaFormat", "block2"] }
+# This computer's name, as System Settings shows it (src/computer_name.rs).
+system-configuration-sys = "0.6"
+core-foundation = "0.10"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
 
 [profile.release]
 codegen-units = 1

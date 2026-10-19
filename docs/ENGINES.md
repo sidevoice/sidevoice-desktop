@@ -1,117 +1,101 @@
-# Model engines: one catalog, chosen at run time
+# The native engine: sidevoice-engine, and the voice call on it
 
-Engines are **downloadable packages chosen at run time**, not compiled into
-a build. One catalog serves every client (browser, desktop app, node, later mobile). Each client detects what it
-can do and offers only the engines and models that fit; picking one downloads the engine (if missing) and the
-model. The experience is the same wherever it runs. Bring-your-own-model later = one more model entry in a format
-some engine reads.
+The app's speech models run on **sidevoice-engine** (`sidevoice/sidevoice-engine`), a Rust crate this app depends on
+(`src-tauri/engine/Cargo.toml`, pinned to the v0.5.0 tag). The engine owns the catalogue of
+models, local and remote, the downloads, which build of a model runs on this machine, and the models in memory.
 
-## The catalog (`catalog/engines.json`, shape in `src-tauri/core/src/engines.rs`)
+On macOS the app runs the voice call itself with **sidevoice-voice** (`sidevoice/sidevoice-voice`, `src-tauri/src/voice.rs`,
+docs/BRIDGE.md → "The voice call"), on that same engine: the microphone, voice activity and turns, transcription,
+speech, playback, barge-in and what was heard. What is in memory is what the call holds: its three models (the voice
+activity detector, speech to text, text to speech) stay loaded across calls, and leave memory once the call has been
+stopped for `idle_unload_minutes` (10 by default; a setting of `host.voice`); the next start loads them again. A
+change of settings loads the new ones.
 
-**Owner: `sidevoice/sidevoice-core`** (`src/sidevoice_core/models/catalog.json`), as sidevoice/sidevoice-core#21 §3
-decided. `catalog/engines.json` is a copy generated from it and never edited here. To change it, change the core,
-then:
+This app keeps what is the app's, in `src-tauri/engine/` (`sidevoice-desktop-engine`):
 
-    node scripts/copy-core-catalog.mjs <sidevoice-core checkout>
+- `lib.rs`: `NativeEngines`, the page's model management in the page's terms over `sidevoice_engine::Engine`, and the
+  engine itself for the voice call (`NativeEngines::engine`).
+- `jobs.rs`: each `install` call's progress and cancel (and whether one of a model is under way, which refuses its
+  `uninstall`).
+- `Wanted` (`lib.rs`): which build an install is for, as the page names it — a catalogue build id, an engine, or
+  neither for the recommended build.
+- `error.rs`: the keyed refusals, and how each of the engine's codes becomes one (with the code beside it as `code`).
+- `memory.rs`: what is available of the machine's memory now.
 
-Every node serves the same file at `GET /api/models/catalog`; the web build carries its own generated copy.
+## The catalogue
 
-```jsonc
-{
-  "version": 2,
-  "engines": [
-    { "id": "sherpa-onnx", "version": "1.13.8", "runs": "native",     // a package per OS/arch
-      "families": ["whisper", "kokoro"], "formats": ["onnx"],
-      "packages": [{ "os": "macos", "arch": "aarch64",
-                     "requires": [],                                 // e.g. ["cuda"] for a CUDA build
-                     "accelerators": ["cpu", "coreml"],              // best first: Core ML measured slower
-                     "download": { "url", "sha256", "size", "archive": "tar.bz2", "root" },
-                     "libraries": [{ "path": "lib/libonnxruntime.dylib", "sha256" }, …] }] },
-    { "id": "transformers-js", "runs": "page", "accelerators": ["webgpu", "wasm"], … }
-  ],
-  "ranking": { "default": ["sherpa-onnx", "transformers-js"] },
-  "families": { "whisper": { "task": "stt", "options": [ … ] }, "kokoro": { "task": "tts", "options": [ … ] } },
-  "providers": [ { "id": "openai", "tasks": ["stt"], … }, { "id": "elevenlabs", "tasks": ["tts"], … } ],
-  "models": [
-    { "id": "whisper-tiny", "family": "whisper", "languages": ["multi"],
-      "builds": [                                                    // one per engine it runs on
-        { "engine": "sherpa-onnx", "format": "onnx", "download": {…sha256…}, "config": { "encoder", "decoder", "tokens" } },
-        { "engine": "transformers-js", "format": "onnx", "config": { "repository": "onnx-community/whisper-tiny", "revision", "dtype" } } ] },
-    { "id": "kokoro-82m-v1.0", "family": "kokoro", "voices": [{ "id": "ef_dora", "language": "es", "sid": 28 }, …], … }
-  ]
-}
-```
+**Owner: sidevoice-engine** (operator's decision, 2026-10-09). The app runs the engine's bundled catalogue
+(`BundledCatalog`, `catalog/families/` in that repository, at the commit `src-tauri/Cargo.lock` pins) and has none of
+its own. The page lists it, and each remote provider's, through `host.engine.catalogs()` (the pinned engine's
+catalogues: `local` first, then each provider), in the shape `/engine` gives the page on the web.
 
-A build may be limited to some `accelerators` (Whisper small's page build: WebGPU only), may `need` a feature
-(`webgpu-f16`), and may carry a per-platform `rank` that beats the default engine order (the resolvers' concern).
+## What runs, where
 
-Capabilities (`Capability`): `cpu`, `wasm`, `webgpu`, `webgpu-f16`, `metal`, `coreml`, `mlx`, `cuda`; one a newer
-catalog names and this app does not know is never had. A `Device` is what a place reports: `runs` (`page` or
-`native`), OS/arch, what it `has`, and memory when known. This app's is `native_device()` (an Apple Silicon Mac has
-`cpu`, `coreml`, `metal`, `mlx`) with the machine's total memory from the OS (`src-tauri/engine/src/memory.rs`); it is
-what the page gets from `nativeEngine.capabilities()` (docs/BRIDGE.md).
+- Backends, linked statically into the app through sidevoice-engine (the release `src-tauri/engine/Cargo.toml` pins: 0.5.0),
+  with no Cargo features to choose: **sherpa-onnx 1.13.8** (ONNX Runtime) on the CPU, **whisper.cpp** (through
+  `whisper-rs`), compiled from source, on Metal on Apple Silicon, and the **remote** OpenAI and ElevenLabs backends.
+  Nothing is loaded at run time with `dlopen`, so the macOS app keeps library validation on: its only entitlement is
+  the microphone.
+- Each stage of the voice call is a model of a catalogue, which picks its build when it loads it
+  (`engine.catalog(id).load(model)`: an installed build that runs here, else the recommended one). The app adds the
+  voice activity detector, the local catalogue's Silero, and, for `smart-turn`, its local end-of-turn model (core
+  `voice.rs`).
+- The engine ranks builds that run here by accelerator class: GPU first, then neural engine, then CPU, while still
+  preferring an installed build when loading without an explicit choice. On Apple Silicon, this recommends
+  whisper.cpp on Metal for Whisper. Its GPU implementation uses flash attention. The page receives each build's
+  optional `acceleratorClass` (`"gpu"`, `"neural-engine"`, or `"cpu"`) from the engine; the app does not infer it or
+  enable Core ML. An explicit build choice still takes precedence.
+- Models are downloaded on demand into the per-user shared machine store
+  (`~/Library/Application Support/Sidevoice/Models` on macOS), each file checked against its
+  SHA-256 as it arrives and stored only once whole. The voice call installs what it needs as it starts; the page may
+  install a model before (`engine.install(model, {build, engine, onProgress, signal})`, sidevoice-web's
+  `ModelCatalogs.install`), to show its progress and cancel it, and takes one off the computer with
+  `engine.uninstall(model)`: every build of it, never while the call holds it in memory (`model-in-use`) or an install
+  of it is under way (`model-installing`).
+  Today this app is the only writer. The root is reserved for another Sidevoice program, but a
+  second writer must wait until both programs use an OS file lock around install, uninstall and
+  metadata updates; the engine's current mutex protects only one process.
+- The engine notes when each local model was last loaded, by any build, in that same directory, so it outlives the
+  app; the page reads it as the model's `lastUsedAt` in `host.engine.catalogs()` (milliseconds since the Unix epoch,
+  absent while the engine does not know), to show it and to find models not used for a while.
+- **Remote models** need their provider's key, which the app keeps in the macOS keychain (`src-tauri/src/keychain.rs`,
+  service `dev.sidevoice.desktop.providers`). The engine asks the app for it each time it needs it
+  (`NativeHost::with_credentials`); the page sets and clears it (`host.engine.setCredential`) and never reads it back.
+  A key the page tries before keeping it (`host.engine.testCredential`) is listed by an engine made for that trial
+  alone, over the same host with that key as its only one (`engine/src/trial.rs`), and dropped after: the app's engine,
+  its listings and the keys it hands a provider are the keychain's throughout. `host.engine.refresh` asks a provider
+  again past the listing the engine keeps (a day for models, an hour for voices).
+  Elsewhere the app keeps no keys.
+- **Echo cancellation** is the call's own: WebRTC's AEC3, fed with the call's playback (sidevoice-voice's README). The
+  room window's page is never granted the microphone where the app runs the call.
 
-The resolver of sidevoice-core#21 — one offer per model a place can run, on its best build and accelerator — has one
-implementation per side: the web's TypeScript for a client (in the app too: the page resolves from what
-`nativeEngine.capabilities()` reports) and the core's Python for a host. This app has none. At its trust boundary
-it only checks that the build a page asks for runs here before it downloads or runs it (`src-tauri/engine`,
-`locate`): an adapter for the engine, a package for this device, the build's needs and accelerators
-(`accelerators_for` in `src-tauri/core/src/engines.rs`) and the model's `requires.memory_mb` (unknown memory is not
-a refusal). The accelerator the page names must be one of those; with none named, the first is used.
+## Building
 
-`check(catalog)` refuses a catalog with an unknown engine or family, a build its engine does not run (family,
-format, accelerator), a native download without https + SHA-256, a library without its hash, or an option kind the
-web interface cannot render (tested against the bundled catalog).
+The engine's sherpa-onnx backend links sherpa-onnx's prebuilt static libraries. CI fetches them with the engine's own
+`cargo xtask sherpa-libs`, at the pinned commit, checked against the digests it pins, and links them through
+`SHERPA_ONNX_LIB_DIR` (`cargo xtask sherpa-libs` in `.github/actions/setup-rust`). Locally, the same command:
 
-## The native engine shipped tonight: sherpa-onnx on Apple Silicon
+    export SHERPA_ONNX_LIB_DIR="$(cargo xtask sherpa-libs)"
 
-- One runtime for both tasks: **sherpa-onnx 1.13.8** (ONNX Runtime underneath), Whisper for STT (tiny, base,
-  small, large-v3-turbo; int8) and Kokoro 82M v1.0 multi-language for TTS (int8; Spanish voices `ef_dora`,
-  `em_alex`, `em_santa`, plus English, French, Italian, Portuguese, Hindi — the same voice ids the web uses).
-- Downloaded on demand into `~/Library/Application Support/dev.sidevoice.desktop/engines/` (the package 8.8 MB,
-  Whisper tiny 116 MB … turbo 564 MB, Kokoro 132 MB), each checked against the catalog's SHA-256, unpacked into a
-  temporary directory and moved into place only when complete (`src-tauri/engine/src/install.rs`). A download counts
-  as installed while its marker names its hash and its root and every file the engine needs are there (the
-  package's libraries; the files the model's config names); one that lost a file is not, and installing fetches it
-  again. A download that fails or is cancelled (`cancel(job)`, docs/BRIDGE.md) leaves nothing of itself on disk.
-- Loaded with `dlopen` (`libloading`), never linked: ONNX Runtime first, then the C API. The `#[repr(C)]`
-  structs are **generated** from that exact version's `c-api.h` (`scripts/gen-sherpa-ffi.py`), and the library's
-  own version string is checked against the bindings' before anything is called.
-- One model in memory serves every language: Whisper's is switched per call on the loaded recognizer
-  (`SherpaOnnxOfflineRecognizerSetConfig`, which only replaces its Whisper settings) and Kokoro's per synthesis
-  (`extra.lang`). What is loaded, and for how long, is docs/BRIDGE.md → "What stays in memory".
-- Accelerator: the one the page chose for the build, else the first it can use here — **CPU**, which the catalogue
-  ranks first for sherpa-onnx on Apple Silicon: Core ML was measured slower on the CI runner for these models
-  (Kokoro 3.1 s vs
-  2.4 s for 2.7 s of speech; Whisper tiny 2.0 s vs 0.3 s). The CI round trip also runs it with `coreml`.
-- macOS: the app is hardened-runtime, ad-hoc signed; library validation would refuse a downloaded library, so
-  the app carries `com.apple.security.cs.disable-library-validation` (Entitlements.plist explains the trade).
+Without it, sherpa-onnx's build script downloads them itself, unchecked. The engine's whisper.cpp backend compiles
+whisper.cpp and ggml from source: the build needs CMake, a C++ compiler and libclang (for `bindgen`); on Linux
+x86_64, `src-tauri/.cargo/config.toml` compiles it with libstdc++'s old string ABI, as sherpa-onnx's libraries there
+are. On macOS, sidevoice-voice's echo canceller builds WebRTC's C++ with meson and ninja (`brew install meson ninja
+pkg-config`). The Rust version is the engine's, `src-tauri/rust-toolchain.toml`.
 
-Verified on a real Apple Silicon runner (CI job "Native engine"): download both, Kokoro says
-"Hola, esto es una prueba de voz de Sidevoice." with `ef_dora`, Whisper tiny hears
-"Hola, esto es una prueba de voz de si de voice." (0.29 s). The macOS job's probe runs the same through the
-signed app's IPC.
+## Verified in CI
 
-## The page's side
+The macOS job's probe page, in the signed app: the engine's capabilities, installs in the web's shape (by build id, by
+engine, by the recommended build) with progress, refusals by key, a download cancelled by its signal, removing a model
+(one on disk, then put back; an unknown one refused by key and code); the catalogues (`local` first, a provider with no key listing nothing); and the voice call's
+seam, settings naming a catalogue's model, and a start that
+settles (listening, or refused with the call's code where the runner has no microphone or speaker): that start loads
+the engine's real models through the app's adapter (`src-tauri/src/voice/models.rs`). sidevoice-voice's own CI drives
+the call with fakes; the real models are the app's to test.
 
-The page reaches the engine through `window.__sidevoiceDesktop.host.nativeEngine` — `capabilities()`,
-`installed()`, `install(model, engine, onProgress)`, `transcribe(…)`, `synthesize(…)`, keyed by catalogue model id +
-engine id; the contract is in docs/BRIDGE.md → "The native engine". In the app the native engine is the only
-engine *Este dispositivo* has: the page's own engines (WebGPU, WebAssembly) are never offered there (sidevoice-core#21 D5). The
-web's transcription and voice clients talk to their engines through a worker message protocol; for a native offer
-they get a stand-in with the same protocol backed by `nativeEngine` (sidevoice-web
-`packages/browser-audio/native-worker.js`).
+## Changing the engine
 
-The app's settings window shows the engine's side: what `capabilities()` reports, and the engine packages and model
-builds on disk with their sizes.
-
-## Adding an engine or a model
-
-- A model of a family an engine already runs: one entry in the core's `models`, with a build per engine carrying
-  its download (native) or its repository (page) and the engine's config keys; then copy the catalog here. Nothing
-  is compiled.
-- A native engine: a catalog entry in the core with packages per OS/arch, and — the one compiled part — its runtime adapter
-  in `src-tauri/engine/src/` (a `Runtime`: load the package, map the model's config to the engine's API) and a line in
-  `ADAPTERS`. The app refuses to install or run a build on an engine it has no adapter for; it never substitutes
-  another. The page resolves offers from the capabilities alone, which do not say which engines the app runs: a
-  catalogue with a second native engine for this platform and no adapter here would be offered, then refused.
+The engine is pinned in `src-tauri/engine/Cargo.toml`, sidevoice-voice in `src-tauri/Cargo.toml`, each on its own:
+sidevoice-voice depends on no engine, and the app fills its interfaces with the engine's models
+(`src-tauri/src/voice/models.rs`). Move a pin, then `cargo update -p sidevoice-engine` (or `-p sidevoice-voice`).
+A model or a voice is added in sidevoice-engine's catalogue, never here.

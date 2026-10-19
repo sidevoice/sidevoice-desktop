@@ -23,7 +23,7 @@ dark interfaces, and the one-ink variant "Tono" (the fourth bar at 45 % of the i
 | Settings window | lockups (light and dark), DM Sans, palette | `ui/brand/`, `ui/settings.css` |
 
 The room window (pairing, calls, first open) is the web interface, bundled from sidevoice-web
-(`ui/voice/`, docs/TARGETS.md). Its brand is that repo's; it reaches the app the next time it is vendored.
+(`ui/voice/`, docs/TARGETS.md). Its brand is that repo's; it reaches the app when `web.pin.json` moves to a release with it.
 
 ## Rules followed as written
 
@@ -103,4 +103,4 @@ The room window (pairing, calls, first open) is the web interface, bundled from 
   checked on a real macOS 26.
 - **Copyright / publisher** for the About panel and installers: still to be named.
 - **NSIS installer artwork** (header and sidebar bitmaps): the installer uses the app icon only.
-- The room window's brand fixes (in sidevoice-web) reach the app when it is vendored again.
+- The room window's brand fixes (in sidevoice-web) reach the app when `web.pin.json` moves to a release with them.

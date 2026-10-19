@@ -2,26 +2,35 @@
 //! the call through the interface's own actions (docs/BRIDGE.md).
 //!
 //! The interface is a secret-free client: it talks to a node or a rendezvous room it was paired with (the node
-//! issues a one-time code; sidevoice-core `control/devices.py`), told where to look first through
-//! `window.__SIDEVOICE_TARGET__` (docs/TARGETS.md). No remote page is ever loaded.
+//! issues a one-time code; sidevoice-core `control/devices.py`), and the app never tells it where to look
+//! (docs/TARGETS.md). No remote page is ever loaded.
 //!
 //! Windows:
-//! - `room-N`: the bundled interface. Created again when the target changes (N grows), so the scripts injected
-//!   into it carry the current target. Closing it hides it; the app keeps running.
-//! - `settings`: bundled local page (`ui/index.html`): target, shortcut, diagnostics.
+//! - `room-N`: the bundled interface. Created at launch, and again (N grows) when it is gone. Closing it hides it; the
+//!   app keeps running.
+//! - `settings`: bundled local page (`ui/index.html`): diagnostics only (native engine, headset buttons, this computer);
+//!   the mute shortcut and the call controls are set in the room page's Settings.
 //! - `call-controls`: the call controls card (`src/call_controls.rs`), floating over other apps during a call.
 
 mod call_controls;
+mod computer_name;
+mod data;
 mod engine_ipc;
 mod headset;
+mod keychain;
 mod local_host;
+mod microphone;
 #[cfg(feature = "probe")]
 mod probe;
 mod tray;
+mod updater;
+mod voice;
 
 use serde::Serialize;
+use serde_json::{json, Value};
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
-use sidevoice_desktop_core::settings::{Settings, APP_ORIGIN};
+use sidevoice_desktop_core::build_info::BuildInfo;
+use sidevoice_desktop_core::settings::{MuteShortcut, Registration, Settings, APP_ORIGIN};
 use sidevoice_desktop_core::{media, settings};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -32,8 +41,8 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 const SETTINGS_LABEL: &str = "settings";
 const ROOM_PREFIX: &str = "room-";
-/// The web interface bundled in the app (vendored from sidevoice-web, `scripts/vendor-web.mjs`), at the
-/// paths a room serves it from, so its absolute `/voice/…` and `/voice-browser/…` URLs resolve.
+/// The web interface bundled in the app (the sidevoice-web release `web.pin.json` names, `scripts/build-web.mjs`), at
+/// the path a room serves it from, so its absolute `/voice/…` URLs resolve.
 const BUNDLED_INTERFACE: &str = "voice/index.html";
 
 pub(crate) struct AppState {
@@ -43,8 +52,15 @@ pub(crate) struct AppState {
     room_counter: AtomicU32,
     /// The language of the app's native texts (tray, …), the system's when there is a bundle for it (core `i18n`).
     pub(crate) language: &'static str,
-    /// The mute shortcut as the system took it, from startup and from every save (the settings window shows it).
-    shortcut: Mutex<ShortcutStatus>,
+    /// The mute shortcut as the system took it, from startup and from every change.
+    shortcut: Mutex<MuteShortcut>,
+    /// Held across a change of the mute shortcut, from keeping it to registering it, so what is kept and what is
+    /// registered never differ. Only off the main thread: registering waits for it.
+    shortcut_change: Mutex<()>,
+    resetting: std::sync::atomic::AtomicBool,
+    reset_admission: Mutex<data::Admission>,
+    #[cfg(target_os = "macos")]
+    reset_helper: Mutex<Option<std::process::Child>>,
 }
 
 impl Default for AppState {
@@ -57,51 +73,21 @@ impl Default for AppState {
             room_counter: AtomicU32::default(),
             language: sidevoice_desktop_core::i18n::language(&preferred),
             shortcut: Mutex::default(),
+            shortcut_change: Mutex::default(),
+            resetting: std::sync::atomic::AtomicBool::new(false),
+            reset_admission: Mutex::default(),
+            #[cfg(target_os = "macos")]
+            reset_helper: Mutex::default(),
         }
     }
 }
 
-#[derive(Clone, Copy, Default, PartialEq, Serialize)]
-#[serde(rename_all = "lowercase")]
-enum Registration {
-    /// None set.
-    #[default]
-    Off,
-    On,
-    /// The system would not register it: another app may hold it.
-    Refused,
-}
-
-/// The mute shortcut as the system took it, for the settings window, which says it in its own language.
-#[derive(Clone, Default, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ShortcutStatus {
-    state: Registration,
-    /// How it reads on this system: ⌃⌥M, Ctrl+Alt+M.
-    label: String,
-    /// Refused: one the system does take, to offer instead.
-    alternative: Option<ShortcutAlternative>,
-    /// macOS: VoiceOver is on, and the shortcut holds its keys (Control and Option together).
-    voice_over: bool,
-}
-
-#[derive(Clone, Serialize)]
-struct ShortcutAlternative {
-    accelerator: String,
-    label: String,
-}
-
-fn shortcut_label(accelerator: &str) -> String {
-    sidevoice_desktop_core::call_controls::shortcut_label(accelerator, cfg!(target_os = "macos"))
-}
-
 /// The shortcut's status now: VoiceOver can be turned on or off at any time.
-fn shortcut_status(state: &AppState) -> ShortcutStatus {
+fn shortcut_status(state: &AppState) -> MuteShortcut {
     let mut status = state.shortcut.lock().unwrap().clone();
-    let accelerator = state.settings.lock().unwrap().as_ref().map(|s| s.mute_shortcut.clone());
-    let accelerator = accelerator.unwrap_or_else(|| settings::DEFAULT_MUTE_SHORTCUT.to_string());
+    let accelerator = status.accelerator.as_deref().unwrap_or_default();
     status.voice_over =
-        status.state == Registration::On && settings::uses_voice_over_keys(&accelerator) && voice_over_on();
+        status.state == Registration::On && settings::uses_voice_over_keys(accelerator) && voice_over_on();
     status
 }
 
@@ -119,64 +105,74 @@ fn voice_over_on() -> bool {
     false
 }
 
+/// A mute shortcut as the app keeps it (core `normalize_shortcut`, empty for none), if the system can read its key.
+fn checked_shortcut(text: &str) -> Option<String> {
+    settings::normalize_shortcut(text).filter(|a| a.is_empty() || a.parse::<Shortcut>().is_ok())
+}
+
+/// The one writer of settings.json: `change` applied to the stored settings, saved and kept under one lock, so the
+/// room page's setters never lose each other's fields.
+pub(crate) fn change_settings(app: &AppHandle, change: impl FnOnce(&mut Settings)) -> Result<Settings, String> {
+    let dir = data::desktop_dir(app).map_err(|e| e.to_string())?;
+    let state = app.state::<AppState>();
+    let mut stored = state.settings.lock().unwrap();
+    let mut changed = stored.clone().unwrap_or_else(Settings::first_run);
+    change(&mut changed);
+    settings::save(&dir, &changed).map_err(|e| e.to_string())?;
+    *stored = Some(changed.clone());
+    Ok(changed)
+}
+
+/// Changes the settings with `change`, registers the mute shortcut they then hold and tells the card: how the system
+/// took it.
+fn change_shortcut(app: &AppHandle, change: impl FnOnce(&mut Settings)) -> Result<MuteShortcut, String> {
+    let state = app.state::<AppState>();
+    let _one_at_a_time = state.shortcut_change.lock().unwrap();
+    let changed = change_settings(app, change)?;
+    apply_shortcut(app, &changed.mute_shortcut);
+    call_controls::update(app);
+    Ok(shortcut_status(&state))
+}
+
+/// A refusal as the room page reads it (docs/BRIDGE.md → "Refusals").
+pub(crate) fn refusal(key: &str, message: impl std::fmt::Display) -> Value {
+    json!({ "key": key, "message": message.to_string() })
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SettingsInfo {
-    settings: Settings,
-    shortcut: ShortcutStatus,
-    first_run: bool,
     /// Diagnostics on (`SIDEVOICE_DEBUG=1`): the settings page then also reports what its webview offers.
     debug: bool,
     app_version: String,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SaveResult {
-    settings: Settings,
-    shortcut: ShortcutStatus,
+/// What the settings window's diagnostics read from the app.
+#[tauri::command]
+fn get_settings(app: AppHandle) -> SettingsInfo {
+    SettingsInfo { debug: debugging(), app_version: app.package_info().version.to_string() }
 }
 
+/// `host.muteShortcut`'s one command: `action` `get`, or `set` with `accelerator` (`null`: none). Refuses
+/// `shortcut_invalid` for an accelerator that is not a shortcut the system can read.
 #[tauri::command]
-fn get_settings(app: AppHandle, state: State<'_, AppState>) -> SettingsInfo {
-    let stored = state.settings.lock().unwrap().clone();
-    debug(&format!("get_settings (first run: {})", stored.is_none()));
-    SettingsInfo {
-        first_run: stored.is_none(),
-        settings: stored.unwrap_or_else(Settings::first_run),
-        shortcut: shortcut_status(&state),
-        debug: debugging(),
-        app_version: app.package_info().version.to_string(),
-    }
-}
-
-// Async so it runs off the main thread: creating a window from a synchronous command deadlocks
-// on Windows (WebView2), and the room window is (re)created here.
-#[tauri::command]
-async fn save_settings(app: AppHandle, state: State<'_, AppState>, settings: Settings) -> Result<SaveResult, String> {
-    let settings = settings::validate(settings).map_err(|e| e.to_string())?;
-    if !settings.mute_shortcut.is_empty() && settings.mute_shortcut.parse::<Shortcut>().is_err() {
-        return Err(format!("El atajo «{}» no es válido. Ejemplo: CmdOrCtrl+Shift+M.", settings.mute_shortcut));
-    }
-    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
-    settings::save(&dir, &settings).map_err(|e| format!("No se pudo guardar: {e}"))?;
-
-    let previous = state.settings.lock().unwrap().replace(settings.clone());
-    apply_shortcut(&app, &settings.mute_shortcut);
-    let shortcut = shortcut_status(&state);
-    call_controls::update(&app);
-
-    let target_changed = previous.as_ref().map(|p| p.target != settings.target).unwrap_or(true);
-    if target_changed || room_window(&app).is_none() {
-        open_room(&app, &settings).map_err(|e| format!("No se pudo abrir la ventana: {e}"))?;
-    }
-    show_room(&app);
-    if shortcut.state != Registration::Refused {
-        if let Some(w) = app.get_webview_window(SETTINGS_LABEL) {
-            let _ = w.close();
+async fn mute_shortcut(
+    app: AppHandle,
+    webview: Webview,
+    action: String,
+    accelerator: Option<String>,
+) -> Result<MuteShortcut, Value> {
+    room_page(&app, &webview).map_err(|why| refusal("bad_request", why))?;
+    match action.as_str() {
+        "get" => Ok(shortcut_status(&app.state::<AppState>())),
+        "set" => {
+            let text = accelerator.unwrap_or_default();
+            let accelerator = checked_shortcut(&text)
+                .ok_or_else(|| refusal("shortcut_invalid", format!("Not a shortcut: {text}")))?;
+            change_shortcut(&app, |s| s.mute_shortcut = accelerator).map_err(|e| refusal("internal", e))
         }
+        _ => Err(refusal("bad_request", format!("not a mute shortcut action: {action}"))),
     }
-    Ok(SaveResult { settings, shortcut })
 }
 
 /// Called by the bridge script in the interface. Only the current room window, on the app's own pages, may
@@ -202,7 +198,6 @@ fn bridge_state(
     *state.call.lock().unwrap() = snapshot.clone();
     tray::update(&app, &snapshot);
     headset::update(&app, &snapshot);
-    engine_ipc::call_changed(&app, snapshot.joined);
     call_controls::update(&app);
     Ok(())
 }
@@ -230,12 +225,47 @@ pub(crate) fn room_page(app: &AppHandle, webview: &Webview) -> Result<(), String
     Ok(())
 }
 
+/// The app log: `<LOG_FILE>.log` in the platform's log directory (macOS `~/Library/Logs/<identifier>/`, Linux
+/// `~/.local/share/<identifier>/logs/`, Windows `%LOCALAPPDATA%\<identifier>\logs\`), with the Rust side's lines and the
+/// room page's (bridge/webview-log.js). It is rotated at [`LOG_MAX_BYTES`], keeping [`LOG_KEPT`] files.
+pub(crate) const LOG_FILE: &str = "sidevoice-desktop";
+const LOG_MAX_BYTES: u128 = 1_000_000;
+const LOG_KEPT: usize = 3;
+
+/// Where the app log is (it may not exist yet).
+pub(crate) fn app_log_file(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_log_dir().ok().map(|dir| dir.join(format!("{LOG_FILE}.log")))
+}
+
+fn log_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    use tauri_plugin_log::{RotationStrategy, Target, TargetKind};
+    tauri_plugin_log::Builder::new()
+        .clear_targets()
+        .target(Target::new(TargetKind::LogDir { file_name: Some(LOG_FILE.into()) }))
+        .level(log::LevelFilter::Info)
+        .level_for("tao", log::LevelFilter::Warn)
+        .level_for("wry", log::LevelFilter::Warn)
+        .max_file_size(LOG_MAX_BYTES)
+        .rotation_strategy(RotationStrategy::KeepSome(LOG_KEPT))
+        .build()
+}
+
+/// A panic goes to the log too (then to stderr as before).
+fn log_panics() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        log::error!("panic: {info}");
+        previous(info);
+    }));
+}
+
 fn debugging() -> bool {
     std::env::var_os("SIDEVOICE_DEBUG").is_some_and(|v| v == "1")
 }
 
 /// Diagnostics on stderr, only with `SIDEVOICE_DEBUG=1` (CI's smoke tests read them).
 pub(crate) fn debug(message: &str) {
+    log::info!("{message}");
     if debugging() {
         eprintln!("sidevoice: {message}");
     }
@@ -276,12 +306,13 @@ fn reset_call_state(app: &AppHandle) {
     *app.state::<AppState>().call.lock().unwrap() = snapshot.clone();
     tray::update(app, &snapshot);
     headset::update(app, &snapshot);
-    engine_ipc::call_changed(app, snapshot.joined);
     call_controls::update(app);
+    #[cfg(target_os = "macos")]
+    voice::page_changed(app);
 }
 
-/// (Re)creates the room window: the bundled interface, told its target, bound to the app's own pages.
-fn open_room(app: &AppHandle, settings: &Settings) -> tauri::Result<()> {
+/// (Re)creates the room window: the bundled interface, bound to the app's own pages.
+fn open_room(app: &AppHandle) -> tauri::Result<()> {
     let state = app.state::<AppState>();
     let label = format!("{ROOM_PREFIX}{}", state.room_counter.fetch_add(1, Ordering::SeqCst) + 1);
     #[cfg(not(feature = "probe"))]
@@ -301,23 +332,27 @@ fn open_room(app: &AppHandle, settings: &Settings) -> tauri::Result<()> {
     let committed_origin: Arc<Mutex<Option<String>>> = Arc::default();
     let committed_for_load = committed_origin.clone();
     let page_app = app.clone();
-    let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(page.into()))
+    // `host.build`, as xtask built this copy (build.rs).
+    let version = app.package_info().version.to_string();
+    let (commit, date) = (env!("SIDEVOICE_BUILD_COMMIT"), env!("SIDEVOICE_BUILD_DATE"));
+    let build = BuildInfo::new(env!("SIDEVOICE_BUILD_CHANNEL"), &version, commit, date);
+    let builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(page.into()))
         .title("Sidevoice")
         .inner_size(1100.0, 760.0)
         .min_inner_size(420.0, 560.0)
-        .initialization_script(bridge::script_for_origin(APP_ORIGIN));
-    if let Some(target) = settings::target_script(settings) {
-        builder = builder.initialization_script(target);
-    }
-    // CI's probe build only (src/probe.rs): the native flow driven through the vendored room itself.
+        .initialization_script(bridge::NO_CONTEXT_MENU_SCRIPT)
+        .initialization_script(bridge::WEBVIEW_LOG_SCRIPT)
+        .initialization_script(bridge::script_for_origin(
+            APP_ORIGIN,
+            updater::offered(),
+            &build,
+            computer_name::read().as_deref(),
+        ));
     #[cfg(feature = "probe")]
-    if let Some(flow) = probe::room_flow() {
-        builder = builder.initialization_script(flow);
-    }
-    #[cfg(feature = "probe")]
-    if let Some(flow) = probe::local_host_flow() {
-        builder = builder.initialization_script(flow);
-    }
+    let builder = match probe::local_host_flow() {
+        Some(flow) => builder.initialization_script(flow),
+        None => builder,
+    };
     builder
         // A hidden window still carries the call: never suspend or throttle its page.
         .background_throttling(BackgroundThrottlingPolicy::Disabled)
@@ -330,7 +365,7 @@ fn open_room(app: &AppHandle, settings: &Settings) -> tauri::Result<()> {
                 _ => media::Capture::Other,
             };
             let page = committed_origin.lock().unwrap().clone();
-            let decision = media::decide(capture, page.as_deref(), APP_ORIGIN);
+            let decision = media::decide(capture, page.as_deref(), APP_ORIGIN, !bridge::voice_offered());
             debug(&format!("media {capture:?} for {page:?}: {decision:?}"));
             match decision {
                 media::Decision::Allow => PermissionResponse::Allow,
@@ -360,6 +395,23 @@ pub(crate) fn show_room(app: &AppHandle) {
     }
 }
 
+/// Makes the app the active one (macOS 14+). `set_focus` asks with `activateIgnoringOtherApps:`, which macOS 14
+/// deprecates for `activate`; older systems lack `activate` and need nothing more.
+fn activate_app() {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::{class, msg_send, runtime::AnyObject, sel};
+        // SAFETY: main thread (setup); `activate` only when the app answers to it.
+        unsafe {
+            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+            let responds: bool = msg_send![app, respondsToSelector: sel!(activate)];
+            if responds {
+                let _: () = msg_send![app, activate];
+            }
+        }
+    }
+}
+
 pub(crate) fn open_settings(app: &AppHandle) {
     if let Some(w) = app.get_webview_window(SETTINGS_LABEL) {
         let _ = w.show();
@@ -368,59 +420,44 @@ pub(crate) fn open_settings(app: &AppHandle) {
     }
     let _ = WebviewWindowBuilder::new(app, SETTINGS_LABEL, WebviewUrl::App("index.html".into()))
         .title("Sidevoice · Ajustes")
+        .initialization_script(bridge::NO_CONTEXT_MENU_SCRIPT)
         .inner_size(600.0, 640.0)
         .min_inner_size(420.0, 480.0)
         .build();
 }
 
-/// Registers the global mute shortcut, replacing any previous one, and keeps how it went for the settings window. A
-/// refused one comes with the first alternative the system does take.
+/// Registers the global mute shortcut, replacing any previous one, keeps how it went and tells the room page
+/// (`host.muteShortcut.subscribe`). A refused one comes with the alternatives the system does take.
 fn apply_shortcut(app: &AppHandle, accelerator: &str) {
     let shortcuts = app.global_shortcut();
     let _ = shortcuts.unregister_all();
-    let status = if accelerator.is_empty() {
-        ShortcutStatus::default()
+    let (state, alternatives) = if accelerator.is_empty() {
+        (Registration::Off, vec![])
     } else if let Err(e) = shortcuts.register(accelerator) {
         debug(&format!("shortcut {accelerator} refused: {e}"));
-        let alternative = settings::shortcut_alternatives(accelerator)
-            .find(|a| shortcuts.register(*a).is_ok() && shortcuts.unregister(*a).is_ok())
-            .map(|a| ShortcutAlternative { accelerator: a.to_string(), label: shortcut_label(a) });
-        ShortcutStatus {
-            state: Registration::Refused,
-            label: shortcut_label(accelerator),
-            alternative,
-            voice_over: false,
-        }
+        let alternatives = settings::shortcut_alternatives(accelerator)
+            .filter(|a| shortcuts.register(*a).is_ok() && shortcuts.unregister(*a).is_ok())
+            .map(str::to_owned)
+            .collect();
+        (Registration::Refused, alternatives)
     } else {
-        ShortcutStatus { state: Registration::On, label: shortcut_label(accelerator), ..Default::default() }
+        (Registration::On, vec![])
     };
-    *app.state::<AppState>().shortcut.lock().unwrap() = status;
+    let app_state = app.state::<AppState>();
+    *app_state.shortcut.lock().unwrap() =
+        MuteShortcut::new(accelerator, state, alternatives, cfg!(target_os = "macos"));
+    if let Some(window) = room_window(app) {
+        let status = json!(shortcut_status(&app_state));
+        let _ =
+            window.eval(format!("window.__sidevoiceDesktop && window.__sidevoiceDesktop.muteShortcutEvent({status})"));
+    }
 }
 
-pub fn run() {
-    let context = tauri::generate_context!();
-    #[cfg(feature = "probe")]
-    let context = probe::with_page(context);
-    let builder = tauri::Builder::default();
-    // The call controls card is a non-activating panel on macOS (src/call_controls.rs).
-    #[cfg(target_os = "macos")]
-    let builder = builder.plugin(tauri_nspanel::init());
-    builder
-        // A second launch (Finder, Spotlight) brings the running one forward instead.
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| show_room(app)))
-        .plugin(
-            tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
-                    if event.state() == ShortcutState::Pressed {
-                        send(app, Command::ToggleMute);
-                    }
-                })
-                .build(),
-        )
-        .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![
+/// The app's commands, with `$extra` (each after a comma) after them.
+macro_rules! commands {
+    ($($extra:tt)*) => {
+        tauri::generate_handler![
             get_settings,
-            save_settings,
             bridge_state,
             bridge_level,
             call_controls::call_controls_ready,
@@ -436,66 +473,148 @@ pub fn run() {
             engine_ipc::engine_install,
             engine_ipc::engine_progress,
             engine_ipc::engine_cancel,
-            engine_ipc::engine_transcribe,
-            engine_ipc::engine_synthesize,
-            engine_ipc::engine_load,
-            engine_ipc::engine_unload,
-            engine_ipc::engine_loaded,
+            engine_ipc::engine_uninstall,
             engine_ipc::engine_memory,
+            engine_ipc::engine_catalogs,
+            engine_ipc::engine_set_credential,
+            engine_ipc::engine_has_credential,
+            engine_ipc::engine_test_credential,
+            engine_ipc::engine_refresh,
             local_host::local_host_state,
             local_host::local_host_pairing,
             local_host::local_host_action,
             local_host::local_host_pairing_code,
-            local_host::local_host_pair_room
-        ])
+            local_host::local_host_pair_room,
+            local_host::local_host_install,
+            local_host::local_host_install_progress,
+            local_host::local_host_install_cancel,
+            data::data_pairings_read,
+            data::data_pairings_write,
+            data::data_delete_all,
+            data::data_uninstall,
+            data::data_reset_report,
+            mute_shortcut,
+            call_controls::call_controls_settings,
+            updater::updater
+            $($extra)*
+        ]
+    };
+}
+
+/// Every command, the voice call's and the microphone permission's where the app runs the call (`host.voice`,
+/// `host.microphone`: macOS).
+#[cfg(target_os = "macos")]
+fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
+    commands![
+        , voice::voice_create_call,
+        voice::voice_route_input,
+        voice::voice_dispose_call,
+        voice::voice_set_settings,
+        voice::voice_start,
+        voice::voice_stop,
+        voice::voice_say,
+        voice::voice_cancel_say,
+        voice::voice_mute,
+        voice::voice_cancel_input,
+        voice::voice_end_input,
+        voice::voice_audio_devices,
+        voice::voice_set_audio_devices,
+        microphone::microphone
+    ]
+}
+
+#[cfg(not(target_os = "macos"))]
+fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
+    commands![]
+}
+
+pub fn run() {
+    #[cfg(target_os = "macos")]
+    if !data::await_reset_idle() {
+        eprintln!("sidevoice: reset lock unavailable or cleanup still running"); // before the log exists
+        return;
+    }
+    let context = tauri::generate_context!();
+    #[cfg(feature = "probe")]
+    let context = probe::with_page(context);
+    log_panics();
+    // First, so everything after it is logged.
+    let builder = tauri::Builder::default().plugin(log_plugin());
+    // The call controls card is a non-activating panel on macOS (src/call_controls.rs).
+    #[cfg(target_os = "macos")]
+    let builder = builder.plugin(tauri_nspanel::init());
+    // The voice call the app runs (`host.voice`, src/voice.rs).
+    // Its shared audio starts its dispatcher on Tokio, so it is built inside the runtime the commands run on.
+    #[cfg(target_os = "macos")]
+    let builder = {
+        let _runtime = tauri::async_runtime::handle().inner().enter();
+        builder.manage(voice::VoiceState::default())
+    };
+    builder
+        // A second launch (Finder, Spotlight) brings the running one forward instead.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| show_room(app)))
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        send(app, Command::ToggleMute);
+                    }
+                })
+                .build(),
+        )
+        .manage(AppState::default())
+        .invoke_handler(handler())
         .setup(|app| {
             let handle = app.handle().clone();
             tray::create(&handle)?;
             headset::setup(&handle);
-            // Native engines and models are downloaded into the app's data directory, on demand (docs/ENGINES.md).
-            let engines_root = app.path().app_data_dir()?.join("engines");
-            #[allow(unused_mut)] // the probe build may shorten the idle time
-            let mut engines = sidevoice_desktop_engine::NativeEngines::new(
-                sidevoice_desktop_core::engines::bundled_catalog(),
-                engines_root,
-            );
-            #[cfg(feature = "probe")]
-            if let Some(idle) = probe::idle_unload() {
-                engines.idle_unload = idle;
+            // The model root is shared per OS user on this machine (docs/ENGINES.md).
+            // Without it the app still runs; the page then finds no native engine to use.
+            let engine_root =
+                data::shared_model_root().ok_or_else(|| std::io::Error::other("no home for the shared model store"))?;
+            // The keys of remote providers come from the keychain (macOS); elsewhere the app keeps none.
+            #[cfg(target_os = "macos")]
+            let credentials = keychain::Keychain;
+            #[cfg(not(target_os = "macos"))]
+            let credentials = sidevoice_desktop_engine::sidevoice_engine::NoCredentials;
+            match sidevoice_desktop_engine::NativeEngines::new(
+                engine_root,
+                credentials,
+                tauri::async_runtime::handle().inner().clone(),
+            ) {
+                Ok(engines) => {
+                    app.manage(engine_ipc::EngineState::new(engines));
+                }
+                Err(e) => log::error!("the native engine did not start: {} ({})", e.key, e.message),
             }
-            #[cfg(feature = "probe")]
-            {
-                engines.faults = probe::faults();
-            }
-            let engines = engine_ipc::EngineState::new(engines);
-            // A model stays in memory during a call and for ten minutes after the last use (sidevoice-core#21 D13).
-            engine_ipc::unload_when_idle(engines.engines.clone());
-            app.manage(engines);
             // This computer's own core, if any (macOS): found, paired, proxied for the page (docs/LOCAL_HOST.md).
             local_host::setup(&handle);
-            let stored = app.path().app_config_dir().ok().and_then(|dir| settings::load(&dir));
+            let stored = data::desktop_dir(&handle).ok().and_then(|dir| settings::load(&dir));
             *app.state::<AppState>().settings.lock().unwrap() = stored.clone();
             // First run too: the interface itself asks for a pairing code; nothing has to be set up first.
             let current = stored.unwrap_or_else(Settings::first_run);
             apply_shortcut(&handle, &current.mute_shortcut);
-            open_room(&handle, &current)?;
+            // Before the room opens, so its bridge offers `host.updater`.
+            updater::setup(&handle);
+            open_room(&handle)?;
             call_controls::create(&handle)?;
+            // The room to the front, last so no window created after it takes it. Setup runs on Ready, after the
+            // launch's own activation, which came before any window existed: the window stayed behind (Dock only).
+            show_room(&handle);
+            activate_app();
+            #[cfg(target_os = "macos")]
+            data::finalize_relaunched_reset();
             Ok(())
         })
         .on_window_event(|window, event| {
             if !window.label().starts_with(ROOM_PREFIX) {
                 return;
             }
-            match event {
-                // Closing the room window hides it: the call and the tray stay alive. Quit from the tray or ⌘Q.
-                WindowEvent::CloseRequested { api, .. } => {
-                    api.prevent_close();
-                    let _ = window.hide();
-                    call_controls::update(window.app_handle());
-                }
-                // In front, the room has the call's controls; behind, the card does.
-                WindowEvent::Focused(_) => call_controls::update(window.app_handle()),
-                _ => {}
+            // Closing the room window hides it: the call and the tray stay alive. Quit from the tray or ⌘Q.
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+                call_controls::update(window.app_handle());
             }
         })
         .build(context)
@@ -506,10 +625,18 @@ pub fn run() {
             if let tauri::RunEvent::Reopen { has_visible_windows: false, .. } = event {
                 show_room(app);
             }
-            // Quitting: the local host's proxy stops and closes every tunnel.
+            // Quitting: the local host's proxy stops and closes every tunnel; an update ready installs (automatic mode).
             if let tauri::RunEvent::Exit = event {
                 local_host::shutdown(app);
+                if !app.state::<AppState>().resetting.load(Ordering::SeqCst) {
+                    updater::quit(app);
+                }
             }
             let _ = (app, event);
         });
+}
+
+/// The helper is the same signed executable, launched only after a confirmed reset or uninstall.
+pub fn run_reset_helper(parent_pid: Option<u32>, lock_fd: Option<i32>, uninstall: bool) {
+    data::run_reset_helper(parent_pid, lock_fd, uninstall);
 }

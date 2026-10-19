@@ -8,7 +8,7 @@
 //! refusal is `{key, message}`, as the native engine's (docs/BRIDGE.md).
 
 use serde_json::{json, Value};
-use tauri::{AppHandle, Webview};
+use tauri::{AppHandle, Manager, Webview};
 
 /// A command's answer: a value, or a refusal `{key, message}`.
 type Answer = Result<Value, Value>;
@@ -28,7 +28,7 @@ fn caller(app: &AppHandle, webview: &Webview) -> Result<(), Value> {
     })
 }
 
-/// `{state, failure?, core?, service?, calls?}`.
+/// `{state, failure?, core?, product_version, service?, calls?, attempts?, limit?, reachable}`.
 #[tauri::command]
 pub fn local_host_state(app: AppHandle, webview: Webview) -> Answer {
     caller(&app, &webview)?;
@@ -42,32 +42,72 @@ pub fn local_host_pairing(app: AppHandle, webview: Webview) -> Answer {
     imp::pairing(&app)
 }
 
-/// `start`, `stop`, `restart`, `service-install`, `service-uninstall` (the connector's CLI), `reconnect`, `reveal-log`:
-/// the state after it.
+/// `start`, `stop`, `restart`, `service-install`, `service-uninstall`, `start-at-login-on`, `start-at-login-off` (the
+/// connector's CLI), `reconnect`, `reveal-log`: the state after it.
 #[tauri::command]
 pub async fn local_host_action(app: AppHandle, webview: Webview, action: String) -> Answer {
     caller(&app, &webview)?;
+    let _permit = crate::data::admit(&app).ok_or_else(|| refusal("reset.busy", "Data reset is under way."))?;
+    if app.state::<crate::AppState>().resetting.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(refusal("reset.busy", "Data reset is under way."));
+    }
     tauri::async_runtime::spawn_blocking(move || imp::action(&app, &action))
         .await
         .map_err(|e| refusal("internal", &e.to_string()))?
 }
 
-/// `sidevoice pair-device --json`, on the person's click: `{code, expires_in, reach}`.
+/// `npx sidevoice pair-device --json`, on the person's click: `{code, expires_in, reach}`.
 #[tauri::command]
 pub async fn local_host_pairing_code(app: AppHandle, webview: Webview) -> Answer {
     caller(&app, &webview)?;
+    let _permit = crate::data::admit(&app).ok_or_else(|| refusal("reset.busy", "Data reset is under way."))?;
     tauri::async_runtime::spawn_blocking(move || imp::pairing_code(&app))
         .await
         .map_err(|e| refusal("internal", &e.to_string()))?
 }
 
-/// `sidevoice pair <url> <code> --json`: `{room}`.
+/// `npx sidevoice pair <url> <code> --json`: `{room}`.
 #[tauri::command]
 pub async fn local_host_pair_room(app: AppHandle, webview: Webview, url: String, code: String) -> Answer {
     caller(&app, &webview)?;
+    let _permit = crate::data::admit(&app).ok_or_else(|| refusal("reset.busy", "Data reset is under way."))?;
     tauri::async_runtime::spawn_blocking(move || imp::pair_room(&app, &url, &code))
         .await
         .map_err(|e| refusal("internal", &e.to_string()))?
+}
+
+/// "Prepare this computer": installs Sidevoice from the npm registry as install `job` (the page's id for this call;
+/// docs/LOCAL_HOST.md → Install), and answers the state after it, once the app is paired with the new core (or has
+/// waited for it long enough); `{key, step?, params?, log_tail?, message}` when it fails. One at a time
+/// (`install.busy`); its progress is `local_host_install_progress`, and `local_host_install_cancel` stops it until the
+/// package's installer starts.
+#[tauri::command]
+pub async fn local_host_install(app: AppHandle, webview: Webview, job: String) -> Answer {
+    caller(&app, &webview)?;
+    let _permit = crate::data::admit(&app).ok_or_else(|| refusal("reset.busy", "Data reset is under way."))?;
+    if app.state::<crate::AppState>().resetting.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(refusal("reset.busy", "Data reset is under way."));
+    }
+    // Begun here, before the blocking work: its progress and its cancel find it from the start.
+    let begun = imp::begin_install(&app, &job)?;
+    tauri::async_runtime::spawn_blocking(move || imp::run_install(begun))
+        .await
+        .map_err(|e| refusal("internal", &e.to_string()))?
+}
+
+/// `{step, done, total, cancellable}` of install `job` while it runs; `null` for another id or once it has ended.
+#[tauri::command]
+pub fn local_host_install_progress(app: AppHandle, webview: Webview, job: String) -> Answer {
+    caller(&app, &webview)?;
+    imp::install_progress(&app, &job)
+}
+
+/// Asks install `job` to stop: true while that is honoured (download, verification, unpacking), false once the
+/// package's installer runs, or for an id not under way.
+#[tauri::command]
+pub fn local_host_install_cancel(app: AppHandle, webview: Webview, job: String) -> Answer {
+    caller(&app, &webview)?;
+    imp::cancel_install(&app, &job)
 }
 
 /// At start: the proxy and the poll, for the app's lifetime (macOS).
@@ -80,11 +120,24 @@ pub fn shutdown(app: &AppHandle) {
     imp::shutdown(app)
 }
 
+/// A missing install record is safe to treat as absent only when the observer also sees no service.
+#[cfg(target_os = "macos")]
+pub fn absent(app: &AppHandle) -> bool {
+    imp::absent(app)
+}
+
+#[cfg(target_os = "macos")]
+pub fn installing(app: &AppHandle) -> bool {
+    imp::installing(app)
+}
+
 #[cfg(unix)]
 mod imp {
     use super::{refusal, unsupported, Answer};
     use serde_json::{json, Value};
-    use sidevoice_local_host::host::{computer_name, Action, Config, LocalHost};
+    use sidevoice_local_host::host::{computer_name, Action, Config, Installing, LocalHost};
+    use sidevoice_local_host::install;
+    use sidevoice_local_host::npm::Https;
     use sidevoice_local_host::paths::DataDirs;
     use std::sync::Arc;
     use tauri::{AppHandle, Manager};
@@ -104,7 +157,7 @@ mod imp {
             crate::debug("local-host off: no home directory");
             return;
         };
-        let Ok(app_dir) = app.path().app_config_dir() else { return };
+        let Ok(app_dir) = crate::data::desktop_dir(app) else { return };
         let config = Config { dirs, app_dir, name: computer_name() };
         match LocalHost::start(config, crate::debug) {
             Ok(host) => {
@@ -125,6 +178,15 @@ mod imp {
         Ok(json!(host(app)?.state()))
     }
 
+    #[cfg(target_os = "macos")]
+    pub fn absent(app: &AppHandle) -> bool {
+        host(app).is_ok_and(|host| json!(host.state())["state"] == "absent")
+    }
+    #[cfg(target_os = "macos")]
+    pub fn installing(app: &AppHandle) -> bool {
+        host(app).is_ok_and(|host| json!(host.state())["state"] == "installing")
+    }
+
     pub fn pairing(app: &AppHandle) -> Answer {
         Ok(host(app)?.pairing().unwrap_or(Value::Null))
     }
@@ -134,7 +196,7 @@ mod imp {
         let report = match name {
             "reconnect" => host.reconnect(),
             "reveal-log" => {
-                reveal(&host)?;
+                reveal(app, &host)?;
                 host.state()
             }
             other => {
@@ -145,13 +207,17 @@ mod imp {
         Ok(json!(report))
     }
 
-    /// The log in Finder, selected (`open -R`, by its absolute path; no shell).
-    fn reveal(host: &LocalHost) -> Result<(), Value> {
-        let path = host.log_path().ok_or_else(|| refusal("log.missing", "There is no log on this computer yet."))?;
+    /// The logs in Finder, selected (`open -R`, by absolute paths; no shell): the app's own, and the core's (else the
+    /// connector's) when there is one. The app's is always there to show, connector or not.
+    fn reveal(app: &AppHandle, host: &LocalHost) -> Result<(), Value> {
+        let logs = sidevoice_local_host::paths::logs_to_show(crate::app_log_file(app), host.log_path());
+        if logs.is_empty() {
+            return Err(refusal("log.missing", "There is no log on this computer yet."));
+        }
         if !cfg!(target_os = "macos") {
             return Err(unsupported());
         }
-        match std::process::Command::new("/usr/bin/open").arg("-R").arg(&path).status() {
+        match std::process::Command::new("/usr/bin/open").arg("-R").args(&logs).status() {
             Ok(status) if status.success() => Ok(()),
             _ => Err(refusal("reveal.failed", "Finder could not show the log.")),
         }
@@ -163,6 +229,32 @@ mod imp {
 
     pub fn pair_room(app: &AppHandle, url: &str, code: &str) -> Answer {
         host(app)?.pair_room(url, code).map_err(|r| json!(r))
+    }
+
+    /// An install begun (the slot taken); dropped unrun, it frees it.
+    pub struct Begun(Installing);
+
+    pub fn begin_install(app: &AppHandle, job: &str) -> Result<Begun, Value> {
+        host(app)?.begin_install(job).map(Begun).map_err(|failure| json!(failure))
+    }
+
+    /// The whole install, blocking (on the async runtime's blocking pool: the HTTPS client runs a runtime of its own,
+    /// made and dropped here). The host logs how it went.
+    pub fn run_install(begun: Begun) -> Answer {
+        let Begun(installing) = begun;
+        let fetch = Https::new().map_err(|failure| json!(failure))?;
+        installing
+            .run(&fetch, &install::Options::standard())
+            .map(|report| json!(report))
+            .map_err(|failure| json!(failure))
+    }
+
+    pub fn install_progress(app: &AppHandle, job: &str) -> Answer {
+        Ok(host(app)?.install_progress(job).map(|progress| json!(progress)).unwrap_or(Value::Null))
+    }
+
+    pub fn cancel_install(app: &AppHandle, job: &str) -> Answer {
+        Ok(json!(host(app)?.cancel_install(job)))
     }
 }
 
@@ -186,6 +278,19 @@ mod imp {
         Err(unsupported())
     }
     pub fn pair_room(_app: &AppHandle, _url: &str, _code: &str) -> Answer {
+        Err(unsupported())
+    }
+    pub struct Begun;
+    pub fn begin_install(_app: &AppHandle, _job: &str) -> Result<Begun, serde_json::Value> {
+        Err(unsupported())
+    }
+    pub fn run_install(_begun: Begun) -> Answer {
+        Err(unsupported())
+    }
+    pub fn install_progress(_app: &AppHandle, _job: &str) -> Answer {
+        Err(unsupported())
+    }
+    pub fn cancel_install(_app: &AppHandle, _job: &str) -> Answer {
         Err(unsupported())
     }
 }

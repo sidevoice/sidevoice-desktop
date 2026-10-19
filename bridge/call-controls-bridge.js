@@ -1,8 +1,7 @@
 // Sidevoice call controls bridge — injected by the desktop app into its call controls card window, before the page's
 // own scripts (docs/BRIDGE.md → "The call controls card").
 //
-//   app → card : window.__sidevoiceDesktop.receive({ call, level, pointerInside, outsideClicks, alwaysExpanded,
-//                muteShortcut })
+//   app → card : window.__sidevoiceDesktop.receive({ call, level, pointerInside, outsideClicks, muteShortcut })
 //                (any subset: what changed), evaluated by the app
 //   card → app : invoke('call_controls_run' | 'call_controls_layout' | 'call_controls_drag' | 'call_controls_ready')
 //
@@ -19,6 +18,30 @@
 
   let state = null;
   const listeners = new Set();
+  /** A device the card chose, until the app next tells the call: its devices are shown busy meanwhile, so the card
+   *  never reads the device still chosen as the room refusing the new one. Given up after a while, should the room
+   *  never answer (it ignores a command it cannot run). */
+  let choosing = null;
+  const CHOOSING_MS = 3000;
+
+  /** The state as the card hears it: the app's, with the devices busy while a choice is on its way. */
+  function view() {
+    if (!choosing || !state || !state.call || !state.call.devices) return state;
+    return Object.freeze(Object.assign({}, state, {
+      call: Object.assign({}, state.call, { devices: Object.assign({}, state.call.devices, { busy: true }) }),
+    }));
+  }
+
+  function publish() {
+    if (!state || !state.call) return; // nothing to show until the app has said what the call is
+    const heard = view();
+    for (const listener of listeners) listener(heard);
+  }
+
+  function stopChoosing() {
+    if (choosing && typeof win.clearTimeout === "function") win.clearTimeout(choosing);
+    choosing = null;
+  }
 
   function invoke(command, args) {
     const internals = win.__TAURI_INTERNALS__;
@@ -32,12 +55,17 @@
     /** Called with the whole state, and again on every change; returns the function that stops it. */
     subscribe(listener) {
       listeners.add(listener);
-      if (state) listener(state);
+      if (state) listener(view());
       else invoke("call_controls_ready");
       return () => listeners.delete(listener);
     },
     /** One of the card's commands, `{command, …arguments}`; the app checks it and carries it to the room. */
     run(command) {
+      if (command && command.command === "select-audio-device" && state && state.call && state.call.devices) {
+        stopChoosing();
+        choosing = typeof win.setTimeout === "function" ? win.setTimeout(() => { choosing = null; publish(); }, CHOOSING_MS) : true;
+        publish();
+      }
       invoke("call_controls_run", { command });
     },
     /** The card's size with its margin, in CSS pixels: the app sizes and places the window to it. */
@@ -57,8 +85,8 @@
     receive(patch) {
       if (!patch || typeof patch !== "object") return;
       state = Object.freeze(Object.assign({}, state, patch));
-      if (!state.call) return; // nothing to show until the app has said what the call is
-      for (const listener of listeners) listener(state);
+      if (patch.call) stopChoosing(); // the room's own word on the devices from here on
+      publish();
     },
   };
   win.__sidevoiceDesktop = api;

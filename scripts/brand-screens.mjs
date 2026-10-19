@@ -174,7 +174,7 @@ shot("dmg-window-dark-labels.png", path.join(work, "dmg-dark.html"), layout.widt
 
 // The settings window, in light and dark, with the app's commands answered by a stub.
 const stub = `<script>window.__TAURI_INTERNALS__={invoke:async(c)=>{
-  if(c==="get_settings")return{settings:{target:"",muteShortcut:"CmdOrCtrl+Shift+M"},debug:false,appVersion:"0.1.0"};
+  if(c==="get_settings")return{debug:false,appVersion:"0.1.0"};
   if(c==="headset_report")return{platformSupported:true,muteGestureApi:true,inCall:true,testing:false,
     events:[{at:Date.now()-42000,source:"remote:toggle",action:"mute"},{at:Date.now()-31000,source:"airpods:unmute",action:"unmute"}]};
   return {};}};</script>`;

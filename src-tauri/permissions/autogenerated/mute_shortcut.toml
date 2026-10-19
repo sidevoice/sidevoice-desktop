@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-mute-shortcut"
+description = "Enables the mute_shortcut command without any pre-configured scope."
+commands.allow = ["mute_shortcut"]
+
+[[permission]]
+identifier = "deny-mute-shortcut"
+description = "Denies the mute_shortcut command without any pre-configured scope."
+commands.deny = ["mute_shortcut"]

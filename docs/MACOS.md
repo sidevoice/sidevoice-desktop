@@ -1,8 +1,9 @@
 # macOS: what the app needs to work on first open
 
-## Install and first open (unsigned build)
+## Install and first open
 
-See `FIRST_OPEN.txt` (in this directory). Short version:
+A release's and the nightly's .dmg are signed with the Developer ID and notarized (RELEASING.md): they open like any
+downloaded app. CI builds are ad-hoc signed; for those, see `FIRST_OPEN.txt` (in this directory). Short version:
 
 ```sh
 # after dragging Sidevoice.app to /Applications
@@ -20,12 +21,20 @@ A `getUserMedia` call in the room page has to pass four gates. Each one is handl
 | Gate | What it needs | Where |
 |---|---|---|
 | Secure context | The page is a secure context | The bundled interface on `tauri://localhost` is one (verified in CI) |
-| WebKit's per-origin decision | A `WKUIDelegate` answer for the origin | `on_permission_request` in `open_room` → `core/src/media.rs`: microphone **granted to the app's own pages only** (the bundled interface), camera and anything else denied. (wry's default, with no handler, grants everything to every page.) |
+| WebKit's per-origin decision | A `WKUIDelegate` answer for the origin | `on_permission_request` in `open_room` → `core/src/media.rs`: microphone **granted to the app's own pages only** (the bundled interface) where the page runs the call, denied to every page where the app runs it (macOS); camera and anything else denied. (wry's default, with no handler, grants everything to every page.) |
 | App privacy (TCC) | `NSMicrophoneUsageDescription` in `Info.plist` — without it macOS kills the app on first capture | `src-tauri/Info.plist`, merged by the bundler; CI checks it is in the built app |
 | Hardened runtime | `com.apple.security.device.audio-input` entitlement | `src-tauri/Entitlements.plist`; CI checks it is in the signature |
 
+On macOS the app runs the voice call itself (cpal; docs/BRIDGE.md → "The voice call"), so the WebKit gate denies the
+microphone to every page, the bundled interface included (`media::decide`), and the call's capture passes only the
+other two. The page then cannot ask macOS for the microphone, nor read whether it may: the web's first-run setup asks
+for it through `host.microphone` (`src-tauri/src/microphone.rs`; docs/BRIDGE.md → "The microphone permission"), which
+reads the app's permission, shows macOS's prompt (`AVCaptureDevice.requestAccess`) and opens System Settings at the
+microphone's pane after a denial.
+
 macOS asks once ("Sidevoice quiere acceder al micrófono"). The answer is stored per app
-signature: with ad-hoc signing each new build is a "new" app and may ask again.
+signature: with ad-hoc signing each new build is a "new" app and may ask again; a release, signed with the Developer
+ID, keeps its answer from one version to the next.
 If it was denied: System Settings → Privacy & Security → Microphone, or
 `tccutil reset Microphone dev.sidevoice.desktop`.
 
@@ -85,7 +94,9 @@ toggles twice. CI simulates a call on a macOS runner and checks the app becomes 
 4. Let the bundler build the `.dmg` too (it signs and notarizes it) and staple the ticket.
    Result: opens with a double click, no Gatekeeper dialog, and the microphone permission survives
    updates (stable signature).
-5. Auto-update (`tauri-plugin-updater`) needs signed builds plus an update signing key; later.
+5. Auto-update (`tauri-plugin-updater`) needs signed builds plus an update signing key: in place, RELEASING.md →
+   Updates. An update replaces the .app with one signed by the same Developer ID, so the microphone permission and
+   the keychain's trust carry over, from the nightly to a release too.
 
 ## iPhone (out of scope)
 

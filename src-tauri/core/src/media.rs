@@ -1,8 +1,10 @@
 //! Who may capture media in, and navigate, the room window (the bundled interface).
 //!
 //! wry's WKWebView delegate grants every camera and microphone request from any page when the app
-//! sets no handler. The room window sets one: the microphone is granted without a WebKit prompt to
-//! the app's own pages only (the bundled interface); the camera, and anything else, are denied. macOS still asks the person once for the app itself (TCC, with
+//! sets no handler. The room window sets one. Where the app runs the voice call itself (`host.voice`, macOS), the
+//! microphone is the app's and every page is denied it. Elsewhere the page runs the call, and the microphone is granted
+//! without a WebKit prompt to the app's own pages only (the bundled interface). The camera, and anything else, are
+//! always denied. macOS still asks the person once for the app itself (TCC, with
 //! `NSMicrophoneUsageDescription`); that prompt cannot and should not be skipped.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,10 +20,11 @@ pub enum Decision {
     Deny,
 }
 
-/// `page_origin` is the origin of the page currently loaded in the room window, if any.
-pub fn decide(capture: Capture, page_origin: Option<&str>, room_origin: &str) -> Decision {
+/// `page_origin` is the origin of the page currently loaded in the room window, if any; `page_captures` whether the
+/// page runs the voice call (no native `host.voice`).
+pub fn decide(capture: Capture, page_origin: Option<&str>, room_origin: &str, page_captures: bool) -> Decision {
     match capture {
-        Capture::Microphone if page_origin == Some(room_origin) => Decision::Allow,
+        Capture::Microphone if page_captures && page_origin == Some(room_origin) => Decision::Allow,
         _ => Decision::Deny,
     }
 }
@@ -40,12 +43,13 @@ mod tests {
     const ROOM: &str = "tauri://localhost";
 
     #[test]
-    fn microphone_only_for_the_room() {
-        assert_eq!(decide(Capture::Microphone, Some(ROOM), ROOM), Decision::Allow);
-        assert_eq!(decide(Capture::Microphone, Some("https://accounts.google.com"), ROOM), Decision::Deny);
-        assert_eq!(decide(Capture::Microphone, Some("https://voice.example.com:8443"), ROOM), Decision::Deny);
-        assert_eq!(decide(Capture::Microphone, Some("http://voice.example.com"), ROOM), Decision::Deny);
-        assert_eq!(decide(Capture::Microphone, None, ROOM), Decision::Deny);
+    fn microphone_only_for_the_room_and_only_where_the_page_runs_the_call() {
+        assert_eq!(decide(Capture::Microphone, Some(ROOM), ROOM, false), Decision::Deny);
+        assert_eq!(decide(Capture::Microphone, Some(ROOM), ROOM, true), Decision::Allow);
+        assert_eq!(decide(Capture::Microphone, Some("https://accounts.google.com"), ROOM, true), Decision::Deny);
+        assert_eq!(decide(Capture::Microphone, Some("https://voice.example.com:8443"), ROOM, true), Decision::Deny);
+        assert_eq!(decide(Capture::Microphone, Some("http://voice.example.com"), ROOM, true), Decision::Deny);
+        assert_eq!(decide(Capture::Microphone, None, ROOM, true), Decision::Deny);
     }
 
     #[test]
@@ -69,7 +73,7 @@ mod tests {
 
     #[test]
     fn never_the_camera_or_anything_else() {
-        assert_eq!(decide(Capture::Camera, Some(ROOM), ROOM), Decision::Deny);
-        assert_eq!(decide(Capture::Other, Some(ROOM), ROOM), Decision::Deny);
+        assert_eq!(decide(Capture::Camera, Some(ROOM), ROOM, true), Decision::Deny);
+        assert_eq!(decide(Capture::Other, Some(ROOM), ROOM, true), Decision::Deny);
     }
 }
