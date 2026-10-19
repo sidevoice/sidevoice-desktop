@@ -230,17 +230,19 @@ what the interface's own window offers — same origin, same permission rule —
       "/" + (takes[0].ended_at - takes[0].started_at === Math.floor(takes[0].samples.length / 16)) : "none";
     const samples = takes.length ? takes.map((t) => t.samples.length).join(",") : "none";
     await until(() => states.includes("idle") || started !== "ok", 30000);
+    // Stopping ends a call (nothing more reaches it), so the delayed turns go to two calls still running.
+    const third = voice.start({ output: { tts: kokoro } });
     const delayedTurns = [];
-    const stopFirst = first.onTurn((turn) => delayedTurns.push(["first", turn.phase, turn.turn_id]));
-    const stopSecond = second.onTurn((turn) => delayedTurns.push(["second", turn.phase, turn.turn_id]));
+    const stopFirst = second.onTurn((turn) => delayedTurns.push(["first", turn.phase, turn.turn_id]));
+    const stopSecond = third.onTurn((turn) => delayedTurns.push(["second", turn.phase, turn.turn_id]));
     // The webview may deliver an earlier call's start after the input route has changed.
     await voice.routeInput(null);
     await new Promise((resolve) => setTimeout(() => {
       const send = (key, data) => window.__sidevoiceDesktop.voiceEvent({ key, type: "turn", data });
-      send(first.id, { phase: "started", turn_id: "probe-a-turn", started_at: 1 });
-      send(second.id, { phase: "started", turn_id: "probe-b-turn", started_at: 2 });
-      send(second.id, { phase: "finished", turn_id: "probe-b-turn", text: "B" });
-      send(first.id, { phase: "finished", turn_id: "probe-a-turn", text: "A" });
+      send(second.id, { phase: "started", turn_id: "probe-a-turn", started_at: 1 });
+      send(third.id, { phase: "started", turn_id: "probe-b-turn", started_at: 2 });
+      send(third.id, { phase: "finished", turn_id: "probe-b-turn", text: "B" });
+      send(second.id, { phase: "finished", turn_id: "probe-a-turn", text: "A" });
       resolve();
     }, 0));
     const delayedTurn = JSON.stringify(delayedTurns) === JSON.stringify([
@@ -249,7 +251,7 @@ what the interface's own window offers — same origin, same permission rule —
     ]);
     stopFirst();
     stopSecond();
-    await first.stop();
+    await third.stop();
     await voice.routeInput(null);
     await second.stop();
     stopListening();
