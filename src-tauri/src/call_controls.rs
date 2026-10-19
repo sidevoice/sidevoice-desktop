@@ -212,13 +212,13 @@ fn watch_view(app: AppHandle) {
             let (tx, rx) = std::sync::mpsc::channel();
             let a = app.clone();
             // AppKit and the window handles want the main thread.
-            if app.run_on_main_thread(move || {
             let sent = app.run_on_main_thread(move || {
                 let _ = tx.send(room_in_front(&a));
             });
             if sent.is_err() {
                 return;
             }
+            let Ok(now) = rx.recv() else { return };
             if was.replace(now).is_some_and(|before| before != now) {
                 update(&app);
             }
