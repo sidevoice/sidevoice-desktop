@@ -60,6 +60,12 @@ pub fn setup(app: &AppHandle) {
         return log::error!("the updater did not start: {e}");
     }
     app.manage(Mutex::new(Updates::default()));
+    // What a relaunch after an update came up as: the version and the bundle it runs from.
+    crate::debug(&format!(
+        "updater: started {} ({CHANNEL}) from {:?}",
+        app.package_info().version,
+        std::env::current_exe().ok()
+    ));
     let app = app.clone();
     // At launch, then as often as its channel says (core `check_every`).
     tauri::async_runtime::spawn(async move {
@@ -95,12 +101,36 @@ async fn check(app: &AppHandle) {
         updater.timeout(Duration::from_secs(2 * 60)).build()?.check().await
     }
     .await;
+    let running = app.package_info().version.to_string();
     with(app, |u| match checked {
-        Ok(found) if matches!(u.status.state, State::Idle | State::Available) => {
-            u.status = found.as_ref().map_or_else(Status::default, |f| Status::new(State::Available, &f.version));
-            u.update = found;
+        Ok(found) => {
+            crate::debug(&format!(
+                "updater: running {running} ({CHANNEL}), the feed offers {}, status {:?}",
+                found.as_ref().map_or("nothing newer", |f| f.version.as_str()),
+                u.status.state
+            ));
+            // The feed moved on while an older one was downloading or ready (a nightly comes with every merge):
+            // that one is dropped, or the app would install it and be offered the newer one again after restarting.
+            let moved = found.as_ref().filter(|f| !u.installing && core::stale(&u.status, &f.version));
+            if let Some(found) = moved {
+                crate::debug(&format!(
+                    "updater: {:?} of {:?} is stale, now {}",
+                    u.status.state, u.status.version, found.version
+                ));
+                if let Some(task) = u.task.take() {
+                    task.abort();
+                }
+                u.downloads.supersede();
+                u.bytes = None;
+                u.status = Status::default();
+            }
+            if matches!(u.status.state, State::Idle | State::Available) {
+                u.status = found.as_ref().map_or_else(Status::default, |f| Status::new(State::Available, &f.version));
+                u.update = found;
+            } else {
+                u.status.error = None;
+            }
         }
-        Ok(_) => u.status.error = None,
         Err(e) => {
             crate::debug(&format!("updater check failed: {e}"));
             u.status = u.status.clone().failed(ErrorCode::CheckFailed);
@@ -173,6 +203,13 @@ fn install(app: &AppHandle, restart: bool) {
     let Some(_permit) = crate::data::admit(app) else { return };
     let claimed = with(app, |u| u.update.clone().zip(u.bytes.take()).inspect(|_| u.installing = true));
     let Some((update, bytes)) = claimed else { return };
+    crate::debug(&format!(
+        "updater: installing {} over {} ({} bytes, restart: {restart}) at {:?}",
+        update.version,
+        update.current_version,
+        bytes.len(),
+        std::env::current_exe().ok()
+    ));
     let installed = update.restart_after_install(restart).install(&bytes);
     with(app, |u| {
         u.installing = false;
@@ -182,6 +219,7 @@ fn install(app: &AppHandle, restart: bool) {
         }
     });
     if installed.is_ok() && restart {
+        crate::debug("updater: installed, restarting");
         crate::local_host::shutdown(app);
         app.restart()
     }

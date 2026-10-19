@@ -99,6 +99,19 @@ impl Downloads {
     pub fn owns(&self, token: Token) -> bool {
         self.generation == token
     }
+
+    /// A download or an update ready that the feed has moved past is dropped: whatever was running owns nothing from
+    /// now on (unlike `cancel`, no version is remembered as the person's refusal).
+    pub fn supersede(&mut self) {
+        self.generation += 1;
+    }
+}
+
+/// Whether the feed now offering `offered` makes what is downloading or ready (`status`) stale: a different version.
+/// A feed only ever moves on (nightlies are published one at a time, a release is `latest`), so installing the older
+/// one would leave the app behind and offer the newer one again at the first check after the restart.
+pub fn stale(status: &Status, offered: &str) -> bool {
+    matches!(status.state, State::Downloading | State::Ready) && status.version.as_deref().is_some_and(|v| v != offered)
 }
 
 /// The releases' feed: `latest` is the newest release that is neither a draft nor a pre-release (never a `-rc.N`, never
@@ -209,6 +222,26 @@ mod tests {
         let first = downloads.start("0.5.0", false).unwrap();
         assert_eq!(downloads.cancel(&Status::new(State::Available, "0.5.0")), None);
         assert!(downloads.owns(first), "a cancel that cancels nothing leaves the download its own");
+    }
+
+    #[test]
+    fn a_newer_version_on_the_feed_makes_a_download_or_a_ready_update_stale() {
+        let ready = Status::new(State::Ready, "0.3.1-nightly.9");
+        assert!(stale(&ready, "0.3.1-nightly.12"));
+        assert!(stale(&Status::new(State::Downloading, "0.3.1-nightly.9"), "0.3.1-nightly.12"));
+        assert!(!stale(&ready, "0.3.1-nightly.9"), "the same version is what is already there");
+        for status in [Status::default(), Status::new(State::Available, "0.3.1-nightly.9")] {
+            assert!(!stale(&status, "0.3.1-nightly.12"), "{status:?}: nothing downloaded to drop");
+        }
+    }
+
+    #[test]
+    fn superseding_takes_the_write_from_the_download_running() {
+        let mut downloads = Downloads::default();
+        let old = downloads.start("0.5.0", false).unwrap();
+        downloads.supersede();
+        assert!(!downloads.owns(old));
+        assert!(downloads.start("0.5.0", false).is_some(), "no cancel is remembered");
     }
 
     #[test]
