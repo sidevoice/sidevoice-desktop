@@ -476,6 +476,8 @@ fn walk(card: &mut Card) -> Result<()> {
     if !wait_for(&log, "call-controls shown", 0, 60) {
         return stop(card, "the card never showed");
     }
+    // The policy at launch, before any window: the Dock tile is the Regular one's (#117).
+    card.expect(&log, "launch app_active=(true|false) regular=true", 0);
     card.expect(&log, "call-controls panel ", 0);
     let panel = grep(&read(&log), "call-controls panel ").last().map(|l| l.to_string()).unwrap_or_default();
     if !re("nonactivating=true level=25 all_spaces=true fullscreen_auxiliary=true key=false visible=true .* app_active=false regular=true").is_match(&panel) {
