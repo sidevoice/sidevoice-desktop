@@ -447,7 +447,10 @@ pub fn card() -> Result<()> {
     app.stop();
     // By its binary, so it goes even when it never said its pid.
     let _ = Cmd::new("pkill").arg("-f").arg(card.editor_app.join("Contents/MacOS/Editor")).attempt();
-    eprintln!("--- app\n{}", grep(&read(&card.log), "call-controls|probe-card").join("\n"));
+    eprintln!(
+        "--- app\n{}",
+        grep(&read(&card.log), "call-controls|probe-card|(launch|ready|settled) app_active").join("\n")
+    );
     eprintln!("--- editor\n{}", read(&card.editor_log));
     walked?;
     ensure(card.failed.is_empty(), format!("failed:\n{}", card.failed.join("\n")))
@@ -478,6 +481,20 @@ fn walk(card: &mut Card) -> Result<()> {
     }
     // The policy at launch, before any window: the Dock tile is the Regular one's (#117).
     card.expect(&log, "launch app_active=(true|false) regular=true", 0);
+    // With the card created, Launch Services (what the Dock and Cmd+Tab go by) must also have it as a regular app.
+    card.expect(&log, "ready app_active=(true|false) regular=true policy=0 running_policy=0 .* call_card=on", 0);
+    // What the system itself says, for the log: Launch Services' record of the process, and the Dock's tiles.
+    for cmd in [
+        Cmd::new("lsappinfo").arg("info").arg(format!("pid={}", card.pid)),
+        Cmd::new("osascript")
+            .arg("-e")
+            .arg(r#"tell application "System Events" to get name of every UI element of list 1 of process "Dock""#),
+    ] {
+        match cmd.attempt() {
+            Ok((ok, out)) => eprintln!("--- dock evidence (ok={ok})\n{out}"),
+            Err(e) => eprintln!("--- dock evidence: {e}"),
+        }
+    }
     card.expect(&log, "call-controls panel ", 0);
     let panel = grep(&read(&log), "call-controls panel ").last().map(|l| l.to_string()).unwrap_or_default();
     if !re("nonactivating=true level=25 all_spaces=true fullscreen_auxiliary=true key=false visible=true .* app_active=false regular=true").is_match(&panel) {
