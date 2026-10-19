@@ -535,9 +535,9 @@ fn walk(card: &mut Card) -> Result<()> {
     }
     card.shot("2-near-you-talking.png")?;
 
-    // A click on the title (no move) opens the conversations below the controls; a click in the editor closes it.
+    // A click on the conversations chip (right of the title, the new card) opens them below the controls; a click in the editor closes it.
     let (x, y, _, _) = card.at.unwrap_or_default();
-    card.click(x + 90, y + 31)?;
+    card.click(x + 262, y + 37)?;
     sleep(1.5);
     card.card();
     let h = card.at.unwrap_or_default().3;
