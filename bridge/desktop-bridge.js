@@ -3,11 +3,13 @@
 // The contract is documented in docs/BRIDGE.md. In short:
 //   page → app : invoke('bridge_state', { snapshot })  whenever the call state the app shows changes (tray, card)
 //                invoke('bridge_level', { level })     the microphone's level during a call, for the card's wave
+//                invoke('bridge_playback', { level, threadId })  the voice's output level, for the card's avatar
 //   app → page : window.__sidevoiceDesktop.run({ command: 'toggle-mute' | 'hang-up' | 'skip-reply' | … })
 //                window.__sidevoiceDesktop.voiceEvent(event)  each event of the voice call the app runs (host.voice)
 //                window.__sidevoiceDesktop.updaterEvent(status)  the updates' status changed (host.updater)
 //                window.__sidevoiceDesktop.muteShortcutEvent(status)  the mute shortcut changed (host.muteShortcut)
-// It only reads the web UI's public seams (window.sidevoiceUI.store and .micLevel, window.sidevoiceActions) and
+// It only reads the web UI's public seams (window.sidevoiceUI.store, .micLevel, .playbackLevel and .openSettings,
+// window.sidevoiceActions) and
 // never touches the DOM. On any origin other than the window's page (the room's, or the app's own for the
 // bundled interface) it does nothing at all.
 (function (factory) {
@@ -578,16 +580,28 @@
     return { host: Object.freeze(host), changed: listeners.tell };
   }
 
-  /** Whether the call controls card shows always in a call, or only while the app is behind: sidevoice-web's
-   *  `CallControlsBridge`, onto the `call_controls_settings` command (docs/BRIDGE.md → "The call controls settings"). */
+  /** The floating card's settings the app keeps: sidevoice-web's `CallControlsBridge`, onto the `call_controls_settings`
+   *  command (docs/BRIDGE.md → "The call controls settings"). */
   function callControls() {
+    const CORNERS = ["tl", "tr", "bl", "br"];
     return Object.freeze({
+      /** `{alwaysShown, corner, moved}`: whether it shows always in a call, the corner a card never moved first appears
+       *  in, and whether it was moved or resized anywhere (what `resetPlace` forgets). */
       settings: () => call("call_controls_settings", { action: "settings" }),
       /** Kept by the app and applied at once. `enabled` must be a boolean, else it rejects `{key: "bad_request"}`. */
       setAlwaysShown: (enabled) =>
         typeof enabled === "boolean"
           ? call("call_controls_settings", { action: "set-always-shown", enabled })
           : Promise.reject({ key: "bad_request", message: "setAlwaysShown(enabled) takes a boolean." }),
+      /** Where a card never moved on a display first appears: `"tl"`, `"tr"` (the default), `"bl"` or `"br"`. */
+      setCorner: (corner) =>
+        CORNERS.includes(corner)
+          ? call("call_controls_settings", { action: "set-corner", corner })
+          : Promise.reject({ key: "bad_request", message: "setCorner(corner) takes tl, tr, bl or br." }),
+      /** Forgets where the card was left and how the picture was resized, on every display. */
+      resetPlace: () => call("call_controls_settings", { action: "reset-place" }).then(() => undefined),
+      /** During a call, shows the card a moment, in front of the room too: after a change in Settings. */
+      preview: () => { invoke("call_controls_settings", { action: "preview" }); },
     });
   }
 
@@ -613,7 +627,9 @@
     };
   }
 
-  /** The call as the app shows it (tray, headset, call controls card), read from the web UI's own view model. */
+  /** The call as the app shows it (tray, headset, call controls card), read from the web UI's own view model: the room's
+   *  own projection for the card (`callCard`, with its `facts`), passed through as it is, with what the tray and the
+   *  headset read made sure of, and what is the bridge's own on top (its version, the clock, the devices' busy). */
   function snapshot() {
     const store = win.sidevoiceUI && win.sidevoiceUI.store;
     const actions = win.sidevoiceActions;
@@ -630,7 +646,7 @@
     const joined = !!call.joined;
     if (!joined) joinedAt = null;
     else if (joinedAt === null) joinedAt = Date.now();
-    return {
+    return Object.assign({}, card, {
       version: BRIDGE_VERSION,
       ready: true,
       joined,
@@ -642,9 +658,11 @@
       youTalking: !!card.youTalking,
       canSkip: !!card.canSkip,
       since: joinedAt,
-      participants: Array.isArray(view.participants) ? view.participants.map((row) => pick(row, PARTICIPANT_FIELDS)) : [],
+      // The room's own rows for the card, else the fields of its conversation list the card shows.
+      participants: Array.isArray(card.participants) ? card.participants
+        : Array.isArray(view.participants) ? view.participants.map((row) => pick(row, PARTICIPANT_FIELDS)) : [],
       devices: cardDevices(view.facts && view.facts.audioDevices),
-    };
+    });
   }
 
   function report() {
@@ -669,6 +687,22 @@
     invoke("bridge_level", { level });
   }
 
+  // The voice's output level, for the card's avatar's mouth: during a call, at most every 40 ms, only when it changes,
+  // and always the 0 that ends a reply.
+  let lastPlayback = { level: 0, threadId: null };
+  let lastPlaybackAt = 0;
+  function reportPlayback(sample) {
+    if (!reportedJoined || !sample || typeof sample !== "object") return;
+    const level = Math.round(Math.max(0, Math.min(1, Number(sample.level) || 0)) * 100) / 100;
+    const threadId = typeof sample.threadId === "string" ? sample.threadId : null;
+    const now = Date.now();
+    if (level === lastPlayback.level && threadId === lastPlayback.threadId) return;
+    if (level !== 0 && now - lastPlaybackAt < 40) return;
+    lastPlayback = { level, threadId };
+    lastPlaybackAt = now;
+    invoke("bridge_playback", { level, threadId });
+  }
+
   let attached = false;
   function attach() {
     if (attached) return true;
@@ -677,6 +711,8 @@
     store.subscribe(report);
     const level = win.sidevoiceUI.micLevel;
     if (level && typeof level.subscribe === "function") level.subscribe(reportLevel);
+    const playback = win.sidevoiceUI.playbackLevel;
+    if (playback && typeof playback.subscribe === "function") playback.subscribe(reportPlayback);
     attached = true;
     report();
     return true;
@@ -787,6 +823,16 @@
               choosingDevices -= 1;
               report();
             });
+          return true;
+        case "open-settings":
+          // The card's gear: the room's Settings at the floating card's section (the app brings the room in front).
+          if (!win.sidevoiceUI || typeof win.sidevoiceUI.openSettings !== "function") return false;
+          win.sidevoiceUI.openSettings("floating-card");
+          return true;
+        case "cancel-input":
+          // The room's "Cancel sending": takes back the person's turn while it is recorded or transcribed.
+          if (typeof actions.cancelInput !== "function") return false;
+          settle(actions.cancelInput());
           return true;
         default:
           return false;

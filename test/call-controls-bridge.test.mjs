@@ -97,6 +97,27 @@ test("commands, layout and drags reach the app, and only well-formed ones", asyn
   ]);
 });
 
+test("the body box, the picture's least width and its resize reach the app; no resize where the app does not offer it", async () => {
+  const { win, calls } = fakeWindow(APP);
+  load()(win, APP, true);
+  const host = win.__sidevoiceDesktop.host.callControls;
+  host.layout({ width: 444, height: 330, card: { x: 12, y: 12, width: 420, height: 306 }, resizable: { minWidth: 374, minHeight: 0 } });
+  host.layout({ width: 414, height: 200, card: { x: 12, y: "a lot", width: 390, height: 76 } });
+  host.resize("start", "sw");
+  host.resize("move", "middle");
+  host.resize("end", "sw");
+  await flush();
+  assert.deepEqual(calls, [
+    ["call_controls_layout", { width: 444, height: 330, card: { x: 12, y: 12, width: 420, height: 306 }, resizable: { minWidth: 374 } }],
+    ["call_controls_layout", { width: 414, height: 200 }],
+    ["call_controls_resize", { phase: "start", edge: "sw" }],
+    ["call_controls_resize", { phase: "end", edge: "sw" }],
+  ]);
+  const wayland = fakeWindow(APP);
+  load()(wayland.win, APP, false);
+  assert.equal(wayland.win.__sidevoiceDesktop.host.callControls.resize, undefined);
+});
+
 test("installs once, and survives a missing Tauri runtime", async () => {
   const { win } = fakeWindow(APP);
   delete win.__TAURI_INTERNALS__;
@@ -108,4 +129,5 @@ test("installs once, and survives a missing Tauri runtime", async () => {
 
 test("the placeholder the app replaces is present exactly once", () => {
   assert.equal(source.split('"__SIDEVOICE_APP_ORIGIN__"').length, 2);
+  assert.equal(source.split('"__SIDEVOICE_RESIZE__"').length, 2);
 });

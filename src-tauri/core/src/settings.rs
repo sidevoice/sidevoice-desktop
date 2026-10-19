@@ -36,6 +36,10 @@ pub struct Settings {
     /// (`host.updater.setMode`).
     #[serde(default)]
     pub update_mode: crate::updater::Mode,
+    /// Where a floating card that was never moved on a display first appears (`host.callControls.setCorner`): the top
+    /// right by default.
+    #[serde(default)]
+    pub call_controls_corner: crate::call_controls::Corner,
 }
 
 fn default_shortcut() -> String {
@@ -199,6 +203,7 @@ impl Settings {
             mute_shortcut: default_shortcut(),
             call_controls_always_shown: false,
             update_mode: crate::updater::Mode::Automatic,
+            call_controls_corner: crate::call_controls::Corner::TopRight,
         }
     }
 }
@@ -347,6 +352,7 @@ mod tests {
             mute_shortcut: "Alt+M".into(),
             call_controls_always_shown: true,
             update_mode: crate::updater::Mode::Manual,
+            call_controls_corner: crate::call_controls::Corner::BottomLeft,
         };
         save(&dir, &s).unwrap();
         assert_eq!(load(&dir), Some(s));

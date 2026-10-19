@@ -194,7 +194,8 @@ fn bridge_state(
         debug(&format!("bridge_state refused: origin {actual:?}"));
         return Err("not the app's own page".into());
     }
-    debug(&format!("bridge_state {snapshot:?}"));
+    // Without the rest of the room's projection: its facts carry the conversation's words, which stay out of the log.
+    debug(&format!("bridge_state {:?}", CallSnapshot { rest: Default::default(), ..snapshot.clone() }));
     *state.call.lock().unwrap() = snapshot.clone();
     tray::update(&app, &snapshot);
     headset::update(&app, &snapshot);
@@ -208,6 +209,16 @@ fn bridge_state(
 fn bridge_level(app: AppHandle, webview: Webview, level: f64) -> Result<(), String> {
     room_page(&app, &webview)?;
     call_controls::level(&app, level.clamp(0.0, 100.0).round() as u8);
+    Ok(())
+}
+
+/// The voice's output level during a call (the bridge script, about every 40 ms while a reply sounds, 0 when it ends) and
+/// whose reply it is, for the card's avatar's mouth. Same caller rule as `bridge_state`.
+#[tauri::command]
+fn bridge_playback(app: AppHandle, webview: Webview, level: f64, thread_id: Option<String>) -> Result<(), String> {
+    room_page(&app, &webview)?;
+    let level = if level.is_finite() { level.clamp(0.0, 1.0) } else { 0.0 };
+    call_controls::playback(&app, level, thread_id.filter(|id| id.len() <= 200));
     Ok(())
 }
 
@@ -510,10 +521,12 @@ macro_rules! commands {
             get_settings,
             bridge_state,
             bridge_level,
+            bridge_playback,
             call_controls::call_controls_ready,
             call_controls::call_controls_run,
             call_controls::call_controls_layout,
             call_controls::call_controls_drag,
+            call_controls::call_controls_resize,
             debug_log,
             headset_report,
             headset_test,

@@ -1388,7 +1388,7 @@ test("host.muteShortcut and host.callControls are exactly the web's seams", () =
   const install = loadFactory();
   const { host } = install(fakeWindow(ORIGIN).win, ORIGIN);
   assert.deepEqual(Object.keys(host.muteShortcut).sort(), ["get", "set", "subscribe"]);
-  assert.deepEqual(Object.keys(host.callControls).sort(), ["setAlwaysShown", "settings"]);
+  assert.deepEqual(Object.keys(host.callControls).sort(), ["preview", "resetPlace", "setAlwaysShown", "setCorner", "settings"]);
   assert.ok(Object.isFrozen(host.muteShortcut) && Object.isFrozen(host.callControls));
 });
 
@@ -1437,4 +1437,79 @@ test("host.callControls reads and sets alwaysShown through the call_controls_set
   assert.deepEqual(await controls.setAlwaysShown(true), { alwaysShown: true });
   await assert.rejects(controls.setAlwaysShown("yes"), (e) => e.key === "bad_request");
   assert.deepEqual(calls.filter(([cmd]) => cmd === "call_controls_settings").map(([, args]) => args), [{ action: "settings" }, { action: "set-always-shown", enabled: true }]);
+});
+
+test("host.callControls sets the default corner, forgets places and previews, through the same command", async () => {
+  const install = loadFactory();
+  const { win, calls } = settingsWindow({ call_controls_settings: ({ action, corner }) => (action === "set-corner" ? { corner } : null) });
+  const controls = install(win, ORIGIN).host.callControls;
+  assert.deepEqual(await controls.setCorner("bl"), { corner: "bl" });
+  await assert.rejects(controls.setCorner("middle"), (e) => e.key === "bad_request");
+  assert.equal(await controls.resetPlace(), undefined);
+  assert.equal(controls.preview(), undefined);
+  await flush();
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "call_controls_settings").map(([, args]) => args),
+    [{ action: "set-corner", corner: "bl" }, { action: "reset-place" }, { action: "preview" }]);
+});
+
+// ---- the floating card's formats (sidevoice-web callcard contract) ----
+
+test("the room's card projection reaches the app whole, facts included, with the bridge's own fields on top", async () => {
+  const install = loadFactory();
+  const { win, calls } = fakeWindow(ORIGIN);
+  const facts = { ws: true, history: [{ thread: "a", role: "assistant", seq: 3, text: "hola" }], now: 5 };
+  const rows = [{ threadId: "a", title: "mini", model: "opus", effort: "high" }];
+  const store = fakeStore({ call: { joined: true }, mic: { enabled: true },
+    callCard: { title: "mini", agent: "speaking", conversation: "a", mood: "speaking", turn: null, theme: "dark", language: "es",
+      setupDone: true, busyReason: null, switchingTo: null, idleWarning: false, ended: null, micSilent: false, participants: rows, facts } });
+  win.sidevoiceUI = { store };
+  win.sidevoiceActions = { toggleMic() {}, toggleCall: async () => {} };
+  install(win, ORIGIN);
+  await flush();
+  const s = calls.filter(([cmd]) => cmd === "bridge_state").at(-1)[1].snapshot;
+  assert.deepEqual(s.facts, facts);
+  assert.deepEqual([s.conversation, s.mood, s.theme, s.language, s.setupDone, s.micSilent], ["a", "speaking", "dark", "es", true, false]);
+  assert.deepEqual(s.participants, rows, "the room's own rows, as it projects them");
+  assert.equal(s.version, 2);
+  assert.ok(s.since > 0);
+  const before = calls.length;
+  store.set({ callCard: { ...store.getState().callCard, facts: { ...facts, karaokeState: { at: 2 } } } });
+  await flush();
+  assert.equal(calls.length, before + 1, "a change of the facts is a change");
+});
+
+test("the voice's output level reaches the app during a call only, throttled, and 0 when a reply ends", async () => {
+  const install = loadFactory();
+  const { win, calls } = fakeWindow(ORIGIN);
+  let publish = null;
+  const store = fakeStore({ call: { joined: false }, mic: { enabled: true } });
+  win.sidevoiceUI = { store, playbackLevel: { subscribe(fn) { publish = fn; return () => {}; } } };
+  win.sidevoiceActions = { toggleMic() {}, toggleCall: async () => {} };
+  install(win, ORIGIN);
+  publish({ level: 0.5, threadId: "a" });
+  await flush();
+  assert.equal(calls.filter(([cmd]) => cmd === "bridge_playback").length, 0, "no call, no level");
+  store.set({ call: { joined: true } });
+  publish({ level: 0.504, threadId: "a" });
+  publish({ level: 0.7, threadId: "a" }); // within 40 ms of the last: dropped
+  publish({ level: 0, threadId: "a" }); // the end of a reply always goes
+  publish({ level: 0, threadId: "a" }); // no change
+  await flush();
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "bridge_playback").map(([, args]) => args),
+    [{ level: 0.5, threadId: "a" }, { level: 0, threadId: "a" }]);
+});
+
+test("the card's gear opens the room's Settings at the floating card, and Cancel sending takes the turn back", async () => {
+  const install = loadFactory();
+  const { win } = fakeWindow(ORIGIN);
+  const did = [];
+  const store = fakeStore({ call: { joined: true }, mic: { enabled: true } });
+  win.sidevoiceUI = { store, openSettings: (section) => did.push("settings " + section) };
+  win.sidevoiceActions = { toggleMic() {}, toggleCall: async () => {}, cancelInput: async () => did.push("cancel") };
+  const api = install(win, ORIGIN);
+  assert.equal(api.run({ command: "open-settings" }), true);
+  assert.equal(api.run({ command: "cancel-input" }), true);
+  delete win.sidevoiceUI.openSettings;
+  assert.equal(api.run({ command: "open-settings" }), false, "a room without it");
+  assert.deepEqual(did, ["settings floating-card", "cancel"]);
 });
