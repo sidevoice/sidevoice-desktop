@@ -132,7 +132,7 @@ the group and stays.
 | `pairingCode()` | `pair-device --json` → `{code, expires_in, reach}` | 30 s |
 | `pairRoom(url, code)` | `pair <url> <code> --json` → `{room}`, nothing else (the core follows the new credentials) | 60 s |
 | `reconnect()` | a new local pairing over the socket | — |
-| `revealLog()` | `/usr/bin/open -R D/core.log` (else `D/connector.log`) | — |
+| `revealLog()` | `/usr/bin/open -R` the app log (docs/BRIDGE.md → The app log) and `D/core.log` (else `D/connector.log`), whichever exist | — |
 
 `pairRoom` refuses (`bad_request`) a URL that is not `http(s)://…` or a code with blanks or starting with `-`, so neither
 can become an option. A CLI refusal is its `{key, message}`; the app's own: `cli.unavailable`, `cli.failed`,

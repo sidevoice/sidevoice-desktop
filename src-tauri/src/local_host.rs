@@ -196,7 +196,7 @@ mod imp {
         let report = match name {
             "reconnect" => host.reconnect(),
             "reveal-log" => {
-                reveal(&host)?;
+                reveal(app, &host)?;
                 host.state()
             }
             other => {
@@ -207,13 +207,17 @@ mod imp {
         Ok(json!(report))
     }
 
-    /// The log in Finder, selected (`open -R`, by its absolute path; no shell).
-    fn reveal(host: &LocalHost) -> Result<(), Value> {
-        let path = host.log_path().ok_or_else(|| refusal("log.missing", "There is no log on this computer yet."))?;
+    /// The logs in Finder, selected (`open -R`, by absolute paths; no shell): the app's own, and the core's (else the
+    /// connector's) when there is one. The app's is always there to show, connector or not.
+    fn reveal(app: &AppHandle, host: &LocalHost) -> Result<(), Value> {
+        let logs = sidevoice_local_host::paths::logs_to_show(crate::app_log_file(app), host.log_path());
+        if logs.is_empty() {
+            return Err(refusal("log.missing", "There is no log on this computer yet."));
+        }
         if !cfg!(target_os = "macos") {
             return Err(unsupported());
         }
-        match std::process::Command::new("/usr/bin/open").arg("-R").arg(&path).status() {
+        match std::process::Command::new("/usr/bin/open").arg("-R").args(&logs).status() {
             Ok(status) if status.success() => Ok(()),
             _ => Err(refusal("reveal.failed", "Finder could not show the log.")),
         }
