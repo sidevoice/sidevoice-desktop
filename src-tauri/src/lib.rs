@@ -412,6 +412,56 @@ fn activate_app() {
     }
 }
 
+/// `SIDEVOICE_NO_CALL_CARD=1`: the app starts without the call controls card, to tell whether the card is what takes
+/// the Dock tile away on macOS (#117). A diagnostic switch: nothing else changes, the tray's card item does nothing.
+fn call_card_disabled() -> bool {
+    std::env::var_os("SIDEVOICE_NO_CALL_CARD").is_some_and(|v| v == "1")
+}
+
+/// How macOS sees the app, for the app log (#117): the policy NSApp reports and the one Launch Services has for the
+/// process (`NSRunningApplication`, what the Dock and Cmd+Tab go by), hidden, whether it owns the menu bar, its
+/// bundle, and whether the room window is shown and on screen.
+#[cfg(target_os = "macos")]
+fn app_report(app: &AppHandle) -> String {
+    use objc2::{class, msg_send, rc::Retained, runtime::AnyObject};
+    use objc2_foundation::NSString;
+    // NSApplicationActivationPolicy: 0 Regular (Dock tile, Cmd+Tab), 1 Accessory, 2 Prohibited.
+    // SAFETY: main thread (setup and `run_on_main_thread`); public AppKit getters.
+    let (policy, running_policy, hidden, owns_menu_bar, bundle) = unsafe {
+        let ns_app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+        let running: *mut AnyObject = msg_send![class!(NSRunningApplication), currentApplication];
+        let policy: isize = msg_send![ns_app, activationPolicy];
+        let running_policy: isize = msg_send![running, activationPolicy];
+        let hidden: bool = msg_send![ns_app, isHidden];
+        let owns_menu_bar: bool = msg_send![running, ownsMenuBar];
+        let bundle: Option<Retained<NSString>> = msg_send![running, bundleIdentifier];
+        (policy, running_policy, hidden, owns_menu_bar, bundle.map(|b| b.to_string()))
+    };
+    let room = room_window(app).map_or_else(
+        || "none".to_owned(),
+        |w| {
+            // NSWindowOcclusionStateVisible: set while any part of the window is on screen.
+            let onscreen = w.ns_window().is_ok_and(|ns| unsafe {
+                let state: usize = msg_send![ns as *mut AnyObject, occlusionState];
+                state & (1 << 1) != 0
+            });
+            format!("visible={},onscreen={onscreen}", w.is_visible().unwrap_or(false))
+        },
+    );
+    format!(
+        "{} policy={policy} running_policy={running_policy} hidden={hidden} owns_menu_bar={owns_menu_bar} bundle={} \
+         room={room} call_card={}",
+        call_controls::app_active(),
+        bundle.as_deref().unwrap_or("none"),
+        if call_card_disabled() { "off" } else { "on" }
+    )
+}
+
+#[cfg(not(target_os = "macos"))]
+fn app_report(_app: &AppHandle) -> String {
+    format!("call_card={}", if call_card_disabled() { "off" } else { "on" })
+}
+
 pub(crate) fn open_settings(app: &AppHandle) {
     if let Some(w) = app.get_webview_window(SETTINGS_LABEL) {
         let _ = w.show();
@@ -576,7 +626,7 @@ pub fn run() {
                 handle.set_activation_policy(tauri::ActivationPolicy::Regular)?;
                 handle.set_dock_visibility(true)?;
             }
-            debug(&format!("launch {}", call_controls::app_active()));
+            debug(&format!("launch {}", app_report(&handle)));
             tray::create(&handle)?;
             headset::setup(&handle);
             // The model root is shared per OS user on this machine (docs/ENGINES.md).
@@ -608,11 +658,23 @@ pub fn run() {
             // Before the room opens, so its bridge offers `host.updater`.
             updater::setup(&handle);
             open_room(&handle)?;
-            call_controls::create(&handle)?;
+            if call_card_disabled() {
+                debug("call-controls not created: SIDEVOICE_NO_CALL_CARD=1 (#117)");
+            } else {
+                call_controls::create(&handle)?;
+            }
             // The room to the front, last so no window created after it takes it. Setup runs on Ready, after the
             // launch's own activation, which came before any window existed: the window stayed behind (Dock only).
             show_room(&handle);
             activate_app();
+            // How macOS sees the app once everything exists, and again once activation has settled (#117).
+            debug(&format!("ready {}", app_report(&handle)));
+            let later = handle.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                let report = later.clone();
+                let _ = later.run_on_main_thread(move || debug(&format!("settled {}", app_report(&report))));
+            });
             #[cfg(target_os = "macos")]
             data::finalize_relaunched_reset();
             Ok(())
