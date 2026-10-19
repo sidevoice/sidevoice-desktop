@@ -600,6 +600,9 @@
           : Promise.reject({ key: "bad_request", message: "setCorner(corner) takes tl, tr, bl or br." }),
       /** Forgets where the card was left and how the picture was resized, on every display. */
       resetPlace: () => call("call_controls_settings", { action: "reset-place" }).then(() => undefined),
+      /** Forgets the picture's resized size (its "Custom") on every display, and keeps where the card was left: a
+       *  starting size picked in Settings applies again. */
+      clearSize: () => call("call_controls_settings", { action: "clear-size" }).then(() => undefined),
       /** During a call, shows the card a moment, in front of the room too: after a change in Settings. */
       preview: () => { invoke("call_controls_settings", { action: "preview" }); },
     });
@@ -828,6 +831,11 @@
           // The card's gear: the room's Settings at the floating card's section (the app brings the room in front).
           if (!win.sidevoiceUI || typeof win.sidevoiceUI.openSettings !== "function") return false;
           win.sidevoiceUI.openSettings("floating-card");
+          return true;
+        case "keep-alive":
+          // The idle warning's Keep on the card: a sign of the person, so the call stays on.
+          if (typeof actions.keepVoiceOn !== "function") return false;
+          actions.keepVoiceOn();
           return true;
         case "cancel-input":
           // The room's "Cancel sending": takes back the person's turn while it is recorded or transcribed.

@@ -613,7 +613,7 @@ fn from_card_window(webview: &Webview) -> Result<(), String> {
 /// `host.callControls`' one command, from the room page (not the card), each kept with the app's settings or its
 /// placements and applied at once: `settings` (answers `{alwaysShown, corner, moved}`), `set-always-shown` with
 /// `enabled` (`{alwaysShown}`), `set-corner` with `corner` (`{corner}`), `reset-place` (forgets where the card was left
-/// and how the picture was resized, on every display) and `preview` (the card a moment, during a call).
+/// and how the picture was resized, on every display), `clear-size` (forgets only the picture's resized sizes) and `preview` (the card a moment, during a call).
 #[tauri::command]
 pub async fn call_controls_settings(
     app: AppHandle,
@@ -655,6 +655,15 @@ pub async fn call_controls_settings(
             place(&app);
             Ok(serde_json::Value::Null)
         }
+        ("clear-size", _, _) => {
+            if let Some(card) = card(&app) {
+                let mut inner = card.0.lock().unwrap();
+                inner.placements.sizes.clear();
+                save(&inner);
+            }
+            place(&app);
+            Ok(serde_json::Value::Null)
+        }
         ("preview", _, _) => {
             preview(&app);
             Ok(serde_json::Value::Null)
@@ -672,7 +681,7 @@ pub fn call_controls_ready(app: AppHandle, webview: Webview) -> Result<(), Strin
     Ok(())
 }
 
-/// One of the card's commands: "open-app" and "hide" are the app's, "open-settings" brings the room in front first, the
+/// One of the card's commands: "open-app", "hide" and "dismiss" are the app's, "open-settings" brings the room in front first, the
 /// rest are carried to the room page.
 #[tauri::command]
 pub fn call_controls_run(app: AppHandle, webview: Webview, command: serde_json::Value) -> Result<(), String> {
@@ -685,6 +694,12 @@ pub fn call_controls_run(app: AppHandle, webview: Webview, command: serde_json::
         Some("hide") => {
             debug("call-controls run hide");
             hide(&app);
+            return Ok(());
+        }
+        // The exit notice's Close, once a call ended by itself: the card goes at once (it never outlasts the call).
+        Some("dismiss") => {
+            debug("call-controls run dismiss");
+            update(&app);
             return Ok(());
         }
         _ => {}

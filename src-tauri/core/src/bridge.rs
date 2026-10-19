@@ -154,6 +154,8 @@ pub enum Command {
     OpenSettings,
     /// Takes back the person's turn while it is recorded or transcribed (`sidevoiceActions.cancelInput`).
     CancelInput,
+    /// The idle warning's Keep: a sign of the person, so the call stays on (`sidevoiceActions.keepVoiceOn`).
+    KeepAlive,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -173,6 +175,7 @@ impl Command {
             Command::SelectAudioDevice { .. } => "select-audio-device",
             Command::OpenSettings => "open-settings",
             Command::CancelInput => "cancel-input",
+            Command::KeepAlive => "keep-alive",
         }
     }
 
@@ -326,6 +329,7 @@ mod tests {
         assert!(parse(r#"{"command":"select-participant"}"#).is_err());
         assert_eq!(parse(r#"{"command":"open-settings"}"#).unwrap(), Command::OpenSettings);
         assert_eq!(parse(r#"{"command":"cancel-input"}"#).unwrap().name(), "cancel-input");
+        assert_eq!(parse(r#"{"command":"keep-alive"}"#).unwrap(), Command::KeepAlive);
     }
 
     #[test]

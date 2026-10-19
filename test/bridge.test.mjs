@@ -1388,7 +1388,7 @@ test("host.muteShortcut and host.callControls are exactly the web's seams", () =
   const install = loadFactory();
   const { host } = install(fakeWindow(ORIGIN).win, ORIGIN);
   assert.deepEqual(Object.keys(host.muteShortcut).sort(), ["get", "set", "subscribe"]);
-  assert.deepEqual(Object.keys(host.callControls).sort(), ["preview", "resetPlace", "setAlwaysShown", "setCorner", "settings"]);
+  assert.deepEqual(Object.keys(host.callControls).sort(), ["clearSize", "preview", "resetPlace", "setAlwaysShown", "setCorner", "settings"]);
   assert.ok(Object.isFrozen(host.muteShortcut) && Object.isFrozen(host.callControls));
 });
 
@@ -1446,10 +1446,11 @@ test("host.callControls sets the default corner, forgets places and previews, th
   assert.deepEqual(await controls.setCorner("bl"), { corner: "bl" });
   await assert.rejects(controls.setCorner("middle"), (e) => e.key === "bad_request");
   assert.equal(await controls.resetPlace(), undefined);
+  assert.equal(await controls.clearSize(), undefined);
   assert.equal(controls.preview(), undefined);
   await flush();
   assert.deepEqual(calls.filter(([cmd]) => cmd === "call_controls_settings").map(([, args]) => args),
-    [{ action: "set-corner", corner: "bl" }, { action: "reset-place" }, { action: "preview" }]);
+    [{ action: "set-corner", corner: "bl" }, { action: "reset-place" }, { action: "clear-size" }, { action: "preview" }]);
 });
 
 // ---- the floating card's formats (sidevoice-web callcard contract) ----
@@ -1505,11 +1506,12 @@ test("the card's gear opens the room's Settings at the floating card, and Cancel
   const did = [];
   const store = fakeStore({ call: { joined: true }, mic: { enabled: true } });
   win.sidevoiceUI = { store, openSettings: (section) => did.push("settings " + section) };
-  win.sidevoiceActions = { toggleMic() {}, toggleCall: async () => {}, cancelInput: async () => did.push("cancel") };
+  win.sidevoiceActions = { toggleMic() {}, toggleCall: async () => {}, cancelInput: async () => did.push("cancel"), keepVoiceOn: () => did.push("keep") };
   const api = install(win, ORIGIN);
   assert.equal(api.run({ command: "open-settings" }), true);
   assert.equal(api.run({ command: "cancel-input" }), true);
+  assert.equal(api.run({ command: "keep-alive" }), true, "the idle warning's Keep");
   delete win.sidevoiceUI.openSettings;
   assert.equal(api.run({ command: "open-settings" }), false, "a room without it");
-  assert.deepEqual(did, ["settings floating-card", "cancel"]);
+  assert.deepEqual(did, ["settings floating-card", "cancel", "keep"]);
 });

@@ -38,7 +38,7 @@ Both are globals the web UI (sidevoice-web → `apps/web`) already defines:
   `floating-card`.
 - `window.sidevoiceActions` — the room's actions (`apps/web/src/state/room-types.ts`, `SidevoiceActions`). The
   bridge calls only `toggleMic()`, `toggleCall()`, `skipReply()`, `selectParticipant(threadId)`,
-  `setAudioDevices(choice)` and `cancelInput()`.
+  `setAudioDevices(choice)`, `cancelInput()` and `keepVoiceOn()`.
 
 If the web UI renames either, the tray greys out ("sala sin cargar") and nothing else breaks.
 Keeping these two names stable is the web UI's side of the contract.
@@ -195,6 +195,7 @@ window.__sidevoiceDesktop.run({ command: "select-participant", threadId: "…" }
 window.__sidevoiceDesktop.run({ command: "select-audio-device", kind: "input", id: "…" })  // card
 window.__sidevoiceDesktop.run({ command: "open-settings" })    // card (the app brings the room in front first)
 window.__sidevoiceDesktop.run({ command: "cancel-input" })     // card
+window.__sidevoiceDesktop.run({ command: "keep-alive" })       // card
 ```
 
 Evaluated by the app with `webview.eval` (works with the window hidden); the command travels as JSON (core
@@ -212,6 +213,8 @@ Evaluated by the app with `webview.eval` (works with the window hidden); the com
   `devices.busy` holds until the last has been answered.
 - `open-settings` → `sidevoiceUI.openSettings("floating-card")`: the room's Settings at its Floating card section.
 - `cancel-input` → `sidevoiceActions.cancelInput()`: the room's "Cancel sending", taking the person's turn back.
+- `keep-alive` → `sidevoiceActions.keepVoiceOn()`: the idle warning's Keep on the card, a sign of the person that keeps
+  the call on.
 
 Joining is deliberately **not** a tray command: joining unlocks audio output, which the webview
 only allows from a click in the page. "Mostrar Sidevoice" opens the window for that.
@@ -335,7 +338,7 @@ The card's page talks to the app only through `window.__sidevoiceDesktop.host.ca
 | Card → app | |
 |---|---|
 | `subscribe(listener)` → `stop` | the whole state now, then on every change (`call_controls_ready` asks the app for it) |
-| `run({command, …})` | `call_controls_run`: `open-app` (the app shows the room), `hide` (the card's ×: hidden as from the tray), or one of the room commands above, which the app parses (`bridge::Command`) before it carries it to the room (`open-settings` brings the room in front first). After `select-audio-device` the card hears its devices `busy` at once, until the app next tells it the call (or 3 s pass): the device still chosen is never read as the room refusing the new one |
+| `run({command, …})` | `call_controls_run`: `open-app` (the app shows the room), `hide` (the card's ×: hidden as from the tray), `dismiss` (the exit notice's Close: the card goes at once; it never outlasts the call), or one of the room commands above, which the app parses (`bridge::Command`) before it carries it to the room (`open-settings` brings the room in front first). After `select-audio-device` the card hears its devices `busy` at once, until the app next tells it the call (or 3 s pass): the device still chosen is never read as the room refusing the new one |
 | `layout({width, height, card?, resizable?})` | `call_controls_layout`: the card's size with its shadow margin, where its body is in it (`{x, y, width, height}`), and the picture's least width when it may be resized; the window takes the size and is placed by its body |
 | `drag(phase)` | `call_controls_drag`: `start`, `move`, `end`; the window follows the pointer (the app reads it) and is dropped, snapped and remembered |
 | `resize(phase, edge)` | `call_controls_resize`: `start`, `move`, `end` by the grip's corner (`nw`, `ne`, `sw`, `se`); only while `layout` says the card may be resized; absent on Wayland |
@@ -704,19 +707,21 @@ interface CallControlsBridge {
   setAlwaysShown(enabled: boolean): Promise<{ alwaysShown: boolean }>;
   setCorner(corner): Promise<{ corner }>;  // where a card never moved on a display first appears
   resetPlace(): Promise<void>;             // forgets places and the picture's resized sizes, on every display
+  clearSize(): Promise<void>;              // forgets only the picture's resized sizes ("Custom"), on every display
   preview(): void;                         // during a call, the card shows a moment, in front of the room too
 }
 ```
 
 - `moved`: whether a place or a resized size is remembered anywhere (Settings disables "Reset size and position"
   without one). `setCorner` keeps it with the app's settings (`callControlsCorner`); anything but the four corners
-  rejects `{key: "bad_request"}`. The card's format, its starting size and the captions are the web's own
+  rejects `{key: "bad_request"}`. `clearSize` is for a starting size picked in Settings: the presets apply again
+  (the card hears `size: null`), and where the card was left stays. The card's format, its starting size and the captions are the web's own
   (localStorage on the app's origin, which the room and the card share): the app keeps none of them.
 
 - `setAlwaysShown` keeps it with the app's settings (`callControlsAlwaysShown`) and applies it to the card at once; a
   non-boolean rejects `{key: "bad_request"}`. Set only from the page.
 - Command behind it: `call_controls_settings {action, enabled?, corner?}`, `action` `settings`, `set-always-shown`,
-  `set-corner`, `reset-place` or `preview`.
+  `set-corner`, `reset-place`, `clear-size` or `preview`.
 
 Both commands are granted to the room window (`capabilities/room.json`) and re-check that the caller is the current
 room window on the app's own page (else `bad_request`). The app's settings (`settings.json`) have one writer
