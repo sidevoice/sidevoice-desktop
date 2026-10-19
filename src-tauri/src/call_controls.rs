@@ -14,19 +14,22 @@
 use crate::{debug, AppState};
 use serde::Deserialize;
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
-use sidevoice_desktop_core::call_controls::{self as logic, Display, Placements, Point, Rect, Size};
+use sidevoice_desktop_core::call_controls::{
+    self as logic, Corner, Display, Edge, Placements, Point, Rect, Size, Spot,
+};
 use sidevoice_desktop_core::settings::{self, APP_ORIGIN};
 use std::path::PathBuf;
 use std::sync::{Condvar, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::utils::config::BackgroundThrottlingPolicy;
 use tauri::webview::{PermissionKind, PermissionResponse};
 use tauri::{AppHandle, LogicalSize, Manager, Monitor, Webview, WebviewUrl, WebviewWindow};
 
 pub const LABEL: &str = "call-controls";
 const PAGE: &str = "voice/call-controls.html";
-/// The card at rest, its window's shadow margin included, until the page reports its own size.
-const FIRST_SIZE: Size = Size { width: 344.0, height: 82.0 };
+/// The card at rest, its window's shadow margin included, until the page reports its own size: the title card at its
+/// Medium size, the default format (the web's `CARD_WIDTHS`).
+const FIRST_SIZE: Size = Size { width: 414.0, height: 82.0 };
 /// How often the app looks at the pointer while the card shows: a window that never takes focus may get no hover
 /// events (WebKit tracks the mouse in the key window only), so the app tells the card when the pointer is over it.
 const POINTER_EVERY: Duration = Duration::from_millis(80);
@@ -34,6 +37,10 @@ const POINTER_EVERY: Duration = Duration::from_millis(80);
 const VIEW_EVERY: Duration = Duration::from_millis(500);
 /// The card's shadow margin inside its window (the web build's CARD_MARGIN): the pointer over it is not over the card.
 const MARGIN: f64 = 12.0;
+/// How long the card shows after a change in Settings → Floating card (`host.callControls.preview`).
+const PREVIEW_FOR: Duration = Duration::from_millis(2500);
+/// The largest window the page may ask for, in logical pixels.
+const MAX_SIDE: f64 = 8000.0;
 
 #[cfg(target_os = "macos")]
 tauri_nspanel::tauri_panel! {
@@ -48,9 +55,14 @@ tauri_nspanel::tauri_panel! {
 
 #[derive(Default)]
 struct Inner {
-    /// Hidden from the tray for the call that is on; the next call shows it again.
-    hidden_for_call: bool,
+    /// Hidden for now, by the card's × or the tray's "hide": until the room's window is opened or minimised again, or
+    /// the next call (core `still_hidden`).
+    hidden: bool,
+    /// Whether the room's window was in view when last looked at.
+    room_in_front: Option<bool>,
     shown: bool,
+    /// Shown for a moment after a change in Settings, while the room is in front (`preview`).
+    preview_until: Option<Instant>,
     level: u8,
     /// `None` where the app cannot see the pointer (Wayland): the card's own pointer events decide.
     pointer_inside: Option<bool>,
@@ -58,12 +70,18 @@ struct Inner {
     outside_clicks: u64,
     /// The window's size now, as the page reports it.
     size: Option<Size>,
-    /// The card at rest: the smallest size the page has reported. Where it rests is always worked out from this one,
-    /// so a card hidden while grown comes back where it rested.
-    rest_size: Option<Size>,
+    /// The box the card is placed by, inside its window (core `anchor`): its body, which stays where it rests while
+    /// captions, a list or the avatar's dock grow the window around it.
+    anchor: Option<Rect>,
+    /// The picture-in-picture's least window width, while the page shows it and lets the person resize it.
+    min_width: Option<f64>,
     /// The display the card rests on, and where on it.
-    rest: Option<(Display, Point)>,
+    rest: Option<(Display, Spot)>,
+    /// What the card was last told of its place and its resized size.
+    told_place: Option<Corner>,
+    told_size: Option<Option<Size>>,
     drag: Option<Drag>,
+    resize: Option<Resize>,
     placements: Placements,
     config_dir: Option<PathBuf>,
 }
@@ -73,6 +91,17 @@ struct Inner {
 struct Drag {
     pointer: Point,
     window: Point,
+}
+
+/// A resize of the picture in progress: where the pointer was when it started (on the desktop), and the window then (on
+/// its display), with its anchor.
+#[derive(Clone)]
+struct Resize {
+    edge: Edge,
+    pointer: Point,
+    display: Display,
+    window: Rect,
+    anchor: Rect,
 }
 
 /// The card's state, and the signal its pointer watcher waits on while the card is hidden.
@@ -97,7 +126,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         Condvar::new(),
     ));
     #[allow(unused_mut)] // the probe build adds its own
-    let mut script = bridge::call_controls_script(APP_ORIGIN);
+    let mut script = bridge::call_controls_script(APP_ORIGIN, !wayland());
     #[cfg(feature = "probe")]
     if let Some(probe) = crate::probe::card_script() {
         script.push_str(probe);
@@ -229,30 +258,38 @@ fn watch_view(app: AppHandle) {
 }
 
 /// Shows or hides the card for the call as it is now, and tells it what changed. Called on every change of the call,
-/// of the room window's focus, of the settings and of the tray's "hide".
+/// of the room window's view, of the settings, of the card's × and of the tray's "hide".
 pub fn update(app: &AppHandle) {
     let Some(card) = card(app) else { return };
     let call = app.state::<AppState>().call.lock().unwrap().clone();
     let in_front = room_in_front(app);
     let always_shown =
         app.state::<AppState>().settings.lock().unwrap().as_ref().is_some_and(|s| s.call_controls_always_shown);
-    let (show, hide) = {
+    let (show, hide, unhidden) = {
         let mut inner = card.0.lock().unwrap();
-        if !call.joined {
-            inner.hidden_for_call = false;
+        let hidden = logic::still_hidden(inner.hidden, call.joined, inner.room_in_front, in_front);
+        let unhidden = inner.hidden && !hidden;
+        inner.hidden = hidden;
+        inner.room_in_front = Some(in_front);
+        let previewing = inner.preview_until.is_some_and(|until| Instant::now() < until);
+        if !previewing {
+            inner.preview_until = None;
         }
-        let wanted = logic::wanted(call.joined, inner.hidden_for_call, in_front, always_shown);
+        let wanted = logic::wanted(call.joined, inner.hidden, in_front, always_shown) || (call.joined && previewing);
         let change = (wanted && !inner.shown, !wanted && inner.shown);
         inner.shown = wanted;
         if change.1 {
-            // Nothing of this showing carries over to the next: no pointer over it, no level.
+            // Nothing of this showing carries over to the next: no pointer over it, no level, no move.
             inner.drag = None;
+            inner.resize = None;
             inner.level = 0;
+            inner.told_place = None;
+            inner.told_size = None;
             if inner.pointer_inside.is_some() {
                 inner.pointer_inside = Some(false);
             }
         }
-        change
+        (change.0, change.1, unhidden)
     };
     if show {
         place(app);
@@ -263,21 +300,47 @@ pub fn update(app: &AppHandle) {
         set_visible(app, false);
         debug("call-controls hidden");
     }
+    if unhidden {
+        crate::tray::update(app, &call);
+    }
     push(app, full_state(app, &call));
 }
 
-/// The tray's "Hide / Show call controls": for the call that is on.
+/// The tray's "Hide / Show call controls".
 pub fn toggle_hidden(app: &AppHandle) {
     if let Some(card) = card(app) {
         let mut inner = card.0.lock().unwrap();
-        inner.hidden_for_call = !inner.hidden_for_call;
+        inner.hidden = !inner.hidden;
     }
     update(app);
 }
 
-/// Whether the card is hidden for this call (the tray's label says the opposite).
+/// The card's ×: hidden until the room's window is opened or minimised again, or the next call.
+fn hide(app: &AppHandle) {
+    if let Some(card) = card(app) {
+        card.0.lock().unwrap().hidden = true;
+    }
+    update(app);
+    let call = app.state::<AppState>().call.lock().unwrap().clone();
+    crate::tray::update(app, &call);
+}
+
+/// Whether the card is hidden for now (the tray's label says the opposite).
 pub fn hidden_for_call(app: &AppHandle) -> bool {
-    card(app).is_some_and(|card| card.0.lock().unwrap().hidden_for_call)
+    card(app).is_some_and(|card| card.0.lock().unwrap().hidden)
+}
+
+/// Settings → Floating card changed something: during a call, the card shows a moment, in front of the room too.
+fn preview(app: &AppHandle) {
+    let Some(card) = card(app) else { return };
+    card.0.lock().unwrap().preview_until = Some(Instant::now() + PREVIEW_FOR);
+    place(app);
+    update(app);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(PREVIEW_FOR + Duration::from_millis(50));
+        update(&app);
+    });
 }
 
 /// The microphone's level from the room window, for the card's wave.
@@ -293,22 +356,39 @@ pub fn level(app: &AppHandle, level: u8) {
     }
 }
 
+/// The voice's output level from the room window (0–1, and whose reply it is), for the avatar's mouth.
+pub fn playback(app: &AppHandle, level: f64, thread_id: Option<String>) {
+    if card(app).is_some_and(|card| card.0.lock().unwrap().shown) {
+        push(app, serde_json::json!({ "playback": { "level": level, "threadId": thread_id } }));
+    }
+}
+
 fn full_state(app: &AppHandle, call: &CallSnapshot) -> serde_json::Value {
     let settings =
         app.state::<AppState>().settings.lock().unwrap().clone().unwrap_or_else(settings::Settings::first_run);
-    let (level, pointer, clicks) = card(app)
+    let (level, pointer, clicks, place, size) = card(app)
         .map(|card| {
             let inner = card.0.lock().unwrap();
-            (inner.level, inner.pointer_inside, inner.outside_clicks)
+            (inner.level, inner.pointer_inside, inner.outside_clicks, inner.told_place, inner.told_size.flatten())
         })
-        .unwrap_or((0, None, 0));
-    serde_json::json!({
+        .unwrap_or((0, None, 0, None, None));
+    let mut state = serde_json::json!({
         "call": call,
         "level": level,
         "pointerInside": pointer,
         "outsideClicks": clicks,
+        "alwaysExpanded": settings.call_controls_always_shown,
         "muteShortcut": logic::shortcut_label(&settings.mute_shortcut, cfg!(target_os = "macos")),
-    })
+        "size": size.map(size_json),
+    });
+    if let Some(place) = place {
+        state["place"] = place.place();
+    }
+    state
+}
+
+fn size_json(size: Size) -> serde_json::Value {
+    serde_json::json!({ "width": size.width.round(), "height": size.height.round() })
 }
 
 fn push(app: &AppHandle, patch: serde_json::Value) {
@@ -462,29 +542,61 @@ fn display(app: &AppHandle, key: Option<&str>, at: Option<Point>) -> Option<Disp
         .map(|m| monitor_display(&m).1)
 }
 
-/// Puts the card where it rests on its display (where it was left there, or the top-right corner the first time),
-/// raised just enough for its current size to fit. On Wayland the compositor places it.
+/// The corner a card that was never moved on a display first appears in.
+fn default_corner(app: &AppHandle) -> Corner {
+    app.state::<AppState>().settings.lock().unwrap().as_ref().map(|s| s.call_controls_corner).unwrap_or_default()
+}
+
+/// Puts the card where it rests on its display (where it was left there, or the default corner the first time): its
+/// body there, the window around it, moved just enough for all of it to fit. Then tells the card its place and its
+/// resized size there, when they changed. On Wayland the compositor places it.
 fn place(app: &AppHandle) {
     if wayland() {
         return;
     }
+    let corner = default_corner(app);
     let (Some(card), Some(w)) = (card(app), window(app)) else { return };
-    let mut inner = card.0.lock().unwrap();
-    let rest_size = inner.rest_size.unwrap_or(FIRST_SIZE);
-    let size = inner.size.unwrap_or(rest_size);
-    let Some(display) = display(app, inner.rest.as_ref().map(|(d, _)| d.key.as_str()), None) else { return };
-    let stored = match &inner.rest {
-        Some((d, p)) if d.key == display.key => Some(*p),
-        _ => inner.placements.displays.get(&display.key).copied(),
+    let patch = {
+        let mut inner = card.0.lock().unwrap();
+        let size = inner.size.unwrap_or(FIRST_SIZE);
+        let anchor = inner.anchor.unwrap_or_else(|| logic::anchor(size, None, MARGIN));
+        let Some(display) = display(app, inner.rest.as_ref().map(|(d, _)| d.key.as_str()), None) else { return };
+        let spot = match &inner.rest {
+            Some((d, spot)) if d.key == display.key => *spot,
+            _ => inner.placements.displays.get(&display.key).copied().unwrap_or(Spot::corner(corner)),
+        };
+        let rest = spot.at(Size { width: anchor.width, height: anchor.height }, display.work);
+        let at = logic::window_at(rest, anchor, size, display.work);
+        move_to(&w, display.to_desktop(at));
+        debug(&format!(
+            "call-controls at {:.0},{:.0} on {} size {:.0}x{:.0} rest {:.0},{:.0}",
+            at.x, at.y, display.key, size.width, size.height, rest.x, rest.y
+        ));
+        let resized = inner.placements.sizes.get(&display.key).copied();
+        inner.rest = Some((display, spot));
+        let mut patch = serde_json::Map::new();
+        if inner.told_place != Some(spot.corner) {
+            inner.told_place = Some(spot.corner);
+            patch.insert("place".into(), spot.corner.place());
+        }
+        if inner.told_size != Some(resized) {
+            inner.told_size = Some(resized);
+            patch.insert("size".into(), resized.map(size_json).unwrap_or(serde_json::Value::Null));
+        }
+        patch
     };
-    let rest = logic::resting_place(stored, rest_size, display.work);
-    let at = logic::fit(rest, size, display.work);
-    move_to(&w, display.to_desktop(at));
-    debug(&format!(
-        "call-controls at {:.0},{:.0} on {} size {:.0}x{:.0} rest {:.0},{:.0}",
-        at.x, at.y, display.key, size.width, size.height, rest.x, rest.y
-    ));
-    inner.rest = Some((display, rest));
+    if !patch.is_empty() {
+        push(app, serde_json::Value::Object(patch));
+    }
+}
+
+/// Keeps where the card rests and its sizes, for the next launch.
+fn save(inner: &Inner) {
+    if let Some(dir) = &inner.config_dir {
+        if let Err(e) = inner.placements.save(dir) {
+            debug(&format!("call-controls placement not saved: {e}"));
+        }
+    }
 }
 
 fn from_card_window(webview: &Webview) -> Result<(), String> {
@@ -498,29 +610,66 @@ fn from_card_window(webview: &Webview) -> Result<(), String> {
     Ok(())
 }
 
-/// `host.callControls`' one command, from the room page (not the card): `action` `settings`, or `set-always-shown` with
-/// `enabled`, kept with the app's settings and applied at once. Answers `{alwaysShown}`.
+/// `host.callControls`' one command, from the room page (not the card), each kept with the app's settings or its
+/// placements and applied at once: `settings` (answers `{alwaysShown, corner, moved}`), `set-always-shown` with
+/// `enabled` (`{alwaysShown}`), `set-corner` with `corner` (`{corner}`), `reset-place` (forgets where the card was left
+/// and how the picture was resized, on every display), `clear-size` (forgets only the picture's resized sizes) and `preview` (the card a moment, during a call).
 #[tauri::command]
 pub async fn call_controls_settings(
     app: AppHandle,
     webview: Webview,
     action: String,
     enabled: Option<bool>,
+    corner: Option<Corner>,
 ) -> Result<serde_json::Value, serde_json::Value> {
     crate::room_page(&app, &webview).map_err(|why| crate::refusal("bad_request", why))?;
-    let always = match (action.as_str(), enabled) {
-        ("settings", _) => {
-            app.state::<AppState>().settings.lock().unwrap().as_ref().is_some_and(|s| s.call_controls_always_shown)
+    let stored =
+        || app.state::<AppState>().settings.lock().unwrap().clone().unwrap_or_else(settings::Settings::first_run);
+    match (action.as_str(), enabled, corner) {
+        ("settings", _, _) => {
+            let s = stored();
+            let moved = card(&app).is_some_and(|card| card.0.lock().unwrap().placements.moved());
+            Ok(
+                serde_json::json!({ "alwaysShown": s.call_controls_always_shown, "corner": s.call_controls_corner, "moved": moved }),
+            )
         }
-        ("set-always-shown", Some(enabled)) => {
+        ("set-always-shown", Some(enabled), _) => {
             crate::change_settings(&app, |s| s.call_controls_always_shown = enabled)
                 .map_err(|e| crate::refusal("internal", e))?;
             update(&app);
-            enabled
+            Ok(serde_json::json!({ "alwaysShown": enabled }))
         }
-        _ => return Err(crate::refusal("bad_request", format!("not a call controls action: {action}"))),
-    };
-    Ok(serde_json::json!({ "alwaysShown": always }))
+        ("set-corner", _, Some(corner)) => {
+            crate::change_settings(&app, |s| s.call_controls_corner = corner)
+                .map_err(|e| crate::refusal("internal", e))?;
+            place(&app);
+            Ok(serde_json::json!({ "corner": corner }))
+        }
+        ("reset-place", _, _) => {
+            if let Some(card) = card(&app) {
+                let mut inner = card.0.lock().unwrap();
+                inner.placements = Placements::default();
+                inner.rest = None;
+                save(&inner);
+            }
+            place(&app);
+            Ok(serde_json::Value::Null)
+        }
+        ("clear-size", _, _) => {
+            if let Some(card) = card(&app) {
+                let mut inner = card.0.lock().unwrap();
+                inner.placements.sizes.clear();
+                save(&inner);
+            }
+            place(&app);
+            Ok(serde_json::Value::Null)
+        }
+        ("preview", _, _) => {
+            preview(&app);
+            Ok(serde_json::Value::Null)
+        }
+        _ => Err(crate::refusal("bad_request", format!("not a call controls action: {action}"))),
+    }
 }
 
 /// The card's page is ready: it gets the whole state.
@@ -532,42 +681,96 @@ pub fn call_controls_ready(app: AppHandle, webview: Webview) -> Result<(), Strin
     Ok(())
 }
 
-/// One of the card's commands: "open-app" is the app's, the rest are carried to the room page.
+/// One of the card's commands: "open-app", "hide" and "dismiss" are the app's, "open-settings" brings the room in front first, the
+/// rest are carried to the room page.
 #[tauri::command]
 pub fn call_controls_run(app: AppHandle, webview: Webview, command: serde_json::Value) -> Result<(), String> {
     from_card_window(&webview)?;
-    if command.get("command").and_then(|c| c.as_str()) == Some("open-app") {
-        crate::show_room(&app);
-        return Ok(());
+    match command.get("command").and_then(|c| c.as_str()) {
+        Some("open-app") => {
+            crate::show_room(&app);
+            return Ok(());
+        }
+        Some("hide") => {
+            debug("call-controls run hide");
+            hide(&app);
+            return Ok(());
+        }
+        // The exit notice's Close, once a call ended by itself: the card goes at once (it never outlasts the call).
+        Some("dismiss") => {
+            debug("call-controls run dismiss");
+            update(&app);
+            return Ok(());
+        }
+        _ => {}
     }
     let command: Command = serde_json::from_value(command.clone()).map_err(|e| {
         debug(&format!("call-controls refused {command}: {e}"));
         format!("not a card command: {e}")
     })?;
     debug(&format!("call-controls run {} {}", command.name(), app_active()));
+    if command == Command::OpenSettings {
+        crate::show_room(&app);
+    }
     crate::send(&app, command);
     Ok(())
 }
 
-/// The card's size with its margin: the window takes it, raised as needed to fit its display.
+/// Where the card's body is inside its window (`layout`'s `card`), in CSS pixels.
+#[derive(Deserialize)]
+pub struct CardBox {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+/// The picture-in-picture, which the person may resize (`call_controls_resize`) down to `minWidth`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Resizable {
+    min_width: f64,
+}
+
+/// The card's size with its margin, where its body is in it, and whether it may be resized: the window takes the size,
+/// and is placed with its body where it rests.
 #[tauri::command]
-pub fn call_controls_layout(app: AppHandle, webview: Webview, width: f64, height: f64) -> Result<(), String> {
+pub fn call_controls_layout(
+    app: AppHandle,
+    webview: Webview,
+    width: f64,
+    height: f64,
+    card: Option<CardBox>,
+    resizable: Option<Resizable>,
+) -> Result<(), String> {
     from_card_window(&webview)?;
-    if !(width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0 && width < 2000.0 && height < 2000.0) {
+    let side = |v: f64| v.is_finite() && v > 0.0 && v < MAX_SIDE;
+    if !(side(width) && side(height)) {
         return Err("not a card size".into());
     }
     let size = Size { width, height };
-    if let Some(card) = card(&app) {
+    let body = card.filter(|b| [b.x, b.y, b.width, b.height].iter().all(|v| v.is_finite())).map(|b| Rect {
+        x: b.x,
+        y: b.y,
+        width: b.width,
+        height: b.height,
+    });
+    let resizing = if let Some(card) = self::card(&app) {
         let mut inner = card.0.lock().unwrap();
         inner.size = Some(size);
-        if inner.rest_size.is_none_or(|rest| height < rest.height) {
-            inner.rest_size = Some(size);
-        }
-    }
+        inner.anchor = Some(logic::anchor(size, body, MARGIN));
+        inner.min_width = resizable.map(|r| r.min_width).filter(|w| side(*w));
+        inner.resize.is_some()
+    } else {
+        false
+    };
     if let Some(w) = window(&app) {
         let _ = w.set_size(LogicalSize::new(width, height));
     }
-    place(&app);
+    // While the person resizes the picture, the resize places the window.
+    if !resizing {
+        place(&app);
+    }
     Ok(())
 }
 
@@ -579,9 +782,9 @@ pub enum DragPhase {
     End,
 }
 
-/// Moving the card: the window follows the pointer; dropped, it snaps (free with magnet) and is remembered for that
-/// display. The app follows the pointer itself, on the desktop, so displays of different scales agree. On Wayland the
-/// compositor moves the window, and where it is left is not the app's to know.
+/// Moving the card: the window follows the pointer; dropped, its body snaps (free with magnet) and is remembered for
+/// that display. The app follows the pointer itself, on the desktop, so displays of different scales agree. On Wayland
+/// the compositor moves the window, and where it is left is not the app's to know.
 #[tauri::command]
 pub fn call_controls_drag(app: AppHandle, webview: Webview, phase: DragPhase) -> Result<(), String> {
     from_card_window(&webview)?;
@@ -608,18 +811,87 @@ pub fn call_controls_drag(app: AppHandle, webview: Webview, phase: DragPhase) ->
             let dropped = Point { x: drag.window.x + p.x - drag.pointer.x, y: drag.window.y + p.y - drag.pointer.y };
             // The display the pointer let go on; the card's corner may be just off it.
             let Some(display) = display(&app, None, Some(p)) else { return Ok(()) };
-            let rest_size = inner.rest_size.or(inner.size).unwrap_or(FIRST_SIZE);
-            let rest = logic::drop_at(display.to_local(dropped), rest_size, display.work);
-            inner.placements.displays.insert(display.key.clone(), rest);
-            if let Some(dir) = &inner.config_dir {
-                if let Err(e) = inner.placements.save(dir) {
-                    debug(&format!("call-controls placement not saved: {e}"));
-                }
-            }
-            let at = logic::fit(rest, inner.size.unwrap_or(rest_size), display.work);
-            move_to(&w, display.to_desktop(at));
+            let size = inner.size.unwrap_or(FIRST_SIZE);
+            let anchor = inner.anchor.unwrap_or_else(|| logic::anchor(size, None, MARGIN));
+            let body = Size { width: anchor.width, height: anchor.height };
+            let window = display.to_local(dropped);
+            let rest = logic::drop_at(Point { x: window.x + anchor.x, y: window.y + anchor.y }, body, display.work);
+            let spot = Spot::of(rest, body, display.work);
+            inner.placements.displays.insert(display.key.clone(), spot);
+            save(&inner);
             debug(&format!("call-controls dropped at {:.0},{:.0} on {} {}", rest.x, rest.y, display.key, app_active()));
-            inner.rest = Some((display, rest));
+            inner.rest = Some((display, spot));
+            drop(inner);
+            place(&app);
+        }
+    }
+    Ok(())
+}
+
+/// The corner that stays still while the picture is resized by `edge`.
+fn opposite(edge: Edge) -> Corner {
+    match edge {
+        Edge::Nw => Corner::BottomRight,
+        Edge::Ne => Corner::BottomLeft,
+        Edge::Sw => Corner::TopRight,
+        Edge::Se => Corner::TopLeft,
+    }
+}
+
+/// Resizing the picture-in-picture by its grip: the window follows the pointer with its opposite corner still, its
+/// stage at 16:9 and its width at least the page's least (core `resized`); the card hears its new size (`size`), and
+/// the size and where it rests are remembered for that display. Only while the page says the picture may be resized;
+/// not on Wayland (the card's bridge offers no `resize` there).
+#[tauri::command]
+pub fn call_controls_resize(app: AppHandle, webview: Webview, phase: DragPhase, edge: Edge) -> Result<(), String> {
+    from_card_window(&webview)?;
+    if wayland() {
+        return Ok(());
+    }
+    let (Some(card), Some(w)) = (card(&app), window(&app)) else { return Ok(()) };
+    let mut inner = card.0.lock().unwrap();
+    let Some(min_width) = inner.min_width else { return Err("the card cannot be resized now".into()) };
+    match phase {
+        DragPhase::Start => {
+            let size = inner.size.unwrap_or(FIRST_SIZE);
+            let anchor = inner.anchor.unwrap_or_else(|| logic::anchor(size, None, MARGIN));
+            let display = inner.rest.as_ref().map(|(d, _)| d.clone());
+            inner.resize = pointer(&app).zip(frame(&w)).zip(display).map(|((pointer, at), display)| {
+                let corner = display.to_local(Point { x: at.x, y: at.y });
+                let window = Rect { x: corner.x, y: corner.y, width: size.width, height: size.height };
+                Resize { edge, pointer, display, window, anchor }
+            });
+        }
+        DragPhase::Move | DragPhase::End => {
+            let (Some(resize), Some(p)) = (inner.resize.clone(), pointer(&app)) else { return Ok(()) };
+            let dx = (p.x - resize.pointer.x) / resize.display.unit;
+            let to = logic::resized(resize.window, resize.edge, dx, min_width, resize.display.work);
+            let size = Size { width: to.width, height: to.height };
+            let a = resize.anchor;
+            let anchor = Rect {
+                x: a.x,
+                y: a.y,
+                width: a.width + to.width - resize.window.width,
+                height: a.height + to.height - resize.window.height,
+            };
+            let rest = Point { x: to.x + anchor.x, y: to.y + anchor.y };
+            let body = Size { width: anchor.width, height: anchor.height };
+            let spot = Spot::against(opposite(resize.edge), rest, body, resize.display.work);
+            let _ = w.set_size(LogicalSize::new(to.width, to.height));
+            move_to(&w, resize.display.to_desktop(Point { x: to.x, y: to.y }));
+            inner.size = Some(size);
+            inner.anchor = Some(anchor);
+            inner.placements.sizes.insert(resize.display.key.clone(), size);
+            inner.told_size = Some(Some(size));
+            if let DragPhase::End = phase {
+                inner.resize = None;
+                inner.placements.displays.insert(resize.display.key.clone(), spot);
+                save(&inner);
+                debug(&format!("call-controls resized to {:.0}x{:.0} on {}", to.width, to.height, resize.display.key));
+            }
+            inner.rest = Some((resize.display, spot));
+            drop(inner);
+            push(&app, serde_json::json!({ "size": size_json(size) }));
         }
     }
     Ok(())

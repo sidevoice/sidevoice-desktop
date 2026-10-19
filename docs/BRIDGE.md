@@ -26,14 +26,19 @@ Both are globals the web UI (sidevoice-web → `apps/web`) already defines:
 
 - `window.sidevoiceUI.store` — the room's view-model store (`apps/web/src/state/room-store.ts`,
   `installRoomBridge`). The bridge calls `getState()` and `subscribe()` and reads only `call.joined`, `call.busy`,
-  `mic.enabled`, `mic.disabled`, `callCard` (the room's own view for the card: the call's conversation title, the
-  agent's state, `youTalking`, `canSkip`), `participants` (the rows' public fields) and `facts.audioDevices` (what the
+  `mic.enabled`, `mic.disabled`, `callCard` (the room's own projection for the card, relayed whole: the call's
+  conversation and its title, the agent's state, `youTalking`, `canSkip`, `mood`, `turn`, `facts`, …), `participants`
+  (the rows' public fields, when `callCard` has none) and `facts.audioDevices` (what the
   voice lists and what is chosen: `{inputs, outputs, input, output, outputSelectable}`, `state/room-session-state.d.ts`).
 - `window.sidevoiceUI.micLevel` — the microphone's level, 0–100, from the room's capture, whether or not the room is
   painted (`apps/web/src/state/mic-level.ts`). The bridge subscribes to it.
+- `window.sidevoiceUI.playbackLevel` — the voice's output level, `{level 0–1, threadId}`
+  (`apps/web/src/state/playback-level.ts`), which the stage's lip-sync reads too. The bridge subscribes to it.
+- `window.sidevoiceUI.openSettings(section)` — opens the room's Settings at a section: the card's gear asks for
+  `floating-card`.
 - `window.sidevoiceActions` — the room's actions (`apps/web/src/state/room-types.ts`, `SidevoiceActions`). The
-  bridge calls only `toggleMic()`, `toggleCall()`, `skipReply()`, `selectParticipant(threadId)` and
-  `setAudioDevices(choice)`.
+  bridge calls only `toggleMic()`, `toggleCall()`, `skipReply()`, `selectParticipant(threadId)`,
+  `setAudioDevices(choice)`, `cancelInput()` and `keepVoiceOn()`.
 
 If the web UI renames either, the tray greys out ("sala sin cargar") and nothing else breaks.
 Keeping these two names stable is the web UI's side of the contract.
@@ -135,8 +140,16 @@ window.__TAURI_INTERNALS__.invoke("bridge_state", { snapshot })
                      "machine": "daimon", "harness": "claude", "subtitle": "", "…": "…" }],
   "devices": { "inputs": [{ "id": "", "label": "", "system": true }, { "id": "CoreAudio:…", "label": "…" }],
                "outputs": [{ "id": "", "label": "", "system": true }], "inputId": "CoreAudio:…",
-               "outputId": "", "available": true, "outputAvailable": false, "busy": false } }
+               "outputId": "", "available": true, "outputAvailable": false, "busy": false },
+  "conversation": "…", "mood": "…", "facts": { "…": "…" }, "…": "…" }
 ```
+
+- The snapshot is the room's own projection for the card (`callCard`, web `call-controls/host.ts` `CallSnapshot`),
+  passed through as it is (`conversation`, `mood`, `turn`, `theme`, `language`, `setupDone`, `busyReason`,
+  `switchingTo`, `idleWarning`, `ended`, `micSilent`, and `facts`: what the card's own room store is patched with — the
+  call conversation's last 40 history records among them), with the fields above made sure of and the bridge's own on
+  top. The app reads only the fields above (tray, headset) and relays the rest to the card unread (core
+  `CallSnapshot::rest`); it never writes `facts` to its log.
 
 - `agent`: what the agent does — `speaking` while its voice plays (it wins over its work), else `working` while the
   conversation works on a turn, else `idle`. `youTalking`: a turn of the person's is open.
@@ -158,10 +171,17 @@ window.__TAURI_INTERNALS__.invoke("bridge_level", { level })   // 0–100, durin
 
 The microphone's level for the card's wave: only during a call, only when it changes (a drop to 0 always goes).
 
+```js
+window.__TAURI_INTERNALS__.invoke("bridge_playback", { level, threadId })   // 0–1, during a call, at most every 40 ms
+```
+
+The voice's output level and whose reply it is, for the card's avatar's mouth: only during a call, only when it
+changes, and always the 0 that ends a reply. The app pushes it to the card as `playback` while the card shows.
+
 Who may call it:
-- `capabilities/room.json` grants `allow-bridge-state` and `allow-bridge-level` (and `allow-debug-log`, printed only
+- `capabilities/room.json` grants `allow-bridge-state`, `allow-bridge-level` and `allow-bridge-playback` (and `allow-debug-log`, printed only
   with `SIDEVOICE_DEBUG=1`) to the room windows (`room-*`), for the app's own (local) pages only.
-- Both commands re-check that the caller is the current room window and that its page is the app's own origin.
+- The three commands re-check that the caller is the current room window and that its page is the app's own origin.
 
 The room window never shows a remote page, so no remote origin can call it.
 
@@ -173,6 +193,9 @@ window.__sidevoiceDesktop.run({ command: "hang-up" })         // tray, card
 window.__sidevoiceDesktop.run({ command: "skip-reply" })      // card
 window.__sidevoiceDesktop.run({ command: "select-participant", threadId: "…" })            // card
 window.__sidevoiceDesktop.run({ command: "select-audio-device", kind: "input", id: "…" })  // card
+window.__sidevoiceDesktop.run({ command: "open-settings" })    // card (the app brings the room in front first)
+window.__sidevoiceDesktop.run({ command: "cancel-input" })     // card
+window.__sidevoiceDesktop.run({ command: "keep-alive" })       // card
 ```
 
 Evaluated by the app with `webview.eval` (works with the window hidden); the command travels as JSON (core
@@ -188,6 +211,10 @@ Evaluated by the app with `webview.eval` (works with the window hidden); the com
   the card and the room never disagree. A choice the room refuses leaves the device it had, which the card says.
   Choices go to the room one at a time, in the order asked (the room keeps whichever answers last), and the card's
   `devices.busy` holds until the last has been answered.
+- `open-settings` → `sidevoiceUI.openSettings("floating-card")`: the room's Settings at its Floating card section.
+- `cancel-input` → `sidevoiceActions.cancelInput()`: the room's "Cancel sending", taking the person's turn back.
+- `keep-alive` → `sidevoiceActions.keepVoiceOn()`: the idle warning's Keep on the card, a sign of the person that keeps
+  the call on.
 
 Joining is deliberately **not** a tray command: joining unlocks audio output, which the webview
 only allows from a click in the page. "Mostrar Sidevoice" opens the window for that.
@@ -264,7 +291,8 @@ Any other key the installer answers comes through as it is, with its `params` an
 During a call, while the room's window is not in view (hidden, minimised, or on macOS fully covered or on another
 Space), a small card floats over the person's other apps
 (sidevoice/sidevoice-desktop#4): the agent, the conversation, the person's microphone, and near the pointer the call's
-controls. Hidden from the tray ("Hide call controls") it stays hidden for that call. "Always show the call controls" (the
+controls. Hidden by its × or from the tray ("Hide call controls") it stays hidden until the room's window is opened or
+minimised again, or the next call (core `call_controls::still_hidden`). "Always show the call controls" (the
 page's `host.callControls`, below) shows it during a call even while the room's window
 is in front (core `call_controls::wanted`).
 
@@ -286,12 +314,23 @@ is in front (core `call_controls::wanted`).
   a card that never takes the keyboard cannot hear it without taking focus or reading every key system-wide.
 - **No capture**: the card's webview denies every permission request (microphone, camera, …): the microphone is the
   room's.
-- **Its place**: the top-right corner of the display the first time; dragged, it is dropped free with a magnet (an
-  edge or corner within 56 px snaps), remembered per display (`call-controls.json` in the config directory, keyed by
-  the display's name and position, in that display's own logical pixels from its work area's corner). The app moves
-  it on the desktop's own coordinates (physical pixels on Windows and X11, points on macOS), so displays of different
-  scales agree. The controls always open below; when they do not fit, the window rises while expanded and returns
-  after (core `call_controls::fit`); where it rests is always worked out from the card at rest.
+- **Its place**: the card is placed by its body (`layout`'s `card`, with its shadow margin), not by its window:
+  captions above it, a list below it or the avatar's dock beside it grow the window around the body, which stays where
+  it rests (core `call_controls::window_at`); when the grown window does not fit, it moves just enough and returns
+  after (`fit`). The first time on a display the body sits in the default corner (Settings → Floating card → Default
+  position, `setCorner`; top right by default). Dragged, it is dropped free with a magnet (an edge or corner within
+  56 px snaps) and remembered per display (`call-controls.json` in the config directory, keyed by the display's name and
+  position) as the corner of the work area nearest to it and its distance from that corner (core `Spot`), in that
+  display's own logical pixels: a card against an edge stays against it in any format or size. The app moves it on the
+  desktop's own coordinates (physical pixels on Windows and X11, points on macOS), so displays of different scales
+  agree. It tells the card which half of the work area it is in (`place`), on show and after a drag, so captions and
+  lists open toward the middle of the screen.
+- **Its size**: the page's (format and Small / Medium / Large are the web's, `layout`). The picture-in-picture says it
+  may be resized (`layout`'s `resizable.minWidth`, 374: 350 px of card and its margin); its grip calls `resize`, and
+  the window follows the pointer with the opposite corner still and its height following its width (the stage keeps
+  16:9; core `resized`). That size is remembered per display and pushed to the card as `size` (margin included; `null`
+  at the preset sizes), the card's "Custom". Not on Wayland, where the bridge offers no `resize`. Settings' "Reset size
+  and position" (`resetPlace`) forgets every place and size.
 
 The card's page talks to the app only through `window.__sidevoiceDesktop.host.callControls`, which
 `bridge/call-controls-bridge.js` defines (injected, bound to the app's own origin):
@@ -299,13 +338,17 @@ The card's page talks to the app only through `window.__sidevoiceDesktop.host.ca
 | Card → app | |
 |---|---|
 | `subscribe(listener)` → `stop` | the whole state now, then on every change (`call_controls_ready` asks the app for it) |
-| `run({command, …})` | `call_controls_run`: `open-app` (the app shows the room), or one of the room commands above, which the app parses (`bridge::Command`) before it carries it to the room. After `select-audio-device` the card hears its devices `busy` at once, until the app next tells it the call (or 3 s pass): the device still chosen is never read as the room refusing the new one |
-| `layout({width, height})` | `call_controls_layout`: the card's size with its shadow margin; the window takes it and is placed to fit |
+| `run({command, …})` | `call_controls_run`: `open-app` (the app shows the room), `hide` (the card's ×: hidden as from the tray), `dismiss` (the exit notice's Close: the card goes at once; it never outlasts the call), or one of the room commands above, which the app parses (`bridge::Command`) before it carries it to the room (`open-settings` brings the room in front first). After `select-audio-device` the card hears its devices `busy` at once, until the app next tells it the call (or 3 s pass): the device still chosen is never read as the room refusing the new one |
+| `layout({width, height, card?, resizable?})` | `call_controls_layout`: the card's size with its shadow margin, where its body is in it (`{x, y, width, height}`), and the picture's least width when it may be resized; the window takes the size and is placed by its body |
 | `drag(phase)` | `call_controls_drag`: `start`, `move`, `end`; the window follows the pointer (the app reads it) and is dropped, snapped and remembered |
+| `resize(phase, edge)` | `call_controls_resize`: `start`, `move`, `end` by the grip's corner (`nw`, `ne`, `sw`, `se`); only while `layout` says the card may be resized; absent on Wayland |
 
 App → card: `window.__sidevoiceDesktop.receive(patch)` (`webview.eval`), any subset of
-`{call, level, pointerInside, outsideClicks, muteShortcut}` — `call` is the room's snapshot above, `muteShortcut` the
-global shortcut as the person reads it (⌃⌥M, Ctrl+Alt+M). `capabilities/call-controls.json` grants the four commands
+`{call, level, playback, place, size, pointerInside, outsideClicks, alwaysExpanded, muteShortcut}` (web
+`call-controls/host.ts` `CallControlsState`) — `call` is the room's snapshot above, `playback` the voice's output
+level (`{level, threadId}`), `place` `{vertical: "upper"|"lower", horizontal: "left"|"right"}`, `size` the picture's
+resized window or `null`, `alwaysExpanded` "Always show the call controls", `muteShortcut` the global shortcut as the
+person reads it (⌃⌥M, Ctrl+Alt+M). `capabilities/call-controls.json` grants the five commands
 to that window only, and each re-checks the caller's label and origin.
 
 CI's macOS job (probe build, `SIDEVOICE_DEBUG_PAGE=card-probe.html`) walks a call through the card's states with an
@@ -660,14 +703,25 @@ behind or minimised ("Always show the call controls", above), set from the web's
 
 ```ts
 interface CallControlsBridge {
-  settings(): Promise<{ alwaysShown: boolean }>;            // default false
+  settings(): Promise<{ alwaysShown: boolean; corner: "tl" | "tr" | "bl" | "br"; moved: boolean }>;  // false, tr
   setAlwaysShown(enabled: boolean): Promise<{ alwaysShown: boolean }>;
+  setCorner(corner): Promise<{ corner }>;  // where a card never moved on a display first appears
+  resetPlace(): Promise<void>;             // forgets places and the picture's resized sizes, on every display
+  clearSize(): Promise<void>;              // forgets only the picture's resized sizes ("Custom"), on every display
+  preview(): void;                         // during a call, the card shows a moment, in front of the room too
 }
 ```
 
+- `moved`: whether a place or a resized size is remembered anywhere (Settings disables "Reset size and position"
+  without one). `setCorner` keeps it with the app's settings (`callControlsCorner`); anything but the four corners
+  rejects `{key: "bad_request"}`. `clearSize` is for a starting size picked in Settings: the presets apply again
+  (the card hears `size: null`), and where the card was left stays. The card's format, its starting size and the captions are the web's own
+  (localStorage on the app's origin, which the room and the card share): the app keeps none of them.
+
 - `setAlwaysShown` keeps it with the app's settings (`callControlsAlwaysShown`) and applies it to the card at once; a
   non-boolean rejects `{key: "bad_request"}`. Set only from the page.
-- Command behind it: `call_controls_settings {action, enabled?}`, `action` `settings` or `set-always-shown`.
+- Command behind it: `call_controls_settings {action, enabled?, corner?}`, `action` `settings`, `set-always-shown`,
+  `set-corner`, `reset-place`, `clear-size` or `preview`.
 
 Both commands are granted to the room window (`capabilities/room.json`) and re-check that the caller is the current
 room window on the app's own page (else `bad_request`). The app's settings (`settings.json`) have one writer

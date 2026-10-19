@@ -3,18 +3,20 @@ fn main() {
     link_macos_clang_runtime();
     // The app's own commands, declared so capabilities can grant them per window/origin:
     // the settings window its diagnostics (`get_settings`, the headset's, the native engine's state), the room window
-    // `bridge_state` and `bridge_level` (+ `debug_log`), the native engine, the voice call (`voice_*`, macOS) and the
+    // `bridge_state`, `bridge_level` and `bridge_playback` (+ `debug_log`), the native engine, the voice call (`voice_*`, macOS) and the
     // local host (`local_host_*`), the mute shortcut and the call controls settings (`mute_shortcut`,
     // `call_controls_settings`), the app's updates (`updater`) and the microphone permission (`microphone`, macOS), the
-    // call controls card its own four.
+    // call controls card its own five.
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
         "get_settings",
         "bridge_state",
         "bridge_level",
+        "bridge_playback",
         "call_controls_ready",
         "call_controls_run",
         "call_controls_layout",
         "call_controls_drag",
+        "call_controls_resize",
         "debug_log",
         "headset_report",
         "headset_test",

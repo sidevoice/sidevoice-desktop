@@ -51,15 +51,22 @@ pub fn voice_offered() -> bool {
 /// The call controls card's bridge script, with its origin placeholder still in place.
 pub const CALL_CONTROLS_SCRIPT_TEMPLATE: &str = include_str!("../../../bridge/call-controls-bridge.js");
 const APP_ORIGIN_PLACEHOLDER: &str = "\"__SIDEVOICE_APP_ORIGIN__\"";
+const RESIZE_PLACEHOLDER: &str = "\"__SIDEVOICE_RESIZE__\"";
 
-/// The script injected into the call controls card's window, bound to the app's own origin.
-pub fn call_controls_script(origin: &str) -> String {
+/// The script injected into the call controls card's window, bound to the app's own origin. `resize`: whether the app
+/// resizes the picture-in-picture by its grip (`host.callControls.resize`; not on Wayland, where it cannot see the pointer).
+pub fn call_controls_script(origin: &str, resize: bool) -> String {
     let literal = serde_json::to_string(origin).expect("a string serialises");
-    let bridge = CALL_CONTROLS_SCRIPT_TEMPLATE.replacen(APP_ORIGIN_PLACEHOLDER, &literal, 1);
+    let bridge = CALL_CONTROLS_SCRIPT_TEMPLATE.replacen(APP_ORIGIN_PLACEHOLDER, &literal, 1).replacen(
+        RESIZE_PLACEHOLDER,
+        if resize { "true" } else { "false" },
+        1,
+    );
     format!("{bridge}\n{NO_CONTEXT_MENU_SCRIPT}")
 }
 
-/// What the app pushes to the card: any subset of `{call, level, pointerInside, outsideClicks, muteShortcut}`.
+/// What the app pushes to the card: any subset of `{call, level, playback, place, size, pointerInside,
+/// outsideClicks, alwaysExpanded, muteShortcut}` (call-controls/host.ts `CallControlsState`).
 pub fn call_controls_push(patch: &serde_json::Value) -> String {
     format!("window.__sidevoiceDesktop && window.__sidevoiceDesktop.receive({patch});")
 }
@@ -122,6 +129,10 @@ pub struct CallSnapshot {
     pub since: Option<f64>,
     pub participants: Vec<serde_json::Value>,
     pub devices: Option<serde_json::Value>,
+    /// The rest of the room's projection (`callCard`: `facts`, `conversation`, `mood`, `turn`, `theme`, …), which only the
+    /// card reads: relayed to it as the room wrote it, never read here.
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
 }
 
 /// What the app asks the room page to do (tray, global shortcut, headset, call controls card).
@@ -139,6 +150,12 @@ pub enum Command {
         kind: DeviceKind,
         id: String,
     },
+    /// The card's gear: the room's Settings at its Floating card section (`sidevoiceUI.openSettings`).
+    OpenSettings,
+    /// Takes back the person's turn while it is recorded or transcribed (`sidevoiceActions.cancelInput`).
+    CancelInput,
+    /// The idle warning's Keep: a sign of the person, so the call stays on (`sidevoiceActions.keepVoiceOn`).
+    KeepAlive,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -156,6 +173,9 @@ impl Command {
             Command::SkipReply => "skip-reply",
             Command::SelectParticipant { .. } => "select-participant",
             Command::SelectAudioDevice { .. } => "select-audio-device",
+            Command::OpenSettings => "open-settings",
+            Command::CancelInput => "cancel-input",
+            Command::KeepAlive => "keep-alive",
         }
     }
 
@@ -234,7 +254,7 @@ mod tests {
 
     #[test]
     fn every_window_script_removes_the_default_context_menu() {
-        assert!(call_controls_script("tauri://localhost").contains("contextmenu"));
+        assert!(call_controls_script("tauri://localhost", true).contains("contextmenu"));
         assert!(NO_CONTEXT_MENU_SCRIPT.contains("contextmenu"));
     }
 
@@ -268,9 +288,12 @@ mod tests {
 
     #[test]
     fn the_card_s_script_binds_the_app_s_origin() {
-        let s = call_controls_script("tauri://localhost");
-        assert!(!s.contains("__SIDEVOICE_APP_ORIGIN__"));
-        assert!(s.contains(r#"factory(window, "tauri://localhost")"#));
+        let s = call_controls_script("tauri://localhost", true);
+        assert!(!s.contains("__SIDEVOICE_APP_ORIGIN__") && !s.contains("__SIDEVOICE_RESIZE__"));
+        assert!(s.contains(r#"factory(window, "tauri://localhost", true)"#));
+        assert!(
+            call_controls_script("tauri://localhost", false).contains(r#"factory(window, "tauri://localhost", false)"#)
+        );
         let push = call_controls_push(&serde_json::json!({"level": 3, "title": "\"); alert(1); (\""}));
         assert!(push.contains(r#"receive({"level":3,"title":"\"); alert(1); (\""});"#), "{push}");
     }
@@ -304,18 +327,28 @@ mod tests {
         assert!(parse(r#"{"command":"select-audio-device","kind":"camera","id":"x"}"#).is_err());
         assert!(parse(r#"{"command":"close-participant","threadId":"abc"}"#).is_err());
         assert!(parse(r#"{"command":"select-participant"}"#).is_err());
+        assert_eq!(parse(r#"{"command":"open-settings"}"#).unwrap(), Command::OpenSettings);
+        assert_eq!(parse(r#"{"command":"cancel-input"}"#).unwrap().name(), "cancel-input");
+        assert_eq!(parse(r#"{"command":"keep-alive"}"#).unwrap(), Command::KeepAlive);
     }
 
     #[test]
     fn snapshot_parses_what_the_script_sends() {
         let json = r#"{"version":2,"ready":true,"joined":true,"busy":false,"micEnabled":false,"micDisabled":false,"title":"x",
             "agent":"speaking","youTalking":false,"canSkip":true,"since":1759300000000,
-            "participants":[{"threadId":"a","title":"x","selected":true}],"devices":{"inputs":[]},"extra":1}"#;
+            "participants":[{"threadId":"a","title":"x","selected":true}],"devices":{"inputs":[]},"extra":1,
+            "facts":{"history":[]},"mood":"listening"}"#;
         let s: CallSnapshot = serde_json::from_str(json).unwrap();
         assert!(s.ready && s.joined && !s.mic_enabled && s.can_skip);
         assert_eq!(s.agent, AgentState::Speaking);
         assert_eq!(s.since, Some(1_759_300_000_000.0));
         assert_eq!(s.participants.len(), 1);
+        // The rest of the room's projection goes to the card as it came.
+        assert_eq!(s.rest.get("extra"), Some(&serde_json::json!(1)));
+        let relayed = serde_json::to_value(&s).unwrap();
+        assert_eq!(relayed["extra"], 1);
+        assert_eq!(relayed["canSkip"], true);
+        assert_eq!(relayed["facts"], serde_json::json!({"history": []}));
         let partial: CallSnapshot = serde_json::from_str(r#"{"ready":false}"#).unwrap();
         assert!(!partial.ready);
         assert_eq!(partial.agent, AgentState::Idle);
