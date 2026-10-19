@@ -472,8 +472,8 @@ fn walk(card: &mut Card) -> Result<()> {
     }
     card.expect(&log, "call-controls panel ", 0);
     let panel = grep(&read(&log), "call-controls panel ").last().map(|l| l.to_string()).unwrap_or_default();
-    if !re("nonactivating=true level=25 all_spaces=true fullscreen_auxiliary=true key=false visible=true .* app_active=false").is_match(&panel) {
-        card.fail(format!("the panel is not what #4 asks: {panel}"));
+    if !re("nonactivating=true level=25 all_spaces=true fullscreen_auxiliary=true key=false visible=true .* app_active=false regular=true").is_match(&panel) {
+        card.fail(format!("the panel is not what #4 asks, or the app is no longer a regular one (#117): {panel}"));
     }
     card.expect(&log, "call-controls watching clicks elsewhere: true", 0);
     card.expect(&log, "call-controls prevents activation: true", 0);

@@ -115,9 +115,11 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             .hides_on_deactivate(false)
             .has_shadow(false)
             .transparent(true)
-            .no_activate(true)
             .with_window(move |w| window_options(w, script))
             .build()?;
+        // No `.no_activate(true)` above: it parks the app at `Prohibited` while the panel is built, and macOS does not
+        // bring the Dock icon back when the policy returns to `Regular` (#117). The card is created before the room is
+        // shown and the app activated (lib.rs setup), so there is no focus for it to steal.
         prevent_activation(app);
         watch_clicks(app);
     }
@@ -328,7 +330,12 @@ fn app_active() -> String {
             let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
             msg_send![app, isActive]
         };
-        format!("app_active={active}")
+        // NSApplicationActivationPolicyRegular is 0: the Dock icon, Dock Quit and Cmd+Tab (the card must not change it).
+        let policy: isize = unsafe {
+            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+            msg_send![app, activationPolicy]
+        };
+        format!("app_active={active} regular={}", policy == 0)
     }
     #[cfg(not(target_os = "macos"))]
     String::new()
