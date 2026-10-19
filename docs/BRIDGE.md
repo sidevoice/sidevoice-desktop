@@ -424,14 +424,15 @@ sidevoice-engine itself fails with is one of these keys, with the engine's own c
 | `voice_build_not_found` | `code` (`build-not-found`), `model` | a local slot's `build` is not a build of its model |
 | `voice_<code>` | `code` (the engine's: `memory`, `backend-not-in-this-build`, ...), `model` | a local slot's `build` does not run on this device |
 | `voice_vad_unavailable` | `code` (`vad-unavailable`) | no local voice activity detector runs on this device |
-| `voice_end_of_turn_unavailable` | `code` (`end-of-turn-unavailable`) | `end_of_turn: "smart-turn"` while no local model that ends turns runs here |
+| `voice_end_of_turn_unavailable` | `code` (`end-of-turn-unavailable`) | `endOfTurn: {kind: "smart"}` while no local model that ends turns runs here |
+| `voice_halves_missing` | `code` (`halves-missing`) | settings with neither an `input` nor an `output` half, or an `update` that leaves a call none |
 | `voice_<code>` | `code` (the engine's: `credential-missing`, `credential-rejected`, ...), `model`, `detail` (the provider's words) | a slot names a provider's model while that provider lists nothing |
 | `catalog_not_found` | `code`, `catalog` | `setCredential`, `testCredential` or `refresh` for a provider the engine does not have |
 | `provider_invalid` | `provider` | not a provider id (lowercase letters, digits and dashes) |
 | `credentials_unavailable` | — | `setCredential` or `testCredential` where the app keeps no keys (Windows, Linux) |
 | `credentials_failed` | — | the keychain would not keep, remove or read a key |
-| `voice_settings_missing` | `code` (`settings-missing`) | a call's `start` before its first `setSettings` |
-| `voice_failed` | `code` (the call's: `microphone-denied`, `audio-device-unavailable`, the engine's `model-load-failed`, …, or `stopped`) | the call could not start, or was stopped before it listened |
+| `voice_not_started` | `code` (`not-started`) | an `update` of a call the app has not made (its start was refused) |
+| `voice_failed` | `code` (the call's: `microphone-denied`, `audio-device-unavailable`, the engine's `model-load-failed`, …, or `stopped`) | the call could not start, or was stopped before it worked; a `preload` that could not load a slot |
 | `engine_unavailable` | — | the engine did not start with the app |
 | `update_unavailable` | — | `host.updater.restart()` with no update ready, `download()` with none known, or the `updater` command where this copy has no updater |
 | `shortcut_invalid` | — | `host.muteShortcut.set(accelerator)` with one that is not a shortcut (below) |
@@ -452,7 +453,7 @@ itself over `@sidevoice/voice` in the webview, the room window granting it the m
 ### The seam
 
 `window.__sidevoiceDesktop.host.voice` implements `VoiceHost`, the page's voice seam, defined once in sidevoice-voice:
-[`js/voice-host.d.ts`](https://github.com/sidevoice/sidevoice-voice/blob/a15174b2d5eed09f1ba721d24090016a71868fbe/js/voice-host.d.ts) in
+[`js/voice-host.d.ts`](https://github.com/sidevoice/sidevoice-voice/blob/main/js/voice-host.d.ts) in
 `@sidevoice/voice` (sidevoice/sidevoice-voice#6), with the types it carries (`VoiceSettings`, `VoiceHostError`,
 and `js/voice-events.d.ts`'s `VoiceTurnEvent`, `VoiceCallState`, `VoiceSaying`, `VoiceSayOutcome`, `VoiceTake`) and what every
 implementation promises
@@ -463,56 +464,65 @@ here: a change is made there, and both sides follow.
 
 What is this app's own:
 
-- `setSettings` takes the web's settings (sidevoice-web `voice-settings.js`, `DeviceVoiceSettings`), each slot a model
-  of a catalogue: `stt: {catalog, model, language, build?}`, `tts: {catalog, model, voice, speed, build?}`, with
-  `patience`, `end_of_turn`, `idle_unload_minutes`, `barge_in_min_speech?` and `turn_model?` (core `voice.rs`;
-  any other key is refused). `barge_in_min_speech` is a finite number of seconds greater than zero and at most 60;
-  when absent, native voice uses 1.0 s. It changes the active call configuration without reloading models.
-  A slot is loaded as `engine.catalog(catalog).load(model)`, which picks the build, or, for a local model with a
-  `build` (Settings, "How it runs"; an empty one names none), as that build (`engine.load(model, build)`): once the
-  model is found and runs here (else `model-unknown`, `model-unfit`), the build must be one of its builds
-  (`build-not-found`) and run here (else the engine's code for why not, `memory`, ...). A provider's model has no
-  builds, and a `build` named for one is not looked at, as on the web. The app adds the voice activity detector, the
-  local catalogue's (family `silero-vad`, else another local `vad` that runs), and, for `smart-turn`, the local model
-  that ends turns `turn_model` names when it runs here, else (as on the web) the first that does. Nothing stops the
-  call (sidevoice-web #75, gap #31): the call holds one interface per slot (speech to text, text to speech with its
-  voice, end of turn), and a change of a slot's catalogue, model or build, of `end_of_turn` or of the model that ends
-  turns loads the new model while the one in use goes on serving, then moves the slot to it; what was under way (a
-  turn being transcribed, a chunk of a reply being synthesized, a pause being asked) ends on the model it started with,
-  and a reply's next chunks are the new speaker's, in its voice (as on the web). Only the latest change moves the
-  slots: an earlier one still loading is dropped when it is done, and a later one never waits for it. Once the slots
-  have moved, the configuration that goes with them applies (`smart-turn` once its model is in place), and
-  `setSettings` resolves. `language`, `voice`, `speed`, `patience` and `idle_unload_minutes` apply live. The voice
-  activity detector, the app's own choice, stays for the call: a different one comes with its next load. With no call
-  holding models, the settings are what the next start loads.
-  It rejects with the app's keyed refusals (above), each with the `code` the page translates (`model-unknown`,
-  `model-unfit`, `catalog-not-found`, `build-not-found`, `vad-unavailable`, `end-of-turn-unavailable`, or the
-  engine's own with the provider's `detail`), and with `{key: "voice_failed", code}` when the new model cannot be
-  loaded: the call then goes on as it was, on the models it had.
-- `start` rejects `{key: "voice_failed", code, message}` with the call's code, `{key: "voice_settings_missing", code:
-  "settings-missing"}` before any settings, and `{key: "voice_failed", code: "stopped"}` when `stop` came first. A
-  start after a stop starts the call again, whether or not that stop has resolved; a start while one is already asked
-  or the call listens changes nothing (the first start's `take` stays).
-- `stop()` resolves once the idle state that answers it has reached the page, after the take and the end of an open
-  turn, and once every saying under way has its outcome; before the first `setSettings` it resolves at once.
+- `start(settings, {take?})` takes the seam's settings, each slot a model of a catalogue: `input` (absent or `null`: no
+  microphone, no detector, no transcriber) with `stt: {catalog, model, language?, build?}`, `endOfTurn`
+  (`{kind: "silence", ms?}`, which loads no end-of-turn model, or `{kind: "smart", model?: {catalog, model}}`),
+  `patience` and `barge_in_min_speech`; `output` (absent or `null`: no speaker model, nothing played) with `tts:
+  {catalog, model, build?}`, `voice`, `speed` and `language`; and `idle_unload_minutes`; at least one half, else it
+  throws a `TypeError`, and any other key is refused (core `voice.rs`). `barge_in_min_speech` is a finite number of
+  seconds greater than zero and at most 60; when absent, sidevoice-voice's own default. A slot is loaded as
+  `engine.catalog(catalog).load(model)`, which picks the build, or, for a local model with a `build` (Settings, "How it
+  runs"; an empty one names none), as that build (`engine.load(model, build)`): once the model is found and runs here
+  (else `model-unknown`, `model-unfit`), the build must be one of its builds (`build-not-found`) and run here (else the
+  engine's code for why not, `memory`, ...). A provider's model has no builds, and a `build` named for one is not looked
+  at, as on the web. The app adds the voice activity detector, only for an input half (the local catalogue's, family
+  `silero-vad`, else another local `vad` that runs), and, for `smart`, the local model that ends turns `model` names
+  when it runs here, else (as on the web) the first that does. The call is made and answers at once; it loads **only the
+  slots its halves use**, each on its own and all at once, opens the speaker and, with an input half, the microphone,
+  and listens. Its `ready` resolves at the call's first state that is not idle (`off` for a call without an input
+  half), once the page has that state; it rejects with the app's keyed refusals (above), each with the `code` the
+  page translates (`model-unknown`, `model-unfit`, `catalog-not-found`, `build-not-found`, `vad-unavailable`,
+  `end-of-turn-unavailable`, or the engine's own with the provider's `detail`), with `{key: "voice_failed", code,
+  message}` with the call's code (a model that cannot load, `microphone-denied`, ...), or with `{code: "stopped"}`
+  when `stop` came first. A call without an input half opens no microphone, so a blocked one cannot fail it, and its
+  `say` plays; a call without an output half loads no speaker, and its `say` is `not-played` (`failed`,
+  `output-missing`).
+- `update(change)` changes the call while it runs, without restarting it: a half that is absent from `change` stays, `null`
+  removes it, settings replace it or add it (`idle_unload_minutes` too). A half whose slots keep their models keeps what
+  it loaded, other models load while the call goes on as it was, and each half's change takes effect at its safe point:
+  the input half's at the next turn, the output half's at the next utterance, never cutting what plays; an input
+  half added opens the microphone, one removed closes it. Changes are made in the order they were asked. It resolves
+  once the change is accepted, not applied; it rejects, changing nothing, with the app's keyed refusals for a model it
+  cannot make or `voice_halves_missing` for a change that leaves no half. A model that cannot load later is an `onError`
+  of the call with its code, and its half stays as it was. A microphone that is lost or denied leaves the call with its
+  output half only (`listening: "off"`), and `update({input})` adds it back; without an output half the call stops.
+- `preload(settings)` loads the models a `start` of the same settings would, ahead of a call: the same slots (an absent half
+  loads none of its own, `silence` no end-of-turn model), once for a model already loaded or loading, and opens no
+  microphone and no speaker. They are held like a stopped call's: a call that starts on the same models meanwhile takes
+  them without loading, and they are let go `idle_unload_minutes` (10 by default) after the end of the load. It resolves
+  once every slot is loaded; it rejects as `ready` does for a slot that cannot load, what else loaded staying loaded.
+- **Models are shared.** The app holds a loaded model once for every call and preload that holds it (weakly: a model
+  nobody holds is let go), so a transcription try followed by a call loads the transcriber and the detector once, and
+  a voice try followed by a call loads the speaker once. A stopped call keeps what it loaded for its
+  `idle_unload_minutes` (10 by default; 0: it lets go at once), so a call that starts after it on the same models does
+  not load them again.
+- `stop()` ends the call: it stops it, resolves once the idle state that answers the stop has reached the page, after
+  the take and the end of an open turn, and once every saying under way has its outcome, then releases only that
+  call's lane and delivers nothing more. Stopping one call leaves the other calls and shared devices running; the
+  final stopped lane closes the physical microphone and speaker. A restart is a new `start`. A second `stop()` answers
+  the first's promise.
 - `mute(muted)` and `cancelInput()` return nothing and never reject, as in a browser. A call keeps its mute from its
-  creation: one asked before the first `setSettings` applies to the call those settings make. A muted call hears
-  silence; an open turn then ends only as silence ends it (its ordinary patience). `cancelInput()` before the settings
-  does nothing.
+  creation: one asked right after `start` applies to the call from its first frame. A muted call hears silence; an
+  open turn then ends only as silence ends it (its ordinary patience).
 - `endInput()` closes the call's open turn now with what was captured so far (sidevoice-voice `endInput`): it is
   transcribed and told like any turn (`finished`, or `cancelled` with `merged` when a turn opening within the merge
-  window joins it). It resolves once the turn is closed, not transcribed, and never rejects: with nothing to close (no
-  settings yet, no open turn, the call stopped or disposing) it resolves at once. It does not mute, nor touch the
+  window joins it). It resolves once the turn is closed, not transcribed, and never rejects: with nothing to close (the
+  call not made yet, no open turn, the call stopped or stopping) it resolves at once. It does not mute, nor touch the
   playback or how later turns end. It is asked in order with `mute`.
-- The host has `createCall`, `routeInput`, `audioDevices`, `setAudioDevices`, and `onAudioDevices`.
-  Every `VoiceCallHost` has `id`, `setSettings`, `start`, `stop`, `dispose`, `say`, `mute`,
-  `cancelInput`, `endInput`, `onTurn`, `onState`, `onLevel`, `onPlaybackLevel`, `onError`, and `onTake`.
-  `routeInput(call | null)` acknowledges a next-frame switch; the other started calls receive silence.
-  `dispose` takes no new work, stops the call and delivers what that stop ends, as the call reports it: each saying's
-  own outcome (never a made-up one), an open turn's `cancelled`, the take; then it releases only that call's lane and
-  delivers nothing more. Stopping one call leaves the other calls and shared devices running.
-  The final stopped lane closes the physical microphone and speaker. The catalogues and provider keys are
-  `host.engine`'s (above).
+- The host has `start`, `preload`, `routeInput`, `audioDevices`, `setAudioDevices`, and `onAudioDevices`. Every
+  `VoiceCallHost` has `id`, `ready`, `update`, `stop`, `say`, `mute`, `cancelInput`, `endInput`, `onTurn`, `onState`,
+  `onLevel`, `onPlaybackLevel`, `onError`, and `onTake`. `routeInput(call | null)` acknowledges a next-frame switch; the other
+  started calls receive silence.
 - `onPlaybackLevel(listener)` receives a bare number from 0 to 1, just as `onLevel` does for the microphone: RMS of
   the samples actually rendered by the speaker, after fade and gain, smoothed on the voice detector's windows
   (normally 512 samples at 16 kHz, 32 ms). It continues while the microphone is muted. Silence and the end of
@@ -522,8 +532,8 @@ What is this app's own:
   function that removes only that listener. Reload stops the call and discards the page's old subscriptions.
   The web UI feature-detects this method and wraps its bare number in its own
   `{threadId, level, receivedAt}` record for `window.sidevoiceUI.playbackLevel`; that record is not a bridge event.
-- A try's take (sidevoice-web's contract gap #40): `start({take: true})` has the call keep what the microphone gives
-  from the moment it listens until that listening ends, at most two minutes, in memory; `onTake` gets it then as
+- A try's take (sidevoice-web's contract gap #40): `start(settings, {take: true})` has the call keep what the microphone
+  gives from the moment it listens until that listening ends, at most two minutes, in memory; `onTake` gets it then as
   `VoiceTake` (`{sampleRate, samples: Float32Array, started_at, ended_at, turns}`), before the error that ended the
   listening, and `stop()` after such a start resolves only once it was handed over (at the idle state that answers
   the stop, which the take comes before). A start with no take records nothing. The app keeps no copy.
@@ -533,17 +543,20 @@ What is this app's own:
   "audio-device-unknown"}` for an id the system does not list. The system tells of no change, so from the first
   `audioDevices` or `setAudioDevices` the app lists the devices every 2 s and tells `onAudioDevices` each change
   (other devices, another choice, or a chosen one that went away, said once as `lost` and replaced by the default).
-- A page that loads anew has no old calls or lanes. Loaded model instances are weakly cached while calls use them; the existing per-call idle period governs unloading.
+- A page that loads anew has no old calls or lanes: each is stopped and, like any stopped call, keeps its models for its
+  idle period.
 
 ### How it travels
 
-- Page → app: `voice_create_call {key}`, `voice_route_input {key?}`, then per-call
-  `voice_set_settings {key,settings}`, `voice_start {key,take?}`, `voice_stop {key}` (answers `true` once the page
-  has what the stop ends, `false` at once before the first settings),
-  `voice_dispose_call {key}` (stops first, the same way), `voice_say {key,sayKey,text,language?}`,
-  `voice_cancel_say {key,sayKey}`, `voice_mute {key,muted}`, `voice_cancel_input {key}`, and
-  `voice_end_input {key}` (answers once the turn is closed).
-  The shared commands are `voice_audio_devices` and `voice_set_audio_devices {choice}`.
+- Page → app: `voice_create_call {key}` (the lane, so the microphone may be routed to the call before it works),
+  `voice_route_input {key?}`, then per-call `voice_start {key,settings,take?}` (the call, asked to start: it answers
+  once made, or refuses the settings), `voice_ready {key}` (answers once the call works), `voice_update {key,change}`,
+  `voice_stop {key}` (answers `true` once the page has what the stop ends, `false` at once when no call was made),
+  `voice_dispose_call {key}` (releases the lane; the models stay for their idle minutes), `voice_say
+  {key,sayKey,text,language?}`, `voice_cancel_say {key,sayKey}`, `voice_mute {key,muted}`, `voice_cancel_input {key}`,
+  and `voice_end_input {key}` (answers once the turn is closed). The bridge's `stop()` is `voice_stop` then
+  `voice_dispose_call`.
+  The shared commands are `voice_preload {settings}`, `voice_audio_devices` and `voice_set_audio_devices {choice}`.
   The room window capability grants only these fixed commands, and each checks the current page.
 - App → page: `window.__sidevoiceDesktop.voiceEvent(event)` receives `{key,type,data}`.
   `key` is the immutable call ID captured before asynchronous native forwarding. `type` is
@@ -744,11 +757,13 @@ interface UpdaterStatus {
   over a test host), `cargo test -p sidevoice-local-host` (the local host against a stand-in core, its install against a stand-in
   registry; docs/LOCAL_HOST.md → Tests). In the real app, CI's macOS job runs the probe page (`test/fixtures/probe.html`, probe build): the engine's
   capabilities, installs, refusals and a cancelled download (CI then checks nothing of it is on disk), and the voice
-  call's seam, catalogue, builds and a start that settles. CI's macOS job also runs the app's `voice::` tests: the
-  native host's lanes through the commands' own methods over stand-in shared devices (two started lanes, the route
-  to one, the other, none; a device failure on one; dispose releasing one lane and the last closing the devices; a
-  mute before the settings; start after stop; dispose's delivered ends), and a call on the engine's real models
-  through the app's adapter. The shared audio itself (`SharedNativeAudio`: one capture, silence to unrouted lanes,
+  call's seam, catalogue, builds, a preload, a call with an output half only and a start that settles. CI's macOS
+  job also runs the app's `voice::` tests: the native host's lanes through the commands' own methods over stand-in
+  shared devices (two started lanes, the route to one, the other, none; a device failure on one; dispose releasing one
+  lane and the last closing the devices; a mute before the call; `ready` and a stop; calls with one half only, which
+  load and open only what it uses; an `update` that keeps what a half loaded and adds a half; what a stopped call or a
+  preload keeps for its idle minutes; dispose's delivered ends), the halves' models over a fake engine, and a call on
+  the engine's real models through the app's adapter. The shared audio itself (`SharedNativeAudio`: one capture, silence to unrouted lanes,
   the mixed echo reference) is sidevoice-voice's, tested in its own CI.
 
 ## The app log

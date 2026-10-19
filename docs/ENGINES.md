@@ -88,7 +88,7 @@ pkg-config`). The Rust version is the engine's, `src-tauri/rust-toolchain.toml`.
 The macOS job's probe page, in the signed app: the engine's capabilities, installs in the web's shape (by build id, by
 engine, by the recommended build) with progress, refusals by key, a download cancelled by its signal, removing a model
 (one on disk, then put back; an unknown one refused by key and code); the catalogues (`local` first, a provider with no key listing nothing); and the voice call's
-seam, settings naming a catalogue's model, and a start that
+seam, settings naming a catalogue's model, a preload, a call with an output half only, and a start that
 settles (listening, or refused with the call's code where the runner has no microphone or speaker): that start loads
 the engine's real models through the app's adapter (`src-tauri/src/voice/models.rs`). sidevoice-voice's own CI drives
 the call with fakes; the real models are the app's to test.

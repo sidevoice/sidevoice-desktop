@@ -169,44 +169,58 @@ what the interface's own window offers — same origin, same permission rule —
 
   // The voice call the app runs (docs/BRIDGE.md → "The voice call"): the seam's shape, the engine's catalogues
   // (`host.engine`), settings that name a catalogue's model, a build of it and an end-of-turn model, as the web's settings
-  // do, the audio devices, and a start that settles, asking for its take: once stopped, the take reaches `onTake` as a
-  // Float32Array before the stop resolves. A CI runner may have no microphone or speaker: then the start is refused
-  // with the call's code, which is what the probe reports, and there is no take.
+  // do, a preload of the models of one half, a call with an output half only (no microphone: it works, `off`), the audio
+  // devices, and a start that settles, asking for its take: once stopped, the take reaches `onTake` as a Float32Array
+  // before the stop resolves. A CI runner may have no microphone or speaker: then the start is refused with the call's
+  // code, which is what the probe reports, and there is no take.
   const voice = window.__sidevoiceDesktop && window.__sidevoiceDesktop.host && window.__sidevoiceDesktop.host.voice;
   if (!voice) { await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-voice none" }); return; }
   try {
-    const first = voice.createCall();
-    const second = voice.createCall();
-    const states = [];
-    const errors = [];
-    const takes = [];
-    const stops = [first.onState((s) => states.push(s.listening)), first.onError((e) => errors.push(e.code)),
-      first.onTake((t) => takes.push(t))];
+    const refusedBy = (error) => error && error.key + "/" + error.code;
+    const kokoro = { catalog: "local", model: "kokoro-82m-v1.0" };
     await voice.routeInput(null);
     const catalogs = await window.__sidevoiceDesktop.host.engine.catalogs();
     const models = catalogs[0].models;
     const remote = catalogs.slice(1).map((c) => c.id + ":" + (c.status.reason ? c.status.reason.code : "current")).join(",");
-    const unknown = await first.setSettings({ stt: { catalog: "local", model: "whisper-nope" },
-      tts: { catalog: "local", model: "kokoro-82m-v1.0" } }).then(() => "no", (error) => error && error.key + "/" + error.code);
+    // A model its catalogue does not list is refused by key and code, on the call's `ready`; nothing was started.
+    const refusing = async (input) => {
+      const call = voice.start({ input, output: { tts: kokoro } });
+      const outcome = await call.ready.then(() => "no", refusedBy);
+      await call.stop();
+      return outcome;
+    };
+    const unknown = await refusing({ stt: { catalog: "local", model: "whisper-nope" } });
     // A build that is not the model's is refused; one that runs here is loaded, and so is the end-of-turn model chosen
     // (the last that runs here: with several, not the one the app would take anyway).
-    const badBuild = await first.setSettings({ stt: { catalog: "local", model: "whisper-tiny", build: "whisper-tiny/nope" },
-      tts: { catalog: "local", model: "kokoro-82m-v1.0" } }).then(() => "no", (error) => error && error.key + "/" + error.code);
+    const badBuild = await refusing({ stt: { catalog: "local", model: "whisper-tiny", build: "whisper-tiny/nope" } });
     const tiny = models.find((m) => m.id === "whisper-tiny");
     // One the catalogue would not pick on its own when there is such a build.
     const runnable = tiny ? tiny.builds.filter((b) => b.available) : [];
     const build = (runnable.find((b) => b.id !== tiny.recommendedBuild) || runnable[0] || { id: "none" }).id;
     const turns = models.filter((m) => m.capabilities.includes("end-of-turn") && m.builds.some((b) => b.available));
     const turnModel = turns.length ? turns[turns.length - 1].id : "none";
-    await first.setSettings({ stt: { catalog: "local", model: "whisper-tiny", language: "es", build },
-      tts: { catalog: "local", model: "kokoro-82m-v1.0", voice: "ef_dora", speed: 1 }, patience: "fast",
-      end_of_turn: "smart-turn", turn_model: turnModel, idle_unload_minutes: 10, barge_in_min_speech: 0.8 });
+    const settings = { input: { stt: { catalog: "local", model: "whisper-tiny", language: "es", build }, patience: "fast",
+      endOfTurn: { kind: "smart", model: { catalog: "local", model: turnModel } }, barge_in_min_speech: 0.8 },
+      output: { tts: kokoro, voice: "ef_dora", speed: 1 }, idle_unload_minutes: 10 };
+    // The models of one half, loaded ahead of a call: the speaker, which neither opens a microphone nor needs one.
+    const preload = await voice.preload({ output: { tts: kokoro } }).then(() => "ok", refusedBy);
     // The system's devices (a runner may list none) and an id it does not list, refused by key and code.
     const listed = await voice.audioDevices();
     const devices = listed.inputs.length + "/" + listed.outputs.length + "/" + listed.outputSelectable;
     const unknownDevice = await voice.setAudioDevices({ input: "nowhere:nothing" })
       .then(() => "no", (error) => error && error.key + "/" + error.code);
-    const started = await first.start({ take: true }).then(() => "ok", (error) => error.key + "/" + error.code);
+    const first = voice.start(settings, { take: true });
+    const states = [];
+    const errors = [];
+    const takes = [];
+    const stops = [first.onState((s) => states.push(s.listening)), first.onError((e) => errors.push(e.code)),
+      first.onTake((t) => takes.push(t))];
+    // A call with an output half only: it asks for no microphone, so a runner without one still works (`off`).
+    const second = voice.start({ output: { tts: kokoro } });
+    const listenStates = [];
+    const stopListening = second.onState((s) => listenStates.push(s.listening));
+    const listen = await second.ready.then(() => (listenStates.includes("off") ? "off" : "on"), refusedBy);
+    const started = await first.ready.then(() => "ok", (error) => error.key + "/" + error.code);
     // A headless runner may let the call start but have no active capture input when the route is selected.
     // Keep that refusal separate from a successful route and still check stop, turns and disposal below.
     const routed = started === "ok" ? await voice.routeInput(first).then(() => "ok", (error) => error.key + "/" + error.code) : "not-attempted";
@@ -235,13 +249,14 @@ what the interface's own window offers — same origin, same permission rule —
     ]);
     stopFirst();
     stopSecond();
-    await first.dispose();
+    await first.stop();
     await voice.routeInput(null);
-    await second.dispose();
+    await second.stop();
+    stopListening();
     stops.forEach((stop) => stop());
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-voice ok keys=" + Object.keys(voice).length + " calls=2 route=" + routed + " delayed_turn=" + delayedTurn +
       " catalogs=" + catalogs[0].id + "," + remote + " models=" + models.length + " vad=" + models.some((m) => m.capabilities.includes("vad")) + " unknown=" + unknown +
-      " bad_build=" + badBuild + " build=" + build + " turn_model=" + turnModel +
+      " bad_build=" + badBuild + " build=" + build + " turn_model=" + turnModel + " preload=" + preload + " listen=" + listen +
       " devices=" + devices + " unknown_device=" + unknownDevice + " start=" + started + " take=" + take + " samples=" + samples + " states=" + states.join(",") + " errors=" + errors.join(",") });
   } catch (error) {
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-voice error " + String(error && (error.message || error)) });

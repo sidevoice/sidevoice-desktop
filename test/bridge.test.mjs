@@ -469,6 +469,17 @@ function voiceWindow(answers = {}) {
   return { win, calls };
 }
 
+// A call works once the app says so and its first state that is not idle has reached the page.
+async function works(api, ...calls) {
+  await flush();
+  for (const call of calls) api.voiceEvent({ key: call.id, type: "state", data: { listening: "listening" } });
+  await Promise.all(calls.map((call) => call.ready));
+}
+
+const LISTEN = { input: { stt: { catalog: "local", model: "whisper" }, endOfTurn: { kind: "silence", ms: 1500 } } };
+const SPEAK = { output: { tts: { catalog: "local", model: "kokoro" } } };
+const BOTH = { ...LISTEN, ...SPEAK };
+
 test("native voice offers the shared host and independent calls", async () => {
   const install = loadFactory();
   for (const offered of [undefined, false, "__SIDEVOICE_VOICE__", "true"]) {
@@ -477,13 +488,14 @@ test("native voice offers the shared host and independent calls", async () => {
   const { win, calls } = voiceWindow();
   const api = install(win, ORIGIN, "native", true, true);
   const host = api.host.voice;
-  assert.deepEqual(Object.keys(host).sort(), ["audioDevices", "createCall", "onAudioDevices", "routeInput", "setAudioDevices"]);
-  const a = host.createCall();
-  const b = host.createCall();
+  assert.deepEqual(Object.keys(host).sort(), ["audioDevices", "onAudioDevices", "preload", "routeInput", "setAudioDevices", "start"]);
+  const a = host.start(BOTH);
+  const b = host.start(LISTEN);
   assert.notEqual(a.id, b.id);
-  assert.deepEqual(Object.keys(a).sort(), ["cancelInput", "dispose", "endInput", "id", "mute", "onError", "onLevel",
-    "onPlaybackLevel", "onState", "onTake", "onTurn", "say", "setSettings", "start", "stop"]);
+  assert.deepEqual(Object.keys(a).sort(), ["cancelInput", "endInput", "id", "mute", "onError", "onLevel",
+    "onPlaybackLevel", "onState", "onTake", "onTurn", "ready", "say", "stop", "update"]);
   assert.ok(Object.isFrozen(host) && Object.isFrozen(a));
+  assert.ok(a.ready instanceof Promise);
   await host.routeInput(a);
   await host.routeInput(b);
   await host.routeInput(null);
@@ -491,23 +503,99 @@ test("native voice offers the shared host and independent calls", async () => {
     ["voice_route_input", { key: a.id }], ["voice_route_input", { key: b.id }], ["voice_route_input", { key: null }],
   ]);
   await assert.rejects(host.routeInput({ id: a.id }), { name: "TypeError" });
-  await a.dispose();
-  await b.dispose();
+  await a.stop();
+  await b.stop();
   assert.deepEqual(calls.filter(([cmd]) => cmd === "voice_dispose_call").map(([, args]) => args.key), [a.id, b.id]);
+  await assert.rejects(host.routeInput(a), { name: "TypeError" }, "a stopped call takes no microphone");
 });
 
-test("per-call commands carry the call key and say handles remain separate", async () => {
+test("start makes the lane, the call with its halves and its take, then asks when it works; settings with no half throw", async () => {
   const { win, calls } = voiceWindow();
   const api = loadFactory()(win, ORIGIN, "native", true, true);
-  const a = api.host.voice.createCall();
-  const b = api.host.voice.createCall();
-  const settings = { stt: { catalog: "local", model: "whisper" }, tts: { catalog: "local", model: "kokoro" } };
-  await Promise.all([a.setSettings(settings), b.setSettings(settings)]);
-  await Promise.all([a.start(), b.start()]);
+  const host = api.host.voice;
+  for (const bad of [undefined, null, "words", {}, { input: null, output: null }, { idle_unload_minutes: 5 }]) {
+    assert.throws(() => host.start(bad), { name: "TypeError" });
+  }
+  assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("voice_")), [], "nothing was asked of the app");
+  const listening = host.start(LISTEN, { take: true });
+  const speaking = host.start(SPEAK);
+  await works(api, listening, speaking);
+  assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("voice_")).map(([cmd, args]) => [cmd, args.key, args.take, args.settings]), [
+    ["voice_create_call", listening.id, undefined, undefined],
+    ["voice_create_call", speaking.id, undefined, undefined],
+    ["voice_start", listening.id, true, plain(LISTEN)],
+    ["voice_start", speaking.id, false, plain(SPEAK)],
+    ["voice_ready", listening.id, undefined, undefined],
+    ["voice_ready", speaking.id, undefined, undefined],
+  ]);
+});
+
+test("a call the app refuses rejects ready with the refusal, says nothing was played, and stop releases its lane", async () => {
+  const refusal = { key: "voice_model_unknown", code: "model-unknown", model: "whisper", message: "no such model" };
+  const { win, calls } = voiceWindow({ voice_start: Object.assign(new Error(), { refusal }) });
+  const unhandled = [];
+  const onUnhandled = (reason) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  const call = loadFactory()(win, ORIGIN, "native", true, true).host.voice.start(BOTH);
+  await assert.rejects(call.ready, (error) => error === refusal);
+  const said = call.say("Hello");
+  assert.deepEqual(plain(await said.outcome), { status: "not-played", reason: "failed", code: "model-unknown" });
+  await assert.rejects(call.update({ output: null }), (error) => error === refusal);
+  await call.stop();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  process.off("unhandledRejection", onUnhandled);
+  assert.deepEqual(unhandled, [], "a ready nobody reads is not an unhandled rejection");
+  assert.ok(!calls.some(([cmd]) => cmd === "voice_say" || cmd === "voice_update"), "nothing is asked of a call that was not made");
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "voice_dispose_call").map(([, args]) => args.key), [call.id]);
+});
+
+test("a call that fails before it works rejects ready with the native code", async () => {
+  const refusal = { key: "voice_failed", code: "microphone-denied", message: "The call could not start." };
+  const { win } = voiceWindow({ voice_ready: Object.assign(new Error(), { refusal }) });
+  const call = loadFactory()(win, ORIGIN, "native", true, true).host.voice.start(BOTH);
+  await assert.rejects(call.ready, (error) => error === refusal);
+  await call.stop();
+});
+
+test("ready resolves once the app says the call works and the page has its first state that is not idle", async () => {
+  const { win } = voiceWindow({ voice_stop: true });
+  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const call = api.host.voice.start(BOTH);
+  let works = false;
+  call.ready.then(() => { works = true; });
+  await flush();
+  await flush();
+  assert.equal(works, false, "the app answered, the state has not reached the page");
+  api.voiceEvent({ key: call.id, type: "state", data: { listening: "idle" } });
+  await flush();
+  assert.equal(works, false, "idle is not working");
+  api.voiceEvent({ key: call.id, type: "state", data: { listening: "listening" } });
+  await call.ready;
+  // One that is stopped before its state came never works.
+  const stopped = api.host.voice.start(SPEAK);
+  await flush();
+  const rejected = assert.rejects(stopped.ready, { code: "stopped" });
+  const stopping = stopped.stop();
+  await flush();
+  await flush();
+  api.voiceEvent({ key: stopped.id, type: "state", data: { listening: "idle" } });
+  await stopping;
+  await rejected;
+});
+
+test("per-call commands carry the call key, wait for the call, and say handles remain separate", async () => {
+  const { win, calls } = voiceWindow();
+  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const a = api.host.voice.start(BOTH);
+  const b = api.host.voice.start(BOTH);
   const saidA = a.say("A");
   const saidB = b.say("B");
   assert.equal(saidA.id, saidB.id, "say IDs may repeat on different calls");
+  await works(api, a, b);
   await flush();
+  const order = (key) => calls.filter(([, args]) => args && args.key === key).map(([cmd]) => cmd);
+  assert.deepEqual(order(a.id).slice(0, 3), ["voice_create_call", "voice_start", "voice_ready"]);
+  assert.ok(order(a.id).indexOf("voice_say") > order(a.id).indexOf("voice_start"), "said once the call was made");
   api.voiceEvent({ key: b.id, type: "say", data: { key: saidB.id, event: { type: "done", outcome: {
     status: "heard-up-to", heard_chars: 1, reason: { reason: "cancelled" },
   } } } });
@@ -518,8 +606,8 @@ test("per-call commands carry the call key and say handles remain separate", asy
   assert.deepEqual(plain(await saidA.outcome), { status: "not-played", reason: "failed", code: "speaker-unavailable" });
   assert.equal(a.mute(true), undefined);
   assert.equal(b.cancelInput(), undefined);
-  await a.stop();
   await flush();
+  await a.stop();
   const commands = calls.filter(([cmd]) => cmd.startsWith("voice_") && !["voice_create_call"].includes(cmd));
   assert.ok(commands.every(([, args]) => args && (args.key === a.id || args.key === b.id)));
   assert.deepEqual(commands.filter(([cmd]) => cmd === "voice_say").map(([, args]) => [args.key, args.sayKey]),
@@ -528,12 +616,55 @@ test("per-call commands carry the call key and say handles remain separate", asy
   assert.ok(commands.some(([cmd, args]) => cmd === "voice_cancel_input" && args.key === b.id));
 });
 
+test("update sends each change to the call, one after the other, and refuses a malformed one", async () => {
+  const { win, calls } = voiceWindow();
+  const call = loadFactory()(win, ORIGIN, "native", true, true).host.voice.start(SPEAK);
+  for (const bad of [undefined, null, "words", 7]) {
+    await assert.rejects(call.update(bad), { name: "TypeError" });
+  }
+  // A microphone appears: the input half is added; then it is lost again: removed.
+  const first = call.update({ input: LISTEN.input });
+  const second = call.update({ input: null, output: { tts: { catalog: "local", model: "other" }, voice: "af_heart" } });
+  assert.equal(await first, undefined);
+  await second;
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "voice_update").map(([, args]) => [args.key, args.change]), [
+    [call.id, plain({ input: LISTEN.input })],
+    [call.id, plain({ input: null, output: { tts: { catalog: "local", model: "other" }, voice: "af_heart" } })],
+  ]);
+  assert.ok(calls.findIndex(([cmd]) => cmd === "voice_update") > calls.findIndex(([cmd]) => cmd === "voice_start"));
+  // The app refuses one that leaves nothing, or a model it cannot fill: the call rejects with it, and the next goes on.
+  const refusal = { key: "voice_halves_missing", code: "halves-missing", message: "A call needs a half." };
+  win.__TAURI_INTERNALS__.invoke = (cmd, args) => {
+    calls.push([cmd, args]);
+    return cmd === "voice_update" && args.change.output === null ? Promise.reject(refusal) : Promise.resolve();
+  };
+  await assert.rejects(call.update({ output: null }), (error) => error === refusal);
+  await call.update({ input: LISTEN.input });
+  await call.stop();
+  await assert.rejects(call.update({ output: SPEAK.output }), { code: "stopped" });
+});
+
+test("preload asks the app to load the models of the settings and rejects what it refuses", async () => {
+  const refusal = { key: "voice_failed", code: "model-load-failed", message: "The models could not be loaded." };
+  const { win, calls } = voiceWindow();
+  const host = loadFactory()(win, ORIGIN, "native", true, true).host.voice;
+  for (const bad of [undefined, null, {}, { input: null }]) {
+    await assert.rejects(host.preload(bad), { name: "TypeError" });
+  }
+  assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("voice_")), []);
+  assert.equal(await host.preload({ ...BOTH, idle_unload_minutes: 3 }), undefined);
+  assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("voice_")),
+    [["voice_preload", { settings: plain({ ...BOTH, idle_unload_minutes: 3 }) }]]);
+  win.__TAURI_INTERNALS__.invoke = () => Promise.reject(refusal);
+  await assert.rejects(host.preload(SPEAK), (error) => error === refusal);
+});
+
 test("A to B routing keeps delayed per-call turns on A despite a later switch", async () => {
   const { win, calls } = voiceWindow();
   const api = loadFactory()(win, ORIGIN, "native", true, true);
   const host = api.host.voice;
-  const a = host.createCall();
-  const b = host.createCall();
+  const a = host.start(BOTH);
+  const b = host.start(BOTH);
   const seen = [];
   a.onTurn((turn) => seen.push(["A", turn.phase, turn.text]));
   b.onTurn((turn) => seen.push(["B", turn.phase, turn.text]));
@@ -550,12 +681,12 @@ test("A to B routing keeps delayed per-call turns on A despite a later switch", 
   assert.deepEqual(calls.filter(([cmd]) => cmd === "voice_route_input").map(([, args]) => args.key), [a.id, b.id]);
 });
 
-test("per-call state, levels, takes and saying outcomes are isolated after dispose", async () => {
+test("per-call state, levels, takes and saying outcomes are isolated after stop", async () => {
   const { win } = voiceWindow({ voice_stop: true });
   win.atob = atob;
   const api = loadFactory()(win, ORIGIN, "native", true, true);
-  const a = api.host.voice.createCall();
-  const b = api.host.voice.createCall();
+  const a = api.host.voice.start(BOTH, { take: true });
+  const b = api.host.voice.start(BOTH);
   const heard = [];
   a.onLevel((level) => heard.push(["A", "mic", level]));
   b.onPlaybackLevel((level) => heard.push(["B", "speaker", level]));
@@ -565,27 +696,25 @@ test("per-call state, levels, takes and saying outcomes are isolated after dispo
   assert.deepEqual(heard, [["A", "mic", 0.7], ["B", "speaker", 0.3], ["B", "speaker", 0]]);
   const takes = [];
   a.onTake((take) => takes.push(take));
-  await a.start({ take: true });
+  await works(api, a);
   let stopped = false;
   const stopping = a.stop().then(() => { stopped = true; });
   await flush();
-  assert.equal(stopped, false);
+  assert.equal(stopped, false, "no idle has answered the stop yet");
   const samples = new Float32Array([0, 0.5]);
   api.voiceEvent({ key: a.id, type: "take", data: { sampleRate: 16000,
     samples: Buffer.from(samples.buffer).toString("base64"), started_at: 1, ended_at: 2, turns: [] } });
+  assert.equal(stopped, false);
   api.voiceEvent({ key: a.id, type: "state", data: { listening: "idle" } });
   await stopping;
-  assert.deepEqual([...takes[0].samples], [...samples]);
-  const disposing = a.dispose();
-  await flush();
-  api.voiceEvent({ key: a.id, type: "state", data: { listening: "idle" } });
-  await disposing;
+  assert.deepEqual([...takes[0].samples], [...samples], "the take came before the stop resolved");
   api.voiceEvent({ key: a.id, type: "level", data: 0.9 });
   api.voiceEvent({ key: b.id, type: "playback-level", data: 0.5 });
   assert.deepEqual(heard.at(-1), ["B", "speaker", 0.5]);
+  assert.equal(a.stop(), a.stop(), "a second stop answers the first's promise");
 });
 
-test("mute and cancelInput before the settings return nothing, never reject, and mutes keep their order", async () => {
+test("mute and cancelInput never reject, and mutes keep their order", async () => {
   const { win, calls } = fakeWindow(ORIGIN);
   const answered = [];
   const unhandled = [];
@@ -598,23 +727,20 @@ test("mute and cancelInput before the settings return nothing, never reject, and
       const slow = calls.filter(([name]) => name === "voice_mute").length === 1;
       return new Promise((resolve, reject) => setTimeout(() => {
         answered.push(args.muted);
-        if (slow) reject({ key: "voice_settings_missing", code: "settings-missing", message: "Set the voice settings first." });
+        if (slow) reject({ key: "bad_request", message: "Unknown voice call." });
         else resolve(null);
       }, slow ? 20 : 0));
     }
-    if (cmd === "voice_cancel_input") {
-      return Promise.reject({ key: "voice_settings_missing", code: "settings-missing", message: "Set the voice settings first." });
-    }
+    if (cmd === "voice_cancel_input") return Promise.reject({ key: "bad_request", message: "Unknown voice call." });
     return Promise.resolve(null);
   };
   const api = loadFactory()(win, ORIGIN, "native", true, true);
-  const a = api.host.voice.createCall();
+  const a = api.host.voice.start(BOTH);
   assert.equal(a.mute(true), undefined);
   assert.equal(a.mute(false), undefined);
   assert.equal(a.mute(true), undefined);
   assert.equal(a.cancelInput(), undefined);
-  await a.setSettings({ stt: { catalog: "local", model: "whisper" }, tts: { catalog: "local", model: "kokoro" } });
-  await a.start();
+  await works(api, a);
   await new Promise((resolve) => setTimeout(resolve, 60));
   process.off("unhandledRejection", onUnhandled);
   assert.deepEqual(unhandled, []);
@@ -634,8 +760,7 @@ test("endInput is asked in order with mutes, resolves once native closed the tur
     return Promise.resolve(null);
   };
   const api = loadFactory()(win, ORIGIN, "native", true, true);
-  const a = api.host.voice.createCall();
-  // Nothing to end before the settings: native answers at once, and so does the bridge.
+  const a = api.host.voice.start(BOTH);
   a.mute(true);
   let ended = false;
   const ending = a.endInput().then((value) => { ended = true; return value; });
@@ -655,44 +780,20 @@ test("endInput is asked in order with mutes, resolves once native closed the tur
   };
   assert.equal(await a.endInput(), undefined);
   await a.stop();
-  await a.dispose();
-  assert.equal(await a.endInput(), undefined, "after dispose, nothing to end");
+  assert.equal(await a.endInput(), undefined, "after stop, nothing to end");
 });
 
-test("stop after a recorded start and a repeated start waits for the take and the idle that answer it", async () => {
-  const { win, calls } = voiceWindow({ voice_stop: true });
-  win.atob = atob;
-  const api = loadFactory()(win, ORIGIN, "native", true, true);
-  const a = api.host.voice.createCall();
-  const takes = [];
-  a.onTake((take) => takes.push(take));
-  await a.start({ take: true });
-  await a.start();
-  let stopped = false;
-  const stopping = a.stop().then(() => { stopped = true; });
-  await flush();
-  await flush();
-  assert.equal(stopped, false, "no idle has answered the stop yet");
-  api.voiceEvent({ key: a.id, type: "take", data: { sampleRate: 16000,
-    samples: Buffer.from(new Float32Array([0.25]).buffer).toString("base64"), started_at: 1, ended_at: 2, turns: [] } });
-  assert.equal(stopped, false);
-  api.voiceEvent({ key: a.id, type: "state", data: { listening: "idle" } });
-  await stopping;
-  assert.equal(takes.length, 1, "the take came before the stop resolved");
-  assert.deepEqual(calls.filter(([cmd]) => cmd === "voice_start").map(([, args]) => args.take), [true, false]);
-});
-
-test("dispose stops first and delivers the call's own ends: the partial saying, the open turn and the take", async () => {
+test("stop delivers the call's own ends before it resolves: the partial saying, the open turn and the take", async () => {
   const { win, calls } = voiceWindow({ voice_stop: true });
   win.atob = atob;
   const api = loadFactory()(win, ORIGIN, "native", true, true);
   const host = api.host.voice;
-  const a = host.createCall();
+  const a = host.start(BOTH, { take: true });
   const turns = [];
   const takes = [];
   a.onTurn((turn) => turns.push(turn.phase));
   a.onTake((take) => takes.push(take));
-  await a.start({ take: true });
+  await works(api, a);
   const said = a.say("Hello there, again.");
   const steps = [];
   said.onEvent((event) => steps.push(event.type));
@@ -700,12 +801,12 @@ test("dispose stops first and delivers the call's own ends: the partial saying, 
   api.voiceEvent({ key: a.id, type: "say", data: { key: said.id, event: { type: "playing" } } });
   api.voiceEvent({ key: a.id, type: "say", data: { key: said.id, event: { type: "progress", heard_chars: 8 } } });
   api.voiceEvent({ key: a.id, type: "turn", data: { phase: "started", turn_id: "a-1", started_at: 1 } });
-  let disposed = false;
-  const disposing = a.dispose().then(() => { disposed = true; });
+  let ended = false;
+  const stopping = a.stop().then(() => { ended = true; });
   await flush();
-  assert.ok(calls.some(([cmd, args]) => cmd === "voice_stop" && args.key === a.id), "dispose stops the call first");
+  assert.ok(calls.some(([cmd, args]) => cmd === "voice_stop" && args.key === a.id), "the call is stopped first");
   assert.ok(!calls.some(([cmd]) => cmd === "voice_dispose_call"), "the lane is kept until the call's ends came");
-  assert.equal(disposed, false);
+  assert.equal(ended, false);
   // What native stop answers, in its order: the saying's end, the open turn's, the take, then the idle state.
   api.voiceEvent({ key: a.id, type: "say", data: { key: said.id, event: { type: "done", outcome: {
     status: "heard-up-to", heard_chars: 8, reason: { reason: "stopped" },
@@ -714,14 +815,14 @@ test("dispose stops first and delivers the call's own ends: the partial saying, 
   api.voiceEvent({ key: a.id, type: "take", data: { sampleRate: 16000,
     samples: Buffer.from(new Float32Array([0.5]).buffer).toString("base64"), started_at: 1, ended_at: 2, turns: [] } });
   api.voiceEvent({ key: a.id, type: "state", data: { listening: "idle" } });
-  await disposing;
+  await stopping;
   assert.deepEqual(plain(await said.outcome), { status: "heard-up-to", heard_chars: 8, reason: "stopped" });
   assert.deepEqual(steps, ["playing", "progress", "done"], "one terminal, the call's own");
   assert.deepEqual(turns, ["started", "cancelled"]);
   assert.equal(takes.length, 1);
   assert.deepEqual(calls.filter(([cmd]) => cmd === "voice_dispose_call").map(([, args]) => args.key), [a.id]);
-  // Nothing reaches the disposed call, nor a call made after it.
-  const b = host.createCall();
+  // Nothing reaches the stopped call, nor a call made after it.
+  const b = host.start(BOTH);
   const late = [];
   b.onTurn((turn) => late.push(turn));
   api.voiceEvent({ key: a.id, type: "turn", data: { phase: "started", turn_id: "a-2", started_at: 3 } });
@@ -729,7 +830,7 @@ test("dispose stops first and delivers the call's own ends: the partial saying, 
   assert.deepEqual(turns, ["started", "cancelled"]);
   assert.deepEqual(late, []);
   assert.deepEqual(steps, ["playing", "progress", "done"]);
-  assert.equal(a.say("late").id.startsWith("say-"), true);
+  assert.deepEqual(plain(await a.say("late").outcome), { status: "not-played", reason: "stopped" });
 });
 
 test("shared audio devices stay at host scope", async () => {
@@ -746,13 +847,6 @@ test("shared audio devices stay at host scope", async () => {
   assert.equal(seen.length, 1);
   assert.deepEqual(calls.filter(([cmd]) => cmd === "voice_set_audio_devices"),
     [["voice_set_audio_devices", { choice: { input: null } }]]);
-});
-
-test("a refused per-call start carries the native code", async () => {
-  const refusal = { key: "voice_failed", code: "microphone-denied", message: "The call could not start." };
-  const api = loadFactory()(voiceWindow({ voice_start: Object.assign(new Error(), { refusal }) }).win, ORIGIN, null, true, true);
-  const lane = api.host.voice.createCall();
-  await assert.rejects(lane.start(), (error) => error === refusal);
 });
 
 test("cancel: the signal's abort cancels the install's own job, which rejects install-cancelled", async () => {

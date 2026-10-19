@@ -1,246 +1,18 @@
-//! The adapter on runtimes of its own: its native work leaves the async workers free, and a whole call through it, on
-//! the engine's real models, hears recorded speech and plays a reply. The real call downloads its models: it is
-//! ignored unless asked for (`--ignored`), which the macOS CI job does.
+//! The halves load only the slots they use, keep their models while their slots stay, and tell a slot that cannot load
+//! by its code, with fakes for the engine.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
-use std::time::Duration;
 
-use futures_util::StreamExt;
 use serde_json::json;
-use sidevoice_desktop_core::voice::{choose, CatalogCandidates, ModelChoice, VoiceSettings};
-use sidevoice_desktop_engine::sidevoice_engine::NoCredentials;
-use sidevoice_desktop_engine::NativeEngines;
-use sidevoice_voice::{
-    AudioIo, Events, IoEvent, IoSink, Listening, PlaybackState, SayEvent, SayOptions, SayOutcome, StartOptions,
-    TurnEvent, VoiceCall, VoiceConfig, VoiceEvent,
-};
+use sidevoice_desktop_core::voice::ModelChoice;
+use sidevoice_voice::{EndOfTurnModel, Speaker, Transcriber, Vad, VadFrame};
 
 use super::*;
-
-#[test]
-fn native_work_leaves_the_async_workers_free() {
-    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().unwrap();
-    runtime.block_on(async {
-        let ticks = Arc::new(AtomicUsize::new(0));
-        let ticker = {
-            let ticks = Arc::clone(&ticks);
-            tokio::spawn(async move {
-                loop {
-                    ticks.fetch_add(1, Ordering::SeqCst);
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
-            })
-        };
-        // Half a second of native work, from a task on the only worker: the ticker on that worker keeps ticking.
-        let work = tokio::spawn(blocking(async {
-            std::thread::sleep(Duration::from_millis(500));
-            Ok::<_, Error>(7)
-        }));
-        let before = ticks.load(Ordering::SeqCst);
-        assert_eq!(work.await.unwrap(), Ok(7));
-        let during = ticks.load(Ordering::SeqCst) - before;
-        assert!(during >= 20, "the worker ticked {during} times in 500 ms");
-        ticker.abort();
-    });
-}
-
-/// The LibriSpeech clip (test/fixtures/voice), as samples from -1 to 1.
-fn speech() -> Vec<f32> {
-    let wav: &[u8] = include_bytes!("../../../../test/fixtures/voice/librispeech_mr_quilter.wav");
-    let mut at = 12;
-    while &wav[at..at + 4] != b"data" {
-        at += 8 + u32::from_le_bytes(wav[at + 4..at + 8].try_into().unwrap()) as usize;
-    }
-    wav[at + 8..].chunks_exact(2).map(|pair| f32::from(i16::from_le_bytes([pair[0], pair[1]])) / 32_768.0).collect()
-}
-
-/// A microphone that says the clip, then silence, in real time, and a speaker that plays at once what it is given.
-struct Fixture {
-    sink: Option<IoSink>,
-    stop: Arc<AtomicBool>,
-    played: Arc<Mutex<Vec<usize>>>,
-}
-
-impl AudioIo for Fixture {
-    fn start(&mut self, sink: IoSink) -> Result<(), String> {
-        self.sink = Some(sink.clone());
-        let stop = Arc::clone(&self.stop);
-        std::thread::spawn(move || {
-            sink.send(IoEvent::Ready);
-            let heard = speech().into_iter().chain(std::iter::repeat_n(0.0, 16_000 * 4)).collect::<Vec<_>>();
-            for frame in heard.chunks(160) {
-                if stop.load(Ordering::SeqCst) {
-                    return;
-                }
-                sink.send(IoEvent::Captured(frame.to_vec()));
-                std::thread::sleep(Duration::from_millis(10));
-            }
-        });
-        Ok(())
-    }
-
-    fn play(&mut self, utterance: &str, chunk: usize, samples: Vec<f32>, _sample_rate: u32) {
-        self.played.lock().unwrap().push(samples.len());
-        if let Some(sink) = &self.sink {
-            sink.send(IoEvent::ChunkStarted { utterance: utterance.into(), chunk });
-            sink.send(IoEvent::ChunkPlayed { utterance: utterance.into(), chunk });
-        }
-    }
-
-    fn stop_playback(&mut self) {}
-
-    fn stop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
-    }
-}
-
-/// The next event `want` keeps, within ten minutes (the first run downloads the models); an error fails the test.
-async fn next<T>(events: &mut Events, want: impl Fn(VoiceEvent) -> Option<T>) -> T {
-    tokio::time::timeout(Duration::from_secs(600), async {
-        loop {
-            match events.next().await.expect("the call is alive") {
-                VoiceEvent::Error(error) => panic!("the call failed: {}", error.code),
-                event => {
-                    if let Some(found) = want(event) {
-                        return found;
-                    }
-                }
-            }
-        }
-    })
-    .await
-    .expect("in time")
-}
-
-#[test]
-#[ignore = "downloads real models; the macOS CI job runs it"]
-fn a_call_on_the_engines_real_models_hears_speech_and_plays_a_reply() {
-    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build().unwrap();
-    // The engine's storage: a scratch folder of this run's, removed at the end; or SIDEVOICE_REAL_CALL_MODELS, kept (CI
-    // caches it by the engine's commit, so a model it already holds is not downloaded again).
-    let kept = std::env::var_os("SIDEVOICE_REAL_CALL_MODELS").map(std::path::PathBuf::from);
-    let root = kept
-        .clone()
-        .unwrap_or_else(|| std::env::temp_dir().join(format!("sidevoice-real-call-{}", std::process::id())));
-    let engines = NativeEngines::new(&root, NoCredentials, runtime.handle().clone()).unwrap();
-    let views = engines.catalogs().unwrap();
-    let catalogs: Vec<CatalogCandidates> = views.iter().map(crate::voice::candidates).collect();
-    // Transcribing with the recommended build chosen explicitly, as the web's "How it runs" setting names one.
-    let local = views[0]
-        .models
-        .iter()
-        .find(|m| m.id == "whisper-tiny")
-        .and_then(|m| m.local.as_ref())
-        .expect("whisper-tiny is a local model");
-    let build = local.recommended_build.clone().expect("a whisper-tiny build runs here");
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    {
-        let recommended = local.builds.iter().find(|candidate| candidate.id == build).unwrap();
-        assert!(recommended.available, "the recommended Whisper build runs here");
-        assert_eq!(recommended.backend, "whisper-cpp");
-        assert_eq!(recommended.accelerator.as_deref(), Some("metal"));
-        assert_eq!(recommended.accelerator_class, Some("gpu"));
-    }
-    let settings: VoiceSettings = serde_json::from_value(json!({
-        "stt": {"catalog": "local", "model": "whisper-tiny", "language": "en", "build": build},
-        "tts": {"catalog": "local", "model": "kokoro-82m-v1.0"},
-        "patience": "fast",
-    }))
-    .unwrap();
-    let choice = choose(&settings, &catalogs).unwrap();
-    assert_eq!(choice.stt, ModelChoice { build: Some(build), ..ModelChoice::local("whisper-tiny") });
-    assert_eq!(choice.vad, ModelChoice::local("silero-vad"));
-    let config: VoiceConfig = serde_json::from_value(choice.config.clone()).unwrap();
-    let played = Arc::new(Mutex::new(Vec::new()));
-    let io = Fixture { sink: None, stop: Arc::default(), played: Arc::clone(&played) };
-    runtime.block_on(async {
-        let models = Arc::new(EngineModels::new(engines.engine(), Arc::new(ModelCache::default()), choice));
-        let (call, mut events) = VoiceCall::new(models, Box::new(io), config);
-        call.start(StartOptions::default());
-        let said = next(&mut events, |event| match event {
-            VoiceEvent::Turn(TurnEvent::Finished { text, .. }) => Some(text),
-            _ => None,
-        })
-        .await;
-        assert!(said.to_lowercase().contains("quilter"), "heard {said:?}");
-
-        let text = "The tests pass on every platform.";
-        let mut saying = call.say(text, SayOptions { language: Some("en".into()) });
-        let mut steps = Vec::new();
-        while let Some(step) = tokio::time::timeout(Duration::from_secs(600), saying.next()).await.expect("in time") {
-            steps.push(step);
-        }
-        assert_eq!(steps.last(), Some(&SayEvent::Done { outcome: SayOutcome::Heard }), "{steps:?}");
-        assert!(
-            steps.contains(&SayEvent::Progress { sounding: None, heard_chars: text.chars().count() }),
-            "heard to its end: {steps:?}"
-        );
-        let samples: usize = played.lock().unwrap().iter().sum();
-        assert!(samples > 12_000, "Kokoro spoke {samples} samples");
-        call.stop();
-    });
-    drop(engines);
-    if kept.is_none() {
-        let _ = std::fs::remove_dir_all(&root);
-    }
-}
-
-// ---- A model changed mid-call (gap #31): the call goes on, and work under way ends on its own model ----
 
 /// The 10 ms frames of tone that make a turn: 1.5 s. sidevoice-voice hears speech start after 400 ms of it at the
 /// volume bar, the volume measured over the last 400 ms and smoothed (Pipecat's, sidevoice-voice#25): 800 ms of tone no
 /// longer opens a turn, a second does.
 pub(crate) const TURN_FRAMES: usize = 150;
-
-/// A microphone that says a tone while the test asks it to and is quiet otherwise, in real time, and a speaker that
-/// plays at once what it is given.
-struct Mic {
-    sink: Option<IoSink>,
-    stop: Arc<AtomicBool>,
-    /// Frames of tone left to say.
-    tone: Arc<AtomicUsize>,
-}
-
-impl AudioIo for Mic {
-    fn start(&mut self, sink: IoSink) -> Result<(), String> {
-        self.sink = Some(sink.clone());
-        let (stop, tone) = (Arc::clone(&self.stop), Arc::clone(&self.tone));
-        std::thread::spawn(move || {
-            sink.send(IoEvent::Ready);
-            let mut phase = 0.0f32;
-            while !stop.load(Ordering::SeqCst) {
-                let speaking = tone.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1)).is_ok();
-                let frame = (0..160)
-                    .map(|_| {
-                        phase = (phase + 2.0 * std::f32::consts::PI * 220.0 / 16_000.0) % std::f32::consts::TAU;
-                        if speaking {
-                            0.3 * phase.sin()
-                        } else {
-                            0.0
-                        }
-                    })
-                    .collect();
-                sink.send(IoEvent::Captured(frame));
-                std::thread::sleep(Duration::from_millis(10));
-            }
-        });
-        Ok(())
-    }
-
-    fn play(&mut self, utterance: &str, chunk: usize, _samples: Vec<f32>, _sample_rate: u32) {
-        if let Some(sink) = &self.sink {
-            sink.send(IoEvent::ChunkStarted { utterance: utterance.into(), chunk });
-            sink.send(IoEvent::ChunkPlayed { utterance: utterance.into(), chunk });
-        }
-    }
-
-    fn stop_playback(&mut self) {}
-
-    fn stop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
-    }
-}
 
 /// A detector that hears speech in any 32 ms window louder than a whisper.
 #[derive(Default)]
@@ -269,367 +41,203 @@ impl Vad for LoudVad {
     }
 }
 
-/// A model that answers `name`, each call telling `started` it began and, held, waiting until it is released.
-pub(crate) struct Held {
+/// A model that answers `name`.
+pub(crate) struct Named {
     name: &'static str,
-    started: tokio::sync::mpsc::UnboundedSender<&'static str>,
-    /// Open: its calls end at once.
-    gate: tokio::sync::watch::Sender<bool>,
-    calls: AtomicUsize,
-}
-
-impl Held {
-    pub(crate) fn new(
-        name: &'static str,
-        held: bool,
-        started: &tokio::sync::mpsc::UnboundedSender<&'static str>,
-    ) -> Arc<Self> {
-        let (gate, _) = tokio::sync::watch::channel(!held);
-        Arc::new(Held { name, started: started.clone(), gate, calls: AtomicUsize::new(0) })
-    }
-
-    /// Every call held, and every one to come, ends.
-    fn release(&self) {
-        self.gate.send_replace(true);
-    }
-
-    fn calls(&self) -> usize {
-        self.calls.load(Ordering::SeqCst)
-    }
-
-    async fn answer(&self) {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        let _ = self.started.send(self.name);
-        let mut open = self.gate.subscribe();
-        let _ = open.wait_for(|open| *open).await;
-    }
 }
 
 #[async_trait]
-impl Transcriber for Held {
+impl Transcriber for Named {
     async fn transcribe(&self, _pcm: Vec<f32>, _rate: u32, _language: Option<String>) -> Result<String, String> {
-        self.answer().await;
         Ok(self.name.to_string())
     }
 }
 
 #[async_trait]
-impl Speaker for Held {
+impl Speaker for Named {
     async fn speak(
         &self,
         _text: String,
-        voice: Option<String>,
+        _voice: Option<String>,
         _language: Option<String>,
         _speed: f32,
     ) -> Result<(Vec<f32>, u32), String> {
-        self.answer().await;
-        // A voice is only ever the one chosen with this model.
-        assert_eq!(voice.as_deref(), Some(self.name), "the voice chosen with {}", self.name);
         Ok((vec![0.1; 4_800], 24_000))
     }
 }
 
 #[async_trait]
-impl EndOfTurnModel for Held {
+impl EndOfTurnModel for Named {
     async fn end_of_turn(&self, _pcm: Vec<f32>, _rate: u32) -> Result<f32, String> {
-        self.answer().await;
         Ok(1.0)
     }
 }
 
-/// Models by id, as the engine would load them: `fail` cannot be loaded, and while `slow` is shut a load of `slow-…`
-/// waits.
+/// The engine as a test has it: models by id that every load hands out (the same one each time, as the engine's cache
+/// does), `fail` one that cannot be loaded, and a record of what was loaded.
 pub(crate) struct FakeLoader {
-    models: Vec<Arc<Held>>,
-    slow: tokio::sync::watch::Sender<bool>,
-    /// Whether a load of `slow-…` has begun waiting.
-    waiting: AtomicBool,
+    models: Vec<Arc<Named>>,
+    /// Every load, as `slot:model` (`vad` for the detector).
+    pub(crate) loads: Mutex<Vec<String>>,
+    /// Shut, a load of the transcriber `slow` waits; open, it goes on.
+    gate: tokio::sync::watch::Sender<bool>,
 }
 
 impl FakeLoader {
-    pub(crate) fn new(models: Vec<Arc<Held>>, slow: bool) -> Arc<Self> {
-        Arc::new(FakeLoader { models, slow: tokio::sync::watch::channel(!slow).0, waiting: AtomicBool::new(false) })
+    pub(crate) fn new(names: &[&'static str]) -> Arc<Self> {
+        Arc::new(FakeLoader {
+            models: names.iter().map(|name| Arc::new(Named { name })).collect(),
+            loads: Mutex::new(Vec::new()),
+            gate: tokio::sync::watch::channel(false).0,
+        })
     }
-}
 
-impl FakeLoader {
-    async fn find(&self, chosen: &ModelChoice) -> Result<Arc<Held>, String> {
+    fn find(&self, slot: &str, chosen: &ModelChoice) -> Result<Arc<Named>, String> {
+        self.loads.lock().unwrap().push(format!("{slot}:{}", chosen.model));
         if chosen.model == "fail" {
             return Err("model-load-failed".into());
         }
-        if chosen.model.starts_with("slow-") {
-            self.waiting.store(true, Ordering::SeqCst);
-            let _ = self.slow.subscribe().wait_for(|open| *open).await;
-        }
         Ok(Arc::clone(self.models.iter().find(|m| m.name == chosen.model).expect("a model of the test")))
+    }
+
+    /// Lets the loads of `slow` go on.
+    pub(crate) fn open_gate(&self) {
+        self.gate.send_replace(true);
+    }
+
+    /// How many times `slot` was loaded.
+    pub(crate) fn loaded(&self, slot: &str) -> usize {
+        self.loads.lock().unwrap().iter().filter(|load| load.starts_with(&format!("{slot}:"))).count()
+    }
+
+    /// How many holders model `name` has besides the loader's own.
+    pub(crate) fn holders(&self, name: &str) -> usize {
+        Arc::strong_count(self.models.iter().find(|m| m.name == name).unwrap()) - 1
     }
 }
 
 #[async_trait]
 impl Loader for Arc<FakeLoader> {
-    async fn vad(&self, _chosen: &ModelChoice) -> Result<Box<dyn Vad>, String> {
+    async fn vad(&self, chosen: &ModelChoice) -> Result<Box<dyn Vad>, String> {
+        self.loads.lock().unwrap().push(format!("vad:{}", chosen.model));
         Ok(Box::new(LoudVad::default()))
     }
     async fn transcriber(&self, chosen: &ModelChoice) -> Result<Arc<dyn Transcriber>, String> {
-        Ok(self.find(chosen).await?)
+        if chosen.model == "slow" {
+            let _ = self.gate.subscribe().wait_for(|open| *open).await;
+        }
+        Ok(self.find("stt", chosen)?)
     }
     async fn speaker(&self, chosen: &ModelChoice) -> Result<Arc<dyn Speaker>, String> {
-        Ok(self.find(chosen).await?)
+        Ok(self.find("tts", chosen)?)
     }
     async fn end_of_turn(&self, chosen: &ModelChoice) -> Result<Arc<dyn EndOfTurnModel>, String> {
-        Ok(self.find(chosen).await?)
+        Ok(self.find("eot", chosen)?)
     }
 }
 
-/// The choice of `stt` and `tts` (and its voice, the same name), with `end_of_turn` when smart.
-pub(crate) fn chosen(stt: &str, tts: &str, end_of_turn: Option<&str>) -> VoiceChoice {
+/// The loader as the halves take it.
+pub(crate) fn loader(fake: &Arc<FakeLoader>) -> Arc<dyn Loader> {
+    Arc::new(Arc::clone(fake))
+}
+
+/// The choice of a call: an input half when `stt` is given (with `smart`'s model, else silence), an output half when
+/// `tts` is.
+pub(crate) fn chosen(stt: Option<&str>, tts: Option<&str>, smart: Option<&str>) -> VoiceChoice {
     VoiceChoice {
-        vad: ModelChoice::local("vad"),
-        stt: ModelChoice::local(stt),
-        tts: ModelChoice::local(tts),
-        end_of_turn: end_of_turn.map(ModelChoice::local),
-        config: json!({ "voice": tts }),
+        input: stt.map(|stt| InputChoice {
+            vad: ModelChoice::local("vad"),
+            stt: ModelChoice::local(stt),
+            end_of_turn: smart.map(ModelChoice::local),
+            config: json!({
+                "language": "en", "patience": "fast",
+                "end_of_turn": if smart.is_some() { json!({"kind": "smart"}) } else { json!({"kind": "silence"}) },
+            }),
+        }),
+        output: tts.map(|tts| OutputChoice { tts: ModelChoice::local(tts), config: json!({"voice": tts}) }),
+        config: json!({"audio_grace_ms": 0}),
     }
 }
 
-pub(crate) fn config(end_of_turn: &str, voice: &str) -> VoiceConfig {
-    serde_json::from_value(json!({
-        "language": "en", "voice": voice, "speed": 1.0, "end_of_turn": end_of_turn, "patience": "fast",
-    }))
-    .unwrap()
-}
-
-const ALWAYS: &(dyn Fn() -> bool + Send + Sync) = &|| true;
-
-/// `work`, within thirty seconds.
-pub(crate) async fn within<T>(work: impl std::future::Future<Output = T>) -> T {
-    tokio::time::timeout(Duration::from_secs(30), work).await.expect("in time")
-}
-
-/// A call on `models`, as the app runs one, and what the test sees of it. Every wait is bounded; an error, or the call going idle, fails the test: a model changed never stops the call.
-struct Live {
-    call: VoiceCall,
-    events: Events,
-    tone: Arc<AtomicUsize>,
-    began: tokio::sync::mpsc::UnboundedReceiver<&'static str>,
-    /// Whether the call has listened: from then on it must never be idle.
-    listened: bool,
-}
-
-impl Live {
-    fn start(models: Arc<EngineModels>, began: tokio::sync::mpsc::UnboundedReceiver<&'static str>) -> Self {
-        let tone = Arc::new(AtomicUsize::new(0));
-        let mic = Mic { sink: None, stop: Arc::default(), tone: Arc::clone(&tone) };
-        let (call, events) = VoiceCall::new(models as Arc<dyn VoiceModels>, Box::new(mic), config("silence", "af_old"));
-        call.start(StartOptions::default());
-        Live { call, events, tone, began, listened: false }
-    }
-
-    async fn next<T>(&mut self, want: impl Fn(&VoiceEvent) -> Option<T>) -> T {
-        let (events, listened) = (&mut self.events, &mut self.listened);
-        tokio::time::timeout(Duration::from_secs(30), async {
-            loop {
-                let event = events.next().await.expect("the call is alive");
-                match &event {
-                    VoiceEvent::Error(error) => panic!("the call failed: {}", error.code),
-                    VoiceEvent::State(state) => {
-                        if state.listening != Listening::Idle {
-                            *listened = true;
-                        }
-                        assert!(!*listened || state.listening != Listening::Idle, "the call stopped");
-                    }
-                    _ => {}
-                }
-                if let Some(found) = want(&event) {
-                    return found;
-                }
-            }
-        })
-        .await
-        .expect("in time")
-    }
-
-    /// A turn of the person's, and its words.
-    async fn turn(&mut self) -> String {
-        self.tone.store(TURN_FRAMES, Ordering::SeqCst);
-        self.next(|event| match event {
-            VoiceEvent::Turn(TurnEvent::Finished { text, .. }) => Some(text.clone()),
-            _ => None,
-        })
-        .await
-    }
-
-    /// The model the next call to one starts on.
-    async fn began(&mut self) -> &'static str {
-        tokio::time::timeout(Duration::from_secs(30), self.began.recv()).await.expect("in time").expect("a model")
-    }
-
-    /// Says `text` to its end, then waits for the speaker to be idle; its outcome.
-    async fn say(&mut self, text: &str) -> SayOutcome {
-        let mut saying = self.call.say(text, SayOptions::default());
-        let mut outcome = None;
-        while let Some(step) = tokio::time::timeout(Duration::from_secs(30), saying.next()).await.expect("in time") {
-            if let SayEvent::Done { outcome: done } = step {
-                outcome = Some(done);
-            }
-        }
-        self.idle().await;
-        outcome.expect("an outcome")
-    }
-
-    async fn idle(&mut self) {
-        self.next(|event| match event {
-            VoiceEvent::State(state) if state.playback == PlaybackState::Idle => Some(()),
-            _ => None,
-        })
-        .await;
-    }
-}
-
-/// Three sentences: a reply of several chunks.
-const LONG: &str = "This first sentence is long enough to be a chunk of its own when it is spoken. \
-    The second one is just as long, so that the reply goes on after the first. \
-    And a third, to be sure the reply has several chunks to speak in turn.";
-
-/// Through the app's own switch: a turn being transcribed when the transcriber changes ends on the one it started
-/// with, and the next turn is the new one's; a reply being spoken when the speaker changes is heard to its end, the
-/// chunk under way by the one it started with, in its voice, the next ones by the new one, in its. The call never
-/// stops.
 #[test]
-fn a_model_switched_mid_turn_and_mid_reply_does_not_stop_the_call() {
-    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build().unwrap();
+fn the_slots_a_half_uses_are_the_ones_it_loads() {
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
     runtime.block_on(async {
-        let (started, began) = tokio::sync::mpsc::unbounded_channel();
-        let old_stt = Held::new("old", true, &started);
-        let new_stt = Held::new("new", false, &started);
-        let old_tts = Held::new("af_old", true, &started);
-        let new_tts = Held::new("af_new", false, &started);
-        let loader = FakeLoader::new(vec![old_stt.clone(), new_stt.clone(), old_tts.clone(), new_tts.clone()], false);
-        let models = Arc::new(EngineModels::with(Box::new(loader), chosen("old", "af_old", None)));
-        let mut live = Live::start(Arc::clone(&models), began);
+        let fake = FakeLoader::new(&["words", "voice", "ends"]);
+        let loader = loader(&fake);
 
-        // A turn: its transcription is held while the transcriber switches.
-        live.tone.store(TURN_FRAMES, Ordering::SeqCst);
-        assert_eq!(live.began().await, "old");
-        let switched = within(models.switch(chosen("new", "af_old", None), ALWAYS)).await.unwrap();
-        assert!(switched.is_some());
-        drop(switched);
-        old_stt.release();
-        let first = live
-            .next(|event| match event {
-                VoiceEvent::Turn(TurnEvent::Finished { text, .. }) => Some(text.clone()),
-                _ => None,
-            })
-            .await;
-        assert!(first.contains("old"), "the turn under way ended on its own model: {first:?}");
-        let second = live.turn().await;
-        assert!(second.contains("new") && !second.contains("old"), "the next turn is the new model's: {second:?}");
+        // A transcription try: the detector and the transcriber, no speaker, no end-of-turn model.
+        let (loaded, failed) = Halves::new(&loader, &chosen(Some("words"), None, None), None).load().await;
+        assert_eq!(failed, None);
+        let mut loads = fake.loads.lock().unwrap().clone();
+        loads.sort();
+        assert_eq!(loads, ["stt:words", "vad:vad"]);
+        drop(loaded);
 
-        // A reply of several chunks: its first is held while the speaker switches. That chunk is the old speaker's, in
-        // its voice; the next ones are the new one's, in its (as on the web: the slot moves between chunks).
-        let mut saying = live.call.say(LONG, SayOptions::default());
-        while live.began().await != "af_old" {}
-        drop(within(models.switch(chosen("new", "af_new", None), ALWAYS)).await.unwrap().expect("switched"));
-        live.call.set_config(config("silence", "af_new"));
-        old_tts.release();
-        let mut outcome = None;
-        while let Some(step) = tokio::time::timeout(Duration::from_secs(30), saying.next()).await.expect("in time") {
-            if let SayEvent::Done { outcome: done } = step {
-                outcome = Some(done);
-            }
-        }
-        assert_eq!(outcome, Some(SayOutcome::Heard), "the reply under way was heard to its end");
-        assert_eq!(old_tts.calls(), 1, "the chunk under way ended on the old speaker");
-        assert!(new_tts.calls() >= 1, "the reply's next chunks are the new speaker's");
-        live.idle().await;
-        let before = new_tts.calls();
-        assert_eq!(live.say("And now the new voice.").await, SayOutcome::Heard);
-        assert!(new_tts.calls() > before, "the next reply is the new speaker's");
+        // A voice try: the speaker alone.
+        fake.loads.lock().unwrap().clear();
+        let (_loaded, failed) = Halves::new(&loader, &chosen(None, Some("voice"), None), None).load().await;
+        assert_eq!(failed, None);
+        assert_eq!(fake.loads.lock().unwrap().clone(), ["tts:voice"]);
 
-        // Still listening.
-        live.turn().await;
-        live.call.stop();
+        // A call: both halves, and the model that ends turns for `smart`.
+        fake.loads.lock().unwrap().clear();
+        let (_loaded, failed) =
+            Halves::new(&loader, &chosen(Some("words"), Some("voice"), Some("ends")), None).load().await;
+        let mut loads = fake.loads.lock().unwrap().clone();
+        loads.sort();
+        assert_eq!(
+            (failed, loads),
+            (None, ["eot:ends", "stt:words", "tts:voice", "vad:vad"].map(String::from).to_vec())
+        );
     });
 }
 
-/// A model that cannot be loaded changes nothing: the call goes on, on the model it had. Of two switches, the later
-/// one wins, and goes ahead while the earlier one is still loading; the earlier one's models are then dropped.
 #[test]
-fn a_refused_model_keeps_the_current_one_and_the_latest_switch_wins() {
-    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build().unwrap();
+fn a_slot_that_cannot_load_is_told_by_its_code_and_the_others_stay_loaded() {
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
     runtime.block_on(async {
-        let (started, began) = tokio::sync::mpsc::unbounded_channel();
-        let old = Held::new("old", false, &started);
-        let slow = Held::new("slow-one", false, &started);
-        let last = Held::new("last", false, &started);
-        let tts = Held::new("af_old", false, &started);
-        let loader = FakeLoader::new(vec![old.clone(), slow.clone(), last.clone(), tts.clone()], true);
-        let models = Arc::new(EngineModels::with(Box::new(Arc::clone(&loader)), chosen("old", "af_old", None)));
-        let mut live = Live::start(Arc::clone(&models), began);
-        assert!(live.turn().await.contains("old"));
-
-        let refused = within(models.switch(chosen("fail", "af_old", None), ALWAYS)).await.err();
-        assert_eq!(refused.as_deref(), Some("model-load-failed"));
-        assert!(live.turn().await.contains("old"), "the call goes on, on the model it had");
-
-        // The earlier switch loads slowly; a later one is asked meanwhile, and wins.
-        let counter = Arc::new(std::sync::atomic::AtomicU64::new(1));
-        let first = {
-            let (models, counter) = (Arc::clone(&models), Arc::clone(&counter));
-            tokio::spawn(async move {
-                let latest = move || counter.load(Ordering::SeqCst) == 1;
-                models.switch(chosen("slow-one", "af_old", None), &latest).await.map(|switched| switched.is_some())
-            })
-        };
-        within(async {
-            while !loader.waiting.load(Ordering::SeqCst) {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await;
-        counter.store(2, Ordering::SeqCst);
-        let second = {
-            let (models, counter) = (Arc::clone(&models), Arc::clone(&counter));
-            tokio::spawn(async move {
-                let latest = move || counter.load(Ordering::SeqCst) == 2;
-                models.switch(chosen("last", "af_old", None), &latest).await.map(|switched| switched.is_some())
-            })
-        };
-        // The later one goes ahead while the earlier one's model is still loading.
-        assert_eq!(within(second).await.unwrap(), Ok(true));
-        assert!(!first.is_finished(), "the earlier one is still loading");
-        loader.slow.send_replace(true);
-        assert_eq!(within(first).await.unwrap(), Ok(false), "overtaken: it changes nothing");
-        let heard = live.turn().await;
-        assert!(heard.contains("last") && slow.calls() == 0, "the latest switch's model: {heard:?}");
-        live.call.stop();
+        let fake = FakeLoader::new(&["words", "fail"]);
+        let (loaded, failed) =
+            Halves::new(&loader(&fake), &chosen(Some("words"), Some("fail"), None), None).load().await;
+        assert_eq!(failed.as_deref(), Some("model-load-failed"));
+        assert_eq!(fake.holders("words"), 1, "the transcriber that loaded is held");
+        drop(loaded);
+        assert_eq!(fake.holders("words"), 0);
     });
 }
 
-/// A call on silence turns to smart-turn without stopping: the switch puts the end-of-turn model in its slot, then the
-/// configuration asks for it, and the next pause asks it. Back to silence, the classifier stays in its slot, so a pause
-/// already asked of it is answered.
 #[test]
-fn smart_turn_and_back_mid_call_does_not_stop_it() {
-    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build().unwrap();
-    runtime.block_on(async {
-        let (started, began) = tokio::sync::mpsc::unbounded_channel();
-        let stt = Held::new("heard", false, &started);
-        let tts = Held::new("af_old", false, &started);
-        let ends = Held::new("ends", false, &started);
-        let loader = FakeLoader::new(vec![stt, tts, ends.clone()], false);
-        let models = Arc::new(EngineModels::with(Box::new(loader), chosen("heard", "af_old", None)));
-        let mut live = Live::start(Arc::clone(&models), began);
-        live.turn().await;
+fn a_half_with_the_same_slots_keeps_its_models_and_one_with_other_slots_gets_its_own() {
+    let fake = FakeLoader::new(&["words", "other", "voice"]);
+    let loader = loader(&fake);
+    let first = Halves::new(&loader, &chosen(Some("words"), Some("voice"), None), None);
+    let (first_in, first_out) = (first.input.as_ref().unwrap().1.clone(), first.output.as_ref().unwrap().1.clone());
 
-        drop(within(models.switch(chosen("heard", "af_old", Some("ends")), ALWAYS)).await.unwrap().expect("switched"));
-        live.call.set_config(config("smart-turn", "af_old"));
-        live.turn().await;
-        assert!(ends.calls() > 0, "the pause asked the end-of-turn model");
+    // The same slots, another configuration: the same models, so an update keeps what they loaded.
+    let mut again = chosen(Some("words"), Some("voice"), None);
+    again.input.as_mut().unwrap().config = json!({"language": "es", "end_of_turn": {"kind": "silence", "ms": 900}});
+    again.output.as_mut().unwrap().config = json!({"voice": "af_heart", "speed": 0.8});
+    let kept = Halves::new(&loader, &again, Some(&first));
+    assert!(Arc::ptr_eq(&first_in, &kept.input.as_ref().unwrap().1));
+    assert!(Arc::ptr_eq(&first_out, &kept.output.as_ref().unwrap().1));
+    // And the setup carries the new configuration.
+    let setup = kept.setup().unwrap();
+    assert_eq!(setup.input.unwrap().config.language.as_deref(), Some("es"));
+    assert_eq!(setup.output.unwrap().config.voice.as_deref(), Some("af_heart"));
 
-        drop(within(models.switch(chosen("heard", "af_old", None), ALWAYS)).await.unwrap().expect("switched"));
-        live.call.set_config(config("silence", "af_old"));
-        live.turn().await;
-        live.call.stop();
-    });
+    // Another transcriber: the input half is new, the output half is the same.
+    let moved = Halves::new(&loader, &chosen(Some("other"), Some("voice"), None), Some(&first));
+    assert!(!Arc::ptr_eq(&first_in, &moved.input.as_ref().unwrap().1));
+    assert!(Arc::ptr_eq(&first_out, &moved.output.as_ref().unwrap().1));
+
+    // A half added, a half removed.
+    let added = Halves::new(
+        &loader,
+        &chosen(Some("words"), Some("voice"), None),
+        Some(&Halves::new(&loader, &chosen(None, Some("voice"), None), None)),
+    );
+    assert!(added.input.is_some());
+    let removed = Halves::new(&loader, &chosen(None, Some("voice"), None), Some(&first));
+    assert!(removed.input.is_none() && removed.setup().unwrap().input.is_none());
 }

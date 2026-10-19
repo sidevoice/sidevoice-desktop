@@ -1,14 +1,17 @@
 //! The voice call's models and configuration, from the person's choices (`VoiceSettings`, what the page sends through
-//! `host.voice.setSettings`) and the engine's catalogues as they list their models (`CatalogCandidates`): each slot is
-//! a model of a catalogue (`{catalog, model}`), loaded with the build the person chose for a local one (`build`), else
-//! with the build its catalogue picks; the app picks the voice activity detector and, unless the person chose one that
-//! runs (`turn_model`), the end-of-turn model, from the local catalogue, and every number the person does not choose.
+//! `host.voice.start` and `preload`, and `SettingsChange`, what it sends through a call's `update`) and the engine's
+//! catalogues as they list their models (`CatalogCandidates`). The settings have the voice seam's shape
+//! (sidevoice-voice `js/voice-host.d.ts`): an input half and an output half, each optional, at least one. Each slot a
+//! half uses is a model of a catalogue (`{catalog, model}`), loaded with the build the person chose for a local one
+//! (`build`), else with the build its catalogue picks; the app picks the voice activity detector (only for an input
+//! half) and, for `smart` end of turn, the end-of-turn model, from the local catalogue, and every number the person
+//! does not choose. A half that is absent has no slot and loads nothing.
 //!
 //! The result names the catalogue and model of each slot (sidevoice-voice names none) and carries sidevoice-voice's
-//! `VoiceConfig` as JSON. What cannot be made is refused with a stable code the page translates. A take the call hands
-//! over reaches the page as `take` makes it.
+//! configuration of each half as JSON. What cannot be made is refused with a stable code the page translates. A take
+//! the call hands over reaches the page as `take` makes it.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 
 pub mod take;
@@ -20,25 +23,50 @@ pub const LOCAL_CATALOG: &str = "local";
 /// The family of the voice activity detector a call prefers.
 const VAD_FAMILY: &str = "silero-vad";
 
-/// What the person chooses, as the page sends it. Read strictly: an unknown key is refused.
+/// What the person chooses for a call, as the page sends it: the seam's `VoiceSettings`. Read strictly: an unknown key
+/// is refused.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct VoiceSettings {
-    pub stt: SttChoice,
-    pub tts: TtsChoice,
+    /// Listening: absent (or null), no microphone, no detector, no transcriber, no end-of-turn model.
     #[serde(default)]
-    pub patience: Option<Patience>,
+    pub input: Option<InputSettings>,
+    /// Speaking: absent (or null), no speaker model and no playback.
     #[serde(default)]
-    pub end_of_turn: Option<EndOfTurn>,
+    pub output: Option<OutputSettings>,
     /// How long the models stay in memory with the call stopped, in minutes; absent for the call's default (10).
     #[serde(default)]
     pub idle_unload_minutes: Option<u32>,
+}
+
+/// The input half: the transcriber, what ends a turn, and how it listens.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct InputSettings {
+    pub stt: SttChoice,
+    /// `{kind: "silence"}` when absent.
+    #[serde(default, rename = "endOfTurn")]
+    pub end_of_turn: Option<EndOfTurn>,
+    #[serde(default)]
+    pub patience: Option<Patience>,
     /// Continuous raised-bar speech required to cut sounding agent audio, in seconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub barge_in_min_speech: Option<f32>,
-    /// The local end-of-turn model `smart-turn` takes, when it runs here; else (or absent) the first that does.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn_model: Option<String>,
+}
+
+/// The output half: the speaker model, its voice and speed.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutputSettings {
+    pub tts: TtsChoice,
+    /// One of the model's voices; absent or null for its first.
+    #[serde(default)]
+    pub voice: Option<String>,
+    #[serde(default)]
+    pub speed: Option<f32>,
+    /// The language of what is said when `say` gives none; absent: the input's.
+    #[serde(default)]
+    pub language: Option<String>,
 }
 
 /// Speech to text: a model of a catalogue, and the language spoken.
@@ -47,7 +75,7 @@ pub struct VoiceSettings {
 pub struct SttChoice {
     pub catalog: String,
     pub model: String,
-    /// A BCP 47 tag; absent or null to detect it.
+    /// A BCP 47 tag; absent or null to detect it. Not part of the model's choice.
     #[serde(default)]
     pub language: Option<String>,
     /// For a local model, the build of it to load; absent for the one its catalogue picks. Ignored for a provider's.
@@ -55,17 +83,12 @@ pub struct SttChoice {
     pub build: Option<String>,
 }
 
-/// Text to speech: a model of a catalogue, its voice and speed.
+/// Text to speech: a model of a catalogue.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TtsChoice {
     pub catalog: String,
     pub model: String,
-    /// One of the model's voices; absent or null for its first.
-    #[serde(default)]
-    pub voice: Option<String>,
-    #[serde(default)]
-    pub speed: Option<f32>,
     /// For a local model, the build of it to load; absent for the one its catalogue picks. Ignored for a provider's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build: Option<String>,
@@ -79,12 +102,57 @@ pub enum Patience {
     Calm,
 }
 
-/// What ends a turn: a pause, or the engine's `end-of-turn` model.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
+/// What ends a turn: a pause (`ms` after the detector says speech stopped; the patience's when absent), which loads no
+/// end-of-turn model, or the engine's end-of-turn model, asked at each pause.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum EndOfTurn {
-    Silence,
-    SmartTurn,
+    Silence {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ms: Option<u32>,
+    },
+    Smart {
+        /// The local model that ends turns, when it runs here; else (or absent, or null) the first that does.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<ModelRef>,
+    },
+}
+
+/// A model as the page names it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelRef {
+    pub catalog: String,
+    pub model: String,
+}
+
+/// A change of a running call's settings, as the page sends it: a half that is absent stays as it is, `null` removes
+/// it, and settings replace it (or add it). Read strictly, like the settings.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SettingsChange {
+    #[serde(default, deserialize_with = "present")]
+    pub input: Option<Option<InputSettings>>,
+    #[serde(default, deserialize_with = "present")]
+    pub output: Option<Option<OutputSettings>>,
+    #[serde(default)]
+    pub idle_unload_minutes: Option<u32>,
+}
+
+/// A field that is there, `null` included.
+fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<Option<Option<T>>, D::Error> {
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
+impl VoiceSettings {
+    /// The settings after `change`.
+    pub fn changed(&self, change: SettingsChange) -> VoiceSettings {
+        VoiceSettings {
+            input: change.input.unwrap_or_else(|| self.input.clone()),
+            output: change.output.unwrap_or_else(|| self.output.clone()),
+            idle_unload_minutes: change.idle_unload_minutes.or(self.idle_unload_minutes),
+        }
+    }
 }
 
 /// A catalogue of the engine, as far as choosing from it needs: why it is not current, and the models it lists.
@@ -120,9 +188,9 @@ pub struct BuildCandidate {
     pub unfit: Option<String>,
 }
 
-/// Why a configuration cannot be made: the page's code for it (`model-unknown`, `model-unfit`, `catalog-not-found`,
-/// `vad-unavailable`, `end-of-turn-unavailable`, or the engine's own: `build-not-found`, why a chosen build does not
-/// run here, a provider's status), with what a provider said.
+/// Why a configuration cannot be made: the page's code for it (`halves-missing`, `model-unknown`, `model-unfit`,
+/// `catalog-not-found`, `vad-unavailable`, `end-of-turn-unavailable`, or the engine's own: `build-not-found`, why a
+/// chosen build does not run here, a provider's status), with what a provider said.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Refusal {
     pub code: String,
@@ -147,23 +215,47 @@ impl ModelChoice {
     }
 }
 
-/// What the app makes of the person's choices: the model that fills each of the call's slots, and sidevoice-voice's
-/// `VoiceConfig` (which names no model) as JSON.
+/// What the app makes of the person's choices: for each half the call has, the model that fills each of its slots and
+/// its configuration, and what holds for the whole call. The configurations are sidevoice-voice's (`InputConfig`,
+/// `OutputConfig`, `VoiceConfig`, which name no model) as JSON.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct VoiceChoice {
-    pub vad: ModelChoice,
-    pub stt: ModelChoice,
-    pub tts: ModelChoice,
-    /// For `smart-turn`: the local model that ends turns the person chose, when it runs here; else the first that does.
-    pub end_of_turn: Option<ModelChoice>,
+    pub input: Option<InputChoice>,
+    pub output: Option<OutputChoice>,
+    /// `VoiceConfig`.
     pub config: Value,
 }
 
-impl VoiceChoice {
-    /// Whether `other` fills the call's slots with the same models (its configuration aside): other models come when a
-    /// slot's catalogue, model or build changes, or the end of turn or the model that ends turns does.
-    pub fn same_models(&self, other: &VoiceChoice) -> bool {
-        (&self.vad, &self.stt, &self.tts, &self.end_of_turn) == (&other.vad, &other.stt, &other.tts, &other.end_of_turn)
+/// The input half's slots: the detector and the transcriber, and for `smart` the model that ends turns.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct InputChoice {
+    pub vad: ModelChoice,
+    pub stt: ModelChoice,
+    pub end_of_turn: Option<ModelChoice>,
+    /// `InputConfig`.
+    pub config: Value,
+}
+
+/// The output half's slot: the speaker.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct OutputChoice {
+    pub tts: ModelChoice,
+    /// `OutputConfig`.
+    pub config: Value,
+}
+
+impl InputChoice {
+    /// Whether `other` fills the half's slots with the same models (its configuration aside): a half with the same
+    /// models keeps what it loaded when the call is updated.
+    pub fn same_models(&self, other: &InputChoice) -> bool {
+        (&self.vad, &self.stt, &self.end_of_turn) == (&other.vad, &other.stt, &other.end_of_turn)
+    }
+}
+
+impl OutputChoice {
+    /// Whether `other` fills the half's slot with the same model (its configuration aside).
+    pub fn same_models(&self, other: &OutputChoice) -> bool {
+        self.tts == other.tts
     }
 }
 
@@ -171,49 +263,71 @@ fn refusal(code: &str, model: &str, message: String) -> Refusal {
     Refusal { code: code.to_string(), model: model.to_string(), detail: None, message }
 }
 
-/// The models and the configuration for `settings`, from what `catalogs` list.
+/// The models and the configuration for `settings`, from what `catalogs` list. Only the halves `settings` has are
+/// looked at.
 pub fn choose(settings: &VoiceSettings, catalogs: &[CatalogCandidates]) -> Result<VoiceChoice, Refusal> {
-    let stt = slot(catalogs, &settings.stt.catalog, &settings.stt.model, settings.stt.build.as_deref(), "stt")?;
-    let tts = slot(catalogs, &settings.tts.catalog, &settings.tts.model, settings.tts.build.as_deref(), "tts")?;
-    let local: &[Candidate] = catalogs.iter().find(|c| c.id == LOCAL_CATALOG).map_or(&[], |c| &c.models);
-    fn runs_as<'a>(local: &'a [Candidate], task: &'a str) -> impl Iterator<Item = &'a Candidate> {
-        local.iter().filter(move |m| m.runs && m.capabilities.iter().any(|capability| capability == task))
+    if settings.input.is_none() && settings.output.is_none() {
+        return Err(refusal("halves-missing", "", "A call needs an input half, an output half or both.".into()));
     }
+    let local: &[Candidate] = catalogs.iter().find(|c| c.id == LOCAL_CATALOG).map_or(&[], |c| &c.models);
+    let input = settings.input.as_ref().map(|input| choose_input(input, catalogs, local)).transpose()?;
+    let output = settings.output.as_ref().map(|output| choose_output(output, catalogs)).transpose()?;
+    let mut config = json!({});
+    if let Some(minutes) = settings.idle_unload_minutes {
+        config["idle_unload_minutes"] = json!(minutes);
+    }
+    Ok(VoiceChoice { input, output, config })
+}
+
+/// The local models that run here and have `task`.
+fn runs_as<'a>(local: &'a [Candidate], task: &'a str) -> impl Iterator<Item = &'a Candidate> {
+    local.iter().filter(move |m| m.runs && m.capabilities.iter().any(|capability| capability == task))
+}
+
+fn choose_input(
+    input: &InputSettings,
+    catalogs: &[CatalogCandidates],
+    local: &[Candidate],
+) -> Result<InputChoice, Refusal> {
+    let stt = slot(catalogs, &input.stt.catalog, &input.stt.model, input.stt.build.as_deref(), "stt")?;
     let vad = runs_as(local, "vad")
         .find(|m| m.family.as_deref() == Some(VAD_FAMILY))
         .or_else(|| runs_as(local, "vad").next())
         .map(|m| ModelChoice::local(&m.id))
         .ok_or_else(|| refusal("vad-unavailable", "", "No voice activity detector runs on this device.".into()))?;
-    let end_of_turn = settings.end_of_turn.unwrap_or(EndOfTurn::Silence);
-    let ends_turns = match end_of_turn {
-        EndOfTurn::Silence => None,
+    let (end_of_turn, ends_turns) = match input.end_of_turn.clone().unwrap_or(EndOfTurn::Silence { ms: None }) {
+        silence @ EndOfTurn::Silence { .. } => (silence, None),
         // As the web's voice source: a chosen model that is not one that runs here gives way to the first that does.
-        EndOfTurn::SmartTurn => Some(
-            runs_as(local, "end-of-turn")
-                .find(|m| settings.turn_model.as_deref() == Some(m.id.as_str()))
+        EndOfTurn::Smart { model } => {
+            let wanted = model.filter(|wanted| wanted.catalog == LOCAL_CATALOG);
+            let chosen = runs_as(local, "end-of-turn")
+                .find(|m| wanted.as_ref().is_some_and(|wanted| wanted.model == m.id))
                 .or_else(|| runs_as(local, "end-of-turn").next())
                 .map(|m| ModelChoice::local(&m.id))
                 .ok_or_else(|| {
                     refusal("end-of-turn-unavailable", "", "No model that ends turns runs on this device.".into())
-                })?,
-        ),
+                })?;
+            (EndOfTurn::Smart { model: None }, Some(chosen))
+        }
     };
-    let mut config = json!({
-        "language": settings.stt.language,
-        "voice": settings.tts.voice,
-        "speed": settings.tts.speed.unwrap_or(1.0),
-        "end_of_turn": end_of_turn,
-    });
-    if let Some(patience) = settings.patience {
+    let mut config = json!({ "language": input.stt.language, "end_of_turn": end_of_turn });
+    if let Some(patience) = input.patience {
         config["patience"] = json!(patience);
     }
-    if let Some(minutes) = settings.idle_unload_minutes {
-        config["idle_unload_minutes"] = json!(minutes);
-    }
-    if let Some(seconds) = settings.barge_in_min_speech {
+    if let Some(seconds) = input.barge_in_min_speech {
         config["barge_in_min_speech"] = json!(seconds);
     }
-    Ok(VoiceChoice { vad, stt, tts, end_of_turn: ends_turns, config })
+    Ok(InputChoice { vad, stt, end_of_turn: ends_turns, config })
+}
+
+fn choose_output(output: &OutputSettings, catalogs: &[CatalogCandidates]) -> Result<OutputChoice, Refusal> {
+    let tts = slot(catalogs, &output.tts.catalog, &output.tts.model, output.tts.build.as_deref(), "tts")?;
+    let config = json!({
+        "language": output.language,
+        "voice": output.voice,
+        "speed": output.speed.unwrap_or(1.0),
+    });
+    Ok(OutputChoice { tts, config })
 }
 
 /// Model `model` of catalogue `catalog`, for `task`: one the catalogue lists for it and that runs here. A catalogue
