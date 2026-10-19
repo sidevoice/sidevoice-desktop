@@ -572,14 +572,11 @@ pub fn run() {
             if !window.label().starts_with(ROOM_PREFIX) {
                 return;
             }
-            match event {
-                // Closing the room window hides it: the call and the tray stay alive. Quit from the tray or ⌘Q.
-                WindowEvent::CloseRequested { api, .. } => {
-                    api.prevent_close();
-                    let _ = window.hide();
-                    call_controls::update(window.app_handle());
-                }
-                _ => {}
+            // Closing the room window hides it: the call and the tray stay alive. Quit from the tray or ⌘Q.
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+                call_controls::update(window.app_handle());
             }
         })
         .build(context)
