@@ -628,6 +628,7 @@ pub fn run() {
             // Quitting: the voice call stops and releases its devices and models; the local host's proxy stops and closes
             // every tunnel; an update ready installs (automatic mode).
             if let tauri::RunEvent::Exit = event {
+                #[cfg(target_os = "macos")]
                 voice::shutdown(app);
                 local_host::shutdown(app);
                 if !app.state::<AppState>().resetting.load(Ordering::SeqCst) {
