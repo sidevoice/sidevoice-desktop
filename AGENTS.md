@@ -23,3 +23,7 @@ native ones (tray, …) in `src-tauri/core/src/i18n.rs`; older literals in the s
 
 - Logic lives in `cargo xtask` (`xtask/`), not in workflow YAML: a workflow sets up the machine and calls one
   `cargo xtask` command, which runs the same on a laptop (RELEASING.md, "The steps").
+
+## Public product information
+
+For changes to user-visible behavior, supported platforms/models, setup, security/privacy practices, availability, limitations, or release/download details, follow the shared [public-information process](https://github.com/sidevoice/landing/blob/main/AGENTS.md#keep-public-product-information-current). Record the landing change/PR or a linked `sidevoice/landing` issue in the PR checklist. Landing issues are the follow-up triage queue.
