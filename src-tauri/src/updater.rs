@@ -57,7 +57,7 @@ pub fn setup(app: &AppHandle) {
         return;
     }
     if let Err(e) = app.plugin(tauri_plugin_updater::Builder::new().build()) {
-        return eprintln!("sidevoice: the updater did not start: {e}");
+        return log::error!("the updater did not start: {e}");
     }
     app.manage(Mutex::new(Updates::default()));
     let app = app.clone();

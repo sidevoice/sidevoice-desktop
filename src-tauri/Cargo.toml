@@ -36,6 +36,10 @@ url = "2.5"
 # commands. Its checks sleep on the app's Tokio runtime.
 tauri-plugin-updater = "2.13"
 tokio = { version = "1", features = ["time"] }
+# The app log (src/lib.rs `applog`): a rotating, size-capped file in the platform's log directory, fed by the Rust side and
+# by the room page's console errors (bridge/webview-log.js).
+tauri-plugin-log = "2"
+log = "0.4"
 
 # This computer's own core, its pairing and the page's proxy (src/local_host.rs; docs/LOCAL_HOST.md). Unix sockets.
 # `fetch`: its install's HTTPS client, for "Prepare this computer" (docs/LOCAL_HOST.md → Install).

@@ -11,6 +11,10 @@ use crate::build_info::BuildInfo;
 /// Removes the WebView's default context menu (bridge/no-context-menu.js); appended to the scripts of every window.
 pub const NO_CONTEXT_MENU_SCRIPT: &str = include_str!("../../../bridge/no-context-menu.js");
 
+/// Forwards the room page's console warnings and errors, uncaught errors and unhandled rejections to the app log
+/// (bridge/webview-log.js); the room window only.
+pub const WEBVIEW_LOG_SCRIPT: &str = include_str!("../../../bridge/webview-log.js");
+
 /// The bridge script, with its room-origin placeholder still in place.
 pub const SCRIPT_TEMPLATE: &str = include_str!("../../../bridge/desktop-bridge.js");
 const ORIGIN_PLACEHOLDER: &str = "\"__SIDEVOICE_ROOM_ORIGIN__\"";

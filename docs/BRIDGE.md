@@ -216,7 +216,7 @@ docs/LOCAL_HOST.md.
 | `start()` / `stop()` / `restart()` / `serviceInstall()` / `serviceUninstall()` | the connector's `service …`; resolve the state after it |
 | `setStartAtLogin(enabled)` | whether the service starts at the next sign-in, and only that (a running service keeps running, a stopped one stays stopped): the connector's `service login on\|off`, which it does not ship yet — until then it rejects `service.login-unsupported`; the state it resolves reads the change back in `installed`; a non-boolean rejects `bad_request` (docs/LOCAL_HOST.md → Start at sign-in) |
 | `reconnect()` | pairs the app with the core again (after `refused`; never done on its own) |
-| `revealLog()` | shows the core's log in Finder (`~/.sidevoice/core.log`, else `connector.log`) |
+| `revealLog()` | shows the logs in Finder: the app's own (below), and the core's (`~/.sidevoice/core.log`, else `connector.log`) when there is one; the app's is there with no connector installed |
 | `pairingCode()` | `{code, expires_in, reach}`, on the person's click only: shown, never sent — the page's convention; native authorises the caller, not a person (docs/LOCAL_HOST.md → Trust) |
 | `pairRoom(url, code)` | pairs this machine with a room (`pair … --json` only): `{room}` |
 | `install(onProgress?)` | «Prepare this computer»: installs Sidevoice from the npm registry, without Node (docs/LOCAL_HOST.md → Install). Answers at once a promise of the state after it — once the app is paired with the new core, `reachable` — that carries `job`, this call's id (sidevoice-web's `LocalHostInstallOperation`). `onProgress({step, done, total, cancellable})` about twice a second while it runs, when that changes (below). One at a time: another call meanwhile rejects `install.busy` |
@@ -749,3 +749,13 @@ interface UpdaterStatus {
   mute before the settings; start after stop; dispose's delivered ends), and a call on the engine's real models
   through the app's adapter. The shared audio itself (`SharedNativeAudio`: one capture, silence to unrouted lanes,
   the mixed echo reference) is sidevoice-voice's, tested in its own CI.
+
+## The app log
+
+The app keeps a rotating log (1 MB per file, 3 files) written by `tauri-plugin-log` in the platform's log directory:
+macOS `~/Library/Logs/dev.sidevoice.desktop/sidevoice-desktop.log`, Linux `~/.local/share/dev.sidevoice.desktop/logs/`,
+Windows `%LOCALAPPDATA%\dev.sidevoice.desktop\logs\`. It holds the Rust side's lines (level info and above, panics
+included) and what the room page reports through `bridge/webview-log.js`: `console.warn`, `console.error`, uncaught
+errors and unhandled rejections, as lines with target `webview`. The page's lines carry only strings and numbers, an
+Error's name, message and first stack lines, and an object's `code`, `key`, `name` and `message`; credential-shaped
+text is masked and a flood is cut. Nothing else is logged: no keys, tokens, transcripts or message text.

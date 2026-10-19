@@ -225,12 +225,47 @@ pub(crate) fn room_page(app: &AppHandle, webview: &Webview) -> Result<(), String
     Ok(())
 }
 
+/// The app log: `<LOG_FILE>.log` in the platform's log directory (macOS `~/Library/Logs/<identifier>/`, Linux
+/// `~/.local/share/<identifier>/logs/`, Windows `%LOCALAPPDATA%\<identifier>\logs\`), with the Rust side's lines and the
+/// room page's (bridge/webview-log.js). It is rotated at [`LOG_MAX_BYTES`], keeping [`LOG_KEPT`] files.
+pub(crate) const LOG_FILE: &str = "sidevoice-desktop";
+const LOG_MAX_BYTES: u128 = 1_000_000;
+const LOG_KEPT: usize = 3;
+
+/// Where the app log is (it may not exist yet).
+pub(crate) fn app_log_file(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_log_dir().ok().map(|dir| dir.join(format!("{LOG_FILE}.log")))
+}
+
+fn log_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    use tauri_plugin_log::{RotationStrategy, Target, TargetKind};
+    tauri_plugin_log::Builder::new()
+        .clear_targets()
+        .target(Target::new(TargetKind::LogDir { file_name: Some(LOG_FILE.into()) }))
+        .level(log::LevelFilter::Info)
+        .level_for("tao", log::LevelFilter::Warn)
+        .level_for("wry", log::LevelFilter::Warn)
+        .max_file_size(LOG_MAX_BYTES)
+        .rotation_strategy(RotationStrategy::KeepSome(LOG_KEPT))
+        .build()
+}
+
+/// A panic goes to the log too (then to stderr as before).
+fn log_panics() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        log::error!("panic: {info}");
+        previous(info);
+    }));
+}
+
 fn debugging() -> bool {
     std::env::var_os("SIDEVOICE_DEBUG").is_some_and(|v| v == "1")
 }
 
 /// Diagnostics on stderr, only with `SIDEVOICE_DEBUG=1` (CI's smoke tests read them).
 pub(crate) fn debug(message: &str) {
+    log::info!("{message}");
     if debugging() {
         eprintln!("sidevoice: {message}");
     }
@@ -306,6 +341,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
         .inner_size(1100.0, 760.0)
         .min_inner_size(420.0, 560.0)
         .initialization_script(bridge::NO_CONTEXT_MENU_SCRIPT)
+        .initialization_script(bridge::WEBVIEW_LOG_SCRIPT)
         .initialization_script(bridge::script_for_origin(
             APP_ORIGIN,
             updater::offered(),
@@ -495,13 +531,15 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
 pub fn run() {
     #[cfg(target_os = "macos")]
     if !data::await_reset_idle() {
-        eprintln!("sidevoice: reset lock unavailable or cleanup still running");
+        eprintln!("sidevoice: reset lock unavailable or cleanup still running"); // before the log exists
         return;
     }
     let context = tauri::generate_context!();
     #[cfg(feature = "probe")]
     let context = probe::with_page(context);
-    let builder = tauri::Builder::default();
+    log_panics();
+    // First, so everything after it is logged.
+    let builder = tauri::Builder::default().plugin(log_plugin());
     // The call controls card is a non-activating panel on macOS (src/call_controls.rs).
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_nspanel::init());
@@ -547,7 +585,7 @@ pub fn run() {
                 Ok(engines) => {
                     app.manage(engine_ipc::EngineState::new(engines));
                 }
-                Err(e) => eprintln!("sidevoice: the native engine did not start: {} ({})", e.key, e.message),
+                Err(e) => log::error!("the native engine did not start: {} ({})", e.key, e.message),
             }
             // This computer's own core, if any (macOS): found, paired, proxied for the page (docs/LOCAL_HOST.md).
             local_host::setup(&handle);
