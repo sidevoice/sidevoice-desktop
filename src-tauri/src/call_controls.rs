@@ -547,7 +547,7 @@ fn display(app: &AppHandle, key: Option<&str>, at: Option<Point>) -> Option<Disp
         .map(|m| monitor_display(&m).1)
 }
 
-/// The corner a card that was never moved on a display first appears in.
+/// The preferred corner: where a card first appears, and where a click on a corner in Settings puts it.
 fn default_corner(app: &AppHandle) -> Corner {
     app.state::<AppState>().settings.lock().unwrap().as_ref().map(|s| s.call_controls_corner).unwrap_or_default()
 }
@@ -653,6 +653,17 @@ pub async fn call_controls_settings(
         ("set-corner", _, Some(corner)) => {
             crate::change_settings(&app, |s| s.call_controls_corner = corner)
                 .map_err(|e| crate::refusal("internal", e))?;
+            // Clicking a corner, the chosen one too, moves the card there now and makes it the preferred one: the places
+            // dragged to are forgotten (the sizes are kept). A drag after that leaves the card where it is dropped, the
+            // corner still chosen, until a corner is clicked again or "Reset size and position".
+            if let Some(card) = card(&app) {
+                let mut inner = card.0.lock().unwrap();
+                inner.placements.displays.clear();
+                if let Some((display, _)) = inner.rest.take() {
+                    inner.rest = Some((display, Spot::corner(corner)));
+                }
+                save(&inner);
+            }
             place(&app);
             Ok(serde_json::json!({ "corner": corner }))
         }
