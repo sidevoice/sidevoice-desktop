@@ -35,10 +35,11 @@ secrets into the environment of the steps that need them, choose which steps run
 - `macos` job (the app and .dmg; not on a pull request): `cargo xtask macos app [--signed] --channel C`,
   `check-app [--signed]`, `first-open`, `dmg [--signed]`, `sign-dmg`, `checksums`, `forget-secrets`, `dmg-screens`.
   The only job with the Apple signing secrets.
-- `macos-native` job, beside it: on the CI-only probe build, `probe-app`, `local-host`, `probe`, `card`. It shares
+- `macos-native` job, beside it: on the CI-only probe build, `probe-app`, `local-host`, `probe`, `card`, `exit`, `memory`. It shares
   the Rust build cache with `macos` (the same dependencies) and is the one that writes it (CI caches, below).
-- `macos-call` job, beside both: `voice-models`, with the models it downloads cached by the engine's commit
-  (`SIDEVOICE_REAL_CALL_MODELS`).
+- `macos-call` job, beside both: `voice-models` and `voice-memory`, with the models they download cached by the
+  engine's commit (`SIDEVOICE_REAL_CALL_MODELS`). `memory` and `voice-memory` measure the app's footprint and Metal
+  allocation over a long session (#145) and fail only on clear growth: the table is in the step's log and summary.
 - `publish-nightly` and `publish-release` jobs (the same steps): `cargo xtask publish assets release TAG` or
   `publish assets nightly`, then `publish release TAG` or `publish nightly`. The nightly waits for the lint and the
   installers' jobs only; a release waits for every job, `macos-native` and `macos-call` included.

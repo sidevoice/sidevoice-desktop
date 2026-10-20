@@ -8,7 +8,7 @@
 //! so the worker hands its other tasks on for that while.
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -32,6 +32,23 @@ const VAD_OPTIONS: VadOptions = VadOptions { threshold: 0.6, min_silence_ms: 1, 
 #[derive(Default)]
 pub struct ModelCache {
     loaded: Mutex<HashMap<String, Arc<tokio::sync::Mutex<Option<Weak<dyn Model>>>>>>,
+}
+
+impl ModelCache {
+    /// The models someone still holds (a call, a preload, a stream, a load under way), by their key; none once every
+    /// model the engine loaded has been dropped.
+    pub(crate) fn held(&self) -> Vec<String> {
+        let mut held: Vec<String> = lock(&self.loaded)
+            .iter()
+            .filter(|(_, entry)| match entry.try_lock() {
+                Ok(model) => model.as_ref().is_some_and(|model| model.strong_count() > 0),
+                Err(_) => true, // a load under way
+            })
+            .map(|(key, _)| key.clone())
+            .collect();
+        held.sort();
+        held
+    }
 }
 
 /// The engine's models, each loaded by its catalogue, or as its build for a local model with a build chosen.

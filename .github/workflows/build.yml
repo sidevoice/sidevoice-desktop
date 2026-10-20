@@ -238,6 +238,14 @@ jobs:
         run: cargo xtask macos probe
       - name: The call controls card over a full-screen editor (never activating, clicks, drag, typing, states)
         run: cargo xtask macos card
+      - name: Restarting and quitting with a model on the GPU loaded (each process ends cleanly, no crash report)
+        run: cargo xtask macos exit
+      # Informational for now: the settings-cycle step of this walk intermittently keeps 50 to 330 MiB after the models' idle
+      # keep (about one run in two), with the host holding nothing (#145). It becomes a gate once that is fixed.
+      - name: The app's footprint stays flat over models, calls and setting changes (table, fails only on clear growth)
+        continue-on-error: true
+        timeout-minutes: 25
+        run: cargo xtask macos memory
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -271,6 +279,10 @@ jobs:
         env:
           SIDEVOICE_REAL_CALL_MODELS: ${{ runner.temp }}/real-call-models
         run: cargo xtask macos voice-models
+      - name: The footprint and Metal allocation stay flat over calls and changes of a call's settings (table, fails only on clear growth)
+        env:
+          SIDEVOICE_REAL_CALL_MODELS: ${{ runner.temp }}/real-call-models
+        run: cargo xtask macos voice-memory
       - if: steps.models.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@v4
         with:

@@ -268,9 +268,21 @@ fn settings(choice: &VoiceChoice, idle: u32) -> VoiceSettings {
             stt,
             end_of_turn: None,
             patience: None,
+            listening_bar: None,
             barge_in_min_speech: None,
+            barge_in_window: None,
+            vad_confidence: None,
+            speech_start_ms: None,
+            pre_roll_ms: None,
         }),
-        output: choice.output.as_ref().map(|_| OutputSettings { tts, voice: None, speed: None, language: None }),
+        output: choice.output.as_ref().map(|_| OutputSettings {
+            tts,
+            voice: None,
+            speed: None,
+            fade_ms: None,
+            language: None,
+        }),
+        audio_grace_ms: None,
         idle_unload_minutes: Some(idle),
     }
 }
@@ -668,4 +680,48 @@ fn end_input_closes_the_open_turn_now_and_leaves_the_playback_alone() {
         assert_ne!(seen.last_listening("a").as_deref(), Some("muted"), "endInput does not mute");
         assert_eq!(say_steps(&seen, "b", "done"), 0, "B's playback still goes on");
     });
+}
+
+/// Quitting lets go of every model, well before their idle minutes: a running call's, a stopped call's and a
+/// preload's, and keeps nothing a preload loads after it. Driven as the app quits: from a thread outside the runtime's
+/// context (`RunEvent::Exit`), through `block_on`.
+#[test]
+fn close_lets_go_of_every_model_before_its_idle_minutes() {
+    let runtime = runtime();
+    let (state, _audio) = host();
+    let (seen, fake) = (Seen::default(), fake());
+    let other = || Halves::new(&loader(&fake), &chosen(Some("other"), None, None), None);
+    runtime.block_on(async {
+        let both = chosen(Some("words"), Some("voice"), None);
+        started(&state, &fake, "running", seen.page(), false).await;
+        state.create_call("stopped".into()).await.unwrap();
+        state.open("stopped", applied(&fake, &both, None, 30), false, seen.page()).await.unwrap();
+        within(state.ready("stopped")).await.unwrap();
+        within(state.dispose_call("stopped")).await.unwrap();
+        within(state.preload(other(), 30)).await.unwrap();
+        assert!(fake.holders("words") > 0 && fake.holders("other") > 0, "loaded before the quit");
+    });
+    let handle = runtime.handle().clone();
+    let (held, state) = std::thread::spawn(move || {
+        let held = handle.block_on(state.close(Duration::from_secs(5), Duration::from_millis(10)));
+        (held, state)
+    })
+    .join()
+    .unwrap();
+    assert!(held.is_empty(), "nothing held: {held:?}");
+    // A dropped call's own task lets go of its models at a time of its own, soon; the idle minutes are 3 s.
+    let gone = |model: &str| {
+        for _ in 0..50 {
+            if fake.holders(model) == 0 {
+                return true;
+            }
+            std::thread::sleep(MINUTE / 5);
+        }
+        false
+    };
+    for model in ["words", "voice", "other"] {
+        assert!(gone(model), "{model} let go at the quit, before its idle minutes");
+    }
+    runtime.block_on(async { within(state.preload(other(), 30)).await.unwrap() });
+    assert_eq!(fake.holders("other"), 0, "a preload after the quit keeps nothing");
 }

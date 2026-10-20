@@ -352,3 +352,88 @@ fn a_change_replaces_adds_or_removes_a_half_and_leaves_the_rest() {
     assert_eq!(choose(&none, &catalogs(true)).unwrap_err().code, "halves-missing");
     assert!(serde_json::from_value::<SettingsChange>(json!({"nope": 1})).is_err());
 }
+
+/// What the web sends for a call with its defaults (sidevoice-web `voice-settings.js`, `voiceHalves` of
+/// `defaultVoiceSettings`, `TURN_TUNING`): every turn number it owns, at the input half, the output half and the call.
+fn web_defaults() -> Value {
+    json!({
+        "input": {
+            "stt": {"catalog": "local", "model": "whisper-small", "language": null},
+            "endOfTurn": {"kind": "smart"},
+            "patience": "normal",
+            "listening_bar": {"quiet": 0.5, "playing": 0.65},
+            "barge_in_min_speech": 0.6,
+            "barge_in_window": 2.5,
+            "vad_confidence": 0.6,
+            "speech_start_ms": 400,
+            "pre_roll_ms": 1000,
+        },
+        "output": {
+            "tts": {"catalog": "local", "model": "kokoro-82m-v1.0"},
+            "voice": null, "speed": 1, "fade_ms": 30, "language": null,
+        },
+        "audio_grace_ms": 1000,
+        "idle_unload_minutes": 10,
+    })
+}
+
+#[test]
+fn the_webs_settings_with_every_turn_number_are_read() {
+    let web: VoiceSettings = serde_json::from_value(web_defaults()).unwrap();
+    let input = web.input.as_ref().unwrap();
+    assert_eq!(input.listening_bar, Some(ListeningBar { quiet: 0.5, playing: 0.65 }));
+    assert_eq!(
+        (input.barge_in_min_speech, input.barge_in_window, input.vad_confidence),
+        (Some(0.6), Some(2.5), Some(0.6))
+    );
+    assert_eq!((input.speech_start_ms, input.pre_roll_ms), (Some(400), Some(1000)));
+    assert_eq!(web.output.as_ref().unwrap().fade_ms, Some(30.0));
+    assert_eq!(web.audio_grace_ms, Some(1000));
+
+    // Still strict: a key the seam does not have is refused, in the listening bar too.
+    let mut unknown = web_defaults();
+    unknown["input"]["listening_bar"]["loud"] = json!(1);
+    assert!(serde_json::from_value::<VoiceSettings>(unknown).is_err());
+    // The fade is checked here (the call never sees it), as the seam's web host does.
+    for fade in [json!(-1), json!(1001), json!("30")] {
+        let mut out_of_range = web_defaults();
+        out_of_range["output"]["fade_ms"] = fade;
+        assert!(serde_json::from_value::<VoiceSettings>(out_of_range).is_err());
+    }
+}
+
+#[test]
+fn the_turn_numbers_reach_the_native_voice_config_as_they_are() {
+    let web: VoiceSettings = serde_json::from_value(web_defaults()).unwrap();
+    let choice = choose(&web, &catalogs(true)).unwrap();
+    let config = &input(&choice).config;
+    assert_eq!(config["listening_bar"], json!({"quiet": 0.5f32, "playing": 0.65f32}));
+    assert_eq!(config["barge_in_min_speech"], json!(0.6f32));
+    assert_eq!(config["barge_in_window"], json!(2.5f32));
+    assert_eq!(config["vad_confidence"], json!(0.6f32));
+    assert_eq!((config["speech_start_ms"].clone(), config["pre_roll_ms"].clone()), (json!(400), json!(1000)));
+    assert_eq!(choice.config, json!({"audio_grace_ms": 1000, "idle_unload_minutes": 10}));
+    // The fade is not the native speaker's to take: the output's configuration has no such key.
+    assert!(output(&choice).config.get("fade_ms").is_none());
+
+    // What is absent stays absent, for the call's own default.
+    let bare = settings(("local", "whisper-small"), ("local", "kokoro-82m-v1.0"));
+    let choice = choose(&bare, &catalogs(true)).unwrap();
+    for key in ["listening_bar", "barge_in_window", "vad_confidence", "speech_start_ms", "pre_roll_ms"] {
+        assert!(input(&choice).config.get(key).is_none(), "{key}");
+    }
+    assert!(choice.config.get("audio_grace_ms").is_none());
+}
+
+#[test]
+fn a_change_carries_the_grace_and_keeps_it_when_not_named() {
+    let web: VoiceSettings = serde_json::from_value(web_defaults()).unwrap();
+    let change = |value: Value| serde_json::from_value::<SettingsChange>(value).unwrap();
+    let longer = web.changed(change(json!({"audio_grace_ms": 2000})));
+    assert_eq!(longer.audio_grace_ms, Some(2000));
+    assert_eq!(choose(&longer, &catalogs(true)).unwrap().config["audio_grace_ms"], json!(2000));
+    assert_eq!(longer.changed(change(json!({"output": null}))).audio_grace_ms, Some(2000));
+    // A half the web sends whole, with its turn numbers.
+    let input = change(json!({"input": web_defaults()["input"].clone()}));
+    assert_eq!(web.changed(input).input, web.input);
+}

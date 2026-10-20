@@ -263,6 +263,18 @@ what the interface's own window offers — same origin, same permission rule —
   } catch (error) {
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-voice error " + String(error && (error.message || error)) });
   }
+  // Last, a model on the GPU left loaded, as after a call: whisper-tiny's whisper.cpp build (Metal on Apple silicon),
+  // preloaded. With SIDEVOICE_DEBUG_EXIT the app then quits or restarts on this line (src/probe.rs), and `macos exit`
+  // checks that the process ends cleanly (#121).
+  try {
+    const tiny = (await window.__sidevoiceDesktop.host.engine.catalogs())[0].models.find((m) => m.id === "whisper-tiny");
+    const cpp = tiny && tiny.builds.find((b) => b.backend === "whisper-cpp" && b.available);
+    const stt = { catalog: "local", model: "whisper-tiny", language: "en", build: cpp ? cpp.id : "none" };
+    const loaded = await voice.preload({ input: { stt } }).then(() => "ok", (error) => error && error.key + "/" + error.code);
+    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-exit models=" + loaded + " build=" + stt.build });
+  } catch (error) {
+    await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-exit error " + String(error && (error.message || error)) });
+  }
 })();
 </script>
 </body>

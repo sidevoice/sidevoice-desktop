@@ -14,6 +14,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 
+pub mod meters;
 pub mod take;
 #[cfg(test)]
 mod tests;
@@ -34,12 +35,18 @@ pub struct VoiceSettings {
     /// Speaking: absent (or null), no speaker model and no playback.
     #[serde(default)]
     pub output: Option<OutputSettings>,
+    /// How long after a turn ends what is to be said waits, in milliseconds; absent for the call's default. Its range
+    /// is checked by the call (sidevoice-voice's `VoiceConfig`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_grace_ms: Option<u32>,
     /// How long the models stay in memory with the call stopped, in minutes; absent for the call's default (10).
     #[serde(default)]
     pub idle_unload_minutes: Option<u32>,
 }
 
-/// The input half: the transcriber, what ends a turn, and how it listens.
+/// The input half: the transcriber, what ends a turn, and how it listens. The turn's numbers are the web's to choose;
+/// each crosses to the call as it is, which checks its range and takes its own default for one absent
+/// (sidevoice-voice's `InputConfig`).
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct InputSettings {
@@ -49,9 +56,33 @@ pub struct InputSettings {
     pub end_of_turn: Option<EndOfTurn>,
     #[serde(default)]
     pub patience: Option<Patience>,
-    /// Continuous raised-bar speech required to cut sounding agent audio, in seconds.
+    /// How loud speech must be to count, while nothing plays and while something does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listening_bar: Option<ListeningBar>,
+    /// Qualified speech required to cut sounding agent audio, in seconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub barge_in_min_speech: Option<f32>,
+    /// The sliding window that speech falls in, as a multiple of `barge_in_min_speech`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub barge_in_window: Option<f32>,
+    /// The detector's confidence from which a window is speech.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vad_confidence: Option<f32>,
+    /// How long speech must go on before it starts a turn in silence, in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speech_start_ms: Option<u32>,
+    /// The audio kept before a turn opens, in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_roll_ms: Option<u32>,
+}
+
+/// How loud speech must be to count, as a volume from 0 to 1: while nothing plays (`quiet`) and while something does
+/// (`playing`, what a barge-in must clear).
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListeningBar {
+    pub quiet: f32,
+    pub playing: f32,
 }
 
 /// The output half: the speaker model, its voice and speed.
@@ -64,9 +95,24 @@ pub struct OutputSettings {
     pub voice: Option<String>,
     #[serde(default)]
     pub speed: Option<f32>,
+    /// How long the speaker fades out when playback is cut, in milliseconds, 0 to 1000: read and checked as the seam's
+    /// web host does, but not applied. The native speaker's fade is fixed (sidevoice-voice's `io::native::FADE_MS`,
+    /// 30 ms, the web's default) and no configuration reaches it.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "fade_ms")]
+    pub fade_ms: Option<f64>,
     /// The language of what is said when `say` gives none; absent: the input's.
     #[serde(default)]
     pub language: Option<String>,
+}
+
+/// A fade within what the seam takes (`output.fade_ms`, 0 to 1000 ms), or none.
+fn fade_ms<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<f64>, D::Error> {
+    match Option::<f64>::deserialize(deserializer)? {
+        Some(ms) if !(ms.is_finite() && (0.0..=1000.0).contains(&ms)) => {
+            Err(serde::de::Error::custom("output.fade_ms must be a number between 0 and 1000"))
+        }
+        fade => Ok(fade),
+    }
 }
 
 /// Speech to text: a model of a catalogue, and the language spoken.
@@ -136,6 +182,8 @@ pub struct SettingsChange {
     #[serde(default, deserialize_with = "present")]
     pub output: Option<Option<OutputSettings>>,
     #[serde(default)]
+    pub audio_grace_ms: Option<u32>,
+    #[serde(default)]
     pub idle_unload_minutes: Option<u32>,
 }
 
@@ -150,6 +198,7 @@ impl VoiceSettings {
         VoiceSettings {
             input: change.input.unwrap_or_else(|| self.input.clone()),
             output: change.output.unwrap_or_else(|| self.output.clone()),
+            audio_grace_ms: change.audio_grace_ms.or(self.audio_grace_ms),
             idle_unload_minutes: change.idle_unload_minutes.or(self.idle_unload_minutes),
         }
     }
@@ -273,6 +322,9 @@ pub fn choose(settings: &VoiceSettings, catalogs: &[CatalogCandidates]) -> Resul
     let input = settings.input.as_ref().map(|input| choose_input(input, catalogs, local)).transpose()?;
     let output = settings.output.as_ref().map(|output| choose_output(output, catalogs)).transpose()?;
     let mut config = json!({});
+    if let Some(ms) = settings.audio_grace_ms {
+        config["audio_grace_ms"] = json!(ms);
+    }
     if let Some(minutes) = settings.idle_unload_minutes {
         config["idle_unload_minutes"] = json!(minutes);
     }
@@ -314,8 +366,23 @@ fn choose_input(
     if let Some(patience) = input.patience {
         config["patience"] = json!(patience);
     }
+    if let Some(bar) = input.listening_bar {
+        config["listening_bar"] = json!(bar);
+    }
     if let Some(seconds) = input.barge_in_min_speech {
         config["barge_in_min_speech"] = json!(seconds);
+    }
+    if let Some(window) = input.barge_in_window {
+        config["barge_in_window"] = json!(window);
+    }
+    if let Some(confidence) = input.vad_confidence {
+        config["vad_confidence"] = json!(confidence);
+    }
+    if let Some(ms) = input.speech_start_ms {
+        config["speech_start_ms"] = json!(ms);
+    }
+    if let Some(ms) = input.pre_roll_ms {
+        config["pre_roll_ms"] = json!(ms);
     }
     Ok(InputChoice { vad, stt, end_of_turn: ends_turns, config })
 }

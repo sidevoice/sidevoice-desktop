@@ -518,10 +518,13 @@ What is this app's own:
 - `start(settings, {take?})` takes the seam's settings, each slot a model of a catalogue: `input` (absent or `null`: no
   microphone, no detector, no transcriber) with `stt: {catalog, model, language?, build?}`, `endOfTurn`
   (`{kind: "silence", ms?}`, which loads no end-of-turn model, or `{kind: "smart", model?: {catalog, model}}`),
-  `patience` and `barge_in_min_speech`; `output` (absent or `null`: no speaker model, nothing played) with `tts:
-  {catalog, model, build?}`, `voice`, `speed` and `language`; and `idle_unload_minutes`; at least one half, else it
-  throws a `TypeError`, and any other key is refused (core `voice.rs`). `barge_in_min_speech` is a finite number of
-  seconds greater than zero and at most 60; when absent, sidevoice-voice's own default. A slot is loaded as
+  `patience` and the turn's numbers (`listening_bar: {quiet, playing}`, `barge_in_min_speech`, `barge_in_window`,
+  `vad_confidence`, `speech_start_ms`, `pre_roll_ms`); `output` (absent or `null`: no speaker model, nothing played)
+  with `tts: {catalog, model, build?}`, `voice`, `speed`, `fade_ms` and `language`; and `audio_grace_ms` and
+  `idle_unload_minutes`; at least one half, else it throws a `TypeError`, and any other key is refused (core
+  `voice.rs`). The turn's numbers and `audio_grace_ms` reach sidevoice-voice's configuration as they are: it checks
+  their ranges (`js/voice-host.d.ts`) and takes its own default for one absent. `fade_ms` (0 to 1000) is checked but
+  not applied: the native speaker's fade is sidevoice-voice's fixed 30 ms. A slot is loaded as
   `engine.catalog(catalog).load(model)`, which picks the build, or, for a local model with a `build` (Settings, "How it
   runs"; an empty one names none), as that build (`engine.load(model, build)`): once the model is found and runs here
   (else `model-unknown`, `model-unfit`), the build must be one of its builds (`build-not-found`) and run here (else the
@@ -538,15 +541,16 @@ What is this app's own:
   when `stop` came first. A call without an input half opens no microphone, so a blocked one cannot fail it, and its
   `say` plays; a call without an output half loads no speaker, and its `say` is `not-played` (`failed`,
   `output-missing`).
-- `update(change)` changes the call while it runs, without restarting it: a half that is absent from `change` stays, `null`
-  removes it, settings replace it or add it (`idle_unload_minutes` too). A half whose slots keep their models keeps what
-  it loaded, other models load while the call goes on as it was, and each half's change takes effect at its safe point:
-  the input half's at the next turn, the output half's at the next utterance, never cutting what plays; an input
-  half added opens the microphone, one removed closes it. Changes are made in the order they were asked. It resolves
-  once the change is accepted, not applied; it rejects, changing nothing, with the app's keyed refusals for a model it
-  cannot make or `voice_halves_missing` for a change that leaves no half. A model that cannot load later is an `onError`
-  of the call with its code, and its half stays as it was. A microphone that is lost or denied leaves the call with its
-  output half only (`listening: "off"`), and `update({input})` adds it back; without an output half the call stops.
+- `update(change)` changes the call while it runs, without restarting it: a half that is absent from `change`
+  stays, `null` removes it, settings replace it or add it (`audio_grace_ms` and `idle_unload_minutes` too). A
+  half whose slots keep their models keeps what it loaded, other models load while the call goes on as it was,
+  and each half's change takes effect at its safe point: the input half's at the next turn, the output half's
+  at the next utterance, never cutting what plays; an input half added opens the microphone, one removed closes
+  it. Changes are made in the order they were asked. It resolves once the change is accepted, not applied; it
+  rejects, changing nothing, with the app's keyed refusals for a model it cannot make or `voice_halves_missing`
+  for a change that leaves no half. A model that cannot load later is an `onError` of the call with its code,
+  and its half stays as it was. A microphone that is lost or denied leaves the call with its output half only
+  (`listening: "off"`), and `update({input})` adds it back; without an output half the call stops.
 - `preload(settings)` loads the models a `start` of the same settings would, ahead of a call: the same slots (an absent half
   loads none of its own, `silence` no end-of-turn model), once for a model already loaded or loading, and opens no
   microphone and no speaker. They are held like a stopped call's: a call that starts on the same models meanwhile takes
@@ -612,6 +616,9 @@ What is this app's own:
 - App → page: `window.__sidevoiceDesktop.voiceEvent(event)` receives `{key,type,data}`.
   `key` is the immutable call ID captured before asynchronous native forwarding. `type` is
   `turn`, `state`, `level`, `playback-level`, `error`, `take`, or `say`.
+  The meters go only when the page would draw them differently (core `voice::meters`): `level` when its whole percent
+  changes, `playback-level` every time it sounds and once for each silence (the first `0`, not the ones after it).
+  The voice publishes both once per detector window, silence included, about 60 events a second (desktop#149).
   `say` uses `{key,type:"say",data:{key:sayKey,event}}`; its last event is `done` with the terminal outcome.
   Device changes use `{type:"devices",data}` and have no call key. Take samples are base64 on the native
   wire and become `Float32Array` in the bridge.
@@ -714,10 +721,11 @@ interface CallControlsBridge {
   settings(): Promise<{ alwaysShown: boolean; enabled: boolean; corner: "tl" | "tr" | "bl" | "br"; moved: boolean }>;  // false, tr
   setAlwaysShown(enabled: boolean): Promise<{ alwaysShown: boolean }>;
   setEnabled(enabled: boolean): Promise<{ enabled: boolean }>;  // whether the card shows at all during a call (true)
-  setCorner(corner): Promise<{ corner }>;  // where a card never moved on a display first appears
+  setCorner(corner): Promise<{ corner }>;  // the preferred corner: the card goes there now (the places dragged to are forgotten, the sizes kept)
   resetPlace(): Promise<void>;             // forgets places and the picture's resized sizes, on every display
   clearSize(): Promise<void>;              // forgets only the picture's resized sizes ("Custom"), on every display
-  preview(): void;                         // during a call, the card shows a moment, in front of the room too
+  preview(): void;                         // during a call, the card shows ~4 s after the last change, in front of the room too; kept while the pointer is on it or it is dragged or resized, gone 2 s after
+  endPreview(): void;                      // leaving Settings: a preview showing goes at once
 }
 ```
 
@@ -733,7 +741,7 @@ interface CallControlsBridge {
 - `setAlwaysShown` keeps it with the app's settings (`callControlsAlwaysShown`) and applies it to the card at once; a
   non-boolean rejects `{key: "bad_request"}`. Set only from the page.
 - Command behind it: `call_controls_settings {action, enabled?, corner?}`, `action` `settings`, `set-always-shown`,
-  `set-enabled`, `set-corner`, `reset-place`, `clear-size` or `preview`.
+  `set-enabled`, `set-corner`, `reset-place`, `clear-size`, `preview` or `end-preview`.
 
 Both commands are granted to the room window (`capabilities/room.json`) and re-check that the caller is the current
 room window on the app's own page (else `bad_request`). The app's settings (`settings.json`) have one writer

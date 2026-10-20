@@ -295,6 +295,77 @@ pub fn probe() -> Result<()> {
     ensure(!text.contains("headset airpods"), "echo recorded as a gesture")
 }
 
+/// `macos exit`: quitting and restarting after a call (#121). The probe app runs the probe page, which ends with
+/// whisper-tiny's whisper.cpp build (Metal) loaded, then restarts as an installed update does
+/// (`SIDEVOICE_DEBUG_EXIT=restart`, src-tauri/src/probe.rs); the relaunched app runs the page again and quits as the
+/// tray's Quit does. Each process must release every model before `exit()`, then run the C++ static destructors to
+/// their end (the probe's handler that runs after them, src-tauri/src/probe.rs), and end with status 0 and no crash
+/// report.
+pub fn exit() -> Result<()> {
+    let data = AppHome::new("exit")?;
+    let logs = work("exit")?;
+    let log = logs.join("exit.log");
+    // Where macOS writes them: the user's own home, whatever HOME the app was given.
+    let reports = crate::macos::home()?.join("Library/Logs/DiagnosticReports");
+    let before: Vec<_> = crash_reports(&reports);
+    let mut app =
+        data.app(&[("SIDEVOICE_DEBUG_PAGE", "probe.html"), ("SIDEVOICE_DEBUG_EXIT", "restart")]).spawn(&log)?;
+    let first = app.ended(480);
+    if first.is_none() {
+        app.stop();
+    }
+    // The relaunched app writes to the same log (it inherits the streams): its launch, its run, its quit.
+    let relaunched = wait_for(&log, "sidevoice: probe: quitting", 0, 480);
+    let mut gone = false;
+    for _ in 0..60 {
+        gone = !Cmd::new("pgrep").arg("-f").arg(binary()).attempt().map(|(found, _)| found).unwrap_or(false);
+        if gone {
+            break;
+        }
+        sleep(1.0);
+    }
+    if !gone {
+        let _ = Cmd::new("pkill").arg("-f").arg(binary()).attempt();
+    }
+    // ReportCrash writes its report a moment after the process ends.
+    sleep(10.0);
+    let text = read(&log);
+    eprintln!("{text}");
+    let new: Vec<_> = crash_reports(&reports).into_iter().filter(|report| !before.contains(report)).collect();
+    for report in &new {
+        eprintln!("--- {}\n{}", report.display(), read(report).chars().take(6000).collect::<String>());
+    }
+    let launches = grep(&text, "sidevoice: launch ").len();
+    eprintln!("--- first process: {first:?}; launches: {launches}; relaunched one quit: {relaunched}, gone: {gone}");
+    ensure(
+        grep(&text, "probe-exit models=ok build=whisper-tiny/").len() == 2,
+        "a run did not load whisper.cpp's build",
+    )?;
+    ensure(first.is_some_and(|status| status.success()), format!("the app did not end cleanly on restart: {first:?}"))?;
+    ensure(launches == 2, "the restart did not relaunch the app")?;
+    ensure(relaunched && gone, "the relaunched app did not quit")?;
+    ensure(!has(&text, "GGML_ASSERT|libc\\+\\+abi|panicked"), "the app aborted on its way out")?;
+    // On a runner (Apple Paravirtual device) whisper.cpp's destructor does not abort with a model left loaded, unlike
+    // on a Mac's GPU: what is checked is that none is left when `exit()` runs.
+    let released = grep(&text, "sidevoice: voice: every model released").len();
+    eprintln!("--- the release at exit\n{}", grep(&text, "sidevoice: voice: ").join("\n"));
+    ensure(released == 2, format!("{released} of 2 processes released every model before exit()"))?;
+    ensure(
+        grep(&text, "sidevoice: probe: exit handlers ran").len() == 2,
+        "exit() did not run the static destructors to their end in both processes",
+    )?;
+    ensure(new.is_empty(), "macOS wrote a crash report")
+}
+
+/// The crash reports of the app (`sidevoice-desktop-*.ips`) in `dir`.
+fn crash_reports(dir: &Path) -> Vec<std::path::PathBuf> {
+    let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
+    entries
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .filter(|path| path.file_name().is_some_and(|name| name.to_string_lossy().starts_with("sidevoice-desktop")))
+        .collect()
+}
+
 /// Every path under `dir`, files and directories (`find DIR` without DIR itself); none when it is not there.
 fn paths(dir: &Path) -> Vec<std::path::PathBuf> {
     let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
@@ -315,9 +386,66 @@ fn paths(dir: &Path) -> Vec<std::path::PathBuf> {
 /// over stand-in shared devices (src-tauri/src/voice/tests.rs).
 pub fn voice_models() -> Result<()> {
     Cmd::new("cargo")
-        .args(["test", "--release", "--lib", "voice::", "--", "--include-ignored", "--nocapture"])
+        .args([
+            "test",
+            "--release",
+            "--lib",
+            "voice::",
+            "--",
+            "--include-ignored",
+            "--nocapture",
+            "--skip",
+            "voice::host::memory",
+        ])
         .dir(repo().join("src-tauri"))
         .run()
+}
+
+/// `macos voice-memory`: the host's calls on the engine's real models, the process's footprint and Metal allocation
+/// taken at each step (src-tauri/src/voice/host/memory.rs, the ignored test): idle, a call with the models loaded, the
+/// call ended and the idle keep run out, ten calls back to back, a call whose settings change twelve times. The table
+/// is printed; the run fails only on clear growth ([`crate::memory`]). Reads `SIDEVOICE_REAL_CALL_MODELS` as
+/// `voice-models` does.
+pub fn voice_memory() -> Result<()> {
+    let logs = work("voice-memory")?;
+    let log = logs.join("voice-memory.log");
+    let mut test = Cmd::new("cargo")
+        .args(["test", "--release", "--lib", "voice::host::memory", "--", "--include-ignored", "--nocapture"])
+        .dir(repo().join("src-tauri"))
+        .spawn(&log)?;
+    let status = test.ended(2400);
+    let text = read(&log);
+    eprintln!("{}", grep(&text, "memory phase=|test result|panicked").join("\n"));
+    ensure(status.is_some_and(|status| status.success()), format!("the memory test did not pass: {status:?}"))?;
+    crate::memory::report(&text, crate::memory::VOICE_RULES)
+}
+
+/// `macos memory`: the probe app through a long session (test/fixtures/memory.html): models loaded and let go after the
+/// idle keep (shortened to two seconds a minute), ten calls, the call controls card's settings changed forty times,
+/// the audio devices listed and chosen forty times and watched for forty seconds, the voice settings changed twenty
+/// times. The app prints its own footprint and Metal allocation at each step (`probe-memory PHASE`); the table is
+/// printed and the run fails only on clear growth ([`crate::memory`]).
+pub fn memory() -> Result<()> {
+    let data = AppHome::new("memory")?;
+    let logs = work("memory")?;
+    let log = logs.join("memory.log");
+    let mut app =
+        data.app(&[("SIDEVOICE_DEBUG_PAGE", "memory.html"), ("SIDEVOICE_DEBUG_IDLE_MINUTE_MS", "2000")]).spawn(&log)?;
+    // The models install first (a download), then the walk; a step takes ten seconds or so.
+    let done = wait_for(&log, "memory phase=done ", 0, 1500);
+    app.stop();
+    let text = read(&log);
+    eprintln!("{}", grep(&text, "probe-memory|memory phase=|memory-holds").join("\n"));
+    if !done {
+        // Where the walk stopped: the app's last lines.
+        eprintln!(
+            "--- the app's last lines\n{}",
+            text.lines().rev().take(80).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n")
+        );
+    }
+    ensure(!has(&text, "probe-memory-failed"), "the memory walk failed")?;
+    ensure(done, "the memory walk never reached its last step")?;
+    crate::memory::report(&text, crate::memory::APP_RULES)
 }
 
 /// The call controls card's run: the probe app on test/fixtures/card-probe.html, the editor of

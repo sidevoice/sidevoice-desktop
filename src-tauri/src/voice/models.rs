@@ -23,6 +23,9 @@ use sidevoice_voice::{
     VoiceConfig, VoiceInput, VoiceOutput, VoiceSetup,
 };
 
+/// The real-model call's fixtures, for the memory measurement (`host::memory`).
+#[cfg(test)]
+pub(crate) use engine::tests as real_call;
 pub(crate) use engine::{EngineLoader, ModelCache};
 
 /// Loads each model the call's slots take: the engine's ([`EngineLoader`]), or a test's.

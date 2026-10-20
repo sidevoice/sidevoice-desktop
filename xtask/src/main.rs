@@ -23,8 +23,8 @@
 //!   directory (`export SHERPA_ONNX_LIB_DIR="$(cargo xtask sherpa-libs)"`) and, on a runner, exports it.
 //!
 //! The macOS app and .dmg (Apple Silicon), in the order CI runs them (macos.rs, probe.rs): `app` to `dmg-screens` in
-//! the `macos` job; beside it, `probe-app`, `local-host`, `probe` and `card` in `macos-native`, and `voice-models` in
-//! `macos-call`:
+//! the `macos` job; beside it, `probe-app`, `local-host`, `probe`, `card` and `exit` in `macos-native`, and
+//! `voice-models` and `voice-memory` in `macos-call`, `memory` after `exit`:
 //!
 //! - `macos app [--signed] [--channel C]`: the app bundle, ad-hoc signed; with `--signed`, signed with the Developer
 //!   ID, notarized and stapled by Tauri's bundler. Reads `APPLE_SIGNING_IDENTITY`, `APPLE_API_KEY`,
@@ -51,7 +51,14 @@
 //! - `macos probe`: on the probe app, the probe page: origin, loopback, the native engine, the voice call, the headset.
 //! - `macos voice-models`: a call on the engine's real models through the app's adapter (the ignored tests). Reads
 //!   `SIDEVOICE_REAL_CALL_MODELS`: a folder to keep the models in between runs (CI caches it); unset, a scratch one.
+//! - `macos voice-memory`: the host's calls on the engine's real models with the process's footprint and Metal allocation
+//!   taken at each step (idle, a call with the models loaded, the call ended and the idle keep run out, ten calls, a
+//!   call whose settings change), as a table; it fails only on clear growth (memory.rs says what and why).
+//! - `macos memory`: on the probe app, the same over a long session in the app: models, calls, the call controls
+//!   card's settings, the audio devices and the voice settings changed over and over (#145).
 //! - `macos card`: on the probe app, the call controls card over a full-screen editor (screenshots into card-shots/).
+//! - `macos exit`: on the probe app, quitting and restarting (as an installed update does) with a model on the GPU
+//!   loaded: each process ends with status 0 and no crash report (#121).
 //!
 //! The commands that start the app (`first-open`, `probe`, `card`) run it with the runner's home on a
 //! runner; off one (`CI` is not `true`), with a scratch home (`/tmp/svx-<step>`) and no `SIDEVOICE_DATA_DIR`, so
@@ -87,6 +94,7 @@
 
 mod checks;
 mod macos;
+mod memory;
 mod probe;
 mod publish;
 mod util;
@@ -100,7 +108,8 @@ pub type Result<T> = std::result::Result<T, String>;
 const USAGE: &str = "usage: cargo xtask web | lint | test | icons | two-users | bundle [--channel C] | engine-rev
   | sherpa-libs | macos app [--signed] [--channel C] | macos check-app [--signed] | macos first-open
   | macos dmg [--signed] | macos sign-dmg | macos checksums | macos forget-secrets | macos dmg-screens
-  | macos probe-app | macos local-host | macos probe | macos voice-models | macos card
+  | macos probe-app | macos local-host | macos probe | macos voice-models | macos card | macos exit
+  | macos memory | macos voice-memory
   | publish assets release TAG | publish assets nightly | publish release TAG | publish nightly
   | release-pr-title [BRANCH] | release-pr-checks
 (C: release, nightly or dev, the default; xtask/src/main.rs says what each does)";
@@ -145,6 +154,9 @@ fn main() -> ExitCode {
         ["macos", "probe"] => macos("probe", probe::probe),
         ["macos", "voice-models"] => macos("voice-models", probe::voice_models),
         ["macos", "card"] => macos("card", probe::card),
+        ["macos", "exit"] => macos("exit", probe::exit),
+        ["macos", "memory"] => macos("memory", probe::memory),
+        ["macos", "voice-memory"] => macos("voice-memory", probe::voice_memory),
         ["publish", "assets", kind] => publish::assemble(kind, None),
         ["publish", "assets", kind, tag] => publish::assemble(kind, Some(tag)),
         ["publish", "release", tag] => publish::release(tag),

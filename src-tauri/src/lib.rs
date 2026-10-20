@@ -17,6 +17,9 @@ mod engine_ipc;
 mod headset;
 mod keychain;
 mod local_host;
+/// A look at the process's own memory, for CI's measurements of it (#145). Never in a release.
+#[cfg(all(target_os = "macos", any(test, feature = "probe")))]
+mod memory;
 mod microphone;
 #[cfg(feature = "probe")]
 mod probe;
@@ -266,8 +269,13 @@ pub(crate) fn debug(message: &str) {
 
 /// A line from a page's diagnostics (the CI probe), printed only with `SIDEVOICE_DEBUG=1`.
 #[tauri::command]
-fn debug_log(line: String) {
+fn debug_log(app: AppHandle, line: String) {
     debug(&format!("page says: {}", line.chars().take(2000).collect::<String>()));
+    #[cfg(feature = "probe")]
+    probe::exit_on(&app, &line);
+    #[cfg(all(feature = "probe", target_os = "macos"))]
+    probe::memory_on(&app, &line);
+    let _ = (app, line);
 }
 
 pub(crate) fn room_window(app: &AppHandle) -> Option<WebviewWindow> {
@@ -562,6 +570,8 @@ pub fn run() {
     let context = tauri::generate_context!();
     #[cfg(feature = "probe")]
     let context = probe::with_page(context);
+    #[cfg(all(feature = "probe", target_os = "macos"))]
+    probe::watch_exit_handlers();
     log_panics();
     // First, so everything after it is logged.
     let builder = tauri::Builder::default().plugin(log_plugin());
@@ -671,11 +681,14 @@ pub fn run() {
             if let tauri::RunEvent::Reopen { has_visible_windows: false, .. } = event {
                 show_room(app);
             }
-            // Quitting: the voice call stops and releases its devices and models; the local host's proxy stops and closes
-            // every tunnel; an update ready installs (automatic mode).
+            // Quitting, however the app ends (tray, ⌘Q, logout, a reset, an update's restart; `AppHandle::restart` from
+            // the updater's thread comes here too), before `exit()` runs the C++ static destructors (#121): the voice
+            // calls stop and every model and audio device is released; the call controls card's window goes; the local
+            // host's proxy stops and closes every tunnel; an update ready installs (automatic mode).
             if let tauri::RunEvent::Exit = event {
                 #[cfg(target_os = "macos")]
                 voice::shutdown(app);
+                call_controls::close(app);
                 local_host::shutdown(app);
                 if !app.state::<AppState>().resetting.load(Ordering::SeqCst) {
                     updater::quit(app);

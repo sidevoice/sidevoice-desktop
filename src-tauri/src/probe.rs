@@ -13,9 +13,80 @@
 
 use std::borrow::Cow;
 use tauri::utils::assets::{AssetKey, AssetsIter, CspHash};
-use tauri::{App, Assets, Context, Runtime};
+use tauri::{App, AppHandle, Assets, Context, Runtime};
+
+/// With `SIDEVOICE_DEBUG_EXIT=quit` or `=restart`, once the probe page logs its last line (`probe-exit`, a model on the
+/// GPU loaded): the app quits as the tray's Quit does, or restarts as an installed update does (`AppHandle::restart`
+/// from a thread of its own, src/updater.rs). The relaunched app inherits this environment, told `quit`: it quits after
+/// its own run. `macos exit` checks that both end cleanly (#121).
+pub fn exit_on(app: &AppHandle, line: &str) {
+    if !crate::debugging() || !line.starts_with("probe-exit ") {
+        return;
+    }
+    match std::env::var("SIDEVOICE_DEBUG_EXIT").as_deref() {
+        Ok("quit") => {
+            crate::debug("probe: quitting");
+            app.exit(0);
+        }
+        Ok("restart") => {
+            crate::debug("probe: restarting");
+            std::env::set_var("SIDEVOICE_DEBUG_EXIT", "quit");
+            let app = app.clone();
+            std::thread::spawn(move || app.restart());
+        }
+        _ => {}
+    }
+}
+
+/// With `SIDEVOICE_DEBUG_EXIT`, from the start: a handler `exit()` runs after the static destructors of the C++
+/// libraries linked in. `exit()` runs the handlers registered with `atexit` and those destructors (`__cxa_atexit`,
+/// when each static is built) from one list, the last registered first; this one is registered before any model is
+/// loaded, so before whisper.cpp's Metal device is built, and runs after its destructor, which aborts when a model is
+/// still loaded (#121). Its line in the log says that destructor ran to its end. `macos exit` checks it.
+#[cfg(target_os = "macos")]
+pub fn watch_exit_handlers() {
+    if !crate::debugging() || std::env::var_os("SIDEVOICE_DEBUG_EXIT").is_none() {
+        return;
+    }
+    extern "C" fn ran() {
+        eprintln!("sidevoice: probe: exit handlers ran");
+    }
+    // SAFETY: registers a plain function, which only writes to stderr.
+    unsafe { libc::atexit(ran) };
+}
+
+/// With `SIDEVOICE_DEBUG_PAGE=memory.html`, at each line `probe-memory PHASE` the page logs: the app's memory then,
+/// printed as `memory phase=PHASE ...` (core `memory`), on a thread of its own (`vmmap` takes a second or two; the page
+/// waits for it). `macos memory` reads the lines back (#145).
+#[cfg(target_os = "macos")]
+pub fn memory_on(app: &tauri::AppHandle, line: &str) {
+    let Some(phase) = line.strip_prefix("probe-memory ") else { return };
+    if !crate::debugging() {
+        return;
+    }
+    let phase = phase.trim().to_owned();
+    if let Some(state) = tauri::Manager::try_state::<crate::voice::VoiceState>(app) {
+        println!("memory-holds phase={phase} {}", state.held());
+    }
+    std::thread::spawn(move || {
+        crate::memory::report(&phase);
+    });
+}
+
+/// With `SIDEVOICE_DEBUG_IDLE_MINUTE_MS`, how long the voice host's idle minute is (src/voice/host.rs): the models of a
+/// stopped call stay loaded for `idle_unload_minutes` of them, so `macos memory` can wait for them to be let go.
+#[cfg(target_os = "macos")]
+pub fn idle_minute() -> std::time::Duration {
+    let millis = std::env::var("SIDEVOICE_DEBUG_IDLE_MINUTE_MS").ok().and_then(|v| v.parse::<u64>().ok());
+    match millis {
+        Some(millis) if crate::debugging() && millis > 0 => std::time::Duration::from_millis(millis),
+        _ => std::time::Duration::from_secs(60),
+    }
+}
 
 pub const PAGE: &str = "probe.html";
+pub const MEMORY_PAGE: &str = "memory.html";
+const MEMORY_HTML: &[u8] = include_bytes!("../../test/fixtures/memory.html");
 const HTML: &[u8] = include_bytes!("../../test/fixtures/probe.html");
 pub const CARD_PAGE: &str = "card-probe.html";
 const CARD_HTML: &[u8] = include_bytes!("../../test/fixtures/card-probe.html");
@@ -24,7 +95,7 @@ const LOCAL_HOST_FLOW: &str = include_str!("../../test/fixtures/local-host-flow.
 /// The page the room window loads: a probe when asked for, else `interface`.
 pub fn page(interface: &str) -> String {
     match std::env::var("SIDEVOICE_DEBUG_PAGE") {
-        Ok(asked) if crate::debugging() && (asked == PAGE || asked == CARD_PAGE) => asked,
+        Ok(asked) if crate::debugging() && (asked == PAGE || asked == CARD_PAGE || asked == MEMORY_PAGE) => asked,
         _ => interface.to_string(),
     }
 }
@@ -104,6 +175,7 @@ impl<R: Runtime> Assets<R> for WithProbe<R> {
         match key.as_ref().trim_start_matches('/') {
             PAGE => return Some(Cow::Borrowed(HTML)),
             CARD_PAGE => return Some(Cow::Borrowed(CARD_HTML)),
+            MEMORY_PAGE => return Some(Cow::Borrowed(MEMORY_HTML)),
             _ => {}
         }
         self.0.get(key)
