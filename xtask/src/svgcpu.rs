@@ -40,6 +40,7 @@ pub enum Kind {
     WebContent,
     Network,
     OtherWebKit,
+    WindowServer,
 }
 
 impl Kind {
@@ -50,6 +51,7 @@ impl Kind {
             Kind::WebContent => "WebContent",
             Kind::Network => "Network",
             Kind::OtherWebKit => "other WebKit",
+            Kind::WindowServer => "WindowServer",
         }
     }
 }
@@ -68,6 +70,8 @@ pub fn processes(ps: &str, app: u32) -> BTreeMap<u32, (Kind, f64)> {
         let command = line.trim_start().splitn(3, char::is_whitespace).nth(2).unwrap_or("").trim_start();
         let kind = if pid == app {
             Kind::App
+        } else if command.ends_with("/WindowServer") || command.contains("/WindowServer ") {
+            Kind::WindowServer
         } else if command.contains("com.apple.WebKit.GPU") {
             Kind::Gpu
         } else if command.contains("com.apple.WebKit.WebContent") {
@@ -207,14 +211,14 @@ fn measure(home: &AppHome, run: &Run, dir: &std::path::Path, shots: &std::path::
 }
 
 fn table(results: &[Result_]) -> String {
-    let kinds = [Kind::Gpu, Kind::WebContent, Kind::App, Kind::Network, Kind::OtherWebKit];
-    let mut out = format!("{:<18}", "run");
+    let kinds = [Kind::Gpu, Kind::WebContent, Kind::App, Kind::WindowServer, Kind::Network];
+    let mut out = format!("{:<20}", "run");
     for kind in kinds {
         out += &format!(" {:>13}", kind.name());
     }
     out += &format!(" {:>13} {:>8} {:>6}\n", "total", "rAF/s", "poses");
     for r in results {
-        out += &format!("{:<18}", r.label);
+        out += &format!("{:<20}", r.label);
         let mut total = 0.0;
         for kind in kinds {
             let percent = r.cpu.get(&kind).copied().unwrap_or(0.0) / r.seconds * 100.0;
@@ -276,6 +280,8 @@ pub fn svg_cpu() -> Result<()> {
             runs.push(on("gpu-dom", &[gpu], false));
             runs.push(on("gpu-dom+lbse", &[gpu, &key], false));
             runs.push(on("threaded-anim", &[threaded], false));
+            runs.push(on("lbse+thr", &[&key, threaded], false));
+            runs.push(on("gpu-dom+thr", &[gpu, threaded], false));
             runs.push(on("gpu-dom+lbse+thr", &[gpu, &key, threaded], false));
             runs.push(Run { label: "stopped", page: "svg-anim-still.html", enable: None, late: false });
             runs.push(Run {
@@ -286,6 +292,7 @@ pub fn svg_cpu() -> Result<()> {
             });
             // The first run again: how much a run differs from itself.
             runs.push(Run { label: "off-again", page: "svg-anim.html", enable: None, late: false });
+            runs.push(on("gpu-dom+lbse+thr-2", &[gpu, &key, threaded], false));
         }
         eprintln!(
             "--- {} (processes: {})\n{}\n{}",
