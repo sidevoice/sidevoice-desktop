@@ -385,35 +385,24 @@ fn watch_devices(app: &AppHandle, state: &VoiceState) {
     });
 }
 
-/// Quitting or restarting (`RunEvent::Exit`): every call is stopped and released, so the devices close and the models
-/// drop before `exit()` runs the C++ static destructors of WebRTC audio processing and ONNX Runtime; with a call
-/// still live, one of them aborted (macOS reported a crash on every restart after an update). Bounded: a stuck call
-/// must not hold the quit.
+/// Quitting or restarting (`RunEvent::Exit`), before `exit()` runs the static destructors of the C++ libraries the
+/// models are made of: every call is stopped and released, so the devices close, and every model is let go, those a
+/// stopped call or a preload kept for their idle minutes too (`VoiceState::close`). One left
+/// loaded is still alive in those destructors, and whisper.cpp's Metal device aborts in its own when one is (#121).
+/// Bounded: a release that does not finish in time is logged, and the quit goes on.
 pub fn shutdown(app: &AppHandle) {
-    if let Some(state) = app.try_state::<VoiceState>() {
-        let _ = tauri::async_runtime::block_on(bounded(Duration::from_secs(3), state.clear()));
+    let Some(state) = app.try_state::<VoiceState>() else { return };
+    let held = tauri::async_runtime::block_on(state.close(RELEASE_LIMIT, Duration::from_millis(50)));
+    if held.is_empty() {
+        crate::debug("voice: every model released");
+    } else {
+        log::error!("voice: models still held at exit after {RELEASE_LIMIT:?}: {}", held.join(", "));
+        crate::debug(&format!("voice: models still held at exit: {}", held.join(", ")));
     }
 }
 
-/// `tokio::time::timeout` registers with the runtime's timer when it is built, so it must be built inside the
-/// future `block_on` drives: built outside, the quit panics with "no reactor running" and aborts the process.
-async fn bounded<F: std::future::Future>(limit: Duration, work: F) -> Option<F::Output> {
-    tokio::time::timeout(limit, work).await.ok()
-}
-
-#[cfg(test)]
-mod bounded_tests {
-    use super::*;
-
-    /// The quit path: `block_on` from a thread with no runtime context (the `RunEvent::Exit` callback).
-    #[test]
-    fn bounds_a_future_driven_from_outside_a_runtime() {
-        let done = tauri::async_runtime::block_on(bounded(Duration::from_secs(1), async { 7 }));
-        assert_eq!(done, Some(7));
-        let stuck = tauri::async_runtime::block_on(bounded(Duration::from_millis(20), std::future::pending::<()>()));
-        assert_eq!(stuck, None);
-    }
-}
+/// How long quitting waits for the calls to stop and the models to be released.
+const RELEASE_LIMIT: Duration = Duration::from_secs(5);
 
 /// A reloaded page owns none of its previous lanes.
 pub fn page_changed(app: &AppHandle) {

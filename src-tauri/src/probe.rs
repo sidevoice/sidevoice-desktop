@@ -13,7 +13,47 @@
 
 use std::borrow::Cow;
 use tauri::utils::assets::{AssetKey, AssetsIter, CspHash};
-use tauri::{App, Assets, Context, Runtime};
+use tauri::{App, AppHandle, Assets, Context, Runtime};
+
+/// With `SIDEVOICE_DEBUG_EXIT=quit` or `=restart`, once the probe page logs its last line (`probe-exit`, a model on the
+/// GPU loaded): the app quits as the tray's Quit does, or restarts as an installed update does (`AppHandle::restart`
+/// from a thread of its own, src/updater.rs). The relaunched app inherits this environment, told `quit`: it quits after
+/// its own run. `macos exit` checks that both end cleanly (#121).
+pub fn exit_on(app: &AppHandle, line: &str) {
+    if !crate::debugging() || !line.starts_with("probe-exit ") {
+        return;
+    }
+    match std::env::var("SIDEVOICE_DEBUG_EXIT").as_deref() {
+        Ok("quit") => {
+            crate::debug("probe: quitting");
+            app.exit(0);
+        }
+        Ok("restart") => {
+            crate::debug("probe: restarting");
+            std::env::set_var("SIDEVOICE_DEBUG_EXIT", "quit");
+            let app = app.clone();
+            std::thread::spawn(move || app.restart());
+        }
+        _ => {}
+    }
+}
+
+/// With `SIDEVOICE_DEBUG_EXIT`, from the start: a handler `exit()` runs after the static destructors of the C++
+/// libraries linked in. `exit()` runs the handlers registered with `atexit` and those destructors (`__cxa_atexit`,
+/// when each static is built) from one list, the last registered first; this one is registered before any model is
+/// loaded, so before whisper.cpp's Metal device is built, and runs after its destructor, which aborts when a model is
+/// still loaded (#121). Its line in the log says that destructor ran to its end. `macos exit` checks it.
+#[cfg(target_os = "macos")]
+pub fn watch_exit_handlers() {
+    if !crate::debugging() || std::env::var_os("SIDEVOICE_DEBUG_EXIT").is_none() {
+        return;
+    }
+    extern "C" fn ran() {
+        eprintln!("sidevoice: probe: exit handlers ran");
+    }
+    // SAFETY: registers a plain function, which only writes to stderr.
+    unsafe { libc::atexit(ran) };
+}
 
 pub const PAGE: &str = "probe.html";
 const HTML: &[u8] = include_bytes!("../../test/fixtures/probe.html");

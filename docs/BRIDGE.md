@@ -605,6 +605,9 @@ What is this app's own:
 - App → page: `window.__sidevoiceDesktop.voiceEvent(event)` receives `{key,type,data}`.
   `key` is the immutable call ID captured before asynchronous native forwarding. `type` is
   `turn`, `state`, `level`, `playback-level`, `error`, `take`, or `say`.
+  The meters go only when the page would draw them differently (core `voice::meters`): `level` when its whole percent
+  changes, `playback-level` every time it sounds and once for each silence (the first `0`, not the ones after it).
+  The voice publishes both once per detector window, silence included, about 60 events a second (desktop#149).
   `say` uses `{key,type:"say",data:{key:sayKey,event}}`; its last event is `done` with the terminal outcome.
   Device changes use `{type:"devices",data}` and have no call key. Take samples are base64 on the native
   wire and become `Float32Array` in the bridge.

@@ -124,6 +124,15 @@ fn wayland() -> bool {
         && !std::env::var("GDK_BACKEND").is_ok_and(|b| b.trim_start().starts_with("x11"))
 }
 
+/// Quitting: the card's window goes, with its webview.
+pub fn close(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(LABEL) {
+        if let Err(e) = window.destroy() {
+            debug(&format!("call-controls not closed: {e}"));
+        }
+    }
+}
+
 /// Creates the card's window, hidden; it shows during a call ([`update`]).
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let config_dir = crate::data::desktop_dir(app).ok();
