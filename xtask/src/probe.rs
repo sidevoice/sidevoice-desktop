@@ -430,6 +430,13 @@ pub fn memory() -> Result<()> {
     app.stop();
     let text = read(&log);
     eprintln!("{}", grep(&text, "probe-memory|memory phase=|memory-holds").join("\n"));
+    if !done {
+        // Where the walk stopped: the app's last lines.
+        eprintln!(
+            "--- the app's last lines\n{}",
+            text.lines().rev().take(80).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n")
+        );
+    }
     ensure(!has(&text, "probe-memory-failed"), "the memory walk failed")?;
     ensure(done, "the memory walk never reached its last step")?;
     crate::memory::report(&text, crate::memory::APP_RULES)
