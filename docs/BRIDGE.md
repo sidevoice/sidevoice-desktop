@@ -326,9 +326,9 @@ is in front (core `call_controls::wanted`).
   agree. It tells the card which half of the work area it is in (`place`), on show and after a drag, so captions and
   lists open toward the middle of the screen.
 - **Its size**: the page's (format and Small / Medium / Large are the web's, `layout`). The picture-in-picture says it
-  may be resized (`layout`'s `resizable.minWidth`, 374: 350 px of card and its margin); its grip calls `resize`, and
-  the window follows the pointer with the opposite corner still and its height following its width (the stage keeps
-  16:9; core `resized`). That size is remembered per display and pushed to the card as `size` (margin included; `null`
+  may be resized (`layout`'s `resizable.minWidth` and `minHeight`, 374 x 354: 350 x 330 px of card and its margin); its grip calls
+  `resize`, and the window follows the pointer with the opposite corner still, free in both directions (the window's
+  aspect changes; the page fits its 16:9 stage inside; core `resized`). That size is remembered per display and pushed to the card as `size` (margin included; `null`
   at the preset sizes), the card's "Custom". Not on Wayland, where the bridge offers no `resize`. Settings' "Reset size
   and position" (`resetPlace`) forgets every place and size.
 
@@ -339,7 +339,7 @@ The card's page talks to the app only through `window.__sidevoiceDesktop.host.ca
 |---|---|
 | `subscribe(listener)` → `stop` | the whole state now, then on every change (`call_controls_ready` asks the app for it) |
 | `run({command, …})` | `call_controls_run`: `open-app` (the app shows the room), `hide` (the card's ×: hidden as from the tray), `dismiss` (the exit notice's Close: the card goes at once; it never outlasts the call), or one of the room commands above, which the app parses (`bridge::Command`) before it carries it to the room (`open-settings` brings the room in front first). After `select-audio-device` the card hears its devices `busy` at once, until the app next tells it the call (or 3 s pass): the device still chosen is never read as the room refusing the new one |
-| `layout({width, height, card?, resizable?})` | `call_controls_layout`: the card's size with its shadow margin, where its body is in it (`{x, y, width, height}`), and the picture's least width when it may be resized; the window takes the size and is placed by its body |
+| `layout({width, height, card?, resizable?})` | `call_controls_layout`: the card's size with its shadow margin, where its body is in it (`{x, y, width, height}`), and the picture's least width and height when it may be resized; the window takes the size and is placed by its body |
 | `drag(phase)` | `call_controls_drag`: `start`, `move`, `end`; the window follows the pointer (the app reads it) and is dropped, snapped and remembered |
 | `resize(phase, edge)` | `call_controls_resize`: `start`, `move`, `end` by the grip's corner (`nw`, `ne`, `sw`, `se`); only while `layout` says the card may be resized; absent on Wayland |
 

@@ -75,6 +75,8 @@ struct Inner {
     anchor: Option<Rect>,
     /// The picture-in-picture's least window width, while the page shows it and lets the person resize it.
     min_width: Option<f64>,
+    /// …and its least height.
+    min_height: Option<f64>,
     /// The display the card rests on, and where on it.
     rest: Option<(Display, Spot)>,
     /// What the card was last told of its place and its resized size.
@@ -730,6 +732,7 @@ pub struct CardBox {
 #[serde(rename_all = "camelCase")]
 pub struct Resizable {
     min_width: f64,
+    min_height: f64,
 }
 
 /// The card's size with its margin, where its body is in it, and whether it may be resized: the window takes the size,
@@ -759,7 +762,8 @@ pub fn call_controls_layout(
         let mut inner = card.0.lock().unwrap();
         inner.size = Some(size);
         inner.anchor = Some(logic::anchor(size, body, MARGIN));
-        inner.min_width = resizable.map(|r| r.min_width).filter(|w| side(*w));
+        inner.min_width = resizable.as_ref().map(|r| r.min_width).filter(|w| side(*w));
+        inner.min_height = resizable.map(|r| r.min_height).filter(|h| side(*h));
         inner.resize.is_some()
     } else {
         false
@@ -838,8 +842,8 @@ fn opposite(edge: Edge) -> Corner {
     }
 }
 
-/// Resizing the picture-in-picture by its grip: the window follows the pointer with its opposite corner still, its
-/// stage at 16:9 and its width at least the page's least (core `resized`); the card hears its new size (`size`), and
+/// Resizing the picture-in-picture by its grip: the window follows the pointer with its opposite corner still, free in both directions
+/// (the page fits its 16:9 stage inside) and at least the page's least width and height (core `resized`); the card hears its new size (`size`), and
 /// the size and where it rests are remembered for that display. Only while the page says the picture may be resized;
 /// not on Wayland (the card's bridge offers no `resize` there).
 #[tauri::command]
@@ -850,7 +854,7 @@ pub fn call_controls_resize(app: AppHandle, webview: Webview, phase: DragPhase, 
     }
     let (Some(card), Some(w)) = (card(&app), window(&app)) else { return Ok(()) };
     let mut inner = card.0.lock().unwrap();
-    let Some(min_width) = inner.min_width else { return Err("the card cannot be resized now".into()) };
+    let (Some(min_width), Some(min_height)) = (inner.min_width, inner.min_height) else { return Err("the card cannot be resized now".into()) };
     match phase {
         DragPhase::Start => {
             let size = inner.size.unwrap_or(FIRST_SIZE);
@@ -865,7 +869,8 @@ pub fn call_controls_resize(app: AppHandle, webview: Webview, phase: DragPhase, 
         DragPhase::Move | DragPhase::End => {
             let (Some(resize), Some(p)) = (inner.resize.clone(), pointer(&app)) else { return Ok(()) };
             let dx = (p.x - resize.pointer.x) / resize.display.unit;
-            let to = logic::resized(resize.window, resize.edge, dx, min_width, resize.display.work);
+            let dy = (p.y - resize.pointer.y) / resize.display.unit;
+            let to = logic::resized(resize.window, resize.edge, dx, dy, min_width, min_height, resize.display.work);
             let size = Size { width: to.width, height: to.height };
             let a = resize.anchor;
             let anchor = Rect {
