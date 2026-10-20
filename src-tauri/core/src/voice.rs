@@ -14,6 +14,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 
+pub mod meters;
 pub mod take;
 #[cfg(test)]
 mod tests;
