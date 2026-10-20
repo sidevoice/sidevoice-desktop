@@ -38,7 +38,7 @@ the agent's voice and its echo cancellation, on your computer.
 Beta. What works today:
 
 - Pairing with your machine through a one-time code, and calls with its conversations.
-- The tray (menu-bar) icon with the call state (idle, live, muted): mute, hang up, show the window, settings, quit.
+- The tray (menu-bar) icon with the call state (idle, live, muted): mute, hang up, show the window, the room's Settings, quit.
   Closing the window keeps the call going.
 - A global mute shortcut (⌘⇧M on macOS, Ctrl+Shift+M elsewhere; configurable in the room's Settings).
 - On Macs (macOS 13+), the voice call runs in the app: the microphone and the speaker with the app's own echo
@@ -93,7 +93,7 @@ src-tauri/src/       the shell: windows, tray, shortcut, commands, the voice cal
 src-tauri/core/      pure logic (settings, bridge contract, media rules, voice builds), testable without Tauri
 src-tauri/engine/    the app's side of sidevoice-engine (ids, install jobs, refusals)
 bridge/              the script injected into the call page: the page side of the bridge
-ui/                  the settings window; ui/voice/ holds the web interface, the pinned release (not committed)
+ui/                  ui/voice/ holds the web interface, the pinned release (not committed)
 brand/               the brand files the icons and installer art are generated from
 docs/                the bridge, the engines and models, targets, macOS notes, the brand
 ```

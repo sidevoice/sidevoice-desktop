@@ -1500,7 +1500,7 @@ test("the voice's output level reaches the app during a call only, throttled, an
     [{ level: 0.5, threadId: "a" }, { level: 0, threadId: "a" }]);
 });
 
-test("the card's gear opens the room's Settings at the floating card, and Cancel sending takes the turn back", async () => {
+test("the card's gear opens the room's Settings at the floating card, the tray's where it was left, and Cancel sending takes the turn back", async () => {
   const install = loadFactory();
   const { win } = fakeWindow(ORIGIN);
   const did = [];
@@ -1509,9 +1509,11 @@ test("the card's gear opens the room's Settings at the floating card, and Cancel
   win.sidevoiceActions = { toggleMic() {}, toggleCall: async () => {}, cancelInput: async () => did.push("cancel"), keepVoiceOn: () => did.push("keep") };
   const api = install(win, ORIGIN);
   assert.equal(api.run({ command: "open-settings" }), true);
+  assert.equal(api.run({ command: "show-settings" }), true, "the tray's, with no section");
   assert.equal(api.run({ command: "cancel-input" }), true);
   assert.equal(api.run({ command: "keep-alive" }), true, "the idle warning's Keep");
   delete win.sidevoiceUI.openSettings;
   assert.equal(api.run({ command: "open-settings" }), false, "a room without it");
-  assert.deepEqual(did, ["settings floating-card", "cancel", "keep"]);
+  assert.equal(api.run({ command: "show-settings" }), false, "a room without it");
+  assert.deepEqual(did, ["settings floating-card", "settings undefined", "cancel", "keep"]);
 });

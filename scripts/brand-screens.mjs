@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 // Renders docs/brand-screens/: the icons as each platform shows them (read back out of the .icns and .ico,
-// so the containers are checked too), the tray on light and dark bars, the .dmg window, and the settings
-// window in light and dark, with headless Chromium. Not part of the build: it is how the brand work is
-// looked at without a Mac.
+// so the containers are checked too), the tray on light and dark bars and the .dmg window, with headless
+// Chromium. Not part of the build: it is how the brand work is looked at without a Mac.
 //
 //   CHROME=/path/to/chromium [CHROME_LIBS=/extra/libs] node scripts/brand-screens.mjs
 import { execFileSync } from "node:child_process";
@@ -122,7 +121,7 @@ const bar = (dark, heightPt) => {
 const taskbar = (dark, size) => `<div class="taskbar ${dark ? "dark" : "light"}">${["idle", "live", "muted"].map((s) => `<img src="tray-${dark ? "dark" : "light"}-${s}.png" width="${size}" height="${size}">`).join("")}<span>${size} px</span></div>`;
 
 const css = `
-@font-face { font-family: "DM Sans"; src: url("${path.join(root, "ui/brand/DMSans-Variable-latin.woff2")}"); font-weight: 100 1000; }
+@font-face { font-family: "DM Sans"; src: url("${path.join(root, "brand/fonts/DMSans-Variable-latin.woff2")}"); font-weight: 100 1000; }
 body { margin: 0; padding: 24px; font: 13px/1.4 "DM Sans", sans-serif; color: #1b1d24; background: #e9e4dc; }
 h2 { font-size: 13px; letter-spacing: .08em; text-transform: uppercase; margin: 22px 0 10px; color: #5b5670; }
 .row { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; }
@@ -172,31 +171,4 @@ writeFileSync(path.join(work, "dmg-dark.html"), dmgPage(true));
 shot("dmg-window-light-labels.png", path.join(work, "dmg-light.html"), layout.width, layout.height, 2);
 shot("dmg-window-dark-labels.png", path.join(work, "dmg-dark.html"), layout.width, layout.height, 2);
 
-// The settings window, in light and dark, with the app's commands answered by a stub.
-const stub = `<script>window.__TAURI_INTERNALS__={invoke:async(c)=>{
-  if(c==="get_settings")return{debug:false,appVersion:"0.1.0"};
-  if(c==="headset_report")return{platformSupported:true,muteGestureApi:true,inCall:true,testing:false,
-    events:[{at:Date.now()-42000,source:"remote:toggle",action:"mute"},{at:Date.now()-31000,source:"airpods:unmute",action:"unmute"}]};
-  return {};}};</script>`;
-for (const scheme of ["light", "dark"]) {
-  const html = readFileSync(path.join(root, "ui/index.html"), "utf8")
-    .replace("<head>", `<head><base href="file://${path.join(root, "ui")}/">`)
-    .replace('<link rel="stylesheet"', `${stub}<meta name="color-scheme" content="${scheme}"><style>:root{color-scheme:${scheme}}</style><link rel="stylesheet"`)
-    .replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/, "");
-  // prefers-color-scheme follows the flag below; the page is otherwise the one the app ships.
-  const page = path.join(work, `settings-${scheme}.html`);
-  writeFileSync(page, html);
-  const file = path.join(shots, `settings-${scheme}.png`);
-  rmSync(file, { force: true });
-  for (let i = 0; i < 3 && !existsSync(file); i++) {
-    try {
-      execFileSync(CHROME, [
-        "--headless", "--no-sandbox", "--disable-gpu", "--hide-scrollbars", "--allow-file-access-from-files",
-        "--force-device-scale-factor=2", "--window-size=600,900", "--virtual-time-budget=5000",
-        `--blink-settings=preferredColorScheme=${scheme === "dark" ? 0 : 1}`, `--screenshot=${file}`, `file://${page}`,
-      ], { stdio: "ignore", env: { ...process.env, LD_LIBRARY_PATH: process.env.CHROME_LIBS || "" } });
-    } catch {}
-  }
-  console.log("wrote", path.relative(root, file));
-}
 rmSync(work, { recursive: true, force: true });

@@ -8,8 +8,6 @@
 //! Windows:
 //! - `room-N`: the bundled interface. Created at launch, and again (N grows) when it is gone. Closing it hides it; the
 //!   app keeps running.
-//! - `settings`: bundled local page (`ui/index.html`): diagnostics only (native engine, headset buttons, this computer);
-//!   the mute shortcut and the call controls are set in the room page's Settings.
 //! - `call-controls`: the call controls card (`src/call_controls.rs`), floating over other apps during a call.
 
 mod call_controls;
@@ -26,7 +24,6 @@ mod tray;
 mod updater;
 mod voice;
 
-use serde::Serialize;
 use serde_json::{json, Value};
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
 use sidevoice_desktop_core::build_info::BuildInfo;
@@ -39,7 +36,6 @@ use tauri::webview::{PageLoadEvent, PermissionKind, PermissionResponse};
 use tauri::{AppHandle, Manager, State, Webview, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
-const SETTINGS_LABEL: &str = "settings";
 const ROOM_PREFIX: &str = "room-";
 /// The web interface bundled in the app (the sidevoice-web release `web.pin.json` names, `scripts/build-web.mjs`), at
 /// the path a room serves it from, so its absolute `/voice/…` URLs resolve.
@@ -137,20 +133,6 @@ fn change_shortcut(app: &AppHandle, change: impl FnOnce(&mut Settings)) -> Resul
 /// A refusal as the room page reads it (docs/BRIDGE.md → "Refusals").
 pub(crate) fn refusal(key: &str, message: impl std::fmt::Display) -> Value {
     json!({ "key": key, "message": message.to_string() })
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SettingsInfo {
-    /// Diagnostics on (`SIDEVOICE_DEBUG=1`): the settings page then also reports what its webview offers.
-    debug: bool,
-    app_version: String,
-}
-
-/// What the settings window's diagnostics read from the app.
-#[tauri::command]
-fn get_settings(app: AppHandle) -> SettingsInfo {
-    SettingsInfo { debug: debugging(), app_version: app.package_info().version.to_string() }
 }
 
 /// `host.muteShortcut`'s one command: `action` `get`, or `set` with `accelerator` (`null`: none). Refuses
@@ -282,19 +264,7 @@ pub(crate) fn debug(message: &str) {
     }
 }
 
-/// The headset diagnostic in the settings window: the last button events and whether they are being listened for.
-#[tauri::command]
-fn headset_report(app: AppHandle) -> headset::Report {
-    app.state::<headset::Headset>().report()
-}
-
-/// "Probar botones": the app listens for a headset's buttons for a minute, without a call.
-#[tauri::command]
-fn headset_test(app: AppHandle) {
-    headset::test(&app, 60);
-}
-
-/// A line from a page's diagnostics (the settings page, the CI probe), printed only with `SIDEVOICE_DEBUG=1`.
+/// A line from a page's diagnostics (the CI probe), printed only with `SIDEVOICE_DEBUG=1`.
 #[tauri::command]
 fn debug_log(line: String) {
     debug(&format!("page says: {}", line.chars().take(2000).collect::<String>()));
@@ -402,8 +372,16 @@ pub(crate) fn show_room(app: &AppHandle) {
             let _ = w.unminimize();
             let _ = w.set_focus();
         }
-        None => open_settings(app),
+        None => {
+            let _ = open_room(app);
+        }
     }
+}
+
+/// The tray's Settings: the room in front, on its own Settings (the page opens them where they were left).
+pub(crate) fn show_settings(app: &AppHandle) {
+    show_room(app);
+    send(app, Command::ShowSettings);
 }
 
 /// Makes the app the active one (macOS 14+). `set_focus` asks with `activateIgnoringOtherApps:`, which macOS 14
@@ -473,20 +451,6 @@ fn app_report(_app: &AppHandle) -> String {
     format!("call_card={}", if call_card_disabled() { "off" } else { "on" })
 }
 
-pub(crate) fn open_settings(app: &AppHandle) {
-    if let Some(w) = app.get_webview_window(SETTINGS_LABEL) {
-        let _ = w.show();
-        let _ = w.set_focus();
-        return;
-    }
-    let _ = WebviewWindowBuilder::new(app, SETTINGS_LABEL, WebviewUrl::App("index.html".into()))
-        .title("Sidevoice · Ajustes")
-        .initialization_script(bridge::NO_CONTEXT_MENU_SCRIPT)
-        .inner_size(600.0, 640.0)
-        .min_inner_size(420.0, 480.0)
-        .build();
-}
-
 /// Registers the global mute shortcut, replacing any previous one, keeps how it went and tells the room page
 /// (`host.muteShortcut.subscribe`). A refused one comes with the alternatives the system does take.
 fn apply_shortcut(app: &AppHandle, accelerator: &str) {
@@ -518,7 +482,6 @@ fn apply_shortcut(app: &AppHandle, accelerator: &str) {
 macro_rules! commands {
     ($($extra:tt)*) => {
         tauri::generate_handler![
-            get_settings,
             bridge_state,
             bridge_level,
             bridge_playback,
@@ -528,11 +491,8 @@ macro_rules! commands {
             call_controls::call_controls_drag,
             call_controls::call_controls_resize,
             debug_log,
-            headset_report,
-            headset_test,
             engine_ipc::engine_capabilities,
             engine_ipc::engine_installed,
-            engine_ipc::engine_on_disk,
             engine_ipc::engine_install,
             engine_ipc::engine_progress,
             engine_ipc::engine_cancel,

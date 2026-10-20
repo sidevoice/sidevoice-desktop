@@ -832,6 +832,11 @@
           if (!win.sidevoiceUI || typeof win.sidevoiceUI.openSettings !== "function") return false;
           win.sidevoiceUI.openSettings("floating-card");
           return true;
+        case "show-settings":
+          // The tray's Settings: the room's Settings as it was left (the app brings the room in front).
+          if (!win.sidevoiceUI || typeof win.sidevoiceUI.openSettings !== "function") return false;
+          win.sidevoiceUI.openSettings();
+          return true;
         case "keep-alive":
           // The idle warning's Keep on the card: a sign of the person, so the call stays on.
           if (typeof actions.keepVoiceOn !== "function") return false;

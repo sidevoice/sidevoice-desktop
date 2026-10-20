@@ -152,6 +152,8 @@ pub enum Command {
     },
     /// The card's gear: the room's Settings at its Floating card section (`sidevoiceUI.openSettings`).
     OpenSettings,
+    /// The tray's Settings: the room's Settings as it was left (`sidevoiceUI.openSettings`, no section).
+    ShowSettings,
     /// Takes back the person's turn while it is recorded or transcribed (`sidevoiceActions.cancelInput`).
     CancelInput,
     /// The idle warning's Keep: a sign of the person, so the call stays on (`sidevoiceActions.keepVoiceOn`).
@@ -174,6 +176,7 @@ impl Command {
             Command::SelectParticipant { .. } => "select-participant",
             Command::SelectAudioDevice { .. } => "select-audio-device",
             Command::OpenSettings => "open-settings",
+            Command::ShowSettings => "show-settings",
             Command::CancelInput => "cancel-input",
             Command::KeepAlive => "keep-alive",
         }
@@ -328,6 +331,7 @@ mod tests {
         assert!(parse(r#"{"command":"close-participant","threadId":"abc"}"#).is_err());
         assert!(parse(r#"{"command":"select-participant"}"#).is_err());
         assert_eq!(parse(r#"{"command":"open-settings"}"#).unwrap(), Command::OpenSettings);
+        assert_eq!(parse(r#"{"command":"show-settings"}"#).unwrap(), Command::ShowSettings);
         assert_eq!(parse(r#"{"command":"cancel-input"}"#).unwrap().name(), "cancel-input");
         assert_eq!(parse(r#"{"command":"keep-alive"}"#).unwrap(), Command::KeepAlive);
     }

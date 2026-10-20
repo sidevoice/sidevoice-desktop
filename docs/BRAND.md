@@ -20,7 +20,6 @@ dark interfaces, and the one-ink variant "Tono" (the fourth bar at 45 % of the i
 | Windows / Linux tray: idle, live, muted, for light and dark bars | `sidevoice-mark.svg`, `…-on-dark.svg`, and Tono in their inks | `src-tauri/icons/tray/{light,dark}-*.png` |
 | `.dmg` window background (1x, 2x) | `logo/lockup/sidevoice-lockup.svg` | `src-tauri/dmg/`, laid out by `scripts/dmg-settings.py` |
 | `.dmg` volume icon | the `.icns` above | CI |
-| Settings window | lockups (light and dark), DM Sans, palette | `ui/brand/`, `ui/settings.css` |
 
 The room window (pairing, calls, first open) is the web interface, bundled from sidevoice-web
 (`ui/voice/`, docs/TARGETS.md). Its brand is that repo's; it reaches the app when `web.pin.json` moves to a release with it.
