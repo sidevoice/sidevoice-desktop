@@ -843,10 +843,10 @@ interface UpdaterStatus {
 
 ## The app log
 
-The app keeps a rotating log (1 MB per file, 3 files) written by `tauri-plugin-log` in the platform's log directory:
+The app keeps a rotating log written by `tauri-plugin-log` in the platform's log directory: each launch starts a new file and the previous ones are kept (the last 5 files, 2 MB each; a long session rotates by size too), so a session that crashed can be read after the relaunch:
 macOS `~/Library/Logs/dev.sidevoice.desktop/sidevoice-desktop.log`, Linux `~/.local/share/dev.sidevoice.desktop/logs/`,
-Windows `%LOCALAPPDATA%\dev.sidevoice.desktop\logs\`. It holds the Rust side's lines (level info and above, panics
-included) and what the room page reports through `bridge/webview-log.js`: `console.warn`, `console.error`, uncaught
+Windows `%LOCALAPPDATA%\dev.sidevoice.desktop\logs\`. It holds the Rust side's lines (level `info` and above by default, panics
+included; `SIDEVOICE_LOG_LEVEL=error|warn|info|debug|trace|off` sets it, and that variable is the only way: there is no setting in the app). The call state is logged as the facts that changed, in a few words (`bridge_state: joined=true mic=false`), never as a whole snapshot per report; the whole snapshot is at level `debug`, and on stderr with `SIDEVOICE_DEBUG=1`. The log also holds what the room page reports through `bridge/webview-log.js`: `console.warn`, `console.error`, uncaught
 errors and unhandled rejections, as lines with target `webview`. The page's lines carry only strings and numbers, an
 Error's name, message and first stack lines, and an object's `code`, `key`, `name` and `message`; credential-shaped
 text is masked and a flood is cut. Nothing else is logged: no keys, tokens, transcripts or message text.

@@ -7,6 +7,7 @@ pub mod call_controls;
 pub mod computer_name;
 pub mod headset;
 pub mod i18n;
+pub mod logging;
 pub mod media;
 pub mod memory;
 pub mod settings;
