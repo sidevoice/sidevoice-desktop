@@ -37,8 +37,12 @@ const POINTER_EVERY: Duration = Duration::from_millis(80);
 const VIEW_EVERY: Duration = Duration::from_millis(500);
 /// The card's shadow margin inside its window (the web build's CARD_MARGIN): the pointer over it is not over the card.
 const MARGIN: f64 = 12.0;
-/// How long the card shows after a change in Settings → Floating card (`host.callControls.preview`).
-const PREVIEW_FOR: Duration = Duration::from_millis(2500);
+/// How long the card shows after the last change in Settings → Floating card (`host.callControls.preview`).
+const PREVIEW_FOR: Duration = Duration::from_millis(4000);
+/// How long it stays once the person is done with it: the pointer over it, or dragging or resizing it, keeps it showing.
+const PREVIEW_AFTER_USE: Duration = Duration::from_millis(2000);
+/// How often a preview is looked at again while it shows.
+const PREVIEW_EVERY: Duration = Duration::from_millis(200);
 /// The largest window the page may ask for, in logical pixels.
 const MAX_SIDE: f64 = 8000.0;
 
@@ -63,6 +67,8 @@ struct Inner {
     shown: bool,
     /// Shown for a moment after a change in Settings, while the room is in front (`preview`).
     preview_until: Option<Instant>,
+    /// Whether a thread is looking at the preview (one at a time).
+    preview_watched: bool,
     level: u8,
     /// `None` where the app cannot see the pointer (Wayland): the card's own pointer events decide.
     pointer_inside: Option<bool>,
@@ -116,6 +122,15 @@ fn wayland() -> bool {
     cfg!(target_os = "linux")
         && std::env::var_os("WAYLAND_DISPLAY").is_some_and(|d| !d.is_empty())
         && !std::env::var("GDK_BACKEND").is_ok_and(|b| b.trim_start().starts_with("x11"))
+}
+
+/// Quitting: the card's window goes, with its webview.
+pub fn close(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(LABEL) {
+        if let Err(e) = window.destroy() {
+            debug(&format!("call-controls not closed: {e}"));
+        }
+    }
 }
 
 /// Creates the card's window, hidden; it shows during a call ([`update`]).
@@ -275,9 +290,15 @@ pub fn update(app: &AppHandle) {
         let unhidden = inner.hidden && !hidden;
         inner.hidden = hidden;
         inner.room_in_front = Some(in_front);
-        let previewing = inner.preview_until.is_some_and(|until| Instant::now() < until);
+        let mut previewing = inner.preview_until.is_some_and(|until| Instant::now() < until);
+        // Never while the person is at it: the pointer over it, a drag or a resize keep it, and it goes
+        // PREVIEW_AFTER_USE after they are done.
+        if previewing && (inner.drag.is_some() || inner.resize.is_some() || inner.pointer_inside == Some(true)) {
+            inner.preview_until = Some(Instant::now() + PREVIEW_AFTER_USE);
+        }
         if !previewing {
             inner.preview_until = None;
+            previewing = false;
         }
         let wanted = enabled
             && (logic::wanted(call.joined, inner.hidden, in_front, always_shown) || (call.joined && previewing));
@@ -338,14 +359,36 @@ pub fn hidden_for_call(app: &AppHandle) -> bool {
 /// Settings → Floating card changed something: during a call, the card shows a moment, in front of the room too.
 fn preview(app: &AppHandle) {
     let Some(card) = card(app) else { return };
-    card.0.lock().unwrap().preview_until = Some(Instant::now() + PREVIEW_FOR);
+    let watch = {
+        let mut inner = card.0.lock().unwrap();
+        // Each change starts the time again, from now.
+        inner.preview_until = Some(Instant::now() + PREVIEW_FOR);
+        !std::mem::replace(&mut inner.preview_watched, true)
+    };
     place(app);
     update(app);
+    if !watch {
+        return;
+    }
+    // Looked at again and again while it shows: an interaction extends it (in `update`), and it goes when its time is up.
     let app = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(PREVIEW_FOR + Duration::from_millis(50));
+    std::thread::spawn(move || loop {
+        std::thread::sleep(PREVIEW_EVERY);
         update(&app);
+        let Some(card) = self::card(&app) else { return };
+        let mut inner = card.0.lock().unwrap();
+        if inner.preview_until.is_none() {
+            inner.preview_watched = false;
+            return;
+        }
     });
+}
+
+/// Leaving Settings → Floating card: a preview showing goes at once.
+fn end_preview(app: &AppHandle) {
+    let Some(card) = card(app) else { return };
+    card.0.lock().unwrap().preview_until = None;
+    update(app);
 }
 
 /// The microphone's level from the room window, for the card's wave.
@@ -684,6 +727,10 @@ pub async fn call_controls_settings(
                 save(&inner);
             }
             place(&app);
+            Ok(serde_json::Value::Null)
+        }
+        ("end-preview", _, _) => {
+            end_preview(&app);
             Ok(serde_json::Value::Null)
         }
         ("preview", _, _) => {

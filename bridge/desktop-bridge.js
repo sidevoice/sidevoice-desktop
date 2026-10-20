@@ -612,6 +612,9 @@
       clearSize: () => call("call_controls_settings", { action: "clear-size" }).then(() => undefined),
       /** During a call, shows the card a moment, in front of the room too: after a change in Settings. */
       preview: () => { invoke("call_controls_settings", { action: "preview" }); },
+      /** Leaving Settings: a preview showing goes at once (else it stays while the pointer is on it or it is dragged, and goes
+       *  two seconds after). */
+      endPreview: () => { invoke("call_controls_settings", { action: "end-preview" }); },
     });
   }
 

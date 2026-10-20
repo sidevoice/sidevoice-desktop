@@ -49,8 +49,8 @@ talks to, and how to reach it, comes from pairing alone. A standalone static dep
 - A node on loopback is reached cross-origin from the interface's window, `Origin: tauri://localhost`, preflight and
   device token included (probe page, fake node).
 - Restarting as an installed update does, and quitting, with whisper.cpp's Metal build loaded (probe page): each
-  process ends with status 0, without running the C++ static destructors, and no crash report (`cargo xtask macos
-  exit`; #121).
+  process releases every model before `exit()`, runs the C++ static destructors to their end, and ends with status
+  0 and no crash report (`cargo xtask macos exit`; #121).
 
 ## Updating the bundled interface
 
