@@ -230,6 +230,14 @@ jobs:
           key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs', 'scripts/web-release.mjs') }}
       - name: Build the CI probe app (feature probe; never shipped)
         run: cargo xtask macos probe-app
+      # Experiment only: the probe app to try on a Mac of one's own (unsigned: `xattr -dr com.apple.quarantine` first).
+      - name: The probe app as a download
+        run: ditto -c -k --keepParent src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sidevoice.app probe-app.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: probe-app
+          path: probe-app.zip
+          retention-days: 7
       # Informational (desktop#149): what animated SVG costs the webview's CPU, with WebKit's layer-based SVG engine off
       # and on, and with the animations stopped. Prints a table and the WebKit features that matter for it.
       - name: Animated SVG cost in the webview, with and without WebKit's layer-based SVG engine (table; informational)

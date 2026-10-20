@@ -77,6 +77,16 @@
     document.getElementById("m").append(svg);
   });
   const invoke = (command, args) => window.__TAURI_INTERNALS__.invoke(command, args);
+  // Proof the page is still being drawn at the rate the display asks for, and that the animations still move (a
+  // frozen one would also cost nothing): frames per second and the first limb's animated transform, every 5 s.
+  let frames = 0;
+  const count = () => { frames++; requestAnimationFrame(count); };
+  requestAnimationFrame(count);
+  const probe = document.querySelector("svg g.a");
+  setInterval(() => {
+    invoke("debug_log", { line: `svg-anim tick fps=${(frames / 5).toFixed(1)} transform=${getComputedStyle(probe).transform}` });
+    frames = 0;
+  }, 5000);
   setTimeout(() => {
     invoke("debug_log", {
       line: `svg-anim running still=${still} groups=${n} animations=${document.getAnimations().length} ua=${navigator.userAgent}`,

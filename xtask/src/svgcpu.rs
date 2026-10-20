@@ -124,6 +124,28 @@ struct Run {
     late: bool,
 }
 
+/// What the page reported of itself (`svg-anim tick` lines): proof it kept drawing and the animations kept moving.
+#[derive(Debug, Default, PartialEq)]
+pub struct Ticks {
+    pub fps: f64,
+    pub poses: usize,
+}
+
+/// The mean frame rate of the ticks after the first, and the number of different transforms they saw.
+pub fn ticks(log: &str) -> Ticks {
+    let line = crate::util::re(r"svg-anim tick fps=([0-9.]+) transform=(.*)");
+    let all: Vec<_> = log
+        .lines()
+        .filter_map(|l| line.captures(l).map(|c| (c[1].parse::<f64>().unwrap_or(0.0), c[2].trim().to_owned())))
+        .collect();
+    let rest = all.get(1..).unwrap_or_default();
+    let fps = if rest.is_empty() { 0.0 } else { rest.iter().map(|(f, _)| f).sum::<f64>() / rest.len() as f64 };
+    let mut poses: Vec<&str> = rest.iter().map(|(_, t)| t.as_str()).collect();
+    poses.sort_unstable();
+    poses.dedup();
+    Ticks { fps, poses: poses.len() }
+}
+
 struct Result_ {
     label: &'static str,
     cpu: BTreeMap<Kind, f64>,
@@ -131,6 +153,8 @@ struct Result_ {
     animations: String,
     live: Vec<String>,
     seen: String,
+    /// The page's own frames per second (mean of its ticks) and how many different poses its ticks saw.
+    ticks: Ticks,
 }
 
 fn sample(app: u32) -> BTreeMap<u32, (Kind, f64)> {
@@ -178,7 +202,8 @@ fn measure(home: &AppHome, run: &Run, dir: &std::path::Path, shots: &std::path::
         *counts.entry(*kind).or_default() += 1;
     }
     let seen = counts.iter().map(|(kind, n)| format!("{}x{n}", kind.name())).collect::<Vec<_>>().join(" ");
-    Ok((Result_ { label: run.label, cpu: spent(&before, &after), seconds, animations, live, seen }, text))
+    let ticks = ticks(&text);
+    Ok((Result_ { label: run.label, cpu: spent(&before, &after), seconds, animations, live, seen, ticks }, text))
 }
 
 fn table(results: &[Result_]) -> String {
@@ -187,7 +212,7 @@ fn table(results: &[Result_]) -> String {
     for kind in kinds {
         out += &format!(" {:>13}", kind.name());
     }
-    out += &format!(" {:>13}\n", "total");
+    out += &format!(" {:>13} {:>8} {:>6}\n", "total", "rAF/s", "poses");
     for r in results {
         out += &format!("{:<18}", r.label);
         let mut total = 0.0;
@@ -196,7 +221,7 @@ fn table(results: &[Result_]) -> String {
             total += percent;
             out += &format!(" {:>12.1}%", percent);
         }
-        out += &format!(" {:>12.1}%\n", total);
+        out += &format!(" {:>12.1}% {:>8.1} {:>6}\n", total, r.ticks.fps, r.ticks.poses);
     }
     out + &format!("(CPU time as a share of one core over {SECONDS} s, from ps; 100% is one core busy)")
 }
@@ -326,6 +351,13 @@ mod tests {
         assert_eq!(used[&Kind::Gpu], 5.0);
         assert_eq!(used[&Kind::App], 1.0);
         assert_eq!(used[&Kind::WebContent], 0.0);
+    }
+
+    #[test]
+    fn the_page_ticks_are_read() {
+        let log = "a\nsvg-anim tick fps=30.0 transform=matrix(1, 0, 0, 1, 0, 0)\nsvg-anim tick fps=60.0 transform=matrix(1, 0, 0, 1, 0, 1)\nsvg-anim tick fps=58.0 transform=matrix(1, 0, 0, 1, 0, 2)\n";
+        assert_eq!(ticks(log), Ticks { fps: 59.0, poses: 2 });
+        assert_eq!(ticks("nothing"), Ticks::default());
     }
 
     #[test]
