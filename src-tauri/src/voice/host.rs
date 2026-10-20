@@ -29,6 +29,10 @@ mod memory;
 #[cfg(test)]
 mod tests;
 
+/// The keeps (`VoiceState::keep`) still waiting to let go, for CI's memory run.
+#[cfg(feature = "probe")]
+static PENDING_KEEPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// How long the models of a stopped call, or of a preload, stay loaded when the settings do not say, in minutes.
 pub(crate) const IDLE_UNLOAD_MINUTES: u32 = 10;
 
@@ -190,10 +194,21 @@ impl<A: LaneAudio> VoiceState<A> {
             return;
         }
         let wait = self.minute.saturating_mul(minutes);
+        #[cfg(feature = "probe")]
+        PENDING_KEEPS.fetch_add(1, Ordering::SeqCst);
         tokio::spawn(async move {
             tokio::time::sleep(wait).await;
             drop(held);
+            #[cfg(feature = "probe")]
+            PENDING_KEEPS.fetch_sub(1, Ordering::SeqCst);
         });
+    }
+
+    /// CI's memory run (src/probe.rs): what the host holds now, as `keeps=N lanes=M`.
+    #[cfg(feature = "probe")]
+    pub(crate) fn held(&self) -> String {
+        let lanes = self.calls.try_lock().map_or("busy".to_owned(), |calls| calls.len().to_string());
+        format!("keeps={} lanes={lanes}", PENDING_KEEPS.load(Ordering::SeqCst))
     }
 
     /// Lets go of the lane's call, a stopped one: it keeps the models it loaded for its idle minutes, so that another

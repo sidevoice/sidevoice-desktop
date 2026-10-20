@@ -58,12 +58,15 @@ fn watch_exit_handlers() {
 /// printed as `memory phase=PHASE ...` (core `memory`), on a thread of its own (`vmmap` takes a second or two; the page
 /// waits for it). `macos memory` reads the lines back (#145).
 #[cfg(target_os = "macos")]
-pub fn memory_on(line: &str) {
+pub fn memory_on(app: &tauri::AppHandle, line: &str) {
     let Some(phase) = line.strip_prefix("probe-memory ") else { return };
     if !crate::debugging() {
         return;
     }
     let phase = phase.trim().to_owned();
+    if let Some(state) = tauri::Manager::try_state::<crate::voice::VoiceState>(app) {
+        println!("memory-holds phase={phase} {}", state.held());
+    }
     std::thread::spawn(move || {
         crate::memory::report(&phase);
     });

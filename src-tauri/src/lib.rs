@@ -274,7 +274,7 @@ fn debug_log(app: AppHandle, line: String) {
     #[cfg(feature = "probe")]
     probe::exit_on(&app, &line);
     #[cfg(all(feature = "probe", target_os = "macos"))]
-    probe::memory_on(&line);
+    probe::memory_on(&app, &line);
     let _ = (app, line);
 }
 
