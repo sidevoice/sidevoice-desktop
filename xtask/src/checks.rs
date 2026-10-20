@@ -44,7 +44,7 @@ pub fn test() -> Result<()> {
 }
 
 /// Everything `npm run icons` writes.
-const DRAWN: &[&str] = &["src-tauri/icons", "src-tauri/dmg", "ui/brand"];
+const DRAWN: &[&str] = &["src-tauri/icons", "src-tauri/dmg"];
 
 /// `icons`: the icons, tray marks and .dmg window are what the brand files draw: `npm run icons`, then nothing it
 /// writes differs from what is committed.

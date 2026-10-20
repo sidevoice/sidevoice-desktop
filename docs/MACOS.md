@@ -65,8 +65,8 @@ Not verified on a Mac (no headset in CI), and what can go wrong:
   process (which captures for the page), not the app's own process, so the gesture may never reach the app.
 - Another app that plays audio after the call started (a video) can become Now Playing and take the buttons.
 
-To see what really arrives: Settings → "Botones del auricular" lists every button event the app receives (source
-and what it did), and "Probar botones (1 min)" makes the app the Now Playing app for a minute without a call.
+To see what really arrives: the app log lists every button event the app receives (`headset …` lines: source and what
+it did).
 The page's own Media Session handlers are switched off in the app (`host.mediaKeys = "native"`), so one click never
 toggles twice. CI simulates a call on a macOS runner and checks the app becomes Now Playing and lets go after.
 

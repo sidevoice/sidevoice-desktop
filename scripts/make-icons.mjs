@@ -7,12 +7,11 @@
 //   src-tauri/icons/tray/{idle,live,muted}.png          macOS menu bar, template images (one ink)
 //   src-tauri/icons/tray/{light,dark}-{idle,live,muted}.png   Windows / Linux tray, for light and dark bars
 //   src-tauri/dmg/background.png, background@2x.png      the .dmg window
-//   ui/brand/…                                           mark, lockups and DM Sans for the settings window
 //
 //   npm run icons
 //
 // The rules it follows are the brand's (the brand kit's README), and where they are silent, docs/BRAND.md.
-import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Resvg } from "@resvg/resvg-js";
@@ -236,17 +235,4 @@ out("src-tauri/dmg/background.png", png(dmg, DMG.width));
 out("src-tauri/dmg/background@2x.png", png(dmg, DMG.width * 2));
 writeFileSync(path.join(root, "src-tauri/dmg/layout.json"), JSON.stringify(DMG, null, 2) + "\n");
 
-// ------------------------------------------------------------------ the settings window's brand files
-
-for (const file of [
-  "logo/mark/sidevoice-mark.svg",
-  "logo/mark/sidevoice-mark-on-dark.svg",
-  "logo/lockup/sidevoice-lockup.svg",
-  "logo/lockup/sidevoice-lockup-on-dark.svg",
-  "fonts/DMSans-Variable-latin.woff2",
-  "fonts/OFL.txt",
-]) {
-  mkdirSync(path.join(root, "ui/brand"), { recursive: true });
-  copyFileSync(path.join(root, "brand", file), path.join(root, "ui/brand", path.basename(file)));
-}
-console.log("icons, tray, .dmg background and ui/brand written from", JSON.parse(brand("source.json")).commit.slice(0, 7));
+console.log("icons, tray and .dmg background written from", JSON.parse(brand("source.json")).commit.slice(0, 7));

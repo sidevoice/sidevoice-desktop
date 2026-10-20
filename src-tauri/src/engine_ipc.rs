@@ -1,15 +1,13 @@
 //! The native engine, as the bundled interface reaches it (docs/BRIDGE.md → "The native engine").
 //!
 //! The bridge script exposes these as `window.__sidevoiceDesktop.host.engine`. Only the room window's own
-//! pages may call them (capabilities/room.json); the settings window may read what is on disk
-//! (`engine_on_disk`, capabilities/settings.json). They manage the models: the catalogues and what they list, the keys
-//! of remote providers (kept in the keychain, never handed back), what runs here, what is installed and on disk,
-//! installs and their cancel, removing a model, memory. Engine work runs on blocking threads, never the main one. A refusal is
+//! pages may call them (capabilities/room.json). They manage the models: the catalogues and what they list, the keys
+//! of remote providers (kept in the keychain, never handed back), what runs here, what is installed, installs and their cancel, removing a model, memory. Engine work runs on blocking threads, never the main one. A refusal is
 //! the engine's keyed `Error` (docs/BRIDGE.md → "Refusals").
 
 use sidevoice_desktop_engine::error::{self, internal};
 use sidevoice_desktop_engine::{
-    CatalogView, CredentialRefusal, Device, Error, Installed, Jobs, Memory, NativeEngines, OnDisk, Progress, Wanted,
+    CatalogView, CredentialRefusal, Device, Error, Installed, Jobs, Memory, NativeEngines, Progress, Wanted,
 };
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -38,13 +36,6 @@ pub fn engine_capabilities(state: State<'_, EngineState>) -> Device {
 pub async fn engine_installed(state: State<'_, EngineState>) -> Result<Vec<Installed>, Error> {
     let engines = state.engines.clone();
     tauri::async_runtime::spawn_blocking(move || engines.installed()).await.map_err(internal)?
-}
-
-/// For the settings window: engine packages and model builds on disk, with their sizes.
-#[tauri::command]
-pub async fn engine_on_disk(state: State<'_, EngineState>) -> Result<OnDisk, Error> {
-    let engines = state.engines.clone();
-    tauri::async_runtime::spawn_blocking(move || engines.on_disk()).await.map_err(internal)?
 }
 
 /// Installs `model` as `job` (the page's id for this call): build `build` (its catalogue id), which must be `engine`'s
