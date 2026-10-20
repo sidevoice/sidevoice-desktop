@@ -298,8 +298,8 @@ pub fn probe() -> Result<()> {
 /// `macos exit`: quitting and restarting after a call (#121). The probe app runs the probe page, which ends with
 /// whisper-tiny's whisper.cpp build (Metal) loaded, then restarts as an installed update does
 /// (`SIDEVOICE_DEBUG_EXIT=restart`, src-tauri/src/probe.rs); the relaunched app runs the page again and quits as the
-/// tray's Quit does. Each process must end with status 0: no abort in `exit()` (a C++ static destructor), no crash
-/// report.
+/// tray's Quit does. Each process must end with status 0, no crash report, and without running the C++ static
+/// destructors: none aborts in `exit()`.
 pub fn exit() -> Result<()> {
     let data = AppHome::new("exit")?;
     let logs = work("exit")?;
@@ -344,6 +344,10 @@ pub fn exit() -> Result<()> {
     ensure(launches == 2, "the restart did not relaunch the app")?;
     ensure(relaunched && gone, "the relaunched app did not quit")?;
     ensure(!has(&text, "GGML_ASSERT|libc\\+\\+abi|panicked"), "the app aborted on its way out")?;
+    // On a runner (Apple Paravirtual device) whisper.cpp's destructor did not abort even before the fix, unlike on a
+    // Mac's GPU: what is checked is that the app runs none of those destructors, which a handler of the probe's
+    // stands in for (src-tauri/src/probe.rs).
+    ensure(!has(&text, "probe: exit handlers ran"), "exit() ran the static destructors")?;
     ensure(new.is_empty(), "macOS wrote a crash report")
 }
 
