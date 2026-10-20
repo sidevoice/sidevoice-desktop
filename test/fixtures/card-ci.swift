@@ -39,7 +39,7 @@ case "hover" where args.count == 3:
     // Unlike `move`, which warps the pointer and posts nothing: the window under it gets each move.
     let to = CGPoint(x: number(1), y: number(2))
     for step in 0...10 {
-        post(.mouseMoved, CGPoint(x: to.x - 20 + 2 * Double(step), y: to.y))
+        post(.mouseMoved, CGPoint(x: to.x - 40 + 4 * Double(step), y: to.y))
     }
     usleep(500_000)
     say("hovered at \(args[1]),\(args[2])")
