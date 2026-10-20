@@ -1388,7 +1388,7 @@ test("host.muteShortcut and host.callControls are exactly the web's seams", () =
   const install = loadFactory();
   const { host } = install(fakeWindow(ORIGIN).win, ORIGIN);
   assert.deepEqual(Object.keys(host.muteShortcut).sort(), ["get", "set", "subscribe"]);
-  assert.deepEqual(Object.keys(host.callControls).sort(), ["clearSize", "preview", "resetPlace", "setAlwaysShown", "setCorner", "settings"]);
+  assert.deepEqual(Object.keys(host.callControls).sort(), ["clearSize", "preview", "resetPlace", "setAlwaysShown", "setCorner", "setEnabled", "settings"]);
   assert.ok(Object.isFrozen(host.muteShortcut) && Object.isFrozen(host.callControls));
 });
 
@@ -1437,6 +1437,15 @@ test("host.callControls reads and sets alwaysShown through the call_controls_set
   assert.deepEqual(await controls.setAlwaysShown(true), { alwaysShown: true });
   await assert.rejects(controls.setAlwaysShown("yes"), (e) => e.key === "bad_request");
   assert.deepEqual(calls.filter(([cmd]) => cmd === "call_controls_settings").map(([, args]) => args), [{ action: "settings" }, { action: "set-always-shown", enabled: true }]);
+});
+
+test("host.callControls turns the card off and on through the same command, booleans only", async () => {
+  const install = loadFactory();
+  const { win, calls } = settingsWindow({ call_controls_settings: ({ enabled }) => ({ enabled }) });
+  const controls = install(win, ORIGIN).host.callControls;
+  assert.deepEqual(await controls.setEnabled(false), { enabled: false });
+  await assert.rejects(controls.setEnabled("no"), (e) => e.key === "bad_request");
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "call_controls_settings").map(([, args]) => args), [{ action: "set-enabled", enabled: false }]);
 });
 
 test("host.callControls sets the default corner, forgets places and previews, through the same command", async () => {

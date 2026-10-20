@@ -704,8 +704,9 @@ behind or minimised ("Always show the call controls", above), set from the web's
 
 ```ts
 interface CallControlsBridge {
-  settings(): Promise<{ alwaysShown: boolean; corner: "tl" | "tr" | "bl" | "br"; moved: boolean }>;  // false, tr
+  settings(): Promise<{ alwaysShown: boolean; enabled: boolean; corner: "tl" | "tr" | "bl" | "br"; moved: boolean }>;  // false, tr
   setAlwaysShown(enabled: boolean): Promise<{ alwaysShown: boolean }>;
+  setEnabled(enabled: boolean): Promise<{ enabled: boolean }>;  // whether the card shows at all during a call (true)
   setCorner(corner): Promise<{ corner }>;  // where a card never moved on a display first appears
   resetPlace(): Promise<void>;             // forgets places and the picture's resized sizes, on every display
   clearSize(): Promise<void>;              // forgets only the picture's resized sizes ("Custom"), on every display
@@ -719,10 +720,13 @@ interface CallControlsBridge {
   (the card hears `size: null`), and where the card was left stays. The card's format, its starting size and the captions are the web's own
   (localStorage on the app's origin, which the room and the card share): the app keeps none of them.
 
+- `setEnabled` keeps "Show the floating card" with the app's settings (`callControlsEnabled`, on by default) and applies it at
+  once: off, the card is never shown during a call, not even the moment `preview` or a change in Settings shows it (the
+  tray's hide and show are unchanged). A non-boolean rejects `{key: "bad_request"}`.
 - `setAlwaysShown` keeps it with the app's settings (`callControlsAlwaysShown`) and applies it to the card at once; a
   non-boolean rejects `{key: "bad_request"}`. Set only from the page.
 - Command behind it: `call_controls_settings {action, enabled?, corner?}`, `action` `settings`, `set-always-shown`,
-  `set-corner`, `reset-place`, `clear-size` or `preview`.
+  `set-enabled`, `set-corner`, `reset-place`, `clear-size` or `preview`.
 
 Both commands are granted to the room window (`capabilities/room.json`) and re-check that the caller is the current
 room window on the app's own page (else `bad_request`). The app's settings (`settings.json`) have one writer
