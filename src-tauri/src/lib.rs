@@ -683,9 +683,38 @@ pub fn run() {
                 if !app.state::<AppState>().resetting.load(Ordering::SeqCst) {
                     updater::quit(app);
                 }
+                #[cfg(target_os = "macos")]
+                skip_static_destructors();
             }
             let _ = (app, event);
         });
+}
+
+/// Quitting, once the app's own cleanup is done: the process ends in `exit()` without running the static destructors
+/// of the C++ libraries linked in (#121). whisper.cpp's Metal device is one: its destructor asserts that no Metal
+/// buffer is left (`GGML_ASSERT([rsets->data count] == 0)`, with the residency sets of macOS 15 and later) and aborts
+/// otherwise; the models of a call or a preload stay loaded for their idle minutes after it ends (`voice::host`), so
+/// a quit or a restart within them aborted, with a crash report.
+///
+/// A handler `atexit` registers runs before every one registered earlier, the static destructors of the models'
+/// libraries included (registered when they were first built). Registered here, at the end of `RunEvent::Exit`, it
+/// runs after what Tauri still does then — its own cleanup and, for a restart, launching the new instance — and only
+/// when the process calls `exit()`: it flushes the log and C's streams and ends the process with `_exit`. Every way
+/// the app quits (tray, ⌘Q, a reset, an update's restart) ends with status 0, which it keeps.
+#[cfg(target_os = "macos")]
+fn skip_static_destructors() {
+    extern "C" fn end() {
+        log::logger().flush();
+        // SAFETY: flushing every C stream (a null stream) and ending the process; nothing runs after them.
+        unsafe {
+            libc::fflush(std::ptr::null_mut());
+            libc::_exit(0)
+        }
+    }
+    // SAFETY: `end` is a plain function that never returns into the C runtime.
+    if unsafe { libc::atexit(end) } != 0 {
+        log::warn!("could not register the exit handler; the static destructors will run");
+    }
 }
 
 /// The helper is the same signed executable, launched only after a confirmed reset or uninstall.
