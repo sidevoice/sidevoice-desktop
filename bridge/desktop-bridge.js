@@ -599,7 +599,8 @@
         typeof enabled === "boolean"
           ? call("call_controls_settings", { action: "set-enabled", enabled })
           : Promise.reject({ key: "bad_request", message: "setEnabled(enabled) takes a boolean." }),
-      /** Where a card never moved on a display first appears: `"tl"`, `"tr"` (the default), `"bl"` or `"br"`. */
+      /** The preferred corner: `"tl"`, `"tr"` (the default), `"bl"` or `"br"`. Setting it, the one already chosen too, moves the card there
+       *  now and forgets the places it was dragged to (its sizes stay); dragged after that, it stays where it is dropped. */
       setCorner: (corner) =>
         CORNERS.includes(corner)
           ? call("call_controls_settings", { action: "set-corner", corner })
@@ -611,6 +612,9 @@
       clearSize: () => call("call_controls_settings", { action: "clear-size" }).then(() => undefined),
       /** During a call, shows the card a moment, in front of the room too: after a change in Settings. */
       preview: () => { invoke("call_controls_settings", { action: "preview" }); },
+      /** Leaving Settings: a preview showing goes at once (else it stays while the pointer is on it or it is dragged, and goes
+       *  two seconds after). */
+      endPreview: () => { invoke("call_controls_settings", { action: "end-preview" }); },
     });
   }
 

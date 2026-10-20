@@ -23,8 +23,6 @@ pub fn exit_on(app: &AppHandle, line: &str) {
     if !crate::debugging() || !line.starts_with("probe-exit ") {
         return;
     }
-    #[cfg(target_os = "macos")]
-    watch_exit_handlers();
     match std::env::var("SIDEVOICE_DEBUG_EXIT").as_deref() {
         Ok("quit") => {
             crate::debug("probe: quitting");
@@ -40,13 +38,16 @@ pub fn exit_on(app: &AppHandle, line: &str) {
     }
 }
 
-/// A stand-in for the static destructors of the C++ libraries linked in: `exit()` runs the handlers registered with
-/// `atexit` and those destructors (`__cxa_atexit`, when each static is built) from one list, the last registered
-/// first. This one is registered once the models are loaded, after whisper.cpp's Metal device was built (whose
-/// destructor aborts when a model is still loaded, #121, on a Mac's GPU though not on a runner's): if it runs, so does
-/// that destructor. `macos exit` checks it never does.
+/// With `SIDEVOICE_DEBUG_EXIT`, from the start: a handler `exit()` runs after the static destructors of the C++
+/// libraries linked in. `exit()` runs the handlers registered with `atexit` and those destructors (`__cxa_atexit`,
+/// when each static is built) from one list, the last registered first; this one is registered before any model is
+/// loaded, so before whisper.cpp's Metal device is built, and runs after its destructor, which aborts when a model is
+/// still loaded (#121). Its line in the log says that destructor ran to its end. `macos exit` checks it.
 #[cfg(target_os = "macos")]
-fn watch_exit_handlers() {
+pub fn watch_exit_handlers() {
+    if !crate::debugging() || std::env::var_os("SIDEVOICE_DEBUG_EXIT").is_none() {
+        return;
+    }
     extern "C" fn ran() {
         eprintln!("sidevoice: probe: exit handlers ran");
     }

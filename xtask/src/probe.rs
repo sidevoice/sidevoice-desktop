@@ -298,8 +298,9 @@ pub fn probe() -> Result<()> {
 /// `macos exit`: quitting and restarting after a call (#121). The probe app runs the probe page, which ends with
 /// whisper-tiny's whisper.cpp build (Metal) loaded, then restarts as an installed update does
 /// (`SIDEVOICE_DEBUG_EXIT=restart`, src-tauri/src/probe.rs); the relaunched app runs the page again and quits as the
-/// tray's Quit does. Each process must end with status 0, no crash report, and without running the C++ static
-/// destructors: none aborts in `exit()`.
+/// tray's Quit does. Each process must release every model before `exit()`, then run the C++ static destructors to
+/// their end (the probe's handler that runs after them, src-tauri/src/probe.rs), and end with status 0 and no crash
+/// report.
 pub fn exit() -> Result<()> {
     let data = AppHome::new("exit")?;
     let logs = work("exit")?;
@@ -344,10 +345,15 @@ pub fn exit() -> Result<()> {
     ensure(launches == 2, "the restart did not relaunch the app")?;
     ensure(relaunched && gone, "the relaunched app did not quit")?;
     ensure(!has(&text, "GGML_ASSERT|libc\\+\\+abi|panicked"), "the app aborted on its way out")?;
-    // On a runner (Apple Paravirtual device) whisper.cpp's destructor did not abort even before the fix, unlike on a
-    // Mac's GPU: what is checked is that the app runs none of those destructors, which a handler of the probe's
-    // stands in for (src-tauri/src/probe.rs).
-    ensure(!has(&text, "probe: exit handlers ran"), "exit() ran the static destructors")?;
+    // On a runner (Apple Paravirtual device) whisper.cpp's destructor does not abort with a model left loaded, unlike
+    // on a Mac's GPU: what is checked is that none is left when `exit()` runs.
+    let released = grep(&text, "sidevoice: voice: every model released").len();
+    eprintln!("--- the release at exit\n{}", grep(&text, "sidevoice: voice: ").join("\n"));
+    ensure(released == 2, format!("{released} of 2 processes released every model before exit()"))?;
+    ensure(
+        grep(&text, "sidevoice: probe: exit handlers ran").len() == 2,
+        "exit() did not run the static destructors to their end in both processes",
+    )?;
     ensure(new.is_empty(), "macOS wrote a crash report")
 }
 
