@@ -266,8 +266,11 @@ pub(crate) fn debug(message: &str) {
 
 /// A line from a page's diagnostics (the CI probe), printed only with `SIDEVOICE_DEBUG=1`.
 #[tauri::command]
-fn debug_log(line: String) {
+fn debug_log(app: AppHandle, line: String) {
     debug(&format!("page says: {}", line.chars().take(2000).collect::<String>()));
+    #[cfg(feature = "probe")]
+    probe::exit_on(&app, &line);
+    let _ = (app, line);
 }
 
 pub(crate) fn room_window(app: &AppHandle) -> Option<WebviewWindow> {
