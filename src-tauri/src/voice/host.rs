@@ -25,7 +25,14 @@ use tokio::task::JoinHandle;
 use super::models::{Halves, ModelCache};
 
 #[cfg(test)]
+mod memory;
+
+#[cfg(test)]
 mod tests;
+
+/// The keeps (`VoiceState::keep`) still waiting to let go, for CI's memory run.
+#[cfg(feature = "probe")]
+static PENDING_KEEPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// How long the models of a stopped call, or of a preload, stay loaded when the settings do not say, in minutes.
 pub(crate) const IDLE_UNLOAD_MINUTES: u32 = 10;
@@ -134,6 +141,14 @@ pub(super) fn failed(what: &str, code: String) -> Refusal {
 }
 
 impl<A: LaneAudio> VoiceState<A> {
+    /// How long an idle minute is: a minute; CI's probe build can shorten it.
+    fn idle_minute() -> Duration {
+        #[cfg(feature = "probe")]
+        return crate::probe::idle_minute();
+        #[cfg(not(feature = "probe"))]
+        Duration::from_secs(60)
+    }
+
     pub(super) fn new(audio: A, devices: NativeDevices) -> Self {
         Self {
             calls: tokio::sync::Mutex::new(HashMap::new()),
@@ -142,7 +157,8 @@ impl<A: LaneAudio> VoiceState<A> {
             route: tokio::sync::Mutex::new(None),
             devices,
             watching: AtomicBool::new(false),
-            minute: Duration::from_secs(60),
+            // CI's memory run shortens the minute so that the models' release is waited for (src/probe.rs).
+            minute: Self::idle_minute(),
             keeping: Mutex::new(Vec::new()),
             closing: AtomicBool::new(false),
         }
@@ -185,13 +201,24 @@ impl<A: LaneAudio> VoiceState<A> {
             return;
         }
         let wait = self.minute.saturating_mul(minutes);
+        #[cfg(feature = "probe")]
+        PENDING_KEEPS.fetch_add(1, Ordering::SeqCst);
         let task = tokio::spawn(async move {
             tokio::time::sleep(wait).await;
             drop(held);
+            #[cfg(feature = "probe")]
+            PENDING_KEEPS.fetch_sub(1, Ordering::SeqCst);
         });
         let mut keeping = self.keeping.lock().unwrap();
         keeping.retain(|task| !task.is_finished());
         keeping.push(task);
+    }
+
+    /// CI's memory run (src/probe.rs): what the host holds now, as `keeps=N lanes=M`.
+    #[cfg(feature = "probe")]
+    pub(crate) fn held(&self) -> String {
+        let lanes = self.calls.try_lock().map_or("busy".to_owned(), |calls| calls.len().to_string());
+        format!("keeps={} lanes={lanes}", PENDING_KEEPS.load(Ordering::SeqCst))
     }
 
     /// Lets go of the lane's call, a stopped one: it keeps the models it loaded for its idle minutes, so that another
