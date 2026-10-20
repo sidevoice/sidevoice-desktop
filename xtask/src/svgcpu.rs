@@ -130,6 +130,7 @@ struct Result_ {
     seconds: f64,
     animations: String,
     live: Vec<String>,
+    seen: String,
 }
 
 fn sample(app: u32) -> BTreeMap<u32, (Kind, f64)> {
@@ -172,7 +173,12 @@ fn measure(home: &AppHome, run: &Run, dir: &std::path::Path, shots: &std::path::
     };
     let animations = grep(&text, "svg-anim running").first().map(|l| l.to_string()).unwrap_or_default();
     let live = grep(&text, "webkit-enable |webkit-live ").into_iter().map(str::to_owned).collect();
-    Ok((Result_ { label: run.label, cpu: spent(&before, &after), seconds, animations, live }, text))
+    let mut counts: BTreeMap<Kind, usize> = BTreeMap::new();
+    for (kind, _) in after.values() {
+        *counts.entry(*kind).or_default() += 1;
+    }
+    let seen = counts.iter().map(|(kind, n)| format!("{}x{n}", kind.name())).collect::<Vec<_>>().join(" ");
+    Ok((Result_ { label: run.label, cpu: spent(&before, &after), seconds, animations, live, seen }, text))
 }
 
 fn table(results: &[Result_]) -> String {
@@ -229,11 +235,40 @@ pub fn svg_cpu() -> Result<()> {
             key = lbse_key(&text);
             features = grep(&text, "webkit-feature ").join("\n");
             write(&shots.join("webkit-features.txt"), format!("{version}\n{features}\n"))?;
-            runs.push(Run { label: "lbse-config", page: "svg-anim.html", enable: Some(key.clone()), late: false });
-            runs.push(Run { label: "lbse-late", page: "svg-anim.html", enable: Some(key.clone()), late: true });
+            // The runner's WebKit (macOS 15) paints the DOM in the page's own process; a newer one may have the GPU process do
+            // it (`UseGPUProcessForDOMRenderingEnabled`: default false here, status "stable"), which would match the GPU process the
+            // operator sees busy.
+            // Switched on by hand here to see that arrangement too, with and without the layer-based engine.
+            let (gpu, threaded) = ("UseGPUProcessForDOMRenderingEnabled", "ThreadedAnimationResolutionEnabled");
+            let on = |label, enable: &[&str], late| Run {
+                label,
+                page: "svg-anim.html",
+                enable: Some(enable.join(",")),
+                late,
+            };
+            runs.push(on("lbse-config", &[&key], false));
+            runs.push(on("lbse-late", &[&key], true));
+            runs.push(on("gpu-dom", &[gpu], false));
+            runs.push(on("gpu-dom+lbse", &[gpu, &key], false));
+            runs.push(on("threaded-anim", &[threaded], false));
+            runs.push(on("gpu-dom+lbse+thr", &[gpu, &key, threaded], false));
             runs.push(Run { label: "stopped", page: "svg-anim-still.html", enable: None, late: false });
+            runs.push(Run {
+                label: "stopped+gpu-dom",
+                page: "svg-anim-still.html",
+                enable: Some(gpu.to_owned()),
+                late: false,
+            });
+            // The first run again: how much a run differs from itself.
+            runs.push(Run { label: "off-again", page: "svg-anim.html", enable: None, late: false });
         }
-        eprintln!("--- {}\n{}\n{}", result.label, result.animations, result.live.join("\n"));
+        eprintln!(
+            "--- {} (processes: {})\n{}\n{}",
+            result.label,
+            result.seen,
+            result.animations,
+            result.live.join("\n")
+        );
         results.push(result);
         index += 1;
     }
