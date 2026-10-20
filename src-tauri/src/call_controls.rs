@@ -265,6 +265,8 @@ pub fn update(app: &AppHandle) {
     let in_front = room_in_front(app);
     let always_shown =
         app.state::<AppState>().settings.lock().unwrap().as_ref().is_some_and(|s| s.call_controls_always_shown);
+    // Switched off in Settings: no card at all, not even the moment a change shows it.
+    let enabled = app.state::<AppState>().settings.lock().unwrap().as_ref().is_none_or(|s| s.call_controls_enabled);
     let (show, hide, unhidden) = {
         let mut inner = card.0.lock().unwrap();
         let hidden = logic::still_hidden(inner.hidden, call.joined, inner.room_in_front, in_front);
@@ -275,7 +277,8 @@ pub fn update(app: &AppHandle) {
         if !previewing {
             inner.preview_until = None;
         }
-        let wanted = logic::wanted(call.joined, inner.hidden, in_front, always_shown) || (call.joined && previewing);
+        let wanted = enabled
+            && (logic::wanted(call.joined, inner.hidden, in_front, always_shown) || (call.joined && previewing));
         let change = (wanted && !inner.shown, !wanted && inner.shown);
         inner.shown = wanted;
         if change.1 {
@@ -611,8 +614,8 @@ fn from_card_window(webview: &Webview) -> Result<(), String> {
 }
 
 /// `host.callControls`' one command, from the room page (not the card), each kept with the app's settings or its
-/// placements and applied at once: `settings` (answers `{alwaysShown, corner, moved}`), `set-always-shown` with
-/// `enabled` (`{alwaysShown}`), `set-corner` with `corner` (`{corner}`), `reset-place` (forgets where the card was left
+/// placements and applied at once: `settings` (answers `{alwaysShown, enabled, corner, moved}`), `set-always-shown` with
+/// `enabled` (`{alwaysShown}`), `set-enabled` with `enabled` (`{enabled}`: whether the card shows at all), `set-corner` with `corner` (`{corner}`), `reset-place` (forgets where the card was left
 /// and how the picture was resized, on every display), `clear-size` (forgets only the picture's resized sizes) and `preview` (the card a moment, during a call).
 #[tauri::command]
 pub async fn call_controls_settings(
@@ -630,7 +633,7 @@ pub async fn call_controls_settings(
             let s = stored();
             let moved = card(&app).is_some_and(|card| card.0.lock().unwrap().placements.moved());
             Ok(
-                serde_json::json!({ "alwaysShown": s.call_controls_always_shown, "corner": s.call_controls_corner, "moved": moved }),
+                serde_json::json!({ "alwaysShown": s.call_controls_always_shown, "enabled": s.call_controls_enabled, "corner": s.call_controls_corner, "moved": moved }),
             )
         }
         ("set-always-shown", Some(enabled), _) => {
@@ -638,6 +641,12 @@ pub async fn call_controls_settings(
                 .map_err(|e| crate::refusal("internal", e))?;
             update(&app);
             Ok(serde_json::json!({ "alwaysShown": enabled }))
+        }
+        ("set-enabled", Some(enabled), _) => {
+            crate::change_settings(&app, |s| s.call_controls_enabled = enabled)
+                .map_err(|e| crate::refusal("internal", e))?;
+            update(&app);
+            Ok(serde_json::json!({ "enabled": enabled }))
         }
         ("set-corner", _, Some(corner)) => {
             crate::change_settings(&app, |s| s.call_controls_corner = corner)
