@@ -386,7 +386,8 @@ fn watch_devices(app: &AppHandle, state: &VoiceState) {
 }
 
 /// Quitting or restarting (`RunEvent::Exit`), before `exit()` runs the static destructors of the C++ libraries the
-/// models are made of: every call is stopped and released, so the devices close, and every model is let go. One left
+/// models are made of: every call is stopped and released, so the devices close, and every model is let go, those a
+/// stopped call or a preload kept for their idle minutes too (`VoiceState::close`). One left
 /// loaded is still alive in those destructors, and whisper.cpp's Metal device aborts in its own when one is (#121).
 /// Bounded: a release that does not finish in time is logged, and the quit goes on.
 pub fn shutdown(app: &AppHandle) {

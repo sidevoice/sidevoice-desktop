@@ -676,11 +676,14 @@ pub fn run() {
             if let tauri::RunEvent::Reopen { has_visible_windows: false, .. } = event {
                 show_room(app);
             }
-            // Quitting: the voice call stops and releases its devices and models; the local host's proxy stops and closes
-            // every tunnel; an update ready installs (automatic mode).
+            // Quitting, however the app ends (tray, ⌘Q, logout, a reset, an update's restart; `AppHandle::restart` from
+            // the updater's thread comes here too), before `exit()` runs the C++ static destructors (#121): the voice
+            // calls stop and every model and audio device is released; the call controls card's window goes; the local
+            // host's proxy stops and closes every tunnel; an update ready installs (automatic mode).
             if let tauri::RunEvent::Exit = event {
                 #[cfg(target_os = "macos")]
                 voice::shutdown(app);
+                call_controls::close(app);
                 local_host::shutdown(app);
                 if !app.state::<AppState>().resetting.load(Ordering::SeqCst) {
                     updater::quit(app);
