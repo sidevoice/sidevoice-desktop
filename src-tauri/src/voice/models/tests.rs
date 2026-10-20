@@ -241,3 +241,59 @@ fn a_half_with_the_same_slots_keeps_its_models_and_one_with_other_slots_gets_its
     let removed = Halves::new(&loader, &chosen(None, Some("voice"), None), Some(&first));
     assert!(removed.input.is_none() && removed.setup().unwrap().input.is_none());
 }
+
+#[test]
+fn the_webs_turn_numbers_reach_sidevoice_voices_configuration() {
+    use sidevoice_desktop_core::voice::{choose, Candidate, CatalogCandidates, VoiceSettings, LOCAL_CATALOG};
+
+    let candidate = |id: &str, capability: &str| Candidate {
+        id: id.into(),
+        family: Some(id.into()),
+        capabilities: vec![capability.into()],
+        runs: true,
+        builds: Vec::new(),
+    };
+    let catalogs = [CatalogCandidates {
+        id: LOCAL_CATALOG.into(),
+        reason: None,
+        detail: None,
+        models: vec![
+            candidate("silero-vad", "vad"),
+            candidate("whisper-base", "stt"),
+            candidate("kokoro-82m-v1.0", "tts"),
+        ],
+    }];
+    // What the web sends with its own numbers (sidevoice-web `voice-settings.js`, `voiceHalves`), none the defaults.
+    let settings: VoiceSettings = serde_json::from_value(json!({
+        "input": {
+            "stt": {"catalog": "local", "model": "whisper-base", "language": null},
+            "endOfTurn": {"kind": "silence"}, "patience": "normal",
+            "listening_bar": {"quiet": 0.4, "playing": 0.7},
+            "barge_in_min_speech": 0.8, "barge_in_window": 3, "vad_confidence": 0.5,
+            "speech_start_ms": 300, "pre_roll_ms": 800,
+        },
+        "output": {
+            "tts": {"catalog": "local", "model": "kokoro-82m-v1.0"},
+            "voice": null, "speed": 1, "fade_ms": 50, "language": null,
+        },
+        "audio_grace_ms": 1500,
+        "idle_unload_minutes": 10,
+    }))
+    .unwrap();
+    let choice = choose(&settings, &catalogs).unwrap();
+    let setup = Halves::new(&loader(&FakeLoader::new(&[])), &choice, None).setup().unwrap();
+    let input = setup.input.unwrap().config;
+    assert_eq!((input.listening_bar.quiet, input.listening_bar.playing), (0.4, 0.7));
+    assert_eq!(input.barge_in_min_speech.seconds(), 0.8);
+    assert_eq!((input.barge_in_window, input.vad_confidence), (3.0, 0.5));
+    assert_eq!((input.speech_start_ms, input.pre_roll_ms), (300, 800));
+    assert_eq!(setup.config.audio_grace_ms, 1500);
+    assert!(setup.output.is_some());
+
+    // A number out of the call's range is refused by the call, naming it.
+    let mut wrong = settings.clone();
+    wrong.input.as_mut().unwrap().vad_confidence = Some(0.0);
+    let choice = choose(&wrong, &catalogs).unwrap();
+    let refused = Halves::new(&loader(&FakeLoader::new(&[])), &choice, None).setup().err().unwrap();
+    assert!(refused.starts_with("invalid-input-config") && refused.contains("vad_confidence"), "{refused}");
+}

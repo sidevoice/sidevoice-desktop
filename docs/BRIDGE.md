@@ -511,10 +511,13 @@ What is this app's own:
 - `start(settings, {take?})` takes the seam's settings, each slot a model of a catalogue: `input` (absent or `null`: no
   microphone, no detector, no transcriber) with `stt: {catalog, model, language?, build?}`, `endOfTurn`
   (`{kind: "silence", ms?}`, which loads no end-of-turn model, or `{kind: "smart", model?: {catalog, model}}`),
-  `patience` and `barge_in_min_speech`; `output` (absent or `null`: no speaker model, nothing played) with `tts:
-  {catalog, model, build?}`, `voice`, `speed` and `language`; and `idle_unload_minutes`; at least one half, else it
-  throws a `TypeError`, and any other key is refused (core `voice.rs`). `barge_in_min_speech` is a finite number of
-  seconds greater than zero and at most 60; when absent, sidevoice-voice's own default. A slot is loaded as
+  `patience` and the turn's numbers (`listening_bar: {quiet, playing}`, `barge_in_min_speech`, `barge_in_window`,
+  `vad_confidence`, `speech_start_ms`, `pre_roll_ms`); `output` (absent or `null`: no speaker model, nothing played)
+  with `tts: {catalog, model, build?}`, `voice`, `speed`, `fade_ms` and `language`; and `audio_grace_ms` and
+  `idle_unload_minutes`; at least one half, else it throws a `TypeError`, and any other key is refused (core
+  `voice.rs`). The turn's numbers and `audio_grace_ms` reach sidevoice-voice's configuration as they are: it checks
+  their ranges (`js/voice-host.d.ts`) and takes its own default for one absent. `fade_ms` (0 to 1000) is checked but
+  not applied: the native speaker's fade is sidevoice-voice's fixed 30 ms. A slot is loaded as
   `engine.catalog(catalog).load(model)`, which picks the build, or, for a local model with a `build` (Settings, "How it
   runs"; an empty one names none), as that build (`engine.load(model, build)`): once the model is found and runs here
   (else `model-unknown`, `model-unfit`), the build must be one of its builds (`build-not-found`) and run here (else the
@@ -531,15 +534,16 @@ What is this app's own:
   when `stop` came first. A call without an input half opens no microphone, so a blocked one cannot fail it, and its
   `say` plays; a call without an output half loads no speaker, and its `say` is `not-played` (`failed`,
   `output-missing`).
-- `update(change)` changes the call while it runs, without restarting it: a half that is absent from `change` stays, `null`
-  removes it, settings replace it or add it (`idle_unload_minutes` too). A half whose slots keep their models keeps what
-  it loaded, other models load while the call goes on as it was, and each half's change takes effect at its safe point:
-  the input half's at the next turn, the output half's at the next utterance, never cutting what plays; an input
-  half added opens the microphone, one removed closes it. Changes are made in the order they were asked. It resolves
-  once the change is accepted, not applied; it rejects, changing nothing, with the app's keyed refusals for a model it
-  cannot make or `voice_halves_missing` for a change that leaves no half. A model that cannot load later is an `onError`
-  of the call with its code, and its half stays as it was. A microphone that is lost or denied leaves the call with its
-  output half only (`listening: "off"`), and `update({input})` adds it back; without an output half the call stops.
+- `update(change)` changes the call while it runs, without restarting it: a half that is absent from `change`
+  stays, `null` removes it, settings replace it or add it (`audio_grace_ms` and `idle_unload_minutes` too). A
+  half whose slots keep their models keeps what it loaded, other models load while the call goes on as it was,
+  and each half's change takes effect at its safe point: the input half's at the next turn, the output half's
+  at the next utterance, never cutting what plays; an input half added opens the microphone, one removed closes
+  it. Changes are made in the order they were asked. It resolves once the change is accepted, not applied; it
+  rejects, changing nothing, with the app's keyed refusals for a model it cannot make or `voice_halves_missing`
+  for a change that leaves no half. A model that cannot load later is an `onError` of the call with its code,
+  and its half stays as it was. A microphone that is lost or denied leaves the call with its output half only
+  (`listening: "off"`), and `update({input})` adds it back; without an output half the call stops.
 - `preload(settings)` loads the models a `start` of the same settings would, ahead of a call: the same slots (an absent half
   loads none of its own, `silence` no end-of-turn model), once for a model already loaded or loading, and opens no
   microphone and no speaker. They are held like a stopped call's: a call that starts on the same models meanwhile takes
