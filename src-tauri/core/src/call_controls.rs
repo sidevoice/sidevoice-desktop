@@ -237,20 +237,17 @@ pub enum Edge {
     Se,
 }
 
-/// The stage inside the picture keeps 16:9: the window's height follows its width.
-const STAGE_RATIO: f64 = 9.0 / 16.0;
-
-/// The picture's window (`start`, on its display) resized by its `edge` corner, the pointer `dx` (logical pixels) from
-/// where the resize started: the opposite corner stays where it is, the width is at least `min_width` and the window
-/// stays within the work area, and its height follows the width so the stage keeps 16:9.
-pub fn resized(start: Rect, edge: Edge, dx: f64, min_width: f64, work: Rect) -> Rect {
+/// The picture's window (`start`, on its display) resized by its `edge` corner, the pointer `dx`, `dy` (logical pixels)
+/// from where the resize started: the opposite corner stays where it is, each side is at least the page's least
+/// (`min_width`, `min_height`) and the window stays within the work area. Free in both directions: the window takes any
+/// shape, and the page fits its 16:9 stage inside it.
+pub fn resized(start: Rect, edge: Edge, dx: f64, dy: f64, min_width: f64, min_height: f64, work: Rect) -> Rect {
     let west = matches!(edge, Edge::Nw | Edge::Sw);
     let north = matches!(edge, Edge::Nw | Edge::Ne);
     let room_x = if west { start.right() - work.x } else { work.right() - start.x };
     let room_y = if north { start.bottom() - work.y } else { work.bottom() - start.y };
-    let widest = room_x.min(start.width + (room_y - start.height) / STAGE_RATIO).max(min_width);
-    let width = (if west { start.width - dx } else { start.width + dx }).clamp(min_width, widest);
-    let height = start.height + (width - start.width) * STAGE_RATIO;
+    let width = (if west { start.width - dx } else { start.width + dx }).clamp(min_width, room_x.max(min_width));
+    let height = (if north { start.height - dy } else { start.height + dy }).clamp(min_height, room_y.max(min_height));
     Rect {
         x: if west { start.right() - width } else { start.x },
         y: if north { start.bottom() - height } else { start.y },
@@ -404,16 +401,29 @@ mod tests {
     }
 
     #[test]
-    fn the_picture_resizes_from_its_grip_keeping_the_far_corner_and_16_9() {
+    fn the_picture_resizes_freely_from_its_grip_keeping_the_far_corner() {
         // At the top right; its grip in the bottom-left corner.
-        let start = Rect { x: 996.0, y: 25.0, width: 444.0, height: 330.0 };
-        let wider = resized(start, Edge::Sw, -160.0, 374.0, WORK);
-        assert_eq!(wider, Rect { x: 836.0, y: 25.0, width: 604.0, height: 420.0 }, "top-right stays, 16:9 kept");
-        let narrow = resized(start, Edge::Sw, 400.0, 374.0, WORK);
-        assert_eq!(narrow.width, 374.0, "never under the minimum");
+        let start = Rect { x: 996.0, y: 25.0, width: 444.0, height: 400.0 };
+        let wider = resized(start, Edge::Sw, -160.0, 0.0, 374.0, 354.0, WORK);
+        assert_eq!(
+            wider,
+            Rect { x: 836.0, y: 25.0, width: 604.0, height: 400.0 },
+            "top-right stays, the height is its own"
+        );
+        let taller = resized(start, Edge::Sw, 0.0, 200.0, 374.0, 354.0, WORK);
+        assert_eq!(taller, Rect { x: 996.0, y: 25.0, width: 444.0, height: 600.0 }, "the aspect changes");
+        let narrow = resized(start, Edge::Sw, 400.0, -400.0, 374.0, 354.0, WORK);
+        assert_eq!((narrow.width, narrow.height), (374.0, 354.0), "never under either minimum");
         assert_eq!(narrow.x + narrow.width, start.x + start.width);
-        let huge = resized(start, Edge::Sw, -5000.0, 374.0, WORK);
+        let huge = resized(start, Edge::Sw, -5000.0, 5000.0, 374.0, 354.0, WORK);
         assert!(huge.x >= WORK.x && huge.y + huge.height <= WORK.y + WORK.height + 1e-9, "within the work area");
+        let low = Rect { x: 500.0, y: 400.0, width: 444.0, height: 400.0 };
+        let up = resized(low, Edge::Ne, 100.0, -100.0, 374.0, 354.0, WORK);
+        assert_eq!(
+            up,
+            Rect { x: 500.0, y: 300.0, width: 544.0, height: 500.0 },
+            "north grows upward, its bottom edge still"
+        );
     }
 
     #[test]

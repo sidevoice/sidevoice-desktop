@@ -74,7 +74,7 @@
     },
     /** The card's size with its margin, in CSS pixels: the app sizes the window to it. `card`: where the card's body is
      *  in it, which the app places and keeps where it rests as the window grows around it. `resizable`: the picture,
-     *  which the person may resize (`resize`) down to `minWidth`. */
+     *  which the person may resize (`resize`) freely down to `minWidth` and `minHeight`. */
     layout(size) {
       const width = number(size && size.width), height = number(size && size.height);
       if (!(width > 0 && height > 0)) return;
@@ -83,7 +83,8 @@
       const body = box ? [box.x, box.y, box.width, box.height].map(number) : [];
       if (body.length && body.every(Number.isFinite)) args.card = { x: body[0], y: body[1], width: body[2], height: body[3] };
       const minWidth = number(size.resizable && size.resizable.minWidth);
-      if (minWidth > 0) args.resizable = { minWidth };
+      const minHeight = number(size.resizable && size.resizable.minHeight);
+      if (minWidth > 0 && minHeight > 0) args.resizable = { minWidth, minHeight };
       invoke("call_controls_layout", args);
     },
     /** Moving the card: "start", every "move", "end". The app follows the pointer itself. */
