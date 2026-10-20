@@ -100,6 +100,7 @@ card's settings, the audio devices, the voice settings) and has the app print it
     }
     await mark("settings-cycle", 0);
     await mark("settings-ended", 10000);
+    await mark("settings-late", 40000);
     await mark("done", 0);
   } catch (error) {
     await log("probe-memory-failed " + String(error && (error.message || error.key || JSON.stringify(error))));

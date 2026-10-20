@@ -187,6 +187,19 @@ fn the_footprint_stays_flat_over_calls_and_changes() {
         state.dispose_call("changing").await.unwrap();
         tokio::time::sleep(SETTLE).await;
         report("changes-ended").await;
+
+        // Models loaded ahead, again and again, as the page does when the person changes voice settings (`voice_preload`):
+        // each is held for the idle minutes and then let go. By half, to tell which one stays.
+        for (name, which) in [("preload-input", 2), ("preload-output", 3), ("preload-both", 0)] {
+            for n in 0..CHANGES * 2 {
+                let next = settings(if which == 0 { n % 2 } else { which }, &build);
+                let choice = choose(&next, &catalogs).unwrap();
+                state.preload(Halves::new(&loader, &choice, None), 1).await.unwrap();
+            }
+            report(&format!("{name}-live")).await;
+            tokio::time::sleep(SETTLE).await;
+            report(&format!("{name}-ended")).await;
+        }
     });
     drop(engines);
     if kept.is_none() {

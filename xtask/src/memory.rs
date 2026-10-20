@@ -187,6 +187,9 @@ pub const VOICE_RULES: &[Rule] = &[
     Rule::Release { idle: "idle", live: "call-live", ended: "call-ended" },
     Rule::Flat { from: "call-ended", to: "calls-many", footprint: FOOTPRINT_MIB },
     Rule::Flat { from: "call-ended", to: "changes-ended", footprint: FOOTPRINT_MIB },
+    Rule::Flat { from: "call-ended", to: "preload-input-ended", footprint: FOOTPRINT_MIB },
+    Rule::Flat { from: "call-ended", to: "preload-output-ended", footprint: FOOTPRINT_MIB },
+    Rule::Flat { from: "call-ended", to: "preload-both-ended", footprint: FOOTPRINT_MIB },
 ];
 
 /// The probe app's long session (test/fixtures/memory.html).
