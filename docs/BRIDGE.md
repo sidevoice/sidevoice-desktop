@@ -710,7 +710,7 @@ interface CallControlsBridge {
   settings(): Promise<{ alwaysShown: boolean; enabled: boolean; corner: "tl" | "tr" | "bl" | "br"; moved: boolean }>;  // false, tr
   setAlwaysShown(enabled: boolean): Promise<{ alwaysShown: boolean }>;
   setEnabled(enabled: boolean): Promise<{ enabled: boolean }>;  // whether the card shows at all during a call (true)
-  setCorner(corner): Promise<{ corner }>;  // where a card never moved on a display first appears
+  setCorner(corner): Promise<{ corner }>;  // the preferred corner: the card goes there now (the places dragged to are forgotten, the sizes kept)
   resetPlace(): Promise<void>;             // forgets places and the picture's resized sizes, on every display
   clearSize(): Promise<void>;              // forgets only the picture's resized sizes ("Custom"), on every display
   preview(): void;                         // during a call, the card shows ~4 s after the last change, in front of the room too; kept while the pointer is on it or it is dragged or resized, gone 2 s after
