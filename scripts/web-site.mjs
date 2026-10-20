@@ -2,15 +2,13 @@
 // the same path, and every directory the previous site put there and this one does not have is removed, so ui/ holds
 // exactly the pinned build and the app's own files. Which directories were the site's is kept in
 // ui/.web-site.json; nothing else in ui/ is touched.
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const RECORD = ".web-site.json";
 
 /** Copies the directories of `site` into `ui`, after removing those the last site copied; answers their names. */
 export function installSite(site, ui) {
-  // A fresh checkout has no ui/: it holds only this site.
-  mkdirSync(ui, { recursive: true });
   const recorded = path.join(ui, RECORD);
   const previous = existsSync(recorded) ? JSON.parse(readFileSync(recorded, "utf8")).directories : [];
   const served = readdirSync(site, { withFileTypes: true })

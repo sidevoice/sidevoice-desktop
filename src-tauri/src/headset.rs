@@ -93,7 +93,7 @@ pub fn setup(app: &AppHandle) {
 
 #[cfg(target_os = "macos")]
 mod platform {
-    use super::{on_media_command, on_mute_gesture, Headset};
+    use super::{on_media_command, on_mute_gesture};
     use block2::RcBlock;
     use objc2::rc::Retained;
     use objc2::runtime::{AnyClass, AnyObject, Bool};
@@ -106,7 +106,7 @@ mod platform {
     use std::ptr::NonNull;
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
-    use tauri::{AppHandle, Manager};
+    use tauri::AppHandle;
 
     /// Whether the gesture handler is installed now (only during a call).
     static GESTURE_ON: Mutex<bool> = Mutex::new(false);

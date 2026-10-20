@@ -7,7 +7,7 @@
 
 use sidevoice_desktop_engine::error::{self, internal};
 use sidevoice_desktop_engine::{
-    CatalogView, CredentialRefusal, Device, Error, Installed, Jobs, Memory, NativeEngines, OnDisk, Progress, Wanted,
+    CatalogView, CredentialRefusal, Device, Error, Installed, Jobs, Memory, NativeEngines, Progress, Wanted,
 };
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
