@@ -854,7 +854,9 @@ pub fn call_controls_resize(app: AppHandle, webview: Webview, phase: DragPhase, 
     }
     let (Some(card), Some(w)) = (card(&app), window(&app)) else { return Ok(()) };
     let mut inner = card.0.lock().unwrap();
-    let (Some(min_width), Some(min_height)) = (inner.min_width, inner.min_height) else { return Err("the card cannot be resized now".into()) };
+    let (Some(min_width), Some(min_height)) = (inner.min_width, inner.min_height) else {
+        return Err("the card cannot be resized now".into());
+    };
     match phase {
         DragPhase::Start => {
             let size = inner.size.unwrap_or(FIRST_SIZE);
