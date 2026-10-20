@@ -295,6 +295,71 @@ pub fn probe() -> Result<()> {
     ensure(!text.contains("headset airpods"), "echo recorded as a gesture")
 }
 
+/// `macos exit`: quitting and restarting after a call (#121). The probe app runs the probe page, which ends with
+/// whisper-tiny's whisper.cpp build (Metal) loaded, then restarts as an installed update does
+/// (`SIDEVOICE_DEBUG_EXIT=restart`, src-tauri/src/probe.rs); the relaunched app runs the page again and quits as the
+/// tray's Quit does. Each process must end with status 0, no crash report, and without running the C++ static
+/// destructors: none aborts in `exit()`.
+pub fn exit() -> Result<()> {
+    let data = AppHome::new("exit")?;
+    let logs = work("exit")?;
+    let log = logs.join("exit.log");
+    // Where macOS writes them: the user's own home, whatever HOME the app was given.
+    let reports = crate::macos::home()?.join("Library/Logs/DiagnosticReports");
+    let before: Vec<_> = crash_reports(&reports);
+    let mut app =
+        data.app(&[("SIDEVOICE_DEBUG_PAGE", "probe.html"), ("SIDEVOICE_DEBUG_EXIT", "restart")]).spawn(&log)?;
+    let first = app.ended(480);
+    if first.is_none() {
+        app.stop();
+    }
+    // The relaunched app writes to the same log (it inherits the streams): its launch, its run, its quit.
+    let relaunched = wait_for(&log, "sidevoice: probe: quitting", 0, 480);
+    let mut gone = false;
+    for _ in 0..60 {
+        gone = !Cmd::new("pgrep").arg("-f").arg(binary()).attempt().map(|(found, _)| found).unwrap_or(false);
+        if gone {
+            break;
+        }
+        sleep(1.0);
+    }
+    if !gone {
+        let _ = Cmd::new("pkill").arg("-f").arg(binary()).attempt();
+    }
+    // ReportCrash writes its report a moment after the process ends.
+    sleep(10.0);
+    let text = read(&log);
+    eprintln!("{text}");
+    let new: Vec<_> = crash_reports(&reports).into_iter().filter(|report| !before.contains(report)).collect();
+    for report in &new {
+        eprintln!("--- {}\n{}", report.display(), read(report).chars().take(6000).collect::<String>());
+    }
+    let launches = grep(&text, "sidevoice: launch ").len();
+    eprintln!("--- first process: {first:?}; launches: {launches}; relaunched one quit: {relaunched}, gone: {gone}");
+    ensure(
+        grep(&text, "probe-exit models=ok build=whisper-tiny/").len() == 2,
+        "a run did not load whisper.cpp's build",
+    )?;
+    ensure(first.is_some_and(|status| status.success()), format!("the app did not end cleanly on restart: {first:?}"))?;
+    ensure(launches == 2, "the restart did not relaunch the app")?;
+    ensure(relaunched && gone, "the relaunched app did not quit")?;
+    ensure(!has(&text, "GGML_ASSERT|libc\\+\\+abi|panicked"), "the app aborted on its way out")?;
+    // On a runner (Apple Paravirtual device) whisper.cpp's destructor did not abort even before the fix, unlike on a
+    // Mac's GPU: what is checked is that the app runs none of those destructors, which a handler of the probe's
+    // stands in for (src-tauri/src/probe.rs).
+    ensure(!has(&text, "probe: exit handlers ran"), "exit() ran the static destructors")?;
+    ensure(new.is_empty(), "macOS wrote a crash report")
+}
+
+/// The crash reports of the app (`sidevoice-desktop-*.ips`) in `dir`.
+fn crash_reports(dir: &Path) -> Vec<std::path::PathBuf> {
+    let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
+    entries
+        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .filter(|path| path.file_name().is_some_and(|name| name.to_string_lossy().starts_with("sidevoice-desktop")))
+        .collect()
+}
+
 /// Every path under `dir`, files and directories (`find DIR` without DIR itself); none when it is not there.
 fn paths(dir: &Path) -> Vec<std::path::PathBuf> {
     let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };

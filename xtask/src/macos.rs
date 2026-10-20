@@ -260,8 +260,14 @@ pub fn entitlements(app: &Path) -> Result<String> {
 }
 
 /// What only the probe build carries (src-tauri/src/probe.rs): never in a release app.
-pub const PROBE_ONLY: &[&str] =
-    &["SIDEVOICE_DEBUG_PAGE", "probe-engine", "probe-card", "SIDEVOICE_DEBUG_LOCAL_HOST_FLOW", "local-host-flow"];
+pub const PROBE_ONLY: &[&str] = &[
+    "SIDEVOICE_DEBUG_PAGE",
+    "probe-engine",
+    "probe-card",
+    "SIDEVOICE_DEBUG_LOCAL_HOST_FLOW",
+    "local-host-flow",
+    "SIDEVOICE_DEBUG_EXIT",
+];
 
 /// `macos check-app [--signed]`: what a first open depends on, in the app as built: Info.plist, the signature (with
 /// `--signed`: the Developer ID's, `APPLE_TEAM_ID`'s, timestamped, notarized and stapled, and Gatekeeper takes it),

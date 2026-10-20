@@ -320,6 +320,21 @@ impl Background {
         matches!(self.child.try_wait(), Ok(None))
     }
 
+    /// Waits at most `seconds` for it to end on its own: how it ended, or `None` while it still runs.
+    pub fn ended(&mut self, seconds: u64) -> Option<std::process::ExitStatus> {
+        let deadline = Instant::now() + Duration::from_secs(seconds);
+        loop {
+            if let Ok(Some(status)) = self.child.try_wait() {
+                self.join();
+                return Some(status);
+            }
+            if Instant::now() >= deadline || interrupted().is_err() {
+                return None;
+            }
+            sleep(0.2);
+        }
+    }
+
     /// Asks it to stop (SIGTERM, as `kill PID` did), and waits a few seconds for it before killing it outright.
     pub fn stop(&mut self) {
         if !self.running() {
