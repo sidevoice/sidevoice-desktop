@@ -3,6 +3,8 @@
 // each window. Points are global, top-left origin.
 //   card-ci trusted                        whether this process may post input events (Accessibility)
 //   card-ci move <x> <y>                   moves the pointer there
+//   card-ci hover <x> <y>                  moves the pointer there as a mouse does, in steps that post mouse moves
+//   card-ci cursor                         the cursor on screen, whichever app set it: "cursor hand=… arrow=… …"
 //   card-ci click <x> <y>                  a left click there
 //   card-ci drag <x> <y> <dx> <dy>         press there, move by dx,dy in steps, release
 //   card-ci type <text>                    types it into whatever has the keyboard
@@ -33,6 +35,25 @@ case "trusted":
 case "move" where args.count == 3:
     CGWarpMouseCursorPosition(CGPoint(x: number(1), y: number(2)))
     say("pointer at \(args[1]),\(args[2])")
+case "hover" where args.count == 3:
+    // Unlike `move`, which warps the pointer and posts nothing: the window under it gets each move.
+    let to = CGPoint(x: number(1), y: number(2))
+    for step in 0...10 {
+        post(.mouseMoved, CGPoint(x: to.x - 20 + 2 * Double(step), y: to.y))
+    }
+    usleep(500_000)
+    say("hovered at \(args[1]),\(args[2])")
+case "cursor":
+    // The same cursor: the same image, else the same hot spot and size (an image may come at other scales).
+    let seen = NSCursor.currentSystem
+    let same = { (cursor: NSCursor) -> Bool in
+        guard let seen = seen else { return false }
+        return seen.image.tiffRepresentation == cursor.image.tiffRepresentation
+            || (seen.hotSpot == cursor.hotSpot && seen.image.size == cursor.image.size)
+    }
+    let spot = seen.map { "\($0.hotSpot.x),\($0.hotSpot.y)" } ?? "none"
+    let size = seen.map { "\($0.image.size.width)x\($0.image.size.height)" } ?? "none"
+    say("cursor hand=\(same(NSCursor.pointingHand)) arrow=\(same(NSCursor.arrow)) hotspot=\(spot) size=\(size)")
 case "click" where args.count == 3:
     let at = CGPoint(x: number(1), y: number(2))
     post(.mouseMoved, at)

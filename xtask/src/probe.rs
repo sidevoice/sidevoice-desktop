@@ -576,6 +576,9 @@ fn walk(card: &mut Card) -> Result<()> {
         card.card();
         let from = line_count(&log);
         let (x, y, _, h) = card.at.unwrap_or_default();
+        if state == "muted" {
+            card.hovers_button(x + 156, y + h - 54, "card-mute", from)?;
+        }
         card.click(x + 156, y + h - 54)?;
         card.expect(&log, "call-controls run toggle-mute app_active=false", from);
         card.expect(&log, "probe-card command toggle-mute", from);
@@ -638,6 +641,26 @@ fn walk(card: &mut Card) -> Result<()> {
 }
 
 impl Card {
+    /// Hover with no click (#139): the pointer moved onto a button as a mouse does, the card's page sees `:hover` on it
+    /// with the hand cursor (its probe script says so), and the screen shows the hand, all while the editor stays the
+    /// active app. Before anything clicks there: a click would set `:hover` even where the page gets no mouse moves.
+    fn hovers_button(&mut self, x: i64, y: i64, button: &str, from: usize) -> Result<()> {
+        self.tool(&["hover", &x.to_string(), &y.to_string()])?;
+        let log = self.log.clone();
+        self.expect(
+            &log,
+            &format!(r#"call-controls refused \{{"button":"[^"]*\b{button}\b[^"]*","command":"probe-hover","cursor":"pointer"\}}"#),
+            from,
+        );
+        let cursor = Cmd::new(&self.tool).arg("cursor").attempt().map(|(_, out)| out).unwrap_or_default();
+        eprint!("{cursor}");
+        if !cursor.contains("cursor hand=true") {
+            self.fail(format!("the hand cursor did not show over {button}: {}", cursor.trim()));
+        }
+        self.editor_active(&format!("after hovering {button}"));
+        Ok(())
+    }
+
     /// The pointer to a point on screen (away from the card).
     fn move_to(&mut self, x: i64, y: i64) -> Result<()> {
         self.tool(&["move", &x.to_string(), &y.to_string()])

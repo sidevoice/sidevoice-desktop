@@ -31,6 +31,8 @@ pub fn page(interface: &str) -> String {
 
 /// With the call controls probe: a script for the card's own page that asks for the microphone, as script that got
 /// into the card could, and sends back what it got as a command the app refuses and logs ("call-controls refused").
+/// It also says, the same way, each new button the pointer hovers and its CSS cursor, as WebKit sees them (#139): only
+/// a page that gets the pointer's moves sees `:hover` change before a click.
 pub fn card_script() -> Option<&'static str> {
     let asked = std::env::var("SIDEVOICE_DEBUG_PAGE").is_ok_and(|v| v == CARD_PAGE);
     (crate::debugging() && asked).then_some(
@@ -49,6 +51,18 @@ pub fn card_script() -> Option<&'static str> {
   };
   document.addEventListener("visibilitychange", () => ask(false));
   setTimeout(() => ask(true), 20000);
+  let hovered = "";
+  document.addEventListener("mouseover", () => {
+    const all = document.querySelectorAll(":hover");
+    const deepest = all[all.length - 1];
+    const button = deepest && deepest.closest("button");
+    if (!button) return;
+    const line = button.className + " " + getComputedStyle(deepest).cursor;
+    if (line === hovered) return;
+    hovered = line;
+    window.__TAURI_INTERNALS__.invoke("call_controls_run",
+      { command: { command: "probe-hover", button: String(button.className), cursor: getComputedStyle(deepest).cursor } });
+  }, true);
 })();"#,
     )
 }

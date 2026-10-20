@@ -31,7 +31,8 @@ const PAGE: &str = "voice/call-controls.html";
 /// Medium size, the default format (the web's `CARD_WIDTHS`).
 const FIRST_SIZE: Size = Size { width: 414.0, height: 82.0 };
 /// How often the app looks at the pointer while the card shows: a window that never takes focus may get no hover
-/// events (WebKit tracks the mouse in the key window only), so the app tells the card when the pointer is over it.
+/// events of its own (Windows, Linux X11), so the app tells the card when the pointer is over it. On macOS the card's
+/// WebKit gets them too ([`hover_while_inactive`]).
 const POINTER_EVERY: Duration = Duration::from_millis(80);
 /// How often the app looks at whether the room window is in view ([`watch_view`]).
 const VIEW_EVERY: Duration = Duration::from_millis(500);
@@ -47,6 +48,9 @@ tauri_nspanel::tauri_panel! {
     panel!(CallControlsPanel {
         config: {
             can_become_key_window: false,
+            // It never becomes key (above), yet says it is: WebKit sets the page's CSS cursor only for a key window
+            // (#139, [`hover_while_inactive`]). AppKit still sends the keyboard to the real key window, the person's app.
+            is_key_window: true,
             can_become_main_window: false,
             is_floating_panel: true
         }
@@ -155,6 +159,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         // bring the Dock icon back when the policy returns to `Regular` (#117). The card is created before the room is
         // shown and the app activated (lib.rs setup), so there is no focus for it to steal.
         prevent_activation(app);
+        set_cursor_in_background();
         watch_clicks(app);
     }
     #[cfg(not(target_os = "macos"))]
@@ -412,6 +417,9 @@ fn set_visible(app: &AppHandle, visible: bool) {
             if let Ok(panel) = app.get_webview_panel(LABEL) {
                 // orderFrontRegardless / orderOut: shown without activating the app or taking the key window.
                 if visible {
+                    if let Some(w) = window(&app) {
+                        hover_while_inactive(&w);
+                    }
                     panel.show();
                     debug(&format!("call-controls panel {}", describe(panel.as_panel())));
                 } else {
@@ -429,7 +437,7 @@ fn set_visible(app: &AppHandle, visible: bool) {
 /// What the panel is, for CI's log (SIDEVOICE_DEBUG=1): how it was asked to behave, read back from AppKit.
 #[cfg(target_os = "macos")]
 fn describe(panel: &tauri_nspanel::objc2_app_kit::NSPanel) -> String {
-    use tauri_nspanel::objc2::msg_send;
+    use tauri_nspanel::objc2::{class, msg_send, runtime::AnyObject};
     // NSWindowStyleMaskNonactivatingPanel, NSWindowCollectionBehaviorCanJoinAllSpaces / FullScreenAuxiliary.
     const NONACTIVATING: usize = 1 << 7;
     const ALL_SPACES: usize = 1 << 0;
@@ -439,7 +447,12 @@ fn describe(panel: &tauri_nspanel::objc2_app_kit::NSPanel) -> String {
             msg_send![panel, styleMask],
             msg_send![panel, level],
             msg_send![panel, collectionBehavior],
-            msg_send![panel, isKeyWindow],
+            // AppKit's own key window: the panel answers `isKeyWindow` with yes for WebKit's sake (#139).
+            {
+                let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+                let key: *mut AnyObject = msg_send![app, keyWindow];
+                std::ptr::eq(key.cast_const().cast(), panel)
+            },
             msg_send![panel, isVisible],
             msg_send![panel, windowNumber],
         )
@@ -970,6 +983,118 @@ fn prevent_activation(app: &AppHandle) {
     debug(&format!("call-controls prevents activation: {applied}"));
 }
 
+/// macOS: hover on a card that is never key while the app is inactive (#139). WebKit tracks the mouse with a tracking
+/// area that is active only in the key window (`NSTrackingActiveInKeyWindow`, WebKit's `WebViewImpl.mm`
+/// `trackingAreaOptions()`), so the card's page never saw the pointer move: no `:hover`, no `mouseenter`. That area
+/// is replaced by the same one active always, which AppKit delivers to inactive apps too; WebKit only re-creates it
+/// when the system's scroller style changes, so it is replaced again each time the card shows. Idempotent.
+#[cfg(target_os = "macos")]
+fn hover_while_inactive(w: &WebviewWindow) {
+    use tauri_nspanel::objc2::{class, msg_send, rc::Retained, runtime::AnyObject};
+    use tauri_nspanel::NSRect;
+    // NSTrackingActiveInKeyWindow, NSTrackingActiveAlways.
+    const IN_KEY_WINDOW: usize = 0x20;
+    const ALWAYS: usize = 0x80;
+    let _ = w.with_webview(|webview| {
+        let view = webview.inner() as *mut AnyObject;
+        if view.is_null() {
+            return;
+        }
+        // SAFETY: the window's own WKWebView, on the main thread (`with_webview`); the areas are kept retained while
+        // the view's own list changes.
+        let replaced = unsafe {
+            let list: Option<Retained<AnyObject>> = msg_send![view, trackingAreas];
+            let areas: Vec<Retained<AnyObject>> = list
+                .map(|list| {
+                    let count: usize = msg_send![&*list, count];
+                    (0..count).map(|i| msg_send![&*list, objectAtIndex: i]).collect()
+                })
+                .unwrap_or_default();
+            let mut replaced = 0;
+            for area in areas {
+                let options: usize = msg_send![&*area, options];
+                if options & IN_KEY_WINDOW == 0 {
+                    continue;
+                }
+                let rect: NSRect = msg_send![&*area, rect];
+                let owner: *mut AnyObject = msg_send![&*area, owner];
+                let user_info: *mut AnyObject = msg_send![&*area, userInfo];
+                let alloc: *mut AnyObject = msg_send![class!(NSTrackingArea), alloc];
+                let always: *mut AnyObject = msg_send![
+                    alloc,
+                    initWithRect: rect,
+                    options: (options & !IN_KEY_WINDOW) | ALWAYS,
+                    owner: owner,
+                    userInfo: user_info
+                ];
+                let Some(always) = Retained::from_raw(always) else { continue };
+                let _: () = msg_send![view, removeTrackingArea: &*area];
+                let _: () = msg_send![view, addTrackingArea: &*always];
+                replaced += 1;
+            }
+            replaced
+        };
+        debug(&format!("call-controls tracks the pointer while inactive: replaced={replaced}"));
+    });
+}
+
+/// macOS: lets the app set the cursor while it is not the active app (#139). The window server ignores a cursor set
+/// by an app in the background, so the hand over the card's buttons never showed; `SetsCursorInBackground` is the
+/// connection property it honours instead. Private, looked up at run time: where it is gone the card only keeps the
+/// arrow. WebKit sets a cursor only while the pointer is over its own window, and the app puts the arrow back when the
+/// pointer leaves the card ([`arrow_after_leaving`]).
+#[cfg(target_os = "macos")]
+fn set_cursor_in_background() {
+    use core_foundation::base::TCFType;
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::string::CFString;
+    type MainConnection = unsafe extern "C" fn() -> i32;
+    type SetProperty = unsafe extern "C" fn(i32, i32, *const std::ffi::c_void, *const std::ffi::c_void) -> i32;
+    let symbol = |name: &std::ffi::CStr| unsafe { libc::dlsym(libc::RTLD_DEFAULT, name.as_ptr()) };
+    let main = symbol(c"CGSMainConnectionID");
+    let set = symbol(c"CGSSetConnectionProperty");
+    let result = if main.is_null() || set.is_null() {
+        "missing".to_string()
+    } else {
+        // SAFETY: CoreGraphics' own functions, with the signatures it has had since Mac OS X 10.4.
+        unsafe {
+            let main = std::mem::transmute::<*mut std::ffi::c_void, MainConnection>(main);
+            let set = std::mem::transmute::<*mut std::ffi::c_void, SetProperty>(set);
+            let connection = main();
+            let key = CFString::from_static_string("SetsCursorInBackground");
+            let error = set(
+                connection,
+                connection,
+                key.as_concrete_TypeRef().cast(),
+                CFBoolean::true_value().as_concrete_TypeRef().cast(),
+            );
+            if error == 0 {
+                "true".to_string()
+            } else {
+                format!("error {error}")
+            }
+        }
+    };
+    debug(&format!("call-controls sets the cursor in background: {result}"));
+}
+
+/// macOS: the pointer left the card: the cursor it showed there (a hand over a button) goes back to the arrow, since the
+/// app under the pointer may not set its own until the pointer enters one of its views again.
+#[cfg(target_os = "macos")]
+fn arrow_after_leaving(app: &AppHandle) {
+    let _ = app.run_on_main_thread(|| {
+        use tauri_nspanel::objc2::{class, msg_send, runtime::AnyObject};
+        // SAFETY: NSCursor's class methods, on the main thread.
+        unsafe {
+            let current: *mut AnyObject = msg_send![class!(NSCursor), currentCursor];
+            let arrow: *mut AnyObject = msg_send![class!(NSCursor), arrowCursor];
+            if current != arrow {
+                let _: () = msg_send![arrow, set];
+            }
+        }
+    });
+}
+
 /// Windows: whether a mouse button went down since the last look (the pointer watcher's pace).
 #[cfg(windows)]
 fn button_down() -> bool {
@@ -1017,6 +1142,10 @@ fn watch_pointer(app: AppHandle) {
             if changed {
                 debug(&format!("call-controls pointer inside={inside:?} {}", app_active()));
                 push(&app, serde_json::json!({ "pointerInside": inside }));
+                #[cfg(target_os = "macos")]
+                if inside == Some(false) {
+                    arrow_after_leaving(&app);
+                }
             }
             #[cfg(windows)]
             {
