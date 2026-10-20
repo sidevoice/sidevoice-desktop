@@ -11,6 +11,9 @@
 //! All run in CI's macOS job (.github/workflows/build.yml). A release app has none of them, nor the switches; CI
 //! checks.
 
+#[cfg(target_os = "macos")]
+pub mod webkit;
+
 use std::borrow::Cow;
 use tauri::utils::assets::{AssetKey, AssetsIter, CspHash};
 use tauri::{App, AppHandle, Assets, Context, Runtime};
@@ -86,16 +89,22 @@ pub fn idle_minute() -> std::time::Duration {
 
 pub const PAGE: &str = "probe.html";
 pub const MEMORY_PAGE: &str = "memory.html";
+/// `macos svg-cpu` (test/fixtures/svg-anim.html): animated SVG figures; the second name is the same page with every
+/// animation stopped (the page reads it from its own path).
+pub const SVG_PAGE: &str = "svg-anim.html";
+pub const SVG_STILL_PAGE: &str = "svg-anim-still.html";
+const SVG_HTML: &[u8] = include_bytes!("../../test/fixtures/svg-anim.html");
 const MEMORY_HTML: &[u8] = include_bytes!("../../test/fixtures/memory.html");
 const HTML: &[u8] = include_bytes!("../../test/fixtures/probe.html");
 pub const CARD_PAGE: &str = "card-probe.html";
 const CARD_HTML: &[u8] = include_bytes!("../../test/fixtures/card-probe.html");
+const PAGES: &[&str] = &[PAGE, CARD_PAGE, MEMORY_PAGE, SVG_PAGE, SVG_STILL_PAGE];
 const LOCAL_HOST_FLOW: &str = include_str!("../../test/fixtures/local-host-flow.js");
 
 /// The page the room window loads: a probe when asked for, else `interface`.
 pub fn page(interface: &str) -> String {
     match std::env::var("SIDEVOICE_DEBUG_PAGE") {
-        Ok(asked) if crate::debugging() && (asked == PAGE || asked == CARD_PAGE || asked == MEMORY_PAGE) => asked,
+        Ok(asked) if crate::debugging() && PAGES.contains(&asked.as_str()) => asked,
         _ => interface.to_string(),
     }
 }
@@ -172,6 +181,7 @@ impl<R: Runtime> Assets<R> for WithProbe<R> {
             PAGE => return Some(Cow::Borrowed(HTML)),
             CARD_PAGE => return Some(Cow::Borrowed(CARD_HTML)),
             MEMORY_PAGE => return Some(Cow::Borrowed(MEMORY_HTML)),
+            SVG_PAGE | SVG_STILL_PAGE => return Some(Cow::Borrowed(SVG_HTML)),
             _ => {}
         }
         self.0.get(key)

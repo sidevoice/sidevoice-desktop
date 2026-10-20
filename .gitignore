@@ -14,5 +14,6 @@ xtask/target/
 target/xtask/
 dmg-screens/
 card-shots/
+svg-cpu-shots/
 /artifacts/
 /assets/

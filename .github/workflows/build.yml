@@ -230,6 +230,19 @@ jobs:
           key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs', 'scripts/web-release.mjs') }}
       - name: Build the CI probe app (feature probe; never shipped)
         run: cargo xtask macos probe-app
+      # Informational (desktop#149): what animated SVG costs the webview's CPU, with WebKit's layer-based SVG engine off
+      # and on, and with the animations stopped. Prints a table and the WebKit features that matter for it.
+      - name: Animated SVG cost in the webview, with and without WebKit's layer-based SVG engine (table; informational)
+        continue-on-error: true
+        timeout-minutes: 10
+        run: cargo xtask macos svg-cpu
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: svg-cpu-screenshots
+          path: svg-cpu-shots/
+          retention-days: 7
+          if-no-files-found: warn
       - name: Reset cleanup safety tests (temporary directories only)
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib data::tests -- --test-threads=1
       - name: The local host from the bundled page (stand-in core on local.sock, pairing, proxy, refusals)

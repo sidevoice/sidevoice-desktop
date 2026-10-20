@@ -342,7 +342,14 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
         Some(flow) => builder.initialization_script(flow),
         None => builder,
     };
-    builder
+    // CI's probe build only (src/probe/webkit.rs): WebKit's feature flags, set on the configuration the webview is
+    // created with.
+    #[cfg(all(feature = "probe", target_os = "macos"))]
+    let builder = match probe::webkit::configuration() {
+        Some(configuration) => builder.with_webview_configuration(configuration),
+        None => builder,
+    };
+    let window = builder
         // A hidden window still carries the call: never suspend or throttle its page.
         .background_throttling(BackgroundThrottlingPolicy::Disabled)
         // Only the app's own pages: the interface never navigates away (a link elsewhere goes nowhere).
@@ -370,6 +377,9 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             }
         })
         .build()?;
+    #[cfg(all(feature = "probe", target_os = "macos"))]
+    probe::webkit::report(&window);
+    let _ = window;
     Ok(())
 }
 

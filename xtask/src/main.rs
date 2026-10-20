@@ -97,6 +97,7 @@ mod macos;
 mod memory;
 mod probe;
 mod publish;
+mod svgcpu;
 mod util;
 
 use std::process::ExitCode;
@@ -109,7 +110,7 @@ const USAGE: &str = "usage: cargo xtask web | lint | test | icons | two-users | 
   | sherpa-libs | macos app [--signed] [--channel C] | macos check-app [--signed] | macos first-open
   | macos dmg [--signed] | macos sign-dmg | macos checksums | macos forget-secrets | macos dmg-screens
   | macos probe-app | macos local-host | macos probe | macos voice-models | macos card | macos exit
-  | macos memory | macos voice-memory
+  | macos memory | macos voice-memory | macos svg-cpu
   | publish assets release TAG | publish assets nightly | publish release TAG | publish nightly
   | release-pr-title [BRANCH] | release-pr-checks
 (C: release, nightly or dev, the default; xtask/src/main.rs says what each does)";
@@ -156,6 +157,7 @@ fn main() -> ExitCode {
         ["macos", "card"] => macos("card", probe::card),
         ["macos", "exit"] => macos("exit", probe::exit),
         ["macos", "memory"] => macos("memory", probe::memory),
+        ["macos", "svg-cpu"] => macos("svg-cpu", svgcpu::svg_cpu),
         ["macos", "voice-memory"] => macos("voice-memory", probe::voice_memory),
         ["publish", "assets", kind] => publish::assemble(kind, None),
         ["publish", "assets", kind, tag] => publish::assemble(kind, Some(tag)),

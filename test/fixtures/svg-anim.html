@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sidevoice · SVG animation cost (CI)</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #14161c; }
+  main { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; height: 100%; }
+  svg { width: 100%; height: 100%; }
+  /* What the creatures do: groups inside one SVG animate transform and opacity from their own box. */
+  svg g.a { transform-box: fill-box; transform-origin: center; animation: sway var(--d) ease-in-out var(--s) infinite alternate; }
+  svg g.b { transform-box: fill-box; transform-origin: 50% 100%; animation: bob var(--d) ease-in-out var(--s) infinite alternate; }
+  svg g.c { transform-box: fill-box; transform-origin: center; animation: pulse var(--d) ease-in-out var(--s) infinite alternate; }
+  svg g.d { animation: blink var(--d) steps(1, end) var(--s) infinite; }
+  @keyframes sway { from { transform: rotate(-9deg) translate(-2px, 0) scale(1); } to { transform: rotate(9deg) translate(2px, 1px) scale(1.04); } }
+  @keyframes bob { from { transform: translate(0, 0) scale(1, 1); } to { transform: translate(0, -9px) scale(1.03, 0.97); } }
+  @keyframes pulse { from { transform: scale(0.92); opacity: 0.55; } to { transform: scale(1.1); opacity: 1; } }
+  @keyframes blink { 0%, 90% { opacity: 1; } 95% { opacity: 0; } }
+</style>
+</head>
+<body>
+<main id="m"></main>
+<script>
+(() => {
+  // Same page under two names (src/probe.rs): the "still" one stops every animation, the control for the CPU the rest of
+  // the app costs.
+  const still = location.pathname.includes("still");
+  if (still) {
+    const style = document.createElement("style");
+    style.textContent = "* { animation: none !important; }";
+    document.head.append(style);
+  }
+  const NS = "http://www.w3.org/2000/svg";
+  const palette = ["#7fd1ae", "#f2b36d", "#8fb4ff", "#e58bd0"];
+  const el = (parent, tag, attrs) => {
+    const node = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+    parent.append(node);
+    return node;
+  };
+  const anim = (parent, kind, i) => {
+    const g = el(parent, "g", { class: kind });
+    g.style.setProperty("--d", (1.1 + ((i * 37) % 17) / 10).toFixed(2) + "s");
+    g.style.setProperty("--s", (-((i * 53) % 29) / 10).toFixed(2) + "s");
+    return g;
+  };
+  let n = 0;
+  palette.forEach((color, f) => {
+    const svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("viewBox", "0 0 400 400");
+    const defs = el(svg, "defs", {});
+    const grad = el(defs, "radialGradient", { id: "g" + f, cx: "40%", cy: "35%", r: "70%" });
+    el(grad, "stop", { offset: "0", "stop-color": "#ffffff", "stop-opacity": "0.85" });
+    el(grad, "stop", { offset: "1", "stop-color": color });
+    const root = anim(svg, "b", n++);
+    // Body.
+    const body = anim(root, "c", n++);
+    el(body, "ellipse", { cx: 200, cy: 230, rx: 95, ry: 105, fill: `url(#g${f})` });
+    // Eight limbs, each a sway around its own box with a blob that pulses at its end.
+    for (let i = 0; i < 8; i++) {
+      const angle = (i / 8) * Math.PI * 2;
+      const x = 200 + Math.cos(angle) * 120, y = 230 + Math.sin(angle) * 110;
+      const limb = anim(root, "a", n++);
+      el(limb, "path", {
+        d: `M200 230 Q${(200 + x) / 2 + 18} ${(230 + y) / 2 - 18} ${x} ${y}`,
+        fill: "none", stroke: color, "stroke-width": 16, "stroke-linecap": "round",
+      });
+      const tip = anim(limb, "c", n++);
+      el(tip, "circle", { cx: x, cy: y, r: 17, fill: `url(#g${f})` });
+    }
+    // Eyes that blink, and a mouth that bobs.
+    const eyes = anim(root, "d", n++);
+    el(eyes, "circle", { cx: 168, cy: 205, r: 12, fill: "#14161c" });
+    el(eyes, "circle", { cx: 232, cy: 205, r: 12, fill: "#14161c" });
+    const mouth = anim(root, "b", n++);
+    el(mouth, "path", { d: "M170 255 Q200 280 230 255", fill: "none", stroke: "#14161c", "stroke-width": 7, "stroke-linecap": "round" });
+    document.getElementById("m").append(svg);
+  });
+  const invoke = (command, args) => window.__TAURI_INTERNALS__.invoke(command, args);
+  setTimeout(() => {
+    invoke("debug_log", {
+      line: `svg-anim running still=${still} groups=${n} animations=${document.getAnimations().length} ua=${navigator.userAgent}`,
+    });
+  }, 1500);
+})();
+</script>
+</body>
+</html>

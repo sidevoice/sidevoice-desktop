@@ -16,7 +16,7 @@ members = ["core", "engine", "local-host"]
 
 [features]
 # CI only (src/probe.rs): the probe page and the switch that loads it. Never in a release build.
-probe = []
+probe = ["dep:objc2-web-kit"]
 
 [build-dependencies]
 tauri-build = { version = "2.7", features = [] }
@@ -74,6 +74,8 @@ tauri-nspanel = "2.1"
 objc2 = "0.6"
 block2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSDictionary", "NSValue", "NSError", "NSObject"] }
+# CI probe build only (src/probe/webkit.rs): the WKWebViewConfiguration the room window is created with.
+objc2-web-kit = { version = "0.3", optional = true, default-features = false, features = ["std", "WKWebViewConfiguration"] }
 objc2-media-player = { version = "0.3", features = ["MPRemoteCommandCenter", "MPRemoteCommand", "MPRemoteCommandEvent", "MPNowPlayingInfoCenter", "MPMediaItem", "block2"] }
 objc2-avf-audio = { version = "0.3", features = ["AVAudioApplication", "block2"] }
 # The microphone permission the room page asks for in its first-run setup (src/microphone.rs, `host.microphone`).
