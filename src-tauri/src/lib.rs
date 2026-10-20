@@ -179,9 +179,13 @@ fn bridge_state(
         debug(&format!("bridge_state refused: origin {actual:?}"));
         return Err("not the app's own page".into());
     }
-    // Without the rest of the room's projection: its facts carry the conversation's words, which stay out of the log.
-    debug(&format!("bridge_state {:?}", CallSnapshot { rest: Default::default(), ..snapshot.clone() }));
-    *state.call.lock().unwrap() = snapshot.clone();
+    let previous = std::mem::replace(&mut *state.call.lock().unwrap(), snapshot.clone());
+    if let Some(changes) = snapshot.changes_since(&previous) {
+        log::info!("bridge_state: {changes}");
+    }
+    // The whole snapshot only at level debug or with SIDEVOICE_DEBUG=1, and without the rest of the room's projection:
+    // its facts carry the conversation's words, which stay out of the log.
+    debug_detail(|| format!("bridge_state {:?}", CallSnapshot { rest: Default::default(), ..snapshot.clone() }));
     tray::update(&app, &snapshot);
     headset::update(&app, &snapshot);
     call_controls::update(&app);
@@ -225,8 +229,8 @@ pub(crate) fn room_page(app: &AppHandle, webview: &Webview) -> Result<(), String
 /// `~/.local/share/<identifier>/logs/`, Windows `%LOCALAPPDATA%\<identifier>\logs\`), with the Rust side's lines and the
 /// room page's (bridge/webview-log.js). It is rotated at [`LOG_MAX_BYTES`], keeping [`LOG_KEPT`] files.
 pub(crate) const LOG_FILE: &str = "sidevoice-desktop";
-const LOG_MAX_BYTES: u128 = 1_000_000;
-const LOG_KEPT: usize = 3;
+const LOG_MAX_BYTES: u128 = 2_000_000;
+const LOG_KEPT: usize = 5;
 
 /// Where the app log is (it may not exist yet).
 pub(crate) fn app_log_file(app: &AppHandle) -> Option<std::path::PathBuf> {
@@ -234,15 +238,18 @@ pub(crate) fn app_log_file(app: &AppHandle) -> Option<std::path::PathBuf> {
 }
 
 fn log_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
-    use tauri_plugin_log::{RotationStrategy, Target, TargetKind};
+    use tauri_plugin_log::{FileOpenStrategy, RotationStrategy, Target, TargetKind};
     tauri_plugin_log::Builder::new()
         .clear_targets()
         .target(Target::new(TargetKind::LogDir { file_name: Some(LOG_FILE.into()) }))
-        .level(log::LevelFilter::Info)
+        .level(sidevoice_desktop_core::logging::level(
+            std::env::var(sidevoice_desktop_core::logging::LEVEL_VARIABLE).ok().as_deref(),
+        ))
         .level_for("tao", log::LevelFilter::Warn)
         .level_for("wry", log::LevelFilter::Warn)
         .max_file_size(LOG_MAX_BYTES)
         .rotation_strategy(RotationStrategy::KeepSome(LOG_KEPT))
+        .file_open_strategy(FileOpenStrategy::Rotate)
         .build()
 }
 
@@ -262,6 +269,19 @@ fn debugging() -> bool {
 /// Diagnostics on stderr, only with `SIDEVOICE_DEBUG=1` (CI's smoke tests read them).
 pub(crate) fn debug(message: &str) {
     log::info!("{message}");
+    if debugging() {
+        eprintln!("sidevoice: {message}");
+    }
+}
+
+/// A line too frequent or too large for the log by default: in it at level `debug` (`SIDEVOICE_LOG_LEVEL`), and on stderr
+/// with `SIDEVOICE_DEBUG=1`.
+pub(crate) fn debug_detail(message: impl FnOnce() -> String) {
+    if !debugging() && !log::log_enabled!(log::Level::Debug) {
+        return;
+    }
+    let message = message();
+    log::debug!("{message}");
     if debugging() {
         eprintln!("sidevoice: {message}");
     }

@@ -135,6 +135,40 @@ pub struct CallSnapshot {
     pub rest: serde_json::Map<String, serde_json::Value>,
 }
 
+impl CallSnapshot {
+    /// What changed since `previous`, for the app log: only the facts the app itself acts on, in a few words, with
+    /// counts instead of the participants and devices and nothing of the conversation's words. `None` when none of
+    /// those changed (the room reports many times a second while it animates).
+    pub fn changes_since(&self, previous: &CallSnapshot) -> Option<String> {
+        let mut changes = Vec::new();
+        let mut flag = |name: &str, now: bool, before: bool| {
+            if now != before {
+                changes.push(format!("{name}={now}"));
+            }
+        };
+        flag("ready", self.ready, previous.ready);
+        flag("joined", self.joined, previous.joined);
+        flag("busy", self.busy, previous.busy);
+        flag("mic", self.mic_enabled, previous.mic_enabled);
+        flag("mic_disabled", self.mic_disabled, previous.mic_disabled);
+        flag("you_talking", self.you_talking, previous.you_talking);
+        flag("can_skip", self.can_skip, previous.can_skip);
+        if self.agent != previous.agent {
+            changes.push(format!("agent={:?}", self.agent));
+        }
+        if self.title != previous.title {
+            changes.push("title".to_owned());
+        }
+        if self.participants.len() != previous.participants.len() {
+            changes.push(format!("participants={}", self.participants.len()));
+        }
+        if self.devices.is_some() != previous.devices.is_some() {
+            changes.push(format!("devices={}", self.devices.is_some()));
+        }
+        (!changes.is_empty()).then(|| changes.join(" "))
+    }
+}
+
 /// What the app asks the room page to do (tray, global shortcut, headset, call controls card).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "kebab-case")]
@@ -253,6 +287,23 @@ mod tests {
             title: "Claude".into(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn only_what_the_app_acts_on_is_a_change_and_never_the_words() {
+        let before = live(true);
+        assert_eq!(before.changes_since(&before.clone()), None);
+        let mut same = before.clone();
+        same.since = Some(5.0);
+        same.rest.insert("mood".into(), serde_json::json!("calm"));
+        assert_eq!(same.changes_since(&before), None, "relayed facts are not changes");
+        let mut after = before.clone();
+        after.mic_enabled = false;
+        after.agent = AgentState::Speaking;
+        after.participants = vec![serde_json::json!({"name": "Secret"})];
+        after.title = "Other".into();
+        let said = after.changes_since(&before).unwrap();
+        assert_eq!(said, "mic=false agent=Speaking title participants=1");
     }
 
     #[test]

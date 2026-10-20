@@ -4533,6 +4533,7 @@ version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "global-hotkey",
+ "log",
  "serde",
  "serde_json",
  "url",
