@@ -429,7 +429,7 @@ pub fn memory() -> Result<()> {
     let done = wait_for(&log, "memory phase=done ", 0, 1500);
     app.stop();
     let text = read(&log);
-    eprintln!("{}", grep(&text, "probe-memory|memory phase=").join("\n"));
+    eprintln!("{}", grep(&text, "probe-memory|memory phase=|memory-holds").join("\n"));
     ensure(!has(&text, "probe-memory-failed"), "the memory walk failed")?;
     ensure(done, "the memory walk never reached its last step")?;
     crate::memory::report(&text, crate::memory::APP_RULES)
