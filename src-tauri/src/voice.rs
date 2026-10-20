@@ -391,7 +391,27 @@ fn watch_devices(app: &AppHandle, state: &VoiceState) {
 /// must not hold the quit.
 pub fn shutdown(app: &AppHandle) {
     if let Some(state) = app.try_state::<VoiceState>() {
-        let _ = tauri::async_runtime::block_on(tokio::time::timeout(Duration::from_secs(3), state.clear()));
+        let _ = tauri::async_runtime::block_on(bounded(Duration::from_secs(3), state.clear()));
+    }
+}
+
+/// `tokio::time::timeout` registers with the runtime's timer when it is built, so it must be built inside the
+/// future `block_on` drives: built outside, the quit panics with "no reactor running" and aborts the process.
+async fn bounded<F: std::future::Future>(limit: Duration, work: F) -> Option<F::Output> {
+    tokio::time::timeout(limit, work).await.ok()
+}
+
+#[cfg(test)]
+mod bounded_tests {
+    use super::*;
+
+    /// The quit path: `block_on` from a thread with no runtime context (the `RunEvent::Exit` callback).
+    #[test]
+    fn bounds_a_future_driven_from_outside_a_runtime() {
+        let done = tauri::async_runtime::block_on(bounded(Duration::from_secs(1), async { 7 }));
+        assert_eq!(done, Some(7));
+        let stuck = tauri::async_runtime::block_on(bounded(Duration::from_millis(20), std::future::pending::<()>()));
+        assert_eq!(stuck, None);
     }
 }
 
