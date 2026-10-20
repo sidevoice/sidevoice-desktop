@@ -375,7 +375,7 @@ fn preview(app: &AppHandle) {
     std::thread::spawn(move || loop {
         std::thread::sleep(PREVIEW_EVERY);
         update(&app);
-        let Some(card) = card(&app) else { return };
+        let Some(card) = self::card(&app) else { return };
         let mut inner = card.0.lock().unwrap();
         if inner.preview_until.is_none() {
             inner.preview_watched = false;
