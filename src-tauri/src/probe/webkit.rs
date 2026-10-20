@@ -156,7 +156,8 @@ pub fn configuration() -> Option<Retained<WKWebViewConfiguration>> {
         crate::debug("webkit-enable: not on the main thread, the webview gets WebKit's own configuration");
         return None;
     };
-    let config = WKWebViewConfiguration::new(main);
+    // SAFETY: created on the main thread (the marker).
+    let config = unsafe { WKWebViewConfiguration::new(main) };
     // SAFETY: the main thread; every selector is asked of what answers to it.
     unsafe {
         let preferences: *mut AnyObject = msg_send![&*config, preferences];
