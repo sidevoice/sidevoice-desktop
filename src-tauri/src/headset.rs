@@ -8,79 +8,28 @@
 //!   `AVAudioApplication.setInputMuteStateChangeHandler`; the app keeps that state in step with its own mute.
 //! - No CallKit: neither needs it (Apple documents both for plain macOS apps).
 //!
-//! Every event that arrives is recorded (the settings window shows the last ones: "Botones del auricular"), so a
-//! person can see which buttons of their own headset reach the app. `test()` makes the app the Now Playing app for
-//! a minute without a call, to try buttons without calling anyone.
+//! Every event that arrives is recorded in the app log (`headset …` lines), so which buttons of a headset reach the
+//! app can be read there.
 
-use serde::Serialize;
 use sidevoice_desktop_core::bridge::CallSnapshot;
 use sidevoice_desktop_core::headset::{media_command_action, mute_gesture_action};
-use std::collections::VecDeque;
 use std::sync::Mutex;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
-
-const KEEP: usize = 30;
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ButtonEvent {
-    /// Milliseconds since the Unix epoch.
-    pub at: u128,
-    /// `remote:play`, `remote:pause`, `remote:toggle`, `airpods:mute`, `airpods:unmute`, `system:…`.
-    pub source: String,
-    /// What the app did with it.
-    pub action: String,
-}
 
 #[derive(Default)]
 pub struct Headset {
-    events: Mutex<VecDeque<ButtonEvent>>,
     call: Mutex<CallSnapshot>,
-    test_until: Mutex<Option<Instant>>,
-    /// Whether the AirPods gesture API exists on this Mac (macOS 14+).
-    pub mute_gesture_api: Mutex<bool>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Report {
-    events: Vec<ButtonEvent>,
-    in_call: bool,
-    testing: bool,
-    mute_gesture_api: bool,
-    platform_supported: bool,
 }
 
 impl Headset {
+    /// One event that arrived and what the app did with it, for the app log.
     pub fn record(&self, source: &str, action: &str) {
-        let at = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
         crate::debug(&format!("headset {source} → {action}"));
-        let mut events = self.events.lock().unwrap();
-        events.push_front(ButtonEvent { at, source: source.into(), action: action.into() });
-        events.truncate(KEEP);
-    }
-
-    fn testing(&self) -> bool {
-        self.test_until.lock().unwrap().is_some_and(|until| Instant::now() < until)
     }
 
     fn active(&self) -> bool {
         let call = self.call.lock().unwrap();
-        (call.ready && call.joined) || self.testing()
-    }
-
-    pub fn report(&self) -> Report {
-        Report {
-            events: self.events.lock().unwrap().iter().cloned().collect(),
-            in_call: {
-                let c = self.call.lock().unwrap();
-                c.ready && c.joined
-            },
-            testing: self.testing(),
-            mute_gesture_api: *self.mute_gesture_api.lock().unwrap(),
-            platform_supported: cfg!(target_os = "macos"),
-        }
+        call.ready && call.joined
     }
 }
 
@@ -125,7 +74,7 @@ pub(crate) fn on_mute_gesture(app: &AppHandle, muted: bool) -> bool {
     true
 }
 
-/// Follows the call: Now Playing and the buttons while in a call (or testing), nothing otherwise.
+/// Follows the call: Now Playing and the buttons while in a call, nothing otherwise.
 pub fn update(app: &AppHandle, snapshot: &CallSnapshot) {
     let Some(headset) = app.try_state::<Headset>() else { return };
     *headset.call.lock().unwrap() = snapshot.clone();
@@ -136,21 +85,6 @@ pub fn update(app: &AppHandle, snapshot: &CallSnapshot) {
     let _ = app.run_on_main_thread(move || platform::apply(&app2, active, in_call, mic, &title));
 }
 
-/// Makes the app the Now Playing app for `seconds` without a call, to try a headset's buttons.
-pub fn test(app: &AppHandle, seconds: u64) {
-    let headset = app.state::<Headset>();
-    *headset.test_until.lock().unwrap() = Some(Instant::now() + Duration::from_secs(seconds));
-    headset.record("prueba", &format!("{seconds} s escuchando botones"));
-    let snapshot = headset.call.lock().unwrap().clone();
-    update(app, &snapshot);
-    let app = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_secs(seconds) + Duration::from_millis(200));
-        let snapshot = app.state::<Headset>().call.lock().unwrap().clone();
-        update(&app, &snapshot);
-    });
-}
-
 pub fn setup(app: &AppHandle) {
     app.manage(Headset::default());
     let app2 = app.clone();
@@ -159,7 +93,7 @@ pub fn setup(app: &AppHandle) {
 
 #[cfg(target_os = "macos")]
 mod platform {
-    use super::{on_media_command, on_mute_gesture, Headset};
+    use super::{on_media_command, on_mute_gesture};
     use block2::RcBlock;
     use objc2::rc::Retained;
     use objc2::runtime::{AnyClass, AnyObject, Bool};
@@ -172,9 +106,9 @@ mod platform {
     use std::ptr::NonNull;
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
-    use tauri::{AppHandle, Manager};
+    use tauri::AppHandle;
 
-    /// Whether the gesture handler is installed now (only during a call or a test).
+    /// Whether the gesture handler is installed now (only during a call).
     static GESTURE_ON: Mutex<bool> = Mutex::new(false);
     /// The state the app itself last set with `setInputMuted`, and when: the system calls the handler for that
     /// too, and such an echo is neither a gesture to record nor one to act on.
@@ -228,7 +162,6 @@ mod platform {
                 command.setEnabled(false);
             }
         }
-        *app.state::<Headset>().mute_gesture_api.lock().unwrap() = gesture_api();
     }
 
     pub fn apply(app: &AppHandle, active: bool, in_call: bool, mic_enabled: bool, title: &str) {

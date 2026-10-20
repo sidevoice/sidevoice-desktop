@@ -18,8 +18,3 @@ browser with a choice of engine:
 
 The native engine runs the same models on every supported macOS, multi-threaded, with the same result in any
 webview, and the native call cancels its own echo with WebRTC's AEC3 rather than relying on the webview's.
-
-## What the settings window shows
-
-"Motor nativo" / "Native engine": what the engine reports (system, accelerators, memory) and what it has on disk —
-each downloaded model build, with what it downloaded (the engine itself is linked into the app).

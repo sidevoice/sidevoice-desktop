@@ -1388,7 +1388,7 @@ test("host.muteShortcut and host.callControls are exactly the web's seams", () =
   const install = loadFactory();
   const { host } = install(fakeWindow(ORIGIN).win, ORIGIN);
   assert.deepEqual(Object.keys(host.muteShortcut).sort(), ["get", "set", "subscribe"]);
-  assert.deepEqual(Object.keys(host.callControls).sort(), ["clearSize", "preview", "resetPlace", "setAlwaysShown", "setCorner", "settings"]);
+  assert.deepEqual(Object.keys(host.callControls).sort(), ["clearSize", "preview", "resetPlace", "setAlwaysShown", "setCorner", "setEnabled", "settings"]);
   assert.ok(Object.isFrozen(host.muteShortcut) && Object.isFrozen(host.callControls));
 });
 
@@ -1437,6 +1437,15 @@ test("host.callControls reads and sets alwaysShown through the call_controls_set
   assert.deepEqual(await controls.setAlwaysShown(true), { alwaysShown: true });
   await assert.rejects(controls.setAlwaysShown("yes"), (e) => e.key === "bad_request");
   assert.deepEqual(calls.filter(([cmd]) => cmd === "call_controls_settings").map(([, args]) => args), [{ action: "settings" }, { action: "set-always-shown", enabled: true }]);
+});
+
+test("host.callControls turns the card off and on through the same command, booleans only", async () => {
+  const install = loadFactory();
+  const { win, calls } = settingsWindow({ call_controls_settings: ({ enabled }) => ({ enabled }) });
+  const controls = install(win, ORIGIN).host.callControls;
+  assert.deepEqual(await controls.setEnabled(false), { enabled: false });
+  await assert.rejects(controls.setEnabled("no"), (e) => e.key === "bad_request");
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "call_controls_settings").map(([, args]) => args), [{ action: "set-enabled", enabled: false }]);
 });
 
 test("host.callControls sets the default corner, forgets places and previews, through the same command", async () => {
@@ -1500,7 +1509,7 @@ test("the voice's output level reaches the app during a call only, throttled, an
     [{ level: 0.5, threadId: "a" }, { level: 0, threadId: "a" }]);
 });
 
-test("the card's gear opens the room's Settings at the floating card, and Cancel sending takes the turn back", async () => {
+test("the card's gear opens the room's Settings at the floating card, the tray's where it was left, and Cancel sending takes the turn back", async () => {
   const install = loadFactory();
   const { win } = fakeWindow(ORIGIN);
   const did = [];
@@ -1509,9 +1518,11 @@ test("the card's gear opens the room's Settings at the floating card, and Cancel
   win.sidevoiceActions = { toggleMic() {}, toggleCall: async () => {}, cancelInput: async () => did.push("cancel"), keepVoiceOn: () => did.push("keep") };
   const api = install(win, ORIGIN);
   assert.equal(api.run({ command: "open-settings" }), true);
+  assert.equal(api.run({ command: "show-settings" }), true, "the tray's, with no section");
   assert.equal(api.run({ command: "cancel-input" }), true);
   assert.equal(api.run({ command: "keep-alive" }), true, "the idle warning's Keep");
   delete win.sidevoiceUI.openSettings;
   assert.equal(api.run({ command: "open-settings" }), false, "a room without it");
-  assert.deepEqual(did, ["settings floating-card", "cancel", "keep"]);
+  assert.equal(api.run({ command: "show-settings" }), false, "a room without it");
+  assert.deepEqual(did, ["settings floating-card", "settings undefined", "cancel", "keep"]);
 });

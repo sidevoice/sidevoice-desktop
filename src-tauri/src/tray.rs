@@ -1,5 +1,5 @@
 //! The menu-bar (tray) icon: call state at a glance, mute, hang up, hide the call controls card, show the window,
-//! settings, quit. What it shows comes from [`bridge::tray_view`], in the app's language; what it does goes through
+//! the room's Settings, quit. What it shows comes from [`bridge::tray_view`], in the app's language; what it does goes through
 //! the bridge.
 
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command, TrayIcon};
@@ -113,7 +113,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
                 update(app, &call);
             }
             "show" => crate::show_room(app),
-            "settings" => crate::open_settings(app),
+            "settings" => crate::show_settings(app),
             "quit" => app.exit(0),
             _ => {}
         })

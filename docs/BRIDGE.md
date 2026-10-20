@@ -35,7 +35,7 @@ Both are globals the web UI (sidevoice-web → `apps/web`) already defines:
 - `window.sidevoiceUI.playbackLevel` — the voice's output level, `{level 0–1, threadId}`
   (`apps/web/src/state/playback-level.ts`), which the stage's lip-sync reads too. The bridge subscribes to it.
 - `window.sidevoiceUI.openSettings(section)` — opens the room's Settings at a section: the card's gear asks for
-  `floating-card`.
+  `floating-card`; the tray's Settings item asks for none (where they were left).
 - `window.sidevoiceActions` — the room's actions (`apps/web/src/state/room-types.ts`, `SidevoiceActions`). The
   bridge calls only `toggleMic()`, `toggleCall()`, `skipReply()`, `selectParticipant(threadId)`,
   `setAudioDevices(choice)`, `cancelInput()` and `keepVoiceOn()`.
@@ -194,6 +194,7 @@ window.__sidevoiceDesktop.run({ command: "skip-reply" })      // card
 window.__sidevoiceDesktop.run({ command: "select-participant", threadId: "…" })            // card
 window.__sidevoiceDesktop.run({ command: "select-audio-device", kind: "input", id: "…" })  // card
 window.__sidevoiceDesktop.run({ command: "open-settings" })    // card (the app brings the room in front first)
+window.__sidevoiceDesktop.run({ command: "show-settings" })    // tray (the app brings the room in front first)
 window.__sidevoiceDesktop.run({ command: "cancel-input" })     // card
 window.__sidevoiceDesktop.run({ command: "keep-alive" })       // card
 ```
@@ -212,6 +213,7 @@ Evaluated by the app with `webview.eval` (works with the window hidden); the com
   Choices go to the room one at a time, in the order asked (the room keeps whichever answers last), and the card's
   `devices.busy` holds until the last has been answered.
 - `open-settings` → `sidevoiceUI.openSettings("floating-card")`: the room's Settings at its Floating card section.
+- `show-settings` → `sidevoiceUI.openSettings()`: the room's Settings, in the section it was left at.
 - `cancel-input` → `sidevoiceActions.cancelInput()`: the room's "Cancel sending", taking the person's turn back.
 - `keep-alive` → `sidevoiceActions.keepVoiceOn()`: the idle warning's Keep on the card, a sign of the person that keeps
   the call on.
@@ -422,8 +424,7 @@ models is the voice call's (below), never the page's. `window.__sidevoiceDesktop
   signal's abort calls: `true` when the install will reject `install_cancelled`, also when it has not reached the app
   yet, which then refuses it as it arrives; `false` when it had already ended), `engine_uninstall {model}`,
   `engine_memory`. Granted to the room
-  window (`capabilities/room.json`). The settings window may read `engine_capabilities` and `engine_on_disk` (what is
-  on disk and its size), and nothing else of the engine.
+  window (`capabilities/room.json`), and to nothing else.
 
 ### Refusals
 
@@ -703,8 +704,9 @@ behind or minimised ("Always show the call controls", above), set from the web's
 
 ```ts
 interface CallControlsBridge {
-  settings(): Promise<{ alwaysShown: boolean; corner: "tl" | "tr" | "bl" | "br"; moved: boolean }>;  // false, tr
+  settings(): Promise<{ alwaysShown: boolean; enabled: boolean; corner: "tl" | "tr" | "bl" | "br"; moved: boolean }>;  // false, tr
   setAlwaysShown(enabled: boolean): Promise<{ alwaysShown: boolean }>;
+  setEnabled(enabled: boolean): Promise<{ enabled: boolean }>;  // whether the card shows at all during a call (true)
   setCorner(corner): Promise<{ corner }>;  // where a card never moved on a display first appears
   resetPlace(): Promise<void>;             // forgets places and the picture's resized sizes, on every display
   clearSize(): Promise<void>;              // forgets only the picture's resized sizes ("Custom"), on every display
@@ -718,15 +720,18 @@ interface CallControlsBridge {
   (the card hears `size: null`), and where the card was left stays. The card's format, its starting size and the captions are the web's own
   (localStorage on the app's origin, which the room and the card share): the app keeps none of them.
 
+- `setEnabled` keeps "Show the floating card" with the app's settings (`callControlsEnabled`, on by default) and applies it at
+  once: off, the card is never shown during a call, not even the moment `preview` or a change in Settings shows it (the
+  tray's hide and show are unchanged). A non-boolean rejects `{key: "bad_request"}`.
 - `setAlwaysShown` keeps it with the app's settings (`callControlsAlwaysShown`) and applies it to the card at once; a
   non-boolean rejects `{key: "bad_request"}`. Set only from the page.
 - Command behind it: `call_controls_settings {action, enabled?, corner?}`, `action` `settings`, `set-always-shown`,
-  `set-corner`, `reset-place`, `clear-size` or `preview`.
+  `set-enabled`, `set-corner`, `reset-place`, `clear-size` or `preview`.
 
 Both commands are granted to the room window (`capabilities/room.json`) and re-check that the caller is the current
 room window on the app's own page (else `bad_request`). The app's settings (`settings.json`) have one writer
 (`change_settings`, `src-tauri/src/lib.rs`): every setter of the page changes only its own fields, under one lock, so
-none loses another's. The app's settings window saves nothing; it only shows diagnostics.
+none loses another's.
 
 ## The build
 

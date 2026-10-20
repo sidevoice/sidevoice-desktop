@@ -32,6 +32,10 @@ pub struct Settings {
     /// front; off, only while it is behind or minimised (core `call_controls::wanted`).
     #[serde(default)]
     pub call_controls_always_shown: bool,
+    /// "Show the floating card": on by default; off, no card shows during a call, not even the moment a change in Settings
+    /// shows it (`host.callControls.setEnabled`).
+    #[serde(default = "default_true")]
+    pub call_controls_enabled: bool,
     /// How the app's updates arrive (core `updater`): automatic (the default) or manual. Set only by the room page
     /// (`host.updater.setMode`).
     #[serde(default)]
@@ -40,6 +44,10 @@ pub struct Settings {
     /// right by default.
     #[serde(default)]
     pub call_controls_corner: crate::call_controls::Corner,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_shortcut() -> String {
@@ -202,6 +210,7 @@ impl Settings {
         Settings {
             mute_shortcut: default_shortcut(),
             call_controls_always_shown: false,
+            call_controls_enabled: true,
             update_mode: crate::updater::Mode::Automatic,
             call_controls_corner: crate::call_controls::Corner::TopRight,
         }
@@ -343,6 +352,15 @@ mod tests {
     }
 
     #[test]
+    fn the_floating_card_shows_unless_switched_off() {
+        assert!(Settings::first_run().call_controls_enabled);
+        let stored: Settings = serde_json::from_str("{}").unwrap();
+        assert!(stored.call_controls_enabled, "a settings file from before the switch keeps the card on");
+        let off: Settings = serde_json::from_str(r#"{"callControlsEnabled":false}"#).unwrap();
+        assert!(!off.call_controls_enabled);
+    }
+
+    #[test]
     fn round_trip_and_bad_files() {
         let dir = std::env::temp_dir().join(format!("sidevoice-settings-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
@@ -351,6 +369,7 @@ mod tests {
         let s = Settings {
             mute_shortcut: "Alt+M".into(),
             call_controls_always_shown: true,
+            call_controls_enabled: false,
             update_mode: crate::updater::Mode::Manual,
             call_controls_corner: crate::call_controls::Corner::BottomLeft,
         };

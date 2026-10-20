@@ -585,7 +585,7 @@
   function callControls() {
     const CORNERS = ["tl", "tr", "bl", "br"];
     return Object.freeze({
-      /** `{alwaysShown, corner, moved}`: whether it shows always in a call, the corner a card never moved first appears
+      /** `{alwaysShown, enabled, corner, moved}`: whether it shows always in a call, whether it shows at all, the corner a card never moved first appears
        *  in, and whether it was moved or resized anywhere (what `resetPlace` forgets). */
       settings: () => call("call_controls_settings", { action: "settings" }),
       /** Kept by the app and applied at once. `enabled` must be a boolean, else it rejects `{key: "bad_request"}`. */
@@ -593,6 +593,12 @@
         typeof enabled === "boolean"
           ? call("call_controls_settings", { action: "set-always-shown", enabled })
           : Promise.reject({ key: "bad_request", message: "setAlwaysShown(enabled) takes a boolean." }),
+      /** Whether the card shows at all during a call (on by default); off, no card shows, not even the moment a change in
+       *  Settings shows it. `enabled` must be a boolean, else it rejects `{key: "bad_request"}`. */
+      setEnabled: (enabled) =>
+        typeof enabled === "boolean"
+          ? call("call_controls_settings", { action: "set-enabled", enabled })
+          : Promise.reject({ key: "bad_request", message: "setEnabled(enabled) takes a boolean." }),
       /** Where a card never moved on a display first appears: `"tl"`, `"tr"` (the default), `"bl"` or `"br"`. */
       setCorner: (corner) =>
         CORNERS.includes(corner)
@@ -831,6 +837,11 @@
           // The card's gear: the room's Settings at the floating card's section (the app brings the room in front).
           if (!win.sidevoiceUI || typeof win.sidevoiceUI.openSettings !== "function") return false;
           win.sidevoiceUI.openSettings("floating-card");
+          return true;
+        case "show-settings":
+          // The tray's Settings: the room's Settings as it was left (the app brings the room in front).
+          if (!win.sidevoiceUI || typeof win.sidevoiceUI.openSettings !== "function") return false;
+          win.sidevoiceUI.openSettings();
           return true;
         case "keep-alive":
           // The idle warning's Keep on the card: a sign of the person, so the call stays on.

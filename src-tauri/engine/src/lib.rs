@@ -72,7 +72,7 @@ pub struct Installed {
     pub engine: String,
 }
 
-/// What the engines take on disk, for the app's own settings window.
+/// What the engines take on disk.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct OnDisk {
     /// Engine packages downloaded at run time: none now, the engine's backend is linked into the app.
