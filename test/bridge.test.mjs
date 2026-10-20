@@ -1388,7 +1388,7 @@ test("host.muteShortcut and host.callControls are exactly the web's seams", () =
   const install = loadFactory();
   const { host } = install(fakeWindow(ORIGIN).win, ORIGIN);
   assert.deepEqual(Object.keys(host.muteShortcut).sort(), ["get", "set", "subscribe"]);
-  assert.deepEqual(Object.keys(host.callControls).sort(), ["clearSize", "preview", "resetPlace", "setAlwaysShown", "setCorner", "setEnabled", "settings"]);
+  assert.deepEqual(Object.keys(host.callControls).sort(), ["clearSize", "endPreview", "preview", "resetPlace", "setAlwaysShown", "setCorner", "setEnabled", "settings"]);
   assert.ok(Object.isFrozen(host.muteShortcut) && Object.isFrozen(host.callControls));
 });
 

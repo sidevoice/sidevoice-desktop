@@ -710,7 +710,8 @@ interface CallControlsBridge {
   setCorner(corner): Promise<{ corner }>;  // where a card never moved on a display first appears
   resetPlace(): Promise<void>;             // forgets places and the picture's resized sizes, on every display
   clearSize(): Promise<void>;              // forgets only the picture's resized sizes ("Custom"), on every display
-  preview(): void;                         // during a call, the card shows a moment, in front of the room too
+  preview(): void;                         // during a call, the card shows ~4 s after the last change, in front of the room too; kept while the pointer is on it or it is dragged or resized, gone 2 s after
+  endPreview(): void;                      // leaving Settings: a preview showing goes at once
 }
 ```
 
@@ -726,7 +727,7 @@ interface CallControlsBridge {
 - `setAlwaysShown` keeps it with the app's settings (`callControlsAlwaysShown`) and applies it to the card at once; a
   non-boolean rejects `{key: "bad_request"}`. Set only from the page.
 - Command behind it: `call_controls_settings {action, enabled?, corner?}`, `action` `settings`, `set-always-shown`,
-  `set-enabled`, `set-corner`, `reset-place`, `clear-size` or `preview`.
+  `set-enabled`, `set-corner`, `reset-place`, `clear-size`, `preview` or `end-preview`.
 
 Both commands are granted to the room window (`capabilities/room.json`) and re-check that the caller is the current
 room window on the app's own page (else `bad_request`). The app's settings (`settings.json`) have one writer
