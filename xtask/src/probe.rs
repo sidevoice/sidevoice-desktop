@@ -602,7 +602,7 @@ fn walk(card: &mut Card) -> Result<()> {
 
     // A click on the conversations chip (right of the title, the new card) opens them below the controls; a click in the editor closes it.
     let (x, y, _, _) = card.at.unwrap_or_default();
-    card.click(x + 262, y + 37)?;
+    card.click(x + 175, y + 37)?;
     sleep(1.5);
     card.card();
     let h = card.at.unwrap_or_default().3;
@@ -641,7 +641,7 @@ fn walk(card: &mut Card) -> Result<()> {
         card.card();
         let from = line_count(&log);
         let (x, y, _, h) = card.at.unwrap_or_default();
-        card.click(x + 66, y + h - 37)?;
+        card.click(x + 156, y + h - 54)?;
         card.expect(&log, "call-controls run toggle-mute app_active=false", from);
         card.expect(&log, "probe-card command toggle-mute", from);
         sleep(1.0);
@@ -678,7 +678,7 @@ fn walk(card: &mut Card) -> Result<()> {
     card.card();
     let from = line_count(&log);
     let (x, y, w, h) = card.at.unwrap_or_default();
-    card.click(x + w - 45, y + h - 37)?;
+    card.click(x + w - 122, y + h - 54)?;
     card.expect(&log, "probe-card command hang-up", from);
     let text = read(&log);
     let hung_up = lines_after(&text, 0)
