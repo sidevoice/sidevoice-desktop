@@ -22,6 +22,11 @@ struct Updates {
     downloads: core::Downloads,
 }
 
+/// How long a check waits for the feed; before an install, how long the last look at it may take (an offline restart
+/// installs what it has).
+const CHECK_TIMEOUT: Duration = Duration::from_secs(2 * 60);
+const RECHECK_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// The channel this build was built for (build.rs): `release`, `nightly` or `dev`.
 const CHANNEL: &str = env!("SIDEVOICE_BUILD_CHANNEL");
 
@@ -94,11 +99,20 @@ fn with<T>(app: &AppHandle, change: impl FnOnce(&mut Updates) -> T) -> T {
 }
 
 /// A newer version on this build's feed is `available` (automatic mode: downloaded at once); one downloading or ready
-/// is left as it is.
+/// is left as it is, unless the feed has moved past it.
 async fn check(app: &AppHandle) {
+    look(app, CHECK_TIMEOUT).await;
+    if current_mode(app) == Mode::Automatic {
+        download(app, false);
+    }
+}
+
+/// Reads the feed (waiting `timeout` at most) and records what it offers; a download or an update ready that it moved
+/// past is dropped.
+async fn look(app: &AppHandle, timeout: Duration) {
     let checked = async {
         let updater = app.updater_builder().endpoints(feed().into_iter().collect())?;
-        updater.timeout(Duration::from_secs(2 * 60)).build()?.check().await
+        updater.timeout(timeout).build()?.check().await
     }
     .await;
     let running = app.package_info().version.to_string();
@@ -111,18 +125,18 @@ async fn check(app: &AppHandle) {
             ));
             // The feed moved on while an older one was downloading or ready (a nightly comes with every merge):
             // that one is dropped, or the app would install it and be offered the newer one again after restarting.
-            let moved = found.as_ref().filter(|f| !u.installing && core::stale(&u.status, &f.version));
-            if let Some(found) = moved {
-                crate::debug(&format!(
-                    "updater: {:?} of {:?} is stale, now {}",
-                    u.status.state, u.status.version, found.version
-                ));
-                if let Some(task) = u.task.take() {
-                    task.abort();
+            if let Some(found) = found.as_ref().filter(|_| !u.installing) {
+                let (state, version) = (u.status.state, u.status.version.clone());
+                if core::drop_stale(&mut u.status, &mut u.downloads, &found.version) {
+                    crate::debug(&format!(
+                        "updater: discarding {state:?} of {version:?}, the feed offers {}",
+                        found.version
+                    ));
+                    if let Some(task) = u.task.take() {
+                        task.abort();
+                    }
+                    u.bytes = None;
                 }
-                u.downloads.supersede();
-                u.bytes = None;
-                u.status = Status::default();
             }
             if matches!(u.status.state, State::Idle | State::Available) {
                 u.status = found.as_ref().map_or_else(Status::default, |f| Status::new(State::Available, &f.version));
@@ -136,9 +150,6 @@ async fn check(app: &AppHandle) {
             u.status = u.status.clone().failed(ErrorCode::CheckFailed);
         }
     });
-    if current_mode(app) == Mode::Automatic {
-        download(app, false);
-    }
 }
 
 /// Starts downloading the update known. `asked`: the person asked (`download`), which also lifts a cancel; otherwise
@@ -149,6 +160,7 @@ fn download(app: &AppHandle, asked: bool) {
         let mut update = u.update.clone().filter(|_| u.status.state == State::Available)?;
         let token = u.downloads.start(&update.version, asked)?;
         u.status = Status::new(State::Downloading, &update.version);
+        crate::debug(&format!("updater: downloading {}", update.version));
         update.timeout = Some(Duration::from_secs(60 * 60));
         // Spawned under the lock, so `cancel` finds the task whenever the status says downloading.
         u.task = Some(tauri::async_runtime::spawn(download_task(app.clone(), update, token, permit)));
@@ -176,7 +188,10 @@ async fn download_task(app: AppHandle, update: Update, token: core::Token, _perm
         }
         u.task = None;
         match downloaded {
-            Ok(bytes) => (u.status, u.bytes) = (Status::new(State::Ready, &update.version), Some(bytes)),
+            Ok(bytes) => {
+                crate::debug(&format!("updater: {} is ready ({} bytes)", update.version, bytes.len()));
+                (u.status, u.bytes) = (Status::new(State::Ready, &update.version), Some(bytes));
+            }
             Err(e) => {
                 crate::debug(&format!("updater download failed: {e}"));
                 u.status = Status::new(State::Available, &update.version).failed(ErrorCode::DownloadFailed);
@@ -238,6 +253,12 @@ pub fn quit(app: &AppHandle) {
         std::thread::sleep(Duration::from_millis(100));
     }
     if current_mode(app) == Mode::Automatic {
+        // Only if what is ready is still the newest: a last look at the feed (from this thread with no runtime
+        // context, as `voice` stops its calls), which drops it otherwise.
+        if with(app, |u| u.bytes.is_some()) {
+            crate::debug("updater: looking at the feed before installing on quit");
+            tauri::async_runtime::block_on(look(app, RECHECK_TIMEOUT));
+        }
         install(app, false);
     }
 }
@@ -279,6 +300,16 @@ pub async fn updater(app: AppHandle, webview: Webview, action: String, mode: Opt
             Ok(Value::Null)
         }
         ("restart", _) if status(&app).state == State::Ready => {
+            // The feed may have moved on since the download: that one is then dropped and the newer one downloaded
+            // (shown to the page as the status), never installed.
+            crate::debug("updater: looking at the feed before restarting");
+            look(&app, RECHECK_TIMEOUT).await;
+            if status(&app).state != State::Ready {
+                if current_mode(&app) == Mode::Automatic {
+                    download(&app, false);
+                }
+                return Ok(Value::Null);
+            }
             tauri::async_runtime::spawn_blocking(move || install(&app, true));
             Ok(Value::Null)
         }
