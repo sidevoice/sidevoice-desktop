@@ -13,6 +13,7 @@ use std::time::Duration;
 use futures_util::StreamExt;
 use serde::Serialize;
 use serde_json::{json, Value};
+use sidevoice_desktop_core::voice::meters::Meters;
 use sidevoice_desktop_core::voice::{self as choice, VoiceSettings};
 use sidevoice_voice::{
     AudioIo, Events, InputPort, Listening, NativeDevices, SayCancel, SayEvent, SayOptions, SayOutcome,
@@ -548,10 +549,20 @@ pub(super) fn refused(r: choice::Refusal) -> Refusal {
 }
 
 /// Forward events with their immutable call key. Asynchronous delivery never consults the current input route. The
-/// idle state that answers a stop answers it once it is handed to the page.
+/// idle state that answers a stop answers it once it is handed to the page. The meters go only when the page would draw
+/// them differently (core `voice::meters`): about 60 a second otherwise, silence included (desktop#149).
 fn forward(page: Page, key: String, mut events: Events, lifecycle: Arc<Mutex<Lifecycle>>, released: Arc<Mutex<bool>>) {
     tokio::spawn(async move {
+        let mut meters = Meters::default();
         while let Some(event) = events.next().await {
+            let wanted = match &event {
+                VoiceEvent::Level(level) => meters.level(*level),
+                VoiceEvent::PlaybackLevel(level) => meters.playback(*level),
+                _ => true,
+            };
+            if !wanted {
+                continue;
+            }
             let mut value = match &event {
                 VoiceEvent::Take(take) => {
                     crate::debug(&format!("voice take: {} samples, {} turns", take.samples.len(), take.turns.len()));
