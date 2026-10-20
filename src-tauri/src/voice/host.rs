@@ -365,6 +365,23 @@ impl<A: LaneAudio> VoiceState<A> {
         Ok(())
     }
 
+    /// Quitting: no route and no lanes, then waits, every `poll`, for no model of the engine to be held any more (a
+    /// dropped call's own task ends after it; a transcription under way finishes). Returns the models still held when
+    /// `limit` passed, by their key; none once every one was released.
+    pub(super) async fn close(&self, limit: Duration, poll: Duration) -> Vec<String> {
+        let deadline = tokio::time::Instant::now() + limit;
+        if tokio::time::timeout_at(deadline, self.clear()).await.is_err() {
+            return vec!["(the calls did not stop)".into()];
+        }
+        loop {
+            let held = self.model_cache.held();
+            if held.is_empty() || tokio::time::Instant::now() >= deadline {
+                return held;
+            }
+            tokio::time::sleep(poll).await;
+        }
+    }
+
     /// No route and no lanes: each old call is stopped and released, and keeps its models for its idle minutes.
     pub(super) async fn clear(&self) {
         {
