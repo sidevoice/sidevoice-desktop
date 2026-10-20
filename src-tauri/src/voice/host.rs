@@ -80,6 +80,10 @@ pub struct VoiceState<A: LaneAudio = SharedNativeAudio> {
     pub(super) watching: AtomicBool,
     /// How long an idle minute is: a minute.
     minute: Duration,
+    /// The tasks keeping a stopped call's or a preload's models for their idle minutes.
+    keeping: Mutex<Vec<JoinHandle<()>>>,
+    /// Quitting: nothing is kept any more; what would be is let go at once.
+    closing: AtomicBool,
 }
 
 pub(super) struct CallLane<P> {
@@ -138,6 +142,8 @@ impl<A: LaneAudio> VoiceState<A> {
             devices,
             watching: AtomicBool::new(false),
             minute: Duration::from_secs(60),
+            keeping: Mutex::new(Vec::new()),
+            closing: AtomicBool::new(false),
         }
     }
 
@@ -172,16 +178,19 @@ impl<A: LaneAudio> VoiceState<A> {
         Ok(())
     }
 
-    /// Keeps `held` for `minutes` of the host's idle minutes, then lets it go (at once for none).
+    /// Keeps `held` for `minutes` of the host's idle minutes, then lets it go (at once for none, or when quitting).
     fn keep<T: Send + 'static>(&self, held: T, minutes: u32) {
-        if minutes == 0 {
+        if minutes == 0 || self.closing.load(Ordering::SeqCst) {
             return;
         }
         let wait = self.minute.saturating_mul(minutes);
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             tokio::time::sleep(wait).await;
             drop(held);
         });
+        let mut keeping = self.keeping.lock().unwrap();
+        keeping.retain(|task| !task.is_finished());
+        keeping.push(task);
     }
 
     /// Lets go of the lane's call, a stopped one: it keeps the models it loaded for its idle minutes, so that another
@@ -363,6 +372,33 @@ impl<A: LaneAudio> VoiceState<A> {
         };
         closed.await;
         Ok(())
+    }
+
+    /// Quitting: no route and no lanes (the last lane closes the devices), nothing kept for its idle minutes any more,
+    /// then waits, every `poll`, for no model of the engine to be held (a dropped call's own task ends after it; a
+    /// transcription under way finishes). Returns the models still held when `limit` passed, by their key; none once
+    /// every one was released.
+    pub(super) async fn close(&self, limit: Duration, poll: Duration) -> Vec<String> {
+        let deadline = tokio::time::Instant::now() + limit;
+        self.closing.store(true, Ordering::SeqCst);
+        if tokio::time::timeout_at(deadline, self.clear()).await.is_err() {
+            return vec!["(the calls did not stop)".into()];
+        }
+        let keeping = std::mem::take(&mut *self.keeping.lock().unwrap());
+        for task in &keeping {
+            task.abort();
+        }
+        // An aborted task's join answers once its future, and what it kept, was dropped.
+        for task in keeping {
+            let _ = task.await;
+        }
+        loop {
+            let held = self.model_cache.held();
+            if held.is_empty() || tokio::time::Instant::now() >= deadline {
+                return held;
+            }
+            tokio::time::sleep(poll).await;
+        }
     }
 
     /// No route and no lanes: each old call is stopped and released, and keeps its models for its idle minutes.
