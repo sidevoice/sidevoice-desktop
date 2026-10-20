@@ -380,9 +380,59 @@ fn paths(dir: &Path) -> Vec<std::path::PathBuf> {
 /// over stand-in shared devices (src-tauri/src/voice/tests.rs).
 pub fn voice_models() -> Result<()> {
     Cmd::new("cargo")
-        .args(["test", "--release", "--lib", "voice::", "--", "--include-ignored", "--nocapture"])
+        .args([
+            "test",
+            "--release",
+            "--lib",
+            "voice::",
+            "--",
+            "--include-ignored",
+            "--nocapture",
+            "--skip",
+            "voice::host::memory",
+        ])
         .dir(repo().join("src-tauri"))
         .run()
+}
+
+/// `macos voice-memory`: the host's calls on the engine's real models, the process's footprint and Metal allocation
+/// taken at each step (src-tauri/src/voice/host/memory.rs, the ignored test): idle, a call with the models loaded, the
+/// call ended and the idle keep run out, ten calls back to back, a call whose settings change twelve times. The table
+/// is printed; the run fails only on clear growth ([`crate::memory`]). Reads `SIDEVOICE_REAL_CALL_MODELS` as
+/// `voice-models` does.
+pub fn voice_memory() -> Result<()> {
+    let logs = work("voice-memory")?;
+    let log = logs.join("voice-memory.log");
+    let mut test = Cmd::new("cargo")
+        .args(["test", "--release", "--lib", "voice::host::memory", "--", "--include-ignored", "--nocapture"])
+        .dir(repo().join("src-tauri"))
+        .spawn(&log)?;
+    let status = test.ended(2400);
+    let text = read(&log);
+    eprintln!("{}", grep(&text, "memory phase=|test result|panicked").join("\n"));
+    ensure(status.is_some_and(|status| status.success()), format!("the memory test did not pass: {status:?}"))?;
+    crate::memory::report(&text, crate::memory::VOICE_RULES)
+}
+
+/// `macos memory`: the probe app through a long session (test/fixtures/memory.html): models loaded and let go after the
+/// idle keep (shortened to two seconds a minute), ten calls, the call controls card's settings changed forty times,
+/// the audio devices listed and chosen forty times and watched for forty seconds, the voice settings changed twenty
+/// times. The app prints its own footprint and Metal allocation at each step (`probe-memory PHASE`); the table is
+/// printed and the run fails only on clear growth ([`crate::memory`]).
+pub fn memory() -> Result<()> {
+    let data = AppHome::new("memory")?;
+    let logs = work("memory")?;
+    let log = logs.join("memory.log");
+    let mut app =
+        data.app(&[("SIDEVOICE_DEBUG_PAGE", "memory.html"), ("SIDEVOICE_DEBUG_IDLE_MINUTE_MS", "2000")]).spawn(&log)?;
+    // The models install first (a download), then the walk; a step takes ten seconds or so.
+    let done = wait_for(&log, "memory phase=done ", 0, 1500);
+    app.stop();
+    let text = read(&log);
+    eprintln!("{}", grep(&text, "probe-memory|memory phase=").join("\n"));
+    ensure(!has(&text, "probe-memory-failed"), "the memory walk failed")?;
+    ensure(done, "the memory walk never reached its last step")?;
+    crate::memory::report(&text, crate::memory::APP_RULES)
 }
 
 /// The call controls card's run: the probe app on test/fixtures/card-probe.html, the editor of

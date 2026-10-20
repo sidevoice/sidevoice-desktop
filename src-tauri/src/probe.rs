@@ -54,7 +54,35 @@ fn watch_exit_handlers() {
     unsafe { libc::atexit(ran) };
 }
 
+/// With `SIDEVOICE_DEBUG_PAGE=memory.html`, at each line `probe-memory PHASE` the page logs: the app's memory then,
+/// printed as `memory phase=PHASE ...` (core `memory`), on a thread of its own (`vmmap` takes a second or two; the page
+/// waits for it). `macos memory` reads the lines back (#145).
+#[cfg(target_os = "macos")]
+pub fn memory_on(line: &str) {
+    let Some(phase) = line.strip_prefix("probe-memory ") else { return };
+    if !crate::debugging() {
+        return;
+    }
+    let phase = phase.trim().to_owned();
+    std::thread::spawn(move || {
+        crate::memory::report(&phase);
+    });
+}
+
+/// With `SIDEVOICE_DEBUG_IDLE_MINUTE_MS`, how long the voice host's idle minute is (src/voice/host.rs): the models of a
+/// stopped call stay loaded for `idle_unload_minutes` of them, so `macos memory` can wait for them to be let go.
+#[cfg(target_os = "macos")]
+pub fn idle_minute() -> std::time::Duration {
+    let millis = std::env::var("SIDEVOICE_DEBUG_IDLE_MINUTE_MS").ok().and_then(|v| v.parse::<u64>().ok());
+    match millis {
+        Some(millis) if crate::debugging() && millis > 0 => std::time::Duration::from_millis(millis),
+        _ => std::time::Duration::from_secs(60),
+    }
+}
+
 pub const PAGE: &str = "probe.html";
+pub const MEMORY_PAGE: &str = "memory.html";
+const MEMORY_HTML: &[u8] = include_bytes!("../../test/fixtures/memory.html");
 const HTML: &[u8] = include_bytes!("../../test/fixtures/probe.html");
 pub const CARD_PAGE: &str = "card-probe.html";
 const CARD_HTML: &[u8] = include_bytes!("../../test/fixtures/card-probe.html");
@@ -63,7 +91,7 @@ const LOCAL_HOST_FLOW: &str = include_str!("../../test/fixtures/local-host-flow.
 /// The page the room window loads: a probe when asked for, else `interface`.
 pub fn page(interface: &str) -> String {
     match std::env::var("SIDEVOICE_DEBUG_PAGE") {
-        Ok(asked) if crate::debugging() && (asked == PAGE || asked == CARD_PAGE) => asked,
+        Ok(asked) if crate::debugging() && (asked == PAGE || asked == CARD_PAGE || asked == MEMORY_PAGE) => asked,
         _ => interface.to_string(),
     }
 }
@@ -129,6 +157,7 @@ impl<R: Runtime> Assets<R> for WithProbe<R> {
         match key.as_ref().trim_start_matches('/') {
             PAGE => return Some(Cow::Borrowed(HTML)),
             CARD_PAGE => return Some(Cow::Borrowed(CARD_HTML)),
+            MEMORY_PAGE => return Some(Cow::Borrowed(MEMORY_HTML)),
             _ => {}
         }
         self.0.get(key)

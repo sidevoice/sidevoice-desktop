@@ -8,6 +8,7 @@ pub mod computer_name;
 pub mod headset;
 pub mod i18n;
 pub mod media;
+pub mod memory;
 pub mod settings;
 pub mod updater;
 pub mod voice;

@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Sidevoice · memory (CI)</title></head>
+<body>
+<p>CI only, served only by the app built with the <code>probe</code> feature (src-tauri/src/probe.rs): loaded into the room
+window with SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_PAGE=memory.html and SIDEVOICE_DEBUG_IDLE_MINUTE_MS. It walks the app through
+what a long session does (calls with models loaded, the models' idle keep running out, many calls, the call controls
+card's settings, the audio devices, the voice settings) and has the app print its own memory at each step
+(<code>probe-memory PHASE</code> lines, src/probe.rs); <code>cargo xtask macos memory</code> checks the numbers (#145).</p>
+<script>
+(async () => {
+  const invoke = (command, args) => window.__TAURI_INTERNALS__.invoke(command, args);
+  const log = (line) => invoke("debug_log", { line });
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  // A step of the walk: what the previous step freed has settled (the host's idle minute is a couple of seconds), the app
+  // looks at its memory, and the page waits for it to finish (`vmmap` takes a moment) before it goes on.
+  const mark = async (phase, settle = 5000) => {
+    await sleep(settle);
+    await log("probe-memory " + phase);
+    await sleep(8000);
+  };
+  const host = window.__sidevoiceDesktop && window.__sidevoiceDesktop.host;
+  if (!host || !host.voice || !host.engine) { await log("probe-memory-failed no host.voice"); return; }
+  const { voice, engine, callControls } = host;
+  try {
+    const caps = await engine.capabilities();
+    await engine.install("kokoro-82m-v1.0", { engine: "sherpa-onnx" });
+    const catalogs = await engine.catalogs();
+    const tiny = catalogs[0].models.find((m) => m.id === "whisper-tiny");
+    const cpp = tiny.builds.find((b) => b.backend === "whisper-cpp" && b.available) || tiny.builds.find((b) => b.available);
+    await engine.install("whisper-tiny", { build: cpp.id, engine: cpp.backend });
+    await engine.install("silero-vad");
+    await log("probe-memory-setup ok has=" + JSON.stringify(caps.has) + " build=" + cpp.id);
+
+    const tts = { catalog: "local", model: "kokoro-82m-v1.0" };
+    const stt = (language) => ({ catalog: "local", model: "whisper-tiny", language, build: cpp.id });
+    // The idle minutes are the host's shortened minute (SIDEVOICE_DEBUG_IDLE_MINUTE_MS): one is a couple of seconds.
+    const both = (language, voiceName) => ({ input: { stt: stt(language), patience: "fast" },
+      output: { tts, voice: voiceName }, idle_unload_minutes: 1 });
+    const speaking = { output: { tts }, idle_unload_minutes: 1 };
+
+    // A call as the page makes it, the models loaded for it ahead (as the web does), a sentence said where the runner has
+    // a speaker, and the stop. A runner without audio devices refuses the start: the models are loaded all the same.
+    const call = async (settings, say) => {
+      await voice.preload(both("en", "af_heart")).catch(() => {});
+      const running = voice.start(settings);
+      await Promise.race([running.ready.catch(() => {}), sleep(60000)]);
+      if (say) {
+        const saying = running.say("The memory stays flat.", { language: "en" });
+        await Promise.race([saying.outcome.catch(() => {}), sleep(60000)]);
+      }
+      return running;
+    };
+
+    await mark("idle", 2000);
+
+    const first = await call(speaking, true);
+    await mark("models-live", 1000);
+    await first.stop();
+    await mark("models-ended", 10000);
+
+    for (let n = 0; n < 10; n++) {
+      const next = await call(speaking, true);
+      await next.stop();
+    }
+    await mark("calls-many", 10000);
+
+    // The card's settings, each changed over and over while a call is on (so that the card shows): shown always or not,
+    // on or off, the corner, a preview of the change, the size and the place forgotten.
+    const snapshot = (joined) => invoke("bridge_state", { snapshot: {
+      version: 1, ready: true, joined, busy: false, micEnabled: true, micDisabled: false, title: "Memory" } });
+    await snapshot(true);
+    const corners = ["tl", "tr", "bl", "br"];
+    for (let n = 0; n < 40; n++) {
+      await callControls.setAlwaysShown(n % 2 === 0);
+      await callControls.setEnabled(n % 3 !== 0);
+      await callControls.setCorner(corners[n % 4]);
+      callControls.preview();
+      if (n % 5 === 0) { await callControls.clearSize(); await callControls.resetPlace(); }
+      await sleep(150);
+    }
+    await callControls.setAlwaysShown(false);
+    await callControls.setEnabled(true);
+    await snapshot(false);
+    await mark("card-cycle", 4000);
+
+    // The audio devices listed and chosen again and again (the app watches them from the first list on).
+    for (let n = 0; n < 40; n++) {
+      await voice.audioDevices();
+      await voice.setAudioDevices({ input: null, output: null });
+    }
+    await mark("devices-cycle", 2000);
+    // The watcher lists them every two seconds for as long as the app runs: twenty more lists, nothing asked.
+    await sleep(40000);
+    await mark("devices-idle", 0);
+
+    // The voice settings changed over and over: the models of each loaded ahead, held for the idle minutes.
+    for (let n = 0; n < 20; n++) {
+      await voice.preload(both(n % 2 ? "es" : "en", n % 3 ? "af_heart" : "af_bella")).catch(() => {});
+    }
+    await mark("settings-cycle", 0);
+    await mark("settings-ended", 10000);
+    await mark("done", 0);
+  } catch (error) {
+    await log("probe-memory-failed " + String(error && (error.message || error.key || JSON.stringify(error))));
+  }
+})();
+</script>
+</body>
+</html>

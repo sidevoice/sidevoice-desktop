@@ -8,7 +8,7 @@
 //! so the worker hands its other tasks on for that while.
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::collections::HashMap;
 use std::future::Future;

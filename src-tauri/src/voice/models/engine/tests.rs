@@ -46,7 +46,7 @@ fn native_work_leaves_the_async_workers_free() {
 }
 
 /// The LibriSpeech clip (test/fixtures/voice), as samples from -1 to 1.
-fn speech() -> Vec<f32> {
+pub(crate) fn speech() -> Vec<f32> {
     let wav: &[u8] = include_bytes!("../../../../../test/fixtures/voice/librispeech_mr_quilter.wav");
     let mut at = 12;
     while &wav[at..at + 4] != b"data" {
@@ -56,10 +56,10 @@ fn speech() -> Vec<f32> {
 }
 
 /// A microphone that says the clip, then silence, in real time, and a speaker that plays at once what it is given.
-struct Fixture {
-    sink: Option<IoSink>,
-    stop: Arc<AtomicBool>,
-    played: Arc<Mutex<Vec<usize>>>,
+pub(crate) struct Fixture {
+    pub(crate) sink: Option<IoSink>,
+    pub(crate) stop: Arc<AtomicBool>,
+    pub(crate) played: Arc<Mutex<Vec<usize>>>,
 }
 
 impl AudioIo for Fixture {

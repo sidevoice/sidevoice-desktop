@@ -24,6 +24,9 @@ use tokio::task::JoinHandle;
 use super::models::{Halves, ModelCache};
 
 #[cfg(test)]
+mod memory;
+
+#[cfg(test)]
 mod tests;
 
 /// How long the models of a stopped call, or of a preload, stay loaded when the settings do not say, in minutes.
@@ -129,6 +132,14 @@ pub(super) fn failed(what: &str, code: String) -> Refusal {
 }
 
 impl<A: LaneAudio> VoiceState<A> {
+    /// How long an idle minute is: a minute; CI's probe build can shorten it.
+    fn idle_minute() -> Duration {
+        #[cfg(feature = "probe")]
+        return crate::probe::idle_minute();
+        #[cfg(not(feature = "probe"))]
+        Duration::from_secs(60)
+    }
+
     pub(super) fn new(audio: A, devices: NativeDevices) -> Self {
         Self {
             calls: tokio::sync::Mutex::new(HashMap::new()),
@@ -137,7 +148,8 @@ impl<A: LaneAudio> VoiceState<A> {
             route: tokio::sync::Mutex::new(None),
             devices,
             watching: AtomicBool::new(false),
-            minute: Duration::from_secs(60),
+            // CI's memory run shortens the minute so that the models' release is waited for (src/probe.rs).
+            minute: Self::idle_minute(),
         }
     }
 
