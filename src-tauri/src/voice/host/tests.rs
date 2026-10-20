@@ -268,9 +268,21 @@ fn settings(choice: &VoiceChoice, idle: u32) -> VoiceSettings {
             stt,
             end_of_turn: None,
             patience: None,
+            listening_bar: None,
             barge_in_min_speech: None,
+            barge_in_window: None,
+            vad_confidence: None,
+            speech_start_ms: None,
+            pre_roll_ms: None,
         }),
-        output: choice.output.as_ref().map(|_| OutputSettings { tts, voice: None, speed: None, language: None }),
+        output: choice.output.as_ref().map(|_| OutputSettings {
+            tts,
+            voice: None,
+            speed: None,
+            fade_ms: None,
+            language: None,
+        }),
+        audio_grace_ms: None,
         idle_unload_minutes: Some(idle),
     }
 }
