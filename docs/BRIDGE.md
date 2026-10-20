@@ -309,7 +309,12 @@ is in front (core `call_controls::wanted`).
 - **The pointer**: a window that never takes focus may get no hover events, so while the card shows one app thread
   polls the cursor (every 80 ms; asleep while it is hidden) and tells the card when it is over it; on Wayland, where
   the app cannot see the pointer, `pointerInside` is `null` and the card's own events decide. Hiding the card resets
-  it (`pointerInside: false`, `level: 0`).
+  it (`pointerInside: false`, `level: 0`). macOS (#139): the card's own page gets the pointer too, for `:hover` and
+  the CSS cursor while the app is inactive: WebKit's mouse tracking area (active only in the key window) is replaced by
+  the same one active always; the panel answers `isKeyWindow` with yes (WebKit sets a page's cursor only in a key
+  window; AppKit still sends the keyboard to the real key window); the app may set the cursor from the background
+  (`SetsCursorInBackground`, a private window-server property looked up at run time); and the arrow comes back when
+  the pointer leaves the card.
 - **Clicks elsewhere**: `outsideClicks` counts clicks in other apps while the card shows; each closes a panel the card
   has open. macOS: an AppKit global monitor (mouse buttons only, no Accessibility permission). Windows: the pointer
   thread reads the mouse buttons. Linux: not detected (a panel closes 2.5 s after the pointer leaves). Escape is not:
@@ -357,7 +362,9 @@ CI's macOS job (probe build, `SIDEVOICE_DEBUG_PAGE=card-probe.html`) walks a cal
 editor full screen in its own Space (`test/fixtures/fullscreen-editor.swift`), acting as the person with the system's
 own input events (`test/fixtures/card-ci.swift`). It checks the panel AppKit reports (non-activating, level 25, all
 Spaces, full-screen auxiliary, not key, app not active); that the window server has the card on screen in front of the
-full-screen editor; that the card's page was refused the microphone; that hovering, a click on the title (its
+full-screen editor; that the card's page was refused the microphone; that the pointer moved onto mute, with no
+click, sets `:hover` there with the `pointer` CSS cursor (the probe script reports it) and shows the hand on screen;
+that hovering, a click on the title (its
 conversations open), a click in the editor (they close: `outsideClicks`), a drag (dropped elsewhere), and mute twice
 reach the app and the room while the app never becomes active, and the editor keeps both the activation and the
 keyboard (it gets what is typed before and after); and that the card's hang-up ends the call and the card hides after
