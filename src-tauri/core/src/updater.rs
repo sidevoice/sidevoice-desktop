@@ -114,6 +114,18 @@ pub fn stale(status: &Status, offered: &str) -> bool {
     matches!(status.state, State::Downloading | State::Ready) && status.version.as_deref().is_some_and(|v| v != offered)
 }
 
+/// The feed now offers `offered`: a download or an update ready that it makes stale is dropped (its token owns nothing
+/// from now on, the status is idle again) and `true` is answered, so the caller also stops the task and frees the
+/// bytes; otherwise nothing changes. The one place that decides it, at every check and before every install.
+pub fn drop_stale(status: &mut Status, downloads: &mut Downloads, offered: &str) -> bool {
+    let stale = stale(status, offered);
+    if stale {
+        downloads.supersede();
+        *status = Status::default();
+    }
+    stale
+}
+
 /// The releases' feed: `latest` is the newest release that is neither a draft nor a pre-release (never a `-rc.N`, never
 /// the nightly).
 const RELEASES_FEED: &str = "https://github.com/sidevoice/sidevoice-desktop/releases/latest/download/latest.json";
@@ -233,6 +245,24 @@ mod tests {
         for status in [Status::default(), Status::new(State::Available, "0.3.1-nightly.9")] {
             assert!(!stale(&status, "0.3.1-nightly.12"), "{status:?}: nothing downloaded to drop");
         }
+    }
+
+    /// A ready update the feed moved past is dropped, and the download that made it can no longer write: it is never
+    /// the one installed, and the newer one is then downloaded from `available`.
+    #[test]
+    fn a_ready_update_the_feed_moved_past_is_dropped_before_it_can_be_installed() {
+        let mut downloads = Downloads::default();
+        let token = downloads.start("0.3.1-nightly.9", false).unwrap();
+        let mut status = Status::new(State::Ready, "0.3.1-nightly.9");
+        assert!(!drop_stale(&mut status, &mut downloads, "0.3.1-nightly.9"), "the same version stays");
+        assert_eq!(status.state, State::Ready);
+        assert!(downloads.owns(token));
+        assert!(drop_stale(&mut status, &mut downloads, "0.3.1-nightly.12"));
+        assert_eq!(status, Status::default(), "nothing is ready to restart into");
+        assert!(!downloads.owns(token), "its late write is refused");
+        assert!(downloads.start("0.3.1-nightly.12", false).is_some(), "and the newer one is downloaded");
+        let mut available = Status::new(State::Available, "0.3.1-nightly.9");
+        assert!(!drop_stale(&mut available, &mut downloads, "0.3.1-nightly.12"), "nothing downloaded to drop");
     }
 
     #[test]
