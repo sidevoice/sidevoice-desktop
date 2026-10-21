@@ -194,6 +194,12 @@ pub fn wanted(joined: bool, hidden: bool, room_in_front: bool, always_shown: boo
     joined && !hidden && (always_shown || !room_in_front)
 }
 
+/// Whether the room's window is what the person is using: shown, not minimised, not covered (macOS) and the one with the
+/// keyboard. Losing the focus to another app, however much of the room is still on screen, is not being in front.
+pub fn room_is_in_front(visible: bool, minimised: bool, covered: bool, focused: bool) -> bool {
+    visible && !minimised && !covered && focused
+}
+
 /// The reason [`wanted`] answers as it does, for the app log: a card that is not there says why.
 pub fn why(joined: bool, hidden: bool, room_in_front: bool, always_shown: bool) -> &'static str {
     if !joined {
@@ -203,9 +209,9 @@ pub fn why(joined: bool, hidden: bool, room_in_front: bool, always_shown: bool) 
     } else if always_shown {
         "always shown"
     } else if room_in_front {
-        "room in view"
+        "room in front"
     } else {
-        "room not in view"
+        "room not in front"
     }
 }
 
@@ -359,12 +365,21 @@ mod tests {
     }
 
     #[test]
+    fn the_room_is_in_front_only_while_it_is_visible_and_focused() {
+        assert!(room_is_in_front(true, false, false, true));
+        assert!(!room_is_in_front(true, false, false, false), "focus went to another app: the card shows (#159)");
+        assert!(!room_is_in_front(true, true, false, true), "minimised");
+        assert!(!room_is_in_front(false, false, false, true), "hidden");
+        assert!(!room_is_in_front(true, false, true, true), "covered");
+    }
+
+    #[test]
     fn the_reason_always_agrees_with_the_answer() {
         for bits in 0..16u8 {
             let (joined, hidden, front, always) = (bits & 1 != 0, bits & 2 != 0, bits & 4 != 0, bits & 8 != 0);
             let reason = why(joined, hidden, front, always);
             let shown = wanted(joined, hidden, front, always);
-            assert_eq!(shown, matches!(reason, "always shown" | "room not in view"), "{bits:04b}: {reason}");
+            assert_eq!(shown, matches!(reason, "always shown" | "room not in front"), "{bits:04b}: {reason}");
         }
     }
 
