@@ -646,6 +646,17 @@
       /** Leaving Settings: a preview showing goes at once (else it stays while the pointer is on it or it is dragged, and goes
        *  two seconds after). */
       endPreview: () => { invoke("call_controls_settings", { action: "end-preview" }); },
+      /** Whether the page shows the call's stage (the conversation's creature and its balloons): false on Settings and
+       *  any other screen without it (#165). `rect`, while shown: where the stage is, in CSS pixels from the top-left
+       *  corner of the page's viewport, for the app to measure how much of it other apps' windows cover. The card shows
+       *  while the stage is out of view; until the page first says, the app takes it as shown. Anything else is ignored. */
+      setStageVisible: (visible, rect) => {
+        if (typeof visible !== "boolean") return;
+        const box = rect && typeof rect === "object" && ["x", "y", "width", "height"].every((k) => Number.isFinite(rect[k]))
+          ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+          : null;
+        invoke("call_controls_settings", box ? { action: "stage", visible, rect: box } : { action: "stage", visible });
+      },
     });
   }
 

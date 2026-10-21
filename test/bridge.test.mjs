@@ -1385,7 +1385,7 @@ test("host.muteShortcut and host.callControls are exactly the web's seams", () =
   const install = loadFactory();
   const { host } = install(fakeWindow(ORIGIN).win, ORIGIN);
   assert.deepEqual(Object.keys(host.muteShortcut).sort(), ["get", "set", "subscribe"]);
-  assert.deepEqual(Object.keys(host.callControls).sort(), ["clearSize", "endPreview", "preview", "resetPlace", "setAlwaysShown", "setCorner", "setEnabled", "settings"]);
+  assert.deepEqual(Object.keys(host.callControls).sort(), ["clearSize", "endPreview", "preview", "resetPlace", "setAlwaysShown", "setCorner", "setEnabled", "setStageVisible", "settings"]);
   assert.ok(Object.isFrozen(host.muteShortcut) && Object.isFrozen(host.callControls));
 });
 
@@ -1457,6 +1457,22 @@ test("host.callControls sets the default corner, forgets places and previews, th
   await flush();
   assert.deepEqual(calls.filter(([cmd]) => cmd === "call_controls_settings").map(([, args]) => args),
     [{ action: "set-corner", corner: "bl" }, { action: "reset-place" }, { action: "clear-size" }, { action: "preview" }]);
+});
+
+test("host.callControls tells the app whether the page shows its stage, and where (#165)", async () => {
+  const install = loadFactory();
+  const { win, calls } = settingsWindow({ call_controls_settings: () => null });
+  const controls = install(win, ORIGIN).host.callControls;
+  assert.equal(controls.setStageVisible(true, { x: 260, y: 64, width: 800.5, height: 450, top: 64 }), undefined);
+  controls.setStageVisible(false);
+  controls.setStageVisible(true, { x: 1, y: NaN, width: 2, height: 3 });
+  for (const wrong of [undefined, "yes", 1, null]) controls.setStageVisible(wrong);
+  await flush();
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "call_controls_settings").map(([, args]) => args), [
+    { action: "stage", visible: true, rect: { x: 260, y: 64, width: 800.5, height: 450 } },
+    { action: "stage", visible: false },
+    { action: "stage", visible: true },
+  ], "only a boolean is sent, and a rect only when every side is a number");
 });
 
 // ---- the floating card's formats (sidevoice-web callcard contract) ----

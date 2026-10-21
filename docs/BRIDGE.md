@@ -290,13 +290,24 @@ Any other key the installer answers comes through as it is, with its `params` an
 
 ## The call controls card
 
-During a call, while the room's window is not in front (hidden, minimised, without the focus, or on macOS fully covered or on another
-Space), a small card floats over the person's other apps
-(sidevoice/sidevoice-desktop#4): the agent, the conversation, the person's microphone, and near the pointer the call's
-controls. Hidden by its × or from the tray ("Hide call controls") it stays hidden until the room's window is opened or
-minimised again, or the next call (core `call_controls::still_hidden`). "Always show the call controls" (the
-page's `host.callControls`, below) shows it during a call even while the room's window
-is in front (core `call_controls::wanted`).
+During a call, while the room's stage (the conversation's creature and its balloons) is out of view, a small card floats
+over the person's other apps (sidevoice/sidevoice-desktop#4): the agent, the conversation, the person's microphone, and
+near the pointer the call's controls. Which app has the focus never decides it (#165): the room in front with its stage,
+another app focused, shows no card. The stage is out of view (core `call_controls::stage_in_view`) when
+
+- the system does not show it (core `call_controls::stage_on_screen`): the room's window hidden or minimised; on macOS
+  also fully covered or on another Space (AppKit's occlusion state), or covered by other apps' windows all but less than
+  a quarter of the stage (`STAGE_SEEN`, measured against the window server's list of the windows above the room); on
+  Windows on another virtual desktop (DWM cloaked; how much other windows cover it is not measured); on Linux X11 only
+  hidden or minimised; on Wayland, which shows the app nothing of other windows, also without the focus, as before;
+- or the page does not show it: Settings and any other screen of the app without the stage
+  (`host.callControls.setStageVisible`, below). A page that never says (a web build before it) counts as showing it.
+
+The app looks at the stage twice a second and when the page says it changed. Switched off in Settings ("Show the
+floating card") it never shows. Hidden by its × or from the tray ("Hide call controls") it stays hidden until the stage
+comes into view or leaves it again, or the next call (core `call_controls::still_hidden`). "Always show the call
+controls" (the page's `host.callControls`, below) shows it during a call even while the stage is in view (core
+`call_controls::wanted`).
 
 - **The window** (`src/call_controls.rs`, label `call-controls`) loads `voice/call-controls.html`, a second page of
   the bundled web build (`apps/web/src/call-controls/`), which reuses the room's conversation list and icons.
@@ -714,8 +725,8 @@ interface MuteShortcut {
 
 ## The call controls settings
 
-Whether the call controls card shows during a call always, also while the room's window is in front, or only while it is
-behind or minimised ("Always show the call controls", above), set from the web's Settings. Always there.
+Whether the call controls card shows during a call always, also while the room's stage is in view, or only while it is
+out of view ("Always show the call controls", above), set from the web's Settings; and the page's view of its stage. Always there.
 
 ```ts
 interface CallControlsBridge {
@@ -727,8 +738,16 @@ interface CallControlsBridge {
   clearSize(): Promise<void>;              // forgets only the picture's resized sizes ("Custom"), on every display
   preview(): void;                         // during a call, the card shows ~4 s after the last change, in front of the room too; kept while the pointer is on it or it is dragged or resized, gone 2 s after
   endPreview(): void;                      // leaving Settings: a preview showing goes at once
+  setStageVisible(visible: boolean, rect?: { x: number; y: number; width: number; height: number }): void;  // #165
 }
 ```
+
+- `setStageVisible` is the page saying whether it shows the call's stage: `false` on Settings and any other screen of
+  the app without it, `true` with the stage on screen in the page, `rect` where (CSS pixels from the top-left corner of
+  the viewport), for the app to measure how much of it other apps' windows cover (macOS). The page says it at start and
+  on every change; the card follows at once when `visible` changes, and a stage that only moved is measured at the
+  app's next look. Until the page first says, the app takes the stage as shown. A non-boolean `visible` is not sent;
+  a `rect` with a side that is not a number is left out.
 
 - `moved`: whether a place or a resized size is remembered anywhere (Settings disables "Reset size and position"
   without one). `setCorner` keeps it with the app's settings (`callControlsCorner`); anything but the four corners
@@ -741,8 +760,8 @@ interface CallControlsBridge {
   tray's hide and show are unchanged). A non-boolean rejects `{key: "bad_request"}`.
 - `setAlwaysShown` keeps it with the app's settings (`callControlsAlwaysShown`) and applies it to the card at once; a
   non-boolean rejects `{key: "bad_request"}`. Set only from the page.
-- Command behind it: `call_controls_settings {action, enabled?, corner?}`, `action` `settings`, `set-always-shown`,
-  `set-enabled`, `set-corner`, `reset-place`, `clear-size`, `preview` or `end-preview`.
+- Command behind it: `call_controls_settings {action, enabled?, corner?, visible?, rect?}`, `action` `settings`, `set-always-shown`,
+  `set-enabled`, `set-corner`, `reset-place`, `clear-size`, `preview`, `end-preview` or `stage` (with `visible`, else `bad_request`).
 
 Both commands are granted to the room window (`capabilities/room.json`) and re-check that the caller is the current
 room window on the app's own page (else `bad_request`). The app's settings (`settings.json`) have one writer
