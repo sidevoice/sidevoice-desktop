@@ -1,5 +1,53 @@
 # Changelog
 
+## [0.2.1](https://github.com/sidevoice/sidevoice-desktop/compare/v0.2.0...v0.2.1) (2026-10-21)
+
+
+### Features
+
+* **call-card:** a click on a corner moves the card there and makes it the preferred one ([#148](https://github.com/sidevoice/sidevoice-desktop/issues/148)) ([92c2469](https://github.com/sidevoice/sidevoice-desktop/commit/92c246945e983d70be7db3a53f19ace22a3e0dfe))
+* **call-card:** a setting to turn the floating card off ([#135](https://github.com/sidevoice/sidevoice-desktop/issues/135)) ([b042f61](https://github.com/sidevoice/sidevoice-desktop/commit/b042f61deaea8d38ff2b5c64decce800aaf08c7d))
+* **call-card:** free resize for the picture-in-picture window ([#134](https://github.com/sidevoice/sidevoice-desktop/issues/134)) ([37746c6](https://github.com/sidevoice/sidevoice-desktop/commit/37746c6389053514f990cc7812b848fe8bf344dd))
+* **call-controls:** show the card while the stage is out of view, not on focus loss ([#175](https://github.com/sidevoice/sidevoice-desktop/issues/175)) ([2d56e78](https://github.com/sidevoice/sidevoice-desktop/commit/2d56e78ae0af51046244535e5677996fa868d286))
+* **callcard:** host the new card formats ([#128](https://github.com/sidevoice/sidevoice-desktop/issues/128)) ([51b23f1](https://github.com/sidevoice/sidevoice-desktop/commit/51b23f1ebc0e9dbd04a7a6238f652d0fb058309e))
+* **debug:** developer options on nightly builds (Web Inspector, compositing borders, repaint counters) ([#168](https://github.com/sidevoice/sidevoice-desktop/issues/168)) ([2f3d6ed](https://github.com/sidevoice/sidevoice-desktop/commit/2f3d6edbf43f4388980397dac7c3727c99b3cb26))
+* **logs:** persist an app log and show it in Ver registro ([#115](https://github.com/sidevoice/sidevoice-desktop/issues/115)) ([ac69666](https://github.com/sidevoice/sidevoice-desktop/commit/ac69666257415385fddce7fb2cad4cebc9bcaa3a)), closes [#113](https://github.com/sidevoice/sidevoice-desktop/issues/113)
+* **tray:** open the room's Settings and drop the bundled settings window ([#133](https://github.com/sidevoice/sidevoice-desktop/issues/133)) ([17c1736](https://github.com/sidevoice/sidevoice-desktop/commit/17c1736898a3767c45ec4bd1433159dde09fbdf0))
+* **voice:** start calls with optional input and output halves, update them live and preload models ([#123](https://github.com/sidevoice/sidevoice-desktop/issues/123)) ([efdf994](https://github.com/sidevoice/sidevoice-desktop/commit/efdf99467911b4e933b171999e0e371e9a335d11))
+
+
+### Bug Fixes
+
+* **app:** release every model and native resource before exit ([#146](https://github.com/sidevoice/sidevoice-desktop/issues/146)) ([9f474f6](https://github.com/sidevoice/sidevoice-desktop/commit/9f474f64eae89c243043b0ba89b35f18f9459c23)), closes [#121](https://github.com/sidevoice/sidevoice-desktop/issues/121)
+* **app:** skip C++ static destructors at exit ([#138](https://github.com/sidevoice/sidevoice-desktop/issues/138)) ([d9e1c9b](https://github.com/sidevoice/sidevoice-desktop/commit/d9e1c9b10e08821df478656ad48d883b532f044b)), closes [#121](https://github.com/sidevoice/sidevoice-desktop/issues/121)
+* **call-card:** hover and the hand cursor on macOS while the app is inactive ([#141](https://github.com/sidevoice/sidevoice-desktop/issues/141)) ([33e4c40](https://github.com/sidevoice/sidevoice-desktop/commit/33e4c4035b5ad77b0cff180c089bcea6da9a11f0)), closes [#139](https://github.com/sidevoice/sidevoice-desktop/issues/139)
+* **call-card:** the Settings preview stays while it is used ([#143](https://github.com/sidevoice/sidevoice-desktop/issues/143)) ([bdbe072](https://github.com/sidevoice/sidevoice-desktop/commit/bdbe0721506e66bd3ed2a91b4fd2491cffb364cd))
+* **call-controls:** never hold the card lock while calling window APIs ([#173](https://github.com/sidevoice/sidevoice-desktop/issues/173)) ([c10bf02](https://github.com/sidevoice/sidevoice-desktop/commit/c10bf02377c06f990cdde414d9f698711890fb79))
+* **call-controls:** set the card's hand cursor itself while another app is in front ([#167](https://github.com/sidevoice/sidevoice-desktop/issues/167)) ([403225c](https://github.com/sidevoice/sidevoice-desktop/commit/403225ce105b2a58d59a126c225f455794668f0d))
+* **call-controls:** the card shows whenever the room is not the app in use, focus lost included ([#162](https://github.com/sidevoice/sidevoice-desktop/issues/162)) ([24630f7](https://github.com/sidevoice/sidevoice-desktop/commit/24630f77ca76030a72f81d04aead56b1a3debaf2))
+* **call-controls:** the card's window cannot disagree with its state; its size is checked when it shows ([#161](https://github.com/sidevoice/sidevoice-desktop/issues/161)) ([23dac63](https://github.com/sidevoice/sidevoice-desktop/commit/23dac639a2ab9228d3f2f5627f73bb6cb4e04832))
+* **callcard:** show the call card only when the window is not in view ([#114](https://github.com/sidevoice/sidevoice-desktop/issues/114)) ([be1aedd](https://github.com/sidevoice/sidevoice-desktop/commit/be1aedd49cad69bff885341aa378ba408810d0a6))
+* **logs:** keep previous sessions' logs and log far less of the call state ([#157](https://github.com/sidevoice/sidevoice-desktop/issues/157)) ([1b2a40f](https://github.com/sidevoice/sidevoice-desktop/commit/1b2a40f09746933c1b34cfb04ffb22accd4c3af6))
+* **macos:** ask for the Dock tile at launch and log the policy before any window ([#125](https://github.com/sidevoice/sidevoice-desktop/issues/125)) ([023ff15](https://github.com/sidevoice/sidevoice-desktop/commit/023ff15779510c74f6d82ffe4e215615850100fb))
+* **macos:** keep the app in the Dock while the call card stays non-activating ([#118](https://github.com/sidevoice/sidevoice-desktop/issues/118)) ([44029a1](https://github.com/sidevoice/sidevoice-desktop/commit/44029a164fe4f08a7eaa050411823eeec9120771)), closes [#117](https://github.com/sidevoice/sidevoice-desktop/issues/117)
+* **macos:** start without the call card on demand and log how macOS sees the app ([#117](https://github.com/sidevoice/sidevoice-desktop/issues/117)) ([#127](https://github.com/sidevoice/sidevoice-desktop/issues/127)) ([996e160](https://github.com/sidevoice/sidevoice-desktop/commit/996e160a18f54c7e754cf58c55e287b03d5528c0))
+* **tray:** never hold the icon lock while calling the tray API ([#174](https://github.com/sidevoice/sidevoice-desktop/issues/174)) ([6bc4fd6](https://github.com/sidevoice/sidevoice-desktop/commit/6bc4fd63b97c2fa37b862ae502a3c42b1cec76bf))
+* **updater:** drop a stale download or ready update when the nightly feed moves on ([#126](https://github.com/sidevoice/sidevoice-desktop/issues/126)) ([5dd1b5b](https://github.com/sidevoice/sidevoice-desktop/commit/5dd1b5bbd62e03e27b473503fe94057a1179044f))
+* **updater:** re-check the feed before installing a downloaded update ([#136](https://github.com/sidevoice/sidevoice-desktop/issues/136)) ([1ada658](https://github.com/sidevoice/sidevoice-desktop/commit/1ada65845391686bacfe1e2c7791402fd6e4160d)), closes [#119](https://github.com/sidevoice/sidevoice-desktop/issues/119)
+* **update:** stop the voice call before the process exits ([#122](https://github.com/sidevoice/sidevoice-desktop/issues/122)) ([bf55371](https://github.com/sidevoice/sidevoice-desktop/commit/bf553714674b66f6d8acde2307ce5f1a0f79297b))
+* **voice:** accept the turn settings the web now sends (voice 0.7.0) ([#153](https://github.com/sidevoice/sidevoice-desktop/issues/153)) ([d6488da](https://github.com/sidevoice/sidevoice-desktop/commit/d6488da429fb752c51d89950303340965a166a0f))
+* **voice:** build the shutdown timeout inside the runtime ([#132](https://github.com/sidevoice/sidevoice-desktop/issues/132)) ([26fcb2c](https://github.com/sidevoice/sidevoice-desktop/commit/26fcb2cb124751061fab9ddff35fce308c9eea22)), closes [#130](https://github.com/sidevoice/sidevoice-desktop/issues/130) [#119](https://github.com/sidevoice/sidevoice-desktop/issues/119)
+
+
+### Performance Improvements
+
+* **voice:** hand the page the meters only when they change ([#150](https://github.com/sidevoice/sidevoice-desktop/issues/150)) ([364d2cb](https://github.com/sidevoice/sidevoice-desktop/commit/364d2cbaf6ae50936afbe4be38f96b03c8a28e47))
+
+
+### Miscellaneous Chores
+
+* **web:** pin the web 0.10.1 release ([#183](https://github.com/sidevoice/sidevoice-desktop/issues/183)) ([5ab3b3b](https://github.com/sidevoice/sidevoice-desktop/commit/5ab3b3be5bc74c7ae70553024f9f0cee52eb80c9))
+
 ## [0.2.0](https://github.com/sidevoice/sidevoice-desktop/compare/v0.1.0...v0.2.0) (2026-10-18)
 
 
