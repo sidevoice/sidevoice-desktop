@@ -23,22 +23,10 @@ impl BuildInfo {
     }
 }
 
-/// Whether a build offers the developer options (`host.debug`: the Web Inspector switch): a nightly and a dev build,
-/// never a release.
-pub fn debug_offered(channel: &str) -> bool {
-    channel != "release"
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn only_a_release_has_no_developer_options() {
-        assert!(debug_offered("nightly") && debug_offered("dev"));
-        assert!(!debug_offered("release"));
-    }
 
     #[test]
     fn the_build_says_its_channel_and_only_what_it_has() {

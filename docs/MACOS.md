@@ -117,3 +117,6 @@ off by default and is kept (docs/BRIDGE.md → "The developer options"). With it
    (listed while it exists).
 3. To see what still paints on the CPU: Layers tab → "Show compositing borders" and paint flashing; Timeline →
    "Rendering Frames" or "Layout & Rendering" to see each paint.
+
+Without Safari, the same section's "Compositing borders" and "Repaint counters" switches draw it over the app itself:
+each GPU layer outlined, and on each layer the number of times the CPU repainted it.

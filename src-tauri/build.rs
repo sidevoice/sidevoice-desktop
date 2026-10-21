@@ -4,8 +4,8 @@ fn main() {
     // The app's own commands, declared so capabilities can grant them per window/origin:
     // the room window `bridge_state`, `bridge_level` and `bridge_playback` (+ `debug_log`), the native engine, the
     // voice call (`voice_*`, macOS) and the local host (`local_host_*`), the mute shortcut and the call controls settings (`mute_shortcut`,
-    // `call_controls_settings`), the app's updates (`updater`), the microphone permission (`microphone`, macOS) and the Web Inspector switch (`web_inspector`), the
-    // call controls card its own five.
+    // `call_controls_settings`), the app's updates (`updater`), the microphone permission (`microphone`, macOS) and the
+    // developer options (`debug_options`), the call controls card its own five.
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
         "bridge_state",
         "bridge_level",
@@ -60,7 +60,7 @@ fn main() {
         "call_controls_settings",
         "updater",
         "microphone",
-        "web_inspector",
+        "debug_options",
     ])))
     .expect("failed to run tauri-build");
 }
@@ -102,4 +102,10 @@ fn build_channel() {
     println!("cargo:rustc-env={CHANNEL}={channel}");
     println!("cargo:rustc-env={COMMIT}={commit}");
     println!("cargo:rustc-env={DATE}={date}");
+    // The developer options' native code (src/debug_options.rs: WebKit's private debug preferences) is compiled only
+    // into a nightly or a dev build; a release has none of it (core `debug_options::offered`).
+    println!("cargo:rustc-check-cfg=cfg(sidevoice_debug_options)");
+    if channel != "release" {
+        println!("cargo:rustc-cfg=sidevoice_debug_options");
+    }
 }

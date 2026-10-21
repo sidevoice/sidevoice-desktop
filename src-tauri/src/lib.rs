@@ -13,6 +13,7 @@
 mod call_controls;
 mod computer_name;
 mod data;
+mod debug_options;
 mod engine_ipc;
 mod headset;
 mod keychain;
@@ -26,7 +27,6 @@ mod probe;
 mod tray;
 mod updater;
 mod voice;
-mod web_inspector;
 
 use serde_json::{json, Value};
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
@@ -346,7 +346,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
     let version = app.package_info().version.to_string();
     let (commit, date) = (env!("SIDEVOICE_BUILD_COMMIT"), env!("SIDEVOICE_BUILD_DATE"));
     let build = BuildInfo::new(env!("SIDEVOICE_BUILD_CHANNEL"), &version, commit, date);
-    let web_inspector_on = app.state::<AppState>().settings.lock().unwrap().as_ref().is_some_and(|s| s.web_inspector);
+    let debug = app.state::<AppState>().settings.lock().unwrap().as_ref().map(|s| s.debug).unwrap_or_default();
     let builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(page.into()))
         .title("Sidevoice")
         .inner_size(1100.0, 760.0)
@@ -358,7 +358,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             updater::offered(),
             &build,
             computer_name::read().as_deref(),
-            web_inspector_on,
+            &debug,
         ));
     #[cfg(feature = "probe")]
     let builder = match probe::local_host_flow() {
@@ -393,7 +393,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             }
         })
         .build()?;
-    web_inspector::apply(app);
+    debug_options::apply(app);
     Ok(())
 }
 
@@ -551,7 +551,7 @@ macro_rules! commands {
             mute_shortcut,
             call_controls::call_controls_settings,
             updater::updater,
-            web_inspector::web_inspector
+            debug_options::debug_options
             $($extra)*
         ]
     };

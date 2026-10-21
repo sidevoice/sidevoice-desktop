@@ -192,7 +192,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         watch_pointer(app.clone());
     }
     watch_view(app.clone());
-    crate::web_inspector::apply(app);
+    crate::debug_options::apply(app);
     debug("call-controls created");
     Ok(())
 }

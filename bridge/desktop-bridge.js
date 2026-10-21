@@ -15,7 +15,7 @@
 (function (factory) {
   if (typeof module === "object" && module.exports) module.exports = factory; // unit tests
   else factory(window, "__SIDEVOICE_ROOM_ORIGIN__", "__SIDEVOICE_MEDIA_KEYS__", "__SIDEVOICE_LOCAL_HOST__", "__SIDEVOICE_VOICE__", "__SIDEVOICE_UPDATER__", "__SIDEVOICE_BUILD__", "__SIDEVOICE_COMPUTER_NAME__", "__SIDEVOICE_DEBUG__");
-})(function installDesktopBridge(win, roomOrigin, mediaKeys, localHostOffered, voiceOffered, updaterOffered, build, computerName, debugInspectable) {
+})(function installDesktopBridge(win, roomOrigin, mediaKeys, localHostOffered, voiceOffered, updaterOffered, build, computerName, debugState) {
   "use strict";
   // scheme://host rather than location.origin: the app's own pages (tauri://localhost) may have an opaque origin.
   if (win.location.protocol + "//" + win.location.host !== roomOrigin) return null;
@@ -581,23 +581,35 @@
   }
 
   /** The developer options (nightly and dev builds): sidevoice-web's hidden "Developer options" section, onto the
-   *  `web_inspector` command (docs/BRIDGE.md -> "The developer options"). `inspectable` is whether the Web Inspector is on
-   *  now: what the app kept, and what the last `setInspectable` the app took left. */
+   *  `debug_options` command (docs/BRIDGE.md -> "The developer options"). Each switch reads live: what the app kept, then
+   *  what the last `set` took. */
   function debug(initial) {
-    let inspectable = initial;
+    const SWITCHES = ["inspectable", "compositingBorders", "repaintCounters"];
+    const available = Object.freeze(SWITCHES.filter((name) => (initial.available || []).includes(name)));
+    const state = {};
+    const take = (from) => {
+      for (const name of SWITCHES) state[name] = !!(from && from[name]) && available.includes(name);
+    };
+    take(initial);
     return Object.freeze({
+      /** The switches this platform has; the page hides the others. */
+      available,
       get inspectable() {
-        return inspectable;
+        return state.inspectable;
       },
-      /** Turns the Web Inspector on or off for the room and the call controls card, at once (no reload), and keeps it.
-       *  Resolves when done; `inspectable` then says what took (false where the system cannot: only macOS 13.3+ can).
-       *  `on` must be a boolean, else it rejects `{key: "bad_request"}`. */
-      setInspectable: (on) =>
-        typeof on === "boolean"
-          ? call("web_inspector", { action: "set", enabled: on }).then((state) => {
-              inspectable = !!(state && state.inspectable);
-            })
-          : Promise.reject({ key: "bad_request", message: "setInspectable(on) takes a boolean." }),
+      get compositingBorders() {
+        return state.compositingBorders;
+      },
+      get repaintCounters() {
+        return state.repaintCounters;
+      },
+      /** Turns one switch on or off on the room and the call controls card, at once (no reload), and keeps it. Resolves
+       *  when done; the switch then reads what took. A name not in `available` or a non-boolean `on` rejects
+       *  `{key: "bad_request"}`. */
+      set: (name, on) =>
+        available.includes(name) && typeof on === "boolean"
+          ? call("debug_options", { action: "set", name, enabled: on }).then(take)
+          : Promise.reject({ key: "bad_request", message: "set(name, on) takes an available switch and a boolean." }),
     });
   }
 
@@ -757,8 +769,8 @@
   // Only in a release or a nightly that can update itself (core `updater::offered`).
   const updates = updaterOffered === true ? updater() : null;
   const shortcut = muteShortcut();
-  // Only in a nightly or a dev build (core `build_info::debug_offered`): `true`/`false` is whether the Web Inspector is on.
-  const debugOptions = typeof debugInspectable === "boolean" ? debug(debugInspectable) : null;
+  // Only in a nightly or a dev build (core `debug_options::offered`): the switches' state and which this platform has.
+  const debugOptions = debugState && typeof debugState === "object" && Array.isArray(debugState.available) ? debug(debugState) : null;
 
   const api = {
     version: BRIDGE_VERSION,
