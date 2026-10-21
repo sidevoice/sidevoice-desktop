@@ -7,11 +7,10 @@ use std::fs;
 use std::path::Path;
 use std::time::Instant;
 
-use crate::macos::{app_command, binary, fake_node, AppHome, PROBE_ONLY, TRIPLE};
 use crate::util::{
-    contains, ensure, grep, has, interrupted, line_count, lines_after, mode, re, read, read_bytes, repo, sleep, wait_for,
-    work, Background, Cmd,
-    TauriBuild,
+use crate::macos::{app_command, binary, fake_node, AppHome, PROBE_ONLY, TRIPLE};
+    contains, ensure, grep, has, interrupted, line_count, lines_after, mode, re, read, read_bytes, repo, sleep,
+    wait_for, work, Background, Cmd, TauriBuild,
 };
 use crate::Result;
 
