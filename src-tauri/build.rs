@@ -5,7 +5,7 @@ fn main() {
     // the room window `bridge_state`, `bridge_level` and `bridge_playback` (+ `debug_log`), the native engine, the
     // voice call (`voice_*`, macOS) and the local host (`local_host_*`), the mute shortcut and the call controls settings (`mute_shortcut`,
     // `call_controls_settings`), the app's updates (`updater`) and the microphone permission (`microphone`, macOS), the
-    // call controls card its own five.
+    // call controls card its own six.
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
         "bridge_state",
         "bridge_level",
@@ -15,6 +15,7 @@ fn main() {
         "call_controls_layout",
         "call_controls_drag",
         "call_controls_resize",
+        "call_controls_cursor",
         "debug_log",
         "engine_capabilities",
         "engine_installed",

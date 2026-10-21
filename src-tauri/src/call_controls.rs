@@ -76,6 +76,8 @@ struct Inner {
     level: u8,
     /// `None` where the app cannot see the pointer (Wayland): the card's own pointer events decide.
     pointer_inside: Option<bool>,
+    /// Whether the page says the pointer is over something clickable (its CSS cursor is the hand), as it last reported.
+    hand: bool,
     /// Clicks in other apps while the card shows (macOS, Windows): each closes a panel the card has open.
     outside_clicks: u64,
     /// The window's size now, as the page reports it.
@@ -321,6 +323,7 @@ pub fn update(app: &AppHandle) {
             inner.drag = None;
             inner.resize = None;
             inner.level = 0;
+            inner.hand = false;
             inner.told_place = None;
             inner.told_size = None;
             if inner.pointer_inside.is_some() {
@@ -808,6 +811,17 @@ pub fn call_controls_ready(app: AppHandle, webview: Webview) -> Result<(), Strin
     Ok(())
 }
 
+/// Whether the pointer is over something clickable in the card (its CSS cursor is the hand). The app sets the hand
+/// itself while the pointer is over the card ([`keep_hand`]).
+#[tauri::command]
+pub fn call_controls_cursor(app: AppHandle, webview: Webview, hand: bool) -> Result<(), String> {
+    from_card_window(&webview)?;
+    if let Some(card) = card(&app) {
+        card.0.lock().unwrap().hand = hand;
+    }
+    Ok(())
+}
+
 /// One of the card's commands: "open-app", "hide" and "dismiss" are the app's, "open-settings" brings the room in front first, the
 /// rest are carried to the room page.
 #[tauri::command]
@@ -1198,6 +1212,27 @@ fn arrow_after_leaving(app: &AppHandle) {
     });
 }
 
+/// macOS: the hand over the card's buttons while another app is in front (#166). WebKit sets the card's cursor only when
+/// the pointer moves over it, and an app in front that sets its own cursor on every mouse move (a text editor's I-beam)
+/// takes it back at once, so the hand is set again at each look at the pointer ([`logic::must_set_hand`]).
+#[cfg(target_os = "macos")]
+fn keep_hand(app: &AppHandle, inside: Option<bool>, page_wants_hand: bool) {
+    if inside != Some(true) || !page_wants_hand {
+        return;
+    }
+    let _ = app.run_on_main_thread(move || {
+        use tauri_nspanel::objc2::{class, msg_send, runtime::AnyObject};
+        // SAFETY: NSCursor's class methods, on the main thread.
+        unsafe {
+            let current: *mut AnyObject = msg_send![class!(NSCursor), currentCursor];
+            let hand: *mut AnyObject = msg_send![class!(NSCursor), pointingHandCursor];
+            if logic::must_set_hand(inside, page_wants_hand, current == hand) {
+                let _: () = msg_send![hand, set];
+            }
+        }
+    });
+}
+
 /// Windows: whether a mouse button went down since the last look (the pointer watcher's pace).
 #[cfg(windows)]
 fn button_down() -> bool {
@@ -1242,6 +1277,11 @@ fn watch_pointer(app: AppHandle) {
                 }
                 changed
             };
+            #[cfg(target_os = "macos")]
+            {
+                let hand = card(&app).is_some_and(|card| card.0.lock().unwrap().hand);
+                keep_hand(&app, inside, hand);
+            }
             if changed {
                 debug(&format!("call-controls pointer inside={inside:?} {}", app_active()));
                 push(&app, serde_json::json!({ "pointerInside": inside }));

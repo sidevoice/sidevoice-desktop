@@ -221,6 +221,13 @@ pub fn still_hidden(hidden: bool, joined: bool, room_was_in_front: Option<bool>,
     hidden && joined && room_was_in_front.is_none_or(|was| was == room_in_front)
 }
 
+/// Whether the app must set the hand cursor itself now (macOS, #166): the pointer is over the card, the page says it is
+/// over something clickable, and the cursor is not the hand already. Another app in front keeps setting its own cursor
+/// (a text editor's I-beam) and WebKit sets the card's only when the pointer moves, so the app sets it on every look.
+pub fn must_set_hand(pointer_inside: Option<bool>, page_wants_hand: bool, hand_now: bool) -> bool {
+    pointer_inside == Some(true) && page_wants_hand && !hand_now
+}
+
 /// Where the card lands when dropped at `at` with its resting `size`: inside the work area, and against an edge or a
 /// corner when it was dropped within [`MAGNET`] of it; otherwise exactly where it was dropped.
 pub fn drop_at(at: Point, size: Size, work: Rect) -> Point {
@@ -371,6 +378,15 @@ mod tests {
         assert!(!room_is_in_front(true, true, false, true), "minimised");
         assert!(!room_is_in_front(false, false, false, true), "hidden");
         assert!(!room_is_in_front(true, false, true, true), "covered");
+    }
+
+    #[test]
+    fn the_hand_is_set_again_only_over_the_card_on_something_clickable_and_not_already_the_cursor() {
+        assert!(must_set_hand(Some(true), true, false), "another app's I-beam is there: take it back");
+        assert!(!must_set_hand(Some(true), true, true), "already the hand");
+        assert!(!must_set_hand(Some(true), false, false), "over the card's body: the arrow is right");
+        assert!(!must_set_hand(Some(false), true, false), "the pointer is elsewhere: never touch another app's cursor");
+        assert!(!must_set_hand(None, true, false), "pointer unknown");
     }
 
     #[test]
