@@ -48,7 +48,6 @@ fn main() {
         "local_host_pairing",
         "local_host_action",
         "local_host_pairing_code",
-        "local_host_pair_room",
         "local_host_install",
         "local_host_install_progress",
         "local_host_install_cancel",

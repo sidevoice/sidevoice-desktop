@@ -1,7 +1,7 @@
 //! Sidevoice desktop: a Tauri shell around the Sidevoice web interface, bundled in the app, whose tray drives
 //! the call through the interface's own actions (docs/BRIDGE.md).
 //!
-//! The interface is a secret-free client: it talks to a node or a rendezvous room it was paired with (the node
+//! The interface is a secret-free client: it talks to a node it was paired with (the node
 //! issues a one-time code; sidevoice-core `control/devices.py`), and the app never tells it where to look
 //! (docs/TARGETS.md). No remote page is ever loaded.
 //!
@@ -536,7 +536,6 @@ macro_rules! commands {
             local_host::local_host_pairing,
             local_host::local_host_action,
             local_host::local_host_pairing_code,
-            local_host::local_host_pair_room,
             local_host::local_host_install,
             local_host::local_host_install_progress,
             local_host::local_host_install_cancel,

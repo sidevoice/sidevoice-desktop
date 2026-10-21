@@ -132,7 +132,6 @@ impl Action {
 const STATUS_TIMEOUT: Duration = Duration::from_secs(10);
 const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
 const PAIR_DEVICE_TIMEOUT: Duration = Duration::from_secs(30);
-const PAIR_ROOM_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Where the app keeps its side, and what it calls itself.
 #[derive(Debug, Clone)]
@@ -238,7 +237,6 @@ impl LocalHost {
             "device_id": pairing.device_id,
             "token": self.proxy.secret(),
             "urls": [self.proxy.url()],
-            "rv": null,
             "host": pairing.host,
             "local": true,
         }))
@@ -473,26 +471,6 @@ impl LocalHost {
     pub fn pairing_code(&self) -> Result<Value, Refusal> {
         let answer = self.cli()?.run(&["pair-device", "--json"], PAIR_DEVICE_TIMEOUT)?;
         Ok(json!({ "code": answer["code"], "expires_in": answer["expires_in"], "reach": answer["reach"] }))
-    }
-
-    /// `pair <room-url> <code> --json`: this machine paired with a room: `{room}`. Nothing else runs after it (the core
-    /// follows the new credentials; SEAMS rev. 2 §3).
-    pub fn pair_room(&self, url: &str, code: &str) -> Result<Value, Refusal> {
-        let plain = |text: &str, limit: usize| {
-            !text.is_empty()
-                && text.len() <= limit
-                && text.chars().all(|c| c.is_ascii_graphic())
-                && !text.starts_with('-')
-        };
-        if !plain(url, 2048) || !(url.starts_with("https://") || url.starts_with("http://")) {
-            return Err(Refusal::new("bad_request", "The room's address is not an http(s) URL."));
-        }
-        if !plain(code, 512) {
-            return Err(Refusal::new("bad_request", "That is not a pairing code."));
-        }
-        let answer = self.cli()?.run(&["pair", url, code, "--json"], PAIR_ROOM_TIMEOUT)?;
-        drop(self.invalidate());
-        Ok(json!({ "room": answer["room"] }))
     }
 
     /// The log «Ver registro» shows.
