@@ -1,5 +1,5 @@
 //! The call controls card (sidevoice/sidevoice-desktop#4): a small window that floats over the person's other apps
-//! during a call, while the room's window is not in view (hidden, minimised or covered), and never takes focus from
+//! during a call, while the room's window is not in front (hidden, minimised, covered or without the focus), and never takes focus from
 //! them. It shows the web build's `call-controls.html`, which talks only to `bridge/call-controls-bridge.js`
 //! (docs/BRIDGE.md → "The call controls card"); the app relays the call to it from the room window and carries its
 //! buttons back.
@@ -34,7 +34,7 @@ const FIRST_SIZE: Size = Size { width: 414.0, height: 82.0 };
 /// events of its own (Windows, Linux X11), so the app tells the card when the pointer is over it. On macOS the card's
 /// WebKit gets them too ([`hover_while_inactive`]).
 const POINTER_EVERY: Duration = Duration::from_millis(80);
-/// How often the app looks at whether the room window is in view ([`watch_view`]).
+/// How often the app looks at whether the room window is in front ([`watch_view`]).
 const VIEW_EVERY: Duration = Duration::from_millis(500);
 /// The card's shadow margin inside its window (the web build's CARD_MARGIN): the pointer over it is not over the card.
 const MARGIN: f64 = 12.0;
@@ -230,12 +230,19 @@ fn card(app: &AppHandle) -> Option<tauri::State<'_, Card>> {
     app.try_state::<Card>()
 }
 
-/// Whether the person can see the room's window (its own controls are there): shown, not minimised and, on macOS,
-/// not fully covered or on another Space. Focus does not matter: a room side by side with another app is in view.
-/// Windows and Linux have no occlusion query, so there a window covered by others still counts as in view.
+/// Whether the room's window is what the person is using (its own controls are there): shown, not minimised, on macOS
+/// not fully covered or on another Space, and focused. Switching to another app is leaving it, even with the room still
+/// on screen beside it (#159; #114 had ignored focus). Windows and Linux have no occlusion query, so there a window
+/// covered by others, but focused, still counts as in front.
 fn room_in_front(app: &AppHandle) -> bool {
-    crate::room_window(app)
-        .is_some_and(|w| w.is_visible().unwrap_or(false) && !w.is_minimized().unwrap_or(false) && !occluded(&w))
+    crate::room_window(app).is_some_and(|w| {
+        logic::room_is_in_front(
+            w.is_visible().unwrap_or(false),
+            w.is_minimized().unwrap_or(false),
+            occluded(&w),
+            w.is_focused().unwrap_or(false),
+        )
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -289,7 +296,7 @@ pub fn update(app: &AppHandle) {
         app.state::<AppState>().settings.lock().unwrap().as_ref().is_some_and(|s| s.call_controls_always_shown);
     // Switched off in Settings: no card at all, not even the moment a change shows it.
     let enabled = app.state::<AppState>().settings.lock().unwrap().as_ref().is_none_or(|s| s.call_controls_enabled);
-    let (show, hide, unhidden) = {
+    let (show, hide, unhidden, reason) = {
         let mut inner = card.0.lock().unwrap();
         let hidden = logic::still_hidden(inner.hidden, call.joined, inner.room_in_front, in_front);
         let unhidden = inner.hidden && !hidden;
@@ -320,21 +327,59 @@ pub fn update(app: &AppHandle) {
                 inner.pointer_inside = Some(false);
             }
         }
-        (change.0, change.1, unhidden)
+        let reason = if !enabled {
+            "switched off"
+        } else if !logic::wanted(call.joined, inner.hidden, in_front, always_shown) && call.joined && previewing {
+            "preview"
+        } else {
+            logic::why(call.joined, inner.hidden, in_front, always_shown)
+        };
+        (change.0, change.1, unhidden, reason)
     };
     if show {
         place(app);
-        set_visible(app, true);
-        debug("call-controls shown");
+        settle_size(app);
+        apply_visible(app, &card, true);
+        debug(&format!("call-controls shown: {reason}"));
         card.1.notify_all();
     } else if hide {
-        set_visible(app, false);
-        debug("call-controls hidden");
+        apply_visible(app, &card, false);
+        debug(&format!("call-controls hidden: {reason}"));
     }
     if unhidden {
         crate::tray::update(app, &call);
     }
     push(app, full_state(app, &call));
+}
+
+/// Puts the window on the screen or takes it off, but only if the card still wants that: [`update`] runs on several
+/// threads (the call, the room's view, a preview, the page's commands), and one that decided "show" can reach the window
+/// after another that decided "hide". Applied under the card's lock, window and state cannot disagree: the last
+/// state change is the last thing the window is told.
+fn apply_visible(app: &AppHandle, card: &Card, visible: bool) {
+    let inner = card.0.lock().unwrap();
+    if inner.shown == visible {
+        set_visible(app, visible);
+    } else {
+        debug(&format!("call-controls {} skipped: changed meanwhile", if visible { "show" } else { "hide" }));
+    }
+}
+
+/// The window is as big as the page last asked (`layout`) when it shows. The page asks only when its own size changes,
+/// and a page that is not on screen may not notice a change until it is (a size picked in Settings while the card was
+/// hidden), so the window could be left at a size the page no longer has: its content then sits misplaced in it or is cut
+/// at its edge. What the window really is is read back and corrected, and logged, so a mismatch is seen.
+fn settle_size(app: &AppHandle) {
+    let (Some(card), Some(w)) = (card(app), window(app)) else { return };
+    let Some(wanted) = card.0.lock().unwrap().size else { return };
+    let Some(actual) = frame(&w) else { return };
+    let unit = unit(&w);
+    let (aw, ah) = (actual.width / unit, actual.height / unit);
+    if (aw - wanted.width).abs() > 1.0 || (ah - wanted.height).abs() > 1.0 {
+        debug(&format!("call-controls window was {aw:.0}x{ah:.0}, set to {:.0}x{:.0}", wanted.width, wanted.height));
+        let _ = w.set_size(LogicalSize::new(wanted.width, wanted.height));
+        place(app);
+    }
 }
 
 /// The tray's "Hide / Show call controls".
