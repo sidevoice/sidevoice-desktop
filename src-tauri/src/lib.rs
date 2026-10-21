@@ -346,7 +346,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
     let version = app.package_info().version.to_string();
     let (commit, date) = (env!("SIDEVOICE_BUILD_COMMIT"), env!("SIDEVOICE_BUILD_DATE"));
     let build = BuildInfo::new(env!("SIDEVOICE_BUILD_CHANNEL"), &version, commit, date);
-    let debug = app.state::<AppState>().settings.lock().unwrap().as_ref().map(|s| s.debug).unwrap_or_default();
+    let debug_options = app.state::<AppState>().settings.lock().unwrap().as_ref().map(|s| s.debug).unwrap_or_default();
     let builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(page.into()))
         .title("Sidevoice")
         .inner_size(1100.0, 760.0)
@@ -358,7 +358,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             updater::offered(),
             &build,
             computer_name::read().as_deref(),
-            &debug,
+            &debug_options,
         ));
     #[cfg(feature = "probe")]
     let builder = match probe::local_host_flow() {
