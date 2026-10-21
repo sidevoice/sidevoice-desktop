@@ -1,5 +1,5 @@
 //! The call controls card (sidevoice/sidevoice-desktop#4): a small window that floats over the person's other apps
-//! during a call, while the room's window is not in view (hidden, minimised or covered), and never takes focus from
+//! during a call, while the room's window is not in front (hidden, minimised, covered or without the focus), and never takes focus from
 //! them. It shows the web build's `call-controls.html`, which talks only to `bridge/call-controls-bridge.js`
 //! (docs/BRIDGE.md → "The call controls card"); the app relays the call to it from the room window and carries its
 //! buttons back.
@@ -34,7 +34,7 @@ const FIRST_SIZE: Size = Size { width: 414.0, height: 82.0 };
 /// events of its own (Windows, Linux X11), so the app tells the card when the pointer is over it. On macOS the card's
 /// WebKit gets them too ([`hover_while_inactive`]).
 const POINTER_EVERY: Duration = Duration::from_millis(80);
-/// How often the app looks at whether the room window is in view ([`watch_view`]).
+/// How often the app looks at whether the room window is in front ([`watch_view`]).
 const VIEW_EVERY: Duration = Duration::from_millis(500);
 /// The card's shadow margin inside its window (the web build's CARD_MARGIN): the pointer over it is not over the card.
 const MARGIN: f64 = 12.0;
@@ -230,12 +230,19 @@ fn card(app: &AppHandle) -> Option<tauri::State<'_, Card>> {
     app.try_state::<Card>()
 }
 
-/// Whether the person can see the room's window (its own controls are there): shown, not minimised and, on macOS,
-/// not fully covered or on another Space. Focus does not matter: a room side by side with another app is in view.
-/// Windows and Linux have no occlusion query, so there a window covered by others still counts as in view.
+/// Whether the room's window is what the person is using (its own controls are there): shown, not minimised, on macOS
+/// not fully covered or on another Space, and focused. Switching to another app is leaving it, even with the room still
+/// on screen beside it (#159; #114 had ignored focus). Windows and Linux have no occlusion query, so there a window
+/// covered by others, but focused, still counts as in front.
 fn room_in_front(app: &AppHandle) -> bool {
-    crate::room_window(app)
-        .is_some_and(|w| w.is_visible().unwrap_or(false) && !w.is_minimized().unwrap_or(false) && !occluded(&w))
+    crate::room_window(app).is_some_and(|w| {
+        logic::room_is_in_front(
+            w.is_visible().unwrap_or(false),
+            w.is_minimized().unwrap_or(false),
+            occluded(&w),
+            w.is_focused().unwrap_or(false),
+        )
+    })
 }
 
 #[cfg(target_os = "macos")]
