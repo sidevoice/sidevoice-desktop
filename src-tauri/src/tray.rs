@@ -2,7 +2,7 @@
 //! the room's Settings, quit. What it shows comes from [`bridge::tray_view`], in the app's language; what it does goes through
 //! the bridge.
 
-use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command, TrayIcon};
+use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command, TrayIcon, TrayIconSlot};
 use sidevoice_desktop_core::i18n::t;
 use std::sync::Mutex;
 use tauri::image::Image;
@@ -63,7 +63,8 @@ struct TrayItems {
     mute: MenuItem<Wry>,
     hang_up: MenuItem<Wry>,
     call_controls: MenuItem<Wry>,
-    last_icon: Mutex<Option<TrayIcon>>,
+    /// Never held across a tray call (see [`TrayIconSlot`]).
+    icon: Mutex<TrayIconSlot>,
 }
 
 fn icon(which: TrayIcon) -> tauri::Result<Image<'static>> {
@@ -119,7 +120,13 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         })
         .build(app)?;
 
-    app.manage(TrayItems { status, mute, hang_up, call_controls, last_icon: Mutex::new(Some(initial.icon)) });
+    app.manage(TrayItems {
+        status,
+        mute,
+        hang_up,
+        call_controls,
+        icon: Mutex::new(TrayIconSlot::showing(initial.icon)),
+    });
     Ok(())
 }
 
@@ -137,13 +144,20 @@ pub fn update(app: &AppHandle, snapshot: &CallSnapshot) {
     let _ = items.call_controls.set_text(t(language, label));
     let _ = items.call_controls.set_enabled(snapshot.joined);
 
-    let mut last = items.last_icon.lock().unwrap();
-    if *last != Some(view.icon) {
-        if let (Some(tray), Ok(image)) = (app.tray_by_id(TRAY_ID), icon(view.icon)) {
+    // Decided under the lock, applied without it, on the main thread: a tray call from another thread waits for the main
+    // thread, which takes this lock (`bridge_state`), so holding it across the call could deadlock (#170). A decision
+    // overtaken by a later one is skipped, so the last icon decided is the one shown.
+    let Some(decision) = items.icon.lock().unwrap().decide(view.icon) else { return };
+    let (a, which, status) = (app.clone(), view.icon, view.status);
+    let _ = app.run_on_main_thread(move || {
+        let Some(items) = a.try_state::<TrayItems>() else { return };
+        if !items.icon.lock().unwrap().is_latest(decision) {
+            return;
+        }
+        if let (Some(tray), Ok(image)) = (a.tray_by_id(TRAY_ID), icon(which)) {
             let _ = tray.set_icon(Some(image));
             let _ = tray.set_icon_as_template(art::TEMPLATE);
-            let _ = tray.set_tooltip(Some(&view.status));
+            let _ = tray.set_tooltip(Some(&status));
         }
-        *last = Some(view.icon);
-    }
+    });
 }
