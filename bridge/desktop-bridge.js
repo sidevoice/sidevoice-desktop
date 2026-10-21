@@ -14,8 +14,8 @@
 // bundled interface) it does nothing at all.
 (function (factory) {
   if (typeof module === "object" && module.exports) module.exports = factory; // unit tests
-  else factory(window, "__SIDEVOICE_ROOM_ORIGIN__", "__SIDEVOICE_MEDIA_KEYS__", "__SIDEVOICE_LOCAL_HOST__", "__SIDEVOICE_VOICE__", "__SIDEVOICE_UPDATER__", "__SIDEVOICE_BUILD__", "__SIDEVOICE_COMPUTER_NAME__");
-})(function installDesktopBridge(win, roomOrigin, mediaKeys, localHostOffered, voiceOffered, updaterOffered, build, computerName) {
+  else factory(window, "__SIDEVOICE_ROOM_ORIGIN__", "__SIDEVOICE_MEDIA_KEYS__", "__SIDEVOICE_LOCAL_HOST__", "__SIDEVOICE_VOICE__", "__SIDEVOICE_UPDATER__", "__SIDEVOICE_BUILD__", "__SIDEVOICE_COMPUTER_NAME__", "__SIDEVOICE_DEBUG__");
+})(function installDesktopBridge(win, roomOrigin, mediaKeys, localHostOffered, voiceOffered, updaterOffered, build, computerName, debugInspectable) {
   "use strict";
   // scheme://host rather than location.origin: the app's own pages (tauri://localhost) may have an opaque origin.
   if (win.location.protocol + "//" + win.location.host !== roomOrigin) return null;
@@ -580,6 +580,27 @@
     return { host: Object.freeze(host), changed: listeners.tell };
   }
 
+  /** The developer options (nightly and dev builds): sidevoice-web's hidden "Developer options" section, onto the
+   *  `web_inspector` command (docs/BRIDGE.md -> "The developer options"). `inspectable` is whether the Web Inspector is on
+   *  now: what the app kept, and what the last `setInspectable` the app took left. */
+  function debug(initial) {
+    let inspectable = initial;
+    return Object.freeze({
+      get inspectable() {
+        return inspectable;
+      },
+      /** Turns the Web Inspector on or off for the room and the call controls card, at once (no reload), and keeps it.
+       *  Resolves when done; `inspectable` then says what took (false where the system cannot: only macOS 13.3+ can).
+       *  `on` must be a boolean, else it rejects `{key: "bad_request"}`. */
+      setInspectable: (on) =>
+        typeof on === "boolean"
+          ? call("web_inspector", { action: "set", enabled: on }).then((state) => {
+              inspectable = !!(state && state.inspectable);
+            })
+          : Promise.reject({ key: "bad_request", message: "setInspectable(on) takes a boolean." }),
+    });
+  }
+
   /** The floating card's settings the app keeps: sidevoice-web's `CallControlsBridge`, onto the `call_controls_settings`
    *  command (docs/BRIDGE.md → "The call controls settings"). */
   function callControls() {
@@ -736,6 +757,8 @@
   // Only in a release or a nightly that can update itself (core `updater::offered`).
   const updates = updaterOffered === true ? updater() : null;
   const shortcut = muteShortcut();
+  // Only in a nightly or a dev build (core `build_info::debug_offered`): `true`/`false` is whether the Web Inspector is on.
+  const debugOptions = typeof debugInspectable === "boolean" ? debug(debugInspectable) : null;
 
   const api = {
     version: BRIDGE_VERSION,
@@ -777,6 +800,8 @@
        *  the page's Settings. */
       muteShortcut: shortcut.host,
       callControls: callControls(),
+      // Only in a nightly or a dev build: the developer options (docs/BRIDGE.md -> "The developer options").
+      ...(debugOptions ? { debug: debugOptions } : {}),
       // Only in a release or a nightly that can update itself.
       ...(updates ? { updater: updates.host } : {}),
     }),

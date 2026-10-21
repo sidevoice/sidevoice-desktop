@@ -44,6 +44,10 @@ pub struct Settings {
     /// right by default.
     #[serde(default)]
     pub call_controls_corner: crate::call_controls::Corner,
+    /// The Web Inspector switch of the developer options (`host.debug.setInspectable`; nightly and dev builds, macOS): off
+    /// by default.
+    #[serde(default)]
+    pub web_inspector: bool,
 }
 
 fn default_true() -> bool {
@@ -213,6 +217,7 @@ impl Settings {
             call_controls_enabled: true,
             update_mode: crate::updater::Mode::Automatic,
             call_controls_corner: crate::call_controls::Corner::TopRight,
+            web_inspector: false,
         }
     }
 }
@@ -372,6 +377,7 @@ mod tests {
             call_controls_enabled: false,
             update_mode: crate::updater::Mode::Manual,
             call_controls_corner: crate::call_controls::Corner::BottomLeft,
+            web_inspector: true,
         };
         save(&dir, &s).unwrap();
         assert_eq!(load(&dir), Some(s));

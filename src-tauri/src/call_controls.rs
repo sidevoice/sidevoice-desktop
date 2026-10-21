@@ -192,6 +192,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         watch_pointer(app.clone());
     }
     watch_view(app.clone());
+    crate::web_inspector::apply(app);
     debug("call-controls created");
     Ok(())
 }
@@ -203,7 +204,6 @@ fn window_options<'a, R: tauri::Runtime, M: Manager<R>>(
 ) -> tauri::WebviewWindowBuilder<'a, R, M> {
     builder
         .title("Sidevoice")
-        .devtools(crate::inspectable())
         .decorations(false)
         .transparent(true)
         .resizable(false)

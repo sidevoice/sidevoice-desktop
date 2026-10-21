@@ -108,12 +108,12 @@ TestFlight.
 
 ## Inspecting the webviews (nightly and dev builds)
 
-A nightly and a dev build can be inspected with Safari's Web Inspector; a release cannot. The webviews' `devtools`
-setting follows the build's channel (core `build_info::inspectable`; the channel is build.rs's), so there is nothing to
-switch on at run time.
+A nightly and a dev build have hidden developer options in the room's Settings (click the version text 10 times in
+5 seconds) with a "Web Inspector" switch; a release has neither the options nor an inspectable webview. The switch is
+off by default and is kept (docs/BRIDGE.md → "The developer options"). With it on:
 
 1. Safari → Settings → Advanced → "Show features for web developers".
-2. Open the app, then Safari → Develop → *this Mac's name* → Sidevoice → the room (`tauri://localhost/voice/`) or
-   the call-controls card (the card is listed while it exists).
+2. Safari → Develop → *this Mac's name* → Sidevoice → the room (`tauri://localhost/voice/`) or the call controls card
+   (listed while it exists).
 3. To see what still paints on the CPU: Layers tab → "Show compositing borders" and paint flashing; Timeline →
    "Rendering Frames" or "Layout & Rendering" to see each paint.

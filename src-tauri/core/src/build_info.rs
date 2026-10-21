@@ -23,9 +23,9 @@ impl BuildInfo {
     }
 }
 
-/// Whether a build's webviews can be inspected (Safari's Web Inspector on macOS): a nightly and a dev build, never a
-/// release. The webviews' `devtools` setting is this, by the channel the build was built for.
-pub fn inspectable(channel: &str) -> bool {
+/// Whether a build offers the developer options (`host.debug`: the Web Inspector switch): a nightly and a dev build,
+/// never a release.
+pub fn debug_offered(channel: &str) -> bool {
     channel != "release"
 }
 
@@ -35,9 +35,9 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn only_a_release_is_not_inspectable() {
-        assert!(inspectable("nightly") && inspectable("dev"));
-        assert!(!inspectable("release"));
+    fn only_a_release_has_no_developer_options() {
+        assert!(debug_offered("nightly") && debug_offered("dev"));
+        assert!(!debug_offered("release"));
     }
 
     #[test]

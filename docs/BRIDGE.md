@@ -18,6 +18,7 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 | `bridge/call-controls-bridge.js` | Injected into the call controls card's window (below). |
 | `src-tauri/src/call_controls.rs`, `src-tauri/core/src/call_controls.rs` | The card's window, and when it shows, where it sits and how it moves (unit-tested). |
 | `src-tauri/src/updater.rs`, `src-tauri/core/src/updater.rs`, `src-tauri/core/src/build_info.rs` | The app's updates, behind `updater`, and what this build is, `build` (below). |
+| `src-tauri/src/web_inspector.rs` | The Web Inspector switch, behind `debug` in a nightly or a dev build (below). |
 | `src-tauri/src/computer_name.rs`, `src-tauri/core/src/computer_name.rs` | This computer's name, `computerName` (below; the Linux file's parsing unit-tested). |
 
 ## What the bridge reads and calls in the web UI
@@ -761,6 +762,29 @@ none loses another's.
 `host.updater` on the nightly's feed; `version` is its own (`X.Y.Z-nightly.N`, RELEASING.md → "Channels"), with the
 short `commit` and that commit's `date` (`YYYY-MM-DD`).
 `dev`: anything else (a laptop, a pull request, a manual run). Always present.
+
+## The developer options
+
+`window.__sidevoiceDesktop.host.debug` is the app's side of the room's hidden "Developer options" section. **Only in a
+nightly or a dev build** (core `build_info::debug_offered`, by `host.build.channel`); absent in a release, where the
+`web_inspector` command also refuses `bad_request`.
+
+```ts
+host.debug?: {
+  /** Whether the Web Inspector is on now: what the app kept (off by default), then what the last `setInspectable` took. */
+  readonly inspectable: boolean;
+  /** Turns the Web Inspector on or off for the room and the call controls card, at once (no reload), and keeps the choice
+   *  in the app's settings across restarts. Resolves when done; read `inspectable` for what took. `on` must be a boolean,
+   *  else it rejects `{key: "bad_request"}`. */
+  setInspectable(on: boolean): Promise<void>;
+}
+```
+
+macOS: `WKWebView.isInspectable` (macOS 13.3+) on both webviews, as they are created and on each change; Safari →
+Develop lists them (docs/MACOS.md). Below macOS 13.3, and on Windows and Linux (no WebView2 or WebKitGTK binding is
+wired), `setInspectable(true)` resolves, nothing is kept, and `inspectable` stays `false`: the page may show the switch
+as unavailable. The command is `web_inspector` `{action: "set", enabled}` answering `{inspectable}`; only the room page
+may call it (`capabilities/room.json`).
 
 ## The updater
 

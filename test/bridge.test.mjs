@@ -635,7 +635,7 @@ test("update sends each change to the call, one after the other, and refuses a m
   // The app refuses one that leaves nothing, or a model it cannot fill: the call rejects with it, and the next goes on.
   const refusal = { key: "voice_halves_missing", code: "halves-missing", message: "A call needs a half." };
   win.__TAURI_INTERNALS__.invoke = (cmd, args) => {
-    calls.push([cmd, args]);
+    calls.push([cmd, plain(args)]);
     return cmd === "voice_update" && args.change.output === null ? Promise.reject(refusal) : Promise.resolve();
   };
   await assert.rejects(call.update({ output: null }), (error) => error === refusal);
@@ -1525,4 +1525,41 @@ test("the card's gear opens the room's Settings at the floating card, the tray's
   assert.equal(api.run({ command: "open-settings" }), false, "a room without it");
   assert.equal(api.run({ command: "show-settings" }), false, "a room without it");
   assert.deepEqual(did, ["settings floating-card", "settings undefined", "cancel", "keep"]);
+});
+
+// ---- host.debug: the developer options of a nightly or a dev build (docs/BRIDGE.md) ----
+
+test("host.debug exists only where the app says a boolean (nightly and dev), and reads what the app kept", () => {
+  const install = loadFactory();
+  const host = (flag) => install(fakeWindow(ORIGIN).win, ORIGIN, null, false, false, false, { channel: "nightly", version: "0.4.0" }, null, flag).host;
+  for (const none of [undefined, null, "__SIDEVOICE_DEBUG__", "true", 1]) assert.ok(!("debug" in host(none)), String(none));
+  assert.deepEqual(Object.keys(host(false).debug).sort(), ["inspectable", "setInspectable"]);
+  assert.ok(Object.isFrozen(host(false).debug));
+  assert.equal(host(false).debug.inspectable, false);
+  assert.equal(host(true).debug.inspectable, true);
+});
+
+test("host.debug.setInspectable goes to the web_inspector command and inspectable follows what the app took", async () => {
+  const install = loadFactory();
+  const { win, calls } = fakeWindow(ORIGIN);
+  win.__TAURI_INTERNALS__.invoke = (cmd, args) => {
+    calls.push([cmd, plain(args)]);
+    return Promise.resolve({ inspectable: args.enabled });
+  };
+  const debug = install(win, ORIGIN, null, false, false, false, { channel: "dev", version: "0.4.0" }, null, false).host.debug;
+  assert.equal(await debug.setInspectable(true), undefined);
+  assert.equal(debug.inspectable, true);
+  assert.equal(await debug.setInspectable(false), undefined);
+  assert.equal(debug.inspectable, false);
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "web_inspector").map(([, args]) => args), [
+    { action: "set", enabled: true },
+    { action: "set", enabled: false },
+  ]);
+  for (const bad of ["true", 1, undefined, null]) {
+    await assert.rejects(debug.setInspectable(bad), (e) => e.key === "bad_request", String(bad));
+  }
+  // Where the system cannot, the app answers false and the page sees it.
+  win.__TAURI_INTERNALS__.invoke = () => Promise.resolve({ inspectable: false });
+  await debug.setInspectable(true);
+  assert.equal(debug.inspectable, false);
 });

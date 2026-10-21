@@ -26,6 +26,7 @@ mod probe;
 mod tray;
 mod updater;
 mod voice;
+mod web_inspector;
 
 use serde_json::{json, Value};
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
@@ -320,11 +321,6 @@ fn reset_call_state(app: &AppHandle) {
     voice::page_changed(app);
 }
 
-/// Whether this build's webviews can be inspected (core `build_info::inspectable`, by the channel build.rs names).
-pub(crate) fn inspectable() -> bool {
-    sidevoice_desktop_core::build_info::inspectable(env!("SIDEVOICE_BUILD_CHANNEL"))
-}
-
 /// (Re)creates the room window: the bundled interface, bound to the app's own pages.
 fn open_room(app: &AppHandle) -> tauri::Result<()> {
     let state = app.state::<AppState>();
@@ -350,9 +346,9 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
     let version = app.package_info().version.to_string();
     let (commit, date) = (env!("SIDEVOICE_BUILD_COMMIT"), env!("SIDEVOICE_BUILD_DATE"));
     let build = BuildInfo::new(env!("SIDEVOICE_BUILD_CHANNEL"), &version, commit, date);
+    let web_inspector_on = app.state::<AppState>().settings.lock().unwrap().as_ref().is_some_and(|s| s.web_inspector);
     let builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(page.into()))
         .title("Sidevoice")
-        .devtools(inspectable())
         .inner_size(1100.0, 760.0)
         .min_inner_size(420.0, 560.0)
         .initialization_script(bridge::NO_CONTEXT_MENU_SCRIPT)
@@ -362,6 +358,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             updater::offered(),
             &build,
             computer_name::read().as_deref(),
+            web_inspector_on,
         ));
     #[cfg(feature = "probe")]
     let builder = match probe::local_host_flow() {
@@ -396,6 +393,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             }
         })
         .build()?;
+    web_inspector::apply(app);
     Ok(())
 }
 
@@ -552,7 +550,8 @@ macro_rules! commands {
             data::data_reset_report,
             mute_shortcut,
             call_controls::call_controls_settings,
-            updater::updater
+            updater::updater,
+            web_inspector::web_inspector
             $($extra)*
         ]
     };

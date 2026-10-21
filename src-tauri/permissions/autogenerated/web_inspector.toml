@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-web-inspector"
+description = "Enables the web_inspector command without any pre-configured scope."
+commands.allow = ["web_inspector"]
+
+[[permission]]
+identifier = "deny-web-inspector"
+description = "Denies the web_inspector command without any pre-configured scope."
+commands.deny = ["web_inspector"]
