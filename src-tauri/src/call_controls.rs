@@ -369,10 +369,7 @@ fn settle_size(app: &AppHandle) {
     let unit = unit(&w);
     let (aw, ah) = (actual.width / unit, actual.height / unit);
     if (aw - wanted.width).abs() > 1.0 || (ah - wanted.height).abs() > 1.0 {
-        debug(&format!(
-            "call-controls window was {aw:.0}x{ah:.0}, set to {:.0}x{:.0}",
-            wanted.width, wanted.height
-        ));
+        debug(&format!("call-controls window was {aw:.0}x{ah:.0}, set to {:.0}x{:.0}", wanted.width, wanted.height));
         let _ = w.set_size(LogicalSize::new(wanted.width, wanted.height));
         place(app);
     }
