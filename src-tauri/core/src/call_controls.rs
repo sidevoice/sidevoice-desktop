@@ -221,6 +221,28 @@ pub fn still_hidden(hidden: bool, joined: bool, room_was_in_front: Option<bool>,
     hidden && joined && room_was_in_front.is_none_or(|was| was == room_in_front)
 }
 
+/// Orders changes to the card's window that are decided on several threads and applied later, on the main thread
+/// (sidevoice-desktop#170). Each decision takes the [`advance`](Latest::advance) number under the card's lock; the
+/// window is touched only after the lock is released, and only if [`is`](Latest::is) says no later decision was made
+/// meanwhile.
+/// The card's lock is never held while the app waits on the main thread (a monitor or window query), which deadlocked
+/// with the main thread waiting for the lock; and a stale "hide" still never lands after a later "show" (#161).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Latest(u64);
+
+impl Latest {
+    /// A new decision: the number its apply must still find to land.
+    pub fn advance(&mut self) -> u64 {
+        self.0 += 1;
+        self.0
+    }
+
+    /// Whether the decision numbered `n` is still the latest one.
+    pub fn is(&self, n: u64) -> bool {
+        self.0 == n
+    }
+}
+
 /// Whether the app must set the hand cursor itself now (macOS, #166): the pointer is over the card, the page says it is
 /// over something clickable, and the cursor is not the hand already. Another app in front keeps setting its own cursor
 /// (a text editor's I-beam) and WebKit sets the card's only when the pointer moves, so the app sets it on every look.
@@ -517,6 +539,111 @@ mod tests {
         fs::write(dir.join(PLACEMENTS_FILE), "{ broken").unwrap();
         assert_eq!(Placements::load(&dir), Placements::default(), "unreadable: start over");
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// How the main thread applies decision `n`, wanting `visible`, to the window (`None`: never touched yet).
+    type Apply = dyn Fn(&Latest, u64, bool, &mut Option<bool>);
+
+    /// Every order in which the main thread may run the applies of `decided` (each queued after its own decision was
+    /// taken, in any order between threads): the window ends as `apply` leaves it.
+    fn every_order(decided: &[bool], apply: &Apply) -> Vec<Option<bool>> {
+        fn walk(
+            decided: &[bool],
+            apply: &Apply,
+            latest: Latest,
+            taken: usize,
+            pending: Vec<(u64, bool)>,
+            window: Option<bool>,
+            out: &mut Vec<Option<bool>>,
+        ) {
+            if taken == decided.len() && pending.is_empty() {
+                out.push(window);
+                return;
+            }
+            if taken < decided.len() {
+                let mut latest = latest;
+                let n = latest.advance();
+                let mut pending = pending.clone();
+                pending.push((n, decided[taken]));
+                walk(decided, apply, latest, taken + 1, pending, window, out);
+            }
+            for i in 0..pending.len() {
+                let mut rest = pending.clone();
+                let (n, visible) = rest.remove(i);
+                let mut window = window;
+                apply(&latest, n, visible, &mut window);
+                walk(decided, apply, latest, taken, rest, window, out);
+            }
+        }
+        let mut out = Vec::new();
+        walk(decided, apply, Latest::default(), 0, Vec::new(), None, &mut out);
+        out
+    }
+
+    #[test]
+    fn the_window_ends_as_the_last_decision_whatever_order_the_applies_run_in() {
+        let checked = |latest: &Latest, n: u64, visible: bool, window: &mut Option<bool>| {
+            if latest.is(n) {
+                *window = Some(visible);
+            }
+        };
+        for decided in [vec![true, false], vec![false, true], vec![true, false, true], vec![false, true, false, true]] {
+            let last = *decided.last().unwrap();
+            let ends = every_order(&decided, &checked);
+            assert!(ends.len() > decided.len(), "interleavings explored for {decided:?}");
+            assert!(ends.iter().all(|w| *w == Some(last)), "{decided:?}: the window agrees with the last decision");
+        }
+        // Without the check, a stale "hide" queued after a later "show" lands last: the card's state says shown and its
+        // window is hidden, with no later change to correct it (#161).
+        let unchecked = |_: &Latest, _: u64, visible: bool, window: &mut Option<bool>| *window = Some(visible);
+        assert!(every_order(&[false, true], &unchecked).contains(&Some(false)));
+    }
+
+    /// The app's shape, with threads: deciders change the state under a lock and queue the apply to one "main thread",
+    /// which takes the same lock to check it. No decider ever waits on the main thread with the lock held, so this
+    /// cannot deadlock however the threads interleave; and the window ends as the state says.
+    #[test]
+    fn deciders_and_the_main_thread_share_the_lock_without_waiting_on_each_other() {
+        use std::sync::{mpsc, Arc, Mutex};
+        type Task = Box<dyn FnOnce() + Send>;
+        for round in 0..50 {
+            let state = Arc::new(Mutex::new((false, Latest::default())));
+            let window = Arc::new(Mutex::new(false));
+            let (main, tasks) = mpsc::channel::<Task>();
+            let main_thread = std::thread::spawn(move || {
+                for task in tasks {
+                    task();
+                }
+            });
+            let deciders: Vec<_> = (0..4)
+                .map(|t| {
+                    let (state, window, main) = (state.clone(), window.clone(), main.clone());
+                    std::thread::spawn(move || {
+                        for i in 0..50 {
+                            let visible = (t + i + round) % 3 != 0;
+                            let n = {
+                                let mut s = state.lock().unwrap();
+                                s.0 = visible;
+                                s.1.advance()
+                            };
+                            let (state, window) = (state.clone(), window.clone());
+                            main.send(Box::new(move || {
+                                if state.lock().unwrap().1.is(n) {
+                                    *window.lock().unwrap() = visible;
+                                }
+                            }))
+                            .unwrap();
+                        }
+                    })
+                })
+                .collect();
+            for d in deciders {
+                d.join().unwrap();
+            }
+            drop(main);
+            main_thread.join().unwrap();
+            assert_eq!(*window.lock().unwrap(), state.lock().unwrap().0, "round {round}");
+        }
     }
 
     #[test]

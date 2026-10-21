@@ -98,6 +98,9 @@ struct Inner {
     resize: Option<Resize>,
     placements: Placements,
     config_dir: Option<PathBuf>,
+    /// The latest show or hide decided ([`apply_visible`]), and the latest move ([`move_when_latest`]).
+    visibility: logic::Latest,
+    moves: logic::Latest,
 }
 
 /// A drag in progress: where the pointer and the window were when it started, on the desktop.
@@ -119,6 +122,12 @@ struct Resize {
 }
 
 /// The card's state, and the signal its pointer watcher waits on while the card is hidden.
+///
+/// The lock is never held across a call that waits for the main thread: a window or monitor query (`outer_position`,
+/// `available_monitors`, `cursor_position`, ...) from another thread waits for the main thread to answer it, and the
+/// main thread takes this lock too (the card's commands, the room's level, clicks elsewhere), so the two waited on each
+/// other for good (#170). The state is read and decided under the lock; the window is queried before and changed
+/// after, with [`logic::Latest`] so that a change decided earlier never lands after a later one.
 #[derive(Default)]
 pub struct Card(Mutex<Inner>, Condvar);
 
@@ -299,7 +308,7 @@ pub fn update(app: &AppHandle) {
         app.state::<AppState>().settings.lock().unwrap().as_ref().is_some_and(|s| s.call_controls_always_shown);
     // Switched off in Settings: no card at all, not even the moment a change shows it.
     let enabled = app.state::<AppState>().settings.lock().unwrap().as_ref().is_none_or(|s| s.call_controls_enabled);
-    let (show, hide, unhidden, reason) = {
+    let (show, hide, unhidden, reason, decision) = {
         let mut inner = card.0.lock().unwrap();
         let hidden = logic::still_hidden(inner.hidden, call.joined, inner.room_in_front, in_front);
         let unhidden = inner.hidden && !hidden;
@@ -319,6 +328,7 @@ pub fn update(app: &AppHandle) {
             && (logic::wanted(call.joined, inner.hidden, in_front, always_shown) || (call.joined && previewing));
         let change = (wanted && !inner.shown, !wanted && inner.shown);
         inner.shown = wanted;
+        let decision = if change.0 || change.1 { inner.visibility.advance() } else { 0 };
         if change.1 {
             // Nothing of this showing carries over to the next: no pointer over it, no level, no move.
             inner.drag = None;
@@ -338,16 +348,16 @@ pub fn update(app: &AppHandle) {
         } else {
             logic::why(call.joined, inner.hidden, in_front, always_shown)
         };
-        (change.0, change.1, unhidden, reason)
+        (change.0, change.1, unhidden, reason, decision)
     };
     if show {
         place(app);
         settle_size(app);
-        apply_visible(app, &card, true);
+        apply_visible(app, true, decision);
         debug(&format!("call-controls shown: {reason}"));
         card.1.notify_all();
     } else if hide {
-        apply_visible(app, &card, false);
+        apply_visible(app, false, decision);
         debug(&format!("call-controls hidden: {reason}"));
     }
     if unhidden {
@@ -356,17 +366,32 @@ pub fn update(app: &AppHandle) {
     push(app, full_state(app, &call));
 }
 
-/// Puts the window on the screen or takes it off, but only if the card still wants that: [`update`] runs on several
-/// threads (the call, the room's view, a preview, the page's commands), and one that decided "show" can reach the window
-/// after another that decided "hide". Applied under the card's lock, window and state cannot disagree: the last
-/// state change is the last thing the window is told.
-fn apply_visible(app: &AppHandle, card: &Card, visible: bool) {
-    let inner = card.0.lock().unwrap();
-    if inner.shown == visible {
-        set_visible(app, visible);
-    } else {
-        debug(&format!("call-controls {} skipped: changed meanwhile", if visible { "show" } else { "hide" }));
-    }
+/// Puts the window on the screen or takes it off, on the main thread, but only if no later show or hide was decided
+/// meanwhile: [`update`] runs on several threads (the call, the room's view, a preview, the page's commands), and one
+/// that decided "show" can reach the window after another that decided "hide" (#161). Every decision queues its own
+/// apply after taking its number, so the latest one always lands and window and state cannot disagree; and no lock is
+/// held while the main thread is asked (#170).
+fn apply_visible(app: &AppHandle, visible: bool, decision: u64) {
+    let a = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let latest = card(&a).is_some_and(|card| card.0.lock().unwrap().visibility.is(decision));
+        if latest {
+            set_visible(&a, visible);
+        } else {
+            debug(&format!("call-controls {} skipped: changed meanwhile", if visible { "show" } else { "hide" }));
+        }
+    });
+}
+
+/// Moves the window there, on the main thread, unless a later move was decided meanwhile (as [`apply_visible`]).
+fn move_when_latest(app: &AppHandle, at: Point, decision: u64) {
+    let a = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let latest = card(&a).is_some_and(|card| card.0.lock().unwrap().moves.is(decision));
+        if let (true, Some(w)) = (latest, window(&a)) {
+            move_to(&w, at);
+        }
+    });
 }
 
 /// The window is as big as the page last asked (`layout`) when it shows. The page asks only when its own size changes,
@@ -499,26 +524,23 @@ fn push(app: &AppHandle, patch: serde_json::Value) {
     }
 }
 
+/// On the main thread ([`apply_visible`]): AppKit wants its windows touched there.
 fn set_visible(app: &AppHandle, visible: bool) {
     #[cfg(target_os = "macos")]
     {
         use tauri_nspanel::ManagerExt;
-        let app = app.clone();
-        // AppKit wants its windows touched on the main thread.
-        let _ = app.clone().run_on_main_thread(move || {
-            if let Ok(panel) = app.get_webview_panel(LABEL) {
-                // orderFrontRegardless / orderOut: shown without activating the app or taking the key window.
-                if visible {
-                    if let Some(w) = window(&app) {
-                        hover_while_inactive(&w);
-                    }
-                    panel.show();
-                    debug(&format!("call-controls panel {}", describe(panel.as_panel())));
-                } else {
-                    panel.hide()
+        if let Ok(panel) = app.get_webview_panel(LABEL) {
+            // orderFrontRegardless / orderOut: shown without activating the app or taking the key window.
+            if visible {
+                if let Some(w) = window(app) {
+                    hover_while_inactive(&w);
                 }
+                panel.show();
+                debug(&format!("call-controls panel {}", describe(panel.as_panel())));
+            } else {
+                panel.hide()
             }
-        });
+        }
     }
     #[cfg(not(target_os = "macos"))]
     if let Some(w) = window(app) {
@@ -665,19 +687,24 @@ fn place(app: &AppHandle) {
         return;
     }
     let corner = default_corner(app);
-    let (Some(card), Some(w)) = (card(app), window(app)) else { return };
-    let patch = {
+    let Some(card) = card(app) else { return };
+    if window(app).is_none() {
+        return;
+    }
+    let key = card.0.lock().unwrap().rest.as_ref().map(|(d, _)| d.key.clone());
+    // The monitors are the main thread's to answer: asked with the lock released (#170).
+    let Some(display) = display(app, key.as_deref(), None) else { return };
+    let (to, decision, patch) = {
         let mut inner = card.0.lock().unwrap();
         let size = inner.size.unwrap_or(FIRST_SIZE);
         let anchor = inner.anchor.unwrap_or_else(|| logic::anchor(size, None, MARGIN));
-        let Some(display) = display(app, inner.rest.as_ref().map(|(d, _)| d.key.as_str()), None) else { return };
         let spot = match &inner.rest {
             Some((d, spot)) if d.key == display.key => *spot,
             _ => inner.placements.displays.get(&display.key).copied().unwrap_or(Spot::corner(corner)),
         };
         let rest = spot.at(Size { width: anchor.width, height: anchor.height }, display.work);
         let at = logic::window_at(rest, anchor, size, display.work);
-        move_to(&w, display.to_desktop(at));
+        let to = display.to_desktop(at);
         debug(&format!(
             "call-controls at {:.0},{:.0} on {} size {:.0}x{:.0} rest {:.0},{:.0}",
             at.x, at.y, display.key, size.width, size.height, rest.x, rest.y
@@ -693,8 +720,9 @@ fn place(app: &AppHandle) {
             inner.told_size = Some(resized);
             patch.insert("size".into(), resized.map(size_json).unwrap_or(serde_json::Value::Null));
         }
-        patch
+        (to, inner.moves.advance(), patch)
     };
+    move_when_latest(app, to, decision);
     if !patch.is_empty() {
         push(app, serde_json::Value::Object(patch));
     }
@@ -939,22 +967,28 @@ pub fn call_controls_drag(app: AppHandle, webview: Webview, phase: DragPhase) ->
         }
         return Ok(());
     }
-    let mut inner = card.0.lock().unwrap();
+    // The pointer, the window and the monitors are asked with the card's lock released (#170).
     match phase {
         DragPhase::Start => {
-            inner.drag =
+            let drag =
                 pointer(&app).zip(frame(&w)).map(|(pointer, at)| Drag { pointer, window: Point { x: at.x, y: at.y } });
+            card.0.lock().unwrap().drag = drag;
         }
         DragPhase::Move => {
-            if let (Some(drag), Some(p)) = (inner.drag, pointer(&app)) {
-                move_to(&w, Point { x: drag.window.x + p.x - drag.pointer.x, y: drag.window.y + p.y - drag.pointer.y });
+            let drag = card.0.lock().unwrap().drag;
+            if let (Some(drag), Some(p)) = (drag, pointer(&app)) {
+                let to = Point { x: drag.window.x + p.x - drag.pointer.x, y: drag.window.y + p.y - drag.pointer.y };
+                let decision = card.0.lock().unwrap().moves.advance();
+                move_when_latest(&app, to, decision);
             }
         }
         DragPhase::End => {
-            let (Some(drag), Some(p)) = (inner.drag.take(), pointer(&app)) else { return Ok(()) };
+            let drag = card.0.lock().unwrap().drag.take();
+            let (Some(drag), Some(p)) = (drag, pointer(&app)) else { return Ok(()) };
             let dropped = Point { x: drag.window.x + p.x - drag.pointer.x, y: drag.window.y + p.y - drag.pointer.y };
             // The display the pointer let go on; the card's corner may be just off it.
             let Some(display) = display(&app, None, Some(p)) else { return Ok(()) };
+            let mut inner = card.0.lock().unwrap();
             let size = inner.size.unwrap_or(FIRST_SIZE);
             let anchor = inner.anchor.unwrap_or_else(|| logic::anchor(size, None, MARGIN));
             let body = Size { width: anchor.width, height: anchor.height };
@@ -993,23 +1027,27 @@ pub fn call_controls_resize(app: AppHandle, webview: Webview, phase: DragPhase, 
         return Ok(());
     }
     let (Some(card), Some(w)) = (card(&app), window(&app)) else { return Ok(()) };
-    let mut inner = card.0.lock().unwrap();
-    let (Some(min_width), Some(min_height)) = (inner.min_width, inner.min_height) else {
-        return Err("the card cannot be resized now".into());
+    let (min_width, min_height, size, anchor, display, resize) = {
+        let inner = card.0.lock().unwrap();
+        let (Some(min_width), Some(min_height)) = (inner.min_width, inner.min_height) else {
+            return Err("the card cannot be resized now".into());
+        };
+        let size = inner.size.unwrap_or(FIRST_SIZE);
+        let anchor = inner.anchor.unwrap_or_else(|| logic::anchor(size, None, MARGIN));
+        (min_width, min_height, size, anchor, inner.rest.as_ref().map(|(d, _)| d.clone()), inner.resize.clone())
     };
+    // The pointer and the window are asked with the card's lock released (#170).
     match phase {
         DragPhase::Start => {
-            let size = inner.size.unwrap_or(FIRST_SIZE);
-            let anchor = inner.anchor.unwrap_or_else(|| logic::anchor(size, None, MARGIN));
-            let display = inner.rest.as_ref().map(|(d, _)| d.clone());
-            inner.resize = pointer(&app).zip(frame(&w)).zip(display).map(|((pointer, at), display)| {
+            let resize = pointer(&app).zip(frame(&w)).zip(display).map(|((pointer, at), display)| {
                 let corner = display.to_local(Point { x: at.x, y: at.y });
                 let window = Rect { x: corner.x, y: corner.y, width: size.width, height: size.height };
                 Resize { edge, pointer, display, window, anchor }
             });
+            card.0.lock().unwrap().resize = resize;
         }
         DragPhase::Move | DragPhase::End => {
-            let (Some(resize), Some(p)) = (inner.resize.clone(), pointer(&app)) else { return Ok(()) };
+            let (Some(resize), Some(p)) = (resize, pointer(&app)) else { return Ok(()) };
             let dx = (p.x - resize.pointer.x) / resize.display.unit;
             let dy = (p.y - resize.pointer.y) / resize.display.unit;
             let to = logic::resized(resize.window, resize.edge, dx, dy, min_width, min_height, resize.display.work);
@@ -1024,8 +1062,9 @@ pub fn call_controls_resize(app: AppHandle, webview: Webview, phase: DragPhase, 
             let rest = Point { x: to.x + anchor.x, y: to.y + anchor.y };
             let body = Size { width: anchor.width, height: anchor.height };
             let spot = Spot::against(opposite(resize.edge), rest, body, resize.display.work);
-            let _ = w.set_size(LogicalSize::new(to.width, to.height));
-            move_to(&w, resize.display.to_desktop(Point { x: to.x, y: to.y }));
+            let at = resize.display.to_desktop(Point { x: to.x, y: to.y });
+            let mut inner = card.0.lock().unwrap();
+            let decision = inner.moves.advance();
             inner.size = Some(size);
             inner.anchor = Some(anchor);
             inner.placements.sizes.insert(resize.display.key.clone(), size);
@@ -1038,6 +1077,8 @@ pub fn call_controls_resize(app: AppHandle, webview: Webview, phase: DragPhase, 
             }
             inner.rest = Some((resize.display, spot));
             drop(inner);
+            let _ = w.set_size(LogicalSize::new(to.width, to.height));
+            move_when_latest(&app, at, decision);
             push(&app, serde_json::json!({ "size": size_json(size) }));
         }
     }
