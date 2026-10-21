@@ -24,6 +24,7 @@ const VOICE_PLACEHOLDER: &str = "\"__SIDEVOICE_VOICE__\"";
 const UPDATER_PLACEHOLDER: &str = "\"__SIDEVOICE_UPDATER__\"";
 const BUILD_PLACEHOLDER: &str = "\"__SIDEVOICE_BUILD__\"";
 const COMPUTER_NAME_PLACEHOLDER: &str = "\"__SIDEVOICE_COMPUTER_NAME__\"";
+const DEBUG_PLACEHOLDER: &str = "\"__SIDEVOICE_DEBUG__\"";
 
 /// Who answers the headset's buttons and media keys in a call: `native` where the app does (macOS,
 /// `src/headset.rs`), so the page does not answer them too; `None` elsewhere (the page's Media Session does).
@@ -74,11 +75,23 @@ pub fn call_controls_push(patch: &serde_json::Value) -> String {
 /// The script injected into the main window, bound to one page origin. `updater`: whether this copy of the app updates
 /// itself (`window.__sidevoiceDesktop.host.updater`; core `updater::offered`), which the shell finds at start; `build`:
 /// what this build is (`host.build`; core `build_info`); `computer_name`: the name the person gave this computer
-/// (`host.computerName`, absent with none; core `computer_name`).
-pub fn script_for_origin(origin: &str, updater: bool, build: &BuildInfo, computer_name: Option<&str>) -> String {
+/// (`host.computerName`, absent with none; core `computer_name`); `debug`: the developer options kept in the settings,
+/// told to the page (with the switches this platform has) only in a build that offers `host.debug` (core `debug_options`).
+pub fn script_for_origin(
+    origin: &str,
+    updater: bool,
+    build: &BuildInfo,
+    computer_name: Option<&str>,
+    debug: &crate::debug_options::DebugOptions,
+) -> String {
     let literal = serde_json::to_string(origin).expect("a string serialises");
     let keys = serde_json::to_string(&media_keys()).expect("serialises");
     let flag = |offered: bool| if offered { "true" } else { "false" };
+    let debug = if crate::debug_options::offered(&build.channel) {
+        debug.state(crate::debug_options::available()).to_string()
+    } else {
+        "null".to_owned()
+    };
     SCRIPT_TEMPLATE
         .replacen(ORIGIN_PLACEHOLDER, &literal, 1)
         .replacen(MEDIA_KEYS_PLACEHOLDER, &keys, 1)
@@ -87,6 +100,7 @@ pub fn script_for_origin(origin: &str, updater: bool, build: &BuildInfo, compute
         .replacen(UPDATER_PLACEHOLDER, flag(updater), 1)
         .replacen(BUILD_PLACEHOLDER, &serde_json::to_string(build).expect("serialises"), 1)
         .replacen(COMPUTER_NAME_PLACEHOLDER, &serde_json::to_string(&computer_name).expect("serialises"), 1)
+        .replacen(DEBUG_PLACEHOLDER, &debug, 1)
 }
 
 /// The bridge's version: the room page sends it in every snapshot (bridge/desktop-bridge.js).
@@ -315,7 +329,8 @@ mod tests {
     #[test]
     fn script_binds_the_origin_as_a_js_string() {
         let dev = BuildInfo::new("dev", "0.4.0", "", "");
-        let s = script_for_origin("https://voice.example.com", false, &dev, None);
+        let off = crate::debug_options::DebugOptions::default();
+        let s = script_for_origin("https://voice.example.com", false, &dev, None, &off);
         assert!(!s.contains("__SIDEVOICE_ROOM_ORIGIN__"));
         assert!(!s.contains("__SIDEVOICE_MEDIA_KEYS__"));
         assert!(!s.contains("__SIDEVOICE_LOCAL_HOST__"));
@@ -323,21 +338,25 @@ mod tests {
         assert!(!s.contains("__SIDEVOICE_UPDATER__"));
         assert!(!s.contains("__SIDEVOICE_BUILD__"));
         assert!(!s.contains("__SIDEVOICE_COMPUTER_NAME__"));
+        assert!(!s.contains("__SIDEVOICE_DEBUG__"));
         let platform = if cfg!(target_os = "macos") { r#""native", true, true"# } else { "null, false, false" };
         let dev_build = r#"{"channel":"dev","version":"0.4.0"}"#;
-        let expected = format!(r#"factory(window, "https://voice.example.com", {platform}, false, {dev_build}, null)"#);
+        // A dev build has the developer options: what the settings keep, and the switches this platform has.
+        let debug = off.state(crate::debug_options::available());
+        let expected =
+            format!(r#"factory(window, "https://voice.example.com", {platform}, false, {dev_build}, null, {debug})"#);
         assert!(s.contains(&expected), "{expected}");
         // A release that can update itself: the page gets `host.updater`, and `host.build` says it is a release.
         let release = BuildInfo::new("release", "0.4.0", "", "");
-        let offered = script_for_origin("https://voice.example.com", true, &release, Some("Mac de Ana"));
+        let offered = script_for_origin("https://voice.example.com", true, &release, Some("Mac de Ana"), &off);
         let expected = format!(
-            r#"factory(window, "https://voice.example.com", {platform}, true, {{"channel":"release","version":"0.4.0"}}, "Mac de Ana")"#
+            r#"factory(window, "https://voice.example.com", {platform}, true, {{"channel":"release","version":"0.4.0"}}, "Mac de Ana", null)"#
         );
         assert!(offered.contains(&expected), "{expected}");
         // A hostile value cannot break out of the string literal.
-        let evil = script_for_origin("\"); alert(1); (\"", false, &dev, Some("\"); alert(1); (\""));
+        let evil = script_for_origin("\"); alert(1); (\"", false, &dev, Some("\"); alert(1); (\""), &off);
         assert!(evil.contains(r#"factory(window, "\"); alert(1); (\"""#));
-        assert!(evil.contains(r#"{"channel":"dev","version":"0.4.0"}, "\"); alert(1); (\"")"#));
+        assert!(evil.contains(r#"{"channel":"dev","version":"0.4.0"}, "\"); alert(1); (\"", "#));
     }
 
     #[test]

@@ -18,6 +18,7 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 | `bridge/call-controls-bridge.js` | Injected into the call controls card's window (below). |
 | `src-tauri/src/call_controls.rs`, `src-tauri/core/src/call_controls.rs` | The card's window, and when it shows, where it sits and how it moves (unit-tested). |
 | `src-tauri/src/updater.rs`, `src-tauri/core/src/updater.rs`, `src-tauri/core/src/build_info.rs` | The app's updates, behind `updater`, and what this build is, `build` (below). |
+| `src-tauri/src/debug_options.rs`, `src-tauri/core/src/debug_options.rs` | The developer options, behind `debug` in a nightly or a dev build (below). |
 | `src-tauri/src/computer_name.rs`, `src-tauri/core/src/computer_name.rs` | This computer's name, `computerName` (below; the Linux file's parsing unit-tested). |
 
 ## What the bridge reads and calls in the web UI
@@ -761,6 +762,42 @@ none loses another's.
 `host.updater` on the nightly's feed; `version` is its own (`X.Y.Z-nightly.N`, RELEASING.md → "Channels"), with the
 short `commit` and that commit's `date` (`YYYY-MM-DD`).
 `dev`: anything else (a laptop, a pull request, a manual run). Always present.
+
+## The developer options
+
+`window.__sidevoiceDesktop.host.debug` is the app's side of the room's hidden "Developer options" section. **Only in a
+nightly or a dev build** (core `debug_options::offered`, by `host.build.channel`); absent in a release. Its native code
+is compiled only into a nightly or a dev build (the `sidevoice_debug_options` cfg, build.rs): in a release the
+`debug_options` command exists but refuses `bad_request`, and nothing touches WebKit's private API.
+
+```ts
+type DebugSwitch = "inspectable" | "compositingBorders" | "repaintCounters";
+host.debug?: {
+  /** The switches this platform has (all three on macOS, none elsewhere); the page hides the others. */
+  readonly available: readonly DebugSwitch[];
+  /** Safari's Web Inspector can be attached to the room and the call controls card. */
+  readonly inspectable: boolean;
+  /** WebKit outlines each composited layer: what the GPU draws. */
+  readonly compositingBorders: boolean;
+  /** WebKit shows each layer's repaint count on it: what the CPU keeps painting. */
+  readonly repaintCounters: boolean;
+  /** Turns one switch on or off on both webviews at once (no reload) and keeps it in the app's settings across
+   *  restarts. Resolves when done; the switches then read what took. A name not in `available` or a non-boolean `on`
+   *  rejects `{key: "bad_request"}`. */
+  set(name: DebugSwitch, on: boolean): Promise<void>;
+}
+```
+
+Each switch is a live getter: off by default, then what the app kept, then what the last `set` took. A switch the
+platform lacks always reads `false`.
+
+macOS: `inspectable` is `WKWebView.isInspectable` (macOS 13.3+; below that it has no effect), Safari → Develop lists
+the webviews (docs/MACOS.md); `compositingBorders` and `repaintCounters` are WebKit's private `WKPreferences`
+`_setCompositingBordersVisible:` and `_setCompositingRepaintCountersVisible:`, set on each webview's live preferences
+and asked only where WebKit answers to them. All three are put on the room and the card as each is created and on each
+change. Windows and Linux: `available` is empty (Chromium's paint flags need a relaunch; no WebKitGTK binding is wired).
+The command is `debug_options` `{action: "set", name, enabled}`, answering `{available, inspectable,
+compositingBorders, repaintCounters}`; only the room page may call it (`capabilities/room.json`).
 
 ## The updater
 

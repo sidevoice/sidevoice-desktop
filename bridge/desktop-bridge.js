@@ -14,8 +14,8 @@
 // bundled interface) it does nothing at all.
 (function (factory) {
   if (typeof module === "object" && module.exports) module.exports = factory; // unit tests
-  else factory(window, "__SIDEVOICE_ROOM_ORIGIN__", "__SIDEVOICE_MEDIA_KEYS__", "__SIDEVOICE_LOCAL_HOST__", "__SIDEVOICE_VOICE__", "__SIDEVOICE_UPDATER__", "__SIDEVOICE_BUILD__", "__SIDEVOICE_COMPUTER_NAME__");
-})(function installDesktopBridge(win, roomOrigin, mediaKeys, localHostOffered, voiceOffered, updaterOffered, build, computerName) {
+  else factory(window, "__SIDEVOICE_ROOM_ORIGIN__", "__SIDEVOICE_MEDIA_KEYS__", "__SIDEVOICE_LOCAL_HOST__", "__SIDEVOICE_VOICE__", "__SIDEVOICE_UPDATER__", "__SIDEVOICE_BUILD__", "__SIDEVOICE_COMPUTER_NAME__", "__SIDEVOICE_DEBUG__");
+})(function installDesktopBridge(win, roomOrigin, mediaKeys, localHostOffered, voiceOffered, updaterOffered, build, computerName, debugState) {
   "use strict";
   // scheme://host rather than location.origin: the app's own pages (tauri://localhost) may have an opaque origin.
   if (win.location.protocol + "//" + win.location.host !== roomOrigin) return null;
@@ -578,6 +578,39 @@
     return { host: Object.freeze(host), changed: listeners.tell };
   }
 
+  /** The developer options (nightly and dev builds): sidevoice-web's hidden "Developer options" section, onto the
+   *  `debug_options` command (docs/BRIDGE.md -> "The developer options"). Each switch reads live: what the app kept, then
+   *  what the last `set` took. */
+  function debug(initial) {
+    const SWITCHES = ["inspectable", "compositingBorders", "repaintCounters"];
+    const available = Object.freeze(SWITCHES.filter((name) => (initial.available || []).includes(name)));
+    const state = {};
+    const take = (from) => {
+      for (const name of SWITCHES) state[name] = !!(from && from[name]) && available.includes(name);
+    };
+    take(initial);
+    return Object.freeze({
+      /** The switches this platform has; the page hides the others. */
+      available,
+      get inspectable() {
+        return state.inspectable;
+      },
+      get compositingBorders() {
+        return state.compositingBorders;
+      },
+      get repaintCounters() {
+        return state.repaintCounters;
+      },
+      /** Turns one switch on or off on the room and the call controls card, at once (no reload), and keeps it. Resolves
+       *  when done; the switch then reads what took. A name not in `available` or a non-boolean `on` rejects
+       *  `{key: "bad_request"}`. */
+      set: (name, on) =>
+        available.includes(name) && typeof on === "boolean"
+          ? call("debug_options", { action: "set", name, enabled: on }).then(take)
+          : Promise.reject({ key: "bad_request", message: "set(name, on) takes an available switch and a boolean." }),
+    });
+  }
+
   /** The floating card's settings the app keeps: sidevoice-web's `CallControlsBridge`, onto the `call_controls_settings`
    *  command (docs/BRIDGE.md → "The call controls settings"). */
   function callControls() {
@@ -734,6 +767,8 @@
   // Only in a release or a nightly that can update itself (core `updater::offered`).
   const updates = updaterOffered === true ? updater() : null;
   const shortcut = muteShortcut();
+  // Only in a nightly or a dev build (core `debug_options::offered`): the switches' state and which this platform has.
+  const debugOptions = debugState && typeof debugState === "object" && Array.isArray(debugState.available) ? debug(debugState) : null;
 
   const api = {
     version: BRIDGE_VERSION,
@@ -775,6 +810,8 @@
        *  the page's Settings. */
       muteShortcut: shortcut.host,
       callControls: callControls(),
+      // Only in a nightly or a dev build: the developer options (docs/BRIDGE.md -> "The developer options").
+      ...(debugOptions ? { debug: debugOptions } : {}),
       // Only in a release or a nightly that can update itself.
       ...(updates ? { updater: updates.host } : {}),
     }),

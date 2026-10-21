@@ -635,7 +635,7 @@ test("update sends each change to the call, one after the other, and refuses a m
   // The app refuses one that leaves nothing, or a model it cannot fill: the call rejects with it, and the next goes on.
   const refusal = { key: "voice_halves_missing", code: "halves-missing", message: "A call needs a half." };
   win.__TAURI_INTERNALS__.invoke = (cmd, args) => {
-    calls.push([cmd, args]);
+    calls.push([cmd, plain(args)]);
     return cmd === "voice_update" && args.change.output === null ? Promise.reject(refusal) : Promise.resolve();
   };
   await assert.rejects(call.update({ output: null }), (error) => error === refusal);
@@ -1522,4 +1522,54 @@ test("the card's gear opens the room's Settings at the floating card, the tray's
   assert.equal(api.run({ command: "open-settings" }), false, "a room without it");
   assert.equal(api.run({ command: "show-settings" }), false, "a room without it");
   assert.deepEqual(did, ["settings floating-card", "settings undefined", "cancel", "keep"]);
+});
+
+// ---- host.debug: the developer options of a nightly or a dev build (docs/BRIDGE.md) ----
+
+test("host.debug exists only where the app says the options (nightly and dev), and reads what the app kept", () => {
+  const install = loadFactory();
+  const host = (state) => install(fakeWindow(ORIGIN).win, ORIGIN, null, false, false, false, { channel: "nightly", version: "0.4.0" }, null, state).host;
+  for (const none of [undefined, null, "__SIDEVOICE_DEBUG__", true, false, {}]) assert.ok(!("debug" in host(none)), String(none));
+  const all = ["inspectable", "compositingBorders", "repaintCounters"];
+  const debug = host({ available: all, inspectable: false, compositingBorders: true, repaintCounters: false }).debug;
+  assert.deepEqual(Object.keys(debug).sort(), ["available", "compositingBorders", "inspectable", "repaintCounters", "set"]);
+  assert.ok(Object.isFrozen(debug) && Object.isFrozen(debug.available));
+  assert.deepEqual([...debug.available], all);
+  assert.deepEqual([debug.inspectable, debug.compositingBorders, debug.repaintCounters], [false, true, false]);
+  // A switch the platform lacks is not available and reads false.
+  const none = host({ available: [], inspectable: true }).debug;
+  assert.deepEqual([...none.available], []);
+  assert.equal(none.inspectable, false);
+});
+
+test("host.debug.set goes to the debug_options command and each switch follows what the app took", async () => {
+  const install = loadFactory();
+  const { win, calls } = fakeWindow(ORIGIN);
+  const kept = { inspectable: false, compositingBorders: false, repaintCounters: false };
+  win.__TAURI_INTERNALS__.invoke = (cmd, args) => {
+    calls.push([cmd, plain(args)]);
+    kept[args.name] = args.enabled;
+    return Promise.resolve({ available: Object.keys(kept), ...kept });
+  };
+  const all = { available: ["inspectable", "compositingBorders", "repaintCounters"], ...kept };
+  const debug = install(win, ORIGIN, null, false, false, false, { channel: "dev", version: "0.4.0" }, null, all).host.debug;
+  assert.equal(await debug.set("inspectable", true), undefined);
+  assert.equal(debug.inspectable, true);
+  await debug.set("repaintCounters", true);
+  assert.deepEqual([debug.inspectable, debug.compositingBorders, debug.repaintCounters], [true, false, true]);
+  await debug.set("inspectable", false);
+  assert.equal(debug.inspectable, false);
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "debug_options").map(([, args]) => args), [
+    { action: "set", name: "inspectable", enabled: true },
+    { action: "set", name: "repaintCounters", enabled: true },
+    { action: "set", name: "inspectable", enabled: false },
+  ]);
+  for (const [name, on] of [["inspectable", "true"], ["inspectable", 1], ["inspectable", undefined], ["webInspector", true], [undefined, true]]) {
+    await assert.rejects(debug.set(name, on), (e) => e.key === "bad_request", String([name, on]));
+  }
+  assert.equal(calls.filter(([cmd]) => cmd === "debug_options").length, 3);
+  // Where the system cannot, the app answers false and the page sees it.
+  win.__TAURI_INTERNALS__.invoke = () => Promise.resolve({ available: all.available, inspectable: false, compositingBorders: false, repaintCounters: false });
+  await debug.set("compositingBorders", true);
+  assert.equal(debug.compositingBorders, false);
 });
