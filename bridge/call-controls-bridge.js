@@ -3,7 +3,7 @@
 //
 //   app → card : window.__sidevoiceDesktop.receive({ call, level, playback, place, size, pointerInside, outsideClicks,
 //                alwaysExpanded, muteShortcut }) (any subset: what changed), evaluated by the app
-//   card → app : invoke('call_controls_run' | 'call_controls_layout' | 'call_controls_drag' | 'call_controls_resize' |
+//   card → app : invoke('call_controls_run' | 'call_controls_layout' | 'call_controls_drag' | 'call_controls_resize' | 'call_controls_cursor' |
 //                'call_controls_ready')
 //
 // The card's page (the web build's call-controls.html) finds it at window.__sidevoiceDesktop.host.callControls. On any
@@ -111,6 +111,21 @@
       publish();
     },
   };
+  // Whether the pointer is over something clickable (CSS cursor: pointer), told to the app when it changes: an app in
+  // front that sets its own cursor (a text editor's I-beam) hides the hand, so the app sets it (#166).
+  if (typeof win.addEventListener === "function" && typeof win.getComputedStyle === "function") {
+    let hand = false;
+    const tell = (now) => {
+      if (now === hand) return;
+      hand = now;
+      invoke("call_controls_cursor", { hand });
+    };
+    win.addEventListener("mousemove", (event) => {
+      const target = event.target;
+      tell(!!target && target.nodeType === 1 && win.getComputedStyle(target).cursor === "pointer");
+    }, true);
+    win.addEventListener("mouseout", (event) => { if (!event.relatedTarget) tell(false); }, true);
+  }
   win.__sidevoiceDesktop = api;
   return api;
 });

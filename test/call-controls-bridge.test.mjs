@@ -131,3 +131,25 @@ test("the placeholder the app replaces is present exactly once", () => {
   assert.equal(source.split('"__SIDEVOICE_APP_ORIGIN__"').length, 2);
   assert.equal(source.split('"__SIDEVOICE_RESIZE__"').length, 2);
 });
+
+test("the app hears when the pointer moves on or off something clickable, once per change (#166)", async () => {
+  const { win, calls } = fakeWindow(APP);
+  const listeners = {};
+  win.addEventListener = (type, fn, capture) => { assert.equal(capture, true); listeners[type] = fn; };
+  const cursors = new Map();
+  win.getComputedStyle = (el) => ({ cursor: cursors.get(el) });
+  const button = { nodeType: 1 }, body = { nodeType: 1 };
+  cursors.set(button, "pointer");
+  cursors.set(body, "default");
+  load()(win, APP);
+  listeners.mousemove({ target: body });
+  listeners.mousemove({ target: button });
+  listeners.mousemove({ target: button });
+  listeners.mousemove({ target: body });
+  listeners.mousemove({ target: button });
+  listeners.mouseout({ relatedTarget: body });
+  listeners.mouseout({ relatedTarget: null });
+  await flush();
+  assert.deepEqual(calls.map(([, args]) => args.hand), [true, false, true, false]);
+  assert.ok(calls.every(([cmd]) => cmd === "call_controls_cursor"));
+});

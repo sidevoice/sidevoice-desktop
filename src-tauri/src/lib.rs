@@ -518,6 +518,7 @@ macro_rules! commands {
             call_controls::call_controls_layout,
             call_controls::call_controls_drag,
             call_controls::call_controls_resize,
+            call_controls::call_controls_cursor,
             debug_log,
             engine_ipc::engine_capabilities,
             engine_ipc::engine_installed,
