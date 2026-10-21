@@ -242,9 +242,12 @@ jobs:
         run: cargo xtask macos exit
       # Informational for now: the settings-cycle step of this walk intermittently keeps 50 to 330 MiB after the models' idle
       # keep (about one run in two), with the host holding nothing (#145). It becomes a gate once that is fixed.
+      # A run takes about 4.5 minutes; the app also hangs in the card-cycle step in about 40% of runs (#27), which used to
+      # cost the whole 25 minutes. The walk gives up itself after 2 minutes without a step and samples the app first;
+      # the 8 minutes here only back that up.
       - name: The app's footprint stays flat over models, calls and setting changes (table, fails only on clear growth)
         continue-on-error: true
-        timeout-minutes: 25
+        timeout-minutes: 8
         run: cargo xtask macos memory
       - uses: actions/upload-artifact@v4
         if: always()
