@@ -203,6 +203,7 @@ fn window_options<'a, R: tauri::Runtime, M: Manager<R>>(
 ) -> tauri::WebviewWindowBuilder<'a, R, M> {
     builder
         .title("Sidevoice")
+        .devtools(crate::inspectable())
         .decorations(false)
         .transparent(true)
         .resizable(false)

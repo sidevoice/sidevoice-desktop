@@ -320,6 +320,11 @@ fn reset_call_state(app: &AppHandle) {
     voice::page_changed(app);
 }
 
+/// Whether this build's webviews can be inspected (core `build_info::inspectable`, by the channel build.rs names).
+pub(crate) fn inspectable() -> bool {
+    sidevoice_desktop_core::build_info::inspectable(env!("SIDEVOICE_BUILD_CHANNEL"))
+}
+
 /// (Re)creates the room window: the bundled interface, bound to the app's own pages.
 fn open_room(app: &AppHandle) -> tauri::Result<()> {
     let state = app.state::<AppState>();
@@ -347,6 +352,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
     let build = BuildInfo::new(env!("SIDEVOICE_BUILD_CHANNEL"), &version, commit, date);
     let builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(page.into()))
         .title("Sidevoice")
+        .devtools(inspectable())
         .inner_size(1100.0, 760.0)
         .min_inner_size(420.0, 560.0)
         .initialization_script(bridge::NO_CONTEXT_MENU_SCRIPT)
