@@ -96,7 +96,7 @@ fn pairs_over_the_socket_and_the_page_gets_only_the_secret() {
         host.pairing().unwrap(),
         json!({
             "fp": core.fingerprint(), "public_key": core.public_key(), "device_id": stored.device_id,
-            "token": secret, "urls": [format!("http://127.0.0.1:{port}")], "rv": null, "host": "fake-machine",
+            "token": secret, "urls": [format!("http://127.0.0.1:{port}")], "host": "fake-machine",
             "local": true,
         })
     );
@@ -385,7 +385,6 @@ fn install_fake_cli(dirs: &DataDirs, status: &str) -> PathBuf {
              '--version --json') v=$(cat '{version}'); : > '{read}'; [ -f '{slow}' ] && sleep 1; printf '{{\"ok\":true,\"version\":%s}}\\n' \"$v\" ;;\n\
              'service status') echo '{status}' ;;\n\
              'pair-device --json') echo '{{\"ok\":true,\"code\":\"SV1-CODE\",\"expires_in\":600,\"reach\":\"local-only\",\"payload\":{{}}}}' ;;\n\
-             pair*) echo '{{\"ok\":true,\"room\":\"https://room.example\",\"connector_id\":\"c1\"}}' ;;\n\
              'service start') echo '{{\"ok\":false,\"error\":{{\"key\":\"service.not-loaded\",\"message\":\"m\"}}}}'; exit 1 ;;\n\
              *) echo '{{\"ok\":true,\"state\":\"starting\",\"service\":\"launchd\"}}' ;;\nesac\n",
             log = log.display(),
@@ -436,12 +435,6 @@ fn without_a_connector_the_cli_says_and_actions_run_through_it() {
     host.act(Action::LoginOn).unwrap();
     host.act(Action::LoginOff).unwrap();
     assert_eq!(host.pairing_code().unwrap(), json!({"code": "SV1-CODE", "expires_in": 600, "reach": "local-only"}));
-    assert_eq!(host.pair_room("https://room.example", "ROOM-CODE").unwrap(), json!({"room": "https://room.example"}));
-    for (url, code) in
-        [("-x", "c"), ("ftp://a", "c"), ("https://a", "--force"), ("https://a b", "c"), ("https://a", "")]
-    {
-        assert_eq!(host.pair_room(url, code).unwrap_err().key, "bad_request", "{url} {code}");
-    }
     let ran = calls(&log);
     for expected in [
         "service restart --json",
@@ -452,11 +445,9 @@ fn without_a_connector_the_cli_says_and_actions_run_through_it() {
         "service login on --json",
         "service login off --json",
         "pair-device --json",
-        "pair https://room.example ROOM-CODE --json",
     ] {
         assert!(ran.iter().any(|c| c == expected), "{expected} not in {ran:?}");
     }
-    assert!(!ran.iter().any(|c| c.contains("--force") || c.starts_with("pair -x")));
 }
 
 #[test]

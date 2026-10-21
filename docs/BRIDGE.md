@@ -241,20 +241,19 @@ docs/LOCAL_HOST.md.
 |---|---|
 | `state()` | `{state, failure?, core?, product_version, service?, calls?, attempts?, limit?, installed?, reachable}` (`limit` only where the service manager has one: «(2 de 5)» only then; `product_version` the installed Sidevoice's version, the `sidevoice` package — not `core.version` —, `null` when unknown or not installed; `installed` whether the service starts at the next sign-in — the connector's `start_at_login`, absent when the connector does not say); `state` one of `absent`, `not-installed`, `stopped-by-person`, `starting`, `backoff`, `running`, `failed`, `service-failed`, `refused`, `incompatible` |
 | `subscribe(listener)` → `stop` | the state now, then on every change (polled every 2 s while anyone listens) |
-| `pairing()` | `{fp, public_key, device_id, token, urls: ["http://127.0.0.1:<port>"], rv: null, host, local: true}` whenever a core answers and the app is paired (`reachable`), whatever `state` says, else `null`; `token` is the app's proxy secret for this launch, never the device token |
+| `pairing()` | `{fp, public_key, device_id, token, urls: ["http://127.0.0.1:<port>"], host, local: true}` whenever a core answers and the app is paired (`reachable`), whatever `state` says, else `null`; `token` is the app's proxy secret for this launch, never the device token |
 | `start()` / `stop()` / `restart()` / `serviceInstall()` / `serviceUninstall()` | the connector's `service …`; resolve the state after it |
 | `setStartAtLogin(enabled)` | whether the service starts at the next sign-in, and only that (a running service keeps running, a stopped one stays stopped): the connector's `service login on\|off`, which it does not ship yet — until then it rejects `service.login-unsupported`; the state it resolves reads the change back in `installed`; a non-boolean rejects `bad_request` (docs/LOCAL_HOST.md → Start at sign-in) |
 | `reconnect()` | pairs the app with the core again (after `refused`; never done on its own) |
 | `revealLog()` | shows the logs in Finder: the app's own (below), and the core's (`~/.sidevoice/core.log`, else `connector.log`) when there is one; the app's is there with no connector installed |
 | `pairingCode()` | `{code, expires_in, reach}`, on the person's click only: shown, never sent — the page's convention; native authorises the caller, not a person (docs/LOCAL_HOST.md → Trust) |
-| `pairRoom(url, code)` | pairs this machine with a room (`pair … --json` only): `{room}` |
 | `install(onProgress?)` | «Prepare this computer»: installs Sidevoice from the npm registry, without Node (docs/LOCAL_HOST.md → Install). Answers at once a promise of the state after it — once the app is paired with the new core, `reachable` — that carries `job`, this call's id (sidevoice-web's `LocalHostInstallOperation`). `onProgress({step, done, total, cancellable})` about twice a second while it runs, when that changes (below). One at a time: another call meanwhile rejects `install.busy` |
 | `cancel(job)` | stops install `job` while that is honoured — `download`, `verification` and the unpacking in `staging`, never once the package's installer runs — and resolves whether it was (`true`: the install rejects `install.cancelled`); `false` too for a job not under way |
 
 Actions reject `{key, message}`. Commands behind it (`src-tauri/src/local_host.rs`): `local_host_state`,
 `local_host_pairing`, `local_host_action {action}` (`start`, `stop`, `restart`, `service-install`,
 `service-uninstall`, `start-at-login-on`, `start-at-login-off`, `reconnect`, `reveal-log`), `local_host_pairing_code`,
-`local_host_pair_room {url, code}`, `local_host_install {job}`, `local_host_install_progress {job}` (the progress, or
+`local_host_install {job}`, `local_host_install_progress {job}` (the progress, or
 `null` for another job or once it has ended), `local_host_install_cancel {job}`.
 Granted to the room window (`capabilities/room.json`); each re-checks that the caller is the current room window on
 the app's own page.

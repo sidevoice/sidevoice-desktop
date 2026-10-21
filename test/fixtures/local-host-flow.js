@@ -49,9 +49,9 @@
     facts.push("subscribed=" + subscribed);
 
     const pairing = await local.pairing();
-    const shape = ["fp", "public_key", "device_id", "token", "urls", "rv", "host", "local"].every((k) => k in pairing);
+    const shape = ["fp", "public_key", "device_id", "token", "urls", "host", "local"].every((k) => k in pairing);
     const base = pairing.urls[0];
-    facts.push("pairing=" + (shape && pairing.local === true && pairing.rv === null && /^http:\/\/127\.0\.0\.1:\d+$/.test(base)
+    facts.push("pairing=" + (shape && pairing.local === true && /^http:\/\/127\.0\.0\.1:\d+$/.test(base)
       && pairing.token.length === 43 ? "ok" : "bad:" + JSON.stringify(Object.keys(pairing))));
     facts.push("host=" + pairing.host);
 

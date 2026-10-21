@@ -66,16 +66,6 @@ pub async fn local_host_pairing_code(app: AppHandle, webview: Webview) -> Answer
         .map_err(|e| refusal("internal", &e.to_string()))?
 }
 
-/// `npx sidevoice pair <url> <code> --json`: `{room}`.
-#[tauri::command]
-pub async fn local_host_pair_room(app: AppHandle, webview: Webview, url: String, code: String) -> Answer {
-    caller(&app, &webview)?;
-    let _permit = crate::data::admit(&app).ok_or_else(|| refusal("reset.busy", "Data reset is under way."))?;
-    tauri::async_runtime::spawn_blocking(move || imp::pair_room(&app, &url, &code))
-        .await
-        .map_err(|e| refusal("internal", &e.to_string()))?
-}
-
 /// "Prepare this computer": installs Sidevoice from the npm registry as install `job` (the page's id for this call;
 /// docs/LOCAL_HOST.md → Install), and answers the state after it, once the app is paired with the new core (or has
 /// waited for it long enough); `{key, step?, params?, log_tail?, message}` when it fails. One at a time
@@ -227,10 +217,6 @@ mod imp {
         host(app)?.pairing_code().map_err(|r| json!(r))
     }
 
-    pub fn pair_room(app: &AppHandle, url: &str, code: &str) -> Answer {
-        host(app)?.pair_room(url, code).map_err(|r| json!(r))
-    }
-
     /// An install begun (the slot taken); dropped unrun, it frees it.
     pub struct Begun(Installing);
 
@@ -275,9 +261,6 @@ mod imp {
         Err(unsupported())
     }
     pub fn pairing_code(_app: &AppHandle) -> Answer {
-        Err(unsupported())
-    }
-    pub fn pair_room(_app: &AppHandle, _url: &str, _code: &str) -> Answer {
         Err(unsupported())
     }
     pub struct Begun;
