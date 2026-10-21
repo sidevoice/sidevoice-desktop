@@ -5,11 +5,12 @@
 
 use std::fs;
 use std::path::Path;
+use std::time::Instant;
 
 use crate::macos::{app_command, binary, fake_node, AppHome, PROBE_ONLY, TRIPLE};
 use crate::util::{
-    contains, ensure, grep, has, line_count, lines_after, mode, re, read, read_bytes, repo, sleep, wait_for, work, Cmd,
-    TauriBuild,
+    contains, ensure, grep, has, interrupted, line_count, lines_after, mode, re, read, read_bytes, repo, sleep,
+    wait_for, work, Background, Cmd, TauriBuild,
 };
 use crate::Result;
 
@@ -432,7 +433,7 @@ pub fn memory() -> Result<()> {
     let mut app =
         data.app(&[("SIDEVOICE_DEBUG_PAGE", "memory.html"), ("SIDEVOICE_DEBUG_IDLE_MINUTE_MS", "2000")]).spawn(&log)?;
     // The models install first (a download), then the walk; a step takes ten seconds or so.
-    let done = wait_for(&log, "memory phase=done ", 0, 1500);
+    let done = memory_walk(&mut app, &log, &logs);
     app.stop();
     let text = read(&log);
     eprintln!("{}", grep(&text, "probe-memory|memory phase=|memory-holds").join("\n"));
@@ -446,6 +447,75 @@ pub fn memory() -> Result<()> {
     ensure(!has(&text, "probe-memory-failed"), "the memory walk failed")?;
     ensure(done, "the memory walk never reached its last step")?;
     crate::memory::report(&text, crate::memory::APP_RULES)
+}
+
+/// The whole memory walk may take this long (a passing run takes about four and a half minutes with the models
+/// installed first), and once it has begun no step takes this long to print the next `memory phase=` line (the longest
+/// waits ten seconds and then reads the footprint).
+const MEMORY_WALK_SECONDS: u64 = 360;
+const MEMORY_STALL_SECONDS: u64 = 120;
+
+/// Waits for the walk's last line. Bounded twice: as a whole, and by a stall (no new `memory phase=` line for
+/// [`MEMORY_STALL_SECONDS`] once the walk has begun), so that a hung app is found in two minutes. Before giving up the
+/// app's state goes to the log: its process line, and a `sample` of its threads (where each is waiting), which is what
+/// tells a deadlock from a slow step (#27). Returns whether the walk finished.
+fn memory_walk(app: &mut Background, log: &Path, logs: &Path) -> bool {
+    let started = Instant::now();
+    let mut seen = 0;
+    let mut last = Instant::now();
+    loop {
+        let text = read(log);
+        if has(&text, "memory phase=done ") {
+            return true;
+        }
+        let phases = text.matches("memory phase=").count();
+        if phases != seen {
+            seen = phases;
+            last = Instant::now();
+        }
+        if !app.running() {
+            eprintln!("--- the app ended before the walk did");
+            return false;
+        }
+        let stalled = seen > 0 && last.elapsed().as_secs() >= MEMORY_STALL_SECONDS;
+        let late = started.elapsed().as_secs() >= MEMORY_WALK_SECONDS;
+        if stalled || late || interrupted().is_err() {
+            let why = if stalled { "no new step for 120 s" } else { "the walk is past 360 s" };
+            eprintln!("--- {why} (after {} s, {seen} steps): the app's state", started.elapsed().as_secs());
+            describe_hung(app.pid(), logs);
+            return false;
+        }
+        sleep(1.0);
+    }
+}
+
+/// What a hung process is doing, for the log: `ps` for its state, and macOS's `sample` of its threads for ten
+/// seconds (the call stacks say which lock or main-thread call each waits on). Each is itself bounded.
+fn describe_hung(pid: u32, logs: &Path) {
+    let pid = pid.to_string();
+    let state = Cmd::new("ps").args(["-o", "pid,stat,etime,time,%cpu,%mem,rss,command", "-p", &pid]).attempt();
+    if let Ok((_, text)) = state {
+        eprintln!("{text}");
+    }
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let file = logs.join("hung-sample.txt");
+    let file_arg = file.to_string_lossy().into_owned();
+    if let Ok(mut sample) =
+        Cmd::new("sample").args([pid.as_str(), "10", "-file", file_arg.as_str()]).spawn(&logs.join("sample.log"))
+    {
+        if sample.ended(45).is_none() {
+            eprintln!("--- sample did not end in 45 s");
+            sample.stop();
+        }
+    }
+    let sampled = read(&file);
+    eprintln!(
+        "--- sample of the app ({} lines, first 250)\n{}",
+        sampled.lines().count(),
+        sampled.lines().take(250).collect::<Vec<_>>().join("\n")
+    );
 }
 
 /// The call controls card's run: the probe app on test/fixtures/card-probe.html, the editor of
