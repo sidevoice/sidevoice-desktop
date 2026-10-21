@@ -194,6 +194,21 @@ pub fn wanted(joined: bool, hidden: bool, room_in_front: bool, always_shown: boo
     joined && !hidden && (always_shown || !room_in_front)
 }
 
+/// The reason [`wanted`] answers as it does, for the app log: a card that is not there says why.
+pub fn why(joined: bool, hidden: bool, room_in_front: bool, always_shown: bool) -> &'static str {
+    if !joined {
+        "no call"
+    } else if hidden {
+        "hidden by the person"
+    } else if always_shown {
+        "always shown"
+    } else if room_in_front {
+        "room in view"
+    } else {
+        "room not in view"
+    }
+}
+
 /// Whether a card hidden for now (its ×, the tray's "hide") stays hidden: until the call ends or the room's window
 /// comes into view or leaves it (opened again, minimised, covered).
 pub fn still_hidden(hidden: bool, joined: bool, room_was_in_front: Option<bool>, room_in_front: bool) -> bool {
@@ -341,6 +356,16 @@ mod tests {
         }
         assert!(!wanted(true, false, true, false), "the room is in front: its controls are there");
         assert!(wanted(true, false, true, true), "always shown: in front of the room too");
+    }
+
+    #[test]
+    fn the_reason_always_agrees_with_the_answer() {
+        for bits in 0..16u8 {
+            let (joined, hidden, front, always) = (bits & 1 != 0, bits & 2 != 0, bits & 4 != 0, bits & 8 != 0);
+            let reason = why(joined, hidden, front, always);
+            let shown = wanted(joined, hidden, front, always);
+            assert_eq!(shown, matches!(reason, "always shown" | "room not in view"), "{bits:04b}: {reason}");
+        }
     }
 
     #[test]
