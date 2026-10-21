@@ -246,6 +246,39 @@ pub enum TrayIcon {
     Muted,
 }
 
+/// The tray icon as decided so far, for icons decided on several threads and applied later, on the main thread
+/// (sidevoice-desktop#170). The decision is taken under the slot's lock ([`decide`](Self::decide)); the tray is
+/// touched only after the lock is released, and only if [`is_latest`](Self::is_latest) says no later icon was decided
+/// meanwhile. The lock is never held across a tray call: from another thread those wait for the main thread, which
+/// takes the same lock.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct TrayIconSlot {
+    decided: Option<TrayIcon>,
+    latest: crate::call_controls::Latest,
+}
+
+impl TrayIconSlot {
+    /// A slot whose tray already shows `icon`.
+    pub fn showing(icon: TrayIcon) -> Self {
+        Self { decided: Some(icon), ..Self::default() }
+    }
+
+    /// Records `icon` as the one to show. `Some(n)`: it differs from the last decided, so apply it, and `n` is the
+    /// number the apply must still find to land. `None`: the tray shows it, or is about to, already.
+    pub fn decide(&mut self, icon: TrayIcon) -> Option<u64> {
+        if self.decided == Some(icon) {
+            return None;
+        }
+        self.decided = Some(icon);
+        Some(self.latest.advance())
+    }
+
+    /// Whether the decision numbered `n` is still the latest one.
+    pub fn is_latest(&self, n: u64) -> bool {
+        self.latest.is(n)
+    }
+}
+
 /// Everything the tray displays, derived from one snapshot, in the app's language.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrayView {
@@ -291,6 +324,25 @@ fn with_title(status: &str, title: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tray_icon_slot_applies_only_changes_and_only_the_latest() {
+        use TrayIcon::*;
+        let mut slot = TrayIconSlot::showing(Idle);
+        assert_eq!(slot.decide(Idle), None, "already shown: nothing to apply");
+        let live = slot.decide(Live).expect("a change");
+        assert_eq!(slot.decide(Live), None, "decided twice: applied once");
+        let muted = slot.decide(Muted).expect("a change");
+        assert!(!slot.is_latest(live), "a stale apply must not land after a later decision");
+        assert!(slot.is_latest(muted));
+        let idle = slot.decide(Idle).expect("back to the first icon is a change from the last decided");
+        assert!(slot.is_latest(idle) && !slot.is_latest(muted));
+    }
+
+    #[test]
+    fn tray_icon_slot_starts_undecided() {
+        assert!(TrayIconSlot::default().decide(TrayIcon::Idle).is_some());
+    }
 
     fn live(mic_enabled: bool) -> CallSnapshot {
         CallSnapshot {
