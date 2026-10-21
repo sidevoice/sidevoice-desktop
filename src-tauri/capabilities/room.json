@@ -40,7 +40,6 @@
     "allow-local-host-pairing",
     "allow-local-host-action",
     "allow-local-host-pairing-code",
-    "allow-local-host-pair-room",
     "allow-local-host-install",
     "allow-local-host-install-progress",
     "allow-local-host-install-cancel",

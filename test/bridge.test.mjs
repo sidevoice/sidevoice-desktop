@@ -1025,7 +1025,7 @@ test("host carries the bridge version; localHost only where the app offers it", 
   const { win } = fakeWindow(ORIGIN);
   const api = install(win, ORIGIN, "native", true);
   assert.deepEqual(Object.keys(api.host.localHost).sort(), [
-    "cancel", "install", "pairRoom", "pairing", "pairingCode", "reconnect", "restart", "revealLog", "serviceInstall",
+    "cancel", "install", "pairing", "pairingCode", "reconnect", "restart", "revealLog", "serviceInstall",
     "serviceUninstall", "setStartAtLogin", "start", "state", "stop", "subscribe",
   ]);
   assert.ok(Object.isFrozen(api.host.localHost));
@@ -1033,13 +1033,12 @@ test("host carries the bridge version; localHost only where the app offers it", 
 
 test("localHost calls go to their native commands and resolve what the app answers", async () => {
   const install = loadFactory();
-  const pairing = { fp: "fp", public_key: "k", device_id: "d", token: "secret", urls: ["http://127.0.0.1:5"], rv: null, host: "Mac", local: true };
+  const pairing = { fp: "fp", public_key: "k", device_id: "d", token: "secret", urls: ["http://127.0.0.1:5"], host: "Mac", local: true };
   const { win, calls } = localHostWindow({
     local_host_state: { state: "running", service: "launchd", calls: 0 },
     local_host_pairing: pairing,
     local_host_action: (args) => ({ state: args.action === "stop" ? "stopped-by-person" : "running" }),
-    local_host_pairing_code: { code: "SV1", expires_in: 600, reach: "room" },
-    local_host_pair_room: { room: "https://room.example" },
+    local_host_pairing_code: { code: "SV1", expires_in: 600, reach: "direct" },
   });
   const local = install(win, ORIGIN, null, true).host.localHost;
   assert.deepEqual(await local.state(), { state: "running", service: "launchd", calls: 0 });
@@ -1048,8 +1047,7 @@ test("localHost calls go to their native commands and resolve what the app answe
   for (const name of ["start", "restart", "serviceInstall", "serviceUninstall", "reconnect", "revealLog"]) await local[name]();
   await local.setStartAtLogin(true);
   await local.setStartAtLogin(false);
-  assert.deepEqual(await local.pairingCode(), { code: "SV1", expires_in: 600, reach: "room" });
-  assert.deepEqual(await local.pairRoom("https://room.example", "CODE"), { room: "https://room.example" });
+  assert.deepEqual(await local.pairingCode(), { code: "SV1", expires_in: 600, reach: "direct" });
   assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("local_host")), [
     ["local_host_state", undefined],
     ["local_host_pairing", undefined],
@@ -1063,7 +1061,6 @@ test("localHost calls go to their native commands and resolve what the app answe
     ["local_host_action", { action: "start-at-login-on" }],
     ["local_host_action", { action: "start-at-login-off" }],
     ["local_host_pairing_code", undefined],
-    ["local_host_pair_room", { url: "https://room.example", code: "CODE" }],
   ]);
 });
 

@@ -456,7 +456,7 @@
           }
         };
       },
-      /** `{fp, public_key, device_id, token, urls: ["http://127.0.0.1:<port>"], rv: null, host, local: true}`
+      /** `{fp, public_key, device_id, token, urls: ["http://127.0.0.1:<port>"], host, local: true}`
        *  whenever a core answers and the app is paired (`reachable`), whatever `state` says; else `null`. `token` is
        *  the app's proxy secret for this launch. */
       pairing: () => call("local_host_pairing"),
@@ -479,8 +479,6 @@
       revealLog: action("reveal-log"),
       /** A code for another device, on the person's click only: `{code, expires_in, reach}`. Shown, never sent. */
       pairingCode: () => call("local_host_pairing_code"),
-      /** Pairs this machine with a room (`npx sidevoice pair <url> <code>`): `{room}`. */
-      pairRoom: (url, code) => call("local_host_pair_room", { url, code }),
       /** "Prepare this computer": installs Sidevoice from the npm registry, without Node (docs/LOCAL_HOST.md → Install;
        *  sidevoice-web's `LocalHostBridge.install`). Answers at once a promise of the state after it, once the app is
        *  paired with the new core (`LocalHostInstallOperation`), carrying `job`, this call's id for `cancel`.

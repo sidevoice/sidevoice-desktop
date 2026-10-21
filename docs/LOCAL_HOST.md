@@ -47,7 +47,7 @@ The device token travels only over the socket. The page never holds it: it gets 
 **What the native side does not check: a person.** The room page's commands are authorised by who calls them (the
 current room window, on the app's own page), not by a person's presence. A compromised room page can therefore operate
 the service, call `pairingCode()` without a click and send the code anywhere (redeeming it issues a separate, durable
-device token), or call `pairRoom()` with a room and code of its choosing. "On the person's click" and "shown, never
+device token). "On the person's click" and "shown, never
 sent" are the page's conventions, not security properties enforced here; the page's integrity (bundled, local, no
 navigation away) is what they rest on.
 
@@ -130,12 +130,10 @@ the group and stays.
 | `serviceInstall()` / `serviceUninstall()` | `service install\|uninstall --json` | 45 s |
 | `setStartAtLogin(enabled)` | `service login on\|off --json` | 45 s |
 | `pairingCode()` | `pair-device --json` → `{code, expires_in, reach}` | 30 s |
-| `pairRoom(url, code)` | `pair <url> <code> --json` → `{room}`, nothing else (the core follows the new credentials) | 60 s |
 | `reconnect()` | a new local pairing over the socket | — |
 | `revealLog()` | `/usr/bin/open -R` the app log (docs/BRIDGE.md → The app log) and `D/core.log` (else `D/connector.log`), whichever exist | — |
 
-`pairRoom` refuses (`bad_request`) a URL that is not `http(s)://…` or a code with blanks or starting with `-`, so neither
-can become an option. A CLI refusal is its `{key, message}`; the app's own: `cli.unavailable`, `cli.failed`,
+A CLI refusal is its `{key, message}`; the app's own: `cli.unavailable`, `cli.failed`,
 `cli.timeout`, `install.unsafe`, `install.unreadable`, `log.missing`, `reveal.failed`, `unsupported`,
 `service.login-unsupported`.
 
@@ -218,7 +216,7 @@ page's pairing for the local host is
 
 ```json
 { "fp": "…", "public_key": "…", "device_id": "…", "token": "<the proxy's secret>",
-  "urls": ["http://127.0.0.1:<port>"], "rv": null, "host": "…", "local": true }
+  "urls": ["http://127.0.0.1:<port>"], "host": "…", "local": true }
 ```
 
 Each request is checked against design §4.1's table (`src-tauri/local-host/src/proxy.rs`):
