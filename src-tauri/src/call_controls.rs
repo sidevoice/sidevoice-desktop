@@ -1,8 +1,8 @@
 //! The call controls card (sidevoice/sidevoice-desktop#4): a small window that floats over the person's other apps
-//! during a call, while the room's window is not in front (hidden, minimised, covered or without the focus), and never takes focus from
-//! them. It shows the web build's `call-controls.html`, which talks only to `bridge/call-controls-bridge.js`
-//! (docs/BRIDGE.md → "The call controls card"); the app relays the call to it from the room window and carries its
-//! buttons back.
+//! during a call, while the room's stage is out of view (#165: the room hidden, minimised, covered or on another
+//! Space, or the page on Settings), and never takes focus from them. It shows the web build's `call-controls.html`,
+//! which talks only to `bridge/call-controls-bridge.js` (docs/BRIDGE.md → "The call controls card"); the app relays the
+//! call to it from the room window and carries its buttons back.
 //!
 //! - macOS: a non-activating `NSPanel` (tauri-nspanel) at the status level, on every Space and over full-screen apps.
 //! - Windows / Linux X11: a borderless, transparent, always-on-top window that is never focused (no taskbar button).
@@ -34,7 +34,7 @@ const FIRST_SIZE: Size = Size { width: 414.0, height: 82.0 };
 /// events of its own (Windows, Linux X11), so the app tells the card when the pointer is over it. On macOS the card's
 /// WebKit gets them too ([`hover_while_inactive`]).
 const POINTER_EVERY: Duration = Duration::from_millis(80);
-/// How often the app looks at whether the room window is in front ([`watch_view`]).
+/// How often the app looks at whether the room's stage is in view ([`watch_view`]).
 const VIEW_EVERY: Duration = Duration::from_millis(500);
 /// The card's shadow margin inside its window (the web build's CARD_MARGIN): the pointer over it is not over the card.
 const MARGIN: f64 = 12.0;
@@ -63,11 +63,14 @@ tauri_nspanel::tauri_panel! {
 
 #[derive(Default)]
 struct Inner {
-    /// Hidden for now, by the card's × or the tray's "hide": until the room's window is opened or minimised again, or
-    /// the next call (core `still_hidden`).
+    /// Hidden for now, by the card's × or the tray's "hide": until the stage comes into view or leaves it again, or the
+    /// next call (core `still_hidden`).
     hidden: bool,
-    /// Whether the room's window was in view when last looked at.
-    room_in_front: Option<bool>,
+    /// Whether the room's stage was in view when last looked at ([`stage_in_view`]).
+    stage_in_view: Option<bool>,
+    /// What the room's page last said of its stage (`host.callControls.setStageVisible`); `None` until it says (a web
+    /// build before #165 never does).
+    page: Option<PageStage>,
     shown: bool,
     /// Shown for a moment after a change in Settings, while the room is in front (`preview`).
     preview_until: Option<Instant>,
@@ -101,6 +104,14 @@ struct Inner {
     /// The latest show or hide decided ([`apply_visible`]), and the latest move ([`move_when_latest`]).
     visibility: logic::Latest,
     moves: logic::Latest,
+}
+
+/// The room's stage as its page last told it: whether the page shows it (not on Settings or another screen without it),
+/// and where it is in the page (CSS pixels from the top-left corner of the window's content).
+#[derive(Clone, Copy, Debug)]
+struct PageStage {
+    shown: bool,
+    rect: Option<Rect>,
 }
 
 /// A drag in progress: where the pointer and the window were when it started, on the desktop.
@@ -242,56 +253,194 @@ fn card(app: &AppHandle) -> Option<tauri::State<'_, Card>> {
     app.try_state::<Card>()
 }
 
-/// Whether the room's window is what the person is using (its own controls are there): shown, not minimised, on macOS
-/// not fully covered or on another Space, and focused. Switching to another app is leaving it, even with the room still
-/// on screen beside it (#159; #114 had ignored focus). Windows and Linux have no occlusion query, so there a window
-/// covered by others, but focused, still counts as in front.
-fn room_in_front(app: &AppHandle) -> bool {
-    crate::room_window(app).is_some_and(|w| {
-        logic::room_is_in_front(
-            w.is_visible().unwrap_or(false),
-            w.is_minimized().unwrap_or(false),
-            occluded(&w),
-            w.is_focused().unwrap_or(false),
-        )
-    })
+/// What the system shows of the room's window, for its stage (core `stage_on_screen`), as the log says it.
+#[derive(Debug, Clone, Copy)]
+struct Shown {
+    shown: bool,
+    minimised: bool,
+    /// macOS: not fully covered nor on another Space; Windows: not on another virtual desktop; Wayland: focused.
+    on_screen: bool,
+    /// The part of the stage no other app's window covers, where the app can measure it (macOS).
+    uncovered: Option<f64>,
 }
 
+impl Shown {
+    fn stage_on_screen(&self) -> bool {
+        logic::stage_on_screen(self.shown, self.minimised, self.on_screen, self.uncovered)
+    }
+}
+
+/// Whether the person can see the room's stage (#165): the system shows it (core `stage_on_screen`) and the page does
+/// (core `stage_in_view`). Which app has the focus is not part of it: the room in front with its stage, another app
+/// focused, is still in view. With what the system said and what the page said, for the log; `None` once the app is
+/// going.
+///
+/// The card's lock is held only to read what the page said; the window is asked on the main thread with it released
+/// (#170).
+fn stage_in_view(app: &AppHandle) -> Option<(bool, Shown, Option<bool>)> {
+    let page = card(app).and_then(|card| card.0.lock().unwrap().page);
+    let rect = page.and_then(|p| p.rect);
+    let a = app.clone();
+    let shown = on_main(app, move || system_shows(&a, rect))?;
+    let page_shows = page.map(|p| p.shown);
+    Some((logic::stage_in_view(shown.stage_on_screen(), page_shows), shown, page_shows))
+}
+
+/// Runs `f` on the main thread and waits for its answer (at once when called there). Never with a lock held that the
+/// main thread may take.
+fn on_main<T: Send + 'static>(app: &AppHandle, f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        let _ = tx.send(f());
+    })
+    .ok()?;
+    rx.recv().ok()
+}
+
+/// On the main thread ([`stage_in_view`]): AppKit and the window handles want it. `stage` is where the page says its
+/// stage is; without it, the room's whole content.
+fn system_shows(app: &AppHandle, stage: Option<Rect>) -> Shown {
+    let Some(w) = crate::room_window(app) else {
+        return Shown { shown: false, minimised: false, on_screen: false, uncovered: None };
+    };
+    let shown = w.is_visible().unwrap_or(false);
+    let minimised = w.is_minimized().unwrap_or(false);
+    let on_screen = on_screen(&w);
+    let uncovered = if shown && !minimised && on_screen { uncovered(&w, stage) } else { None };
+    Shown { shown, minimised, on_screen, uncovered }
+}
+
+/// macOS: AppKit's occlusion state, clear while no part of the window is on screen (fully covered, or on another Space).
 #[cfg(target_os = "macos")]
-fn occluded(w: &WebviewWindow) -> bool {
+fn on_screen(w: &WebviewWindow) -> bool {
     use tauri_nspanel::objc2::{msg_send, runtime::AnyObject};
     // NSWindowOcclusionStateVisible: set while any part of the window is on screen.
     const VISIBLE: usize = 1 << 1;
-    // SAFETY: the window's own NSWindow, read on the main thread (`watch_view`, window events).
+    // SAFETY: the window's own NSWindow, read on the main thread ([`system_shows`]).
     w.ns_window().is_ok_and(|ns| unsafe {
         let state: usize = msg_send![ns as *mut AnyObject, occlusionState];
-        state & VISIBLE == 0
+        state & VISIBLE != 0
     })
 }
 
-#[cfg(not(target_os = "macos"))]
-fn occluded(_: &WebviewWindow) -> bool {
-    false
+/// Windows: DWM cloaks a window on another virtual desktop. How much other windows cover it is not measured.
+#[cfg(windows)]
+fn on_screen(w: &WebviewWindow) -> bool {
+    use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+    let Ok(hwnd) = w.hwnd() else { return true };
+    let mut cloaked: u32 = 0;
+    // SAFETY: the room's own window handle, and a u32 as large as the attribute.
+    let read = unsafe {
+        DwmGetWindowAttribute(
+            hwnd.0 as _,
+            DWMWA_CLOAKED as _,
+            (&mut cloaked as *mut u32).cast(),
+            std::mem::size_of::<u32>() as u32,
+        )
+    };
+    read != 0 || cloaked == 0
 }
 
-/// Minimising, covering and Space changes raise no window event Tauri forwards, so the app looks at the room's view
-/// twice a second and updates the card when it changes. One thread for the app's lifetime.
+/// Linux: X11 is not measured (a covered room counts as seen); Wayland shows the app nothing of other windows, so there
+/// the room counts as seen only while it has the focus, as before #165.
+#[cfg(target_os = "linux")]
+fn on_screen(w: &WebviewWindow) -> bool {
+    !wayland() || w.is_focused().unwrap_or(false)
+}
+
+/// macOS: the part of the stage (on the desktop) no other app's window above the room covers, from the window server's
+/// list of the windows in front of it. Ordinary and floating windows count; the Dock, menus, the menu bar and the app's
+/// own windows (the card) do not. Window bounds need no permission (only their titles would).
+#[cfg(target_os = "macos")]
+fn uncovered(w: &WebviewWindow, stage: Option<Rect>) -> Option<f64> {
+    use core_foundation::array::{CFArray, CFArrayRef};
+    use core_foundation::base::{CFType, TCFType};
+    use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
+    use core_foundation::number::CFNumber;
+    use core_foundation::string::CFString;
+    use tauri_nspanel::objc2::{msg_send, runtime::AnyObject};
+
+    #[repr(C)]
+    #[derive(Default)]
+    struct CGRect {
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+    }
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGWindowListCopyWindowInfo(option: u32, relative_to: u32) -> CFArrayRef;
+        fn CGRectMakeWithDictionaryRepresentation(dict: CFDictionaryRef, rect: *mut CGRect) -> bool;
+    }
+    // kCGWindowListOptionOnScreenAboveWindow | kCGWindowListExcludeDesktopElements.
+    const ABOVE: u32 = (1 << 1) | (1 << 4);
+    // kCGDockWindowLevel: the Dock and what floats over it (menus, the menu bar, the card) cover no window.
+    const DOCK_LEVEL: i64 = 20;
+
+    // The room's content on the desktop in points, top-left origin: as the window server gives windows' bounds.
+    let scale = w.scale_factor().ok()?;
+    let (at, size) = (w.inner_position().ok()?, w.inner_size().ok()?);
+    let content = Rect {
+        x: at.x as f64 / scale,
+        y: at.y as f64 / scale,
+        width: size.width as f64 / scale,
+        height: size.height as f64 / scale,
+    };
+    let target = match stage {
+        Some(s) => Rect { x: content.x + s.x, y: content.y + s.y, width: s.width, height: s.height },
+        None => content,
+    };
+    // SAFETY: the room's own NSWindow, on the main thread.
+    let number = w.ns_window().ok().map(|ns| -> isize { unsafe { msg_send![ns as *mut AnyObject, windowNumber] } })?;
+    // SAFETY: CoreGraphics' own function; the array it creates is released by its wrapper.
+    let raw = unsafe { CGWindowListCopyWindowInfo(ABOVE, u32::try_from(number).ok()?) };
+    if raw.is_null() {
+        return None;
+    }
+    let windows: CFArray<CFDictionary<CFString, CFType>> = unsafe { CFArray::wrap_under_create_rule(raw) };
+    let own = i64::from(std::process::id());
+    let number_of = |d: &CFDictionary<CFString, CFType>, key: &'static str| {
+        d.find(CFString::from_static_string(key)).and_then(|v| v.downcast::<CFNumber>())
+    };
+    let above: Vec<Rect> = windows
+        .iter()
+        .filter_map(|d| {
+            let layer = number_of(&d, "kCGWindowLayer")?.to_i64()?;
+            let pid = number_of(&d, "kCGWindowOwnerPID")?.to_i64()?;
+            let alpha = number_of(&d, "kCGWindowAlpha").and_then(|a| a.to_f64()).unwrap_or(1.0);
+            if !(0..DOCK_LEVEL).contains(&layer) || pid == own || alpha <= 0.0 {
+                return None;
+            }
+            let bounds = d.find(CFString::from_static_string("kCGWindowBounds"))?;
+            if !bounds.instance_of::<CFDictionary>() {
+                return None;
+            }
+            let mut r = CGRect::default();
+            // SAFETY: a CFDictionary (checked above), as CoreGraphics wrote it.
+            unsafe { CGRectMakeWithDictionaryRepresentation(bounds.as_CFTypeRef() as CFDictionaryRef, &mut r) }
+                .then_some(Rect { x: r.x, y: r.y, width: r.width, height: r.height })
+        })
+        .collect();
+    Some(logic::uncovered(target, &above))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn uncovered(_: &WebviewWindow, _: Option<Rect>) -> Option<f64> {
+    None
+}
+
+/// Minimising, covering, Space changes and windows of other apps moving raise no window event Tauri forwards, so the app
+/// looks at the stage twice a second and updates the card when it comes into view or leaves it. One thread for the app's
+/// lifetime.
 fn watch_view(app: AppHandle) {
     std::thread::spawn(move || {
         let mut was = None;
         loop {
             std::thread::sleep(VIEW_EVERY);
-            let (tx, rx) = std::sync::mpsc::channel();
-            let a = app.clone();
-            // AppKit and the window handles want the main thread.
-            let sent = app.run_on_main_thread(move || {
-                let _ = tx.send(room_in_front(&a));
-            });
-            if sent.is_err() {
-                return;
-            }
-            let Ok(now) = rx.recv() else { return };
+            let Some((now, shown, page)) = stage_in_view(&app) else { return };
             if was.replace(now).is_some_and(|before| before != now) {
+                debug(&format!("call-controls stage in view={now}: {shown:?} page={page:?}"));
                 update(&app);
             }
         }
@@ -303,17 +452,17 @@ fn watch_view(app: AppHandle) {
 pub fn update(app: &AppHandle) {
     let Some(card) = card(app) else { return };
     let call = app.state::<AppState>().call.lock().unwrap().clone();
-    let in_front = room_in_front(app);
+    let Some((in_view, _, _)) = stage_in_view(app) else { return };
     let always_shown =
         app.state::<AppState>().settings.lock().unwrap().as_ref().is_some_and(|s| s.call_controls_always_shown);
     // Switched off in Settings: no card at all, not even the moment a change shows it.
     let enabled = app.state::<AppState>().settings.lock().unwrap().as_ref().is_none_or(|s| s.call_controls_enabled);
     let (show, hide, unhidden, reason, decision) = {
         let mut inner = card.0.lock().unwrap();
-        let hidden = logic::still_hidden(inner.hidden, call.joined, inner.room_in_front, in_front);
+        let hidden = logic::still_hidden(inner.hidden, call.joined, inner.stage_in_view, in_view);
         let unhidden = inner.hidden && !hidden;
         inner.hidden = hidden;
-        inner.room_in_front = Some(in_front);
+        inner.stage_in_view = Some(in_view);
         let mut previewing = inner.preview_until.is_some_and(|until| Instant::now() < until);
         // Never while the person is at it: the pointer over it, a drag or a resize keep it, and it goes
         // PREVIEW_AFTER_USE after they are done.
@@ -324,8 +473,8 @@ pub fn update(app: &AppHandle) {
             inner.preview_until = None;
             previewing = false;
         }
-        let wanted = enabled
-            && (logic::wanted(call.joined, inner.hidden, in_front, always_shown) || (call.joined && previewing));
+        let by_rule = logic::wanted(enabled, call.joined, inner.hidden, in_view, always_shown);
+        let wanted = by_rule || (enabled && call.joined && previewing);
         let change = (wanted && !inner.shown, !wanted && inner.shown);
         inner.shown = wanted;
         let decision = if change.0 || change.1 { inner.visibility.advance() } else { 0 };
@@ -341,12 +490,10 @@ pub fn update(app: &AppHandle) {
                 inner.pointer_inside = Some(false);
             }
         }
-        let reason = if !enabled {
-            "switched off"
-        } else if !logic::wanted(call.joined, inner.hidden, in_front, always_shown) && call.joined && previewing {
+        let reason = if wanted && !by_rule {
             "preview"
         } else {
-            logic::why(call.joined, inner.hidden, in_front, always_shown)
+            logic::why(enabled, call.joined, inner.hidden, in_view, always_shown)
         };
         (change.0, change.1, unhidden, reason, decision)
     };
@@ -420,7 +567,7 @@ pub fn toggle_hidden(app: &AppHandle) {
     update(app);
 }
 
-/// The card's ×: hidden until the room's window is opened or minimised again, or the next call.
+/// The card's ×: hidden until the stage comes into view or leaves it again, or the next call.
 fn hide(app: &AppHandle) {
     if let Some(card) = card(app) {
         card.0.lock().unwrap().hidden = true;
@@ -468,6 +615,22 @@ fn end_preview(app: &AppHandle) {
     let Some(card) = card(app) else { return };
     card.0.lock().unwrap().preview_until = None;
     update(app);
+}
+
+/// The room's page says whether it shows its stage, and where (#165): Settings and the app's other screens without it
+/// bring the card up as the room going out of view does. The card changes only when what the page shows changes; a
+/// stage that only moved or resized is measured at the next look ([`watch_view`]).
+fn stage_seen_by_page(app: &AppHandle, shown: bool, rect: Option<CardBox>) {
+    let Some(card) = card(app) else { return };
+    let rect = rect
+        .map(|b| Rect { x: b.x, y: b.y, width: b.width, height: b.height })
+        .filter(|r| [r.x, r.y, r.width, r.height].iter().all(|v| v.is_finite() && v.abs() < MAX_SIDE))
+        .filter(|r| r.width > 0.0 && r.height > 0.0);
+    let before = card.0.lock().unwrap().page.replace(PageStage { shown, rect });
+    if before.is_none_or(|b| b.shown != shown) {
+        debug(&format!("call-controls page shows the stage={shown}"));
+        update(app);
+    }
 }
 
 /// The microphone's level from the room window, for the card's wave.
@@ -751,7 +914,8 @@ fn from_card_window(webview: &Webview) -> Result<(), String> {
 /// `host.callControls`' one command, from the room page (not the card), each kept with the app's settings or its
 /// placements and applied at once: `settings` (answers `{alwaysShown, enabled, corner, moved}`), `set-always-shown` with
 /// `enabled` (`{alwaysShown}`), `set-enabled` with `enabled` (`{enabled}`: whether the card shows at all), `set-corner` with `corner` (`{corner}`), `reset-place` (forgets where the card was left
-/// and how the picture was resized, on every display), `clear-size` (forgets only the picture's resized sizes) and `preview` (the card a moment, during a call).
+/// and how the picture was resized, on every display), `clear-size` (forgets only the picture's resized sizes), `preview` (the card a moment, during a call),
+/// and `stage` with `visible` and `rect` (whether the page shows its stage, and where: #165).
 #[tauri::command]
 pub async fn call_controls_settings(
     app: AppHandle,
@@ -759,8 +923,15 @@ pub async fn call_controls_settings(
     action: String,
     enabled: Option<bool>,
     corner: Option<Corner>,
+    visible: Option<bool>,
+    rect: Option<CardBox>,
 ) -> Result<serde_json::Value, serde_json::Value> {
     crate::room_page(&app, &webview).map_err(|why| crate::refusal("bad_request", why))?;
+    if action == "stage" {
+        let visible = visible.ok_or_else(|| crate::refusal("bad_request", "stage takes visible"))?;
+        stage_seen_by_page(&app, visible, rect);
+        return Ok(serde_json::Value::Null);
+    }
     let stored =
         || app.state::<AppState>().settings.lock().unwrap().clone().unwrap_or_else(settings::Settings::first_run);
     match (action.as_str(), enabled, corner) {

@@ -187,38 +187,90 @@ pub fn keep_inside(at: Point, size: Size, work: Rect) -> Point {
     }
 }
 
-/// Whether the card is on screen: during a call, unless hidden for now (the card's ×, the tray's "hide"); while the
-/// room's own window is in view (the same controls are there) only when the person chose it always shown
-/// (`host.callControls.setAlwaysShown`).
-pub fn wanted(joined: bool, hidden: bool, room_in_front: bool, always_shown: bool) -> bool {
-    joined && !hidden && (always_shown || !room_in_front)
+/// Whether the card is on screen (sidevoice-desktop#165): switched on in Settings, during a call, unless hidden for now
+/// (the card's ×, the tray's "hide"), while the room's stage (the conversation's creature and its balloons) is not in
+/// view ([`stage_in_view`]); with the stage in view only when the person chose it always shown
+/// (`host.callControls.setAlwaysShown`). Which app has the focus never decides it.
+pub fn wanted(enabled: bool, joined: bool, hidden: bool, stage_in_view: bool, always_shown: bool) -> bool {
+    enabled && joined && !hidden && (always_shown || !stage_in_view)
 }
 
-/// Whether the room's window is what the person is using: shown, not minimised, not covered (macOS) and the one with the
-/// keyboard. Losing the focus to another app, however much of the room is still on screen, is not being in front.
-pub fn room_is_in_front(visible: bool, minimised: bool, covered: bool, focused: bool) -> bool {
-    visible && !minimised && !covered && focused
+/// Whether the person can see the room's stage: the system shows it ([`stage_on_screen`]) and the page shows it (not
+/// Settings or another screen of the app that has no stage). A page that never said (a web build before #165) counts as
+/// showing it, so an older web never brings the card up by itself.
+pub fn stage_in_view(on_screen: bool, page_shows_it: Option<bool>) -> bool {
+    on_screen && page_shows_it.unwrap_or(true)
+}
+
+/// How much of the stage must be left uncovered by other apps' windows for the person to see it: less than this, and it
+/// counts as covered.
+pub const STAGE_SEEN: f64 = 0.25;
+
+/// Whether the system shows the room's stage: its window shown, not minimised, on screen (macOS: not fully covered nor
+/// on another Space; Windows: not on another virtual desktop) and, where the app can measure it (macOS), at least
+/// [`STAGE_SEEN`] of the stage not under other apps' windows (`uncovered`, [`uncovered`]).
+pub fn stage_on_screen(shown: bool, minimised: bool, on_screen: bool, uncovered: Option<f64>) -> bool {
+    shown && !minimised && on_screen && uncovered.is_none_or(|part| part >= STAGE_SEEN)
+}
+
+/// The part (0 to 1) of `target` that none of `above` covers. Each covered piece is counted once, however many windows
+/// lie over it. An empty target is not seen at all.
+pub fn uncovered(target: Rect, above: &[Rect]) -> f64 {
+    let area = target.width.max(0.0) * target.height.max(0.0);
+    if area <= 0.0 {
+        return 0.0;
+    }
+    // The windows' parts over the target, cut to it.
+    let over: Vec<Rect> = above
+        .iter()
+        .filter_map(|r| {
+            let (x0, y0) = (r.x.max(target.x), r.y.max(target.y));
+            let (x1, y1) = (r.right().min(target.right()), r.bottom().min(target.bottom()));
+            (x1 > x0 && y1 > y0).then_some(Rect { x: x0, y: y0, width: x1 - x0, height: y1 - y0 })
+        })
+        .collect();
+    // The target cut on every edge of those parts: each cell is wholly covered or wholly not.
+    let edges = |a: fn(&Rect) -> f64, b: fn(&Rect) -> f64, lo: f64, hi: f64| {
+        let mut e: Vec<f64> = over.iter().flat_map(|r| [a(r), b(r)]).chain([lo, hi]).collect();
+        e.sort_by(f64::total_cmp);
+        e.dedup();
+        e
+    };
+    let xs = edges(|r| r.x, Rect::right, target.x, target.right());
+    let ys = edges(|r| r.y, Rect::bottom, target.y, target.bottom());
+    let mut covered = 0.0;
+    for x in xs.windows(2) {
+        for y in ys.windows(2) {
+            let middle = Point { x: (x[0] + x[1]) / 2.0, y: (y[0] + y[1]) / 2.0 };
+            if over.iter().any(|r| r.contains(middle)) {
+                covered += (x[1] - x[0]) * (y[1] - y[0]);
+            }
+        }
+    }
+    (1.0 - covered / area).clamp(0.0, 1.0)
 }
 
 /// The reason [`wanted`] answers as it does, for the app log: a card that is not there says why.
-pub fn why(joined: bool, hidden: bool, room_in_front: bool, always_shown: bool) -> &'static str {
-    if !joined {
+pub fn why(enabled: bool, joined: bool, hidden: bool, stage_in_view: bool, always_shown: bool) -> &'static str {
+    if !enabled {
+        "switched off"
+    } else if !joined {
         "no call"
     } else if hidden {
         "hidden by the person"
     } else if always_shown {
         "always shown"
-    } else if room_in_front {
-        "room in front"
+    } else if stage_in_view {
+        "stage in view"
     } else {
-        "room not in front"
+        "stage not in view"
     }
 }
 
-/// Whether a card hidden for now (its ×, the tray's "hide") stays hidden: until the call ends or the room's window
-/// comes into view or leaves it (opened again, minimised, covered).
-pub fn still_hidden(hidden: bool, joined: bool, room_was_in_front: Option<bool>, room_in_front: bool) -> bool {
-    hidden && joined && room_was_in_front.is_none_or(|was| was == room_in_front)
+/// Whether a card hidden for now (its ×, the tray's "hide") stays hidden: until the call ends or the stage comes into
+/// view or leaves it (the room opened again, minimised, covered, Settings opened or closed).
+pub fn still_hidden(hidden: bool, joined: bool, was_in_view: Option<bool>, in_view: bool) -> bool {
+    hidden && joined && was_in_view.is_none_or(|was| was == in_view)
 }
 
 /// Orders changes to the card's window that are decided on several threads and applied later, on the main thread
@@ -381,25 +433,68 @@ mod tests {
     const WORK: Rect = Rect { x: 0.0, y: 25.0, width: 1440.0, height: 850.0 }; // a MacBook under its menu bar
     const CARD: Size = Size { width: 414.0, height: 82.0 };
 
+    /// The whole rule (#165), every case: the card shows when switched on, in a call, not hidden for now, and either
+    /// always shown or with the stage out of view, on screen or in the page.
     #[test]
-    fn shown_during_a_call_unless_hidden_or_the_room_is_in_front_and_not_always_shown() {
-        for always in [false, true] {
-            assert!(wanted(true, false, false, always), "behind or minimised: shown ({always})");
-            assert!(!wanted(false, false, false, always), "no call, no card ({always})");
-            assert!(!wanted(true, true, false, always), "hidden for now ({always})");
-            assert!(!wanted(true, true, true, always), "hidden, the room in front ({always})");
+    fn the_card_shows_exactly_when_the_stage_is_out_of_view() {
+        for bits in 0..64u8 {
+            let [enabled, joined, hidden, on_screen, always] = [0, 1, 2, 3, 4].map(|i| bits & (1 << i) != 0);
+            for page in [None, Some(true), Some(false)] {
+                let in_view = stage_in_view(on_screen, page);
+                let shown = wanted(enabled, joined, hidden, in_view, always);
+                let page_shows = page != Some(false);
+                let expected = enabled && joined && !hidden && (always || !(on_screen && page_shows));
+                assert_eq!(shown, expected, "{bits:05b} page={page:?}");
+            }
         }
-        assert!(!wanted(true, false, true, false), "the room is in front: its controls are there");
-        assert!(wanted(true, false, true, true), "always shown: in front of the room too");
     }
 
     #[test]
-    fn the_room_is_in_front_only_while_it_is_visible_and_focused() {
-        assert!(room_is_in_front(true, false, false, true));
-        assert!(!room_is_in_front(true, false, false, false), "focus went to another app: the card shows (#159)");
-        assert!(!room_is_in_front(true, true, false, true), "minimised");
-        assert!(!room_is_in_front(false, false, false, true), "hidden");
-        assert!(!room_is_in_front(true, false, true, true), "covered");
+    fn the_cases_the_operator_named() {
+        let card = |on_screen: bool, page: Option<bool>, enabled: bool| {
+            wanted(enabled, true, false, stage_in_view(on_screen, page), false)
+        };
+        // The room in front with its stage, even with another app focused (focus is not an input at all): no card.
+        assert!(!card(true, Some(true), true));
+        // The room hidden, minimised, covered, on another Space: the card.
+        assert!(card(false, Some(true), true));
+        // Settings (or another screen of the app without the stage), the room in front: the card.
+        assert!(card(true, Some(false), true));
+        // Settings closed again: no card.
+        assert!(!card(true, Some(true), true));
+        // A web before #165 never says: the system alone decides, and an older page never brings the card up.
+        assert!(!card(true, None, true));
+        assert!(card(false, None, true));
+        // Switched off: never.
+        for (on_screen, page) in [(false, Some(true)), (true, Some(false)), (false, None), (false, Some(false))] {
+            assert!(!card(on_screen, page, false), "{on_screen} {page:?}");
+        }
+    }
+
+    #[test]
+    fn the_system_shows_the_stage_while_its_window_is_shown_and_enough_of_it_uncovered() {
+        assert!(stage_on_screen(true, false, true, None), "nothing measured (Windows, Linux): the window decides");
+        assert!(stage_on_screen(true, false, true, Some(1.0)));
+        assert!(stage_on_screen(true, false, true, Some(STAGE_SEEN)), "a quarter is enough to see it");
+        assert!(!stage_on_screen(true, false, true, Some(0.1)), "covered all but a sliver");
+        assert!(!stage_on_screen(true, true, true, Some(1.0)), "minimised");
+        assert!(!stage_on_screen(false, false, true, None), "hidden (closed to the tray)");
+        assert!(!stage_on_screen(true, false, false, None), "fully covered or on another Space");
+    }
+
+    #[test]
+    fn the_uncovered_part_counts_each_covered_piece_once() {
+        let stage = Rect { x: 100.0, y: 100.0, width: 400.0, height: 200.0 };
+        assert_eq!(uncovered(stage, &[]), 1.0);
+        let left_half = Rect { x: 0.0, y: 0.0, width: 300.0, height: 1000.0 };
+        assert_eq!(uncovered(stage, &[left_half]), 0.5);
+        // The same half under two windows is still half.
+        assert_eq!(uncovered(stage, &[left_half, Rect { x: 150.0, y: 120.0, width: 100.0, height: 50.0 }]), 0.5);
+        let right_quarter = Rect { x: 400.0, y: 0.0, width: 1000.0, height: 1000.0 };
+        assert_eq!(uncovered(stage, &[left_half, right_quarter]), 0.25);
+        assert_eq!(uncovered(stage, &[Rect { x: 0.0, y: 0.0, width: 2000.0, height: 2000.0 }]), 0.0);
+        assert_eq!(uncovered(stage, &[Rect { x: 600.0, y: 0.0, width: 100.0, height: 100.0 }]), 1.0, "beside it");
+        assert_eq!(uncovered(Rect { width: 0.0, ..stage }, &[]), 0.0, "no stage, nothing seen");
     }
 
     #[test]
@@ -413,20 +508,20 @@ mod tests {
 
     #[test]
     fn the_reason_always_agrees_with_the_answer() {
-        for bits in 0..16u8 {
-            let (joined, hidden, front, always) = (bits & 1 != 0, bits & 2 != 0, bits & 4 != 0, bits & 8 != 0);
-            let reason = why(joined, hidden, front, always);
-            let shown = wanted(joined, hidden, front, always);
-            assert_eq!(shown, matches!(reason, "always shown" | "room not in front"), "{bits:04b}: {reason}");
+        for bits in 0..32u8 {
+            let [enabled, joined, hidden, in_view, always] = [0, 1, 2, 3, 4].map(|i| bits & (1 << i) != 0);
+            let reason = why(enabled, joined, hidden, in_view, always);
+            let shown = wanted(enabled, joined, hidden, in_view, always);
+            assert_eq!(shown, matches!(reason, "always shown" | "stage not in view"), "{bits:05b}: {reason}");
         }
     }
 
     #[test]
-    fn hidden_by_its_x_until_the_room_is_opened_or_minimised_or_the_call_ends() {
+    fn hidden_by_its_x_until_the_stage_comes_into_view_or_leaves_or_the_call_ends() {
         assert!(still_hidden(true, true, Some(false), false), "the room still minimised: still hidden");
         assert!(still_hidden(true, true, None, false), "nothing seen of the room yet");
-        assert!(!still_hidden(true, true, Some(false), true), "the room opened again");
-        assert!(!still_hidden(true, true, Some(true), false), "the room minimised (next minimise)");
+        assert!(!still_hidden(true, true, Some(false), true), "the room opened again, Settings closed");
+        assert!(!still_hidden(true, true, Some(true), false), "the room minimised, Settings opened");
         assert!(!still_hidden(true, false, Some(false), false), "the next call shows it again");
         assert!(!still_hidden(false, true, Some(false), false));
     }
