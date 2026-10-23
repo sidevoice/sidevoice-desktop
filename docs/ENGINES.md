@@ -46,7 +46,7 @@ catalogues: `local` first, then each provider), in the shape `/engine` gives the
   optional `acceleratorClass` (`"gpu"`, `"neural-engine"`, or `"cpu"`) from the engine; the app does not infer it or
   enable Core ML. An explicit build choice still takes precedence.
 - Models are downloaded on demand into the per-user shared machine store
-  (`~/Library/Application Support/Sidevoice/Models` on macOS), each file checked against its
+  (`Models` in the OS standard place for data, the same rule on every OS and independent of `SIDEVOICE_DATA_DIR`: `sidevoice-platform`'s `data_dir::models_dir`; `~/Library/Application Support/Sidevoice/Models` on macOS), each file checked against its
   SHA-256 as it arrives and stored only once whole. The voice call installs what it needs as it starts; the page may
   install a model before (`engine.install(model, {build, engine, onProgress, signal})`, sidevoice-web's
   `ModelCatalogs.install`), to show its progress and cancel it, and takes one off the computer with

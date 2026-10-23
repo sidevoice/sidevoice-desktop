@@ -19,7 +19,7 @@ this computer»; Install, below); either way the app then runs that installation
 `D` is the data directory every Sidevoice program shares, by one rule owned by `sidevoice-platform`'s `data_dir` (the app
 depends on that crate, at the tag of a core release): `$SIDEVOICE_DATA_DIR`, else the OS's standard place — macOS
 `~/Library/Application Support/Sidevoice`, Linux `$XDG_DATA_HOME/sidevoice`, Windows `%LOCALAPPDATA%\Sidevoice`. `C` = `D/core`
-is the core's, the connector's releases are in `D/install`; on macOS the shared model directory (`Models`, below) is in `D` too. The app writes in none of them.
+is the core's, the connector's releases are in `D/install`; the shared model directory (`Models`, below) is in the OS standard place, so in `D` only when `D` is not overridden (macOS: its standard place). The app writes in none of them.
 
 Where the core and the connector listen is **read, not computed**: the core writes `endpoint` in `C/core.json`, the
 connector writes `{pid, endpoint}` in `D/connector.json` once it listens (it stays after a crash: a `pid` that is not
@@ -33,7 +33,7 @@ The app's own file is `local-host.json` (0600) in its config directory:
 
 The app now uses Tauri's app data directory for this file, settings, call-control placement and
 remote pairings; on macOS it is `~/Library/Application Support/dev.sidevoice.desktop`. The
-shared downloaded-model directory is `~/Library/Application Support/Sidevoice/Models`. Settings ›
+shared downloaded-model directory is `Models` in the OS standard place (`sidevoice-platform`'s `data_dir::models_dir`, independent of `SIDEVOICE_DATA_DIR`; on macOS `~/Library/Application Support/Sidevoice/Models`). Settings ›
 Advanced can run the **installed connector's top-level** `uninstall --json` before clearing the
 app's own data after exit. `localHost.serviceUninstall()` below remains a service-manager action
 and does not remove connector releases, conversations or agent registrations.

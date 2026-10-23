@@ -239,6 +239,8 @@ pub fn probe() -> Result<()> {
     ensure(!engine.is_empty(), "no probe-engine ok")?;
     check_engine_line(&engine.join("\n"))?;
     // sidevoice-engine's storage: a folder per installed build, nothing of the cancelled one, nothing half written.
+    // The app's `Models` in the probe's home: `sidevoice-platform`'s `data_dir::models_dir()` on macOS. Spelled out because xtask
+    // is a dependency-light package of its own (no C toolchain, no git dependency) and that crate pulls the local channel.
     let storage = data.home.join("Library/Application Support/Sidevoice/Models");
     Cmd::new("ls").arg("-laR").arg(storage.join("models")).run()?;
     let cancelled = paths(&storage.join("models")).into_iter().any(|p| p.to_string_lossy().contains("whisper-small"));

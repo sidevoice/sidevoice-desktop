@@ -113,28 +113,10 @@ pub(crate) fn desktop_dir(app: &AppHandle) -> Result<PathBuf, Value> {
     app.path().app_data_dir().map_err(|_| refused("reset.unavailable"))
 }
 
+/// The models folder the engine and the app share: `Models` by the one rule of `sidevoice-platform` (always the OS standard
+/// place, the same on every OS, independent of `$SIDEVOICE_DATA_DIR`). `None` when this user has none.
 pub fn shared_model_root() -> Option<PathBuf> {
-    #[cfg(target_os = "macos")]
-    {
-        let home = PathBuf::from(std::env::var_os("HOME")?);
-        home.is_absolute().then(|| home.join("Library/Application Support/Sidevoice/Models"))
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let base =
-            std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).filter(|path| path.is_absolute()).or_else(|| {
-                std::env::var_os("HOME")
-                    .map(PathBuf::from)
-                    .filter(|path| path.is_absolute())
-                    .map(|home| home.join(".local/share"))
-            })?;
-        Some(base.join("sidevoice-shared/models"))
-    }
-    #[cfg(target_os = "windows")]
-    {
-        let base = PathBuf::from(std::env::var_os("LOCALAPPDATA")?);
-        base.is_absolute().then(|| base.join("Sidevoice/Models"))
-    }
+    sidevoice_platform::data_dir::models_dir()
 }
 
 fn pairings_file(app: &AppHandle) -> Result<PathBuf, Value> {
@@ -809,11 +791,12 @@ fn residual_connector_data(data: &Path) -> bool {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
         Err(_) => return true,
     };
+    let models = sidevoice_platform::data_dir::MODELS;
     for entry in entries {
         let Ok(entry) = entry else { return true };
         let name = entry.file_name();
-        // `Models` is the engine's, in the same folder (docs/ENGINES.md): not the connector's to leave behind.
-        if name == "Models" {
+        // `Models` is the engine's (docs/ENGINES.md); on macOS its place is `D`: not the connector's to leave behind.
+        if name == models {
             continue;
         }
         if !["install.lock", "connector.lock", "agents.lock", "node-stopped.json"].iter().any(|kept| name == *kept) {
@@ -937,6 +920,18 @@ fn account_home() -> Option<PathBuf> {
     Some(PathBuf::from(std::ffi::OsStr::from_bytes(bytes)))
 }
 
+/// `D` on macOS with no override: the OS's standard place of `sidevoice-platform`'s `data_dir`.
+#[cfg(target_os = "macos")]
+fn standard_data(home: &Path) -> PathBuf {
+    home.join("Library/Application Support/Sidevoice")
+}
+
+/// The shared models folder as [`shared_model_root`] places it for this home (the OS standard place; on macOS it is in `D`).
+#[cfg(target_os = "macos")]
+fn standard_models(home: &Path) -> PathBuf {
+    standard_data(home).join(sidevoice_platform::data_dir::MODELS)
+}
+
 #[cfg(target_os = "macos")]
 fn validate_uninstall_scope_at(home: &Path, data: &Path) -> Result<PathBuf, &'static str> {
     if !clean_absolute(home) || fs::canonicalize(home).ok().as_deref() != Some(home) {
@@ -944,7 +939,7 @@ fn validate_uninstall_scope_at(home: &Path, data: &Path) -> Result<PathBuf, &'st
     }
     // `D` on macOS: the standard place of `sidevoice-platform`'s `data_dir`, and the releases `D/install` in it. An
     // override (`SIDEVOICE_DATA_DIR`) is not a known directory.
-    let expected_data = home.join("Library/Application Support/Sidevoice");
+    let expected_data = standard_data(home);
     if data != expected_data || !clean_absolute(data) {
         return Err("outside-known-dirs");
     }
@@ -1124,9 +1119,9 @@ fn known_cleanup_path(path: &Path, home: &Path) -> Result<(), &'static str> {
     }
     let allowed = [
         home.join("Library/Application Support/dev.sidevoice.desktop"),
-        home.join("Library/Application Support/Sidevoice/Models/blobs"),
-        home.join("Library/Application Support/Sidevoice/Models/models"),
-        home.join("Library/Application Support/Sidevoice/Models/partial"),
+        standard_models(home).join("blobs"),
+        standard_models(home).join("models"),
+        standard_models(home).join("partial"),
         home.join("Library/WebKit/dev.sidevoice.desktop"),
         home.join("Library/Caches/dev.sidevoice.desktop"),
         home.join("Library/Saved Application State/dev.sidevoice.desktop.savedState"),
@@ -1377,7 +1372,7 @@ fn remove_known(path: &Path, home: &Path) -> Result<(), &'static str> {
 
 #[cfg(target_os = "macos")]
 fn remove_model_store(root: &Path, home: &Path) -> Result<(), &'static str> {
-    if root != home.join("Library/Application Support/Sidevoice/Models") {
+    if root != standard_models(home) {
         return Err("outside-known-dirs");
     }
     let children = ["blobs", "models", "partial"].map(|name| root.join(name));
@@ -1480,7 +1475,7 @@ pub fn run_reset_helper(parent_pid: Option<u32>, lock_fd: Option<i32>, uninstall
         let webkit_safe = webkit.as_ref().is_some_and(|children| webkit_gone(children));
         let paths = [
             ("app-data", home.join("Library/Application Support/dev.sidevoice.desktop")),
-            ("models", home.join("Library/Application Support/Sidevoice/Models")),
+            ("models", standard_models(&home)),
             ("webview", home.join("Library/WebKit/dev.sidevoice.desktop")),
             ("cache", home.join("Library/Caches/dev.sidevoice.desktop")),
             ("saved-state", home.join("Library/Saved Application State/dev.sidevoice.desktop.savedState")),
@@ -1682,7 +1677,7 @@ mod tests {
     fn shared_store_removes_only_engine_owned_children() {
         let home = tempfile::tempdir().unwrap();
         let home = fs::canonicalize(home.path()).unwrap();
-        let root = home.join("Library/Application Support/Sidevoice/Models");
+        let root = standard_models(&home);
         for child in ["blobs", "models", "partial"] {
             fs::create_dir_all(root.join(child)).unwrap();
             fs::write(root.join(child).join("owned"), b"model").unwrap();
