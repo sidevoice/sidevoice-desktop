@@ -282,8 +282,6 @@ pairing the proxy answers 503; without a core, 502.
   time, `running` and the pairing after it, a refused pairing paired again, a failed install that frees the slot. By
   hand, over the network (`--features fetch -- --ignored the_real_registry`): the real latest release resolved,
   downloaded, verified and unpacked, its installer not run.
-- `tests/real_core.rs`: pairing, the proxy and upgrade framing (101; chunked, a body, early data refused) against
-  sidevoice-core itself when `SIDEVOICE_CORE_PYTHON` names a Python that imports it (skipped otherwise).
 - CI, Linux (`test` job): `examples/local-host-ci.rs serve` as the runner and `attack` as a second user — it cannot
   open the core's socket (so neither pair nor link as a connector), read the app's pairing, or use the proxy without the
   secret; the same attempts as the first user, as a control, do get through.
