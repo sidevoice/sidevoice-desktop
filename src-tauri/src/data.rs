@@ -961,10 +961,9 @@ fn validate_uninstall_scope_at(home: &Path, data: &Path) -> Result<PathBuf, &'st
             return Err("outside-known-dirs");
         }
         let command = value.get("command").and_then(Value::as_array).ok_or("unsafe-record")?;
-        let standard = expected_releases.join("current/bin/sidevoice-connector");
         let recovery = expected_data.join(".uninstall-recovery/sidevoice-connector");
         if command.len() != 1
-            || !matches!(command[0].as_str(), Some(path) if Path::new(path) == standard || Path::new(path) == recovery)
+            || !matches!(command[0].as_str(), Some(path) if is_release_binary(Path::new(path), &expected_releases) || Path::new(path) == recovery)
         {
             return Err("unsafe-record");
         }
@@ -974,6 +973,17 @@ fn validate_uninstall_scope_at(home: &Path, data: &Path) -> Result<PathBuf, &'st
     guarded_tree(data, home, false, true, &mount_identity)?;
     guarded_tree(&expected_releases, home, false, true, &mount_identity)?;
     Ok(expected_releases)
+}
+
+/// `R/releases/<id>/bin/sidevoice-connector`: the command the connector's `install` records for the release it
+/// selects, `<id>` one plain name.
+#[cfg(target_os = "macos")]
+fn is_release_binary(path: &Path, releases: &Path) -> bool {
+    use std::path::Component;
+    let Ok(rest) = path.strip_prefix(releases.join("releases")) else { return false };
+    let parts: Vec<_> = rest.components().collect();
+    matches!(parts.as_slice(), [Component::Normal(id), Component::Normal(bin), Component::Normal(name)]
+        if !id.to_string_lossy().starts_with('.') && *bin == "bin" && *name == "sidevoice-connector")
 }
 
 #[cfg(target_os = "macos")]
@@ -1744,7 +1754,8 @@ mod tests {
         let releases = data.join("install");
         fs::write(
             data.join("install.json"),
-            json!({"releases": releases, "command": [releases.join("current/bin/sidevoice-connector")]}).to_string(),
+            json!({"releases": releases, "command": [releases.join("releases/1.2.3/bin/sidevoice-connector")]})
+                .to_string(),
         )
         .unwrap();
         assert!(validate_uninstall_scope_at(&home, &data).is_ok());
@@ -1757,6 +1768,13 @@ mod tests {
         assert!(validate_uninstall_scope_at(&home, &data).is_ok());
         fs::write(data.join("install.json"), json!({"releases": releases, "command": ["/usr/bin/rm"]}).to_string())
             .unwrap();
+        assert_eq!(validate_uninstall_scope_at(&home, &data), Err("unsafe-record"));
+        // Not the layout the connector records: `current` is a link of the old installer, not a release.
+        fs::write(
+            data.join("install.json"),
+            json!({"releases": releases, "command": [releases.join("current/bin/sidevoice-connector")]}).to_string(),
+        )
+        .unwrap();
         assert_eq!(validate_uninstall_scope_at(&home, &data), Err("unsafe-record"));
     }
 
@@ -2043,10 +2061,10 @@ mod tests {
     #[test]
     fn production_process_parser_recognizes_bundled_core() {
         assert!(managed_process_in_ps(
-            b"/Users/test/Library/Application Support/Sidevoice/install/current/core/bin/sidevoice-core-rust\n"
+            b"/Users/test/Library/Application Support/Sidevoice/install/releases/1.2.3/core/bin/sidevoice-core-rust\n"
         ));
         assert!(managed_process_in_ps(
-            b"/Users/test/Library/Application Support/Sidevoice/install/current/bin/sidevoice-connector\n"
+            b"/Users/test/Library/Application Support/Sidevoice/install/releases/1.2.3/bin/sidevoice-connector\n"
         ));
         assert!(!managed_process_in_ps(b"/usr/bin/other-service\n"));
     }
@@ -2057,7 +2075,7 @@ mod tests {
         let home = fs::canonicalize(home.path()).unwrap();
         let data = home.join("Library/Application Support/Sidevoice");
         assert!(!residual_connector_data(&data));
-        fs::create_dir(&data).unwrap();
+        fs::create_dir_all(&data).unwrap();
         fs::write(data.join("install.lock"), b"marker").unwrap();
         assert!(!residual_connector_data(&data));
         fs::write(data.join("core-secret"), b"sentinel").unwrap();
