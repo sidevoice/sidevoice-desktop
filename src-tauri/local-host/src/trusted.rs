@@ -3,7 +3,7 @@
 //! itself, opened without following links and checked with `fstat` — never checked by path and reopened by path.
 //!
 //! - [`ancestry`]: every directory above a path (links resolved) is root's or this user's, and nobody else can
-//!   rename in it (not group- or other-writable, unless sticky, as `/tmp`). `~/.sidevoice` and the app's config
+//!   rename in it (not group- or other-writable, unless sticky, as `/tmp`). the data directory `D` and the app's config
 //!   directory pass in the ordinary layout; a `SIDEVOICE_DATA_DIR` under a directory others can write does not.
 //! - [`executable`]: a program the app runs (`install.json` `command`): its ancestry, and the file itself root's or
 //!   this user's and not writable by others.

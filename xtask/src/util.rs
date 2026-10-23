@@ -682,20 +682,6 @@ impl Drop for PrivateFiles {
     }
 }
 
-/// Whether `path` is a Unix socket (`test -S`).
-pub fn is_socket(path: &Path) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::FileTypeExt;
-        fs::metadata(path).is_ok_and(|m| m.file_type().is_socket())
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        false
-    }
-}
-
 /// The permission bits of `path` (`stat -f %Lp`), on Unix.
 #[cfg(unix)]
 pub fn mode(path: &Path) -> Result<u32> {

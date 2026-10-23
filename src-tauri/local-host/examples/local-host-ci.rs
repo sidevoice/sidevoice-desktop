@@ -1,11 +1,12 @@
 //! CI's tool for the local host (.github/workflows/build.yml). Feature `fake-core`; never shipped.
 //!
-//! - `core <D>`: a stand-in core on `D/core/local.sock` (the macOS probe runs the real app against it). Prints each
+//! - `core <D>`: a stand-in core on the socket it publishes in `D/core/core.json` (the macOS probe runs the real app against it). Prints each
 //!   request it gets.
 //! - `serve <D> <app-dir> <port-file>`: as the first user — the stand-in core, and the app's side paired with it
 //!   (`local-host.json` in `app-dir`, the proxy on loopback); writes the proxy's port (only the port) to `port-file`
 //!   and serves until killed. `D` is left 0755 so the refusal a second user meets is the core directory's own.
-//! - `attack <D> <app-dir> <port>`: as a second user — must fail to open `local.sock` (so it can neither pair nor link
+//! - `attack <D> <app-dir> <port> <socket>`: as a second user — must fail to open the core's `<socket>` (the endpoint its
+//!   record names; the other user cannot read the record, so the caller hands it over) (so it can neither pair nor link
 //!   as a connector), to read the app's pairing, and to use the proxy without the secret (plain requests, the
 //!   connector link, a WebSocket). Prints one line per attempt; exits 1 if any of them got through.
 
@@ -26,17 +27,17 @@ fn main() {
     match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         ["core", data] => core(data),
         ["serve", data, app, port_file] => serve(data, app, port_file),
-        ["attack", data, app, port] => attack(data, app, port.parse().expect("a port")),
+        ["attack", data, app, port, socket] => attack(data, app, port.parse().expect("a port"), socket),
         _ => {
-            eprintln!("usage: local-host-ci core <D> | serve <D> <app-dir> <port-file> | attack <D> <app-dir> <port>");
+            eprintln!("usage: local-host-ci core <D> | serve <D> <app-dir> <port-file> | attack <D> <app-dir> <port> <socket>");
             exit(2);
         }
     }
 }
 
 fn core(data: &str) {
-    let _core = FakeCore::start(&DataDirs::new(data), 1, true).expect("the stand-in core starts");
-    println!("fake-core listening on {data}/core/local.sock");
+    let core = FakeCore::start(&DataDirs::new(data), 1, true).expect("the stand-in core starts");
+    println!("fake-core listening on {}", core.socket().display());
     loop {
         std::thread::sleep(Duration::from_secs(3600));
     }
@@ -83,7 +84,7 @@ fn status_of(raw: &str, port: u16) -> u16 {
     String::from_utf8_lossy(&answer).split(' ').nth(1).and_then(|s| s.parse().ok()).unwrap_or(0)
 }
 
-fn attack(data: &str, app: &str, port: u16) {
+fn attack(data: &str, app: &str, port: u16, socket: &str) {
     let dirs = DataDirs::new(data);
     let mut breaches = 0;
     let mut report = |what: &str, got_through: bool, detail: String| {
@@ -92,14 +93,14 @@ fn attack(data: &str, app: &str, port: u16) {
     };
 
     // The socket: pairing, the connector link and every route behind it.
-    match UnixStream::connect(dirs.core_socket()) {
+    match UnixStream::connect(socket) {
         Ok(mut stream) => {
             let _ = stream.write_all(b"GET /api/local/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
             let mut answer = String::new();
             let _ = stream.read_to_string(&mut answer);
-            report("open local.sock", true, answer.lines().next().unwrap_or("").to_string());
+            report("open the core's socket", true, answer.lines().next().unwrap_or("").to_string());
         }
-        Err(e) => report("open local.sock", false, e.to_string()),
+        Err(e) => report("open the core's socket", false, e.to_string()),
     }
     match std::fs::read_dir(dirs.core()) {
         Ok(_) => report("list the core's directory", true, String::new()),

@@ -15,7 +15,6 @@ use sidevoice_local_host::store;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -25,6 +24,12 @@ struct World {
     dirs: DataDirs,
     app_dir: PathBuf,
     log: Arc<Mutex<Vec<String>>>,
+}
+
+impl Drop for World {
+    fn drop(&mut self) {
+        fake_core::forget(&self.dirs);
+    }
 }
 
 impl World {
@@ -551,7 +556,7 @@ fn a_poll_in_flight_cannot_put_back_the_status_an_action_replaced() {
 fn a_connector_that_answers_is_asked_first() {
     let world = World::new();
     let log = install_fake_cli(&world.dirs, r#"{"ok":true,"state":"absent"}"#);
-    let listener = UnixListener::bind(world.dirs.connector_socket()).unwrap();
+    let listener = fake_core::connector_listener(&world.dirs).unwrap();
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
@@ -634,7 +639,7 @@ fn a_connector_status_is_the_service_status() {
     let world = World::new();
     let _core = world.core(1);
     let log = install_fake_cli(&world.dirs, r#"{"ok":true,"state":"absent"}"#);
-    let listener = UnixListener::bind(world.dirs.connector_socket()).unwrap();
+    let listener = fake_core::connector_listener(&world.dirs).unwrap();
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
