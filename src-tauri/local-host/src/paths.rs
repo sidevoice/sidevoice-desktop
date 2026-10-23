@@ -44,11 +44,6 @@ impl DataDirs {
         self.data.join("install.json")
     }
 
-    /// The shared models folder (`D/Models`): the engine's and the app's, the same place on every OS.
-    pub fn models(&self) -> PathBuf {
-        data_dir::models_dir(&self.data)
-    }
-
     /// `R`, the connector's releases (`D/install`).
     pub fn releases(&self) -> PathBuf {
         data_dir::releases_dir(&self.data)
@@ -58,6 +53,15 @@ impl DataDirs {
     pub fn log(&self) -> Option<PathBuf> {
         ["core.log", "connector.log"].iter().map(|name| self.data.join(name)).find(|p| is_file(p))
     }
+}
+
+/// The name of the shared models folder (the engine's and the app's, never the connector's).
+pub use data_dir::MODELS;
+
+/// The shared models folder: `Models` in the OS standard place, the same on every OS and independent of
+/// `$SIDEVOICE_DATA_DIR` (`sidevoice-platform`'s `data_dir::models_dir`). `None` when the user has no standard place.
+pub fn models_dir() -> Option<PathBuf> {
+    data_dir::models_dir()
 }
 
 /// What "Ver registro" shows: the app's own log first, then the core's (else the connector's) one, each only if it is
@@ -75,9 +79,10 @@ mod log_tests {
     use super::*;
 
     #[test]
-    fn the_models_are_d_models_on_every_os() {
-        let dirs = DataDirs::new(std::env::temp_dir().join("data"));
-        assert_eq!(dirs.models(), dirs.data.join("Models"));
+    fn the_models_are_in_the_standard_place_on_every_os() {
+        let models = models_dir().unwrap();
+        assert_eq!(models.file_name().unwrap(), MODELS);
+        assert_eq!(models, data_dir::standard().unwrap().join(MODELS));
     }
 
     #[test]

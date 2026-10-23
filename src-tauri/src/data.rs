@@ -113,10 +113,10 @@ pub(crate) fn desktop_dir(app: &AppHandle) -> Result<PathBuf, Value> {
     app.path().app_data_dir().map_err(|_| refused("reset.unavailable"))
 }
 
-/// The models folder the engine and the app share: `D/Models` by the one rule of `sidevoice-platform` (same place on every
-/// OS, and `$SIDEVOICE_DATA_DIR` moves it with the rest of `D`). `None` when this user has no data directory.
+/// The models folder the engine and the app share: `Models` by the one rule of `sidevoice-platform` (always the OS standard
+/// place, the same on every OS, independent of `$SIDEVOICE_DATA_DIR`). `None` when this user has none.
 pub fn shared_model_root() -> Option<PathBuf> {
-    sidevoice_local_host::paths::DataDirs::from_env().map(|dirs| dirs.models())
+    sidevoice_local_host::paths::models_dir()
 }
 
 fn pairings_file(app: &AppHandle) -> Result<PathBuf, Value> {
@@ -791,12 +791,12 @@ fn residual_connector_data(data: &Path) -> bool {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
         Err(_) => return true,
     };
-    let models = sidevoice_local_host::paths::DataDirs::new(data).models();
+    let models = sidevoice_local_host::paths::MODELS;
     for entry in entries {
         let Ok(entry) = entry else { return true };
         let name = entry.file_name();
-        // `D/Models` is the engine's, in the same folder (docs/ENGINES.md): not the connector's to leave behind.
-        if Some(name.as_os_str()) == models.file_name() {
+        // `Models` is the engine's (docs/ENGINES.md); on macOS its place is `D`: not the connector's to leave behind.
+        if name == models {
             continue;
         }
         if !["install.lock", "connector.lock", "agents.lock", "node-stopped.json"].iter().any(|kept| name == *kept) {
@@ -926,10 +926,10 @@ fn standard_data(home: &Path) -> PathBuf {
     home.join("Library/Application Support/Sidevoice")
 }
 
-/// The shared models folder in that `D` (`D/Models`, by the same rule as [`shared_model_root`]).
+/// The shared models folder as [`shared_model_root`] places it for this home (the OS standard place; on macOS it is in `D`).
 #[cfg(target_os = "macos")]
 fn standard_models(home: &Path) -> PathBuf {
-    sidevoice_local_host::paths::DataDirs::new(standard_data(home)).models()
+    standard_data(home).join(sidevoice_local_host::paths::MODELS)
 }
 
 #[cfg(target_os = "macos")]
