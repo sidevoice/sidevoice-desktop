@@ -55,15 +55,6 @@ impl DataDirs {
     }
 }
 
-/// The name of the shared models folder (the engine's and the app's, never the connector's).
-pub use data_dir::MODELS;
-
-/// The shared models folder: `Models` in the OS standard place, the same on every OS and independent of
-/// `$SIDEVOICE_DATA_DIR` (`sidevoice-platform`'s `data_dir::models_dir`). `None` when the user has no standard place.
-pub fn models_dir() -> Option<PathBuf> {
-    data_dir::models_dir()
-}
-
 /// What "Ver registro" shows: the app's own log first, then the core's (else the connector's) one, each only if it is
 /// a file. The app's is there with or without a connector.
 pub fn logs_to_show(app: Option<PathBuf>, connector: Option<PathBuf>) -> Vec<PathBuf> {
@@ -77,13 +68,6 @@ fn is_file(path: &Path) -> bool {
 #[cfg(test)]
 mod log_tests {
     use super::*;
-
-    #[test]
-    fn the_models_are_in_the_standard_place_on_every_os() {
-        let models = models_dir().unwrap();
-        assert_eq!(models.file_name().unwrap(), MODELS);
-        assert_eq!(models, data_dir::standard().unwrap().join(MODELS));
-    }
 
     #[test]
     fn shows_the_app_log_then_the_connectors_and_only_what_exists() {

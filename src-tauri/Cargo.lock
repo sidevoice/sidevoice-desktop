@@ -4546,6 +4546,7 @@ dependencies = [
  "sidevoice-desktop-core",
  "sidevoice-desktop-engine",
  "sidevoice-local-host",
+ "sidevoice-platform",
  "sidevoice-voice",
  "sys-locale",
  "system-configuration-sys",

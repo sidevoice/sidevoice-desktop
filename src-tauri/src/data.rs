@@ -116,7 +116,7 @@ pub(crate) fn desktop_dir(app: &AppHandle) -> Result<PathBuf, Value> {
 /// The models folder the engine and the app share: `Models` by the one rule of `sidevoice-platform` (always the OS standard
 /// place, the same on every OS, independent of `$SIDEVOICE_DATA_DIR`). `None` when this user has none.
 pub fn shared_model_root() -> Option<PathBuf> {
-    sidevoice_local_host::paths::models_dir()
+    sidevoice_platform::data_dir::models_dir()
 }
 
 fn pairings_file(app: &AppHandle) -> Result<PathBuf, Value> {
@@ -791,7 +791,7 @@ fn residual_connector_data(data: &Path) -> bool {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
         Err(_) => return true,
     };
-    let models = sidevoice_local_host::paths::MODELS;
+    let models = sidevoice_platform::data_dir::MODELS;
     for entry in entries {
         let Ok(entry) = entry else { return true };
         let name = entry.file_name();
@@ -929,7 +929,7 @@ fn standard_data(home: &Path) -> PathBuf {
 /// The shared models folder as [`shared_model_root`] places it for this home (the OS standard place; on macOS it is in `D`).
 #[cfg(target_os = "macos")]
 fn standard_models(home: &Path) -> PathBuf {
-    standard_data(home).join(sidevoice_local_host::paths::MODELS)
+    standard_data(home).join(sidevoice_platform::data_dir::MODELS)
 }
 
 #[cfg(target_os = "macos")]
