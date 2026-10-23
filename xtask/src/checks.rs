@@ -91,17 +91,25 @@ pub fn two_users() -> Result<()> {
     }
     let port = fs::read_to_string(&port_file).map_err(|e| format!("serve wrote no port: {e}"))?.trim().to_owned();
     // Where the stand-in core listens: the endpoint it publishes, which the second user cannot read.
-    let record = fs::read_to_string(data.join("core/core.json")).map_err(|e| format!("serve published no core record: {e}"))?;
+    let record =
+        fs::read_to_string(data.join("core/core.json")).map_err(|e| format!("serve published no core record: {e}"))?;
     let socket = serde_json::from_str::<serde_json::Value>(&record)
         .ok()
         .and_then(|v| v["endpoint"].as_str().map(str::to_owned))
         .ok_or("core.json names no endpoint")?;
     Cmd::new("ls").arg("-la").arg(dir).arg(&data).run()?;
     eprintln!("--- the second user");
-    Cmd::new("sudo").args(["-u", OTHER]).arg(&tool).arg("attack").arg(&data).arg(&app_dir).arg(&port).arg(&socket).run()?;
+    Cmd::new("sudo")
+        .args(["-u", OTHER])
+        .arg(&tool)
+        .arg("attack")
+        .arg(&data)
+        .arg(&app_dir)
+        .arg(&port)
+        .arg(&socket)
+        .run()?;
     eprintln!("--- the same attempts as the first user (control: the socket and the files are open to it)");
-    let (control, _) =
-        Cmd::new(&tool).arg("attack").arg(&data).arg(&app_dir).arg(&port).arg(&socket).attempt()?;
+    let (control, _) = Cmd::new(&tool).arg("attack").arg(&data).arg(&app_dir).arg(&port).arg(&socket).attempt()?;
     ensure(!control, "the control got nowhere")?;
     serve.stop();
     let text = read(&log);
