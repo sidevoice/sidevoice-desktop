@@ -44,6 +44,11 @@ impl DataDirs {
         self.data.join("install.json")
     }
 
+    /// The shared models folder (`D/Models`): the engine's and the app's, the same place on every OS.
+    pub fn models(&self) -> PathBuf {
+        data_dir::models_dir(&self.data)
+    }
+
     /// `R`, the connector's releases (`D/install`).
     pub fn releases(&self) -> PathBuf {
         data_dir::releases_dir(&self.data)
@@ -68,6 +73,12 @@ fn is_file(path: &Path) -> bool {
 #[cfg(test)]
 mod log_tests {
     use super::*;
+
+    #[test]
+    fn the_models_are_d_models_on_every_os() {
+        let dirs = DataDirs::new(std::env::temp_dir().join("data"));
+        assert_eq!(dirs.models(), dirs.data.join("Models"));
+    }
 
     #[test]
     fn shows_the_app_log_then_the_connectors_and_only_what_exists() {
