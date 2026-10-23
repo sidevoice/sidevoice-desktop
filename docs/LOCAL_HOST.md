@@ -16,8 +16,19 @@ this computer»; Install, below); either way the app then runs that installation
 
 ## Where things are
 
-`D` is the connector's data directory (`$SIDEVOICE_DATA_DIR`, else `~/.sidevoice`), `C` = `D/core` the core's. The app
-writes in neither. Its own file is `local-host.json` (0600) in its config directory:
+`D` is the data directory every Sidevoice program shares, by one rule owned by `sidevoice-platform`'s `data_dir` (the app
+depends on that crate, at the tag of a core release): `$SIDEVOICE_DATA_DIR`, else the OS's standard place — macOS
+`~/Library/Application Support/Sidevoice`, Linux `$XDG_DATA_HOME/sidevoice`, Windows `%LOCALAPPDATA%\Sidevoice`. `C` = `D/core`
+is the core's, the connector's releases are in `D/install`; on macOS the shared model directory (`Models`, below) is in `D` too. The app writes in none of them.
+
+Where the core and the connector listen is **read, not computed**: the core writes `endpoint` in `C/core.json`, the
+connector writes `{pid, endpoint}` in `D/connector.json` once it listens (it stays after a crash: a `pid` that is not
+alive makes it stale, and the app takes it for no connector). `endpoint` is the record `sidevoice-platform`'s `ipc` writes
+and parses (`ipc::Endpoint`); on Unix an absolute socket path in the user's runtime directory (Linux
+`$XDG_RUNTIME_DIR`, macOS `$TMPDIR`) inside a private `sidevoice-<hash>` directory. Nothing in `D`: there is no local
+connector, as before.
+
+The app's own file is `local-host.json` (0600) in its config directory:
 `{fp, public_key, device_id, token, host, paired_at}`, the only copy of its device token.
 
 The app now uses Tauri's app data directory for this file, settings, call-control placement and
@@ -29,12 +40,12 @@ and does not remove connector releases, conversations or agent registrations.
 
 ## Trust
 
-The boundary is the OS user. Before any connect to `C/local.sock` the app checks that `C` is a directory (not a
+The boundary is the OS user. Before any connect to the core's socket (the one `C/core.json` names) the app checks that `C` is a directory (not a
 link) owned by this user with mode & 077 = 0 (`identity.unsafe-directory`), and after connecting that the socket's peer
 is this user (`getpeereid` / `SO_PEERCRED`, `peer.uid-mismatch`).
 Files are checked as they are used, not by path and reopened (`src-tauri/local-host/src/trusted.rs`): every
 directory above `D` and above the app's config directory must be root's or this user's and not writable by others
-(sticky, as `/tmp`, is fine) — the default `~/.sidevoice` passes, a `SIDEVOICE_DATA_DIR` under a directory others can
+(sticky, as `/tmp`, is fine) — the default `D` passes, a `SIDEVOICE_DATA_DIR` under a directory others can
 write does not; `install.json` is read through `D`'s opened and `fstat`-checked descriptor, opened without following a
 link and checked as opened (a regular file, this user's, not writable by others; `install.unsafe`); each path in its
 `command` must be root's or this user's, closed to others, with a safe ancestry too — and what runs is exactly the
@@ -70,7 +81,7 @@ poll asks the core whether it still accepts the token: a revocation from another
 
 ## The poll and the state
 
-Every 2 s while the app runs: `node.status` on `D/connector.sock` (JSON lines, 1.5 s; connecting never starts
+Every 2 s while the app runs: `node.status` on the socket `D/connector.json` names (JSON lines, 1.5 s; connecting never starts
 anything); when no connector answers, `service status --json` through the CLI, at most every 10 s (it starts a
 process) and right after each action; the core's health; the token check. The bridge's state:
 
@@ -274,7 +285,7 @@ pairing the proxy answers 503; without a core, 502.
 - `tests/real_core.rs`: pairing, the proxy and upgrade framing (101; chunked, a body, early data refused) against
   sidevoice-core itself when `SIDEVOICE_CORE_PYTHON` names a Python that imports it (skipped otherwise).
 - CI, Linux (`test` job): `examples/local-host-ci.rs serve` as the runner and `attack` as a second user — it cannot
-  open `local.sock` (so neither pair nor link as a connector), read the app's pairing, or use the proxy without the
+  open the core's socket (so neither pair nor link as a connector), read the app's pairing, or use the proxy without the
   secret; the same attempts as the first user, as a control, do get through.
 - CI, macOS (probe build): the app with a temporary `HOME` against `local-host-ci core`; the bundled room's own page
   (`test/fixtures/local-host-flow.js`) sees `running` and the pairing, fetches through the proxy (WebKit's preflight,

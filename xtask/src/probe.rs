@@ -65,9 +65,9 @@ pub fn proxy_port(log: &str) -> Option<String> {
     log.lines().find_map(|l| line.captures(l)).map(|c| c[1].to_owned())
 }
 
-/// `macos local-host`: the local host from the bundled page, in the probe app: a stand-in core on local.sock
-/// (`local-host-ci core`), pairing, the proxy, and what it refuses. A home of its own (/tmp/svhome, short: a Unix
-/// socket's path is at most 104 bytes), for ~/.sidevoice and the app's config.
+/// `macos local-host`: the local host from the bundled page, in the probe app: a stand-in core on its published socket
+/// (`local-host-ci core`), pairing, the proxy, and what it refuses. A home of its own (/tmp/svhome), for the data
+/// directory (macOS: ~/Library/Application Support/Sidevoice) and the app's config.
 pub fn local_host() -> Result<()> {
     let app_dir = repo().join("src-tauri");
     Cmd::new("cargo")
@@ -79,9 +79,10 @@ pub fn local_host() -> Result<()> {
     crate::util::fresh_dir(home)?;
     let logs = work("local-host")?;
     let (core_log, app_log) = (logs.join("lh-core.log"), logs.join("lh.log"));
-    let mut core = Cmd::new(&tool).arg("core").arg(home.join(".sidevoice")).env("HOME", home).spawn(&core_log)?;
+    let data = home.join("Library/Application Support/Sidevoice");
+    let mut core = Cmd::new(&tool).arg("core").arg(&data).env("HOME", home).spawn(&core_log)?;
     for _ in 0..50 {
-        if crate::util::is_socket(&home.join(".sidevoice/core/local.sock")) {
+        if data.join("core/core.json").is_file() {
             break;
         }
         sleep(0.2);

@@ -62,8 +62,8 @@ pub fn icons() -> Result<()> {
 const OTHER: &str = "sidevoice-other";
 
 /// `two-users` (Linux, CI only: it adds a user): the local host with two users. `local-host-ci serve` runs as this
-/// user (a stand-in core on local.sock, the app's side paired with it, the proxy), `attack` as another, who must get
-/// nowhere: it cannot open local.sock, link as a connector, or use the proxy
+/// user (a stand-in core on the socket it publishes, the app's side paired with it, the proxy), `attack` as another, who must get
+/// nowhere: it cannot open that socket, link as a connector, or use the proxy
 /// (src-tauri/local-host/examples/local-host-ci.rs).
 pub fn two_users() -> Result<()> {
     require_os("linux", "two-users")?;
@@ -90,11 +90,18 @@ pub fn two_users() -> Result<()> {
         sleep(0.2);
     }
     let port = fs::read_to_string(&port_file).map_err(|e| format!("serve wrote no port: {e}"))?.trim().to_owned();
+    // Where the stand-in core listens: the endpoint it publishes, which the second user cannot read.
+    let record = fs::read_to_string(data.join("core/core.json")).map_err(|e| format!("serve published no core record: {e}"))?;
+    let socket = serde_json::from_str::<serde_json::Value>(&record)
+        .ok()
+        .and_then(|v| v["endpoint"].as_str().map(str::to_owned))
+        .ok_or("core.json names no endpoint")?;
     Cmd::new("ls").arg("-la").arg(dir).arg(&data).run()?;
     eprintln!("--- the second user");
-    Cmd::new("sudo").args(["-u", OTHER]).arg(&tool).arg("attack").arg(&data).arg(&app_dir).arg(&port).run()?;
+    Cmd::new("sudo").args(["-u", OTHER]).arg(&tool).arg("attack").arg(&data).arg(&app_dir).arg(&port).arg(&socket).run()?;
     eprintln!("--- the same attempts as the first user (control: the socket and the files are open to it)");
-    let (control, _) = Cmd::new(&tool).arg("attack").arg(&data).arg(&app_dir).arg(&port).attempt()?;
+    let (control, _) =
+        Cmd::new(&tool).arg("attack").arg(&data).arg(&app_dir).arg(&port).arg(&socket).attempt()?;
     ensure(!control, "the control got nowhere")?;
     serve.stop();
     let text = read(&log);

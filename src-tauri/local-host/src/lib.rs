@@ -2,10 +2,12 @@
 //!
 //! - [`checks`]: before any connect, the core's directory is this user's and private, and the socket's peer is this
 //!   user (`getpeereid` / `SO_PEERCRED`).
-//! - [`core_socket`]: a minimal HTTP/1.1 client over `C/local.sock` — health, identity, local pairing.
+//! - [`endpoints`]: where the core and the connector listen, read from the records they publish (`C/core.json`,
+//!   `D/connector.json`), never computed.
+//! - [`core_socket`]: a minimal HTTP/1.1 client over the core's socket (`C/core.json`) — health, identity, local pairing.
 //! - [`identity`]: the core proves its identity by signing a nonce with the key the app pinned.
 //! - [`store`]: `local-host.json` (0600) in the app's config directory: the pairing and its device token.
-//! - [`connector`], [`cli`]: the node service's state (`node.status` on `D/connector.sock`) and the connector's CLI,
+//! - [`connector`], [`cli`]: the node service's state (`node.status` on the socket `D/connector.json` names) and the connector's CLI,
 //!   run through `D/install.json` `command` only.
 //! - [`state`]: what the bridge reports, from all of the above (pure).
 //! - [`proxy`]: the page's way in — `127.0.0.1:<ephemeral>`, a per-launch secret, the Origin/Host rules — which swaps
@@ -27,6 +29,7 @@ pub mod checks;
 pub mod cli;
 pub mod connector;
 pub mod core_socket;
+pub mod endpoints;
 #[cfg(feature = "fake-core")]
 pub mod fake_core;
 #[cfg(feature = "fake-core")]

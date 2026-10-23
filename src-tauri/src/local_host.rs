@@ -142,9 +142,9 @@ mod imp {
         if !sidevoice_desktop_core::bridge::local_host_offered() {
             return;
         }
-        // The connector's data directory, as the connector resolves it (`SIDEVOICE_DATA_DIR`, else ~/.sidevoice).
+        // `D`, by the rule every Sidevoice program shares (`SIDEVOICE_DATA_DIR`, else the OS standard place).
         let Some(dirs) = DataDirs::from_env() else {
-            crate::debug("local-host off: no home directory");
+            crate::debug("local-host off: no data directory");
             return;
         };
         let Ok(app_dir) = crate::data::desktop_dir(app) else { return };

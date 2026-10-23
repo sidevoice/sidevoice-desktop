@@ -1,9 +1,9 @@
-//! The node service's live state: `node.status` on the connector's IPC socket, `D/connector.sock` (SEAMS §4), JSON
+//! The node service's live state: `node.status` on the connector's IPC socket, the one `D/connector.json` names (SEAMS §4), JSON
 //! lines `{id, method, params}` → `{id, ok, result|error}`. Connecting never starts anything: no answer is simply no
 //! connector, and the caller asks the service manager through the CLI instead ([`crate::cli`]).
 
-use crate::checks;
 use crate::paths::DataDirs;
+use crate::{checks, endpoints};
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::time::Duration;
@@ -15,7 +15,8 @@ const LINE_LIMIT: u64 = 1024 * 1024;
 /// `node.status`'s result, or `None` when no connector of this user answers in time (absent, unsafe, silent, or an
 /// answer that is not one).
 pub fn node_status(dirs: &DataDirs) -> Option<Value> {
-    let stream = checks::connect(&dirs.data, &dirs.connector_socket(), checks::owned_not_writable).ok()?;
+    let socket = endpoints::connector(dirs).ok()?;
+    let stream = checks::connect(&dirs.data, &socket, checks::owned_not_writable).ok()?;
     stream.set_read_timeout(Some(TIMEOUT)).ok()?;
     stream.set_write_timeout(Some(TIMEOUT)).ok()?;
     let mut writer = &stream;

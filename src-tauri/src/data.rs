@@ -686,7 +686,7 @@ fn begin_reset(app: &AppHandle, uninstall: bool) -> Answer {
         }
         Err(_) if !dirs.install_record().exists() => {
             // A missing record is only an absent service when all owned data is gone too.
-            if !fresh_service_absent(&home) || residual_connector_data(&home, &dirs.data) {
+            if !fresh_service_absent(&home) || residual_connector_data(&dirs.data) {
                 return Err(refused("reset.service-failed"));
             }
             None
@@ -801,12 +801,9 @@ fn probe_safe_connector(cli: &sidevoice_local_host::cli::Cli, timeout: Duration)
 }
 
 #[cfg(target_os = "macos")]
-fn residual_connector_data(home: &Path, data: &Path) -> bool {
-    let releases = home.join(".local/share/sidevoice");
-    // A missing record is not proof that an interrupted uninstall finished its data phase.
-    if fs::symlink_metadata(releases).is_ok() {
-        return true;
-    }
+fn residual_connector_data(data: &Path) -> bool {
+    // A missing record is not proof that an interrupted uninstall finished its data phase: the releases (`D/install`) are
+    // an entry of `D` too.
     let entries = match fs::read_dir(data) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
@@ -815,6 +812,10 @@ fn residual_connector_data(home: &Path, data: &Path) -> bool {
     for entry in entries {
         let Ok(entry) = entry else { return true };
         let name = entry.file_name();
+        // `Models` is the engine's, in the same folder (docs/ENGINES.md): not the connector's to leave behind.
+        if name == "Models" {
+            continue;
+        }
         if !["install.lock", "connector.lock", "agents.lock", "node-stopped.json"].iter().any(|kept| name == *kept) {
             return true;
         }
@@ -918,8 +919,7 @@ fn validate_uninstall_scope(home: &Path, data: &Path) -> Result<PathBuf, &'stati
     if account_home().as_deref() != Some(home) {
         return Err("unsafe-home");
     }
-    let data_home = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from);
-    validate_uninstall_scope_at(home, data, data_home.as_deref())
+    validate_uninstall_scope_at(home, data)
 }
 
 #[cfg(target_os = "macos")]
@@ -938,18 +938,17 @@ fn account_home() -> Option<PathBuf> {
 }
 
 #[cfg(target_os = "macos")]
-fn validate_uninstall_scope_at(home: &Path, data: &Path, data_home: Option<&Path>) -> Result<PathBuf, &'static str> {
+fn validate_uninstall_scope_at(home: &Path, data: &Path) -> Result<PathBuf, &'static str> {
     if !clean_absolute(home) || fs::canonicalize(home).ok().as_deref() != Some(home) {
         return Err("unsafe-home");
     }
-    let expected_data = home.join(".sidevoice");
+    // `D` on macOS: the standard place of `sidevoice-platform`'s `data_dir`, and the releases `D/install` in it. An
+    // override (`SIDEVOICE_DATA_DIR`) is not a known directory.
+    let expected_data = home.join("Library/Application Support/Sidevoice");
     if data != expected_data || !clean_absolute(data) {
         return Err("outside-known-dirs");
     }
-    let expected_releases = home.join(".local/share/sidevoice");
-    if data_home.is_some_and(|path| path != home.join(".local/share")) {
-        return Err("outside-known-dirs");
-    }
+    let expected_releases = sidevoice_local_host::paths::DataDirs::new(&expected_data).releases();
     let record = data.join("install.json");
     if let Ok(meta) = fs::symlink_metadata(&record) {
         if !meta.is_file() || meta.file_type().is_symlink() || meta.len() > 64 * 1024 {
@@ -1732,32 +1731,33 @@ mod tests {
             .is_err());
         }
         assert!(!invoked);
+        let data = home.join("Library/Application Support/Sidevoice");
         assert_eq!(
-            validate_uninstall_scope_at(&home, &home.join(".sidevoice"), Some(&home.join("Documents"))),
-            Err("outside-known-dirs")
+            validate_uninstall_scope_at(&home, &home.join(".sidevoice")),
+            Err("outside-known-dirs"),
+            "the old directory is not known"
         );
-        let data = home.join(".sidevoice");
         fs::create_dir_all(&data).unwrap();
         fs::write(data.join("install.json"), json!({"releases": home.join("Documents/sidevoice")}).to_string())
             .unwrap();
-        assert_eq!(validate_uninstall_scope_at(&home, &data, None), Err("outside-known-dirs"));
-        let releases = home.join(".local/share/sidevoice");
+        assert_eq!(validate_uninstall_scope_at(&home, &data), Err("outside-known-dirs"));
+        let releases = data.join("install");
         fs::write(
             data.join("install.json"),
             json!({"releases": releases, "command": [releases.join("current/bin/sidevoice-connector")]}).to_string(),
         )
         .unwrap();
-        assert!(validate_uninstall_scope_at(&home, &data, None).is_ok());
+        assert!(validate_uninstall_scope_at(&home, &data).is_ok());
         fs::write(
             data.join("install.json"),
             json!({"releases": releases, "command": [data.join(".uninstall-recovery/sidevoice-connector")]})
                 .to_string(),
         )
         .unwrap();
-        assert!(validate_uninstall_scope_at(&home, &data, None).is_ok());
+        assert!(validate_uninstall_scope_at(&home, &data).is_ok());
         fs::write(data.join("install.json"), json!({"releases": releases, "command": ["/usr/bin/rm"]}).to_string())
             .unwrap();
-        assert_eq!(validate_uninstall_scope_at(&home, &data, None), Err("unsafe-record"));
+        assert_eq!(validate_uninstall_scope_at(&home, &data), Err("unsafe-record"));
     }
 
     #[test]
@@ -1821,7 +1821,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let home = tempfile::tempdir().unwrap();
         let home = fs::canonicalize(home.path()).unwrap();
-        let data = home.join(".sidevoice");
+        let data = home.join("Library/Application Support/Sidevoice");
         let recovery = data.join(".uninstall-recovery");
         fs::create_dir_all(&recovery).unwrap();
         let script = recovery.join("sidevoice-connector");
@@ -1835,10 +1835,10 @@ mod tests {
         )
         .unwrap();
         fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
-        let releases = home.join(".local/share/sidevoice");
+        let releases = data.join("install");
         fs::write(data.join("install.json"), json!({"releases": releases.clone(), "command": [script]}).to_string())
             .unwrap();
-        assert_eq!(validate_uninstall_scope_at(&home, &data, None), Ok(releases));
+        assert_eq!(validate_uninstall_scope_at(&home, &data), Ok(releases));
         let cli = Cli::installed(&DataDirs::new(&data)).unwrap();
         assert_eq!(probe_safe_connector(&cli, Duration::from_secs(2)), Ok(()));
         assert!(!marker.exists());
@@ -2042,8 +2042,12 @@ mod tests {
 
     #[test]
     fn production_process_parser_recognizes_bundled_core() {
-        assert!(managed_process_in_ps(b"/Users/test/.local/share/sidevoice/current/core/bin/sidevoice-core-rust\n"));
-        assert!(managed_process_in_ps(b"/Users/test/.local/share/sidevoice/current/bin/sidevoice-connector\n"));
+        assert!(managed_process_in_ps(
+            b"/Users/test/Library/Application Support/Sidevoice/install/current/core/bin/sidevoice-core-rust\n"
+        ));
+        assert!(managed_process_in_ps(
+            b"/Users/test/Library/Application Support/Sidevoice/install/current/bin/sidevoice-connector\n"
+        ));
         assert!(!managed_process_in_ps(b"/usr/bin/other-service\n"));
     }
 
@@ -2051,19 +2055,19 @@ mod tests {
     fn missing_record_with_residual_connector_data_refuses_absent_retry() {
         let home = tempfile::tempdir().unwrap();
         let home = fs::canonicalize(home.path()).unwrap();
-        let data = home.join(".sidevoice");
-        assert!(!residual_connector_data(&home, &data));
+        let data = home.join("Library/Application Support/Sidevoice");
+        assert!(!residual_connector_data(&data));
         fs::create_dir(&data).unwrap();
         fs::write(data.join("install.lock"), b"marker").unwrap();
-        assert!(!residual_connector_data(&home, &data));
+        assert!(!residual_connector_data(&data));
         fs::write(data.join("core-secret"), b"sentinel").unwrap();
-        assert!(residual_connector_data(&home, &data));
+        assert!(residual_connector_data(&data));
         fs::remove_file(data.join("core-secret")).unwrap();
         fs::create_dir(data.join(".uninstall-recovery")).unwrap();
-        assert!(residual_connector_data(&home, &data));
+        assert!(residual_connector_data(&data));
         fs::remove_dir(data.join(".uninstall-recovery")).unwrap();
-        fs::create_dir_all(home.join(".local/share/sidevoice")).unwrap();
-        assert!(residual_connector_data(&home, &data));
+        fs::create_dir_all(data.join("install")).unwrap();
+        assert!(residual_connector_data(&data));
     }
 
     #[test]

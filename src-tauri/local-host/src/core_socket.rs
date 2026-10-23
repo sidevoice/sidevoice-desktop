@@ -1,4 +1,4 @@
-//! The core's private listener, `C/local.sock` (SEAMS §2), as the app uses it: every connect checked first
+//! The core's private listener, the socket `C/core.json` names (SEAMS §2), as the app uses it: every connect checked first
 //! ([`checks`]), one request per connection.
 //!
 //! - `GET /api/local/health` → who answers: launch, version, `api`, fingerprint and key, calls.
@@ -8,12 +8,12 @@
 //! - Any authenticated route with the token, to tell whether the core still accepts it.
 
 use crate::checks::{self, Check};
+use crate::endpoints;
 use crate::http::{self, Response};
 use crate::identity;
 use crate::Refusal;
 use serde::{Deserialize, Serialize};
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
 use std::time::Duration;
 
 /// How long the app waits for the core's own answers. Health is the readiness probe: 2 s (design §4.2).
@@ -79,21 +79,22 @@ fn failed(why: impl Into<String>) -> CoreError {
     CoreError::Failed(Refusal::new("core.unexpected", why))
 }
 
-/// `C`, and its socket.
+/// `C`, and the record that says where its socket is: read at each connect, so a restarted core is followed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoreSocket {
-    pub dir: PathBuf,
-    pub socket: PathBuf,
+    dirs: crate::paths::DataDirs,
 }
 
 impl CoreSocket {
     pub fn new(dirs: &crate::paths::DataDirs) -> Self {
-        CoreSocket { dir: dirs.core(), socket: dirs.core_socket() }
+        CoreSocket { dirs: dirs.clone() }
     }
 
     /// A connection to the core, after the directory and peer checks, with `timeout` on reads and writes.
     pub fn connect(&self, timeout: Option<Duration>) -> Result<UnixStream, CoreError> {
-        let stream = checks::connect(&self.dir, &self.socket, checks::private_dir)?;
+        checks::private_dir(&self.dirs.core())?;
+        let socket = endpoints::core(&self.dirs)?;
+        let stream = checks::connect(&self.dirs.core(), &socket, checks::private_dir)?;
         stream
             .set_read_timeout(timeout)
             .and_then(|_| stream.set_write_timeout(timeout))

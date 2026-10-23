@@ -1,7 +1,8 @@
 //! A stand-in for sidevoice-core's private listener (SEAMS §2), for this crate's tests, the CI example
 //! (`examples/local-host-ci.rs`) and the app's macOS CI probe. Feature `fake-core`; never in the app.
 //!
-//! It serves `C/local.sock` (creating `D` and `C` 0700) with what the app uses — health, the identity proof with a
+//! It serves the socket it publishes in `C/core.json` (creating `D` and `C` 0700; the socket where the real core puts it,
+//! `sidevoice-platform`'s endpoint for `C`) with what the app uses — health, the identity proof with a
 //! real P-256 key, local pairing (one local device at a time), its revocation — plus, with a device token, an echo of
 //! any other request (`{method, path, origin, auth, body}`, with the CORS the core sends app origins) and a
 //! WebSocket echo. `/api/connectors/link*` answers too, so a test sees it is never reached through the proxy. Every
@@ -16,6 +17,7 @@ use p256::ecdsa::signature::Signer;
 use p256::ecdsa::{Signature, SigningKey};
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
+use sidevoice_platform::ipc::{Address, Endpoint};
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
@@ -46,21 +48,20 @@ pub struct FakeCore {
     state: Mutex<State>,
     stopped: AtomicBool,
     socket: std::path::PathBuf,
+    record: std::path::PathBuf,
     print: bool,
 }
 
 impl FakeCore {
-    /// Serves `C/local.sock` under `dirs` until [`Self::stop`]; `seed` picks the identity (another seed is another
+    /// Serves the core's socket under `dirs` until [`Self::stop`]; `seed` picks the identity (another seed is another
     /// machine, as after a reset). `print`: each request on stdout too (CI reads it).
     pub fn start(dirs: &DataDirs, seed: u8, print: bool) -> io::Result<Arc<FakeCore>> {
         for dir in [&dirs.data, &dirs.core()] {
             std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
             std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
         }
-        let socket = dirs.core_socket();
-        let _ = std::fs::remove_file(&socket);
-        let listener = UnixListener::bind(&socket)?;
-        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))?;
+        let (listener, socket) = bind_private(&Endpoint::new(&dirs.core(), "local"))?;
+        publish(&dirs.core_record(), &json!({"pid": std::process::id(), "endpoint": socket.display().to_string()}))?;
         let key = SigningKey::from_slice(&[seed.max(1); 32]).expect("a valid scalar");
         let public_key = identity::spki(key.verifying_key());
         let fingerprint = identity::fingerprint(&public_key).expect("base64");
@@ -71,6 +72,7 @@ impl FakeCore {
             state: Mutex::new(State { launch: 1, api: 1, ..State::default() }),
             stopped: AtomicBool::new(false),
             socket,
+            record: dirs.core_record(),
             print,
         });
         let serving = core.clone();
@@ -87,6 +89,11 @@ impl FakeCore {
             }
         });
         Ok(core)
+    }
+
+    /// The socket it listens on (the endpoint `C/core.json` names).
+    pub fn socket(&self) -> &std::path::Path {
+        &self.socket
     }
 
     pub fn fingerprint(&self) -> &str {
@@ -131,6 +138,7 @@ impl FakeCore {
         }
         let _ = UnixStream::connect(&self.socket);
         let _ = std::fs::remove_file(&self.socket);
+        let _ = std::fs::remove_file(&self.record);
     }
 
     fn record(&self, line: String) {
@@ -371,4 +379,47 @@ pub fn write_frame_masked(
         None => out.extend_from_slice(payload),
     }
     stream.write_all(&out)
+}
+
+/// Listens at `endpoint`, in a directory of this user's open to nobody else (made if missing), the socket 0600; a
+/// socket left there is replaced. Returns the listener and the socket's path.
+fn bind_private(endpoint: &Endpoint) -> io::Result<(UnixListener, std::path::PathBuf)> {
+    let path = std::path::PathBuf::from(endpoint.to_string());
+    if let Some(parent) = path.parent() {
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(parent)?;
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+    }
+    let _ = std::fs::remove_file(&path);
+    let listener = UnixListener::bind(&path)?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    Ok((listener, path))
+}
+
+/// Writes a record the way the programs do: private, whole.
+fn publish(record: &std::path::Path, value: &Value) -> io::Result<()> {
+    let partial = record.with_extension("json.tmp");
+    std::fs::write(&partial, value.to_string())?;
+    std::fs::set_permissions(&partial, std::fs::Permissions::from_mode(0o600))?;
+    std::fs::rename(&partial, record)
+}
+
+/// A stand-in connector's listener: the socket `D/connector.json` names, published with this process's `pid` (alive),
+/// as the connector does once it listens. The caller serves it.
+pub fn connector_listener(dirs: &DataDirs) -> io::Result<UnixListener> {
+    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&dirs.data)?;
+    std::fs::set_permissions(&dirs.data, std::fs::Permissions::from_mode(0o700))?;
+    let (listener, socket) = bind_private(&Endpoint::new(&dirs.data, "connector"))?;
+    publish(&dirs.connector_record(), &json!({"pid": std::process::id(), "endpoint": socket.display().to_string()}))?;
+    Ok(listener)
+}
+
+/// Removes the private directories the stand-ins' endpoints made in the runtime directory for `dirs` (a test's end;
+/// those inside `D` go with it).
+pub fn forget(dirs: &DataDirs) {
+    for endpoint in [Endpoint::new(&dirs.core(), "local"), Endpoint::new(&dirs.data, "connector")] {
+        let path = std::path::PathBuf::from(endpoint.to_string());
+        if let Some(parent) = path.parent().filter(|parent| !parent.starts_with(&dirs.data)) {
+            let _ = std::fs::remove_dir_all(parent);
+        }
+    }
 }
