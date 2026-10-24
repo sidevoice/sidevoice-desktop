@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.0](https://github.com/sidevoice/sidevoice-desktop/compare/v0.2.1...v0.3.0) (2026-10-24)
+
+
+### Features
+
+* **data:** one rule for the shared models folder ([#190](https://github.com/sidevoice/sidevoice-desktop/issues/190)) ([848d6a7](https://github.com/sidevoice/sidevoice-desktop/commit/848d6a708a44d22e65ecbb14c4c0069e4bc09afe))
+* **local-host:** find the connector and core through the shared data directory ([#189](https://github.com/sidevoice/sidevoice-desktop/issues/189)) ([010d858](https://github.com/sidevoice/sidevoice-desktop/commit/010d85811e5f404df30476e9e38c0d754e268f23))
+
+
+### Bug Fixes
+
+* **call-controls:** the card is told whether each conversation's machine can be reached ([#194](https://github.com/sidevoice/sidevoice-desktop/issues/194)) ([2bc59a7](https://github.com/sidevoice/sidevoice-desktop/commit/2bc59a734d7d9c319dc30841ff45391e65894b0a))
+* **call-controls:** the card's pick of a conversation whose agent is away reaches the room ([#193](https://github.com/sidevoice/sidevoice-desktop/issues/193)) ([2e7bae2](https://github.com/sidevoice/sidevoice-desktop/commit/2e7bae2c925c2db50cb04bf5aa05fcf0c73ea666))
+
 ## [0.2.1](https://github.com/sidevoice/sidevoice-desktop/compare/v0.2.0...v0.2.1) (2026-10-21)
 
 
