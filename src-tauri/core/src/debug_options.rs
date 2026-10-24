@@ -78,16 +78,6 @@ pub fn offered(channel: &str) -> bool {
     channel != "release"
 }
 
-/// The switches this platform has: all three on macOS (WebKit); none elsewhere, where no WebView2 or WebKitGTK binding
-/// is wired (Chromium's paint flags need a relaunch).
-pub fn available() -> &'static [Switch] {
-    if cfg!(target_os = "macos") {
-        &Switch::ALL
-    } else {
-        &[]
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
