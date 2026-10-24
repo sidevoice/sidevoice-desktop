@@ -296,6 +296,9 @@ pairing the proxy answers 503; without a core, 502.
 The existing `reveal-log` action selects the same app/core/connector log paths through
 `platform::reveal::Reveal::files`, backed by the already registered official `tauri-plugin-opener`.
 The plugin owns Finder, Windows Explorer, and Linux file-manager integration; no shell command is built.
+Every resolved path must be valid UTF-8 before any file is revealed. A non-UTF-8 target (including one reached
+through a UTF-8 symlink) returns an error instead of risking selection of a different file: opener 2.7.0 uses
+lossy path conversion on macOS. This restriction applies to the common interface on every host.
 Missing logs retain `log.missing`; file-manager failures retain `reveal.failed` with a localized message.
 The local-host offer remains macOS-only pending its separate cross-platform migration. This interface alone
 adds no Windows/Linux local-host offer or webview opener permissions. Interactive file-manager selection still
