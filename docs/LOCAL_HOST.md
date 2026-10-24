@@ -290,3 +290,13 @@ pairing the proxy answers 503; without a core, 502.
   then the request with the token swapped in), is refused without the secret and on native routes, and opens a
   WebSocket through it; `curl` sends what a page cannot (hostile, missing, empty, `null` Origin; a wrong or rebound
   Host; no or a guessed secret).
+
+## Native log reveal
+
+The existing `reveal-log` action selects the same app/core/connector log paths through
+`platform::reveal::Reveal::files`, backed by the already registered official `tauri-plugin-opener`.
+The plugin owns Finder, Windows Explorer, and Linux file-manager integration; no shell command is built.
+Missing logs retain `log.missing`; file-manager failures retain `reveal.failed` with a localized message.
+The local-host offer remains macOS-only pending its separate cross-platform migration. This interface alone
+adds no Windows/Linux local-host offer or webview opener permissions. Interactive file-manager selection still
+needs runtime verification on each OS; headless tests cover error propagation without opening a window.
