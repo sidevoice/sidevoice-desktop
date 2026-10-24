@@ -11,7 +11,6 @@
 //! - `call-controls`: the call controls card (`src/call_controls.rs`), floating over other apps during a call.
 
 mod call_controls;
-mod computer_name;
 mod data;
 mod debug_options;
 mod engine_ipc;
@@ -29,6 +28,7 @@ mod tray;
 mod updater;
 mod voice;
 
+use crate::platform::computer_name::{ComputerName, SystemComputerName};
 use serde_json::{json, Value};
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
 use sidevoice_desktop_core::build_info::BuildInfo;
@@ -358,7 +358,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             APP_ORIGIN,
             updater::offered(),
             &build,
-            computer_name::read().as_deref(),
+            SystemComputerName::read().as_deref(),
             &debug_options,
             platform::microphone::SETTINGS_URL.is_some(),
         ));

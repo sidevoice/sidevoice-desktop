@@ -19,7 +19,7 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 | `src-tauri/src/call_controls.rs`, `src-tauri/core/src/call_controls.rs` | The card's window, and when it shows, where it sits and how it moves (unit-tested). |
 | `src-tauri/src/updater.rs`, `src-tauri/core/src/updater.rs`, `src-tauri/core/src/build_info.rs` | The app's updates, behind `updater`, and what this build is, `build` (below). |
 | `src-tauri/src/debug_options.rs`, `src-tauri/core/src/debug_options.rs` | The developer options, behind `debug` in a nightly or a dev build (below). |
-| `src-tauri/src/computer_name.rs`, `src-tauri/core/src/computer_name.rs` | This computer's name, `computerName` (below; the Linux file's parsing unit-tested). |
+| `src-tauri/src/platform/computer_name.rs`, `src-tauri/core/src/computer_name.rs` | This computer's name, `computerName` (below; the Linux file's parsing unit-tested). |
 
 ## What the bridge reads and calls in the web UI
 
@@ -230,7 +230,7 @@ the Computer Name (System Settings → General → Sharing, «Mac de Ana»; Syst
 `SCDynamicStoreCopyComputerName`), not the `.local` hostname; on Windows the device name (the DNS host name, as typed);
 on Linux the pretty hostname (`PRETTY_HOSTNAME` in `/etc/machine-info`, `hostnamectl set-hostname --pretty`), else
 the hostname. A non-empty string, trimmed; absent when the system has none, and the page then names the device
-itself. Read each time the room window opens (`src-tauri/src/computer_name.rs`, core `computer_name`).
+itself. Read each time the room window opens (`src-tauri/src/platform/computer_name.rs`, core `computer_name`).
 
 ## The local host
 
