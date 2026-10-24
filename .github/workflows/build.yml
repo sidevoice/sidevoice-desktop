@@ -355,6 +355,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ (needs.changes.outputs.channel == 'release' || needs.changes.outputs.channel == 'nightly') && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ (needs.changes.outputs.channel == 'release' || needs.changes.outputs.channel == 'nightly') && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
         run: cargo xtask bundle --channel ${{ needs.changes.outputs.channel }}
+      # The Windows app starts: the bundled interface comes up in WebView2 (no settings; a throwaway runner only).
+      - name: First open (no settings), the bundled interface comes up
+        run: cargo xtask windows first-open
       - uses: actions/upload-artifact@v4
         with:
           name: Sidevoice-Windows-x64

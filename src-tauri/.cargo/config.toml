@@ -4,6 +4,10 @@
 # compiles whisper.cpp with the old ABI too, as sidevoice-engine's README asks of consumers.
 [env]
 CXXFLAGS_x86_64_unknown_linux_gnu = "-D_GLIBCXX_USE_CXX11_ABI=0"
+# The same static runtime for the C++ that CMake builds (whisper.cpp): its CMake (minimum 3.5) ignores the runtime setting
+# unless policy CMP0091 is on. Read by the MSVC builds only (sidevoice-engine#117 asks the same of a consumer).
+CMAKE_POLICY_DEFAULT_CMP0091 = "NEW"
+CMAKE_MSVC_RUNTIME_LIBRARY = "MultiThreaded"
 
 # sherpa-onnx's static libraries for Windows are built against the static C runtime (/MT); whisper.cpp is compiled
 # with whichever runtime the build uses, the dynamic one (/MD) by default, and the linker refuses the mix (LNK2038).

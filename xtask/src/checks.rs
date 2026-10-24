@@ -185,7 +185,12 @@ pub fn bundle(channel: crate::util::Channel) -> Result<()> {
         "windows" => "nsis",
         os => return Err(format!("`cargo xtask bundle` is for Linux and Windows, not {os}: see `cargo xtask macos`")),
     };
-    crate::util::TauriBuild { bundles, channel, ..Default::default() }.command()?.run()
+    let mut command = crate::util::TauriBuild { bundles, channel, ..Default::default() }.command()?;
+    if std::env::consts::OS == "windows" {
+        // Installers must run on other CPUs too, including when bundled on a laptop.
+        command = command.env("GGML_NATIVE", "OFF");
+    }
+    command.run()
 }
 
 /// `release-pr-title [BRANCH]`: the title of the release PR on BRANCH (default `GITHUB_REF_NAME`, the branch a

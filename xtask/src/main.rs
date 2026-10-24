@@ -16,6 +16,10 @@
 //!   installer. With `--channel release` or `nightly`, the AppImage and the installer are also signed as updates
 //!   (their `.sig`, checked).
 //!
+//! The Windows app, in the `windows` job after `bundle` (windows.rs):
+//!
+//! - `windows first-open` (a CI runner): the app started with no settings: the bundled interface comes up.
+//!
 //! Setting up a build (`.github/actions/setup-rust`):
 //!
 //! - `engine-rev`: the sidevoice-engine commit src-tauri/Cargo.lock pins, printed.
@@ -98,6 +102,7 @@ mod memory;
 mod probe;
 mod publish;
 mod util;
+mod windows;
 
 use std::process::ExitCode;
 
@@ -110,6 +115,7 @@ const USAGE: &str = "usage: cargo xtask web | lint | test | icons | two-users | 
   | macos dmg [--signed] | macos sign-dmg | macos checksums | macos forget-secrets | macos dmg-screens
   | macos probe-app | macos local-host | macos probe | macos voice-models | macos card | macos exit
   | macos memory | macos voice-memory
+  | windows first-open
   | publish assets release TAG | publish assets nightly | publish release TAG | publish nightly
   | release-pr-title [BRANCH] | release-pr-checks
 (C: release, nightly or dev, the default; xtask/src/main.rs says what each does)";
@@ -157,6 +163,9 @@ fn main() -> ExitCode {
         ["macos", "exit"] => macos("exit", probe::exit),
         ["macos", "memory"] => macos("memory", probe::memory),
         ["macos", "voice-memory"] => macos("voice-memory", probe::voice_memory),
+        ["windows", "first-open"] => {
+            util::require_os("windows", "windows first-open").and_then(|()| windows::first_open())
+        }
         ["publish", "assets", kind] => publish::assemble(kind, None),
         ["publish", "assets", kind, tag] => publish::assemble(kind, Some(tag)),
         ["publish", "release", tag] => publish::release(tag),
