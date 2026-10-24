@@ -61,6 +61,9 @@ with Cancel as its default button on every invocation; cancelling rejects `{key:
 any uninstall or deletion. `platform::confirmation::Confirmation` owns the native prompt: the existing NSAlert on
 macOS, TaskDialogIndirect with an explicit Cancel default on Windows, and GTK with an explicit Cancel response on
 Linux. The capability is implemented on all three hosts; the reset offer and transaction remain macOS-only.
+The shared confirmation interface cancels if the UI callback cannot start its modal loop within three seconds,
+and a callback delivered later cannot open a stale prompt. Once started, the person's decision has no timeout.
+Linux cancels before constructing a widget if GTK is not initialized on the UI thread or no display is available.
 The existing eight-language reset/uninstall text is kept in the confirmation module, unchanged, with English fallback.
 No general dialog or filesystem permission is granted to the webview. A room script calling the bridge directly cannot bypass that confirmation. It refuses a running call, service install or
 model download with `{key: "reset.busy"}`, and checks the current room window and bundled origin again in

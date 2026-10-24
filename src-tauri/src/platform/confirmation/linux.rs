@@ -1,38 +1,38 @@
 use gtk::prelude::*;
-use tauri::{AppHandle, Runtime};
 
-use super::{Confirmation, ConfirmationKind};
+use super::{Confirmation, ConfirmationKind, DialogStart};
 
 pub struct NativeConfirmation;
 
 impl Confirmation for NativeConfirmation {
-    async fn confirm<R: Runtime>(app: &AppHandle<R>, kind: ConfirmationKind) -> bool {
-        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-        if app
-            .run_on_main_thread(move || {
-                let locale = sys_locale::get_locale().unwrap_or_default();
-                let (title, detail, cancel, action) = kind.words(&locale);
-                let dialog = gtk::MessageDialog::builder()
-                    .title(title)
-                    .text(title)
-                    .secondary_text(detail)
-                    .message_type(gtk::MessageType::Warning)
-                    .modal(true)
-                    .build();
-                dialog.add_button(cancel, gtk::ResponseType::Cancel);
-                dialog.add_button(action, gtk::ResponseType::Accept);
-                dialog.set_default_response(gtk::ResponseType::Cancel);
-                // GTK maps Escape/close to DeleteEvent. Only the destructive button's response accepts.
-                let confirmed = dialog.run() == gtk::ResponseType::Accept;
-                // SAFETY: the modal run has ended, and this owned dialog is never accessed again. GTK requires
-                // explicit destruction after run(); requesting close would only queue another delete event.
-                unsafe { dialog.destroy() };
-                let _ = sender.send(confirmed);
-            })
-            .is_err()
-        {
+    fn show(kind: ConfirmationKind, start: DialogStart) -> bool {
+        // Tauri normally initializes GTK on its UI thread. Do not construct a widget if that prerequisite
+        // or the display connection is missing: GTK would abort rather than return a recoverable error.
+        if !gtk::is_initialized_main_thread() || gtk::gdk::Display::default().is_none() {
             return false;
         }
-        tauri::async_runtime::spawn_blocking(move || receiver.recv().unwrap_or(false)).await.unwrap_or(false)
+        let locale = sys_locale::get_locale().unwrap_or_default();
+        let (title, detail, cancel, action) = kind.words(&locale);
+        let dialog = gtk::MessageDialog::builder()
+            .title(title)
+            .text(title)
+            .secondary_text(detail)
+            .message_type(gtk::MessageType::Warning)
+            .modal(true)
+            .build();
+        dialog.add_button(cancel, gtk::ResponseType::Cancel);
+        dialog.add_button(action, gtk::ResponseType::Accept);
+        dialog.set_default_response(gtk::ResponseType::Cancel);
+        if !start.opened() {
+            // SAFETY: this owned dialog has not entered a modal loop and is never accessed again.
+            unsafe { dialog.destroy() };
+            return false;
+        }
+        // GTK maps Escape/close to DeleteEvent. Only the destructive button's response accepts.
+        let confirmed = dialog.run() == gtk::ResponseType::Accept;
+        // SAFETY: the modal run has ended, and this owned dialog is never accessed again. GTK requires
+        // explicit destruction after run(); requesting close would only queue another delete event.
+        unsafe { dialog.destroy() };
+        confirmed
     }
 }

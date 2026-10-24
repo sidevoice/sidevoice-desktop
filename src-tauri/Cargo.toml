@@ -37,7 +37,7 @@ url = "2.5"
 # The app's updates (src/updater.rs; docs/BRIDGE.md → "The updater"), from Rust only: the page gets none of its
 # commands. Its checks sleep on the app's Tokio runtime.
 tauri-plugin-updater = "2.13"
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = ["time", "sync"] }
 # The app log (src/lib.rs `applog`): a rotating, size-capped file in the platform's log directory, fed by the Rust side and
 # by the room page's console errors (bridge/webview-log.js).
 tauri-plugin-log = "2"
@@ -93,6 +93,8 @@ libc = "0.2"
 gtk = "0.18"
 
 [dev-dependencies]
+# Deterministic startup-deadline tests; no wall-clock sleeps.
+tokio = { version = "1", features = ["rt", "test-util"] }
 tempfile = "3"
 
 [profile.release]

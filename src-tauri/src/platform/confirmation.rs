@@ -1,7 +1,12 @@
 //! Native destructive-action confirmation. The reset transaction remains in `data`.
 
 use std::future::Future;
+use std::time::Duration;
 use tauri::{AppHandle, Runtime};
+use tokio::sync::oneshot;
+use tokio::time::Instant;
+
+const START_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[cfg(target_os = "macos")]
 #[path = "confirmation/macos.rs"]
@@ -22,10 +27,64 @@ pub enum ConfirmationKind {
 }
 
 /// OS-owned confirmation, available independently of whether reset is offered on this host.
-pub trait Confirmation {
+pub trait Confirmation: 'static {
     /// Asks using the system language (English fallback). Cancel is the default; only an explicit destructive
-    /// button response accepts. Escape, closing, and a failure to display or receive a response cancel.
-    fn confirm<R: Runtime>(app: &AppHandle<R>, kind: ConfirmationKind) -> impl Future<Output = bool> + Send;
+    /// button response accepts. Escape, closing, and a failure to display or receive a response cancel. The native
+    /// modal loop must start within three seconds; the person's decision has no deadline once it starts.
+    fn confirm<R: Runtime>(app: &AppHandle<R>, kind: ConfirmationKind) -> impl Future<Output = bool> + Send {
+        async move {
+            let deadline = Instant::now() + START_TIMEOUT;
+            let (started, start) = oneshot::channel();
+            let (answer, response) = oneshot::channel();
+            if app
+                .run_on_main_thread(move || {
+                    let accepted = Self::show(kind, DialogStart { deadline, started });
+                    let _ = answer.send(accepted);
+                })
+                .is_err()
+            {
+                return false;
+            }
+            wait_for_response(deadline, start, response).await
+        }
+    }
+
+    /// Runs on the UI thread. Checks native prerequisites, prepares the dialog, then calls `start.opened()`
+    /// immediately before entering the modal loop. If it returns false, skips the loop and cancels.
+    fn show(kind: ConfirmationKind, start: DialogStart) -> bool;
+}
+
+/// A single-use START handshake. A callback delivered after cancellation must never show a late dialog.
+pub struct DialogStart {
+    deadline: Instant,
+    started: oneshot::Sender<()>,
+}
+
+impl DialogStart {
+    /// Commits to entering the native modal loop. Refuses an expired request or one whose caller has gone away.
+    pub fn opened(self) -> bool {
+        Instant::now() < self.deadline && self.started.send(()).is_ok()
+    }
+}
+
+async fn wait_for_response(
+    deadline: Instant,
+    mut start: oneshot::Receiver<()>,
+    response: oneshot::Receiver<bool>,
+) -> bool {
+    match tokio::time::timeout_at(deadline, &mut start).await {
+        Ok(Ok(())) => {}
+        Ok(Err(_)) => return false,
+        Err(_) => {
+            // close() prevents a late START. Drain a START that won the race with the timer instead of timing
+            // out a person who already has a dialog. No decision timeout applies after a successful START.
+            start.close();
+            if start.try_recv().is_err() {
+                return false;
+            }
+        }
+    }
+    response.await.unwrap_or(false)
 }
 
 impl ConfirmationKind {
@@ -66,7 +125,77 @@ fn native_uninstall_words(locale: &str) -> (&'static str, &'static str, &'static
 
 #[cfg(test)]
 mod tests {
-    use super::ConfirmationKind;
+    use super::*;
+
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread().enable_time().start_paused(true).build().unwrap()
+    }
+
+    fn request() -> (DialogStart, impl Future<Output = bool> + Send, oneshot::Sender<bool>) {
+        let deadline = Instant::now() + START_TIMEOUT;
+        let (started, start) = oneshot::channel();
+        let (answer, response) = oneshot::channel();
+        (DialogStart { deadline, started }, wait_for_response(deadline, start, response), answer)
+    }
+
+    #[test]
+    fn callback_that_never_starts_cancels_and_cannot_open_later() {
+        runtime().block_on(async {
+            let (start, response, _answer) = request();
+            let waiting = tokio::spawn(response);
+            tokio::task::yield_now().await;
+            tokio::time::advance(START_TIMEOUT).await;
+            assert!(!waiting.await.unwrap());
+            assert!(!start.opened());
+        });
+    }
+
+    #[test]
+    fn started_dialog_has_no_timeout_on_the_persons_decision() {
+        runtime().block_on(async {
+            let (start, response, answer) = request();
+            assert!(start.opened());
+            let waiting = tokio::spawn(response);
+            tokio::task::yield_now().await;
+            tokio::time::advance(Duration::from_secs(3600)).await;
+            tokio::task::yield_now().await;
+            assert!(!waiting.is_finished());
+            answer.send(true).unwrap();
+            assert!(waiting.await.unwrap());
+        });
+    }
+
+    #[test]
+    fn failure_before_start_cancels_even_with_an_accept_response() {
+        runtime().block_on(async {
+            let (start, response, answer) = request();
+            drop(start);
+            answer.send(true).unwrap();
+            assert!(!response.await);
+        });
+    }
+
+    #[test]
+    fn expired_start_is_refused_before_the_waiter_is_polled() {
+        runtime().block_on(async {
+            let (start, response, _answer) = request();
+            tokio::time::advance(START_TIMEOUT).await;
+            assert!(!start.opened());
+            assert!(!response.await);
+        });
+    }
+
+    // GTK's process/thread initialization is Linux-specific; the handshake tests above run on every host.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_without_gtk_on_this_thread_cancels_without_constructing_a_widget() {
+        runtime().block_on(async {
+            assert!(!gtk::is_initialized_main_thread());
+            let (start, response, _answer) = request();
+            assert!(!NativeConfirmation::show(ConfirmationKind::DeleteAllData, start));
+            assert!(!response.await);
+        });
+    }
 
     #[test]
     fn reset_confirmation_preserves_all_supported_languages() {
