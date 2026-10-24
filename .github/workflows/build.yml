@@ -230,6 +230,8 @@ jobs:
           key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs', 'scripts/web-release.mjs') }}
       - name: Build the CI probe app (feature probe; never shipped)
         run: cargo xtask macos probe-app
+      - name: Portable native local-host fixtures
+        run: cargo xtask test-support
       - name: Reset cleanup safety tests (temporary directories only)
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib data::tests -- --test-threads=1
       - name: The local host from the bundled page (stand-in core on its published socket, pairing, proxy, refusals)
@@ -350,6 +352,8 @@ jobs:
           key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs', 'scripts/web-release.mjs') }}
       # A release and the nightly sign the AppImage / the installer as updates with the updater's key; no
       # other run reads it.
+      - name: Portable native local-host fixtures
+        run: cargo xtask test-support
       - name: Build the installers
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ (needs.changes.outputs.channel == 'release' || needs.changes.outputs.channel == 'nightly') && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}

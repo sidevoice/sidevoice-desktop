@@ -71,10 +71,10 @@ pub fn proxy_port(log: &str) -> Option<String> {
 pub fn local_host() -> Result<()> {
     let app_dir = repo().join("src-tauri");
     Cmd::new("cargo")
-        .args(["build", "--release", "-p", "sidevoice-local-host", "--example", "local-host-ci"])
+        .args(["build", "--release", "-p", "sidevoice-desktop-test-support", "--bin", "local-host-ci"])
         .dir(&app_dir)
         .run()?;
-    let tool = app_dir.join("target/release/examples/local-host-ci");
+    let tool = app_dir.join("target/release/local-host-ci");
     let home = Path::new("/tmp/svhome");
     crate::util::fresh_dir(home)?;
     let logs = work("local-host")?;

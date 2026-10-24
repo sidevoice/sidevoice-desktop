@@ -1,11 +1,12 @@
+#![cfg(unix)]
 //! The local host end to end on this machine: a stand-in core on a real Unix socket (HTTP and a WebSocket echo), the
 //! app's pairing with it and the startup cases (design §4.1), the proxy a page talks to — forwarding with the token
 //! swapped in, a socket spliced both ways, the refusals — and the service's state and actions through a stand-in
 //! connector and CLI.
 
 use serde_json::{json, Value};
-use sidevoice_local_host::fake_core::{self, FakeCore};
-use sidevoice_local_host::fake_registry::FakeRegistry;
+use sidevoice_desktop_test_support::fake_core::{self, FakeCore};
+use sidevoice_desktop_test_support::{fake_registry::FakeRegistry, fixture};
 use sidevoice_local_host::host::{Action, Config, LocalHost};
 use sidevoice_local_host::http;
 use sidevoice_local_host::install;
@@ -28,7 +29,7 @@ struct World {
 
 impl Drop for World {
     fn drop(&mut self) {
-        fake_core::forget(&self.dirs);
+        fake_core::forget(&self.dirs.data);
     }
 }
 
@@ -42,7 +43,7 @@ impl World {
     }
 
     fn core(&self, seed: u8) -> Arc<FakeCore> {
-        FakeCore::start(&self.dirs, seed, false).unwrap()
+        FakeCore::start(&self.dirs.data, seed, false).unwrap()
     }
 
     fn host(&self) -> Arc<LocalHost> {
@@ -383,23 +384,12 @@ fn install_fake_cli(dirs: &DataDirs, status: &str) -> PathBuf {
     std::fs::set_permissions(&dirs.data, std::fs::Permissions::from_mode(0o700)).unwrap();
     let script = dirs.data.join("fake-cli");
     let log = dirs.data.join("calls.log");
-    std::fs::write(
+    fixture::install(
+        Path::new(env!("CARGO_BIN_EXE_fake-connector")),
         &script,
-        format!(
-            "#!/bin/sh\necho \"$*\" >> '{log}'\ncase \"$1 $2\" in\n\
-             '--version --json') v=$(cat '{version}'); : > '{read}'; [ -f '{slow}' ] && sleep 1; printf '{{\"ok\":true,\"version\":%s}}\\n' \"$v\" ;;\n\
-             'service status') echo '{status}' ;;\n\
-             'pair-device --json') echo '{{\"ok\":true,\"code\":\"SV1-CODE\",\"expires_in\":600,\"reach\":\"local-only\",\"payload\":{{}}}}' ;;\n\
-             'service start') echo '{{\"ok\":false,\"error\":{{\"key\":\"service.not-loaded\",\"message\":\"m\"}}}}'; exit 1 ;;\n\
-             *) echo '{{\"ok\":true,\"state\":\"starting\",\"service\":\"launchd\"}}' ;;\nesac\n",
-            log = log.display(),
-            version = dirs.data.join("version").display(),
-            read = dirs.data.join("version-read").display(),
-            slow = dirs.data.join("slow").display()
-        ),
+        &json!({"mode":"host","status":serde_json::from_str::<Value>(status).unwrap()}),
     )
     .unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
     std::fs::write(dirs.install_record(), json!({"command": [script]}).to_string()).unwrap();
     std::fs::set_permissions(dirs.install_record(), std::fs::Permissions::from_mode(0o600)).unwrap();
     set_version(dirs, json!("0.8.1"));
@@ -461,11 +451,11 @@ fn a_connector_without_start_at_sign_in_refuses_it_with_a_key_at_once() {
     let log = install_fake_cli(&world.dirs, r#"{"ok":true,"state":"running","service":"launchd"}"#);
     // As a connector whose command line has no `service login` answers `--json` (clap's error, keyed).
     let script = world.dirs.data.join("fake-cli");
-    let body = std::fs::read_to_string(&script).unwrap().replace(
-        "case \"$1 $2\" in\n",
-        "case \"$1 $2\" in\n'service login') echo '{\"ok\":false,\"error\":{\"key\":\"connector.usage\",\"params\":{\"detail\":\"invalid subcommand\"},\"message\":\"m\"}}'; exit 1 ;;\n",
-    );
-    std::fs::write(&script, body).unwrap();
+    fixture::configure(
+        &script,
+        &json!({"mode":"host","status":{"ok":true,"state":"running","service":"launchd"},"unsupported_login":true}),
+    )
+    .unwrap();
     let host = world.host();
     let started = std::time::Instant::now();
     for action in [Action::LoginOn, Action::LoginOff] {
@@ -485,22 +475,7 @@ fn a_connector_without_start_at_sign_in_refuses_it_with_a_key_at_once() {
 fn install_login_cli(dirs: &DataDirs) -> (PathBuf, PathBuf) {
     let log = install_fake_cli(dirs, "{}");
     let dir = dirs.data.clone();
-    let status = r#"{\"ok\":true,\"state\":\"stopped-by-person\",\"service\":\"launchd\",\"start_at_login\":$login}"#;
-    std::fs::write(
-        dir.join("fake-cli"),
-        format!(
-            "#!/bin/sh\necho \"$*\" >> '{log}'\nd='{d}'\ncase \"$1 $2\" in\n\
-             'service status') login=$(cat \"$d/login\" 2>/dev/null || echo false)\n\
-               if [ -e \"$d/gate\" ]; then rm -f \"$d/gate\"; while [ ! -e \"$d/release\" ]; do sleep 0.02; done; fi\n\
-               echo \"{status}\" ;;\n\
-             'service login') if [ \"$3\" = on ]; then login=true; else login=false; fi; echo $login > \"$d/login\"\n\
-               echo \"{status}\" ;;\n\
-             *) echo '{{\"ok\":true,\"state\":\"stopped-by-person\",\"service\":\"launchd\"}}' ;;\nesac\n",
-            log = log.display(),
-            d = dir.display()
-        ),
-    )
-    .unwrap();
+    fixture::configure(&dir.join("fake-cli"), &json!({"mode":"login"})).unwrap();
     (log, dir)
 }
 
@@ -556,12 +531,12 @@ fn a_poll_in_flight_cannot_put_back_the_status_an_action_replaced() {
 fn a_connector_that_answers_is_asked_first() {
     let world = World::new();
     let log = install_fake_cli(&world.dirs, r#"{"ok":true,"state":"absent"}"#);
-    let listener = fake_core::connector_listener(&world.dirs).unwrap();
+    let listener = fake_core::connector_listener(&world.dirs.data).unwrap();
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
             let mut line = String::new();
-            let _ = std::io::BufRead::read_line(&mut std::io::BufReader::new(&stream), &mut line);
+            let _ = std::io::BufRead::read_line(&mut std::io::BufReader::new(&mut stream), &mut line);
             let asked: Value = serde_json::from_str(&line).unwrap();
             assert_eq!(asked["method"], "node.status");
             // SEAMS rev. 2 §4: the derived status, as any connector answers it.
@@ -639,12 +614,12 @@ fn a_connector_status_is_the_service_status() {
     let world = World::new();
     let _core = world.core(1);
     let log = install_fake_cli(&world.dirs, r#"{"ok":true,"state":"absent"}"#);
-    let listener = fake_core::connector_listener(&world.dirs).unwrap();
+    let listener = fake_core::connector_listener(&world.dirs.data).unwrap();
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
             let mut line = String::new();
-            let _ = std::io::BufRead::read_line(&mut std::io::BufReader::new(&stream), &mut line);
+            let _ = std::io::BufRead::read_line(&mut std::io::BufReader::new(&mut stream), &mut line);
             let result = json!({"ok": true, "state": "not-installed", "service": "none", "installed": false,
                 "core": {"pid": 1, "version": "0.0.0-fake", "api": 1, "launch_id": null}, "calls": 0, "failure": null,
                 "attempts": null, "limit": null, "since": null, "window_started": null, "next_retry_at": null,
@@ -685,6 +660,7 @@ fn the_installed_version_is_asked_once_per_program_and_after_actions() {
     // An update selects another release: the command resolves to another program, which is asked.
     let release = world.dirs.data.join("fake-cli-0.9.0");
     std::fs::copy(world.dirs.data.join("fake-cli"), &release).unwrap();
+    std::fs::copy(fixture::config_path(&world.dirs.data.join("fake-cli")), fixture::config_path(&release)).unwrap();
     std::fs::write(world.dirs.install_record(), json!({"command": [release]}).to_string()).unwrap();
     set_version(&world.dirs, json!("0.9.0"));
     assert_eq!(host.poll().product_version.as_deref(), Some("0.9.0"));
@@ -885,10 +861,12 @@ fn install_options(world: &World) -> install::Options {
 
 /// A release whose installer answers as the real one does once the service runs, after `seconds`.
 fn release(seconds: &str) -> FakeRegistry {
-    let installer = format!(
-        "#!/bin/sh\nsleep {seconds}\necho '{{\"ok\":true,\"action\":\"installed\",\"version\":\"0.8.1\",\"state\":\"running\"}}'\n"
-    );
-    FakeRegistry::release("0.8.1", PLATFORM, &[("bin/sidevoice-connector", installer.as_bytes(), 0o755)])
+    fixture::release(
+        Path::new(env!("CARGO_BIN_EXE_fake-connector")),
+        "0.8.1",
+        PLATFORM,
+        &json!({"delay_ms":(seconds.parse::<f64>().unwrap()*1000.0) as u64,"response":{"ok":true,"action":"installed","version":"0.8.1","state":"running"}}),
+    )
 }
 
 #[test]
