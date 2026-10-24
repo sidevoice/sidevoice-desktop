@@ -2,6 +2,7 @@
 //! the room's Settings, quit. What it shows comes from [`bridge::tray_view`], in the app's language; what it does goes through
 //! the bridge.
 
+use crate::platform::tray::{SystemTrayAppearance, TrayAppearance};
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command, TrayIcon, TrayIconSlot};
 use sidevoice_desktop_core::i18n::t;
 use std::sync::Mutex;
@@ -12,52 +13,6 @@ use tauri::{AppHandle, Manager, Wry};
 
 const TRAY_ID: &str = "sidevoice";
 
-// Drawn by scripts/make-icons.mjs (docs/BRAND.md). macOS: template images (black + alpha), which it tints
-// for light and dark menu bars. Windows and Linux do not tint tray icons, so the mark comes in the brand's
-// two looks, berenjena for light bars and lila for dark ones, and the app picks by the bar's colour.
-#[cfg(target_os = "macos")]
-mod art {
-    use sidevoice_desktop_core::bridge::TrayIcon;
-    pub const TEMPLATE: bool = true;
-    pub fn bytes(which: TrayIcon) -> &'static [u8] {
-        match which {
-            TrayIcon::Idle => include_bytes!("../icons/tray/idle.png"),
-            TrayIcon::Live => include_bytes!("../icons/tray/live.png"),
-            TrayIcon::Muted => include_bytes!("../icons/tray/muted.png"),
-        }
-    }
-}
-#[cfg(not(target_os = "macos"))]
-mod art {
-    use sidevoice_desktop_core::bridge::TrayIcon;
-    pub const TEMPLATE: bool = false;
-    pub fn bytes(which: TrayIcon) -> &'static [u8] {
-        match (bar_is_light(), which) {
-            (true, TrayIcon::Idle) => include_bytes!("../icons/tray/light-idle.png"),
-            (true, TrayIcon::Live) => include_bytes!("../icons/tray/light-live.png"),
-            (true, TrayIcon::Muted) => include_bytes!("../icons/tray/light-muted.png"),
-            (false, TrayIcon::Idle) => include_bytes!("../icons/tray/dark-idle.png"),
-            (false, TrayIcon::Live) => include_bytes!("../icons/tray/dark-live.png"),
-            (false, TrayIcon::Muted) => include_bytes!("../icons/tray/dark-muted.png"),
-        }
-    }
-    /// Windows says whether its taskbar is light (Settings → Personalisation → Colours → "Windows mode").
-    /// Read at every icon change, so a switch shows by the next change of call state.
-    #[cfg(windows)]
-    fn bar_is_light() -> bool {
-        winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
-            .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
-            .and_then(|key| key.get_value::<u32, _>("SystemUsesLightTheme"))
-            .map(|light| light == 1)
-            .unwrap_or(false)
-    }
-    /// Linux panels do not say; most (GNOME's top bar among them) are dark.
-    #[cfg(not(windows))]
-    fn bar_is_light() -> bool {
-        false
-    }
-}
-
 struct TrayItems {
     status: MenuItem<Wry>,
     mute: MenuItem<Wry>,
@@ -67,8 +22,9 @@ struct TrayItems {
     icon: Mutex<TrayIconSlot>,
 }
 
-fn icon(which: TrayIcon) -> tauri::Result<Image<'static>> {
-    Image::from_bytes(art::bytes(which))
+fn icon(which: TrayIcon) -> tauri::Result<(Image<'static>, bool)> {
+    let image = SystemTrayAppearance::image(which);
+    Ok((Image::from_bytes(image.bytes)?, image.template))
 }
 
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
@@ -99,9 +55,10 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         ],
     )?;
 
-    TrayIconBuilder::with_id(TRAY_ID)
-        .icon(icon(initial.icon)?)
-        .icon_as_template(art::TEMPLATE)
+    let (image, template) = icon(initial.icon)?;
+    let created = TrayIconBuilder::with_id(TRAY_ID)
+        .icon(image)
+        .icon_as_template(template)
         .tooltip("Sidevoice")
         .menu(&menu)
         .show_menu_on_left_click(true)
@@ -118,7 +75,11 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             "quit" => app.exit(0),
             _ => {}
         })
-        .build(app)?;
+        .build(app);
+    if let Err(error) = created {
+        SystemTrayAppearance::creation_failed(error)?;
+        return Ok(());
+    }
 
     app.manage(TrayItems {
         status,
@@ -154,9 +115,9 @@ pub fn update(app: &AppHandle, snapshot: &CallSnapshot) {
         if !items.icon.lock().unwrap().is_latest(decision) {
             return;
         }
-        if let (Some(tray), Ok(image)) = (a.tray_by_id(TRAY_ID), icon(which)) {
+        if let (Some(tray), Ok((image, template))) = (a.tray_by_id(TRAY_ID), icon(which)) {
             let _ = tray.set_icon(Some(image));
-            let _ = tray.set_icon_as_template(art::TEMPLATE);
+            let _ = tray.set_icon_as_template(template);
             let _ = tray.set_tooltip(Some(&status));
         }
     });
