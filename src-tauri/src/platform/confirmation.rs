@@ -49,19 +49,19 @@ pub trait Confirmation: 'static {
         }
     }
 
-    /// Runs on the UI thread. Checks native prerequisites, prepares the dialog, then calls `start.opened()`
-    /// immediately before entering the modal loop. If it returns false, skips the loop and cancels.
+    /// Runs on the UI thread. Checks native prerequisites and registers a native opened/modal-session hook.
+    /// That hook calls `start.opened()` and immediately cancels the native dialog if it returns false.
     fn show(kind: ConfirmationKind, start: DialogStart) -> bool;
 }
 
-/// A single-use START handshake. A callback delivered after cancellation must never show a late dialog.
+/// A single-use START handshake. An opened hook delivered after cancellation must dismiss its native dialog.
 pub struct DialogStart {
     deadline: Instant,
     started: oneshot::Sender<()>,
 }
 
 impl DialogStart {
-    /// Commits to entering the native modal loop. Refuses an expired request or one whose caller has gone away.
+    /// Acknowledges the native opened/modal-session hook. Refuses an expired request or an absent caller.
     pub fn opened(self) -> bool {
         Instant::now() < self.deadline && self.started.send(()).is_ok()
     }

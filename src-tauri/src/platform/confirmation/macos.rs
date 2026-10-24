@@ -5,7 +5,10 @@ pub struct NativeConfirmation;
 impl Confirmation for NativeConfirmation {
     fn show(kind: ConfirmationKind, start: DialogStart) -> bool {
         use objc2::{class, msg_send, runtime::AnyObject};
-        use objc2_foundation::NSString;
+        use objc2_app_kit::NSWindowDidBecomeKeyNotification;
+        use objc2_foundation::{NSNotification, NSNotificationCenter, NSString};
+        use std::ptr::NonNull;
+        use std::sync::Mutex;
         // NSAlert's first button is the default. The destructive button is deliberately second.
         unsafe {
             let alert: *mut AnyObject = msg_send![class!(NSAlert), new];
@@ -26,11 +29,31 @@ impl Confirmation for NativeConfirmation {
                 let _: () = msg_send![alert, setInformativeText: &*detail];
                 let _: *mut AnyObject = msg_send![alert, addButtonWithTitle: &*cancel];
                 let _: *mut AnyObject = msg_send![alert, addButtonWithTitle: &*delete];
-                if !start.opened() {
+                let window: *mut AnyObject = msg_send![alert, window];
+                if window.is_null() {
                     let _: () = msg_send![alert, release];
                     return false;
                 }
+                let start = Mutex::new(Some(start));
+                let opened = block2::RcBlock::new(move |_: NonNull<NSNotification>| {
+                    let start = start.lock().unwrap().take();
+                    if start.is_some_and(|start| !start.opened()) {
+                        let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+                        let _: () = msg_send![app, abortModal];
+                    }
+                });
+                let center = NSNotificationCenter::defaultCenter();
+                // This sendable block acknowledges only this alert window's native key notification. A nil
+                // queue delivers synchronously on AppKit's UI thread, where abortModal cancels the late alert.
+                let observer = center.addObserverForName_object_queue_usingBlock(
+                    Some(NSWindowDidBecomeKeyNotification),
+                    Some(&*window),
+                    None,
+                    &opened,
+                );
                 let answer: isize = msg_send![alert, runModal];
+                // Stop observing before releasing the alert/window, including when no key notification ran.
+                center.removeObserver((*observer).as_ref());
                 let _: () = msg_send![alert, release];
                 answer == 1001 // NSAlertSecondButtonReturn
             }

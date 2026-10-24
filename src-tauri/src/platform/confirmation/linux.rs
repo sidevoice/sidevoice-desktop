@@ -23,11 +23,14 @@ impl Confirmation for NativeConfirmation {
         dialog.add_button(cancel, gtk::ResponseType::Cancel);
         dialog.add_button(action, gtk::ResponseType::Accept);
         dialog.set_default_response(gtk::ResponseType::Cancel);
-        if !start.opened() {
-            // SAFETY: this owned dialog has not entered a modal loop and is never accessed again.
-            unsafe { dialog.destroy() };
-            return false;
-        }
+        let start = std::cell::RefCell::new(Some(start));
+        dialog.connect_map_event(move |dialog, _| {
+            let start = start.borrow_mut().take();
+            if start.is_some_and(|start| !start.opened()) {
+                dialog.response(gtk::ResponseType::Cancel);
+            }
+            gtk::glib::Propagation::Proceed
+        });
         // GTK maps Escape/close to DeleteEvent. Only the destructive button's response accepts.
         let confirmed = dialog.run() == gtk::ResponseType::Accept;
         // SAFETY: the modal run has ended, and this owned dialog is never accessed again. GTK requires
