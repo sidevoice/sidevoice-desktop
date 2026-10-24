@@ -60,6 +60,7 @@ fn main() {
         "call_controls_settings",
         "updater",
         "microphone",
+        "microphone_open_settings",
         "debug_options",
     ])))
     .expect("failed to run tauri-build");

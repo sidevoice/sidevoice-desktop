@@ -660,7 +660,7 @@ What is this app's own:
 Where the app runs the voice call (`host.voice`, macOS), the room page is never granted `getUserMedia`, so it can
 neither trigger macOS's microphone prompt (TCC) nor read its answer. `window.__sidevoiceDesktop.host.microphone` does
 it for the page, on the app's own privacy entry, the one the voice call uses: the web's first-run setup asks for the
-microphone early through it, rather than at the first call. Present exactly where `host.voice` is; a frozen object:
+microphone early through it, rather than at the first call. On macOS it is a frozen object with the native permission methods:
 
 ```ts
 interface MicrophonePermission {
@@ -681,13 +681,30 @@ interface MicrophonePermission {
   `NSMicrophoneUsageDescription`, `src-tauri/Info.plist`); afterwards it answers at once with the stored answer, no
   prompt.
 - `openSettings()`: opens System Settings at Privacy & Security › Microphone
-  (`x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone`, through `/usr/bin/open`), where a
+  (`x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone`, through `tauri-plugin-opener`), where a
   denial is undone.
 - A refusal rejects `{key, message}`: `bad_request` for a malformed call or another caller, `internal` when the system
   does not answer or System Settings does not open.
 - Command behind it: `microphone {action}`, `action` `state`, `request` or `open-settings` (`src-tauri/src/microphone.rs`),
   macOS only. Granted to the room window (`capabilities/room.json`); it re-checks that the caller is the current room
   window on the app's own page.
+
+On Windows, `host.microphone` is a frozen settings-only object:
+
+```ts
+interface MicrophoneSettings {
+  openSettings(): Promise<void>;
+}
+```
+
+It opens `ms-settings:privacy-microphone` through `tauri-plugin-opener` (Rust API). The page must feature-detect
+`state` and `request` independently: Windows still reads and requests capture access through the webview, and opening
+Settings says nothing about whether capture is allowed. No native Windows permission poll is offered. Linux has no
+standard privacy-settings link and does not expose this object. The settings-only command is
+`microphone_open_settings`, granted only to the room, with the same current-room/origin check and refusal contract as
+`microphone`. It accepts no URL or program from the page. No generic opener permission is granted to JavaScript, and
+the plugin's automatic link interception is disabled. Native access-state and capture-error work remains separate.
+The existing macOS `microphone {action: "open-settings"}` command remains supported.
 
 ## The mute shortcut
 

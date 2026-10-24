@@ -1311,7 +1311,7 @@ test("the app's updaterEvent hands each listener the status, until it stops", ()
 
 // ---- host.microphone: the app's microphone permission, for the page's first-run setup (docs/BRIDGE.md) ----
 
-test("host.microphone only with host.voice, and exactly its three calls", () => {
+test("host.microphone with native voice keeps its permission methods", () => {
   const install = loadFactory();
   for (const offered of [undefined, false, "__SIDEVOICE_VOICE__", "true"]) {
     const api = install(fakeWindow(ORIGIN).win, ORIGIN, null, true, offered);
@@ -1321,6 +1321,28 @@ test("host.microphone only with host.voice, and exactly its three calls", () => 
   assert.ok("voice" in api.host);
   assert.deepEqual(Object.keys(api.host.microphone).sort(), ["onChange", "openSettings", "request", "state"]);
   assert.ok(Object.isFrozen(api.host.microphone));
+});
+
+test("settings-only microphone capability opens settings without claiming permission or polling", async () => {
+  const install = loadFactory();
+  const { win, calls, tick } = fakeWindow(ORIGIN);
+  const api = install(win, ORIGIN, null, false, false, false, undefined, undefined, undefined, true);
+  assert.equal("voice" in api.host, false);
+  assert.deepEqual(Object.keys(api.host.microphone), ["openSettings"]);
+  assert.ok(Object.isFrozen(api.host.microphone));
+  assert.equal(await api.host.microphone.openSettings(), undefined);
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "microphone_open_settings"), [["microphone_open_settings", undefined]]);
+  assert.equal(calls.some(([cmd]) => cmd === "microphone"), false);
+  tick(); await flush();
+  assert.equal(calls.some(([cmd]) => cmd === "microphone"), false, "no native permission poll");
+  for (const offered of [undefined, false, "true", "__SIDEVOICE_MICROPHONE_SETTINGS__"]) {
+    assert.equal("microphone" in install(fakeWindow(ORIGIN).win, ORIGIN, null, false, false, false, undefined, undefined, undefined, offered).host, false);
+  }
+  assert.equal(install(fakeWindow("https://other.example").win, ORIGIN, null, false, false, false, undefined, undefined, undefined, true), null);
+  const refusal = { key: "internal", message: "System Settings could not be opened." };
+  const failing = settingsWindow({ microphone_open_settings: () => Object.assign(new Error(), { refusal }) });
+  const microphone = install(failing.win, ORIGIN, null, false, false, false, undefined, undefined, undefined, true).host.microphone;
+  await assert.rejects(microphone.openSettings(), (error) => error === refusal);
 });
 
 test("host.microphone calls the microphone command with its action, and passes refusals on", async () => {
