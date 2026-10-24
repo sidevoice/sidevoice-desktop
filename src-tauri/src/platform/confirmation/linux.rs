@@ -24,7 +24,9 @@ impl Confirmation for NativeConfirmation {
                 dialog.set_default_response(gtk::ResponseType::Cancel);
                 // GTK maps Escape/close to DeleteEvent. Only the destructive button's response accepts.
                 let confirmed = dialog.run() == gtk::ResponseType::Accept;
-                dialog.close();
+                // SAFETY: the modal run has ended, and this owned dialog is never accessed again. GTK requires
+                // explicit destruction after run(); requesting close would only queue another delete event.
+                unsafe { dialog.destroy() };
                 let _ = sender.send(confirmed);
             })
             .is_err()
