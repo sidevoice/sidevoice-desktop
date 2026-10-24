@@ -43,6 +43,14 @@ pub fn test() -> Result<()> {
     Cmd::new("cargo").args(["test", "--workspace"]).dir(repo().join("src-tauri")).run()
 }
 
+/// Portable fixtures, also run by the existing macOS and Windows PR jobs.
+pub fn test_support() -> Result<()> {
+    Cmd::new("cargo")
+        .args(["test", "--locked", "-p", "sidevoice-desktop-test-support", "--test", "portable"])
+        .dir(repo().join("src-tauri"))
+        .run()
+}
+
 /// Everything `npm run icons` writes.
 const DRAWN: &[&str] = &["src-tauri/icons", "src-tauri/dmg"];
 
@@ -64,18 +72,21 @@ const OTHER: &str = "sidevoice-other";
 /// `two-users` (Linux, CI only: it adds a user): the local host with two users. `local-host-ci serve` runs as this
 /// user (a stand-in core on the socket it publishes, the app's side paired with it, the proxy), `attack` as another, who must get
 /// nowhere: it cannot open that socket, link as a connector, or use the proxy
-/// (src-tauri/local-host/examples/local-host-ci.rs).
+/// (test-support/src/bin/local-host-ci.rs).
 pub fn two_users() -> Result<()> {
     require_os("linux", "two-users")?;
     require_ci("two-users")?;
     let app = repo().join("src-tauri");
-    Cmd::new("cargo").args(["build", "-p", "sidevoice-local-host", "--example", "local-host-ci"]).dir(&app).run()?;
+    Cmd::new("cargo")
+        .args(["build", "-p", "sidevoice-desktop-test-support", "--bin", "local-host-ci"])
+        .dir(&app)
+        .run()?;
     // Outside any home, where the second user can reach it.
     let dir = Path::new("/tmp/svci");
     mkdir(dir)?;
     chmod(dir, 0o755)?;
     let tool = dir.join("local-host-ci");
-    fs::copy(app.join("target/debug/examples/local-host-ci"), &tool).map_err(|e| format!("{}: {e}", tool.display()))?;
+    fs::copy(app.join("target/debug/local-host-ci"), &tool).map_err(|e| format!("{}: {e}", tool.display()))?;
     chmod(&tool, 0o755)?;
     if !Cmd::new("id").arg(OTHER).attempt()?.0 {
         Cmd::new("sudo").args(["useradd", "--create-home", OTHER]).run()?;

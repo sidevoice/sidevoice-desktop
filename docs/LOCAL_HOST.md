@@ -263,17 +263,17 @@ pairing the proxy answers 503; without a core, 502.
 
 ## Tests
 
-- `cargo test -p sidevoice-local-host`: the checks, strict HTTP, the identity proof (also a high-S signature), the
+- `cargo test -p sidevoice-local-host -p sidevoice-desktop-test-support`: the checks, strict HTTP, the identity proof (also a high-S signature), the
   store, the CLI runner, the state table, every row of the ingress table; end to end over a real socket against a
-  stand-in core (`src/fake_core.rs`: HTTP, a WebSocket echo, the core's socket rules) — pairing, forwarding with the
+  stand-in core (`test-support/src/fake_core.rs`: HTTP, a WebSocket echo, the core's socket rules) — pairing, forwarding with the
   token swapped in, a socket spliced, the refusals, every startup case, revocation, the fallback and the actions;
   the service condition over a healthy core; 256 clients trickling partial heads while the page gets through, the
   head deadline, a valid head arriving in pieces through connection churn; data before an upgrade's 101; the CLI's
   deadline with a child holding its pipes, a timeout with a live child, a detached service kept, a command link
   retargeted after the check; a directory swapped between check and read, links, loose modes and an ancestry others
   can write.
-- The install, against a stand-in registry (`src/fake_registry.rs`: the documents and a package built on the spot,
-  its installer a script): the real 0.8.1 documents resolved; platforms, skewed versions, documents that are not ones,
+- The install, against a stand-in registry (`test-support/src/fake_registry.rs`: the documents and a package built on the spot,
+  its installer the prebuilt native `fake-connector` executable with a JSON sidecar): the real 0.8.1 documents resolved; platforms, skewed versions, documents that are not ones,
   every tarball URL off the registry; the integrity's forms; tarballs that leave the package (`..`, absolute, a GNU long
   name, a pax `path`), links, devices, an entry twice, the limits, a cancel; a release fetched, verified, unpacked and
   installed by its installer (`install --json`, `D`), a tampered tarball never unpacked, the installer's keys mapped
@@ -282,7 +282,7 @@ pairing the proxy answers 503; without a core, 502.
   time, `running` and the pairing after it, a refused pairing paired again, a failed install that frees the slot. By
   hand, over the network (`--features fetch -- --ignored the_real_registry`): the real latest release resolved,
   downloaded, verified and unpacked, its installer not run.
-- CI, Linux (`test` job): `examples/local-host-ci.rs serve` as the runner and `attack` as a second user — it cannot
+- CI, Linux (`test` job): `test-support/src/bin/local-host-ci.rs serve` as the runner and `attack` as a second user — it cannot
   open the core's socket (so neither pair nor link as a connector), read the app's pairing, or use the proxy without the
   secret; the same attempts as the first user, as a control, do get through.
 - CI, macOS (probe build): the app with a temporary `HOME` against `local-host-ci core`; the bundled room's own page

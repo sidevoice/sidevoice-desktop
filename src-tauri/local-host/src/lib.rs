@@ -30,10 +30,6 @@ pub mod cli;
 pub mod connector;
 pub mod core_socket;
 pub mod endpoints;
-#[cfg(feature = "fake-core")]
-pub mod fake_core;
-#[cfg(feature = "fake-core")]
-pub mod fake_registry;
 pub mod host;
 pub mod http;
 pub mod identity;
