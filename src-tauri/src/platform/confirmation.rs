@@ -185,6 +185,18 @@ mod tests {
         });
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_expired_request_cancels_before_accessing_appkit() {
+        runtime().block_on(async {
+            let (start, response, _answer) = request();
+            tokio::time::advance(START_TIMEOUT).await;
+            // Runs on a test thread: an expired request must return before any main-thread-only AppKit call.
+            assert!(!NativeConfirmation::show(ConfirmationKind::DeleteAllData, start));
+            assert!(!response.await);
+        });
+    }
+
     // GTK's process/thread initialization is Linux-specific; the handshake tests above run on every host.
     #[cfg(target_os = "linux")]
     #[test]

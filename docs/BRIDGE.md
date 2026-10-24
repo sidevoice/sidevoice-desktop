@@ -63,7 +63,9 @@ macOS, TaskDialogIndirect with an explicit Cancel default on Windows, and GTK wi
 Linux. The capability is implemented on all three hosts; the reset offer and transaction remain macOS-only.
 The shared confirmation interface cancels unless the native opened hook arrives within three seconds; a dialog
 that appears later is immediately dismissed. Once opened, the person's decision has no timeout. The hooks are
-Windows' `TDN_CREATED`, GTK's map event, and the macOS alert window's did-become-key notification.
+Windows' `TDN_CREATED`, GTK's map event, and a macOS block scheduled in `NSModalPanelRunLoopMode`.
+macOS activates the app before opening the alert, skips requests already cancelled before showing, and aborts
+a modal session whose startup hook arrives late.
 Linux cancels before constructing a widget if GTK is not initialized on the UI thread or no display is available.
 The existing eight-language reset/uninstall text is kept in the confirmation module, unchanged, with English fallback.
 No general dialog or filesystem permission is granted to the webview. A room script calling the bridge directly cannot bypass that confirmation. It refuses a running call, service install or

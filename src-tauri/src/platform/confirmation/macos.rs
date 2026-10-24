@@ -2,13 +2,21 @@ use super::{Confirmation, ConfirmationKind, DialogStart};
 
 pub struct NativeConfirmation;
 
+fn cancelled(start: &DialogStart) -> bool {
+    tokio::time::Instant::now() >= start.deadline || start.started.is_closed()
+}
+
 impl Confirmation for NativeConfirmation {
     fn show(kind: ConfirmationKind, start: DialogStart) -> bool {
         use objc2::{class, msg_send, runtime::AnyObject};
-        use objc2_app_kit::NSWindowDidBecomeKeyNotification;
-        use objc2_foundation::{NSNotification, NSNotificationCenter, NSString};
-        use std::ptr::NonNull;
-        use std::sync::Mutex;
+        use objc2_app_kit::NSModalPanelRunLoopMode;
+        use objc2_foundation::{NSArray, NSRunLoop, NSString};
+        use std::sync::{Arc, Mutex};
+
+        // A callback delayed on the main queue must never show an already-cancelled request.
+        if cancelled(&start) {
+            return false;
+        }
         // NSAlert's first button is the default. The destructive button is deliberately second.
         unsafe {
             let alert: *mut AnyObject = msg_send![class!(NSAlert), new];
@@ -29,31 +37,31 @@ impl Confirmation for NativeConfirmation {
                 let _: () = msg_send![alert, setInformativeText: &*detail];
                 let _: *mut AnyObject = msg_send![alert, addButtonWithTitle: &*cancel];
                 let _: *mut AnyObject = msg_send![alert, addButtonWithTitle: &*delete];
-                let window: *mut AnyObject = msg_send![alert, window];
-                if window.is_null() {
-                    let _: () = msg_send![alert, release];
-                    return false;
-                }
-                let start = Mutex::new(Some(start));
-                let opened = block2::RcBlock::new(move |_: NonNull<NSNotification>| {
-                    let start = start.lock().unwrap().take();
+                let start = Arc::new(Mutex::new(Some(start)));
+                let modal_start = Arc::clone(&start);
+                let opened = block2::RcBlock::new(move || {
+                    let start = modal_start.lock().unwrap().take();
                     if start.is_some_and(|start| !start.opened()) {
                         let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
                         let _: () = msg_send![app, abortModal];
                     }
                 });
-                let center = NSNotificationCenter::defaultCenter();
-                // This sendable block acknowledges only this alert window's native key notification. A nil
-                // queue delivers synchronously on AppKit's UI thread, where abortModal cancels the late alert.
-                let observer = center.addObserverForName_object_queue_usingBlock(
-                    Some(NSWindowDidBecomeKeyNotification),
-                    Some(&*window),
-                    None,
-                    &opened,
-                );
+                let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+                let _: () = msg_send![app, activateIgnoringOtherApps: true];
+                // Activation can itself be delayed. Recheck before entering the modal session.
+                let expired = start.lock().unwrap().as_ref().is_some_and(cancelled);
+                if expired {
+                    start.lock().unwrap().take();
+                    let _: () = msg_send![alert, release];
+                    return false;
+                }
+                let modes = NSArray::from_slice(&[NSModalPanelRunLoopMode]);
+                // Runs on the UI thread only once AppKit enters its modal loop, even if the alert never
+                // becomes key. A session that starts after cancellation is immediately aborted there.
+                NSRunLoop::mainRunLoop().performInModes_block(&modes, &opened);
                 let answer: isize = msg_send![alert, runModal];
-                // Stop observing before releasing the alert/window, including when no key notification ran.
-                center.removeObserver((*observer).as_ref());
+                // Invalidate an unserviced block so it cannot abort a later, unrelated modal session.
+                start.lock().unwrap().take();
                 let _: () = msg_send![alert, release];
                 answer == 1001 // NSAlertSecondButtonReturn
             }
