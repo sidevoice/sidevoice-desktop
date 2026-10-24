@@ -26,9 +26,6 @@ use tokio::sync::oneshot;
 
 use crate::refusal;
 
-/// System Settings → Privacy & Security → Microphone.
-const SETTINGS_URL: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone";
-
 /// `host.microphone`'s one command: `action` `state`, `request` or `open-settings`. `state` and `request` answer the
 /// permission as the page reads it (`"prompt" | "granted" | "denied"`, `state` also `"missing"`; `request` only
 /// `"granted" | "denied"`), `open-settings` nothing. Refuses `bad_request` for another action or caller, `internal` when the system does not answer.
@@ -48,7 +45,9 @@ pub async fn microphone(app: AppHandle, webview: Webview, action: String) -> Res
                 .map_err(|_| refusal("internal", "The system did not answer the microphone request."))?;
             Ok(json!(if granted { "granted" } else { "denied" }))
         }
-        "open-settings" => open_settings().await.map(|()| Value::Null),
+        "open-settings" => crate::platform::microphone::open_settings(&app)
+            .map_err(|_| refusal("internal", "System Settings could not be opened."))
+            .map(|()| Value::Null),
         _ => Err(refusal("bad_request", format!("not a microphone action: {action}"))),
     }
 }
@@ -97,14 +96,4 @@ fn request_access() -> Result<oneshot::Receiver<bool>, Value> {
     // SAFETY: AVMediaTypeAudio is one of the two media types the method accepts; AVFoundation copies the block.
     unsafe { AVCaptureDevice::requestAccessForMediaType_completionHandler(audio, &handler) };
     Ok(rx)
-}
-
-/// System Settings at the microphone's privacy pane (`open <url>`, no shell).
-async fn open_settings() -> Result<(), Value> {
-    let open = || std::process::Command::new("/usr/bin/open").arg(SETTINGS_URL).status();
-    let opened = tauri::async_runtime::spawn_blocking(open).await;
-    match opened {
-        Ok(Ok(status)) if status.success() => Ok(()),
-        _ => Err(refusal("internal", "System Settings could not be opened.")),
-    }
 }

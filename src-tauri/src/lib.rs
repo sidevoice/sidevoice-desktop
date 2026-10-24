@@ -22,6 +22,7 @@ mod local_host;
 #[cfg(all(target_os = "macos", any(test, feature = "probe")))]
 mod memory;
 mod microphone;
+mod platform;
 #[cfg(feature = "probe")]
 mod probe;
 mod tray;
@@ -359,6 +360,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             &build,
             computer_name::read().as_deref(),
             &debug_options,
+            platform::microphone::SETTINGS_URL.is_some(),
         ));
     #[cfg(feature = "probe")]
     let builder = match probe::local_host_flow() {
@@ -510,6 +512,13 @@ fn apply_shortcut(app: &AppHandle, accelerator: &str) {
     }
 }
 
+/// Opens only the fixed system microphone privacy page, for the current room page.
+#[tauri::command]
+async fn microphone_open_settings(app: AppHandle, webview: Webview) -> Result<(), Value> {
+    room_page(&app, &webview).map_err(|why| refusal("bad_request", why))?;
+    platform::microphone::open_settings(&app).map_err(|_| refusal("internal", "System Settings could not be opened."))
+}
+
 /// The app's commands, with `$extra` (each after a comma) after them.
 macro_rules! commands {
     ($($extra:tt)*) => {
@@ -551,7 +560,8 @@ macro_rules! commands {
             mute_shortcut,
             call_controls::call_controls_settings,
             updater::updater,
-            debug_options::debug_options
+            debug_options::debug_options,
+            microphone_open_settings
             $($extra)*
         ]
     };
@@ -611,6 +621,7 @@ pub fn run() {
         builder.manage(voice::VoiceState::default())
     };
     builder
+        .plugin(tauri_plugin_opener::Builder::new().open_js_links_on_click(false).build())
         // A second launch (Finder, Spotlight) brings the running one forward instead.
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| show_room(app)))
         .plugin(

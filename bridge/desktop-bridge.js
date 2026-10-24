@@ -14,8 +14,8 @@
 // bundled interface) it does nothing at all.
 (function (factory) {
   if (typeof module === "object" && module.exports) module.exports = factory; // unit tests
-  else factory(window, "__SIDEVOICE_ROOM_ORIGIN__", "__SIDEVOICE_MEDIA_KEYS__", "__SIDEVOICE_LOCAL_HOST__", "__SIDEVOICE_VOICE__", "__SIDEVOICE_UPDATER__", "__SIDEVOICE_BUILD__", "__SIDEVOICE_COMPUTER_NAME__", "__SIDEVOICE_DEBUG__");
-})(function installDesktopBridge(win, roomOrigin, mediaKeys, localHostOffered, voiceOffered, updaterOffered, build, computerName, debugState) {
+  else factory(window, "__SIDEVOICE_ROOM_ORIGIN__", "__SIDEVOICE_MEDIA_KEYS__", "__SIDEVOICE_LOCAL_HOST__", "__SIDEVOICE_VOICE__", "__SIDEVOICE_UPDATER__", "__SIDEVOICE_BUILD__", "__SIDEVOICE_COMPUTER_NAME__", "__SIDEVOICE_DEBUG__", "__SIDEVOICE_MICROPHONE_SETTINGS__");
+})(function installDesktopBridge(win, roomOrigin, mediaKeys, localHostOffered, voiceOffered, updaterOffered, build, computerName, debugState, microphoneSettingsOffered) {
   "use strict";
   // scheme://host rather than location.origin: the app's own pages (tauri://localhost) may have an opaque origin.
   if (win.location.protocol + "//" + win.location.host !== roomOrigin) return null;
@@ -785,7 +785,7 @@
     version: BRIDGE_VERSION,
     /** What this host offers the page besides the webview itself. The web UI feature-detects it.
      *  `engine`: the app's engine, its catalogues, keys and models on disk (docs/ENGINES.md); `voice`: the call the
-     *  app runs; `microphone`: the app's microphone permission, with `voice`. */
+     *  app runs; `microphone`: native permission with `voice`, or just the system settings link. */
     host: Object.freeze({
       app: "sidevoice-desktop",
       /** The bridge's version: what the page may rely on (docs/BRIDGE.md). */
@@ -810,8 +810,10 @@
       }),
       // Only where the app runs the voice call (macOS): the page then neither opens the microphone nor runs models.
       ...(voiceCall ? { voice: voiceCall.host } : {}),
-      // With `voice`: the app's microphone permission, which the page cannot ask for itself there.
-      ...(voiceCall ? { microphone: microphone() } : {}),
+      // Native voice owns permission on macOS. Windows keeps capture permission in the page and offers only settings.
+      ...(voiceCall ? { microphone: microphone() } : microphoneSettingsOffered === true ? {
+        microphone: Object.freeze({ openSettings: () => call("microphone_open_settings").then(() => undefined) }),
+      } : {}),
       /** What this build is: a release, a nightly (both with `updater`), or a development build. */
       build: Object.freeze({ ...build }),
       // The name the person gave this computer ("Mac de Ana"): the page proposes it as the device's name. Only
