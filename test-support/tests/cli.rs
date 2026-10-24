@@ -145,10 +145,15 @@ fn only_an_install_record_of_absolute_paths_names_the_cli() {
         std::fs::set_permissions(dirs.install_record(), std::fs::Permissions::from_mode(mode)).unwrap();
     };
     let script = tmp.path().join("cli.mjs");
-    std::fs::write(&script, b"").unwrap();
+    std::fs::write(&script, b"// cli").unwrap();
     let executable = env!("CARGO_BIN_EXE_fake-connector");
     let record = json!({"command":[executable, script]}).to_string();
     write(&record, 0o600);
+    // Shared program validation refuses non-executable payloads too; it must not silently chmod the script.
+    assert_eq!(Cli::installed(&dirs).unwrap_err().key, "install.unsafe");
+    assert_eq!(std::fs::read(&script).unwrap(), b"// cli");
+    assert_eq!(std::fs::metadata(&script).unwrap().permissions().mode() & 0o111, 0);
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
     let cli = Cli::installed(&dirs).unwrap();
     let canonical = |p: &str| std::fs::canonicalize(p).unwrap().display().to_string();
     assert_eq!(cli.prefix, [canonical(executable), canonical(&script.display().to_string())]);

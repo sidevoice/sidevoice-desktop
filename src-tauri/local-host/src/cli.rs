@@ -8,9 +8,9 @@
 
 use crate::checks::Check;
 use crate::paths::DataDirs;
-use crate::trusted;
 use crate::Refusal;
 use serde_json::Value;
+use sidevoice_platform::fs::{Access, Directory, Files, Fs, HeldDirectory};
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::process::CommandExt;
 use std::process::{Command, ExitStatus, Stdio};
@@ -31,12 +31,19 @@ pub struct Cli {
 impl Cli {
     /// The CLI the install recorded. `D`'s ancestry safe from other users, `D` itself this user's and not writable by
     /// others, `install.json` read through `D`'s checked descriptor (a regular file, not a link, this user's, not
-    /// writable by others), and `command` a non-empty array of absolute paths, each a program or file only root or
+    /// writable by others), and `command` a non-empty array of absolute paths, each an executable file only root or
     /// this user can change. No install, no CLI (`cli.unavailable`).
     pub fn installed(dirs: &DataDirs) -> Result<Cli, Refusal> {
-        let dir = checked(trusted::Dir::open(&dirs.data, 0o022, "install.unsafe"))?;
-        let text = checked(dir.read("install.json", 0o022, RECORD_LIMIT))?;
+        let dir = checked(
+            HeldDirectory::open(&dirs.data, Access::NotWritableByOthers)
+                .map_err(|e| crate::checks::storage_error(&dirs.data, "install.unsafe", e)),
+        )?;
         let record = dirs.install_record();
+        let text = checked(
+            dir.read("install.json".as_ref(), Access::NotWritableByOthers, RECORD_LIMIT)
+                .map_err(|e| crate::checks::storage_error(&record, "install.unsafe", e))
+                .and_then(|bytes| bytes.ok_or(Check::Missing)),
+        )?;
         let install: Value = serde_json::from_slice(&text)
             .map_err(|e| Refusal::new("install.unreadable", format!("{} is not JSON: {e}", record.display())))?;
         let prefix = command(&install).ok_or_else(|| {
@@ -45,13 +52,19 @@ impl Cli {
         // What runs is exactly what was checked: each path resolved once, and `D` as its descriptor was checked.
         let mut verified = Vec::with_capacity(prefix.len());
         for path in &prefix {
-            let resolved = checked(trusted::executable(std::path::Path::new(path)))?;
+            let resolved = checked(
+                Files::trusted_program(std::path::Path::new(path))
+                    .map_err(|e| crate::checks::storage_error(std::path::Path::new(path), "install.unsafe", e)),
+            )?;
             let resolved = resolved.into_os_string().into_string().map_err(|_| {
                 Refusal::new("install.unreadable", format!("{} names a path that is not UTF-8.", record.display()))
             })?;
             verified.push(resolved);
         }
-        Ok(Cli { prefix: verified, data: dir.path().to_path_buf() })
+        let data = checked(
+            dirs.data.canonicalize().map_err(|e| crate::checks::storage_error(&dirs.data, "install.unsafe", e)),
+        )?;
+        Ok(Cli { prefix: verified, data })
     }
 
     /// Runs `prefix + args` and waits at most `timeout` — for the process to exit **and** for both its output streams
