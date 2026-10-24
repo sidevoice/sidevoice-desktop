@@ -103,3 +103,14 @@ The room window (pairing, calls, first open) is the web interface, bundled from 
 - **Copyright / publisher** for the About panel and installers: still to be named.
 - **NSIS installer artwork** (header and sidebar bitmaps): the installer uses the app icon only.
 - The room window's brand fixes (in sidevoice-web) reach the app when `web.pin.json` moves to a release with them.
+
+## Tray platform boundary
+
+`src-tauri/src/platform/tray.rs` selects icon bytes and their template flag together. macOS uses the existing
+system-tinted templates. Windows reads `SystemUsesLightTheme` through `winreg` on each icon selection; a missing
+setting falls back to dark. Linux retains the dark-panel artwork: panel colours have no universal query.
+
+Linux tray display depends on AppIndicator support in the desktop panel and the Tauri runtime libraries listed
+in README. A panel without a tray may leave the icon invisible; native tray creation errors are logged and do
+not prevent the room from opening. The room and global shortcut remain usable. Real theme switching and tray
+presence/absence across Linux desktops still require session testing; compiled bundles alone do not verify them.
