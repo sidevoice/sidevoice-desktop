@@ -146,7 +146,7 @@ test("the call controls card's view: the agent, you, the clock, the conversation
   const install = loadFactory();
   const { win, calls } = fakeWindow(ORIGIN);
   const participants = [
-    { threadId: "a", title: "mini", selected: true, reach: "listening", machine: "daimon", harness: "claude", working: false, subtitle: "", karaoke: "not relayed" },
+    { threadId: "a", title: "mini", selected: true, reach: "listening", machine: "daimon", harness: "claude", working: false, subtitle: "", machineReachable: true, karaoke: "not relayed" },
     { threadId: "b", title: "web", selected: false, reach: "holding", machine: "nas", harness: "codex", working: true, subtitle: "2 sin leer" },
   ];
   // The room's facts, as its voice lists the devices (room-session-state.d.ts SessionFacts.audioDevices).
@@ -162,7 +162,8 @@ test("the call controls card's view: the agent, you, the clock, the conversation
   let s = api.snapshot();
   assert.equal(s.since, null, "no clock outside a call");
   const plain = (value) => JSON.parse(JSON.stringify(value)); // objects made in the bridge's own realm
-  assert.deepEqual(plain(s.participants[0]), { threadId: "a", title: "mini", selected: true, reach: "listening", machine: "daimon", harness: "claude", working: false, subtitle: "" });
+  assert.deepEqual(plain(s.participants[0]), { threadId: "a", title: "mini", selected: true, reach: "listening", machine: "daimon", harness: "claude", working: false, subtitle: "", machineReachable: true },
+    "whether its machine can be reached too: the card tells an agent away from a machine away by it (sidevoice-web#356)");
   // As the card reads them (call-controls/host.ts AudioDevices): the system's default first, an unnamed device by its
   // place, and a speaker the voice cannot move shown as the system's.
   const system = { id: "", label: "", system: true };

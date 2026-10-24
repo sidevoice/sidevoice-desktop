@@ -30,7 +30,7 @@
   let joinedAt = null;
   /** The fields of the room's conversation rows the card shows (the web UI's ParticipantView). */
   const PARTICIPANT_FIELDS = ["threadId", "title", "selected", "available", "switching", "unread", "reach", "stateLabel",
-    "activityNote", "detail", "subtitle", "working", "machine", "harness", "route"];
+    "activityNote", "detail", "subtitle", "working", "machine", "harness", "route", "machineReachable"];
   /** Choices of a device the card asked for that the room has not answered yet: the card's devices are busy meanwhile.
    *  They go to the room one after another, in the order asked (the room keeps whichever answers last). */
   let choosingDevices = 0;
