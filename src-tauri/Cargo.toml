@@ -91,6 +91,8 @@ core-foundation = "0.10"
 libc = "0.2"
 
 [dev-dependencies]
+# Mock runtime for the platform interface tests; no native explorer is opened.
+tauri = { version = "2.12", features = ["test"] }
 tempfile = "3"
 
 [profile.release]
