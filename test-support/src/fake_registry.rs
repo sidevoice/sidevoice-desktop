@@ -1,13 +1,20 @@
-//! A stand-in npm registry, for tests only (`fake-core`): the two documents and the tarball of a `sidevoice` release
+//! A stand-in npm registry, for tests only: the two documents and the tarball of a `sidevoice` release
 //! built on the spot, served through [`Fetch`]; and the tarballs themselves, malformed ones included, written header by
 //! header so a test can put anything in a name.
 
-use crate::install::Failure;
-use crate::npm::{Fetch, Response, REGISTRY};
+#[cfg(unix)]
+use sidevoice_local_host::{install::Failure, npm::Fetch};
+pub struct Response {
+    pub status: u16,
+    pub length: Option<u64>,
+    pub body: Box<dyn Read + Send>,
+}
+const REGISTRY: &str = "https://registry.npmjs.org";
 use base64::Engine as _;
 use sha2::{Digest, Sha512};
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::Read;
+use std::io::Write;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -143,16 +150,28 @@ impl Read for Slow {
     }
 }
 
-impl Fetch for FakeRegistry {
-    fn get(&self, url: &str) -> Result<Response, Failure> {
+impl FakeRegistry {
+    pub fn get(&self, url: &str) -> Response {
         self.asked.lock().unwrap().push(url.to_string());
         let Some(served) = self.served.lock().unwrap().get(url).cloned() else {
-            return Ok(Response { status: 404, length: None, body: Box::new(std::io::empty()) });
+            return Response { status: 404, length: None, body: Box::new(std::io::empty()) };
         };
         let body: Box<dyn Read + Send> = match served.delay {
             Some(delay) => Box::new(Slow { body: std::io::Cursor::new(served.body), delay }),
             None => Box::new(std::io::Cursor::new(served.body)),
         };
-        Ok(Response { status: served.status, length: served.length, body })
+        Response { status: served.status, length: served.length, body }
+    }
+}
+
+#[cfg(unix)]
+impl Fetch for FakeRegistry {
+    fn get(&self, url: &str) -> Result<sidevoice_local_host::npm::Response, Failure> {
+        let response = FakeRegistry::get(self, url);
+        Ok(sidevoice_local_host::npm::Response {
+            status: response.status,
+            length: response.length,
+            body: response.body,
+        })
     }
 }

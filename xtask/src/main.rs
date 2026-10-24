@@ -134,6 +134,7 @@ fn main() -> ExitCode {
         ["web"] => checks::web(),
         ["lint"] => checks::lint(),
         ["test"] => checks::test(),
+        ["test-support"] => checks::test_support(),
         ["icons"] => checks::icons(),
         ["two-users"] => checks::two_users(),
         ["bundle"] => checks::bundle(Channel::Dev),

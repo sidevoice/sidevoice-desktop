@@ -173,8 +173,8 @@ pub fn extract(archive: impl Read, into: &Path, limits: Limits, cancelled: &dyn 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fake_registry::{gzip, tar_entry, tarball};
     use serde_json::json;
+    use sidevoice_desktop_test_support::fake_registry::{gzip, tar_entry, tarball};
     use std::os::unix::fs::PermissionsExt;
 
     fn unpack(bytes: &[u8]) -> (tempfile::TempDir, Result<(), Failure>) {

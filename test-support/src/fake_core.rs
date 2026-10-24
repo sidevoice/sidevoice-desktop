@@ -1,5 +1,5 @@
 //! A stand-in for sidevoice-core's private listener (SEAMS §2), for this crate's tests, the CI example
-//! (`examples/local-host-ci.rs`) and the app's macOS CI probe. Feature `fake-core`; never in the app.
+//! (`local-host-ci`) and the app's macOS CI probe. Never in the app.
 //!
 //! It serves the socket it publishes in `C/core.json` (creating `D` and `C` 0700; the socket where the real core puts it,
 //! `sidevoice-platform`'s endpoint for `C`) with what the app uses — health, the identity proof with a
@@ -9,22 +9,24 @@
 //! request is recorded (`requests()`), as `METHOD /path origin=… auth=device|none|other`.
 
 use crate::http::{self, Headers};
-use crate::identity;
-use crate::paths::DataDirs;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use p256::ecdsa::signature::Signer;
 use p256::ecdsa::{Signature, SigningKey};
+use p256::pkcs8::EncodePublicKey;
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
-use sidevoice_platform::ipc::{Address, Endpoint};
+use sha2::Sha256;
+use sidevoice_platform::fs::{Files, Fs};
+use sidevoice_platform::ipc::{Address, Channel, Channels, Endpoint, Stream};
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::watch;
 
 const DESKTOP_ORIGINS: [&str; 3] = ["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"];
 
@@ -38,7 +40,7 @@ struct State {
     counter: u32,
     requests: Vec<String>,
     /// Calls (open sockets) per device.
-    sockets: HashMap<String, Vec<UnixStream>>,
+    sockets: HashMap<String, Vec<watch::Sender<bool>>>,
 }
 
 pub struct FakeCore {
@@ -47,6 +49,8 @@ pub struct FakeCore {
     fingerprint: String,
     state: Mutex<State>,
     stopped: AtomicBool,
+    stop: watch::Sender<bool>,
+    worker: Mutex<Option<thread::JoinHandle<()>>>,
     socket: std::path::PathBuf,
     record: std::path::PathBuf,
     print: bool,
@@ -55,39 +59,63 @@ pub struct FakeCore {
 impl FakeCore {
     /// Serves the core's socket under `dirs` until [`Self::stop`]; `seed` picks the identity (another seed is another
     /// machine, as after a reset). `print`: each request on stdout too (CI reads it).
-    pub fn start(dirs: &DataDirs, seed: u8, print: bool) -> io::Result<Arc<FakeCore>> {
-        for dir in [&dirs.data, &dirs.core()] {
-            std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
-            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
-        }
-        let (listener, socket) = bind_private(&Endpoint::new(&dirs.core(), "local"))?;
-        publish(&dirs.core_record(), &json!({"pid": std::process::id(), "endpoint": socket.display().to_string()}))?;
+    pub fn start(data: &Path, seed: u8, print: bool) -> io::Result<Arc<FakeCore>> {
+        let dir = data.join("core");
+        Files::ensure_private_dir(&dir)?;
+        let endpoint = Endpoint::new(&dir, "local");
+        let socket = endpoint.to_string().into();
+        let record = dir.join("core.json");
         let key = SigningKey::from_slice(&[seed.max(1); 32]).expect("a valid scalar");
-        let public_key = identity::spki(key.verifying_key());
-        let fingerprint = identity::fingerprint(&public_key).expect("base64");
+        let der = p256::PublicKey::from(key.verifying_key()).to_public_key_der().expect("SPKI");
+        let public_key = STANDARD.encode(der.as_bytes());
+        let fingerprint = base64url(&Sha256::digest(der.as_bytes()));
+        let (stop, mut stopping) = watch::channel(false);
         let core = Arc::new(FakeCore {
             key,
             public_key,
             fingerprint,
             state: Mutex::new(State { launch: 1, api: 1, ..State::default() }),
             stopped: AtomicBool::new(false),
+            stop,
+            worker: Mutex::new(None),
             socket,
-            record: dirs.core_record(),
+            record,
             print,
         });
         let serving = core.clone();
-        thread::spawn(move || {
-            for stream in listener.incoming() {
-                if serving.stopped.load(Ordering::SeqCst) {
-                    break;
+        let (ready, started) = std::sync::mpsc::sync_channel(1);
+        let worker = thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            tokio::task::LocalSet::new().block_on(&runtime, async move {
+                let listener = match Channels::listen(&endpoint) {
+                    Ok(listener) => listener,
+                    Err(error) => {
+                        let _ = ready.send(Err(error));
+                        return;
+                    }
+                };
+                if let Err(error) = Files::write_private(
+                    &serving.record,
+                    json!({"pid": std::process::id(), "endpoint": endpoint.to_string()}).to_string().as_bytes(),
+                ) {
+                    let _ = ready.send(Err(error));
+                    return;
                 }
-                let Ok(stream) = stream else { continue };
-                let core = serving.clone();
-                thread::spawn(move || {
-                    let _ = core.serve(stream);
-                });
-            }
+                let _ = ready.send(Ok(()));
+                loop {
+                    tokio::select! {
+                        _ = stopping.changed() => break,
+                        stream = listener.accept() => {
+                            let Ok(stream) = stream else { continue };
+                            let core = serving.clone();
+                            tokio::task::spawn_local(async move { let _ = core.serve(stream).await; });
+                        }
+                    }
+                }
+            });
         });
+        *core.worker.lock().unwrap() = Some(worker);
+        started.recv().map_err(io::Error::other)??;
         Ok(core)
     }
 
@@ -128,7 +156,9 @@ impl FakeCore {
         state.devices.clear();
         state.local = None;
         for (_, sockets) in state.sockets.drain() {
-            sockets.iter().for_each(|s| drop(s.shutdown(std::net::Shutdown::Both)));
+            sockets.iter().for_each(|s| {
+                let _ = s.send(true);
+            });
         }
     }
 
@@ -136,8 +166,10 @@ impl FakeCore {
         if self.stopped.swap(true, Ordering::SeqCst) {
             return;
         }
-        let _ = UnixStream::connect(&self.socket);
-        let _ = std::fs::remove_file(&self.socket);
+        let _ = self.stop.send(true);
+        if let Some(worker) = self.worker.lock().unwrap().take() {
+            let _ = worker.join();
+        }
         let _ = std::fs::remove_file(&self.record);
     }
 
@@ -148,16 +180,16 @@ impl FakeCore {
         self.state.lock().unwrap().requests.push(line);
     }
 
-    fn serve(&self, mut stream: UnixStream) -> io::Result<()> {
+    async fn serve(&self, mut stream: Stream) -> io::Result<()> {
         let mut buf = Vec::new();
-        let end = http::read_head(&mut stream, &mut buf)?;
+        let end = http::read_head(&mut stream, &mut buf).await?;
         let head = http::parse_request(&buf[..end]).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         let headers = &head.headers;
         let length: usize = headers.first("content-length").and_then(|v| v.parse().ok()).unwrap_or(0);
         let mut body = buf[end..].to_vec();
         while body.len() < length {
             let mut chunk = [0u8; 4096];
-            let n = stream.read(&mut chunk)?;
+            let n = stream.read(&mut chunk).await?;
             if n == 0 {
                 break;
             }
@@ -180,23 +212,6 @@ impl FakeCore {
         };
         self.record(format!("{} {path} origin={origin} auth={auth}", head.method));
 
-        let cors = |answer: &mut Headers| {
-            if DESKTOP_ORIGINS.contains(&origin.as_str()) {
-                answer.push("access-control-allow-origin", origin.as_str());
-                answer.push("vary", "Origin");
-            }
-        };
-        let reply = |stream: &mut UnixStream, status: u16, body: Value| -> io::Result<()> {
-            let data = serde_json::to_vec(&body).expect("serialises");
-            let mut answer = Headers::default();
-            answer.push("content-type", "application/json");
-            answer.push("content-length", data.len().to_string());
-            cors(&mut answer);
-            let mut out = http::response_head(status, http::reason(status), &answer);
-            out.extend_from_slice(&data);
-            stream.write_all(&out)
-        };
-
         // As the core on its socket (SEAMS §2): loopback names only, and what only the socket serves is refused to
         // anything carrying an Origin — native's own calls carry none.
         let host = headers.first("host").unwrap_or("");
@@ -205,79 +220,92 @@ impl FakeCore {
             _ => host.trim_start_matches('[').split(']').next().unwrap_or(""),
         };
         if !["localhost", "127.0.0.1", "::1"].contains(&name.to_ascii_lowercase().as_str()) {
-            return reply(&mut stream, 421, json!({"detail": "This node answers to its own name only."}));
+            return reply(&mut stream, &origin, 421, json!({"detail": "This node answers to its own name only."}))
+                .await;
         }
         let socket_only =
             ["/api/local", "/api/device/local", "/api/connectors/link"].iter().any(|p| path.starts_with(p));
         if socket_only && headers.has("origin") {
-            return reply(&mut stream, 404, json!({"detail": "Not Found"}));
+            return reply(&mut stream, &origin, 404, json!({"detail": "Not Found"})).await;
         }
 
         let upgrade = headers.first("upgrade").is_some_and(|v| v.eq_ignore_ascii_case("websocket"));
         match (head.method.as_str(), path) {
             ("GET", "/api/local/health") => {
-                let state = self.state.lock().unwrap();
-                let calls: usize = state.sockets.values().map(Vec::len).sum();
-                let health = json!({
-                    "launch_id": format!("launch-{}", state.launch), "pid": std::process::id(), "version": "0.0.0-fake",
-                    "api": state.api, "fingerprint": self.fingerprint, "public_key": self.public_key,
-                    "host": "fake-machine", "calls": calls,
-                });
-                drop(state);
-                reply(&mut stream, 200, health)
+                let health = {
+                    let state = self.state.lock().unwrap();
+                    let calls: usize = state.sockets.values().map(Vec::len).sum();
+                    json!({
+                        "launch_id": format!("launch-{}", state.launch), "pid": std::process::id(), "version": "0.0.0-fake",
+                        "api": state.api, "fingerprint": self.fingerprint, "public_key": self.public_key,
+                        "host": "fake-machine", "calls": calls,
+                    })
+                };
+                reply(&mut stream, &origin, 200, health).await
             }
             ("GET", "/api/device/identity") => {
                 let nonce = query.split('&').find_map(|kv| kv.strip_prefix("nonce=")).unwrap_or("");
-                let signature: Signature = self.key.sign(format!("{}{nonce}", identity::CONTEXT).as_bytes());
+                let signature: Signature = self.key.sign(format!("{}{nonce}", "sidevoice-node-identity:").as_bytes());
                 let proof = json!({
                     "fingerprint": self.fingerprint, "public_key": self.public_key,
-                    "signature": identity::base64url(&signature.to_bytes()),
+                    "signature": base64url(&signature.to_bytes()),
                 });
-                reply(&mut stream, 200, proof)
+                reply(&mut stream, &origin, 200, proof).await
             }
             ("POST", "/api/device/local/pair") => {
-                let mut state = self.state.lock().unwrap();
-                if let Some(previous) = state.local.take() {
-                    state.devices.retain(|_, id| *id != previous);
-                    for socket in state.sockets.remove(&previous).unwrap_or_default() {
-                        let _ = socket.shutdown(std::net::Shutdown::Both);
+                let (device_id, token) = {
+                    let mut state = self.state.lock().unwrap();
+                    if let Some(previous) = state.local.take() {
+                        state.devices.retain(|_, id| *id != previous);
+                        for socket in state.sockets.remove(&previous).unwrap_or_default() {
+                            let _ = socket.send(true);
+                        }
                     }
-                }
-                state.counter += 1;
-                let device_id = format!("local-{}", state.counter);
-                let token = identity::random(24);
-                state.devices.insert(token.clone(), device_id.clone());
-                state.local = Some(device_id.clone());
-                drop(state);
+                    state.counter += 1;
+                    let device_id = format!("local-{}", state.counter);
+                    let token = {
+                        let mut b = [0; 24];
+                        getrandom::fill(&mut b).unwrap();
+                        base64url(&b)
+                    };
+                    state.devices.insert(token.clone(), device_id.clone());
+                    state.local = Some(device_id.clone());
+                    (device_id, token)
+                };
                 let node =
                     json!({"fingerprint": self.fingerprint, "public_key": self.public_key, "host": "fake-machine"});
-                reply(&mut stream, 200, json!({"device_id": device_id, "token": token, "node": node}))
+                reply(&mut stream, &origin, 200, json!({"device_id": device_id, "token": token, "node": node})).await
             }
             ("DELETE", "/api/device/local") => {
-                let mut state = self.state.lock().unwrap();
-                let revoked = state.local.take();
-                if let Some(previous) = &revoked {
-                    state.devices.retain(|_, id| id != previous);
-                }
-                drop(state);
-                reply(&mut stream, 200, json!({"ok": true, "revoked": revoked.is_some()}))
+                let revoked = {
+                    let mut state = self.state.lock().unwrap();
+                    let revoked = state.local.take();
+                    if let Some(previous) = &revoked {
+                        state.devices.retain(|_, id| id != previous);
+                    }
+                    revoked
+                };
+                reply(&mut stream, &origin, 200, json!({"ok": true, "revoked": revoked.is_some()})).await
             }
-            (_, p) if p.starts_with("/api/connectors/link") => reply(&mut stream, 200, json!({"link": true})),
-            _ if device.is_none() => reply(&mut stream, 401, json!({"detail": "unpaired"})),
-            ("GET", "/api/device/devices") => reply(&mut stream, 200, json!({"devices": []})),
-            ("GET", _) if upgrade => self.echo_socket(stream, headers, device.unwrap_or_default()),
+            (_, p) if p.starts_with("/api/connectors/link") => {
+                reply(&mut stream, &origin, 200, json!({"link": true})).await
+            }
+            _ if device.is_none() => reply(&mut stream, &origin, 401, json!({"detail": "unpaired"})).await,
+            ("GET", "/api/device/devices") => reply(&mut stream, &origin, 200, json!({"devices": []})).await,
+            ("GET", _) if upgrade => self.echo_socket(stream, headers, device.unwrap_or_default()).await,
             (method, _) => {
                 let echoed = json!({
                     "method": method, "path": path, "origin": origin, "auth": auth,
                     "body": String::from_utf8_lossy(&body[..length.min(body.len())]),
                 });
-                reply(&mut stream, 200, echoed)
+                reply(&mut stream, &origin, 200, echoed).await
             }
         }
     }
 
     /// Accepts the socket (with `sidevoice` when offered, as the core does) and echoes every frame until close.
-    fn echo_socket(&self, mut stream: UnixStream, headers: &Headers, device: String) -> io::Result<()> {
+    async fn echo_socket(&self, mut stream: Stream, headers: &Headers, device: String) -> io::Result<()> {
+        use futures_util::{SinkExt, StreamExt};
         let key = headers.first("sec-websocket-key").unwrap_or("");
         let accept = STANDARD.encode(Sha1::digest(format!("{key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11").as_bytes()));
         let mut answer = Headers::default();
@@ -287,32 +315,46 @@ impl FakeCore {
         if headers.lists("sec-websocket-protocol", "sidevoice") {
             answer.push("sec-websocket-protocol", "sidevoice");
         }
-        stream.write_all(&http::response_head(101, "Switching Protocols", &answer))?;
-        if let Ok(clone) = stream.try_clone() {
-            self.state.lock().unwrap().sockets.entry(device.clone()).or_default().push(clone);
+        stream.write_all(&http::response_head(101, "Switching Protocols", &answer)).await?;
+        let (stop, mut stopped) = watch::channel(false);
+        self.state.lock().unwrap().sockets.entry(device.clone()).or_default().push(stop);
+        let mut ws = tokio_tungstenite::WebSocketStream::from_raw_socket(
+            stream,
+            tokio_tungstenite::tungstenite::protocol::Role::Server,
+            None,
+        )
+        .await;
+        loop {
+            tokio::select! {
+                _ = stopped.changed() => break,
+                message = ws.next() => {
+                    let Some(Ok(message)) = message else { break };
+                    if ws.send(message).await.is_err() { break; }
+                }
+            }
         }
-        let result = echo_frames(&mut stream);
         if let Some(sockets) = self.state.lock().unwrap().sockets.get_mut(&device) {
             sockets.pop();
         }
-        result
+        Ok(())
     }
 }
 
-impl Drop for FakeCore {
-    fn drop(&mut self) {
-        self.stop();
+async fn reply(stream: &mut Stream, origin: &str, status: u16, body: Value) -> io::Result<()> {
+    let data = serde_json::to_vec(&body)?;
+    let mut headers = Headers::default();
+    headers.push("content-type", "application/json");
+    headers.push("content-length", data.len().to_string());
+    if DESKTOP_ORIGINS.contains(&origin) {
+        headers.push("access-control-allow-origin", origin);
+        headers.push("vary", "Origin");
     }
+    let mut out = http::response_head(status, "fixture", &headers);
+    out.extend_from_slice(&data);
+    stream.write_all(&out).await
 }
-
-fn echo_frames(stream: &mut UnixStream) -> io::Result<()> {
-    loop {
-        let (opcode, payload) = read_frame(stream)?;
-        write_frame(stream, opcode, &payload)?;
-        if opcode == 8 {
-            return Ok(());
-        }
-    }
+fn base64url(bytes: &[u8]) -> String {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
 /// One frame, unmasked (a client's frames are masked).
@@ -381,45 +423,36 @@ pub fn write_frame_masked(
     stream.write_all(&out)
 }
 
-/// Listens at `endpoint`, in a directory of this user's open to nobody else (made if missing), the socket 0600; a
-/// socket left there is replaced. Returns the listener and the socket's path.
-fn bind_private(endpoint: &Endpoint) -> io::Result<(UnixListener, std::path::PathBuf)> {
-    let path = std::path::PathBuf::from(endpoint.to_string());
-    if let Some(parent) = path.parent() {
-        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(parent)?;
-        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+/// Removes runtime directories left by the fixtures (Unix only; pipes leave no files).
+pub fn forget(data: &Path) {
+    crate::platform::forget(data);
+}
+
+/// Blocking adapter for adversarial line-JSON connector fixtures, over the same shared listener.
+pub struct ConnectorListener {
+    runtime: tokio::runtime::Runtime,
+    listener: sidevoice_platform::ipc::Listener,
+}
+impl ConnectorListener {
+    pub fn incoming(&self) -> impl Iterator<Item = io::Result<tokio_util::io::SyncIoBridge<Stream>>> + '_ {
+        std::iter::repeat_with(|| {
+            self.runtime
+                .block_on(self.listener.accept())
+                .map(|stream| tokio_util::io::SyncIoBridge::new_with_handle(stream, self.runtime.handle().clone()))
+        })
     }
-    let _ = std::fs::remove_file(&path);
-    let listener = UnixListener::bind(&path)?;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-    Ok((listener, path))
 }
-
-/// Writes a record the way the programs do: private, whole.
-fn publish(record: &std::path::Path, value: &Value) -> io::Result<()> {
-    let partial = record.with_extension("json.tmp");
-    std::fs::write(&partial, value.to_string())?;
-    std::fs::set_permissions(&partial, std::fs::Permissions::from_mode(0o600))?;
-    std::fs::rename(&partial, record)
-}
-
-/// A stand-in connector's listener: the socket `D/connector.json` names, published with this process's `pid` (alive),
-/// as the connector does once it listens. The caller serves it.
-pub fn connector_listener(dirs: &DataDirs) -> io::Result<UnixListener> {
-    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&dirs.data)?;
-    std::fs::set_permissions(&dirs.data, std::fs::Permissions::from_mode(0o700))?;
-    let (listener, socket) = bind_private(&Endpoint::new(&dirs.data, "connector"))?;
-    publish(&dirs.connector_record(), &json!({"pid": std::process::id(), "endpoint": socket.display().to_string()}))?;
-    Ok(listener)
-}
-
-/// Removes the private directories the stand-ins' endpoints made in the runtime directory for `dirs` (a test's end;
-/// those inside `D` go with it).
-pub fn forget(dirs: &DataDirs) {
-    for endpoint in [Endpoint::new(&dirs.core(), "local"), Endpoint::new(&dirs.data, "connector")] {
-        let path = std::path::PathBuf::from(endpoint.to_string());
-        if let Some(parent) = path.parent().filter(|parent| !parent.starts_with(&dirs.data)) {
-            let _ = std::fs::remove_dir_all(parent);
-        }
-    }
+pub fn connector_listener(data: &Path) -> io::Result<ConnectorListener> {
+    Files::ensure_private_dir(data)?;
+    let endpoint = Endpoint::new(data, "connector");
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build()?;
+    let listener = {
+        let _entered = runtime.enter();
+        Channels::listen(&endpoint)?
+    };
+    Files::write_private(
+        &data.join("connector.json"),
+        json!({"pid":std::process::id(),"endpoint":endpoint.to_string()}).to_string().as_bytes(),
+    )?;
+    Ok(ConnectorListener { runtime, listener })
 }
