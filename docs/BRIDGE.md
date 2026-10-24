@@ -58,7 +58,11 @@ macOS-only; elsewhere the bridge omits them and the native commands refuse `{key
 
 `deleteAll()` is the confirmed Settings › Advanced action. Native also displays an OS-owned confirmation
 with Cancel as its default button on every invocation; cancelling rejects `{key: "reset.cancelled"}` before
-any uninstall or deletion. A room script calling the bridge directly cannot bypass that confirmation. It refuses a running call, service install or
+any uninstall or deletion. `platform::confirmation::Confirmation` owns the native prompt: the existing NSAlert on
+macOS, TaskDialogIndirect with an explicit Cancel default on Windows, and GTK with an explicit Cancel response on
+Linux. The capability is implemented on all three hosts; the reset offer and transaction remain macOS-only.
+The existing eight-language reset/uninstall text is kept in the confirmation module, unchanged, with English fallback.
+No general dialog or filesystem permission is granted to the webview. A room script calling the bridge directly cannot bypass that confirmation. It refuses a running call, service install or
 model download with `{key: "reset.busy"}`, and checks the current room window and bundled origin again in
 native code. It first requires a top-level integer `safe_uninstall` of at least `1` from the installed
 connector's `--version --json` response. An older, silent, malformed or timed-out connector refuses with

@@ -56,7 +56,7 @@ winreg = "0.55"
 # Whether a mouse button went down elsewhere, to close the call controls card's panels, and whether the room is on another
 # virtual desktop (DWM cloaked), for the card (src/call_controls.rs); this
 # computer's name (src/computer_name.rs).
-windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_System_SystemInformation", "Win32_Storage_FileSystem", "Win32_Graphics_Dwm"] }
+windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_System_SystemInformation", "Win32_Storage_FileSystem", "Win32_Graphics_Dwm", "Win32_UI_Controls", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # The voice call the app runs itself (src/voice.rs, `host.voice`): sidevoice-voice with its native microphone and
@@ -89,6 +89,8 @@ core-foundation = "0.10"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
+# Tauri's existing native toolkit; explicit Cancel default/response for destructive confirmations.
+gtk = "0.18"
 
 [dev-dependencies]
 tempfile = "3"

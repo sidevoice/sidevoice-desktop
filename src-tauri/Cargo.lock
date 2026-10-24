@@ -4563,6 +4563,7 @@ dependencies = [
  "block2",
  "core-foundation 0.10.1",
  "futures-util",
+ "gtk",
  "libc",
  "log",
  "objc2",
