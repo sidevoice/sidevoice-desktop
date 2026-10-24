@@ -60,6 +60,9 @@ impl Confirmation for NativeConfirmation {
                 // becomes key. A session that starts after cancellation is immediately aborted there.
                 NSRunLoop::mainRunLoop().performInModes_block(&modes, &opened);
                 let answer: isize = msg_send![alert, runModal];
+                // Explicitly remove the panel after a programmatic abort as well as a button response.
+                let window: *mut AnyObject = msg_send![alert, window];
+                let _: () = msg_send![window, orderOut: std::ptr::null::<AnyObject>()];
                 // Invalidate an unserviced block so it cannot abort a later, unrelated modal session.
                 start.lock().unwrap().take();
                 let _: () = msg_send![alert, release];
