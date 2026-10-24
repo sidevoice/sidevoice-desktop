@@ -17,13 +17,35 @@ fn binary() -> PathBuf {
 pub fn first_open() -> Result<()> {
     // It writes the person's settings and data: a throwaway runner only.
     require_ci("windows first-open")?;
+    // Tauri uses Windows Known Folders, not APPDATA overrides. Refuse saved settings and WebView2 data;
+    // never delete a person's profile. This check requires a fresh runner even when CI=true is set locally.
+    Cmd::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            r#"
+            foreach ($folder in @('ApplicationData', 'LocalApplicationData')) {
+                $root = [Environment]::GetFolderPath($folder)
+                if (!$root) { throw "Cannot resolve $folder" }
+                $profile = Join-Path $root 'dev.sidevoice.desktop'
+                if (Test-Path -LiteralPath $profile) {
+                    throw "windows first-open requires a fresh runner: $profile already exists"
+                }
+            }
+        "#,
+        ])
+        .run()?;
     let log = work("first-open")?.join("app.log");
     let mut app = Cmd::new(binary())
         .env("SIDEVOICE_DEBUG", "1")
         .env("SIDEVOICE_DEBUG_PAGE", "probe.html")
         .env_remove("SIDEVOICE_DATA_DIR")
         .spawn(&log)?;
-    wait_for(&log, "ready: true", 0, 90);
+    ensure(
+        wait_for(&log, "ready: true", 0, 90),
+        format!("The interface's controller was not ready within 90 seconds:\n{}", read(&log)),
+    )?;
     sleep(5.0);
     if !app.running() {
         return Err(format!("The app exited on its own:\n{}", read(&log)));

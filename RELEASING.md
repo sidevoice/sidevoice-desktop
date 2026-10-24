@@ -242,3 +242,9 @@ leaves the signed, notarized and stapled `dist/Sidevoice_X.Y.Z_aarch64.dmg` and 
   `tauri signer generate` wrote) and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (Updates, above).
 - Required check **PR title is a conventional commit**. release-please's own PR gets it through a dispatched run
   (its pushes start no workflow by themselves).
+
+`cargo xtask windows first-open` requires a fresh CI runner profile: it refuses to start if the
+`dev.sidevoice.desktop` directory already exists in either Windows Known Folder (Roaming or Local AppData),
+so saved settings and WebView2 storage cannot make the first-open check pass. Setting `CI=true` alone
+does not bypass this check. Windows bundles made with `cargo xtask bundle` disable `GGML_NATIVE`
+on laptops as well as CI so the installer does not target the build machine’s CPU.

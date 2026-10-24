@@ -334,9 +334,6 @@ jobs:
     name: Windows (installer)
     needs: changes
     runs-on: windows-latest
-    env:
-      # whisper.cpp built for any x86-64 machine, not the runner's own CPU (the installer runs on other machines).
-      GGML_NATIVE: "OFF"
     steps:
       - uses: actions/checkout@v4
         with:
