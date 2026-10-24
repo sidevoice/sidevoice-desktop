@@ -863,8 +863,9 @@
           return true;
         case "select-participant":
           if (typeof request.threadId !== "string" || typeof actions.selectParticipant !== "function") return false;
-          // Only a conversation the room lists and the call can go to; the room browses the others itself.
-          if (!state.participants.some((row) => row.threadId === request.threadId && row.available !== false)) return false;
+          // Only a conversation the room lists. One whose agent is away is one the call can go to: what is said to it
+          // waits there for its agent, as the room's own pick allows (sidevoice-web selectParticipant).
+          if (!state.participants.some((row) => row.threadId === request.threadId)) return false;
           actions.selectParticipant(request.threadId);
           return true;
         case "select-audio-device":

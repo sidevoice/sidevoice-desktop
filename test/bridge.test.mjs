@@ -216,13 +216,13 @@ test("the card's commands: skip, switch conversation and choose a device, each o
   assert.equal(api.run({ command: "skip-reply" }), true);
   assert.equal(api.run({ command: "select-participant", threadId: "b" }), true);
   assert.equal(api.run({ command: "select-participant", threadId: "zzz" }), false, "only a conversation the room lists");
-  assert.equal(api.run({ command: "select-participant", threadId: "c" }), false, "and one the call can go to");
+  assert.equal(api.run({ command: "select-participant", threadId: "c" }), true, "its agent away, the call still goes to it");
   assert.equal(api.run({ command: "select-audio-device", kind: "input", id: "mbp" }), true);
   assert.equal(api.run({ command: "select-audio-device", kind: "output", id: "" }), true, "the system's default");
   assert.equal(api.run({ command: "select-audio-device", kind: "camera", id: "x" }), false);
   assert.equal(api.run({ command: "select-audio-device", kind: "input", id: 3 }), false);
   await flush();
-  assert.deepEqual(did, ["skip", "select b", 'devices {"input":"mbp"}', 'devices {"output":null}']);
+  assert.deepEqual(did, ["skip", "select b", "select c", 'devices {"input":"mbp"}', 'devices {"output":null}']);
 });
 
 test("the card's choices go to the room one after another, busy until the last has been answered, refused or not", async () => {
