@@ -1,14 +1,15 @@
 //! The process's memory as CI measures it (`cargo xtask macos memory`, `macos voice-memory`; #145): what one sample is,
-//! the line it is printed as, and how the system's `vmmap` summary is read. Taking the sample is the shell's
-//! (src/memory.rs); the pure parts are here so they are tested anywhere. `xtask` reads the lines back by their keys.
+//! the line it is printed as, and how the system's `vmmap` summary is read. Taking the sample is the shell platform's
+//! (platform/process_memory.rs); the pure parts are here so they are tested anywhere. `xtask` reads lines by their keys.
 
 /// One look at the process, in bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Sample {
-    /// `phys_footprint` of `TASK_VM_INFO`: what Activity Monitor calls Memory, compressed and GPU-wired pages included.
-    pub footprint: u64,
-    /// The resident set.
-    pub resident: u64,
+    /// `phys_footprint` of `TASK_VM_INFO`: Activity Monitor's Memory, including compressed and GPU-wired pages.
+    /// Absent on other OSes.
+    pub footprint: Option<u64>,
+    /// The resident set; absent when the OS cannot report it.
+    pub resident: Option<u64>,
     /// `MTLDevice.currentAllocatedSize` of the system's default device: what the process holds on the GPU through Metal.
     pub metal: Option<u64>,
     /// The dirty and swapped IOAccelerator and IOSurface regions of `vmmap --summary`.
@@ -16,13 +17,13 @@ pub struct Sample {
 }
 
 impl Sample {
-    /// The line a phase is reported as: `memory phase=NAME footprint=N resident=N metal=N|na accelerator=N|na`.
+    /// The line a phase is reported as: `memory phase=NAME footprint=N|na resident=N|na metal=N|na accelerator=N|na`.
     pub fn line(&self, phase: &str) -> String {
         let value = |v: Option<u64>| v.map_or("na".to_owned(), |v| v.to_string());
         format!(
             "memory phase={phase} footprint={} resident={} metal={} accelerator={}",
-            self.footprint,
-            self.resident,
+            value(self.footprint),
+            value(self.resident),
             value(self.metal),
             value(self.accelerator)
         )
@@ -96,7 +97,7 @@ MALLOC_LARGE                     900M       800M       800M        10M       0K 
 
     #[test]
     fn a_sample_prints_as_the_line_xtask_reads() {
-        let sample = Sample { footprint: 10, resident: 20, metal: Some(30), accelerator: None };
+        let sample = Sample { footprint: Some(10), resident: Some(20), metal: Some(30), accelerator: None };
         assert_eq!(sample.line("idle"), "memory phase=idle footprint=10 resident=20 metal=30 accelerator=na");
     }
 }

@@ -2,6 +2,8 @@
 
 pub mod computer_name;
 pub mod microphone;
+#[cfg(any(test, feature = "probe"))]
+pub mod process_memory;
 pub mod reveal;
 pub mod tray;
 

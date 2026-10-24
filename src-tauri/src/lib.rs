@@ -18,7 +18,7 @@ mod headset;
 mod keychain;
 mod local_host;
 /// A look at the process's own memory, for CI's measurements of it (#145). Never in a release.
-#[cfg(all(target_os = "macos", any(test, feature = "probe")))]
+#[cfg(any(test, feature = "probe"))]
 mod memory;
 mod microphone;
 mod platform;
@@ -295,7 +295,7 @@ fn debug_log(app: AppHandle, line: String) {
     debug(&format!("page says: {}", line.chars().take(2000).collect::<String>()));
     #[cfg(feature = "probe")]
     probe::exit_on(&app, &line);
-    #[cfg(all(feature = "probe", target_os = "macos"))]
+    #[cfg(feature = "probe")]
     probe::memory_on(&app, &line);
     let _ = (app, line);
 }
