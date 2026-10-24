@@ -87,3 +87,72 @@ fn fake_core_publishes_and_serves_the_shared_channel() {
     assert!(!data.join("core/core.json").exists());
     sidevoice_desktop_test_support::fake_core::forget(&data);
 }
+
+#[test]
+fn closing_an_older_call_keeps_the_newer_call_open() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::{
+        tungstenite::{protocol::Role, Message},
+        WebSocketStream,
+    };
+
+    async fn open_call(endpoint: &Endpoint, token: &str) -> WebSocketStream<sidevoice_platform::ipc::Stream> {
+        let mut stream = Channels::connect(endpoint).await.unwrap();
+        stream
+            .write_all(
+                format!(
+            "GET /api/browser/call HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+             Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\
+             Sec-WebSocket-Protocol: sidevoice, sidevoice.token.{token}\r\n\r\n"
+        )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut head = Vec::new();
+        while !head.ends_with(b"\r\n\r\n") {
+            head.push(stream.read_u8().await.unwrap());
+        }
+        assert!(head.starts_with(b"HTTP/1.1 101 "));
+        WebSocketStream::from_raw_socket(stream, Role::Client, None).await
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("d");
+    let core = FakeCore::start(&data, 1, false).unwrap();
+    let record: Value = serde_json::from_slice(&std::fs::read(data.join("core/core.json")).unwrap()).unwrap();
+    let endpoint: Endpoint = record["endpoint"].as_str().unwrap().parse().unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let result = runtime.block_on(async {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let mut pairing = Channels::connect(&endpoint).await.unwrap();
+            pairing
+                .write_all(b"POST /api/device/local/pair HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .unwrap();
+            let mut response = Vec::new();
+            pairing.read_to_end(&mut response).await.unwrap();
+            let body = response.windows(4).position(|b| b == b"\r\n\r\n").unwrap() + 4;
+            let paired: Value = serde_json::from_slice(&response[body..]).unwrap();
+            let token = paired["token"].as_str().unwrap();
+
+            let mut a = open_call(&endpoint, token).await;
+            let mut b = open_call(&endpoint, token).await;
+            b.send(Message::Text("before A closes".into())).await.unwrap();
+            assert_eq!(b.next().await.unwrap().unwrap(), Message::Text("before A closes".into()));
+
+            a.close(None).await.unwrap();
+            // Wait for EOF so A's server handler has finished its cleanup before exercising B.
+            a.get_mut().read_to_end(&mut Vec::new()).await.unwrap();
+            b.send(Message::Text("after A closes".into())).await.unwrap();
+            let echoed = b.next().await.unwrap();
+            core.revoke_all();
+            assert_eq!(echoed.unwrap(), Message::Text("after A closes".into()));
+            assert!(b.next().await.is_none_or(|message| message.is_err()), "revocation still closes B");
+        })
+        .await
+    });
+    core.stop();
+    sidevoice_desktop_test_support::fake_core::forget(&data);
+    result.unwrap();
+}

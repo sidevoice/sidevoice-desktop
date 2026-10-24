@@ -317,7 +317,7 @@ impl FakeCore {
         }
         stream.write_all(&http::response_head(101, "Switching Protocols", &answer)).await?;
         let (stop, mut stopped) = watch::channel(false);
-        self.state.lock().unwrap().sockets.entry(device.clone()).or_default().push(stop);
+        self.state.lock().unwrap().sockets.entry(device.clone()).or_default().push(stop.clone());
         let mut ws = tokio_tungstenite::WebSocketStream::from_raw_socket(
             stream,
             tokio_tungstenite::tungstenite::protocol::Role::Server,
@@ -334,7 +334,7 @@ impl FakeCore {
             }
         }
         if let Some(sockets) = self.state.lock().unwrap().sockets.get_mut(&device) {
-            sockets.pop();
+            sockets.retain(|sender| !sender.same_channel(&stop));
         }
         Ok(())
     }
