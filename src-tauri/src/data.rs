@@ -478,9 +478,20 @@ pub async fn data_uninstall(app: AppHandle, webview: Webview) -> Answer {
 #[cfg(target_os = "macos")]
 async fn confirmed_reset(app: AppHandle, uninstall: bool) -> Answer {
     use crate::platform::confirmation::{Confirmation, ConfirmationKind, NativeConfirmation};
+    use crate::platform::webview_data::{SystemWebviewData, WebviewData};
     let state = app.state::<AppState>();
     if !begin_exclusive(&app) {
         return Err(refused("reset.busy"));
+    }
+    if let Err(error) = SystemWebviewData::preflight(std::process::id()) {
+        end_exclusive(&app);
+        // Existing translated guidance: open the installed app from Applications, then retry.
+        let key = if error.kind() == std::io::ErrorKind::Unsupported {
+            "reset.app-unremovable"
+        } else {
+            "reset.helper-failed"
+        };
+        return Err(refused(key));
     }
     if state.call.lock().unwrap().joined
         || crate::local_host::installing(&app)

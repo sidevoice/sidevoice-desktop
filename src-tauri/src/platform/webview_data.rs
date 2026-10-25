@@ -13,7 +13,11 @@ mod imp;
 #[cfg(target_os = "linux")]
 mod imp {
     pub struct Os;
-    impl super::WebviewData for Os {}
+    impl super::WebviewData for Os {
+        fn exited(pid: u32) -> std::io::Result<bool> {
+            super::unix_pid_exited(pid)
+        }
+    }
 }
 #[cfg(target_os = "windows")]
 #[path = "webview_data/windows.rs"]
@@ -44,6 +48,15 @@ pub struct Released(Locations);
 
 /// Browser cleanup only: no service stop, reset lock, journal, relaunch or app removal policy.
 pub trait WebviewData {
+    /// Check launch-mode eligibility at reset admission, before confirmation or any destructive step.
+    fn preflight(_owner: u32) -> io::Result<()> {
+        Ok(())
+    }
+
+    /// Independently prove a tracked PID has exited. Snapshot omission is never exit evidence.
+    /// Inspection failure refuses cleanup; even a reused live PID conservatively keeps the gate closed.
+    fn exited(pid: u32) -> io::Result<bool>;
+
     /// Resolve the runtime's roots from native Tauri `home_dir` and `app_local_data_dir` results.
     /// Call before exit; carry these native values through authenticated helper handoff. macOS keeps
     /// its existing WKWebView default store. Linux's Wry context uses the same base for data AND cache.
@@ -76,14 +89,14 @@ pub trait WebviewData {
         loop {
             let system = snapshot()?;
             Self::observe(&system, &owner.locations, &mut owner.processes)?;
-            if owner.processes.iter().any(|(pid, _)| system.process(*pid).is_some_and(|p| p.start_time() == 0)) {
-                return Err(busy());
+            let mut all_exited = true;
+            for (pid, _) in &owner.processes {
+                // Query every tracked PID independently of metadata/name enumeration. A failed
+                // inspection is an error, never an absent process; start-time mismatch alone is
+                // likewise insufficient. PID reuse may delay cleanup but cannot release a live writer.
+                all_exited &= Self::exited(pid.as_u32())?;
             }
-            if owner
-                .processes
-                .iter()
-                .all(|(pid, start)| system.process(*pid).is_none_or(|process| process.start_time() != *start))
-            {
+            if all_exited {
                 return Ok(Released(owner.locations));
             }
             if Instant::now() >= deadline {
@@ -129,6 +142,21 @@ pub trait WebviewData {
         // remains held, and Removal repeats identity/ownership/mount checks before and during deletion.
         drop(target);
         held.remove_contents(&[name])
+    }
+}
+
+#[cfg(unix)]
+fn unix_pid_exited(pid: u32) -> io::Result<bool> {
+    let pid = libc::pid_t::try_from(pid).ok().filter(|pid| *pid > 1).ok_or_else(busy)?;
+    // SAFETY: signal zero inspects a positive PID without sending a signal or touching memory.
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        return Ok(false);
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        Ok(true)
+    } else {
+        Err(error)
     }
 }
 
@@ -233,6 +261,9 @@ mod tests {
     // without pretending that its executable/arguments identify a real WebView2 runtime.
     struct Fixture;
     impl WebviewData for Fixture {
+        fn exited(pid: u32) -> io::Result<bool> {
+            SystemWebviewData::exited(pid)
+        }
         fn observe(system: &System, _locations: &Locations, processes: &mut Vec<(Pid, u64)>) -> io::Result<()> {
             descendants(system, processes);
             Ok(())
@@ -245,6 +276,40 @@ mod tests {
         let paths = locations(vec![temp.path().join(IDENTIFIER)]).unwrap();
         let owner = Fixture::capture(std::process::id(), paths).unwrap();
         assert_eq!(Fixture::wait_released(owner, Instant::now()).err().unwrap().kind(), io::ErrorKind::WouldBlock);
+    }
+
+    #[test]
+    fn missing_snapshot_and_inspection_failure_do_not_authorize_removal() {
+        struct FailedInspection;
+        impl WebviewData for FailedInspection {
+            fn observe(_: &System, _: &Locations, _: &mut Vec<(Pid, u64)>) -> io::Result<()> {
+                Ok(())
+            }
+            fn exited(_: u32) -> io::Result<bool> {
+                Err(io::Error::from(io::ErrorKind::PermissionDenied))
+            }
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let selected = temp.path().join(IDENTIFIER);
+        std::fs::create_dir(&selected).unwrap();
+        // A PID absent from sysinfo still requires the independent query, whose failure blocks release.
+        let owner = Owner {
+            locations: locations(vec![selected.clone()]).unwrap(),
+            processes: vec![(Pid::from_u32(u32::MAX), 1)],
+        };
+        assert_eq!(
+            FailedInspection::wait_released(owner, Instant::now()).err().unwrap().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert!(selected.exists());
+        // Native liveness does not need a sysinfo entry (or even a snapshot) to detect this live PID.
+        assert!(!SystemWebviewData::exited(std::process::id()).unwrap());
+        let reused = Owner {
+            locations: locations(vec![selected]).unwrap(),
+            processes: vec![(Pid::from_u32(std::process::id()), 1)],
+        };
+        assert_eq!(Fixture::wait_released(reused, Instant::now()).err().unwrap().kind(), io::ErrorKind::WouldBlock);
+        assert!(SystemWebviewData::exited(0).is_err());
     }
 
     #[test]

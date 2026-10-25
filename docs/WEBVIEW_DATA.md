@@ -24,7 +24,11 @@ reuses another application's browser cannot make an unobserved default store loo
 
 ## Lifetime and integration contract
 
-1. Hold reset admission and the interprocess launch barrier. Stop new webview creation before capture. The room
+1. At reset admission, call `preflight` before confirmation, journal/report mutation, connector removal or
+   credential deletion. macOS verifies the app is its own responsible process. Unsupported launch mode reuses
+   `reset.app-unremovable`: the existing translated message tells the user to open Sidevoice from Applications
+   and retry. No new translation key. An unavailable/failed query returns `reset.helper-failed` before deletion.
+   Hold reset admission and the interprocess launch barrier. Stop new webview creation before capture. The room
    builder now takes the existing admission permit; the card is created only during startup, after the launch barrier.
 2. Resolve native locations and `capture` the still-live app PID before helper readiness/parent exit. Keep the
    resulting observation in the helper. It retains PID **and start time**, and includes descendants, not just
@@ -34,9 +38,13 @@ reuses another application's browser cannot make an unobserved default store loo
    have launchd as their parent. Services charged to our app are retained by PID/start time even after the app
    exits or the responsibility chain changes. A terminal-launched app that is not itself responsible is refused
    rather than associating services from other apps charged to that terminal.
-3. After app exit, `wait_released` refreshes that observation until the deadline. It never terminates another
+3. After app exit, `wait_released` refreshes that observation until the deadline. Every tracked PID gets an
+   independent native exit check: Unix `kill(pid, 0)` must return `ESRCH`; Windows opens a synchronization handle
+   and requires a signaled process (or `OpenProcess` reporting the PID does not exist). Permission/query errors
+   refuse cleanup. A missing sysinfo entry or changed start time never authorizes deletion. Even a reused live
+   PID conservatively blocks release; PID/start pairs still select descendants without following reused parents. It never terminates another
    browser. An unavailable/failed macOS responsibility query, unreadable Windows runtime owner/command line,
-   or an uninspectable tracked start time refuses
+   or a failed native exit inspection refuses
    cleanup; a process timeout leaves all browser roots intact and reports `reset.process-busy`.
 4. Only a successful release produces the opaque `Released` value needed by `remove`. All three macOS browser
    roots share this gate, so a lingering browser cannot rewrite cookies/cache into an already deleted app-data root.
@@ -54,7 +62,12 @@ Windows folder identity, plus the released shared removal primitive. macOS adds 
 binding to `responsibility_get_pid_responsible_for_pid`: sysinfo has no equivalent, and no maintained Rust
 wrapper was found. A missing symbol refuses cleanup. The ABI is evidenced by
 [Chromium's macOS process implementation](https://chromium.googlesource.com/chromium/src/+/24aa2a50ac03698e7ec5a11251a615b965f5874d/base/process/process_info_mac.cc).
-This is a macOS SPI, not a promised public API. There is no recursive walker.
+This is a macOS SPI, not a promised public API. Independent exit checks use the existing `libc` and
+`windows-sys` bindings: [signal zero / ESRCH](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/kill.2.html),
+[OpenProcess](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-openprocess)
+and [WaitForSingleObject](https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-waitforsingleobject).
+The shared core process identity API, like sysinfo enumeration, is explicitly only a hint and cannot prove exit
+on inspection failure. These small native checks do not signal or terminate processes. There is no recursive walker.
 
 The security fix chooses responsible-service tracking (option b). The pinned
 [Wry 0.57.0 WKWebView clear implementation](https://docs.rs/crate/wry/0.57.0/source/src/wkwebview/mod.rs)
@@ -80,7 +93,8 @@ Interface tests run on each compiled host: an active owner refuses release, exac
 siblings, missing roots succeed, malformed UDF arguments refuse, and a real child through the shared lifetime implementation performs its final shutdown
 write before release/removal. A sibling-writer regression injects responsibility lookup (not PPID ancestry),
 exits its host, confirms release is refused while the sibling remains alive, and waits for the final shutdown
-write before removing storage. Lookup failure and another responsible app are also checked. Windows can also
+write before removing storage. Lookup failure and another responsible app are also checked. An omitted-PID/inspection-error regression
+refuses release, and a live PID with a mismatched start time still blocks cleanup. Windows can also
 be type-checked independently of the shell's native toolkit.
 
 The tests do not launch a real WebView2/WKWebView/WebKitGTK engine or exercise the macOS SPI. Its availability,

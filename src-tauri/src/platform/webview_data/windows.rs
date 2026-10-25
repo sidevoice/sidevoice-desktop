@@ -3,6 +3,29 @@ use super::*;
 pub struct Os;
 
 impl WebviewData for Os {
+    fn exited(pid: u32) -> io::Result<bool> {
+        use windows_sys::Win32::Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, WAIT_OBJECT_0, WAIT_TIMEOUT};
+        use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE};
+        if pid <= 1 {
+            return Err(busy());
+        }
+        // SAFETY: a synchronization-only handle; no process memory is read or modified.
+        let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+        if handle.is_null() {
+            let error = io::Error::last_os_error();
+            return if error.raw_os_error() == Some(ERROR_INVALID_PARAMETER as i32) { Ok(true) } else { Err(error) };
+        }
+        // SAFETY: the handle is live, waited without blocking and closed exactly once on every path.
+        let result = unsafe { WaitForSingleObject(handle, 0) };
+        let error = io::Error::last_os_error();
+        unsafe { CloseHandle(handle) };
+        match result {
+            WAIT_OBJECT_0 => Ok(true),
+            WAIT_TIMEOUT => Ok(false),
+            _ => Err(error),
+        }
+    }
+
     fn observe(system: &System, locations: &Locations, processes: &mut Vec<(Pid, u64)>) -> io::Result<()> {
         // Capture starts with only the live host. Require positive UDF evidence at that point:
         // an environment/registry override may reuse another app's browser, outside our ancestry.
