@@ -18,8 +18,10 @@
 pub mod catalogs;
 pub mod error;
 mod jobs;
-pub mod memory;
+pub mod platform;
 mod trial;
+
+use platform::memory::{Memory as _, SystemMemory};
 
 pub use catalogs::{CatalogView, CredentialRefusal, ReasonView};
 pub use error::Error;
@@ -201,7 +203,7 @@ impl NativeEngines {
             os: capabilities.os,
             arch: capabilities.arch,
             has,
-            memory_mb: capabilities.memory_mb.map(u64::from).or_else(memory::total_mb),
+            memory_mb: capabilities.memory_mb.map(u64::from).or_else(|| SystemMemory::snapshot().total_mb()),
         };
         Ok(NativeEngines { engine: Arc::new(engine), host, runtime, device, installing: Mutex::default() })
     }
@@ -540,7 +542,7 @@ impl NativeEngines {
 
     /// This machine's memory and what is available of it now.
     pub fn memory(&self) -> Memory {
-        Memory { total_mb: self.device.memory_mb, available_mb: memory::available_mb() }
+        Memory { total_mb: self.device.memory_mb, available_mb: SystemMemory::snapshot().available_mb() }
     }
 }
 
