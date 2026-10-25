@@ -79,6 +79,7 @@ pub fn call_controls_push(patch: &serde_json::Value) -> String {
 /// (`host.computerName`, absent with none; core `computer_name`); `debug`: the developer options kept in the settings,
 /// told to the page (with the switches this platform has) only in a build that offers `host.debug` (core `debug_options`);
 /// `microphone_settings`: whether the platform can open its microphone privacy page, independently of native voice.
+/// `diagnostics`: native diagnostic switches the shell actually implements on this runtime.
 pub fn script_for_origin(
     origin: &str,
     updater: bool,
@@ -86,12 +87,13 @@ pub fn script_for_origin(
     computer_name: Option<&str>,
     debug: &crate::debug_options::DebugOptions,
     microphone_settings: bool,
+    diagnostics: &[crate::debug_options::Switch],
 ) -> String {
     let literal = serde_json::to_string(origin).expect("a string serialises");
     let keys = serde_json::to_string(&media_keys()).expect("serialises");
     let flag = |offered: bool| if offered { "true" } else { "false" };
     let debug = if crate::debug_options::offered(&build.channel) {
-        debug.state(crate::debug_options::available()).to_string()
+        debug.state(diagnostics).to_string()
     } else {
         "null".to_owned()
     };
@@ -386,7 +388,15 @@ mod tests {
     fn script_binds_the_origin_as_a_js_string() {
         let dev = BuildInfo::new("dev", "0.4.0", "", "");
         let off = crate::debug_options::DebugOptions::default();
-        let s = script_for_origin("https://voice.example.com", false, &dev, None, &off, false);
+        let s = script_for_origin(
+            "https://voice.example.com",
+            false,
+            &dev,
+            None,
+            &off,
+            false,
+            &crate::debug_options::Switch::ALL,
+        );
         assert!(!s.contains("__SIDEVOICE_ROOM_ORIGIN__"));
         assert!(!s.contains("__SIDEVOICE_MEDIA_KEYS__"));
         assert!(!s.contains("__SIDEVOICE_LOCAL_HOST__"));
@@ -399,20 +409,38 @@ mod tests {
         let platform = if cfg!(target_os = "macos") { r#""native", true, true"# } else { "null, false, false" };
         let dev_build = r#"{"channel":"dev","version":"0.4.0"}"#;
         // A dev build has the developer options: what the settings keep, and the switches this platform has.
-        let debug = off.state(crate::debug_options::available());
+        let debug = off.state(&crate::debug_options::Switch::ALL);
         let expected = format!(
             r#"factory(window, "https://voice.example.com", {platform}, false, {dev_build}, null, {debug}, false)"#
         );
         assert!(s.contains(&expected), "{expected}");
+        let no_diagnostics = script_for_origin("https://voice.example.com", false, &dev, None, &off, false, &[]);
+        assert!(no_diagnostics.contains(&off.state(&[]).to_string()));
         // A release that can update itself: the page gets `host.updater`, and `host.build` says it is a release.
         let release = BuildInfo::new("release", "0.4.0", "", "");
-        let offered = script_for_origin("https://voice.example.com", true, &release, Some("Mac de Ana"), &off, true);
+        let offered = script_for_origin(
+            "https://voice.example.com",
+            true,
+            &release,
+            Some("Mac de Ana"),
+            &off,
+            true,
+            &crate::debug_options::Switch::ALL,
+        );
         let expected = format!(
             r#"factory(window, "https://voice.example.com", {platform}, true, {{"channel":"release","version":"0.4.0"}}, "Mac de Ana", null, true)"#
         );
         assert!(offered.contains(&expected), "{expected}");
         // A hostile value cannot break out of the string literal.
-        let evil = script_for_origin("\"); alert(1); (\"", false, &dev, Some("\"); alert(1); (\""), &off, true);
+        let evil = script_for_origin(
+            "\"); alert(1); (\"",
+            false,
+            &dev,
+            Some("\"); alert(1); (\""),
+            &off,
+            true,
+            &crate::debug_options::Switch::ALL,
+        );
         assert!(evil.contains(r#"factory(window, "\"); alert(1); (\"""#));
         assert!(evil.contains(r#"{"channel":"dev","version":"0.4.0"}, "\"); alert(1); (\"", "#));
     }

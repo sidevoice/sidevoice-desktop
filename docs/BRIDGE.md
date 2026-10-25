@@ -837,10 +837,10 @@ host.debug?: {
 Each switch is a live getter: off by default, then what the app kept, then what the last `set` took. A switch the
 platform lacks always reads `false`.
 
-macOS: `inspectable` is `WKWebView.isInspectable` (macOS 13.3+; below that it has no effect), Safari → Develop lists
+macOS: `inspectable` is `WKWebView.isInspectable` (macOS 13.3+; below that it is omitted), Safari → Develop lists
 the webviews (docs/MACOS.md); `compositingBorders` and `repaintCounters` are WebKit's private `WKPreferences`
 `_setCompositingBordersVisible:` and `_setCompositingRepaintCountersVisible:`, set on each webview's live preferences
-and asked only where WebKit answers to them. All three are put on the room and the card as each is created and on each
+and offered only where WebKit provides their setters. All three are put on the room and the card as each is created and on each
 change. Windows and Linux: `available` is empty (Chromium's paint flags need a relaunch; no WebKitGTK binding is wired).
 The command is `debug_options` `{action: "set", name, enabled}`, answering `{available, inspectable,
 compositingBorders, repaintCounters}`; only the room page may call it (`capabilities/room.json`).

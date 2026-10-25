@@ -29,6 +29,7 @@ mod updater;
 mod voice;
 
 use crate::platform::computer_name::{ComputerName, SystemComputerName};
+use crate::platform::webview_diagnostics::{NativeWebviewDiagnostics, WebviewDiagnostics};
 use serde_json::{json, Value};
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
 use sidevoice_desktop_core::build_info::BuildInfo;
@@ -361,6 +362,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             SystemComputerName::read().as_deref(),
             &debug_options,
             platform::microphone::SETTINGS_URL.is_some(),
+            &NativeWebviewDiagnostics::available(),
         ));
     #[cfg(feature = "probe")]
     let builder = match probe::local_host_flow() {
