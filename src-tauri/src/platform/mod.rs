@@ -4,6 +4,8 @@ pub mod update_eligibility;
 
 pub mod computer_name;
 pub mod microphone;
+#[cfg(test)]
+pub mod pairing_storage;
 #[cfg(any(test, feature = "probe"))]
 pub mod process_memory;
 pub mod reveal;
