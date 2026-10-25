@@ -4620,7 +4620,6 @@ dependencies = [
  "sidevoice-platform",
  "sidevoice-voice",
  "sys-locale",
- "system-configuration-sys",
  "tauri",
  "tauri-build",
  "tauri-nspanel",
@@ -4632,6 +4631,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "url",
+ "whoami",
  "windows-sys 0.61.2",
  "winreg",
 ]

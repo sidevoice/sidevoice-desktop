@@ -19,7 +19,7 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 | `src-tauri/src/call_controls.rs`, `src-tauri/core/src/call_controls.rs` | The card's window, and when it shows, where it sits and how it moves (unit-tested). |
 | `src-tauri/src/updater.rs`, `src-tauri/core/src/updater.rs`, `src-tauri/core/src/build_info.rs` | The app's updates, behind `updater`, and what this build is, `build` (below). |
 | `src-tauri/src/debug_options.rs`, `src-tauri/core/src/debug_options.rs` | The developer options, behind `debug` in a nightly or a dev build (below). |
-| `src-tauri/src/computer_name.rs`, `src-tauri/core/src/computer_name.rs` | This computer's name, `computerName` (below; the Linux file's parsing unit-tested). |
+| `src-tauri/src/platform/computer_name.rs`, `src-tauri/core/src/computer_name.rs` | This computer's name, `computerName` (below; the Linux file's parsing unit-tested). |
 
 ## What the bridge reads and calls in the web UI
 
@@ -230,7 +230,7 @@ the Computer Name (System Settings → General → Sharing, «Mac de Ana»; Syst
 `SCDynamicStoreCopyComputerName`), not the `.local` hostname; on Windows the device name (the DNS host name, as typed);
 on Linux the pretty hostname (`PRETTY_HOSTNAME` in `/etc/machine-info`, `hostnamectl set-hostname --pretty`), else
 the hostname. A non-empty string, trimmed; absent when the system has none, and the page then names the device
-itself. Read each time the room window opens (`src-tauri/src/computer_name.rs`, core `computer_name`).
+itself. Read each time the room window opens (`src-tauri/src/platform/computer_name.rs`, core `computer_name`).
 
 ## The local host
 
@@ -246,7 +246,7 @@ docs/LOCAL_HOST.md.
 | `start()` / `stop()` / `restart()` / `serviceInstall()` / `serviceUninstall()` | the connector's `service …`; resolve the state after it |
 | `setStartAtLogin(enabled)` | whether the service starts at the next sign-in, and only that (a running service keeps running, a stopped one stays stopped): the connector's `service login on\|off`, which it does not ship yet — until then it rejects `service.login-unsupported`; the state it resolves reads the change back in `installed`; a non-boolean rejects `bad_request` (docs/LOCAL_HOST.md → Start at sign-in) |
 | `reconnect()` | pairs the app with the core again (after `refused`; never done on its own) |
-| `revealLog()` | shows the logs in Finder: the app's own (below), and the core's (`D/core.log`, else `D/connector.log`) when there is one; the app's is there with no connector installed |
+| `revealLog()` | shows the logs in the system file manager: the app's own (below), and the core's (`D/core.log`, else `D/connector.log`) when there is one; the app's is there with no connector installed |
 | `pairingCode()` | `{code, expires_in, reach}`, on the person's click only: shown, never sent — the page's convention; native authorises the caller, not a person (docs/LOCAL_HOST.md → Trust) |
 | `install(onProgress?)` | «Prepare this computer»: installs Sidevoice from the npm registry, without Node (docs/LOCAL_HOST.md → Install). Answers at once a promise of the state after it — once the app is paired with the new core, `reachable` — that carries `job`, this call's id (sidevoice-web's `LocalHostInstallOperation`). `onProgress({step, done, total, cancellable})` about twice a second while it runs, when that changes (below). One at a time: another call meanwhile rejects `install.busy` |
 | `cancel(job)` | stops install `job` while that is honoured — `download`, `verification` and the unpacking in `staging`, never once the package's installer runs — and resolves whether it was (`true`: the install rejects `install.cancelled`); `false` too for a job not under way |
