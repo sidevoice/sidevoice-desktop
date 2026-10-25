@@ -23,15 +23,29 @@ pub trait ProcessMemory {
                 true,
                 sysinfo::ProcessRefreshKind::nothing().with_memory(),
             );
-            system.process(pid).map(|process| process.memory())
+            system.process(pid).and_then(|process| resident_bytes(process.memory()))
         });
         Sample { resident, ..Sample::default() }
     }
 }
 
+// A live process cannot have an empty resident set. In particular, sysinfo leaves its initial zero on
+// Windows when GetProcessMemoryInfo fails. Preserve that as unavailable rather than a measured zero.
+fn resident_bytes(bytes: u64) -> Option<u64> {
+    (bytes > 0).then_some(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_live_process_reading_is_unavailable_in_the_probe_line() {
+        let sample = Sample { resident: resident_bytes(0), ..Sample::default() };
+        assert_eq!(sample.resident, None);
+        assert_eq!(sample.line("failed"), "memory phase=failed footprint=na resident=na metal=na accelerator=na");
+        assert_eq!(resident_bytes(4096), Some(4096));
+    }
 
     #[test]
     fn portable_observations_do_not_invent_footprint_or_gpu_usage() {
