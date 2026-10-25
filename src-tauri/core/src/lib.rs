@@ -11,6 +11,7 @@ pub mod i18n;
 pub mod logging;
 pub mod media;
 pub mod memory;
+pub mod platform;
 pub mod settings;
 pub mod updater;
 pub mod voice;

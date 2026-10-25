@@ -10,17 +10,13 @@ use std::fs;
 use std::path::Path;
 use url::Url;
 
+pub use crate::platform::application_origin::APP_ORIGIN;
+
 /// Global mute toggle: ⌃⌥M on macOS, Ctrl+Alt+M elsewhere; editable in settings. Not ⌘⇧M: a global shortcut takes the
 /// keys from every app, and ⌘⇧M is the Problems panel of VS Code (sidevoice/sidevoice-desktop#4).
 pub const DEFAULT_MUTE_SHORTCUT: &str = "Ctrl+Alt+M";
 
 pub const FILE_NAME: &str = "settings.json";
-
-/// The origin Tauri serves the app's own pages from: what a node sees as the interface's `Origin`.
-#[cfg(windows)]
-pub const APP_ORIGIN: &str = "http://tauri.localhost";
-#[cfg(not(windows))]
-pub const APP_ORIGIN: &str = "tauri://localhost";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
