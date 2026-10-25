@@ -23,13 +23,6 @@ pub enum LabelStyle {
     Names,
 }
 
-impl LabelStyle {
-    /// Format with the core's shared label rules; no OS observation occurs in the formatter.
-    pub fn label(&self, chord: &str) -> String {
-        sidevoice_desktop_core::call_controls::shortcut_label(chord, *self == Self::Symbols)
-    }
-}
-
 pub trait ShortcutAccess {
     /// Normalize a kept accelerator and accept it only if the plugin recognizes the key. Empty disables.
     fn checked(text: &str) -> Option<String> {
@@ -127,8 +120,15 @@ mod tests {
 
     #[test]
     fn label_styles_preserve_the_accelerator_and_accessibility_is_not_fabricated() {
-        assert_eq!(LabelStyle::Symbols.label("Ctrl+Alt+M"), "⌃⌥M");
-        assert_eq!(LabelStyle::Names.label("Ctrl+Alt+M"), "Ctrl+Alt+M");
+        struct SymbolLabels;
+        impl ShortcutAccess for SymbolLabels {
+            fn label_style() -> LabelStyle {
+                LabelStyle::Symbols
+            }
+        }
+        let app = tauri::test::mock_app();
+        assert_eq!(SymbolLabels::replace(app.handle(), "Ctrl+Alt+M").label.as_deref(), Some("⌃⌥M"));
+        assert_eq!(Baseline::replace(app.handle(), "Ctrl+Alt+M").label.as_deref(), Some("Ctrl+Alt+M"));
         assert!(!Baseline::reserved_chord_active("Ctrl+Alt+M"));
         assert!(!NativeShortcutAccess::reserved_chord_active("Shift+M"));
     }

@@ -11,7 +11,6 @@
 //!
 //! When it shows, where it sits and how it moves are `sidevoice_desktop_core::call_controls`.
 
-use crate::platform::shortcut_access::{NativeShortcutAccess, ShortcutAccess};
 use crate::{debug, AppState};
 use serde::Deserialize;
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
@@ -663,13 +662,14 @@ fn full_state(app: &AppHandle, call: &CallSnapshot) -> serde_json::Value {
             (inner.level, inner.pointer_inside, inner.outside_clicks, inner.told_place, inner.told_size.flatten())
         })
         .unwrap_or((0, None, 0, None, None));
+    let shortcut = crate::shortcut_status(&app.state::<AppState>());
     let mut state = serde_json::json!({
         "call": call,
         "level": level,
         "pointerInside": pointer,
         "outsideClicks": clicks,
         "alwaysExpanded": settings.call_controls_always_shown,
-        "muteShortcut": NativeShortcutAccess::label_style().label(&settings.mute_shortcut),
+        "muteShortcut": logic::shortcut_hint(&shortcut),
         "size": size.map(size_json),
     });
     if let Some(place) = place {
