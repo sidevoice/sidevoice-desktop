@@ -12,6 +12,7 @@
 //! When it shows, where it sits and how it moves are `sidevoice_desktop_core::call_controls`.
 
 use crate::platform::card_window::{CardSpec, CardWindow, NativeCardWindow};
+use crate::platform::desktop_geometry::{DesktopGeometry, NativeGeometry};
 use crate::{debug, AppState};
 use serde::Deserialize;
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
@@ -22,7 +23,7 @@ use sidevoice_desktop_core::settings::{self, APP_ORIGIN};
 use std::path::PathBuf;
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, LogicalSize, Manager, Monitor, Webview, WebviewWindow};
+use tauri::{AppHandle, LogicalSize, Manager, Webview, WebviewWindow};
 
 pub const LABEL: &str = "call-controls";
 const PAGE: &str = "voice/call-controls.html";
@@ -127,14 +128,6 @@ struct Resize {
 #[derive(Default)]
 pub struct Card(Mutex<Inner>, Condvar);
 
-/// Whether the app runs as a Wayland client: GTK picks Wayland when there is a Wayland display, unless `GDK_BACKEND`
-/// says otherwise (`GDK_BACKEND=x11` runs it under XWayland, where it is an X11 card).
-fn wayland() -> bool {
-    cfg!(target_os = "linux")
-        && std::env::var_os("WAYLAND_DISPLAY").is_some_and(|d| !d.is_empty())
-        && !std::env::var("GDK_BACKEND").is_ok_and(|b| b.trim_start().starts_with("x11"))
-}
-
 /// Quitting: the card's window goes, with its webview.
 pub fn close(app: &AppHandle) {
     if let Err(e) = NativeCardWindow::close(app, LABEL) {
@@ -146,13 +139,13 @@ pub fn close(app: &AppHandle) {
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let config_dir = crate::data::desktop_dir(app).ok();
     let placements = config_dir.as_deref().map(Placements::load).unwrap_or_default();
-    let pointer_inside = if wayland() { None } else { Some(false) };
+    let pointer_inside = if !NativeGeometry::capabilities().global_coordinates { None } else { Some(false) };
     app.manage(Card(
         Mutex::new(Inner { placements, config_dir, pointer_inside, ..Default::default() }),
         Condvar::new(),
     ));
     #[allow(unused_mut)] // the probe build adds its own
-    let mut script = bridge::call_controls_script(APP_ORIGIN, !wayland());
+    let mut script = bridge::call_controls_script(APP_ORIGIN, NativeGeometry::capabilities().global_coordinates);
     #[cfg(feature = "probe")]
     if let Some(probe) = crate::probe::card_script() {
         script.push_str(probe);
@@ -163,7 +156,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         set_cursor_in_background();
         watch_clicks(app);
     }
-    if !wayland() {
+    if NativeGeometry::capabilities().global_coordinates {
         watch_pointer(app.clone());
     }
     watch_view(app.clone());
@@ -272,7 +265,7 @@ fn on_screen(w: &WebviewWindow) -> bool {
 /// the room counts as seen only while it has the focus, as before #165.
 #[cfg(target_os = "linux")]
 fn on_screen(w: &WebviewWindow) -> bool {
-    !wayland() || w.is_focused().unwrap_or(false)
+    NativeGeometry::capabilities().global_coordinates || w.is_focused().unwrap_or(false)
 }
 
 /// macOS: the part of the stage (on the desktop) no other app's window above the room covers, from the window server's
@@ -463,7 +456,7 @@ fn move_when_latest(app: &AppHandle, at: Point, decision: u64) {
     let _ = app.run_on_main_thread(move || {
         let latest = card(&a).is_some_and(|card| card.0.lock().unwrap().moves.is(decision));
         if let (true, Some(w)) = (latest, window(&a)) {
-            move_to(&w, at);
+            NativeGeometry::place(&w, at);
         }
     });
 }
@@ -475,8 +468,8 @@ fn move_when_latest(app: &AppHandle, at: Point, decision: u64) {
 fn settle_size(app: &AppHandle) {
     let (Some(card), Some(w)) = (card(app), window(app)) else { return };
     let Some(wanted) = card.0.lock().unwrap().size else { return };
-    let Some(actual) = frame(&w) else { return };
-    let unit = unit(&w);
+    let Some(actual) = NativeGeometry::frame(&w) else { return };
+    let unit = NativeGeometry::unit(&w);
     let (aw, ah) = (actual.width / unit, actual.height / unit);
     if (aw - wanted.width).abs() > 1.0 || (ah - wanted.height).abs() > 1.0 {
         debug(&format!("call-controls window was {aw:.0}x{ah:.0}, set to {:.0}x{:.0}", wanted.width, wanted.height));
@@ -614,79 +607,6 @@ fn push(app: &AppHandle, patch: serde_json::Value) {
     }
 }
 
-// Geometry on the desktop (see `Display`): physical pixels on Windows and Linux; points on macOS, where Tao's
-// "physical" positions are each scaled by a different display (the pointer's by the main one, a window's by its own).
-
-/// One logical pixel of this window, in desktop units.
-fn unit(w: &WebviewWindow) -> f64 {
-    if cfg!(target_os = "macos") {
-        1.0
-    } else {
-        w.scale_factor().unwrap_or(1.0)
-    }
-}
-
-/// The pointer on the desktop.
-fn pointer(app: &AppHandle) -> Option<Point> {
-    let p = app.cursor_position().ok()?;
-    let scale = if cfg!(target_os = "macos") { app.primary_monitor().ok()??.scale_factor() } else { 1.0 };
-    Some(Point { x: p.x / scale, y: p.y / scale })
-}
-
-/// The window on the desktop.
-fn frame(w: &WebviewWindow) -> Option<Rect> {
-    let (at, size) = (w.outer_position().ok()?, w.outer_size().ok()?);
-    let scale = if cfg!(target_os = "macos") { w.scale_factor().ok()? } else { 1.0 };
-    Some(Rect {
-        x: at.x as f64 / scale,
-        y: at.y as f64 / scale,
-        width: size.width as f64 / scale,
-        height: size.height as f64 / scale,
-    })
-}
-
-fn move_to(w: &WebviewWindow, at: Point) {
-    #[cfg(target_os = "macos")]
-    let _ = w.set_position(tauri::LogicalPosition::new(at.x, at.y));
-    #[cfg(not(target_os = "macos"))]
-    let _ = w.set_position(tauri::PhysicalPosition::new(at.x.round() as i32, at.y.round() as i32));
-}
-
-/// A monitor's whole area on the desktop, and the display it is to the card (its work area).
-fn monitor_display(m: &Monitor) -> (Rect, Display) {
-    let scale = m.scale_factor();
-    let (unit, to_desktop) = if cfg!(target_os = "macos") { (1.0, 1.0 / scale) } else { (scale, 1.0) };
-    let (at, size, work) = (m.position(), m.size(), m.work_area());
-    let whole = Rect {
-        x: at.x as f64 * to_desktop,
-        y: at.y as f64 * to_desktop,
-        width: size.width as f64 * to_desktop,
-        height: size.height as f64 * to_desktop,
-    };
-    let name = m.name().cloned().unwrap_or_else(|| format!("{}x{}", size.width, size.height));
-    let display = Display::new(
-        &name,
-        unit,
-        Point { x: work.position.x as f64 * to_desktop, y: work.position.y as f64 * to_desktop },
-        Size { width: work.size.width as f64 / scale, height: work.size.height as f64 / scale },
-    );
-    (whole, display)
-}
-
-/// The display with this key, else the one at `at` (on the desktop), else the room window's, else the primary.
-fn display(app: &AppHandle, key: Option<&str>, at: Option<Point>) -> Option<Display> {
-    let all: Vec<(Rect, Display)> = app.available_monitors().unwrap_or_default().iter().map(monitor_display).collect();
-    let by_key = key.and_then(|key| all.iter().find(|(_, d)| d.key == key));
-    let by_point = || at.and_then(|p| all.iter().find(|(whole, _)| whole.contains(p)));
-    if let Some((_, d)) = by_key.or_else(by_point) {
-        return Some(d.clone());
-    }
-    crate::room_window(app)
-        .and_then(|w| w.current_monitor().ok().flatten())
-        .or_else(|| app.primary_monitor().ok().flatten())
-        .map(|m| monitor_display(&m).1)
-}
-
 /// The preferred corner: where a card first appears, and where a click on a corner in Settings puts it.
 fn default_corner(app: &AppHandle) -> Corner {
     app.state::<AppState>().settings.lock().unwrap().as_ref().map(|s| s.call_controls_corner).unwrap_or_default()
@@ -696,7 +616,7 @@ fn default_corner(app: &AppHandle) -> Corner {
 /// body there, the window around it, moved just enough for all of it to fit. Then tells the card its place and its
 /// resized size there, when they changed. On Wayland the compositor places it.
 fn place(app: &AppHandle) {
-    if wayland() {
+    if !NativeGeometry::capabilities().global_coordinates {
         return;
     }
     let corner = default_corner(app);
@@ -706,7 +626,9 @@ fn place(app: &AppHandle) {
     }
     let key = card.0.lock().unwrap().rest.as_ref().map(|(d, _)| d.key.clone());
     // The monitors are the main thread's to answer: asked with the lock released (#170).
-    let Some(display) = display(app, key.as_deref(), None) else { return };
+    let Some(display) = NativeGeometry::display(app, crate::room_window(app).as_ref(), key.as_deref(), None) else {
+        return;
+    };
     let (to, decision, patch) = {
         let mut inner = card.0.lock().unwrap();
         let size = inner.size.unwrap_or(FIRST_SIZE);
@@ -982,22 +904,23 @@ pub enum DragPhase {
 pub fn call_controls_drag(app: AppHandle, webview: Webview, phase: DragPhase) -> Result<(), String> {
     from_card_window(&webview)?;
     let (Some(card), Some(w)) = (card(&app), window(&app)) else { return Ok(()) };
-    if wayland() {
+    if !NativeGeometry::capabilities().global_coordinates {
         if let DragPhase::Start = phase {
-            let _ = w.start_dragging();
+            let _ = NativeGeometry::start_dragging(&w);
         }
         return Ok(());
     }
     // The pointer, the window and the monitors are asked with the card's lock released (#170).
     match phase {
         DragPhase::Start => {
-            let drag =
-                pointer(&app).zip(frame(&w)).map(|(pointer, at)| Drag { pointer, window: Point { x: at.x, y: at.y } });
+            let drag = NativeGeometry::pointer(&app)
+                .zip(NativeGeometry::frame(&w))
+                .map(|(pointer, at)| Drag { pointer, window: Point { x: at.x, y: at.y } });
             card.0.lock().unwrap().drag = drag;
         }
         DragPhase::Move => {
             let drag = card.0.lock().unwrap().drag;
-            if let (Some(drag), Some(p)) = (drag, pointer(&app)) {
+            if let (Some(drag), Some(p)) = (drag, NativeGeometry::pointer(&app)) {
                 let to = Point { x: drag.window.x + p.x - drag.pointer.x, y: drag.window.y + p.y - drag.pointer.y };
                 let decision = card.0.lock().unwrap().moves.advance();
                 move_when_latest(&app, to, decision);
@@ -1005,10 +928,12 @@ pub fn call_controls_drag(app: AppHandle, webview: Webview, phase: DragPhase) ->
         }
         DragPhase::End => {
             let drag = card.0.lock().unwrap().drag.take();
-            let (Some(drag), Some(p)) = (drag, pointer(&app)) else { return Ok(()) };
+            let (Some(drag), Some(p)) = (drag, NativeGeometry::pointer(&app)) else { return Ok(()) };
             let dropped = Point { x: drag.window.x + p.x - drag.pointer.x, y: drag.window.y + p.y - drag.pointer.y };
             // The display the pointer let go on; the card's corner may be just off it.
-            let Some(display) = display(&app, None, Some(p)) else { return Ok(()) };
+            let Some(display) = NativeGeometry::display(&app, crate::room_window(&app).as_ref(), None, Some(p)) else {
+                return Ok(());
+            };
             let mut inner = card.0.lock().unwrap();
             let size = inner.size.unwrap_or(FIRST_SIZE);
             let anchor = inner.anchor.unwrap_or_else(|| logic::anchor(size, None, MARGIN));
@@ -1050,7 +975,7 @@ fn opposite(edge: Edge) -> Corner {
 #[tauri::command]
 pub fn call_controls_resize(app: AppHandle, webview: Webview, phase: DragPhase, edge: Edge) -> Result<(), String> {
     from_card_window(&webview)?;
-    if wayland() {
+    if !NativeGeometry::capabilities().global_coordinates {
         return Ok(());
     }
     let (Some(card), Some(w)) = (card(&app), window(&app)) else { return Ok(()) };
@@ -1066,15 +991,17 @@ pub fn call_controls_resize(app: AppHandle, webview: Webview, phase: DragPhase, 
     // The pointer and the window are asked with the card's lock released (#170).
     match phase {
         DragPhase::Start => {
-            let resize = pointer(&app).zip(frame(&w)).zip(display).map(|((pointer, at), display)| {
-                let corner = display.to_local(Point { x: at.x, y: at.y });
-                let window = Rect { x: corner.x, y: corner.y, width: size.width, height: size.height };
-                Resize { edge, pointer, display, window, anchor }
-            });
+            let resize = NativeGeometry::pointer(&app).zip(NativeGeometry::frame(&w)).zip(display).map(
+                |((pointer, at), display)| {
+                    let corner = display.to_local(Point { x: at.x, y: at.y });
+                    let window = Rect { x: corner.x, y: corner.y, width: size.width, height: size.height };
+                    Resize { edge, pointer, display, window, anchor }
+                },
+            );
             card.0.lock().unwrap().resize = resize;
         }
         DragPhase::Move | DragPhase::End => {
-            let (Some(resize), Some(p)) = (resize, pointer(&app)) else { return Ok(()) };
+            let (Some(resize), Some(p)) = (resize, NativeGeometry::pointer(&app)) else { return Ok(()) };
             let dx = (p.x - resize.pointer.x) / resize.display.unit;
             let dy = (p.y - resize.pointer.y) / resize.display.unit;
             let to = logic::resized(resize.window, resize.edge, dx, dy, min_width, min_height, resize.display.work);
@@ -1249,8 +1176,8 @@ fn watch_pointer(app: AppHandle) {
             }
             std::thread::sleep(POINTER_EVERY);
             let Some(w) = window(&app) else { return };
-            let inside = pointer(&app).zip(frame(&w)).map(|(p, at)| {
-                let margin = MARGIN * unit(&w);
+            let inside = NativeGeometry::pointer(&app).zip(NativeGeometry::frame(&w)).map(|(p, at)| {
+                let margin = MARGIN * NativeGeometry::unit(&w);
                 Rect {
                     x: at.x + margin,
                     y: at.y + margin,

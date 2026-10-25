@@ -13,3 +13,4 @@ pub mod webview_diagnostics;
 pub mod confirmation;
 
 pub mod card_window;
+pub mod desktop_geometry;
