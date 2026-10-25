@@ -54,7 +54,7 @@ reuses another application's browser cannot make an unobserved default store loo
    cleanup; a process timeout leaves all browser roots intact and reports `reset.process-busy`.
 4. Only a successful release produces the opaque `Released` value needed by `remove`. All three macOS browser
    roots share this gate, so a lingering browser cannot rewrite cookies/cache into an already deleted app-data root.
-5. `remove` opens the target and its parent through core v0.12.0 `HeldDirectory`, refuses redirected roots,
+5. `remove` opens the target and its parent through core v0.12.2 `HeldDirectory`, refuses redirected roots,
    and delegates the exact child allowlist to `Removal::remove_contents`. It creates no directories, follows no
    child links and implements no recursive deletion. Missing roots are success. Unsafe ownership, mounts and
    sharing failures remain failures for the reset journal. A partial filesystem failure can be retried.

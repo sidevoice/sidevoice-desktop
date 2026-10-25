@@ -8,6 +8,8 @@
 //!
 //! - `web`: the web interface at the pin (web.pin.json), into ui/voice/ (`npm run web`). Reads
 //!   `SIDEVOICE_WEB_ATTESTATION` and `GH_TOKEN` (scripts/build-web.mjs).
+//! - `platform-guard`: reject OS-specific code outside platform (the separate Platform boundary CI job).
+//! - `platform-clippy`: deny OS API lints in the independent Platform boundary job.
 //! - `lint`: rustfmt and Clippy (warnings denied) on the app's workspace and on this tooling.
 //! - `test`: the bridge script's tests (`npm test`) and the app's Rust tests (`cargo test --workspace`).
 //! - `icons`: `npm run icons`, then the icons, tray marks and .dmg window must be what is committed.
@@ -99,6 +101,7 @@
 mod checks;
 mod macos;
 mod memory;
+mod platform_guard;
 mod probe;
 mod publish;
 mod util;
@@ -110,7 +113,8 @@ use util::Channel;
 
 pub type Result<T> = std::result::Result<T, String>;
 
-const USAGE: &str = "usage: cargo xtask web | lint | test | icons | two-users | bundle [--channel C] | engine-rev
+const USAGE: &str =
+    "usage: cargo xtask web | lint | platform-guard | platform-clippy | test | icons | two-users | bundle [--channel C] | engine-rev
   | sherpa-libs | macos app [--signed] [--channel C] | macos check-app [--signed] | macos first-open
   | macos dmg [--signed] | macos sign-dmg | macos checksums | macos forget-secrets | macos dmg-screens
   | macos probe-app | macos local-host | macos probe | macos voice-models | macos card | macos exit
@@ -136,6 +140,8 @@ fn main() -> ExitCode {
     let result = match args.as_slice() {
         ["web"] => checks::web(),
         ["lint"] => checks::lint(),
+        ["platform-guard"] => platform_guard::check(),
+        ["platform-clippy"] => checks::clippy(true),
         ["test"] => checks::test(),
         ["test-support"] => checks::test_support(),
         ["icons"] => checks::icons(),

@@ -22,8 +22,8 @@ probe = []
 tauri-build = { version = "2.7", features = [] }
 
 [dependencies]
-# Shared model paths and held-root browser-data removal, pinned to a released core tag.
-sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.12.0" }
+# Shared model paths, pairing storage and browser-data removal, pinned to a released core tag.
+sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.12.2" }
 sidevoice-desktop-core = { path = "core" }
 sidevoice-desktop-engine = { path = "engine" }
 tauri = { version = "2.12", features = ["tray-icon", "image-png", "macos-private-api"] }
@@ -99,6 +99,8 @@ libc = "0.2"
 gtk = "0.18"
 
 [dev-dependencies]
+# Portable pairing attack fixtures from the pinned shared filesystem interface.
+sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.12.2", features = ["test-support"] }
 # Deterministic startup-deadline tests; no wall-clock sleeps.
 tokio = { version = "1", features = ["rt", "test-util"] }
 # Mock runtime for the platform interface tests; no native explorer is opened.
