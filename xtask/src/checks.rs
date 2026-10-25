@@ -52,7 +52,7 @@ pub fn test_support() -> Result<()> {
 }
 
 /// Everything `npm run icons` writes.
-const DRAWN: &[&str] = &["src-tauri/icons", "src-tauri/dmg"];
+const DRAWN: &[&str] = &["src-tauri/packaging"];
 
 /// `icons`: the icons, tray marks and .dmg window are what the brand files draw: `npm run icons`, then nothing it
 /// writes differs from what is committed.

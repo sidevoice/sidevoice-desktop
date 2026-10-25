@@ -101,7 +101,7 @@ fn notary_key(dir: &SecretDir) -> Result<PathBuf> {
 }
 
 /// `macos app [--signed] [--channel release|nightly|dev]`: the app bundle (hardened runtime,
-/// src-tauri/Entitlements.plist), built for its channel (default `dev`). Ad-hoc signed; or, with `--signed`, signed by
+/// src-tauri/packaging/macos/Entitlements.plist), built for its channel (default `dev`). Ad-hoc signed; or, with `--signed`, signed by
 /// Tauri's bundler with the Developer ID (`APPLE_SIGNING_IDENTITY`; `APPLE_CERTIFICATE` and
 /// `APPLE_CERTIFICATE_PASSWORD`, imported into a keychain of the bundler's own, or else the login keychain's),
 /// notarized with the API key (`APPLE_API_KEY`, `APPLE_API_ISSUER`, and the key file, see [`notary_key`]) and
@@ -385,7 +385,12 @@ pub fn dmg(signed: bool) -> Result<()> {
     // One TIFF with the 1x and 2x drawings: Finder picks the one for the screen.
     let background = work.join("background.tiff");
     Cmd::new("tiffutil")
-        .args(["-cathidpicheck", "src-tauri/dmg/background.png", "src-tauri/dmg/background@2x.png", "-out"])
+        .args([
+            "-cathidpicheck",
+            "src-tauri/packaging/macos/dmg/background.png",
+            "src-tauri/packaging/macos/dmg/background@2x.png",
+            "-out",
+        ])
         .arg(&background)
         .run()?;
     // No older image beside this one, to be checksummed or uploaded with it.
@@ -401,7 +406,13 @@ pub fn dmg(signed: bool) -> Result<()> {
         .arg(format!("app={}", app().display()))
         .arg("-D")
         .arg(format!("background={}", background.display()))
-        .args(["-D", "layout=src-tauri/dmg/layout.json", "-D", "icon=src-tauri/icons/icon.icns", "Sidevoice"])
+        .args([
+            "-D",
+            "layout=src-tauri/packaging/macos/dmg/layout.json",
+            "-D",
+            "icon=src-tauri/packaging/macos/icon.icns",
+            "Sidevoice",
+        ])
         .arg(&dmg)
         .run()?;
     Cmd::new("hdiutil").arg("verify").arg(&dmg).run()?;
