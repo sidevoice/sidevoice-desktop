@@ -54,7 +54,8 @@ silently repairing them. No shell, service-manager replacement, privilege prompt
 
 ## Verification and limits
 
-Tests are colocated with the platform interface. Native child modes use the test executable on every host:
+Tests are colocated with the platform interface and included in the existing `test-support/tests/portable.rs`
+target, which normal macOS/Windows PR jobs already run. Native child modes use the test executable on every host:
 real parent exit; startup exclusion before/during helper work; cancellation; helper and startup deadlines;
 wrong capability; missing bootstrap; EOF before commit; spawn failure; oversized plan; hard-linked lock.
 These exercise actual shared IPC and kernel locks, not a mocked lock implementation.

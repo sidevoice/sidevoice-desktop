@@ -156,3 +156,9 @@ fn closing_an_older_call_keeps_the_newer_call_open() {
     sidevoice_desktop_test_support::fake_core::forget(&data);
     result.unwrap();
 }
+
+// Exercise the shell's actual handoff protocol in the existing Windows/macOS fixture jobs,
+// without linking a webview. Tests remain colocated with the desktop platform interface.
+#[path = "../../src-tauri/src/platform/reset_handoff.rs"]
+#[allow(dead_code)]
+mod reset_handoff;
