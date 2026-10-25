@@ -94,7 +94,6 @@ pub fn compare(before: &str) -> Result<()> {
             previous["bundle"]["macOS"][field] = moved(value).into();
         }
         if os != "macos" {
-            previous["app"].as_object_mut().unwrap().remove("macOSPrivateApi");
             previous["bundle"].as_object_mut().unwrap().remove("macOS");
         }
         for channel in [Channel::Dev, Channel::Release, Channel::Nightly] {

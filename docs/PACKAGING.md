@@ -17,6 +17,11 @@ fallbacks used for the default window icon; relocating an icon does not change w
 `npm run icons` regenerates the same bytes at the new paths. `cargo xtask icons` checks those directories.
 The generator, brand previews, Rust `include_bytes!`, xtask's custom DMG build and documentation use this layout.
 
+All three overlays retain `app.macOSPrivateApi: true`: Cargo currently enables Tauri's `macos-private-api`
+feature globally. Tauri's build script requires the config flag to match even on Linux/Windows when invoked
+directly through Cargo (including CI's Clippy/tests). Moving that Cargo feature to a target-specific dependency
+would change more than the packaging layout. The flag has no native effect outside macOS.
+
 ## P26 migration evidence
 
 Baseline: `02916bf3484be5f01e9225f9f17ed1d68ae54f20` (main before this change).
