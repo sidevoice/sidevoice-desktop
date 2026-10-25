@@ -156,3 +156,7 @@ fn closing_an_older_call_keeps_the_newer_call_open() {
     sidevoice_desktop_test_support::fake_core::forget(&data);
     result.unwrap();
 }
+
+// Exercise the actual shell pairing store without linking the native UI.
+#[path = "../../src-tauri/src/data/pairings.rs"]
+mod pairings;
