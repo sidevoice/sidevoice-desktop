@@ -15,7 +15,9 @@ mod imp;
 pub use imp::NativeGeometry;
 
 /// The shared physical-pixel geometry used when an OS needs no overrides.
+#[cfg(target_os = "windows")]
 pub struct PhysicalGeometry;
+#[cfg(target_os = "windows")]
 impl DesktopGeometry for PhysicalGeometry {}
 #[cfg(target_os = "windows")]
 pub use PhysicalGeometry as NativeGeometry;
