@@ -304,6 +304,43 @@ fn a_stored_pairing_is_reused_after_proving_the_identity() {
 }
 
 #[test]
+fn a_pairing_below_traverse_only_ancestors_loads_saves_and_is_discovered() {
+    struct RestorePermissions<'a>(&'a Path);
+    impl Drop for RestorePermissions<'_> {
+        fn drop(&mut self) {
+            std::fs::set_permissions(self.0, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+    }
+
+    for mode in [0o311, 0o711] {
+        let world = World::new();
+        let core = world.core(1);
+        let first = world.host();
+        running(&first);
+        let stored = store::load(&world.app_dir).unwrap();
+        first.shutdown();
+        drop(first);
+
+        // 0311 denies directory listing even to its owner; 0711 is the usual searchable /home layout.
+        // Restore on panic too, so the fixture can always remove its private children.
+        let ancestor = world._tmp.path();
+        let _restore = RestorePermissions(ancestor);
+        std::fs::set_permissions(ancestor, std::fs::Permissions::from_mode(mode)).unwrap();
+        assert_eq!(store::load(&world.app_dir), Some(stored.clone()), "load beneath {mode:o}");
+        let updated = store::Pairing { host: "saved beneath a searchable ancestor".into(), ..stored };
+        store::save(&world.app_dir, &updated).unwrap();
+        assert_eq!(store::load(&world.app_dir), Some(updated.clone()), "save beneath {mode:o}");
+
+        let host = world.host();
+        running(&host);
+        assert_eq!(core.local_device().as_deref(), Some(updated.device_id.as_str()), "reuse beneath {mode:o}");
+        assert_eq!(store::load(&world.app_dir).unwrap().token, updated.token);
+        assert_eq!(std::fs::metadata(ancestor).unwrap().permissions().mode() & 0o777, mode);
+        host.shutdown();
+    }
+}
+
+#[test]
 fn a_reset_core_is_paired_again() {
     let world = World::new();
     let core = world.core(1);

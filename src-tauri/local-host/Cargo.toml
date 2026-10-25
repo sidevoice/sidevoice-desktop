@@ -15,7 +15,7 @@ fetch = ["dep:reqwest"]
 [dependencies]
 # `D`, the local data directory, by the one rule every Sidevoice program shares, and the endpoint records the core
 # and the connector publish in it (`ipc::Endpoint`): at the tag of a core release.
-sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.11.0" }
+sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.11.1" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

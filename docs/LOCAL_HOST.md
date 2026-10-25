@@ -43,12 +43,13 @@ and does not remove connector releases, conversations or agent registrations.
 The boundary is the OS user. Before any connect to the core's socket (the one `C/core.json` names) the app checks that `C` is a directory (not a
 link) owned by this user with mode & 077 = 0 (`identity.unsafe-directory`), and after connecting that the socket's peer
 is this user (`getpeereid` / `SO_PEERCRED`, `peer.uid-mismatch`).
-Filesystem checks and record access use `sidevoice-platform` at core **v0.11.0** (`fs::Directory`,
+Filesystem checks and record access use `sidevoice-platform` at core **v0.11.1** (`fs::Directory`,
 `HeldDirectory`, `Access`, and `Fs::trusted_program`); there is no desktop copy of those primitives. Discovery opens
 existing directories only. Missing directories/records remain absence; unsafe paths remain refusals. Every directory
 above `D` and the app's config directory must be root's or this user's and not writable by others (sticky, as `/tmp`,
 is fine). A linked data root is refused; Unix system-owned ancestor links such as macOS `/var` remain supported.
-Use an ordinary directory owned by this user if a redirected root is refused.
+Use an ordinary directory owned by this user if a redirected root is refused. Ancestors need search access,
+not directory-listing access: safe traverse-only ancestors such as `0311` and `0711` remain usable.
 
 `install.json` and the endpoint records are read through held, checked directories, without following record links
 or blocking on special files. Records must be regular files with exactly one name. Core records and the pairing
@@ -62,8 +63,9 @@ into an apparently valid record.
 Every path in the recorded `command` is validated by `Fs::trusted_program`, and the resolved path is the one launched
 (a system program link works; retargeting the original link after validation does not change it). On Unix the shared
 validator requires execute permission: an old `[node, cli.mjs]` record whose script is not executable now produces
-`install.unsafe`, with neither the script nor the record changed. Compatibility for non-executable interpreter
-payloads needs a shared API decision; the desktop does not carry a second validator. Program validation is not
+`install.unsafe`, with neither the script nor the record changed. The current connector writer (v0.16.0) records
+only its native executable, never `[node, cli.mjs]`; non-executable interpreter payloads fail closed without a second
+desktop validator. Program validation is not
 publisher authentication or descriptor-bound execution, and cannot prevent replacement by this same user or an
 administrator. `SIDEVOICE_DATA_DIR` is still the checked directory's canonical path.
 
