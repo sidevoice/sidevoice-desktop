@@ -24,7 +24,7 @@ collections. Clear reports any deletion failure instead of claiming partial clea
 
 Backend errors are reduced to fixed categories; their messages, debug values, and malformed secret bytes
 never reach logs or the bridge. The bridge retains `provider_invalid`, `credentials_failed`, and
-`credentials_unavailable`; an oversized write also carries `reason: "too_long"`. All store work runs on
+`credentials_unavailable`; an oversized write also carries `reason: "too_long"`. A credential trial uses only its supplied key and does not open the persisted store (the existing macOS behavior). All store work runs on
 blocking workers, with credential operations serialized within the process. No additional native-reset
 availability is enabled by this change; its existing caller now invokes `clear()`.
 

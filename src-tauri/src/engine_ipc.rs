@@ -205,8 +205,9 @@ mod credentials {
     }
 
     pub fn check(id: &str) -> Result<(), Error> {
-        // A real read also detects a locked/unavailable store before a remote trial.
-        has(id).map(|_| ())
+        // A trial uses only its supplied key, as on macOS before this abstraction.
+        // It neither reads nor unlocks the persisted credential.
+        provider(id)
     }
 
     pub fn write(id: &str, key: Option<&str>) -> Result<(), Error> {
