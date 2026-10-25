@@ -4572,6 +4572,7 @@ dependencies = [
  "objc2-avf-audio",
  "objc2-foundation",
  "objc2-media-player",
+ "same-file",
  "security-framework",
  "serde",
  "serde_json",

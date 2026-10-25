@@ -28,6 +28,8 @@ mod tray;
 mod updater;
 mod voice;
 
+use crate::platform::update_eligibility::{NativeUpdateEligibility, UpdateEligibility};
+
 use crate::platform::computer_name::{ComputerName, SystemComputerName};
 use crate::platform::webview_diagnostics::{NativeWebviewDiagnostics, WebviewDiagnostics};
 use serde_json::{json, Value};
@@ -357,7 +359,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
         .initialization_script(bridge::WEBVIEW_LOG_SCRIPT)
         .initialization_script(bridge::script_for_origin(
             APP_ORIGIN,
-            updater::offered(),
+            NativeUpdateEligibility::available(&build.channel),
             &build,
             SystemComputerName::read().as_deref(),
             &debug_options,
