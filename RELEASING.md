@@ -208,8 +208,10 @@ from a fork never has the repository's secrets.)
 kept 7 days.
 
 **Signing on a Mac**, the same steps: with the secrets above in the environment (on a laptop `APPLE_API_KEY_PATH`,
-a .p8 file, may stand for `APPLE_API_KEY_P8`, and without `APPLE_CERTIFICATE` the Developer ID in the login
-keychain signs),
+a private .p8 file, may stand for `APPLE_API_KEY_P8`, and without `APPLE_CERTIFICATE` the Developer ID in the login
+keychain signs). The .p8 must belong to this user, have only one name, and be readable and writable by nobody else
+(`chmod 600 "$APPLE_API_KEY_PATH"` on macOS). It is read through the shared private-file checks and copied into the
+step's private scratch directory; cleanup removes the copy and preserves the original.
 
 ```sh
 npm ci
