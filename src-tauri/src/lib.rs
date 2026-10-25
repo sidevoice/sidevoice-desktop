@@ -476,7 +476,7 @@ fn app_report(app: &AppHandle) -> String {
     format!(
         "{} policy={policy} running_policy={running_policy} hidden={hidden} owns_menu_bar={owns_menu_bar} bundle={} \
          room={room} call_card={}",
-        call_controls::app_active(),
+        <platform::card_window::NativeCardWindow as platform::card_window::CardWindow>::app_active(),
         bundle.as_deref().unwrap_or("none"),
         if call_card_disabled() { "off" } else { "on" }
     )
@@ -613,8 +613,7 @@ pub fn run() {
     // First, so everything after it is logged.
     let builder = tauri::Builder::default().plugin(log_plugin());
     // The call controls card is a non-activating panel on macOS (src/call_controls.rs).
-    #[cfg(target_os = "macos")]
-    let builder = builder.plugin(tauri_nspanel::init());
+    let builder = <platform::card_window::NativeCardWindow as platform::card_window::CardWindow>::configure(builder);
     // The voice call the app runs (`host.voice`, src/voice.rs).
     // Its shared audio starts its dispatcher on Tokio, so it is built inside the runtime the commands run on.
     #[cfg(target_os = "macos")]
