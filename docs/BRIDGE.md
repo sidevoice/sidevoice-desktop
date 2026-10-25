@@ -58,7 +58,17 @@ macOS-only; elsewhere the bridge omits them and the native commands refuse `{key
 
 `deleteAll()` is the confirmed Settings › Advanced action. Native also displays an OS-owned confirmation
 with Cancel as its default button on every invocation; cancelling rejects `{key: "reset.cancelled"}` before
-any uninstall or deletion. A room script calling the bridge directly cannot bypass that confirmation. It refuses a running call, service install or
+any uninstall or deletion. `platform::confirmation::Confirmation` owns the native prompt: the existing NSAlert on
+macOS, TaskDialogIndirect with an explicit Cancel default on Windows, and GTK with an explicit Cancel response on
+Linux. The capability is implemented on all three hosts; the reset offer and transaction remain macOS-only.
+The shared confirmation interface cancels unless the native opened hook arrives within three seconds; a dialog
+that appears later is immediately dismissed. Once opened, the person's decision has no timeout. The hooks are
+Windows' `TDN_CREATED`, GTK's map event, and a macOS block scheduled in `NSModalPanelRunLoopMode`.
+macOS activates the app before opening the alert, skips requests already cancelled before showing, and aborts
+a modal session whose startup hook arrives late.
+Linux cancels before constructing a widget if GTK is not initialized on the UI thread or no display is available.
+The existing eight-language reset/uninstall text is kept in the confirmation module, unchanged, with English fallback.
+No general dialog or filesystem permission is granted to the webview. A room script calling the bridge directly cannot bypass that confirmation. It refuses a running call, service install or
 model download with `{key: "reset.busy"}`, and checks the current room window and bundled origin again in
 native code. It first requires a top-level integer `safe_uninstall` of at least `1` from the installed
 connector's `--version --json` response. An older, silent, malformed or timed-out connector refuses with
@@ -827,10 +837,10 @@ host.debug?: {
 Each switch is a live getter: off by default, then what the app kept, then what the last `set` took. A switch the
 platform lacks always reads `false`.
 
-macOS: `inspectable` is `WKWebView.isInspectable` (macOS 13.3+; below that it has no effect), Safari → Develop lists
+macOS: `inspectable` is `WKWebView.isInspectable` (macOS 13.3+; below that it is omitted), Safari → Develop lists
 the webviews (docs/MACOS.md); `compositingBorders` and `repaintCounters` are WebKit's private `WKPreferences`
 `_setCompositingBordersVisible:` and `_setCompositingRepaintCountersVisible:`, set on each webview's live preferences
-and asked only where WebKit answers to them. All three are put on the room and the card as each is created and on each
+and offered only where WebKit provides their setters. All three are put on the room and the card as each is created and on each
 change. Windows and Linux: `available` is empty (Chromium's paint flags need a relaunch; no WebKitGTK binding is wired).
 The command is `debug_options` `{action: "set", name, enabled}`, answering `{available, inspectable,
 compositingBorders, repaintCounters}`; only the room page may call it (`capabilities/room.json`).

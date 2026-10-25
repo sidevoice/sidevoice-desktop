@@ -33,13 +33,17 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The system's preferred languages, for the app's native texts (core i18n).
 sys-locale = "0.3"
+# Match the registered NSIS executable by native file identity (also handles Windows path casing).
+same-file = "1"
+# Probe-only RSS observations use the maintained portable API; no GPU estimates.
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 # Friendly computer names via the OS APIs (platform/computer_name); already in the shared platform graph.
 whoami = "2.1"
 url = "2.5"
 # The app's updates (src/updater.rs; docs/BRIDGE.md → "The updater"), from Rust only: the page gets none of its
 # commands. Its checks sleep on the app's Tokio runtime.
 tauri-plugin-updater = "2.13"
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = ["time", "sync"] }
 # The app log (src/lib.rs `applog`): a rotating, size-capped file in the platform's log directory, fed by the Rust side and
 # by the room page's console errors (bridge/webview-log.js).
 tauri-plugin-log = "2"
@@ -57,7 +61,7 @@ sidevoice-local-host = { path = "local-host", features = ["fetch"] }
 winreg = "0.55"
 # Whether a mouse button went down elsewhere, to close the call controls card's panels, and whether the room is on another
 # virtual desktop (DWM cloaked), for the card (src/call_controls.rs).
-windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_Storage_FileSystem", "Win32_Graphics_Dwm"] }
+windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_Storage_FileSystem", "Win32_Graphics_Dwm", "Win32_UI_Controls", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # The voice call the app runs itself (src/voice.rs, `host.voice`): sidevoice-voice with its native microphone and
@@ -79,7 +83,9 @@ tauri-nspanel = "2.1"
 # Headset buttons and the AirPods mute gesture (src/headset.rs).
 objc2 = "0.6"
 block2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSString", "NSDictionary", "NSValue", "NSError", "NSObject"] }
+objc2-foundation = { version = "0.3", features = ["NSString", "NSDictionary", "NSValue", "NSError", "NSObject", "NSArray", "NSRunLoop", "block2"] }
+# The native confirmation acknowledges startup from AppKit's modal run-loop mode.
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication"] }
 objc2-media-player = { version = "0.3", features = ["MPRemoteCommandCenter", "MPRemoteCommand", "MPRemoteCommandEvent", "MPNowPlayingInfoCenter", "MPMediaItem", "block2"] }
 objc2-avf-audio = { version = "0.3", features = ["AVAudioApplication", "block2"] }
 # The microphone permission the room page asks for in its first-run setup (src/microphone.rs, `host.microphone`).
@@ -89,8 +95,12 @@ core-foundation = "0.10"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
+# Tauri's existing native toolkit; explicit Cancel default/response for destructive confirmations.
+gtk = "0.18"
 
 [dev-dependencies]
+# Deterministic startup-deadline tests; no wall-clock sleeps.
+tokio = { version = "1", features = ["rt", "test-util"] }
 # Mock runtime for the platform interface tests; no native explorer is opened.
 tauri = { version = "2.12", features = ["test"] }
 tempfile = "3"

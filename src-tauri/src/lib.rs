@@ -18,7 +18,7 @@ mod headset;
 mod keychain;
 mod local_host;
 /// A look at the process's own memory, for CI's measurements of it (#145). Never in a release.
-#[cfg(all(target_os = "macos", any(test, feature = "probe")))]
+#[cfg(any(test, feature = "probe"))]
 mod memory;
 mod microphone;
 mod platform;
@@ -28,7 +28,10 @@ mod tray;
 mod updater;
 mod voice;
 
+use crate::platform::update_eligibility::{NativeUpdateEligibility, UpdateEligibility};
+
 use crate::platform::computer_name::{ComputerName, SystemComputerName};
+use crate::platform::webview_diagnostics::{NativeWebviewDiagnostics, WebviewDiagnostics};
 use serde_json::{json, Value};
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
 use sidevoice_desktop_core::build_info::BuildInfo;
@@ -295,7 +298,7 @@ fn debug_log(app: AppHandle, line: String) {
     debug(&format!("page says: {}", line.chars().take(2000).collect::<String>()));
     #[cfg(feature = "probe")]
     probe::exit_on(&app, &line);
-    #[cfg(all(feature = "probe", target_os = "macos"))]
+    #[cfg(feature = "probe")]
     probe::memory_on(&app, &line);
     let _ = (app, line);
 }
@@ -356,11 +359,12 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
         .initialization_script(bridge::WEBVIEW_LOG_SCRIPT)
         .initialization_script(bridge::script_for_origin(
             APP_ORIGIN,
-            updater::offered(),
+            NativeUpdateEligibility::available(&build.channel),
             &build,
             SystemComputerName::read().as_deref(),
             &debug_options,
             platform::microphone::SETTINGS_URL.is_some(),
+            &NativeWebviewDiagnostics::available(),
         ));
     #[cfg(feature = "probe")]
     let builder = match probe::local_host_flow() {
