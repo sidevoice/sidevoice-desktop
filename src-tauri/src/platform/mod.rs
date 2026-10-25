@@ -14,5 +14,5 @@ pub mod confirmation;
 
 pub mod card_window;
 pub mod desktop_geometry;
-pub mod window_visibility;
 pub mod pointer_events;
+pub mod window_visibility;
