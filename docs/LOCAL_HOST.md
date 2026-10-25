@@ -60,14 +60,14 @@ parent. Neither operation overwrites/removes a linked or otherwise unsafe record
 a refusal instead of continuing through the old directory descriptor. Oversized records are refused, never truncated
 into an apparently valid record.
 
-Every path in the recorded `command` is validated by `Fs::trusted_program`, and the resolved path is the one launched
+The connector records its native executable in `command`; action arguments are appended when the app launches it.
+The recorded executable is validated by `Fs::trusted_program`, and the resolved path is the one launched
 (a system program link works; retargeting the original link after validation does not change it). On Unix the shared
-validator requires execute permission: an old `[node, cli.mjs]` record whose script is not executable now produces
-`install.unsafe`, with neither the script nor the record changed. The current connector writer (v0.16.0) records
-only its native executable, never `[node, cli.mjs]`; non-executable interpreter payloads fail closed without a second
-desktop validator. Program validation is not
-publisher authentication or descriptor-bound execution, and cannot prevent replacement by this same user or an
-administrator. `SIDEVOICE_DATA_DIR` is still the checked directory's canonical path.
+validator requires execute permission: a native application without it produces `install.unsafe`, with neither the
+program nor the record changed. Desktop launches native Core and Connector applications; the working macOS launch
+contract also applies to Windows. Program validation is not publisher authentication or descriptor-bound execution,
+and cannot prevent replacement by this same user or an administrator. `SIDEVOICE_DATA_DIR` is still the checked
+directory's canonical path.
 
 The device token travels only over the socket. The page never holds it: it gets the proxy's secret.
 

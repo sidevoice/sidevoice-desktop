@@ -22,7 +22,8 @@ const RECORD_LIMIT: u64 = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cli {
-    /// Absolute paths: the program, then what it needs before the subcommand (`[node, …/cli.mjs]`).
+    /// The native connector executable, followed by any fixed launch arguments.
+    /// The current install writer records the executable alone; action arguments are passed to `run`.
     pub prefix: Vec<String>,
     /// `D`, passed down as `SIDEVOICE_DATA_DIR` so the CLI and the app agree on it.
     pub data: std::path::PathBuf,

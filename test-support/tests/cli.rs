@@ -147,27 +147,36 @@ fn only_an_install_record_of_absolute_paths_names_the_cli() {
             StorageFixtures::writable(&dirs.install_record());
         }
     };
-    let script = tmp.path().join("cli.mjs");
-    std::fs::write(&script, b"// cli").unwrap();
-    let executable = env!("CARGO_BIN_EXE_fake-connector");
-    let record = json!({"command":[executable, script]}).to_string();
+    let executable = tmp.path().join(fixture::program_name());
+    let bytes = std::fs::read(env!("CARGO_BIN_EXE_fake-connector")).unwrap();
+    std::fs::write(&executable, &bytes).unwrap();
+    fixture::configure(&executable, &json!({})).unwrap();
+    let record = json!({"command":[executable]}).to_string();
     write(&record, false);
-    // Shared program validation refuses non-executable payloads too; it must not silently chmod the script.
+    // Native applications must be executable; discovery never changes their contents or permissions.
     assert_eq!(Cli::installed(&dirs).unwrap_err().key, "install.unsafe");
-    assert_eq!(std::fs::read(&script).unwrap(), b"// cli");
-    StorageFixtures::assert_not_executable(&script);
-    StorageFixtures::executable(&script);
+    assert_eq!(std::fs::read(&executable).unwrap(), bytes);
+    StorageFixtures::assert_not_executable(&executable);
+    StorageFixtures::executable(&executable);
     let cli = Cli::installed(&dirs).unwrap();
-    let canonical = |p: &str| std::fs::canonicalize(p).unwrap().display().to_string();
-    assert_eq!(cli.prefix, [canonical(executable), canonical(&script.display().to_string())]);
-    // What the command names must be root's or this user's and closed to others too.
-    StorageFixtures::writable(&script);
+    assert_eq!(cli.prefix, [std::fs::canonicalize(&executable).unwrap().display().to_string()]);
+    let answer = cli.run(&["service", "start", "--json"], Duration::from_secs(5)).unwrap();
+    assert_eq!(answer["args"], "service start --json");
+    // The recorded native application must remain closed to writes by others.
+    StorageFixtures::writable(&executable);
     assert_eq!(Cli::installed(&dirs).unwrap_err().key, "install.unsafe");
-    StorageFixtures::private(&script);
-    write(r#"{"command":["/nonexistent/node"]}"#, false);
+    StorageFixtures::private(&executable);
+    let missing = tmp.path().join("missing").join(fixture::program_name());
+    write(&json!({"command":[missing]}).to_string(), false);
     assert_eq!(Cli::installed(&dirs).unwrap_err().key, "cli.unavailable");
-    for bad in [r#"{"command":["node","cli.mjs"]}"#, r#"{"command":[]}"#, r#"{"command":"/bin/sh"}"#, "{}", "nope"] {
-        write(bad, false);
+    for bad in [
+        json!({"command":[fixture::program_name()]}).to_string(),
+        json!({"command":[]}).to_string(),
+        json!({"command":executable}).to_string(),
+        "{}".into(),
+        "nope".into(),
+    ] {
+        write(&bad, false);
         let key = Cli::installed(&dirs).unwrap_err().key;
         assert_eq!(key, "install.unreadable", "{bad}");
     }
