@@ -28,8 +28,9 @@ mod tray;
 mod updater;
 mod voice;
 
-use crate::platform::computer_name::{ComputerName, SystemComputerName};
 use crate::platform::update_eligibility::{NativeUpdateEligibility, UpdateEligibility};
+
+use crate::platform::computer_name::{ComputerName, SystemComputerName};
 use serde_json::{json, Value};
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
 use sidevoice_desktop_core::build_info::BuildInfo;
