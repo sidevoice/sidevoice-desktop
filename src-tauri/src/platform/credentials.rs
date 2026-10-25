@@ -56,6 +56,8 @@ pub trait Credentials {
     }
     /// Delete the exact service namespace, including accounts absent from the current catalog
     /// or no longer accepted by `valid`. An unrelated service is never removed.
+    // The production reset caller is still macOS-only until the portable-reset work lands.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     fn clear(&self) -> Result<(), Error> {
         let _guard = ACCESS.lock().map_err(|_| Error::Failed)?;
         native::clear(native::store().map_err(Error::from)?.as_ref(), SERVICE).map_err(Error::from)
@@ -101,6 +103,7 @@ fn delete(entry: &Entry) -> Result<(), Error> {
 
 /// Continue deleting other entries after a failure, but never report partial cleanup as success.
 #[cfg(any(not(target_os = "macos"), test))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn delete_entries(entries: Vec<Entry>) -> keyring_core::Result<()> {
     let mut failure = None;
     for entry in entries {

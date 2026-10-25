@@ -10,6 +10,8 @@ pub(super) fn store() -> Result<Arc<CredentialStore>> {
     ]))?)
 }
 
+// The production reset caller remains macOS-only for now.
+#[allow(dead_code)]
 pub(super) fn clear(store: &CredentialStore, service: &str) -> Result<()> {
     // Targets are <account>/<service>. Anchor both ends and escape the
     // service so a similarly named service cannot be deleted. Accounts may be unknown.
