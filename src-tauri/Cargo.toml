@@ -97,6 +97,8 @@ gtk = "0.18"
 [dev-dependencies]
 # Deterministic startup-deadline tests; no wall-clock sleeps.
 tokio = { version = "1", features = ["rt", "test-util"] }
+# Mock runtime for the platform interface tests; no native explorer is opened.
+tauri = { version = "2.12", features = ["test"] }
 tempfile = "3"
 
 [profile.release]

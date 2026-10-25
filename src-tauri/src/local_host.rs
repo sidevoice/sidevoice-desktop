@@ -197,20 +197,20 @@ mod imp {
         Ok(json!(report))
     }
 
-    /// The logs in Finder, selected (`open -R`, by absolute paths; no shell): the app's own, and the core's (else the
-    /// connector's) when there is one. The app's is always there to show, connector or not.
+    /// Select existing app/core (else connector) logs in the native file manager, without a shell.
     fn reveal(app: &AppHandle, host: &LocalHost) -> Result<(), Value> {
+        use crate::platform::reveal::{NativeReveal, Reveal};
+        use sidevoice_desktop_core::i18n::t;
+
         let logs = sidevoice_local_host::paths::logs_to_show(crate::app_log_file(app), host.log_path());
+        let language = app.state::<crate::AppState>().language;
         if logs.is_empty() {
-            return Err(refusal("log.missing", "There is no log on this computer yet."));
+            return Err(refusal("log.missing", t(language, "local_host.log_missing")));
         }
-        if !cfg!(target_os = "macos") {
-            return Err(unsupported());
-        }
-        match std::process::Command::new("/usr/bin/open").arg("-R").args(&logs).status() {
-            Ok(status) if status.success() => Ok(()),
-            _ => Err(refusal("reveal.failed", "Finder could not show the log.")),
-        }
+        NativeReveal::files(app, &logs).map_err(|error| {
+            log::warn!("Could not reveal logs: {error}");
+            refusal("reveal.failed", t(language, "local_host.reveal_failed"))
+        })
     }
 
     pub fn pairing_code(app: &AppHandle) -> Answer {

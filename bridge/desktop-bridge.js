@@ -475,7 +475,7 @@
           : Promise.reject({ key: "bad_request", message: "setStartAtLogin(enabled) takes a boolean." }),
       /** Pairs this app with the core again (after `refused`): never done on its own. */
       reconnect: action("reconnect"),
-      /** Shows the core's log in Finder (else the connector's). */
+      /** Shows the app's and core's logs in the system file manager (else the connector's). */
       revealLog: action("reveal-log"),
       /** A code for another device, on the person's click only: `{code, expires_in, reach}`. Shown, never sent. */
       pairingCode: () => call("local_host_pairing_code"),

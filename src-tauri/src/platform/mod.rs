@@ -2,6 +2,7 @@
 
 pub mod computer_name;
 pub mod microphone;
+pub mod reveal;
 pub mod tray;
 
 // The reset caller remains macOS-only until the separate portable-reset work is complete.
