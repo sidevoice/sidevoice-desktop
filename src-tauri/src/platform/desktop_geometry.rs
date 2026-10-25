@@ -53,6 +53,7 @@ pub trait DesktopGeometry {
         })
     }
 
+    /// Place in desktop units, without changing focus; do nothing when global placement is unavailable.
     fn place<R: Runtime>(w: &WebviewWindow<R>, at: Point) {
         if !Self::capabilities().global_coordinates {
             return;
@@ -75,10 +76,8 @@ pub trait DesktopGeometry {
         }
         let all: Vec<(Rect, Display)> =
             app.available_monitors().unwrap_or_default().iter().map(monitor_display).collect();
-        let by_key = key.and_then(|key| all.iter().find(|(_, d)| d.key == key));
-        let by_point = || at.and_then(|p| all.iter().find(|(whole, _)| whole.contains(p)));
-        if let Some((_, d)) = by_key.or_else(by_point) {
-            return Some(d.clone());
+        if let Some(display) = selected_display(&all, key, at) {
+            return Some(display);
         }
         room.and_then(|w| w.current_monitor().ok().flatten())
             .or_else(|| app.primary_monitor().ok().flatten())
@@ -89,6 +88,12 @@ pub trait DesktopGeometry {
     fn start_dragging<R: Runtime>(w: &WebviewWindow<R>) -> tauri::Result<()> {
         w.start_dragging()
     }
+}
+
+fn selected_display(all: &[(Rect, Display)], key: Option<&str>, at: Option<Point>) -> Option<Display> {
+    let by_key = key.and_then(|key| all.iter().find(|(_, d)| d.key == key));
+    let by_point = || at.and_then(|p| all.iter().find(|(whole, _)| whole.contains(p)));
+    by_key.or_else(by_point).map(|(_, d)| d.clone())
 }
 
 /// A monitor's whole area on the desktop, and the display it is to the card (its work area).
@@ -159,6 +164,42 @@ mod tests {
         assert!(Unavailable::frame(&w).is_none());
         assert!(Unavailable::display(app.handle(), Some(&w), None, None).is_none());
         Unavailable::place(&w, Point { x: 50.0, y: 50.0 });
+    }
+
+    #[test]
+    fn monitor_changes_use_fresh_geometry_and_missing_keys_fall_through_to_the_pointer() {
+        let first = monitor_geometry(
+            "first",
+            1.0,
+            Point { x: 0.0, y: 0.0 },
+            Size { width: 1920.0, height: 1080.0 },
+            Rect { x: 0.0, y: 0.0, width: 1920.0, height: 1040.0 },
+        );
+        let second = monitor_geometry(
+            "second",
+            1.0,
+            Point { x: 1920.0, y: 0.0 },
+            Size { width: 2560.0, height: 1440.0 },
+            Rect { x: 1920.0, y: 0.0, width: 2560.0, height: 1400.0 },
+        );
+        let key = first.1.key.clone();
+        let pointer = Point { x: 2000.0, y: 100.0 };
+        assert_eq!(
+            selected_display(&[first.clone(), second.clone()], Some(&key), Some(pointer)),
+            Some(first.1.clone())
+        );
+        // Unplug the saved monitor. The current pointer display wins, or None lets the caller use room/primary.
+        assert_eq!(selected_display(std::slice::from_ref(&second), Some(&key), Some(pointer)), Some(second.1));
+        assert!(selected_display(&[], Some(&key), Some(pointer)).is_none());
+        // The same saved key gets the current work area, never a cached copy of the old monitor.
+        let changed = monitor_geometry(
+            "first",
+            1.0,
+            Point { x: 0.0, y: 0.0 },
+            Size { width: 1920.0, height: 1080.0 },
+            Rect { x: 0.0, y: 0.0, width: 1920.0, height: 1000.0 },
+        );
+        assert_eq!(selected_display(&[changed], Some(&key), None).unwrap().work.height, 1000.0);
     }
 
     #[test]
