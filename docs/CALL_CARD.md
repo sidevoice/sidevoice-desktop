@@ -89,3 +89,7 @@ regression test creates a hidden system-class window, applies the policy, simula
 checks exclusion, nonactivation and preservation of an unrelated style. This exception to portable interface tests
 is necessary because a Tauri mock cannot exercise Win32 style messages. Cross-target Clippy compiles this test;
 execution requires Windows. Normal Windows first-open CI also runs the construction-time policy readback.
+Geometry implementation boundaries: GTK backend detection lives in `desktop_geometry/linux.rs`; macOS point
+conversion and logical placement live in `desktop_geometry/macos.rs`. Windows/X11 use the shared Tauri trait
+defaults for physical coordinates. Each OS supplies its monitor-unit mapping; the common mapper and monitor-change
+tests retain the same inputs and behavior. No OS detection or coordinate-policy branches remain in the interface.

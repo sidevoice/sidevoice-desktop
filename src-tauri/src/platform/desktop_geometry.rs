@@ -7,25 +7,24 @@ pub struct GeometryCapabilities {
     pub global_coordinates: bool,
 }
 
-pub struct NativeGeometry;
-impl DesktopGeometry for NativeGeometry {}
+#[cfg_attr(target_os = "macos", path = "desktop_geometry/macos.rs")]
+#[cfg_attr(target_os = "windows", path = "desktop_geometry/windows.rs")]
+#[cfg_attr(target_os = "linux", path = "desktop_geometry/linux.rs")]
+mod imp;
+pub use imp::NativeGeometry;
 
 pub trait DesktopGeometry {
     /// Read session capabilities. First call must be on the main thread during setup, before workers start.
     /// Linux observes the GTK backend actually selected, including XWayland, rather than environment hints.
     fn capabilities() -> GeometryCapabilities {
-        GeometryCapabilities { global_coordinates: global_coordinates() }
+        GeometryCapabilities { global_coordinates: true }
     }
     // Geometry on the desktop (see `Display`): physical pixels on Windows and Linux; points on macOS, where Tao's
     // "physical" positions are each scaled by a different display (the pointer's by the main one, a window's by its own).
 
     /// One logical pixel of this window, in desktop units.
     fn unit<R: Runtime>(w: &WebviewWindow<R>) -> f64 {
-        if cfg!(target_os = "macos") {
-            1.0
-        } else {
-            w.scale_factor().unwrap_or(1.0)
-        }
+        w.scale_factor().unwrap_or(1.0)
     }
 
     /// The pointer on the desktop.
@@ -34,8 +33,7 @@ pub trait DesktopGeometry {
             return None;
         }
         let p = app.cursor_position().ok()?;
-        let scale = if cfg!(target_os = "macos") { app.primary_monitor().ok()??.scale_factor() } else { 1.0 };
-        Some(Point { x: p.x / scale, y: p.y / scale })
+        Some(Point { x: p.x, y: p.y })
     }
 
     /// The window on the desktop.
@@ -44,13 +42,7 @@ pub trait DesktopGeometry {
             return None;
         }
         let (at, size) = (w.outer_position().ok()?, w.outer_size().ok()?);
-        let scale = if cfg!(target_os = "macos") { w.scale_factor().ok()? } else { 1.0 };
-        Some(Rect {
-            x: at.x as f64 / scale,
-            y: at.y as f64 / scale,
-            width: size.width as f64 / scale,
-            height: size.height as f64 / scale,
-        })
+        Some(Rect { x: at.x as f64, y: at.y as f64, width: size.width as f64, height: size.height as f64 })
     }
 
     /// Place in desktop units, without changing focus; do nothing when global placement is unavailable.
@@ -58,9 +50,6 @@ pub trait DesktopGeometry {
         if !Self::capabilities().global_coordinates {
             return;
         }
-        #[cfg(target_os = "macos")]
-        let _ = w.set_position(tauri::LogicalPosition::new(at.x, at.y));
-        #[cfg(not(target_os = "macos"))]
         let _ = w.set_position(tauri::PhysicalPosition::new(at.x.round() as i32, at.y.round() as i32));
     }
 
@@ -114,20 +103,8 @@ fn monitor_display(m: &Monitor) -> (Rect, Display) {
     )
 }
 
-#[cfg(not(target_os = "linux"))]
-fn global_coordinates() -> bool {
-    true
-}
-
-#[cfg(target_os = "linux")]
-fn global_coordinates() -> bool {
-    use gtk::prelude::*;
-    static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *AVAILABLE.get_or_init(|| gtk::gdk::Display::default().is_some_and(|d| d.type_().name() == "GdkX11Display"))
-}
-
 fn monitor_geometry(name: &str, scale: f64, at: Point, size: Size, work: Rect) -> (Rect, Display) {
-    let (unit, to_desktop) = if cfg!(target_os = "macos") { (1.0, 1.0 / scale) } else { (scale, 1.0) };
+    let (unit, to_desktop) = imp::monitor_units(scale);
     let whole = Rect {
         x: at.x * to_desktop,
         y: at.y * to_desktop,
