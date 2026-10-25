@@ -196,12 +196,15 @@ mod credentials {
             credentials::Error::Unavailable => "credentials_unavailable",
             _ => "credentials_failed",
         };
-        let refusal = Error::new(code, sidevoice_desktop_core::i18n::t("en", code));
+        let mut refusal = Error {
+            key: code,
+            params: Default::default(),
+            message: sidevoice_desktop_core::i18n::t("en", code).into(),
+        };
         if error == credentials::Error::TooLong {
-            refusal.with("reason", "too_long")
-        } else {
-            refusal
+            refusal.params.insert("reason", "too_long".into());
         }
+        refusal
     }
 
     pub fn check(id: &str) -> Result<(), Error> {
