@@ -20,6 +20,7 @@
 use crate::checks::Check;
 use crate::cli::Cli;
 use crate::npm::{self, Fetch};
+use crate::platform::filesystem_error::{FilesystemErrorClassifier, SystemFilesystemErrors};
 use crate::tarball;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -86,7 +87,7 @@ impl Failure {
 
     /// A local file could not be written: a full disk is `install.disk`, anything else `install.failed`.
     pub fn io(e: &io::Error, step: Step, what: &str) -> Failure {
-        let full = matches!(e.raw_os_error(), Some(libc::ENOSPC) | Some(libc::EDQUOT));
+        let full = SystemFilesystemErrors::is_capacity_exhausted(e);
         Failure::new(if full { "install.disk" } else { "install.failed" }, step, format!("{what}: {e}"))
     }
 }
@@ -517,7 +518,16 @@ mod tests {
         assert_eq!(steps, ["download", "verification", "staging", "service-start", "pairing"]);
         let progress = Progress { step: Step::Download, done: Some(5), total: None, cancellable: true };
         assert_eq!(json!(progress), json!({"step": "download", "done": 5, "total": null, "cancellable": true}));
-        let disk = Failure::io(&io::Error::from_raw_os_error(libc::ENOSPC), Step::Staging, "w");
-        assert_eq!(disk.key, "install.disk");
+        for error in SystemFilesystemErrors::capacity_errors_for_test() {
+            let disk = Failure::io(&error, Step::Staging, "w");
+            assert_eq!(disk.key, "install.disk");
+            assert_eq!(disk.step, Some(Step::Staging));
+            assert_eq!(disk.message, format!("w: {error}"));
+        }
+        let other = io::Error::new(io::ErrorKind::PermissionDenied, "denied");
+        let failure = Failure::io(&other, Step::Download, "save");
+        assert_eq!(failure.key, "install.failed");
+        assert_eq!(failure.step, Some(Step::Download));
+        assert_eq!(failure.message, format!("save: {other}"));
     }
 }
