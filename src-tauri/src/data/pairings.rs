@@ -90,20 +90,21 @@ fn write_pairings_with(path: &Path, value: &Value, before_write: impl FnOnce()) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::platform::pairing_storage::{NativePairingRace, PairingRace, Replacement};
+    use sidevoice_platform::fs::{Others, TestFiles};
     use std::fs;
 
-    #[cfg(unix)]
     #[test]
     fn pairings_refuse_symlinked_parent_and_file() {
         let home = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         fs::create_dir(home.path().join("app")).unwrap();
-        std::os::unix::fs::symlink(outside.path(), home.path().join("app/redirect")).unwrap();
+        Files::symlink(outside.path(), home.path().join("app/redirect"));
         let redirected = home.path().join("app/redirect/pairings.json");
         assert_eq!(read_pairings(&redirected), Err(refused("reset.unsafe")));
         assert_eq!(write_pairings(&redirected, &json!({"pairings": []})), Err(refused("reset.unsafe")));
         let file = home.path().join("app/pairings.json");
-        std::os::unix::fs::symlink(outside.path().join("other.json"), &file).unwrap();
+        Files::symlink(outside.path().join("other.json"), &file);
         assert_eq!(read_pairings(&file), Err(refused("reset.unsafe")));
         assert!(!outside.path().join("other.json").exists());
     }
@@ -120,7 +121,6 @@ mod tests {
         Files::check_private(&Files::open_read(file.parent().unwrap()).unwrap()).unwrap();
     }
 
-    #[cfg(unix)]
     #[test]
     fn pairing_write_refuses_replaced_ancestor_before_shared_write() {
         let home = tempfile::tempdir().unwrap();
@@ -132,11 +132,19 @@ mod tests {
         fs::write(outside.join("sentinel"), b"unrelated").unwrap();
         let file = app.join("pairings.json");
         let value = json!({"pairings": [], "pendingRevokes": []});
+        let moved = home.join("moved-app");
+        let mut replaced = false;
         let result = write_pairings_with(&file, &value, || {
-            fs::rename(&app, home.join("moved-app")).unwrap();
-            std::os::unix::fs::symlink(&outside, &app).unwrap();
+            replaced = NativePairingRace::replace_ancestor(&app, &moved, Replacement::Redirect(&outside));
         });
-        assert_eq!(result, Err(refused("reset.unsafe")));
+        if replaced {
+            assert_eq!(result, Err(refused("reset.unsafe")));
+            assert!(!moved.join("pairings.json").exists());
+        } else {
+            assert_eq!(result, Ok(Value::Null));
+            assert_eq!(read_pairings(&file), Ok(value));
+            fs::rename(&app, &moved).unwrap();
+        }
         assert_eq!(fs::read(outside.join("sentinel")).unwrap(), b"unrelated");
         assert!(!outside.join("pairings.json").exists());
     }
@@ -193,29 +201,26 @@ mod tests {
         assert_eq!(fs::read(alias).unwrap(), original);
     }
 
-    // Permission bits and symlink replacement are Unix-specific attack mechanisms.
-    #[cfg(unix)]
     #[test]
-    fn existing_readable_app_directory_is_not_chmodded() {
-        use std::os::unix::fs::PermissionsExt;
+    fn existing_readable_app_directory_keeps_its_access_policy() {
         let home = tempfile::tempdir().unwrap();
         let app = fs::canonicalize(home.path()).unwrap().join("app");
         fs::create_dir(&app).unwrap();
-        fs::set_permissions(&app, fs::Permissions::from_mode(0o755)).unwrap();
+        Files::let_others_read(&app);
         let file = app.join("pairings.json");
         let value = json!({"pairings": []});
         fs::write(&file, serde_json::to_vec(&value).unwrap()).unwrap();
-        fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+        Files::let_others_read(&file);
+        assert_eq!(Files::others_of(&Files::open_read(&app).unwrap()).unwrap(), Others::Read);
         assert_eq!(read_pairings(&file), Ok(value.clone()));
         write_pairings(&file, &value).unwrap();
-        assert_eq!(fs::metadata(&app).unwrap().permissions().mode() & 0o777, 0o755);
+        assert_eq!(Files::others_of(&Files::open_read(&app).unwrap()).unwrap(), Others::Read);
         Files::check_private(&Files::open_read(&file).unwrap()).unwrap();
-        fs::set_permissions(&app, fs::Permissions::from_mode(0o777)).unwrap();
+        Files::let_others_change(&app);
         assert_eq!(read_pairings(&file), Err(refused("reset.unsafe")));
         assert_eq!(write_pairings(&file, &value), Err(refused("reset.unsafe")));
     }
 
-    #[cfg(unix)]
     #[test]
     fn pairing_write_refuses_replaced_grandparent_with_a_real_directory() {
         let home = tempfile::tempdir().unwrap();
@@ -226,33 +231,23 @@ mod tests {
         write_pairings(&file, &value).unwrap();
         let original = fs::read(&file).unwrap();
         let moved = root.join("moved");
+        let mut replaced = false;
         let result = write_pairings_with(&file, &value, || {
-            fs::rename(&ancestor, &moved).unwrap();
-            fs::create_dir_all(ancestor.join("app")).unwrap();
-            fs::write(&file, b"decoy").unwrap();
+            replaced = NativePairingRace::replace_ancestor(&ancestor, &moved, Replacement::Directory);
+            if replaced {
+                fs::create_dir(ancestor.join("app")).unwrap();
+                fs::write(&file, b"decoy").unwrap();
+            }
         });
-        assert_eq!(result, Err(refused("reset.unsafe")));
-        assert_eq!(fs::read(&file).unwrap(), b"decoy");
-        assert_eq!(fs::read(moved.join("app/pairings.json")).unwrap(), original);
-    }
-
-    // Windows must deny ancestor renames for the entire shared write, even above the immediate parent.
-    #[cfg(windows)]
-    #[test]
-    fn pairing_write_holds_every_windows_ancestor_until_publication() {
-        let home = tempfile::tempdir().unwrap();
-        let root = fs::canonicalize(home.path()).unwrap();
-        let ancestor = root.join("ancestor");
-        let app = ancestor.join("app");
-        let file = app.join("pairings.json");
-        let value = json!({"pairings": []});
-        let moved = root.join("moved");
-        write_pairings_with(&file, &value, || {
-            assert!(fs::rename(&app, &moved).is_err());
-            assert!(fs::rename(&ancestor, &moved).is_err());
-        })
-        .unwrap();
-        assert_eq!(read_pairings(&file), Ok(value));
-        fs::rename(&ancestor, &moved).unwrap();
+        if replaced {
+            assert_eq!(result, Err(refused("reset.unsafe")));
+            assert_eq!(fs::read(&file).unwrap(), b"decoy");
+            assert_eq!(fs::read(moved.join("app/pairings.json")).unwrap(), original);
+        } else {
+            assert_eq!(result, Ok(Value::Null));
+            assert_eq!(fs::read(&file).unwrap(), original);
+            fs::rename(&ancestor, &moved).unwrap();
+            assert_eq!(fs::read(moved.join("app/pairings.json")).unwrap(), original);
+        }
     }
 }

@@ -99,6 +99,8 @@ libc = "0.2"
 gtk = "0.18"
 
 [dev-dependencies]
+# Portable pairing attack fixtures from the pinned shared filesystem interface.
+sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.12.2", features = ["test-support"] }
 # Deterministic startup-deadline tests; no wall-clock sleeps.
 tokio = { version = "1", features = ["rt", "test-util"] }
 # Mock runtime for the platform interface tests; no native explorer is opened.
