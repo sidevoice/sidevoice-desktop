@@ -20,12 +20,11 @@ serde_json = "1"
 # The engine's futures run on the app's Tokio runtime; installs race a cancel (src/lib.rs).
 tokio = { version = "1", features = ["rt", "time", "macros"] }
 
-# What is available of the machine's memory now (src/memory.rs).
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
+# Physical-memory observations (platform/memory); also used by the shared platform crate.
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_System_SystemInformation"] }
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 sha2 = "0.11"

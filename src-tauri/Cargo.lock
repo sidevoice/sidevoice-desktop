@@ -4581,6 +4581,7 @@ dependencies = [
  "sidevoice-platform",
  "sidevoice-voice",
  "sys-locale",
+ "sysinfo",
  "tauri",
  "tauri-build",
  "tauri-nspanel",
@@ -4618,8 +4619,8 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "sidevoice-engine",
+ "sysinfo",
  "tokio",
- "windows-sys 0.61.2",
 ]
 
 [[package]]
