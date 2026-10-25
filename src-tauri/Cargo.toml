@@ -22,6 +22,7 @@ probe = []
 tauri-build = { version = "2.7", features = [] }
 
 [dependencies]
+keyring-core = "1.0.1"
 # The one rule for where the engine's shared models are (`data_dir::models_dir`), on every OS: at the tag of a core release.
 sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.10.0" }
 sidevoice-desktop-core = { path = "core" }
@@ -57,6 +58,8 @@ log = "0.4"
 sidevoice-local-host = { path = "local-host", features = ["fetch"] }
 
 [target.'cfg(windows)'.dependencies]
+windows-native-keyring-store = "1.1"
+regex = "1"
 # The taskbar's colour, to draw the tray mark in the brand's look for it (src/tray.rs).
 winreg = "0.55"
 # Whether a mouse button went down elsewhere, to close the call controls card's panels, and whether the room is on another
@@ -64,6 +67,7 @@ winreg = "0.55"
 windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_Storage_FileSystem", "Win32_Graphics_Dwm", "Win32_UI_Controls", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { version = "1.0.2", features = ["keychain"] }
 # The voice call the app runs itself (src/voice.rs, `host.voice`): sidevoice-voice with its native microphone and
 # speaker (cpal) and WebRTC's AEC3 between them, on the models the app hands it (src/voice/models.rs: the engine's).
 # It depends on no engine. The candidate source: a try's take (StartOptions, VoiceEvent::Take), the pause in the
@@ -73,7 +77,7 @@ sidevoice-voice = { git = "https://github.com/sidevoice/sidevoice-voice", tag = 
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 # The call runs on the app's Tokio runtime; the models' native work goes to its blocking pool (src/voice/models.rs).
 tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "time", "macros"] }
-# The keys of remote providers, in the keychain (src/keychain.rs).
+# Legacy keychain namespace deletion and compatibility tests (platform/credentials).
 security-framework = "3"
 libc = "0.2"
 
@@ -94,11 +98,13 @@ objc2-av-foundation = { version = "0.3", default-features = false, features = ["
 core-foundation = "0.10"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+zbus-secret-service-keyring-store = { version = "1.0.1", features = ["crypto-rust"] }
 libc = "0.2"
 # Tauri's existing native toolkit; explicit Cancel default/response for destructive confirmations.
 gtk = "0.18"
 
 [dev-dependencies]
+keyring-core = { version = "1.0.1", features = ["sample"] }
 # Deterministic startup-deadline tests; no wall-clock sleeps.
 tokio = { version = "1", features = ["rt", "test-util"] }
 # Mock runtime for the platform interface tests; no native explorer is opened.

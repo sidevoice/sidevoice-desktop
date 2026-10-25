@@ -114,9 +114,14 @@ pub async fn engine_set_credential(
 ) -> Result<(), Error> {
     let _permit = crate::data::admit(&app).ok_or_else(error::reset_busy)?;
     let key = key.as_deref().map(str::trim).filter(|key| !key.is_empty()).map(str::to_string);
-    credentials::write(&provider, key.as_deref())?;
     let engines = state.engines.clone();
-    tauri::async_runtime::spawn_blocking(move || engines.refresh(&provider)).await.map_err(internal)?
+    tauri::async_runtime::spawn_blocking(move || {
+        let _permit = _permit;
+        credentials::write(&provider, key.as_deref())?;
+        engines.refresh(&provider)
+    })
+    .await
+    .map_err(internal)?
 }
 
 /// Asks `provider` with `key` without keeping it: never written to the keychain, never in the engine's own listings
@@ -130,9 +135,13 @@ pub async fn engine_test_credential(
     provider: String,
     key: String,
 ) -> Result<Option<CredentialRefusal>, Error> {
-    credentials::check(&provider)?;
     let engines = state.engines.clone();
-    tauri::async_runtime::spawn_blocking(move || engines.test_credential(&provider, &key)).await.map_err(internal)?
+    tauri::async_runtime::spawn_blocking(move || {
+        credentials::check(&provider)?;
+        engines.test_credential(&provider, &key)
+    })
+    .await
+    .map_err(internal)?
 }
 
 /// Reads `provider`'s catalogue again now, past any listing kept, with the key the keychain has.
@@ -144,54 +153,69 @@ pub async fn engine_refresh(state: State<'_, EngineState>, provider: String) -> 
 
 /// Whether the keychain holds a key for `provider`. The key itself never leaves the app.
 #[tauri::command]
-pub fn engine_has_credential(provider: String) -> Result<bool, Error> {
-    credentials::has(&provider)
+pub async fn engine_has_credential(provider: String) -> Result<bool, Error> {
+    tauri::async_runtime::spawn_blocking(move || credentials::has(&provider)).await.map_err(internal)?
 }
 
-/// Provider keys, in the keychain where the app has one (macOS).
-#[cfg(target_os = "macos")]
+/// The engine reads the same native store as the bridge; no OS-specific host adapters.
+pub struct ProviderKeys;
+
+#[sidevoice_desktop_engine::sidevoice_engine::async_trait]
+impl sidevoice_desktop_engine::sidevoice_engine::Credentials for ProviderKeys {
+    async fn credential(&self, provider: &str) -> sidevoice_desktop_engine::sidevoice_engine::Result<Option<String>> {
+        use crate::platform::credentials::{Credentials, ProviderCredentials};
+        let provider = provider.to_owned();
+        let result = tauri::async_runtime::spawn_blocking(move || ProviderCredentials.read(&provider))
+            .await
+            .map_err(|_| sidevoice_desktop_engine::sidevoice_engine::Error::new("credentials-failed"))?;
+        result.map_err(|error| {
+            sidevoice_desktop_engine::sidevoice_engine::Error::new(match error {
+                crate::platform::credentials::Error::Unavailable => "credentials-unavailable",
+                _ => "credentials-failed",
+            })
+        })
+    }
+}
+
 mod credentials {
     use super::{error, Error};
-    use crate::keychain;
+    use crate::platform::credentials::{self, Credentials, ProviderCredentials};
 
     fn provider(provider: &str) -> Result<(), Error> {
-        if keychain::valid(provider) {
+        if credentials::valid(provider) {
             Ok(())
         } else {
             Err(error::provider_invalid(provider))
         }
     }
 
-    /// Whether a key for `id` could be kept here.
+    fn refusal(error: credentials::Error) -> Error {
+        // The page translates the existing refusal code; its fallback message is keyed too.
+        // Never expose the backend's error text: it can contain secret bytes.
+        let code = match error {
+            credentials::Error::Unavailable => "credentials_unavailable",
+            _ => "credentials_failed",
+        };
+        let refusal = Error::new(code, sidevoice_desktop_core::i18n::t("en", code));
+        if error == credentials::Error::TooLong {
+            refusal.with("reason", "too_long")
+        } else {
+            refusal
+        }
+    }
+
     pub fn check(id: &str) -> Result<(), Error> {
-        provider(id)
+        // A real read also detects a locked/unavailable store before a remote trial.
+        has(id).map(|_| ())
     }
 
     pub fn write(id: &str, key: Option<&str>) -> Result<(), Error> {
         provider(id)?;
-        keychain::write(id, key).map_err(error::credentials_failed)
+        ProviderCredentials.write(id, key).map_err(refusal)
     }
 
     pub fn has(id: &str) -> Result<bool, Error> {
         provider(id)?;
-        keychain::read(id).map(|key| key.is_some()).map_err(error::credentials_failed)
-    }
-}
-
-/// Elsewhere the app keeps no keys: none is held, and none can be set.
-#[cfg(not(target_os = "macos"))]
-mod credentials {
-    use super::{error, Error};
-
-    pub fn check(_: &str) -> Result<(), Error> {
-        Err(error::credentials_unavailable())
-    }
-
-    pub fn write(_: &str, _: Option<&str>) -> Result<(), Error> {
-        Err(error::credentials_unavailable())
-    }
-
-    pub fn has(_: &str) -> Result<bool, Error> {
-        Ok(false)
+        ProviderCredentials.read(id).map(|key| key.is_some()).map_err(refusal)
     }
 }

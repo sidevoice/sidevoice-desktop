@@ -633,7 +633,8 @@ fn begin_reset(app: &AppHandle, uninstall: bool) -> Answer {
     write_atomic_json(&journal, &json!({"stage":"service", "completed":["service"], "failed":[]}))
         .map_err(|_| refused("reset.report-failed"))?;
     let mut failed = Vec::<Value>::new();
-    if crate::keychain::delete_service().is_err() {
+    use crate::platform::credentials::{Credentials, ProviderCredentials};
+    if ProviderCredentials.clear().is_err() {
         failed.push(json!({"step": "keychain", "key": "reset.keychain-failed"}));
     }
     write_atomic_json(

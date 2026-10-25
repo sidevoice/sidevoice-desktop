@@ -36,6 +36,8 @@ fn leak(key: &str) -> &'static str {
 }
 
 const EN: &[(&str, &str)] = &[
+    ("credentials_unavailable", "The system credential store is unavailable or locked."),
+    ("credentials_failed", "The system credential store could not read, save or remove the provider key."),
     ("local_host.log_missing", "There is no log on this computer yet."),
     ("local_host.reveal_failed", "The file manager could not show the log."),
     ("tray.not_loaded", "Sidevoice · room not loaded"),
