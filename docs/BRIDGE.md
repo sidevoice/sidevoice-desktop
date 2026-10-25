@@ -83,8 +83,10 @@ saved-state and log paths and its `defaults` domain. Other programs' siblings in
 store remain. A WebKit child that
 does not exit leaves a partial result and its storage in place. Paths are derived natively from an
 exact allowlist, checked again before each top-level removal, and traversed without following
-symlinks or crossing a mount/device boundary. A failed check is reported, with that directory left
-in place. Connector data and release roots must be the exact default
+symlink targets or crossing a mount/device boundary. Symlinks are unlinked as entries and cleanup continues;
+hard links lose only the selected name, and ordinary shortcut files are removed as files. The shared model
+store itself and redirected ancestors remain protected roots. All three engine-owned children are preflighted
+before any is removed. A failed check is reported, with that directory left in place. Connector data and release roots must be the exact default
 Sidevoice roots; unsafe environment overrides or install records refuse before the installed uninstaller runs.
 If installation metadata is absent, a fresh service/process check and a check for residual connector data
 must both pass before the service is called absent. A retained recovery executable named by `install.json`

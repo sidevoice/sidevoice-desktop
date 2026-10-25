@@ -621,6 +621,7 @@ fn standard_models(home: &Path) -> PathBuf {
 
 #[cfg(target_os = "macos")]
 fn validate_uninstall_scope_at(home: &Path, data: &Path) -> Result<PathBuf, &'static str> {
+    use crate::platform::owned_removal::{NativeOwnedRemoval, OwnedRemoval};
     if !clean_absolute(home) || fs::canonicalize(home).ok().as_deref() != Some(home) {
         return Err("unsafe-home");
     }
@@ -652,8 +653,8 @@ fn validate_uninstall_scope_at(home: &Path, data: &Path) -> Result<PathBuf, &'st
     } else if fs::symlink_metadata(&record).is_err_and(|error| error.kind() != std::io::ErrorKind::NotFound) {
         return Err("unsafe-record");
     }
-    guarded_tree(data, home, false, true, &mount_identity)?;
-    guarded_tree(&expected_releases, home, false, true, &mount_identity)?;
+    NativeOwnedRemoval::check_tree(data, home)?;
+    NativeOwnedRemoval::check_tree(&expected_releases, home)?;
     Ok(expected_releases)
 }
 
@@ -773,314 +774,9 @@ fn helper_lock_at(fd: Option<i32>, path: &Path) -> Option<std::fs::File> {
 }
 
 #[cfg(target_os = "macos")]
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct MountIdentity {
-    device: u64,
-    mounted_at: Vec<u8>,
-}
-
-#[cfg(target_os = "macos")]
-fn mount_identity(fd: i32, _: &Path) -> Result<MountIdentity, &'static str> {
-    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
-    let mut fs_stat: libc::statfs = unsafe { std::mem::zeroed() };
-    if unsafe { libc::fstat(fd, &mut stat) } != 0 || unsafe { libc::fstatfs(fd, &mut fs_stat) } != 0 {
-        return Err("inspect-mount");
-    }
-    let mounted_at = unsafe { std::ffi::CStr::from_ptr(fs_stat.f_mntonname.as_ptr()) }.to_bytes().to_vec();
-    Ok(MountIdentity { device: stat.st_dev as u64, mounted_at })
-}
-
-#[cfg(target_os = "macos")]
 fn clean_absolute(path: &Path) -> bool {
     path.is_absolute()
         && path.components().all(|part| matches!(part, std::path::Component::RootDir | std::path::Component::Normal(_)))
-}
-
-#[cfg(target_os = "macos")]
-fn known_cleanup_path(path: &Path, home: &Path) -> Result<(), &'static str> {
-    if path == home {
-        return Err("home-root");
-    }
-    if !clean_absolute(home) || !clean_absolute(path) || home.parent().is_none_or(|p| p == Path::new("/")) {
-        return Err("unsafe-path");
-    }
-    let allowed = [
-        home.join("Library/Application Support/dev.sidevoice.desktop"),
-        standard_models(home).join("blobs"),
-        standard_models(home).join("models"),
-        standard_models(home).join("partial"),
-        home.join("Library/WebKit/dev.sidevoice.desktop"),
-        home.join("Library/Caches/dev.sidevoice.desktop"),
-        home.join("Library/Saved Application State/dev.sidevoice.desktop.savedState"),
-        home.join("Library/Logs/dev.sidevoice.desktop"),
-    ];
-    if !allowed.iter().any(|candidate| candidate == path) {
-        return Err("outside-known-dirs");
-    }
-    if fs::canonicalize(home).ok().as_deref() != Some(home) {
-        return Err("unsafe-home");
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn open_dir_at(parent: i32, name: &std::ffi::OsStr) -> Result<std::os::fd::OwnedFd, &'static str> {
-    use std::os::fd::FromRawFd;
-    use std::os::unix::ffi::OsStrExt;
-    let name = std::ffi::CString::new(name.as_bytes()).map_err(|_| "unsafe-name")?;
-    let fd = unsafe {
-        libc::openat(parent, name.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-    };
-    if fd < 0 {
-        return Err("unsafe-directory");
-    }
-    Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) })
-}
-
-#[cfg(target_os = "macos")]
-fn open_absolute_dir(path: &Path) -> Result<std::os::fd::OwnedFd, &'static str> {
-    use std::os::fd::{AsRawFd, FromRawFd};
-    if !clean_absolute(path) {
-        return Err("unsafe-path");
-    }
-    let root = unsafe { libc::open(c"/".as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC) };
-    if root < 0 {
-        return Err("unsafe-path");
-    }
-    let mut current = unsafe { std::os::fd::OwnedFd::from_raw_fd(root) };
-    for part in path.components().skip(1) {
-        let std::path::Component::Normal(name) = part else { return Err("unsafe-path") };
-        current = open_dir_at(current.as_raw_fd(), name)?;
-    }
-    Ok(current)
-}
-
-#[cfg(target_os = "macos")]
-fn same_entry(parent: i32, name: &std::ffi::CStr, opened: i32) -> Result<(), &'static str> {
-    let mut named: libc::stat = unsafe { std::mem::zeroed() };
-    let mut held: libc::stat = unsafe { std::mem::zeroed() };
-    if unsafe { libc::fstatat(parent, name.as_ptr(), &mut named, libc::AT_SYMLINK_NOFOLLOW) } != 0
-        || unsafe { libc::fstat(opened, &mut held) } != 0
-        || named.st_dev != held.st_dev
-        || named.st_ino != held.st_ino
-    {
-        return Err("changed-path");
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn walk_owned(
-    fd: i32,
-    relative: &Path,
-    expected: &MountIdentity,
-    probe: &impl Fn(i32, &Path) -> Result<MountIdentity, &'static str>,
-    remove: bool,
-    allow_links: bool,
-    depth: usize,
-) -> Result<(), &'static str> {
-    use std::os::fd::{AsRawFd, FromRawFd};
-    use std::os::unix::ffi::OsStrExt;
-    if depth > 64 {
-        return Err("too-deep");
-    }
-    if probe(fd, relative)? != *expected {
-        return Err("mount-boundary");
-    }
-    // dup shares the directory offset with the held descriptor. A fresh open lets the
-    // preflight and removal passes each enumerate the full directory.
-    let copy = unsafe {
-        libc::openat(fd, c".".as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-    };
-    if copy < 0 {
-        return Err("inspect");
-    }
-    let stream = unsafe { libc::fdopendir(copy) };
-    if stream.is_null() {
-        unsafe { libc::close(copy) };
-        return Err("inspect");
-    }
-    let result = (|| {
-        loop {
-            unsafe {
-                *libc::__error() = 0;
-            }
-            let entry = unsafe { libc::readdir(stream) };
-            if entry.is_null() {
-                if unsafe { *libc::__error() } != 0 {
-                    return Err("inspect");
-                } else {
-                    break;
-                }
-            }
-            let name = unsafe { std::ffi::CStr::from_ptr((*entry).d_name.as_ptr()) };
-            if name.to_bytes() == b"." || name.to_bytes() == b".." {
-                continue;
-            }
-            let child_relative = relative.join(std::ffi::OsStr::from_bytes(name.to_bytes()));
-            let mut stat: libc::stat = unsafe { std::mem::zeroed() };
-            if unsafe { libc::fstatat(fd, name.as_ptr(), &mut stat, libc::AT_SYMLINK_NOFOLLOW) } != 0 {
-                return Err("inspect");
-            }
-            if stat.st_dev as u64 != expected.device {
-                return Err("mount-boundary");
-            }
-            let kind = stat.st_mode & libc::S_IFMT;
-            if kind == libc::S_IFLNK {
-                if allow_links {
-                    continue;
-                } else {
-                    return Err("symlink");
-                }
-            }
-            if kind == libc::S_IFDIR {
-                let child = open_dir_at(fd, std::ffi::OsStr::from_bytes(name.to_bytes()))?;
-                walk_owned(child.as_raw_fd(), &child_relative, expected, probe, remove, allow_links, depth + 1)?;
-                if remove {
-                    same_entry(fd, name, child.as_raw_fd())?;
-                    if unsafe { libc::unlinkat(fd, name.as_ptr(), libc::AT_REMOVEDIR) } != 0 {
-                        return Err("remove");
-                    }
-                }
-            } else if kind == libc::S_IFREG {
-                let file = unsafe {
-                    libc::openat(
-                        fd,
-                        name.as_ptr(),
-                        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
-                    )
-                };
-                if file < 0 {
-                    return Err("unsafe-file");
-                }
-                let file = unsafe { std::os::fd::OwnedFd::from_raw_fd(file) };
-                if probe(file.as_raw_fd(), &child_relative)? != *expected {
-                    return Err("mount-boundary");
-                }
-                if remove {
-                    same_entry(fd, name, file.as_raw_fd())?;
-                    if unsafe { libc::unlinkat(fd, name.as_ptr(), 0) } != 0 {
-                        return Err("remove");
-                    }
-                }
-            } else if !allow_links {
-                return Err("unsafe-entry");
-            }
-        }
-        Ok(())
-    })();
-    unsafe { libc::closedir(stream) };
-    result
-}
-
-#[cfg(target_os = "macos")]
-fn guarded_tree(
-    path: &Path,
-    home: &Path,
-    remove: bool,
-    allow_links: bool,
-    probe: &impl Fn(i32, &Path) -> Result<MountIdentity, &'static str>,
-) -> Result<(), &'static str> {
-    use std::os::fd::AsRawFd;
-    use std::os::unix::ffi::OsStrExt;
-    let relative = path.strip_prefix(home).map_err(|_| "outside-home")?;
-    if relative.as_os_str().is_empty() {
-        return Err("home-root");
-    }
-    if !clean_absolute(path) || !clean_absolute(home) {
-        return Err("unsafe-path");
-    }
-    if fs::canonicalize(home).ok().as_deref() != Some(home) {
-        return Err("unsafe-home");
-    }
-    let home_fd = open_absolute_dir(home)?;
-    let expected = probe(home_fd.as_raw_fd(), Path::new(""))?;
-    if expected.mounted_at == home.as_os_str().as_bytes() {
-        return Err("volume-root");
-    }
-    let parts: Vec<_> = relative.components().collect();
-    let mut parent = home_fd;
-    let mut prefix = PathBuf::new();
-    for part in &parts[..parts.len() - 1] {
-        let std::path::Component::Normal(name) = part else { return Err("unsafe-path") };
-        prefix.push(name);
-        parent = match open_dir_at(parent.as_raw_fd(), name) {
-            Ok(fd) => fd,
-            Err(_) if !parent_path_exists(parent.as_raw_fd(), name) => return Ok(()),
-            Err(error) => return Err(error),
-        };
-        if probe(parent.as_raw_fd(), &prefix)? != expected {
-            return Err("mount-boundary");
-        }
-    }
-    let std::path::Component::Normal(name) = parts[parts.len() - 1] else { return Err("unsafe-path") };
-    let target = match open_dir_at(parent.as_raw_fd(), name) {
-        Ok(fd) => fd,
-        Err(_) if !parent_path_exists(parent.as_raw_fd(), name) => return Ok(()),
-        Err(error) => return Err(error),
-    };
-    walk_owned(target.as_raw_fd(), relative, &expected, probe, false, allow_links, 0)?;
-    if remove {
-        walk_owned(target.as_raw_fd(), relative, &expected, probe, true, allow_links, 0)?;
-        let name = std::ffi::CString::new(name.as_bytes()).map_err(|_| "unsafe-name")?;
-        same_entry(parent.as_raw_fd(), &name, target.as_raw_fd())?;
-        if unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR) } != 0 {
-            return Err("remove");
-        }
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn remove_known_with(
-    path: &Path,
-    home: &Path,
-    probe: &impl Fn(i32, &Path) -> Result<MountIdentity, &'static str>,
-) -> Result<(), &'static str> {
-    known_cleanup_path(path, home)?;
-    // Recheck the exact top-level name immediately before guarded traversal. A missing
-    // directory is already gone; a link, alias or changed ancestor is a reported refusal.
-    match fs::symlink_metadata(path) {
-        Ok(meta) => {
-            if !meta.is_dir() || meta.file_type().is_symlink() || fs::canonicalize(path).ok().as_deref() != Some(path) {
-                return Err("changed-path");
-            }
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(_) => return Err("inspect"),
-    }
-    guarded_tree(path, home, true, false, probe)
-}
-
-#[cfg(target_os = "macos")]
-fn remove_known(path: &Path, home: &Path) -> Result<(), &'static str> {
-    remove_known_with(path, home, &mount_identity)
-}
-
-#[cfg(target_os = "macos")]
-fn remove_model_store(root: &Path, home: &Path) -> Result<(), &'static str> {
-    if root != standard_models(home) {
-        return Err("outside-known-dirs");
-    }
-    let children = ["blobs", "models", "partial"].map(|name| root.join(name));
-    // Validate every owned child before removing any. Other programs may have their own siblings here.
-    for child in &children {
-        known_cleanup_path(child, home)?;
-        guarded_tree(child, home, false, false, &mount_identity)?;
-    }
-    for child in &children {
-        remove_known(child, home)?;
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn parent_path_exists(parent: i32, name: &std::ffi::OsStr) -> bool {
-    use std::os::unix::ffi::OsStrExt;
-    let Ok(name) = std::ffi::CString::new(name.as_bytes()) else { return true };
-    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
-    let result = unsafe { libc::fstatat(parent, name.as_ptr(), &mut stat, libc::AT_SYMLINK_NOFOLLOW) };
-    result == 0 || std::io::Error::last_os_error().kind() != std::io::ErrorKind::NotFound
 }
 
 #[cfg(target_os = "macos")]
@@ -1132,6 +828,7 @@ fn webkit_gone(pids: &[u32]) -> bool {
 pub fn run_reset_helper(parent_pid: Option<u32>, lock_fd: Option<i32>, uninstall: bool) {
     #[cfg(target_os = "macos")]
     {
+        use crate::platform::owned_removal::{NativeOwnedRemoval, OwnedRemoval};
         let Some(lock) = helper_lock(lock_fd) else { return };
         let Some(parent_pid) = parent_pid else { return };
         if unsafe { libc::getppid() as u32 } != parent_pid {
@@ -1172,8 +869,11 @@ pub fn run_reset_helper(parent_pid: Option<u32>, lock_fd: Option<i32>, uninstall
             if name == "webview" && !webkit_safe {
                 failed.push(json!({"step": "webview", "key": "reset.process-busy"}));
             } else {
-                let removed =
-                    if name == "models" { remove_model_store(&path, &home) } else { remove_known(&path, &home) };
+                let removed = if name == "models" {
+                    NativeOwnedRemoval::remove_model_store(&path, &home)
+                } else {
+                    NativeOwnedRemoval::remove_known(&path, &home)
+                };
                 match removed {
                     Ok(()) => completed.push(name),
                     Err(key) => failed.push(json!({"step": name, "key": key})),
@@ -1315,99 +1015,6 @@ fn finalize_relaunched_reset_at(report: &Path, journal: &Path) -> Result<(), &'s
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
-    #[test]
-    fn cleanup_refuses_symlinked_target_parent_and_child() {
-        let home = tempfile::tempdir().unwrap();
-        let outside = tempfile::tempdir().unwrap();
-        let canonical = fs::canonicalize(home.path()).unwrap();
-        let root = canonical.as_path();
-        fs::write(outside.path().join("sentinel"), "unrelated").unwrap();
-        fs::create_dir_all(root.join("Library/Caches")).unwrap();
-        std::os::unix::fs::symlink(outside.path(), root.join("Library/Caches/dev.sidevoice.desktop")).unwrap();
-        assert_eq!(remove_known(root, root), Err("home-root"));
-        assert!(remove_known(&root.join("Library/Caches/dev.sidevoice.desktop"), root).is_err());
-        assert!(outside.path().exists());
-        assert_eq!(fs::read(outside.path().join("sentinel")).unwrap(), b"unrelated");
-        fs::remove_file(root.join("Library/Caches/dev.sidevoice.desktop")).unwrap();
-        fs::remove_dir(root.join("Library/Caches")).unwrap();
-        std::os::unix::fs::symlink(outside.path(), root.join("Library/Caches")).unwrap();
-        assert!(remove_known(&root.join("Library/Caches/dev.sidevoice.desktop"), root).is_err());
-        assert!(outside.path().exists());
-        assert_eq!(fs::read(outside.path().join("sentinel")).unwrap(), b"unrelated");
-        fs::remove_file(root.join("Library/Caches")).unwrap();
-        fs::create_dir_all(root.join("Library/Caches/dev.sidevoice.desktop")).unwrap();
-        std::os::unix::fs::symlink(outside.path(), root.join("Library/Caches/dev.sidevoice.desktop/escape")).unwrap();
-        assert_eq!(remove_known(&root.join("Library/Caches/dev.sidevoice.desktop"), root), Err("symlink"));
-        assert!(root.join("Library/Caches/dev.sidevoice.desktop").exists());
-        assert!(outside.path().exists());
-        assert_eq!(fs::read(outside.path().join("sentinel")).unwrap(), b"unrelated");
-    }
-
-    #[test]
-    fn cleanup_handles_missing_and_only_removes_named_directory() {
-        let home = tempfile::tempdir().unwrap();
-        let canonical = fs::canonicalize(home.path()).unwrap();
-        let root = canonical.as_path();
-        let parent = root.join("Library/Caches");
-        fs::create_dir_all(&parent).unwrap();
-        let target = parent.join("dev.sidevoice.desktop");
-        assert_eq!(remove_known(&target, root), Ok(()));
-        fs::create_dir(&target).unwrap();
-        fs::write(target.join("owned"), "only in temp").unwrap();
-        fs::create_dir(parent.join("unrelated")).unwrap();
-        assert_eq!(remove_known(&target, root), Ok(()));
-        assert!(!target.exists());
-        assert!(parent.join("unrelated").exists());
-    }
-
-    #[test]
-    fn shared_store_removes_only_engine_owned_children() {
-        let home = tempfile::tempdir().unwrap();
-        let home = fs::canonicalize(home.path()).unwrap();
-        let root = standard_models(&home);
-        for child in ["blobs", "models", "partial"] {
-            fs::create_dir_all(root.join(child)).unwrap();
-            fs::write(root.join(child).join("owned"), b"model").unwrap();
-        }
-        fs::create_dir(root.join("other-program")).unwrap();
-        fs::write(root.join("other-program/sentinel"), b"unrelated").unwrap();
-        assert_eq!(remove_model_store(&root, &home), Ok(()));
-        for child in ["blobs", "models", "partial"] {
-            assert!(!root.join(child).exists());
-        }
-        assert_eq!(fs::read(root.join("other-program/sentinel")).unwrap(), b"unrelated");
-    }
-
-    #[test]
-    fn cleanup_refuses_target_and_child_mount_boundaries_before_erasing_sentinels() {
-        let home = tempfile::tempdir().unwrap();
-        let home = fs::canonicalize(home.path()).unwrap();
-        let target = home.join("Library/Caches/dev.sidevoice.desktop");
-        fs::create_dir_all(target.join("mounted")).unwrap();
-        fs::write(target.join("mounted/sentinel"), b"unrelated").unwrap();
-        fs::write(target.join("owned"), b"owned").unwrap();
-        let target_relative = Path::new("Library/Caches/dev.sidevoice.desktop");
-        let target_mount = |fd, relative: &Path| {
-            let mut id = mount_identity(fd, relative)?;
-            if relative == target_relative {
-                id.mounted_at = b"/foreign-volume".to_vec();
-            }
-            Ok(id)
-        };
-        assert_eq!(remove_known_with(&target, &home, &target_mount), Err("mount-boundary"));
-        assert!(target.join("owned").exists());
-        let child_mount = |fd, relative: &Path| {
-            let mut id = mount_identity(fd, relative)?;
-            if relative.ends_with("mounted") {
-                id.device += 1;
-            }
-            Ok(id)
-        };
-        assert_eq!(remove_known_with(&target, &home, &child_mount), Err("mount-boundary"));
-        assert_eq!(fs::read(target.join("mounted/sentinel")).unwrap(), b"unrelated");
-        assert!(target.join("owned").exists());
-    }
-
     #[test]
     fn connector_uninstall_scope_refuses_overrides_before_fake_cli_runs() {
         let home = tempfile::tempdir().unwrap();
