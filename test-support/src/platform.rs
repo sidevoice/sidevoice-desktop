@@ -16,3 +16,5 @@ pub trait FixtureHost {
 pub fn forget(data: &Path) {
     Host::forget(data);
 }
+
+pub mod storage;

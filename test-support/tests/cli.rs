@@ -1,8 +1,8 @@
 #![cfg(unix)]
 use serde_json::json;
 use sidevoice_desktop_test_support::fixture;
+use sidevoice_desktop_test_support::platform::storage::{StorageFixture, StorageFixtures};
 use sidevoice_local_host::{cli::Cli, paths::DataDirs, Refusal};
-use std::os::unix::fs::PermissionsExt;
 use std::{
     thread,
     time::{Duration, Instant},
@@ -111,7 +111,7 @@ fn what_the_program_detaches_into_its_own_session_stays() {
 #[test]
 fn what_runs_is_what_was_checked_even_if_a_link_is_retargeted() {
     let tmp = tempfile::tempdir().unwrap();
-    std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    StorageFixtures::private(tmp.path());
     let program = |name: &str| {
         let path = tmp.path().join(name);
         fixture::install(std::path::Path::new(env!("CARGO_BIN_EXE_fake-connector")), &path, &json!({"which":name}))
@@ -120,14 +120,14 @@ fn what_runs_is_what_was_checked_even_if_a_link_is_retargeted() {
     };
     let (genuine, replacement) = (program("genuine"), program("replacement"));
     let link = tmp.path().join("sidevoice");
-    std::os::unix::fs::symlink(&genuine, &link).unwrap();
+    StorageFixtures::symlink(&genuine, &link);
     let dirs = DataDirs::new(tmp.path());
     std::fs::write(dirs.install_record(), format!(r#"{{"command":["{}"]}}"#, link.display())).unwrap();
-    std::fs::set_permissions(dirs.install_record(), std::fs::Permissions::from_mode(0o600)).unwrap();
+    StorageFixtures::private(&dirs.install_record());
     let cli = Cli::installed(&dirs).unwrap();
     // Between the check and the run, the link is pointed elsewhere.
     std::fs::remove_file(&link).unwrap();
-    std::os::unix::fs::symlink(&replacement, &link).unwrap();
+    StorageFixtures::symlink(&replacement, &link);
     let answer = cli.run(&["x"], Duration::from_secs(5)).unwrap();
     assert_eq!(answer["which"], "genuine", "the checked target runs, not the link's new one");
     let canonical_data = std::fs::canonicalize(tmp.path()).unwrap();
@@ -137,41 +137,44 @@ fn what_runs_is_what_was_checked_even_if_a_link_is_retargeted() {
 #[test]
 fn only_an_install_record_of_absolute_paths_names_the_cli() {
     let tmp = tempfile::tempdir().unwrap();
-    std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    StorageFixtures::private(tmp.path());
     let dirs = DataDirs::new(tmp.path());
     assert_eq!(Cli::installed(&dirs).unwrap_err().key, "cli.unavailable");
-    let write = |text: &str, mode: u32| {
+    let write = |text: &str, writable: bool| {
         std::fs::write(dirs.install_record(), text).unwrap();
-        std::fs::set_permissions(dirs.install_record(), std::fs::Permissions::from_mode(mode)).unwrap();
+        StorageFixtures::private(&dirs.install_record());
+        if writable {
+            StorageFixtures::writable(&dirs.install_record());
+        }
     };
     let script = tmp.path().join("cli.mjs");
     std::fs::write(&script, b"// cli").unwrap();
     let executable = env!("CARGO_BIN_EXE_fake-connector");
     let record = json!({"command":[executable, script]}).to_string();
-    write(&record, 0o600);
+    write(&record, false);
     // Shared program validation refuses non-executable payloads too; it must not silently chmod the script.
     assert_eq!(Cli::installed(&dirs).unwrap_err().key, "install.unsafe");
     assert_eq!(std::fs::read(&script).unwrap(), b"// cli");
-    assert_eq!(std::fs::metadata(&script).unwrap().permissions().mode() & 0o111, 0);
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    StorageFixtures::assert_not_executable(&script);
+    StorageFixtures::executable(&script);
     let cli = Cli::installed(&dirs).unwrap();
     let canonical = |p: &str| std::fs::canonicalize(p).unwrap().display().to_string();
     assert_eq!(cli.prefix, [canonical(executable), canonical(&script.display().to_string())]);
     // What the command names must be root's or this user's and closed to others too.
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o666)).unwrap();
+    StorageFixtures::writable(&script);
     assert_eq!(Cli::installed(&dirs).unwrap_err().key, "install.unsafe");
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o644)).unwrap();
-    write(r#"{"command":["/nonexistent/node"]}"#, 0o600);
+    StorageFixtures::private(&script);
+    write(r#"{"command":["/nonexistent/node"]}"#, false);
     assert_eq!(Cli::installed(&dirs).unwrap_err().key, "cli.unavailable");
     for bad in [r#"{"command":["node","cli.mjs"]}"#, r#"{"command":[]}"#, r#"{"command":"/bin/sh"}"#, "{}", "nope"] {
-        write(bad, 0o600);
+        write(bad, false);
         let key = Cli::installed(&dirs).unwrap_err().key;
         assert_eq!(key, "install.unreadable", "{bad}");
     }
-    write(&json!({"command":[executable]}).to_string(), 0o666);
+    write(&json!({"command":[executable]}).to_string(), true);
     assert_eq!(Cli::installed(&dirs).unwrap_err().key, "install.unsafe");
-    write(&json!({"command":[executable]}).to_string(), 0o600);
-    std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o777)).unwrap();
+    write(&json!({"command":[executable]}).to_string(), false);
+    StorageFixtures::writable(tmp.path());
     assert_eq!(Cli::installed(&dirs).unwrap_err().key, "install.unsafe");
-    std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    StorageFixtures::private(tmp.path());
 }

@@ -6,6 +6,7 @@
 
 use serde_json::{json, Value};
 use sidevoice_desktop_test_support::fake_core::{self, FakeCore};
+use sidevoice_desktop_test_support::platform::storage::{StorageFixture, StorageFixtures};
 use sidevoice_desktop_test_support::{fake_registry::FakeRegistry, fixture};
 use sidevoice_local_host::host::{Action, Config, LocalHost};
 use sidevoice_local_host::http;
@@ -15,7 +16,6 @@ use sidevoice_local_host::state::State;
 use sidevoice_local_host::store;
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -94,8 +94,7 @@ fn pairs_over_the_socket_and_the_page_gets_only_the_secret() {
     let (port, secret) = running(&host);
 
     let stored = store::load(&world.app_dir).expect("local-host.json");
-    let mode = std::fs::metadata(world.app_dir.join(store::FILE_NAME)).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode, 0o600);
+    StorageFixtures::assert_private(&world.app_dir.join(store::FILE_NAME));
     assert_eq!(stored.fp, core.fingerprint());
     assert_eq!(core.local_device().as_deref(), Some(stored.device_id.as_str()));
     assert_eq!(
@@ -305,39 +304,27 @@ fn a_stored_pairing_is_reused_after_proving_the_identity() {
 
 #[test]
 fn a_pairing_below_traverse_only_ancestors_loads_saves_and_is_discovered() {
-    struct RestorePermissions<'a>(&'a Path);
-    impl Drop for RestorePermissions<'_> {
-        fn drop(&mut self) {
-            std::fs::set_permissions(self.0, std::fs::Permissions::from_mode(0o700)).unwrap();
-        }
-    }
+    let world = World::new();
+    let core = world.core(1);
+    let first = world.host();
+    running(&first);
+    let stored = store::load(&world.app_dir).unwrap();
+    first.shutdown();
+    drop(first);
 
-    for mode in [0o311, 0o711] {
-        let world = World::new();
-        let core = world.core(1);
-        let first = world.host();
-        running(&first);
-        let stored = store::load(&world.app_dir).unwrap();
-        first.shutdown();
-        drop(first);
-
-        // 0311 denies directory listing even to its owner; 0711 is the usual searchable /home layout.
-        // Restore on panic too, so the fixture can always remove its private children.
-        let ancestor = world._tmp.path();
-        let _restore = RestorePermissions(ancestor);
-        std::fs::set_permissions(ancestor, std::fs::Permissions::from_mode(mode)).unwrap();
-        assert_eq!(store::load(&world.app_dir), Some(stored.clone()), "load beneath {mode:o}");
-        let updated = store::Pairing { host: "saved beneath a searchable ancestor".into(), ..stored };
+    let mut expected = stored.clone();
+    StorageFixtures::with_search_only_ancestor(world._tmp.path(), || {
+        assert_eq!(store::load(&world.app_dir), Some(expected.clone()));
+        let updated = store::Pairing { host: "saved beneath a searchable ancestor".into(), ..stored.clone() };
         store::save(&world.app_dir, &updated).unwrap();
-        assert_eq!(store::load(&world.app_dir), Some(updated.clone()), "save beneath {mode:o}");
-
+        assert_eq!(store::load(&world.app_dir), Some(updated.clone()));
         let host = world.host();
         running(&host);
-        assert_eq!(core.local_device().as_deref(), Some(updated.device_id.as_str()), "reuse beneath {mode:o}");
+        assert_eq!(core.local_device().as_deref(), Some(updated.device_id.as_str()));
         assert_eq!(store::load(&world.app_dir).unwrap().token, updated.token);
-        assert_eq!(std::fs::metadata(ancestor).unwrap().permissions().mode() & 0o777, mode);
         host.shutdown();
-    }
+        expected = updated;
+    });
 }
 
 #[test]
@@ -393,13 +380,13 @@ fn an_incompatible_core_is_not_paired() {
 fn an_unsafe_core_directory_is_never_connected_to() {
     let world = World::new();
     let core = world.core(1);
-    std::fs::set_permissions(world.dirs.core(), std::fs::Permissions::from_mode(0o750)).unwrap();
+    StorageFixtures::readable(&world.dirs.core());
     let host = world.host();
     let report = serde_json::to_value(host.poll()).unwrap();
     assert_eq!(report["state"], "failed");
     assert_eq!(report["failure"]["key"], "identity.unsafe-directory");
     assert!(core.requests().is_empty(), "{:?}", core.requests());
-    std::fs::set_permissions(world.dirs.core(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    StorageFixtures::private(&world.dirs.core());
 }
 
 #[test]
@@ -418,7 +405,7 @@ fn with_nothing_installed_the_host_is_absent() {
 /// leaving `D/version-read` once it has read it.
 fn install_fake_cli(dirs: &DataDirs, status: &str) -> PathBuf {
     std::fs::create_dir_all(&dirs.data).unwrap();
-    std::fs::set_permissions(&dirs.data, std::fs::Permissions::from_mode(0o700)).unwrap();
+    StorageFixtures::private(&dirs.data);
     let script = dirs.data.join("fake-cli");
     let log = dirs.data.join("calls.log");
     fixture::install(
@@ -428,7 +415,7 @@ fn install_fake_cli(dirs: &DataDirs, status: &str) -> PathBuf {
     )
     .unwrap();
     std::fs::write(dirs.install_record(), json!({"command": [script]}).to_string()).unwrap();
-    std::fs::set_permissions(dirs.install_record(), std::fs::Permissions::from_mode(0o600)).unwrap();
+    StorageFixtures::private(&dirs.install_record());
     set_version(dirs, json!("0.8.1"));
     log
 }

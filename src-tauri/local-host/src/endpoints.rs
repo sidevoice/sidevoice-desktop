@@ -11,9 +11,9 @@
 
 use crate::checks::Check;
 use crate::paths::DataDirs;
+use crate::platform::storage::{Access, Directory, HeldDirectory, Storage, TrustedStorage};
 use crate::Refusal;
 use serde_json::Value;
-use sidevoice_platform::fs::{Access, Directory, HeldDirectory};
 use sidevoice_platform::ipc::Endpoint;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -22,7 +22,7 @@ const RECORD_LIMIT: u64 = 64 * 1024;
 
 /// The core's socket, from `C/core.json`: `C` private to this user, the record private too (it holds the core's token).
 pub fn core(dirs: &DataDirs) -> Result<PathBuf, Check> {
-    let dir = HeldDirectory::open(&dirs.core(), Access::Private)
+    let dir = Storage::open(&dirs.core(), Access::Private)
         .map_err(|e| crate::checks::storage_error(&dirs.core(), "identity.unsafe-directory", e))?;
     let record = read(&dir, &dirs.core_record(), Access::Private, "identity.unsafe-directory")?;
     socket(&record, &dirs.core_record())
@@ -32,7 +32,7 @@ pub fn core(dirs: &DataDirs) -> Result<PathBuf, Check> {
 /// others, so is the record.
 pub fn connector(dirs: &DataDirs) -> Result<PathBuf, Check> {
     let path = dirs.connector_record();
-    let dir = HeldDirectory::open(&dirs.data, Access::NotWritableByOthers)
+    let dir = Storage::open(&dirs.data, Access::NotWritableByOthers)
         .map_err(|e| crate::checks::storage_error(&dirs.data, "install.unsafe", e))?;
     let record = read(&dir, &path, Access::NotWritableByOthers, "install.unsafe")?;
     let pid = record.get("pid").and_then(Value::as_u64).and_then(|pid| i32::try_from(pid).ok()).filter(|pid| *pid > 0);
@@ -79,25 +79,21 @@ fn alive(pid: i32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
-
-    fn chmod(path: &Path, mode: u32) {
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
-    }
+    use sidevoice_desktop_test_support::platform::storage::{StorageFixture, StorageFixtures};
 
     fn dirs() -> (tempfile::TempDir, DataDirs) {
         let tmp = tempfile::tempdir().unwrap();
         let data = tmp.path().join("d");
         std::fs::create_dir_all(data.join("core")).unwrap();
-        chmod(&data, 0o700);
-        chmod(&data.join("core"), 0o700);
+        StorageFixtures::private(&data);
+        StorageFixtures::private(&data.join("core"));
         (tmp, DataDirs::new(data))
     }
 
     fn write(path: &Path, text: &str) {
         let _ = std::fs::remove_file(path);
         std::fs::write(path, text).unwrap();
-        chmod(path, 0o600);
+        StorageFixtures::private(path);
     }
 
     #[test]
@@ -107,11 +103,11 @@ mod tests {
         assert_eq!(core(&dirs), Err(Check::Missing));
         assert_eq!(connector(&dirs), Err(Check::Missing));
         assert!(!dirs.data.exists());
-        chmod(tmp.path(), 0o777);
+        StorageFixtures::writable(tmp.path());
         assert!(matches!(core(&dirs), Err(Check::Unsafe(_))));
         assert!(matches!(connector(&dirs), Err(Check::Unsafe(_))));
         assert!(!dirs.data.exists());
-        chmod(tmp.path(), 0o700);
+        StorageFixtures::private(tmp.path());
     }
 
     #[test]
@@ -159,27 +155,26 @@ mod tests {
         let me = std::process::id();
         let body = format!(r#"{{"pid":{me},"endpoint":"/run/user/1/x/connector.sock"}}"#);
         // A named pipe in its place: opened without blocking and refused as not a regular file.
-        let fifo = std::ffi::CString::new(dirs.connector_record().to_str().unwrap()).unwrap();
-        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        StorageFixtures::special_record(&dirs.connector_record());
         assert!(matches!(connector(&dirs), Err(Check::Unsafe(_))));
         std::fs::remove_file(dirs.connector_record()).unwrap();
         // A link to a good file is not followed.
         let real = tmp.path().join("real.json");
         write(&real, &body);
-        std::os::unix::fs::symlink(&real, dirs.connector_record()).unwrap();
+        StorageFixtures::symlink(&real, dirs.connector_record());
         assert!(matches!(connector(&dirs), Err(Check::Unsafe(_))));
         // Writable by others: refused.
         std::fs::remove_file(dirs.connector_record()).unwrap();
         write(&dirs.connector_record(), &body);
-        chmod(&dirs.connector_record(), 0o666);
+        StorageFixtures::writable(&dirs.connector_record());
         assert!(matches!(connector(&dirs), Err(Check::Unsafe(_))));
         // The core's record: a link, or readable by others, is refused too.
         write(&real, r#"{"endpoint":"/run/user/1/x/local.sock"}"#);
-        std::os::unix::fs::symlink(&real, dirs.core_record()).unwrap();
+        StorageFixtures::symlink(&real, dirs.core_record());
         assert!(matches!(core(&dirs), Err(Check::Unsafe(_))));
         std::fs::remove_file(dirs.core_record()).unwrap();
         write(&dirs.core_record(), r#"{"endpoint":"/run/user/1/x/local.sock"}"#);
-        chmod(&dirs.core_record(), 0o644);
+        StorageFixtures::readable(&dirs.core_record());
         assert!(matches!(core(&dirs), Err(Check::Unsafe(_))));
     }
 }

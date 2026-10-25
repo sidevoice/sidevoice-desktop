@@ -3,9 +3,9 @@
 //! unreadable is no pairing: the app pairs again (which revokes the previous local device in the core).
 
 use crate::checks::Check;
+use crate::platform::storage::{Access, Directory, HeldDirectory, Storage, TrustedStorage};
 use crate::Refusal;
 use serde::{Deserialize, Serialize};
-use sidevoice_platform::fs::{Access, Directory, Files, Fs, HeldDirectory};
 use std::io;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -40,8 +40,7 @@ impl Pairing {
 /// The app's config directory, checked as opened: its ancestry safe from other users, itself this user's and not
 /// writable by others (review R1-c #5).
 fn open(dir: &Path) -> Result<HeldDirectory, Check> {
-    HeldDirectory::open(dir, Access::NotWritableByOthers)
-        .map_err(|e| crate::checks::storage_error(dir, "app.storage", e))
+    Storage::open(dir, Access::NotWritableByOthers).map_err(|e| crate::checks::storage_error(dir, "app.storage", e))
 }
 
 /// The stored pairing, read through the checked directory: a regular private file (0600), not a link.
@@ -57,7 +56,7 @@ pub fn save(dir: &Path, pairing: &Pairing) -> io::Result<()> {
     // directory is created, with the shared private creation/check policy.
     let opened = match open(dir) {
         Err(Check::Missing) => {
-            Files::ensure_private_dir(dir)?;
+            Storage::ensure_private_dir(dir)?;
             open(dir)
         }
         opened => opened,
@@ -98,8 +97,8 @@ fn iso(seconds: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sidevoice_desktop_test_support::platform::storage::{Others, StorageFixture, StorageFixtures};
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
 
     fn pairing() -> Pairing {
         Pairing {
@@ -119,9 +118,8 @@ mod tests {
         assert_eq!(load(&dir), None);
         save(&dir, &pairing()).unwrap();
         assert_eq!(load(&dir), Some(pairing()).map(|p| Pairing { paired_at: load(&dir).unwrap().paired_at, ..p }));
-        let mode = fs::metadata(dir.join(FILE_NAME)).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600);
-        assert_eq!(fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+        StorageFixtures::assert_private(&dir.join(FILE_NAME));
+        StorageFixtures::assert_private(&dir);
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 1, "nothing staged is left");
         assert!(!pairing().redacted().contains("secret-token"));
         remove(&dir).unwrap();
@@ -149,15 +147,16 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let shared = tmp.path().join("shared");
         fs::create_dir(&shared).unwrap();
-        fs::set_permissions(&shared, fs::Permissions::from_mode(0o777)).unwrap();
+        StorageFixtures::writable(&shared);
         let dir = shared.join("dev.sidevoice.desktop");
         assert!(save(&dir, &pairing()).is_err(), "refused under a directory others can rename in");
         assert_eq!(load(&dir), None);
-        fs::set_permissions(&shared, fs::Permissions::from_mode(0o755)).unwrap();
+        StorageFixtures::private(&shared);
+        StorageFixtures::readable(&shared);
         save(&dir, &pairing()).unwrap();
         assert!(load(&dir).is_some());
         // A credential others can read is not one.
-        fs::set_permissions(dir.join(FILE_NAME), fs::Permissions::from_mode(0o644)).unwrap();
+        StorageFixtures::readable(&dir.join(FILE_NAME));
         assert_eq!(load(&dir), None);
     }
 
@@ -166,15 +165,15 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("config");
         fs::create_dir(&dir).unwrap();
-        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+        StorageFixtures::readable(&dir);
         let old = pairing();
         let bytes = serde_json::to_vec_pretty(&old).unwrap();
         fs::write(dir.join(FILE_NAME), &bytes).unwrap();
-        fs::set_permissions(dir.join(FILE_NAME), fs::Permissions::from_mode(0o600)).unwrap();
+        StorageFixtures::private(&dir.join(FILE_NAME));
         assert_eq!(load(&dir), Some(old.clone()));
         assert_eq!(fs::read(dir.join(FILE_NAME)).unwrap(), bytes);
         save(&dir, &old).unwrap();
-        assert_eq!(fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o755);
+        assert_eq!(StorageFixtures::others(&dir), Others::Read);
         assert_eq!(load(&dir), Some(old));
     }
 
@@ -192,7 +191,7 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), original);
         assert_eq!(fs::read(&other).unwrap(), original);
         fs::remove_file(&path).unwrap();
-        std::os::unix::fs::symlink(&other, &path).unwrap();
+        StorageFixtures::symlink(&other, &path);
         assert_eq!(load(tmp.path()), None);
         assert!(save(tmp.path(), &pairing()).is_err());
         assert!(remove(tmp.path()).is_err());

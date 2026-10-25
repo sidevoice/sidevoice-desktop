@@ -4,8 +4,8 @@
 //!
 //! A path that is not there is not unsafe: it is [`Check::Missing`], and the caller treats the host as absent.
 
+use crate::platform::storage::{Access, Storage, TrustedStorage};
 use crate::Refusal;
-use sidevoice_platform::fs::{Access, Directory, HeldDirectory};
 use std::io;
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixStream;
@@ -46,16 +46,12 @@ pub(crate) fn storage_error(path: &Path, key: &str, error: io::Error) -> Check {
 
 /// The core's existing directory, checked with its ancestry; discovery never creates it.
 pub fn private_dir(path: &Path) -> Result<(), Check> {
-    HeldDirectory::open(path, Access::Private)
-        .map(|_| ())
-        .map_err(|e| storage_error(path, "identity.unsafe-directory", e))
+    Storage::open(path, Access::Private).map(|_| ()).map_err(|e| storage_error(path, "identity.unsafe-directory", e))
 }
 
 /// The connector's existing directory, readable by others but never writable by them.
 pub fn owned_not_writable(path: &Path) -> Result<(), Check> {
-    HeldDirectory::open(path, Access::NotWritableByOthers)
-        .map(|_| ())
-        .map_err(|e| storage_error(path, "install.unsafe", e))
+    Storage::open(path, Access::NotWritableByOthers).map(|_| ()).map_err(|e| storage_error(path, "install.unsafe", e))
 }
 
 /// The uid of the process at the other end of a connected Unix socket.
@@ -122,12 +118,9 @@ pub fn connect(dir: &Path, socket: &Path, dir_check: fn(&Path) -> Result<(), Che
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
+    use crate::platform::storage::Directory;
+    use sidevoice_desktop_test_support::platform::storage::{StorageFixture, StorageFixtures};
     use std::os::unix::net::UnixListener;
-
-    fn chmod(path: &Path, mode: u32) {
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
-    }
 
     #[test]
     fn a_private_directory_passes_and_anything_looser_does_not() {
@@ -135,13 +128,12 @@ mod tests {
         let dir = tmp.path().join("core");
         assert_eq!(private_dir(&dir), Err(Check::Missing));
         std::fs::create_dir(&dir).unwrap();
-        chmod(&dir, 0o700);
+        StorageFixtures::private(&dir);
         assert_eq!(private_dir(&dir), Ok(()));
-        for mode in [0o750, 0o705, 0o770, 0o777, 0o710] {
-            chmod(&dir, mode);
-            let Err(Check::Unsafe(refusal)) = private_dir(&dir) else { panic!("mode {mode:o} passed") };
+        StorageFixtures::private_directory_violations(&dir, || {
+            let Err(Check::Unsafe(refusal)) = private_dir(&dir) else { panic!("insecure access passed") };
             assert_eq!(refusal.key, "identity.unsafe-directory");
-        }
+        });
     }
 
     #[test]
@@ -149,13 +141,13 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let real = tmp.path().join("real");
         std::fs::create_dir(&real).unwrap();
-        chmod(&real, 0o700);
+        StorageFixtures::private(&real);
         let link = tmp.path().join("core");
-        std::os::unix::fs::symlink(&real, &link).unwrap();
+        StorageFixtures::symlink(&real, &link);
         assert!(matches!(private_dir(&link), Err(Check::Unsafe(_))));
         let file = tmp.path().join("file");
         std::fs::write(&file, b"").unwrap();
-        chmod(&file, 0o600);
+        StorageFixtures::private(&file);
         assert!(matches!(private_dir(&file), Err(Check::Unsafe(_))));
     }
 
@@ -163,7 +155,7 @@ mod tests {
     fn install_record_must_not_be_writable_by_others() {
         let tmp = tempfile::tempdir().unwrap();
         let file = tmp.path().join("install.json");
-        let dir = HeldDirectory::open(tmp.path(), Access::NotWritableByOthers).unwrap();
+        let dir = Storage::open(tmp.path(), Access::NotWritableByOthers).unwrap();
         let check = || {
             dir.read("install.json".as_ref(), Access::NotWritableByOthers, 1024)
                 .map_err(|e| storage_error(&file, "install.unsafe", e))?
@@ -171,21 +163,20 @@ mod tests {
         };
         assert_eq!(check(), Err(Check::Missing));
         std::fs::write(&file, b"{}").unwrap();
-        for mode in [0o600, 0o644, 0o640, 0o700, 0o755] {
-            chmod(&file, mode);
-            assert_eq!(check(), Ok(b"{}".to_vec()), "mode {mode:o}");
-        }
-        for mode in [0o620, 0o602, 0o666, 0o777] {
-            chmod(&file, mode);
-            let Err(Check::Unsafe(refusal)) = check() else { panic!("mode {mode:o} passed") };
-            assert_eq!(refusal.key, "install.unsafe");
-        }
+        StorageFixtures::record_access_cases(&file, |trusted| {
+            if trusted {
+                assert_eq!(check(), Ok(b"{}".to_vec()));
+            } else {
+                let Err(Check::Unsafe(refusal)) = check() else { panic!("writable record passed") };
+                assert_eq!(refusal.key, "install.unsafe");
+            }
+        });
     }
 
     #[test]
     fn the_peer_of_our_own_socket_is_us() {
         let tmp = tempfile::tempdir().unwrap();
-        chmod(tmp.path(), 0o700);
+        StorageFixtures::private(tmp.path());
         let path = tmp.path().join("s.sock");
         let _listener = UnixListener::bind(&path).unwrap();
         let stream = connect(tmp.path(), &path, private_dir).unwrap();
@@ -193,8 +184,8 @@ mod tests {
         // Nobody listening: absent, not unsafe.
         assert_eq!(connect(tmp.path(), &tmp.path().join("none.sock"), private_dir).err(), Some(Check::Missing));
         // A loose directory: refused before any connect.
-        chmod(tmp.path(), 0o755);
+        StorageFixtures::readable(tmp.path());
         assert!(matches!(connect(tmp.path(), &path, private_dir), Err(Check::Unsafe(_))));
-        chmod(tmp.path(), 0o700);
+        StorageFixtures::private(tmp.path());
     }
 }

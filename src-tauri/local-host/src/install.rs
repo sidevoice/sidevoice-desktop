@@ -19,11 +19,11 @@
 
 use crate::cli::Cli;
 use crate::npm::{self, Fetch};
+use crate::platform::storage::{Access, Storage, TrustedStorage};
 use crate::tarball;
 use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha512};
-use sidevoice_platform::fs::{Access, Directory, HeldDirectory};
 use std::ffi::{CString, OsString};
 use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
@@ -245,7 +245,7 @@ impl Scratch {
         buffer.pop();
         // Removed again, by this name, if the check below refuses it.
         let mut scratch = Scratch { path: PathBuf::from(OsString::from_vec(buffer)) };
-        HeldDirectory::open(&scratch.path, Access::Private)
+        Storage::open(&scratch.path, Access::Private)
             .map_err(|error| unsafe_root(format!("{}: {error}", scratch.path.display())))?;
         // Resolve only after the shared policy has accepted the original ancestry (e.g. macOS /var).
         scratch.path =

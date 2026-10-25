@@ -8,9 +8,9 @@
 
 use crate::checks::Check;
 use crate::paths::DataDirs;
+use crate::platform::storage::{Access, Directory, Storage, TrustedStorage};
 use crate::Refusal;
 use serde_json::Value;
-use sidevoice_platform::fs::{Access, Directory, Files, Fs, HeldDirectory};
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::process::CommandExt;
 use std::process::{Command, ExitStatus, Stdio};
@@ -35,7 +35,7 @@ impl Cli {
     /// this user can change. No install, no CLI (`cli.unavailable`).
     pub fn installed(dirs: &DataDirs) -> Result<Cli, Refusal> {
         let dir = checked(
-            HeldDirectory::open(&dirs.data, Access::NotWritableByOthers)
+            Storage::open(&dirs.data, Access::NotWritableByOthers)
                 .map_err(|e| crate::checks::storage_error(&dirs.data, "install.unsafe", e)),
         )?;
         let record = dirs.install_record();
@@ -53,7 +53,7 @@ impl Cli {
         let mut verified = Vec::with_capacity(prefix.len());
         for path in &prefix {
             let resolved = checked(
-                Files::trusted_program(std::path::Path::new(path))
+                Storage::trusted_program(std::path::Path::new(path))
                     .map_err(|e| crate::checks::storage_error(std::path::Path::new(path), "install.unsafe", e)),
             )?;
             let resolved = resolved.into_os_string().into_string().map_err(|_| {
