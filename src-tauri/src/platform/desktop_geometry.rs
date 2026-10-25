@@ -8,12 +8,25 @@ pub struct GeometryCapabilities {
 }
 
 #[cfg_attr(target_os = "macos", path = "desktop_geometry/macos.rs")]
-#[cfg_attr(target_os = "windows", path = "desktop_geometry/windows.rs")]
 #[cfg_attr(target_os = "linux", path = "desktop_geometry/linux.rs")]
+#[cfg(not(target_os = "windows"))]
 mod imp;
+#[cfg(not(target_os = "windows"))]
 pub use imp::NativeGeometry;
 
+/// The shared physical-pixel geometry used when an OS needs no overrides.
+pub struct PhysicalGeometry;
+impl DesktopGeometry for PhysicalGeometry {}
+#[cfg(target_os = "windows")]
+pub use PhysicalGeometry as NativeGeometry;
+
 pub trait DesktopGeometry {
+    /// Convert a monitor's scale to desktop units per logical pixel and desktop units per Tauri pixel.
+    /// The default uses physical pixels; macOS overrides it to use AppKit points.
+    fn monitor_units(scale: f64) -> (f64, f64) {
+        (scale, 1.0)
+    }
+
     /// Read session capabilities. First call must be on the main thread during setup, before workers start.
     /// Linux observes the GTK backend actually selected, including XWayland, rather than environment hints.
     fn capabilities() -> GeometryCapabilities {
@@ -104,7 +117,7 @@ fn monitor_display(m: &Monitor) -> (Rect, Display) {
 }
 
 fn monitor_geometry(name: &str, scale: f64, at: Point, size: Size, work: Rect) -> (Rect, Display) {
-    let (unit, to_desktop) = imp::monitor_units(scale);
+    let (unit, to_desktop) = NativeGeometry::monitor_units(scale);
     let whole = Rect {
         x: at.x * to_desktop,
         y: at.y * to_desktop,
