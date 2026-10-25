@@ -14,7 +14,6 @@ mod call_controls;
 mod data;
 mod debug_options;
 mod engine_ipc;
-mod headset;
 mod keychain;
 mod local_host;
 /// A look at the process's own memory, for CI's measurements of it (#145). Never in a release.
@@ -31,6 +30,7 @@ mod voice;
 use crate::platform::update_eligibility::{NativeUpdateEligibility, UpdateEligibility};
 
 use crate::platform::computer_name::{ComputerName, SystemComputerName};
+use crate::platform::media_controls::{MediaControls, NativeMediaControls};
 use crate::platform::webview_diagnostics::{NativeWebviewDiagnostics, WebviewDiagnostics};
 use serde_json::{json, Value};
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
@@ -192,7 +192,7 @@ fn bridge_state(
     // its facts carry the conversation's words, which stay out of the log.
     debug_detail(|| format!("bridge_state {:?}", CallSnapshot { rest: Default::default(), ..snapshot.clone() }));
     tray::update(&app, &snapshot);
-    headset::update(&app, &snapshot);
+    NativeMediaControls::update(&app, &snapshot);
     call_controls::update(&app);
     Ok(())
 }
@@ -319,7 +319,7 @@ fn reset_call_state(app: &AppHandle) {
     let snapshot = CallSnapshot::default();
     *app.state::<AppState>().call.lock().unwrap() = snapshot.clone();
     tray::update(app, &snapshot);
-    headset::update(app, &snapshot);
+    NativeMediaControls::update(app, &snapshot);
     call_controls::update(app);
     #[cfg(target_os = "macos")]
     voice::page_changed(app);
@@ -365,6 +365,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             &debug_options,
             platform::microphone::SETTINGS_URL.is_some(),
             &NativeWebviewDiagnostics::available(),
+            NativeMediaControls::support(),
         ));
     #[cfg(feature = "probe")]
     let builder = match probe::local_host_flow() {
@@ -657,7 +658,8 @@ pub fn run() {
             }
             debug(&format!("launch {}", app_report(&handle)));
             tray::create(&handle)?;
-            headset::setup(&handle);
+            let media_app = handle.clone();
+            NativeMediaControls::attach(&handle, Arc::new(move |command| send(&media_app, command)));
             // The model root is shared per OS user on this machine (docs/ENGINES.md).
             // Without it the app still runs; the page then finds no native engine to use.
             let engine_root =

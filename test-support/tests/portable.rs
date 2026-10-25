@@ -162,3 +162,12 @@ fn closing_an_older_call_keeps_the_newer_call_open() {
 #[path = "../../src-tauri/src/platform/reset_handoff.rs"]
 #[allow(dead_code)]
 mod reset_handoff;
+
+// Exercise the actual shell pairing store without linking the native UI.
+#[path = "../../src-tauri/src/platform/pairing_storage.rs"]
+mod pairing_storage;
+mod platform {
+    pub(crate) use crate::pairing_storage;
+}
+#[path = "../../src-tauri/src/data/pairings.rs"]
+mod pairings;
