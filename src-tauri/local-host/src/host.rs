@@ -1,6 +1,3 @@
-// Existing OS calls are reported by the separate Platform boundary CI job.
-#![allow(clippy::disallowed_methods, clippy::disallowed_types)]
-
 //! The local host, tied together: the poll that finds the core and keeps the app paired with it, the proxy, and the
 //! actions the bridge offers (`localHost.*`, SEAMS §5).
 //!

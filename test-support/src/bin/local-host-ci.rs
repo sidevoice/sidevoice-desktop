@@ -1,6 +1,3 @@
-// Existing OS calls are reported by the separate Platform boundary CI job.
-#![allow(clippy::disallowed_methods, clippy::disallowed_types)]
-
 #[cfg(unix)]
 mod unix {
     // CI's tool for the local host (.github/workflows/build.yml). Never shipped.

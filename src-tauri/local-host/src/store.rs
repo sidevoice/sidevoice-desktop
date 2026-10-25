@@ -1,6 +1,3 @@
-// Existing OS calls are reported by the separate Platform boundary CI job.
-#![allow(clippy::disallowed_methods, clippy::disallowed_types)]
-
 //! `local-host.json` in the app's config directory (SEAMS §5): the app's pairing with this computer's core, the only
 //! copy of its device token. Written 0600, atomically; one writer, the app's native side. A file that is missing or
 //! unreadable is no pairing: the app pairs again (which revokes the previous local device in the core).

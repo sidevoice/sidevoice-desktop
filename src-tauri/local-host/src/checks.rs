@@ -1,6 +1,3 @@
-// Existing OS calls are reported by the separate Platform boundary CI job.
-#![allow(clippy::disallowed_methods, clippy::disallowed_types)]
-
 //! What the app checks before it trusts a file or a socket of the local host (SEAMS §5): the core's directory is
 //! this user's and private (`identity.unsafe-directory`), the connector's directory and `install.json` are this
 //! user's and nobody else can write them, and whoever answers on a socket runs as this user (`peer.uid-mismatch`).

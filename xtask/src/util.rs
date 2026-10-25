@@ -1,6 +1,3 @@
-// Existing OS calls are reported by the separate Platform boundary CI job.
-#![allow(clippy::disallowed_methods, clippy::disallowed_types)]
-
 //! What every command shares: the repository, the app's version, running programs (with secrets kept out of what is
 //! printed), programs in the background, and reading the logs the app writes with `SIDEVOICE_DEBUG=1`.
 

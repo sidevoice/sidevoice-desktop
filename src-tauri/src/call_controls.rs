@@ -1,6 +1,3 @@
-// Existing OS calls are reported by the separate Platform boundary CI job.
-#![allow(clippy::disallowed_methods, clippy::disallowed_types)]
-
 //! The call controls card (sidevoice/sidevoice-desktop#4): a small window that floats over the person's other apps
 //! during a call, while the room's stage is out of view (#165: the room hidden, minimised, covered or on another
 //! Space, or the page on Settings), and never takes focus from them. It shows the web build's `call-controls.html`,
