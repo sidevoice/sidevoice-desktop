@@ -30,8 +30,13 @@ reuses another application's browser cannot make an unobserved default store loo
    resulting observation in the helper. It retains PID **and start time**, and includes descendants, not just
    the browser leader. Windows also finds `msedgewebview2.exe` processes whose exact `--user-data-dir` argument
    names our folder, even when they are no longer children of the app. Other user-data folders are not selected.
+   macOS also queries responsibility for same-user WebKit processes: XPC Networking/WebContent services can
+   have launchd as their parent. Services charged to our app are retained by PID/start time even after the app
+   exits or the responsibility chain changes. A terminal-launched app that is not itself responsible is refused
+   rather than associating services from other apps charged to that terminal.
 3. After app exit, `wait_released` refreshes that observation until the deadline. It never terminates another
-   browser. An unreadable Windows runtime owner/command line or an uninspectable tracked start time refuses
+   browser. An unavailable/failed macOS responsibility query, unreadable Windows runtime owner/command line,
+   or an uninspectable tracked start time refuses
    cleanup; a process timeout leaves all browser roots intact and reports `reset.process-busy`.
 4. Only a successful release produces the opaque `Released` value needed by `remove`. All three macOS browser
    roots share this gate, so a lingering browser cannot rewrite cookies/cache into an already deleted app-data root.
@@ -45,15 +50,42 @@ reuses another application's browser cannot make an unobserved default store loo
 Microsoft explicitly requires the browser and its children to exit before deleting a user data folder:
 [WebView2 UDF lifecycle](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/user-data-folder#delete-user-data-folders).
 The interface uses the existing maintained `sysinfo` dependency for process observation and `same-file` for
-Windows folder identity, plus the released shared removal primitive. It adds no native unsafe code or recursive walker.
+Windows folder identity, plus the released shared removal primitive. macOS adds a small dynamically resolved
+binding to `responsibility_get_pid_responsible_for_pid`: sysinfo has no equivalent, and no maintained Rust
+wrapper was found. A missing symbol refuses cleanup. The ABI is evidenced by
+[Chromium's macOS process implementation](https://chromium.googlesource.com/chromium/src/+/24aa2a50ac03698e7ec5a11251a615b965f5874d/base/process/process_info_mac.cc).
+This is a macOS SPI, not a promised public API. There is no recursive walker.
+
+The security fix chooses responsible-service tracking (option b). The pinned
+[Wry 0.57.0 WKWebView clear implementation](https://docs.rs/crate/wry/0.57.0/source/src/wkwebview/mod.rs)
+invokes the official asynchronous removal API but supplies an empty completion callback; Tauri's
+`clear_all_browsing_data` therefore cannot serve as a completed-removal barrier. Tracking the service keeps
+the existing helper protocol and deletion order without introducing a separate pre-exit reset phase.
+
+### Other process models checked
+
+- **Windows:** Microsoft's [process model](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/process-model)
+  ties renderers/helpers to a browser process and a UDF; its UDF deletion guidance explicitly says to wait for
+  the browser and all children. The browser can be shared across host applications, so it is not safe to require
+  it to be our app's child. The existing exact-UDF scan plus descendant tracking covers that distinction.
+- **Linux:** WebKit's [GLib launcher](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/Launcher/glib/ProcessLauncherGLib.cpp)
+  chooses `executablePathOfNetworkProcess` and launches it with `GSubprocessLauncher` (spawn/fork-exec), so the
+  ordinary native WebKitNetworkProcess is a child. Bubblewrap/Flatpak have separate launch paths and intermediate
+  processes; the source does not prove app ancestry for all sandbox configurations. Those configurations and
+  installed runtime process trees remain unverified; reset stays hidden on Linux and Windows.
 
 ## Verification and limits
 
 Interface tests run on each compiled host: an active owner refuses release, exact allowlist removal preserves
 siblings, missing roots succeed, malformed UDF arguments refuse, and a real child through the shared lifetime implementation performs its final shutdown
-write before release/removal. Windows can also be type-checked independently of the shell's native toolkit.
+write before release/removal. A sibling-writer regression injects responsibility lookup (not PPID ancestry),
+exits its host, confirms release is refused while the sibling remains alive, and waits for the final shutdown
+write before removing storage. Lookup failure and another responsible app are also checked. Windows can also
+be type-checked independently of the shell's native toolkit.
 
-The tests do not launch a real WebView2/WKWebView/WebKitGTK engine. Installed-browser process topology,
+The tests do not launch a real WebView2/WKWebView/WebKitGTK engine or exercise the macOS SPI. Its availability,
+Finder-launched app responsibility and XPC-service lifetime must still be verified on supported macOS releases.
+Installed-browser process topology,
 shutdown under renderer/network-process churn, Windows file locks, and actual non-Mac reset/relaunch remain
 runtime validation requirements before enabling reset there. Process snapshots are observational, not kernel
 job containment: the caller's no-new-webviews and launch-barrier obligations are essential. No guarantee is

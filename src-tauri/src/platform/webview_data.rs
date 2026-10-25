@@ -53,9 +53,9 @@ pub trait WebviewData {
         locations(vec![app_local_data.to_path_buf()])
     }
 
-    /// Snapshot the app and its browser descendants before allowing the app to exit. The transaction
+    /// Snapshot the app and its browser writers before allowing the app to exit. The transaction
     /// must already forbid new webviews and keep other app launches behind its held reset lock.
-    /// Windows also discovers every runtime using this user-data folder, including reparented ones.
+    /// Windows also discovers runtimes using this user-data folder; macOS tracks responsible XPC services.
     fn capture(owner: u32, locations: Locations) -> io::Result<Owner> {
         let system = snapshot()?;
         let pid = Pid::from_u32(owner);
@@ -184,6 +184,32 @@ fn descendants(system: &System, processes: &mut Vec<(Pid, u64)>) {
     }
 }
 
+// Responsibility, unlike PPID, associates launchd-owned XPC services with their application. Keep
+// already observed PID/start pairs even after the app exits or macOS changes the responsibility chain.
+#[cfg(any(target_os = "macos", test))]
+fn responsible_processes(
+    system: &System,
+    processes: &mut Vec<(Pid, u64)>,
+    mut lookup: impl FnMut(Pid, &sysinfo::Process) -> io::Result<Option<Pid>>,
+) -> io::Result<()> {
+    let app = processes.first().ok_or_else(busy)?.0;
+    for (pid, process) in system.processes() {
+        if processes.contains(&(*pid, process.start_time())) {
+            continue;
+        }
+        if lookup(*pid, process)? == Some(app) {
+            if process.start_time() == 0 {
+                return Err(busy());
+            }
+            let identity = (*pid, process.start_time());
+            if !processes.contains(&identity) {
+                processes.push(identity);
+            }
+        }
+    }
+    Ok(())
+}
+
 // The browser's command line is used only to associate a process with our UDF, never as a deletion path.
 #[cfg(any(target_os = "windows", test))]
 fn user_data_folder(args: &[std::ffi::OsString]) -> io::Result<Option<PathBuf>> {
@@ -274,6 +300,55 @@ mod tests {
         }
         // A browser can flush cookies during shutdown, after its host has requested exit.
         std::fs::write(root.join(IDENTIFIER).join("cookies"), b"last shutdown write").unwrap();
+    }
+
+    #[test]
+    fn responsible_sibling_writer_blocks_removal_after_host_exit() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let selected = root.join(IDENTIFIER);
+        std::fs::create_dir(&selected).unwrap();
+        let spawn_writer = |directory: &Path| {
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", &format!("{}::browser_writer_child", module_path!().split_once("::").unwrap().1)])
+                .env("SIDEVOICE_WEBVIEW_WRITER_FIXTURE", directory)
+                .spawn()
+                .unwrap()
+        };
+        let host_dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(host_dir.path().join(IDENTIFIER)).unwrap();
+        let mut host = spawn_writer(host_dir.path());
+        let mut writer = spawn_writer(&root);
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !root.join("ready").exists() || !host_dir.path().join("ready").exists() {
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(20));
+        }
+        let mut owner = Fixture::capture(host.id(), locations(vec![selected.clone()]).unwrap()).unwrap();
+        let writer_pid = Pid::from_u32(writer.id());
+        assert!(!owner.processes.iter().any(|(pid, _)| *pid == writer_pid));
+        let system = snapshot().unwrap();
+        // Lookup failure cannot authorize cleanup; another responsible app must not be selected.
+        assert!(responsible_processes(&system, &mut owner.processes, |_, _| Err(busy())).is_err());
+        responsible_processes(&system, &mut owner.processes, |_, _| Ok(Some(Pid::from_u32(std::process::id()))))
+            .unwrap();
+        assert!(!owner.processes.iter().any(|(pid, _)| *pid == writer_pid));
+        // Inject only the platform lookup: these are real sibling processes, not descendants.
+        responsible_processes(&system, &mut owner.processes, |pid, _| {
+            Ok((pid == writer_pid).then_some(Pid::from_u32(host.id())))
+        })
+        .unwrap();
+        let retry = Owner { locations: locations(vec![selected.clone()]).unwrap(), processes: owner.processes.clone() };
+        std::fs::write(host_dir.path().join("exit"), b"exit").unwrap();
+        assert!(host.wait().unwrap().success());
+        assert_eq!(Fixture::wait_released(owner, Instant::now()).err().unwrap().kind(), io::ErrorKind::WouldBlock);
+        assert!(selected.exists());
+        std::fs::write(root.join("exit"), b"exit").unwrap();
+        assert!(writer.wait().unwrap().success());
+        let released = Fixture::wait_released(retry, deadline).unwrap();
+        assert_eq!(std::fs::read(selected.join("cookies")).unwrap(), b"last shutdown write");
+        SystemWebviewData::remove(&released, &selected).unwrap();
+        assert!(!selected.exists());
     }
 
     #[test]
