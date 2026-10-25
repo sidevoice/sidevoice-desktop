@@ -34,12 +34,12 @@ mod tests {
     fn current_computer_name_is_usable_for_a_pairing() {
         let name = SystemComputerName::read();
         assert!(!name.is_empty());
-        assert!(!name.ends_with(".local"));
     }
 
     #[test]
     fn pairing_name_strips_only_the_exact_suffix_and_uses_empty_fallback() {
         assert_eq!(normalize(OsStr::new("desk.local")), "desk");
+        assert_eq!(normalize(OsStr::new("desk.local.local")), "desk.local");
         assert_eq!(normalize(OsStr::new("desk.local.")), "desk.local.");
         assert_eq!(normalize(OsStr::new(".local")), "Sidevoice");
         assert_eq!(normalize(OsStr::new("")), "Sidevoice");
