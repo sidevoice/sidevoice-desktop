@@ -64,7 +64,7 @@ pub(crate) struct AppState {
     resetting: std::sync::atomic::AtomicBool,
     reset_admission: Mutex<data::Admission>,
     #[cfg(target_os = "macos")]
-    reset_helper: Mutex<Option<std::process::Child>>,
+    reset_helper: Mutex<Option<platform::reset_handoff::Pending>>,
 }
 
 impl Default for AppState {
@@ -601,11 +601,17 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
 }
 
 pub fn run() {
-    #[cfg(target_os = "macos")]
-    if !data::await_reset_idle() {
-        eprintln!("sidevoice: reset lock unavailable or cleanup still running"); // before the log exists
-        return;
-    }
+    use platform::reset_handoff::{DesktopReset, ResetHandoff};
+    let startup = match DesktopReset::await_idle(
+        std::time::Duration::from_secs(5 * 60),
+        &std::sync::atomic::AtomicBool::new(false),
+    ) {
+        Ok(guard) => guard,
+        Err(_) => {
+            eprintln!("sidevoice: reset lock unavailable or cleanup still running"); // before the log exists
+            return;
+        }
+    };
     let context = tauri::generate_context!();
     #[cfg(feature = "probe")]
     let context = probe::with_page(context);
@@ -639,7 +645,7 @@ pub fn run() {
         )
         .manage(AppState::default())
         .invoke_handler(handler())
-        .setup(|app| {
+        .setup(move |app| {
             let handle = app.handle().clone();
             // A regular app with its Dock tile, asked for before any window or panel exists (#117). The policy is
             // already Regular (Tao sets it at launch, no bundle key says otherwise) yet the operator's Mac showed no
@@ -700,6 +706,7 @@ pub fn run() {
             });
             #[cfg(target_os = "macos")]
             data::finalize_relaunched_reset();
+            DesktopReset::finish_startup(startup);
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -739,6 +746,6 @@ pub fn run() {
 }
 
 /// The helper is the same signed executable, launched only after a confirmed reset or uninstall.
-pub fn run_reset_helper(parent_pid: Option<u32>, lock_fd: Option<i32>, uninstall: bool) {
-    data::run_reset_helper(parent_pid, lock_fd, uninstall);
+pub fn run_reset_helper() {
+    data::run_reset_helper();
 }

@@ -6,7 +6,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "macos")]
-use std::process::{Command, Stdio};
+use std::process::Command;
 #[cfg(target_os = "macos")]
 use std::sync::atomic::Ordering;
 #[cfg(target_os = "macos")]
@@ -590,11 +590,11 @@ fn move_to_trash(bundle: &Path) -> Result<(), &'static str> {
 
 #[cfg(target_os = "macos")]
 fn begin_reset(app: &AppHandle, uninstall: bool) -> Answer {
+    use crate::platform::reset_handoff::{DesktopReset, ResetHandoff, ResetPlan};
     use sidevoice_local_host::{cli::Cli, paths::DataDirs};
-    let reset_lock = open_reset_lock().map_err(|_| refused("reset.helper-failed"))?;
-    if !try_lock(&reset_lock) {
-        return Err(refused("reset.busy"));
-    }
+    let admission = DesktopReset::admit().map_err(|error| {
+        refused(if error.kind() == std::io::ErrorKind::WouldBlock { "reset.busy" } else { "reset.helper-failed" })
+    })?;
     let dirs = DataDirs::from_env().ok_or_else(|| refused("reset.unavailable"))?;
     let home = std::env::var_os("HOME").map(PathBuf::from).ok_or_else(|| refused("reset.unavailable"))?;
     validate_uninstall_scope(&home, &dirs.data).map_err(|reason| json!({"key": "reset.unsafe", "reason": reason}))?;
@@ -650,41 +650,12 @@ fn begin_reset(app: &AppHandle, uninstall: bool) -> Answer {
         &json!({"stage":"agent-results", "completed":["service", "keychain"], "failed":failed.clone()}),
     )
     .map_err(|_| refused("reset.report-failed"))?;
-    let exe = std::env::current_exe().map_err(|_| refused("reset.unavailable"))?;
-    let inherited_lock = inherit_lock(&reset_lock).map_err(|_| refused("reset.helper-failed"))?;
-    let spawned = Command::new(exe)
-        .arg("--sidevoice-reset-helper")
-        .arg(std::process::id().to_string())
-        .arg(inherited_lock.to_string())
-        .args(uninstall.then_some("uninstall"))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn();
-    {
-        use std::os::fd::AsRawFd;
-        unsafe {
-            libc::fcntl(reset_lock.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC);
-        }
-    }
-    let mut child = spawned.map_err(|_| refused("reset.helper-failed"))?;
-    let initial = json!({"failed": failed, "agents": agents});
-    let payload = serde_json::to_vec(&initial).map_err(|_| refused("reset.helper-failed"))?;
-    if payload.len() > 16 * 1024 || child.stdin.as_mut().is_none_or(|stdin| stdin.write_all(&payload).is_err()) {
-        let _ = child.kill();
-        return Err(refused("reset.helper-failed"));
-    }
-    let mut ready = child.stdout.take().ok_or_else(|| refused("reset.helper-failed"))?;
-    let (sent, received) = std::sync::mpsc::sync_channel(1);
-    std::thread::spawn(move || {
-        let mut bytes = [0u8; 6];
-        let _ = sent.send(ready.read_exact(&mut bytes).is_ok() && &bytes == b"ready\n");
-    });
-    if received.recv_timeout(Duration::from_secs(5)) != Ok(true) {
-        let _ = child.kill();
-        return Err(refused("reset.helper-failed"));
-    }
-    *app.state::<AppState>().reset_helper.lock().unwrap() = Some(child);
+    let pending = DesktopReset::launch(
+        admission,
+        ResetPlan { parent_pid: std::process::id(), uninstall, initial: json!({"failed": failed, "agents": agents}) },
+    )
+    .map_err(|_| refused("reset.helper-failed"))?;
+    *app.state::<AppState>().reset_helper.lock().unwrap() = Some(pending);
     let app_to_quit = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(700));
@@ -936,90 +907,6 @@ fn report_path() -> Option<PathBuf> {
         return None;
     }
     Some(dir.join("report.json"))
-}
-
-#[cfg(target_os = "macos")]
-fn open_reset_lock() -> Result<std::fs::File, &'static str> {
-    let path = report_path().ok_or("report-unavailable")?.with_file_name("reset.lock");
-    open_reset_lock_at(&path)
-}
-
-#[cfg(target_os = "macos")]
-fn open_reset_lock_at(path: &Path) -> Result<std::fs::File, &'static str> {
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(&path)
-        .map_err(|_| "lock-unavailable")?;
-    let meta = file.metadata().map_err(|_| "lock-unavailable")?;
-    if !meta.is_file() || meta.uid() != unsafe { libc::geteuid() } || meta.mode() & 0o077 != 0 {
-        return Err("unsafe-lock");
-    }
-    Ok(file)
-}
-
-#[cfg(target_os = "macos")]
-fn try_lock(file: &std::fs::File) -> bool {
-    use std::os::fd::AsRawFd;
-    unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) == 0 }
-}
-
-/// The helper inherits the locked file description. A new app waits for it before initializing writers.
-#[cfg(target_os = "macos")]
-pub fn await_reset_idle() -> bool {
-    let Ok(file) = open_reset_lock() else { return false };
-    let deadline = std::time::Instant::now() + Duration::from_secs(5 * 60);
-    while std::time::Instant::now() < deadline {
-        if try_lock(&file) {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    false
-}
-
-#[cfg(target_os = "macos")]
-fn inherit_lock(file: &std::fs::File) -> Result<i32, &'static str> {
-    use std::os::fd::AsRawFd;
-    let fd = file.as_raw_fd();
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
-    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } < 0 {
-        return Err("lock-unavailable");
-    }
-    Ok(fd)
-}
-
-#[cfg(target_os = "macos")]
-fn helper_lock(fd: Option<i32>) -> Option<std::fs::File> {
-    let path = report_path()?.with_file_name("reset.lock");
-    helper_lock_at(fd, &path)
-}
-
-#[cfg(target_os = "macos")]
-fn helper_lock_at(fd: Option<i32>, path: &Path) -> Option<std::fs::File> {
-    use std::os::fd::FromRawFd;
-    use std::os::unix::fs::MetadataExt;
-    let fd = fd.filter(|fd| *fd >= 3)?;
-    let held = unsafe { std::fs::File::from_raw_fd(fd) };
-    let named = open_reset_lock_at(path).ok()?;
-    let held_meta = held.metadata().ok()?;
-    let named_meta = named.metadata().ok()?;
-    if held_meta.dev() != named_meta.dev() || held_meta.ino() != named_meta.ino() {
-        return None;
-    }
-    if !try_lock(&held) {
-        return None;
-    }
-    use std::os::fd::AsRawFd;
-    let flags = unsafe { libc::fcntl(held.as_raw_fd(), libc::F_GETFD) };
-    if flags < 0 || unsafe { libc::fcntl(held.as_raw_fd(), libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0 {
-        return None;
-    }
-    Some(held)
 }
 
 #[cfg(target_os = "macos")]
@@ -1378,29 +1265,18 @@ fn webkit_gone(pids: &[u32]) -> bool {
     false
 }
 
-/// Called in the helper process, after its parent closes the pipe on exit. `uninstall`: then the app bundle too.
-pub fn run_reset_helper(parent_pid: Option<u32>, lock_fd: Option<i32>, uninstall: bool) {
+/// Helper dispatch runs before Tauri. Cleanup stays macOS-only; the handoff itself runs on every host.
+pub fn run_reset_helper() {
+    use crate::platform::reset_handoff::{DesktopReset, ResetHandoff};
+    let Ok(helper) = DesktopReset::receive() else { return };
+    #[cfg(target_os = "macos")]
+    let webkit = webkit_children(helper.plan.parent_pid);
+    #[cfg(target_os = "macos")]
+    let (initial, uninstall) = (helper.plan.initial.clone(), helper.plan.uninstall);
+    let Ok(lock) = helper.await_exit() else { return };
     #[cfg(target_os = "macos")]
     {
-        let Some(lock) = helper_lock(lock_fd) else { return };
-        let Some(parent_pid) = parent_pid else { return };
-        if unsafe { libc::getppid() as u32 } != parent_pid {
-            return;
-        }
         let Some(report) = report_path() else { return };
-        let webkit = webkit_children(parent_pid);
-        if std::io::stdout().write_all(b"ready\n").is_err() {
-            return;
-        }
-        // The parent writes the pre-exit failures then keeps the pipe open until it exits.
-        let mut drain = Vec::new();
-        if std::io::stdin().read_to_end(&mut drain).is_err() {
-            return;
-        }
-        if drain.is_empty() || drain.len() > 16 * 1024 {
-            return;
-        }
-        let Ok(initial) = serde_json::from_slice::<Value>(&drain) else { return };
         let Some(initial_failed) = initial.get("failed").and_then(Value::as_array) else { return };
         let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return };
         if account_home().as_deref() != Some(home.as_path()) {
@@ -1471,7 +1347,7 @@ pub fn run_reset_helper(parent_pid: Option<u32>, lock_fd: Option<i32>, uninstall
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (parent_pid, lock_fd, uninstall);
+        drop(lock);
     }
 }
 
@@ -1882,75 +1758,6 @@ mod tests {
         let failed = consume_report_at(&report).unwrap();
         assert_eq!(failed["state"], "partial");
         assert_eq!(failed["failed"][0]["key"], "reset.relaunch-failed");
-    }
-
-    #[test]
-    fn helper_lock_blocks_a_second_app_until_released() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("reset.lock");
-        let parent = open_reset_lock_at(&path).unwrap();
-        let newcomer = open_reset_lock_at(&path).unwrap();
-        assert!(try_lock(&parent));
-        assert!(!try_lock(&newcomer));
-        drop(parent);
-        assert!(try_lock(&newcomer));
-    }
-
-    #[test]
-    fn lock_helper_child_mode() {
-        if std::env::var("SIDEVOICE_LOCK_HANDOFF_MODE").as_deref() != Ok("helper") {
-            return;
-        }
-        let path = PathBuf::from(std::env::var_os("SIDEVOICE_LOCK_HANDOFF_PATH").unwrap());
-        let fd: i32 = std::env::var("SIDEVOICE_LOCK_HANDOFF_FD").unwrap().parse().unwrap();
-        let _held = helper_lock_at(Some(fd), &path).expect("helper validates and retains inherited lock");
-        let status = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "data::tests::lock_relaunch_child_mode", "--nocapture"])
-            .env("SIDEVOICE_LOCK_HANDOFF_MODE", "relaunch")
-            .env("SIDEVOICE_LOCK_HANDOFF_PATH", &path)
-            .env("SIDEVOICE_LOCK_HANDOFF_FD", fd.to_string())
-            .status()
-            .unwrap();
-        assert!(status.success());
-    }
-
-    #[test]
-    fn lock_relaunch_child_mode() {
-        if std::env::var("SIDEVOICE_LOCK_HANDOFF_MODE").as_deref() != Ok("relaunch") {
-            return;
-        }
-        let path = PathBuf::from(std::env::var_os("SIDEVOICE_LOCK_HANDOFF_PATH").unwrap());
-        let fd: i32 = std::env::var("SIDEVOICE_LOCK_HANDOFF_FD").unwrap().parse().unwrap();
-        let mut inherited: libc::stat = unsafe { std::mem::zeroed() };
-        // Inspect the inherited number before opening the named lock: that open may reuse a
-        // correctly closed descriptor number and otherwise make the test report a false leak.
-        let inherited_open = unsafe { libc::fstat(fd, &mut inherited) } == 0;
-        let named = open_reset_lock_at(&path).unwrap();
-        use std::os::fd::AsRawFd;
-        let mut expected: libc::stat = unsafe { std::mem::zeroed() };
-        assert_eq!(unsafe { libc::fstat(named.as_raw_fd(), &mut expected) }, 0);
-        let matches_lock = inherited_open && inherited.st_dev == expected.st_dev && inherited.st_ino == expected.st_ino;
-        assert!(!matches_lock, "relaunched process inherited the reset lock");
-        assert!(!try_lock(&named), "helper keeps the lock until its work finishes");
-    }
-
-    #[test]
-    fn reset_lock_handoff_closes_descriptor_before_relaunch() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = fs::canonicalize(dir.path()).unwrap().join("reset.lock");
-        let held = open_reset_lock_at(&path).unwrap();
-        assert!(try_lock(&held));
-        let fd = inherit_lock(&held).unwrap();
-        let child = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "data::tests::lock_helper_child_mode", "--nocapture"])
-            .env("SIDEVOICE_LOCK_HANDOFF_MODE", "helper")
-            .env("SIDEVOICE_LOCK_HANDOFF_PATH", &path)
-            .env("SIDEVOICE_LOCK_HANDOFF_FD", fd.to_string())
-            .spawn()
-            .unwrap();
-        drop(held);
-        assert!(child.wait_with_output().unwrap().status.success());
-        assert!(try_lock(&open_reset_lock_at(&path).unwrap()));
     }
 
     #[test]

@@ -22,8 +22,8 @@ probe = []
 tauri-build = { version = "2.7", features = [] }
 
 [dependencies]
-# The one rule for where the engine's shared models are (`data_dir::models_dir`), on every OS: at the tag of a core release.
-sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.10.0" }
+# Shared paths, private files, authenticated channels and detached helper execution.
+sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.11.1" }
 sidevoice-desktop-core = { path = "core" }
 sidevoice-desktop-engine = { path = "engine" }
 tauri = { version = "2.12", features = ["tray-icon", "image-png", "macos-private-api"] }
@@ -43,7 +43,9 @@ url = "2.5"
 # The app's updates (src/updater.rs; docs/BRIDGE.md → "The updater"), from Rust only: the page gets none of its
 # commands. Its checks sleep on the app's Tokio runtime.
 tauri-plugin-updater = "2.13"
-tokio = { version = "1", features = ["time", "sync"] }
+tokio = { version = "1", features = ["time", "sync", "rt", "net", "io-util", "process"] }
+# A one-use helper capability, delivered only through its inherited stdin pipe.
+getrandom = "0.3"
 # The app log (src/lib.rs `applog`): a rotating, size-capped file in the platform's log directory, fed by the Rust side and
 # by the room page's console errors (bridge/webview-log.js).
 tauri-plugin-log = "2"
