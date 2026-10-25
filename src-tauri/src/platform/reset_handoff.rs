@@ -77,21 +77,17 @@ pub trait ResetHandoff {
     }
 }
 
-pub struct DesktopReset;
+#[cfg(target_os = "macos")]
+#[path = "reset_handoff/macos.rs"]
+mod native;
+#[cfg(target_os = "windows")]
+#[path = "reset_handoff/windows.rs"]
+mod native;
+#[cfg(target_os = "linux")]
+#[path = "reset_handoff/linux.rs"]
+mod native;
 
-impl ResetHandoff for DesktopReset {
-    fn state_dir() -> io::Result<PathBuf> {
-        // Retain macOS's existing report/lock location. Windows/Linux control state is a sibling of
-        // Sidevoice's standard data root, so neither models nor app-data cleanup removes the barrier.
-        #[cfg(target_os = "macos")]
-        let path = std::env::temp_dir().join(format!("dev.sidevoice.desktop-reset-{}", unsafe { libc::getuid() }));
-        #[cfg(not(target_os = "macos"))]
-        let path = sidevoice_platform::data_dir::standard()
-            .and_then(|path| path.parent().map(|parent| parent.join("dev.sidevoice.desktop-reset")))
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "reset state directory unavailable"))?;
-        Ok(path)
-    }
-}
+pub use native::DesktopReset;
 
 /// Holds checked ancestry as well as file locks. Files are never unlinked (which would split the lock).
 pub struct Admission {
@@ -408,6 +404,14 @@ mod tests {
             }
             other => panic!("unknown test mode {other}"),
         }
+    }
+
+    #[test]
+    fn native_control_state_is_outside_the_standard_data_root() {
+        let root = DesktopReset::state_dir().unwrap();
+        assert!(root.is_absolute());
+        let data = sidevoice_platform::data_dir::standard().unwrap();
+        assert!(!root.starts_with(data), "cleanup must not remove the handoff barrier");
     }
 
     #[test]

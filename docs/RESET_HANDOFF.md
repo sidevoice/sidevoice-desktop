@@ -5,7 +5,8 @@ The same executable runs `--sidevoice-reset-helper` before Tauri initializes. On
 reset. Windows/Linux implement and compile the handoff without exposing reset or doing cleanup.
 Webview lifecycle/removal and the reset transaction remain separate work.
 
-The existing macOS transaction, models deletion, report/journal and relaunch remain in `data.rs`.
+The existing macOS helper dispatch lives in `platform/reset_helper/macos.rs`; its transaction helpers,
+models deletion and report/journal functions remain in `data.rs`.
 This change does not alter uninstall policy or elevate any process.
 
 ## Protocol and lifetime
@@ -65,3 +66,22 @@ Native Windows/macOS protocol execution, another-user attack probes and installe
 runtime checks for those hosts. Browser process release, correct WebView2/WebKitGTK storage and portable
 transaction/recovery are not established by this handoff block. A Windows helper in a kill-on-close enclosing
 job does not escape that job; an early helper death prevents cleanup and leaves journal recovery to the caller.
+
+## Platform boundary
+
+`reset_handoff.rs` declares the protocol interface and shared types. Its state-directory implementations
+are selected from `reset_handoff/{macos,windows,linux}.rs`; the shared checked filesystem, channel and
+child libraries still supply the protocol on every host. The existing real-uid macOS directory naming
+uses the same `libc::getuid` call; this relocation adds no unsafe operation or native binding.
+
+`ResetHelper` is the separate helper-mode dispatch interface. The caller in `data.rs` invokes it without
+host checks. macOS retains the original order: authenticate, observe WebKit children, await committed
+parent exit and admission, clean up, release admission before relaunch. Windows and Linux retain their
+original authenticate → await committed exit → release sequence and perform no cleanup. The macOS
+transaction body was moved mechanically; its helper functions only gained crate visibility.
+
+The handoff protocol tests remain portable and included by the existing native fixture target; a path
+contract test also checks that control state cannot be removed with the standard data root. The macOS
+cleanup adapter requires the real shell and its transaction helpers, so its compilation and existing
+cleanup tests belong to the normal macOS PR job. The portable test target deliberately exercises the
+actual IPC/lock protocol without linking the shell or pretending to test AppKit/browser cleanup.

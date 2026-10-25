@@ -17,3 +17,5 @@ pub mod confirmation;
 // The protocol is portable; reset cleanup remains separately gated.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub mod reset_handoff;
+
+pub mod reset_helper;
