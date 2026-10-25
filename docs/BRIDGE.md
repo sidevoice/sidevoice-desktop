@@ -699,7 +699,7 @@ interface MicrophonePermission {
   macOS only. Granted to the room window (`capabilities/room.json`); it re-checks that the caller is the current room
   window on the app's own page.
 
-On Windows, `host.microphone` is a frozen settings-only object:
+On Windows, `host.microphone` retains the settings capability:
 
 ```ts
 interface MicrophoneSettings {
@@ -710,10 +710,13 @@ interface MicrophoneSettings {
 It opens `ms-settings:privacy-microphone` through `tauri-plugin-opener` (Rust API). The page must feature-detect
 `state` and `request` independently: Windows still reads and requests capture access through the webview, and opening
 Settings says nothing about whether capture is allowed. No native Windows permission poll is offered. Linux has no
-standard privacy-settings link and does not expose this object. The settings-only command is
+standard privacy-settings link. The settings-only command is
 `microphone_open_settings`, granted only to the room, with the same current-room/origin check and refusal contract as
 `microphone`. It accepts no URL or program from the page. No generic opener permission is granted to JavaScript, and
-the plugin's automatic link interception is disabled. Native access-state and capture-error work remains separate.
+the plugin's automatic link interception is disabled. On Windows/Linux with a webview capture API, the additive
+`host.microphone.access` member reports the platform's five access states using fresh backend observations; it does
+not replace these top-level permission methods or the page fallback. See [Microphone access](MICROPHONE_ACCESS.md)
+for its contract, platform implementations, runtime verification gaps, and the pending UI integration decision.
 The existing macOS `microphone {action: "open-settings"}` command remains supported.
 
 ## The mute shortcut

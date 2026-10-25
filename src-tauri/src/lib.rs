@@ -32,6 +32,7 @@ use crate::platform::update_eligibility::{NativeUpdateEligibility, UpdateEligibi
 
 use crate::platform::computer_name::{ComputerName, SystemComputerName};
 use crate::platform::webview_diagnostics::{NativeWebviewDiagnostics, WebviewDiagnostics};
+use platform::microphone::{MicrophoneAccess, NativeMicrophone};
 use serde_json::{json, Value};
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
 use sidevoice_desktop_core::build_info::BuildInfo;
@@ -520,7 +521,7 @@ fn apply_shortcut(app: &AppHandle, accelerator: &str) {
 #[tauri::command]
 async fn microphone_open_settings(app: AppHandle, webview: Webview) -> Result<(), Value> {
     room_page(&app, &webview).map_err(|why| refusal("bad_request", why))?;
-    platform::microphone::open_settings(&app).map_err(|_| refusal("internal", "System Settings could not be opened."))
+    NativeMicrophone::open_settings(&app).map_err(|_| refusal("internal", "System Settings could not be opened."))
 }
 
 /// The app's commands, with `$extra` (each after a comma) after them.
@@ -565,7 +566,8 @@ macro_rules! commands {
             call_controls::call_controls_settings,
             updater::updater,
             debug_options::debug_options,
-            microphone_open_settings
+            microphone_open_settings,
+            microphone::microphone
             $($extra)*
         ]
     };
@@ -590,8 +592,7 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
         voice::voice_cancel_input,
         voice::voice_end_input,
         voice::voice_audio_devices,
-        voice::voice_set_audio_devices,
-        microphone::microphone
+        voice::voice_set_audio_devices
     ]
 }
 

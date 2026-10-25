@@ -408,6 +408,46 @@
     });
   }
 
+  /** The richer platform access observation. Keep this additive: the web's existing permission flow understands
+   *  only prompt/granted/denied/missing and must keep its page fallback until it can present unavailable too. */
+  function backendMicrophoneAccess() {
+    const media = win.navigator.mediaDevices;
+    const send = (action, backend) => call("microphone", { action, backend });
+    return Object.freeze({
+      async state() {
+        let permission = "unavailable";
+        let hasDevice = null;
+        try {
+          const status = await win.navigator.permissions?.query({ name: "microphone" });
+          permission = { prompt: "not-determined", granted: "granted", denied: "denied" }[status?.state] ?? "unavailable";
+        } catch (_) { /* querying microphone permission is not supported by every WebKit version */ }
+        try {
+          const devices = await media.enumerateDevices();
+          hasDevice = devices.some((device) => device.kind === "audioinput");
+        } catch (_) { /* an unreadable device list is not an empty one */ }
+        return send("access-state", { permission, hasDevice });
+      },
+      async request() {
+        let backend;
+        try {
+          // Start capture in the gesture, before an await, and release every track even on a malformed stream.
+          const stream = await media.getUserMedia({ audio: true });
+          try {
+            const audio = stream.getAudioTracks();
+            backend = audio.some((track) => track.readyState === "live")
+              ? { captured: true, hasDevice: true }
+              : { error: "NotFoundError" };
+          } finally {
+            for (const track of stream.getTracks()) track.stop();
+          }
+        } catch (error) {
+          backend = { error: typeof error?.name === "string" ? error.name : "UnknownError" };
+        }
+        return send("access-request", backend);
+      },
+    });
+  }
+
   /** This computer's own core, the local host (docs/LOCAL_HOST.md): its state, the pairing the page uses to reach it
    *  (through the app's proxy, with this launch's secret — never the device token), the service's actions, and
    *  installing Sidevoice here (`install`, `cancel`). Each action resolves the state after it (`{state, failure?, core?,
@@ -811,8 +851,13 @@
       // Only where the app runs the voice call (macOS): the page then neither opens the microphone nor runs models.
       ...(voiceCall ? { voice: voiceCall.host } : {}),
       // Native voice owns permission on macOS. Windows keeps capture permission in the page and offers only settings.
-      ...(voiceCall ? { microphone: microphone() } : microphoneSettingsOffered === true ? {
-        microphone: Object.freeze({ openSettings: () => call("microphone_open_settings").then(() => undefined) }),
+      ...(voiceCall ? { microphone: microphone() } : microphoneSettingsOffered === true || typeof win.navigator?.mediaDevices?.getUserMedia === "function" ? {
+        microphone: Object.freeze({
+          ...(microphoneSettingsOffered === true ? {
+            openSettings: () => call("microphone_open_settings").then(() => undefined),
+          } : {}),
+          ...(typeof win.navigator?.mediaDevices?.getUserMedia === "function" ? { access: backendMicrophoneAccess() } : {}),
+        }),
       } : {}),
       /** What this build is: a release, a nightly (both with `updater`), or a development build. */
       build: Object.freeze({ ...build }),
