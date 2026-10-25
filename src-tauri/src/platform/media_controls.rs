@@ -30,10 +30,15 @@ mod macos;
 #[cfg(target_os = "macos")]
 pub use macos::NativeMediaControls;
 
-#[cfg(not(target_os = "macos"))]
-pub struct NativeMediaControls;
-#[cfg(not(target_os = "macos"))]
-impl MediaControls for NativeMediaControls {}
+#[cfg(target_os = "windows")]
+mod windows;
+#[cfg(target_os = "windows")]
+pub use windows::NativeMediaControls;
+
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::NativeMediaControls;
 
 #[cfg(test)]
 mod tests {
@@ -45,23 +50,28 @@ mod tests {
     #[test]
     fn unavailable_leaves_media_keys_to_the_page() {
         assert_eq!(Unavailable::support(), None);
-        let expected = if cfg!(target_os = "macos") { Some("native") } else { None };
-        assert_eq!(NativeMediaControls::support(), expected);
+        assert!(matches!(NativeMediaControls::support(), None | Some("native")));
     }
 
     #[test]
     fn bridge_receives_the_implementation_support() {
-        let script = sidevoice_desktop_core::bridge::script_for_origin(
-            "tauri://localhost",
-            false,
-            &sidevoice_desktop_core::build_info::BuildInfo::new("dev", "0.0.0", "", ""),
-            None,
-            &Default::default(),
-            false,
-            &[],
-            NativeMediaControls::support(),
-        );
-        let support = serde_json::to_string(&NativeMediaControls::support()).unwrap();
-        assert!(script.contains(&format!("factory(window, \"tauri://localhost\", {support},")));
+        fn assert_bridge_support<T: MediaControls>() {
+            let support = T::support();
+            let script = sidevoice_desktop_core::bridge::script_for_origin(
+                "tauri://localhost",
+                false,
+                &sidevoice_desktop_core::build_info::BuildInfo::new("dev", "0.0.0", "", ""),
+                None,
+                &Default::default(),
+                false,
+                &[],
+                support,
+            );
+            let literal = serde_json::to_string(&support).unwrap();
+            assert!(script.contains(&format!("factory(window, \"tauri://localhost\", {literal},")));
+        }
+
+        assert_bridge_support::<Unavailable>();
+        assert_bridge_support::<NativeMediaControls>();
     }
 }

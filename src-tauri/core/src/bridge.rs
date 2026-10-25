@@ -400,7 +400,7 @@ mod tests {
         assert!(!s.contains("__SIDEVOICE_COMPUTER_NAME__"));
         assert!(!s.contains("__SIDEVOICE_DEBUG__"));
         assert!(!s.contains("__SIDEVOICE_MICROPHONE_SETTINGS__"));
-        let platform = if cfg!(target_os = "macos") { r#""native", true, true"# } else { r#""native", false, false"# };
+        let platform = format!(r#""native", {}, {}"#, local_host_offered(), voice_offered());
         let dev_build = r#"{"channel":"dev","version":"0.4.0"}"#;
         // A dev build has the developer options: what the settings keep, and the switches this platform has.
         let debug = off.state(&crate::debug_options::Switch::ALL);
