@@ -402,6 +402,41 @@ mod tests {
             assert!(output.status.success(), "security test setup/cleanup failed");
             output
         }
+        const CHILD: &str = "SIDEVOICE_CREDENTIAL_SEARCH_LIST_TEST";
+        const KEYCHAIN_PATH: &str = "SIDEVOICE_CREDENTIAL_KEYCHAIN_PATH";
+        if let Ok(service) = std::env::var(CHILD) {
+            let store = TestCredentials { store: native::store().unwrap(), service, clear: native::clear };
+            let secondary = SecKeychain::open(std::env::var(KEYCHAIN_PATH).unwrap()).unwrap();
+            // Establish that the fixture is reachable by the old app's lookup API too.
+            assert_eq!(
+                security_framework::passwords::get_generic_password(&store.service, "openai").unwrap(),
+                b"legacy-secondary"
+            );
+            assert_eq!(store.read("openai").unwrap().as_deref(), Some("legacy-secondary"));
+            store.write("openai", Some("updated-secondary")).unwrap();
+            use security_framework::os::macos::passwords::find_generic_password;
+            assert_eq!(
+                find_generic_password(Some(std::slice::from_ref(&secondary)), &store.service, "openai")
+                    .unwrap()
+                    .0
+                    .as_ref(),
+                b"updated-secondary"
+            );
+            store.write("openai", None).unwrap();
+            assert_eq!(
+                find_generic_password(Some(std::slice::from_ref(&secondary)), &store.service, "openai")
+                    .unwrap_err()
+                    .code(),
+                -25300
+            );
+            secondary.set_generic_password(&store.service, "unknown_old", b"test-only").unwrap();
+            store.clear().unwrap();
+            assert_eq!(
+                find_generic_password(Some(&[secondary]), &store.service, "unknown_old").unwrap_err().code(),
+                -25300
+            );
+            return;
+        }
         // Preserve the runner/developer's complete search list, including on assertion failure.
         struct Keychain {
             path: String,
@@ -435,18 +470,15 @@ mod tests {
         security(&search);
         let secondary = SecKeychain::open(&keychain.path).unwrap();
         secondary.set_generic_password(&store.service, "openai", b"legacy-secondary").unwrap();
-        assert_eq!(store.read("openai").unwrap().as_deref(), Some("legacy-secondary"));
-        store.write("openai", Some("updated-secondary")).unwrap();
-        use security_framework::os::macos::passwords::find_generic_password;
-        assert_eq!(
-            find_generic_password(Some(std::slice::from_ref(&secondary)), &store.service, "openai").unwrap().0.as_ref(),
-            b"updated-secondary"
-        );
-        store.write("openai", None).unwrap();
-        assert!(find_generic_password(Some(std::slice::from_ref(&secondary)), &store.service, "openai").is_err());
-        secondary.set_generic_password(&store.service, "unknown_old", b"test-only").unwrap();
-        store.clear().unwrap();
-        assert!(find_generic_password(Some(&[secondary]), &store.service, "unknown_old").is_err());
+        // Security.framework caches the search list per process. Other tests may already
+        // have used it before the security CLI added this fixture; start a fresh process.
+        let status = Command::new(std::env::current_exe().unwrap())
+            .arg("macos_searches_nondefault_keychains_for_read_update_delete_and_clear")
+            .env(CHILD, &store.service)
+            .env(KEYCHAIN_PATH, &keychain.path)
+            .status()
+            .unwrap();
+        assert!(status.success());
     }
 
     #[test]
