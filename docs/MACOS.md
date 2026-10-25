@@ -46,7 +46,7 @@ WKWebView implements it with the system voice-processing unit.
 None. The app shows its own bundled interface and a device is admitted by pairing with the node (a one-time code
 the node issues; docs/TARGETS.md). There is no oauth2-proxy or Google login in the app.
 
-## Headset buttons (src/headset.rs)
+## Headset buttons (src/platform/media_controls/macos.rs)
 
 What macOS offers a plain app, checked against Apple's documentation (2026-09-30):
 

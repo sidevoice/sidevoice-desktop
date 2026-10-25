@@ -19,22 +19,39 @@ pub fn lint() -> Result<()> {
     let xtask = repo().join("xtask/Cargo.toml");
     Cmd::new("cargo").args(["fmt", "--all", "--check"]).dir(&app).run()?;
     Cmd::new("cargo")
-        .args(["clippy", "--workspace", "--all-targets", "--all-features", "--", "-D", "warnings"])
-        .dir(&app)
-        .run()?;
-    Cmd::new("cargo")
         .args(["fmt", "--manifest-path"])
         .arg(&xtask)
         .args(["--check", "--", "--config-path"])
         .arg(app.join("rustfmt.toml"))
         .dir(&app)
         .run()?;
-    Cmd::new("cargo")
+    clippy(false)
+}
+
+/// The independent boundary job denies OS APIs; regular lint leaves those findings to that job.
+pub fn clippy(boundary: bool) -> Result<()> {
+    let app = repo().join("src-tauri");
+    let xtask = repo().join("xtask/Cargo.toml");
+    let level = if boundary { "-D" } else { "-A" };
+    let flags = ["--", "-D", "warnings", level, "clippy::disallowed_methods", level, "clippy::disallowed_types"];
+    // Run both even when the app reports boundary findings.
+    let app_result = Cmd::new("cargo")
+        .args(["clippy", "--workspace", "--all-targets", "--all-features"])
+        .args(flags)
+        .dir(&app)
+        .run();
+    let xtask_result = Cmd::new("cargo")
         .args(["clippy", "--locked", "--all-targets", "--manifest-path"])
         .arg(&xtask)
-        .args(["--", "-D", "warnings"])
+        .args(flags)
         .dir(&app)
-        .run()
+        .run();
+    let errors: Vec<_> = [app_result, xtask_result].into_iter().filter_map(Result::err).collect();
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("\n"))
+    }
 }
 
 /// `test`: the bridge script's tests (`npm test`) and the app's Rust tests (`cargo test --workspace`).
