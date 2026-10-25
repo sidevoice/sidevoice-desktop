@@ -19,6 +19,7 @@ mod imp;
 #[cfg(target_os = "windows")]
 #[path = "owned_removal/windows.rs"]
 mod imp;
+#[cfg(any(target_os = "macos", test))]
 pub use imp::NativeOwnedRemoval;
 
 /// Opaque filesystem/mount identity; compared only for equality, never exposed to callers as a native handle.
