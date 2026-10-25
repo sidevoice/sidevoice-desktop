@@ -46,7 +46,8 @@ pub fn test() -> Result<()> {
 /// Portable fixtures, also run by the existing macOS and Windows PR jobs.
 pub fn test_support() -> Result<()> {
     Cmd::new("cargo")
-        .args(["test", "--locked", "-p", "sidevoice-desktop-test-support", "--test", "portable", "--test", "credentials"])
+        .args(["test", "--locked", "-p", "sidevoice-desktop-test-support"])
+        .args(["--test", "portable", "--test", "credentials"])
         .dir(repo().join("src-tauri"))
         .run()
 }
