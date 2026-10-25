@@ -7,7 +7,7 @@ impl WebviewData for Os {
         use windows_sys::Win32::Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, WAIT_OBJECT_0, WAIT_TIMEOUT};
         use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE};
         if pid <= 1 {
-            return Err(busy());
+            return Err(Owner::busy());
         }
         // SAFETY: a synchronization-only handle; no process memory is read or modified.
         let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
@@ -32,22 +32,22 @@ impl WebviewData for Os {
         // No matching runtime is uncertainty, not permission to delete a guessed default folder.
         let capturing = processes.len() == 1;
         let mut found_folder = false;
-        descendants(system, processes);
-        let current = system.process(Pid::from_u32(std::process::id())).ok_or_else(busy)?;
-        let user = current.user_id().ok_or_else(busy)?;
+        Owner::descendants(system, processes);
+        let current = system.process(Pid::from_u32(std::process::id())).ok_or_else(Owner::busy)?;
+        let user = current.user_id().ok_or_else(Owner::busy)?;
         for (pid, process) in system.processes() {
             if !process.name().to_str().is_some_and(|name| name.eq_ignore_ascii_case("msedgewebview2.exe")) {
                 continue;
             }
             // Unreadable ownership/arguments must not turn an unknown runtime into an absent one.
-            let owner = process.user_id().ok_or_else(busy)?;
+            let owner = process.user_id().ok_or_else(Owner::busy)?;
             if owner != user {
                 continue;
             }
             if process.cmd().is_empty() || process.start_time() == 0 {
-                return Err(busy());
+                return Err(Owner::busy());
             }
-            let folder = user_data_folder(process.cmd())?;
+            let folder = Locations::browser_folder(process.cmd())?;
             if let Some(folder) = folder {
                 let owned = locations
                     .paths()
@@ -60,14 +60,14 @@ impl WebviewData for Os {
                 // WebView2 supports environment/registry overrides. Refuse an app descendant
                 // writing outside the native-resolved allowlist instead of deleting the wrong UDF.
                 if !owned && processes.contains(&(*pid, process.start_time())) {
-                    return Err(busy());
+                    return Err(Owner::busy());
                 }
             }
         }
         if capturing && !found_folder {
-            return Err(busy());
+            return Err(Owner::busy());
         }
-        descendants(system, processes);
+        Owner::descendants(system, processes);
         Ok(())
     }
 }

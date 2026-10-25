@@ -11,14 +11,8 @@ use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 #[path = "webview_data/macos.rs"]
 mod imp;
 #[cfg(target_os = "linux")]
-mod imp {
-    pub struct Os;
-    impl super::WebviewData for Os {
-        fn exited(pid: u32) -> std::io::Result<bool> {
-            super::unix_pid_exited(pid)
-        }
-    }
-}
+#[path = "webview_data/linux.rs"]
+mod imp;
 #[cfg(target_os = "windows")]
 #[path = "webview_data/windows.rs"]
 mod imp;
@@ -63,18 +57,18 @@ pub trait WebviewData {
     fn locations(_home: &Path, app_local_data: &Path) -> io::Result<Locations> {
         // Tauri supplies this path to Wry. WebView2 uses it as its UDF; WebKitGTK uses it
         // for BOTH base_data_directory and base_cache_directory, with cookies at <path>/cookies.
-        locations(vec![app_local_data.to_path_buf()])
+        Locations::new(vec![app_local_data.to_path_buf()])
     }
 
     /// Snapshot the app and its browser writers before allowing the app to exit. The transaction
     /// must already forbid new webviews and keep other app launches behind its held reset lock.
     /// Windows also discovers runtimes using this user-data folder; macOS tracks responsible XPC services.
     fn capture(owner: u32, locations: Locations) -> io::Result<Owner> {
-        let system = snapshot()?;
+        let system = Owner::snapshot()?;
         let pid = Pid::from_u32(owner);
-        let app = system.process(pid).ok_or_else(busy)?;
+        let app = system.process(pid).ok_or_else(Owner::busy)?;
         if app.start_time() == 0 {
-            return Err(busy());
+            return Err(Owner::busy());
         }
         let mut processes = vec![(pid, app.start_time())];
         Self::observe(&system, &locations, &mut processes)?;
@@ -87,7 +81,7 @@ pub trait WebviewData {
     /// through removal. A fresh process must never initialize writers between release and deletion.
     fn wait_released(mut owner: Owner, deadline: Instant) -> io::Result<Released> {
         loop {
-            let system = snapshot()?;
+            let system = Owner::snapshot()?;
             Self::observe(&system, &owner.locations, &mut owner.processes)?;
             let mut all_exited = true;
             for (pid, _) in &owner.processes {
@@ -100,7 +94,7 @@ pub trait WebviewData {
                 return Ok(Released(owner.locations));
             }
             if Instant::now() >= deadline {
-                return Err(busy());
+                return Err(Owner::busy());
             }
             thread::sleep(Duration::from_millis(50).min(deadline.saturating_duration_since(Instant::now())));
         }
@@ -108,18 +102,7 @@ pub trait WebviewData {
 
     /// Add browser writers to the pre-exit observation. `sysinfo` owns native process enumeration;
     /// selection is desktop policy. Kept on this trait so OS implementations expose no extra API.
-    fn observe(system: &System, _locations: &Locations, processes: &mut Vec<(Pid, u64)>) -> io::Result<()> {
-        let mut tree = processes.clone();
-        descendants(system, &mut tree);
-        for (pid, start) in tree {
-            if !processes.contains(&(pid, start))
-                && system.process(pid).is_some_and(|p| p.name().to_string_lossy().contains("WebKit"))
-            {
-                processes.push((pid, start));
-            }
-        }
-        Ok(())
-    }
+    fn observe(system: &System, locations: &Locations, processes: &mut Vec<(Pid, u64)>) -> io::Result<()>;
 
     /// Remove one exact allowlisted root only after browser release, using core's held-parent removal.
     /// No directory is created or repaired; a missing root is success. Redirected roots are refused.
@@ -134,8 +117,8 @@ pub trait WebviewData {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
             Err(error) => return Err(error),
         };
-        let parent = path.parent().ok_or_else(busy)?;
-        let name = path.file_name().ok_or_else(busy)?;
+        let parent = path.parent().ok_or_else(Owner::busy)?;
+        let name = path.file_name().ok_or_else(Owner::busy)?;
         let held = HeldDirectory::open(parent, Access::NotWritableByOthers)?;
         held.check_contents(&[name])?;
         // Windows denies deleting the target while the target's own held handle is open. The parent
@@ -145,112 +128,101 @@ pub trait WebviewData {
     }
 }
 
-#[cfg(unix)]
-fn unix_pid_exited(pid: u32) -> io::Result<bool> {
-    let pid = libc::pid_t::try_from(pid).ok().filter(|pid| *pid > 1).ok_or_else(busy)?;
-    // SAFETY: signal zero inspects a positive PID without sending a signal or touching memory.
-    if unsafe { libc::kill(pid, 0) } == 0 {
-        return Ok(false);
+impl Locations {
+    fn new(paths: Vec<PathBuf>) -> io::Result<Locations> {
+        if paths.iter().any(|path| {
+            !path.is_absolute()
+                || path.parent().is_none()
+                || path.components().any(|part| matches!(part, std::path::Component::ParentDir))
+        }) {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid native webview root"));
+        }
+        Ok(Locations(paths))
     }
-    let error = io::Error::last_os_error();
-    if error.raw_os_error() == Some(libc::ESRCH) {
-        Ok(true)
-    } else {
-        Err(error)
+
+    // The browser's command line is used only to associate a process with our UDF, never as a deletion path.
+    #[cfg(any(target_os = "windows", test))]
+    fn browser_folder(args: &[std::ffi::OsString]) -> io::Result<Option<PathBuf>> {
+        for (index, arg) in args.iter().enumerate() {
+            if arg == "--user-data-dir" {
+                return args.get(index + 1).map(PathBuf::from).map(Some).ok_or_else(Owner::busy);
+            }
+            let text = arg.to_str().ok_or_else(Owner::busy)?;
+            if let Some(folder) = text.strip_prefix("--user-data-dir=") {
+                return if folder.is_empty() { Err(Owner::busy()) } else { Ok(Some(PathBuf::from(folder))) };
+            }
+        }
+        Ok(None)
     }
 }
 
-fn busy() -> io::Error {
-    io::Error::new(io::ErrorKind::WouldBlock, "webview writers have not been released")
-}
-
-fn locations(paths: Vec<PathBuf>) -> io::Result<Locations> {
-    if paths.iter().any(|path| {
-        !path.is_absolute()
-            || path.parent().is_none()
-            || path.components().any(|part| matches!(part, std::path::Component::ParentDir))
-    }) {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid native webview root"));
+impl Owner {
+    fn busy() -> io::Error {
+        io::Error::new(io::ErrorKind::WouldBlock, "webview writers have not been released")
     }
-    Ok(Locations(paths))
-}
 
-fn snapshot() -> io::Result<System> {
-    let mut system = System::new();
-    system.refresh_processes_specifics(
-        ProcessesToUpdate::All,
-        true,
-        ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always).with_user(UpdateKind::Always),
-    );
-    // Enumeration failure must never be mistaken for an empty machine.
-    system.process(Pid::from_u32(std::process::id())).ok_or_else(busy)?;
-    Ok(system)
-}
+    fn snapshot() -> io::Result<System> {
+        let mut system = System::new();
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always).with_user(UpdateKind::Always),
+        );
+        // Enumeration failure must never be mistaken for an empty machine.
+        system.process(Pid::from_u32(std::process::id())).ok_or_else(Owner::busy)?;
+        Ok(system)
+    }
 
-// Retain start times so a recycled PID cannot authorize deletion or cause an unrelated process to be killed.
-// Include intermediate descendants too: a renderer can start its own children. Exclude this reset helper.
-fn descendants(system: &System, processes: &mut Vec<(Pid, u64)>) {
-    loop {
-        let added: Vec<_> = system
-            .processes()
-            .iter()
-            .filter(|(pid, process)| {
-                pid.as_u32() != std::process::id()
-                    && !processes.contains(&(**pid, process.start_time()))
-                    && process.parent().is_some_and(|parent| {
-                        processes.iter().any(|(pid, start)| {
-                            *pid == parent && system.process(parent).is_some_and(|p| p.start_time() == *start)
+    // Retain start times so a recycled PID cannot authorize deletion or cause an unrelated process to be killed.
+    // Include intermediate descendants too: a renderer can start its own children. Exclude this reset helper.
+    fn descendants(system: &System, processes: &mut Vec<(Pid, u64)>) {
+        loop {
+            let added: Vec<_> = system
+                .processes()
+                .iter()
+                .filter(|(pid, process)| {
+                    pid.as_u32() != std::process::id()
+                        && !processes.contains(&(**pid, process.start_time()))
+                        && process.parent().is_some_and(|parent| {
+                            processes.iter().any(|(pid, start)| {
+                                *pid == parent && system.process(parent).is_some_and(|p| p.start_time() == *start)
+                            })
                         })
-                    })
-            })
-            .map(|(pid, process)| (*pid, process.start_time()))
-            .collect();
-        if added.is_empty() {
-            break;
-        }
-        processes.extend(added);
-    }
-}
-
-// Responsibility, unlike PPID, associates launchd-owned XPC services with their application. Keep
-// already observed PID/start pairs even after the app exits or macOS changes the responsibility chain.
-#[cfg(any(target_os = "macos", test))]
-fn responsible_processes(
-    system: &System,
-    processes: &mut Vec<(Pid, u64)>,
-    mut lookup: impl FnMut(Pid, &sysinfo::Process) -> io::Result<Option<Pid>>,
-) -> io::Result<()> {
-    let app = processes.first().ok_or_else(busy)?.0;
-    for (pid, process) in system.processes() {
-        if processes.contains(&(*pid, process.start_time())) {
-            continue;
-        }
-        if lookup(*pid, process)? == Some(app) {
-            if process.start_time() == 0 {
-                return Err(busy());
+                })
+                .map(|(pid, process)| (*pid, process.start_time()))
+                .collect();
+            if added.is_empty() {
+                break;
             }
-            let identity = (*pid, process.start_time());
-            if !processes.contains(&identity) {
-                processes.push(identity);
+            processes.extend(added);
+        }
+    }
+
+    // Responsibility, unlike PPID, associates launchd-owned XPC services with their application. Keep
+    // already observed PID/start pairs even after the app exits or macOS changes the responsibility chain.
+    #[cfg(any(target_os = "macos", test))]
+    fn responsible_processes(
+        system: &System,
+        processes: &mut Vec<(Pid, u64)>,
+        mut lookup: impl FnMut(Pid, &sysinfo::Process) -> io::Result<Option<Pid>>,
+    ) -> io::Result<()> {
+        let app = processes.first().ok_or_else(Owner::busy)?.0;
+        for (pid, process) in system.processes() {
+            if processes.contains(&(*pid, process.start_time())) {
+                continue;
+            }
+            if lookup(*pid, process)? == Some(app) {
+                if process.start_time() == 0 {
+                    return Err(Owner::busy());
+                }
+                let identity = (*pid, process.start_time());
+                if !processes.contains(&identity) {
+                    processes.push(identity);
+                }
             }
         }
+        Ok(())
     }
-    Ok(())
-}
-
-// The browser's command line is used only to associate a process with our UDF, never as a deletion path.
-#[cfg(any(target_os = "windows", test))]
-fn user_data_folder(args: &[std::ffi::OsString]) -> io::Result<Option<PathBuf>> {
-    for (index, arg) in args.iter().enumerate() {
-        if arg == "--user-data-dir" {
-            return args.get(index + 1).map(PathBuf::from).map(Some).ok_or_else(busy);
-        }
-        let text = arg.to_str().ok_or_else(busy)?;
-        if let Some(folder) = text.strip_prefix("--user-data-dir=") {
-            return if folder.is_empty() { Err(busy()) } else { Ok(Some(PathBuf::from(folder))) };
-        }
-    }
-    Ok(None)
 }
 
 #[cfg(test)]
@@ -265,7 +237,7 @@ mod tests {
             SystemWebviewData::exited(pid)
         }
         fn observe(system: &System, _locations: &Locations, processes: &mut Vec<(Pid, u64)>) -> io::Result<()> {
-            descendants(system, processes);
+            Owner::descendants(system, processes);
             Ok(())
         }
     }
@@ -273,7 +245,7 @@ mod tests {
     #[test]
     fn live_owner_prevents_removal_even_without_a_browser() {
         let temp = tempfile::tempdir().unwrap();
-        let paths = locations(vec![temp.path().join(IDENTIFIER)]).unwrap();
+        let paths = Locations::new(vec![temp.path().join(IDENTIFIER)]).unwrap();
         let owner = Fixture::capture(std::process::id(), paths).unwrap();
         assert_eq!(Fixture::wait_released(owner, Instant::now()).err().unwrap().kind(), io::ErrorKind::WouldBlock);
     }
@@ -294,7 +266,7 @@ mod tests {
         std::fs::create_dir(&selected).unwrap();
         // A PID absent from sysinfo still requires the independent query, whose failure blocks release.
         let owner = Owner {
-            locations: locations(vec![selected.clone()]).unwrap(),
+            locations: Locations::new(vec![selected.clone()]).unwrap(),
             processes: vec![(Pid::from_u32(u32::MAX), 1)],
         };
         assert_eq!(
@@ -305,7 +277,7 @@ mod tests {
         // Native liveness does not need a sysinfo entry (or even a snapshot) to detect this live PID.
         assert!(!SystemWebviewData::exited(std::process::id()).unwrap());
         let reused = Owner {
-            locations: locations(vec![selected]).unwrap(),
+            locations: Locations::new(vec![selected]).unwrap(),
             processes: vec![(Pid::from_u32(std::process::id()), 1)],
         };
         assert_eq!(Fixture::wait_released(reused, Instant::now()).err().unwrap().kind(), io::ErrorKind::WouldBlock);
@@ -322,7 +294,7 @@ mod tests {
         std::fs::create_dir(&selected).unwrap();
         std::fs::write(selected.join("cookies"), "old session").unwrap();
         std::fs::write(root.join("other-app"), "keep").unwrap();
-        let released = Released(locations(vec![selected.clone()]).unwrap());
+        let released = Released(Locations::new(vec![selected.clone()]).unwrap());
         assert!(SystemWebviewData::remove(&released, &root).is_err());
         SystemWebviewData::remove(&released, &selected).unwrap();
         SystemWebviewData::remove(&released, &selected).unwrap();
@@ -337,7 +309,7 @@ mod tests {
         let paths = SystemWebviewData::locations(temp.path(), &local).unwrap();
         assert!(!paths.paths().is_empty());
         assert!(paths.paths().iter().all(|p| p.is_absolute() && p.ends_with(IDENTIFIER)));
-        assert!(locations(vec![PathBuf::from("../browser")]).is_err());
+        assert!(Locations::new(vec![PathBuf::from("../browser")]).is_err());
     }
 
     #[test]
@@ -347,11 +319,14 @@ mod tests {
             args(&["browser", "--user-data-dir=C:\\Users\\Name With Spaces\\é"]),
             args(&["browser", "--user-data-dir", "C:\\Users\\Name With Spaces\\é"]),
         ] {
-            assert_eq!(user_data_folder(&command).unwrap(), Some(PathBuf::from("C:\\Users\\Name With Spaces\\é")));
+            assert_eq!(
+                Locations::browser_folder(&command).unwrap(),
+                Some(PathBuf::from("C:\\Users\\Name With Spaces\\é"))
+            );
         }
-        assert_eq!(user_data_folder(&args(&["browser", "--something=--user-data-dir=other"])).unwrap(), None);
-        assert!(user_data_folder(&args(&["browser", "--user-data-dir"])).is_err());
-        assert!(user_data_folder(&args(&["browser", "--user-data-dir="])).is_err());
+        assert_eq!(Locations::browser_folder(&args(&["browser", "--something=--user-data-dir=other"])).unwrap(), None);
+        assert!(Locations::browser_folder(&args(&["browser", "--user-data-dir"])).is_err());
+        assert!(Locations::browser_folder(&args(&["browser", "--user-data-dir="])).is_err());
     }
 
     #[test]
@@ -389,21 +364,22 @@ mod tests {
             assert!(Instant::now() < deadline);
             thread::sleep(Duration::from_millis(20));
         }
-        let mut owner = Fixture::capture(host.id(), locations(vec![selected.clone()]).unwrap()).unwrap();
+        let mut owner = Fixture::capture(host.id(), Locations::new(vec![selected.clone()]).unwrap()).unwrap();
         let writer_pid = Pid::from_u32(writer.id());
         assert!(!owner.processes.iter().any(|(pid, _)| *pid == writer_pid));
-        let system = snapshot().unwrap();
+        let system = Owner::snapshot().unwrap();
         // Lookup failure cannot authorize cleanup; another responsible app must not be selected.
-        assert!(responsible_processes(&system, &mut owner.processes, |_, _| Err(busy())).is_err());
-        responsible_processes(&system, &mut owner.processes, |_, _| Ok(Some(Pid::from_u32(std::process::id()))))
+        assert!(Owner::responsible_processes(&system, &mut owner.processes, |_, _| Err(Owner::busy())).is_err());
+        Owner::responsible_processes(&system, &mut owner.processes, |_, _| Ok(Some(Pid::from_u32(std::process::id()))))
             .unwrap();
         assert!(!owner.processes.iter().any(|(pid, _)| *pid == writer_pid));
         // Inject only the platform lookup: these are real sibling processes, not descendants.
-        responsible_processes(&system, &mut owner.processes, |pid, _| {
+        Owner::responsible_processes(&system, &mut owner.processes, |pid, _| {
             Ok((pid == writer_pid).then_some(Pid::from_u32(host.id())))
         })
         .unwrap();
-        let retry = Owner { locations: locations(vec![selected.clone()]).unwrap(), processes: owner.processes.clone() };
+        let retry =
+            Owner { locations: Locations::new(vec![selected.clone()]).unwrap(), processes: owner.processes.clone() };
         std::fs::write(host_dir.path().join("exit"), b"exit").unwrap();
         assert!(host.wait().unwrap().success());
         assert_eq!(Fixture::wait_released(owner, Instant::now()).err().unwrap().kind(), io::ErrorKind::WouldBlock);
@@ -436,7 +412,7 @@ mod tests {
             assert!(Instant::now() < deadline);
             thread::sleep(Duration::from_millis(20));
         }
-        let owner = Fixture::capture(child.id(), locations(vec![selected.clone()]).unwrap()).unwrap();
+        let owner = Fixture::capture(child.id(), Locations::new(vec![selected.clone()]).unwrap()).unwrap();
         std::fs::write(root.join("exit"), b"exit").unwrap();
         // Reap in parallel: on Unix, an unreaped child remains visible as a zombie.
         let reap = thread::spawn(move || child.wait().unwrap());

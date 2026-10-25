@@ -12,11 +12,21 @@ impl WebviewData for Os {
     }
 
     fn exited(pid: u32) -> io::Result<bool> {
-        unix_pid_exited(pid)
+        let pid = libc::pid_t::try_from(pid).ok().filter(|pid| *pid > 1).ok_or_else(Owner::busy)?;
+        // SAFETY: signal zero inspects a positive PID without sending a signal or touching memory.
+        if unsafe { libc::kill(pid, 0) } == 0 {
+            return Ok(false);
+        }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            Ok(true)
+        } else {
+            Err(error)
+        }
     }
 
     fn locations(home: &Path, _app_local_data: &Path) -> io::Result<Locations> {
-        locations(vec![
+        Locations::new(vec![
             home.join("Library/Application Support").join(IDENTIFIER),
             home.join("Library/WebKit").join(IDENTIFIER),
             home.join("Library/Caches").join(IDENTIFIER),
@@ -24,21 +34,21 @@ impl WebviewData for Os {
     }
 
     fn observe(system: &System, _locations: &Locations, processes: &mut Vec<(Pid, u64)>) -> io::Result<()> {
-        let &(app, start) = processes.first().ok_or_else(busy)?;
+        let &(app, start) = processes.first().ok_or_else(Owner::busy)?;
         if system.process(app).is_some_and(|p| p.start_time() == start) && responsible_pid(app)? != app {
             // A terminal-launched app can inherit the terminal's responsibility. Do not confuse its
             // WebKit services with other applications charged to that same responsible process.
-            return Err(busy());
+            return Err(Owner::busy());
         }
-        let current = system.process(Pid::from_u32(std::process::id())).ok_or_else(busy)?;
-        let user = current.user_id().ok_or_else(busy)?;
+        let current = system.process(Pid::from_u32(std::process::id())).ok_or_else(Owner::busy)?;
+        let user = current.user_id().ok_or_else(Owner::busy)?;
         let mut tree = processes.clone();
-        descendants(system, &mut tree);
-        responsible_processes(system, processes, |pid, process| {
+        Owner::descendants(system, &mut tree);
+        Owner::responsible_processes(system, processes, |pid, process| {
             if !process.name().to_string_lossy().contains("WebKit") {
                 return Ok(None);
             }
-            if process.user_id().ok_or_else(busy)? != user {
+            if process.user_id().ok_or_else(Owner::busy)? != user {
                 return Ok(None);
             }
             if tree.contains(&(pid, process.start_time())) {
@@ -55,15 +65,15 @@ fn responsible_pid(pid: Pid) -> io::Result<Pid> {
     // SAFETY: dlsym reads a static NUL-terminated symbol in the process's loaded system libraries.
     let symbol = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"responsibility_get_pid_responsible_for_pid".as_ptr()) };
     if symbol.is_null() {
-        return Err(busy());
+        return Err(Owner::busy());
     }
     // SAFETY: the non-null symbol has this system ABI; no library handle is closed while in use.
     let responsible: unsafe extern "C" fn(libc::pid_t) -> libc::pid_t = unsafe { std::mem::transmute(symbol) };
-    let pid = libc::pid_t::try_from(pid.as_u32()).map_err(|_| busy())?;
+    let pid = libc::pid_t::try_from(pid.as_u32()).map_err(|_| Owner::busy())?;
     // SAFETY: this query takes a PID by value and does not access caller-owned memory.
     let owner = unsafe { responsible(pid) };
     if owner <= 0 {
-        Err(busy())
+        Err(Owner::busy())
     } else {
         Ok(Pid::from_u32(owner as u32))
     }

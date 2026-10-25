@@ -4,6 +4,12 @@
 The macOS reset helper uses it. Windows/Linux reset remains unavailable until the separate portable reset
 transaction is assembled; this interface does not enable that UI or remove an installed app.
 
+The concern module declares the documented trait, common types and OS selection. Its shared trait defaults
+own capture, waiting and held-parent deletion; private common-type helpers own path validation and process
+association. Each of `webview_data/{macos,windows,linux}.rs` implements only the native liveness and writer
+selection it needs (plus macOS admission and storage roots). Callers import the trait and selected type
+directly. The interface tests stay in the concern module and run on every compiled host.
+
 ## Exact storage roots
 
 The native caller supplies Tauri's resolved `home_dir()` and `app_local_data_dir()` values. No path is accepted
