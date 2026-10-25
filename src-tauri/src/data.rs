@@ -477,6 +477,7 @@ pub async fn data_uninstall(app: AppHandle, webview: Webview) -> Answer {
 
 #[cfg(target_os = "macos")]
 async fn confirmed_reset(app: AppHandle, uninstall: bool) -> Answer {
+    use crate::platform::confirmation::{Confirmation, ConfirmationKind, NativeConfirmation};
     let state = app.state::<AppState>();
     if !begin_exclusive(&app) {
         return Err(refused("reset.busy"));
@@ -497,7 +498,13 @@ async fn confirmed_reset(app: AppHandle, uninstall: bool) -> Answer {
             return Err(refused(key));
         }
     }
-    if let Err(refusal) = require_confirmation(native_reset_confirmation(&app, uninstall).await) {
+    if let Err(refusal) = require_confirmation(
+        NativeConfirmation::confirm(
+            &app,
+            if uninstall { ConfirmationKind::Uninstall } else { ConfirmationKind::DeleteAllData },
+        )
+        .await,
+    ) {
         end_exclusive(&app);
         return Err(refusal);
     }
@@ -514,76 +521,6 @@ async fn confirmed_reset(app: AppHandle, uninstall: bool) -> Answer {
 #[cfg(target_os = "macos")]
 fn require_confirmation(accepted: bool) -> Result<(), Value> {
     accepted.then_some(()).ok_or_else(|| refused("reset.cancelled"))
-}
-
-#[cfg(target_os = "macos")]
-async fn native_reset_confirmation(app: &AppHandle, uninstall: bool) -> bool {
-    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-    if app
-        .run_on_main_thread(move || {
-            use objc2::{class, msg_send, runtime::AnyObject};
-            use objc2_foundation::NSString;
-            // NSAlert's first button is the default. The destructive button is deliberately second.
-            let confirmed = unsafe {
-                let alert: *mut AnyObject = msg_send![class!(NSAlert), new];
-                if alert.is_null() {
-                    false
-                } else {
-                    let locale: *mut AnyObject = msg_send![class!(NSLocale), currentLocale];
-                    let code: *mut AnyObject = msg_send![locale, languageCode];
-                    let utf8: *const libc::c_char = msg_send![code, UTF8String];
-                    let language =
-                        if utf8.is_null() { "en" } else { std::ffi::CStr::from_ptr(utf8).to_str().unwrap_or("en") };
-                    let (title_text, detail_text, cancel_text, delete_text) =
-                        if uninstall { native_uninstall_words(language) } else { native_reset_words(language) };
-                    let title = NSString::from_str(title_text);
-                    let detail = NSString::from_str(detail_text);
-                    let cancel = NSString::from_str(cancel_text);
-                    let delete = NSString::from_str(delete_text);
-                    let _: () = msg_send![alert, setMessageText: &*title];
-                    let _: () = msg_send![alert, setInformativeText: &*detail];
-                    let _: *mut AnyObject = msg_send![alert, addButtonWithTitle: &*cancel];
-                    let _: *mut AnyObject = msg_send![alert, addButtonWithTitle: &*delete];
-                    let answer: isize = msg_send![alert, runModal];
-                    let _: () = msg_send![alert, release];
-                    answer == 1001 // NSAlertSecondButtonReturn
-                }
-            };
-            let _ = sender.send(confirmed);
-        })
-        .is_err()
-    {
-        return false;
-    }
-    tauri::async_runtime::spawn_blocking(move || receiver.recv().unwrap_or(false)).await.unwrap_or(false)
-}
-
-#[cfg(target_os = "macos")]
-fn native_reset_words(locale: &str) -> (&'static str, &'static str, &'static str, &'static str) {
-    match locale.split(['-', '_']).next().unwrap_or("en") {
-        "de" => ("Alle Sidevoice-Daten löschen?", "Der Sidevoice-Dienst wird deinstalliert; lokale App-Daten, Modelle und gespeicherte Schlüssel werden gelöscht. Eigene Profile, ein separat installierter Core, andere Geräte, Backups und diese .app bleiben erhalten. Dies kann nicht rückgängig gemacht werden.", "Abbrechen", "Alle Sidevoice-Daten löschen"),
-        "es" => ("¿Borrar todos los datos de Sidevoice?", "Se desinstalará el servicio Sidevoice y se borrarán los datos locales de la app, los modelos y las claves guardadas. Permanecen los perfiles personalizados, un núcleo instalado por separado, otros dispositivos, las copias de seguridad y esta .app. No se puede deshacer.", "Cancelar", "Borrar todos los datos de Sidevoice"),
-        "fr" => ("Supprimer toutes les données Sidevoice ?", "Le service Sidevoice sera désinstallé et les données locales de l’app, les modèles et les clés enregistrées seront supprimés. Les profils personnalisés, un cœur installé séparément, les autres appareils, les sauvegardes et cette .app restent. Cette action est irréversible.", "Annuler", "Supprimer toutes les données Sidevoice"),
-        "it" => ("Eliminare tutti i dati di Sidevoice?", "Il servizio Sidevoice verrà disinstallato; i dati locali dell’app, i modelli e le chiavi salvate verranno eliminati. Restano i profili personalizzati, un core installato separatamente, gli altri dispositivi, i backup e questa .app. L’azione non può essere annullata.", "Annulla", "Elimina tutti i dati di Sidevoice"),
-        "ja" => ("Sidevoice の全データを削除しますか？", "Sidevoice サービスをアンインストールし、アプリ内のデータ、モデル、保存したキーを削除します。カスタムプロファイル、別途インストールしたコア、ほかの端末、バックアップ、この .app は残ります。この操作は取り消せません。", "キャンセル", "Sidevoice の全データを削除"),
-        "pl" => ("Usunąć wszystkie dane Sidevoice?", "Usługa Sidevoice zostanie odinstalowana, a lokalne dane aplikacji, modele i zapisane klucze usunięte. Niestandardowe profile, osobno zainstalowany rdzeń, inne urządzenia, kopie zapasowe i ta aplikacja .app pozostaną. Nie można tego cofnąć.", "Anuluj", "Usuń wszystkie dane Sidevoice"),
-        "zh" => ("删除所有 Sidevoice 数据？", "将卸载 Sidevoice 服务，并删除本应用的本地数据、模型和保存的密钥。自定义配置、单独安装的核心、其他设备、备份和此 .app 应用程序包会保留。此操作无法撤销。", "取消", "删除所有 Sidevoice 数据"),
-        _ => ("Delete all Sidevoice data?", "This uninstalls the Sidevoice service and deletes this app’s local data, models and saved keys. Custom profiles, a separately installed core, other devices, backups and this .app bundle remain. This cannot be undone.", "Cancel", "Delete all Sidevoice data"),
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn native_uninstall_words(locale: &str) -> (&'static str, &'static str, &'static str, &'static str) {
-    match locale.split(['-', '_']).next().unwrap_or("en") {
-        "de" => ("Sidevoice deinstallieren?", "Alle Sidevoice-Daten werden gelöscht: der Sidevoice-Dienst, lokale App-Daten, Modelle und gespeicherte Schlüssel. Danach wird Sidevoice beendet und in den Papierkorb gelegt. Eigene Profile, ein separat installierter Core, andere Geräte und Backups bleiben erhalten. Dies kann nicht rückgängig gemacht werden.", "Abbrechen", "Sidevoice deinstallieren"),
-        "es" => ("¿Desinstalar Sidevoice?", "Se borrarán todos los datos de Sidevoice: el servicio Sidevoice, los datos locales de la app, los modelos y las claves guardadas. Después Sidevoice se cerrará y se moverá a la Papelera. Permanecen los perfiles personalizados, un núcleo instalado por separado, otros dispositivos y las copias de seguridad. No se puede deshacer.", "Cancelar", "Desinstalar Sidevoice"),
-        "fr" => ("Désinstaller Sidevoice ?", "Toutes les données Sidevoice seront supprimées : le service Sidevoice, les données locales de l’app, les modèles et les clés enregistrées. Sidevoice se fermera ensuite et sera placé dans la Corbeille. Les profils personnalisés, un cœur installé séparément, les autres appareils et les sauvegardes restent. Cette action est irréversible.", "Annuler", "Désinstaller Sidevoice"),
-        "it" => ("Disinstallare Sidevoice?", "Verranno eliminati tutti i dati di Sidevoice: il servizio Sidevoice, i dati locali dell’app, i modelli e le chiavi salvate. Poi Sidevoice si chiuderà e verrà spostato nel Cestino. Restano i profili personalizzati, un core installato separatamente, gli altri dispositivi e i backup. L’azione non può essere annullata.", "Annulla", "Disinstalla Sidevoice"),
-        "ja" => ("Sidevoice をアンインストールしますか？", "Sidevoice のすべてのデータ（Sidevoice サービス、アプリ内のデータ、モデル、保存したキー）を削除します。その後 Sidevoice は終了し、ゴミ箱に移動されます。カスタムプロファイル、別途インストールしたコア、ほかの端末、バックアップは残ります。この操作は取り消せません。", "キャンセル", "Sidevoice をアンインストール"),
-        "pl" => ("Odinstalować Sidevoice?", "Wszystkie dane Sidevoice zostaną usunięte: usługa Sidevoice, lokalne dane aplikacji, modele i zapisane klucze. Następnie Sidevoice zamknie się i zostanie przeniesiony do Kosza. Niestandardowe profile, osobno zainstalowany rdzeń, inne urządzenia i kopie zapasowe pozostaną. Nie można tego cofnąć.", "Anuluj", "Odinstaluj Sidevoice"),
-        "zh" => ("卸载 Sidevoice？", "将删除所有 Sidevoice 数据：Sidevoice 服务、本应用的本地数据、模型和保存的密钥。随后 Sidevoice 会退出并移到废纸篓。自定义配置、单独安装的核心、其他设备和备份会保留。此操作无法撤销。", "取消", "卸载 Sidevoice"),
-        _ => ("Uninstall Sidevoice?", "This deletes all Sidevoice data: the Sidevoice service, this app’s local data, models and saved keys. Sidevoice then quits and moves itself to the Trash. Custom profiles, a separately installed core, other devices and backups remain. This cannot be undone.", "Cancel", "Uninstall Sidevoice"),
-    }
 }
 
 /// The `.app` bundle this executable runs from: `<bundle>.app/Contents/MacOS/<executable>`. Anything else (a
@@ -1869,31 +1806,6 @@ mod tests {
     fn direct_command_requires_native_confirmation() {
         assert_eq!(require_confirmation(false), Err(refused("reset.cancelled")));
         assert_eq!(require_confirmation(true), Ok(()));
-    }
-
-    #[test]
-    fn native_confirmation_has_cancel_first_and_all_supported_languages() {
-        for locale in ["en", "es", "de", "fr", "it", "ja", "pl", "zh-Hans"] {
-            let (title, detail, cancel, delete) = native_reset_words(locale);
-            assert!(!title.is_empty() && !detail.is_empty() && !cancel.is_empty() && !delete.is_empty());
-            assert!(detail.contains("Sidevoice") && !detail.contains("connector"));
-            assert_ne!(cancel, delete);
-        }
-        assert_eq!(native_reset_words("xx"), native_reset_words("en"));
-    }
-
-    #[test]
-    fn native_uninstall_confirmation_names_the_trash_in_all_supported_languages() {
-        for locale in ["en", "es", "de", "fr", "it", "ja", "pl", "zh-Hans"] {
-            let (title, detail, cancel, uninstall) = native_uninstall_words(locale);
-            assert!(!title.is_empty() && !detail.is_empty() && !cancel.is_empty() && !uninstall.is_empty());
-            assert!(detail.contains("Sidevoice") && !detail.contains("connector"));
-            assert_eq!(cancel, native_reset_words(locale).2);
-            assert_ne!(title, native_reset_words(locale).0);
-            assert_ne!(cancel, uninstall);
-        }
-        assert_eq!(native_uninstall_words("xx"), native_uninstall_words("en"));
-        assert!(native_uninstall_words("en").1.contains("Trash"));
     }
 
     #[test]
