@@ -66,7 +66,7 @@ pub(super) fn write_pairings(path: &Path, value: &Value) -> Answer {
     write_pairings_with(path, value, || {})
 }
 
-fn write_pairings_with(path: &Path, value: &Value, before_publish: impl FnOnce()) -> Answer {
+fn write_pairings_with(path: &Path, value: &Value, before_write: impl FnOnce()) -> Answer {
     if !checked_pairings(value) {
         return Err(refused("data.pairings-invalid"));
     }
@@ -81,7 +81,8 @@ fn write_pairings_with(path: &Path, value: &Value, before_publish: impl FnOnce()
     }
     .map_err(|error| storage_error(error, "data.pairings-write"))?;
     let bytes = serde_json::to_vec(value).map_err(|_| refused("data.pairings-invalid"))?;
-    before_publish();
+    // This desktop hook runs before the shared writer stages anything; publication checks belong to core.
+    before_write();
     held.write(name, &bytes).map_err(|error| storage_error(error, "data.pairings-write"))?;
     Ok(Value::Null)
 }
@@ -121,7 +122,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn pairing_write_refuses_replaced_ancestor_before_rename() {
+    fn pairing_write_refuses_replaced_ancestor_before_shared_write() {
         let home = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         let home = fs::canonicalize(home.path()).unwrap();
