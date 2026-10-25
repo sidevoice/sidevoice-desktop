@@ -96,7 +96,15 @@ pub trait WebviewData {
     /// Add browser writers to the pre-exit observation. `sysinfo` owns native process enumeration;
     /// selection is desktop policy. Kept on this trait so OS implementations expose no extra API.
     fn observe(system: &System, _locations: &Locations, processes: &mut Vec<(Pid, u64)>) -> io::Result<()> {
-        descendants(system, processes);
+        let mut tree = processes.clone();
+        descendants(system, &mut tree);
+        for (pid, start) in tree {
+            if !processes.contains(&(pid, start))
+                && system.process(pid).is_some_and(|p| p.name().to_string_lossy().contains("WebKit"))
+            {
+                processes.push((pid, start));
+            }
+        }
         Ok(())
     }
 
@@ -198,7 +206,12 @@ mod tests {
     // A native test subprocess stands in for a browser, so exercise the shared lifetime contract
     // without pretending that its executable/arguments identify a real WebView2 runtime.
     struct Fixture;
-    impl WebviewData for Fixture {}
+    impl WebviewData for Fixture {
+        fn observe(system: &System, _locations: &Locations, processes: &mut Vec<(Pid, u64)>) -> io::Result<()> {
+            descendants(system, processes);
+            Ok(())
+        }
+    }
 
     #[test]
     fn live_owner_prevents_removal_even_without_a_browser() {
