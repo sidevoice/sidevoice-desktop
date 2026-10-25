@@ -195,15 +195,17 @@ fn user_data_folder(args: &[std::ffi::OsString]) -> io::Result<Option<PathBuf>> 
 mod tests {
     use super::*;
 
+    // A native test subprocess stands in for a browser, so exercise the shared lifetime contract
+    // without pretending that its executable/arguments identify a real WebView2 runtime.
+    struct Fixture;
+    impl WebviewData for Fixture {}
+
     #[test]
     fn live_owner_prevents_removal_even_without_a_browser() {
         let temp = tempfile::tempdir().unwrap();
         let paths = locations(vec![temp.path().join(IDENTIFIER)]).unwrap();
-        let owner = SystemWebviewData::capture(std::process::id(), paths).unwrap();
-        assert_eq!(
-            SystemWebviewData::wait_released(owner, Instant::now()).err().unwrap().kind(),
-            io::ErrorKind::WouldBlock
-        );
+        let owner = Fixture::capture(std::process::id(), paths).unwrap();
+        assert_eq!(Fixture::wait_released(owner, Instant::now()).err().unwrap().kind(), io::ErrorKind::WouldBlock);
     }
 
     #[test]
@@ -281,11 +283,11 @@ mod tests {
             assert!(Instant::now() < deadline);
             thread::sleep(Duration::from_millis(20));
         }
-        let owner = SystemWebviewData::capture(child.id(), locations(vec![selected.clone()]).unwrap()).unwrap();
+        let owner = Fixture::capture(child.id(), locations(vec![selected.clone()]).unwrap()).unwrap();
         std::fs::write(root.join("exit"), b"exit").unwrap();
         // Reap in parallel: on Unix, an unreaped child remains visible as a zombie.
         let reap = thread::spawn(move || child.wait().unwrap());
-        let released = SystemWebviewData::wait_released(owner, deadline).unwrap();
+        let released = Fixture::wait_released(owner, deadline).unwrap();
         assert_eq!(std::fs::read(selected.join("cookies")).unwrap(), b"last shutdown write");
         SystemWebviewData::remove(&released, &selected).unwrap();
         assert!(reap.join().unwrap().success());

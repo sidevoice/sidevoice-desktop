@@ -4,6 +4,11 @@ pub struct Os;
 
 impl WebviewData for Os {
     fn observe(system: &System, locations: &Locations, processes: &mut Vec<(Pid, u64)>) -> io::Result<()> {
+        // Capture starts with only the live host. Require positive UDF evidence at that point:
+        // an environment/registry override may reuse another app's browser, outside our ancestry.
+        // No matching runtime is uncertainty, not permission to delete a guessed default folder.
+        let capturing = processes.len() == 1;
+        let mut found_folder = false;
         descendants(system, processes);
         let current = system.process(Pid::from_u32(std::process::id())).ok_or_else(busy)?;
         let user = current.user_id().ok_or_else(busy)?;
@@ -25,6 +30,7 @@ impl WebviewData for Os {
                     .paths()
                     .iter()
                     .any(|path| path == &folder || same_file::is_same_file(path, &folder).unwrap_or(false));
+                found_folder |= owned;
                 if owned && !processes.contains(&(*pid, process.start_time())) {
                     processes.push((*pid, process.start_time()));
                 }
@@ -34,6 +40,9 @@ impl WebviewData for Os {
                     return Err(busy());
                 }
             }
+        }
+        if capturing && !found_folder {
+            return Err(busy());
         }
         descendants(system, processes);
         Ok(())

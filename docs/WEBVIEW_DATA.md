@@ -19,6 +19,8 @@ These are the pinned dependency versions, not guesses from generic browser defau
 if configured in a future Tauri config, must be resolved by Tauri before passing the paths. The current app has
 no custom data-directory override on either webview builder. A WebView2 environment/registry override pointing
 an app child at a different user data folder is refused, not silently added to the deletion allowlist.
+Windows capture also requires positive evidence of a runtime using the allowlisted folder; an override that
+reuses another application's browser cannot make an unobserved default store look safe to remove.
 
 ## Lifetime and integration contract
 
@@ -48,7 +50,7 @@ Windows folder identity, plus the released shared removal primitive. It adds no 
 ## Verification and limits
 
 Interface tests run on each compiled host: an active owner refuses release, exact allowlist removal preserves
-siblings, missing roots succeed, malformed UDF arguments refuse, and a real child performs its final shutdown
+siblings, missing roots succeed, malformed UDF arguments refuse, and a real child through the shared lifetime implementation performs its final shutdown
 write before release/removal. Windows can also be type-checked independently of the shell's native toolkit.
 
 The tests do not launch a real WebView2/WKWebView/WebKitGTK engine. Installed-browser process topology,
