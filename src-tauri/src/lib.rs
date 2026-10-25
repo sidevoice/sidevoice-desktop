@@ -327,6 +327,9 @@ fn reset_call_state(app: &AppHandle) {
 
 /// (Re)creates the room window: the bundled interface, bound to the app's own pages.
 fn open_room(app: &AppHandle) -> tauri::Result<()> {
+    // Reset captures browser writers before exit. A tray/reopen action must not create another
+    // WebKit/WebView2 process after that snapshot (or race reset admission while building it).
+    let Some(_permit) = data::admit(app) else { return Ok(()) };
     let state = app.state::<AppState>();
     let label = format!("{ROOM_PREFIX}{}", state.room_counter.fetch_add(1, Ordering::SeqCst) + 1);
     #[cfg(not(feature = "probe"))]
