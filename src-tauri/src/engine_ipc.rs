@@ -182,7 +182,7 @@ mod credentials {
     use crate::platform::credentials::{self, Credentials, ProviderCredentials};
 
     fn provider(provider: &str) -> Result<(), Error> {
-        if credentials::valid(provider) {
+        if ProviderCredentials::valid(provider) {
             Ok(())
         } else {
             Err(error::provider_invalid(provider))

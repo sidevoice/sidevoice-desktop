@@ -35,9 +35,18 @@ availability is enabled by this change; its existing caller now invokes `clear()
 
 ## Verification
 
-Tests live with the interface and run without Tauri/model linkage via
+Portable contract tests live with the interface and run without Tauri/model linkage via
 `cargo test -p sidevoice-desktop-test-support --test credentials`. The existing macOS and Windows PR
 jobs run them through `cargo xtask test-support`; the Linux workspace tests run them too.
+The shared concern holds the documented interface and store-independent policy. Each OS type implements
+that interface and its private backend hook; native store construction, admission and entry options live
+in the corresponding OS file. Callers use only the credential trait, including provider validation.
+
+Native regression fixtures live beside their OS implementation because they must exercise Keychain
+search-list/legacy APIs, CredMan persistence metadata and byte limits, or Secret Service bus failure and
+prompt admission. Each invokes the same portable contract where storage is available; the Linux live-store
+contract remains explicitly ignored on headless CI. The native fixtures cannot be expressed solely through
+read/write/clear: those operations intentionally hide the OS metadata and setup mechanisms being checked.
 
 - The in-memory keyring sample backend is test-only and non-persistent. It covers missing keys, update,
   idempotent removal, Unicode, unknown and malformed providers, ambiguous entries, malformed stored
