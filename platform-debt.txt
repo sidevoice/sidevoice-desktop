@@ -28,7 +28,7 @@ src-tauri/src/voice/models/engine/tests.rs 1
 test-support/src/bin/local-host-ci.rs 5
 test-support/src/fake_registry.rs 2
 test-support/tests/cli.rs 7
-test-support/tests/install.rs 2
+test-support/tests/install.rs 3
 test-support/tests/local_host.rs 2
 xtask/src/main.rs 1
 xtask/src/probe.rs 1
