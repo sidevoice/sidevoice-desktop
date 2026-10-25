@@ -4,7 +4,10 @@ P18: `platform/card_window` owns construction, native panel behavior, visibility
 Layout, call state and bridge contracts remain in `call_controls` and the portable core. P19a: `platform/desktop_geometry` now owns coordinate capabilities, pointer/frame queries, monitor mapping,
 placement and compositor dragging. It reads the selected GTK backend once during setup; unavailable coordinates
 are returned as `None`, and placement is skipped. Display enumeration stays fresh for monitor changes.
-Visibility observations and pointer subscriptions follow in P19b–P19c. This is an inventory of the existing
+P19b: `platform/window_visibility` now exposes optional shown/minimized, workspace and coverage observations.
+DWM errors and X11/Wayland workspace observations are explicitly unavailable. The prior fallback is retained
+separately (X11 assumes visible; Wayland uses focus; Windows assumes visible when DWM fails). AppKit
+occlusion and CoreGraphics coverage are unchanged. Pointer subscriptions follow in P19c. This is an inventory of the existing
 card, including its deliberate fallbacks; it does not enable local voice on additional operating systems.
 
 ## Evidence and status

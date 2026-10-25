@@ -13,6 +13,7 @@
 
 use crate::platform::card_window::{CardSpec, CardWindow, NativeCardWindow};
 use crate::platform::desktop_geometry::{DesktopGeometry, NativeGeometry};
+use crate::platform::window_visibility::{NativeVisibility, Visibility, WindowVisibility};
 use crate::{debug, AppState};
 use serde::Deserialize;
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
@@ -173,23 +174,6 @@ fn card(app: &AppHandle) -> Option<tauri::State<'_, Card>> {
     app.try_state::<Card>()
 }
 
-/// What the system shows of the room's window, for its stage (core `stage_on_screen`), as the log says it.
-#[derive(Debug, Clone, Copy)]
-struct Shown {
-    shown: bool,
-    minimised: bool,
-    /// macOS: not fully covered nor on another Space; Windows: not on another virtual desktop; Wayland: focused.
-    on_screen: bool,
-    /// The part of the stage no other app's window covers, where the app can measure it (macOS).
-    uncovered: Option<f64>,
-}
-
-impl Shown {
-    fn stage_on_screen(&self) -> bool {
-        logic::stage_on_screen(self.shown, self.minimised, self.on_screen, self.uncovered)
-    }
-}
-
 /// Whether the person can see the room's stage (#165): the system shows it (core `stage_on_screen`) and the page does
 /// (core `stage_in_view`). Which app has the focus is not part of it: the room in front with its stage, another app
 /// focused, is still in view. With what the system said and what the page said, for the log; `None` once the app is
@@ -197,11 +181,11 @@ impl Shown {
 ///
 /// The card's lock is held only to read what the page said; the window is asked on the main thread with it released
 /// (#170).
-fn stage_in_view(app: &AppHandle) -> Option<(bool, Shown, Option<bool>)> {
+fn stage_in_view(app: &AppHandle) -> Option<(bool, Visibility, Option<bool>)> {
     let page = card(app).and_then(|card| card.0.lock().unwrap().page);
     let rect = page.and_then(|p| p.rect);
     let a = app.clone();
-    let shown = on_main(app, move || system_shows(&a, rect))?;
+    let shown = on_main(app, move || NativeVisibility::observe(crate::room_window(&a).as_ref(), rect))?;
     let page_shows = page.map(|p| p.shown);
     Some((logic::stage_in_view(shown.stage_on_screen(), page_shows), shown, page_shows))
 }
@@ -215,139 +199,6 @@ fn on_main<T: Send + 'static>(app: &AppHandle, f: impl FnOnce() -> T + Send + 's
     })
     .ok()?;
     rx.recv().ok()
-}
-
-/// On the main thread ([`stage_in_view`]): AppKit and the window handles want it. `stage` is where the page says its
-/// stage is; without it, the room's whole content.
-fn system_shows(app: &AppHandle, stage: Option<Rect>) -> Shown {
-    let Some(w) = crate::room_window(app) else {
-        return Shown { shown: false, minimised: false, on_screen: false, uncovered: None };
-    };
-    let shown = w.is_visible().unwrap_or(false);
-    let minimised = w.is_minimized().unwrap_or(false);
-    let on_screen = on_screen(&w);
-    let uncovered = if shown && !minimised && on_screen { uncovered(&w, stage) } else { None };
-    Shown { shown, minimised, on_screen, uncovered }
-}
-
-/// macOS: AppKit's occlusion state, clear while no part of the window is on screen (fully covered, or on another Space).
-#[cfg(target_os = "macos")]
-fn on_screen(w: &WebviewWindow) -> bool {
-    use tauri_nspanel::objc2::{msg_send, runtime::AnyObject};
-    // NSWindowOcclusionStateVisible: set while any part of the window is on screen.
-    const VISIBLE: usize = 1 << 1;
-    // SAFETY: the window's own NSWindow, read on the main thread ([`system_shows`]).
-    w.ns_window().is_ok_and(|ns| unsafe {
-        let state: usize = msg_send![ns as *mut AnyObject, occlusionState];
-        state & VISIBLE != 0
-    })
-}
-
-/// Windows: DWM cloaks a window on another virtual desktop. How much other windows cover it is not measured.
-#[cfg(windows)]
-fn on_screen(w: &WebviewWindow) -> bool {
-    use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
-    let Ok(hwnd) = w.hwnd() else { return true };
-    let mut cloaked: u32 = 0;
-    // SAFETY: the room's own window handle, and a u32 as large as the attribute.
-    let read = unsafe {
-        DwmGetWindowAttribute(
-            hwnd.0 as _,
-            DWMWA_CLOAKED as _,
-            (&mut cloaked as *mut u32).cast(),
-            std::mem::size_of::<u32>() as u32,
-        )
-    };
-    read != 0 || cloaked == 0
-}
-
-/// Linux: X11 is not measured (a covered room counts as seen); Wayland shows the app nothing of other windows, so there
-/// the room counts as seen only while it has the focus, as before #165.
-#[cfg(target_os = "linux")]
-fn on_screen(w: &WebviewWindow) -> bool {
-    NativeGeometry::capabilities().global_coordinates || w.is_focused().unwrap_or(false)
-}
-
-/// macOS: the part of the stage (on the desktop) no other app's window above the room covers, from the window server's
-/// list of the windows in front of it. Ordinary and floating windows count; the Dock, menus, the menu bar and the app's
-/// own windows (the card) do not. Window bounds need no permission (only their titles would).
-#[cfg(target_os = "macos")]
-fn uncovered(w: &WebviewWindow, stage: Option<Rect>) -> Option<f64> {
-    use core_foundation::array::{CFArray, CFArrayRef};
-    use core_foundation::base::{CFType, TCFType};
-    use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
-    use core_foundation::number::CFNumber;
-    use core_foundation::string::CFString;
-    use tauri_nspanel::objc2::{msg_send, runtime::AnyObject};
-
-    #[repr(C)]
-    #[derive(Default)]
-    struct CGRect {
-        x: f64,
-        y: f64,
-        width: f64,
-        height: f64,
-    }
-    #[link(name = "CoreGraphics", kind = "framework")]
-    extern "C" {
-        fn CGWindowListCopyWindowInfo(option: u32, relative_to: u32) -> CFArrayRef;
-        fn CGRectMakeWithDictionaryRepresentation(dict: CFDictionaryRef, rect: *mut CGRect) -> bool;
-    }
-    // kCGWindowListOptionOnScreenAboveWindow | kCGWindowListExcludeDesktopElements.
-    const ABOVE: u32 = (1 << 1) | (1 << 4);
-    // kCGDockWindowLevel: the Dock and what floats over it (menus, the menu bar, the card) cover no window.
-    const DOCK_LEVEL: i64 = 20;
-
-    // The room's content on the desktop in points, top-left origin: as the window server gives windows' bounds.
-    let scale = w.scale_factor().ok()?;
-    let (at, size) = (w.inner_position().ok()?, w.inner_size().ok()?);
-    let content = Rect {
-        x: at.x as f64 / scale,
-        y: at.y as f64 / scale,
-        width: size.width as f64 / scale,
-        height: size.height as f64 / scale,
-    };
-    let target = match stage {
-        Some(s) => Rect { x: content.x + s.x, y: content.y + s.y, width: s.width, height: s.height },
-        None => content,
-    };
-    // SAFETY: the room's own NSWindow, on the main thread.
-    let number = w.ns_window().ok().map(|ns| -> isize { unsafe { msg_send![ns as *mut AnyObject, windowNumber] } })?;
-    // SAFETY: CoreGraphics' own function; the array it creates is released by its wrapper.
-    let raw = unsafe { CGWindowListCopyWindowInfo(ABOVE, u32::try_from(number).ok()?) };
-    if raw.is_null() {
-        return None;
-    }
-    let windows: CFArray<CFDictionary<CFString, CFType>> = unsafe { CFArray::wrap_under_create_rule(raw) };
-    let own = i64::from(std::process::id());
-    let number_of = |d: &CFDictionary<CFString, CFType>, key: &'static str| {
-        d.find(CFString::from_static_string(key)).and_then(|v| v.downcast::<CFNumber>())
-    };
-    let above: Vec<Rect> = windows
-        .iter()
-        .filter_map(|d| {
-            let layer = number_of(&d, "kCGWindowLayer")?.to_i64()?;
-            let pid = number_of(&d, "kCGWindowOwnerPID")?.to_i64()?;
-            let alpha = number_of(&d, "kCGWindowAlpha").and_then(|a| a.to_f64()).unwrap_or(1.0);
-            if !(0..DOCK_LEVEL).contains(&layer) || pid == own || alpha <= 0.0 {
-                return None;
-            }
-            let bounds = d.find(CFString::from_static_string("kCGWindowBounds"))?;
-            if !bounds.instance_of::<CFDictionary>() {
-                return None;
-            }
-            let mut r = CGRect::default();
-            // SAFETY: a CFDictionary (checked above), as CoreGraphics wrote it.
-            unsafe { CGRectMakeWithDictionaryRepresentation(bounds.as_CFTypeRef() as CFDictionaryRef, &mut r) }
-                .then_some(Rect { x: r.x, y: r.y, width: r.width, height: r.height })
-        })
-        .collect();
-    Some(logic::uncovered(target, &above))
-}
-
-#[cfg(not(target_os = "macos"))]
-fn uncovered(_: &WebviewWindow, _: Option<Rect>) -> Option<f64> {
-    None
 }
 
 /// Minimising, covering, Space changes and windows of other apps moving raise no window event Tauri forwards, so the app
