@@ -15,6 +15,7 @@ pub fn web() -> Result<()> {
 /// `lint`: rustfmt and Clippy, warnings denied, on the app's workspace (src-tauri/) and on this tooling. Both with
 /// the app's toolchain (src-tauri/rust-toolchain.toml) and the app's rustfmt.toml.
 pub fn lint() -> Result<()> {
+    crate::platform_guard::check()?;
     let app = repo().join("src-tauri");
     let xtask = repo().join("xtask/Cargo.toml");
     Cmd::new("cargo").args(["fmt", "--all", "--check"]).dir(&app).run()?;

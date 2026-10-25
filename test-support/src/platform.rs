@@ -1,3 +1,6 @@
+// OS APIs belong in this platform module.
+#![allow(clippy::disallowed_methods, clippy::disallowed_types)]
+
 //! The fixture's only OS-specific operations.
 use std::{io, path::Path, process::Command};
 #[cfg(unix)]

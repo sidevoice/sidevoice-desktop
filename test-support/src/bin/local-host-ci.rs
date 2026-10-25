@@ -1,3 +1,6 @@
+// Existing OS debt is capped by platform-debt.txt.
+#![allow(clippy::disallowed_methods, clippy::disallowed_types)]
+
 #[cfg(unix)]
 mod unix {
     // CI's tool for the local host (.github/workflows/build.yml). Never shipped.

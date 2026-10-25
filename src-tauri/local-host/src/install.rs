@@ -1,3 +1,6 @@
+// Existing OS debt is capped by platform-debt.txt.
+#![allow(clippy::disallowed_methods, clippy::disallowed_types)]
+
 //! Preparing this computer from the app, without Node (docs/LOCAL_HOST.md → Install): what `npx sidevoice@latest
 //! install` does, with the npm package fetched directly.
 //!

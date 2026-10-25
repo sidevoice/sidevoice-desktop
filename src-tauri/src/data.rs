@@ -1,3 +1,6 @@
+// Existing OS debt is capped by platform-debt.txt.
+#![allow(clippy::disallowed_methods, clippy::disallowed_types)]
+
 //! The app's private pairing file, the machine's shared model root, and the confirmed reset.
 //! Only the current room page can ask; no bridge method accepts a filesystem path.
 

@@ -1,3 +1,6 @@
+// Existing OS debt is capped by platform-debt.txt.
+#![allow(clippy::disallowed_methods, clippy::disallowed_types)]
+
 //! The page's way to the local host (design §4.1, "The proxy (N1)"): `127.0.0.1:<ephemeral>` for the app's lifetime,
 //! a 32-byte secret made per launch and kept in memory only. The page holds the secret, never the device token; the
 //! proxy checks every request against the table below, swaps the secret for the token and carries the request over

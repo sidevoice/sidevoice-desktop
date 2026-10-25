@@ -99,6 +99,7 @@
 mod checks;
 mod macos;
 mod memory;
+mod platform_guard;
 mod probe;
 mod publish;
 mod util;
@@ -110,7 +111,8 @@ use util::Channel;
 
 pub type Result<T> = std::result::Result<T, String>;
 
-const USAGE: &str = "usage: cargo xtask web | lint | test | icons | two-users | bundle [--channel C] | engine-rev
+const USAGE: &str =
+    "usage: cargo xtask web | lint | platform-guard | test | icons | two-users | bundle [--channel C] | engine-rev
   | sherpa-libs | macos app [--signed] [--channel C] | macos check-app [--signed] | macos first-open
   | macos dmg [--signed] | macos sign-dmg | macos checksums | macos forget-secrets | macos dmg-screens
   | macos probe-app | macos local-host | macos probe | macos voice-models | macos card | macos exit
@@ -136,6 +138,7 @@ fn main() -> ExitCode {
     let result = match args.as_slice() {
         ["web"] => checks::web(),
         ["lint"] => checks::lint(),
+        ["platform-guard"] => platform_guard::check(),
         ["test"] => checks::test(),
         ["test-support"] => checks::test_support(),
         ["icons"] => checks::icons(),

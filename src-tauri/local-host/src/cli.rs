@@ -1,3 +1,6 @@
+// Existing OS debt is capped by platform-debt.txt.
+#![allow(clippy::disallowed_methods, clippy::disallowed_types)]
+
 //! The connector's CLI, as the app runs it (SEAMS §3): `command + [subcommand…, --json]`, where `command` is the
 //! absolute argv prefix the install recorded in `D/install.json`. Never a shell, never a name looked up on a PATH,
 //! always a deadline; one JSON object on stdout is the answer.

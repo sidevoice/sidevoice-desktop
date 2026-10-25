@@ -1,3 +1,6 @@
+// Existing OS debt is capped by platform-debt.txt.
+#![allow(clippy::disallowed_methods, clippy::disallowed_types)]
+
 //! CI only, compiled only with the `probe` feature (never in a release):
 //! - the probe page (`test/fixtures/probe.html`), served at the app's own origin and loaded into the room window
 //!   instead of the interface when `SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_PAGE=probe.html`: what the interface's window

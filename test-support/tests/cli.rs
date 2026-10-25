@@ -1,3 +1,6 @@
+// Existing OS debt is capped by platform-debt.txt.
+#![allow(clippy::disallowed_methods, clippy::disallowed_types)]
+
 #![cfg(unix)]
 use serde_json::json;
 use sidevoice_desktop_test_support::fixture;

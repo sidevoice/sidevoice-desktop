@@ -1,3 +1,6 @@
+// Existing OS debt is capped by platform-debt.txt.
+#![allow(clippy::disallowed_methods, clippy::disallowed_types)]
+
 //! Files the app acts on, bound to what was checked (review R1-c #5): a path whose ancestry another user can
 //! change is refused, and a file is read or written through a directory descriptor that was opened and checked
 //! itself, opened without following links and checked with `fstat` — never checked by path and reopened by path.

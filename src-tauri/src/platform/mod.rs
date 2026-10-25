@@ -1,3 +1,6 @@
+// OS APIs belong in this platform module.
+#![allow(clippy::disallowed_methods, clippy::disallowed_types)]
+
 //! Desktop operations supplied by the host platform.
 
 pub mod update_eligibility;

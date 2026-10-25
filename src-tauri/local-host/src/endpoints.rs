@@ -1,3 +1,6 @@
+// Existing OS debt is capped by platform-debt.txt.
+#![allow(clippy::disallowed_methods, clippy::disallowed_types)]
+
 //! Where the core and the connector listen (SEAMS §1, §2, §4): read from the records they publish, never worked out.
 //! The core writes `endpoint` in `C/core.json`; the connector writes `{pid, endpoint}` in `D/connector.json` once it
 //! listens and removes it when it exits cleanly. `endpoint` is the record `sidevoice-platform`'s `ipc` writes (an

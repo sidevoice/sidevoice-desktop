@@ -1,3 +1,6 @@
+// Existing OS debt is capped by platform-debt.txt.
+#![allow(clippy::disallowed_methods, clippy::disallowed_types)]
+
 #![cfg(unix)]
 //! The local host end to end on this machine: a stand-in core on a real Unix socket (HTTP and a WebSocket echo), the
 //! app's pairing with it and the startup cases (design §4.1), the proxy a page talks to — forwarding with the token
