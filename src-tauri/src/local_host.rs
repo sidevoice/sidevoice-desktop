@@ -125,10 +125,11 @@ pub fn installing(app: &AppHandle) -> bool {
 mod imp {
     use super::{refusal, unsupported, Answer};
     use serde_json::{json, Value};
-    use sidevoice_local_host::host::{computer_name, Action, Config, Installing, LocalHost};
+    use sidevoice_local_host::host::{Action, Config, Installing, LocalHost};
     use sidevoice_local_host::install;
     use sidevoice_local_host::npm::Https;
     use sidevoice_local_host::paths::DataDirs;
+    use sidevoice_local_host::platform::computer_name::{ComputerName, SystemComputerName};
     use std::sync::Arc;
     use tauri::{AppHandle, Manager};
 
@@ -148,7 +149,7 @@ mod imp {
             return;
         };
         let Ok(app_dir) = crate::data::desktop_dir(app) else { return };
-        let config = Config { dirs, app_dir, name: computer_name() };
+        let config = Config { dirs, app_dir, name: SystemComputerName::read() };
         match LocalHost::start(config, crate::debug) {
             Ok(host) => {
                 host.watch();
