@@ -2,6 +2,7 @@
 //! The service/account pair is the original macOS namespace, not a catalog-dependent list.
 
 use keyring_core::{CredentialStore, Entry};
+#[cfg(not(target_os = "linux"))]
 use std::sync::Mutex;
 
 #[cfg(target_os = "macos")]
@@ -15,8 +16,9 @@ mod native;
 mod native;
 
 const SERVICE: &str = "dev.sidevoice.desktop.providers";
-// CredMan does not reliably sequence concurrent operations on the same entry. Also prevents
-// an in-process write racing a namespace clear. The reset admission gate owns the wider reset.
+// CredMan does not reliably sequence concurrent operations on the same entry. Linux uses
+// bounded, nonblocking admission instead: an unlock prompt must never hold this lock.
+#[cfg(not(target_os = "linux"))]
 static ACCESS: Mutex<()> = Mutex::new(());
 
 /// Safe error categories only: keyring errors can contain secret bytes or backend-supplied text.
@@ -47,20 +49,30 @@ pub fn valid(provider: &str) -> bool {
 pub trait Credentials {
     /// Read a provider's key. Missing is `None`; inaccessible storage is `Unavailable`.
     fn read(&self, provider: &str) -> Result<Option<String>, Error> {
-        read_from_store(native::store().map_err(Error::from)?.as_ref(), SERVICE, provider)
+        if !valid(provider) {
+            return Err(Error::InvalidProvider);
+        }
+        let provider = provider.to_owned();
+        execute(move || read_from_store(native::store().map_err(Error::from)?.as_ref(), SERVICE, &provider))
     }
     /// Replace a key, or remove it for `None`. Removing a missing key succeeds.
     /// Oversized credentials are refused before replacing the stored value; never truncated.
     fn write(&self, provider: &str, secret: Option<&str>) -> Result<(), Error> {
-        write_to_store(native::store().map_err(Error::from)?.as_ref(), SERVICE, provider, secret)
+        if !valid(provider) {
+            return Err(Error::InvalidProvider);
+        }
+        let provider = provider.to_owned();
+        let secret = secret.map(str::to_owned);
+        execute(move || {
+            write_to_store(native::store().map_err(Error::from)?.as_ref(), SERVICE, &provider, secret.as_deref())
+        })
     }
     /// Delete the exact service namespace, including accounts absent from the current catalog
     /// or no longer accepted by `valid`. An unrelated service is never removed.
     // The production reset caller is still macOS-only until the portable-reset work lands.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     fn clear(&self) -> Result<(), Error> {
-        let _guard = ACCESS.lock().map_err(|_| Error::Failed)?;
-        native::clear(native::store().map_err(Error::from)?.as_ref(), SERVICE).map_err(Error::from)
+        execute(|| native::clear(native::store().map_err(Error::from)?.as_ref(), SERVICE).map_err(Error::from))
     }
 }
 
@@ -69,15 +81,33 @@ pub trait Credentials {
 pub struct ProviderCredentials;
 impl Credentials for ProviderCredentials {}
 
+/// The Linux backend may wait for a desktop prompt. Bound the caller's wait without
+/// holding ACCESS or spawning an unlimited number of workers. Other native stores keep
+/// their existing serialized behavior.
+fn execute<T: Send + 'static>(operation: impl FnOnce() -> Result<T, Error> + Send + 'static) -> Result<T, Error> {
+    #[cfg(target_os = "linux")]
+    {
+        native::execute(operation)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _guard = ACCESS.lock().map_err(|_| Error::Failed)?;
+        operation()
+    }
+}
+
 fn entry(store: &CredentialStore, service: &str, provider: &str) -> Result<Entry, Error> {
     if !valid(provider) {
         return Err(Error::InvalidProvider);
+    }
+    #[cfg(target_os = "windows")]
+    if store.as_any().is::<windows_native_keyring_store::Store>() {
+        return native::entry(store, service, provider).map_err(Error::from);
     }
     store.build(service, provider, None).map_err(Error::from)
 }
 
 fn read_from_store(store: &CredentialStore, service: &str, provider: &str) -> Result<Option<String>, Error> {
-    let _guard = ACCESS.lock().map_err(|_| Error::Failed)?;
     match entry(store, service, provider)?.get_password() {
         Ok(secret) => Ok(Some(secret)),
         Err(keyring_core::Error::NoEntry) => Ok(None),
@@ -86,7 +116,6 @@ fn read_from_store(store: &CredentialStore, service: &str, provider: &str) -> Re
 }
 
 fn write_to_store(store: &CredentialStore, service: &str, provider: &str, secret: Option<&str>) -> Result<(), Error> {
-    let _guard = ACCESS.lock().map_err(|_| Error::Failed)?;
     let entry = entry(store, service, provider)?;
     match secret {
         Some(secret) => entry.set_password(secret).map_err(Error::from),
@@ -129,12 +158,17 @@ mod tests {
 
     impl Credentials for TestCredentials {
         fn read(&self, provider: &str) -> Result<Option<String>, Error> {
+            #[cfg(not(target_os = "linux"))]
+            let _guard = ACCESS.lock().map_err(|_| Error::Failed)?;
             read_from_store(self.store.as_ref(), &self.service, provider)
         }
         fn write(&self, provider: &str, secret: Option<&str>) -> Result<(), Error> {
+            #[cfg(not(target_os = "linux"))]
+            let _guard = ACCESS.lock().map_err(|_| Error::Failed)?;
             write_to_store(self.store.as_ref(), &self.service, provider, secret)
         }
         fn clear(&self) -> Result<(), Error> {
+            #[cfg(not(target_os = "linux"))]
             let _guard = ACCESS.lock().map_err(|_| Error::Failed)?;
             (self.clear)(self.store.as_ref(), &self.service).map_err(Error::from)
         }
@@ -297,6 +331,122 @@ mod tests {
             assert_eq!(store.read("openai").unwrap().as_deref(), Some(fits.as_str()));
         }
         store.clear().unwrap();
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn slow_backend_times_out_without_queuing_later_operations() {
+        use std::{
+            sync::{
+                atomic::{AtomicBool, Ordering},
+                mpsc,
+            },
+            time::{Duration, Instant},
+        };
+        static BUSY: AtomicBool = AtomicBool::new(false);
+        let (release, blocked) = mpsc::channel();
+        let (finished, completion) = mpsc::channel();
+        let started = Instant::now();
+        // A fake backend waiting for an unanswered prompt. No real Secret Service needed.
+        assert_eq!(
+            native::bounded(&BUSY, Duration::from_millis(20), move || {
+                blocked.recv().unwrap();
+                finished.send(()).unwrap();
+                Ok(())
+            }),
+            Err(Error::Unavailable)
+        );
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(BUSY.load(Ordering::Acquire));
+        let started = Instant::now();
+        assert_eq!(
+            native::bounded(&BUSY, Duration::from_secs(5), || -> Result<(), Error> {
+                panic!("a retry must not queue another backend operation")
+            }),
+            Err(Error::Unavailable)
+        );
+        assert!(started.elapsed() < Duration::from_secs(2));
+        release.send(()).unwrap();
+        completion.recv_timeout(Duration::from_secs(2)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while BUSY.load(Ordering::Acquire) {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert_eq!(native::bounded(&BUSY, Duration::from_secs(2), || Ok(42)), Ok(42));
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn windows_credentials_persist_only_on_this_computer() {
+        let store = native_test_store();
+        // Read metadata back from CredMan, not just from the entry's creation modifiers.
+        store.write("openai", Some("test-only")).unwrap();
+        let raw = store.store.build(&store.service, "openai", None).unwrap();
+        assert_eq!(raw.get_attributes().unwrap()["persistence"], "Local");
+        // Updating an entry written by the previous implementation also removes roaming.
+        raw.set_password("old-enterprise-test-only").unwrap();
+        assert_eq!(raw.get_attributes().unwrap()["persistence"], "Enterprise");
+        store.write("openai", Some("replacement")).unwrap();
+        assert_eq!(raw.get_attributes().unwrap()["persistence"], "Local");
+        store.clear().unwrap();
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_searches_nondefault_keychains_for_read_update_delete_and_clear() {
+        use security_framework::os::macos::keychain::SecKeychain;
+        use std::process::Command;
+        fn security(args: &[&str]) -> std::process::Output {
+            let output = Command::new("/usr/bin/security").args(args).output().unwrap();
+            assert!(output.status.success(), "security test setup/cleanup failed");
+            output
+        }
+        // Preserve the runner/developer's complete search list, including on assertion failure.
+        struct Keychain {
+            path: String,
+            previous: Vec<String>,
+        }
+        impl Drop for Keychain {
+            fn drop(&mut self) {
+                let _ = Command::new("/usr/bin/security")
+                    .args(["list-keychains", "-d", "user", "-s"])
+                    .args(&self.previous)
+                    .output();
+                let _ = Command::new("/usr/bin/security").args(["delete-keychain", &self.path]).output();
+            }
+        }
+        let store = native_test_store();
+        let output = security(&["list-keychains", "-d", "user"]);
+        let previous: Vec<String> = String::from_utf8(output.stdout)
+            .unwrap()
+            .lines()
+            .map(|line| line.trim().trim_matches('"').to_owned())
+            .collect();
+        let keychain = Keychain {
+            path: std::env::temp_dir().join(format!("{}.keychain-db", store.service)).to_str().unwrap().into(),
+            previous,
+        };
+        security(&["create-keychain", "-p", "test-only", &keychain.path]);
+        security(&["unlock-keychain", "-p", "test-only", &keychain.path]);
+        let mut search = vec!["list-keychains", "-d", "user", "-s"];
+        search.extend(keychain.previous.iter().map(String::as_str));
+        search.push(&keychain.path);
+        security(&search);
+        let secondary = SecKeychain::open(&keychain.path).unwrap();
+        secondary.set_generic_password(&store.service, "openai", b"legacy-secondary").unwrap();
+        assert_eq!(store.read("openai").unwrap().as_deref(), Some("legacy-secondary"));
+        store.write("openai", Some("updated-secondary")).unwrap();
+        use security_framework::os::macos::passwords::find_generic_password;
+        assert_eq!(
+            find_generic_password(Some(std::slice::from_ref(&secondary)), &store.service, "openai").unwrap().0.as_ref(),
+            b"updated-secondary"
+        );
+        store.write("openai", None).unwrap();
+        assert!(find_generic_password(Some(std::slice::from_ref(&secondary)), &store.service, "openai").is_err());
+        secondary.set_generic_password(&store.service, "unknown_old", b"test-only").unwrap();
+        store.clear().unwrap();
+        assert!(find_generic_password(Some(&[secondary]), &store.service, "unknown_old").is_err());
     }
 
     #[test]
