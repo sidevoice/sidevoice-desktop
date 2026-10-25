@@ -60,7 +60,7 @@ DPI / monitor removal still need a real desktop test. No Windows/X11/Wayland run
 | Reset stored size and placement; bridge place / size patches | unverified — pending runtime test | unverified — pending runtime test | unverified — pending runtime test | unavailable — no stored desktop placement |
 | Latest show / hide and move ordering; no state lock across native queries | unverified — pending runtime test | unverified — pending runtime test | unverified — pending runtime test | unverified — pending runtime test |
 | Window / webview destruction on quit | unverified — pending runtime test | unverified — pending runtime test | unverified — pending runtime test | unverified — pending runtime test |
-| Pointer subscription and watcher shutdown | unavailable — until #210 | unavailable — until #210 | unavailable — until #210 | unavailable — until #210 |
+| Pointer subscription and watcher shutdown | unverified — pending runtime test | unverified — pending runtime test | unverified — pending runtime test | unverified — pending runtime test |
 | Three formats and three preset sizes with persisted cross-window preferences | unverified — pending runtime test | unverified — pending runtime test | unverified — pending runtime test | unverified — pending runtime test |
 | Captions / transcripts / balloons and their shared toggle | unverified — pending runtime test | unverified — pending runtime test | unverified — pending runtime test | unverified — pending runtime test |
 | Skip-reply and cancel-input | unverified — pending runtime test | unverified — pending runtime test | unverified — pending runtime test | unverified — pending runtime test |
