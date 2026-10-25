@@ -1,4 +1,4 @@
-// Existing OS debt is capped by platform-debt.txt.
+// Existing OS calls are reported by the separate Platform boundary CI job.
 #![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 
 //! The app's private pairing file, the machine's shared model root, and the confirmed reset.

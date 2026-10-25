@@ -1,4 +1,4 @@
-// Existing OS debt is capped by platform-debt.txt.
+// Existing OS calls are reported by the separate Platform boundary CI job.
 #![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 
 //! The page's way to the local host (design §4.1, "The proxy (N1)"): `127.0.0.1:<ephemeral>` for the app's lifetime,

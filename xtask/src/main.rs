@@ -8,6 +8,7 @@
 //!
 //! - `web`: the web interface at the pin (web.pin.json), into ui/voice/ (`npm run web`). Reads
 //!   `SIDEVOICE_WEB_ATTESTATION` and `GH_TOKEN` (scripts/build-web.mjs).
+//! - `platform-guard`: reject OS-specific code outside platform (the separate Platform boundary CI job).
 //! - `lint`: rustfmt and Clippy (warnings denied) on the app's workspace and on this tooling.
 //! - `test`: the bridge script's tests (`npm test`) and the app's Rust tests (`cargo test --workspace`).
 //! - `icons`: `npm run icons`, then the icons, tray marks and .dmg window must be what is committed.

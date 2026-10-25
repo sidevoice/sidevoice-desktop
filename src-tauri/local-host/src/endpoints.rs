@@ -1,4 +1,4 @@
-// Existing OS debt is capped by platform-debt.txt.
+// Existing OS calls are reported by the separate Platform boundary CI job.
 #![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 
 //! Where the core and the connector listen (SEAMS §1, §2, §4): read from the records they publish, never worked out.

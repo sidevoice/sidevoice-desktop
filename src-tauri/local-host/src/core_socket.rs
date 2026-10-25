@@ -1,4 +1,4 @@
-// Existing OS debt is capped by platform-debt.txt.
+// Existing OS calls are reported by the separate Platform boundary CI job.
 #![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 
 //! The core's private listener, the socket `C/core.json` names (SEAMS §2), as the app uses it: every connect checked first

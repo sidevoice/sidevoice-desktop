@@ -54,6 +54,18 @@ env:
   GH_TOKEN: ${{ github.token }}
 
 jobs:
+  platform-boundary:
+    name: Platform boundary
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release-tag }}
+      - name: Rust toolchain
+        working-directory: src-tauri
+        run: rustup toolchain install
+      - run: cargo xtask platform-guard
+
   test:
     name: Lint and unit tests
     runs-on: ubuntu-24.04

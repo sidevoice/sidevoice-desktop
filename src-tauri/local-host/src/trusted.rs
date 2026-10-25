@@ -1,4 +1,4 @@
-// Existing OS debt is capped by platform-debt.txt.
+// Existing OS calls are reported by the separate Platform boundary CI job.
 #![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 
 //! Files the app acts on, bound to what was checked (review R1-c #5): a path whose ancestry another user can
