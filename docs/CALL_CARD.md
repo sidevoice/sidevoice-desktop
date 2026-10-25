@@ -5,45 +5,60 @@ Layout, call state and bridge contracts remain in `call_controls` and the portab
 observations and pointer subscriptions are extracted separately in P19a–P19c. This is an inventory of the existing
 card, including its deliberate fallbacks; it does not enable local voice on additional operating systems.
 
-## Capabilities
+## Platform interface
 
-This matrix describes the implemented behavior across main and the #207–#210 extraction stack, including platform
-fallbacks. macOS is used daily by the operator; its known hand-cursor glitch is recorded below. X11 window-manager
-hints and Wayland compositor policies can limit native window behavior.
+This table describes main's existing card behavior as exposed by the completed #207–#210 stack, not runtime test
+status. `native:` means an OS operation, including one reached through a shared Tauri default; `fallback:` spells
+out a no-op, constant or unavailable observation. Linux cells split X11/Wayland only where behavior differs.
+All 14 trait methods are listed; cursor maintenance is a separate private operation invoked by `watch`.
 
-| Capability | macOS | Windows | Linux X11 | Linux Wayland |
+| Method | What it does | macOS | Windows | Linux (X11 / Wayland) |
 |---|---|---|---|---|
-| Window: always on top | Yes | Yes | Partial — window-manager stacking hint | No — compositor controls stacking |
-| Window: over full-screen apps | Yes | Partial — topmost window; exclusive full-screen can cover it | Partial — window manager decides over full-screen | No — compositor controls stacking |
-| Window: all desktops / Spaces | Yes | No — no Windows all-desktops implementation | Partial — sticky-workspace hint | No — compositor controls workspaces |
-| Window: no focus stealing | Yes | Yes | Yes | Partial — nonfocusable request; compositor controls activation |
-| Window: hidden from taskbar | Yes | Yes | Partial — skip-taskbar hint | Partial — skip-taskbar request; compositor decides |
-| Window: hidden from Alt+Tab / app switcher | Yes | Yes | Partial — skip-taskbar hint; switcher policy varies | No — no compositor app-switcher exclusion |
-| Interaction: hover and click | Yes | Yes | Yes | Yes |
-| Interaction: drag | Yes | Yes | Yes | Partial — compositor drag only |
-| Interaction: picture-in-picture resize grip | Yes | Yes | Yes | No — resize command not offered |
-| Interaction: hand cursor | Partial — not always, depends on what is underneath | Yes | Yes | Yes |
-| Interaction: outside click closes panels | Partial — other-app clicks only; own room clicks not observed | Yes | No — page leave timeout instead | No — page leave timeout instead |
-| Interaction: global Escape closes panels | No — non-key card has no keyboard listener | No — non-key card has no keyboard listener | No — non-key card has no keyboard listener | No — non-key card has no keyboard listener |
-| Placement: corner selection | Yes | Yes | Yes | No — compositor owns placement |
-| Placement: edge magnet | Yes | Yes | Yes | No — no global coordinates |
-| Placement: remembers position and size per display | Yes | Yes | Yes | No — no saved desktop placement or grip size |
-| Placement: mixed DPI | Yes | Yes | Yes | Partial — logical sizing only; no global placement |
-| Awareness: room minimized | Yes | Yes | Yes | Yes |
-| Awareness: room covered by other windows | Yes | No — detects other virtual desktops, not coverage | No — coverage not observed | No — focus heuristic instead |
-| Content: three formats and three preset sizes | Yes | Yes | Yes | Yes |
-| Content: captions / transcripts / balloons | Yes | Yes | Yes | Yes |
-| Content: mute / hang-up / skip-reply / cancel-input | Yes | Yes | Yes | Yes |
-| Content: avatar animation | Yes | Yes | Yes | Yes |
-| Content: theme and language synchronization | Yes | Yes | Yes | Yes |
+| `CardWindow::configure` | Install window support in the app builder. | native: installs `tauri_nspanel` | fallback: returns builder unchanged | fallback: returns builder unchanged |
+| `CardWindow::create` | Construct the hidden, nonactivating card. | native: status-level NSPanel, all Spaces/full-screen auxiliary, nonactivation override | native: Tauri topmost/nonfocusable/skip-taskbar window plus checked tool-window style policy | native: Tauri/GTK borderless nonfocusable window; X11 stacking/sticky/taskbar hints; Wayland compositor controls stacking/workspaces |
+| `CardWindow::set_visible` | Show or hide the card without requesting focus. | native: panel show/hide; refreshes inactive WebKit tracking on show; missing panel does nothing | native: shared default calls Tauri show/hide; missing window does nothing; errors ignored | native: shared default calls Tauri show/hide; missing window does nothing; errors ignored |
+| `CardWindow::close` | Destroy the card and webview. | native: shared default calls Tauri destroy; missing window returns `Ok(())`; destroy errors propagate | native: shared default calls Tauri destroy; missing window returns `Ok(())`; destroy errors propagate | native: shared default calls Tauri destroy; missing window returns `Ok(())`; destroy errors propagate |
+| `CardWindow::app_active` | Read activation diagnostics. | native: reads NSApplication active state and regular activation policy | fallback: returns empty string | fallback: returns empty string |
+| `DesktopGeometry::capabilities` | Declare whether global geometry is usable. | fallback: default returns `global_coordinates: true` | fallback: default returns `global_coordinates: true` | native: checks actual GTK display backend once; X11 returns true, Wayland false |
+| `DesktopGeometry::unit` | Return desktop units per logical pixel. | fallback: returns `1.0` (AppKit points) | native: Tauri scale factor, or `1.0` on error | native: Tauri scale factor, or `1.0` on error |
+| `DesktopGeometry::pointer` | Read the pointer in desktop coordinates. | native: Tauri cursor position divided by primary-monitor scale; failed query returns `None` | native: shared default reads Tauri physical cursor position; error returns `None` | native: X11 reads Tauri physical cursor position, error returns `None`; fallback: Wayland returns `None` without querying |
+| `DesktopGeometry::frame` | Read the card's outer desktop rectangle. | native: Tauri position/size divided by window scale; failed query returns `None` | native: shared default reads Tauri physical position/size; error returns `None` | native: X11 reads Tauri physical position/size, error returns `None`; fallback: Wayland returns `None` without querying |
+| `DesktopGeometry::place` | Move the card without changing focus. | native: Tauri logical position in AppKit points; error ignored | native: shared default rounds coordinates and sets Tauri physical position; error ignored | native: X11 sets rounded physical position, error ignored; fallback: Wayland does nothing |
+| `DesktopGeometry::display` | Select a monitor and convert its work area. | native: Tauri monitors converted to AppKit points; saved key → pointer → room → primary; exhausted queries return `None` | native: shared Tauri monitor selection in physical pixels; saved key → pointer → room → primary; exhausted queries return `None` | native: X11 uses the same physical-pixel selection; fallback: Wayland returns `None` without querying |
+| `DesktopGeometry::start_dragging` | Delegate a pointer-down drag to the window system. | native: shared default returns Tauri `start_dragging()` result; card uses its own geometry drag instead | native: shared default returns Tauri `start_dragging()` result; card uses its own geometry drag instead | native: shared default returns Tauri drag result; used on Wayland, own geometry drag used on X11 |
+| `WindowVisibility::observe` | Read room shown/minimized, workspace and coverage observations. | native: Tauri shown/minimized, AppKit occlusion, CGWindowList uncovered fraction; unavailable fields are `None`, unknown on-screen defaults false | native: Tauri shown/minimized and DWM cloaking for on-screen; fallback: `uncovered = None`, unknown on-screen defaults true (no coverage measurement) | native: Tauri shown/minimized; fallback: `on_screen = None`, `uncovered = None`; X11 assumes on-screen, Wayland uses focused state (error → false) |
+| `PointerEvents::watch` | Subscribe to pointer-inside changes and outside clicks. | native: 80 ms geometry polling plus NSEvent global mouse monitor (other apps only); returns subscription even if monitor unavailable | native: 80 ms geometry polling plus three-button `GetAsyncKeyState` edges; short clicks can be missed; returns subscription | native: X11 80 ms geometry polling; fallback: no outside-click events, page leave timeout instead; Wayland returns `None`, page pointer events/timeout instead |
+| Cursor maintenance inside `watch`: `set_cursor_in_background`, `keep_hand`, `arrow_after_leaving` | Maintain the clickable hand and restore the arrow after leaving. | native: runtime CGS background-cursor property and NSCursor refresh/reset; hand sometimes absent depending on what is underneath; missing CGS symbols leave arrow-only background behavior | fallback: ignores `state.hand`; page CSS owns cursor, no native refresh/reset | fallback: X11 ignores `state.hand`; Wayland installs no watcher; page CSS owns cursor, no native refresh/reset |
+
+`observe` returns shown/minimized/on-screen false and `uncovered: None` when the room is missing. Otherwise failed
+shown/minimized queries produce `None` (consumed as false). Unknown coverage is never converted to 0 or 1: the
+portable visibility decision accepts it, provided the shown/minimized/on-screen checks pass. macOS measures coverage
+only while those checks permit it. X11/Wayland selection follows GTK's actual backend, so XWayland uses the X11 path.
+
+## Gaps worth considering
+
+- `watch` on macOS: a local mouse monitor alongside the global monitor could cover clicks in Sidevoice's own room.
+- `watch` on X11: sampling the root pointer's button mask alongside coordinates could add outside-button edges without a new global hook.
+- `app_active` on Windows/Linux: a Tauri room-focus diagnostic could replace the empty string, clearly labelled as focus rather than app activation.
+- Cursor maintenance on macOS: try the public Tauri cursor setter during polling as a fallback when the runtime CGS property is unavailable; background effectiveness needs checking.
+
+## Card OS code still outside `src-tauri/src/platform`
+
+References below are revision-qualified because each extraction shortens `src-tauri/src/call_controls.rs`; they
+identify existing code, not proposed fixes. The final-stack shortcut-label branch remains outside platform.
+
+- Main (`bf68c04`), `src-tauri/src/call_controls.rs:50`, `:147`, `:179`, `:202`, `:691`, `:716`, `:748`: NSPanel declaration, environment-based Wayland detection, construction/show policy and AppKit diagnostics; moved by #207/#208.
+- Main (`bf68c04`), `src-tauri/src/call_controls.rs:315`, `:328`, `:347`, `:355`, `:429`, `:771`, `:780`, `:787`, `:798`, `:806`: native visibility/coverage and macOS geometry conversions; moved by #208/#209.
+- Main (`bf68c04`), `src-tauri/src/call_controls.rs:1280`, `:1300`, `:1322`, `:1377`, `:1414`, `:1432`, `:1451`, `:1459`: native click monitors, activation/hover overrides, cursor and button polling; moved by #207/#210.
+- #207 (`14a6248`), `src-tauri/src/call_controls.rs:132`, `:242`, `:255`, `:274`, `:282`, `:356`, `:621`, `:630`, `:637`, `:648`, `:656`: Wayland detection, visibility and geometry still inline until #208/#209; `:1136`, `:1156`, `:1193`, `:1211`, `:1230`, `:1238`: pointer/cursor code until #210.
+- #208 (`335c4b3`), `src-tauri/src/call_controls.rs:235`, `:248`, `:267`, `:275`, `:349`: visibility still inline until #209; `:1063`, `:1083`, `:1120`, `:1138`, `:1157`, `:1165`: pointer/cursor code until #210.
+- #209 (`27686a0`), `src-tauri/src/call_controls.rs:914`, `:934`, `:971`, `:989`, `:1008`, `:1016`: pointer/cursor code still inline until #210.
+- #210 (`065369f`), `src-tauri/src/call_controls.rs:484`: `cfg!(target_os = "macos")` selects the mute-shortcut label. The same choice is at #207 `:598`, #208 `:591`, #209 `:442`, and main `:671`; it is still outside platform after all four extractions.
 
 ## Not tested yet on real machines
 
-Windows, Linux X11 and Linux Wayland have the implementations and fallbacks described above, but have not yet
-been verified on real machines for this stack. The cells describe code capabilities, not runtime test results.
-
-The web-owned content comes from sidevoice-web v0.10.1: `apps/web/src/state/floating-card.ts`,
-`apps/web/src/call-controls/CallCard.tsx` and `apps/web/src/call-controls/main.tsx`.
+Windows, Linux X11 and Linux Wayland implementations/fallbacks have not yet been verified on real machines for
+this stack. The operator uses macOS daily; the known hand-cursor limitation is recorded on the cursor operation.
 
 ## Implementation and validation
 
