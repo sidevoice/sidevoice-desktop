@@ -4620,7 +4620,7 @@ dependencies = [
  "sidevoice-desktop-core",
  "sidevoice-desktop-engine",
  "sidevoice-local-host",
- "sidevoice-platform",
+ "sidevoice-platform 0.12.2",
  "sidevoice-voice",
  "sys-locale",
  "sysinfo",
@@ -4680,7 +4680,7 @@ dependencies = [
  "sha1",
  "sha2 0.10.9",
  "sidevoice-local-host",
- "sidevoice-platform",
+ "sidevoice-platform 0.12.2",
  "tar",
  "tempfile",
  "tokio",
@@ -4732,7 +4732,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "sidevoice-desktop-test-support",
- "sidevoice-platform",
+ "sidevoice-platform 0.11.1",
  "subtle",
  "tar",
  "tempfile",
@@ -4742,6 +4742,31 @@ dependencies = [
 name = "sidevoice-platform"
 version = "0.11.1"
 source = "git+https://github.com/sidevoice/sidevoice-core?tag=v0.11.1#b2f094574a6583d84f137e56d667a9833e557d5f"
+dependencies = [
+ "dirs",
+ "gethostname",
+ "hex",
+ "interprocess",
+ "libc",
+ "process-wrap",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sysinfo",
+ "tempfile",
+ "tokio",
+ "whoami",
+ "widestring",
+ "winapi-util",
+ "windows",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "sidevoice-platform"
+version = "0.12.2"
+source = "git+https://github.com/sidevoice/sidevoice-core?tag=v0.12.2#b7ff91a3108267cdebec66e0fa902e477fb74715"
 dependencies = [
  "dirs",
  "gethostname",

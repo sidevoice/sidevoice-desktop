@@ -27,3 +27,25 @@ are fixed in sidevoice-web, not here. The app's own texts are the native ones (t
 ## Public product information
 
 For changes to user-visible behavior, supported platforms/models, setup, security/privacy practices, availability, limitations, or release/download details, follow the shared [public-information process](https://github.com/sidevoice/landing/blob/main/AGENTS.md#keep-public-product-information-current). Record the landing change/PR or a linked `sidevoice/landing` issue in the PR checklist. Landing issues are the follow-up triage queue.
+
+## Platform code
+
+Operator rule (2026-10-25). Applies to product code, tests, xtask and build scripts.
+
+- **Only `platform` touches the operating system.** Each crate has one `platform` module. It is the only place with
+  `cfg(target_os | unix | windows | target_family)`, `cfg!` on those, `std::os::*`, `libc`, `rustix`, `windows-sys`,
+  `objc2`/AppKit, OS commands, local sockets/pipes or OS-specific paths. Everything else is host-agnostic.
+- **One file per concern:** `platform/<concern>.rs`. When the behaviour differs per OS, that file declares a
+  documented trait, and its `cfg` picks `platform/<concern>/<os>.rs`, each implementing the trait with the minimum
+  code. The concern file holds only the trait, the shared types and that selection, never an OS body.
+- **An OS that cannot do something still implements the method**, returning a documented fallback (`None`,
+  "unknown", a coarser value) that callers handle. Callers never ask which OS they run on.
+- **Only a value differs** (a folder name, a shortcut label): a plain module with that value is enough, no trait.
+- **Callers import the trait and its type**; no forwarding wrappers or free functions repeating the trait.
+- **Tests are written against the interface** and run on every OS; no per-OS test modules unless it cannot be
+  phrased generically (say why in the PR).
+- **Maintained crates first**; own `unsafe` only where nothing maintained exists, justified in the PR.
+- **Enforced in CI** by its own `platform-boundary` check (next to Clippy's `disallowed-*`): any OS-specific code
+  outside `platform` fails it. It stays red until the existing debt is fixed; there is no allowlist.
+
+Reference: sidevoice-connector `connector/src/platform/user.rs` and `user/{unix,windows}.rs`.
