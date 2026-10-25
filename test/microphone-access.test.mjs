@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
 const source = readFileSync(new URL("../bridge/desktop-bridge.js", import.meta.url), "utf8");
-function setup({ permission = "prompt", devices = [{ kind: "audioinput" }], failure, live = true, settings = true } = {}) {
+function setup({ permission = "prompt", devices = [{ kind: "audioinput" }], failure, live = true, emptyAudio = false, settings = true } = {}) {
   const module = { exports: {} };
   vm.runInNewContext(source, { module, Promise, JSON, Date });
   const calls = [];
@@ -19,7 +19,7 @@ function setup({ permission = "prompt", devices = [{ kind: "audioinput" }], fail
       opened++;
       assert.equal(constraints.audio, true);
       if (failure) throw failure;
-      return { getAudioTracks: () => [track], getTracks: () => [track] };
+      return { getAudioTracks: () => emptyAudio ? [] : [track], getTracks: () => [track] };
     },
   };
   const win = {
@@ -73,14 +73,25 @@ test("an unreadable permission or device list remains unknown", async () => {
   }]);
 });
 
-test("request releases capture and reports only a live audio track as granted", async () => {
-  for (const live of [true, false]) {
-    const app = setup({ live });
+test("request releases capture and reports a live audio track as granted", async () => {
+  const app = setup();
+  await app.host.microphone.access.request();
+  assert.equal(app.stopped(), 1);
+  assert.equal(app.opened(), 1);
+  assert.deepEqual(app.calls[0], ["microphone", {
+    action: "access-request", backend: { captured: true, hasDevice: true },
+  }]);
+});
+
+test("ended or absent audio tracks do not fabricate evidence of missing hardware", async () => {
+  // The default fixture still enumerates an audio input: a revoked/failed track is not device absence.
+  for (const options of [{ live: false }, { emptyAudio: true }]) {
+    const app = setup(options);
     await app.host.microphone.access.request();
-    assert.equal(app.stopped(), 1);
+    assert.equal(app.stopped(), 1, "even unusable capture releases every track");
     assert.equal(app.opened(), 1);
     assert.deepEqual(app.calls[0], ["microphone", {
-      action: "access-request", backend: live ? { captured: true, hasDevice: true } : { error: "NotFoundError" },
+      action: "access-request", backend: { permission: "unavailable" },
     }]);
   }
 });

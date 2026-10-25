@@ -436,7 +436,8 @@
             const audio = stream.getAudioTracks();
             backend = audio.some((track) => track.readyState === "live")
               ? { captured: true, hasDevice: true }
-              : { error: "NotFoundError" };
+              // A track can end after permission revocation or a backend failure; that does not establish hardware absence.
+              : { permission: "unavailable" };
           } finally {
             for (const track of stream.getTracks()) track.stop();
           }

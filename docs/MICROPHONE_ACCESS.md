@@ -11,7 +11,8 @@ The platform reads again on every operation; opening settings does not change or
   We use the registry option because this is an unpackaged NSIS app, whereas Microsoft's
   [AppCapability preflight guidance](https://learn.microsoft.com/en-us/windows/apps/develop/camera/camera-privacy-setting)
   targets packaged apps. The [desktop-app privacy switch](https://support.microsoft.com/en-us/windows/privacy/windows-camera-microphone-and-privacy)
-  is distinct from the Store-app switch; per-executable usage timestamps are not consent.
+  is distinct from the Store-app switch. Per-executable ConsentStore keys are not read; their effect on actual
+  capture is runtime-unverified. Per-executable usage timestamps are not consent.
   A registry allow alone never establishes working capture. Missing/unreadable/unrecognized keys leave a browser
   permission hint unavailable; only an actual successful capture can establish access in that case. WebView2 supplies device presence and capture failures.
   The existing `ms-settings:privacy-microphone` opener plugin path and room/origin checks remain.
@@ -35,7 +36,8 @@ interface MicrophoneAccess {
 
 `state()` queries the current webview permission and input-device list without opening capture. `request()` opens
 getUserMedia in the caller's gesture and stops all tracks immediately, then passes the outcome to platform policy.
-It does not record audio or keep streams. The fixed settings operation stays at `host.microphone.openSettings`
+An ended or absent audio track alone reports unavailable, never a fabricated no-device error; only a real
+backend NotFoundError or an observed empty input-device list establishes absence. It does not record audio or keep streams. The fixed settings operation stays at `host.microphone.openSettings`
 on Windows; Linux has no `openSettings`. The room-only `microphone` command accepts `access-state`/`access-request`
 and a fresh `backend` observation; these observations are not security grants and cannot change the webview's
 capture policy. Legacy macOS `state`/`request`/`open-settings` actions retain their response vocabulary.
