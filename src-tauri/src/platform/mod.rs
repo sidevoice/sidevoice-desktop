@@ -2,11 +2,13 @@
 
 pub mod update_eligibility;
 
+pub mod application;
 pub mod computer_name;
 pub mod microphone;
 #[cfg(any(test, feature = "probe"))]
 pub mod process_memory;
 pub mod reveal;
+pub mod shortcut_access;
 pub mod tray;
 pub mod webview_diagnostics;
 
