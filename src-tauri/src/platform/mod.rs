@@ -3,6 +3,7 @@
 pub mod update_eligibility;
 
 pub mod computer_name;
+pub mod media_controls;
 pub mod microphone;
 #[cfg(any(test, feature = "probe"))]
 pub mod process_memory;

@@ -235,6 +235,11 @@ only allows from a click in the page. "Mostrar Sidevoice" opens the window for t
 `window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", version, engine, mediaKeys, build, muteShortcut, callControls, computerName?, localHost?, voice?, microphone?, updater? }`: the
 web UI feature-detects the desktop app by it, and each capability by its presence. `version` is the bridge's (2).
 
+`mediaKeys` is supplied by `MediaControls::support()`: `"native"` on macOS and `null` on Windows/Linux.
+It is independent of `host.voice`: with native voice and unavailable native media controls, the page
+keeps its Media Session handlers and Now Playing element. See [MEDIA_CONTROLS.md](MEDIA_CONTROLS.md)
+for the test boundary and hardware verification still needed.
+
 `computerName` is the name the person gave this computer, which the page proposes as the device's name: on macOS
 the Computer Name (System Settings → General → Sharing, «Mac de Ana»; SystemConfiguration's
 `SCDynamicStoreCopyComputerName`), not the `.local` hostname; on Windows the device name (the DNS host name, as typed);
