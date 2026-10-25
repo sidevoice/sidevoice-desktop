@@ -7,7 +7,11 @@ are returned as `None`, and placement is skipped. Display enumeration stays fres
 P19b: `platform/window_visibility` now exposes optional shown/minimized, workspace and coverage observations.
 DWM errors and X11/Wayland workspace observations are explicitly unavailable. The prior fallback is retained
 separately (X11 assumes visible; Wayland uses focus; Windows assumes visible when DWM fails). AppKit
-occlusion and CoreGraphics coverage are unchanged. Pointer subscriptions follow in P19c. This is an inventory of the existing
+occlusion and CoreGraphics coverage are unchanged. P19c: `platform/pointer_events` owns pointer polling, outside clicks and cursor upkeep. Dropping its subscription
+cancels the timer, suppresses queued callbacks and removes the AppKit monitor on its owning main thread. Workers
+only enqueue main-thread work (at most one callback outstanding); shutdown never joins a UI-dependent thread.
+Windows polling reads all three buttons, tracks held-button edges and retains short-click hints; the API cannot
+guarantee clicks completed between samples or their exact location. Call-card close also stops the stage/preview loops and bounds their waits for a main-thread response. This is an inventory of the existing
 card, including its deliberate fallbacks; it does not enable local voice on additional operating systems.
 
 ## Evidence and status
