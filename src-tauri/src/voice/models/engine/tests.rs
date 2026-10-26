@@ -52,7 +52,7 @@ pub(crate) fn speech() -> Vec<f32> {
     while &wav[at..at + 4] != b"data" {
         at += 8 + u32::from_le_bytes(wav[at + 4..at + 8].try_into().unwrap()) as usize;
     }
-    wav[at + 8..].chunks_exact(2).map(|pair| f32::from(i16::from_le_bytes([pair[0], pair[1]])) / 32_768.0).collect()
+    wav[at + 8..].as_chunks::<2>().0.iter().map(|pair| f32::from(i16::from_le_bytes(*pair)) / 32_768.0).collect()
 }
 
 /// A microphone that says the clip, then silence, in real time, and a speaker that plays at once what it is given.
@@ -160,7 +160,7 @@ fn a_call_on_the_engines_real_models_hears_speech_and_plays_a_reply() {
     let played = Arc::new(Mutex::new(Vec::new()));
     let io = Fixture { sink: None, stop: Arc::default(), played: Arc::clone(&played) };
     runtime.block_on(async {
-        let loader = EngineLoader::new(engines.engine(), Arc::new(ModelCache::default()));
+        let loader = EngineLoader::shared(engines.engine(), Arc::new(ModelCache::default()));
         let setup = Halves::new(&loader, &choice, None).setup().unwrap();
         let (call, mut events) = VoiceCall::new(Box::new(io), setup);
         call.start(StartOptions::default());

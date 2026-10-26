@@ -135,7 +135,7 @@ pub async fn voice_start(
     state.lane(&key).await?;
     let engines = engines(&app)?;
     let choice = choice_of(&engines, &settings).await?;
-    let loader = EngineLoader::new(engines.engine(), Arc::clone(&state.model_cache));
+    let loader = EngineLoader::shared(engines.engine(), Arc::clone(&state.model_cache));
     let applied = Applied { halves: Halves::new(&loader, &choice, None), settings };
     state.open(&key, applied, take.unwrap_or(false), page_sink(&app)).await
 }
@@ -176,7 +176,7 @@ pub async fn voice_update(
     let settings = current.settings.changed(change);
     let engines = engines(&app)?;
     let choice = choice_of(&engines, &settings).await?;
-    let loader = EngineLoader::new(engines.engine(), Arc::clone(&state.model_cache));
+    let loader = EngineLoader::shared(engines.engine(), Arc::clone(&state.model_cache));
     let applied = Applied { halves: Halves::new(&loader, &choice, Some(&current.halves)), settings };
     state.update(&key, applied).await
 }
@@ -198,7 +198,7 @@ pub async fn voice_preload(
     let _permit = crate::data::admit(&app).ok_or_else(reset_busy)?;
     let engines = engines(&app)?;
     let choice = choice_of(&engines, &settings).await?;
-    let loader = EngineLoader::new(engines.engine(), Arc::clone(&state.model_cache));
+    let loader = EngineLoader::shared(engines.engine(), Arc::clone(&state.model_cache));
     let minutes = settings.idle_unload_minutes.unwrap_or(IDLE_UNLOAD_MINUTES);
     state
         .preload(Halves::new(&loader, &choice, None), minutes)
