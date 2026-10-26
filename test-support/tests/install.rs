@@ -2,7 +2,7 @@
 use serde_json::json;
 use sidevoice_desktop_test_support::fake_registry::FakeRegistry;
 use sidevoice_desktop_test_support::fixture;
-use sidevoice_desktop_test_support::platform::temp::{Temp, TempArea};
+use sidevoice_desktop_test_support::platform::temp;
 use sidevoice_local_host::install::*;
 use sidevoice_platform::fs::{Files, Fs, TestFiles};
 use std::{
@@ -20,7 +20,7 @@ struct World {
 
 impl World {
     fn new() -> World {
-        let tmp = tempfile::Builder::new().prefix("svin").tempdir_in(Temp::short_root()).unwrap();
+        let tmp = tempfile::Builder::new().prefix("svin").tempdir_in(temp::short_root()).unwrap();
         Files::shut_others_out(tmp.path());
         let data = tmp.path().join("d");
         let temp = tmp.path().join("t");
@@ -193,7 +193,7 @@ fn the_private_directory_is_private_and_below_a_safe_root_only() {
     Files::let_others_change(&world.temp);
     let failure = Scratch::create(&world.temp.join(".")).unwrap_err();
     assert_eq!(failure.key, "install.unsafe", "a temporary directory others can write in, not sticky");
-    if Temp::share_sticky(&world.temp) {
+    if temp::share_sticky(&world.temp) {
         assert!(Scratch::create(&world.temp).is_ok(), "sticky, as /tmp");
     }
     assert_eq!(Scratch::create(Path::new("relative")).unwrap_err().key, "install.unsafe");
