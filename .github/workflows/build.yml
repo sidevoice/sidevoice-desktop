@@ -1,8 +1,8 @@
 name: build
 
 # What runs when (RELEASING.md):
-# - pull request: lint + unit tests on Linux, unit tests on Windows, the Windows and Linux app builds (the repo is public: Actions minutes
-#   are free), and the Apple-Silicon native flows: the probe app's (`macos-native`) and a call on the engine's real
+# - pull request: lint + unit tests on Linux, unit tests on Windows, the Windows and Linux app builds (the repo is
+#   public: Actions minutes are free), and the Apple-Silicon native flows: the probe app's (`macos-native`) and a call on the engine's real
 #   models (`macos-call`). No .dmg.
 # - push to main, manual run: everything, installers included. On main, once the installers' jobs (`macos`, `linux`,
 #   `windows`) and the lint pass, the `nightly` pre-release is replaced; the native flows run beside them and the
