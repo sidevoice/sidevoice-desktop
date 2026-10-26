@@ -139,13 +139,13 @@ pub fn close(app: &AppHandle) {
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let config_dir = crate::data::desktop_dir(app).ok();
     let placements = config_dir.as_deref().map(Placements::load).unwrap_or_default();
-    let pointer_inside = if !desktop_geometry::global_coordinates() { None } else { Some(false) };
+    let pointer_inside = if !desktop_geometry::positions_available() { None } else { Some(false) };
     app.manage(Card(
         Mutex::new(Inner { placements, config_dir, pointer_inside, ..Default::default() }),
         Condvar::new(),
     ));
     #[allow(unused_mut)] // the probe build adds its own
-    let mut script = bridge::call_controls_script(APP_ORIGIN, desktop_geometry::global_coordinates());
+    let mut script = bridge::call_controls_script(APP_ORIGIN, desktop_geometry::positions_available());
     #[cfg(feature = "probe")]
     if let Some(probe) = crate::probe::card_script() {
         script.push_str(probe);
@@ -156,7 +156,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         set_cursor_in_background();
         watch_clicks(app);
     }
-    if desktop_geometry::global_coordinates() {
+    if desktop_geometry::positions_available() {
         watch_pointer(app.clone());
     }
     watch_view(app.clone());
@@ -265,7 +265,7 @@ fn on_screen(w: &WebviewWindow) -> bool {
 /// the room counts as seen only while it has the focus, as before #165.
 #[cfg(target_os = "linux")]
 fn on_screen(w: &WebviewWindow) -> bool {
-    desktop_geometry::global_coordinates() || w.is_focused().unwrap_or(false)
+    desktop_geometry::positions_available() || w.is_focused().unwrap_or(false)
 }
 
 /// macOS: the part of the stage (on the desktop) no other app's window above the room covers, from the window server's
@@ -617,7 +617,7 @@ fn default_corner(app: &AppHandle) -> Corner {
 /// body there, the window around it, moved just enough for all of it to fit. Then tells the card its place and its
 /// resized size there, when they changed. On Wayland the compositor places it.
 fn place(app: &AppHandle) {
-    if !desktop_geometry::global_coordinates() {
+    if !desktop_geometry::positions_available() {
         return;
     }
     let corner = default_corner(app);
@@ -905,7 +905,7 @@ pub enum DragPhase {
 pub fn call_controls_drag(app: AppHandle, webview: Webview, phase: DragPhase) -> Result<(), String> {
     from_card_window(&webview)?;
     let (Some(card), Some(w)) = (card(&app), window(&app)) else { return Ok(()) };
-    if !desktop_geometry::global_coordinates() {
+    if !desktop_geometry::positions_available() {
         if let DragPhase::Start = phase {
             let _ = w.start_dragging();
         }
@@ -977,7 +977,7 @@ fn opposite(edge: Edge) -> Corner {
 #[tauri::command]
 pub fn call_controls_resize(app: AppHandle, webview: Webview, phase: DragPhase, edge: Edge) -> Result<(), String> {
     from_card_window(&webview)?;
-    if !desktop_geometry::global_coordinates() {
+    if !desktop_geometry::positions_available() {
         return Ok(());
     }
     let (Some(card), Some(w)) = (card(&app), window(&app)) else { return Ok(()) };
