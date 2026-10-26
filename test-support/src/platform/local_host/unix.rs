@@ -1,12 +1,12 @@
 //! Unix: the local host itself (`serve`) and its socket, a Unix domain socket.
 use super::{status_of, Duplex, Modes};
 use crate::fake_core::FakeCore;
+use interprocess::local_socket::{prelude::*, GenericFilePath, Stream};
 use sidevoice_local_host::host::{Config, LocalHost};
 use sidevoice_local_host::paths::DataDirs;
 use sidevoice_local_host::state::State;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::process::exit;
 use std::time::Duration;
@@ -47,6 +47,8 @@ impl Modes for Os {
     }
 
     fn open_core_socket(socket: &Path) -> io::Result<Box<dyn Duplex>> {
-        Ok(Box::new(UnixStream::connect(socket)?))
+        // Raw, through the maintained crate under `sidevoice_platform::ipc`: its `connect` would refuse a server that
+        // is not this user, and what is measured here is whether the OS lets this user in at all.
+        Ok(Box::new(Stream::connect(socket.to_fs_name::<GenericFilePath>()?)?))
     }
 }
