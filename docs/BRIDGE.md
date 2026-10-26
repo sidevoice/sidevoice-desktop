@@ -97,11 +97,15 @@ during a write. This operation does not provide atomic confinement against that 
 has direct access to the account's files. This limit does not relax the exact-root, no-follow and
 mount/device checks for a stable filesystem layout.
 
-Before uninstall, native creates a private operation journal and takes an interprocess reset lock.
-Model operations, voice model loads, credential writes, local-host actions and updater writes share an
-atomic admission gate with reset. The helper inherits the lock, acknowledges readiness before the app
-quits, records cleanup stages, and releases the lock only after its work ends. The helper marks the
-inherited lock descriptor close-on-exec, so the relaunched app acquires the lock independently.
+Before uninstall, native creates a private operation journal and takes the reset admission: two
+interprocess locks, `admission.lock` and `reset.lock`. Model operations, voice model loads, credential
+writes, local-host actions and updater writes share an atomic admission gate with reset. Nothing is
+inherited: the app keeps `admission.lock` and releases `reset.lock`, which the helper acquires on its own.
+The helper authenticates with a one-time capability on its stdin, receives the plan over the local channel,
+acknowledges readiness before the app quits, and cleans up only after an explicit commit, the channel's end
+and its own acquisition of `admission.lock`; it records cleanup stages and releases both locks after its
+work ends. Startup takes both locks independently, so a relaunched app waits for that. Authentication,
+cancellation and deadlines: [RESET_HANDOFF.md](RESET_HANDOFF.md).
 The helper records an awaiting-relaunch journal; only the new app after its setup publishes a complete
 report. A failed startup leaves the journal as a partial report for the next launch.
 
@@ -735,7 +739,7 @@ interface MuteShortcutBridge {
 interface MuteShortcut {
   accelerator: string | null;   // as the app keeps it: "Ctrl+Alt+M"; null when there is none
   label: string | null;         // as this system writes it: "⌃⌥M" on macOS, "Ctrl+Alt+M" elsewhere
-  state: "on" | "off" | "refused";  // refused: the system would not take it (another app may hold it)
+  state: "on" | "off" | "refused" | "unavailable";  // refused: the system would not take it (another app may hold it)
   alternatives: string[];       // refused: accelerators the system does take, to offer instead (set one as it is)
   voiceOver: boolean;           // macOS: VoiceOver is on and the shortcut holds Control and Option together
 }
@@ -749,6 +753,8 @@ interface MuteShortcut {
   core `settings::normalize_shortcut`), and answers it as `accelerator`. `Cmd` is the Command key (Super elsewhere).
   Anything else — no modifier, no key or two, a character no key makes (`µ` from Option+M on a Mac, a dead key) —
   rejects `{key: "shortcut_invalid", message}` and changes nothing. One the system refuses is kept, and answered `refused`.
+- `unavailable` means no global shortcut backend in this session (including native Wayland). The saved
+  accelerator and label remain present, with no alternatives and `voiceOver: false`; disabling still returns `off`.
 - Kept with the app's settings (`muteShortcut`), set only from the page.
 - App → page: `window.__sidevoiceDesktop.muteShortcutEvent(shortcut)` (`webview.eval`) whenever the app registers it
   (set from the page), to `subscribe`'s listeners. `voiceOver` is read when asked: VoiceOver

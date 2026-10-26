@@ -6,6 +6,7 @@
 
 use serde_json::{json, Value};
 use sidevoice_desktop_test_support::fake_core::{self, FakeCore};
+use sidevoice_desktop_test_support::platform::storage::{StorageFixture, StorageFixtures};
 use sidevoice_desktop_test_support::platform::temp::{Temp, TempArea};
 use sidevoice_desktop_test_support::{fake_registry::FakeRegistry, fixture};
 use sidevoice_local_host::host::{Action, Config, LocalHost};
@@ -14,7 +15,6 @@ use sidevoice_local_host::install;
 use sidevoice_local_host::paths::DataDirs;
 use sidevoice_local_host::state::State;
 use sidevoice_local_host::store;
-use sidevoice_platform::fs::{Files, Fs, TestFiles};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
@@ -95,7 +95,7 @@ fn pairs_over_the_socket_and_the_page_gets_only_the_secret() {
     let (port, secret) = running(&host);
 
     let stored = store::load(&world.app_dir).expect("local-host.json");
-    Files::check_private(&Files::open_read(&world.app_dir.join(store::FILE_NAME)).unwrap()).unwrap();
+    StorageFixtures::assert_private(&world.app_dir.join(store::FILE_NAME));
     assert_eq!(stored.fp, core.fingerprint());
     assert_eq!(core.local_device().as_deref(), Some(stored.device_id.as_str()));
     assert_eq!(
@@ -304,6 +304,31 @@ fn a_stored_pairing_is_reused_after_proving_the_identity() {
 }
 
 #[test]
+fn a_pairing_below_traverse_only_ancestors_loads_saves_and_is_discovered() {
+    let world = World::new();
+    let core = world.core(1);
+    let first = world.host();
+    running(&first);
+    let stored = store::load(&world.app_dir).unwrap();
+    first.shutdown();
+    drop(first);
+
+    let mut expected = stored.clone();
+    StorageFixtures::with_search_only_ancestor(world._tmp.path(), || {
+        assert_eq!(store::load(&world.app_dir), Some(expected.clone()));
+        let updated = store::Pairing { host: "saved beneath a searchable ancestor".into(), ..stored.clone() };
+        store::save(&world.app_dir, &updated).unwrap();
+        assert_eq!(store::load(&world.app_dir), Some(updated.clone()));
+        let host = world.host();
+        running(&host);
+        assert_eq!(core.local_device().as_deref(), Some(updated.device_id.as_str()));
+        assert_eq!(store::load(&world.app_dir).unwrap().token, updated.token);
+        host.shutdown();
+        expected = updated;
+    });
+}
+
+#[test]
 fn a_reset_core_is_paired_again() {
     let world = World::new();
     let core = world.core(1);
@@ -356,15 +381,13 @@ fn an_incompatible_core_is_not_paired() {
 fn an_unsafe_core_directory_is_never_connected_to() {
     let world = World::new();
     let core = world.core(1);
-    if !Temp::let_group_read(&world.dirs.core()) {
-        Files::let_others_read(&world.dirs.core());
-    }
+    StorageFixtures::readable(&world.dirs.core());
     let host = world.host();
     let report = serde_json::to_value(host.poll()).unwrap();
     assert_eq!(report["state"], "failed");
     assert_eq!(report["failure"]["key"], "identity.unsafe-directory");
     assert!(core.requests().is_empty(), "{:?}", core.requests());
-    Files::shut_others_out(&world.dirs.core());
+    StorageFixtures::private(&world.dirs.core());
 }
 
 #[test]
@@ -383,7 +406,7 @@ fn with_nothing_installed_the_host_is_absent() {
 /// leaving `D/version-read` once it has read it.
 fn install_fake_cli(dirs: &DataDirs, status: &str) -> PathBuf {
     std::fs::create_dir_all(&dirs.data).unwrap();
-    Files::shut_others_out(&dirs.data);
+    StorageFixtures::private(&dirs.data);
     let script = dirs.data.join("fake-cli");
     let log = dirs.data.join("calls.log");
     fixture::install(
@@ -393,7 +416,7 @@ fn install_fake_cli(dirs: &DataDirs, status: &str) -> PathBuf {
     )
     .unwrap();
     std::fs::write(dirs.install_record(), json!({"command": [script]}).to_string()).unwrap();
-    Files::shut_others_out(&dirs.install_record());
+    StorageFixtures::private(&dirs.install_record());
     set_version(dirs, json!("0.8.1"));
     log
 }

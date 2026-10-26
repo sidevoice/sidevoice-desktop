@@ -41,7 +41,6 @@ pub mod proxy;
 pub mod state;
 pub mod store;
 pub mod tarball;
-pub mod trusted;
 
 use serde::Serialize;
 use std::fmt;
