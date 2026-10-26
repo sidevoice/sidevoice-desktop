@@ -186,16 +186,19 @@ fn os_attr_syn(attribute: &syn::Attribute, aliases: &HashSet<String>) -> bool {
 }
 
 /// Whether an attribute removes the item it sits on on some OS: a `cfg` with an OS predicate, or a `cfg_attr`
-/// that applies one. An OS-conditional lint allowance (`cfg_attr(windows, allow(..))`) keeps the item everywhere.
+/// that applies one, or applies any `cfg` on an OS (`cfg_attr(windows, cfg(feature = "x"))`). An OS-conditional lint allowance (`cfg_attr(windows, allow(..))`) keeps the item everywhere.
 fn removes_on_os(attribute: &syn::Attribute, aliases: &HashSet<String>) -> bool {
-    fn nested(name: &str, args: &TokenStream, aliases: &HashSet<String>) -> bool {
+    fn nested(name: &str, args: &TokenStream, aliases: &HashSet<String>, under_os: bool) -> bool {
         match name {
-            "cfg" => names_os(args, aliases),
+            "cfg" => under_os || names_os(args, aliases),
             "cfg_attr" => {
                 let parts = flat(args.clone());
-                parts.split(|tree| punct(Some(tree), ',')).skip(1).any(|part| {
+                let mut parts = parts.split(|tree| punct(Some(tree), ','));
+                let predicate: TokenStream = parts.next().unwrap_or_default().iter().cloned().collect();
+                let under_os = under_os || names_os(&predicate, aliases);
+                parts.any(|part| {
                     let name = part.first().and_then(ident).unwrap_or_default();
-                    nested(&name, &group(part.get(1), Delimiter::Parenthesis).unwrap_or_default(), aliases)
+                    nested(&name, &group(part.get(1), Delimiter::Parenthesis).unwrap_or_default(), aliases, under_os)
                 })
             }
             _ => false,
@@ -203,7 +206,7 @@ fn removes_on_os(attribute: &syn::Attribute, aliases: &HashSet<String>) -> bool 
     }
     let name = attribute.path().get_ident().map(ToString::to_string).unwrap_or_default();
     match &attribute.meta {
-        syn::Meta::List(list) => nested(&name, &list.tokens, aliases),
+        syn::Meta::List(list) => nested(&name, &list.tokens, aliases, false),
         _ => false,
     }
 }
@@ -1131,5 +1134,14 @@ mod tests {
         assert_eq!(other("#![cfg_attr(windows, allow(dead_code))]\npub trait T { fn f(); }"), 0);
         assert_eq!(other("#[cfg_attr(windows, allow(dead_code))] mod m { pub trait T { fn f(); } }"), 0);
         assert_eq!(other("#[cfg_attr(test, cfg(windows))] pub trait T { fn f(); }"), 1);
+    }
+
+    #[test]
+    fn an_os_cfg_attr_applying_a_portable_cfg_gates_what_it_encloses() {
+        assert_eq!(other("#[cfg_attr(windows, cfg(feature = \"x\"))] pub trait T { fn f(); }"), 1);
+        assert_eq!(other("#[cfg_attr(unix, cfg_attr(test, cfg(feature = \"x\")))] mod m { trait T {} }"), 1);
+        assert_eq!(other("#![cfg_attr(windows, cfg(feature = \"x\"))]\ntrait T { fn f(); }"), 1);
+        assert_eq!(other("#[cfg_attr(test, cfg(feature = \"x\"))] mod m { trait T { fn f(); } }"), 0);
+        assert_eq!(other("#[cfg_attr(windows, allow(dead_code))] mod m { trait T { fn f(); } }"), 0);
     }
 }
