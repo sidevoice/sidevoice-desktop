@@ -19,6 +19,9 @@ json-patch = { version = "4", default-features = false }
 sha2 = "0.10"
 # The checks on what the app and its stand-ins log, as the YAML's grep patterns were.
 regex = "1"
+# The platform-boundary check reads Rust tokens (comments and string contents are not code) and `use` trees.
+proc-macro2 = { version = "1", features = ["span-locations"] }
+syn = { version = "2", default-features = false, features = ["full", "parsing", "proc-macro"] }
 
 # Shared child lifetime, private files and release-target facts; no core application dependency.
 sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.12.4" }
