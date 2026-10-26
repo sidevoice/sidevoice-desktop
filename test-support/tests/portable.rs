@@ -160,7 +160,6 @@ fn closing_an_older_call_keeps_the_newer_call_open() {
 // Exercise the shell's actual handoff protocol in the existing Windows/macOS fixture jobs,
 // without linking a webview. Tests remain colocated with the desktop platform interface.
 #[path = "../../src-tauri/src/platform/reset_handoff.rs"]
-#[allow(dead_code)]
 mod reset_handoff;
 
 // Exercise the actual shell pairing store without linking the native UI.

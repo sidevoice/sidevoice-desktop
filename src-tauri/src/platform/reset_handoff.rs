@@ -43,11 +43,18 @@ pub struct ResetPlan {
 pub trait ResetHandoff {
     /// Whether Desktop offers reset (delete all data, uninstall) on this host. When false, callers refuse
     /// before any confirmation or data access, and a helper only completes the committed wait. The handoff
-    /// itself works on every host either way.
-    fn reset_available() -> bool;
+    /// itself works on every host either way. Unavailable unless a host has the reset transaction.
+    fn reset_available() -> bool {
+        false
+    }
 
     /// Private control state outside every reset deletion root. Never follows SIDEVOICE_DATA_DIR.
-    fn state_dir() -> io::Result<PathBuf>;
+    /// By default a sibling of the standard data root, so no cleanup of that root can remove it.
+    fn state_dir() -> io::Result<PathBuf> {
+        sidevoice_platform::data_dir::standard()
+            .and_then(|path| path.parent().map(|parent| parent.join("dev.sidevoice.desktop-reset")))
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "reset state directory unavailable"))
+    }
 
     /// Exclusive admission before any transaction side effects. Busy is `WouldBlock`.
     fn admit() -> io::Result<Admission> {
@@ -85,12 +92,12 @@ pub trait ResetHandoff {
 #[cfg(target_os = "macos")]
 #[path = "reset_handoff/macos.rs"]
 mod native;
-#[cfg(target_os = "windows")]
-#[path = "reset_handoff/windows.rs"]
-mod native;
-#[cfg(target_os = "linux")]
-#[path = "reset_handoff/linux.rs"]
-mod native;
+// Linux and Windows have no reset transaction: the shared defaults are all they need.
+#[cfg(not(target_os = "macos"))]
+mod native {
+    pub struct DesktopReset;
+    impl super::ResetHandoff for DesktopReset {}
+}
 
 pub use native::DesktopReset;
 
@@ -319,10 +326,6 @@ mod tests {
 
     struct TestReset;
     impl ResetHandoff for TestReset {
-        fn reset_available() -> bool {
-            true
-        }
-
         fn state_dir() -> io::Result<PathBuf> {
             TEST_ROOT.with(|root| Ok(root.borrow().clone()))
         }
@@ -380,6 +383,10 @@ mod tests {
             }
             "helper" => {
                 let helper = TestReset::receive().unwrap();
+                // The plan arrives as the parent committed it; its PID is the parent's, not ours.
+                let sent = plan();
+                assert_eq!((helper.plan.uninstall, &helper.plan.initial), (sent.uninstall, &sent.initial));
+                assert_ne!(helper.plan.parent_pid, std::process::id());
                 let guard = helper.await_exit().unwrap();
                 mark(&root, "cleanup");
                 wait_marker(&root, "finish");
@@ -421,6 +428,28 @@ mod tests {
         assert!(root.is_absolute());
         let data = sidevoice_platform::data_dir::standard().unwrap();
         assert!(!root.starts_with(data), "cleanup must not remove the handoff barrier");
+    }
+
+    #[test]
+    fn a_host_without_the_transaction_is_unavailable_and_keeps_state_beside_the_data_root() {
+        struct Unported;
+        impl ResetHandoff for Unported {}
+        assert!(!Unported::reset_available(), "callers refuse before confirmation on such a host");
+        let root = Unported::state_dir().unwrap();
+        let data = sidevoice_platform::data_dir::standard().unwrap();
+        assert_eq!(root.parent(), data.parent());
+        assert!(!root.starts_with(&data), "cleanup must not remove the handoff barrier");
+    }
+
+    #[test]
+    fn production_launch_fails_closed_when_the_executable_does_not_authenticate() {
+        // This test executable rejects the helper flag and exits: no capability ever comes back.
+        let (_temp, _root) = scratch();
+        let started = Instant::now();
+        let refused = TestReset::launch(TestReset::admit().unwrap(), plan()).err().unwrap();
+        assert_eq!(refused.kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < HANDSHAKE + Duration::from_secs(5), "bounded by the handshake deadline");
+        assert!(TestReset::admit().is_ok(), "a failed launch releases admission");
     }
 
     #[test]
