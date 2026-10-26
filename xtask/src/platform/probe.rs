@@ -2,6 +2,9 @@
 //! a person's machine would, with what the app, the page and the stand-ins log checked. What each OS does differently
 //! is in `probe/{macos,windows,linux}.rs`; a flow an OS has no use for says so and does nothing.
 
+pub mod checks;
+pub mod memory;
+
 use crate::platform::host;
 use crate::Result;
 
@@ -28,13 +31,14 @@ trait Os {
         Err(unsupported("voice-models"))
     }
 
-    /// The host's calls on the engine's real models with the process's footprint taken at each step.
-    fn voice_memory() -> Result<()> {
+    /// Runs the host's calls on the engine's real models and returns the log with a `memory phase=…` line at each step
+    /// (the process's footprint and GPU allocation). The checks on it are common ([`memory`]).
+    fn voice_memory_log() -> Result<String> {
         Err(unsupported("voice-memory"))
     }
 
-    /// On the probe app, the same over a long session in the app.
-    fn memory() -> Result<()> {
+    /// Runs the probe app through a long session and returns its log with a `memory phase=…` line at each step.
+    fn memory_log() -> Result<String> {
         Err(unsupported("memory"))
     }
 
@@ -83,12 +87,12 @@ pub fn voice_models() -> Result<()> {
 
 /// `probe voice-memory`.
 pub fn voice_memory() -> Result<()> {
-    Native::voice_memory()
+    memory::report(&Native::voice_memory_log()?, memory::VOICE_RULES)
 }
 
 /// `probe memory`.
 pub fn memory() -> Result<()> {
-    Native::memory()
+    memory::report(&Native::memory_log()?, memory::APP_RULES)
 }
 
 /// `probe card`.

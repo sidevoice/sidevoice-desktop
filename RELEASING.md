@@ -33,7 +33,7 @@ secrets into the environment of the steps that need them, choose which steps run
   xtask's own tests, `cargo test --manifest-path xtask/Cargo.toml`.
 - `linux` and `windows` jobs: `cargo xtask bundle --channel C`, this host's installers.
 - `macos` job (the app and .dmg; not on a pull request): `cargo xtask release app [--signed] --channel C`,
-  `check-app [--signed]`, `first-open`, `dmg [--signed]`, `sign-dmg`, `checksums`, `forget-secrets`, `dmg-screens`.
+  `check-app [--signed]`, `first-open`, `package [--signed]`, `sign-package`, `checksums`, `forget-secrets`, `package-screens`.
   The only job with the Apple signing secrets.
 - `macos-native` job, beside it: on the CI-only probe build, `probe-app`, `local-host`, `probe`, `card`, `exit`, `memory`. It shares
   the Rust build cache with `macos` (the same dependencies) and is the one that writes it (CI caches, below).

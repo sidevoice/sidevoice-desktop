@@ -5,11 +5,14 @@ use sidevoice_platform::fs::{Create, Files, Fs};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::platform::macos_app::{app, binary, release_target, unsigned, AppHome, PROBE_ONLY};
+use crate::platform::macos_app::{
+    app, binary, keychain_list, notarized, notary_status, region, release_target, signing_keychain, unsigned,
+    Signature, KEYCHAIN, PROBE_ONLY, SIGNING,
+};
 use crate::platform::private_files::{PrivateCreation, PrivateFiles};
 use crate::util::{
     contains, copy_dir, ensure, fresh_dir, in_ci, mkdir, random_hex, read, read_bytes, read_secret, repo, required_env,
-    secret_path, sleep, version, wait_for, work, Channel, Cmd, SecretDir, TauriBuild,
+    secret_path, sleep, version, work, Channel, Cmd, SecretDir, TauriBuild,
 };
 use crate::Result;
 
@@ -103,70 +106,6 @@ fn user_keychains() -> Result<Vec<String>> {
     Ok(keychain_list(&Cmd::new("security").args(["list-keychains", "-d", "user"]).stdout()?))
 }
 
-/// The paths in `security list-keychains`' output: one per line, indented and quoted.
-pub fn keychain_list(text: &str) -> Vec<String> {
-    text.lines().map(|line| line.trim().trim_matches('"').to_owned()).filter(|path| !path.is_empty()).collect()
-}
-
-/// What `codesign -dvvv` says of a signature, as far as the checks go.
-#[derive(Debug, Default, PartialEq)]
-pub struct Signature {
-    pub adhoc: bool,
-    pub runtime: bool,
-    pub developer_id: bool,
-    pub team: Option<String>,
-    pub timestamp: bool,
-}
-
-impl Signature {
-    pub fn parse(text: &str) -> Signature {
-        let mut signature = Signature {
-            adhoc: text.contains("Signature=adhoc"),
-            runtime: text.contains("runtime"),
-            ..Signature::default()
-        };
-        for line in text.lines() {
-            signature.developer_id |= line.starts_with("Authority=Developer ID Application: ");
-            signature.timestamp |= line.starts_with("Timestamp=");
-            if let Some(team) = line.strip_prefix("TeamIdentifier=") {
-                signature.team.get_or_insert_with(|| team.to_owned());
-            }
-        }
-        signature
-    }
-
-    /// The checks on the app's signature: the hardened runtime always; then ad-hoc, or (with the team) the
-    /// Developer ID's, this team's, with a secure timestamp.
-    pub fn check(text: &str, team: Option<&str>) -> Result<()> {
-        let signature = Signature::parse(text);
-        ensure(signature.runtime, "not signed with the hardened runtime")?;
-        let Some(team) = team else {
-            return ensure(signature.adhoc, "not ad-hoc signed");
-        };
-        ensure(signature.developer_id, "not signed by a Developer ID Application")?;
-        ensure(
-            text.lines().any(|line| line == format!("TeamIdentifier={team}")),
-            format!(
-                "not signed by the team APPLE_TEAM_ID names (TeamIdentifier={})",
-                signature.team.unwrap_or_default()
-            ),
-        )?;
-        ensure(signature.timestamp, "no secure timestamp")?;
-        ensure(!signature.adhoc, "ad-hoc signed in a signed build")
-    }
-}
-
-/// Whether `spctl -a -vv` accepted it as a notarized Developer ID app or image.
-pub fn notarized(spctl: &str) -> bool {
-    spctl.contains("source=Notarized Developer ID")
-}
-
-/// `notarytool submit --output-format json`'s status.
-pub fn notary_status(json: &str) -> Result<String> {
-    let answer: serde_json::Value = serde_json::from_str(json).map_err(|e| format!("notarytool's answer: {e}"))?;
-    answer["status"].as_str().map(str::to_owned).ok_or_else(|| "notarytool's answer has no status".into())
-}
-
 fn plist(app: &Path, key: &str) -> Result<String> {
     let info = app.join("Contents/Info.plist");
     Ok(Cmd::new("plutil").args(["-extract", key, "raw"]).arg(info).stdout()?.trim_end_matches('\n').to_owned())
@@ -258,27 +197,6 @@ const ICON_SIZES: [&str; 10] = [
     "512x512",
     "512x512@2x",
 ];
-
-/// `release first-open`: first open, no settings: the bundled interface comes up in the real WKWebView, its controller
-/// attached to the real web UI's store and actions and reaching the app over IPC; asking for the probe page changes
-/// nothing in a release.
-pub fn first_open() -> Result<()> {
-    let home = AppHome::new("first-open")?;
-    let log = work("first-open")?.join("app.log");
-    let mut app = home.app(&[("SIDEVOICE_DEBUG_PAGE", "probe.html")]).spawn(&log)?;
-    wait_for(&log, "ready: true", 0, 45);
-    sleep(5.0);
-    if !app.running() {
-        return Err(format!("The app exited on its own:\n{}", read(&log)));
-    }
-    app.stop();
-    let text = read(&log);
-    eprintln!("{text}");
-    let has = |pattern| crate::util::has(&text, pattern);
-    ensure(has("page tauri://localhost/voice/index.html"), "the bundled interface did not load")?;
-    ensure(!has("probe.html"), "a release ran a CI probe")?;
-    ensure(has("ready: true"), "the interface's controller never came up")
-}
 
 /// `release package [--signed]`: the .dmg, `dist/Sidevoice_<version>_aarch64.dmg`, with the brand's window (background,
 /// icon layout and volume icon: scripts/dmg-settings.py, dmgbuild), verified, and the app checked as shipped inside
@@ -419,12 +337,6 @@ fn set_user_keychains(keychains: &[String]) -> Result<()> {
     Cmd::new("security").args(["list-keychains", "-d", "user", "-s"]).args(keychains).run()
 }
 
-/// Whether a path on the search list is a signing step's own keychain ([`SIGNING`]/[`KEYCHAIN`]), however the temporary
-/// directory resolves (`/var` is `/private/var` on a Mac).
-fn signing_keychain(path: &str) -> bool {
-    Path::new(path).ends_with(Path::new(SIGNING).join(KEYCHAIN))
-}
-
 /// `release sign-package`: the .dmg signed with the Developer ID (`APPLE_SIGNING_IDENTITY`; from a keychain of this
 /// step's own holding `APPLE_CERTIFICATE`, or on a laptop without it, from the login keychain), notarized with
 /// `notarytool` (`APPLE_API_KEY`, `APPLE_API_ISSUER` and the key file) and stapled, so Gatekeeper opens it from a
@@ -483,8 +395,6 @@ pub fn sign_dmg() -> Result<()> {
 }
 
 /// Where the signing steps keep their secrets ([`SecretDir`]): the keychain and the certificate, the notary's key.
-const SIGNING: &str = "sidevoice-signing";
-const KEYCHAIN: &str = "sidevoice-signing.keychain-db";
 const NOTARY: &str = "sidevoice-notary";
 
 /// `release forget-secrets`: whatever a signing step that was cut short (cancelled, killed) left: its keychain (and its
@@ -581,13 +491,6 @@ fn osa(lines: &[&str]) -> Result<String> {
     Err("osascript did not answer in 30 seconds".into())
 }
 
-/// The screen region (`x,y,w,h`, the title bar's 28 points included) of a Finder window's bounds (`x1,y1,x2,y2`).
-pub fn region(bounds: &str) -> Option<String> {
-    let numbers: Vec<i64> = bounds.split(',').map(|n| n.trim().parse().ok()).collect::<Option<_>>()?;
-    let [x1, y1, x2, y2] = numbers[..] else { return None };
-    Some(format!("{x1},{},{},{}", y1 - 28, x2 - x1, y2 - y1 + 28))
-}
-
 /// `xcrun stapler <action> <path>`, retried: both actions ask Apple's ticket service (CloudKit), and a runner's
 /// connection to it drops now and then ("The network connection was lost", error 68) though the ticket is fine.
 fn stapler(action: &str, path: impl AsRef<Path>) -> Result<()> {
@@ -635,91 +538,4 @@ fn assemble_disk_image(
         .arg("Sidevoice")
         .arg(output)
         .run()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::platform::macos_app::SIGNING_ENV;
-
-    const ADHOC: &str = "Executable=/x/Sidevoice.app/Contents/MacOS/sidevoice-desktop
-Identifier=dev.sidevoice.desktop
-Format=app bundle with Mach-O thin (arm64)
-CodeDirectory v=20500 size=1 flags=0x10002(adhoc,runtime) hashes=1+7 location=embedded
-Signature=adhoc
-TeamIdentifier=not set
-";
-
-    const SIGNED: &str = "Executable=/x/Sidevoice.app/Contents/MacOS/sidevoice-desktop
-CodeDirectory v=20500 size=1 flags=0x10000(runtime) hashes=1+7 location=embedded
-Signature size=9045
-Authority=Developer ID Application: Example Person (AB12CD34EF)
-Authority=Developer ID Certification Authority
-Authority=Apple Root CA
-Timestamp=12 Oct 2026 at 10:00:00
-TeamIdentifier=AB12CD34EF
-";
-
-    #[test]
-    fn an_adhoc_signature_passes_only_as_adhoc() {
-        assert_eq!(Signature::check(ADHOC, None), Ok(()));
-        assert!(Signature::check(ADHOC, Some("AB12CD34EF")).is_err());
-        assert!(Signature::check(&ADHOC.replace("adhoc,runtime", "adhoc"), None).is_err());
-    }
-
-    #[test]
-    fn a_developer_id_signature_needs_the_team_and_a_timestamp() {
-        assert_eq!(Signature::check(SIGNED, Some("AB12CD34EF")), Ok(()));
-        assert!(Signature::check(SIGNED, None).is_err(), "a signed app is not ad-hoc");
-        let other_team = Signature::check(SIGNED, Some("ZZ99")).unwrap_err();
-        assert!(other_team.contains("AB12CD34EF"), "{other_team}");
-        assert!(Signature::check(SIGNED, Some("AB12CD34")).is_err(), "the whole line, not a prefix");
-        assert!(Signature::check(&SIGNED.replace("Timestamp=", "Signed Time="), Some("AB12CD34EF")).is_err());
-        assert!(Signature::check(&SIGNED.replace("Developer ID Application", "Apple Development"), Some("AB12CD34EF"))
-            .is_err());
-        let both = format!("{SIGNED}Signature=adhoc\n");
-        assert_eq!(Signature::check(&both, Some("AB12CD34EF")).unwrap_err(), "ad-hoc signed in a signed build");
-    }
-
-    #[test]
-    fn gatekeeper_and_the_notary_are_read() {
-        assert!(notarized(
-            "/x/Sidevoice.app: accepted\nsource=Notarized Developer ID\norigin=Developer ID Application: X"
-        ));
-        assert!(!notarized("/x/Sidevoice.app: rejected\nsource=Unnotarized Developer ID"));
-        assert_eq!(notary_status(r#"{"id":"1","status":"Accepted","message":"ok"}"#).unwrap(), "Accepted");
-        assert_eq!(notary_status(r#"{"status":"Invalid"}"#).unwrap(), "Invalid");
-        assert!(notary_status("Error: HTTP 401").is_err());
-    }
-
-    #[test]
-    fn a_finder_window_becomes_a_screen_region() {
-        assert_eq!(region("100,128,740,528").as_deref(), Some("100,100,640,428"));
-        assert_eq!(region("0,28,1440,900").as_deref(), Some("0,0,1440,900"));
-        assert_eq!(region("missing value"), None);
-        assert_eq!(region("1,2,3"), None);
-    }
-
-    #[test]
-    fn the_keychain_list_is_read_unquoted() {
-        let out =
-            "    \"/Users/me/Library/Keychains/login.keychain-db\"\n    \"/private/var/folders/x/T/abc.keychain-db\"\n";
-        assert_eq!(
-            keychain_list(out),
-            ["/Users/me/Library/Keychains/login.keychain-db", "/private/var/folders/x/T/abc.keychain-db"]
-        );
-    }
-
-    #[test]
-    fn the_signing_keychain_is_told_from_the_others_on_the_list() {
-        assert!(signing_keychain("/Users/runner/work/_temp/sidevoice-signing/sidevoice-signing.keychain-db"));
-        assert!(signing_keychain("/private/var/folders/x/T/sidevoice-signing/sidevoice-signing.keychain-db"));
-        assert!(!signing_keychain("/Users/me/Library/Keychains/login.keychain-db"));
-        assert!(!signing_keychain("/Users/runner/Library/Keychains/Nt0IPhmZAIYKjzRR.keychain-db"));
-    }
-
-    #[test]
-    fn an_unsigned_build_drops_every_signing_variable() {
-        assert!(SIGNING_ENV.contains(&"APPLE_SIGNING_IDENTITY") && SIGNING_ENV.contains(&"APPLE_API_KEY_P8"));
-    }
 }

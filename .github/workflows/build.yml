@@ -160,8 +160,6 @@ jobs:
         with:
           path: target/web
           key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs', 'scripts/web-release.mjs') }}
-      - name: The build tooling's own tests (xtask), including the macOS tooling's
-        run: cargo test --locked --manifest-path xtask/Cargo.toml
       - name: Build the app bundle (ad-hoc signed, hardened runtime, entitlements)
         if: needs.changes.outputs.sign != 'true'
         # The nightly's update artifact is signed with the updater's key; no PR or manual run reads it.
@@ -260,6 +258,8 @@ jobs:
         with:
           path: target/web
           key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs', 'scripts/web-release.mjs') }}
+      - name: The build tooling's own tests (xtask), compiled for macOS
+        run: cargo test --locked --manifest-path xtask/Cargo.toml
       - name: Build the CI probe app (feature probe; never shipped)
         run: cargo xtask probe probe-app
       - name: Record produced probe bundle file list

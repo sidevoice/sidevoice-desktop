@@ -5,8 +5,6 @@ use crate::Result;
 
 #[path = "macos/flows.rs"]
 mod flows;
-#[path = "macos/memory.rs"]
-mod memory;
 
 pub struct Native;
 
@@ -27,12 +25,12 @@ impl Os for Native {
         flows::voice_models()
     }
 
-    fn voice_memory() -> Result<()> {
-        flows::voice_memory()
+    fn voice_memory_log() -> Result<String> {
+        flows::voice_memory_log()
     }
 
-    fn memory() -> Result<()> {
-        flows::memory()
+    fn memory_log() -> Result<String> {
+        flows::memory_log()
     }
 
     fn card() -> Result<()> {

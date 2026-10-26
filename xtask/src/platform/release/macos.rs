@@ -1,7 +1,10 @@
 //! macOS: the Apple-Silicon app and its `.dmg`, signed with `codesign`, notarized with `notarytool`, checked with
 //! `plutil` and `spctl`, and stapled.
 
+use std::path::PathBuf;
+
 use super::Os;
+use crate::platform::macos_app::binary;
 use crate::util::Channel;
 use crate::Result;
 
@@ -19,8 +22,12 @@ impl Os for Native {
         app::check_app(signed)
     }
 
-    fn first_open() -> Result<()> {
-        app::first_open()
+    const SCRATCH_HOME: bool = true;
+
+    const INTERFACE_PAGE: &'static str = r"page tauri://localhost/voice/index\.html";
+
+    fn app_binary() -> Option<PathBuf> {
+        Some(binary())
     }
 
     fn package(signed: bool) -> Result<()> {
