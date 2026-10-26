@@ -1,8 +1,8 @@
 fn main() {
     build_channel();
     link_macos_clang_runtime();
-    embed_windows_manifest();
-    // The Windows manifest is linked by embed_windows_manifest, not by tauri-build.
+    // The Windows manifest goes in through the linker for every executable, test binaries included
+    // (.cargo/config.toml), so tauri-build adds none of its own.
     let windows = tauri_build::WindowsAttributes::new_without_app_manifest();
     // The app's own commands, declared so capabilities can grant them per window/origin:
     // the room window `bridge_state`, `bridge_level` and `bridge_playback` (+ `debug_log`), the native engine, the
@@ -114,20 +114,4 @@ fn build_channel() {
     if channel != "release" {
         println!("cargo:rustc-cfg=sidevoice_debug_options");
     }
-}
-
-/// The Windows application manifest (packaging/windows/app.manifest: Common Controls v6, which WebView2 and tao's
-/// dialogs import from comctl32), linked into every executable the package builds, the unit-test binaries included.
-/// tauri-build's own manifest goes into the app's binaries only (`rustc-link-arg-bins`), so a test binary without it
-/// fails to start (STATUS_ENTRYPOINT_NOT_FOUND); this is the workaround Tauri uses for its own tests
-/// (tauri-apps/tauri#13419), with tauri-build's manifest turned off so the app's binaries carry one.
-fn embed_windows_manifest() {
-    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("msvc") {
-        return;
-    }
-    let manifest = std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"))
-        .join("packaging/windows/app.manifest");
-    println!("cargo:rerun-if-changed={}", manifest.display());
-    println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
-    println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
 }

@@ -12,5 +12,14 @@ CMAKE_MSVC_RUNTIME_LIBRARY = "MultiThreaded"
 # sherpa-onnx's static libraries for Windows are built against the static C runtime (/MT); whisper.cpp is compiled
 # with whichever runtime the build uses, the dynamic one (/MD) by default, and the linker refuses the mix (LNK2038).
 # The whole app links the static C runtime there, so everything the cc and cmake crates compile does too.
+# The application manifest (packaging/windows/app.manifest, tauri-build's default: Common Controls v6, which tao's
+# dialogs import from comctl32) is linked into every executable, the unit-test binaries included: tauri-build's own
+# goes into the package's binaries only, and a test binary without one fails to start (STATUS_ENTRYPOINT_NOT_FOUND,
+# tauri-apps/tauri#13419), so build.rs turns tauri-build's off. The path is relative to src-tauri, where Cargo runs the
+# compiler (the workspace root).
 [target.'cfg(all(windows, target_env = "msvc"))']
-rustflags = ["-C", "target-feature=+crt-static"]
+rustflags = [
+    "-C", "target-feature=+crt-static",
+    "-C", "link-arg=/MANIFEST:EMBED",
+    "-C", "link-arg=/MANIFESTINPUT:packaging/windows/app.manifest",
+]
