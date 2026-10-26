@@ -381,13 +381,19 @@ fn an_incompatible_core_is_not_paired() {
 fn an_unsafe_core_directory_is_never_connected_to() {
     let world = World::new();
     let core = world.core(1);
+    let refused = || {
+        let report = serde_json::to_value(world.host().poll()).unwrap();
+        assert_eq!(report["state"], "failed");
+        assert_eq!(report["failure"]["key"], "identity.unsafe-directory");
+        assert!(core.requests().is_empty(), "{:?}", core.requests());
+        StorageFixtures::private(&world.dirs.core());
+    };
+    // Readable by the owner's group alone, where the OS has group-only access, and by everybody.
+    if temp::let_group_read(&world.dirs.core()) {
+        refused();
+    }
     StorageFixtures::readable(&world.dirs.core());
-    let host = world.host();
-    let report = serde_json::to_value(host.poll()).unwrap();
-    assert_eq!(report["state"], "failed");
-    assert_eq!(report["failure"]["key"], "identity.unsafe-directory");
-    assert!(core.requests().is_empty(), "{:?}", core.requests());
-    StorageFixtures::private(&world.dirs.core());
+    refused();
 }
 
 #[test]

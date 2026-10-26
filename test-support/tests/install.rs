@@ -2,9 +2,10 @@
 use serde_json::json;
 use sidevoice_desktop_test_support::fake_registry::FakeRegistry;
 use sidevoice_desktop_test_support::fixture;
+use sidevoice_desktop_test_support::platform::storage::{StorageFixture, StorageFixtures};
 use sidevoice_desktop_test_support::platform::temp;
 use sidevoice_local_host::install::*;
-use sidevoice_platform::fs::{Files, Fs, TestFiles};
+use sidevoice_platform::fs::{Files, TestFiles};
 use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -186,7 +187,7 @@ fn download_bounds_hold() {
 fn the_private_directory_is_private_and_below_a_safe_root_only() {
     let world = World::new();
     let scratch = Scratch::create(&world.temp).unwrap();
-    Files::check_private(&Files::open_read(scratch.path()).unwrap()).unwrap();
+    StorageFixtures::assert_private(scratch.path());
     let path = scratch.path().to_path_buf();
     drop(scratch);
     assert!(!path.exists());

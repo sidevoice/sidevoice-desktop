@@ -1,4 +1,5 @@
-//! The temporary directory's own paths are short enough, and there is no sticky-directory counterpart.
+//! The temporary directory's own paths are short enough, and there is neither a sticky-directory counterpart nor
+//! group-only access through this API.
 use super::Area;
 
 pub struct Os;
