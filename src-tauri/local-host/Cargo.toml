@@ -18,9 +18,11 @@ fetch = ["dep:reqwest"]
 sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.10.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The computer's kernel hostname, used when naming the core's local pairing.
+gethostname = "1.1"
 
 [target.'cfg(unix)'.dependencies]
-# The socket peer's uid (`getpeereid` / `SO_PEERCRED`), the effective uid, the host name.
+# The socket peer's uid (`getpeereid` / `SO_PEERCRED`) and the effective uid.
 libc = "0.2"
 # The core's identity: ECDSA P-256 over `sidevoice-node-identity:<nonce>`, IEEE P1363 signatures.
 p256 = { version = "0.13", default-features = false, features = ["ecdsa", "pkcs8", "std"] }
