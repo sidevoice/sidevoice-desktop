@@ -1,7 +1,7 @@
 name: build
 
 # What runs when (RELEASING.md):
-# - pull request: lint + unit tests on Linux, the Windows and Linux app builds (the repo is public: Actions minutes
+# - pull request: lint + unit tests on Linux, unit tests on Windows, the Windows and Linux app builds (the repo is public: Actions minutes
 #   are free), and the Apple-Silicon native flows: the probe app's (`macos-native`) and a call on the engine's real
 #   models (`macos-call`). No .dmg.
 # - push to main, manual run: everything, installers included. On main, once the installers' jobs (`macos`, `linux`,
@@ -396,6 +396,11 @@ jobs:
       # other run reads it.
       - name: Portable native local-host fixtures
         run: cargo xtask test-support
+      # The same tests the Linux job runs, here with the Windows-only ones (platform/). Through xtask, which runs cargo
+      # in src-tauri: only from there does Cargo read src-tauri/.cargo/config.toml, whose static C runtime the engine's
+      # native libraries need to link (LNK2038 otherwise).
+      - name: Bridge script and Rust unit tests
+        run: cargo xtask test
       - name: Build the installers
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ (needs.changes.outputs.channel == 'release' || needs.changes.outputs.channel == 'nightly') && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
