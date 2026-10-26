@@ -8,15 +8,19 @@ use std::{io, thread};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
 #[cfg(target_os = "macos")]
-#[path = "webview_data/macos.rs"]
-mod imp;
-#[cfg(target_os = "linux")]
-#[path = "webview_data/linux.rs"]
-mod imp;
+mod macos;
+#[cfg(target_os = "macos")]
+use macos::Os;
+
 #[cfg(target_os = "windows")]
-#[path = "webview_data/windows.rs"]
-mod imp;
-pub use imp::Os as SystemWebviewData;
+mod windows;
+#[cfg(target_os = "windows")]
+use windows::Os;
+
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+use linux::Os;
 
 /// The app's bundle identifier (`tauri.conf.json`), which names its browser storage on every host.
 const IDENTIFIER: &str = "dev.sidevoice.desktop";
@@ -40,9 +44,61 @@ pub struct Owner {
 /// Proof that the observed writers have exited. Keep the reset/launch lock held while using this value.
 pub struct Released(Locations);
 
-/// Browser cleanup only: no service stop, reset lock, journal, relaunch or app removal policy.
-pub trait WebviewData {
-    /// Check launch-mode eligibility at reset admission, before confirmation or any destructive step.
+/// Check launch-mode eligibility at reset admission, before confirmation or any destructive step.
+/// macOS refuses (`Unsupported`) an app that is not its own responsible process.
+pub fn preflight(owner: u32) -> io::Result<()> {
+    Os::preflight(owner)
+}
+
+/// Resolve the runtime's roots natively, before exit; `home` is the account's home directory.
+/// Callers never spell a native path. macOS keeps its existing WKWebView default store.
+pub fn locations(home: &Path) -> io::Result<Locations> {
+    Os::locations(home)
+}
+
+/// Snapshot the app and its browser writers before allowing the app to exit. The transaction
+/// must already forbid new webviews and keep other app launches behind its held reset lock.
+/// Windows also discovers runtimes using this user-data folder; macOS tracks responsible XPC services.
+pub fn capture(owner: u32, locations: Locations) -> io::Result<Owner> {
+    capture_with::<Os>(owner, locations)
+}
+
+/// Wait for the app and its observed browser processes, refreshing descendants and folder users
+/// until `deadline`. Never kill unrelated browsers or treat a timeout as permission to delete.
+/// The app must stop creating webviews before capture; the helper must retain the launch barrier
+/// through removal. A fresh process must never initialize writers between release and deletion.
+pub fn wait_released(owner: Owner, deadline: Instant) -> io::Result<Released> {
+    wait_released_with::<Os>(owner, deadline)
+}
+
+/// Remove one exact allowlisted root only after browser release, using core's held-parent removal.
+/// No directory is created or repaired; a missing root is success. Redirected roots are refused.
+/// The caller keeps recovery records outside these roots and retains its reset/launch lock.
+pub fn remove(released: &Released, path: &Path) -> io::Result<()> {
+    if !released.0.paths().iter().any(|allowed| allowed == path) {
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "outside webview roots"));
+    }
+    // Opening the target first rejects root symlinks/junctions rather than unlinking them.
+    let target = match HeldDirectory::open(path, Access::NotWritableByOthers) {
+        Ok(target) => target,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let parent = path.parent().ok_or_else(Owner::busy)?;
+    let name = path.file_name().ok_or_else(Owner::busy)?;
+    let held = HeldDirectory::open(parent, Access::NotWritableByOthers)?;
+    held.check_contents(&[name])?;
+    // Windows denies deleting the target while the target's own held handle is open. The parent
+    // remains held, and Removal repeats identity/ownership/mount checks before and during deletion.
+    drop(target);
+    held.remove_contents(&[name])
+}
+
+// What varies per OS, and nothing else. Browser cleanup only: no service stop, reset lock, journal,
+// relaunch or app removal policy. Each `webview_data/<os>.rs` implements this private trait; the
+// functions above hold the common code once and are the module's only interface.
+trait Native {
+    /// Launch-mode eligibility at reset admission. Hosts without such a constraint admit every launch.
     fn preflight(_owner: u32) -> io::Result<()> {
         Ok(())
     }
@@ -51,8 +107,7 @@ pub trait WebviewData {
     /// Inspection failure refuses cleanup; even a reused live PID conservatively keeps the gate closed.
     fn exited(pid: u32) -> io::Result<bool>;
 
-    /// Resolve the runtime's roots natively, before exit; `home` is the account's home directory.
-    /// Callers never spell a native path. macOS keeps its existing WKWebView default store.
+    /// The runtime's storage roots; `home` is the account's home directory.
     fn locations(_home: &Path) -> io::Result<Locations> {
         // Tauri's `app_local_data_dir` (the same `dirs` local data folder plus the identifier), which it
         // supplies to Wry. WebView2 uses it as its UDF; WebKitGTK uses it for BOTH base_data_directory
@@ -62,71 +117,41 @@ pub trait WebviewData {
         Locations::new(vec![local.join(IDENTIFIER)])
     }
 
-    /// Snapshot the app and its browser writers before allowing the app to exit. The transaction
-    /// must already forbid new webviews and keep other app launches behind its held reset lock.
-    /// Windows also discovers runtimes using this user-data folder; macOS tracks responsible XPC services.
-    fn capture(owner: u32, locations: Locations) -> io::Result<Owner> {
+    /// Add browser writers to the pre-exit observation. `sysinfo` owns native process enumeration;
+    /// selection is desktop policy.
+    fn observe(system: &System, locations: &Locations, processes: &mut Vec<(Pid, u64)>) -> io::Result<()>;
+}
+
+fn capture_with<N: Native>(owner: u32, locations: Locations) -> io::Result<Owner> {
+    let system = Owner::snapshot()?;
+    let pid = Pid::from_u32(owner);
+    let app = system.process(pid).ok_or_else(Owner::busy)?;
+    if app.start_time() == 0 {
+        return Err(Owner::busy());
+    }
+    let mut processes = vec![(pid, app.start_time())];
+    N::observe(&system, &locations, &mut processes)?;
+    Ok(Owner { locations, processes })
+}
+
+fn wait_released_with<N: Native>(mut owner: Owner, deadline: Instant) -> io::Result<Released> {
+    loop {
         let system = Owner::snapshot()?;
-        let pid = Pid::from_u32(owner);
-        let app = system.process(pid).ok_or_else(Owner::busy)?;
-        if app.start_time() == 0 {
+        N::observe(&system, &owner.locations, &mut owner.processes)?;
+        let mut all_exited = true;
+        for (pid, _) in &owner.processes {
+            // Query every tracked PID independently of metadata/name enumeration. A failed
+            // inspection is an error, never an absent process; start-time mismatch alone is
+            // likewise insufficient. PID reuse may delay cleanup but cannot release a live writer.
+            all_exited &= N::exited(pid.as_u32())?;
+        }
+        if all_exited {
+            return Ok(Released(owner.locations));
+        }
+        if Instant::now() >= deadline {
             return Err(Owner::busy());
         }
-        let mut processes = vec![(pid, app.start_time())];
-        Self::observe(&system, &locations, &mut processes)?;
-        Ok(Owner { locations, processes })
-    }
-
-    /// Wait for the app and its observed browser processes, refreshing descendants and folder users
-    /// until `deadline`. Never kill unrelated browsers or treat a timeout as permission to delete.
-    /// The app must stop creating webviews before capture; the helper must retain the launch barrier
-    /// through removal. A fresh process must never initialize writers between release and deletion.
-    fn wait_released(mut owner: Owner, deadline: Instant) -> io::Result<Released> {
-        loop {
-            let system = Owner::snapshot()?;
-            Self::observe(&system, &owner.locations, &mut owner.processes)?;
-            let mut all_exited = true;
-            for (pid, _) in &owner.processes {
-                // Query every tracked PID independently of metadata/name enumeration. A failed
-                // inspection is an error, never an absent process; start-time mismatch alone is
-                // likewise insufficient. PID reuse may delay cleanup but cannot release a live writer.
-                all_exited &= Self::exited(pid.as_u32())?;
-            }
-            if all_exited {
-                return Ok(Released(owner.locations));
-            }
-            if Instant::now() >= deadline {
-                return Err(Owner::busy());
-            }
-            thread::sleep(Duration::from_millis(50).min(deadline.saturating_duration_since(Instant::now())));
-        }
-    }
-
-    /// Add browser writers to the pre-exit observation. `sysinfo` owns native process enumeration;
-    /// selection is desktop policy. Kept on this trait so OS implementations expose no extra API.
-    fn observe(system: &System, locations: &Locations, processes: &mut Vec<(Pid, u64)>) -> io::Result<()>;
-
-    /// Remove one exact allowlisted root only after browser release, using core's held-parent removal.
-    /// No directory is created or repaired; a missing root is success. Redirected roots are refused.
-    /// The caller keeps recovery records outside these roots and retains its reset/launch lock.
-    fn remove(released: &Released, path: &Path) -> io::Result<()> {
-        if !released.0.paths().iter().any(|allowed| allowed == path) {
-            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "outside webview roots"));
-        }
-        // Opening the target first rejects root symlinks/junctions rather than unlinking them.
-        let target = match HeldDirectory::open(path, Access::NotWritableByOthers) {
-            Ok(target) => target,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => return Err(error),
-        };
-        let parent = path.parent().ok_or_else(Owner::busy)?;
-        let name = path.file_name().ok_or_else(Owner::busy)?;
-        let held = HeldDirectory::open(parent, Access::NotWritableByOthers)?;
-        held.check_contents(&[name])?;
-        // Windows denies deleting the target while the target's own held handle is open. The parent
-        // remains held, and Removal repeats identity/ownership/mount checks before and during deletion.
-        drop(target);
-        held.remove_contents(&[name])
+        thread::sleep(Duration::from_millis(50).min(deadline.saturating_duration_since(Instant::now())));
     }
 }
 
@@ -193,9 +218,9 @@ mod tests {
     // A native test subprocess stands in for a browser, so exercise the shared lifetime contract
     // without pretending that its executable/arguments identify a real WebView2 runtime.
     pub(super) struct Fixture;
-    impl WebviewData for Fixture {
+    impl Native for Fixture {
         fn exited(pid: u32) -> io::Result<bool> {
-            SystemWebviewData::exited(pid)
+            Os::exited(pid)
         }
         fn observe(system: &System, _locations: &Locations, processes: &mut Vec<(Pid, u64)>) -> io::Result<()> {
             Owner::descendants(system, processes);
@@ -207,14 +232,17 @@ mod tests {
     fn live_owner_prevents_removal_even_without_a_browser() {
         let temp = tempfile::tempdir().unwrap();
         let paths = Locations::new(vec![temp.path().join(IDENTIFIER)]).unwrap();
-        let owner = Fixture::capture(std::process::id(), paths).unwrap();
-        assert_eq!(Fixture::wait_released(owner, Instant::now()).err().unwrap().kind(), io::ErrorKind::WouldBlock);
+        let owner = capture_with::<Fixture>(std::process::id(), paths).unwrap();
+        assert_eq!(
+            wait_released_with::<Fixture>(owner, Instant::now()).err().unwrap().kind(),
+            io::ErrorKind::WouldBlock
+        );
     }
 
     #[test]
     fn missing_snapshot_and_inspection_failure_do_not_authorize_removal() {
         struct FailedInspection;
-        impl WebviewData for FailedInspection {
+        impl Native for FailedInspection {
             fn observe(_: &System, _: &Locations, _: &mut Vec<(Pid, u64)>) -> io::Result<()> {
                 Ok(())
             }
@@ -231,18 +259,21 @@ mod tests {
             processes: vec![(Pid::from_u32(u32::MAX), 1)],
         };
         assert_eq!(
-            FailedInspection::wait_released(owner, Instant::now()).err().unwrap().kind(),
+            wait_released_with::<FailedInspection>(owner, Instant::now()).err().unwrap().kind(),
             io::ErrorKind::PermissionDenied
         );
         assert!(selected.exists());
         // Native liveness does not need a sysinfo entry (or even a snapshot) to detect this live PID.
-        assert!(!SystemWebviewData::exited(std::process::id()).unwrap());
+        assert!(!Os::exited(std::process::id()).unwrap());
         let reused = Owner {
             locations: Locations::new(vec![selected]).unwrap(),
             processes: vec![(Pid::from_u32(std::process::id()), 1)],
         };
-        assert_eq!(Fixture::wait_released(reused, Instant::now()).err().unwrap().kind(), io::ErrorKind::WouldBlock);
-        assert!(SystemWebviewData::exited(0).is_err());
+        assert_eq!(
+            wait_released_with::<Fixture>(reused, Instant::now()).err().unwrap().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        assert!(Os::exited(0).is_err());
     }
 
     #[test]
@@ -256,9 +287,9 @@ mod tests {
         std::fs::write(selected.join("cookies"), "old session").unwrap();
         std::fs::write(root.join("other-app"), "keep").unwrap();
         let released = Released(Locations::new(vec![selected.clone()]).unwrap());
-        assert!(SystemWebviewData::remove(&released, &root).is_err());
-        SystemWebviewData::remove(&released, &selected).unwrap();
-        SystemWebviewData::remove(&released, &selected).unwrap();
+        assert!(remove(&released, &root).is_err());
+        remove(&released, &selected).unwrap();
+        remove(&released, &selected).unwrap();
         assert!(!selected.exists());
         assert_eq!(std::fs::read(root.join("other-app")).unwrap(), b"keep");
     }
@@ -266,7 +297,7 @@ mod tests {
     #[test]
     fn native_locations_are_absolute_and_do_not_guess_other_browser_profiles() {
         let temp = tempfile::tempdir().unwrap();
-        let paths = SystemWebviewData::locations(temp.path()).unwrap();
+        let paths = locations(temp.path()).unwrap();
         assert!(!paths.paths().is_empty());
         assert!(paths.paths().iter().all(|p| p.is_absolute() && p.ends_with(IDENTIFIER)));
         assert!(Locations::new(vec![PathBuf::from("../browser")]).is_err());
@@ -306,13 +337,13 @@ mod tests {
             assert!(Instant::now() < deadline);
             thread::sleep(Duration::from_millis(20));
         }
-        let owner = Fixture::capture(child.id(), Locations::new(vec![selected.clone()]).unwrap()).unwrap();
+        let owner = capture_with::<Fixture>(child.id(), Locations::new(vec![selected.clone()]).unwrap()).unwrap();
         std::fs::write(root.join("exit"), b"exit").unwrap();
         // Reap in parallel: on Unix, an unreaped child remains visible as a zombie.
         let reap = thread::spawn(move || child.wait().unwrap());
-        let released = Fixture::wait_released(owner, deadline).unwrap();
+        let released = wait_released_with::<Fixture>(owner, deadline).unwrap();
         assert_eq!(std::fs::read(selected.join("cookies")).unwrap(), b"last shutdown write");
-        SystemWebviewData::remove(&released, &selected).unwrap();
+        remove(&released, &selected).unwrap();
         assert!(reap.join().unwrap().success());
         assert!(!selected.exists());
     }

@@ -228,12 +228,12 @@ pub async fn data_uninstall(app: AppHandle, webview: Webview) -> Answer {
 #[cfg(target_os = "macos")]
 async fn confirmed_reset(app: AppHandle, uninstall: bool) -> Answer {
     use crate::platform::confirmation::{Confirmation, ConfirmationKind, NativeConfirmation};
-    use crate::platform::webview_data::{SystemWebviewData, WebviewData};
+    use crate::platform::webview_data;
     let state = app.state::<AppState>();
     if !begin_exclusive(&app) {
         return Err(refused("reset.busy"));
     }
-    if let Err(error) = SystemWebviewData::preflight(std::process::id()) {
+    if let Err(error) = webview_data::preflight(std::process::id()) {
         end_exclusive(&app);
         // Existing translated guidance: open the installed app from Applications, then retry.
         let key = if error.kind() == std::io::ErrorKind::Unsupported {
@@ -1104,10 +1104,9 @@ pub fn run_reset_helper(parent_pid: Option<u32>, lock_fd: Option<i32>, uninstall
             return;
         }
         let Some(report) = report_path() else { return };
-        use crate::platform::webview_data::{SystemWebviewData, WebviewData};
+        use crate::platform::webview_data;
         let Some(home) = account_home() else { return };
-        let browser =
-            SystemWebviewData::locations(&home).and_then(|paths| SystemWebviewData::capture(parent_pid, paths));
+        let browser = webview_data::locations(&home).and_then(|paths| webview_data::capture(parent_pid, paths));
         if std::io::stdout().write_all(b"ready\n").is_err() {
             return;
         }
@@ -1128,9 +1127,8 @@ pub fn run_reset_helper(parent_pid: Option<u32>, lock_fd: Option<i32>, uninstall
         let mut completed = Vec::new();
         let mut failed = initial_failed.clone();
         let journal = report.with_file_name("journal.json");
-        let browser = browser.and_then(|owner| {
-            SystemWebviewData::wait_released(owner, std::time::Instant::now() + Duration::from_secs(10))
-        });
+        let browser = browser
+            .and_then(|owner| webview_data::wait_released(owner, std::time::Instant::now() + Duration::from_secs(10)));
         let paths = [
             ("app-data", home.join("Library/Application Support/dev.sidevoice.desktop")),
             ("models", standard_models(&home)),
@@ -1145,7 +1143,7 @@ pub fn run_reset_helper(parent_pid: Option<u32>, lock_fd: Option<i32>, uninstall
                 failed.push(json!({"step": name, "key": "reset.process-busy"}));
             } else {
                 let removed = if browser_storage {
-                    SystemWebviewData::remove(browser.as_ref().unwrap(), &path).map_err(|_| "remove")
+                    webview_data::remove(browser.as_ref().unwrap(), &path).map_err(|_| "remove")
                 } else if name == "models" {
                     remove_model_store(&path, &home)
                 } else {

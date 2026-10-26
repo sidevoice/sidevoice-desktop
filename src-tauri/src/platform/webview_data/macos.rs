@@ -1,8 +1,8 @@
 use super::*;
 
-pub struct Os;
+pub(super) struct Os;
 
-impl WebviewData for Os {
+impl Native for Os {
     fn preflight(owner: u32) -> io::Result<()> {
         let pid = Pid::from_u32(owner);
         if responsible_pid(pid)? != pid {
@@ -126,7 +126,7 @@ mod tests {
             assert!(Instant::now() < deadline);
             thread::sleep(Duration::from_millis(20));
         }
-        let mut owner = Fixture::capture(host.id(), Locations::new(vec![selected.clone()]).unwrap()).unwrap();
+        let mut owner = capture_with::<Fixture>(host.id(), Locations::new(vec![selected.clone()]).unwrap()).unwrap();
         let writer_pid = Pid::from_u32(writer.id());
         assert!(!owner.processes.iter().any(|(pid, _)| *pid == writer_pid));
         let system = Owner::snapshot().unwrap();
@@ -144,13 +144,16 @@ mod tests {
             Owner { locations: Locations::new(vec![selected.clone()]).unwrap(), processes: owner.processes.clone() };
         std::fs::write(host_dir.path().join("exit"), b"exit").unwrap();
         assert!(host.wait().unwrap().success());
-        assert_eq!(Fixture::wait_released(owner, Instant::now()).err().unwrap().kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(
+            wait_released_with::<Fixture>(owner, Instant::now()).err().unwrap().kind(),
+            io::ErrorKind::WouldBlock
+        );
         assert!(selected.exists());
         std::fs::write(root.join("exit"), b"exit").unwrap();
         assert!(writer.wait().unwrap().success());
-        let released = Fixture::wait_released(retry, deadline).unwrap();
+        let released = wait_released_with::<Fixture>(retry, deadline).unwrap();
         assert_eq!(std::fs::read(selected.join("cookies")).unwrap(), b"last shutdown write");
-        Os::remove(&released, &selected).unwrap();
+        remove(&released, &selected).unwrap();
         assert!(!selected.exists());
     }
 }

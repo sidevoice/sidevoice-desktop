@@ -1,8 +1,8 @@
 use super::*;
 
-pub struct Os;
+pub(super) struct Os;
 
-impl WebviewData for Os {
+impl Native for Os {
     fn exited(pid: u32) -> io::Result<bool> {
         use windows_sys::Win32::Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, WAIT_OBJECT_0, WAIT_TIMEOUT};
         use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE};

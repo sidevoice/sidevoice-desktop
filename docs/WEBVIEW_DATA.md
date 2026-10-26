@@ -1,16 +1,18 @@
 # Browser data during delete-all
 
-`platform::webview_data::WebviewData` owns browser storage selection, writer release and safe removal.
+`platform::webview_data` owns browser storage selection, writer release and safe removal.
 The macOS reset helper uses it. Windows/Linux reset remains unavailable until the separate portable reset
 transaction is assembled; this interface does not enable that UI or remove an installed app.
 
-The concern module declares the documented trait, common types and OS selection. Its shared trait defaults
-own capture, waiting, held-parent deletion and the Windows/Linux storage root; private common-type helpers own
-path validation and descendant tracking. Each of `webview_data/{macos,windows,linux}.rs` implements only the
-native liveness and writer selection it needs (plus macOS admission and storage roots); OS-only association
-(macOS responsibility, the WebView2 `--user-data-dir` argument) stays private to its OS file. Callers import
-the trait and selected type directly. The interface tests stay in the concern module and run on every compiled
-host; the two OS-only association helpers are tested in their own OS file.
+The module's interface is five plain functions — `preflight`, `locations`, `capture`, `wait_released` and
+`remove` — plus the `Locations`, `Owner` and `Released` values they pass along. They hold the common code once:
+capture, waiting, held-parent deletion, path validation and descendant tracking. What varies per OS is declared
+by one private trait (not exported): `preflight` and `locations` have common defaults (admit every launch; the
+Windows/Linux storage root), which macOS overrides; every OS implements `exited` and `observe`. Each of
+`webview_data/{macos,windows,linux}.rs` implements only that trait; OS-only association (macOS responsibility,
+the WebView2 `--user-data-dir` argument) stays private to its OS file. Callers call the functions and never
+name an OS type. The interface tests stay in the concern module and run on every compiled host; the two OS-only
+association helpers are tested in their own OS file.
 
 ## Exact storage roots
 

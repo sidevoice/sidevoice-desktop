@@ -1,8 +1,8 @@
 use super::*;
 
-pub struct Os;
+pub(super) struct Os;
 
-impl WebviewData for Os {
+impl Native for Os {
     fn exited(pid: u32) -> io::Result<bool> {
         let pid = libc::pid_t::try_from(pid).ok().filter(|pid| *pid > 1).ok_or_else(Owner::busy)?;
         // SAFETY: signal zero inspects a positive PID without sending a signal or touching memory.
