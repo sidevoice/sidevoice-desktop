@@ -57,6 +57,7 @@ const EN: &[(&str, &str)] = &[
 const ES: &[(&str, &str)] = &[
     ("local_host.log_missing", "Todavía no hay ningún registro en este equipo."),
     ("local_host.reveal_failed", "El gestor de archivos no pudo mostrar el registro."),
+    ("startup.reset_busy", "Sidevoice no pudo iniciarse: todavía se está completando un restablecimiento o no se puede acceder a su bloqueo."),
     ("tray.not_loaded", "Sidevoice · sala sin cargar"),
     ("tray.no_call", "Sin llamada"),
     ("tray.reconnecting", "Reconectando…"),

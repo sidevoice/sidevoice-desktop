@@ -373,8 +373,10 @@ mod tests {
         TEST_ROOT.with(|slot| *slot.borrow_mut() = root.clone());
         match mode.to_str().unwrap() {
             "parent" => {
-                let pending =
-                    launch_command(TestReset::admit().unwrap(), plan(), command(&root, "helper"), HANDSHAKE).unwrap();
+                let mut helper = command(&root, "helper");
+                // Fixture-only: the helper compares what it receives with this process's real PID.
+                helper.env("SIDEVOICE_TEST_PARENT_PID", std::process::id().to_string());
+                let pending = launch_command(TestReset::admit().unwrap(), plan(), helper, HANDSHAKE).unwrap();
                 mark(&root, "ready");
                 wait_marker(&root, "exit");
                 // Real process exit closes the live channel and parent gate without running cancellation Drop.
@@ -383,10 +385,14 @@ mod tests {
             }
             "helper" => {
                 let helper = TestReset::receive().unwrap();
-                // The plan arrives as the parent committed it; its PID is the parent's, not ours.
+                // The plan arrives as the parent committed it, with the parent's actual PID.
+                let parent_pid: u32 = std::env::var("SIDEVOICE_TEST_PARENT_PID").unwrap().parse().unwrap();
                 let sent = plan();
-                assert_eq!((helper.plan.uninstall, &helper.plan.initial), (sent.uninstall, &sent.initial));
-                assert_ne!(helper.plan.parent_pid, std::process::id());
+                assert_ne!(parent_pid, std::process::id());
+                assert_eq!(
+                    (helper.plan.parent_pid, helper.plan.uninstall, &helper.plan.initial),
+                    (parent_pid, sent.uninstall, &sent.initial)
+                );
                 let guard = helper.await_exit().unwrap();
                 mark(&root, "cleanup");
                 wait_marker(&root, "finish");
