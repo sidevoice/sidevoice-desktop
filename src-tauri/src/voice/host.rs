@@ -146,7 +146,7 @@ impl<A: LaneAudio> VoiceState<A> {
         #[cfg(feature = "probe")]
         {
             // With `SIDEVOICE_DEBUG_IDLE_MINUTE_MS`, how long it is: the models of a stopped call stay loaded for
-            // `idle_unload_minutes` of them, so `macos memory` can wait for them to be let go.
+            // `idle_unload_minutes` of them, so `probe memory` can wait for them to be let go.
             let millis = std::env::var("SIDEVOICE_DEBUG_IDLE_MINUTE_MS").ok().and_then(|v| v.parse::<u64>().ok());
             if let Some(millis) = millis.filter(|&m| crate::debugging() && m > 0) {
                 return Duration::from_millis(millis);

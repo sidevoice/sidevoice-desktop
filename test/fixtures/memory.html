@@ -6,7 +6,7 @@
 window with SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_PAGE=memory.html and SIDEVOICE_DEBUG_IDLE_MINUTE_MS. It walks the app through
 what a long session does (calls with models loaded, the models' idle keep running out, many calls, the call controls
 card's settings, the audio devices, the voice settings) and has the app print its own memory at each step
-(<code>probe-memory PHASE</code> lines, src/probe.rs); <code>cargo xtask macos memory</code> checks the numbers (#145).</p>
+(<code>probe-memory PHASE</code> lines, src/probe.rs); <code>cargo xtask probe memory</code> checks the numbers (#145).</p>
 <script>
 (async () => {
   const invoke = (command, args) => window.__TAURI_INTERNALS__.invoke(command, args);

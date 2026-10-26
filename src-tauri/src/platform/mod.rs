@@ -12,13 +12,13 @@ pub mod reveal;
 pub mod shortcut_access;
 pub mod tray;
 
+pub mod account;
+pub mod app_data;
 pub mod card_window;
 pub mod confirmation;
 pub mod desktop_geometry;
 pub mod pointer_events;
 pub mod reset_handoff;
-pub mod window_visibility;
-
-// Windows/Linux reset remains hidden until the portable transaction is assembled.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code, unused_imports))]
+pub mod uninstall;
 pub mod webview_data;
+pub mod window_visibility;
