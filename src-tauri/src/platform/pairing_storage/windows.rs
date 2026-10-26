@@ -1,8 +1,8 @@
 use std::{fs, path::Path};
 
-pub struct Os;
+pub(super) struct Os;
 
-impl super::PairingRace for Os {
+impl super::Native for Os {
     fn replace_ancestor(ancestor: &Path, moved: &Path, replacement: super::Replacement<'_>) -> bool {
         if let super::Replacement::Redirect(target) = replacement {
             assert!(target.is_dir(), "the redirect target must exist before the held rename attempt");
