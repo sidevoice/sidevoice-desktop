@@ -58,7 +58,7 @@ macOS-only; elsewhere the bridge omits them and the native commands refuse `{key
 
 `deleteAll()` is the confirmed Settings › Advanced action. Native also displays an OS-owned confirmation
 with Cancel as its default button on every invocation; cancelling rejects `{key: "reset.cancelled"}` before
-any uninstall or deletion. `platform::confirmation::Confirmation` owns the native prompt: the existing NSAlert on
+any uninstall or deletion. `platform::confirmation::confirm` owns the native prompt: the existing NSAlert on
 macOS, TaskDialogIndirect with an explicit Cancel default on Windows, and GTK with an explicit Cancel response on
 Linux. The capability is implemented on all three hosts; the reset offer and transaction remain macOS-only.
 The shared confirmation interface cancels unless the native opened hook arrives within three seconds; a dialog
