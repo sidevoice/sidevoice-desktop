@@ -1,11 +1,10 @@
 //! Linux: systemd's user manager. A job is the user unit `<name>.service` (sidevoice-connector
 //! `platform/service/linux.rs`), written to `systemd/user` in this user's configuration directory and asked of
-//! `systemctl --user`. The running programs come from the process list (the trait's default). Without a user manager
-//! that answers, nothing is proven absent.
+//! `systemctl --user` through the bounded runner. The running programs come from the process list (the trait's
+//! default). Without a user manager that answers, nothing is proven absent.
 
-use super::{Os, Seen};
+use super::{run, Os, Seen};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 pub(super) struct Native;
 
@@ -23,9 +22,7 @@ impl Os for Native {
             }
         }
         // The manager's own answer, wherever it reads units from: absent only when it says `not-found`.
-        let Ok(output) =
-            Command::new("systemctl").args(["--user", "show", "--property=LoadState", "--", &unit]).output()
-        else {
+        let Some(output) = run("systemctl", &["--user", "show", "--property=LoadState", "--", &unit]) else {
             return Seen::Unknown;
         };
         if !output.status.success() {
