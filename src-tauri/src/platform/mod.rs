@@ -20,3 +20,7 @@ pub mod webview_diagnostics;
 pub mod confirmation;
 pub mod reset_availability;
 pub mod reset_handoff;
+
+// Windows/Linux reset remains hidden until the portable transaction is assembled.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code, unused_imports))]
+pub mod webview_data;

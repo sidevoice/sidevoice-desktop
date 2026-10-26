@@ -203,12 +203,23 @@ pub async fn data_uninstall(app: AppHandle, webview: Webview) -> Answer {
 /// A host without the reset transaction refuses before the confirmation and before any data is touched.
 async fn confirmed_reset(app: AppHandle, uninstall: bool) -> Answer {
     use crate::platform::confirmation::{Confirmation, ConfirmationKind, NativeConfirmation};
+    use crate::platform::webview_data;
     if !RESET_AVAILABLE {
         return Err(refused("reset.unavailable"));
     }
     let state = app.state::<AppState>();
     if !begin_exclusive(&app) {
         return Err(refused("reset.busy"));
+    }
+    if let Err(error) = webview_data::preflight(std::process::id()) {
+        end_exclusive(&app);
+        // Existing translated guidance: open the installed app from Applications, then retry.
+        let key = if error.kind() == std::io::ErrorKind::Unsupported {
+            "reset.app-unremovable"
+        } else {
+            "reset.helper-failed"
+        };
+        return Err(refused(key));
     }
     if state.call.lock().unwrap().joined
         || crate::updater::installing(&app)
@@ -962,51 +973,6 @@ fn parent_path_exists(parent: i32, name: &std::ffi::OsStr) -> bool {
     result == 0 || std::io::Error::last_os_error().kind() != std::io::ErrorKind::NotFound
 }
 
-#[cfg(target_os = "macos")]
-fn webkit_children(parent: u32) -> Option<Vec<u32>> {
-    let output = Command::new("/bin/ps").args(["-axo", "pid=,ppid=,comm="]).output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let rows: Vec<(u32, u32, String)> = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(|line| {
-            let mut parts = line.split_whitespace();
-            Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?, parts.collect::<Vec<_>>().join(" ")))
-        })
-        .collect();
-    let mut descendants = vec![parent];
-    for _ in 0..8 {
-        let children: Vec<_> = rows
-            .iter()
-            .filter(|(_, ppid, _)| descendants.contains(ppid))
-            .map(|(pid, _, _)| *pid)
-            .filter(|pid| !descendants.contains(pid))
-            .collect();
-        if children.is_empty() {
-            break;
-        }
-        descendants.extend(children);
-    }
-    Some(
-        rows.iter()
-            .filter(|(pid, _, command)| descendants.contains(pid) && command.contains("WebKit"))
-            .map(|(pid, _, _)| *pid)
-            .collect(),
-    )
-}
-
-#[cfg(target_os = "macos")]
-fn webkit_gone(pids: &[u32]) -> bool {
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while std::time::Instant::now() < deadline {
-        if pids.iter().all(|pid| unsafe { libc::kill(*pid as i32, 0) } != 0 &&
-            std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)) { return true }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    false
-}
-
 /// Called in the helper process, before Tauri. The authenticated plan arrives on every host.
 pub fn run_reset_helper() {
     let Ok(helper) = Handoff::new().and_then(|handoff| handoff.receive()) else { return };
@@ -1019,7 +985,7 @@ pub fn run_reset_helper() {
     }
 }
 
-/// The existing macOS helper transaction: observe WebKit children, await the committed exit, clean up,
+/// The existing macOS helper transaction: observe the browser writers, await the committed exit, clean up,
 /// write the report, release admission, then relaunch or move the app to the Trash.
 #[cfg(target_os = "macos")]
 fn clean_up_after_exit(
@@ -1028,7 +994,9 @@ fn clean_up_after_exit(
     uninstall: bool,
     initial: Value,
 ) {
-    let webkit = webkit_children(parent_pid);
+    use crate::platform::webview_data;
+    let Some(home) = account_home() else { return };
+    let browser = webview_data::locations(&home).and_then(|paths| webview_data::capture(parent_pid, paths));
     let Ok(lock) = helper.await_exit() else { return };
     let Some(report) = report_path() else { return };
     let Some(initial_failed) = initial.get("failed").and_then(Value::as_array) else { return };
@@ -1039,7 +1007,8 @@ fn clean_up_after_exit(
     let mut completed = Vec::new();
     let mut failed = initial_failed.clone();
     let journal = report.with_file_name("journal.json");
-    let webkit_safe = webkit.as_ref().is_some_and(|children| webkit_gone(children));
+    let browser = browser
+        .and_then(|owner| webview_data::wait_released(owner, std::time::Instant::now() + Duration::from_secs(10)));
     let paths = [
         ("app-data", home.join("Library/Application Support/dev.sidevoice.desktop")),
         ("models", standard_models(&home)),
@@ -1049,10 +1018,17 @@ fn clean_up_after_exit(
         ("logs", home.join("Library/Logs/dev.sidevoice.desktop")),
     ];
     for (name, path) in paths {
-        if name == "webview" && !webkit_safe {
-            failed.push(json!({"step": "webview", "key": "reset.process-busy"}));
+        let browser_storage = matches!(name, "app-data" | "webview" | "cache");
+        if browser_storage && browser.is_err() {
+            failed.push(json!({"step": name, "key": "reset.process-busy"}));
         } else {
-            let removed = if name == "models" { remove_model_store(&path, &home) } else { remove_known(&path, &home) };
+            let removed = if browser_storage {
+                webview_data::remove(browser.as_ref().unwrap(), &path).map_err(|_| "remove")
+            } else if name == "models" {
+                remove_model_store(&path, &home)
+            } else {
+                remove_known(&path, &home)
+            };
             match removed {
                 Ok(()) => completed.push(name),
                 Err(key) => failed.push(json!({"step": name, "key": key})),
