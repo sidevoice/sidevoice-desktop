@@ -11,4 +11,8 @@ impl TempArea for Os {
     fn share_sticky(_dir: &Path) -> bool {
         false
     }
+
+    fn let_group_read(_dir: &Path) -> bool {
+        false
+    }
 }

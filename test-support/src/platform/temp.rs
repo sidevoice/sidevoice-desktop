@@ -17,4 +17,8 @@ pub trait TempArea {
     /// Makes `dir` writable by everybody, with deletion limited to each file's owner (the sticky bit, as `/tmp` is).
     /// Returns `false`, changing nothing, where the OS has no such mode.
     fn share_sticky(dir: &Path) -> bool;
+
+    /// Lets the owner's group (not everybody) read and enter `dir`. Returns `false`, changing nothing, where the OS has no
+    /// group-only access.
+    fn let_group_read(dir: &Path) -> bool;
 }

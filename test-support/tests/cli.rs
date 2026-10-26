@@ -97,11 +97,14 @@ fn a_timeout_kills_the_whole_run() {
 fn what_the_program_detaches_into_its_own_session_stays() {
     let tmp = tempfile::tempdir().unwrap();
     let pid = tmp.path().join("pid");
-    let cli = fake(tmp.path(), json!({"detached":true,"pid":pid}));
+    let stop = tmp.path().join("stop");
+    let cli = fake(tmp.path(), json!({"detached":true,"pid":pid,"stop":stop}));
     assert_eq!(cli.run(&["service", "start", "--json"], Duration::from_secs(10)).unwrap()["ok"], true);
     let pid = pid_in(&pid);
     thread::sleep(Duration::from_millis(200));
     assert!(alive(pid), "a service the program started on its own stays");
+    std::fs::write(&stop, b"").unwrap();
+    assert!(dead_soon(pid), "the sleeper ends when told to");
 }
 
 #[test]

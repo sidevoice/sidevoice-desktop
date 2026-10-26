@@ -356,7 +356,9 @@ fn an_incompatible_core_is_not_paired() {
 fn an_unsafe_core_directory_is_never_connected_to() {
     let world = World::new();
     let core = world.core(1);
-    Files::let_others_read(&world.dirs.core());
+    if !Temp::let_group_read(&world.dirs.core()) {
+        Files::let_others_read(&world.dirs.core());
+    }
     let host = world.host();
     let report = serde_json::to_value(host.poll()).unwrap();
     assert_eq!(report["state"], "failed");
