@@ -615,7 +615,9 @@ pub fn run() {
             // Quitting, however the app ends (tray, ⌘Q, logout, a reset, an update's restart; `AppHandle::restart` from
             // the updater's thread comes here too), before `exit()` runs the C++ static destructors (#121): the voice
             // calls stop and every model and audio device is released; the call controls card's window goes; the local
-            // host's proxy stops and closes every tunnel; an update ready installs (automatic mode).
+            // host's proxy stops and closes every tunnel; an update ready installs (automatic mode). Not when the updater
+            // ends the process itself (Windows, starting the installer): its before-exit hook stops the local host then
+            // (`updater::before_exit`).
             if let tauri::RunEvent::Exit = event {
                 #[cfg(target_os = "macos")]
                 voice::shutdown(app);

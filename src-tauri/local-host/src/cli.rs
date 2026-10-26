@@ -94,7 +94,7 @@ impl Cli {
         Err(refusal_of(&answer).unwrap_or_else(|| failed(format!("`{}` exited {status}: {}", args.join(" "), tail()))))
     }
 
-    /// Runs `prefix + args` as [`Self::run`] does — a process group of its own, at most `timeout` for its exit and both
+    /// Runs `prefix + args` as [`Self::run`] does — in the program's own directory, a process group of its own, at most `timeout` for its exit and both
     /// its output streams — and hands back what it left, `status` `None` when the deadline came first (the whole group
     /// was killed). `tick` is called about every 50 ms while it runs. Only a program that cannot start is a refusal
     /// (`cli.failed`).
@@ -102,6 +102,11 @@ impl Cli {
         let failed = |why: String| Refusal::new("cli.failed", why);
         let deadline = Instant::now() + timeout;
         let mut command = Command::new(&self.prefix[0]);
+        // The program's own directory, checked with it, as the working directory: never the app's, which can be anywhere
+        // (on Windows the current directory is also where a DLL loaded by bare name may be found).
+        if let Some(dir) = std::path::Path::new(&self.prefix[0]).parent() {
+            command.current_dir(dir);
+        }
         command
             .args(&self.prefix[1..])
             .args(args)

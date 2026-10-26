@@ -91,7 +91,7 @@ async fn check(app: &AppHandle) {
 async fn look(app: &AppHandle, timeout: Duration) {
     let checked = async {
         let updater = app.updater_builder().endpoints(feed().into_iter().collect())?;
-        updater.timeout(timeout).build()?.check().await
+        updater.timeout(timeout).on_before_exit(before_exit(app)).build()?.check().await
     }
     .await;
     let running = app.package_info().version.to_string();
@@ -192,7 +192,21 @@ fn cancel(app: &AppHandle) {
     });
 }
 
-/// Whoever takes the bytes installs; the local host stops only once the install succeeded.
+/// What runs just before the process goes for an install: where the plugin ends the process itself (Windows: once
+/// the installer is extracted, it starts it and calls `exit`, so neither `install`'s restart below nor the app's
+/// `RunEvent::Exit` runs), the local host stops and every tunnel closes, then the plugin's own default hook (Tauri's
+/// cleanup). Where the plugin returns instead, it is never called. If starting the installer then fails, the app keeps
+/// running without its local host until relaunched.
+fn before_exit(app: &AppHandle) -> impl Fn() + Send + Sync + 'static {
+    let app = app.clone();
+    move || {
+        crate::local_host::shutdown(&app);
+        app.cleanup_before_exit();
+    }
+}
+
+/// Whoever takes the bytes installs; the local host stops only once the install succeeded: here, where the plugin
+/// returns, or in [`before_exit`], where it exits the process itself.
 fn install(app: &AppHandle, restart: bool) {
     let Some(_permit) = crate::data::admit(app) else { return };
     let claimed = with(app, |u| u.update.clone().zip(u.bytes.take()).inspect(|_| u.installing = true));
