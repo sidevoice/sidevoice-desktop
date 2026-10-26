@@ -59,6 +59,9 @@ const DEADLINE: Duration = Duration::from_secs(2);
 /// thread).
 const STALLED_OPEN: Duration = Duration::from_secs(1);
 
+/// How many audio hosts the app ever opens: the first, and a reopen after each of the first failed listings.
+const MAX_HOSTS: usize = 3;
+
 /// Whether an audio input device exists, as seen by this OS's audio host (`Os::audio_host`). Enumeration opens no
 /// stream and so never triggers a privacy prompt or a capture indicator.
 async fn input_devices() -> Devices {
@@ -72,25 +75,39 @@ async fn input_devices() -> Devices {
     }
 }
 
-/// The enumeration the worker runs. The audio host is opened once and kept, and each request lists its devices afresh
-/// (the connection is reused, the inventory is never cached). It is opened again only after it failed, one attempt at a
-/// time since there is one worker. A host open that stalled is never retried: its stuck attempt cannot be cancelled,
-/// and retrying would strand one more thread and socket on every poll, so the answer stays `Unknown` until the app
-/// restarts.
+/// The enumeration the worker runs, on this OS's audio host.
 fn scanner<O: Os>() -> impl FnMut() -> Devices {
+    reusing_host(O::audio_host, |host: &cpal::Host| {
+        host.input_devices().ok().map(|mut devices| devices.any(|device| O::is_capture_source(&device)))
+    })
+}
+
+/// Enumerate with `list` (`None` when the listing fails) on a host from `open` (`None` when it cannot be opened). The
+/// host is opened once and kept, and each request lists afresh on it (the connection is reused, the inventory is never
+/// cached). After a failed listing it is dropped and opened again, one attempt at a time since there is one worker.
+///
+/// Recovery is bounded, and past the bound the answer is `Unknown` until the app restarts. A dropped host can leave its
+/// connection behind (cpal's PulseAudio client does not always stop its reactor thread when dropped), so at most
+/// `MAX_HOSTS` hosts are ever opened. A host open that stalled is never retried: its stuck attempt cannot be cancelled.
+/// An open refused at once (no sound server yet) leaves nothing behind and is retried on the next request.
+fn reusing_host<H>(mut open: impl FnMut() -> Option<H>, list: impl Fn(&H) -> Option<bool>) -> impl FnMut() -> Devices {
     let mut host = None;
+    let mut opened = 0;
     let mut stalled = false;
     move || {
-        if host.is_none() && !stalled {
+        if host.is_none() && opened < MAX_HOSTS && !stalled {
             let opening = Instant::now();
-            host = O::audio_host();
-            stalled = host.is_none() && opening.elapsed() >= STALLED_OPEN;
+            host = open();
+            match host {
+                Some(_) => opened += 1,
+                None => stalled = opening.elapsed() >= STALLED_OPEN,
+            }
         }
         // A host that cannot be opened or a listing that fails says nothing about the hardware.
         let Some(open) = &host else { return Devices::Unknown };
-        match open.input_devices() {
-            Ok(mut devices) => devices.any(|device| O::is_capture_source(&device)).into(),
-            Err(_) => {
+        match list(open) {
+            Some(present) => present.into(),
+            None => {
                 host = None;
                 Devices::Unknown
             }
@@ -102,8 +119,8 @@ fn scanner<O: Os>() -> impl FnMut() -> Devices {
 /// belongs to the thread, so every call into the host must come from the same one).
 ///
 /// Callers never queue and never wait past their deadline: a caller that arrives while an enumeration runs waits for
-/// that one's answer rather than asking for another. No replacement thread or connection is ever started. The residual
-/// limit: an enumeration that never returns (a sound server that accepted the connection and stopped answering; cpal
+/// that one's answer rather than asking for another. No replacement thread is ever started, and connections are
+/// reopened only within `reusing_host`'s bound. The residual limit: an enumeration that never returns (a sound server that accepted the connection and stopped answering; cpal
 /// cannot cancel a blocked listing) strands this one thread for the life of the app, and every caller from then on
 /// answers `Unknown` after its deadline.
 struct Enumerator {
@@ -356,6 +373,28 @@ mod tests {
         release.send(()).unwrap();
         assert_eq!(enumerator.devices(LONG).await, Devices::Present);
         assert_eq!(runs.load(SeqCst), 2);
+    }
+
+    #[test]
+    fn a_host_whose_listing_always_fails_is_reopened_a_bounded_number_of_times() {
+        let opens = AtomicUsize::new(0);
+        let mut scan = reusing_host(|| Some(opens.fetch_add(1, SeqCst)), |_| None);
+        for _ in 0..20 {
+            assert_eq!(scan(), Devices::Unknown);
+        }
+        assert_eq!(opens.load(SeqCst), MAX_HOSTS);
+    }
+
+    #[test]
+    fn an_open_refused_at_once_is_retried_until_one_succeeds() {
+        let opens = AtomicUsize::new(0);
+        let mut scan = reusing_host(|| (opens.fetch_add(1, SeqCst) >= 5).then_some(()), |()| Some(true));
+        for _ in 0..5 {
+            assert_eq!(scan(), Devices::Unknown);
+        }
+        assert_eq!(scan(), Devices::Present);
+        assert_eq!(scan(), Devices::Present);
+        assert_eq!(opens.load(SeqCst), 6);
     }
 
     #[tokio::test]
