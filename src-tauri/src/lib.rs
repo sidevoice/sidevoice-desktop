@@ -30,7 +30,7 @@ mod voice;
 use crate::platform::update_eligibility::{NativeUpdateEligibility, UpdateEligibility};
 
 use crate::platform::computer_name::{ComputerName, SystemComputerName};
-use crate::platform::host_capabilities::{HostCapabilities, NativeHostCapabilities};
+use crate::platform::host_capabilities::CAPABILITIES;
 use crate::platform::media_controls::{MediaControls, NativeMediaControls};
 use crate::platform::webview_diagnostics::{NativeWebviewDiagnostics, WebviewDiagnostics};
 use serde_json::{json, Value};
@@ -367,7 +367,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             platform::microphone::SETTINGS_URL.is_some(),
             &NativeWebviewDiagnostics::available(),
             NativeMediaControls::support(),
-            NativeHostCapabilities::capabilities(),
+            CAPABILITIES,
         ));
     #[cfg(feature = "probe")]
     let builder = match probe::local_host_flow() {
@@ -386,8 +386,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
                 _ => media::Capture::Other,
             };
             let page = committed_origin.lock().unwrap().clone();
-            let decision =
-                media::decide(capture, page.as_deref(), APP_ORIGIN, !NativeHostCapabilities::capabilities().voice);
+            let decision = media::decide(capture, page.as_deref(), APP_ORIGIN, !CAPABILITIES.voice);
             debug(&format!("media {capture:?} for {page:?}: {decision:?}"));
             match decision {
                 media::Decision::Allow => PermissionResponse::Allow,
