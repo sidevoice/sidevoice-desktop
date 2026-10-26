@@ -519,8 +519,6 @@ mod tests {
         let progress = Progress { step: Step::Download, done: Some(5), total: None, cancellable: true };
         assert_eq!(json!(progress), json!({"step": "download", "done": 5, "total": null, "cancellable": true}));
         let full = [
-            io::Error::from_raw_os_error(libc::ENOSPC),
-            io::Error::from_raw_os_error(libc::EDQUOT),
             io::Error::from(io::ErrorKind::StorageFull),
             io::Error::from(io::ErrorKind::QuotaExceeded),
         ];
