@@ -14,7 +14,8 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tauri::{AppHandle, Manager, Webview};
 
-use crate::platform::reset_handoff::{DesktopReset, ResetHandoff};
+use crate::platform::reset_availability::RESET_AVAILABLE;
+use crate::platform::reset_handoff::{self, Handoff};
 use crate::AppState;
 
 #[derive(Default)]
@@ -139,7 +140,7 @@ pub fn data_pairings_write(app: AppHandle, webview: Webview, value: Value) -> An
 #[tauri::command]
 pub fn data_reset_report(app: AppHandle, webview: Webview) -> Answer {
     caller(&app, &webview)?;
-    if !DesktopReset::reset_available() {
+    if !RESET_AVAILABLE {
         return Err(refused("reset.unavailable"));
     }
     let path = report_path().ok_or_else(|| refused("reset.unavailable"))?;
@@ -202,7 +203,7 @@ pub async fn data_uninstall(app: AppHandle, webview: Webview) -> Answer {
 /// A host without the reset transaction refuses before the confirmation and before any data is touched.
 async fn confirmed_reset(app: AppHandle, uninstall: bool) -> Answer {
     use crate::platform::confirmation::{Confirmation, ConfirmationKind, NativeConfirmation};
-    if !DesktopReset::reset_available() {
+    if !RESET_AVAILABLE {
         return Err(refused("reset.unavailable"));
     }
     let state = app.state::<AppState>();
@@ -330,11 +331,11 @@ fn move_to_trash(bundle: &Path) -> Result<(), &'static str> {
 
 fn begin_reset(app: &AppHandle, uninstall: bool) -> Answer {
     use crate::platform::reset_handoff::ResetPlan;
-    let admission = DesktopReset::admit().map_err(|error| {
+    let admission = Handoff::new().and_then(|handoff| handoff.admit()).map_err(|error| {
         refused(if error.kind() == std::io::ErrorKind::WouldBlock { "reset.busy" } else { "reset.helper-failed" })
     })?;
     let (failed, agents, service_outcome) = reset_before_exit()?;
-    let pending = DesktopReset::launch(
+    let pending = reset_handoff::launch(
         admission,
         ResetPlan { parent_pid: std::process::id(), uninstall, initial: json!({"failed": failed, "agents": agents}) },
     )
@@ -645,7 +646,7 @@ fn is_release_binary(path: &Path, releases: &Path) -> bool {
 /// The report sits in the handoff's private control directory, outside every reset deletion root.
 fn report_path() -> Option<PathBuf> {
     use sidevoice_platform::fs::{Files, Fs};
-    let dir = DesktopReset::state_dir().ok()?;
+    let dir = reset_handoff::state_dir().ok()?;
     Files::ensure_private_dir(&dir).ok()?;
     Some(dir.join("report.json"))
 }
@@ -1008,9 +1009,9 @@ fn webkit_gone(pids: &[u32]) -> bool {
 
 /// Called in the helper process, before Tauri. The authenticated plan arrives on every host.
 pub fn run_reset_helper() {
-    let Ok(helper) = DesktopReset::receive() else { return };
+    let Ok(helper) = Handoff::new().and_then(|handoff| handoff.receive()) else { return };
     let (parent_pid, uninstall, initial) = (helper.plan.parent_pid, helper.plan.uninstall, helper.plan.initial.clone());
-    if !DesktopReset::reset_available() {
+    if !RESET_AVAILABLE {
         // Complete the committed wait and release it; nothing is cleaned up.
         drop(helper.await_exit());
     } else {

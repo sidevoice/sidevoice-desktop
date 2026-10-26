@@ -39,67 +39,59 @@ pub struct ResetPlan {
     pub initial: serde_json::Value,
 }
 
-/// Desktop reset protocol; all hosts use the shared checked filesystem, IPC and child primitives.
-pub trait ResetHandoff {
-    /// Whether Desktop offers reset (delete all data, uninstall) on this host. When false, callers refuse
-    /// before any confirmation or data access, and a helper only completes the committed wait. The handoff
-    /// itself works on every host either way. Unavailable unless a host has the reset transaction.
-    fn reset_available() -> bool {
-        false
-    }
+/// Private control state outside every reset deletion root, the same on every host: a sibling of the standard
+/// data root (`…/dev.sidevoice.desktop-reset`), so no cleanup of that root can remove it. Never follows
+/// SIDEVOICE_DATA_DIR.
+pub fn state_dir() -> io::Result<PathBuf> {
+    sidevoice_platform::data_dir::standard()
+        .and_then(|path| path.parent().map(|parent| parent.join("dev.sidevoice.desktop-reset")))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "reset state directory unavailable"))
+}
 
-    /// Private control state outside every reset deletion root. Never follows SIDEVOICE_DATA_DIR.
-    /// By default a sibling of the standard data root, so no cleanup of that root can remove it.
-    fn state_dir() -> io::Result<PathBuf> {
-        sidevoice_platform::data_dir::standard()
-            .and_then(|path| path.parent().map(|parent| parent.join("dev.sidevoice.desktop-reset")))
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "reset state directory unavailable"))
+/// The reset handoff in its control directory. The protocol is identical on every host: the shared checked
+/// filesystem, IPC and child primitives supply what differs.
+pub struct Handoff {
+    root: PathBuf,
+}
+
+impl Handoff {
+    /// The handoff in [`state_dir`].
+    pub fn new() -> io::Result<Self> {
+        Ok(Self { root: state_dir()? })
     }
 
     /// Exclusive admission before any transaction side effects. Busy is `WouldBlock`.
-    fn admit() -> io::Result<Admission> {
-        admit_at(&Self::state_dir()?)
-    }
-
-    /// Launch this executable in helper mode, authenticate it and commit its plan. The returned guard must
-    /// remain alive until process exit. Dropping it cancels and reaps the helper before releasing admission.
-    /// This blocking operation belongs on the blocking pool, never inside a Tokio runtime.
-    fn launch(admission: Admission, plan: ResetPlan) -> io::Result<Pending> {
-        let exe = std::env::current_exe()?;
-        let mut command = tokio::process::Command::new(exe);
-        command.arg("--sidevoice-reset-helper");
-        launch_command(admission, plan, command, HANDSHAKE)
+    pub fn admit(&self) -> io::Result<Admission> {
+        admit_at(&self.root)
     }
 
     /// Wait at most `timeout`, or until cancelled, before initializing ANY application writers/plugins.
     /// Hold the returned admission through initialization; dropping it on failure releases both locks.
-    fn await_idle(timeout: Duration, cancelled: &AtomicBool) -> io::Result<Admission> {
-        await_at(&Self::state_dir()?, timeout, cancelled)
-    }
-
-    /// Finish startup and release the barrier. Transaction journal acknowledgement stays with its caller.
-    fn finish_startup(admission: Admission) {
-        drop(admission);
+    pub fn await_idle(&self, timeout: Duration, cancelled: &AtomicBool) -> io::Result<Admission> {
+        await_at(&self.root, timeout, cancelled)
     }
 
     /// Helper-only: read the capability from inherited stdin and receive a bounded, authenticated plan.
     /// No CLI PID, descriptor number, environment secret or on-disk secret is accepted as authorization.
-    fn receive() -> io::Result<Helper> {
-        receive_at(&Self::state_dir()?, HANDSHAKE)
+    pub fn receive(&self) -> io::Result<Helper> {
+        receive_at(&self.root, HANDSHAKE)
     }
 }
 
-#[cfg(target_os = "macos")]
-#[path = "reset_handoff/macos.rs"]
-mod native;
-// Linux and Windows have no reset transaction: the shared defaults are all they need.
-#[cfg(not(target_os = "macos"))]
-mod native {
-    pub struct DesktopReset;
-    impl super::ResetHandoff for DesktopReset {}
+/// Launch this executable in helper mode, authenticate it and commit its plan. The returned guard must
+/// remain alive until process exit. Dropping it cancels and reaps the helper before releasing admission.
+/// This blocking operation belongs on the blocking pool, never inside a Tokio runtime.
+pub fn launch(admission: Admission, plan: ResetPlan) -> io::Result<Pending> {
+    let exe = std::env::current_exe()?;
+    let mut command = tokio::process::Command::new(exe);
+    command.arg("--sidevoice-reset-helper");
+    launch_command(admission, plan, command, HANDSHAKE)
 }
 
-pub use native::DesktopReset;
+/// Finish startup and release the barrier. Transaction journal acknowledgement stays with its caller.
+pub fn finish_startup(admission: Admission) {
+    drop(admission);
+}
 
 /// Holds checked ancestry as well as file locks. Files are never unlinked (which would split the lock).
 pub struct Admission {
@@ -320,22 +312,14 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    std::thread_local! {
-        static TEST_ROOT: std::cell::RefCell<PathBuf> = const { std::cell::RefCell::new(PathBuf::new()) };
-    }
-
-    struct TestReset;
-    impl ResetHandoff for TestReset {
-        fn state_dir() -> io::Result<PathBuf> {
-            TEST_ROOT.with(|root| Ok(root.borrow().clone()))
-        }
+    fn at(root: &Path) -> Handoff {
+        Handoff { root: root.to_owned() }
     }
 
     fn scratch() -> (tempfile::TempDir, PathBuf) {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("reset");
         Files::create_private_dir(&root).unwrap();
-        TEST_ROOT.with(|slot| *slot.borrow_mut() = root.clone());
         (temp, root)
     }
 
@@ -370,13 +354,12 @@ mod tests {
             return;
         };
         let root = PathBuf::from(std::env::var_os("SIDEVOICE_TEST_RESET_ROOT").unwrap());
-        TEST_ROOT.with(|slot| *slot.borrow_mut() = root.clone());
         match mode.to_str().unwrap() {
             "parent" => {
                 let mut helper = command(&root, "helper");
                 // Fixture-only: the helper compares what it receives with this process's real PID.
                 helper.env("SIDEVOICE_TEST_PARENT_PID", std::process::id().to_string());
-                let pending = launch_command(TestReset::admit().unwrap(), plan(), helper, HANDSHAKE).unwrap();
+                let pending = launch_command(at(&root).admit().unwrap(), plan(), helper, HANDSHAKE).unwrap();
                 mark(&root, "ready");
                 wait_marker(&root, "exit");
                 // Real process exit closes the live channel and parent gate without running cancellation Drop.
@@ -384,7 +367,7 @@ mod tests {
                 std::process::exit(0);
             }
             "helper" => {
-                let helper = TestReset::receive().unwrap();
+                let helper = at(&root).receive().unwrap();
                 // The plan arrives as the parent committed it, with the parent's actual PID.
                 let parent_pid: u32 = std::env::var("SIDEVOICE_TEST_PARENT_PID").unwrap().parse().unwrap();
                 let sent = plan();
@@ -400,7 +383,7 @@ mod tests {
                 mark(&root, "done");
             }
             "timeout" => {
-                let helper = TestReset::receive().unwrap();
+                let helper = at(&root).receive().unwrap();
                 assert_eq!(
                     helper.wait_for_exit(Duration::from_millis(150)).err().unwrap().kind(),
                     io::ErrorKind::TimedOut
@@ -408,7 +391,7 @@ mod tests {
                 mark(&root, "timed-out");
             }
             "refuse" => {
-                let helper = TestReset::receive().unwrap();
+                let helper = at(&root).receive().unwrap();
                 assert!(helper.await_exit().is_err());
                 mark(&root, "refused");
             }
@@ -429,19 +412,10 @@ mod tests {
     }
 
     #[test]
-    fn native_control_state_is_outside_the_standard_data_root() {
-        let root = DesktopReset::state_dir().unwrap();
+    fn every_host_keeps_control_state_beside_the_standard_data_root() {
+        let root = Handoff::new().unwrap().root;
+        assert_eq!(root, state_dir().unwrap());
         assert!(root.is_absolute());
-        let data = sidevoice_platform::data_dir::standard().unwrap();
-        assert!(!root.starts_with(data), "cleanup must not remove the handoff barrier");
-    }
-
-    #[test]
-    fn a_host_without_the_transaction_is_unavailable_and_keeps_state_beside_the_data_root() {
-        struct Unported;
-        impl ResetHandoff for Unported {}
-        assert!(!Unported::reset_available(), "callers refuse before confirmation on such a host");
-        let root = Unported::state_dir().unwrap();
         let data = sidevoice_platform::data_dir::standard().unwrap();
         assert_eq!(root.parent(), data.parent());
         assert!(!root.starts_with(&data), "cleanup must not remove the handoff barrier");
@@ -450,12 +424,12 @@ mod tests {
     #[test]
     fn production_launch_fails_closed_when_the_executable_does_not_authenticate() {
         // This test executable rejects the helper flag and exits: no capability ever comes back.
-        let (_temp, _root) = scratch();
+        let (_temp, root) = scratch();
         let started = Instant::now();
-        let refused = TestReset::launch(TestReset::admit().unwrap(), plan()).err().unwrap();
+        let refused = launch(at(&root).admit().unwrap(), plan()).err().unwrap();
         assert_eq!(refused.kind(), io::ErrorKind::TimedOut);
         assert!(started.elapsed() < HANDSHAKE + Duration::from_secs(5), "bounded by the handshake deadline");
-        assert!(TestReset::admit().is_ok(), "a failed launch releases admission");
+        assert!(at(&root).admit().is_ok(), "a failed launch releases admission");
     }
 
     #[test]
@@ -463,28 +437,28 @@ mod tests {
         fn send<T: Send>() {}
         send::<Admission>(); // Tauri's setup closure.
         send::<Pending>(); // Tauri managed state behind a mutex.
-        let (_temp, _root) = scratch();
-        let guard = TestReset::admit().unwrap();
-        assert_eq!(TestReset::admit().err().unwrap().kind(), io::ErrorKind::WouldBlock);
+        let (_temp, root) = scratch();
+        let guard = at(&root).admit().unwrap();
+        assert_eq!(at(&root).admit().err().unwrap().kind(), io::ErrorKind::WouldBlock);
         assert_eq!(
-            TestReset::await_idle(Duration::ZERO, &AtomicBool::new(false)).err().unwrap().kind(),
+            at(&root).await_idle(Duration::ZERO, &AtomicBool::new(false)).err().unwrap().kind(),
             io::ErrorKind::TimedOut
         );
-        TestReset::finish_startup(guard);
-        let guard = TestReset::await_idle(HANDSHAKE, &AtomicBool::new(false)).unwrap();
-        assert!(TestReset::admit().is_err());
+        finish_startup(guard);
+        let guard = at(&root).await_idle(HANDSHAKE, &AtomicBool::new(false)).unwrap();
+        assert!(at(&root).admit().is_err());
         drop(guard);
-        assert!(TestReset::admit().is_ok());
+        assert!(at(&root).admit().is_ok());
     }
 
     #[test]
     fn startup_can_be_cancelled_without_admission() {
-        let (_temp, _root) = scratch();
+        let (_temp, root) = scratch();
         assert_eq!(
-            TestReset::await_idle(HANDSHAKE, &AtomicBool::new(true)).err().unwrap().kind(),
+            at(&root).await_idle(HANDSHAKE, &AtomicBool::new(true)).err().unwrap().kind(),
             io::ErrorKind::Interrupted
         );
-        assert!(TestReset::admit().is_ok());
+        assert!(at(&root).admit().is_ok());
     }
 
     #[test]
@@ -493,36 +467,35 @@ mod tests {
         let runtime = runtime().unwrap();
         let mut parent = runtime.block_on(Processes::spawn_detached(command(&root, "parent"))).unwrap();
         wait_marker(&root, "ready");
-        assert_eq!(TestReset::admit().err().unwrap().kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(at(&root).admit().err().unwrap().kind(), io::ErrorKind::WouldBlock);
         assert!(!root.join("cleanup").exists(), "cleanup cannot start while parent is alive");
         mark(&root, "exit");
         wait_marker(&root, "cleanup");
-        assert_eq!(TestReset::admit().err().unwrap().kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(at(&root).admit().err().unwrap().kind(), io::ErrorKind::WouldBlock);
         mark(&root, "finish");
         wait_marker(&root, "done");
-        assert!(TestReset::admit().is_ok());
+        assert!(at(&root).admit().is_ok());
         runtime.block_on(parent.kill_tree());
     }
 
     #[test]
     fn dropping_pending_cancels_and_reaps_before_unlocking() {
         let (_temp, root) = scratch();
-        let pending = launch_command(TestReset::admit().unwrap(), plan(), command(&root, "refuse"), HANDSHAKE).unwrap();
-        assert!(TestReset::admit().is_err());
+        let pending = launch_command(at(&root).admit().unwrap(), plan(), command(&root, "refuse"), HANDSHAKE).unwrap();
+        assert!(at(&root).admit().is_err());
         drop(pending);
-        assert!(TestReset::admit().is_ok());
+        assert!(at(&root).admit().is_ok());
         assert!(!root.join("cleanup").exists());
     }
 
     #[test]
     fn helper_exit_deadline_releases_its_lock_but_parent_still_blocks_startup() {
         let (_temp, root) = scratch();
-        let pending =
-            launch_command(TestReset::admit().unwrap(), plan(), command(&root, "timeout"), HANDSHAKE).unwrap();
+        let pending = launch_command(at(&root).admit().unwrap(), plan(), command(&root, "timeout"), HANDSHAKE).unwrap();
         wait_marker(&root, "timed-out");
-        assert!(TestReset::admit().is_err());
+        assert!(at(&root).admit().is_err());
         drop(pending);
-        assert!(TestReset::admit().is_ok());
+        assert!(at(&root).admit().is_ok());
     }
 
     #[test]
@@ -530,13 +503,13 @@ mod tests {
         for mode in ["wrong", "silent"] {
             let (_temp, root) = scratch();
             assert!(launch_command(
-                TestReset::admit().unwrap(),
+                at(&root).admit().unwrap(),
                 plan(),
                 command(&root, mode),
                 Duration::from_millis(300)
             )
             .is_err());
-            assert!(TestReset::admit().is_ok());
+            assert!(at(&root).admit().is_ok());
         }
     }
 
@@ -544,7 +517,7 @@ mod tests {
     fn spawn_failure_and_oversized_plan_release_admission() {
         let (_temp, root) = scratch();
         assert!(launch_command(
-            TestReset::admit().unwrap(),
+            at(&root).admit().unwrap(),
             plan(),
             tokio::process::Command::new(root.join("missing")),
             HANDSHAKE
@@ -553,13 +526,13 @@ mod tests {
         let mut large = plan();
         large.initial = json!({"failed": [], "huge": "x".repeat(LIMIT)});
         assert_eq!(
-            launch_command(TestReset::admit().unwrap(), large, command(&root, "helper"), HANDSHAKE)
+            launch_command(at(&root).admit().unwrap(), large, command(&root, "helper"), HANDSHAKE)
                 .err()
                 .unwrap()
                 .kind(),
             io::ErrorKind::InvalidInput
         );
-        assert!(TestReset::admit().is_ok());
+        assert!(at(&root).admit().is_ok());
     }
 
     #[test]
@@ -572,13 +545,13 @@ mod tests {
         let mut child = runtime.block_on(Processes::spawn_detached(command)).unwrap();
         wait_marker(&root, "refused");
         runtime.block_on(child.kill_tree());
-        assert!(TestReset::admit().is_ok());
+        assert!(at(&root).admit().is_ok());
     }
 
     #[test]
     fn pipe_eof_without_commit_never_authorizes_cleanup() {
         let (_temp, root) = scratch();
-        let admission = TestReset::admit().unwrap();
+        let admission = at(&root).admit().unwrap();
         let runtime = runtime().unwrap();
         runtime.block_on(async {
             let listener = Channels::listen(&Endpoint::new(&root, "reset")).unwrap();
@@ -606,8 +579,8 @@ mod tests {
     #[test]
     fn lock_replacement_with_a_hardlink_is_refused() {
         let (_temp, root) = scratch();
-        drop(TestReset::admit().unwrap());
+        drop(at(&root).admit().unwrap());
         std::fs::hard_link(root.join("reset.lock"), root.join("alias")).unwrap();
-        assert_eq!(TestReset::admit().err().unwrap().kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(at(&root).admit().err().unwrap().kind(), io::ErrorKind::PermissionDenied);
     }
 }

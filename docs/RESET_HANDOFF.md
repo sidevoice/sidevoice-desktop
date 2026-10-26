@@ -1,10 +1,12 @@
 # Reset helper handoff
 
-Reset (delete all data, uninstall) is a Desktop capability. `platform::reset_handoff::ResetHandoff` owns
-only the handoff — admission, launch of the same executable with `--sidevoice-reset-helper` before Tauri
+Reset (delete all data, uninstall) is a Desktop capability. `platform::reset_handoff` owns only the
+handoff — admission, launch of the same executable with `--sidevoice-reset-helper` before Tauri
 initializes, the authenticated plan, the wait for the app's exit, startup exclusion, deadlines and
-cancellation — plus `reset_available()`, the answer to whether this host offers reset. macOS answers
-true; Windows and Linux answer false until the portable transaction lands, and the handoff works on all three.
+cancellation — and its control directory, `state_dir()`. Both are identical on every host, so it is a plain
+module: no trait, no per-OS files. Whether this host offers reset is a separate constant,
+`platform::reset_availability::RESET_AVAILABLE`: true on macOS, false on Windows and Linux until their reset
+cleanup exists. The handoff works on all three.
 
 The reset transaction itself (pre-exit service and keychain steps, post-exit cleanup, report/journal,
 relaunch or move to the Trash) stays in `data.rs`, unchanged. Webview lifecycle/removal and the portable
@@ -46,7 +48,7 @@ Normal guard destruction means cancellation, not a successful handoff.
 
 | Host | Storage and transport | Process/lifetime |
 | --- | --- | --- |
-| macOS | Existing private per-user temporary reset directory; shared ancestry, owner/mode, no-follow and single-link checks. Shared Unix socket with peer uid checks on both ends. | Same executable, detached process group, non-inherited std file locks. Existing WebKit observation/cleanup unchanged. |
+| macOS | Private sibling of the standard Sidevoice data directory, independent of `SIDEVOICE_DATA_DIR`; shared ancestry, owner/mode, no-follow and single-link checks. Shared Unix socket with peer uid checks on both ends. | Same executable, detached process group, non-inherited std file locks. Existing WebKit observation/cleanup unchanged. |
 | Linux | Private sibling of the standard Sidevoice data directory, independent of `SIDEVOICE_DATA_DIR`; shared ancestry, owner/mode, no-follow and single-link checks. Shared Unix socket with peer uid checks on both ends. | Same executable, detached process group, std file locks. No reset UI or cleanup enablement. |
 | Windows | Private sibling of the standard Sidevoice data directory; protected owner-only DACLs from creation, owner checks, held ancestry and reparse/hard-link refusal. Shared local-only named pipe with peer SID checks on both ends. | Same executable, windowless detached child, std file locks; no numeric HANDLE inheritance or PID authorization. No reset UI or cleanup enablement. |
 
@@ -70,19 +72,21 @@ job does not escape that job; an early helper death prevents cleanup and leaves 
 
 ## Platform boundary
 
-`reset_handoff.rs` declares the protocol interface and shared types. Availability (`false`) and the
-control directory (a sibling of the standard data root) are the trait's shared defaults; only
-`reset_handoff/macos.rs` overrides them. The shared checked filesystem, channel and child libraries supply
-the protocol on every host. The existing real-uid macOS directory naming
-uses the same `libc::getuid` call; this relocation adds no unsafe operation or native binding.
+`reset_handoff.rs` is one module for every host: the protocol functions, `Handoff`, the shared types and
+`state_dir()`, a sibling of the standard data root (`…/dev.sidevoice.desktop-reset`) on every host. The
+shared checked filesystem, channel and child libraries supply what differs per OS. It adds no unsafe
+operation or native binding.
+
+`reset_availability.rs` holds `RESET_AVAILABLE`, the one value that differs by OS (`cfg!`). It moves to the
+reset cleanup concern when that exists and disappears once Windows and Linux get their cleanup.
 
 The reset and report commands, the native confirmation and the
 exclusive admission compile on every host and refuse with `reset.unavailable` before any confirmation or
-data access when `reset_available()` is false. The helper receives the authenticated plan on every host; when
+data access when `RESET_AVAILABLE` is false. The helper receives the authenticated plan on every host; when
 reset is unavailable it completes the committed wait and releases it without cleaning anything up. On macOS
 the existing order is kept: authenticate, observe WebKit children, await committed parent exit and
 admission, clean up, release admission before relaunch. The reset report lives in the handoff's private
-control directory (`state_dir()`), which on macOS is the same per-user temporary directory as before.
+control directory (`state_dir()`), checked with the same private-directory API as the locks.
 
 The macOS transaction steps themselves (pre-confirmation bundle check, service and keychain before exit,
 cleanup after exit) are still selected by OS in `data.rs`; moving their native operations behind platform

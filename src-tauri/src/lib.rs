@@ -600,11 +600,10 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
 }
 
 pub fn run() {
-    use platform::reset_handoff::{DesktopReset, ResetHandoff};
-    let startup = match DesktopReset::await_idle(
-        std::time::Duration::from_secs(5 * 60),
-        &std::sync::atomic::AtomicBool::new(false),
-    ) {
+    use platform::reset_handoff::{self, Handoff};
+    let startup = match Handoff::new().and_then(|handoff| {
+        handoff.await_idle(std::time::Duration::from_secs(5 * 60), &std::sync::atomic::AtomicBool::new(false))
+    }) {
         Ok(guard) => guard,
         Err(_) => {
             // Before the log and the app state exist: the system's language is read here.
@@ -709,7 +708,7 @@ pub fn run() {
             });
             #[cfg(target_os = "macos")]
             data::finalize_relaunched_reset();
-            DesktopReset::finish_startup(startup);
+            reset_handoff::finish_startup(startup);
             Ok(())
         })
         .on_window_event(|window, event| {

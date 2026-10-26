@@ -16,4 +16,5 @@ pub mod voice_holds;
 pub mod webview_diagnostics;
 
 pub mod confirmation;
+pub mod reset_availability;
 pub mod reset_handoff;
