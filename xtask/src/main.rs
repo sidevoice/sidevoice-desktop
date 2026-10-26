@@ -18,7 +18,7 @@
 //!   installer. With `--channel release` or `nightly`, the AppImage and the installer are also signed as updates
 //!   (their `.sig`, checked).
 //!
-//! The Windows app, in the `windows` job after `bundle` (windows.rs):
+//! The Windows app, in the `windows` job after `bundle` (platform/first_open.rs):
 //!
 //! - `windows first-open` (a CI runner): the app started with no settings: the bundled interface comes up.
 //!
@@ -107,7 +107,6 @@ mod platform_guard;
 mod probe;
 mod publish;
 mod util;
-mod windows;
 
 use std::process::ExitCode;
 
@@ -178,9 +177,7 @@ fn main() -> ExitCode {
         ["macos", "exit"] => macos("exit", probe::exit),
         ["macos", "memory"] => macos("memory", probe::memory),
         ["macos", "voice-memory"] => macos("voice-memory", probe::voice_memory),
-        ["windows", "first-open"] => {
-            platform::host::require_os("windows", "windows first-open").and_then(|()| windows::first_open())
-        }
+        ["windows", "first-open"] => platform::first_open::run(),
         ["publish", "assets", kind] => publish::assemble(kind, None),
         ["publish", "assets", kind, tag] => publish::assemble(kind, Some(tag)),
         ["publish", "release", tag] => publish::release(tag),
