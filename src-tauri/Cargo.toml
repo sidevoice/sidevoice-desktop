@@ -56,6 +56,11 @@ log = "0.4"
 [target.'cfg(unix)'.dependencies]
 sidevoice-local-host = { path = "local-host", features = ["fetch"] }
 
+[target.'cfg(any(windows, target_os = "linux"))'.dependencies]
+# Whether an audio input device exists (platform/microphone): enumeration only, no stream. WASAPI on Windows, ALSA on Linux.
+# Already in the tree through sidevoice-voice (macOS), where AVFoundation answers instead.
+cpal = { version = "0.18", default-features = false }
+
 [target.'cfg(windows)'.dependencies]
 # The taskbar's colour, to draw the tray mark in the brand's look for it (src/tray.rs).
 winreg = "0.55"

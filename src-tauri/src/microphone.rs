@@ -1,23 +1,18 @@
-//! Room-only microphone commands. Native permission policy lives in platform/microphone.
+//! Room-only microphone command: `host.microphone`'s state, request and open-settings, on every OS. Native policy
+//! lives in platform/microphone.
 use crate::{
-    platform::microphone::{AccessState, BackendObservation, MicrophoneAccess, NativeMicrophone},
+    platform::microphone::{AccessState, MicrophoneAccess, NativeMicrophone},
     refusal,
 };
 use serde_json::{json, Value};
 use tauri::{AppHandle, Webview};
 
 #[tauri::command]
-pub async fn microphone(
-    app: AppHandle,
-    webview: Webview,
-    action: String,
-    backend: Option<BackendObservation>,
-) -> Result<Value, Value> {
+pub async fn microphone(app: AppHandle, webview: Webview, action: String) -> Result<Value, Value> {
     crate::room_page(&app, &webview).map_err(|why| refusal("bad_request", why))?;
-    let backend = backend.unwrap_or_default();
     let state = match action.as_str() {
-        "state" | "access-state" => NativeMicrophone::state(backend),
-        "request" | "access-request" => NativeMicrophone::request(backend).await,
+        "state" => NativeMicrophone::state(),
+        "request" => NativeMicrophone::request().await,
         "open-settings" => {
             return NativeMicrophone::open_settings(&app)
                 .map_err(|_| refusal("internal", "System Settings could not be opened."))
@@ -26,10 +21,7 @@ pub async fn microphone(
         _ => return Err(refusal("bad_request", format!("not a microphone action: {action}"))),
     }
     .map_err(|why| refusal("internal", why))?;
-    if action.starts_with("access-") {
-        return Ok(json!(state));
-    }
-    // Preserve the original macOS bridge vocabulary and refusal contract.
+    // The page's vocabulary: no state of its own for an OS that did not answer, which refuses like any failed read.
     Ok(json!(match state {
         AccessState::Granted => "granted",
         AccessState::Denied => "denied",

@@ -360,9 +360,9 @@
     } };
   }
 
-  /** The app's microphone permission (docs/BRIDGE.md → "The microphone permission"), onto the `microphone` command:
-   *  where the app runs the voice call, the page is never granted `getUserMedia`, so it can neither ask macOS for the
-   *  microphone nor read whether it may. The first-run setup asks through this. Only with `voice` (macOS). */
+  /** The app's microphone access (docs/BRIDGE.md → "The microphone permission"), onto the `microphone` command, on every
+   *  OS: the system's own answer, never the webview's. Where the app runs the voice call (macOS) the page is never granted
+   *  `getUserMedia`, so this is also how it asks macOS for the microphone. The first-run setup asks through this. */
   function microphone() {
     const listeners = new Set();
     let timer = null;
@@ -382,11 +382,13 @@
       /** `"prompt"` (not asked yet), `"granted"`, `"denied"` (denied, or forbidden by the system) or `"missing"` (not
        *  denied, and no audio input device exists). Never prompts. */
       state: () => call("microphone", { action: "state" }),
-      /** macOS's own prompt the first time; afterwards the stored answer at once, with no prompt: `"granted"` or
-       *  `"denied"`. */
+      /** macOS's own prompt the first time; afterwards, and on every other OS, the same as `state()` (there is no prompt to
+       *  wait for), so any of `state()`'s answers. */
       request: () => call("microphone", { action: "request" }),
-      /** Opens System Settings at Privacy & Security › Microphone, where a denial is undone. */
-      openSettings: () => call("microphone", { action: "open-settings" }).then(() => undefined),
+      /** Opens the system's microphone privacy page, where a denial is undone. Only where the OS has one (not Linux). */
+      ...(microphoneSettingsOffered === true ? {
+        openSettings: () => call("microphone", { action: "open-settings" }).then(() => undefined),
+      } : {}),
       /** `listener()` whenever `state()` changes: the permission (in System Settings) or a microphone plugged in or
        *  out; read it with `state()`. Polled every 2 s while anyone listens. Returns `stop`. */
       onChange(listener) {
@@ -404,47 +406,6 @@
             last = null;
           }
         };
-      },
-    });
-  }
-
-  /** The richer platform access observation. Keep this additive: the web's existing permission flow understands
-   *  only prompt/granted/denied/missing and must keep its page fallback until it can present unavailable too. */
-  function backendMicrophoneAccess() {
-    const media = win.navigator.mediaDevices;
-    const send = (action, backend) => call("microphone", { action, backend });
-    return Object.freeze({
-      async state() {
-        let permission = "unavailable";
-        let hasDevice = null;
-        try {
-          const status = await win.navigator.permissions?.query({ name: "microphone" });
-          permission = { prompt: "not-determined", granted: "granted", denied: "denied" }[status?.state] ?? "unavailable";
-        } catch (_) { /* querying microphone permission is not supported by every WebKit version */ }
-        try {
-          const devices = await media.enumerateDevices();
-          hasDevice = devices.some((device) => device.kind === "audioinput");
-        } catch (_) { /* an unreadable device list is not an empty one */ }
-        return send("access-state", { permission, hasDevice });
-      },
-      async request() {
-        let backend;
-        try {
-          // Start capture in the gesture, before an await, and release every track even on a malformed stream.
-          const stream = await media.getUserMedia({ audio: true });
-          try {
-            const audio = stream.getAudioTracks();
-            backend = audio.some((track) => track.readyState === "live")
-              ? { captured: true, hasDevice: true }
-              // A track can end after permission revocation or a backend failure; that does not establish hardware absence.
-              : { permission: "unavailable" };
-          } finally {
-            for (const track of stream.getTracks()) track.stop();
-          }
-        } catch (error) {
-          backend = { error: typeof error?.name === "string" ? error.name : "UnknownError" };
-        }
-        return send("access-request", backend);
       },
     });
   }
@@ -851,15 +812,8 @@
       }),
       // Only where the app runs the voice call (macOS): the page then neither opens the microphone nor runs models.
       ...(voiceCall ? { voice: voiceCall.host } : {}),
-      // Native voice owns permission on macOS. Windows keeps capture permission in the page and offers only settings.
-      ...(voiceCall ? { microphone: microphone() } : microphoneSettingsOffered === true || typeof win.navigator?.mediaDevices?.getUserMedia === "function" ? {
-        microphone: Object.freeze({
-          ...(microphoneSettingsOffered === true ? {
-            openSettings: () => call("microphone_open_settings").then(() => undefined),
-          } : {}),
-          ...(typeof win.navigator?.mediaDevices?.getUserMedia === "function" ? { access: backendMicrophoneAccess() } : {}),
-        }),
-      } : {}),
+      // The app's native microphone access, on every OS (src/platform/microphone.rs).
+      microphone: microphone(),
       /** What this build is: a release, a nightly (both with `updater`), or a development build. */
       build: Object.freeze({ ...build }),
       // The name the person gave this computer ("Mac de Ana"): the page proposes it as the device's name. Only

@@ -518,13 +518,6 @@ fn apply_shortcut(app: &AppHandle, accelerator: &str) {
     }
 }
 
-/// Opens only the fixed system microphone privacy page, for the current room page.
-#[tauri::command]
-async fn microphone_open_settings(app: AppHandle, webview: Webview) -> Result<(), Value> {
-    room_page(&app, &webview).map_err(|why| refusal("bad_request", why))?;
-    NativeMicrophone::open_settings(&app).map_err(|_| refusal("internal", "System Settings could not be opened."))
-}
-
 /// The app's commands, with `$extra` (each after a comma) after them.
 macro_rules! commands {
     ($($extra:tt)*) => {
@@ -567,15 +560,13 @@ macro_rules! commands {
             call_controls::call_controls_settings,
             updater::updater,
             debug_options::debug_options,
-            microphone_open_settings,
             microphone::microphone
             $($extra)*
         ]
     };
 }
 
-/// Every command, the voice call's and the microphone permission's where the app runs the call (`host.voice`,
-/// `host.microphone`: macOS).
+/// Every command, and the voice call's where the app runs the call (`host.voice`: macOS).
 #[cfg(target_os = "macos")]
 fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
     commands![

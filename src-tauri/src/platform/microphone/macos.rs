@@ -1,5 +1,5 @@
 //! The existing AVFoundation permission/device checks and one-shot request callback.
-use super::{AccessState, BackendObservation, MicrophoneAccess};
+use super::{resolve, AccessState, MicrophoneAccess};
 use block2::RcBlock;
 use objc2::runtime::Bool;
 use objc2_av_foundation::{AVAuthorizationStatus, AVCaptureDevice, AVMediaType, AVMediaTypeAudio};
@@ -11,13 +11,11 @@ impl MicrophoneAccess for NativeMicrophone {
     const SETTINGS_URL: Option<&'static str> =
         Some("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone");
 
-    fn state(_: BackendObservation) -> Result<AccessState, &'static str> {
-        let permission = permission(authorization()?);
-        // A denial stands whatever is plugged in, exactly as before the extraction.
-        Ok(if permission != AccessState::Denied && !input_device()? { AccessState::NoDevice } else { permission })
+    fn state() -> Result<AccessState, &'static str> {
+        Ok(resolve(permission(authorization()?), input_device()?.into()))
     }
 
-    async fn request(_: BackendObservation) -> Result<AccessState, &'static str> {
+    async fn request() -> Result<AccessState, &'static str> {
         let granted = request_access()?.await.map_err(|_| "The system did not answer the microphone request.")?;
         Ok(if granted { AccessState::Granted } else { AccessState::Denied })
     }

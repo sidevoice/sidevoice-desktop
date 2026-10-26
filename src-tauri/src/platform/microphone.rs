@@ -1,6 +1,5 @@
-//! Microphone privacy policy, combined with observations from the backend that actually captures audio.
-//! Windows/Linux currently capture in WebView2/WebKit; do not open a second native audio backend here.
-use serde::{Deserialize, Serialize};
+//! Native microphone access on every OS: the OS privacy policy and whether an input device exists, read fresh on each
+//! call. Nothing is cached, no stream is opened, and the webview's own capture outcome plays no part.
 use std::future::Future;
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_opener::OpenerExt;
@@ -16,47 +15,50 @@ mod imp;
 mod imp;
 pub use imp::NativeMicrophone;
 
-#[derive(Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
+/// Audio input enumeration through the maintained cross-platform audio crate (WASAPI, ALSA); not used on macOS,
+/// where AVFoundation answers both questions.
+#[cfg(not(target_os = "macos"))]
+#[path = "microphone/devices.rs"]
+mod devices;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccessState {
     Granted,
     Denied,
+    /// The OS has not asked the person yet (macOS only).
     NotDetermined,
     NoDevice,
-    #[default]
+    /// The OS did not answer: never a grant, never a denial, never an absent device.
     Unavailable,
 }
 
-/// A fresh observation from the current capture backend, never a cached authorization or an access grant.
-/// `error` is the DOMException name from WebView2/WebKit getUserMedia (Linux's session audio backend).
-#[derive(Default, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct BackendObservation {
-    #[serde(default)]
-    pub permission: AccessState,
-    pub has_device: Option<bool>,
-    pub error: Option<String>,
-    /// True only when this operation opened a live audio track (not merely a permission query).
-    #[serde(default)]
-    pub captured: bool,
+/// What the OS says about audio input devices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Devices {
+    Present,
+    Absent,
+    /// The device list could not be read. That is not an empty list.
+    Unknown,
 }
 
-impl BackendObservation {
-    fn state(self) -> AccessState {
-        let permission = match self.error.as_deref() {
-            Some("NotAllowedError" | "PermissionDeniedError" | "SecurityError") => AccessState::Denied,
-            Some("NotFoundError" | "DevicesNotFoundError") => AccessState::NoDevice,
-            // Busy/broken backends, constraints, interruption, and unknown errors do not establish a denial
-            // or prove that the computer has no device (e.g. PipeWire/Pulse not available to WebKit).
-            Some(_) => AccessState::Unavailable,
-            None if self.captured => AccessState::Granted,
-            None => self.permission,
-        };
-        if permission != AccessState::Denied && self.has_device == Some(false) {
-            AccessState::NoDevice
+impl From<bool> for Devices {
+    fn from(present: bool) -> Self {
+        if present {
+            Devices::Present
         } else {
-            permission
+            Devices::Absent
         }
+    }
+}
+
+/// The one rule every OS shares. A denial stands whatever is plugged in (the person fixes it in Settings, whether or
+/// not a device is there); a missing device beats everything else; a grant needs a readable device list.
+fn resolve(permission: AccessState, devices: Devices) -> AccessState {
+    match (permission, devices) {
+        (AccessState::Denied, _) => AccessState::Denied,
+        (_, Devices::Absent) => AccessState::NoDevice,
+        (AccessState::Granted, Devices::Unknown) => AccessState::Unavailable,
+        (permission, _) => permission,
     }
 }
 
@@ -64,18 +66,15 @@ pub trait MicrophoneAccess {
     /// The fixed system microphone privacy page, where the OS has a standard URI for it.
     const SETTINGS_URL: Option<&'static str> = None;
 
-    /// Inspect without prompting. Re-read OS privacy policy every time; combine it with a fresh capture/backend
-    /// observation. Denial takes precedence over absence. An unreadable backend never means granted.
-    /// macOS supplies its own AVFoundation permission and device observation, ignoring `backend`.
-    fn state(backend: BackendObservation) -> Result<AccessState, &'static str> {
-        Ok(backend.state())
-    }
+    /// Inspect without prompting. Re-reads the OS every time. Denial takes precedence over a missing device, and an
+    /// OS that cannot be read is `Unavailable`, never a grant.
+    fn state() -> Result<AccessState, &'static str>;
 
-    /// Request access: macOS uses its existing AVFoundation prompt. On hosts whose capture belongs to the
-    /// webview, the caller first requests getUserMedia and supplies its outcome; this applies current OS policy.
-    /// This never edits privacy settings, and a desktop app cannot enable Windows' desktop-app switch itself.
-    fn request(backend: BackendObservation) -> impl Future<Output = Result<AccessState, &'static str>> + Send {
-        async { Self::state(backend) }
+    /// Ask for access. Only macOS has a prompt (AVFoundation, the first time; afterwards the stored answer). Elsewhere
+    /// there is nothing to ask — Windows' unpackaged desktop apps and Linux have no consent prompt — so this is
+    /// `state`. It never edits privacy settings.
+    fn request() -> impl Future<Output = Result<AccessState, &'static str>> + Send {
+        async { Self::state() }
     }
 
     /// Open the fixed system microphone privacy page through the registered opener plugin. Opening it proves
@@ -90,57 +89,39 @@ pub trait MicrophoneAccess {
 mod tests {
     use super::*;
 
-    struct BackendMicrophone;
-    impl MicrophoneAccess for BackendMicrophone {}
-
-    fn observation(permission: AccessState, has_device: Option<bool>) -> BackendObservation {
-        BackendObservation { permission, has_device, ..Default::default() }
+    #[test]
+    fn denial_beats_a_missing_device_and_a_missing_device_beats_the_rest() {
+        use AccessState::*;
+        use Devices::*;
+        for (permission, devices, expected) in [
+            (Denied, Present, Denied),
+            (Denied, Absent, Denied),
+            (Denied, Unknown, Denied),
+            (Granted, Present, Granted),
+            (Granted, Absent, NoDevice),
+            (NotDetermined, Absent, NoDevice),
+            (NotDetermined, Present, NotDetermined),
+            (Unavailable, Absent, NoDevice),
+            (Unavailable, Present, Unavailable),
+        ] {
+            assert_eq!(resolve(permission, devices), expected, "{permission:?} with {devices:?}");
+        }
     }
 
+    #[test]
+    fn an_unreadable_device_list_is_neither_a_grant_nor_an_absence() {
+        assert_eq!(resolve(AccessState::Granted, Devices::Unknown), AccessState::Unavailable);
+        assert_eq!(resolve(AccessState::NotDetermined, Devices::Unknown), AccessState::NotDetermined);
+        assert_eq!(Devices::from(true), Devices::Present);
+        assert_eq!(Devices::from(false), Devices::Absent);
+    }
+
+    #[cfg(not(target_os = "macos"))]
     #[tokio::test]
-    async fn backend_denial_absence_and_changes_are_fresh_observations() {
-        assert_eq!(BackendMicrophone::state(BackendObservation::default()).unwrap(), AccessState::Unavailable);
-        for (permission, device, expected) in [
-            (AccessState::Denied, Some(false), AccessState::Denied),
-            (AccessState::Granted, Some(false), AccessState::NoDevice),
-            (AccessState::NotDetermined, Some(true), AccessState::NotDetermined),
-            (AccessState::Granted, Some(true), AccessState::Granted),
-            (AccessState::Denied, Some(true), AccessState::Denied),
-            (AccessState::Granted, Some(true), AccessState::Granted),
-        ] {
-            assert_eq!(BackendMicrophone::request(observation(permission, device)).await.unwrap(), expected);
-        }
-    }
-
-    #[test]
-    fn capture_errors_distinguish_denial_missing_and_backend_failure() {
-        for (error, expected) in [
-            ("NotAllowedError", AccessState::Denied),
-            ("PermissionDeniedError", AccessState::Denied),
-            ("SecurityError", AccessState::Denied),
-            ("NotFoundError", AccessState::NoDevice),
-            ("DevicesNotFoundError", AccessState::NoDevice),
-            ("NotReadableError", AccessState::Unavailable),
-            ("TrackStartError", AccessState::Unavailable),
-            ("OverconstrainedError", AccessState::Unavailable),
-            ("AbortError", AccessState::Unavailable),
-            ("new backend failure", AccessState::Unavailable),
-        ] {
-            assert_eq!(
-                BackendMicrophone::state(BackendObservation { error: Some(error.into()), ..Default::default() })
-                    .unwrap(),
-                expected,
-                "{error}"
-            );
-        }
-    }
-
-    #[test]
-    fn native_inspection_without_backend_evidence_never_assumes_granted() {
-        // macOS has its own device/authorization inspection. Other hosts need a capture observation.
-        let state = NativeMicrophone::state(BackendObservation::default()).unwrap();
-        if !cfg!(target_os = "macos") {
-            assert!(matches!(state, AccessState::Unavailable | AccessState::Denied));
-        }
+    async fn state_and_request_answer_without_a_prompt_whatever_the_machine_has() {
+        // CI machines have no audio hardware: any answer is fine, a failure or a hang is not.
+        let state = NativeMicrophone::state().unwrap();
+        assert_eq!(NativeMicrophone::request().await.unwrap(), state);
+        assert_ne!(state, AccessState::NotDetermined, "only macOS has a prompt to wait for");
     }
 }

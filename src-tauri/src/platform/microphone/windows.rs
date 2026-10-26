@@ -1,80 +1,81 @@
-//! The unpackaged desktop-app privacy gate, read with the existing maintained winreg crate.
-//! AppCapability is documented for packaged apps; Sidevoice ships an unpackaged NSIS executable.
-use super::{AccessState, BackendObservation, MicrophoneAccess};
+//! The unpackaged desktop-app privacy gate, read with the existing maintained winreg crate, and the input devices.
+//! AppCapability is documented for packaged apps; Sidevoice ships an unpackaged NSIS executable, which has no consent
+//! prompt: `request` is `state`.
+use super::{devices, resolve, AccessState, MicrophoneAccess};
+use std::io::ErrorKind;
 use winreg::{
     enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE},
-    RegKey,
+    RegKey, HKEY,
 };
 
 pub struct NativeMicrophone;
 impl MicrophoneAccess for NativeMicrophone {
     const SETTINGS_URL: Option<&'static str> = Some("ms-settings:privacy-microphone");
 
-    fn state(backend: BackendObservation) -> Result<AccessState, &'static str> {
+    fn state() -> Result<AccessState, &'static str> {
         const MICROPHONE: &str =
             r"SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone";
         // Machine-wide microphone access and this user's desktop-app switch. Do not use the user root's
         // Store-app switch, nor per-executable usage timestamps as an authorization decision.
-        let values =
-            [(HKEY_LOCAL_MACHINE, MICROPHONE.to_owned()), (HKEY_CURRENT_USER, format!(r"{MICROPHONE}\NonPackaged"))]
-                .map(|(hive, path)| {
-                    RegKey::predef(hive).open_subkey(path).and_then(|key| key.get_value::<String, _>("Value")).ok()
-                });
-        Ok(privacy_state(backend, values))
+        let policy = permission([
+            setting(HKEY_LOCAL_MACHINE, MICROPHONE),
+            setting(HKEY_CURRENT_USER, &format!(r"{MICROPHONE}\NonPackaged")),
+        ]);
+        Ok(resolve(policy, devices::present()))
     }
 }
 
-// Unknown registry keys must not turn a browser permission hint into an OS grant. A successful capture
-// is stronger evidence; it still cannot override an explicit privacy denial read in this operation.
-fn privacy_state(backend: BackendObservation, values: [Option<String>; 2]) -> AccessState {
-    if values.iter().any(|value| value.as_deref() == Some("Deny")) {
-        return AccessState::Denied;
+/// One privacy switch's `Value`.
+#[derive(Debug, PartialEq, Eq)]
+enum Setting {
+    Allow,
+    Deny,
+    /// No key or no value: Windows never wrote a choice.
+    Unset,
+    /// A value this code does not know, or a key it could not read.
+    Unknown,
+}
+
+fn setting(hive: HKEY, path: &str) -> Setting {
+    match RegKey::predef(hive).open_subkey(path).and_then(|key| key.get_value::<String, _>("Value")) {
+        Ok(value) => match value.as_str() {
+            "Allow" => Setting::Allow,
+            "Deny" => Setting::Deny,
+            _ => Setting::Unknown,
+        },
+        Err(error) if error.kind() == ErrorKind::NotFound => Setting::Unset,
+        Err(_) => Setting::Unknown,
     }
-    let captured = backend.captured;
-    let state = backend.state();
-    if state == AccessState::Granted && !captured && values.iter().any(|value| value.as_deref() != Some("Allow")) {
+}
+
+/// A `Deny` in either switch denies. Otherwise an `Unset` switch counts as allowed: Windows' default for desktop apps
+/// is allow, and a fresh install or a policy-free machine has no key until someone first opens the page. Only a value or
+/// a key this code cannot interpret is `Unavailable`, which is never a grant.
+fn permission(settings: [Setting; 2]) -> AccessState {
+    if settings.contains(&Setting::Deny) {
+        AccessState::Denied
+    } else if settings.contains(&Setting::Unknown) {
         AccessState::Unavailable
     } else {
-        state
+        AccessState::Granted
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn observation(permission: AccessState, has_device: Option<bool>) -> BackendObservation {
-        BackendObservation { permission, has_device, ..Default::default() }
-    }
+    use Setting::*;
 
     #[test]
-    fn privacy_changes_override_backend_hints_and_unknown_is_not_a_grant() {
-        let allowed = || Some("Allow".into());
-        let denied = || Some("Deny".into());
-        let query = || observation(AccessState::Granted, Some(true));
-        assert_eq!(privacy_state(query(), [allowed(), allowed()]), AccessState::Granted);
-        assert_eq!(privacy_state(query(), [allowed(), denied()]), AccessState::Denied);
-        assert_eq!(privacy_state(query(), [denied(), allowed()]), AccessState::Denied);
-        assert_eq!(privacy_state(query(), [allowed(), allowed()]), AccessState::Granted);
-        assert_eq!(privacy_state(query(), [None, allowed()]), AccessState::Unavailable);
-        assert_eq!(privacy_state(query(), [allowed(), Some("future value".into())]), AccessState::Unavailable);
-        assert_eq!(
-            privacy_state(
-                BackendObservation { captured: true, has_device: Some(true), ..Default::default() },
-                [None, None]
-            ),
-            AccessState::Granted
-        );
-        assert_eq!(
-            privacy_state(
-                BackendObservation { captured: true, has_device: Some(true), ..Default::default() },
-                [None, denied()]
-            ),
-            AccessState::Denied
-        );
-        assert_eq!(
-            privacy_state(observation(AccessState::Granted, Some(false)), [allowed(), denied()]),
-            AccessState::Denied
-        );
+    fn deny_wins_and_unset_follows_the_windows_default() {
+        assert_eq!(permission([Allow, Allow]), AccessState::Granted);
+        assert_eq!(permission([Unset, Unset]), AccessState::Granted);
+        assert_eq!(permission([Allow, Unset]), AccessState::Granted);
+        assert_eq!(permission([Allow, Deny]), AccessState::Denied);
+        assert_eq!(permission([Deny, Allow]), AccessState::Denied);
+        assert_eq!(permission([Deny, Unknown]), AccessState::Denied);
+        assert_eq!(permission([Unknown, Deny]), AccessState::Denied);
+        assert_eq!(permission([Allow, Unknown]), AccessState::Unavailable);
+        assert_eq!(permission([Unknown, Unset]), AccessState::Unavailable);
     }
 }
