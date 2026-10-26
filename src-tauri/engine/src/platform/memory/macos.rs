@@ -1,8 +1,8 @@
 use super::{Memory, MemorySnapshot};
 
-pub struct Os;
+pub struct SystemMemory;
 
-impl Memory for Os {
+impl Memory for SystemMemory {
     fn snapshot() -> MemorySnapshot {
         MemorySnapshot { total_bytes: total_bytes(), available_bytes: available_bytes() }
     }

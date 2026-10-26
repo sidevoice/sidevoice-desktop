@@ -641,31 +641,6 @@ pub fn read_secret(path: &Path) -> Result<Vec<u8>> {
         .ok_or_else(|| format!("{}: secret file is missing", path.display()))
 }
 
-/// While it lives, files this process and its children create are private to this user (umask 077), whatever the
-/// person's umask: Tauri's bundler writes the certificate it decodes with plain file creation.
-pub struct PrivateFiles {
-    #[cfg(unix)]
-    before: rustix::fs::Mode,
-}
-
-impl PrivateFiles {
-    pub fn start() -> PrivateFiles {
-        #[cfg(unix)]
-        {
-            PrivateFiles { before: rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o077)) }
-        }
-        #[cfg(not(unix))]
-        PrivateFiles {}
-    }
-}
-
-impl Drop for PrivateFiles {
-    fn drop(&mut self) {
-        #[cfg(unix)]
-        rustix::process::umask(self.before);
-    }
-}
-
 /// The permission bits of `path` (`stat -f %Lp`), on Unix.
 #[cfg(unix)]
 pub fn mode(path: &Path) -> Result<u32> {
