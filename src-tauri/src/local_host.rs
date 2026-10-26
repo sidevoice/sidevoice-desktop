@@ -2,7 +2,7 @@
 //!
 //! The work is the `sidevoice-local-host` crate's (the checks, the pairing over the core's socket, the proxy, the
 //! poll); this module starts it with the app's own paths, answers the page's commands, and stops it as the app quits.
-//! Offered on macOS only (design O2; `bridge::local_host_offered`): elsewhere every command refuses `unsupported`,
+//! Offered on macOS only (design O2; `platform::host_capabilities`): elsewhere every command refuses `unsupported`,
 //! except `reveal-log`, which needs no local host (the app's own log).
 //!
 //! Only the room window's own page may call these (capabilities/room.json, and [`crate::room_page`] in each). A
@@ -109,7 +109,6 @@ pub fn local_host_install_cancel(app: AppHandle, webview: Webview, job: String) 
 /// manager, without a shell. The app log needs no connector, so this runs on every OS: the answer is the local host's
 /// state after it, `null` where there is none.
 fn reveal(app: &AppHandle) -> Answer {
-    use crate::platform::reveal::{NativeReveal, Reveal};
     use sidevoice_desktop_core::i18n::t;
 
     let logs = logs_to_show(crate::app_log_file(app), imp::host_log(app));
@@ -117,7 +116,7 @@ fn reveal(app: &AppHandle) -> Answer {
     if logs.is_empty() {
         return Err(refusal("log.missing", t(language, "local_host.log_missing")));
     }
-    NativeReveal::files(app, &logs).map_err(|error| {
+    crate::platform::reveal::files(app, &logs).map_err(|error| {
         log::warn!("Could not reveal logs: {error}");
         refusal("reveal.failed", t(language, "local_host.reveal_failed"))
     })?;
@@ -155,11 +154,13 @@ pub fn installing(app: &AppHandle) -> bool {
 #[cfg(unix)]
 mod imp {
     use super::{refusal, unsupported, Answer};
+    use crate::platform::host_capabilities::CAPABILITIES;
     use serde_json::{json, Value};
-    use sidevoice_local_host::host::{computer_name, Action, Config, Installing, LocalHost};
+    use sidevoice_local_host::host::{Action, Config, Installing, LocalHost};
     use sidevoice_local_host::install;
     use sidevoice_local_host::npm::Https;
     use sidevoice_local_host::paths::DataDirs;
+    use sidevoice_local_host::platform::computer_name::{ComputerName, SystemComputerName};
     use std::sync::Arc;
     use tauri::{AppHandle, Manager};
 
@@ -170,7 +171,7 @@ mod imp {
     }
 
     pub fn setup(app: &AppHandle) {
-        if !sidevoice_desktop_core::bridge::local_host_offered() {
+        if !CAPABILITIES.local_host {
             return;
         }
         // `D`, by the rule every Sidevoice program shares (`SIDEVOICE_DATA_DIR`, else the OS standard place).
@@ -179,7 +180,7 @@ mod imp {
             return;
         };
         let Ok(app_dir) = crate::data::desktop_dir(app) else { return };
-        let config = Config { dirs, app_dir, name: computer_name() };
+        let config = Config { dirs, app_dir, name: SystemComputerName::read() };
         match LocalHost::start(config, crate::debug) {
             Ok(host) => {
                 host.watch();

@@ -43,15 +43,31 @@ and does not remove connector releases, conversations or agent registrations.
 The boundary is the OS user. Before any connect to the core's socket (the one `C/core.json` names) the app checks that `C` is a directory (not a
 link) owned by this user with mode & 077 = 0 (`identity.unsafe-directory`), and after connecting that the socket's peer
 is this user (`getpeereid` / `SO_PEERCRED`, `peer.uid-mismatch`).
-Files are checked as they are used, not by path and reopened (`src-tauri/local-host/src/trusted.rs`): every
-directory above `D` and above the app's config directory must be root's or this user's and not writable by others
-(sticky, as `/tmp`, is fine) — the default `D` passes, a `SIDEVOICE_DATA_DIR` under a directory others can
-write does not; `install.json` is read through `D`'s opened and `fstat`-checked descriptor, opened without following a
-link and checked as opened (a regular file, this user's, not writable by others; `install.unsafe`); each path in its
-`command` must be root's or this user's, closed to others, with a safe ancestry too — and what runs is exactly the
-path that was checked, links resolved once (a system link such as `/usr/bin/node` works; a link retargeted after the
-check is not followed), with `SIDEVOICE_DATA_DIR` set to `D` as checked. `local-host.json` is read and
-written the same way (the file private, 0600; written beside, synced, renamed, the directory synced).
+Filesystem checks and record access use `sidevoice-platform` at core **v0.11.1** (`fs::Directory`,
+`HeldDirectory`, `Access`, and `Fs::trusted_program`); there is no desktop copy of those primitives. Discovery opens
+existing directories only. Missing directories/records remain absence; unsafe paths remain refusals. Every directory
+above `D` and the app's config directory must be root's or this user's and not writable by others (sticky, as `/tmp`,
+is fine). A linked data root is refused; Unix system-owned ancestor links such as macOS `/var` remain supported.
+Use an ordinary directory owned by this user if a redirected root is refused. Ancestors need search access,
+not directory-listing access: safe traverse-only ancestors such as `0311` and `0711` remain usable.
+
+`install.json` and the endpoint records are read through held, checked directories, without following record links
+or blocking on special files. Records must be regular files with exactly one name. Core records and the pairing
+are private; connector records and app-data parents may be readable by others, but never writable by them.
+`local-host.json` keeps its location and schema: existing ordinary 0600 pairings under 0755 app-data parents load
+without rewriting data or permissions. Saves use the shared atomic private writer; removals use the same checked
+parent. Neither operation overwrites/removes a linked or otherwise unsafe record. An ancestor replacement now causes
+a refusal instead of continuing through the old directory descriptor. Oversized records are refused, never truncated
+into an apparently valid record.
+
+The connector records its native executable in `command`; action arguments are appended when the app launches it.
+The recorded executable is validated by `Fs::trusted_program`, and the resolved path is the one launched
+(a system program link works; retargeting the original link after validation does not change it). On Unix the shared
+validator requires execute permission: a native application without it produces `install.unsafe`, with neither the
+program nor the record changed. Desktop launches native Core and Connector applications; the working macOS launch
+contract also applies to Windows. Program validation is not publisher authentication or descriptor-bound execution,
+and cannot prevent replacement by this same user or an administrator. `SIDEVOICE_DATA_DIR` is still the checked
+directory's canonical path.
 
 The device token travels only over the socket. The page never holds it: it gets the proxy's secret.
 

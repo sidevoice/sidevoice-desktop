@@ -4,24 +4,19 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_opener::OpenerExt;
 
-pub trait Reveal {
-    /// Reveal existing files in their containing directory using the native file manager. Resolve all paths
-    /// before revealing anything; reject non-UTF-8 targets with InvalidInput rather than select a lossy name.
-    /// Propagate plugin/IO failures to the caller's localized refusal mapping.
-    /// The opener plugin must be registered on `app`. No page-side opener permissions are needed.
-    fn files<R: Runtime>(app: &AppHandle<R>, paths: &[PathBuf]) -> Result<(), tauri_plugin_opener::Error> {
-        let paths = paths.iter().map(std::fs::canonicalize).collect::<std::io::Result<Vec<_>>>()?;
-        // Opener 2.7.0 converts canonical paths to strings lossily on macOS. Validate targets too, because
-        // a UTF-8 symlink can resolve to a non-UTF-8 path. Keep one explicit contract on every host.
-        if paths.iter().any(|path| path.to_str().is_none()) {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "non-UTF-8 reveal path").into());
-        }
-        app.opener().reveal_items_in_dir(paths)
+/// Reveal existing files in their containing directory using the native file manager. Resolve all paths
+/// before revealing anything; reject non-UTF-8 targets with InvalidInput rather than select a lossy name.
+/// Propagate plugin/IO failures to the caller's localized refusal mapping.
+/// The opener plugin must be registered on `app`. No page-side opener permissions are needed.
+pub fn files<R: Runtime>(app: &AppHandle<R>, paths: &[PathBuf]) -> Result<(), tauri_plugin_opener::Error> {
+    let paths = paths.iter().map(std::fs::canonicalize).collect::<std::io::Result<Vec<_>>>()?;
+    // Opener 2.7.0 converts canonical paths to strings lossily on macOS. Validate targets too, because
+    // a UTF-8 symlink can resolve to a non-UTF-8 path. Keep one explicit contract on every host.
+    if paths.iter().any(|path| path.to_str().is_none()) {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "non-UTF-8 reveal path").into());
     }
+    app.opener().reveal_items_in_dir(paths)
 }
-
-pub struct NativeReveal;
-impl Reveal for NativeReveal {}
 
 #[cfg(test)]
 mod tests {
@@ -40,7 +35,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         // Spaces and shell metacharacters remain path characters; no command string is constructed.
         let missing = dir.path().join("missing log ; $.log");
-        let error = NativeReveal::files(app.handle(), &[missing]).unwrap_err();
+        let error = files(app.handle(), &[missing]).unwrap_err();
         assert!(matches!(error, tauri_plugin_opener::Error::Io(ref io) if io.kind() == std::io::ErrorKind::NotFound));
     }
 
@@ -66,7 +61,7 @@ mod tests {
         assert!(link.to_str().is_some());
 
         for path in [raw_log, link] {
-            let error = NativeReveal::files(app.handle(), &[path]).unwrap_err();
+            let error = files(app.handle(), &[path]).unwrap_err();
             assert!(
                 matches!(error, tauri_plugin_opener::Error::Io(ref io) if io.kind() == std::io::ErrorKind::InvalidInput)
             );
