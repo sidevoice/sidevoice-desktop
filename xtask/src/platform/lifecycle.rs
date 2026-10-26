@@ -2,15 +2,8 @@
 
 use crate::Result;
 
-/// A host's way to hear a stop request: Ctrl+C on every host, and the termination signals where the host has them.
-pub trait Interruption {
-    /// Calls `on_stop` on a helper thread for every stop request from now on. The caller owns what stopping means.
-    /// A host that cannot register returns an error saying so.
-    fn register(on_stop: fn()) -> Result<()>;
+/// Calls `on_stop` on a helper thread for every stop request from now on: Ctrl+C on every host, and SIGTERM and SIGHUP
+/// on Unix (the `ctrlc` library supplies all of it). The caller owns what stopping means.
+pub fn register(on_stop: fn()) -> Result<()> {
+    ctrlc::set_handler(on_stop).map_err(|e| e.to_string())
 }
-
-/// One maintained library (`ctrlc`) supplies the handler on every host, so there is one implementation, not one per OS.
-#[path = "lifecycle/default.rs"]
-mod imp;
-
-pub use imp::Host;

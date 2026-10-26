@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::platform::lifecycle::{Host, Interruption};
+use crate::platform::lifecycle;
 use regex::Regex;
 use sidevoice_platform::fs::{Files, Fs};
 use sidevoice_platform::process::{Child, Process, Processes};
@@ -102,7 +102,7 @@ static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 /// Ctrl+C on every host, and SIGTERM/SIGHUP on Unix, stop new work and unwind resource guards.
 /// Children have their own groups/jobs, so running commands also observe this flag and stop their owned trees.
 pub fn on_interrupt() -> Result<()> {
-    Host::register(|| INTERRUPTED.store(true, Ordering::SeqCst))
+    lifecycle::register(|| INTERRUPTED.store(true, Ordering::SeqCst))
 }
 
 /// Keep async child IO alive between synchronous xtask steps (including background log readers).
