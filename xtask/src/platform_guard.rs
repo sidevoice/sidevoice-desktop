@@ -10,6 +10,14 @@
 //! - a `Command::new("<program>")` of a program that exists on one OS only (shells, `uname`, `launchctl`…);
 //! - the Cargo OS variables (`CARGO_CFG_TARGET_OS`…) read by a build script.
 //!
+//! Inside `platform` the OS is allowed, but its shape is checked (recipe items 1-2):
+//! - `platform/mod.rs` carries no OS `cfg`/`cfg_attr` and no `allow`/`expect` of `dead_code` or `unused*` lints, at
+//!   any depth of an attribute (`cfg_attr(test, allow(dead_code))` included): an OS that cannot do something says so
+//!   through the interface;
+//! - no item of a trait declared in `platform` is gated by an OS condition (`cfg(target_os = ..)`,
+//!   `cfg(any(target_os = .., test))`, `cfg_attr`): the OS file implements the common method, and anything of one
+//!   OS stays in that OS's file.
+//!
 //! Limits, by design of a token scan: a program name or OS variable reaching `Command::new` through a constant
 //! or a computed value, and a bare function imported by glob (`use libc::*`), are not followed.
 use std::{
@@ -397,6 +405,50 @@ impl Scan {
         }
     }
 
+    /// The shape of platform code: `root` is `platform/mod.rs`. Traits are looked for in every platform file.
+    fn walk_platform(&mut self, trees: &[TokenTree], root: bool) {
+        let mut i = 0;
+        while i < trees.len() {
+            match &trees[i] {
+                TokenTree::Group(g) => self.walk_platform(&flat(g.stream()), root),
+                TokenTree::Punct(p) if p.as_char() == '#' => {
+                    let at = i + usize::from(punct(trees.get(i + 1), '!')) + 1;
+                    if let Some(inner) = group(trees.get(at), Delimiter::Bracket) {
+                        let body = flat(inner.clone());
+                        let cfg = matches!(body.first().and_then(ident).as_deref(), Some("cfg" | "cfg_attr"));
+                        if root && ((cfg && names_os(&inner, &self.shared.cfg_aliases)) || allows_unused(&body)) {
+                            self.found(&trees[i]);
+                        }
+                        i = at;
+                    }
+                }
+                TokenTree::Ident(id) if id == "trait" && !mid_path(trees, i) => {
+                    if let Some(body) = trees[i + 1..].iter().find_map(|t| group(Some(t), Delimiter::Brace)) {
+                        self.trait_items(&flat(body));
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+    }
+
+    /// The attributes written directly on the items of a trait body (nested bodies belong to default methods).
+    fn trait_items(&mut self, body: &[TokenTree]) {
+        for (i, tree) in body.iter().enumerate() {
+            if !punct(Some(tree), '#') {
+                continue;
+            }
+            let at = i + usize::from(punct(body.get(i + 1), '!')) + 1;
+            if let Some(inner) = group(body.get(at), Delimiter::Bracket) {
+                let cfg = matches!(flat(inner.clone()).first().and_then(ident).as_deref(), Some("cfg" | "cfg_attr"));
+                if cfg && names_os(&inner, &self.shared.cfg_aliases) {
+                    self.found(tree);
+                }
+            }
+        }
+    }
+
     fn walk(&mut self, trees: &[TokenTree]) {
         let mut i = 0;
         while i < trees.len() {
@@ -572,6 +624,21 @@ impl Scan {
     }
 }
 
+/// `allow(dead_code)`, `expect(unused_imports)`… anywhere in an attribute, so `cfg_attr(x, allow(dead_code))` too.
+fn allows_unused(attribute: &[TokenTree]) -> bool {
+    attribute.iter().enumerate().any(|(i, tree)| match tree {
+        TokenTree::Group(g) => allows_unused(&flat(g.stream())),
+        TokenTree::Ident(id) if id == "allow" || id == "expect" => group(attribute.get(i + 1), Delimiter::Parenthesis)
+            .is_some_and(|lints| {
+                lints.into_iter().any(|lint| {
+                    matches!(&lint, TokenTree::Ident(name)
+                        if name == "dead_code" || name.to_string().starts_with("unused"))
+                })
+            }),
+        _ => false,
+    })
+}
+
 fn mentions_command(stream: TokenStream) -> bool {
     stream.into_iter().any(|tree| match tree {
         TokenTree::Ident(id) => {
@@ -598,6 +665,20 @@ fn scan(source: &str, shared: &Shared) -> Result<Report> {
     scan.collecting = false;
     scan.walk(&trees);
     Ok(Report { count: scan.count, lines: scan.lines, shared: scan.shared })
+}
+
+/// The shape of one platform file (see the module docs); the OS itself is allowed there.
+fn scan_platform(source: &str, root: bool, shared: &Shared) -> Result<Report> {
+    let stream = TokenStream::from_str(source).map_err(|e| e.to_string())?;
+    let mut scan = Scan { shared: shared.clone(), ..Scan::default() };
+    scan.walk_platform(&flat(stream), root);
+    Ok(Report { count: scan.count, lines: scan.lines, shared: scan.shared })
+}
+
+/// `platform/mod.rs`: the module root, which only declares and picks.
+fn platform_root(path: &Path) -> bool {
+    path.file_name().is_some_and(|name| name == "mod.rs")
+        && path.parent().and_then(Path::file_name).is_some_and(|dir| dir == "platform")
 }
 
 /// Platform code (the `platform` module, `platform.rs`) is where the OS belongs.
@@ -638,8 +719,13 @@ pub fn check() -> Result<()> {
     }
     let mut errors = Vec::new();
     let mut total = 0;
-    for (path, source) in files.iter().filter(|(path, _)| !exempt(Path::new(path))) {
-        let report = scan(source, &shared).map_err(|e| format!("{path}: {e}"))?;
+    for (path, source) in &files {
+        let report = if exempt(Path::new(path)) {
+            scan_platform(source, platform_root(Path::new(path)), &shared)
+        } else {
+            scan(source, &shared)
+        }
+        .map_err(|e| format!("{path}: {e}"))?;
         if report.count > 0 {
             total += report.count;
             let lines: Vec<String> = report.lines.iter().map(usize::to_string).collect();
@@ -814,5 +900,72 @@ mod tests {
             2
         );
         assert_eq!(n("const EXAMPLE: &str = \"CARGO_CFG_TARGET_OS\"; #[test] fn f() { assert_eq!(name(), \"CARGO_CFG_TARGET_OS\"); }"), 0);
+    }
+
+    fn root(source: &str) -> usize {
+        scan_platform(source, true, &Shared::default()).unwrap().count
+    }
+
+    fn other(source: &str) -> usize {
+        scan_platform(source, false, &Shared::default()).unwrap().count
+    }
+
+    #[test]
+    fn platform_root_rejects_os_cfg_and_unused_allows() {
+        assert_eq!(root("#[cfg(target_os = \"macos\")] mod tray; #[cfg(windows)] mod tray;"), 2);
+        assert_eq!(root("#[cfg_attr(unix, derive(Debug))] pub struct A;"), 1);
+        assert_eq!(root("#![allow(dead_code)] #[allow(unused_imports)] use a::b; #[expect(unused)] fn f() {}"), 3);
+        assert_eq!(root("#[cfg_attr(test, allow(dead_code))] fn f() {}"), 1);
+        assert_eq!(root("#[cfg_attr(not(debug_assertions), cfg_attr(unix, allow(dead_code)))] fn f() {}"), 1);
+    }
+
+    #[test]
+    fn platform_root_accepts_portable_declarations() {
+        assert_eq!(
+            root("mod tray; pub use tray::Tray; #[cfg(test)] mod tests {} #[allow(clippy::needless_return)] fn f() {}"),
+            0
+        );
+        assert_eq!(
+            root("#[cfg(feature = \"windows\")] mod a; #[derive(Debug)] struct B; #[deny(dead_code)] fn f() {}"),
+            0
+        );
+        assert_eq!(root("/// Uses #[cfg(unix)] and allow(dead_code).\nfn f() { let _ = \"#[cfg(unix)]\"; }"), 0);
+    }
+
+    #[test]
+    fn root_rules_apply_to_mod_rs_only() {
+        assert_eq!(other("#[cfg(target_os = \"macos\")] mod mac; #[allow(dead_code)] fn f() {}"), 0);
+        assert!(platform_root(Path::new("src-tauri/src/platform/mod.rs")));
+        assert!(!platform_root(Path::new("src-tauri/src/platform/tray.rs")));
+        assert!(!platform_root(Path::new("src-tauri/src/platform/tray/mod.rs")));
+        assert!(!platform_root(Path::new("src-tauri/src/other/mod.rs")));
+    }
+
+    #[test]
+    fn traits_reject_os_gated_items() {
+        let methods =
+            "pub trait Data { fn all(&self); #[cfg(any(target_os = \"macos\", test))] fn responsible(&self) -> u32; }";
+        assert_eq!(other(methods), 1);
+        assert_eq!(
+            other(
+                "trait T { #[cfg(target_os = \"macos\")] const X: u8; #[cfg(unix)] type A; #[cfg(windows)] fn f(); }"
+            ),
+            3
+        );
+        assert_eq!(other("trait T { #[cfg_attr(unix, inline)] fn f(&self) {} }"), 1);
+        assert_eq!(other("mod m { pub trait T { #[cfg(not(target_os = \"linux\"))] fn f(&self); } }"), 1);
+        // The same rule holds in a root.
+        assert_eq!(root("trait T { #[cfg(unix)] fn f(&self); }"), 2);
+        let aliases = Shared { cfg_aliases: HashSet::from(["mac".to_string()]), ..Shared::default() };
+        assert_eq!(scan_platform("trait T { #[cfg(mac)] fn f(&self); }", false, &aliases).unwrap().count, 1);
+    }
+
+    #[test]
+    fn traits_accept_portable_items() {
+        assert_eq!(other("trait T { fn f(&self); #[cfg(test)] fn g(&self); #[cfg(feature = \"x\")] fn h(&self); }"), 0);
+        assert_eq!(other("trait T { #[doc = \"unix\"] fn f(&self) { #[cfg(unix)] let _ = 1; } }"), 0);
+        // OS gates on the implementing side are the OS file's own business.
+        assert_eq!(other("impl T for A { #[cfg(unix)] fn f(&self) {} } fn g<T: Trait>() {}"), 0);
+        assert_eq!(other("fn f() -> impl Trait { 1 } struct S; #[cfg(unix)] fn g() {}"), 0);
     }
 }
