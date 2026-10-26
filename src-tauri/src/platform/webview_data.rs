@@ -18,7 +18,7 @@ mod imp;
 mod imp;
 pub use imp::Os as SystemWebviewData;
 
-#[cfg(any(target_os = "macos", test))]
+/// The app's bundle identifier (`tauri.conf.json`), which names its browser storage on every host.
 const IDENTIFIER: &str = "dev.sidevoice.desktop";
 
 /// Native-resolved allowlist, never populated from the page or a reset payload.
@@ -51,13 +51,15 @@ pub trait WebviewData {
     /// Inspection failure refuses cleanup; even a reused live PID conservatively keeps the gate closed.
     fn exited(pid: u32) -> io::Result<bool>;
 
-    /// Resolve the runtime's roots from native Tauri `home_dir` and `app_local_data_dir` results.
-    /// Call before exit; carry these native values through authenticated helper handoff. macOS keeps
-    /// its existing WKWebView default store. Linux's Wry context uses the same base for data AND cache.
-    fn locations(_home: &Path, app_local_data: &Path) -> io::Result<Locations> {
-        // Tauri supplies this path to Wry. WebView2 uses it as its UDF; WebKitGTK uses it
-        // for BOTH base_data_directory and base_cache_directory, with cookies at <path>/cookies.
-        Locations::new(vec![app_local_data.to_path_buf()])
+    /// Resolve the runtime's roots natively, before exit; `home` is the account's home directory.
+    /// Callers never spell a native path. macOS keeps its existing WKWebView default store.
+    fn locations(_home: &Path) -> io::Result<Locations> {
+        // Tauri's `app_local_data_dir` (the same `dirs` local data folder plus the identifier), which it
+        // supplies to Wry. WebView2 uses it as its UDF; WebKitGTK uses it for BOTH base_data_directory
+        // and base_cache_directory, with cookies at <path>/cookies.
+        let local = dirs::data_local_dir()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no local data folder for this account"))?;
+        Locations::new(vec![local.join(IDENTIFIER)])
     }
 
     /// Snapshot the app and its browser writers before allowing the app to exit. The transaction
@@ -139,21 +141,6 @@ impl Locations {
         }
         Ok(Locations(paths))
     }
-
-    // The browser's command line is used only to associate a process with our UDF, never as a deletion path.
-    #[cfg(any(target_os = "windows", test))]
-    fn browser_folder(args: &[std::ffi::OsString]) -> io::Result<Option<PathBuf>> {
-        for (index, arg) in args.iter().enumerate() {
-            if arg == "--user-data-dir" {
-                return args.get(index + 1).map(PathBuf::from).map(Some).ok_or_else(Owner::busy);
-            }
-            let text = arg.to_str().ok_or_else(Owner::busy)?;
-            if let Some(folder) = text.strip_prefix("--user-data-dir=") {
-                return if folder.is_empty() { Err(Owner::busy()) } else { Ok(Some(PathBuf::from(folder))) };
-            }
-        }
-        Ok(None)
-    }
 }
 
 impl Owner {
@@ -197,32 +184,6 @@ impl Owner {
             processes.extend(added);
         }
     }
-
-    // Responsibility, unlike PPID, associates launchd-owned XPC services with their application. Keep
-    // already observed PID/start pairs even after the app exits or macOS changes the responsibility chain.
-    #[cfg(any(target_os = "macos", test))]
-    fn responsible_processes(
-        system: &System,
-        processes: &mut Vec<(Pid, u64)>,
-        mut lookup: impl FnMut(Pid, &sysinfo::Process) -> io::Result<Option<Pid>>,
-    ) -> io::Result<()> {
-        let app = processes.first().ok_or_else(Owner::busy)?.0;
-        for (pid, process) in system.processes() {
-            if processes.contains(&(*pid, process.start_time())) {
-                continue;
-            }
-            if lookup(*pid, process)? == Some(app) {
-                if process.start_time() == 0 {
-                    return Err(Owner::busy());
-                }
-                let identity = (*pid, process.start_time());
-                if !processes.contains(&identity) {
-                    processes.push(identity);
-                }
-            }
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -231,7 +192,7 @@ mod tests {
 
     // A native test subprocess stands in for a browser, so exercise the shared lifetime contract
     // without pretending that its executable/arguments identify a real WebView2 runtime.
-    struct Fixture;
+    pub(super) struct Fixture;
     impl WebviewData for Fixture {
         fn exited(pid: u32) -> io::Result<bool> {
             SystemWebviewData::exited(pid)
@@ -305,28 +266,10 @@ mod tests {
     #[test]
     fn native_locations_are_absolute_and_do_not_guess_other_browser_profiles() {
         let temp = tempfile::tempdir().unwrap();
-        let local = temp.path().join(IDENTIFIER);
-        let paths = SystemWebviewData::locations(temp.path(), &local).unwrap();
+        let paths = SystemWebviewData::locations(temp.path()).unwrap();
         assert!(!paths.paths().is_empty());
         assert!(paths.paths().iter().all(|p| p.is_absolute() && p.ends_with(IDENTIFIER)));
         assert!(Locations::new(vec![PathBuf::from("../browser")]).is_err());
-    }
-
-    #[test]
-    fn user_data_folder_is_an_exact_argument_not_a_command_substring() {
-        let args = |items: &[&str]| items.iter().map(std::ffi::OsString::from).collect::<Vec<_>>();
-        for command in [
-            args(&["browser", "--user-data-dir=C:\\Users\\Name With Spaces\\é"]),
-            args(&["browser", "--user-data-dir", "C:\\Users\\Name With Spaces\\é"]),
-        ] {
-            assert_eq!(
-                Locations::browser_folder(&command).unwrap(),
-                Some(PathBuf::from("C:\\Users\\Name With Spaces\\é"))
-            );
-        }
-        assert_eq!(Locations::browser_folder(&args(&["browser", "--something=--user-data-dir=other"])).unwrap(), None);
-        assert!(Locations::browser_folder(&args(&["browser", "--user-data-dir"])).is_err());
-        assert!(Locations::browser_folder(&args(&["browser", "--user-data-dir="])).is_err());
     }
 
     #[test]
@@ -342,54 +285,13 @@ mod tests {
         std::fs::write(root.join(IDENTIFIER).join("cookies"), b"last shutdown write").unwrap();
     }
 
-    #[test]
-    fn responsible_sibling_writer_blocks_removal_after_host_exit() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().canonicalize().unwrap();
-        let selected = root.join(IDENTIFIER);
-        std::fs::create_dir(&selected).unwrap();
-        let spawn_writer = |directory: &Path| {
-            std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", &format!("{}::browser_writer_child", module_path!().split_once("::").unwrap().1)])
-                .env("SIDEVOICE_WEBVIEW_WRITER_FIXTURE", directory)
-                .spawn()
-                .unwrap()
-        };
-        let host_dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir(host_dir.path().join(IDENTIFIER)).unwrap();
-        let mut host = spawn_writer(host_dir.path());
-        let mut writer = spawn_writer(&root);
-        let deadline = Instant::now() + Duration::from_secs(15);
-        while !root.join("ready").exists() || !host_dir.path().join("ready").exists() {
-            assert!(Instant::now() < deadline);
-            thread::sleep(Duration::from_millis(20));
-        }
-        let mut owner = Fixture::capture(host.id(), Locations::new(vec![selected.clone()]).unwrap()).unwrap();
-        let writer_pid = Pid::from_u32(writer.id());
-        assert!(!owner.processes.iter().any(|(pid, _)| *pid == writer_pid));
-        let system = Owner::snapshot().unwrap();
-        // Lookup failure cannot authorize cleanup; another responsible app must not be selected.
-        assert!(Owner::responsible_processes(&system, &mut owner.processes, |_, _| Err(Owner::busy())).is_err());
-        Owner::responsible_processes(&system, &mut owner.processes, |_, _| Ok(Some(Pid::from_u32(std::process::id()))))
-            .unwrap();
-        assert!(!owner.processes.iter().any(|(pid, _)| *pid == writer_pid));
-        // Inject only the platform lookup: these are real sibling processes, not descendants.
-        Owner::responsible_processes(&system, &mut owner.processes, |pid, _| {
-            Ok((pid == writer_pid).then_some(Pid::from_u32(host.id())))
-        })
-        .unwrap();
-        let retry =
-            Owner { locations: Locations::new(vec![selected.clone()]).unwrap(), processes: owner.processes.clone() };
-        std::fs::write(host_dir.path().join("exit"), b"exit").unwrap();
-        assert!(host.wait().unwrap().success());
-        assert_eq!(Fixture::wait_released(owner, Instant::now()).err().unwrap().kind(), io::ErrorKind::WouldBlock);
-        assert!(selected.exists());
-        std::fs::write(root.join("exit"), b"exit").unwrap();
-        assert!(writer.wait().unwrap().success());
-        let released = Fixture::wait_released(retry, deadline).unwrap();
-        assert_eq!(std::fs::read(selected.join("cookies")).unwrap(), b"last shutdown write");
-        SystemWebviewData::remove(&released, &selected).unwrap();
-        assert!(!selected.exists());
+    /// Starts [`browser_writer_child`] in its own process, writing under `directory`.
+    pub(super) fn spawn_writer(directory: &Path) -> std::process::Child {
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &format!("{}::browser_writer_child", module_path!().split_once("::").unwrap().1)])
+            .env("SIDEVOICE_WEBVIEW_WRITER_FIXTURE", directory)
+            .spawn()
+            .unwrap()
     }
 
     #[test]
@@ -398,15 +300,7 @@ mod tests {
         let root = temp.path().canonicalize().unwrap();
         let selected = root.join(IDENTIFIER);
         std::fs::create_dir(&selected).unwrap();
-        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                &format!("{}::browser_writer_child", module_path!().split_once("::").unwrap().1),
-                "--nocapture",
-            ])
-            .env("SIDEVOICE_WEBVIEW_WRITER_FIXTURE", &root)
-            .spawn()
-            .unwrap();
+        let mut child = spawn_writer(&root);
         let deadline = Instant::now() + Duration::from_secs(15);
         while !root.join("ready").exists() {
             assert!(Instant::now() < deadline);

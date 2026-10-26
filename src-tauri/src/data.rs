@@ -1107,8 +1107,7 @@ pub fn run_reset_helper(parent_pid: Option<u32>, lock_fd: Option<i32>, uninstall
         use crate::platform::webview_data::{SystemWebviewData, WebviewData};
         let Some(home) = account_home() else { return };
         let browser =
-            SystemWebviewData::locations(&home, &home.join("Library/Application Support/dev.sidevoice.desktop"))
-                .and_then(|paths| SystemWebviewData::capture(parent_pid, paths));
+            SystemWebviewData::locations(&home).and_then(|paths| SystemWebviewData::capture(parent_pid, paths));
         if std::io::stdout().write_all(b"ready\n").is_err() {
             return;
         }

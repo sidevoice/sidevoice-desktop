@@ -35,6 +35,8 @@ serde_json = "1"
 sys-locale = "0.3"
 # Match the registered NSIS executable by native file identity (also handles Windows path casing).
 same-file = "1"
+# The local data folder Tauri gives the webview (`app_local_data_dir`), for its storage removal; already in Tauri's graph.
+dirs = "7"
 # Probe-only RSS observations use the maintained portable API; no GPU estimates.
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 # Friendly computer names via the OS APIs (platform/computer_name); already in the shared platform graph.

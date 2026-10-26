@@ -47,7 +47,7 @@ impl WebviewData for Os {
             if process.cmd().is_empty() || process.start_time() == 0 {
                 return Err(Owner::busy());
             }
-            let folder = Locations::browser_folder(process.cmd())?;
+            let folder = browser_folder(process.cmd())?;
             if let Some(folder) = folder {
                 let owned = locations
                     .paths()
@@ -69,5 +69,40 @@ impl WebviewData for Os {
         }
         Owner::descendants(system, processes);
         Ok(())
+    }
+}
+
+// The browser's command line is used only to associate a process with our UDF, never as a deletion path.
+fn browser_folder(args: &[std::ffi::OsString]) -> io::Result<Option<PathBuf>> {
+    for (index, arg) in args.iter().enumerate() {
+        if arg == "--user-data-dir" {
+            return args.get(index + 1).map(PathBuf::from).map(Some).ok_or_else(Owner::busy);
+        }
+        let text = arg.to_str().ok_or_else(Owner::busy)?;
+        if let Some(folder) = text.strip_prefix("--user-data-dir=") {
+            return if folder.is_empty() { Err(Owner::busy()) } else { Ok(Some(PathBuf::from(folder))) };
+        }
+    }
+    Ok(None)
+}
+
+// WebView2's command-line association is Windows-only, so this test cannot be phrased against the shared
+// interface (`observe` needs a live sysinfo snapshot of real runtimes).
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn user_data_folder_is_an_exact_argument_not_a_command_substring() {
+        let args = |items: &[&str]| items.iter().map(std::ffi::OsString::from).collect::<Vec<_>>();
+        for command in [
+            args(&["browser", "--user-data-dir=C:\\Users\\Name With Spaces\\é"]),
+            args(&["browser", "--user-data-dir", "C:\\Users\\Name With Spaces\\é"]),
+        ] {
+            assert_eq!(browser_folder(&command).unwrap(), Some(PathBuf::from("C:\\Users\\Name With Spaces\\é")));
+        }
+        assert_eq!(browser_folder(&args(&["browser", "--something=--user-data-dir=other"])).unwrap(), None);
+        assert!(browser_folder(&args(&["browser", "--user-data-dir"])).is_err());
+        assert!(browser_folder(&args(&["browser", "--user-data-dir="])).is_err());
     }
 }

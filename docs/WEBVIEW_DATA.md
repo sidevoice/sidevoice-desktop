@@ -5,15 +5,19 @@ The macOS reset helper uses it. Windows/Linux reset remains unavailable until th
 transaction is assembled; this interface does not enable that UI or remove an installed app.
 
 The concern module declares the documented trait, common types and OS selection. Its shared trait defaults
-own capture, waiting and held-parent deletion; private common-type helpers own path validation and process
-association. Each of `webview_data/{macos,windows,linux}.rs` implements only the native liveness and writer
-selection it needs (plus macOS admission and storage roots). Callers import the trait and selected type
-directly. The interface tests stay in the concern module and run on every compiled host.
+own capture, waiting, held-parent deletion and the Windows/Linux storage root; private common-type helpers own
+path validation and descendant tracking. Each of `webview_data/{macos,windows,linux}.rs` implements only the
+native liveness and writer selection it needs (plus macOS admission and storage roots); OS-only association
+(macOS responsibility, the WebView2 `--user-data-dir` argument) stays private to its OS file. Callers import
+the trait and selected type directly. The interface tests stay in the concern module and run on every compiled
+host; the two OS-only association helpers are tested in their own OS file.
 
 ## Exact storage roots
 
-The native caller supplies Tauri's resolved `home_dir()` and `app_local_data_dir()` values. No path is accepted
-from the room page. `SIDEVOICE_DATA_DIR` does not change browser storage.
+The concern resolves the roots itself; the caller passes only the account home (used by macOS) and never spells
+a native path. On Windows and Linux the root is Tauri's `app_local_data_dir()`, resolved the same way Tauri
+resolves it (`dirs::data_local_dir()` plus the identifier), so the reset helper needs no Tauri handle. No path is
+accepted from the room page. `SIDEVOICE_DATA_DIR` does not change browser storage.
 
 | OS | Roots authorized by this interface | Evidence |
 | --- | --- | --- |
@@ -21,9 +25,9 @@ from the room page. `SIDEVOICE_DATA_DIR` does not change browser storage.
 | Windows | Tauri `app_local_data_dir()`, normally `%LOCALAPPDATA%\dev.sidevoice.desktop` (the WebView2 user data folder, including its profiles/cache) | [Tauri 2.12.0 manager](https://docs.rs/crate/tauri/2.12.0/source/src/manager/webview.rs), [path resolver](https://docs.rs/crate/tauri/2.12.0/source/src/path/desktop.rs), [Wry 0.57.0 WebView2 environment](https://docs.rs/crate/wry/0.57.0/source/src/webview2/mod.rs). |
 | Linux | Tauri `app_local_data_dir()`, normally `$XDG_DATA_HOME/dev.sidevoice.desktop` or `~/.local/share/dev.sidevoice.desktop`; **both data and cache are here**, including `cookies` | The same Tauri manager and resolver; [Wry 0.57.0 WebContext](https://docs.rs/crate/wry/0.57.0/source/src/webkitgtk/web_context.rs) sets both `base_data_directory` and `base_cache_directory` to this path and the cookie file to `<path>/cookies`. There is no additional default `~/.cache/webkitgtk` deletion. |
 
-These are the pinned dependency versions, not guesses from generic browser defaults. App-directory overrides,
-if configured in a future Tauri config, must be resolved by Tauri before passing the paths. The current app has
-no custom data-directory override on either webview builder. A WebView2 environment/registry override pointing
+These are the pinned dependency versions, not guesses from generic browser defaults. Tauri's app-directory
+override (`app.appDirectoriesOverride`) is not configured and would have to be mirrored here if it ever were. The
+current app has no custom data-directory override on either webview builder. A WebView2 environment/registry override pointing
 an app child at a different user data folder is refused, not silently added to the deletion allowlist.
 Windows capture also requires positive evidence of a runtime using the allowlisted folder; an override that
 reuses another application's browser cannot make an unobserved default store look safe to remove.
@@ -96,8 +100,9 @@ the existing helper protocol and deletion order without introducing a separate p
 ## Verification and limits
 
 Interface tests run on each compiled host: an active owner refuses release, exact allowlist removal preserves
-siblings, missing roots succeed, malformed UDF arguments refuse, and a real child through the shared lifetime implementation performs its final shutdown
-write before release/removal. A sibling-writer regression injects responsibility lookup (not PPID ancestry),
+siblings, missing roots succeed, and a real child through the shared lifetime implementation performs its final shutdown
+write before release/removal. In `webview_data/windows.rs`, malformed UDF arguments refuse. In `webview_data/macos.rs`, a
+sibling-writer regression injects responsibility lookup (not PPID ancestry),
 exits its host, confirms release is refused while the sibling remains alive, and waits for the final shutdown
 write before removing storage. Lookup failure and another responsible app are also checked. An omitted-PID/inspection-error regression
 refuses release, and a live PID with a mismatched start time still blocks cleanup. Windows can also
