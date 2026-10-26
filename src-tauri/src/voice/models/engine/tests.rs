@@ -137,8 +137,7 @@ fn a_call_on_the_engines_real_models_hears_speech_and_plays_a_reply() {
         .and_then(|m| m.local.as_ref())
         .expect("whisper-tiny is a local model");
     let build = local.recommended_build.clone().expect("a whisper-tiny build runs here");
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    {
+    if crate::platform::host::APPLE_SILICON {
         let recommended = local.builds.iter().find(|candidate| candidate.id == build).unwrap();
         assert!(recommended.available, "the recommended Whisper build runs here");
         assert_eq!(recommended.backend, "whisper-cpp");
