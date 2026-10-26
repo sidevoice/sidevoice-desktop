@@ -1,8 +1,8 @@
 use super::*;
 
-pub(super) struct Os;
+pub(super) struct Native;
 
-impl Native for Os {
+impl Os for Native {
     fn preflight(owner: u32) -> io::Result<()> {
         let pid = Pid::from_u32(owner);
         if responsible_pid(pid)? != pid {

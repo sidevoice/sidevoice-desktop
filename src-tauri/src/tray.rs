@@ -2,7 +2,7 @@
 //! the room's Settings, quit. What it shows comes from [`bridge::tray_view`], in the app's language; what it does goes through
 //! the bridge.
 
-use crate::platform::tray::{SystemTrayAppearance, TrayAppearance};
+use crate::platform;
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command, TrayIcon, TrayIconSlot};
 use sidevoice_desktop_core::i18n::t;
 use std::sync::Mutex;
@@ -23,7 +23,7 @@ struct TrayItems {
 }
 
 fn icon(which: TrayIcon) -> tauri::Result<(Image<'static>, bool)> {
-    let image = SystemTrayAppearance::image(which);
+    let image = platform::tray::image(which);
     Ok((Image::from_bytes(image.bytes)?, image.template))
 }
 
@@ -77,7 +77,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         })
         .build(app);
     if let Err(error) = created {
-        SystemTrayAppearance::creation_failed(error)?;
+        platform::tray::creation_failed(error)?;
         return Ok(());
     }
 

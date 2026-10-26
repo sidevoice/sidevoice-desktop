@@ -1,9 +1,9 @@
-use super::Application;
+use super::Os;
 use tauri::AppHandle;
 
-pub struct Os;
+pub(super) struct Native;
 
-impl Application for Os {
+impl Os for Native {
     fn prepare(app: &AppHandle) -> tauri::Result<()> {
         // Ask for a regular Dock application before creating any window or panel (#117).
         app.set_activation_policy(tauri::ActivationPolicy::Regular)?;
@@ -28,7 +28,7 @@ impl Application for Os {
         }
     }
 
-    fn report(app: &AppHandle) -> String {
+    fn report(app: &AppHandle) -> Option<String> {
         use objc2::{class, msg_send, rc::Retained, runtime::AnyObject};
         use objc2_foundation::NSString;
         // NSApplicationActivationPolicy: 0 Regular (Dock tile, Cmd+Tab), 1 Accessory, 2 Prohibited.
@@ -57,9 +57,9 @@ impl Application for Os {
         );
         let regular = policy == 0;
         let bundle = bundle.as_deref().unwrap_or("none");
-        format!(
+        Some(format!(
             "app_active={active} regular={regular} policy={policy} running_policy={running_policy} hidden={hidden} \
              owns_menu_bar={owns_menu_bar} bundle={bundle} room={room}"
-        )
+        ))
     }
 }

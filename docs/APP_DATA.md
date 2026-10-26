@@ -43,7 +43,7 @@ and the reset plan carries none.
   the browser storage and the deletion. An alternate home supplied as `HOME` (say, a restored profile inside the
   real one) is refused before anything is deleted; a test pins that.
 
-Reset is still offered on macOS only (`reset_availability`): the rest of the transaction is macOS-only.
+Reset is still offered on macOS only (`platform::host::RESET_AVAILABLE`): the rest of the transaction is macOS-only.
 
 ## Which folders
 

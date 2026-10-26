@@ -26,14 +26,9 @@ use std::ffi::OsStr;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
-#[cfg(target_os = "macos")]
-#[path = "app_data/macos.rs"]
-mod imp;
-#[cfg(target_os = "linux")]
-#[path = "app_data/linux.rs"]
-mod imp;
-#[cfg(target_os = "windows")]
-#[path = "app_data/windows.rs"]
+#[cfg_attr(target_os = "macos", path = "app_data/macos.rs")]
+#[cfg_attr(target_os = "windows", path = "app_data/windows.rs")]
+#[cfg_attr(target_os = "linux", path = "app_data/linux.rs")]
 mod imp;
 use imp::Native;
 

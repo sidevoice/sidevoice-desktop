@@ -1,10 +1,10 @@
-use super::Observations;
+use super::Os;
 use crate::platform::desktop_geometry;
 use tauri::{Runtime, WebviewWindow};
 
 pub struct Native;
 
-impl Observations for Native {
+impl Os for Native {
     /// Linux has no workspace or occlusion query, so what it can say depends on the display server:
     ///
     /// - With global positions (X11), it reports nothing: the room counts as on screen unless hidden or minimised.

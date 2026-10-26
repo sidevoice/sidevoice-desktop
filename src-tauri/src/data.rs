@@ -9,7 +9,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tauri::{AppHandle, Manager, Webview};
 
-use crate::platform::reset_availability::RESET_AVAILABLE;
+use crate::platform::host::RESET_AVAILABLE;
 use crate::platform::reset_handoff::{self, Handoff};
 use crate::platform::{account, app_data, uninstall};
 use crate::AppState;
@@ -198,7 +198,7 @@ pub async fn data_uninstall(app: AppHandle, webview: Webview) -> Answer {
 
 /// A host without the reset transaction refuses before the confirmation and before any data is touched.
 async fn confirmed_reset(app: AppHandle, uninstall: bool) -> Answer {
-    use crate::platform::confirmation::{Confirmation, ConfirmationKind, NativeConfirmation};
+    use crate::platform::confirmation::{self, ConfirmationKind};
     use crate::platform::webview_data;
     if !RESET_AVAILABLE {
         return Err(refused("reset.unavailable"));
@@ -234,7 +234,7 @@ async fn confirmed_reset(app: AppHandle, uninstall: bool) -> Answer {
         return Err(refused("reset.app-unremovable"));
     }
     if let Err(refusal) = require_confirmation(
-        NativeConfirmation::confirm(
+        confirmation::confirm(
             &app,
             if uninstall { ConfirmationKind::Uninstall } else { ConfirmationKind::DeleteAllData },
         )

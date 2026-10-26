@@ -1,18 +1,17 @@
 use gtk::prelude::*;
 
-use super::{Confirmation, ConfirmationKind, DialogStart};
+use super::{DialogStart, Os};
 
-pub struct NativeConfirmation;
+pub(super) struct Native;
 
-impl Confirmation for NativeConfirmation {
-    fn show(kind: ConfirmationKind, start: DialogStart) -> bool {
+impl Os for Native {
+    fn show(words: (&'static str, &'static str, &'static str, &'static str), start: DialogStart) -> bool {
         // Tauri normally initializes GTK on its UI thread. Do not construct a widget if that prerequisite
         // or the display connection is missing: GTK would abort rather than return a recoverable error.
         if !gtk::is_initialized_main_thread() || gtk::gdk::Display::default().is_none() {
             return false;
         }
-        let locale = sys_locale::get_locale().unwrap_or_default();
-        let (title, detail, cancel, action) = kind.words(&locale);
+        let (title, detail, cancel, action) = words;
         let dialog = gtk::MessageDialog::builder()
             .title(title)
             .text(title)
@@ -37,5 +36,19 @@ impl Confirmation for NativeConfirmation {
         // explicit destruction after run(); requesting close would only queue another delete event.
         unsafe { dialog.destroy() };
         confirmed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::platform::confirmation::{ConfirmationKind, START_TIMEOUT};
+
+    #[test]
+    fn without_gtk_on_this_thread_it_cancels_without_constructing_a_widget() {
+        assert!(!gtk::is_initialized_main_thread());
+        let (started, _start) = tokio::sync::oneshot::channel();
+        let start = DialogStart { deadline: tokio::time::Instant::now() + START_TIMEOUT, started };
+        assert!(!Native::show(ConfirmationKind::DeleteAllData.words("en"), start));
     }
 }

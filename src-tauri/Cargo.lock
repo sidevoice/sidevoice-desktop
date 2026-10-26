@@ -4734,6 +4734,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.3.4",
  "httparse",
+ "interprocess",
  "p256",
  "process-wrap",
  "serde",

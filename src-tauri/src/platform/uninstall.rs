@@ -2,14 +2,9 @@
 //! `data.rs` runs [`uninstall`] in the reset helper after the app's data is deleted (`app_data`), and keeps the
 //! decisions (report, relaunch).
 
-#[cfg(target_os = "macos")]
-#[path = "uninstall/macos.rs"]
-mod imp;
-#[cfg(target_os = "linux")]
-#[path = "uninstall/linux.rs"]
-mod imp;
-#[cfg(target_os = "windows")]
-#[path = "uninstall/windows.rs"]
+#[cfg_attr(target_os = "macos", path = "uninstall/macos.rs")]
+#[cfg_attr(target_os = "windows", path = "uninstall/windows.rs")]
+#[cfg_attr(target_os = "linux", path = "uninstall/linux.rs")]
 mod imp;
 use imp::Native;
 

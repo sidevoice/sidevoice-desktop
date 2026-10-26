@@ -1,7 +1,7 @@
 //! Tauri's defaults already provide the application lifecycle on this host.
 
-use super::Application;
+use super::Os;
 
-pub struct Os;
+pub(super) struct Native;
 
-impl Application for Os {}
+impl Os for Native {}

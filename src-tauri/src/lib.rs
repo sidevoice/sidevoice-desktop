@@ -27,14 +27,11 @@ mod tray;
 mod updater;
 mod voice;
 
-use crate::platform::update_eligibility::{NativeUpdateEligibility, UpdateEligibility};
-
-use crate::platform::application::{Application, NativeApplication};
-use crate::platform::computer_name::{ComputerName, SystemComputerName};
-use crate::platform::host_capabilities::CAPABILITIES;
-use crate::platform::media_controls::{MediaControls, NativeMediaControls};
+use crate::platform::application;
+use crate::platform::diagnostics;
+use crate::platform::host;
+use crate::platform::media_controls;
 use crate::platform::shortcut_access;
-use crate::platform::webview_diagnostics::{NativeWebviewDiagnostics, WebviewDiagnostics};
 use serde_json::{json, Value};
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
 use sidevoice_desktop_core::build_info::BuildInfo;
@@ -172,7 +169,7 @@ fn bridge_state(
     // its facts carry the conversation's words, which stay out of the log.
     debug_detail(|| format!("bridge_state {:?}", CallSnapshot { rest: Default::default(), ..snapshot.clone() }));
     tray::update(&app, &snapshot);
-    NativeMediaControls::update(&app, &snapshot);
+    media_controls::update(&app, &snapshot);
     call_controls::update(&app);
     Ok(())
 }
@@ -299,7 +296,7 @@ fn reset_call_state(app: &AppHandle) {
     let snapshot = CallSnapshot::default();
     *app.state::<AppState>().call.lock().unwrap() = snapshot.clone();
     tray::update(app, &snapshot);
-    NativeMediaControls::update(app, &snapshot);
+    media_controls::update(app, &snapshot);
     call_controls::update(app);
     #[cfg(target_os = "macos")]
     voice::page_changed(app);
@@ -342,14 +339,14 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
         .initialization_script(bridge::WEBVIEW_LOG_SCRIPT)
         .initialization_script(bridge::script_for_origin(
             APP_ORIGIN,
-            NativeUpdateEligibility::available(&build.channel),
+            host::updates_available(&build.channel),
             &build,
-            SystemComputerName::read().as_deref(),
+            host::name().as_deref(),
             &debug_options,
             platform::microphone::settings_available(),
-            &NativeWebviewDiagnostics::available(),
-            NativeMediaControls::support(),
-            CAPABILITIES,
+            &diagnostics::webview_switches(),
+            media_controls::support(),
+            host::capabilities(),
         ));
     #[cfg(feature = "probe")]
     let builder = match probe::local_host_flow() {
@@ -368,7 +365,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
                 _ => media::Capture::Other,
             };
             let page = committed_origin.lock().unwrap().clone();
-            let decision = media::decide(capture, page.as_deref(), APP_ORIGIN, !CAPABILITIES.voice);
+            let decision = media::decide(capture, page.as_deref(), APP_ORIGIN, !host::capabilities().voice);
             debug(&format!("media {capture:?} for {page:?}: {decision:?}"));
             match decision {
                 media::Decision::Allow => PermissionResponse::Allow,
@@ -415,7 +412,7 @@ fn call_card_disabled() -> bool {
 
 /// Native lifecycle observations plus the common diagnostic card setting (#117).
 fn app_report(app: &AppHandle) -> String {
-    format!("{} call_card={}", NativeApplication::report(app), if call_card_disabled() { "off" } else { "on" })
+    format!("{} call_card={}", application::report(app), if call_card_disabled() { "off" } else { "on" })
 }
 
 /// Replace the shortcut, keep the actual outcome, and notify the room page.
@@ -536,18 +533,18 @@ pub fn run() {
         let _runtime = tauri::async_runtime::handle().inner().enter();
         builder.manage(voice::VoiceState::default())
     };
-    NativeApplication::configure(builder)
+    application::configure(builder)
         .plugin(tauri_plugin_opener::Builder::new().open_js_links_on_click(false).build())
         .manage(AppState::default())
         .invoke_handler(handler())
         .setup(move |app| {
             let handle = app.handle().clone();
-            NativeApplication::prepare(&handle)?;
+            application::prepare(&handle)?;
             shortcut_access::configure(&handle);
             debug(&format!("launch {}", app_report(&handle)));
             tray::create(&handle)?;
             let media_app = handle.clone();
-            NativeMediaControls::attach(&handle, Arc::new(move |command| send(&media_app, command)));
+            media_controls::attach(&handle, Arc::new(move |command| send(&media_app, command)));
             // The model root is shared per OS user on this machine (docs/ENGINES.md).
             // Without it the app still runs; the page then finds no native engine to use.
             let engine_root =
@@ -585,7 +582,7 @@ pub fn run() {
             // The room to the front, last so no window created after it takes it. Setup runs on Ready, after the
             // launch's own activation, which came before any window existed: the window stayed behind (Dock only).
             show_room(&handle);
-            NativeApplication::activate(&handle);
+            application::activate(&handle);
             // How macOS sees the app once everything exists, and again once activation has settled (#117).
             debug(&format!("ready {}", app_report(&handle)));
             let later = handle.clone();
@@ -613,7 +610,7 @@ pub fn run() {
         .build(context)
         .expect("error while building the Sidevoice app")
         .run(|app, event| {
-            NativeApplication::handle_event(app, &event);
+            application::handle_event(app, &event);
             // Quitting, however the app ends (tray, ⌘Q, logout, a reset, an update's restart; `AppHandle::restart` from
             // the updater's thread comes here too), before `exit()` runs the C++ static destructors (#121): the voice
             // calls stop and every model and audio device is released; the call controls card's window goes; the local

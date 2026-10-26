@@ -1,8 +1,8 @@
-use super::Native;
+use super::Os;
 use gtk::prelude::*;
 
-pub(super) struct Os;
-impl Native for Os {
+pub(super) struct Native;
+impl Os for Native {
     fn positions_available() -> bool {
         // The backend GTK selected, compared by type name: `gdk::backend()` panics on an unknown backend.
         static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();

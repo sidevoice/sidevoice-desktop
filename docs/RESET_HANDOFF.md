@@ -5,7 +5,7 @@ handoff — admission, launch of the same executable with `--sidevoice-reset-hel
 initializes, the authenticated plan, the wait for the app's exit, startup exclusion, deadlines and
 cancellation — and its control directory, `state_dir()`. Both are identical on every host, so it is a plain
 module: no trait, no per-OS files. Whether this host offers reset is a separate constant,
-`platform::reset_availability::RESET_AVAILABLE`: true on macOS, false on Windows and Linux until their reset
+`platform::host::RESET_AVAILABLE`: true on macOS, false on Windows and Linux until their reset
 cleanup exists. The handoff works on all three.
 
 The reset transaction itself (pre-exit service and keychain steps, post-exit cleanup, report/journal,
@@ -79,7 +79,7 @@ job does not escape that job; an early helper death prevents cleanup and leaves 
 shared checked filesystem, channel and child libraries supply what differs per OS. It adds no unsafe
 operation or native binding.
 
-`reset_availability.rs` holds `RESET_AVAILABLE`, the one value that differs by OS (`cfg!`). It moves to the
+`host.rs` holds `RESET_AVAILABLE`, the one value that differs by OS (`cfg!`). It moves to the
 reset cleanup concern when that exists and disappears once Windows and Linux get their cleanup.
 
 The reset and report commands, the native confirmation and the
