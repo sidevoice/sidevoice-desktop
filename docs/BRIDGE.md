@@ -237,7 +237,7 @@ Evaluated by the app with `webview.eval` (works with the window hidden); the com
 Joining is deliberately **not** a tray command: joining unlocks audio output, which the webview
 only allows from a click in the page. "Mostrar Sidevoice" opens the window for that.
 
-`window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", version, engine, mediaKeys, build, muteShortcut, callControls, computerName?, localHost?, voice?, microphone?, updater? }`: the
+`window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", version, engine, mediaKeys, build, muteShortcut, callControls, computerName?, localHost?, voice?, microphone, updater? }`: the
 web UI feature-detects the desktop app by it, and each capability by its presence. `version` is the bridge's (2).
 
 `mediaKeys` is supplied by `MediaControls::support()`: `"native"` on macOS and `null` on Windows/Linux.
@@ -677,54 +677,57 @@ What is this app's own:
 
 ## The microphone permission
 
-Where the app runs the voice call (`host.voice`, macOS), the room page is never granted `getUserMedia`, so it can
-neither trigger macOS's microphone prompt (TCC) nor read its answer. `window.__sidevoiceDesktop.host.microphone` does
-it for the page, on the app's own privacy entry, the one the voice call uses: the web's first-run setup asks for the
-microphone early through it, rather than at the first call. On macOS it is a frozen object with the native permission methods:
+`window.__sidevoiceDesktop.host.microphone` is the app's own microphone access, on every OS (the system's answer, never
+the webview's: no `getUserMedia` is opened to read it). Where the app runs the voice call (`host.voice`, macOS), the room
+page is never granted `getUserMedia`, so it can neither trigger macOS's microphone prompt (TCC) nor read its answer;
+the web's first-run setup asks early through this rather than at the first call.
 
 ```ts
 interface MicrophonePermission {
   state(): Promise<"prompt" | "granted" | "denied" | "missing">;
-  request(): Promise<"granted" | "denied">;
-  openSettings(): Promise<void>;
+  request(): Promise<"granted" | "denied" | "missing">;
+  openSettings?(): Promise<void>;
   onChange(listener: () => void): () => void;
 }
 ```
 
-- `state()`: `AVCaptureDevice.authorizationStatus(for: .audio)`: not determined → `"prompt"`, authorized →
-  `"granted"`, denied or restricted → `"denied"`. Where it is not denied and no audio input device exists
-  (`AVCaptureDevice.default(for: .audio)` is nil), `"missing"`: the OS knows the devices, so the bridge owns device
-  availability, and a denial stands whatever is plugged in. Never prompts.
-- `onChange(listener)`: `listener()` whenever `state()` changes, so on a permission change and on a microphone
-  plugged in or out; the page reads `state()` again. Polled every 2 s while anyone listens; returns `stop`.
-- `request()`: `AVCaptureDevice.requestAccess(for: .audio)`: macOS's own prompt the first time (with
-  `NSMicrophoneUsageDescription`, `src-tauri/packaging/macos/Info.plist`); afterwards it answers at once with the stored answer, no
-  prompt.
-- `openSettings()`: opens System Settings at Privacy & Security › Microphone
-  (`x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone`, through `tauri-plugin-opener`), where a
-  denial is undone.
+- `state()`: never prompts, and reads the system afresh each time. A denial stands whatever is plugged in; otherwise
+  no audio input device is `"missing"`. A system that does not answer (below) rejects with `internal`; the bridge has
+  no extra state string for it, and it is never a grant.
+- `request()`: macOS only has a prompt: `AVCaptureDevice.requestAccess(for: .audio)` asks the first time (with
+  `NSMicrophoneUsageDescription`, `src-tauri/packaging/macos/Info.plist`), afterwards it answers at once with the stored
+  answer. On Windows and Linux it is `state()`: there is nothing to ask.
+- `onChange(listener)`: `listener()` whenever `state()` changes, so on a permission change and on a microphone plugged
+  in or out; the page reads `state()` again. Polled every 2 s while anyone listens; returns `stop`.
+- `openSettings()`: only where the OS has a standard microphone privacy page (macOS and Windows; absent on Linux, which
+  has none). It opens a fixed URL through `tauri-plugin-opener` (Rust API) and accepts no URL or program from the page; no
+  generic opener permission is granted to JavaScript, and the plugin's automatic link interception is disabled.
+  Opening it says nothing about access. The page detects it by presence.
 - A refusal rejects `{key, message}`: `bad_request` for a malformed call or another caller, `internal` when the system
-  does not answer or System Settings does not open.
-- Command behind it: `microphone {action}`, `action` `state`, `request` or `open-settings` (`src-tauri/src/microphone.rs`),
-  macOS only. Granted to the room window (`capabilities/room.json`); it re-checks that the caller is the current room
-  window on the app's own page.
+  does not answer or Settings does not open.
+- Command behind it: `microphone {action}`, `action` `state`, `request` or `open-settings` (`src-tauri/src/microphone.rs`).
+  Granted to the room window (`capabilities/room.json`); it re-checks that the caller is the current room window on the
+  app's own page.
 
-On Windows, `host.microphone` is a frozen settings-only object:
+Per OS (`src-tauri/src/platform/microphone.rs`; the rule every OS shares is one function there: a denial beats a missing
+device, a missing device beats everything else, and a grant needs a readable device list):
 
-```ts
-interface MicrophoneSettings {
-  openSettings(): Promise<void>;
-}
-```
-
-It opens `ms-settings:privacy-microphone` through `tauri-plugin-opener` (Rust API). The page must feature-detect
-`state` and `request` independently: Windows still reads and requests capture access through the webview, and opening
-Settings says nothing about whether capture is allowed. No native Windows permission poll is offered. Linux has no
-standard privacy-settings link and does not expose this object. The settings-only command is
-`microphone_open_settings`, granted only to the room, with the same current-room/origin check and refusal contract as
-`microphone`. It accepts no URL or program from the page. No generic opener permission is granted to JavaScript, and
-the plugin's automatic link interception is disabled. Native access-state and capture-error work remains separate.
-The existing macOS `microphone {action: "open-settings"}` command remains supported.
+- **macOS:** `AVCaptureDevice.authorizationStatus(for: .audio)`: not determined → `"prompt"`, authorized → `"granted"`,
+  denied or restricted → `"denied"`; no `AVCaptureDevice.default(for: .audio)` → `"missing"`. Settings:
+  `x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone`.
+- **Windows:** the registry privacy policy, read with `winreg` (no writes): the machine switch
+  (`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone`) and this user's
+  desktop-app switch (`HKCU\…\microphone\NonPackaged`), value `Value`. Sidevoice is an unpackaged NSIS executable, so
+  the packaged-app AppCapability API does not apply and the Store-app switch and per-executable timestamps are not read.
+  `Deny` in either is `"denied"`. A missing key or value counts as allowed: Windows' default for desktop apps is allow,
+  and no key exists until the person first opens that page. A value or key this code cannot interpret is unavailable
+  (a rejection), never a grant. Then the device check below. Settings: `ms-settings:privacy-microphone`. Unpackaged desktop
+  apps have no consent prompt, so `request()` is `state()`.
+- **Linux:** no consent prompt, no privacy page, no desktop permission: granted when an input device exists, else
+  `"missing"`.
+- **Device presence (Windows, Linux):** `cpal` (WASAPI active capture endpoints; ALSA PCM hints, which include the
+  PipeWire/Pulse ALSA plugins where installed) lists the input devices; no stream is opened. A listing that fails is not
+  an empty one: it is unavailable.
 
 ## The mute shortcut
 

@@ -6,7 +6,9 @@
 
 use serde_json::{json, Value};
 use sidevoice_desktop_test_support::fake_core::{self, FakeCore};
+use sidevoice_desktop_test_support::platform::endpoint_cleanup;
 use sidevoice_desktop_test_support::platform::storage::{StorageFixture, StorageFixtures};
+use sidevoice_desktop_test_support::platform::temp;
 use sidevoice_desktop_test_support::{fake_registry::FakeRegistry, fixture};
 use sidevoice_local_host::host::{Action, Config, LocalHost};
 use sidevoice_local_host::http;
@@ -29,14 +31,14 @@ struct World {
 
 impl Drop for World {
     fn drop(&mut self) {
-        fake_core::forget(&self.dirs.data);
+        endpoint_cleanup::forget(&self.dirs.data);
     }
 }
 
 impl World {
     fn new() -> World {
         // Under /tmp: a socket's path must stay short.
-        let tmp = tempfile::Builder::new().prefix("svlh").tempdir_in("/tmp").unwrap();
+        let tmp = tempfile::Builder::new().prefix("svlh").tempdir_in(temp::short_root()).unwrap();
         let dirs = DataDirs::new(tmp.path().join("d"));
         let app_dir = tmp.path().join("app");
         World { _tmp: tmp, dirs, app_dir, log: Arc::default() }
@@ -380,13 +382,19 @@ fn an_incompatible_core_is_not_paired() {
 fn an_unsafe_core_directory_is_never_connected_to() {
     let world = World::new();
     let core = world.core(1);
+    let refused = || {
+        let report = serde_json::to_value(world.host().poll()).unwrap();
+        assert_eq!(report["state"], "failed");
+        assert_eq!(report["failure"]["key"], "identity.unsafe-directory");
+        assert!(core.requests().is_empty(), "{:?}", core.requests());
+        StorageFixtures::private(&world.dirs.core());
+    };
+    // Readable by the owner's group alone, where the OS has group-only access, and by everybody.
+    if temp::let_group_read(&world.dirs.core()) {
+        refused();
+    }
     StorageFixtures::readable(&world.dirs.core());
-    let host = world.host();
-    let report = serde_json::to_value(host.poll()).unwrap();
-    assert_eq!(report["state"], "failed");
-    assert_eq!(report["failure"]["key"], "identity.unsafe-directory");
-    assert!(core.requests().is_empty(), "{:?}", core.requests());
-    StorageFixtures::private(&world.dirs.core());
+    refused();
 }
 
 #[test]

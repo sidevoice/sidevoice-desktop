@@ -23,8 +23,11 @@ pub mod webview_diagnostics;
 
 pub mod account;
 pub mod app_data;
+pub mod card_window;
 pub mod confirmation;
+pub mod desktop_geometry;
 pub mod reset_availability;
 pub mod reset_handoff;
 pub mod uninstall;
+pub mod window_visibility;
 pub mod webview_data;

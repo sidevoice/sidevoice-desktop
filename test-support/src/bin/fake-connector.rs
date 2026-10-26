@@ -1,9 +1,7 @@
 //! Native stand-in connector. Configuration lives beside the executable, never in shell text.
+use process_wrap::std::ChildWrapper;
 use serde_json::{json, Value};
-use sidevoice_desktop_test_support::{
-    fixture,
-    platform::{FixtureHost, Host},
-};
+use sidevoice_desktop_test_support::{fixture, platform::process};
 use std::{
     fs,
     io::Write,
@@ -20,7 +18,14 @@ fn emit(value: &Value) {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|a| a == "--fixture-sleep") {
-        sleep(30_000);
+        // Until the stop file named by the next argument exists (a test ends its sleeper with it), or 30 s.
+        let stop = args.get(1).map(PathBuf::from);
+        for _ in 0..1500 {
+            if stop.as_ref().is_some_and(|stop| stop.exists()) {
+                break;
+            }
+            sleep(20);
+        }
         return;
     }
     let executable = std::env::current_exe().unwrap();
@@ -38,11 +43,14 @@ fn main() {
     if config["child"] == true || config["detached"] == true {
         let mut child = Command::new(&executable);
         child.arg("--fixture-sleep");
-        let mut spawned = if config["detached"] == true {
+        if let Some(stop) = config["stop"].as_str() {
+            child.arg(stop);
+        }
+        let mut spawned: Box<dyn ChildWrapper> = if config["detached"] == true {
             child.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-            Host::detach(&mut child).unwrap()
+            process::detach(child).unwrap()
         } else {
-            child.spawn().unwrap()
+            Box::new(child.spawn().unwrap())
         };
         fs::write(config["pid"].as_str().unwrap(), spawned.id().to_string()).unwrap();
         // The parent intentionally leaves its descendant running for the runner's lifecycle checks.

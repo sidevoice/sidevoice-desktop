@@ -346,7 +346,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             &build,
             SystemComputerName::read().as_deref(),
             &debug_options,
-            platform::microphone::SETTINGS_URL.is_some(),
+            platform::microphone::settings_available(),
             &NativeWebviewDiagnostics::available(),
             NativeMediaControls::support(),
             CAPABILITIES,
@@ -430,13 +430,6 @@ fn apply_shortcut(app: &AppHandle, accelerator: &str) {
     }
 }
 
-/// Opens only the fixed system microphone privacy page, for the current room page.
-#[tauri::command]
-async fn microphone_open_settings(app: AppHandle, webview: Webview) -> Result<(), Value> {
-    room_page(&app, &webview).map_err(|why| refusal("bad_request", why))?;
-    platform::microphone::open_settings(&app).map_err(|_| refusal("internal", "System Settings could not be opened."))
-}
-
 /// The app's commands, with `$extra` (each after a comma) after them.
 macro_rules! commands {
     ($($extra:tt)*) => {
@@ -479,14 +472,13 @@ macro_rules! commands {
             call_controls::call_controls_settings,
             updater::updater,
             debug_options::debug_options,
-            microphone_open_settings
+            microphone::microphone
             $($extra)*
         ]
     };
 }
 
-/// Every command, the voice call's and the microphone permission's where the app runs the call (`host.voice`,
-/// `host.microphone`: macOS).
+/// Every command, and the voice call's where the app runs the call (`host.voice`: macOS).
 #[cfg(target_os = "macos")]
 fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
     commands![
@@ -504,8 +496,7 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
         voice::voice_cancel_input,
         voice::voice_end_input,
         voice::voice_audio_devices,
-        voice::voice_set_audio_devices,
-        microphone::microphone
+        voice::voice_set_audio_devices
     ]
 }
 
@@ -537,8 +528,7 @@ pub fn run() {
     // First, so everything after it is logged.
     let builder = tauri::Builder::default().plugin(log_plugin());
     // The call controls card is a non-activating panel on macOS (src/call_controls.rs).
-    #[cfg(target_os = "macos")]
-    let builder = builder.plugin(tauri_nspanel::init());
+    let builder = <platform::card_window::NativeCardWindow as platform::card_window::CardWindow>::configure(builder);
     // The voice call the app runs (`host.voice`, src/voice.rs).
     // Its shared audio starts its dispatcher on Tokio, so it is built inside the runtime the commands run on.
     #[cfg(target_os = "macos")]
