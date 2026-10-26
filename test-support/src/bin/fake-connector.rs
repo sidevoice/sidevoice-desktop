@@ -1,8 +1,9 @@
 //! Native stand-in connector. Configuration lives beside the executable, never in shell text.
+use process_wrap::std::ChildWrapper;
 use serde_json::{json, Value};
 use sidevoice_desktop_test_support::{
     fixture,
-    platform::{FixtureHost, Host},
+    platform::process::{Detach, Detached},
 };
 use std::{
     fs,
@@ -48,11 +49,11 @@ fn main() {
         if let Some(stop) = config["stop"].as_str() {
             child.arg(stop);
         }
-        let mut spawned = if config["detached"] == true {
+        let mut spawned: Box<dyn ChildWrapper> = if config["detached"] == true {
             child.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-            Host::detach(&mut child).unwrap()
+            Detached::detach(child).unwrap()
         } else {
-            child.spawn().unwrap()
+            Box::new(child.spawn().unwrap())
         };
         fs::write(config["pid"].as_str().unwrap(), spawned.id().to_string()).unwrap();
         // The parent intentionally leaves its descendant running for the runner's lifecycle checks.

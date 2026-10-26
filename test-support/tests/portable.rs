@@ -1,5 +1,6 @@
 //! The same fixture executable and core listener are exercised on Linux, macOS and Windows.
 use serde_json::{json, Value};
+use sidevoice_desktop_test_support::platform::endpoint_cleanup::{Cleanup, EndpointCleanup};
 use sidevoice_desktop_test_support::platform::registry::RegistryTransport;
 use sidevoice_desktop_test_support::{fake_core::FakeCore, fake_registry::FakeRegistry, fixture};
 use sidevoice_platform::ipc::{Channel, Channels, Endpoint};
@@ -101,7 +102,7 @@ fn fake_core_publishes_and_serves_the_shared_channel() {
     });
     core.stop();
     assert!(!data.join("core/core.json").exists());
-    sidevoice_desktop_test_support::fake_core::forget(&data);
+    Cleanup::forget(&data);
 }
 
 #[test]
@@ -169,7 +170,7 @@ fn closing_an_older_call_keeps_the_newer_call_open() {
         .await
     });
     core.stop();
-    sidevoice_desktop_test_support::fake_core::forget(&data);
+    Cleanup::forget(&data);
     result.unwrap();
 }
 

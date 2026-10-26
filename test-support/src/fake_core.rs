@@ -9,7 +9,6 @@
 //! request is recorded (`requests()`), as `METHOD /path origin=… auth=device|none|other`.
 
 use crate::http::{self, Headers};
-use crate::platform::{FixtureHost, Host};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use p256::ecdsa::signature::Signer;
@@ -422,11 +421,6 @@ pub fn write_frame_masked(
         None => out.extend_from_slice(payload),
     }
     stream.write_all(&out)
-}
-
-/// Removes runtime directories left by the fixtures (Unix only; pipes leave no files).
-pub fn forget(data: &Path) {
-    Host::forget(data);
 }
 
 /// Blocking adapter for adversarial line-JSON connector fixtures, over the same shared listener.

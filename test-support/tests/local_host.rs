@@ -6,6 +6,7 @@
 
 use serde_json::{json, Value};
 use sidevoice_desktop_test_support::fake_core::{self, FakeCore};
+use sidevoice_desktop_test_support::platform::endpoint_cleanup::{Cleanup, EndpointCleanup};
 use sidevoice_desktop_test_support::platform::temp::{Temp, TempArea};
 use sidevoice_desktop_test_support::{fake_registry::FakeRegistry, fixture};
 use sidevoice_local_host::host::{Action, Config, LocalHost};
@@ -30,7 +31,7 @@ struct World {
 
 impl Drop for World {
     fn drop(&mut self) {
-        fake_core::forget(&self.dirs.data);
+        Cleanup::forget(&self.dirs.data);
     }
 }
 
