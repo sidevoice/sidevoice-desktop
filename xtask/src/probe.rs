@@ -7,7 +7,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Instant;
 
-use crate::macos::{app_command, binary, fake_node, AppHome, PROBE_ONLY, TRIPLE};
+use crate::macos::{app_command, binary, fake_node, release_target, AppHome, PROBE_ONLY};
 use crate::util::{
     contains, ensure, grep, has, interrupted, line_count, lines_after, mode, re, read, read_bytes, repo, sleep,
     wait_for, work, Background, Cmd, TauriBuild,
@@ -17,7 +17,12 @@ use crate::Result;
 /// `macos probe-app`: the app built with the `probe` feature, over the release app's place; it does carry the page
 /// and its switch (so the release app's check for them means something).
 pub fn probe_app() -> Result<()> {
-    let build = TauriBuild { target: Some(TRIPLE), bundles: "app", features: Some("probe"), ..TauriBuild::default() };
+    let build = TauriBuild {
+        target: Some(release_target().triple),
+        bundles: "app",
+        features: Some("probe"),
+        ..TauriBuild::default()
+    };
     crate::macos::unsigned(build.command()?).run()?;
     let bytes = read_bytes(&binary())?;
     for marker in PROBE_ONLY {
