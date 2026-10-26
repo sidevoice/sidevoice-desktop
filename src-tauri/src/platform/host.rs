@@ -15,10 +15,11 @@ use imp::Native;
 /// confirmation or data access, and a reset helper only completes the committed wait: the handoff
 /// (`reset_handoff`) works on every host either way.
 ///
-/// The deletion itself (`app_data`, with `webview_data` for browser storage) has a body on every host; what is still
-/// macOS-only is the rest of the transaction in `data.rs` (connector service, keychain; plan rows 15, 16, 42–44).
-/// Only this value differs by OS, so there is no per-OS code. It disappears once Windows and Linux get those steps.
-pub const RESET_AVAILABLE: bool = cfg!(target_os = "macos");
+/// The reset transaction in `data.rs` runs on every host now (the app's data through `app_data` and `webview_data`,
+/// the provider keys through `credentials`, the connector's uninstall through its recorded CLI), so it is true on
+/// all three; removing the uninstall of the app itself stays where the host can do it (`uninstall::available`). The
+/// constant is removed once the remaining reset steps are in (plan rows 43, 44, then row 5).
+pub const RESET_AVAILABLE: bool = true;
 
 /// What differs per OS.
 trait Os {

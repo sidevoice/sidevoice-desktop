@@ -85,7 +85,6 @@ fn refused(key: &str) -> Value {
     json!({ "key": key })
 }
 
-#[cfg(target_os = "macos")]
 fn retained_agents(agents: &Value) -> Vec<String> {
     agents
         .as_object()
@@ -183,6 +182,12 @@ fn consume_report_at(path: &Path) -> Answer {
     }
 }
 
+/// What the page is offered of the reset (`host.data`, docs/BRIDGE.md): delete-all and its report wherever this
+/// transaction runs, the uninstall only where the host can also remove the app (`uninstall::available`).
+pub fn offered() -> sidevoice_desktop_core::bridge::Reset {
+    sidevoice_desktop_core::bridge::Reset { delete_all: RESET_AVAILABLE, uninstall: uninstall::available() }
+}
+
 #[tauri::command]
 pub async fn data_delete_all(app: AppHandle, webview: Webview) -> Answer {
     caller(&app, &webview)?;
@@ -255,18 +260,11 @@ async fn confirmed_reset(app: AppHandle, uninstall: bool) -> Answer {
 
 /// The transaction's own refusal before the confirmation and before any data is touched: a connector install
 /// in progress.
-#[cfg(target_os = "macos")]
 fn refuse_before_confirmation(app: &AppHandle) -> Result<(), &'static str> {
     if crate::local_host::installing(app) {
         return Err("reset.busy");
     }
     Ok(())
-}
-
-/// The reset transaction exists only on macOS; `confirmed_reset` refuses before this elsewhere.
-#[cfg(not(target_os = "macos"))]
-fn refuse_before_confirmation(_: &AppHandle) -> Result<(), &'static str> {
-    Err("reset.unavailable")
 }
 
 fn require_confirmation(accepted: bool) -> Result<(), Value> {
@@ -312,30 +310,35 @@ fn begin_reset(app: &AppHandle, uninstall: bool) -> Answer {
     Ok(json!({"state": state, "service": service_outcome, "agents": agents, "failed": failed, "pending": pending}))
 }
 
-/// The existing macOS steps before the app exits, under the held admission: the connector service and its
-/// agents, journalled; `begin_reset` then clears the provider keys. Returns the failures so far, the agents' results
-/// and the service outcome.
-#[cfg(target_os = "macos")]
+/// The steps before the app exits, under the held admission: the connector service and its agents, journalled;
+/// `begin_reset` then clears the provider keys. Returns the failures so far, the agents' results and the service
+/// outcome. The same on every host: `D` by `sidevoice-platform`'s one rule, which must be its standard place.
 fn reset_before_exit() -> Result<(Vec<Value>, Value, &'static str), Value> {
-    use sidevoice_local_host::{cli::Cli, paths::DataDirs};
-    let dirs = DataDirs::from_env().ok_or_else(|| refused("reset.unavailable"))?;
+    use crate::local_host::{self, NoConnectorCli};
+    use sidevoice_platform::data_dir;
+    // `D` as every Sidevoice program resolves it (`SIDEVOICE_DATA_DIR`, else the standard place); the scope check
+    // accepts only the standard place.
+    let data = data_dir::resolve(|name| std::env::var_os(name)).map_err(|_| refused("reset.unavailable"))?;
+    let standard = data_dir::standard().ok_or_else(|| refused("reset.unavailable"))?;
     // `HOME` only when it is this account's home in the account database: no other home is reset.
     let home = account::home().map_err(|reason| json!({"key": "reset.unsafe", "reason": reason}))?;
-    validate_uninstall_scope_at(&home, &dirs.data)
+    validate_uninstall_scope_at(&home, &standard, &data)
         .map_err(|reason| json!({"key": "reset.unsafe", "reason": reason}))?;
-    let installed_cli = match Cli::installed(&dirs) {
+    let installed_cli = match local_host::connector_cli(&data) {
         Ok(cli) => {
             probe_safe_connector(&cli, Duration::from_secs(10))?;
             Some(cli)
         }
-        Err(_) if !dirs.install_record().exists() => {
+        Err(_) if !data.join(INSTALL_RECORD).exists() => {
             // A missing record is only an absent service when all owned data is gone too.
-            if !fresh_service_absent(&home) || residual_connector_data(&dirs.data) {
+            if !fresh_service_absent(&home) || residual_connector_data(&data) {
                 return Err(refused("reset.service-failed"));
             }
             None
         }
-        Err(_) => return Err(refused("reset.unsafe")),
+        // A recorded connector this host cannot run: its service stays, so nothing is reset.
+        Err(NoConnectorCli::Unsupported) => return Err(refused("reset.unsupported-connector")),
+        Err(NoConnectorCli::Refused) => return Err(refused("reset.unsafe")),
     };
     let report = report_path().ok_or_else(|| refused("reset.helper-failed"))?;
     if let Err(error) = fs::remove_file(&report) {
@@ -348,8 +351,9 @@ fn reset_before_exit() -> Result<(Vec<Value>, Value, &'static str), Value> {
         .map_err(|_| refused("reset.helper-failed"))?;
     let (service, service_outcome) = match installed_cli {
         Some(cli) => (
-            run_checked_uninstall(&home, &dirs.data, || {
-                cli.run(&["uninstall", "--json"], Duration::from_secs(180)).map_err(|_| refused("reset.service-failed"))
+            run_checked_uninstall(&home, &standard, &data, || {
+                local_host::run_connector(&cli, &["uninstall", "--json"], Duration::from_secs(180))
+                    .ok_or_else(|| refused("reset.service-failed"))
             })?,
             "removed",
         ),
@@ -367,13 +371,9 @@ fn reset_before_exit() -> Result<(Vec<Value>, Value, &'static str), Value> {
     Ok((failed, agents, service_outcome))
 }
 
-/// The reset transaction exists only on macOS; `confirmed_reset` refuses before this elsewhere.
-#[cfg(not(target_os = "macos"))]
-fn reset_before_exit() -> Result<(Vec<Value>, Value, &'static str), Value> {
-    Err(refused("reset.unavailable"))
-}
+/// The connector's install record in `D`: the active installation and the command that runs its CLI.
+const INSTALL_RECORD: &str = "install.json";
 
-#[cfg(target_os = "macos")]
 fn require_safe_uninstall(version: &Value) -> Result<(), Value> {
     if version.get("ok") == Some(&Value::Bool(true))
         && version.get("safe_uninstall").and_then(Value::as_u64).is_some_and(|level| level >= 1)
@@ -384,13 +384,12 @@ fn require_safe_uninstall(version: &Value) -> Result<(), Value> {
     }
 }
 
-#[cfg(target_os = "macos")]
-fn probe_safe_connector(cli: &sidevoice_local_host::cli::Cli, timeout: Duration) -> Result<(), Value> {
-    let version = cli.run(&["--version", "--json"], timeout).map_err(|_| refused("reset.unsupported-connector"))?;
+fn probe_safe_connector(cli: &crate::local_host::ConnectorCli, timeout: Duration) -> Result<(), Value> {
+    let version = crate::local_host::run_connector(cli, &["--version", "--json"], timeout)
+        .ok_or_else(|| refused("reset.unsupported-connector"))?;
     require_safe_uninstall(&version)
 }
 
-#[cfg(target_os = "macos")]
 fn residual_connector_data(data: &Path) -> bool {
     // A missing record is not proof that an interrupted uninstall finished its data phase: the releases (`D/install`) are
     // an entry of `D` too.
@@ -403,7 +402,8 @@ fn residual_connector_data(data: &Path) -> bool {
     for entry in entries {
         let Ok(entry) = entry else { return true };
         let name = entry.file_name();
-        // `Models` is the engine's (docs/ENGINES.md); on macOS its place is `D`: not the connector's to leave behind.
+        // `Models` is the engine's (docs/ENGINES.md), in the standard `D` the scope check requires: not the
+        // connector's to leave behind.
         if name == models {
             continue;
         }
@@ -428,6 +428,9 @@ fn write_atomic_json(path: &Path, value: &Value) -> Result<(), &'static str> {
     Files::write_private(path, &bytes).map_err(|_| "report-write")
 }
 
+/// Fresh proof that the connector's service is gone: its launchd jobs and processes (macOS). This proof is still
+/// selected by OS here: moving it behind a platform concern, with the Windows and Linux proofs, is separate work
+/// (plan row 43, D-SERVICE-ABSENCE).
 #[cfg(target_os = "macos")]
 fn fresh_service_absent(home: &Path) -> bool {
     fresh_service_absent_with(
@@ -446,6 +449,13 @@ fn fresh_service_absent(home: &Path) -> bool {
             output.status.success() && !managed_process_in_ps(&output.stdout)
         },
     )
+}
+
+/// No proof of the service's absence on this host yet (plan row 43): a missing install record is never taken for an
+/// absent service, and the reset refuses before anything is deleted.
+#[cfg(not(target_os = "macos"))]
+fn fresh_service_absent(_home: &Path) -> bool {
+    false
 }
 
 #[cfg(target_os = "macos")]
@@ -480,35 +490,34 @@ fn fresh_service_absent_with(
     processes_absent()
 }
 
-#[cfg(target_os = "macos")]
-fn run_checked_uninstall<T>(home: &Path, data: &Path, invoke: impl FnOnce() -> Result<T, Value>) -> Result<T, Value> {
+fn run_checked_uninstall<T>(
+    home: &Path,
+    standard: &Path,
+    data: &Path,
+    invoke: impl FnOnce() -> Result<T, Value>,
+) -> Result<T, Value> {
     // Still this account's home in the account database, right before the destructive call.
     if account::home().as_deref() != Ok(home) {
         return Err(json!({"key": "reset.unsafe", "reason": "unsafe-home"}));
     }
-    validate_uninstall_scope_at(home, data).map_err(|reason| json!({"key": "reset.unsafe", "reason": reason}))?;
+    validate_uninstall_scope_at(home, standard, data)
+        .map_err(|reason| json!({"key": "reset.unsafe", "reason": reason}))?;
     invoke()
 }
 
-/// `D` on macOS with no override: the OS's standard place of `sidevoice-platform`'s `data_dir`.
-#[cfg(target_os = "macos")]
-fn standard_data(home: &Path) -> PathBuf {
-    home.join("Library/Application Support/Sidevoice")
-}
-
-#[cfg(target_os = "macos")]
-fn validate_uninstall_scope_at(home: &Path, data: &Path) -> Result<PathBuf, &'static str> {
-    if !clean_absolute(home) || fs::canonicalize(home).ok().as_deref() != Some(home) {
+/// The connector's data `data` is the one the reset may uninstall: the standard `D` (`standard`,
+/// `sidevoice-platform`'s `data_dir::standard`, the same rule on every OS) inside the account home `home`, with the
+/// releases `D/install` in it. An override (`SIDEVOICE_DATA_DIR`) is not a known directory, nor is a standard place
+/// outside the home. Returns the releases directory.
+fn validate_uninstall_scope_at(home: &Path, standard: &Path, data: &Path) -> Result<PathBuf, &'static str> {
+    if !clean_absolute(home) || dunce::canonicalize(home).ok().as_deref() != Some(home) {
         return Err("unsafe-home");
     }
-    // `D` on macOS: the standard place of `sidevoice-platform`'s `data_dir`, and the releases `D/install` in it. An
-    // override (`SIDEVOICE_DATA_DIR`) is not a known directory.
-    let expected_data = standard_data(home);
-    if data != expected_data || !clean_absolute(data) {
+    if data != standard || !clean_absolute(data) || !data.starts_with(home) || data == home {
         return Err("outside-known-dirs");
     }
-    let expected_releases = sidevoice_local_host::paths::DataDirs::new(&expected_data).releases();
-    let record = data.join("install.json");
+    let expected_releases = sidevoice_platform::data_dir::releases_dir(standard);
+    let record = data.join(INSTALL_RECORD);
     if let Ok(meta) = fs::symlink_metadata(&record) {
         if !meta.is_file() || meta.file_type().is_symlink() || meta.len() > 64 * 1024 {
             return Err("unsafe-record");
@@ -520,7 +529,7 @@ fn validate_uninstall_scope_at(home: &Path, data: &Path) -> Result<PathBuf, &'st
             return Err("outside-known-dirs");
         }
         let command = value.get("command").and_then(Value::as_array).ok_or("unsafe-record")?;
-        let recovery = expected_data.join(".uninstall-recovery/sidevoice-connector");
+        let recovery = standard.join(".uninstall-recovery").join("sidevoice-connector");
         if command.len() != 1
             || !matches!(command[0].as_str(), Some(path) if is_release_binary(Path::new(path), &expected_releases) || Path::new(path) == recovery)
         {
@@ -537,7 +546,6 @@ fn validate_uninstall_scope_at(home: &Path, data: &Path) -> Result<PathBuf, &'st
 
 /// `R/releases/<id>/bin/sidevoice-connector`: the command the connector's `install` records for the release it
 /// selects, `<id>` one plain name.
-#[cfg(target_os = "macos")]
 fn is_release_binary(path: &Path, releases: &Path) -> bool {
     use std::path::Component;
     let Ok(rest) = path.strip_prefix(releases.join("releases")) else { return false };
@@ -554,10 +562,13 @@ fn report_path() -> Option<PathBuf> {
     Some(dir.join("report.json"))
 }
 
-#[cfg(target_os = "macos")]
+/// Absolute, with no `.` or `..`: a drive or share prefix, the root, then plain names.
 fn clean_absolute(path: &Path) -> bool {
+    use std::path::Component;
     path.is_absolute()
-        && path.components().all(|part| matches!(part, std::path::Component::RootDir | std::path::Component::Normal(_)))
+        && path
+            .components()
+            .all(|part| matches!(part, Component::Prefix(_) | Component::RootDir | Component::Normal(_)))
 }
 
 /// Called in the helper process, before Tauri. The authenticated plan arrives on every host.
@@ -703,7 +714,6 @@ fn finish_uninstall_at(
     finish_reset_at(report, journal, completed, failed, agents, write, relaunch);
 }
 
-#[cfg(target_os = "macos")]
 pub fn finalize_relaunched_reset() {
     if std::env::var("SIDEVOICE_RESET_RELAUNCH").as_deref() != Ok("1") {
         return;
@@ -713,7 +723,6 @@ pub fn finalize_relaunched_reset() {
     let _ = finalize_relaunched_reset_at(&report, &journal);
 }
 
-#[cfg(target_os = "macos")]
 fn finalize_relaunched_reset_at(report: &Path, journal: &Path) -> Result<(), &'static str> {
     let bytes = fs::read(journal).map_err(|_| "report-read")?;
     if bytes.len() > 16 * 1024 {
@@ -731,59 +740,99 @@ fn finalize_relaunched_reset_at(report: &Path, journal: &Path) -> Result<(), &'s
     Ok(())
 }
 
-#[cfg(all(test, target_os = "macos"))]
+/// The transaction's decisions, on every host.
+#[cfg(test)]
 mod tests {
     use super::*;
+    use sidevoice_platform::fs::{Files, Fs, TestFiles};
+
+    /// A private, canonical scratch folder (as `app_data`'s tests make it) and an account home inside it.
+    pub(super) fn fixture() -> (tempfile::TempDir, PathBuf) {
+        let temp = tempfile::Builder::new().tempdir_in(dunce::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
+        Files::shut_others_out(temp.path());
+        let home = dunce::canonicalize(temp.path()).unwrap().join("home");
+        Files::create_private_dir(&home).unwrap();
+        (temp, home)
+    }
+
+    /// `path` and every missing folder between `home` and it, private.
+    pub(super) fn private_dirs(home: &Path, path: &Path) {
+        for dir in path.ancestors().collect::<Vec<_>>().into_iter().rev().filter(|dir| dir.starts_with(home)) {
+            if !dir.exists() {
+                Files::create_private_dir(dir).unwrap();
+            }
+        }
+    }
+
+    /// The standard `D` of a fixture home, as `data_dir::standard` names it on any OS: only its place in the home
+    /// matters to the scope check.
+    pub(super) fn standard(home: &Path) -> PathBuf {
+        home.join("standard").join("Sidevoice")
+    }
+
     #[test]
     fn connector_uninstall_scope_refuses_overrides_before_fake_cli_runs() {
-        let home = tempfile::tempdir().unwrap();
-        let home = fs::canonicalize(home.path()).unwrap();
+        let (temp, home) = fixture();
+        let data = standard(&home);
         let mut invoked = false;
-        for data in
+        for elsewhere in
             [home.clone(), PathBuf::from("/"), home.join("../other"), home.join("Documents"), PathBuf::from("relative")]
         {
-            assert!(run_checked_uninstall(&home, &data, || {
+            assert!(run_checked_uninstall(&home, &data, &elsewhere, || {
                 invoked = true;
                 Ok(())
             })
             .is_err());
         }
         assert!(!invoked);
-        let data = home.join("Library/Application Support/Sidevoice");
         assert_eq!(
-            validate_uninstall_scope_at(&home, &home.join(".sidevoice")),
+            validate_uninstall_scope_at(&home, &data, &home.join(".sidevoice")),
             Err("outside-known-dirs"),
             "the old directory is not known"
         );
-        fs::create_dir_all(&data).unwrap();
+        // A standard place outside the account home (an `XDG_DATA_HOME` elsewhere) is not known either.
+        let outside = temp.path().join("elsewhere").join("Sidevoice");
+        assert_eq!(validate_uninstall_scope_at(&home, &outside, &outside), Err("outside-known-dirs"));
+        assert_eq!(validate_uninstall_scope_at(&home, &home, &home), Err("outside-known-dirs"));
+        private_dirs(&home, &data);
         fs::write(data.join("install.json"), json!({"releases": home.join("Documents/sidevoice")}).to_string())
             .unwrap();
-        assert_eq!(validate_uninstall_scope_at(&home, &data), Err("outside-known-dirs"));
+        assert_eq!(validate_uninstall_scope_at(&home, &data, &data), Err("outside-known-dirs"));
         let releases = data.join("install");
         fs::write(
             data.join("install.json"),
-            json!({"releases": releases, "command": [releases.join("releases/1.2.3/bin/sidevoice-connector")]})
+            json!({"releases": releases, "command": [releases.join("releases").join("1.2.3").join("bin").join("sidevoice-connector")]})
                 .to_string(),
         )
         .unwrap();
-        assert!(validate_uninstall_scope_at(&home, &data).is_ok());
+        assert_eq!(validate_uninstall_scope_at(&home, &data, &data), Ok(releases.clone()));
         fs::write(
             data.join("install.json"),
-            json!({"releases": releases, "command": [data.join(".uninstall-recovery/sidevoice-connector")]})
+            json!({"releases": releases, "command": [data.join(".uninstall-recovery").join("sidevoice-connector")]})
                 .to_string(),
         )
         .unwrap();
-        assert!(validate_uninstall_scope_at(&home, &data).is_ok());
-        fs::write(data.join("install.json"), json!({"releases": releases, "command": ["/usr/bin/rm"]}).to_string())
-            .unwrap();
-        assert_eq!(validate_uninstall_scope_at(&home, &data), Err("unsafe-record"));
+        assert!(validate_uninstall_scope_at(&home, &data, &data).is_ok());
+        fs::write(
+            data.join("install.json"),
+            json!({"releases": releases, "command": [temp.path().join("other-program")]}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(validate_uninstall_scope_at(&home, &data, &data), Err("unsafe-record"));
         // Not the layout the connector records: `current` is a link of the old installer, not a release.
         fs::write(
             data.join("install.json"),
-            json!({"releases": releases, "command": [releases.join("current/bin/sidevoice-connector")]}).to_string(),
+            json!({"releases": releases, "command": [releases.join("current").join("bin").join("sidevoice-connector")]})
+                .to_string(),
         )
         .unwrap();
-        assert_eq!(validate_uninstall_scope_at(&home, &data), Err("unsafe-record"));
+        assert_eq!(validate_uninstall_scope_at(&home, &data, &data), Err("unsafe-record"));
+        // A linked `D` is refused, never traversed.
+        fs::remove_file(data.join("install.json")).unwrap();
+        let linked = standard(&home.join("linked"));
+        private_dirs(&home, linked.parent().unwrap());
+        Files::symlink(&data, &linked);
+        assert!(validate_uninstall_scope_at(&home, &linked, &linked).is_err());
     }
 
     #[test]
@@ -799,77 +848,6 @@ mod tests {
         }
         assert_eq!(require_safe_uninstall(&json!({"ok":true,"safe_uninstall":1})), Ok(()));
         assert_eq!(require_safe_uninstall(&json!({"ok":true,"safe_uninstall":2})), Ok(()));
-    }
-
-    #[test]
-    fn fake_installed_connectors_refuse_without_safe_capability() {
-        use sidevoice_local_host::cli::Cli;
-        use std::os::unix::fs::PermissionsExt;
-        let cases = [
-            ("missing", r#"{"ok":true,"version":"0.6.0"}"#, false),
-            ("zero", r#"{"ok":true,"safe_uninstall":0}"#, false),
-            ("one", r#"{"ok":true,"safe_uninstall":1}"#, true),
-            ("two", r#"{"ok":true,"safe_uninstall":2}"#, true),
-            ("garbage", "not-json", false),
-        ];
-        for (name, answer, accepted) in cases {
-            let dir = tempfile::tempdir().unwrap();
-            let script = dir.path().join("sidevoice-connector");
-            let marker = dir.path().join("uninstall-invoked");
-            fs::write(
-                &script,
-                format!(
-                    "#!/bin/sh\nif [ \"$1\" = \"--version\" ] && [ \"$2\" = \"--json\" ]; then\n  printf '%s\\n' '{answer}'\nelse\n  : > '{}'\n  printf '%s\\n' '{{\"ok\":true}}'\nfi\n",
-                    marker.display()
-                ),
-            )
-            .unwrap();
-            fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
-            let cli = Cli { prefix: vec![script.to_string_lossy().into_owned()], data: dir.path().join(".sidevoice") };
-            let checked = probe_safe_connector(&cli, Duration::from_secs(2));
-            assert_eq!(checked.is_ok(), accepted, "{name}");
-            if checked.is_ok() {
-                cli.run(&["uninstall", "--json"], Duration::from_secs(2)).unwrap();
-            }
-            assert_eq!(marker.exists(), accepted, "{name}: unsafe uninstall invocation");
-        }
-        let dir = tempfile::tempdir().unwrap();
-        let script = dir.path().join("slow-sidevoice-connector");
-        fs::write(&script, "#!/bin/sh\nsleep 2\n").unwrap();
-        fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
-        let cli = Cli { prefix: vec![script.to_string_lossy().into_owned()], data: dir.path().join(".sidevoice") };
-        assert_eq!(probe_safe_connector(&cli, Duration::from_millis(100)), Err(refused("reset.unsupported-connector")));
-    }
-
-    #[test]
-    fn retained_connector_record_uses_recovery_executable_on_retry() {
-        use sidevoice_local_host::{cli::Cli, paths::DataDirs};
-        use std::os::unix::fs::PermissionsExt;
-        let home = tempfile::tempdir().unwrap();
-        let home = fs::canonicalize(home.path()).unwrap();
-        let data = home.join("Library/Application Support/Sidevoice");
-        let recovery = data.join(".uninstall-recovery");
-        fs::create_dir_all(&recovery).unwrap();
-        let script = recovery.join("sidevoice-connector");
-        let marker = home.join("retry-invoked");
-        fs::write(
-            &script,
-            format!(
-                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf '%s\\n' '{{\"ok\":true,\"safe_uninstall\":1}}'\nelse\n  : > '{}'\n  printf '%s\\n' '{{\"ok\":true,\"state\":\"removed\"}}'\nfi\n",
-                marker.display()
-            ),
-        )
-        .unwrap();
-        fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
-        let releases = data.join("install");
-        fs::write(data.join("install.json"), json!({"releases": releases.clone(), "command": [script]}).to_string())
-            .unwrap();
-        assert_eq!(validate_uninstall_scope_at(&home, &data), Ok(releases));
-        let cli = Cli::installed(&DataDirs::new(&data)).unwrap();
-        assert_eq!(probe_safe_connector(&cli, Duration::from_secs(2)), Ok(()));
-        assert!(!marker.exists());
-        assert_eq!(cli.run(&["uninstall", "--json"], Duration::from_secs(2)).unwrap()["state"], "removed");
-        assert!(marker.exists());
     }
 
     #[test]
@@ -898,19 +876,21 @@ mod tests {
     }
 
     /// The report's directory as `report_path()` makes it: private, as the shared record writer requires.
-    fn private_dir() -> tempfile::TempDir {
-        use std::os::unix::fs::PermissionsExt;
-        tempfile::Builder::new().permissions(fs::Permissions::from_mode(0o700)).tempdir().unwrap()
+    fn private_dir() -> (tempfile::TempDir, PathBuf) {
+        let (temp, home) = fixture();
+        let dir = home.join("control");
+        Files::create_private_dir(&dir).unwrap();
+        (temp, dir)
     }
 
     #[test]
     fn durable_journal_reports_interruption_then_allows_retry() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = private_dir();
-        let report = dir.path().join("report.json");
-        let journal = dir.path().join("journal.json");
+        let (temp, dir) = private_dir();
+        let report = dir.join("report.json");
+        let journal = dir.join("journal.json");
         write_atomic_json(&journal, &json!({"stage":"service", "completed":["service"], "failed":[]})).unwrap();
-        assert_eq!(fs::metadata(&journal).unwrap().permissions().mode() & 0o077, 0);
+        // Readable as a private record: this user's, not readable or writable by others.
+        assert!(Files::read_private(&journal, 16 * 1024).unwrap().is_some());
         let interrupted = consume_report_at(&report).unwrap();
         assert_eq!(interrupted["state"], "partial");
         assert_eq!(interrupted["completed"], json!(["service"]));
@@ -925,17 +905,18 @@ mod tests {
         .unwrap();
         assert_eq!(consume_report_at(&report).unwrap()["state"], "complete");
         assert_eq!(consume_report_at(&report), Ok(Value::Null));
-        let outside = tempfile::NamedTempFile::new().unwrap();
-        std::os::unix::fs::symlink(outside.path(), &report).unwrap();
+        let outside = temp.path().join("outside.json");
+        fs::write(&outside, b"{}").unwrap();
+        Files::symlink(&outside, &report);
         assert_eq!(consume_report_at(&report), Err(refused("reset.unsafe")));
-        assert!(outside.path().exists());
+        assert!(outside.exists());
     }
 
     #[test]
     fn helper_reports_complete_only_after_relaunched_setup_and_keeps_failed_writes() {
-        let dir = private_dir();
-        let report = dir.path().join("report.json");
-        let journal = dir.path().join("journal.json");
+        let (_temp, dir) = private_dir();
+        let report = dir.join("report.json");
+        let journal = dir.join("journal.json");
         let mut launched = false;
         finish_reset_at(&report, &journal, &["service", "app-data"], vec![], json!({}), write_atomic_json, || {
             assert!(journal.exists());
@@ -967,6 +948,109 @@ mod tests {
     }
 
     #[test]
+    fn missing_record_with_residual_connector_data_refuses_absent_retry() {
+        let (_temp, home) = fixture();
+        let data = standard(&home);
+        assert!(!residual_connector_data(&data));
+        private_dirs(&home, &data);
+        fs::write(data.join("install.lock"), b"marker").unwrap();
+        assert!(!residual_connector_data(&data));
+        // The engine's models live in the standard `D` on every OS: not the connector's.
+        fs::create_dir(data.join(sidevoice_platform::data_dir::MODELS)).unwrap();
+        assert!(!residual_connector_data(&data));
+        fs::write(data.join("core-secret"), b"sentinel").unwrap();
+        assert!(residual_connector_data(&data));
+        fs::remove_file(data.join("core-secret")).unwrap();
+        fs::create_dir(data.join(".uninstall-recovery")).unwrap();
+        assert!(residual_connector_data(&data));
+        fs::remove_dir(data.join(".uninstall-recovery")).unwrap();
+        fs::create_dir_all(data.join("install")).unwrap();
+        assert!(residual_connector_data(&data));
+    }
+}
+
+/// The connector's CLI is the local-host crate's, built on Unix hosts only, and these fake connectors are POSIX shell
+/// scripts: there is no host-neutral way to phrase them.
+#[cfg(all(test, unix))]
+mod connector_cli_tests {
+    use super::tests::{fixture, private_dirs, standard};
+    use super::*;
+    use sidevoice_local_host::cli::Cli;
+    use sidevoice_platform::fs::{Files, TestFiles};
+
+    fn script(path: &Path, body: &str) {
+        fs::write(path, body).unwrap();
+        Files::make_executable(path);
+    }
+
+    #[test]
+    fn fake_installed_connectors_refuse_without_safe_capability() {
+        let cases = [
+            ("missing", r#"{"ok":true,"version":"0.6.0"}"#, false),
+            ("zero", r#"{"ok":true,"safe_uninstall":0}"#, false),
+            ("one", r#"{"ok":true,"safe_uninstall":1}"#, true),
+            ("two", r#"{"ok":true,"safe_uninstall":2}"#, true),
+            ("garbage", "not-json", false),
+        ];
+        for (name, answer, accepted) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            let program = dir.path().join("sidevoice-connector");
+            let marker = dir.path().join("uninstall-invoked");
+            script(
+                &program,
+                &format!(
+                    "#!/bin/sh\nif [ \"$1\" = \"--version\" ] && [ \"$2\" = \"--json\" ]; then\n  printf '%s\\n' '{answer}'\nelse\n  : > '{}'\n  printf '%s\\n' '{{\"ok\":true}}'\nfi\n",
+                    marker.display()
+                ),
+            );
+            let cli = Cli { prefix: vec![program.to_string_lossy().into_owned()], data: dir.path().join(".sidevoice") };
+            let checked = probe_safe_connector(&cli, Duration::from_secs(2));
+            assert_eq!(checked.is_ok(), accepted, "{name}");
+            if checked.is_ok() {
+                cli.run(&["uninstall", "--json"], Duration::from_secs(2)).unwrap();
+            }
+            assert_eq!(marker.exists(), accepted, "{name}: unsafe uninstall invocation");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("slow-sidevoice-connector");
+        script(&program, "#!/bin/sh\nsleep 2\n");
+        let cli = Cli { prefix: vec![program.to_string_lossy().into_owned()], data: dir.path().join(".sidevoice") };
+        assert_eq!(probe_safe_connector(&cli, Duration::from_millis(100)), Err(refused("reset.unsupported-connector")));
+    }
+
+    #[test]
+    fn retained_connector_record_uses_recovery_executable_on_retry() {
+        let (_temp, home) = fixture();
+        let data = standard(&home);
+        let recovery = data.join(".uninstall-recovery");
+        private_dirs(&home, &recovery);
+        let program = recovery.join("sidevoice-connector");
+        let marker = home.join("retry-invoked");
+        script(
+            &program,
+            &format!(
+                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf '%s\\n' '{{\"ok\":true,\"safe_uninstall\":1}}'\nelse\n  : > '{}'\n  printf '%s\\n' '{{\"ok\":true,\"state\":\"removed\"}}'\nfi\n",
+                marker.display()
+            ),
+        );
+        let releases = data.join("install");
+        fs::write(data.join("install.json"), json!({"releases": releases.clone(), "command": [program]}).to_string())
+            .unwrap();
+        assert_eq!(validate_uninstall_scope_at(&home, &data, &data), Ok(releases));
+        let Ok(cli) = crate::local_host::connector_cli(&data) else { panic!("the recorded recovery executable runs") };
+        assert_eq!(probe_safe_connector(&cli, Duration::from_secs(2)), Ok(()));
+        assert!(!marker.exists());
+        assert_eq!(cli.run(&["uninstall", "--json"], Duration::from_secs(2)).unwrap()["state"], "removed");
+        assert!(marker.exists());
+    }
+}
+
+/// The macOS proof of the service's absence (launchd and `ps`), which only macOS has; plan row 43 moves it.
+#[cfg(all(test, target_os = "macos"))]
+mod service_absence_tests {
+    use super::*;
+
+    #[test]
     fn missing_install_record_requires_fresh_launchd_and_process_absence() {
         let home = tempfile::tempdir().unwrap();
         let home = fs::canonicalize(home.path()).unwrap();
@@ -988,28 +1072,9 @@ mod tests {
         ));
         assert!(!managed_process_in_ps(b"/usr/bin/other-service\n"));
     }
-
-    #[test]
-    fn missing_record_with_residual_connector_data_refuses_absent_retry() {
-        let home = tempfile::tempdir().unwrap();
-        let home = fs::canonicalize(home.path()).unwrap();
-        let data = home.join("Library/Application Support/Sidevoice");
-        assert!(!residual_connector_data(&data));
-        fs::create_dir_all(&data).unwrap();
-        fs::write(data.join("install.lock"), b"marker").unwrap();
-        assert!(!residual_connector_data(&data));
-        fs::write(data.join("core-secret"), b"sentinel").unwrap();
-        assert!(residual_connector_data(&data));
-        fs::remove_file(data.join("core-secret")).unwrap();
-        fs::create_dir(data.join(".uninstall-recovery")).unwrap();
-        assert!(residual_connector_data(&data));
-        fs::remove_dir(data.join(".uninstall-recovery")).unwrap();
-        fs::create_dir_all(data.join("install")).unwrap();
-        assert!(residual_connector_data(&data));
-    }
 }
 
-/// The uninstall's platform-neutral decisions run on every platform's tests; the macOS-only parts above do not.
+/// The uninstall's decisions, on every host (only macOS removes the app: `uninstall::available`).
 #[cfg(test)]
 mod uninstall_tests {
     use super::*;
