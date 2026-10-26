@@ -1,10 +1,10 @@
-use super::Native;
+use super::Os;
 use tauri::utils::config::BundleType;
 use winreg::{enums::HKEY_CURRENT_USER, RegKey};
 
-pub(super) struct Os;
+pub(super) struct Native;
 
-impl Native for Os {
+impl Os for Native {
     const BUNDLE: Option<BundleType> = Some(BundleType::Nsis);
 
     /// The registered per-user NSIS installation's own executable.

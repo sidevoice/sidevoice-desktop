@@ -1,7 +1,7 @@
 //! Windows has no WebView2 diagnostic binding implemented; the empty availability list and rejecting `apply` are the defaults.
 
-use super::Native;
+use super::Os;
 
-pub(super) struct Os;
+pub(super) struct Native;
 
-impl Native for Os {}
+impl Os for Native {}

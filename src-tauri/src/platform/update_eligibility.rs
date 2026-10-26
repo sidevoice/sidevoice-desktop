@@ -8,10 +8,10 @@ use tauri::utils::{config::BundleType, platform::bundle_type};
 #[cfg_attr(target_os = "windows", path = "update_eligibility/windows.rs")]
 #[cfg_attr(target_os = "linux", path = "update_eligibility/linux.rs")]
 mod imp;
-use imp::Os;
+use imp::Native;
 
 /// What differs per OS: which bundle the updater can replace, and how this run proves it is that installation.
-trait Native {
+trait Os {
     /// The bundle the updater plugin can update and restart here; `None` where there is none.
     const BUNDLE: Option<BundleType> = None;
 
@@ -26,8 +26,8 @@ trait Native {
 /// Dev builds, deb/rpm, MSI, bare binaries and hosts without an update path report `false`.
 pub fn available(channel: &str) -> bool {
     updater::feed(channel).is_some()
-        && Os::BUNDLE.is_some_and(|bundle| bundle_type() == Some(bundle))
-        && Os::installed_here()
+        && Native::BUNDLE.is_some_and(|bundle| bundle_type() == Some(bundle))
+        && Native::installed_here()
 }
 
 #[cfg(test)]

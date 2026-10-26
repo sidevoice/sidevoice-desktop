@@ -6,10 +6,10 @@ use sidevoice_desktop_core::computer_name;
 #[cfg_attr(target_os = "windows", path = "computer_name/windows.rs")]
 #[cfg_attr(target_os = "linux", path = "computer_name/linux.rs")]
 mod imp;
-use imp::Os;
+use imp::Native;
 
 /// Where each OS keeps the name; `None` where it keeps none.
-trait Native {
+trait Os {
     /// The name the person gave the device, kept apart from the network name (macOS Sharing's Computer Name,
     /// Linux's pretty hostname).
     fn device_name() -> Option<String> {
@@ -26,7 +26,7 @@ trait Native {
 /// Read on every room open so a rename appears on the next one: the device name, else the host name. Trim
 /// surrounding whitespace; return None for absent/blank names so the page can name the device.
 pub fn read() -> Option<String> {
-    Os::device_name().or_else(Os::host_name).and_then(|name| computer_name::given(&name))
+    Native::device_name().or_else(Native::host_name).and_then(|name| computer_name::given(&name))
 }
 
 #[cfg(test)]

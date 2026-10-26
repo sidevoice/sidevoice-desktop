@@ -1,8 +1,8 @@
-use super::{LabelStyle, Native};
+use super::{LabelStyle, Os};
 
-pub(super) struct Os;
+pub(super) struct Native;
 
-impl Native for Os {
+impl Os for Native {
     fn reserved_chord_active(chord: &str) -> bool {
         if !sidevoice_desktop_core::settings::uses_voice_over_keys(chord) {
             return false;

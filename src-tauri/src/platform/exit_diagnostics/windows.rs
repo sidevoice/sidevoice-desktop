@@ -1,7 +1,7 @@
 //! No native library whose exit destructors the probe observes runs here.
 
-use super::Native;
+use super::Os;
 
-pub(super) struct Os;
+pub(super) struct Native;
 
-impl Native for Os {}
+impl Os for Native {}

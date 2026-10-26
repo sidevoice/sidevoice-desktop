@@ -36,10 +36,12 @@ Operator rule (2026-10-25). Applies to product code, tests, xtask and build scri
   `cfg(target_os | unix | windows | target_family)`, `cfg!` on those, `std::os::*`, `libc`, `rustix`, `windows-sys`,
   `objc2`/AppKit, OS commands, local sockets/pipes or OS-specific paths. Everything else is host-agnostic.
 - **One file per concern:** `platform/<concern>.rs` exposes **public plain functions**; the common logic is written
-  once there. Per-OS differences live in a **private trait** implemented in `platform/<concern>/{macos,windows,linux}.rs`,
+  once there. Per-OS differences live in a **private trait named `Os`**, implemented by a type named `Native` (`impl Os for Native`)
+  in `platform/<concern>/{macos,windows,linux}.rs`,
   with **one named method or const per real difference** and honest defaults (`None`, no-op, `false`,
   `Unsupported`). OS files override only what they actually do; an empty impl is fine. The concern file selects the
-  OS file with `cfg_attr(target_os = ..., path = ...)`, the only `cfg` allowed in common files. One exception: a
+  OS file with `cfg_attr(target_os = ..., path = ...)` as `mod imp`, the only `cfg` allowed in common files; common
+  code calls `Native::method()` / `Native::CONST` (`use imp::Native`). One exception: a
   value-only difference (no behaviour) may use `cfg!` in a plain module with no trait and no OS files, e.g. `data_dir`
   or `RESET_AVAILABLE`.
 - **Platforms return observations/capabilities; decisions live in common code** (fallbacks, cascades, thresholds).

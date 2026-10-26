@@ -11,7 +11,7 @@ const START_TIMEOUT: Duration = Duration::from_secs(3);
 #[cfg_attr(target_os = "windows", path = "confirmation/windows.rs")]
 #[cfg_attr(target_os = "linux", path = "confirmation/linux.rs")]
 mod imp;
-use imp::Os;
+use imp::Native;
 
 /// The existing reset and uninstall prompts, with their original translations.
 pub enum ConfirmationKind {
@@ -20,7 +20,7 @@ pub enum ConfirmationKind {
 }
 
 /// What differs per OS: the native dialog, and where its language is read.
-trait Native {
+trait Os {
     /// The language the OS reports for the dialog, `None` when it reports none. Default: the system locale
     /// (macOS reads the current locale's language code instead).
     fn language() -> Option<String> {
@@ -43,8 +43,8 @@ pub async fn confirm<R: Runtime>(app: &AppHandle<R>, kind: ConfirmationKind) -> 
     let (answer, response) = oneshot::channel();
     if app
         .run_on_main_thread(move || {
-            let language = Os::language().unwrap_or_else(|| "en".to_owned());
-            let accepted = Os::show(kind.words(&language), DialogStart { deadline, started });
+            let language = Native::language().unwrap_or_else(|| "en".to_owned());
+            let accepted = Native::show(kind.words(&language), DialogStart { deadline, started });
             let _ = answer.send(accepted);
         })
         .is_err()

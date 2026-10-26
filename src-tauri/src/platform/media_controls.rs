@@ -11,13 +11,13 @@ use tauri::AppHandle;
 #[cfg_attr(target_os = "windows", path = "media_controls/windows.rs")]
 #[cfg_attr(target_os = "linux", path = "media_controls/linux.rs")]
 mod imp;
-use imp::Os;
+use imp::Native;
 
 /// Delivers a media action to the call. Implementations preserve main-thread dispatch.
 pub type CommandSink = Arc<dyn Fn(Command) + Send + Sync>;
 
 /// What differs per OS: whether the app owns media keys, and its native wiring when it does.
-trait Native {
+trait Os {
     /// Whether the app owns media keys on this OS.
     const NATIVE: bool = false;
 
@@ -31,18 +31,18 @@ trait Native {
 /// `Some("native")` when the app owns media keys; `None` means unavailable,
 /// so the page must keep its Media Session handlers and Now Playing element.
 pub fn support() -> Option<&'static str> {
-    Os::NATIVE.then_some("native")
+    Native::NATIVE.then_some("native")
 }
 
 /// Installs process-lifetime callbacks once at startup. Unavailable hosts install nothing.
 pub fn attach(app: &AppHandle, sink: CommandSink) {
-    Os::attach(app, sink)
+    Native::attach(app, sink)
 }
 
 /// Follows call and microphone state, including navigation and hang-up resets.
 /// Native APIs run on the main thread; unavailable hosts leave the page in control.
 pub fn update(app: &AppHandle, call: &CallSnapshot) {
-    Os::update(app, call)
+    Native::update(app, call)
 }
 
 #[cfg(test)]

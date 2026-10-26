@@ -1,8 +1,8 @@
-use super::{DialogStart, Native};
+use super::{DialogStart, Os};
 
-pub(super) struct Os;
+pub(super) struct Native;
 
-impl Native for Os {
+impl Os for Native {
     /// The current locale's language code, as AppKit's own alerts read it; `None` when it reports none.
     fn language() -> Option<String> {
         use objc2::{class, msg_send, runtime::AnyObject};
@@ -89,6 +89,6 @@ mod tests {
         let (started, _start) = tokio::sync::oneshot::channel();
         let start = DialogStart { deadline: tokio::time::Instant::now(), started };
         // Runs on a test thread: an expired request must return before any main-thread-only AppKit call.
-        assert!(!Os::show(ConfirmationKind::DeleteAllData.words("en"), start));
+        assert!(!Native::show(ConfirmationKind::DeleteAllData.words("en"), start));
     }
 }

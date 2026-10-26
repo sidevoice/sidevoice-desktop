@@ -1,10 +1,10 @@
-use super::Native;
+use super::Os;
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use sidevoice_desktop_core::memory::accelerator_bytes;
 
-pub(super) struct Os;
+pub(super) struct Native;
 
 #[link(name = "Metal", kind = "framework")]
 extern "C" {
@@ -12,7 +12,7 @@ extern "C" {
     fn MTLCreateSystemDefaultDevice() -> *mut AnyObject;
 }
 
-impl Native for Os {
+impl Os for Native {
     /// The physical footprint, from the task's VM info.
     fn footprint() -> Option<u64> {
         use mach2::kern_return::KERN_SUCCESS;

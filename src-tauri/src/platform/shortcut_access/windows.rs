@@ -1,7 +1,7 @@
 //! The global-shortcut plugin supplies registration here; no native label or reservation policy differs.
 
-use super::Native;
+use super::Os;
 
-pub(super) struct Os;
+pub(super) struct Native;
 
-impl Native for Os {}
+impl Os for Native {}

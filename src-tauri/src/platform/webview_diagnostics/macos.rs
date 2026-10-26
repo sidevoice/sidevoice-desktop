@@ -1,4 +1,4 @@
-use super::Native;
+use super::Os;
 #[cfg(sidevoice_debug_options)]
 use objc2::runtime::{AnyClass, AnyObject, Bool};
 #[cfg(sidevoice_debug_options)]
@@ -6,14 +6,14 @@ use objc2::{msg_send, sel};
 #[cfg(sidevoice_debug_options)]
 use sidevoice_desktop_core::debug_options::{DebugOptions, Switch};
 
-pub(super) struct Os;
+pub(super) struct Native;
 
 /// Releases have no native setters: the defaults (nothing available, `apply` rejected) stand.
 #[cfg(not(sidevoice_debug_options))]
-impl Native for Os {}
+impl Os for Native {}
 
 #[cfg(sidevoice_debug_options)]
-impl Native for Os {
+impl Os for Native {
     fn available() -> Vec<Switch> {
         let has = |name, selector| AnyClass::get(name).is_some_and(|class| class.instance_method(selector).is_some());
         [

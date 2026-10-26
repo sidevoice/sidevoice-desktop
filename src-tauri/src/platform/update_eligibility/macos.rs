@@ -1,10 +1,10 @@
-use super::Native;
+use super::Os;
 use sidevoice_desktop_core::updater;
 use tauri::utils::config::BundleType;
 
-pub(super) struct Os;
+pub(super) struct Native;
 
-impl Native for Os {
+impl Os for Native {
     const BUNDLE: Option<BundleType> = Some(BundleType::App);
 
     /// Only an app bundle running from a writable app volume can use the plugin's update/restart path.

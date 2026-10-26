@@ -1,9 +1,9 @@
-use super::Native;
+use super::Os;
 use sidevoice_desktop_core::computer_name;
 
-pub(super) struct Os;
+pub(super) struct Native;
 
-impl Native for Os {
+impl Os for Native {
     fn device_name() -> Option<String> {
         std::fs::read_to_string("/etc/machine-info").ok().and_then(|file| computer_name::pretty_hostname(&file))
     }

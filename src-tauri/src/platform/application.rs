@@ -6,10 +6,10 @@ use tauri::{AppHandle, Builder};
 #[cfg_attr(target_os = "windows", path = "application/windows.rs")]
 #[cfg_attr(target_os = "linux", path = "application/linux.rs")]
 mod imp;
-use imp::Os;
+use imp::Native;
 
 /// What differs per OS; Tauri's defaults are the rest.
-trait Native {
+trait Os {
     /// Application policy before any window exists. Tauri's defaults need none.
     fn prepare(_app: &AppHandle) -> tauri::Result<()> {
         Ok(())
@@ -34,22 +34,22 @@ pub fn configure(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
 
 /// Prepare application policy on the UI thread, before any window exists (macOS: a regular Dock app).
 pub fn prepare(app: &AppHandle) -> tauri::Result<()> {
-    Os::prepare(app)
+    Native::prepare(app)
 }
 
 /// Finish launch activation on the UI thread, after the shell shows and focuses the room.
 pub fn activate(app: &AppHandle) {
-    Os::activate(app)
+    Native::activate(app)
 }
 
 /// Handle native lifecycle events on the UI thread. macOS Dock reopen shows a hidden/missing room.
 pub fn handle_event(app: &AppHandle, event: &tauri::RunEvent) {
-    Os::handle_event(app, event)
+    Native::handle_event(app, event)
 }
 
 /// Native application observations for diagnostics, on the UI thread. Never invent AppKit facts elsewhere.
 pub fn report(app: &AppHandle) -> String {
-    Os::report(app).unwrap_or_else(|| "application=tauri".into())
+    Native::report(app).unwrap_or_else(|| "application=tauri".into())
 }
 
 #[cfg(test)]

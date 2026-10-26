@@ -2,9 +2,9 @@ use std::{fs, path::Path};
 
 use sidevoice_platform::fs::{Files, TestFiles};
 
-pub(super) struct Os;
+pub(super) struct Native;
 
-impl super::Native for Os {
+impl super::Os for Native {
     fn replace_ancestor(ancestor: &Path, moved: &Path, replacement: super::Replacement<'_>) -> bool {
         fs::rename(ancestor, moved).unwrap();
         match replacement {

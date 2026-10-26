@@ -1,7 +1,7 @@
 //! Only the portable resident-memory observation is available here.
 
-use super::Native;
+use super::Os;
 
-pub(super) struct Os;
+pub(super) struct Native;
 
-impl Native for Os {}
+impl Os for Native {}

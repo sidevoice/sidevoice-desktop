@@ -6,10 +6,10 @@ use sidevoice_desktop_core::memory::Sample;
 #[cfg_attr(target_os = "windows", path = "process_memory/windows.rs")]
 #[cfg_attr(target_os = "linux", path = "process_memory/linux.rs")]
 mod imp;
-use imp::Os;
+use imp::Native;
 
 /// The readings only some OSes have, in bytes; `None` where this OS has no such reading.
-trait Native {
+trait Os {
     /// The physical footprint (macOS `task_info`).
     fn footprint() -> Option<u64> {
         None
@@ -29,7 +29,12 @@ trait Native {
 /// Sample this process, in bytes. Missing readings stay absent, including the macOS-only footprint,
 /// Metal allocation and vmmap accelerator regions. The portable observation is resident memory.
 pub fn sample() -> Sample {
-    Sample { footprint: Os::footprint(), resident: resident(), metal: Os::metal(), accelerator: Os::accelerator() }
+    Sample {
+        footprint: Native::footprint(),
+        resident: resident(),
+        metal: Native::metal(),
+        accelerator: Native::accelerator(),
+    }
 }
 
 /// Resident memory, through the maintained portable API.
@@ -65,7 +70,7 @@ mod tests {
     #[test]
     fn portable_observations_do_not_invent_footprint_or_gpu_usage() {
         struct Portable;
-        impl Native for Portable {}
+        impl Os for Portable {}
         assert_eq!(Portable::footprint(), None);
         assert_eq!(Portable::metal(), None);
         assert_eq!(Portable::accelerator(), None);

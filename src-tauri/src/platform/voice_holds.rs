@@ -9,10 +9,10 @@ use tauri::{AppHandle, Runtime};
 #[cfg_attr(target_os = "windows", path = "voice_holds/windows.rs")]
 #[cfg_attr(target_os = "linux", path = "voice_holds/linux.rs")]
 mod imp;
-use imp::Os;
+use imp::Native;
 
 /// What differs per OS: whether the app runs a call of its own.
-trait Native {
+trait Os {
     /// What the app's voice host holds now; `None` where the app runs no call of its own.
     fn held<R: Runtime>(_app: &AppHandle<R>) -> Option<String> {
         None
@@ -21,7 +21,7 @@ trait Native {
 
 /// What the app's voice host holds now (`keeps=N lanes=M`), or `None` when this host runs no call of its own.
 pub fn held<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
-    Os::held(app)
+    Native::held(app)
 }
 
 #[cfg(test)]

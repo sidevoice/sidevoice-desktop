@@ -1,9 +1,9 @@
-use super::Observations;
+use super::Os;
 use sidevoice_desktop_core::call_controls::{self as logic, Rect};
 use tauri::{Runtime, WebviewWindow};
 pub struct Native;
 
-impl Observations for Native {
+impl Os for Native {
     fn on_screen<R: Runtime>(w: &WebviewWindow<R>) -> Option<bool> {
         on_screen(w)
     }

@@ -7,9 +7,9 @@ use windows_sys::Win32::UI::{
     WindowsAndMessaging::{SendMessageW, IDCANCEL, IDOK},
 };
 
-use super::{DialogStart, Native};
+use super::{DialogStart, Os};
 
-pub(super) struct Os;
+pub(super) struct Native;
 
 unsafe extern "system" fn dialog_event(hwnd: HWND, event: u32, _: WPARAM, _: LPARAM, data: isize) -> i32 {
     if event == TDN_CREATED as u32 {
@@ -24,7 +24,7 @@ unsafe extern "system" fn dialog_event(hwnd: HWND, event: u32, _: WPARAM, _: LPA
     0
 }
 
-impl Native for Os {
+impl Os for Native {
     fn show(words: (&'static str, &'static str, &'static str, &'static str), start: DialogStart) -> bool {
         let (title, detail, cancel, action) = words;
         let wide = |text: &str| text.encode_utf16().chain(Some(0)).collect::<Vec<_>>();

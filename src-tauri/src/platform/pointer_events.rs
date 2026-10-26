@@ -27,7 +27,7 @@ pub type Sink = Arc<dyn Fn(PointerEvent) + Send + Sync>;
 
 /// What an OS does differently while the pointer is watched; everything else is [`watch`]. Each runs with no
 /// application mutex held.
-trait Native {
+trait Os {
     /// Whether the pointer can be observed globally at all. Where it cannot (Wayland) the page's own events are used.
     fn available() -> bool {
         true

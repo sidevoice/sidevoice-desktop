@@ -11,7 +11,7 @@ use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 #[cfg_attr(target_os = "windows", path = "webview_data/windows.rs")]
 #[cfg_attr(target_os = "linux", path = "webview_data/linux.rs")]
 mod imp;
-use imp::Os;
+use imp::Native;
 
 /// The app's bundle identifier (`tauri.conf.json`), which names its browser storage on every host.
 const IDENTIFIER: &str = "dev.sidevoice.desktop";
@@ -38,20 +38,20 @@ pub struct Released(Locations);
 /// Check launch-mode eligibility at reset admission, before confirmation or any destructive step.
 /// macOS refuses (`Unsupported`) an app that is not its own responsible process.
 pub fn preflight(owner: u32) -> io::Result<()> {
-    Os::preflight(owner)
+    Native::preflight(owner)
 }
 
 /// Resolve the runtime's roots natively, before exit; `home` is the account's home directory.
 /// Callers never spell a native path. macOS keeps its existing WKWebView default store.
 pub fn locations(home: &Path) -> io::Result<Locations> {
-    Os::locations(home)
+    Native::locations(home)
 }
 
 /// Snapshot the app and its browser writers before allowing the app to exit. The transaction
 /// must already forbid new webviews and keep other app launches behind its held reset lock.
 /// Windows also discovers runtimes using this user-data folder; macOS tracks responsible XPC services.
 pub fn capture(owner: u32, locations: Locations) -> io::Result<Owner> {
-    capture_with::<Os>(owner, locations)
+    capture_with::<Native>(owner, locations)
 }
 
 /// Wait for the app and its observed browser processes, refreshing descendants and folder users
@@ -59,7 +59,7 @@ pub fn capture(owner: u32, locations: Locations) -> io::Result<Owner> {
 /// The app must stop creating webviews before capture; the helper must retain the launch barrier
 /// through removal. A fresh process must never initialize writers between release and deletion.
 pub fn wait_released(owner: Owner, deadline: Instant) -> io::Result<Released> {
-    wait_released_with::<Os>(owner, deadline)
+    wait_released_with::<Native>(owner, deadline)
 }
 
 /// Remove one exact allowlisted root only after browser release, using core's held-parent removal.
@@ -88,7 +88,7 @@ pub fn remove(released: &Released, path: &Path) -> io::Result<()> {
 // What varies per OS, and nothing else. Browser cleanup only: no service stop, reset lock, journal,
 // relaunch or app removal policy. Each `webview_data/<os>.rs` implements this private trait; the
 // functions above hold the common code once and are the module's only interface.
-trait Native {
+trait Os {
     /// Launch-mode eligibility at reset admission. Hosts without such a constraint admit every launch.
     fn preflight(_owner: u32) -> io::Result<()> {
         Ok(())
@@ -113,7 +113,7 @@ trait Native {
     fn observe(system: &System, locations: &Locations, processes: &mut Vec<(Pid, u64)>) -> io::Result<()>;
 }
 
-fn capture_with<N: Native>(owner: u32, locations: Locations) -> io::Result<Owner> {
+fn capture_with<N: Os>(owner: u32, locations: Locations) -> io::Result<Owner> {
     let system = Owner::snapshot()?;
     let pid = Pid::from_u32(owner);
     let app = system.process(pid).ok_or_else(Owner::busy)?;
@@ -125,7 +125,7 @@ fn capture_with<N: Native>(owner: u32, locations: Locations) -> io::Result<Owner
     Ok(Owner { locations, processes })
 }
 
-fn wait_released_with<N: Native>(mut owner: Owner, deadline: Instant) -> io::Result<Released> {
+fn wait_released_with<N: Os>(mut owner: Owner, deadline: Instant) -> io::Result<Released> {
     loop {
         let system = Owner::snapshot()?;
         N::observe(&system, &owner.locations, &mut owner.processes)?;
@@ -209,9 +209,9 @@ mod tests {
     // A native test subprocess stands in for a browser, so exercise the shared lifetime contract
     // without pretending that its executable/arguments identify a real WebView2 runtime.
     pub(super) struct Fixture;
-    impl Native for Fixture {
+    impl Os for Fixture {
         fn exited(pid: u32) -> io::Result<bool> {
-            Os::exited(pid)
+            Native::exited(pid)
         }
         fn observe(system: &System, _locations: &Locations, processes: &mut Vec<(Pid, u64)>) -> io::Result<()> {
             Owner::descendants(system, processes);
@@ -233,7 +233,7 @@ mod tests {
     #[test]
     fn missing_snapshot_and_inspection_failure_do_not_authorize_removal() {
         struct FailedInspection;
-        impl Native for FailedInspection {
+        impl Os for FailedInspection {
             fn observe(_: &System, _: &Locations, _: &mut Vec<(Pid, u64)>) -> io::Result<()> {
                 Ok(())
             }
@@ -255,7 +255,7 @@ mod tests {
         );
         assert!(selected.exists());
         // Native liveness does not need a sysinfo entry (or even a snapshot) to detect this live PID.
-        assert!(!Os::exited(std::process::id()).unwrap());
+        assert!(!Native::exited(std::process::id()).unwrap());
         let reused = Owner {
             locations: Locations::new(vec![selected]).unwrap(),
             processes: vec![(Pid::from_u32(std::process::id()), 1)],
@@ -264,7 +264,7 @@ mod tests {
             wait_released_with::<Fixture>(reused, Instant::now()).err().unwrap().kind(),
             io::ErrorKind::WouldBlock
         );
-        assert!(Os::exited(0).is_err());
+        assert!(Native::exited(0).is_err());
     }
 
     #[test]

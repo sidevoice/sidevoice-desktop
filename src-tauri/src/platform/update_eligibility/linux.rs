@@ -1,9 +1,9 @@
-use super::Native;
+use super::Os;
 use tauri::utils::config::BundleType;
 
-pub(super) struct Os;
+pub(super) struct Native;
 
-impl Native for Os {
+impl Os for Native {
     /// Only an AppImage can update itself; deb/rpm are managed by the system.
     const BUNDLE: Option<BundleType> = Some(BundleType::AppImage);
 

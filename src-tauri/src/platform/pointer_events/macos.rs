@@ -1,4 +1,4 @@
-use super::{Cleanup, Native as Observations, PointerEvent, Sink};
+use super::{Cleanup, Os, PointerEvent, Sink};
 use crate::debug;
 use sidevoice_desktop_core::call_controls as logic;
 use std::{
@@ -18,7 +18,7 @@ static NEXT_MONITOR: AtomicU64 = AtomicU64::new(1);
 pub struct Native;
 
 /// macOS: outside clicks come from a global NSEvent monitor, and the app sets the cursor itself.
-impl Observations for Native {
+impl Os for Native {
     fn prepare() {
         set_cursor_in_background();
     }

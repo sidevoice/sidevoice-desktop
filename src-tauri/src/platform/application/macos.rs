@@ -1,9 +1,9 @@
-use super::Native;
+use super::Os;
 use tauri::AppHandle;
 
-pub(super) struct Os;
+pub(super) struct Native;
 
-impl Native for Os {
+impl Os for Native {
     fn prepare(app: &AppHandle) -> tauri::Result<()> {
         // Ask for a regular Dock application before creating any window or panel (#117).
         app.set_activation_policy(tauri::ActivationPolicy::Regular)?;

@@ -1,5 +1,5 @@
-use super::Native;
+use super::Os;
 
 /// Physical pixels, positions always available: the trait's defaults.
-pub(super) struct Os;
-impl Native for Os {}
+pub(super) struct Native;
+impl Os for Native {}

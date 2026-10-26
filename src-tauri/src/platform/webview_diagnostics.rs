@@ -8,10 +8,10 @@ use sidevoice_desktop_core::debug_options::Switch;
 #[cfg_attr(target_os = "windows", path = "webview_diagnostics/windows.rs")]
 #[cfg_attr(target_os = "linux", path = "webview_diagnostics/linux.rs")]
 mod imp;
-use imp::Os;
+use imp::Native;
 
 /// What differs per OS: which diagnostic setters its webview has, and applying them.
-trait Native {
+trait Os {
     /// The switches with native setters in this build/runtime; none where no binding is implemented.
     fn available() -> Vec<Switch> {
         Vec::new()
@@ -28,7 +28,7 @@ trait Native {
 /// Only switches with native setters in this build/runtime. Empty in releases and on Windows/Linux,
 /// where no WebView2 or WebKitGTK diagnostic binding is implemented.
 pub fn available() -> Vec<Switch> {
-    Os::available()
+    Native::available()
 }
 
 /// Schedule the kept options on this webview's UI thread. Reject unsupported enabled options and surface
@@ -39,7 +39,7 @@ pub fn apply(window: &tauri::WebviewWindow, options: DebugOptions) -> Result<(),
     if Switch::ALL.into_iter().any(|switch| options.get(switch) && !available.contains(&switch)) {
         return Err("unsupported webview diagnostic switch".into());
     }
-    Os::apply(window, options)
+    Native::apply(window, options)
 }
 
 #[cfg(test)]
@@ -60,7 +60,7 @@ mod tests {
     #[test]
     fn an_unimplemented_backend_advertises_no_switches() {
         struct Unsupported;
-        impl Native for Unsupported {}
+        impl Os for Unsupported {}
         assert!(Unsupported::available().is_empty());
         // This backend cannot touch a window: only its advertised state is consumed by production callers.
         assert_eq!(DebugOptions::default().state(&Unsupported::available())["available"], serde_json::json!([]));

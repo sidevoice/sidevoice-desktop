@@ -1,7 +1,7 @@
 //! The app is a remote client here; the page runs the call.
 
-use super::Native;
+use super::Os;
 
-pub(super) struct Os;
+pub(super) struct Native;
 
-impl Native for Os {}
+impl Os for Native {}

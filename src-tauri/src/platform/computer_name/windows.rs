@@ -1,8 +1,8 @@
-use super::Native;
+use super::Os;
 
-pub(super) struct Os;
+pub(super) struct Native;
 
-impl Native for Os {
+impl Os for Native {
     fn host_name() -> Option<String> {
         whoami::hostname().ok()
     }

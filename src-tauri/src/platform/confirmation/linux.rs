@@ -1,10 +1,10 @@
 use gtk::prelude::*;
 
-use super::{DialogStart, Native};
+use super::{DialogStart, Os};
 
-pub(super) struct Os;
+pub(super) struct Native;
 
-impl Native for Os {
+impl Os for Native {
     fn show(words: (&'static str, &'static str, &'static str, &'static str), start: DialogStart) -> bool {
         // Tauri normally initializes GTK on its UI thread. Do not construct a widget if that prerequisite
         // or the display connection is missing: GTK would abort rather than return a recoverable error.
@@ -49,6 +49,6 @@ mod tests {
         assert!(!gtk::is_initialized_main_thread());
         let (started, _start) = tokio::sync::oneshot::channel();
         let start = DialogStart { deadline: tokio::time::Instant::now() + START_TIMEOUT, started };
-        assert!(!Os::show(ConfirmationKind::DeleteAllData.words("en"), start));
+        assert!(!Native::show(ConfirmationKind::DeleteAllData.words("en"), start));
     }
 }

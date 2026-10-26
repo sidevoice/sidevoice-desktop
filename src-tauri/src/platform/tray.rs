@@ -6,7 +6,7 @@ use sidevoice_desktop_core::bridge::TrayIcon;
 #[cfg_attr(target_os = "windows", path = "tray/windows.rs")]
 #[cfg_attr(target_os = "linux", path = "tray/linux.rs")]
 mod imp;
-use imp::Os;
+use imp::Native;
 
 /// The bytes and tinting rule are selected together, for one call state.
 pub struct TrayImage {
@@ -15,7 +15,7 @@ pub struct TrayImage {
 }
 
 /// What differs per OS about the tray.
-trait Native {
+trait Os {
     /// Whether the system tints template artwork itself (macOS).
     const TEMPLATE_ART: bool = false;
 
@@ -31,7 +31,7 @@ trait Native {
 /// Generated brand artwork for the current panel theme. Windows re-reads its taskbar theme each time;
 /// macOS tints templates itself; Linux uses the dark-panel fallback (no universal panel theme API).
 pub fn image(state: TrayIcon) -> TrayImage {
-    if Os::TEMPLATE_ART {
+    if Native::TEMPLATE_ART {
         let bytes: &[u8] = match state {
             TrayIcon::Idle => include_bytes!("../../packaging/shared/tray/idle.png"),
             TrayIcon::Live => include_bytes!("../../packaging/shared/tray/live.png"),
@@ -39,7 +39,7 @@ pub fn image(state: TrayIcon) -> TrayImage {
         };
         return TrayImage { bytes, template: true };
     }
-    let bytes: &[u8] = match (Os::light_panel().unwrap_or(false), state) {
+    let bytes: &[u8] = match (Native::light_panel().unwrap_or(false), state) {
         (true, TrayIcon::Idle) => include_bytes!("../../packaging/shared/tray/light-idle.png"),
         (true, TrayIcon::Live) => include_bytes!("../../packaging/shared/tray/light-live.png"),
         (true, TrayIcon::Muted) => include_bytes!("../../packaging/shared/tray/light-muted.png"),
@@ -53,7 +53,7 @@ pub fn image(state: TrayIcon) -> TrayImage {
 /// Handle a failed native tray creation. macOS/Windows propagate the error; Linux logs it and keeps the
 /// room usable without a tray. A panel without AppIndicator support may simply never display the icon.
 pub fn creation_failed(error: tauri::Error) -> tauri::Result<()> {
-    if !Os::TRAY_OPTIONAL {
+    if !Native::TRAY_OPTIONAL {
         return Err(error);
     }
     log::warn!("Tray unavailable; continuing with the room window: {error}");

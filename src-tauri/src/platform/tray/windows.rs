@@ -1,8 +1,8 @@
-use super::Native;
+use super::Os;
 
-pub(super) struct Os;
+pub(super) struct Native;
 
-impl Native for Os {
+impl Os for Native {
     fn light_panel() -> Option<bool> {
         winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
             .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")

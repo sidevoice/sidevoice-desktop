@@ -1,7 +1,7 @@
-use super::Native;
+use super::Os;
 
-pub(super) struct Os;
+pub(super) struct Native;
 
-impl Native for Os {
+impl Os for Native {
     const TRAY_OPTIONAL: bool = true;
 }

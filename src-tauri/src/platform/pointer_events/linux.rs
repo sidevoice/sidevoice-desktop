@@ -1,4 +1,4 @@
-use super::{ButtonSample, Native as Observations};
+use super::{ButtonSample, Os};
 use crate::platform::desktop_geometry;
 use gtk::gdk::{self, ModifierType};
 use gtk::prelude::*;
@@ -7,7 +7,7 @@ pub struct Native;
 
 /// Linux: the page owns its cursor on X11, and outside clicks are seen by polling the pointer's button state;
 /// Wayland cannot observe the pointer globally, so the page's own events are used.
-impl Observations for Native {
+impl Os for Native {
     fn available() -> bool {
         desktop_geometry::positions_available()
     }

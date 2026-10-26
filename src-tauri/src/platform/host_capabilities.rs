@@ -10,17 +10,17 @@ use sidevoice_desktop_core::bridge::Capabilities;
 #[cfg_attr(target_os = "windows", path = "host_capabilities/windows.rs")]
 #[cfg_attr(target_os = "linux", path = "host_capabilities/linux.rs")]
 mod imp;
-use imp::Os;
+use imp::Native;
 
 /// What differs per OS: what it offers.
-trait Native {
+trait Os {
     /// Nothing beyond the web unless the OS offers it.
     const CAPABILITIES: Capabilities = Capabilities { local_host: false, voice: false };
 }
 
 /// What this host offers the page beyond the web.
 pub fn capabilities() -> Capabilities {
-    Os::CAPABILITIES
+    Native::CAPABILITIES
 }
 
 #[cfg(test)]
@@ -30,7 +30,7 @@ mod tests {
     #[test]
     fn a_host_offers_nothing_beyond_the_web_unless_it_says_so() {
         struct Remote;
-        impl Native for Remote {}
+        impl Os for Remote {}
         assert_eq!(Remote::CAPABILITIES, Capabilities { local_host: false, voice: false });
     }
 }
