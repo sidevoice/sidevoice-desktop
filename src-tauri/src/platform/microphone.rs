@@ -1,5 +1,6 @@
 //! Native microphone access on every OS: the OS privacy policy and whether an input device exists, read fresh on each
 //! call. Nothing is cached, no stream is opened, and the webview's own capture outcome plays no part.
+use cpal::traits::HostTrait;
 use std::future::Future;
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_opener::OpenerExt;
@@ -14,12 +15,6 @@ mod imp;
 #[path = "microphone/linux.rs"]
 mod imp;
 pub use imp::NativeMicrophone;
-
-/// Audio input enumeration through the maintained cross-platform audio crate (WASAPI, ALSA); not used on macOS,
-/// where AVFoundation answers both questions.
-#[cfg(not(target_os = "macos"))]
-#[path = "microphone/devices.rs"]
-mod devices;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccessState {
@@ -48,6 +43,17 @@ impl From<bool> for Devices {
         } else {
             Devices::Absent
         }
+    }
+}
+
+/// Whether an audio input device exists, from cpal's host enumeration (WASAPI active endpoints, CoreAudio, ALSA PCM
+/// hints). Enumeration opens no stream and so never triggers a privacy prompt or a capture indicator.
+fn input_devices() -> Devices {
+    let Some(id) = cpal::available_hosts().into_iter().next() else { return Devices::Unknown };
+    // A host or a listing that fails says nothing about the hardware.
+    match cpal::host_from_id(id).and_then(|host| host.input_devices()) {
+        Ok(mut devices) => devices.next().is_some().into(),
+        Err(_) => Devices::Unknown,
     }
 }
 

@@ -1,5 +1,5 @@
-//! The existing AVFoundation permission/device checks and one-shot request callback.
-use super::{resolve, AccessState, MicrophoneAccess};
+//! AVFoundation permission and the one-shot request callback; device presence is the shared cpal enumeration.
+use super::{input_devices, resolve, AccessState, MicrophoneAccess};
 use block2::RcBlock;
 use objc2::runtime::Bool;
 use objc2_av_foundation::{AVAuthorizationStatus, AVCaptureDevice, AVMediaType, AVMediaTypeAudio};
@@ -12,7 +12,7 @@ impl MicrophoneAccess for NativeMicrophone {
         Some("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone");
 
     fn state() -> Result<AccessState, &'static str> {
-        Ok(resolve(permission(authorization()?), input_device()?.into()))
+        Ok(resolve(permission(authorization()?), input_devices()))
     }
 
     async fn request() -> Result<AccessState, &'static str> {
@@ -30,13 +30,6 @@ fn permission(status: AVAuthorizationStatus) -> AccessState {
         // page cannot get the microphone by asking.
         _ => AccessState::Denied,
     }
-}
-
-/// Whether an audio input device exists (`AVCaptureDevice.default(for: .audio)`), which needs no permission.
-fn input_device() -> Result<bool, &'static str> {
-    let audio = audio()?;
-    // SAFETY: AVMediaTypeAudio is one of the two media types the method accepts.
-    Ok(unsafe { AVCaptureDevice::defaultDeviceWithMediaType(audio) }.is_some())
 }
 
 fn audio() -> Result<&'static AVMediaType, &'static str> {

@@ -50,16 +50,14 @@ tauri-plugin-log = "2"
 # The system microphone privacy page, from Rust only (platform/microphone.rs).
 tauri-plugin-opener = "2"
 log = "0.4"
+# Whether an audio input device exists (platform/microphone): enumeration only, no stream, no prompt. WASAPI on Windows,
+# CoreAudio on macOS, ALSA on Linux; no feature is needed for any of them. Already in the tree through sidevoice-voice.
+cpal = { version = "0.18", default-features = false }
 
 # This computer's own core, its pairing and the page's proxy (src/local_host.rs; docs/LOCAL_HOST.md). Unix sockets.
 # `fetch`: its install's HTTPS client, for "Prepare this computer" (docs/LOCAL_HOST.md → Install).
 [target.'cfg(unix)'.dependencies]
 sidevoice-local-host = { path = "local-host", features = ["fetch"] }
-
-[target.'cfg(any(windows, target_os = "linux"))'.dependencies]
-# Whether an audio input device exists (platform/microphone): enumeration only, no stream. WASAPI on Windows, ALSA on Linux.
-# Already in the tree through sidevoice-voice (macOS), where AVFoundation answers instead.
-cpal = { version = "0.18", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 # The taskbar's colour, to draw the tray mark in the brand's look for it (src/tray.rs).

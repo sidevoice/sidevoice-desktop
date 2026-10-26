@@ -1,7 +1,7 @@
 //! The unpackaged desktop-app privacy gate, read with the existing maintained winreg crate, and the input devices.
 //! AppCapability is documented for packaged apps; Sidevoice ships an unpackaged NSIS executable, which has no consent
 //! prompt: `request` is `state`.
-use super::{devices, resolve, AccessState, MicrophoneAccess};
+use super::{input_devices, resolve, AccessState, MicrophoneAccess};
 use std::io::ErrorKind;
 use winreg::{
     enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE},
@@ -21,7 +21,7 @@ impl MicrophoneAccess for NativeMicrophone {
             setting(HKEY_LOCAL_MACHINE, MICROPHONE),
             setting(HKEY_CURRENT_USER, &format!(r"{MICROPHONE}\NonPackaged")),
         ]);
-        Ok(resolve(policy, devices::present()))
+        Ok(resolve(policy, input_devices()))
     }
 }
 
