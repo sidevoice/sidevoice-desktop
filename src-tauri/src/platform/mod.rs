@@ -17,7 +17,7 @@ pub mod process_memory;
 pub mod reveal;
 pub mod shortcut_access;
 pub mod tray;
-#[cfg(any(test, feature = "probe"))]
+#[cfg(feature = "probe")]
 pub mod voice_holds;
 pub mod webview_diagnostics;
 

@@ -14,7 +14,7 @@
 use std::borrow::Cow;
 
 use crate::platform::exit_diagnostics;
-use crate::platform::voice_holds::{NativeVoiceHolds, VoiceHolds};
+use crate::platform::voice_holds;
 use tauri::utils::assets::{AssetKey, AssetsIter, CspHash};
 use tauri::{App, AppHandle, Assets, Context, Runtime};
 
@@ -60,7 +60,7 @@ pub fn memory_on(app: &tauri::AppHandle, line: &str) {
         return;
     }
     let phase = phase.trim().to_owned();
-    if let Some(held) = NativeVoiceHolds::held(app) {
+    if let Some(held) = voice_holds::held(app) {
         println!("memory-holds phase={phase} {held}");
     }
     std::thread::spawn(move || {

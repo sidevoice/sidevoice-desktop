@@ -1,9 +1,9 @@
-use super::VoiceHolds;
+use super::Native;
 use tauri::{AppHandle, Manager, Runtime};
 
-pub struct NativeVoiceHolds;
+pub(super) struct Os;
 
-impl VoiceHolds for NativeVoiceHolds {
+impl Native for Os {
     fn held<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
         app.try_state::<crate::voice::VoiceState>().map(|state| state.held())
     }

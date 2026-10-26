@@ -1,7 +1,7 @@
 //! The page runs the call on Linux; the app holds none.
 
-use super::VoiceHolds;
+use super::Native;
 
-pub struct NativeVoiceHolds;
+pub(super) struct Os;
 
-impl VoiceHolds for NativeVoiceHolds {}
+impl Native for Os {}
