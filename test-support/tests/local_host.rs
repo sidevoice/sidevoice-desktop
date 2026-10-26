@@ -7,7 +7,7 @@
 use serde_json::{json, Value};
 use sidevoice_desktop_test_support::fake_core::{self, FakeCore};
 use sidevoice_desktop_test_support::platform::storage::{StorageFixture, StorageFixtures};
-use sidevoice_desktop_test_support::platform::temp::{Temp, TempArea};
+use sidevoice_desktop_test_support::platform::temp;
 use sidevoice_desktop_test_support::{fake_registry::FakeRegistry, fixture};
 use sidevoice_local_host::host::{Action, Config, LocalHost};
 use sidevoice_local_host::http;
@@ -37,7 +37,7 @@ impl Drop for World {
 impl World {
     fn new() -> World {
         // Under /tmp: a socket's path must stay short.
-        let tmp = tempfile::Builder::new().prefix("svlh").tempdir_in(Temp::short_root()).unwrap();
+        let tmp = tempfile::Builder::new().prefix("svlh").tempdir_in(temp::short_root()).unwrap();
         let dirs = DataDirs::new(tmp.path().join("d"));
         let app_dir = tmp.path().join("app");
         World { _tmp: tmp, dirs, app_dir, log: Arc::default() }

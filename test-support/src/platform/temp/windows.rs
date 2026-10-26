@@ -1,18 +1,6 @@
-use super::TempArea;
-use std::path::{Path, PathBuf};
+//! The temporary directory's own paths are short enough, and there is no sticky-directory counterpart.
+use super::Area;
 
 pub struct Os;
 
-impl TempArea for Os {
-    fn short_root() -> PathBuf {
-        std::env::temp_dir()
-    }
-
-    fn share_sticky(_dir: &Path) -> bool {
-        false
-    }
-
-    fn let_group_read(_dir: &Path) -> bool {
-        false
-    }
-}
+impl Area for Os {}

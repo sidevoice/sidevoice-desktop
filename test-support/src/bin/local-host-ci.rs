@@ -13,21 +13,24 @@
 // `serve` and `attack` need the local host, which a host without it answers as unsupported (exit 2).
 
 use sidevoice_desktop_test_support::fake_core::FakeCore;
-use sidevoice_desktop_test_support::platform::local_host::{Ci, LocalHostCi};
+use sidevoice_desktop_test_support::platform::local_host;
+use std::path::Path;
 use std::process::exit;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let ran = match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         ["core", data] => {
-            let core = FakeCore::start(std::path::Path::new(data), 1, true).expect("the stand-in core starts");
+            let core = FakeCore::start(Path::new(data), 1, true).expect("the stand-in core starts");
             println!("fake-core listening on {}", core.socket().display());
             loop {
                 std::thread::sleep(std::time::Duration::from_secs(3600));
             }
         }
-        ["serve", data, app, port_file] => Ci::serve(data, app, port_file),
-        ["attack", data, app, port, socket] => Ci::attack(data, app, port.parse().expect("a port"), socket),
+        ["serve", data, app, port_file] => local_host::serve(Path::new(data), Path::new(app), Path::new(port_file)),
+        ["attack", data, app, port, socket] => {
+            local_host::attack(Path::new(data), Path::new(app), port.parse().expect("a port"), Path::new(socket))
+        }
         _ => {
             eprintln!("usage: local-host-ci core <D> | serve <D> <app-dir> <port-file> | attack <D> <app-dir> <port> <socket>");
             exit(2);

@@ -1,18 +1,6 @@
-//! Windows: no local host yet, so neither mode can run.
-use super::LocalHostCi;
-use std::io;
+//! Windows: no local host yet (its crate is a Unix-only dependency), so both modes answer unsupported.
+use super::Modes;
 
 pub struct Os;
 
-fn unsupported() -> io::Result<()> {
-    Err(io::Error::new(io::ErrorKind::Unsupported, "the local host is not available on this OS yet"))
-}
-
-impl LocalHostCi for Os {
-    fn serve(_data: &str, _app: &str, _port_file: &str) -> io::Result<()> {
-        unsupported()
-    }
-    fn attack(_data: &str, _app: &str, _port: u16, _socket: &str) -> io::Result<()> {
-        unsupported()
-    }
-}
+impl Modes for Os {}

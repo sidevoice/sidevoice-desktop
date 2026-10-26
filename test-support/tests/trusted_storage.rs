@@ -1,5 +1,6 @@
 // The former local trusted implementation's regressions exercise the shared owner on every host.
 use sidevoice_desktop_test_support::platform::storage::{Others, Replacement, StorageFixture, StorageFixtures};
+use sidevoice_desktop_test_support::platform::temp;
 use sidevoice_platform::fs::{Access, Create, Directory, Files, Fs, HeldDirectory};
 use std::{fs, io::ErrorKind};
 
@@ -20,7 +21,7 @@ fn ancestry_others_can_write_is_refused_unless_protected() {
     StorageFixtures::writable(&shared);
     let error = HeldDirectory::open(&data, Access::NotWritableByOthers).err().expect("a writable parent passed");
     assert_eq!(error.kind(), ErrorKind::PermissionDenied);
-    if StorageFixtures::protect_shared_ancestor(&shared) {
+    if temp::share_sticky(&shared) {
         assert!(HeldDirectory::open(&data, Access::NotWritableByOthers).is_ok(), "protected shared ancestor");
     }
     assert_eq!(
