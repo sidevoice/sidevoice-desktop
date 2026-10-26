@@ -18,11 +18,11 @@ use imp::Os;
 trait Duplex: Read + Write {}
 impl<T: Read + Write> Duplex for T {}
 
-/// The only parts of the two modes that differ per OS. A host without the local host answers
-/// [`io::ErrorKind::Unsupported`], which is the availability answer: today that is every host but Unix.
+/// The only parts of the two modes that differ per OS. A host that does not run the scenario answers
+/// [`io::ErrorKind::Unsupported`]: today, every host but Unix (the two-user CI scenario is Unix's).
 trait Modes {
-    /// [`serve`], whole: it runs the local host itself, and `sidevoice-local-host` is a Unix-only dependency
-    /// (test-support/Cargo.toml) until local-host IPC is portable, so nothing of it can be written once here.
+    /// [`serve`], whole: it runs the local host itself, with `D` opened to a second user the Unix way (its mode bits);
+    /// the two-user scenario is a Unix CI job.
     fn serve(_data: &Path, _app: &Path, _port_file: &Path) -> io::Result<()> {
         Err(unsupported())
     }

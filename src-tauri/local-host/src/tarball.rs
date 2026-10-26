@@ -2,8 +2,8 @@
 //! Install): a gzipped tar whose every entry is a plain file or directory below `package/`.
 //!
 //! Refused, with `install.authenticity` and the check the page names: a path that is absolute, has an empty, `.` or
-//! `..` segment, a backslash or a control character, or is not below `package/` (`archive-path`); a symbolic or hard
-//! link (`archive-link`); a device, a FIFO, a sparse file or anything else that is not a file or a directory
+//! `..` segment, a backslash, a colon or a control character, or is not below `package/` (`archive-path`); a symbolic
+//! or hard link (`archive-link`); a device, a FIFO, a sparse file or anything else that is not a file or a directory
 //! (`archive-type`, also for an archive that does not decode); more than [`Limits`] allow (`archive-size`). Nothing is
 //! taken from an entry but its path, its contents and whether it is executable: files are written 0600 (0700 when the
 //! archive marks them executable, as `bin/sidevoice-connector`), directories 0700, each created anew — an entry that
@@ -49,8 +49,9 @@ fn segments(raw: &[u8]) -> Result<Vec<&str>, Failure> {
     if text.is_empty() || text.len() > PATH_LIMIT {
         return Err(bad("an empty or overlong path"));
     }
-    if text.chars().any(|c| c.is_control() || c == '\\') {
-        return Err(bad("a control character or a backslash"));
+    // A colon names a drive (`C:`) or a file's stream (`name:stream`) on Windows; `C:` joined to a path leaves it.
+    if text.chars().any(|c| c.is_control() || c == '\\' || c == ':') {
+        return Err(bad("a control character, a backslash or a colon"));
     }
     if text.starts_with('/') {
         return Err(bad("an absolute path"));
@@ -188,15 +189,16 @@ mod tests {
 
     #[test]
     fn a_package_unpacks_with_its_executable_and_private_modes() {
+        let program = format!("package/{}", crate::install::bundled_installer());
         let archive = tarball(&[
             ("package/package.json", b"{}".as_slice(), 0o644),
-            ("package/bin/sidevoice-connector", b"#!/bin/sh\n".as_slice(), 0o755),
+            (program.as_str(), b"#!/bin/sh\n".as_slice(), 0o755),
             ("package/notices/licenses/a.txt", b"MIT".as_slice(), 0o644),
         ]);
         let (tmp, result) = unpack(&archive);
         result.unwrap();
         let root = tmp.path().join("package");
-        let installer = root.join("bin/sidevoice-connector");
+        let installer = root.join(crate::install::bundled_installer());
         assert_eq!(std::fs::read(&installer).unwrap(), b"#!/bin/sh\n");
         assert_eq!(StorageFixtures::others(&installer), Others::Nothing);
         assert!(Files::trusted_program(&installer).is_ok(), "executable");
@@ -231,6 +233,9 @@ mod tests {
             "./package/evil",
             "package\\..\\evil",
             "package/e\u{1b}vil",
+            "package/C:",
+            "package/C:evil",
+            "package/bin:stream",
             "",
         ] {
             let mut raw = tar_entry(path, b"x", tar::EntryType::Regular, 0o644, None);

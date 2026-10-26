@@ -1,6 +1,5 @@
-#![cfg(unix)]
-//! The local host end to end on this machine: a stand-in core on a real Unix socket (HTTP and a WebSocket echo), the
-//! app's pairing with it and the startup cases (design §4.1), the proxy a page talks to — forwarding with the token
+//! The local host end to end on this machine: a stand-in core on the real local channel (HTTP and a WebSocket echo),
+//! the app's pairing with it and the startup cases (design §4.1), the proxy a page talks to — forwarding with the token
 //! swapped in, a socket spliced both ways, the refusals — and the service's state and actions through a stand-in
 //! connector and CLI.
 

@@ -22,6 +22,8 @@ pub struct Native;
 
 impl Os for Native {
     type User = Uid;
+    /// The socket keeps its deadlines and its end itself.
+    type Shared = ();
 
     fn this_user() -> io::Result<Uid> {
         Ok(Uid(rustix::process::geteuid().as_raw()))
@@ -32,7 +34,7 @@ impl Os for Native {
         creds.euid().map(Uid).ok_or_else(|| io::Error::other("the socket does not say who its peer is"))
     }
 
-    fn shutdown(stream: &Local) -> io::Result<()> {
+    fn shutdown(stream: &Local, _shared: &()) -> io::Result<()> {
         match stream {
             Local::UdSocket(socket) => socket.inner().shutdown(Shutdown::Both),
         }

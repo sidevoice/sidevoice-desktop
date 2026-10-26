@@ -4801,8 +4801,11 @@ dependencies = [
  "sidevoice-desktop-test-support",
  "sidevoice-platform",
  "subtle",
+ "sysinfo",
  "tar",
  "tempfile",
+ "winapi-util",
+ "windows",
 ]
 
 [[package]]

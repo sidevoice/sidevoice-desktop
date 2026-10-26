@@ -3,8 +3,9 @@
 //! by `sidevoice-platform`, never computed here); connecting goes through `interprocess`, the crate under
 //! `sidevoice_platform::ipc`.
 //!
-//! What differs per OS is observed in `ipc/<os>.rs`: who is at the other end of a connection, who this process is,
-//! and how a connection is ended from another thread. Whether the peer is this user is decided here, once.
+//! What differs per OS is observed in `ipc/<os>.rs`: who is at the other end of a connection, who this process is, how
+//! reads and writes are bounded, and how a connection is ended from another thread. Whether the peer is this user is
+//! decided here, once.
 
 use interprocess::local_socket::traits::Stream as _;
 use interprocess::local_socket::{GenericFilePath, Stream as Local, ToFsName};
@@ -12,6 +13,7 @@ use interprocess::TryClone as _;
 use sidevoice_platform::ipc::Endpoint;
 use std::fmt;
 use std::io::{self, Read, Write};
+use std::sync::Arc;
 use std::time::Duration;
 
 #[cfg_attr(unix, path = "ipc/unix.rs")]
@@ -35,8 +37,35 @@ trait Os {
         Err(unsupported())
     }
 
+    /// What a connection keeps beside `interprocess`'s stream, shared by all its clones: where the OS does not keep a
+    /// connection's deadlines and its end itself (Windows), they are kept here.
+    type Shared: Default + fmt::Debug + Send + Sync;
+
+    /// Bounds every later read on `stream` and its clones by `timeout` (`None`: unbounded), as `interprocess` does.
+    fn set_read_timeout(stream: &Local, _shared: &Self::Shared, timeout: Option<Duration>) -> io::Result<()> {
+        stream.set_recv_timeout(timeout)
+    }
+
+    /// Bounds every later write on `stream` and its clones by `timeout` (`None`: unbounded), as `interprocess` does.
+    fn set_write_timeout(stream: &Local, _shared: &Self::Shared, timeout: Option<Duration>) -> io::Result<()> {
+        stream.set_send_timeout(timeout)
+    }
+
+    /// Reads from `stream` within its read timeout (past it, an error of kind `WouldBlock` or `TimedOut`); 0 once the
+    /// connection ended, also by [`Os::shutdown`]. As `interprocess` does.
+    fn read(stream: &Local, _shared: &Self::Shared, buf: &mut [u8]) -> io::Result<usize> {
+        let mut stream = stream;
+        stream.read(buf)
+    }
+
+    /// Writes to `stream` within its write timeout; an error once the connection ended. As `interprocess` does.
+    fn write(stream: &Local, _shared: &Self::Shared, buf: &[u8]) -> io::Result<usize> {
+        let mut stream = stream;
+        stream.write(buf)
+    }
+
     /// Ends `stream` both ways, for every clone of it too, so whoever reads or writes it on another thread stops.
-    fn shutdown(_stream: &Local) -> io::Result<()> {
+    fn shutdown(_stream: &Local, _shared: &Self::Shared) -> io::Result<()> {
         Err(unsupported())
     }
 
@@ -63,70 +92,75 @@ pub enum Peer {
 /// One connection to a local endpoint. Reads and writes block, bounded by [`Stream::set_read_timeout`] and
 /// [`Stream::set_write_timeout`].
 #[derive(Debug)]
-pub struct Stream(Local);
+pub struct Stream {
+    local: Local,
+    shared: Arc<<Native as Os>::Shared>,
+}
 
 /// Connects to `endpoint`. Nothing about the peer is checked yet: that is [`Stream::peer`]. Nobody listening is
 /// [`io::ErrorKind::NotFound`] or [`io::ErrorKind::ConnectionRefused`].
 pub fn connect(endpoint: &Endpoint) -> io::Result<Stream> {
     let name = endpoint.to_string().to_fs_name::<GenericFilePath>()?;
-    Local::connect(name).map(Stream)
+    Local::connect(name).map(|local| Stream { local, shared: Arc::default() })
 }
 
 impl Stream {
     /// Whether the process at the other end runs as this user.
     pub fn peer(&self) -> io::Result<Peer> {
-        let peer = Native::peer_user(&self.0)?;
+        let peer = Native::peer_user(&self.local)?;
         Ok(if peer == Native::this_user()? { Peer::ThisUser } else { Peer::Other(peer.to_string()) })
     }
 
+    /// Bounds every later read on this connection and its clones (`None`: unbounded).
     pub fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
-        self.0.set_recv_timeout(timeout)
+        Native::set_read_timeout(&self.local, &self.shared, timeout)
     }
 
+    /// Bounds every later write on this connection and its clones (`None`: unbounded).
     pub fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
-        self.0.set_send_timeout(timeout)
+        Native::set_write_timeout(&self.local, &self.shared, timeout)
     }
 
     /// Another handle on the same connection (to read on one thread and write on another, or to end it from outside).
     pub fn try_clone(&self) -> io::Result<Stream> {
-        self.0.try_clone().map(Stream)
+        Ok(Stream { local: self.local.try_clone()?, shared: Arc::clone(&self.shared) })
     }
 
     /// Ends the connection both ways, for every clone of it too.
     pub fn shutdown(&self) -> io::Result<()> {
-        Native::shutdown(&self.0)
+        Native::shutdown(&self.local, &self.shared)
     }
 }
 
 impl Read for Stream {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.0.read(buf)
+        (&*self).read(buf)
     }
 }
 
 impl Read for &Stream {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        (&self.0).read(buf)
+        Native::read(&self.local, &self.shared, buf)
     }
 }
 
 impl Write for Stream {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.write(buf)
+        (&*self).write(buf)
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.0.flush()
+        (&*self).flush()
     }
 }
 
 impl Write for &Stream {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        (&self.0).write(buf)
+        Native::write(&self.local, &self.shared, buf)
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        (&self.0).flush()
+        (&self.local).flush()
     }
 }
 
@@ -177,5 +211,48 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let error = connect(&scratch_endpoint(tmp.path(), "t")).unwrap_err();
         assert!(matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused), "{error:?}");
+    }
+
+    /// A connection to a listener that accepts and then says nothing, kept open until the returned sender is dropped.
+    fn silent() -> (tempfile::TempDir, Stream, std::sync::mpsc::Sender<()>, std::thread::JoinHandle<()>) {
+        let tmp = tempfile::tempdir().unwrap();
+        let endpoint = scratch_endpoint(tmp.path(), "t");
+        let listener = listen(&endpoint).unwrap();
+        let (hold, release) = std::sync::mpsc::channel::<()>();
+        let server = std::thread::spawn(move || {
+            let _stream = listener.accept().unwrap();
+            let _ = release.recv();
+        });
+        let stream = connect(&endpoint).unwrap();
+        (tmp, stream, hold, server)
+    }
+
+    #[test]
+    fn a_read_past_its_deadline_fails_and_the_connection_stays_usable() {
+        let (_tmp, stream, hold, server) = silent();
+        stream.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
+        let started = std::time::Instant::now();
+        let error = (&stream).read(&mut [0u8; 8]).unwrap_err();
+        assert!(matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut), "{error:?}");
+        assert!(started.elapsed() < Duration::from_secs(5), "bounded: {:?}", started.elapsed());
+        // A clone shares the deadline.
+        let error = stream.try_clone().unwrap().read(&mut [0u8; 8]).unwrap_err();
+        assert!(matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut), "{error:?}");
+        (&stream).write_all(b"still open").unwrap();
+        drop(hold);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn ending_a_connection_stops_a_read_blocked_on_another_thread() {
+        let (_tmp, stream, hold, server) = silent();
+        let mut reader = stream.try_clone().unwrap();
+        let blocked = std::thread::spawn(move || reader.read(&mut [0u8; 8]));
+        std::thread::sleep(Duration::from_millis(200));
+        stream.shutdown().unwrap();
+        assert_eq!(blocked.join().unwrap().unwrap(), 0, "ended");
+        assert!((&stream).write_all(b"x").is_err(), "nothing is written after the end");
+        drop(hold);
+        server.join().unwrap();
     }
 }

@@ -160,7 +160,7 @@ fn checked<T>(result: Result<T, Check>) -> Result<T, Refusal> {
 fn command(install: &Value) -> Option<Vec<String>> {
     let items = install.get("command")?.as_array()?;
     let prefix: Vec<String> = items.iter().map(|v| v.as_str().map(str::to_string)).collect::<Option<_>>()?;
-    let absolute = |p: &String| p.starts_with('/') && !p.contains('\0');
+    let absolute = |p: &String| std::path::Path::new(p).is_absolute() && !p.contains('\0');
     (!prefix.is_empty() && prefix.iter().all(absolute)).then_some(prefix)
 }
 

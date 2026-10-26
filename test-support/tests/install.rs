@@ -1,4 +1,3 @@
-#![cfg(unix)]
 use serde_json::json;
 use sidevoice_desktop_test_support::fake_registry::FakeRegistry;
 use sidevoice_desktop_test_support::fixture;

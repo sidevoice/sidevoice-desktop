@@ -3,7 +3,6 @@
 //!
 //! What differs per OS is in `files/<os>.rs`: how a file is marked runnable, and which file a path names.
 
-use std::fs::Metadata;
 use std::io;
 use std::path::Path;
 use std::time::SystemTime;
@@ -21,8 +20,10 @@ trait Os {
         Ok(())
     }
 
-    /// Which file `metadata` describes (Unix: its device and inode); `None` where the OS does not say.
-    fn identity(_metadata: &Metadata) -> Option<(u64, u128)> {
+    /// Which file `path` names, never following a link there (Unix: its device and inode; Windows: its volume's serial
+    /// number and its file index), and when it was last written, read together; `None` when there is nothing there or
+    /// the OS does not say.
+    fn identity(_path: &Path) -> Option<((u64, u128), SystemTime)> {
         None
     }
 }
@@ -42,8 +43,8 @@ pub struct Stamp {
 /// What `path` names now, never following a link there: another reading differs once the file was written, or
 /// another took its name (a rename over it). `None` when there is nothing there or it cannot be told.
 pub fn stamp(path: &Path) -> Option<Stamp> {
-    let metadata = std::fs::symlink_metadata(path).ok()?;
-    Some(Stamp { identity: Native::identity(&metadata)?, modified: metadata.modified().ok()? })
+    let (identity, modified) = Native::identity(path)?;
+    Some(Stamp { identity, modified })
 }
 
 #[cfg(test)]
@@ -57,7 +58,7 @@ mod tests {
         let path = tmp.path().join("install.json");
         assert_eq!(stamp(&path), None);
         std::fs::write(&path, b"{}").unwrap();
-        let Some(before) = stamp(&path) else { return }; // A host that cannot tell.
+        let before = stamp(&path).expect("which file a path names is known on every host");
         assert_eq!(stamp(&path), Some(before));
         let other = tmp.path().join("other.json");
         std::fs::write(&other, b"{}").unwrap();

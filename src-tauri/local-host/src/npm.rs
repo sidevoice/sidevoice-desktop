@@ -44,6 +44,7 @@ pub fn platform_package(os: &str, arch: &str) -> Option<String> {
     let os = match os {
         "macos" => "darwin",
         "linux" => "linux",
+        "windows" => "win32",
         _ => return None,
     };
     let cpu = match arch {
@@ -268,7 +269,8 @@ mod tests {
         assert_eq!(platform_package("linux", "aarch64").as_deref(), Some("@sidevoice/sidevoice-linux-arm64"));
         // An Intel Mac has a name, and no package (`install.no-bundle`, below); a system npm has no name for, neither.
         assert_eq!(platform_package("macos", "x86_64").as_deref(), Some("@sidevoice/sidevoice-darwin-x64"));
-        assert_eq!(platform_package("windows", "x86_64"), None);
+        assert_eq!(platform_package("windows", "x86_64").as_deref(), Some("@sidevoice/sidevoice-win32-x64"));
+        assert_eq!(platform_package("windows", "aarch64").as_deref(), Some("@sidevoice/sidevoice-win32-arm64"));
         assert_eq!(platform_package("linux", "riscv64"), None);
     }
 
