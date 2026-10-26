@@ -29,5 +29,5 @@ pub mod desktop_geometry;
 pub mod reset_availability;
 pub mod reset_handoff;
 pub mod uninstall;
-pub mod window_visibility;
 pub mod webview_data;
+pub mod window_visibility;
