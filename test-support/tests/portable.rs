@@ -186,7 +186,3 @@ mod platform {
 }
 #[path = "../../src-tauri/src/data/pairings.rs"]
 mod pairings;
-
-// The production cleanup contract runs without linking a webview, including on Windows.
-#[path = "../../src-tauri/src/platform/owned_removal.rs"]
-mod owned_removal;

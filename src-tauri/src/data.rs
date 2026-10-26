@@ -9,8 +9,8 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tauri::{AppHandle, Manager, Webview};
 
+use crate::platform::app_data;
 use crate::platform::reset_availability::RESET_AVAILABLE;
-use crate::platform::reset_cleanup::{NativeResetCleanup, ResetCleanup};
 use crate::platform::reset_handoff::{self, Handoff};
 use crate::AppState;
 
@@ -224,9 +224,14 @@ async fn confirmed_reset(app: AppHandle, uninstall: bool) -> Answer {
         end_exclusive(&app);
         return Err(refused("reset.busy"));
     }
-    if let Err(key) = refuse_before_confirmation(&app, uninstall) {
+    if let Err(key) = refuse_before_confirmation(&app) {
         end_exclusive(&app);
         return Err(refused(key));
+    }
+    // A copy that cannot remove itself (a disk image, a translocated or read-only copy) refuses before the data goes.
+    if uninstall && !app_data::uninstallable() {
+        end_exclusive(&app);
+        return Err(refused("reset.app-unremovable"));
     }
     if let Err(refusal) = require_confirmation(
         NativeConfirmation::confirm(
@@ -248,22 +253,19 @@ async fn confirmed_reset(app: AppHandle, uninstall: bool) -> Answer {
     answer
 }
 
-/// The transaction's own refusals before the confirmation and before any data is touched: a connector install
-/// in progress, and an app that cannot remove its own bundle (a disk image, a translocated or read-only copy).
+/// The transaction's own refusal before the confirmation and before any data is touched: a connector install
+/// in progress.
 #[cfg(target_os = "macos")]
-fn refuse_before_confirmation(app: &AppHandle, uninstall: bool) -> Result<(), &'static str> {
+fn refuse_before_confirmation(app: &AppHandle) -> Result<(), &'static str> {
     if crate::local_host::installing(app) {
         return Err("reset.busy");
-    }
-    if uninstall {
-        NativeResetCleanup::removable_app()?;
     }
     Ok(())
 }
 
 /// The reset transaction exists only on macOS; `confirmed_reset` refuses before this elsewhere.
 #[cfg(not(target_os = "macos"))]
-fn refuse_before_confirmation(_: &AppHandle, _: bool) -> Result<(), &'static str> {
+fn refuse_before_confirmation(_: &AppHandle) -> Result<(), &'static str> {
     Err("reset.unavailable")
 }
 
@@ -307,7 +309,8 @@ fn reset_before_exit() -> Result<(Vec<Value>, Value, &'static str), Value> {
     use sidevoice_local_host::{cli::Cli, paths::DataDirs};
     let dirs = DataDirs::from_env().ok_or_else(|| refused("reset.unavailable"))?;
     let home = std::env::var_os("HOME").map(PathBuf::from).ok_or_else(|| refused("reset.unavailable"))?;
-    validate_uninstall_scope(&home, &dirs.data).map_err(|reason| json!({"key": "reset.unsafe", "reason": reason}))?;
+    validate_uninstall_scope_at(&home, &dirs.data)
+        .map_err(|reason| json!({"key": "reset.unsafe", "reason": reason}))?;
     let installed_cli = match Cli::installed(&dirs) {
         Ok(cli) => {
             probe_safe_connector(&cli, Duration::from_secs(10))?;
@@ -478,16 +481,8 @@ fn fresh_service_absent_with(
 
 #[cfg(target_os = "macos")]
 fn run_checked_uninstall<T>(home: &Path, data: &Path, invoke: impl FnOnce() -> Result<T, Value>) -> Result<T, Value> {
-    validate_uninstall_scope(home, data).map_err(|reason| json!({"key": "reset.unsafe", "reason": reason}))?;
+    validate_uninstall_scope_at(home, data).map_err(|reason| json!({"key": "reset.unsafe", "reason": reason}))?;
     invoke()
-}
-
-#[cfg(target_os = "macos")]
-fn validate_uninstall_scope(home: &Path, data: &Path) -> Result<PathBuf, &'static str> {
-    if NativeResetCleanup::account_home().as_deref() != Some(home) {
-        return Err("unsafe-home");
-    }
-    validate_uninstall_scope_at(home, data)
 }
 
 /// `D` on macOS with no override: the OS's standard place of `sidevoice-platform`'s `data_dir`.
@@ -498,7 +493,6 @@ fn standard_data(home: &Path) -> PathBuf {
 
 #[cfg(target_os = "macos")]
 fn validate_uninstall_scope_at(home: &Path, data: &Path) -> Result<PathBuf, &'static str> {
-    use crate::platform::owned_removal::{NativeOwnedRemoval, OwnedRemoval};
     if !clean_absolute(home) || fs::canonicalize(home).ok().as_deref() != Some(home) {
         return Err("unsafe-home");
     }
@@ -531,8 +525,8 @@ fn validate_uninstall_scope_at(home: &Path, data: &Path) -> Result<PathBuf, &'st
         return Err("unsafe-record");
     }
     // Protected roots, not selected entries: each must be an ordinary directory, never a link.
-    NativeOwnedRemoval::check_tree(data, home, false)?;
-    NativeOwnedRemoval::check_tree(&expected_releases, home, false)?;
+    app_data::check_tree(home, data)?;
+    app_data::check_tree(home, &expected_releases)?;
     Ok(expected_releases)
 }
 
@@ -573,72 +567,54 @@ pub fn run_reset_helper() {
     }
 }
 
-/// The helper transaction: observe the browser writers, await the committed exit, remove the owned data, then
-/// conclude (preferences, report, relaunch or move the app to the Trash). A host with no account home or no
-/// owned scope has nothing to clean up and ends here.
+/// The helper transaction: observe the browser writers, await the committed exit, delete the app's data
+/// (`app_data`, journalled step by step), then conclude (report, relaunch or remove the app).
 fn clean_up_after_exit(
     helper: crate::platform::reset_handoff::Helper,
     parent_pid: u32,
     uninstall: bool,
     initial: Value,
 ) {
-    use crate::platform::owned_removal::{NativeOwnedRemoval, OwnedRemoval};
     use crate::platform::webview_data;
-    let Some(home) = NativeResetCleanup::account_home() else { return };
-    let Some(scope) = NativeOwnedRemoval::scope(&home) else { return };
-    let browser = webview_data::locations(&home).and_then(|paths| webview_data::capture(parent_pid, paths));
+    let unresolved = || std::io::Error::new(std::io::ErrorKind::NotFound, "no home folder for this account");
+    let browser = dirs::home_dir()
+        .ok_or_else(unresolved)
+        .and_then(|home| webview_data::locations(&home))
+        .and_then(|paths| webview_data::capture(parent_pid, paths));
     let Ok(lock) = helper.await_exit() else { return };
     let Some(report) = report_path() else { return };
     let Some(initial_failed) = initial.get("failed").and_then(Value::as_array) else { return };
-    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return };
-    if NativeResetCleanup::account_home().as_deref() != Some(home.as_path()) {
-        return;
-    }
     let mut completed = Vec::new();
     let mut failed = initial_failed.clone();
     let journal = report.with_file_name("journal.json");
     let browser = browser
         .and_then(|owner| webview_data::wait_released(owner, std::time::Instant::now() + Duration::from_secs(10)));
-    for (name, path) in scope.steps() {
-        let browser_storage = matches!(*name, "app-data" | "webview" | "cache");
-        if browser_storage && browser.is_err() {
-            failed.push(json!({"step": name, "key": "reset.process-busy"}));
-        } else {
-            let removed = if browser_storage {
-                webview_data::remove(browser.as_ref().unwrap(), path).map_err(|_| "remove")
-            } else if *name == "models" {
-                NativeOwnedRemoval::remove_model_store(path, &home)
-            } else {
-                NativeOwnedRemoval::remove_known(path, &home)
-            };
-            match removed {
-                Ok(()) => completed.push(*name),
-                Err(key) => failed.push(json!({"step": name, "key": key})),
-            }
+    // A journal that cannot be written stops the deletion: an interruption could no longer be reported.
+    let _ = app_data::delete_data(&browser, &mut |step, result| {
+        match result {
+            Ok(()) => completed.push(step),
+            Err(key) => failed.push(json!({"step": step, "key": key})),
         }
-        if write_atomic_json(&journal, &json!({"stage":"cleanup", "completed":completed, "failed":failed})).is_err() {
+        let written = write_atomic_json(&journal, &json!({"stage":"cleanup", "completed":completed, "failed":failed}));
+        if written.is_err() {
             failed.push(json!({"step":"report", "key":"reset.report-failed"}));
-            break;
         }
-    }
+        written.is_ok()
+    });
     conclude_reset(lock, &report, &journal, completed, failed, &initial, uninstall);
 }
 
-/// The end of the transaction: the app's native preferences, then the report with a relaunch or the move of the
-/// app where it can be restored from. The native results come from [`ResetCleanup`]; the decisions stay here.
+/// The end of the transaction: the report with a relaunch, or the removal of the app where it can be restored from
+/// (`app_data::uninstall`). The decisions stay here.
 fn conclude_reset(
     lock: crate::platform::reset_handoff::Admission,
     report: &Path,
     journal: &Path,
-    mut completed: Vec<&str>,
-    mut failed: Vec<Value>,
+    completed: Vec<&str>,
+    failed: Vec<Value>,
     initial: &Value,
     uninstall: bool,
 ) {
-    match NativeResetCleanup::remove_preferences() {
-        Ok(()) => completed.push("preferences"),
-        Err(key) => failed.push(json!({"step": "preferences", "key": key})),
-    }
     let agents = initial.get("agents").cloned().unwrap_or_else(|| json!({}));
     let relaunch = || {
         // Cleanup is over. A new app must acquire this lock independently.
@@ -649,7 +625,11 @@ fn conclude_reset(
             .is_some()
     };
     if uninstall {
-        let trash = || NativeResetCleanup::removable_app().and_then(|app| NativeResetCleanup::trash(&app));
+        let trash = || match app_data::uninstall() {
+            Ok(()) => Ok(()),
+            Err(app_data::Error::Failed(key)) => Err(key),
+            Err(_) => Err("reset.app-unremovable"),
+        };
         finish_uninstall_at(report, journal, &completed, failed, agents, write_atomic_json, trash, relaunch);
     } else {
         finish_reset_at(report, journal, &completed, failed, agents, write_atomic_json, relaunch);

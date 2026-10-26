@@ -78,11 +78,10 @@ connector's `--version --json` response. An older, silent, malformed or timed-ou
 The connector removes the service, its releases, its data and registrations it owns. Native then forgets
 Sidevoice's provider keys and starts a helper from the app executable. The helper waits for the app to
 exit and for its observed WebKit children to exit before removing its exact Application Support,
-shared-model store's engine-owned `blobs`, `models` and `partial` children, WebKit, cache,
-saved-state and log paths and its `defaults` domain. Other programs' siblings in the shared model
+shared-model store's engine-owned `blobs`, `models` and `partial` children, WebKit, cache and log
+paths, then its saved window state and its `defaults` domain (docs/APP_DATA.md). Other programs' siblings in the shared model
 store remain. A WebKit child that
-does not exit leaves a partial result and its storage in place. Paths are derived natively from an
-exact allowlist, checked again before each top-level removal, and traversed without following
+does not exit leaves a partial result and its storage in place. Paths are derived natively by Tauri's documented folder rule, checked again before each top-level removal, and traversed without following
 symlink targets or crossing a mount/device boundary. Symlinks are unlinked as entries and cleanup continues;
 hard links lose only the selected name, and ordinary shortcut files are removed as files. The shared model
 store itself and redirected ancestors remain protected roots. All three engine-owned children are preflighted
