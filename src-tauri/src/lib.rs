@@ -615,7 +615,7 @@ pub fn run() {
     let context = tauri::generate_context!();
     #[cfg(feature = "probe")]
     let context = probe::with_page(context);
-    #[cfg(all(feature = "probe", target_os = "macos"))]
+    #[cfg(feature = "probe")]
     probe::watch_exit_handlers();
     log_panics();
     // First, so everything after it is logged.
