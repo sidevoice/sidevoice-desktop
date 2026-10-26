@@ -33,11 +33,12 @@ operations can be retried. An indefinitely unanswered prompt may require dismiss
 
 ## Reset
 
-The reset transaction (docs/BRIDGE.md, `deleteAll()`) is the one caller of `clear()`. It still exists on macOS
-alone: elsewhere `deleteAll()` refuses `reset.unavailable` before touching anything, so Windows and Linux keep
-their keys until the portable reset lands. `clear()` itself is implemented on every OS and runs in the shared contract (Linux: see below); until the
-transaction compiles everywhere, the Windows and Linux builds carry the remaining `dead_code` allowances on
-`clear()` and its request.
+The reset transaction (docs/BRIDGE.md, `deleteAll()`) is the one caller of `clear()`. Its common `begin_reset` in
+`data.rs` clears the provider keys after the macOS connector service and agent-results steps and before the app exits,
+journalled as the `keychain` step; a failure is reported as `{step: "keychain", key: "reset.keychain-failed"}`. The step
+is the same on every host that runs the transaction. Today that is macOS alone: elsewhere `deleteAll()` refuses
+`reset.unavailable` before touching anything, so Windows and Linux keep their keys until the reset transaction runs
+there.
 
 ## Verification
 

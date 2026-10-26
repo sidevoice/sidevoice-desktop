@@ -59,8 +59,6 @@ pub trait Credentials: Backend {
 
     /// Delete the exact service namespace, including unknown or obsolete accounts.
     /// An unrelated service is never removed; partial cleanup is an error.
-    // Its one caller, the reset transaction, is still compiled for macOS alone (docs/CREDENTIALS.md, "Reset").
-    #[allow(dead_code)]
     fn clear(&self) -> Result<(), Error> {
         self.execute(Request::Clear).map(|_| ())
     }
@@ -139,8 +137,6 @@ impl Provider {
 enum Request {
     Read(Provider),
     Write(Provider, Option<String>),
-    // Built by `Credentials::clear` alone; see there.
-    #[allow(dead_code)]
     Clear,
 }
 
