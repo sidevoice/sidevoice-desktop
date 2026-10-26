@@ -21,13 +21,19 @@ pub async fn microphone(app: AppHandle, webview: Webview, action: String) -> Res
         _ => return Err(refusal("bad_request", format!("not a microphone action: {action}"))),
     }
     .map_err(|why| refusal("internal", why))?;
-    // The page's vocabulary: no state of its own for an OS that did not answer, which refuses like any failed read.
-    Ok(json!(match state {
-        AccessState::Granted => "granted",
-        AccessState::Denied => "denied",
-        AccessState::NotDetermined => "prompt",
-        AccessState::NoDevice => "missing",
-        AccessState::Unavailable =>
-            return Err(refusal("internal", "The system did not answer the microphone request.")),
-    }))
+    WORDS
+        .iter()
+        .find(|(known, _)| *known == state)
+        .map(|(_, word)| json!(word))
+        .ok_or_else(|| refusal("internal", "The system did not answer the microphone request."))
 }
+
+/// The page's vocabulary, one word per state. None for an OS that did not answer (`AccessState::Unavailable`), which
+/// refuses like any failed read. A table rather than a match: every OS's build names every state the page can read,
+/// including those only another OS produces.
+const WORDS: [(AccessState, &str); 4] = [
+    (AccessState::Granted, "granted"),
+    (AccessState::Denied, "denied"),
+    (AccessState::NotDetermined, "prompt"),
+    (AccessState::NoDevice, "missing"),
+];
