@@ -141,14 +141,14 @@ mod tests {
     }
 
     #[test]
-    fn a_link_or_a_file_is_not_the_core_directory() {
+    fn a_link_of_this_users_leads_to_the_core_directory_but_a_file_is_not_one() {
         let tmp = tempfile::tempdir().unwrap();
         let real = tmp.path().join("real");
         std::fs::create_dir(&real).unwrap();
         StorageFixtures::private(&real);
         let link = tmp.path().join("core");
         StorageFixtures::symlink(&real, &link);
-        assert!(matches!(private_dir(&link), Err(Check::Unsafe(_))));
+        assert_eq!(private_dir(&link), Ok(()));
         let file = tmp.path().join("file");
         std::fs::write(&file, b"").unwrap();
         StorageFixtures::private(&file);

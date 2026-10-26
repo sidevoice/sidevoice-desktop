@@ -6,6 +6,7 @@ mod imp;
 #[cfg(windows)]
 #[path = "platform/windows.rs"]
 mod imp;
+pub mod registry;
 pub use imp::Os as Host;
 pub trait FixtureHost {
     /// Spawn a service outside the caller's process group/job.
@@ -13,8 +14,4 @@ pub trait FixtureHost {
     /// Remove filesystem endpoint directories; named pipes leave none.
     fn forget(_data: &Path) {}
 }
-pub fn forget(data: &Path) {
-    Host::forget(data);
-}
-
 pub mod storage;

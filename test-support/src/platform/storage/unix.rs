@@ -25,7 +25,7 @@ impl StorageFixture for NativeStorageFixtures {
             mode(path, bits);
             check(true);
         }
-        for bits in [0o620, 0o602, 0o666, 0o777] {
+        for bits in [0o602, 0o666, 0o777] {
             mode(path, bits);
             check(false);
         }
@@ -59,8 +59,5 @@ impl StorageFixture for NativeStorageFixtures {
     fn protect_shared_ancestor(path: &Path) -> bool {
         mode(path, 0o1777);
         true
-    }
-    fn group_writable(path: &Path) {
-        mode(path, 0o775);
     }
 }

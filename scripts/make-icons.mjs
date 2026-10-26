@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // Draws everything the app shows of the Sidevoice mark, from the brand files in brand/ (scripts/vendor-brand.mjs):
 //
-//   src-tauri/icons/icon.icns             macOS app icon, every size (16…1024), on Apple's icon grid
-//   src-tauri/icons/icon.ico              Windows app icon (16…256)
-//   src-tauri/icons/{32x32,64x64,128x128,128x128@2x,icon}.png   Linux
-//   src-tauri/icons/tray/{idle,live,muted}.png          macOS menu bar, template images (one ink)
-//   src-tauri/icons/tray/{light,dark}-{idle,live,muted}.png   Windows / Linux tray, for light and dark bars
-//   src-tauri/dmg/background.png, background@2x.png      the .dmg window
+//   src-tauri/packaging/macos/icon.icns             macOS app icon, every size (16…1024), on Apple's icon grid
+//   src-tauri/packaging/windows/icon.ico              Windows app icon (16…256)
+//   src-tauri/packaging/linux/icons/{32x32,64x64,128x128,128x128@2x,icon}.png   Linux
+//   src-tauri/packaging/shared/tray/{idle,live,muted}.png          macOS menu bar, template images (one ink)
+//   src-tauri/packaging/shared/tray/{light,dark}-{idle,live,muted}.png   Windows / Linux tray, for light and dark bars
+//   src-tauri/packaging/macos/dmg/background.png, background@2x.png      the .dmg window
 //
 //   npm run icons
 //
@@ -142,19 +142,19 @@ function ico(images) {
 
 const mac = Object.fromEntries([16, 32, 64, 128, 256, 512, 1024].map((s) => [s, appIconMac(s)]));
 const [c16, c32] = [classic(mac[16]), classic(mac[32])];
-out("src-tauri/icons/icon.icns", icns([
+out("src-tauri/packaging/macos/icon.icns", icns([
   ["is32", c16.rgb], ["s8mk", c16.mask], ["ic11", mac[32]], // 16, 16@2x
   ["il32", c32.rgb], ["l8mk", c32.mask], ["ic12", mac[64]], // 32, 32@2x
   ["ic07", mac[128]], ["ic13", mac[256]], // 128, 128@2x
   ["ic08", mac[256]], ["ic14", mac[512]], // 256, 256@2x
   ["ic09", mac[512]], ["ic10", mac[1024]], // 512, 512@2x
 ]));
-out("src-tauri/icons/icon.ico", ico([16, 20, 24, 32, 40, 48, 64, 256].map((s) => [s, appIconFlat(s)])));
+out("src-tauri/packaging/windows/icon.ico", ico([16, 20, 24, 32, 40, 48, 64, 256].map((s) => [s, appIconFlat(s)])));
 for (const [file, size] of [["32x32.png", 32], ["64x64.png", 64], ["128x128.png", 128], ["128x128@2x.png", 256], ["icon.png", 512]]) {
-  out(`src-tauri/icons/${file}`, appIconFlat(size));
+  out(`src-tauri/packaging/linux/icons/${file}`, appIconFlat(size));
 }
 // For the screens in docs/brand-screens and anyone who wants to look at it.
-out("src-tauri/icons/macos-1024.png", mac[1024]);
+out("src-tauri/packaging/macos/macos-1024.png", mac[1024]);
 
 // ------------------------------------------------------------------ tray
 
@@ -188,7 +188,7 @@ const template = {
   muted: slashed(trayMark(MARK_INK), "#000", TRAY.w, TRAY.h) + dot("#000"),
 };
 for (const [state, body] of Object.entries(template)) {
-  out(`src-tauri/icons/tray/${state}.png`, png(svg(TRAY.w, TRAY.h, body), TRAY.w));
+  out(`src-tauri/packaging/shared/tray/${state}.png`, png(svg(TRAY.w, TRAY.h, body), TRAY.w));
 }
 
 // Windows and Linux do not tint tray icons and draw them square (16 px at 100 %), with their own spacing
@@ -206,7 +206,7 @@ for (const [ground, colourMark, ink] of [["light", MARK, "#4a2f6b"], ["dark", MA
     muted: slashed(place(colourMark, 0, 0, 32), ink, 32, 32, sq, 32 / 24),
   };
   for (const [state, body] of Object.entries(states)) {
-    out(`src-tauri/icons/tray/${ground}-${state}.png`, png(svg(32, 32, body), 32));
+    out(`src-tauri/packaging/shared/tray/${ground}-${state}.png`, png(svg(32, 32, body), 32));
   }
 }
 
@@ -231,8 +231,8 @@ const dmg = svg(DMG.width, DMG.height,
   `<svg x="${(DMG.width - lockupW) / 2}" y="40" width="${lockupW}" height="${LOCKUP_H}" viewBox="0 0 ${lw} ${lh}">${inner(LOCKUP)}</svg>` +
   `<rect x="32" y="112" width="${DMG.width - 64}" height="236" rx="24" fill="${SHELF}"/>` +
   arrow);
-out("src-tauri/dmg/background.png", png(dmg, DMG.width));
-out("src-tauri/dmg/background@2x.png", png(dmg, DMG.width * 2));
-writeFileSync(path.join(root, "src-tauri/dmg/layout.json"), JSON.stringify(DMG, null, 2) + "\n");
+out("src-tauri/packaging/macos/dmg/background.png", png(dmg, DMG.width));
+out("src-tauri/packaging/macos/dmg/background@2x.png", png(dmg, DMG.width * 2));
+writeFileSync(path.join(root, "src-tauri/packaging/macos/dmg/layout.json"), JSON.stringify(DMG, null, 2) + "\n");
 
 console.log("icons, tray and .dmg background written from", JSON.parse(brand("source.json")).commit.slice(0, 7));

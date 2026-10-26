@@ -66,6 +66,7 @@ mod tests {
                 false,
                 &[],
                 support,
+                Default::default(),
             );
             let literal = serde_json::to_string(&support).unwrap();
             assert!(script.contains(&format!("factory(window, \"tauri://localhost\", {literal},")));

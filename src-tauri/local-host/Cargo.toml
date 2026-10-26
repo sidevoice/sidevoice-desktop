@@ -15,12 +15,14 @@ fetch = ["dep:reqwest"]
 [dependencies]
 # `D`, the local data directory, by the one rule every Sidevoice program shares, and the endpoint records the core
 # and the connector publish in it (`ipc::Endpoint`): at the tag of a core release.
-sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.11.1" }
+sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.12.3" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The computer's kernel hostname, used when naming the core's local pairing.
+gethostname = "1.1"
 
 [target.'cfg(unix)'.dependencies]
-# The socket peer's uid (`getpeereid` / `SO_PEERCRED`), the effective uid, the host name.
+# The socket peer's uid (`getpeereid` / `SO_PEERCRED`) and the effective uid.
 libc = "0.2"
 # The core's identity: ECDSA P-256 over `sidevoice-node-identity:<nonce>`, IEEE P1363 signatures.
 p256 = { version = "0.13", default-features = false, features = ["ecdsa", "pkcs8", "std"] }

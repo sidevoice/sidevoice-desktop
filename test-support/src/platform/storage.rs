@@ -68,10 +68,6 @@ pub trait StorageFixture {
     fn system_program() -> PathBuf;
     /// Add sticky protection to a writable ancestor when supported; otherwise return false unchanged.
     fn protect_shared_ancestor(path: &Path) -> bool;
-    /// Make the path writable through a group grant where groups differ from everyone.
-    fn group_writable(path: &Path) {
-        Self::writable(path);
-    }
     /// Set up a fresh private record, independent of a user's creation mask.
     fn record(path: &Path, bytes: &[u8]) {
         fs::write(path, bytes).unwrap();

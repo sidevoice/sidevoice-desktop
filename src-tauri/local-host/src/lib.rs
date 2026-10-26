@@ -36,6 +36,7 @@ pub mod identity;
 pub mod install;
 pub mod npm;
 pub mod paths;
+pub mod platform;
 pub mod proxy;
 pub mod state;
 pub mod store;

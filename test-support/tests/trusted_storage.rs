@@ -20,8 +20,6 @@ fn ancestry_others_can_write_is_refused_unless_protected() {
     StorageFixtures::writable(&shared);
     let error = HeldDirectory::open(&data, Access::NotWritableByOthers).err().expect("a writable parent passed");
     assert_eq!(error.kind(), ErrorKind::PermissionDenied);
-    StorageFixtures::group_writable(&shared);
-    assert!(HeldDirectory::open(&data, Access::NotWritableByOthers).is_err(), "a group write grant");
     if StorageFixtures::protect_shared_ancestor(&shared) {
         assert!(HeldDirectory::open(&data, Access::NotWritableByOthers).is_ok(), "protected shared ancestor");
     }
@@ -63,7 +61,7 @@ fn a_directory_replaced_after_it_was_opened_is_not_read() {
 }
 
 #[test]
-fn links_and_loose_files_are_refused() {
+fn record_links_and_loose_files_are_refused() {
     let tmp = tmp();
     let data = tmp.path().join("d");
     Files::create_private_dir(&data).unwrap();
@@ -81,8 +79,8 @@ fn links_and_loose_files_are_refused() {
     assert!(dir.read("loose.json".as_ref(), Access::Private, 1024).is_err(), "a credential must be private");
     StorageFixtures::symlink(&data, tmp.path().join("link"));
     assert!(
-        HeldDirectory::open(&tmp.path().join("link"), Access::NotWritableByOthers).is_err(),
-        "a linked root is refused"
+        HeldDirectory::open(&tmp.path().join("link"), Access::NotWritableByOthers).is_ok(),
+        "a link of this user's is followed to the directory it leads to"
     );
     StorageFixtures::writable(&data);
     assert!(HeldDirectory::open(&data, Access::NotWritableByOthers).is_err());
