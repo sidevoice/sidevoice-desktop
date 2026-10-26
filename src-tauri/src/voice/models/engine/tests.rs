@@ -1,6 +1,6 @@
 //! The engine's adapter on runtimes of its own: its native work leaves the async workers free, and a whole call through
 //! it, on the engine's real models, hears recorded speech and plays a reply. The real call downloads its models: it is
-//! ignored unless asked for (`--ignored`), which the macOS CI job does.
+//! ignored unless asked for (`--ignored`), which the macOS and Windows CI jobs do.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -117,7 +117,7 @@ async fn next<T>(events: &mut Events, want: impl Fn(VoiceEvent) -> Option<T>) ->
 }
 
 #[test]
-#[ignore = "downloads real models; the macOS CI job runs it"]
+#[ignore = "downloads real models; the macOS and Windows CI jobs run it"]
 fn a_call_on_the_engines_real_models_hears_speech_and_plays_a_reply() {
     let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build().unwrap();
     // The engine's storage: a scratch folder of this run's, removed at the end; or SIDEVOICE_REAL_CALL_MODELS, kept (CI
