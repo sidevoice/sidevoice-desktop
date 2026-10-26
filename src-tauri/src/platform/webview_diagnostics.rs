@@ -4,13 +4,20 @@
 use sidevoice_desktop_core::debug_options::DebugOptions;
 use sidevoice_desktop_core::debug_options::Switch;
 
-#[cfg(all(sidevoice_debug_options, target_os = "macos"))]
-#[path = "webview_diagnostics/macos.rs"]
-mod imp;
-#[cfg(not(all(sidevoice_debug_options, target_os = "macos")))]
-#[path = "webview_diagnostics/unavailable.rs"]
-mod imp;
-pub use imp::Os as NativeWebviewDiagnostics;
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+pub use macos::Os as NativeWebviewDiagnostics;
+
+#[cfg(target_os = "windows")]
+mod windows;
+#[cfg(target_os = "windows")]
+pub use windows::Os as NativeWebviewDiagnostics;
+
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::Os as NativeWebviewDiagnostics;
 
 pub trait WebviewDiagnostics {
     /// Only switches with native setters in this build/runtime. Empty in releases and on Windows/Linux,
