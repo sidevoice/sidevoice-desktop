@@ -1,14 +1,17 @@
 use keyring_core::{CredentialStore, Result};
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
-pub(super) fn store() -> Result<Arc<CredentialStore>> {
-    Ok(zbus_secret_service_keyring_store::Store::new()?)
-}
+/// The user's Secret Service over an encrypted D-Bus session, with bounded admission instead of the shared lock.
+pub(super) struct Store;
 
-// The production reset caller remains macOS-only for now.
-#[allow(dead_code)]
-pub(super) fn clear(store: &CredentialStore, service: &str) -> Result<()> {
-    super::Entries(store.search(&HashMap::from([("service", service)]))?).delete()
+impl super::NativeStore for Store {
+    fn store() -> Result<Arc<CredentialStore>> {
+        Ok(zbus_secret_service_keyring_store::Store::new()?)
+    }
+
+    fn admit(operation: super::Operation) -> std::result::Result<Option<String>, super::Error> {
+        bounded(&OPERATION, WAIT, operation)
+    }
 }
 
 // The synchronous keyring backend cannot cancel an outstanding D-Bus prompt. Do not
@@ -18,13 +21,7 @@ pub(super) fn clear(store: &CredentialStore, service: &str) -> Result<()> {
 static OPERATION: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 const WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
-pub(super) fn execute<T: Send + 'static>(
-    operation: impl FnOnce() -> std::result::Result<T, super::Error> + Send + 'static,
-) -> std::result::Result<T, super::Error> {
-    bounded(&OPERATION, WAIT, operation)
-}
-
-pub(super) fn bounded<T: Send + 'static>(
+fn bounded<T: Send + 'static>(
     busy: &'static std::sync::atomic::AtomicBool,
     timeout: std::time::Duration,
     operation: impl FnOnce() -> std::result::Result<T, super::Error> + Send + 'static,
@@ -50,25 +47,9 @@ pub(super) fn bounded<T: Send + 'static>(
     receiver.recv_timeout(timeout).map_err(|_| super::Error::Unavailable)?
 }
 
-/// Native provider credential store; failures never install a fallback or prevent a later retry.
-pub struct ProviderCredentials;
-
-impl super::Credentials for ProviderCredentials {}
-
-impl super::Backend for ProviderCredentials {
-    fn execute(&self, request: super::Request) -> std::result::Result<Option<String>, super::Error> {
-        execute(move || request.run(store()?.as_ref(), super::SERVICE, entry, clear))
-    }
-}
-
-pub(super) fn entry(store: &CredentialStore, service: &str, provider: &str) -> Result<keyring_core::Entry> {
-    store.build(service, provider, None)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::super::{tests::*, Credentials, Error};
-    use super::ProviderCredentials;
+    use super::super::{tests::*, Credentials, Error, ProviderCredentials};
 
     #[test]
     #[ignore = "requires an unlocked desktop Secret Service; unverified on headless CI"]

@@ -30,17 +30,26 @@ keyring backend cannot cancel a pending call: after a timeout the outcome remain
 calls return unavailable immediately until that operation ends. Only one worker can remain pending;
 retries never accumulate threads or race a late write against a subsequent write/clear. Once it ends,
 operations can be retried. An indefinitely unanswered prompt may require dismissal or app restart.
-No additional native-reset
-availability is enabled by this change; its existing caller now invokes `clear()`.
+
+## Reset
+
+The reset transaction (docs/BRIDGE.md, `deleteAll()`) is the one caller of `clear()`. It still exists on macOS
+alone: elsewhere `deleteAll()` refuses `reset.unavailable` before touching anything, so Windows and Linux keep
+their keys until the portable reset lands. `clear()` itself is implemented on every OS and runs in the shared contract (Linux: see below); until the
+transaction compiles everywhere, the Windows and Linux builds carry the remaining `dead_code` allowances on
+`clear()` and its request.
 
 ## Verification
 
 Portable contract tests live with the interface and run without Tauri/model linkage via
 `cargo test -p sidevoice-desktop-test-support --test credentials`. The existing macOS and Windows PR
 jobs run them through `cargo xtask test-support`; the Linux workspace tests run them too.
-The shared concern holds the documented interface and store-independent policy. Each OS type implements
-that interface and its private backend hook; native store construction, admission and entry options live
-in the corresponding OS file. Callers use only the credential trait, including provider validation.
+The shared concern holds the documented interface, the one public `ProviderCredentials` type and every
+store-independent body: validation, request handling, error categories, namespace deletion and the
+process-wide serialization macOS and Windows use. Each OS file implements only the private `NativeStore`
+hook: its store, entry options (Windows persistence), the namespace search (Windows anchored pattern),
+the macOS search-list deletion, and the Linux bounded admission. Callers use only the credential trait,
+including provider validation.
 
 Native regression fixtures live beside their OS implementation because they must exercise Keychain
 search-list/legacy APIs, CredMan persistence metadata and byte limits, or Secret Service bus failure and

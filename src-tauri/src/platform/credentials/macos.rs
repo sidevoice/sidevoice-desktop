@@ -1,4 +1,4 @@
-use keyring_core::{CredentialStore, Result};
+use keyring_core::{CredentialStore, Entry, Result};
 use std::sync::Arc;
 
 // Apple's keyring store constrains every lookup to a domain's default keychain.
@@ -7,18 +7,38 @@ use std::sync::Arc;
 use apple_native_keyring_store::keychain::decode_error;
 use keyring_core::{
     api::{CredentialApi, CredentialStoreApi},
-    Credential, Entry,
+    Credential,
 };
 use std::{any::Any, collections::HashMap};
+
+/// Keychain Services generic passwords over the whole search list; operations serialized by the shared default
+/// admission.
+pub(super) struct Store;
+
+impl super::NativeStore for Store {
+    fn store() -> Result<Arc<CredentialStore>> {
+        Ok(Arc::new(SearchList))
+    }
+
+    fn clear(_store: &CredentialStore, service: &str) -> Result<()> {
+        // Preserve the old SecItemDelete search-list scope, including credentials outside the
+        // default login keychain. The keyring store's search is limited to its chosen keychain.
+        // security-framework owns the bindings; no handwritten Security/CoreFoundation FFI.
+        use security_framework::item::{ItemClass, ItemSearchOptions, Limit};
+        // Explicitly request all matches: the default limit on macOS deletes only one item.
+        match ItemSearchOptions::new().class(ItemClass::generic_password()).service(service).limit(Limit::All).delete()
+        {
+            Ok(()) => Ok(()),
+            Err(error) if error.code() == -25300 => Ok(()),
+            Err(error) => Err(decode_error(error)),
+        }
+    }
+}
 
 struct SearchList;
 struct Password {
     service: String,
     account: String,
-}
-
-pub(super) fn store() -> Result<Arc<CredentialStore>> {
-    Ok(Arc::new(SearchList))
 }
 
 impl CredentialStoreApi for SearchList {
@@ -67,47 +87,10 @@ impl CredentialApi for Password {
     }
 }
 
-pub(super) fn clear(_store: &CredentialStore, service: &str) -> Result<()> {
-    // Preserve the old SecItemDelete search-list scope, including credentials outside the
-    // default login keychain. The keyring store's search is limited to its chosen keychain.
-    // security-framework owns the bindings; no handwritten Security/CoreFoundation FFI.
-    use security_framework::item::{ItemClass, ItemSearchOptions, Limit};
-    // Explicitly request all matches: the default limit on macOS deletes only one item.
-    match ItemSearchOptions::new().class(ItemClass::generic_password()).service(service).limit(Limit::All).delete() {
-        Ok(()) => Ok(()),
-        Err(error) if error.code() == -25300 => Ok(()),
-        Err(error) => Err(apple_native_keyring_store::keychain::decode_error(error)),
-    }
-}
-
-/// Native provider credential store; failures never install a fallback or prevent a later retry.
-pub struct ProviderCredentials;
-
-impl super::Credentials for ProviderCredentials {}
-
-impl super::Backend for ProviderCredentials {
-    fn execute(&self, request: super::Request) -> std::result::Result<Option<String>, super::Error> {
-        execute(move || request.run(store()?.as_ref(), super::SERVICE, entry, clear))
-    }
-}
-
-// Serialize operations on native entries; no secret or backend error is logged.
-static ACCESS: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-fn execute<T>(
-    operation: impl FnOnce() -> std::result::Result<T, super::Error>,
-) -> std::result::Result<T, super::Error> {
-    let _guard = ACCESS.lock().map_err(|_| super::Error::Failed)?;
-    operation()
-}
-
-pub(super) fn entry(store: &CredentialStore, service: &str, provider: &str) -> Result<keyring_core::Entry> {
-    store.build(service, provider, None)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::super::{tests::*, Credentials};
+    use super::super::{tests::*, Credentials, NativeStore};
+    use super::Store;
 
     #[test]
     fn native_contract() {
@@ -139,7 +122,7 @@ mod tests {
         const CHILD: &str = "SIDEVOICE_CREDENTIAL_SEARCH_LIST_TEST";
         const KEYCHAIN_PATH: &str = "SIDEVOICE_CREDENTIAL_KEYCHAIN_PATH";
         if let Ok(service) = std::env::var(CHILD) {
-            let store = TestCredentials { store: super::store().unwrap(), service, clear: super::clear };
+            let store = TestCredentials { store: Store::store().unwrap(), service, clear: Store::clear };
             let secondary = SecKeychain::open(std::env::var(KEYCHAIN_PATH).unwrap()).unwrap();
             // Establish that the fixture is reachable by the old app's lookup API too.
             assert_eq!(

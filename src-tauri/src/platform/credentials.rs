@@ -2,6 +2,7 @@
 //! The service/account pair is the original macOS namespace, not a catalog-dependent list.
 
 use keyring_core::{CredentialStore, Entry};
+use std::{collections::HashMap, sync::Arc};
 
 #[cfg(target_os = "macos")]
 #[path = "credentials/macos.rs"]
@@ -12,8 +13,6 @@ mod native;
 #[cfg(target_os = "linux")]
 #[path = "credentials/linux.rs"]
 mod native;
-
-pub use native::ProviderCredentials;
 
 const SERVICE: &str = "dev.sidevoice.desktop.providers";
 
@@ -60,7 +59,7 @@ pub trait Credentials: Backend {
 
     /// Delete the exact service namespace, including unknown or obsolete accounts.
     /// An unrelated service is never removed; partial cleanup is an error.
-    // Portable reset has not landed yet; keep this operation on every implementation.
+    // Its one caller, the reset transaction, is still compiled for macOS alone (docs/CREDENTIALS.md, "Reset").
     #[allow(dead_code)]
     fn clear(&self) -> Result<(), Error> {
         self.execute(Request::Clear).map(|_| ())
@@ -71,6 +70,52 @@ pub trait Credentials: Backend {
 trait Backend {
     /// Execute a validated request using the native store's admission and persistence policy.
     fn execute(&self, request: Request) -> Result<Option<String>, Error>;
+}
+
+/// What differs per OS, implemented once by each `native::Store`: the store, entry options, the namespace
+/// search, and admission. Validation, request handling and error categories are shared.
+trait NativeStore {
+    /// The native store, opened for each operation so a failure never sticks.
+    fn store() -> keyring_core::Result<Arc<CredentialStore>>;
+
+    /// One provider's entry. Default: the store's entry without options.
+    fn entry(store: &CredentialStore, service: &str, provider: &str) -> keyring_core::Result<Entry> {
+        store.build(service, provider, None)
+    }
+
+    /// The search specifier selecting exactly `service`'s entries, whatever their account.
+    /// Default: keyring's exact `service` attribute.
+    fn namespace(service: &str) -> (&'static str, String) {
+        ("service", service.to_owned())
+    }
+
+    /// Delete every entry `namespace` finds.
+    fn clear(store: &CredentialStore, service: &str) -> keyring_core::Result<()> {
+        let (key, value) = Self::namespace(service);
+        delete(store.search(&HashMap::from([(key, value.as_str())]))?)
+    }
+
+    /// Admit one operation. Default: operations are serialized within the process.
+    fn admit(operation: Operation) -> Result<Option<String>, Error> {
+        static ACCESS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = ACCESS.lock().map_err(|_| Error::Failed)?;
+        operation()
+    }
+}
+
+/// One validated request bound to the native store, movable to a worker thread.
+type Operation = Box<dyn FnOnce() -> Result<Option<String>, Error> + Send>;
+
+/// The provider keys in this OS's credential store. A failure never installs a fallback or prevents a later retry.
+pub struct ProviderCredentials;
+
+impl Credentials for ProviderCredentials {}
+
+impl Backend for ProviderCredentials {
+    fn execute(&self, request: Request) -> Result<Option<String>, Error> {
+        use native::Store as Native;
+        Native::admit(Box::new(move || request.run(Native::store()?.as_ref(), SERVICE, Native::entry, Native::clear)))
+    }
 }
 
 struct Provider(String);
@@ -94,6 +139,7 @@ impl Provider {
 enum Request {
     Read(Provider),
     Write(Provider, Option<String>),
+    // Built by `Credentials::clear` alone; see there.
     #[allow(dead_code)]
     Clear,
 }
@@ -132,30 +178,23 @@ impl Request {
     }
 }
 
-/// Entries selected by an exact namespace search, never by the current provider catalog.
-#[allow(dead_code)]
-struct Entries(Vec<Entry>);
-
-impl Entries {
-    /// Continue after a deletion failure, but never report partial cleanup as success.
-    #[allow(dead_code)]
-    fn delete(self) -> keyring_core::Result<()> {
-        let mut failure = None;
-        for entry in self.0 {
-            if let Err(error) = entry.delete_credential() {
-                if !matches!(error, keyring_core::Error::NoEntry) {
-                    failure = Some(error);
-                }
+/// Delete each entry. Continues after a failure, but never reports partial cleanup as success;
+/// an entry already gone is not a failure.
+fn delete(entries: Vec<Entry>) -> keyring_core::Result<()> {
+    let mut failure = None;
+    for entry in entries {
+        if let Err(error) = entry.delete_credential() {
+            if !matches!(error, keyring_core::Error::NoEntry) {
+                failure = Some(error);
             }
         }
-        failure.map_or(Ok(()), Err)
     }
+    failure.map_or(Ok(()), Err)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{collections::HashMap, sync::Arc};
 
     pub(super) struct TestCredentials {
         pub(super) store: Arc<CredentialStore>,
@@ -170,20 +209,19 @@ mod tests {
             // Fixtures share a deterministic test lock, independent of native admission state.
             static ACCESS: std::sync::Mutex<()> = std::sync::Mutex::new(());
             let _guard = ACCESS.lock().map_err(|_| Error::Failed)?;
-            request.run(self.store.as_ref(), &self.service, native::entry, self.clear)
+            request.run(self.store.as_ref(), &self.service, native::Store::entry, self.clear)
         }
     }
 
     fn memory_clear(store: &CredentialStore, service: &str) -> keyring_core::Result<()> {
         // The sample store's service matcher is a regex, unlike native macOS/Linux stores.
         let entries = store.search(&HashMap::new())?;
-        Entries(
+        delete(
             entries
                 .into_iter()
                 .filter(|entry| entry.get_specifiers().is_some_and(|(found, _)| found == service))
                 .collect(),
         )
-        .delete()
     }
 
     fn memory() -> TestCredentials {
@@ -295,13 +333,13 @@ mod tests {
     pub(super) fn native_test_store() -> TestCredentials {
         // Never read or clear real provider credentials, even on a developer's machine.
         TestCredentials {
-            store: native::store().unwrap(),
+            store: native::Store::store().unwrap(),
             service: format!(
                 "dev.sidevoice.desktop.test-{}-{}",
                 std::process::id(),
                 std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
             ),
-            clear: native::clear,
+            clear: native::Store::clear,
         }
     }
 }
