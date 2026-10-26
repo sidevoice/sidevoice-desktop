@@ -1761,6 +1761,11 @@ mod uninstall_tests {
 
     #[test]
     fn only_a_real_app_bundle_can_be_removed() {
+        // The bundle rule is macOS app-removal behaviour: its paths are macOS bundle paths, so it is asserted where the
+        // platform offers the local host (macOS) and nowhere else.
+        if !crate::platform::host_capabilities::CAPABILITIES.local_host {
+            return;
+        }
         let ok = |exe: &str| app_bundle_of(Path::new(exe));
         assert_eq!(
             ok("/Applications/Sidevoice.app/Contents/MacOS/sidevoice-desktop"),
