@@ -8,6 +8,8 @@ use winreg::{
 
 pub struct NativeMicrophone;
 impl MicrophoneAccess for NativeMicrophone {
+    const SETTINGS_URL: Option<&'static str> = Some("ms-settings:privacy-microphone");
+
     fn state(backend: BackendObservation) -> Result<AccessState, &'static str> {
         const MICROPHONE: &str =
             r"SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone";

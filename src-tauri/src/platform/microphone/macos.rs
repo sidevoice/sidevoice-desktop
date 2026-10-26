@@ -8,6 +8,9 @@ use tokio::sync::oneshot;
 
 pub struct NativeMicrophone;
 impl MicrophoneAccess for NativeMicrophone {
+    const SETTINGS_URL: Option<&'static str> =
+        Some("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone");
+
     fn state(_: BackendObservation) -> Result<AccessState, &'static str> {
         let permission = permission(authorization()?);
         // A denial stands whatever is plugged in, exactly as before the extraction.

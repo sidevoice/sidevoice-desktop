@@ -16,14 +16,6 @@ mod imp;
 mod imp;
 pub use imp::NativeMicrophone;
 
-#[cfg(target_os = "macos")]
-pub const SETTINGS_URL: Option<&str> =
-    Some("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone");
-#[cfg(target_os = "windows")]
-pub const SETTINGS_URL: Option<&str> = Some("ms-settings:privacy-microphone");
-#[cfg(target_os = "linux")]
-pub const SETTINGS_URL: Option<&str> = None;
-
 #[derive(Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AccessState {
@@ -69,6 +61,9 @@ impl BackendObservation {
 }
 
 pub trait MicrophoneAccess {
+    /// The fixed system microphone privacy page, where the OS has a standard URI for it.
+    const SETTINGS_URL: Option<&'static str> = None;
+
     /// Inspect without prompting. Re-read OS privacy policy every time; combine it with a fresh capture/backend
     /// observation. Denial takes precedence over absence. An unreadable backend never means granted.
     /// macOS supplies its own AVFoundation permission and device observation, ignoring `backend`.
@@ -86,7 +81,7 @@ pub trait MicrophoneAccess {
     /// Open the fixed system microphone privacy page through the registered opener plugin. Opening it proves
     /// nothing about access. UnsupportedPlatform on hosts without a standard settings URI (Linux).
     fn open_settings<R: Runtime>(app: &AppHandle<R>) -> Result<(), tauri_plugin_opener::Error> {
-        let url = SETTINGS_URL.ok_or(tauri_plugin_opener::Error::UnsupportedPlatform)?;
+        let url = Self::SETTINGS_URL.ok_or(tauri_plugin_opener::Error::UnsupportedPlatform)?;
         app.opener().open_url(url, None::<&str>)
     }
 }

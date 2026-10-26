@@ -364,7 +364,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             &build,
             SystemComputerName::read().as_deref(),
             &debug_options,
-            platform::microphone::SETTINGS_URL.is_some(),
+            NativeMicrophone::SETTINGS_URL.is_some(),
             &NativeWebviewDiagnostics::available(),
             NativeMediaControls::support(),
         ));
