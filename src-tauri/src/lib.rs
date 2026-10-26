@@ -30,7 +30,7 @@ mod voice;
 use crate::platform::update_eligibility::{NativeUpdateEligibility, UpdateEligibility};
 
 use crate::platform::application;
-use crate::platform::computer_name::{ComputerName, SystemComputerName};
+use crate::platform::computer_name;
 use crate::platform::host_capabilities::CAPABILITIES;
 use crate::platform::media_controls::{MediaControls, NativeMediaControls};
 use crate::platform::shortcut_access;
@@ -344,7 +344,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             APP_ORIGIN,
             NativeUpdateEligibility::available(&build.channel),
             &build,
-            SystemComputerName::read().as_deref(),
+            computer_name::read().as_deref(),
             &debug_options,
             platform::microphone::settings_available(),
             &NativeWebviewDiagnostics::available(),

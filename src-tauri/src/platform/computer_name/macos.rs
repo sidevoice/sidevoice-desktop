@@ -1,9 +1,9 @@
-use sidevoice_desktop_core::computer_name;
+use super::Native;
 
-pub struct Name;
+pub(super) struct Os;
 
-impl super::ComputerName for Name {
-    fn read() -> Option<String> {
-        whoami::devicename().ok().and_then(|name| computer_name::given(&name))
+impl Native for Os {
+    fn device_name() -> Option<String> {
+        whoami::devicename().ok()
     }
 }
