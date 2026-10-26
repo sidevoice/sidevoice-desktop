@@ -3,8 +3,7 @@ use super::{DialogStart, Native};
 pub(super) struct Os;
 
 impl Native for Os {
-    /// The current locale's language code, as AppKit's own alerts read it; English when it has none (never the
-    /// preferred languages).
+    /// The current locale's language code, as AppKit's own alerts read it; `None` when it reports none.
     fn language() -> Option<String> {
         use objc2::{class, msg_send, runtime::AnyObject};
         // SAFETY: public Foundation getters; `UTF8String` stays valid while `code` lives, and is copied at once.
@@ -13,7 +12,7 @@ impl Native for Os {
             let code: *mut AnyObject = msg_send![locale, languageCode];
             let utf8: *const libc::c_char = msg_send![code, UTF8String];
             if utf8.is_null() {
-                Some("en".to_owned())
+                None
             } else {
                 Some(std::ffi::CStr::from_ptr(utf8).to_string_lossy().into_owned())
             }

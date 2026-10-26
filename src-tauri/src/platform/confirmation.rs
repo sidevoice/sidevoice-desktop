@@ -21,10 +21,10 @@ pub enum ConfirmationKind {
 
 /// What differs per OS: the native dialog, and where its language is read.
 trait Native {
-    /// The dialog's language, where the OS reads it apart from the preferred languages (macOS: the current locale's
-    /// language code). `None` here means the preferred languages decide.
+    /// The language the OS reports for the dialog, `None` when it reports none. Default: the system locale
+    /// (macOS reads the current locale's language code instead).
     fn language() -> Option<String> {
-        None
+        sys_locale::get_locale()
     }
 
     /// Runs on the UI thread with the prompt's title, detail, cancel and destructive button words. Checks native
@@ -43,7 +43,7 @@ pub async fn confirm<R: Runtime>(app: &AppHandle<R>, kind: ConfirmationKind) -> 
     let (answer, response) = oneshot::channel();
     if app
         .run_on_main_thread(move || {
-            let language = Os::language().or_else(sys_locale::get_locale).unwrap_or_default();
+            let language = Os::language().unwrap_or_else(|| "en".to_owned());
             let accepted = Os::show(kind.words(&language), DialogStart { deadline, started });
             let _ = answer.send(accepted);
         })
