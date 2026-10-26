@@ -1,9 +1,9 @@
-use super::{Native, Space};
+use super::Native;
 use gtk::prelude::*;
 
 pub(super) struct Os;
 impl Native for Os {
-    const SPACE: Space = Space::Pixels;
+    const POINTS: bool = false;
 
     fn global_coordinates() -> bool {
         // The backend GTK selected, compared by type name: `gdk::backend()` panics on an unknown backend.
