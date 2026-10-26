@@ -347,6 +347,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             &diagnostics::webview_switches(),
             media_controls::support(),
             host::capabilities(),
+            host::RESET_AVAILABLE,
         ));
     #[cfg(feature = "probe")]
     let builder = match probe::local_host_flow() {
@@ -564,7 +565,7 @@ pub fn run() {
                 }
                 Err(e) => log::error!("the native engine did not start: {} ({})", e.key, e.message),
             }
-            // This computer's own core, if any (macOS): found, paired, proxied for the page (docs/LOCAL_HOST.md).
+            // This computer's own core, where the host offers it: found, paired, proxied for the page (docs/LOCAL_HOST.md).
             local_host::setup(&handle);
             let stored = data::desktop_dir(&handle).ok().and_then(|dir| settings::load(&dir));
             *app.state::<AppState>().settings.lock().unwrap() = stored.clone();

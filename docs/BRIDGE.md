@@ -54,7 +54,8 @@ after a bounded, private, atomic write under the app's Application Support direc
 remote pairing credentials; pending revocations remain native until the remote machine acknowledges them.
 Local-host pairing is derived from the verified socket and is never stored there. Neither call accepts a
 path. Browser pages keep their own browser storage. `deleteAll()`, `uninstall()` and `resetReport()` are
-macOS-only; elsewhere the bridge omits them and the native commands refuse `{key: "reset.unavailable"}`.
+macOS-only (`RESET_AVAILABLE`, told to the bridge apart from `localHost`); elsewhere the bridge omits them and the
+native commands refuse `{key: "reset.unavailable"}`.
 
 `deleteAll()` is the confirmed Settings › Advanced action. Native also displays an OS-owned confirmation
 with Cancel as its default button on every invocation; cancelling rejects `{key: "reset.cancelled"}` before
@@ -254,7 +255,7 @@ itself. Read each time the room window opens (`src-tauri/src/platform/host.rs`, 
 
 ## The local host
 
-`host.localHost` is there only where the app offers this computer's own core (macOS, design O2); elsewhere it is
+`host.localHost` is there only where the app offers this computer's own core (macOS, Windows); elsewhere it is
 absent and the page hides what needs it. Nothing runs until the page calls it. Contract, states and actions:
 docs/LOCAL_HOST.md.
 

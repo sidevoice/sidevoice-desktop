@@ -1,4 +1,5 @@
 use super::Os;
+use sidevoice_desktop_core::bridge::Capabilities;
 use tauri::utils::config::BundleType;
 use winreg::{enums::HKEY_CURRENT_USER, RegKey};
 
@@ -8,6 +9,10 @@ impl Os for Native {
     fn host_name() -> Option<String> {
         whoami::hostname().ok()
     }
+
+    /// This computer's own core: the connector installs it per user (Task Scheduler) and the app reaches it over its
+    /// named pipe. The voice call stays the page's.
+    const CAPABILITIES: Capabilities = Capabilities { local_host: true, voice: false };
 
     const BUNDLE: Option<BundleType> = Some(BundleType::Nsis);
 

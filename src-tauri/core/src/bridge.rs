@@ -26,6 +26,7 @@ const BUILD_PLACEHOLDER: &str = "\"__SIDEVOICE_BUILD__\"";
 const COMPUTER_NAME_PLACEHOLDER: &str = "\"__SIDEVOICE_COMPUTER_NAME__\"";
 const MICROPHONE_SETTINGS_PLACEHOLDER: &str = "\"__SIDEVOICE_MICROPHONE_SETTINGS__\"";
 const DEBUG_PLACEHOLDER: &str = "\"__SIDEVOICE_DEBUG__\"";
+const RESET_PLACEHOLDER: &str = "\"__SIDEVOICE_RESET__\"";
 
 /// What the host platform offers the page beyond the web: the platform interface supplies it, the bridge only tells it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -69,7 +70,8 @@ pub fn call_controls_push(patch: &serde_json::Value) -> String {
 /// `microphone_settings`: whether the platform can open its microphone privacy page, independently of native voice.
 /// `diagnostics`: native diagnostic switches the shell actually implements on this runtime.
 /// `media_keys`: media-control ownership supplied by the shell, independently of native voice.
-/// `capabilities`: what the host platform offers (`host.localHost`, `host.voice`).
+/// `capabilities`: what the host platform offers (`host.localHost`, `host.voice`). `reset`: whether the app has the reset
+/// transaction (`host.data.{deleteAll,uninstall,resetReport}`), independently of the local host.
 #[allow(clippy::too_many_arguments)]
 pub fn script_for_origin(
     origin: &str,
@@ -81,6 +83,7 @@ pub fn script_for_origin(
     diagnostics: &[crate::debug_options::Switch],
     media_keys: Option<&str>,
     capabilities: Capabilities,
+    reset: bool,
 ) -> String {
     let literal = serde_json::to_string(origin).expect("a string serialises");
     let keys = serde_json::to_string(&media_keys).expect("serialises");
@@ -100,6 +103,7 @@ pub fn script_for_origin(
         .replacen(COMPUTER_NAME_PLACEHOLDER, &serde_json::to_string(&computer_name).expect("serialises"), 1)
         .replacen(DEBUG_PLACEHOLDER, &debug, 1)
         .replacen(MICROPHONE_SETTINGS_PLACEHOLDER, flag(microphone_settings), 1)
+        .replacen(RESET_PLACEHOLDER, flag(reset), 1)
 }
 
 /// The bridge's version: the room page sends it in every snapshot (bridge/desktop-bridge.js).
@@ -392,6 +396,7 @@ mod tests {
             &crate::debug_options::Switch::ALL,
             Some("native"),
             both,
+            true,
         );
         assert!(!s.contains("__SIDEVOICE_ROOM_ORIGIN__"));
         assert!(!s.contains("__SIDEVOICE_MEDIA_KEYS__"));
@@ -402,18 +407,21 @@ mod tests {
         assert!(!s.contains("__SIDEVOICE_COMPUTER_NAME__"));
         assert!(!s.contains("__SIDEVOICE_DEBUG__"));
         assert!(!s.contains("__SIDEVOICE_MICROPHONE_SETTINGS__"));
+        assert!(!s.contains("__SIDEVOICE_RESET__"));
         let platform = r#""native", true, true"#;
         let dev_build = r#"{"channel":"dev","version":"0.4.0"}"#;
         // A dev build has the developer options: what the settings keep, and the switches this platform has.
         let debug = off.state(&crate::debug_options::Switch::ALL);
         let expected = format!(
-            r#"factory(window, "https://voice.example.com", {platform}, false, {dev_build}, null, {debug}, false)"#
+            r#"factory(window, "https://voice.example.com", {platform}, false, {dev_build}, null, {debug}, false, true)"#
         );
         assert!(s.contains(&expected), "{expected}");
         let no_diagnostics =
-            script_for_origin("https://voice.example.com", false, &dev, None, &off, false, &[], None, both);
+            script_for_origin("https://voice.example.com", false, &dev, None, &off, false, &[], None, both, false);
         assert!(no_diagnostics.contains(&off.state(&[]).to_string()));
         assert!(no_diagnostics.contains(r#"factory(window, "https://voice.example.com", null,"#));
+        // No reset transaction: the page gets no `host.data.deleteAll`, whatever the local host.
+        assert!(no_diagnostics.contains(&format!("{}, false, false)", off.state(&[]))));
         // A release that can update itself: the page gets `host.updater`, and `host.build` says it is a release.
         let release = BuildInfo::new("release", "0.4.0", "", "");
         let offered = script_for_origin(
@@ -426,9 +434,10 @@ mod tests {
             &crate::debug_options::Switch::ALL,
             Some("native"),
             both,
+            true,
         );
         let expected = format!(
-            r#"factory(window, "https://voice.example.com", {platform}, true, {{"channel":"release","version":"0.4.0"}}, "Mac de Ana", null, true)"#
+            r#"factory(window, "https://voice.example.com", {platform}, true, {{"channel":"release","version":"0.4.0"}}, "Mac de Ana", null, true, true)"#
         );
         assert!(offered.contains(&expected), "{expected}");
         // A hostile value cannot break out of the string literal.
@@ -442,6 +451,7 @@ mod tests {
             &crate::debug_options::Switch::ALL,
             Some("native"),
             both,
+            true,
         );
         assert!(evil.contains(r#"factory(window, "\"); alert(1); (\"""#));
         assert!(evil.contains(r#"{"channel":"dev","version":"0.4.0"}, "\"); alert(1); (\"", "#));
@@ -462,6 +472,7 @@ mod tests {
                 &[],
                 Some("native"),
                 capabilities,
+                false,
             )
         };
         let reference = script(Capabilities { local_host: true, voice: true });

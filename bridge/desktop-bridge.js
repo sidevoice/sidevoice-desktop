@@ -14,8 +14,8 @@
 // bundled interface) it does nothing at all.
 (function (factory) {
   if (typeof module === "object" && module.exports) module.exports = factory; // unit tests
-  else factory(window, "__SIDEVOICE_ROOM_ORIGIN__", "__SIDEVOICE_MEDIA_KEYS__", "__SIDEVOICE_LOCAL_HOST__", "__SIDEVOICE_VOICE__", "__SIDEVOICE_UPDATER__", "__SIDEVOICE_BUILD__", "__SIDEVOICE_COMPUTER_NAME__", "__SIDEVOICE_DEBUG__", "__SIDEVOICE_MICROPHONE_SETTINGS__");
-})(function installDesktopBridge(win, roomOrigin, mediaKeys, localHostOffered, voiceOffered, updaterOffered, build, computerName, debugState, microphoneSettingsOffered) {
+  else factory(window, "__SIDEVOICE_ROOM_ORIGIN__", "__SIDEVOICE_MEDIA_KEYS__", "__SIDEVOICE_LOCAL_HOST__", "__SIDEVOICE_VOICE__", "__SIDEVOICE_UPDATER__", "__SIDEVOICE_BUILD__", "__SIDEVOICE_COMPUTER_NAME__", "__SIDEVOICE_DEBUG__", "__SIDEVOICE_MICROPHONE_SETTINGS__", "__SIDEVOICE_RESET__");
+})(function installDesktopBridge(win, roomOrigin, mediaKeys, localHostOffered, voiceOffered, updaterOffered, build, computerName, debugState, microphoneSettingsOffered, resetOffered) {
   "use strict";
   // scheme://host rather than location.origin: the app's own pages (tauri://localhost) may have an opaque origin.
   if (win.location.protocol + "//" + win.location.host !== roomOrigin) return null;
@@ -414,7 +414,7 @@
    *  (through the app's proxy, with this launch's secret — never the device token), the service's actions, and
    *  installing Sidevoice here (`install`, `cancel`). Each action resolves the state after it (`{state, failure?, core?,
    *  product_version, service?, calls?, attempts?, limit?, installed?, reachable}`) or rejects `{key, message}`.
-   *  Only where the app offers a local host (macOS). */
+   *  Only where the app offers a local host (macOS, Windows). */
   function localHost() {
     const listeners = new Set();
     let last = null; // the state last delivered, as JSON
@@ -796,15 +796,16 @@
       /** `"native"`: the app answers headset buttons / media keys in a call, so the page must not register its
        *  own Media Session handlers (both would toggle the microphone on one click). `null`: the page does. */
       mediaKeys: mediaKeys === "native" ? "native" : null,
-      // Only where the app offers this computer's own core (O2: macOS): the page hides what is not there.
+      // Only where the app offers this computer's own core (macOS, Windows): the page hides what is not there.
       ...(localHostOffered === true ? { localHost: Object.freeze(localHost()) } : {}),
-      // Private pairings are available on every desktop platform; machine reset is macOS-only.
+      // Private pairings are available on every desktop platform; machine reset only where the app has the reset
+      // transaction (macOS), independently of the local host.
       data: Object.freeze({
         pairings: Object.freeze({
           read: () => call("data_pairings_read"),
           write: (value) => call("data_pairings_write", { value }).then(() => undefined),
         }),
-        ...(localHostOffered === true ? {
+        ...(resetOffered === true ? {
           deleteAll: () => call("data_delete_all"),
           uninstall: () => call("data_uninstall"),
           resetReport: () => call("data_reset_report"),

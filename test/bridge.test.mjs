@@ -58,7 +58,7 @@ test("does nothing on any other origin (auth pages, other sites)", () => {
 test("the macOS data bridge uses fixed native commands and no page-supplied paths", async () => {
   const install = loadFactory();
   const { win, calls } = fakeWindow(ORIGIN);
-  const api = install(win, ORIGIN, null, true);
+  const api = install(win, ORIGIN, null, true, false, false, undefined, null, null, false, true);
   assert.equal(typeof api.host.data.deleteAll, "function");
   assert.equal(typeof api.host.data.resetReport, "function");
   assert.equal(typeof api.host.data.uninstall, "function");
@@ -81,6 +81,14 @@ test("the macOS data bridge uses fixed native commands and no page-supplied path
   assert.equal(otherData.deleteAll, undefined);
   assert.equal(otherData.resetReport, undefined);
   assert.equal(otherData.uninstall, undefined);
+  // Windows: the local host without the reset transaction. Reset follows its own flag, not the local host.
+  for (const offered of [undefined, false, "__SIDEVOICE_RESET__", "true"]) {
+    const host = install(fakeWindow(ORIGIN).win, ORIGIN, null, true, false, false, undefined, null, null, false, offered).host;
+    assert.equal(typeof host.localHost, "object", String(offered));
+    assert.equal(host.data.deleteAll, undefined, String(offered));
+    assert.equal(host.data.resetReport, undefined, String(offered));
+    assert.equal(host.data.uninstall, undefined, String(offered));
+  }
 });
 
 test("reports not-ready first, then the real state once the room's controller exists", async () => {
@@ -990,6 +998,7 @@ test("the placeholders the app replaces are present exactly once", () => {
   assert.equal(source.split("__SIDEVOICE_MEDIA_KEYS__").length, 2);
   assert.equal(source.split("__SIDEVOICE_LOCAL_HOST__").length, 2);
   assert.equal(source.split("__SIDEVOICE_VOICE__").length, 2);
+  assert.equal(source.split("__SIDEVOICE_RESET__").length, 2);
 });
 
 test("says who answers the media keys", () => {

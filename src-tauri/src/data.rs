@@ -254,19 +254,16 @@ async fn confirmed_reset(app: AppHandle, uninstall: bool) -> Answer {
 }
 
 /// The transaction's own refusal before the confirmation and before any data is touched: a connector install
-/// in progress.
-#[cfg(target_os = "macos")]
+/// in progress. Where there is no reset transaction (`RESET_AVAILABLE`), `confirmed_reset` refuses before this; this
+/// refuses again.
 fn refuse_before_confirmation(app: &AppHandle) -> Result<(), &'static str> {
+    if !RESET_AVAILABLE {
+        return Err("reset.unavailable");
+    }
     if crate::local_host::installing(app) {
         return Err("reset.busy");
     }
     Ok(())
-}
-
-/// The reset transaction exists only on macOS; `confirmed_reset` refuses before this elsewhere.
-#[cfg(not(target_os = "macos"))]
-fn refuse_before_confirmation(_: &AppHandle) -> Result<(), &'static str> {
-    Err("reset.unavailable")
 }
 
 fn require_confirmation(accepted: bool) -> Result<(), Value> {
