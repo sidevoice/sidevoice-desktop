@@ -2,7 +2,9 @@
 //! Install): a gzipped tar whose every entry is a plain file or directory below `package/`.
 //!
 //! Refused, with `install.authenticity` and the check the page names: a path that is absolute, has an empty, `.` or
-//! `..` segment, a backslash or a control character, or is not below `package/` (`archive-path`); a symbolic or hard
+//! `..` segment, a backslash or a control character, a segment Windows would read as something else (a drive or a
+//! stream, `:`; a device name such as `NUL`; a trailing dot or space), or is not below `package/` (`archive-path`),
+//! on every OS, and the joined path must still be exactly that many names below the directory; a symbolic or hard
 //! link (`archive-link`); a device, a FIFO, a sparse file or anything else that is not a file or a directory
 //! (`archive-type`, also for an archive that does not decode); more than [`Limits`] allow (`archive-size`). Nothing is
 //! taken from an entry but its path, its contents and whether it is executable: files are written 0600 (0700 when the
@@ -12,8 +14,9 @@
 
 use crate::install::{Failure, Step};
 use sidevoice_platform::fs::{Create, Files, Fs};
+use std::ffi::OsStr;
 use std::io::{self, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// What one archive may unpack to.
 #[derive(Debug, Clone, Copy)]
@@ -60,10 +63,57 @@ fn segments(raw: &[u8]) -> Result<Vec<&str>, Failure> {
     if segments.iter().any(|s| s.is_empty() || *s == "." || *s == "..") {
         return Err(bad("an empty, `.` or `..` segment"));
     }
+    if let Some(why) = segments.iter().find_map(|s| special(s)) {
+        return Err(bad(why));
+    }
     if segments[0] != ROOT || segments.len() > DEPTH_LIMIT {
         return Err(bad("not below package/"));
     }
     Ok(segments)
+}
+
+/// Why `segment` is not one plain name on every OS this unpacks on, read with Windows' rules too wherever it runs: a
+/// drive prefix (`C:x`, which `join` would put in place of the directory) or an alternate data stream (`x:s`), a device
+/// name (`NUL`, `com1.txt`), a name ending in a dot or a space (Windows drops them), or anything `Path` does not read
+/// as exactly that one name.
+fn special(segment: &str) -> Option<&'static str> {
+    if segment.contains(':') {
+        return Some("a drive or a stream (`:`)");
+    }
+    if segment.ends_with(['.', ' ']) {
+        return Some("a name ending in a dot or a space");
+    }
+    let stem = segment.split('.').next().unwrap_or(segment).trim_end_matches(' ').to_ascii_uppercase();
+    let numbered = |prefix: &str| {
+        stem.strip_prefix(prefix)
+            .is_some_and(|n| matches!(n, "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"))
+    };
+    if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
+        || numbered("COM")
+        || numbered("LPT")
+    {
+        return Some("a device name");
+    }
+    let mut components = Path::new(segment).components();
+    match (components.next(), components.next()) {
+        (Some(Component::Normal(name)), None) if name == OsStr::new(segment) => None,
+        _ => Some("not one plain name"),
+    }
+}
+
+/// `into` joined with `segments`, which must stay below it: exactly one more plain name per segment.
+fn contained(into: &Path, segments: &[&str], shown: &[u8]) -> Result<PathBuf, Failure> {
+    let path: PathBuf = segments.iter().fold(into.to_path_buf(), |path, segment| path.join(segment));
+    let below = path.strip_prefix(into).ok().filter(|rest| {
+        rest.components().count() == segments.len() && rest.components().all(|c| matches!(c, Component::Normal(_)))
+    });
+    if !path.starts_with(into) || below.is_none() {
+        return Err(refused(
+            "archive-path",
+            format!("The archive holds {:?}: not below package/.", String::from_utf8_lossy(shown)),
+        ));
+    }
+    Ok(path)
 }
 
 /// Creates `path` (0700) unless it is a directory already: one this unpacking made, since nothing else writes here.
@@ -105,7 +155,7 @@ pub fn extract(archive: impl Read, into: &Path, limits: Limits, cancelled: &dyn 
         }
         let raw = entry.path_bytes().into_owned();
         let segments = segments(&raw)?;
-        let path: PathBuf = segments.iter().fold(into.to_path_buf(), |path, segment| path.join(segment));
+        let path = contained(into, &segments, &raw)?;
         if kind.is_symlink() || kind.is_hard_link() {
             return Err(refused(
                 "archive-link",
@@ -237,6 +287,43 @@ mod tests {
             raw.extend([0u8; 1024]);
             refused_with(&gzip(&raw), "archive-path");
         }
+    }
+
+    #[test]
+    fn names_windows_reads_as_somewhere_else_are_refused_on_every_os() {
+        for path in [
+            "package/C:escaped.txt",
+            "package/C:/escaped.txt",
+            "package/bin/c:escaped.txt",
+            "package/notes.txt:hidden",
+            "package/NUL",
+            "package/con.txt",
+            "package/bin/Com1",
+            "package/lpt9.log",
+            "package/aux .json",
+            "package/trailing.",
+            "package/trailing ",
+            "package/dir./x",
+        ] {
+            let mut raw = tar_entry(path, b"x", tar::EntryType::Regular, 0o644, None);
+            raw.extend([0u8; 1024]);
+            let (tmp, result) = unpack(&gzip(&raw));
+            let failure = result.expect_err(path);
+            assert_eq!(failure.params, Some(json!({"check": "archive-path"})), "{path}: {failure:?}");
+            // Nothing was written anywhere: not in the directory, not beside it, not where a drive prefix points.
+            let package = tmp.path().join(ROOT);
+            assert!(!package.exists() || std::fs::read_dir(&package).unwrap().next().is_none(), "{path}");
+            assert!(!tmp.path().parent().unwrap().join("escaped.txt").exists(), "{path}");
+            assert!(!Path::new("escaped.txt").exists(), "{path}");
+        }
+        // Names that only look close are fine.
+        let archive = tarball(&[
+            ("package/console.txt", b"x".as_slice(), 0o644),
+            ("package/com10", b"x".as_slice(), 0o644),
+            ("package/a.b.c", b"x".as_slice(), 0o644),
+        ]);
+        let (_tmp, result) = unpack(&archive);
+        result.unwrap();
     }
 
     #[test]
