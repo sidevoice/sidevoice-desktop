@@ -269,7 +269,7 @@ jobs:
       - name: Portable native local-host fixtures
         run: cargo xtask test-support
       - name: Reset cleanup safety tests (temporary directories only)
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib data::tests -- --test-threads=1
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib -- data::tests platform::webview_data --test-threads=1
       - name: The local host from the bundled page (stand-in core on its published socket, pairing, proxy, refusals)
         run: cargo xtask macos local-host
       - name: What the interface's window offers (probe page, same origin and permission rule)
