@@ -85,7 +85,7 @@ observations. The common shell still shows/restores/focuses the room and keeps i
 its Regular activation policy, visible Dock tile, macOS 14+ activation and Dock reopen handling. Windows/Linux use
 Tauri window focus and the existing single-instance plugin. No native accessibility equivalent is inferred there.
 
-`platform::ShortcutAccess` owns the maintained global-shortcut plugin, live VoiceOver reservation and label style.
+`platform::shortcut_access` owns the maintained global-shortcut plugin, live VoiceOver reservation and label style.
 The saved default and alternatives above are unchanged; [#10](https://github.com/sidevoice/sidevoice-desktop/issues/10)
 remains the operator's decision. A backend failure leaves the app running and reports `unavailable` through
 `host.muteShortcut`; an individual registration conflict remains `refused`. An empty shortcut remains `off`.

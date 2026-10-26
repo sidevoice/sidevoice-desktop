@@ -32,7 +32,7 @@ use crate::platform::update_eligibility::{NativeUpdateEligibility, UpdateEligibi
 use crate::platform::application::{Application, NativeApplication};
 use crate::platform::computer_name::{ComputerName, SystemComputerName};
 use crate::platform::media_controls::{MediaControls, NativeMediaControls};
-use crate::platform::shortcut_access::{NativeShortcutAccess, ShortcutAccess};
+use crate::platform::shortcut_access;
 use crate::platform::webview_diagnostics::{NativeWebviewDiagnostics, WebviewDiagnostics};
 use serde_json::{json, Value};
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
@@ -91,7 +91,7 @@ impl Default for AppState {
 fn shortcut_status(state: &AppState) -> MuteShortcut {
     let mut status = state.shortcut.lock().unwrap().clone();
     let accelerator = status.accelerator.as_deref().unwrap_or_default();
-    status.voice_over = status.state == Registration::On && NativeShortcutAccess::reserved_chord_active(accelerator);
+    status.voice_over = status.state == Registration::On && shortcut_access::reserved_chord_active(accelerator);
     status
 }
 
@@ -138,7 +138,7 @@ async fn mute_shortcut(
         "get" => Ok(shortcut_status(&app.state::<AppState>())),
         "set" => {
             let text = accelerator.unwrap_or_default();
-            let accelerator = NativeShortcutAccess::checked(&text)
+            let accelerator = shortcut_access::checked(&text)
                 .ok_or_else(|| refusal("shortcut_invalid", format!("Not a shortcut: {text}")))?;
             change_shortcut(&app, |s| s.mute_shortcut = accelerator).map_err(|e| refusal("internal", e))
         }
@@ -417,7 +417,7 @@ fn app_report(app: &AppHandle) -> String {
 
 /// Replace the shortcut, keep the actual outcome, and notify the room page.
 fn apply_shortcut(app: &AppHandle, accelerator: &str) {
-    let status = NativeShortcutAccess::replace(app, accelerator);
+    let status = shortcut_access::replace(app, accelerator);
     let app_state = app.state::<AppState>();
     *app_state.shortcut.lock().unwrap() = status;
     if let Some(window) = room_window(app) {
@@ -542,7 +542,7 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             NativeApplication::prepare(&handle)?;
-            NativeShortcutAccess::configure(&handle);
+            shortcut_access::configure(&handle);
             debug(&format!("launch {}", app_report(&handle)));
             tray::create(&handle)?;
             let media_app = handle.clone();

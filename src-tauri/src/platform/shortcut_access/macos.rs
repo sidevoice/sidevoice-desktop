@@ -1,8 +1,8 @@
-use super::{LabelStyle, ShortcutAccess};
+use super::{Backend, LabelStyle};
 
 pub struct Os;
 
-impl ShortcutAccess for Os {
+impl Backend for Os {
     fn reserved_chord_active(chord: &str) -> bool {
         if !sidevoice_desktop_core::settings::uses_voice_over_keys(chord) {
             return false;
