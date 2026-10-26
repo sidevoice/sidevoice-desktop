@@ -28,7 +28,7 @@
 //! - `sherpa-libs`: sherpa-onnx's libraries, checked, by that engine's own `cargo xtask sherpa-libs`; prints their
 //!   directory (`export SHERPA_ONNX_LIB_DIR="$(cargo xtask sherpa-libs)"`) and, on a runner, exports it.
 //!
-//! The macOS app and .dmg (Apple Silicon), in the order CI runs them (macos.rs, probe.rs): `app` to `dmg-screens` in
+//! The macOS app and .dmg (Apple Silicon), in the order CI runs them (platform/macos_app.rs, platform/macos_probe.rs): `app` to `dmg-screens` in
 //! the `macos` job; beside it, `probe-app`, `local-host`, `probe`, `card` and `exit` in `macos-native`, and
 //! `voice-models` and `voice-memory` in `macos-call`, `memory` after `exit`:
 //!
@@ -99,12 +99,12 @@
 //! This tooling's own tests: `cargo test --manifest-path xtask/Cargo.toml`.
 
 mod checks;
-mod macos;
+
 mod memory;
 mod packaging;
 mod platform;
 mod platform_guard;
-mod probe;
+
 mod publish;
 mod util;
 
@@ -154,29 +154,31 @@ fn main() -> ExitCode {
         ["bundle", "--channel", c] => Channel::parse(c).and_then(checks::bundle),
         ["engine-rev"] => checks::engine_rev(),
         ["sherpa-libs"] => checks::sherpa_libs(),
-        ["macos", "app"] => macos("app", || macos::build_app(false, Channel::Dev)),
-        ["macos", "app", "--signed"] => macos("app", || macos::build_app(true, Channel::Dev)),
-        ["macos", "app", "--channel", c] => Channel::parse(c).and_then(|c| macos("app", || macos::build_app(false, c))),
-        ["macos", "app", "--signed", "--channel", c] => {
-            Channel::parse(c).and_then(|c| macos("app", || macos::build_app(true, c)))
+        ["macos", "app"] => macos("app", || platform::macos_app::build_app(false, Channel::Dev)),
+        ["macos", "app", "--signed"] => macos("app", || platform::macos_app::build_app(true, Channel::Dev)),
+        ["macos", "app", "--channel", c] => {
+            Channel::parse(c).and_then(|c| macos("app", || platform::macos_app::build_app(false, c)))
         }
-        ["macos", "check-app"] => macos("check-app", || macos::check_app(false)),
-        ["macos", "check-app", "--signed"] => macos("check-app", || macos::check_app(true)),
-        ["macos", "first-open"] => macos("first-open", macos::first_open),
-        ["macos", "dmg"] => macos("dmg", || macos::dmg(false)),
-        ["macos", "dmg", "--signed"] => macos("dmg", || macos::dmg(true)),
-        ["macos", "sign-dmg"] => macos("sign-dmg", macos::sign_dmg),
-        ["macos", "forget-secrets"] => macos("forget-secrets", macos::forget_secrets),
-        ["macos", "checksums"] => macos("checksums", macos::checksums),
-        ["macos", "dmg-screens"] => macos("dmg-screens", macos::dmg_screens),
-        ["macos", "probe-app"] => macos("probe-app", probe::probe_app),
-        ["macos", "local-host"] => macos("local-host", probe::local_host),
-        ["macos", "probe"] => macos("probe", probe::probe),
-        ["macos", "voice-models"] => macos("voice-models", probe::voice_models),
-        ["macos", "card"] => macos("card", probe::card),
-        ["macos", "exit"] => macos("exit", probe::exit),
-        ["macos", "memory"] => macos("memory", probe::memory),
-        ["macos", "voice-memory"] => macos("voice-memory", probe::voice_memory),
+        ["macos", "app", "--signed", "--channel", c] => {
+            Channel::parse(c).and_then(|c| macos("app", || platform::macos_app::build_app(true, c)))
+        }
+        ["macos", "check-app"] => macos("check-app", || platform::macos_app::check_app(false)),
+        ["macos", "check-app", "--signed"] => macos("check-app", || platform::macos_app::check_app(true)),
+        ["macos", "first-open"] => macos("first-open", platform::macos_app::first_open),
+        ["macos", "dmg"] => macos("dmg", || platform::macos_app::dmg(false)),
+        ["macos", "dmg", "--signed"] => macos("dmg", || platform::macos_app::dmg(true)),
+        ["macos", "sign-dmg"] => macos("sign-dmg", platform::macos_app::sign_dmg),
+        ["macos", "forget-secrets"] => macos("forget-secrets", platform::macos_app::forget_secrets),
+        ["macos", "checksums"] => macos("checksums", platform::macos_app::checksums),
+        ["macos", "dmg-screens"] => macos("dmg-screens", platform::macos_app::dmg_screens),
+        ["macos", "probe-app"] => macos("probe-app", platform::macos_probe::probe_app),
+        ["macos", "local-host"] => macos("local-host", platform::macos_probe::local_host),
+        ["macos", "probe"] => macos("probe", platform::macos_probe::probe),
+        ["macos", "voice-models"] => macos("voice-models", platform::macos_probe::voice_models),
+        ["macos", "card"] => macos("card", platform::macos_probe::card),
+        ["macos", "exit"] => macos("exit", platform::macos_probe::exit),
+        ["macos", "memory"] => macos("memory", platform::macos_probe::memory),
+        ["macos", "voice-memory"] => macos("voice-memory", platform::macos_probe::voice_memory),
         ["windows", "first-open"] => platform::first_open::run(),
         ["publish", "assets", kind] => publish::assemble(kind, None),
         ["publish", "assets", kind, tag] => publish::assemble(kind, Some(tag)),

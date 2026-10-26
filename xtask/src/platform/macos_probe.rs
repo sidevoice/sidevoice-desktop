@@ -7,8 +7,8 @@ use std::fs;
 use std::path::Path;
 use std::time::Instant;
 
-use crate::macos::{app_command, binary, fake_node, release_target, AppHome, PROBE_ONLY};
 use crate::platform::file_mode::mode;
+use crate::platform::macos_app::{app_command, binary, fake_node, release_target, AppHome, PROBE_ONLY};
 use crate::util::{
     contains, ensure, grep, has, interrupted, line_count, lines_after, re, read, read_bytes, repo, sleep, wait_for,
     work, Background, Cmd, TauriBuild,
@@ -24,7 +24,7 @@ pub fn probe_app() -> Result<()> {
         features: Some("probe"),
         ..TauriBuild::default()
     };
-    crate::macos::unsigned(build.command()?).run()?;
+    crate::platform::macos_app::unsigned(build.command()?).run()?;
     let bytes = read_bytes(&binary())?;
     for marker in PROBE_ONLY {
         ensure(contains(&bytes, marker), format!("the probe build does not carry {marker}"))?;
@@ -138,7 +138,7 @@ pub fn local_host() -> Result<()> {
     }
     ensure(!has(&core_text, "auth=other|/api/local/health origin=tauri"), "the core saw what it should not")?;
     // The token, stored by the app alone: 0600 in its config directory.
-    let store = crate::macos::app_data(home).join("local-host.json");
+    let store = crate::platform::macos_app::app_data(home).join("local-host.json");
     let bits = mode(&store)?;
     ensure(bits == 0o600, format!("{} is {bits:o}, not 600", store.display()))
 }
@@ -316,7 +316,7 @@ pub fn exit() -> Result<()> {
     let logs = work("exit")?;
     let log = logs.join("exit.log");
     // Where macOS writes them: the user's own home, whatever HOME the app was given.
-    let reports = crate::macos::home()?.join("Library/Logs/DiagnosticReports");
+    let reports = crate::platform::macos_app::home()?.join("Library/Logs/DiagnosticReports");
     let before: Vec<_> = crash_reports(&reports);
     let mut app =
         data.app(&[("SIDEVOICE_DEBUG_PAGE", "probe.html"), ("SIDEVOICE_DEBUG_EXIT", "restart")]).spawn(&log)?;

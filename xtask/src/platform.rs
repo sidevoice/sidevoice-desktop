@@ -5,5 +5,7 @@ pub mod file_mode;
 pub mod first_open;
 pub mod host;
 pub mod lifecycle;
+pub mod macos_app;
+pub mod macos_probe;
 pub mod private_files;
 pub mod two_users;

@@ -1,5 +1,5 @@
 //! `macos …`: the Apple-Silicon app and its .dmg, built, signed, checked and started as a release ships them
-//! (RELEASING.md, "macOS signing and notarization"). The probe build and the native flows are in probe.rs.
+//! (RELEASING.md, "macOS signing and notarization"). The probe build and the native flows are in macos_probe.rs.
 
 use sidevoice_platform::fs::{Create, Files, Fs};
 use std::fs;
