@@ -4,8 +4,8 @@
 //!
 //! A path that is not there is not unsafe: it is [`Check::Missing`], and the caller treats the host as absent.
 
-use crate::platform::storage::{Access, Storage, TrustedStorage};
 use crate::Refusal;
+use sidevoice_platform::fs::{Access, Directory, HeldDirectory};
 use std::io;
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixStream;
@@ -46,12 +46,16 @@ pub(crate) fn storage_error(path: &Path, key: &str, error: io::Error) -> Check {
 
 /// The core's existing directory, checked with its ancestry; discovery never creates it.
 pub fn private_dir(path: &Path) -> Result<(), Check> {
-    Storage::open(path, Access::Private).map(|_| ()).map_err(|e| storage_error(path, "identity.unsafe-directory", e))
+    HeldDirectory::open(path, Access::Private)
+        .map(|_| ())
+        .map_err(|e| storage_error(path, "identity.unsafe-directory", e))
 }
 
 /// The connector's existing directory, readable by others but never writable by them.
 pub fn owned_not_writable(path: &Path) -> Result<(), Check> {
-    Storage::open(path, Access::NotWritableByOthers).map(|_| ()).map_err(|e| storage_error(path, "install.unsafe", e))
+    HeldDirectory::open(path, Access::NotWritableByOthers)
+        .map(|_| ())
+        .map_err(|e| storage_error(path, "install.unsafe", e))
 }
 
 /// The uid of the process at the other end of a connected Unix socket.
@@ -118,8 +122,8 @@ pub fn connect(dir: &Path, socket: &Path, dir_check: fn(&Path) -> Result<(), Che
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::platform::storage::Directory;
     use sidevoice_desktop_test_support::platform::storage::{StorageFixture, StorageFixtures};
+    use sidevoice_platform::fs::Directory;
     use std::os::unix::net::UnixListener;
 
     #[test]
@@ -155,7 +159,7 @@ mod tests {
     fn install_record_must_not_be_writable_by_others() {
         let tmp = tempfile::tempdir().unwrap();
         let file = tmp.path().join("install.json");
-        let dir = Storage::open(tmp.path(), Access::NotWritableByOthers).unwrap();
+        let dir = HeldDirectory::open(tmp.path(), Access::NotWritableByOthers).unwrap();
         let check = || {
             dir.read("install.json".as_ref(), Access::NotWritableByOthers, 1024)
                 .map_err(|e| storage_error(&file, "install.unsafe", e))?

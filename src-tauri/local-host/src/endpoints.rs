@@ -11,9 +11,9 @@
 
 use crate::checks::Check;
 use crate::paths::DataDirs;
-use crate::platform::storage::{Access, Directory, HeldDirectory, Storage, TrustedStorage};
 use crate::Refusal;
 use serde_json::Value;
+use sidevoice_platform::fs::{Access, Directory, HeldDirectory};
 use sidevoice_platform::ipc::Endpoint;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -22,7 +22,7 @@ const RECORD_LIMIT: u64 = 64 * 1024;
 
 /// The core's socket, from `C/core.json`: `C` private to this user, the record private too (it holds the core's token).
 pub fn core(dirs: &DataDirs) -> Result<PathBuf, Check> {
-    let dir = Storage::open(&dirs.core(), Access::Private)
+    let dir = HeldDirectory::open(&dirs.core(), Access::Private)
         .map_err(|e| crate::checks::storage_error(&dirs.core(), "identity.unsafe-directory", e))?;
     let record = read(&dir, &dirs.core_record(), Access::Private, "identity.unsafe-directory")?;
     socket(&record, &dirs.core_record())
@@ -32,7 +32,7 @@ pub fn core(dirs: &DataDirs) -> Result<PathBuf, Check> {
 /// others, so is the record.
 pub fn connector(dirs: &DataDirs) -> Result<PathBuf, Check> {
     let path = dirs.connector_record();
-    let dir = Storage::open(&dirs.data, Access::NotWritableByOthers)
+    let dir = HeldDirectory::open(&dirs.data, Access::NotWritableByOthers)
         .map_err(|e| crate::checks::storage_error(&dirs.data, "install.unsafe", e))?;
     let record = read(&dir, &path, Access::NotWritableByOthers, "install.unsafe")?;
     let pid = record.get("pid").and_then(Value::as_u64).and_then(|pid| i32::try_from(pid).ok()).filter(|pid| *pid > 0);

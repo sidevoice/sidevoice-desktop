@@ -3,9 +3,9 @@
 //! unreadable is no pairing: the app pairs again (which revokes the previous local device in the core).
 
 use crate::checks::Check;
-use crate::platform::storage::{Access, Directory, HeldDirectory, Storage, TrustedStorage};
 use crate::Refusal;
 use serde::{Deserialize, Serialize};
+use sidevoice_platform::fs::{Access, Directory, Files, Fs, HeldDirectory};
 use std::io;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -40,7 +40,8 @@ impl Pairing {
 /// The app's config directory, checked as opened: its ancestry safe from other users, itself this user's and not
 /// writable by others (review R1-c #5).
 fn open(dir: &Path) -> Result<HeldDirectory, Check> {
-    Storage::open(dir, Access::NotWritableByOthers).map_err(|e| crate::checks::storage_error(dir, "app.storage", e))
+    HeldDirectory::open(dir, Access::NotWritableByOthers)
+        .map_err(|e| crate::checks::storage_error(dir, "app.storage", e))
 }
 
 /// The stored pairing, read through the checked directory: a regular private file (0600), not a link.
@@ -56,7 +57,7 @@ pub fn save(dir: &Path, pairing: &Pairing) -> io::Result<()> {
     // directory is created, with the shared private creation/check policy.
     let opened = match open(dir) {
         Err(Check::Missing) => {
-            Storage::ensure_private_dir(dir)?;
+            Files::ensure_private_dir(dir)?;
             open(dir)
         }
         opened => opened,
