@@ -1,6 +1,6 @@
-use super::{Native, Space};
+use super::Native;
 
 pub(super) struct Os;
 impl Native for Os {
-    const SPACE: Space = Space::Points;
+    const POINTS: bool = true;
 }
