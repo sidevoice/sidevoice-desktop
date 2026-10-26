@@ -9,9 +9,9 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tauri::{AppHandle, Manager, Webview};
 
-use crate::platform::app_data;
 use crate::platform::reset_availability::RESET_AVAILABLE;
 use crate::platform::reset_handoff::{self, Handoff};
+use crate::platform::{account, app_data, uninstall};
 use crate::AppState;
 
 #[derive(Default)]
@@ -228,8 +228,8 @@ async fn confirmed_reset(app: AppHandle, uninstall: bool) -> Answer {
         end_exclusive(&app);
         return Err(refused(key));
     }
-    // A copy that cannot remove itself (a disk image, a translocated or read-only copy) refuses before the data goes.
-    if uninstall && !app_data::uninstallable() {
+    // A host that cannot remove the app refuses before the data goes.
+    if uninstall && !uninstall::available() {
         end_exclusive(&app);
         return Err(refused("reset.app-unremovable"));
     }
@@ -309,7 +309,7 @@ fn reset_before_exit() -> Result<(Vec<Value>, Value, &'static str), Value> {
     use sidevoice_local_host::{cli::Cli, paths::DataDirs};
     let dirs = DataDirs::from_env().ok_or_else(|| refused("reset.unavailable"))?;
     // `HOME` only when it is this account's home in the account database: no other home is reset.
-    let home = app_data::home().map_err(|reason| json!({"key": "reset.unsafe", "reason": reason}))?;
+    let home = account::home().map_err(|reason| json!({"key": "reset.unsafe", "reason": reason}))?;
     validate_uninstall_scope_at(&home, &dirs.data)
         .map_err(|reason| json!({"key": "reset.unsafe", "reason": reason}))?;
     let installed_cli = match Cli::installed(&dirs) {
@@ -483,7 +483,7 @@ fn fresh_service_absent_with(
 #[cfg(target_os = "macos")]
 fn run_checked_uninstall<T>(home: &Path, data: &Path, invoke: impl FnOnce() -> Result<T, Value>) -> Result<T, Value> {
     // Still this account's home in the account database, right before the destructive call.
-    if app_data::home().as_deref() != Ok(home) {
+    if account::home().as_deref() != Ok(home) {
         return Err(json!({"key": "reset.unsafe", "reason": "unsafe-home"}));
     }
     validate_uninstall_scope_at(home, data).map_err(|reason| json!({"key": "reset.unsafe", "reason": reason}))?;
@@ -582,7 +582,7 @@ fn clean_up_after_exit(
 ) {
     use crate::platform::webview_data;
     let unsafe_home = |reason| std::io::Error::new(std::io::ErrorKind::PermissionDenied, reason);
-    let browser = app_data::home()
+    let browser = account::home()
         .map_err(unsafe_home)
         .and_then(|home| webview_data::locations(&home))
         .and_then(|paths| webview_data::capture(parent_pid, paths));
@@ -595,7 +595,7 @@ fn clean_up_after_exit(
     let browser = browser
         .and_then(|owner| webview_data::wait_released(owner, std::time::Instant::now() + Duration::from_secs(10)));
     // A journal that cannot be written stops the deletion: an interruption could no longer be reported.
-    let _ = app_data::delete_data(&browser, &mut |step, result| {
+    let mut step = |step: &'static str, result: Result<(), &'static str>| {
         match result {
             Ok(()) => completed.push(step),
             Err(key) => failed.push(json!({"step": step, "key": key})),
@@ -605,12 +605,17 @@ fn clean_up_after_exit(
             failed.push(json!({"step":"report", "key":"reset.report-failed"}));
         }
         written.is_ok()
-    });
+    };
+    // Still this account's home in the account record, right before the deletion; no other home is deleted.
+    let _ = match account::home() {
+        Ok(home) => app_data::delete_data(&home, &browser, &mut step).is_ok(),
+        Err(key) => step("app-data", Err(key)),
+    };
     conclude_reset(lock, &report, &journal, completed, failed, &initial, uninstall);
 }
 
 /// The end of the transaction: the report with a relaunch, or the removal of the app where it can be restored from
-/// (`app_data::uninstall`). The decisions stay here.
+/// (`uninstall::uninstall`). The decisions stay here.
 fn conclude_reset(
     lock: crate::platform::reset_handoff::Admission,
     report: &Path,
@@ -630,7 +635,7 @@ fn conclude_reset(
             .is_some()
     };
     if uninstall {
-        let trash = || match app_data::uninstall() {
+        let trash = || match uninstall::uninstall() {
             Ok(()) => Ok(()),
             Err(app_data::Error::Failed(key)) => Err(key),
             Err(_) => Err("reset.app-unremovable"),

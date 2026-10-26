@@ -1,33 +1,49 @@
 # The app's data on this computer
 
-`platform::app_data` deletes everything the app keeps on this computer and, where the OS allows, the app itself.
-It replaces the former `owned_removal` and `reset_cleanup` concerns. The reset transaction in `data.rs` keeps
-admission, the pre-exit connector and keychain steps, the journal and report, relaunch and the uninstall decision;
-it calls these functions in the reset helper after the app has exited. The page still supplies no paths, and the
-reset plan carries none.
+Three platform concerns serve the reset transaction in `data.rs`: `platform::app_data` deletes everything the app
+keeps on this computer, `platform::uninstall` removes the app itself where the OS allows, and `platform::account`
+names the account home they work in. They replace the former `owned_removal` and `reset_cleanup` concerns.
+`data.rs` keeps admission, the pre-exit connector and keychain steps, the journal and report, relaunch and the
+uninstall decision; it calls these in the reset helper after the app has exited. The page still supplies no paths,
+and the reset plan carries none.
 
 ## Interface
 
-- `delete_app_folders(browser, steps)`: common to every OS. Deletes, in order, `app-data`, `models`, `webview`,
-  `cache` and `logs`, telling `steps` each name and result (the journal). `browser` is the `webview_data` proof that
-  the browser writers exited; without it, browser storage fails with `reset.process-busy` and stays.
-- `delete_data(browser, steps)`: everything. By default exactly `delete_app_folders`; macOS then removes the saved
-  window state (`saved-state`) and the `defaults` domain (`preferences`, nothing to do when absent).
-- `uninstallable()` / `uninstall()`: whether this copy can remove itself (macOS: a real `.app` bundle in a folder
-  this user may write, not a disk image or translocated copy), and the removal (macOS: Finder's move to the Trash).
-  Elsewhere `false` / `Unsupported`. `data.rs` refuses an uninstall before its confirmation when `uninstallable()`
-  is false, deletes the data, and only after a clean deletion calls `uninstall()`.
-- `home()`: the account home every step works in: `dirs`' home (which trusts `$HOME`) only when it equals the home
-  the OS account database records for this user (`Os::account_home`; macOS `getpwuid_r(geteuid())`; none elsewhere,
-  so it refuses there). `data.rs` takes the connector preflight's home from it, checks it again right before the
-  installed uninstaller runs, and the helper's deletion resolves it again. An alternate home supplied as `HOME`
-  (say, a restored profile inside the real one) is refused before anything is deleted; a test pins that.
-- `check_tree(home, path)`: the read-only preflight of a protected root (the connector's data and releases, and
-  browser storage before its removal).
+`app_data`:
 
-What differs per OS is a private `Os` trait (`app_data/{macos,linux,windows}.rs`): the account home, the log folder rule,
-`delete_data`, `UNINSTALLABLE`, the self-removal check and `uninstall`. Reset is still offered on macOS only
-(`reset_availability`): the rest of the transaction is macOS-only.
+- `delete_data(home, browser, steps)`: the only entry for data. The app folders every OS has (below), then the
+  OS's own extras. Each step's name and result goes to `steps` (the journal); `false` stops. `browser` is the
+  `webview_data` proof that the browser writers exited; without it, browser storage fails with
+  `reset.process-busy` and stays. `home` must still be `account::home()`, checked again before anything is
+  deleted: otherwise the `app-data` step fails with `unsafe-home` and nothing is deleted.
+- `check_tree(home, path)`: a plain, read-only preflight of a protected root. It stays public because the
+  connector preflight in `data.rs` checks the connector's data and releases with it before the installed
+  uninstaller runs; the folder deletion uses it for browser storage.
+- Per OS, a private trait with one method, `delete_extra_data(home, steps)`, default nothing. macOS: its logs
+  (`~/Library/Logs/<id>`, `logs`), the saved window state (`saved-state`) with the same safe removal, then the
+  `defaults` domain (`preferences`, nothing to do when absent). Linux and Windows: the default.
+
+`uninstall`:
+
+- `available()`: whether this host can remove the app (`Os::AVAILABLE`; macOS only). `data.rs` refuses an
+  uninstall before its confirmation when false.
+- `uninstall()`: macOS checks the running copy (a real `.app` bundle in a folder this user may write, not a disk
+  image or translocated copy) and moves it to the Trash with Finder's `NSFileManager` move; elsewhere `Unsupported`.
+  `data.rs` calls it only after a clean deletion. A copy that fails the bundle check is now found then, not before
+  the confirmation: its data is deleted, the app stays, and the report says `reset.app-unremovable`.
+- Per OS, a private trait: `const AVAILABLE` (default `false`) and `uninstall()` (default `Unsupported`).
+
+`account`:
+
+- `home()`: `dirs`' home (which trusts `$HOME`, as Tauri does) only when it equals the home the OS account record
+  has for this user; otherwise `unsafe-home`. Not a trait: one plain function, with the record read on every OS
+  (macOS and Linux: the user database entry of the effective user via `nix`'s `getpwuid_r`; Windows:
+  `GetUserProfileDirectoryW` on the process token, never `USERPROFILE`). `data.rs` takes the connector preflight's
+  home from it, checks it again right before the installed uninstaller runs, and the helper resolves it again for
+  the browser storage and the deletion. An alternate home supplied as `HOME` (say, a restored profile inside the
+  real one) is refused before anything is deleted; a test pins that.
+
+Reset is still offered on macOS only (`reset_availability`): the rest of the transaction is macOS-only.
 
 ## Which folders
 
@@ -40,13 +56,13 @@ documents for its `PathResolver`, with the bundle identifier `dev.sidevoice.desk
 | `models` | `sidevoice-platform`'s `data_dir::models_dir()`; only its `blobs`, `models` and `partial` children |
 | `webview` | `webview_data`'s browser storage that is no other step's folder (macOS: `~/Library/WebKit/<id>`) |
 | `cache` | `app_cache_dir`: `<cache>/<id>` |
-| `logs` | `app_log_dir`: `~/Library/Logs/<id>` on macOS, `<local data>/<id>/logs` elsewhere |
+| `logs` | `app_log_dir` off macOS: `<local data>/<id>/logs` |
 
-A folder equal to or inside an earlier one is dropped (Linux: the logs are inside `app-data`; Windows: cache and
-logs are inside the browser's local data folder). `app_local_data_dir` is covered as browser storage, and
-`app_config_dir` is not written by the app. On macOS the result is exactly the previous list, in the same order,
-and a test pins it: Application Support, the model children, WebKit, Caches and Logs. `saved-state` now runs after
-`logs` instead of before it (both are plain owned folders, so nothing depends on that order), then `preferences`.
+A folder equal to or inside an earlier one is dropped (macOS and Linux: that `logs` folder is inside `app-data`;
+Windows: cache and logs are inside the browser's local data folder). `app_local_data_dir` is covered as browser
+storage, and `app_config_dir` is not written by the app. On macOS the common folders and then the extras are
+exactly the previous list, in the same order, and tests pin it: Application Support, the model children, WebKit,
+Caches, Logs, Saved Application State, then `preferences`.
 
 ## Removal policy
 

@@ -1,16 +1,16 @@
-//! The app's data on this computer: every folder it keeps, its native extras, and the app itself. The reset
-//! transaction in `data.rs` keeps the sequencing, the journal and report, and the relaunch; it runs these in the
-//! reset helper after the app has exited, and asks only for each step's result.
+//! Deleting the app's data on this computer. The reset transaction in `data.rs` keeps the sequencing, the journal
+//! and report, and the relaunch; it runs [`delete_data`] in the reset helper after the app has exited, and asks only
+//! for each step's result. Removing the app itself is `uninstall`.
 //!
-//! The folders are the ones Tauri gives the app, resolved by the rule Tauri documents for its `PathResolver` (the
-//! helper runs before Tauri, so it has no `AppHandle`): `dirs` places plus the bundle identifier, the logs at
-//! `~/Library/Logs/<id>` on macOS and `<local data>/<id>/logs` elsewhere. With them, the shared model store
-//! (`sidevoice-platform`'s `data_dir`) and the browser storage `webview_data` names. A folder inside another one
-//! is removed with it. Nothing comes from the page or from the reset plan.
+//! [`delete_data`] deletes, on every OS, the folders the app already knows, then whatever more the OS keeps for it
+//! (the only per-OS part). The folders are the ones Tauri gives the app, resolved by the rule Tauri documents for its
+//! `PathResolver` (the helper runs before Tauri, so it has no `AppHandle`): `dirs` places plus the bundle identifier,
+//! the logs at `<local data>/<id>/logs` (macOS keeps them in `~/Library/Logs/<id>`, one of its extras). With them,
+//! the shared model store (`sidevoice-platform`'s `data_dir`) and the browser storage `webview_data` names. A folder
+//! inside another one is removed with it. Nothing comes from the page or from the reset plan.
 //!
-//! Every folder must be inside [`home`]: `dirs`' home only when it is the one the OS account database records for
-//! this user (`Os::account_home`), checked before the pre-exit connector work and again in the helper; another home
-//! (an alternate profile supplied as `HOME`) is refused before anything is deleted.
+//! `home` must still be the account home (`account::home`) when the deletion starts; another home (an alternate
+//! profile supplied as `HOME`) is refused before anything is deleted.
 //!
 //! Every removal goes through the shared held-root capability (`HeldDirectory` + `Removal`): the selected entry and
 //! its whole tree are preflighted before anything is deleted, links are unlinked and never followed, entry identity
@@ -18,6 +18,7 @@
 //! parent down, so until it covers the rest this module refuses, between the account home and that parent, any
 //! link (the path must be its own canonical form) and any change of volume, and a home that is a volume's root.
 
+use crate::platform::account;
 use crate::platform::webview_data::{self, Released};
 use sidevoice_platform::fs::{Access, Directory, HeldDirectory};
 use sidevoice_platform::removal::Removal;
@@ -42,7 +43,7 @@ const IDENTIFIER: &str = "dev.sidevoice.desktop";
 /// The engine-owned children of the model store; the store itself and any other sibling stay.
 const MODEL_CHILDREN: [&str; 3] = ["blobs", "models", "partial"];
 
-/// Why an operation did not complete.
+/// Why a reset operation (this deletion, or `uninstall`) did not complete.
 pub enum Error {
     /// This host cannot do it.
     Unsupported,
@@ -53,39 +54,17 @@ pub enum Error {
 }
 
 /// Told each step's name and result, in order, as the report names them (`app-data`, `models`, `webview`, `cache`,
-/// `logs`, and on macOS `saved-state` and `preferences`); a failed step is the report's key. Returning `false`
-/// stops the deletion.
+/// `logs`, then the OS's own: on macOS `logs`, `saved-state` and `preferences`); a failed step is the report's key.
+/// Returning `false` stops the deletion.
 pub type Steps<'a> = &'a mut dyn FnMut(&'static str, Result<(), &'static str>) -> bool;
 
-/// Delete every folder the app keeps on this computer, in order, reporting each to `steps`. Browser storage is
-/// removed only when `browser` proves its writers released (`webview_data`); otherwise those steps fail with
-/// `reset.process-busy` and stay. A missing folder is a completed step.
-pub fn delete_app_folders(browser: &io::Result<Released>, steps: Steps) -> Result<(), Error> {
-    delete_folders(home().and_then(Places::native), browser, steps)
-}
-
-/// The account home every folder must be inside: `dirs`' home (which trusts `$HOME`, as Tauri does) only when it is
-/// the home the OS account database records for this user. Anything else, or a host without that record, is
-/// `unsafe-home`: callers do no destructive work in another home.
-pub fn home() -> Result<PathBuf, &'static str> {
-    accept_home(dirs::home_dir(), Native::account_home())
-}
-
-/// Delete all the app's data on this computer: its folders and, where the OS keeps more, that too.
-pub fn delete_data(browser: &io::Result<Released>, steps: Steps) -> Result<(), Error> {
-    Native::delete_data(browser, steps)
-}
-
-/// Whether this copy of the app can remove itself: the host supports it and the running copy passes
-/// [`uninstall`]'s checks now (macOS: a real bundle in a folder this user may write, not a disk image or a
-/// translocated copy). Callers refuse an uninstall before its confirmation when this is false.
-pub fn uninstallable() -> bool {
-    Native::UNINSTALLABLE && Native::check_uninstall().is_ok()
-}
-
-/// Remove the app itself where the person can restore it from (macOS: the Trash). Run after [`delete_data`].
-pub fn uninstall() -> Result<(), Error> {
-    Native::uninstall()
+/// Delete all the app's data for the account home `home` (`account::home`), in order, reporting each step to
+/// `steps`: the app's folders, then what the OS keeps for it. Browser storage is removed only when `browser` proves
+/// its writers released (`webview_data`); otherwise those steps fail with `reset.process-busy` and stay. A missing
+/// folder is a completed step.
+pub fn delete_data(home: &Path, browser: &io::Result<Released>, steps: Steps) -> Result<(), Error> {
+    delete_app_folders(home, browser, steps)?;
+    Native::delete_extra_data(home, steps)
 }
 
 /// Read-only: whether an existing protected directory under `home` (the connector's data and releases) and its
@@ -103,43 +82,21 @@ pub fn check_tree(home: &Path, path: &Path) -> Result<(), &'static str> {
     }
 }
 
-/// What differs per OS. Hosts without more data than their folders, and without self-removal, keep the defaults.
+/// What the OS keeps for the app beyond its folders. Hosts with nothing more keep the default.
 trait Os {
-    /// The home of the account running the app, as the OS account database records it (never `HOME`), or `None`
-    /// where there is none to check against; then [`home`] refuses.
-    fn account_home() -> Option<PathBuf> {
-        None
-    }
-
-    /// Tauri's `app_log_dir` for this home and local data folder: `<local>/<id>/logs` (Linux, Windows).
-    fn log_dir(_home: &Path, local: &Path) -> PathBuf {
-        local.join(IDENTIFIER).join("logs")
-    }
-
-    /// All the app's data: by default, exactly [`delete_app_folders`].
-    fn delete_data(browser: &io::Result<Released>, steps: Steps) -> Result<(), Error> {
-        delete_app_folders(browser, steps)
-    }
-
-    /// Whether this host can remove the app itself.
-    const UNINSTALLABLE: bool = false;
-
-    /// Whether the running copy can be removed now; only asked where [`UNINSTALLABLE`](Self::UNINSTALLABLE).
-    fn check_uninstall() -> Result<(), Error> {
-        Err(Error::Unsupported)
-    }
-
-    /// Remove the app itself, checking it again first.
-    fn uninstall() -> Result<(), Error> {
-        Err(Error::Unsupported)
+    /// Delete it inside the account home `home`, reporting each step to `steps`.
+    fn delete_extra_data(_home: &Path, _steps: Steps) -> Result<(), Error> {
+        Ok(())
     }
 }
 
-fn accept_home(home: Option<PathBuf>, account: Option<PathBuf>) -> Result<PathBuf, &'static str> {
-    match (home, account) {
-        (Some(home), Some(account)) if home == account => Ok(home),
+/// The app folders every OS has, once `home` is checked to still be the account home.
+fn delete_app_folders(home: &Path, browser: &io::Result<Released>, steps: Steps) -> Result<(), Error> {
+    let places = match account::home() {
+        Ok(account) if account == home => Places::native(account),
         _ => Err("unsafe-home"),
-    }
+    };
+    delete_folders(places, browser, steps)
 }
 
 /// Delete the folders of `places`, or report why there are none before deleting anything.
@@ -192,15 +149,14 @@ struct Folders {
 }
 
 impl Places {
-    /// For the account `home` ([`home`]).
+    /// For the account `home` (`account::home`).
     fn native(home: PathBuf) -> Result<Self, &'static str> {
         let unavailable = "reset.unavailable";
-        let local = dirs::data_local_dir().ok_or(unavailable)?;
         let webview = webview_data::locations(&home).map_err(|_| unavailable)?.paths().to_vec();
         Ok(Self {
             data: dirs::data_dir().ok_or(unavailable)?.join(IDENTIFIER),
             cache: dirs::cache_dir().ok_or(unavailable)?.join(IDENTIFIER),
-            logs: Native::log_dir(&home, &local),
+            logs: dirs::data_local_dir().ok_or(unavailable)?.join(IDENTIFIER).join("logs"),
             models: sidevoice_platform::data_dir::models_dir().ok_or(unavailable)?,
             webview,
             home,
@@ -341,14 +297,15 @@ mod tests {
         Files::create_private(path, b"preserve outside owned names").unwrap();
     }
 
-    /// macOS as `dirs`, Tauri, `data_dir` and `webview_data` resolve it for `home`.
-    fn macos(home: &Path) -> Places {
+    /// macOS as `dirs`, Tauri's common rule, `data_dir` and `webview_data` resolve it for `home`: the logs that rule
+    /// names are inside the app's data folder (macOS's own `~/Library/Logs/<id>` is one of its extras).
+    pub(super) fn macos(home: &Path) -> Places {
         let support = home.join("Library/Application Support");
         Places {
             home: home.to_path_buf(),
             data: support.join(IDENTIFIER),
             cache: home.join("Library/Caches").join(IDENTIFIER),
-            logs: home.join("Library/Logs").join(IDENTIFIER),
+            logs: support.join(IDENTIFIER).join("logs"),
             models: support.join("Sidevoice").join(sidevoice_platform::data_dir::MODELS),
             webview: vec![
                 support.join(IDENTIFIER),
@@ -358,7 +315,12 @@ mod tests {
         }
     }
 
-    fn named(folders: &Folders) -> Vec<(&'static str, PathBuf)> {
+    /// [`macos`] with the logs in a folder of their own, as on Windows (`<local data>/<id>/logs`).
+    fn separate_logs(home: &Path) -> Places {
+        Places { logs: home.join("AppData/Local").join(IDENTIFIER).join("logs"), ..macos(home) }
+    }
+
+    pub(super) fn named(folders: &Folders) -> Vec<(&'static str, PathBuf)> {
         folders.list.iter().map(|folder| (folder.name, folder.path.clone())).collect()
     }
 
@@ -377,10 +339,10 @@ mod tests {
         Err(io::Error::from(io::ErrorKind::WouldBlock))
     }
 
-    /// The macOS deletion set and order before this module, verbatim: `delete_data` there adds `saved-state`
-    /// (`~/Library/Saved Application State/dev.sidevoice.desktop.savedState`) after these, then the defaults.
+    /// The common folders on macOS; the macOS extras (`app_data/macos.rs`) follow them with `logs`, `saved-state`
+    /// and `preferences`, which together are the previous deletion set and order verbatim.
     #[test]
-    fn the_macos_folders_are_exactly_the_previous_list() {
+    fn the_common_macos_folders_are_the_previous_list_before_its_extras() {
         let home = Path::new("/Users/ana");
         let models = home.join("Library/Application Support/Sidevoice").join(sidevoice_platform::data_dir::MODELS);
         assert_eq!(
@@ -390,7 +352,6 @@ mod tests {
                 ("models", models.clone()),
                 ("webview", home.join("Library/WebKit/dev.sidevoice.desktop")),
                 ("cache", home.join("Library/Caches/dev.sidevoice.desktop")),
-                ("logs", home.join("Library/Logs/dev.sidevoice.desktop")),
             ]
         );
         assert_eq!(models, Path::new("/Users/ana/Library/Application Support/Sidevoice/Models"));
@@ -400,10 +361,11 @@ mod tests {
     #[test]
     fn an_alternate_home_is_refused_before_anything_is_deleted() {
         let (_temp, home) = fixture();
-        // A canonical, private, same-owner home restored inside the real one, supplied as `HOME`.
+        // A canonical, private, same-owner home restored inside the real one, supplied as `HOME`: never the home
+        // the account record names.
         let alternate = home.join("restored-account-home");
         directory(&alternate);
-        let places = macos(&alternate);
+        let places = separate_logs(&alternate);
         for path in [&places.data, &places.logs, &places.models.join("blobs")] {
             for ancestor in
                 path.ancestors().collect::<Vec<_>>().into_iter().rev().filter(|dir| dir.starts_with(&alternate))
@@ -414,27 +376,18 @@ mod tests {
             }
             put(&path.join("payload"));
         }
-        assert_eq!(accept_home(Some(alternate.clone()), Some(home.clone())), Err("unsafe-home"));
-        assert_eq!(accept_home(None, Some(home.clone())), Err("unsafe-home"));
-        assert_eq!(accept_home(Some(home.clone()), None), Err("unsafe-home"));
         let mut seen = Vec::new();
-        let deleted = delete_folders(
-            accept_home(Some(alternate.clone()), Some(home.clone())).map(|home| macos(&home)),
-            &busy(),
-            &mut |name, result| {
-                seen.push((name, result));
-                true
-            },
-        );
+        let deleted = delete_data(&alternate, &busy(), &mut |name, result| {
+            seen.push((name, result));
+            true
+        });
         assert!(matches!(deleted, Err(Error::Failed("unsafe-home"))));
         assert_eq!(seen, vec![("app-data", Err("unsafe-home"))]);
-        let places = macos(&alternate);
         for path in [&places.data, &places.logs, &places.models.join("blobs")] {
             assert!(path.join("payload").is_file());
         }
         // The account's own home is accepted and its folders go.
-        let accepted = accept_home(Some(alternate.clone()), Some(alternate.clone())).map(|home| macos(&home));
-        assert!(delete_folders(accepted, &busy(), &mut |_, _| true).is_ok());
+        assert!(delete_folders(Ok(separate_logs(&alternate)), &busy(), &mut |_, _| true).is_ok());
         assert!(!places.logs.exists() && !places.models.join("blobs").exists());
     }
 
@@ -463,7 +416,7 @@ mod tests {
 
     #[test]
     fn native_folders_are_inside_home_distinct_and_unnested() {
-        let Ok(folders) = home().and_then(Places::native).map(Folders::from) else { return };
+        let Ok(folders) = account::home().and_then(Places::native).map(Folders::from) else { return };
         for (index, folder) in folders.list.iter().enumerate() {
             assert!(folder.path.starts_with(&folders.home) && folder.path != folders.home);
             assert!(folders.list[index + 1..]
@@ -476,7 +429,7 @@ mod tests {
     #[test]
     fn only_the_folders_go_and_unreleased_browser_storage_stays() {
         let (_temp, home) = fixture();
-        let places = macos(&home);
+        let places = separate_logs(&home);
         for path in [&places.data, &places.webview[1], &places.cache, &places.logs, &places.models] {
             for ancestor in path.ancestors().collect::<Vec<_>>().into_iter().rev().filter(|dir| dir.starts_with(&home))
             {

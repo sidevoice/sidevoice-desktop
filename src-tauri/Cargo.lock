@@ -4633,6 +4633,7 @@ dependencies = [
  "libc",
  "log",
  "mach2",
+ "nix",
  "objc2",
  "objc2-app-kit",
  "objc2-av-foundation",

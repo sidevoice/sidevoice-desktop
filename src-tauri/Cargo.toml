@@ -63,13 +63,16 @@ log = "0.4"
 # `fetch`: its install's HTTPS client, for "Prepare this computer" (docs/LOCAL_HOST.md → Install).
 [target.'cfg(unix)'.dependencies]
 sidevoice-local-host = { path = "local-host", features = ["fetch"] }
+# The account home the user database records (platform/account/unix.rs), never `HOME`; already in the graph.
+nix = { version = "0.31", default-features = false, features = ["user"] }
 
 [target.'cfg(windows)'.dependencies]
 # The taskbar's colour, to draw the tray mark in the brand's look for it (src/tray.rs).
 winreg = "0.55"
 # Whether a mouse button went down elsewhere, to close the call controls card's panels, and whether the room is on another
-# virtual desktop (DWM cloaked), for the card (src/call_controls.rs).
-windows-sys = { version = "0.61", features = ["Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_Storage_FileSystem", "Win32_Graphics_Dwm", "Win32_UI_Controls", "Win32_UI_WindowsAndMessaging"] }
+# virtual desktop (DWM cloaked), for the card (src/call_controls.rs). The profile folder the system records for the
+# account (platform/account/windows.rs).
+windows-sys = { version = "0.61", features = ["Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_Storage_FileSystem", "Win32_Graphics_Dwm", "Win32_UI_Controls", "Win32_UI_WindowsAndMessaging", "Win32_Security", "Win32_UI_Shell"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # The typed Mach bindings (task_info, task_vm_info) for the process memory read (src/platform/process_memory/macos.rs).

@@ -1,4 +1,4 @@
-//! Tauri's Linux folders, the default deletion, and no self-removal: the trait's defaults.
+//! Linux keeps nothing for the app beyond its folders: the trait's default.
 
 use super::Os;
 

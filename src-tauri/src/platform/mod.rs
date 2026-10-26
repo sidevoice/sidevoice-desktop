@@ -21,8 +21,10 @@ pub mod tray;
 pub mod voice_holds;
 pub mod webview_diagnostics;
 
+pub mod account;
 pub mod app_data;
 pub mod confirmation;
 pub mod reset_availability;
 pub mod reset_handoff;
+pub mod uninstall;
 pub mod webview_data;
