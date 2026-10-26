@@ -7,20 +7,11 @@ use std::time::{Duration, Instant};
 use std::{io, thread};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
-#[cfg(target_os = "macos")]
-mod macos;
-#[cfg(target_os = "macos")]
-use macos::Os;
-
-#[cfg(target_os = "windows")]
-mod windows;
-#[cfg(target_os = "windows")]
-use windows::Os;
-
-#[cfg(target_os = "linux")]
-mod linux;
-#[cfg(target_os = "linux")]
-use linux::Os;
+#[cfg_attr(target_os = "macos", path = "webview_data/macos.rs")]
+#[cfg_attr(target_os = "windows", path = "webview_data/windows.rs")]
+#[cfg_attr(target_os = "linux", path = "webview_data/linux.rs")]
+mod imp;
+use imp::Os;
 
 /// The app's bundle identifier (`tauri.conf.json`), which names its browser storage on every host.
 const IDENTIFIER: &str = "dev.sidevoice.desktop";
