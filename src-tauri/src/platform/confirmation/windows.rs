@@ -7,9 +7,9 @@ use windows_sys::Win32::UI::{
     WindowsAndMessaging::{SendMessageW, IDCANCEL, IDOK},
 };
 
-use super::{Confirmation, ConfirmationKind, DialogStart};
+use super::{DialogStart, Native};
 
-pub struct NativeConfirmation;
+pub(super) struct Os;
 
 unsafe extern "system" fn dialog_event(hwnd: HWND, event: u32, _: WPARAM, _: LPARAM, data: isize) -> i32 {
     if event == TDN_CREATED as u32 {
@@ -24,10 +24,9 @@ unsafe extern "system" fn dialog_event(hwnd: HWND, event: u32, _: WPARAM, _: LPA
     0
 }
 
-impl Confirmation for NativeConfirmation {
-    fn show(kind: ConfirmationKind, start: DialogStart) -> bool {
-        let locale = sys_locale::get_locale().unwrap_or_default();
-        let (title, detail, cancel, action) = kind.words(&locale);
+impl Native for Os {
+    fn show(words: (&'static str, &'static str, &'static str, &'static str), start: DialogStart) -> bool {
+        let (title, detail, cancel, action) = words;
         let wide = |text: &str| text.encode_utf16().chain(Some(0)).collect::<Vec<_>>();
         let (title, detail, cancel, action) = (wide(title), wide(detail), wide(cancel), wide(action));
         let buttons = [
