@@ -211,20 +211,15 @@ async fn confirmed_reset(app: AppHandle, uninstall: bool) -> Answer {
         return Err(refused("reset.busy"));
     }
     if state.call.lock().unwrap().joined
-        || crate::local_host::installing(&app)
         || crate::updater::installing(&app)
         || app.try_state::<crate::engine_ipc::EngineState>().is_some_and(|engine| engine.jobs.busy())
     {
         end_exclusive(&app);
         return Err(refused("reset.busy"));
     }
-    // An app that cannot remove its own bundle (a disk image, a translocated or read-only copy) refuses
-    // before the confirmation and before any data is touched.
-    if uninstall {
-        if let Err(key) = removable_app_bundle() {
-            end_exclusive(&app);
-            return Err(refused(key));
-        }
+    if let Err(key) = refuse_before_confirmation(&app, uninstall) {
+        end_exclusive(&app);
+        return Err(refused(key));
     }
     if let Err(refusal) = require_confirmation(
         NativeConfirmation::confirm(
@@ -244,6 +239,25 @@ async fn confirmed_reset(app: AppHandle, uninstall: bool) -> Answer {
         end_exclusive(&app);
     }
     answer
+}
+
+/// The transaction's own refusals before the confirmation and before any data is touched: a connector install
+/// in progress, and an app that cannot remove its own bundle (a disk image, a translocated or read-only copy).
+#[cfg(target_os = "macos")]
+fn refuse_before_confirmation(app: &AppHandle, uninstall: bool) -> Result<(), &'static str> {
+    if crate::local_host::installing(app) {
+        return Err("reset.busy");
+    }
+    if uninstall {
+        removable_app_bundle()?;
+    }
+    Ok(())
+}
+
+/// The reset transaction exists only on macOS; `confirmed_reset` refuses before this elsewhere.
+#[cfg(not(target_os = "macos"))]
+fn refuse_before_confirmation(_: &AppHandle, _: bool) -> Result<(), &'static str> {
+    Err("reset.unavailable")
 }
 
 fn require_confirmation(accepted: bool) -> Result<(), Value> {
@@ -288,12 +302,6 @@ fn removable_app_bundle() -> Result<PathBuf, &'static str> {
         return Err("reset.app-unremovable");
     }
     Ok(bundle)
-}
-
-/// No other host has the reset transaction, so no bundle is removable; `confirmed_reset` refuses before this.
-#[cfg(not(target_os = "macos"))]
-fn removable_app_bundle() -> Result<PathBuf, &'static str> {
-    Err("reset.unavailable")
 }
 
 /// Finder's own move to the Trash (`NSFileManager trashItemAtURL:`), so the app can be put back from there.
