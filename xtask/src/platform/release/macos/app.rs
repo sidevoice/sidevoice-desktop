@@ -1,11 +1,10 @@
-//! `macos …`: the Apple-Silicon app and its .dmg, built, signed, checked and started as a release ships them
-//! (RELEASING.md, "macOS signing and notarization"). The probe build and the native flows are in macos_probe.rs.
+//! The macOS app and its .dmg, built, signed, checked and started as a release ships them (RELEASING.md, "macOS signing
+//! and notarization"). The probe build and the native flows are in probe.rs.
 
 use sidevoice_platform::fs::{Create, Files, Fs};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::platform::disk_image::{DiskImage, Host as DiskImageHost};
 use crate::platform::private_files::{PrivateCreation, PrivateFiles};
 use crate::util::{
     contains, copy_dir, ensure, fresh_dir, in_ci, mkdir, random_hex, read, read_bytes, read_secret, repo, required_env,
@@ -21,7 +20,7 @@ const IDENTIFIER: &str = "dev.sidevoice.desktop";
 /// Where the stand-in node (test/fixtures/fake-node.py) listens.
 pub const FAKE_NODE_PORT: &str = "8768";
 
-/// The bundle every `macos` command works on, as `tauri build --target aarch64-apple-darwin` leaves it.
+/// The bundle every `release` command works on, as `tauri build --target aarch64-apple-darwin` leaves it.
 pub fn app() -> PathBuf {
     repo().join("src-tauri/target").join(release_target().triple).join("release/bundle/macos/Sidevoice.app")
 }
@@ -31,7 +30,7 @@ pub fn binary() -> PathBuf {
     app().join("Contents/MacOS/sidevoice-desktop")
 }
 
-/// The .dmg `macos dmg` makes: `dist/Sidevoice_<version>_aarch64.dmg`.
+/// The .dmg `release package` makes: `dist/Sidevoice_<version>_aarch64.dmg`.
 pub fn dmg_path() -> Result<PathBuf> {
     Ok(repo().join("dist").join(format!("Sidevoice_{}_aarch64.dmg", version()?)))
 }
@@ -108,7 +107,7 @@ fn notary_key(dir: &SecretDir) -> Result<PathBuf> {
     }
 }
 
-/// `macos app [--signed] [--channel release|nightly|dev]`: the app bundle (hardened runtime,
+/// `release app [--signed] [--channel release|nightly|dev]`: the app bundle (hardened runtime,
 /// src-tauri/packaging/macos/Entitlements.plist), built for its channel (default `dev`). Ad-hoc signed; or, with `--signed`, signed by
 /// Tauri's bundler with the Developer ID (`APPLE_SIGNING_IDENTITY`; `APPLE_CERTIFICATE` and
 /// `APPLE_CERTIFICATE_PASSWORD`, imported into a keychain of the bundler's own, or else the login keychain's),
@@ -116,7 +115,10 @@ fn notary_key(dir: &SecretDir) -> Result<PathBuf> {
 /// stapled. A release's (signed only) or a nightly's also makes the update artifact ([`update_artifact`]).
 pub fn build_app(signed: bool, channel: Channel) -> Result<()> {
     let build = TauriBuild { target: Some(release_target().triple), bundles: "app", channel, ..TauriBuild::default() };
-    ensure(signed || channel != Channel::Release, "a release's app is signed: `macos app --signed --channel release`")?;
+    ensure(
+        signed || channel != Channel::Release,
+        "a release's app is signed: `release app --signed --channel release`",
+    )?;
     if signed {
         build_signed(build)?;
     } else {
@@ -277,12 +279,12 @@ pub const PROBE_ONLY: &[&str] = &[
     "SIDEVOICE_DEBUG_EXIT",
 ];
 
-/// `macos check-app [--signed]`: what a first open depends on, in the app as built: Info.plist, the signature (with
+/// `release check-app [--signed]`: what a first open depends on, in the app as built: Info.plist, the signature (with
 /// `--signed`: the Developer ID's, `APPLE_TEAM_ID`'s, timestamped, notarized and stapled, and Gatekeeper takes it),
 /// the entitlements, the icon (its entries also copied to dmg-screens/ for the record), arm64, and no CI probe.
 pub fn check_app(signed: bool) -> Result<()> {
     let app = app();
-    ensure(app.is_dir(), format!("{} is not there: `cargo xtask macos app` first", app.display()))?;
+    ensure(app.is_dir(), format!("{} is not there: `cargo xtask release app` first", app.display()))?;
     let team = if signed { Some(required_env("APPLE_TEAM_ID")?) } else { None };
     eprintln!("--- Info.plist");
     Cmd::new("plutil").arg("-p").arg(app.join("Contents/Info.plist")).run()?;
@@ -360,7 +362,7 @@ const ICON_SIZES: [&str; 10] = [
     "512x512@2x",
 ];
 
-/// `macos first-open`: first open, no settings: the bundled interface comes up in the real WKWebView, its controller
+/// `release first-open`: first open, no settings: the bundled interface comes up in the real WKWebView, its controller
 /// attached to the real web UI's store and actions and reaching the app over IPC; asking for the probe page changes
 /// nothing in a release.
 pub fn first_open() -> Result<()> {
@@ -381,7 +383,7 @@ pub fn first_open() -> Result<()> {
     ensure(has("ready: true"), "the interface's controller never came up")
 }
 
-/// `macos dmg [--signed]`: the .dmg, `dist/Sidevoice_<version>_aarch64.dmg`, with the brand's window (background,
+/// `release package [--signed]`: the .dmg, `dist/Sidevoice_<version>_aarch64.dmg`, with the brand's window (background,
 /// icon layout and volume icon: scripts/dmg-settings.py, dmgbuild), verified, and the app checked as shipped inside
 /// it. Without `--signed`, docs/FIRST_OPEN.txt goes beside it (`dist/LEEME-primera-apertura.txt`): how to open an app
 /// Gatekeeper does not know.
@@ -394,7 +396,7 @@ pub fn dmg(signed: bool) -> Result<()> {
         fs::remove_file(&old).map_err(|e| format!("{}: {e}", old.display()))?;
     }
     let dmg = dmg_path()?;
-    DiskImageHost.assemble(
+    assemble_disk_image(
         &work,
         &app(),
         [
@@ -526,7 +528,7 @@ fn signing_keychain(path: &str) -> bool {
     Path::new(path).ends_with(Path::new(SIGNING).join(KEYCHAIN))
 }
 
-/// `macos sign-dmg`: the .dmg signed with the Developer ID (`APPLE_SIGNING_IDENTITY`; from a keychain of this
+/// `release sign-package`: the .dmg signed with the Developer ID (`APPLE_SIGNING_IDENTITY`; from a keychain of this
 /// step's own holding `APPLE_CERTIFICATE`, or on a laptop without it, from the login keychain), notarized with
 /// `notarytool` (`APPLE_API_KEY`, `APPLE_API_ISSUER` and the key file) and stapled, so Gatekeeper opens it from a
 /// download without a word; then the image and the app inside it checked as a download has them. The keychain, the
@@ -538,7 +540,7 @@ pub fn sign_dmg() -> Result<()> {
     let key_id = required_env("APPLE_API_KEY")?;
     let issuer = required_env("APPLE_API_ISSUER")?;
     let dmg = dmg_path()?;
-    ensure(dmg.is_file(), format!("{} is not there: `cargo xtask macos dmg --signed` first", dmg.display()))?;
+    ensure(dmg.is_file(), format!("{} is not there: `cargo xtask release package --signed` first", dmg.display()))?;
     let keychain = match std::env::var("APPLE_CERTIFICATE") {
         Ok(certificate) if !certificate.is_empty() => Some(Keychain::with_certificate()?),
         _ if !in_ci() => None,
@@ -588,7 +590,7 @@ const SIGNING: &str = "sidevoice-signing";
 const KEYCHAIN: &str = "sidevoice-signing.keychain-db";
 const NOTARY: &str = "sidevoice-notary";
 
-/// `macos forget-secrets`: whatever a signing step that was cut short (cancelled, killed) left: its keychain (and its
+/// `release forget-secrets`: whatever a signing step that was cut short (cancelled, killed) left: its keychain (and its
 /// place on the search list), the certificate file, the notary's key file. Each step removes its own when it ends; CI
 /// also runs this at the end of the job, whatever happened.
 pub fn forget_secrets() -> Result<()> {
@@ -607,7 +609,7 @@ pub fn forget_secrets() -> Result<()> {
     Ok(())
 }
 
-/// `macos checksums`: `dist/SHA256SUMS.txt`, the SHA-256 of each .dmg in dist/ (`shasum -a 256 *.dmg`).
+/// `release checksums`: `dist/SHA256SUMS.txt`, the SHA-256 of each .dmg in dist/ (`shasum -a 256 *.dmg`).
 pub fn checksums() -> Result<()> {
     let dist = repo().join("dist");
     let dmgs: Vec<PathBuf> =
@@ -618,7 +620,7 @@ pub fn checksums() -> Result<()> {
     crate::util::write(&dist.join("SHA256SUMS.txt"), sums)
 }
 
-/// `macos dmg-screens` (informational): the .dmg's window as Finder shows it, light and dark, into dmg-screens/.
+/// `release package-screens` (informational): the .dmg's window as Finder shows it, light and dark, into dmg-screens/.
 /// AppleScript calls are cut off after 30 seconds (a permission prompt must not hang it); nothing here fails it but a
 /// missing .dmg.
 pub fn dmg_screens() -> Result<()> {
@@ -704,6 +706,38 @@ fn stapler(action: &str, path: impl AsRef<Path>) -> Result<()> {
         }
     }
     Cmd::new("xcrun").args(["stapler", action]).arg(path).run()
+}
+
+/// Writes `output` from the `.app` bundle `app` with `dmgbuild` (pinned, in a virtualenv of its own) and a `tiffutil`
+/// background, as scripts/dmg-settings.py expects: `background` is the window drawing at 1x and at 2x, `layout` the
+/// icon layout (`layout.json`) and `icon` the volume icon. `work` is a scratch directory the build may fill.
+fn assemble_disk_image(
+    work: &Path,
+    app: &Path,
+    background: [&Path; 2],
+    layout: &Path,
+    icon: &Path,
+    output: &Path,
+) -> Result<()> {
+    let venv = work.join("dmgbuild");
+    Cmd::new("python3").args(["-m", "venv"]).arg(&venv).run()?;
+    Cmd::new(venv.join("bin/pip")).args(["install", "--quiet", "dmgbuild==1.6.7"]).run()?;
+    // One TIFF with the 1x and 2x drawings: Finder picks the one for the screen.
+    let tiff = work.join("background.tiff");
+    Cmd::new("tiffutil").arg("-cathidpicheck").args(background).arg("-out").arg(&tiff).run()?;
+    Cmd::new(venv.join("bin/dmgbuild"))
+        .args(["-s", "scripts/dmg-settings.py"])
+        .arg("-D")
+        .arg(format!("app={}", app.display()))
+        .arg("-D")
+        .arg(format!("background={}", tiff.display()))
+        .arg("-D")
+        .arg(format!("layout={}", layout.display()))
+        .arg("-D")
+        .arg(format!("icon={}", icon.display()))
+        .arg("Sidevoice")
+        .arg(output)
+        .run()
 }
 
 #[cfg(test)]

@@ -587,7 +587,7 @@ impl TauriBuild<'_> {
 }
 
 /// Where the secrets directory `name` goes: under `RUNNER_TEMP` on a runner, the system's temporary directory
-/// elsewhere. A fixed place, so that `macos forget-secrets` finds what a run that was cut short left.
+/// elsewhere. A fixed place, so that `release forget-secrets` finds what a run that was cut short left.
 pub fn secret_path(name: &str) -> PathBuf {
     std::env::var_os("RUNNER_TEMP").map(PathBuf::from).unwrap_or_else(std::env::temp_dir).join(name)
 }

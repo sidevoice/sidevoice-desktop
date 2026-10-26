@@ -166,7 +166,7 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ needs.changes.outputs.channel == 'nightly' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.changes.outputs.channel == 'nightly' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
-        run: cargo xtask macos app --channel ${{ needs.changes.outputs.channel }}
+        run: cargo xtask release app --channel ${{ needs.changes.outputs.channel }}
       # Tauri's bundler imports the certificate into a keychain of its own, signs every binary with the hardened runtime
       # and the entitlements (src-tauri/packaging/macos/Entitlements.plist), then notarizes the app with the API key (the .p8 as a file
       # only the runner's user may read, removed when the step ends) and staples it.
@@ -184,15 +184,15 @@ jobs:
           # build (a manual `sign` run) makes none.
           TAURI_SIGNING_PRIVATE_KEY: ${{ needs.changes.outputs.channel != 'dev' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.changes.outputs.channel != 'dev' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
-        run: cargo xtask macos app --signed --channel ${{ needs.changes.outputs.channel }}
+        run: cargo xtask release app --signed --channel ${{ needs.changes.outputs.channel }}
       - name: Check what a first open depends on
         env:
           APPLE_TEAM_ID: ${{ needs.changes.outputs.sign == 'true' && secrets.APPLE_TEAM_ID || '' }}
-        run: cargo xtask macos check-app ${{ needs.changes.outputs.sign == 'true' && '--signed' || '' }}
+        run: cargo xtask release check-app ${{ needs.changes.outputs.sign == 'true' && '--signed' || '' }}
       - name: First open (no settings) — the bundled interface comes up in the real WKWebView
-        run: cargo xtask macos first-open
+        run: cargo xtask release first-open
       - name: Make the .dmg (the brand's window, with background, icon layout and volume icon)
-        run: cargo xtask macos dmg ${{ needs.changes.outputs.sign == 'true' && '--signed' || '' }}
+        run: cargo xtask release package ${{ needs.changes.outputs.sign == 'true' && '--signed' || '' }}
       # The image itself: signed with the Developer ID (from a keychain of the step's own, the bundler's being gone),
       # notarized and stapled, so Gatekeeper opens it from a download without a word.
       - name: Sign, notarize and staple the .dmg
@@ -204,9 +204,9 @@ jobs:
           APPLE_API_KEY: ${{ needs.changes.outputs.sign == 'true' && secrets.APPLE_API_KEY || '' }}
           APPLE_API_ISSUER: ${{ needs.changes.outputs.sign == 'true' && secrets.APPLE_API_ISSUER || '' }}
           APPLE_API_KEY_P8: ${{ needs.changes.outputs.sign == 'true' && secrets.APPLE_API_KEY_P8 || '' }}
-        run: cargo xtask macos sign-dmg
+        run: cargo xtask release sign-package
       - name: The .dmg's checksum
-        run: cargo xtask macos checksums
+        run: cargo xtask release checksums
       - name: Record produced bundle file lists
         run: cargo xtask packaging files src-tauri/target/aarch64-apple-darwin/release/bundle packaging-macos.txt
       - uses: actions/upload-artifact@v4
@@ -216,11 +216,11 @@ jobs:
       # Each signing step removes its keychain and key files when it ends; this catches one that was cut short.
       - name: Remove the signing keychain and the notary's key
         if: always() && needs.changes.outputs.sign == 'true'
-        run: cargo xtask macos forget-secrets
+        run: cargo xtask release forget-secrets
       - name: The .dmg window as Finder shows it (screenshots, light and dark; informational)
         continue-on-error: true
         timeout-minutes: 4
-        run: cargo xtask macos dmg-screens
+        run: cargo xtask release package-screens
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -259,7 +259,7 @@ jobs:
           path: target/web
           key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs', 'scripts/web-release.mjs') }}
       - name: Build the CI probe app (feature probe; never shipped)
-        run: cargo xtask macos probe-app
+        run: cargo xtask release probe-app
       - name: Record produced probe bundle file list
         run: cargo xtask packaging files src-tauri/target/aarch64-apple-darwin/release/bundle packaging-macos-probe.txt
       - uses: actions/upload-artifact@v4
@@ -271,13 +271,13 @@ jobs:
       - name: Reset cleanup safety tests (temporary directories only)
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib -- data::tests platform::webview_data --test-threads=1
       - name: The local host from the bundled page (stand-in core on its published socket, pairing, proxy, refusals)
-        run: cargo xtask macos local-host
+        run: cargo xtask release local-host
       - name: What the interface's window offers (probe page, same origin and permission rule)
-        run: cargo xtask macos probe
+        run: cargo xtask release probe
       - name: The call controls card over a full-screen editor (never activating, clicks, drag, typing, states)
-        run: cargo xtask macos card
+        run: cargo xtask release card
       - name: Restarting and quitting with a model on the GPU loaded (each process ends cleanly, no crash report)
-        run: cargo xtask macos exit
+        run: cargo xtask release exit
       # Informational for now: the settings-cycle step of this walk intermittently keeps 50 to 330 MiB after the models' idle
       # keep (about one run in two), with the host holding nothing (#145). It becomes a gate once that is fixed.
       # A run takes about 4.5 minutes; the app also hangs in the card-cycle step in about 40% of runs (#27), which used to
@@ -286,7 +286,7 @@ jobs:
       - name: The app's footprint stays flat over models, calls and setting changes (table, fails only on clear growth)
         continue-on-error: true
         timeout-minutes: 8
-        run: cargo xtask macos memory
+        run: cargo xtask release memory
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -319,11 +319,11 @@ jobs:
       - name: A call on the engine's real models through the app's adapter (recorded speech in, a reply out)
         env:
           SIDEVOICE_REAL_CALL_MODELS: ${{ runner.temp }}/real-call-models
-        run: cargo xtask macos voice-models
+        run: cargo xtask release voice-models
       - name: The footprint and Metal allocation stay flat over calls and changes of a call's settings (table, fails only on clear growth)
         env:
           SIDEVOICE_REAL_CALL_MODELS: ${{ runner.temp }}/real-call-models
-        run: cargo xtask macos voice-memory
+        run: cargo xtask release voice-memory
       - if: steps.models.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@v4
         with:
@@ -403,7 +403,7 @@ jobs:
         run: cargo xtask bundle --channel ${{ needs.changes.outputs.channel }}
       # The Windows app starts: the bundled interface comes up in WebView2 (no settings; a throwaway runner only).
       - name: First open (no settings), the bundled interface comes up
-        run: cargo xtask windows first-open
+        run: cargo xtask release first-open
       - name: Record produced bundle file lists
         run: cargo xtask packaging files src-tauri/target/release/bundle packaging-windows.txt
       - uses: actions/upload-artifact@v4

@@ -1,7 +1,7 @@
 //! The call's memory on the engine's real models (#145): the process's footprint, and what it holds on the GPU, at
 //! each step of a long session through the host the app runs (`VoiceState`, the same `open`, `update`, `say`,
 //! `dispose_call` and idle keep the commands use), over a stand-in for the devices that says a recorded sentence. Each
-//! step prints a line `memory phase=NAME footprint=N ...` (core `memory`), which `cargo xtask macos voice-memory`
+//! step prints a line `memory phase=NAME footprint=N ...` (core `memory`), which `cargo xtask release voice-memory`
 //! reads back and checks. Ignored unless asked for: it downloads the models and takes minutes.
 //!
 //! The host's idle minute is two seconds here, so "the models are let go after the call" is waited for, not assumed.
@@ -129,7 +129,7 @@ async fn report(phase: &str) {
 }
 
 #[test]
-#[ignore = "downloads real models and takes minutes; `cargo xtask macos voice-memory` runs it"]
+#[ignore = "downloads real models and takes minutes; `cargo xtask release voice-memory` runs it"]
 fn the_footprint_stays_flat_over_calls_and_changes() {
     let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build().unwrap();
     let kept = std::env::var_os("SIDEVOICE_REAL_CALL_MODELS").map(std::path::PathBuf::from);

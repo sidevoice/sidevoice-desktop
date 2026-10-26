@@ -32,7 +32,7 @@ secrets into the environment of the steps that need them, choose which steps run
   the app and on xtask), `test` (the bridge script and the Rust tests), `two-users` (CI only: it adds a user); and
   xtask's own tests, `cargo test --manifest-path xtask/Cargo.toml`.
 - `linux` and `windows` jobs: `cargo xtask bundle --channel C`, this host's installers.
-- `macos` job (the app and .dmg; not on a pull request): `cargo xtask macos app [--signed] --channel C`,
+- `macos` job (the app and .dmg; not on a pull request): `cargo xtask release app [--signed] --channel C`,
   `check-app [--signed]`, `first-open`, `dmg [--signed]`, `sign-dmg`, `checksums`, `forget-secrets`, `dmg-screens`.
   The only job with the Apple signing secrets.
 - `macos-native` job, beside it: on the CI-only probe build, `probe-app`, `local-host`, `probe`, `card`, `exit`, `memory`. It shares
@@ -46,12 +46,12 @@ secrets into the environment of the steps that need them, choose which steps run
 - `.github/actions/setup-rust`: `cargo xtask engine-rev` and `sherpa-libs`; release-please.yml and pr-title.yml:
   `release-pr-checks` and `release-pr-title`.
 
-On a laptop, `npm ci` first. The `macos` commands that start the app (`first-open`, `probe`,
+On a laptop, `npm ci` first. The `release` commands that start the app (`first-open`, `probe`,
 `card`) run it off a runner with a scratch home (`/tmp/svx-<step>`), never with this machine's own settings,
 pairing, local core or models; `probe` expects no provider key in the login keychain, as on a runner. Unsigned and
 probe builds ignore any `APPLE_*` variables in the environment. Every build is a `dev` build unless `--channel`
 says otherwise (Channels, below), and only a `release` or `nightly` build reads the updater's key. Ctrl-C unwinds
-cleanly; if a signing step was killed outright, `cargo xtask macos forget-secrets` removes its keychain and key files.
+cleanly; if a signing step was killed outright, `cargo xtask release forget-secrets` removes its keychain and key files.
 
 ## CI caches
 
@@ -72,7 +72,7 @@ writing its own would evict `main`'s and leave the next nightly to build from co
 
 ## Channels
 
-What a build is, decided when it is built: `--channel` of `cargo xtask macos app` and `bundle`, which the workflow
+What a build is, decided when it is built: `--channel` of `cargo xtask release app` and `bundle`, which the workflow
 sets from the run (`changes.channel`) and xtask hands to the app's build script (`SIDEVOICE_BUILD_CHANNEL`, with
 `SIDEVOICE_BUILD_COMMIT` and `SIDEVOICE_BUILD_DATE`; `src-tauri/build.rs` refuses anything else). The app says it to
 the page as `host.build` (docs/BRIDGE.md → "The build").
@@ -163,8 +163,8 @@ update, whose signature then does not match: nothing is installed, the check or 
 - **What a release (and a nightly) adds.** Only a `release` or `nightly` build makes them
   (`bundle.createUpdaterArtifacts`, passed by xtask as `--config`; such a build without the key fails before it
   starts):
-  - macOS (`macos app --signed --channel release`): `dist/Sidevoice_X.Y.Z_aarch64.app.tar.gz`, the signed, notarized
-    and stapled app, checked again after unpacking (signature, ticket, Gatekeeper); a nightly's (`macos app --signed
+  - macOS (`release app --signed --channel release`): `dist/Sidevoice_X.Y.Z_aarch64.app.tar.gz`, the signed, notarized
+    and stapled app, checked again after unpacking (signature, ticket, Gatekeeper); a nightly's (`release app --signed
     --channel nightly`) likewise;
   - Windows and Linux (`bundle --channel release`): the NSIS installer and the AppImage themselves.
 
@@ -198,7 +198,7 @@ from a fork never has the repository's secrets.)
 - Checked in the job: the Developer ID authority, the team, a secure timestamp, `stapler validate` and
   `spctl -a -vv` (`source=Notarized Developer ID`) on the app, on the .dmg, and on the app inside the .dmg.
 - The step's own keychain, the certificate file and the key file are removed when the step ends, whatever
-  happened, and `cargo xtask macos forget-secrets` removes what a step cut short left at the end of the job. The
+  happened, and `cargo xtask release forget-secrets` removes what a step cut short left at the end of the job. The
   bundler removes the keychain it made itself when it is done; one left by a bundler that failed
   half-way goes with the runner, a GitHub-hosted machine discarded after the job.
 
@@ -215,11 +215,11 @@ step's private scratch directory; cleanup removes the copy and preserves the ori
 
 ```sh
 npm ci
-cargo xtask macos app --signed
-cargo xtask macos check-app --signed      # needs APPLE_TEAM_ID
-cargo xtask macos dmg --signed
-cargo xtask macos sign-dmg
-cargo xtask macos checksums
+cargo xtask release app --signed
+cargo xtask release check-app --signed      # needs APPLE_TEAM_ID
+cargo xtask release package --signed
+cargo xtask release sign-package
+cargo xtask release checksums
 ```
 
 leaves the signed, notarized and stapled `dist/Sidevoice_X.Y.Z_aarch64.dmg` and its `dist/SHA256SUMS.txt`.
@@ -245,7 +245,7 @@ leaves the signed, notarized and stapled `dist/Sidevoice_X.Y.Z_aarch64.dmg` and 
 - Required check **PR title is a conventional commit**. release-please's own PR gets it through a dispatched run
   (its pushes start no workflow by themselves).
 
-`cargo xtask windows first-open` requires a fresh CI runner profile: it refuses to start if the
+`cargo xtask release first-open` requires a fresh CI runner profile: it refuses to start if the
 `dev.sidevoice.desktop` directory already exists in either Windows Known Folder (Roaming or Local AppData),
 so saved settings and WebView2 storage cannot make the first-open check pass. Setting `CI=true` alone
 does not bypass this check. Windows bundles made with `cargo xtask bundle` disable `GGML_NATIVE`

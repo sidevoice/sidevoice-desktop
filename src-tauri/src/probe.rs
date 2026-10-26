@@ -20,7 +20,7 @@ use tauri::{App, AppHandle, Assets, Context, Runtime};
 /// With `SIDEVOICE_DEBUG_EXIT=quit` or `=restart`, once the probe page logs its last line (`probe-exit`, a model on the
 /// GPU loaded): the app quits as the tray's Quit does, or restarts as an installed update does (`AppHandle::restart`
 /// from a thread of its own, src/updater.rs). The relaunched app inherits this environment, told `quit`: it quits after
-/// its own run. `macos exit` checks that both end cleanly (#121).
+/// its own run. `release exit` checks that both end cleanly (#121).
 pub fn exit_on(app: &AppHandle, line: &str) {
     if !crate::debugging() || !line.starts_with("probe-exit ") {
         return;
@@ -41,7 +41,7 @@ pub fn exit_on(app: &AppHandle, line: &str) {
 }
 
 /// With `SIDEVOICE_DEBUG_EXIT`, from the start: a handler `exit()` runs after the static destructors of the C++
-/// libraries linked in (the platform registers it, src/platform/diagnostics.rs). `macos exit` checks that its
+/// libraries linked in (the platform registers it, src/platform/diagnostics.rs). `release exit` checks that its
 /// line is in the log (#121).
 pub fn watch_exit_handlers() {
     if !crate::debugging() || std::env::var_os("SIDEVOICE_DEBUG_EXIT").is_none() {
@@ -52,7 +52,7 @@ pub fn watch_exit_handlers() {
 
 /// With `SIDEVOICE_DEBUG_PAGE=memory.html`, at each line `probe-memory PHASE` the page logs: the app's memory then,
 /// printed as `memory phase=PHASE ...` (core `memory`), on a thread of its own (`vmmap` takes a second or two; the page
-/// waits for it). `macos memory` reads the lines back (#145).
+/// waits for it). `release memory` reads the lines back (#145).
 pub fn memory_on(app: &tauri::AppHandle, line: &str) {
     let Some(phase) = line.strip_prefix("probe-memory ") else { return };
     if !crate::debugging() {
