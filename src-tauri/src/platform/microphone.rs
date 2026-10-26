@@ -11,7 +11,9 @@ mod imp;
 #[cfg(target_os = "windows")]
 #[path = "microphone/windows.rs"]
 mod imp;
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "linux")]
+#[path = "microphone/linux.rs"]
+mod imp;
 pub use imp::NativeMicrophone;
 
 #[cfg(target_os = "macos")]
@@ -19,7 +21,7 @@ pub const SETTINGS_URL: Option<&str> =
     Some("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone");
 #[cfg(target_os = "windows")]
 pub const SETTINGS_URL: Option<&str> = Some("ms-settings:privacy-microphone");
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(target_os = "linux")]
 pub const SETTINGS_URL: Option<&str> = None;
 
 #[derive(Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -66,22 +68,6 @@ impl BackendObservation {
     }
 }
 
-// Unknown registry keys must not turn a browser permission hint into an OS grant. A successful capture
-// is stronger evidence; it still cannot override an explicit privacy denial read in this operation.
-#[cfg(any(target_os = "windows", test))]
-fn privacy_state(backend: BackendObservation, values: [Option<String>; 2]) -> AccessState {
-    if values.iter().any(|value| value.as_deref() == Some("Deny")) {
-        return AccessState::Denied;
-    }
-    let captured = backend.captured;
-    let state = backend.state();
-    if state == AccessState::Granted && !captured && values.iter().any(|value| value.as_deref() != Some("Allow")) {
-        AccessState::Unavailable
-    } else {
-        state
-    }
-}
-
 pub trait MicrophoneAccess {
     /// Inspect without prompting. Re-read OS privacy policy every time; combine it with a fresh capture/backend
     /// observation. Denial takes precedence over absence. An unreadable backend never means granted.
@@ -104,13 +90,6 @@ pub trait MicrophoneAccess {
         app.opener().open_url(url, None::<&str>)
     }
 }
-
-// Linux has no independent TCC-style prompt: WebKit's existing capture backend supplies the outcome.
-// No empty OS file and no second PipeWire/Pulse connection or portal.
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-pub struct NativeMicrophone;
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-impl MicrophoneAccess for NativeMicrophone {}
 
 #[cfg(test)]
 mod tests {
@@ -159,37 +138,6 @@ mod tests {
                 "{error}"
             );
         }
-    }
-
-    #[test]
-    fn privacy_changes_override_backend_hints_and_unknown_is_not_a_grant() {
-        let allowed = || Some("Allow".into());
-        let denied = || Some("Deny".into());
-        let query = || observation(AccessState::Granted, Some(true));
-        assert_eq!(privacy_state(query(), [allowed(), allowed()]), AccessState::Granted);
-        assert_eq!(privacy_state(query(), [allowed(), denied()]), AccessState::Denied);
-        assert_eq!(privacy_state(query(), [denied(), allowed()]), AccessState::Denied);
-        assert_eq!(privacy_state(query(), [allowed(), allowed()]), AccessState::Granted);
-        assert_eq!(privacy_state(query(), [None, allowed()]), AccessState::Unavailable);
-        assert_eq!(privacy_state(query(), [allowed(), Some("future value".into())]), AccessState::Unavailable);
-        assert_eq!(
-            privacy_state(
-                BackendObservation { captured: true, has_device: Some(true), ..Default::default() },
-                [None, None]
-            ),
-            AccessState::Granted
-        );
-        assert_eq!(
-            privacy_state(
-                BackendObservation { captured: true, has_device: Some(true), ..Default::default() },
-                [None, denied()]
-            ),
-            AccessState::Denied
-        );
-        assert_eq!(
-            privacy_state(observation(AccessState::Granted, Some(false)), [allowed(), denied()]),
-            AccessState::Denied
-        );
     }
 
     #[test]
