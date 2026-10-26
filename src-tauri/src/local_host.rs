@@ -154,7 +154,7 @@ pub fn installing(app: &AppHandle) -> bool {
 #[cfg(unix)]
 mod imp {
     use super::{refusal, unsupported, Answer};
-    use crate::platform::host_capabilities::CAPABILITIES;
+    use crate::platform::host_capabilities;
     use serde_json::{json, Value};
     use sidevoice_local_host::host::{Action, Config, Installing, LocalHost};
     use sidevoice_local_host::install;
@@ -171,7 +171,7 @@ mod imp {
     }
 
     pub fn setup(app: &AppHandle) {
-        if !CAPABILITIES.local_host {
+        if !host_capabilities::capabilities().local_host {
             return;
         }
         // `D`, by the rule every Sidevoice program shares (`SIDEVOICE_DATA_DIR`, else the OS standard place).

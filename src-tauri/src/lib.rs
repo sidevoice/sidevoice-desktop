@@ -31,7 +31,7 @@ use crate::platform::update_eligibility;
 
 use crate::platform::application;
 use crate::platform::computer_name;
-use crate::platform::host_capabilities::CAPABILITIES;
+use crate::platform::host_capabilities;
 use crate::platform::media_controls;
 use crate::platform::shortcut_access;
 use crate::platform::webview_diagnostics;
@@ -349,7 +349,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             platform::microphone::settings_available(),
             &webview_diagnostics::available(),
             media_controls::support(),
-            CAPABILITIES,
+            host_capabilities::capabilities(),
         ));
     #[cfg(feature = "probe")]
     let builder = match probe::local_host_flow() {
@@ -368,7 +368,8 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
                 _ => media::Capture::Other,
             };
             let page = committed_origin.lock().unwrap().clone();
-            let decision = media::decide(capture, page.as_deref(), APP_ORIGIN, !CAPABILITIES.voice);
+            let decision =
+                media::decide(capture, page.as_deref(), APP_ORIGIN, !host_capabilities::capabilities().voice);
             debug(&format!("media {capture:?} for {page:?}: {decision:?}"));
             match decision {
                 media::Decision::Allow => PermissionResponse::Allow,
