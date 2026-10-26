@@ -37,6 +37,10 @@ sys-locale = "0.3"
 same-file = "1"
 # The local data folder Tauri gives the webview (`app_local_data_dir`), for its storage removal; already in Tauri's graph.
 dirs = "7"
+# The app-data deletion's interim check between home and the held parent (platform/app_data.rs): canonical paths
+# without Windows verbatim prefixes, and the volume a directory is on.
+dunce = "1"
+file-id = "0.2"
 # Probe-only RSS observations use the maintained portable API; no GPU estimates.
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 # Friendly computer names via the OS APIs (platform/host); already in the shared platform graph.
@@ -62,14 +66,16 @@ cpal = { version = "0.18", default-features = false }
 # `fetch`: its install's HTTPS client, for "Prepare this computer" (docs/LOCAL_HOST.md → Install).
 [target.'cfg(unix)'.dependencies]
 sidevoice-local-host = { path = "local-host", features = ["fetch"] }
+# The account home the user database records (platform/account/unix.rs), never `HOME`; already in the graph.
+nix = { version = "0.31", default-features = false, features = ["user"] }
 
 [target.'cfg(windows)'.dependencies]
 # The taskbar's colour, to draw the tray mark in the brand's look for it (src/tray.rs).
 winreg = "0.55"
 # Whether a mouse button went down elsewhere, to close the call controls card's panels, and whether the room is on another
 # virtual desktop (DWM cloaked), for the card (src/call_controls.rs); the microphone device worker's COM apartment
-# (src/platform/microphone/windows.rs).
-windows-sys = { version = "0.61", features = ["Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_Storage_FileSystem", "Win32_Graphics_Dwm", "Win32_UI_Controls", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_System_Com"] }
+# (src/platform/microphone/windows.rs). The profile folder the system records for the account (platform/account/windows.rs).
+windows-sys = { version = "0.61", features = ["Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_Storage_FileSystem", "Win32_Graphics_Dwm", "Win32_UI_Controls", "Win32_UI_WindowsAndMessaging", "Win32_Security", "Win32_UI_Shell", "Win32_System_Com"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # The typed Mach bindings (task_info, task_vm_info) for the process memory read (src/platform/diagnostics/macos.rs).
