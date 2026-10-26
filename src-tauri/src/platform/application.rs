@@ -3,14 +3,19 @@
 use tauri::{AppHandle, Builder};
 
 #[cfg(target_os = "macos")]
-#[path = "application/macos.rs"]
-mod imp;
-#[cfg(not(target_os = "macos"))]
-mod imp {
-    pub struct Os;
-    impl super::Application for Os {}
-}
-pub use imp::Os as NativeApplication;
+mod macos;
+#[cfg(target_os = "macos")]
+pub use macos::Os as NativeApplication;
+
+#[cfg(target_os = "windows")]
+mod windows;
+#[cfg(target_os = "windows")]
+pub use windows::Os as NativeApplication;
+
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::Os as NativeApplication;
 
 pub trait Application {
     /// Install single-instance handling before launch. A second launch shows, restores and focuses the room.

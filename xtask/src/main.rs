@@ -8,6 +8,8 @@
 //!
 //! - `web`: the web interface at the pin (web.pin.json), into ui/voice/ (`npm run web`). Reads
 //!   `SIDEVOICE_WEB_ATTESTATION` and `GH_TOKEN` (scripts/build-web.mjs).
+//! - `platform-guard`: reject OS-specific code outside platform (the separate Platform boundary CI job).
+//! - `platform-clippy`: deny OS API lints in the independent Platform boundary job.
 //! - `lint`: rustfmt and Clippy (warnings denied) on the app's workspace and on this tooling.
 //! - `test`: the bridge script's tests (`npm test`) and the app's Rust tests (`cargo test --workspace`).
 //! - `icons`: `npm run icons`, then the icons, tray marks and .dmg window must be what is committed.
@@ -33,7 +35,7 @@
 //! - `macos app [--signed] [--channel C]`: the app bundle, ad-hoc signed; with `--signed`, signed with the Developer
 //!   ID, notarized and stapled by Tauri's bundler. Reads `APPLE_SIGNING_IDENTITY`, `APPLE_API_KEY`,
 //!   `APPLE_API_ISSUER`, and `APPLE_API_KEY_P8` (the .p8's contents, written to a 0600 file removed when it ends) or
-//!   `APPLE_API_KEY_PATH` (a .p8 on a laptop); `APPLE_CERTIFICATE` and `APPLE_CERTIFICATE_PASSWORD` when set (else
+//!   `APPLE_API_KEY_PATH` (a private .p8 on a laptop, checked and staged in the same scratch directory); `APPLE_CERTIFICATE` and `APPLE_CERTIFICATE_PASSWORD` when set (else
 //!   the bundler signs from the login keychain). With `--signed --channel release` (or `--channel nightly`), also the
 //!   update artifact: dist/Sidevoice_<version>_aarch64.app.tar.gz and its `.sig`, checked unpacked as the app is.
 //! - `macos check-app [--signed]`: what a first open depends on: Info.plist, the signature (`--signed`: the Developer
@@ -99,6 +101,7 @@
 mod checks;
 mod macos;
 mod memory;
+mod platform_guard;
 mod probe;
 mod publish;
 mod util;
@@ -110,7 +113,8 @@ use util::Channel;
 
 pub type Result<T> = std::result::Result<T, String>;
 
-const USAGE: &str = "usage: cargo xtask web | lint | test | icons | two-users | bundle [--channel C] | engine-rev
+const USAGE: &str =
+    "usage: cargo xtask web | lint | platform-guard | platform-clippy | test | icons | two-users | bundle [--channel C] | engine-rev
   | sherpa-libs | macos app [--signed] [--channel C] | macos check-app [--signed] | macos first-open
   | macos dmg [--signed] | macos sign-dmg | macos checksums | macos forget-secrets | macos dmg-screens
   | macos probe-app | macos local-host | macos probe | macos voice-models | macos card | macos exit
@@ -127,12 +131,17 @@ fn macos(command: &str, step: impl FnOnce() -> Result<()>) -> Result<()> {
 }
 
 fn main() -> ExitCode {
-    util::on_interrupt();
+    if let Err(error) = util::on_interrupt() {
+        eprintln!("xtask: {error}");
+        return ExitCode::FAILURE;
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let result = match args.as_slice() {
         ["web"] => checks::web(),
         ["lint"] => checks::lint(),
+        ["platform-guard"] => platform_guard::check(),
+        ["platform-clippy"] => checks::clippy(true),
         ["test"] => checks::test(),
         ["test-support"] => checks::test_support(),
         ["icons"] => checks::icons(),

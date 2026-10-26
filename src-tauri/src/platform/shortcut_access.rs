@@ -5,17 +5,19 @@ use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_global_shortcut::{GlobalShortcut, Shortcut, ShortcutState};
 
 #[cfg(target_os = "macos")]
-#[path = "shortcut_access/macos.rs"]
-mod imp;
+mod macos;
+#[cfg(target_os = "macos")]
+pub use macos::Os as NativeShortcutAccess;
+
+#[cfg(target_os = "windows")]
+mod windows;
+#[cfg(target_os = "windows")]
+pub use windows::Os as NativeShortcutAccess;
+
 #[cfg(target_os = "linux")]
-#[path = "shortcut_access/linux.rs"]
-mod imp;
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-mod imp {
-    pub struct Os;
-    impl super::ShortcutAccess for Os {}
-}
-pub use imp::Os as NativeShortcutAccess;
+mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::Os as NativeShortcutAccess;
 
 #[derive(PartialEq, Eq)]
 pub enum LabelStyle {

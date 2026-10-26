@@ -4,7 +4,10 @@ pub mod update_eligibility;
 
 pub mod application;
 pub mod computer_name;
+pub mod media_controls;
 pub mod microphone;
+#[cfg(test)]
+pub mod pairing_storage;
 #[cfg(any(test, feature = "probe"))]
 pub mod process_memory;
 pub mod reveal;

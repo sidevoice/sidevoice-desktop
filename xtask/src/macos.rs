@@ -1,16 +1,19 @@
 //! `macos …`: the Apple-Silicon app and its .dmg, built, signed, checked and started as a release ships them
 //! (RELEASING.md, "macOS signing and notarization"). The probe build and the native flows are in probe.rs.
 
+use sidevoice_platform::fs::{Create, Files, Fs};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::util::{
-    contains, copy_dir, ensure, fresh_dir, in_ci, mkdir, private_file, random_hex, read, read_bytes, repo,
-    required_env, secret_path, sleep, version, wait_for, work, Channel, Cmd, PrivateFiles, SecretDir, TauriBuild,
+    contains, copy_dir, ensure, fresh_dir, in_ci, mkdir, random_hex, read, read_bytes, read_secret, repo, required_env,
+    secret_path, sleep, version, wait_for, work, Channel, Cmd, PrivateFiles, SecretDir, TauriBuild,
 };
 use crate::Result;
 
-pub const TRIPLE: &str = "aarch64-apple-darwin";
+pub fn release_target() -> &'static sidevoice_platform::target::ReleaseTarget {
+    sidevoice_platform::target::for_platform("macos", "aarch64").expect("published macOS target")
+}
 /// The app's identifier (tauri.conf.json): its directory under Application Support.
 const IDENTIFIER: &str = "dev.sidevoice.desktop";
 /// Where the stand-in node (test/fixtures/fake-node.py) listens.
@@ -18,7 +21,7 @@ pub const FAKE_NODE_PORT: &str = "8768";
 
 /// The bundle every `macos` command works on, as `tauri build --target aarch64-apple-darwin` leaves it.
 pub fn app() -> PathBuf {
-    repo().join("src-tauri/target").join(TRIPLE).join("release/bundle/macos/Sidevoice.app")
+    repo().join("src-tauri/target").join(release_target().triple).join("release/bundle/macos/Sidevoice.app")
 }
 
 /// The app's binary in [`app`].
@@ -89,12 +92,15 @@ impl AppHome {
 
 /// The notary's API key (App Store Connect) as the file `notarytool` and Tauri's bundler read: `APPLE_API_KEY_P8`
 /// (its contents) written to a file only this user may read, removed with `dir`; or, on a laptop, the file
-/// `APPLE_API_KEY_PATH` already names.
+/// `APPLE_API_KEY_PATH` names, read through a checked private handle and staged in the same private directory.
 fn notary_key(dir: &SecretDir) -> Result<PathBuf> {
     match std::env::var("APPLE_API_KEY_P8") {
         Ok(p8) if !p8.is_empty() => dir.file("AuthKey.p8", format!("{p8}\n").as_bytes()),
         _ => match std::env::var_os("APPLE_API_KEY_PATH") {
-            Some(path) if Path::new(&path).is_file() => Ok(path.into()),
+            Some(path) => {
+                let bytes = read_secret(Path::new(&path))?;
+                dir.file("AuthKey.p8", &bytes)
+            }
             _ => Err("neither APPLE_API_KEY_P8 nor APPLE_API_KEY_PATH (a file) is set (RELEASING.md)".into()),
         },
     }
@@ -107,7 +113,7 @@ fn notary_key(dir: &SecretDir) -> Result<PathBuf> {
 /// notarized with the API key (`APPLE_API_KEY`, `APPLE_API_ISSUER`, and the key file, see [`notary_key`]) and
 /// stapled. A release's (signed only) or a nightly's also makes the update artifact ([`update_artifact`]).
 pub fn build_app(signed: bool, channel: Channel) -> Result<()> {
-    let build = TauriBuild { target: Some(TRIPLE), bundles: "app", channel, ..TauriBuild::default() };
+    let build = TauriBuild { target: Some(release_target().triple), bundles: "app", channel, ..TauriBuild::default() };
     ensure(signed || channel != Channel::Release, "a release's app is signed: `macos app --signed --channel release`")?;
     if signed {
         build_signed(build)?;
@@ -477,7 +483,10 @@ impl Keychain {
         Cmd::new("security").args(["set-keychain-settings", "-lut", "3600"]).arg(path).run()?;
         Cmd::new("security").args(["unlock-keychain", "-p"]).secret(password).arg(path).run()?;
         let p12 = keychain.dir.path.join("certificate.p12");
-        Cmd::new("base64").arg("--decode").pipe(certificate.as_bytes(), private_file(&p12)?)?;
+        Cmd::new("base64").arg("--decode").pipe(
+            certificate.as_bytes(),
+            Files::open_private(&p12, Create::New).map_err(|e| format!("{}: {e}", p12.display()))?,
+        )?;
         let imported = Cmd::new("security")
             .arg("import")
             .arg(&p12)
