@@ -22,27 +22,30 @@ pub struct TrayImage {
 
 pub trait TrayAppearance {
     /// Generated brand artwork for the current panel theme. Windows re-reads its taskbar theme each time;
-    /// macOS tints templates itself; Linux uses the existing dark-panel fallback (no universal panel theme API).
-    fn image(state: TrayIcon) -> TrayImage;
+    /// macOS tints templates itself; Linux uses the existing dark-panel fallback (no universal panel theme API),
+    /// which is this default.
+    fn image(state: TrayIcon) -> TrayImage {
+        Self::colored(state, false)
+    }
+
+    /// Shared colored (non-template) artwork for a light or dark panel.
+    fn colored(state: TrayIcon, light: bool) -> TrayImage {
+        let bytes: &[u8] = match (light, state) {
+            (true, TrayIcon::Idle) => include_bytes!("../../packaging/shared/tray/light-idle.png"),
+            (true, TrayIcon::Live) => include_bytes!("../../packaging/shared/tray/light-live.png"),
+            (true, TrayIcon::Muted) => include_bytes!("../../packaging/shared/tray/light-muted.png"),
+            (false, TrayIcon::Idle) => include_bytes!("../../packaging/shared/tray/dark-idle.png"),
+            (false, TrayIcon::Live) => include_bytes!("../../packaging/shared/tray/dark-live.png"),
+            (false, TrayIcon::Muted) => include_bytes!("../../packaging/shared/tray/dark-muted.png"),
+        };
+        TrayImage { bytes, template: false }
+    }
 
     /// Handle a failed native tray creation. macOS/Windows propagate the error; Linux logs it and keeps the
     /// room usable without a tray. A panel without AppIndicator support may simply never display the icon.
     fn creation_failed(error: tauri::Error) -> tauri::Result<()> {
         Err(error)
     }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn colored(state: TrayIcon, light: bool) -> TrayImage {
-    let bytes: &[u8] = match (light, state) {
-        (true, TrayIcon::Idle) => include_bytes!("../../icons/tray/light-idle.png"),
-        (true, TrayIcon::Live) => include_bytes!("../../icons/tray/light-live.png"),
-        (true, TrayIcon::Muted) => include_bytes!("../../icons/tray/light-muted.png"),
-        (false, TrayIcon::Idle) => include_bytes!("../../icons/tray/dark-idle.png"),
-        (false, TrayIcon::Live) => include_bytes!("../../icons/tray/dark-live.png"),
-        (false, TrayIcon::Muted) => include_bytes!("../../icons/tray/dark-muted.png"),
-    };
-    TrayImage { bytes, template: false }
 }
 
 #[cfg(test)]

@@ -4607,6 +4607,7 @@ dependencies = [
  "gtk",
  "libc",
  "log",
+ "mach2",
  "objc2",
  "objc2-app-kit",
  "objc2-av-foundation",
@@ -4724,6 +4725,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "flate2",
+ "gethostname",
  "getrandom 0.3.4",
  "libc",
  "p256",

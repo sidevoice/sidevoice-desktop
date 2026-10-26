@@ -101,6 +101,8 @@
 mod checks;
 mod macos;
 mod memory;
+mod packaging;
+mod platform;
 mod platform_guard;
 mod probe;
 mod publish;
@@ -120,6 +122,7 @@ const USAGE: &str =
   | macos probe-app | macos local-host | macos probe | macos voice-models | macos card | macos exit
   | macos memory | macos voice-memory
   | windows first-open
+  | packaging compare BEFORE_REF | packaging files DIR OUTPUT
   | publish assets release TAG | publish assets nightly | publish release TAG | publish nightly
   | release-pr-title [BRANCH] | release-pr-checks
 (C: release, nightly or dev, the default; xtask/src/main.rs says what each does)";
@@ -145,6 +148,8 @@ fn main() -> ExitCode {
         ["test"] => checks::test(),
         ["test-support"] => checks::test_support(),
         ["icons"] => checks::icons(),
+        ["packaging", "compare", before] => packaging::compare(before),
+        ["packaging", "files", dir, output] => packaging::files(dir, output),
         ["two-users"] => checks::two_users(),
         ["bundle"] => checks::bundle(Channel::Dev),
         ["bundle", "--channel", c] => Channel::parse(c).and_then(checks::bundle),

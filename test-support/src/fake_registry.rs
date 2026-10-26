@@ -1,19 +1,12 @@
 //! A stand-in npm registry, for tests only: the two documents and the tarball of a `sidevoice` release
-//! built on the spot, served through [`Fetch`]; and the tarballs themselves, malformed ones included, written header by
+//! built on the spot, served through [`RegistryTransport`]; and the tarballs themselves, malformed ones included, written header by
 //! header so a test can put anything in a name.
+//! [`RegistryTransport`]: crate::platform::registry::RegistryTransport
 
-#[cfg(unix)]
-use sidevoice_local_host::{install::Failure, npm::Fetch};
-pub struct Response {
-    pub status: u16,
-    pub length: Option<u64>,
-    pub body: Box<dyn Read + Send>,
-}
 const REGISTRY: &str = "https://registry.npmjs.org";
 use base64::Engine as _;
 use sha2::{Digest, Sha512};
 use std::collections::HashMap;
-use std::io::Read;
 use std::io::Write;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -62,17 +55,17 @@ pub fn tarball(files: &[(&str, &[u8], u32)]) -> Vec<u8> {
 }
 
 #[derive(Clone)]
-struct Served {
-    status: u16,
-    body: Vec<u8>,
-    length: Option<u64>,
+pub(crate) struct Served {
+    pub(crate) status: u16,
+    pub(crate) body: Vec<u8>,
+    pub(crate) length: Option<u64>,
     /// The body comes 1 KiB at a time, each after this long.
-    delay: Option<Duration>,
+    pub(crate) delay: Option<Duration>,
 }
 
 pub struct FakeRegistry {
-    served: Mutex<HashMap<String, Served>>,
-    asked: Mutex<Vec<String>>,
+    pub(crate) served: Mutex<HashMap<String, Served>>,
+    pub(crate) asked: Mutex<Vec<String>>,
     tarball_url: String,
 }
 
@@ -134,44 +127,5 @@ impl FakeRegistry {
     /// Every URL asked, in order.
     pub fn asked(&self) -> Vec<String> {
         self.asked.lock().unwrap().clone()
-    }
-}
-
-struct Slow {
-    body: std::io::Cursor<Vec<u8>>,
-    delay: Duration,
-}
-
-impl Read for Slow {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        std::thread::sleep(self.delay);
-        let n = buf.len().min(1024);
-        self.body.read(&mut buf[..n])
-    }
-}
-
-impl FakeRegistry {
-    pub fn get(&self, url: &str) -> Response {
-        self.asked.lock().unwrap().push(url.to_string());
-        let Some(served) = self.served.lock().unwrap().get(url).cloned() else {
-            return Response { status: 404, length: None, body: Box::new(std::io::empty()) };
-        };
-        let body: Box<dyn Read + Send> = match served.delay {
-            Some(delay) => Box::new(Slow { body: std::io::Cursor::new(served.body), delay }),
-            None => Box::new(std::io::Cursor::new(served.body)),
-        };
-        Response { status: served.status, length: served.length, body }
-    }
-}
-
-#[cfg(unix)]
-impl Fetch for FakeRegistry {
-    fn get(&self, url: &str) -> Result<sidevoice_local_host::npm::Response, Failure> {
-        let response = FakeRegistry::get(self, url);
-        Ok(sidevoice_local_host::npm::Response {
-            status: response.status,
-            length: response.length,
-            body: response.body,
-        })
     }
 }
