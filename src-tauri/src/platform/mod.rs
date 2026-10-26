@@ -5,6 +5,7 @@ pub mod update_eligibility;
 pub mod computer_name;
 #[cfg(feature = "probe")]
 pub mod exit_diagnostics;
+pub mod host_capabilities;
 pub mod media_controls;
 pub mod microphone;
 #[cfg(test)]
