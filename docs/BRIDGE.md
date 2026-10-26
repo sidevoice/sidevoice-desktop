@@ -97,11 +97,15 @@ during a write. This operation does not provide atomic confinement against that 
 has direct access to the account's files. This limit does not relax the exact-root, no-follow and
 mount/device checks for a stable filesystem layout.
 
-Before uninstall, native creates a private operation journal and takes an interprocess reset lock.
-Model operations, voice model loads, credential writes, local-host actions and updater writes share an
-atomic admission gate with reset. The helper inherits the lock, acknowledges readiness before the app
-quits, records cleanup stages, and releases the lock only after its work ends. The helper marks the
-inherited lock descriptor close-on-exec, so the relaunched app acquires the lock independently.
+Before uninstall, native creates a private operation journal and takes the reset admission: two
+interprocess locks, `admission.lock` and `reset.lock`. Model operations, voice model loads, credential
+writes, local-host actions and updater writes share an atomic admission gate with reset. Nothing is
+inherited: the app keeps `admission.lock` and releases `reset.lock`, which the helper acquires on its own.
+The helper authenticates with a one-time capability on its stdin, receives the plan over the local channel,
+acknowledges readiness before the app quits, and cleans up only after an explicit commit, the channel's end
+and its own acquisition of `admission.lock`; it records cleanup stages and releases both locks after its
+work ends. Startup takes both locks independently, so a relaunched app waits for that. Authentication,
+cancellation and deadlines: [RESET_HANDOFF.md](RESET_HANDOFF.md).
 The helper records an awaiting-relaunch journal; only the new app after its setup publishes a complete
 report. A failed startup leaves the journal as a partial report for the next launch.
 

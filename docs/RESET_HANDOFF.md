@@ -70,18 +70,23 @@ job does not escape that job; an early helper death prevents cleanup and leaves 
 
 ## Platform boundary
 
-`reset_handoff.rs` declares the protocol interface and shared types. Its state-directory implementations
-are selected from `reset_handoff/{macos,windows,linux}.rs`; the shared checked filesystem, channel and
-child libraries still supply the protocol on every host. The existing real-uid macOS directory naming
+`reset_handoff.rs` declares the protocol interface and shared types. Availability (`false`) and the
+control directory (a sibling of the standard data root) are the trait's shared defaults; only
+`reset_handoff/macos.rs` overrides them. The shared checked filesystem, channel and child libraries supply
+the protocol on every host. The existing real-uid macOS directory naming
 uses the same `libc::getuid` call; this relocation adds no unsafe operation or native binding.
 
-Callers never ask which OS they run on. The reset and report commands, the native confirmation and the
+The reset and report commands, the native confirmation and the
 exclusive admission compile on every host and refuse with `reset.unavailable` before any confirmation or
 data access when `reset_available()` is false. The helper receives the authenticated plan on every host; when
 reset is unavailable it completes the committed wait and releases it without cleaning anything up. On macOS
 the existing order is kept: authenticate, observe WebKit children, await committed parent exit and
 admission, clean up, release admission before relaunch. The reset report lives in the handoff's private
 control directory (`state_dir()`), which on macOS is the same per-user temporary directory as before.
+
+The macOS transaction steps themselves (pre-confirmation bundle check, service and keychain before exit,
+cleanup after exit) are still selected by OS in `data.rs`; moving their native operations behind platform
+concerns is the reset transaction work that follows this handoff.
 
 The handoff protocol tests remain portable and included by the existing native fixture target; a path
 contract test also checks that control state cannot be removed with the standard data root. The macOS
