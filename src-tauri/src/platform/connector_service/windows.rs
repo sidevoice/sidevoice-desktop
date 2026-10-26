@@ -25,19 +25,22 @@ impl Os for Native {
 }
 
 /// What the CSV task list says of the job `name`: present when a task's leaf name is `<name>-…` in any folder.
-/// Decided only on a list read whole: any record that is not CSV, has another number of fields, or whose first field
-/// is not a task path (`\`, folders, a leaf, none empty) makes it unknown, and so does a list with no task row (every
-/// account sees the system's own tasks).
+/// Decided only on a list read whole: `schtasks /FO CSV` quotes every field and writes one record per line, so each
+/// non-empty line must be exactly one record of [`COLUMNS`] fields that, written back with every field quoted, gives
+/// the line itself (the csv reader recovers from broken quoting; this check does not), and its first field must be a
+/// task path (`\`, folders, a leaf, none empty). Anything else makes the whole answer unknown, and so does a list with
+/// no task row (every account sees the system's own tasks).
 fn seen_in(list: &[u8], name: &str) -> Seen {
     let prefix = format!("{}-", name.to_ascii_lowercase());
-    let mut reader = csv::ReaderBuilder::new().has_headers(false).flexible(true).from_reader(list);
+    let list = list.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(list);
     let mut rows = 0;
     let mut present = false;
-    for record in reader.byte_records() {
-        let Ok(record) = record else { return Seen::Unknown };
-        if record.len() != COLUMNS {
-            return Seen::Unknown;
+    for line in list.split(|&byte| byte == b'\n') {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        if line.is_empty() {
+            continue;
         }
+        let Some(record) = strict_record(line) else { return Seen::Unknown };
         let Some(leaf) = task_leaf(&record[0]) else { return Seen::Unknown };
         rows += 1;
         present |= leaf.to_ascii_lowercase().starts_with(&prefix);
@@ -47,6 +50,23 @@ fn seen_in(list: &[u8], name: &str) -> Seen {
         (_, true) => Seen::Present,
         (_, false) => Seen::Absent,
     }
+}
+
+/// The one record of [`COLUMNS`] fields in `line`, only when writing it back with every field quoted gives `line`.
+fn strict_record(line: &[u8]) -> Option<csv::ByteRecord> {
+    let mut reader = csv::ReaderBuilder::new().has_headers(false).flexible(true).from_reader(line);
+    let mut records = reader.byte_records();
+    let record = records.next()?.ok()?;
+    if records.next().is_some() || record.len() != COLUMNS {
+        return None;
+    }
+    let mut writer = csv::WriterBuilder::new()
+        .quote_style(csv::QuoteStyle::Always)
+        .terminator(csv::Terminator::Any(b'\n'))
+        .from_writer(Vec::new());
+    writer.write_byte_record(&record).ok()?;
+    let written = writer.into_inner().ok()?;
+    (written.strip_suffix(b"\n")? == line).then_some(record)
 }
 
 /// The leaf of a task path `\folder\…\leaf`, decoded; `None` when it is not one.
@@ -85,6 +105,8 @@ mod tests {
             Seen::Present
         );
         assert_eq!(seen("\"\\A, B\\other\",\"1/2/2026, 10:00\",\"Ready\"\r\n", "sidevoice-core"), Seen::Absent);
+        // A byte-order mark before the first record, and a last line with no terminator.
+        assert_eq!(seen("\u{FEFF}\"\\sidevoice-core-a\",\"N/A\",\"Ready\"", "sidevoice-core"), Seen::Present);
     }
 
     #[test]
@@ -100,6 +122,13 @@ mod tests {
             "\"\\Task\",\"N/A\",\"Ready\"\r\nINFO: something else\r\n",
             // Truncated mid-record.
             "\"\\Task\",\"N/A\",\"Ready\"\r\n\"\\Other\",\"N/",
+            // Broken quoting the csv reader would recover from: an unterminated last field, junk after a closing
+            // quote, a truncated last field, a field left unquoted.
+            "\"\\Task\",\"N/A\",\"Ready\"\r\n\"\\Other\",\"N/A\",\"Rea",
+            "\"\\Task\",\"N/A\",\"Ready\"\r\n\"\\Other\"junk,\"N/A\",\"Ready\"\r\n",
+            "\"\\Task\",\"N/A\",\"Ready\"\r\n\"\\Other\",\"N/A\",\"Ready",
+            "\"\\Task\",N/A,\"Ready\"\r\n",
+            "\"\\Task\",\"N/A\",\"Ready\" \r\n",
             // Task names that are not task paths.
             "\"Task\",\"N/A\",\"Ready\"\r\n",
             "\"\\\",\"N/A\",\"Ready\"\r\n",
