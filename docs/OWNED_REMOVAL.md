@@ -14,6 +14,9 @@ shutdown, connector-root validation, reporting and relaunch. The page still supp
   without following their targets.
 - Account home, model-store ancestors and the held removal parent are protected roots: links or replacements
   there cause refusal. Missing roots remain missing. Whole-list model preflight precedes all deletion.
+- `check_tree` is the one read-only preflight. Its caller says how the selected root is judged: a protected
+  root (the connector-uninstall data and release roots) must be an ordinary directory; a selected owned entry
+  (each model child) may itself be a link, which deletion unlinks. Home and ancestors are always protected.
 - Cleanup never elevates, launches a shell, kills writers or schedules deletion after reboot. Windows/Linux reset
   remain unavailable: their native implementations return no production cleanup scope. Portable tests provide
   an explicit temporary scope and exercise the same default trait operations and actual native checks.
@@ -40,12 +43,13 @@ the transaction's existing journal and retry behavior remain necessary.
 The production interface is included in the existing portable fixture target. Tests use only temporary roots:
 link targets outside the selected scope survive while other entries disappear; hard links preserve the external
 name; model siblings remain; unsafe model children block all selected deletion; missing/foreign/redirected roots,
-held-parent replacement and injected home/ancestor mount boundaries are refused. Actual privileged mount changes,
-installed-browser lifetime and reset/relaunch require native integration checks.
+held-parent replacement and injected home/ancestor mount boundaries are refused; the read-only preflight refuses a
+linked protected root and accepts a linked selected entry. Actual privileged mount changes, installed-browser
+lifetime and reset/relaunch require native integration checks.
 
-PR #216 currently moves the reset helper and imports `data::{remove_known, remove_model_store}` after changing
-only their visibility. This change removes those entrypoints: when the two PRs are integrated serially, its
-macOS helper must import `platform::owned_removal::{NativeOwnedRemoval, OwnedRemoval}` and call the trait directly.
-There are intentionally no old forwarding entrypoints. PR #218 owns browser storage selection and browser-writer
-release, so its overlapping webview caller changes must also be reconciled by that owner. Neither pending PR's
-implementation is changed here. This PR requires human integration review before merge.
+The reset helper (#216) and the browser-storage flow (#218) are integrated: the helper's post-exit cleanup in
+`data.rs` takes the scope from `NativeOwnedRemoval::scope`, removes browser storage through `webview_data` and
+every other step through the trait's `remove_known`/`remove_model_store`; there are no forwarding entrypoints. The
+account home, the app's native preferences and the app's own removal come from `platform::reset_cleanup`; the
+journal and report are written through the shared private-record writer. Reset remains unavailable on Windows and
+Linux. This is deletion code: it requires human review before merge.

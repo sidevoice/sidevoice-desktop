@@ -42,16 +42,24 @@ pub trait OwnedRemoval {
     /// home-to-parent guard, which the shared removal API (anchored at its held parent) does not provide.
     fn mount(file: &File, path: &Path) -> Result<Mount, &'static str>;
 
-    /// Preflight an existing tree under home without deleting anything. The selected root must be an ordinary
-    /// directory; missing roots succeed. Callers retain their own exact connector-root validation.
-    /// Only the macOS connector-uninstall preflight asks for it; no portable caller exists yet.
-    #[cfg(any(target_os = "macos", test))]
-    fn check_tree(path: &Path, home: &Path) -> Result<(), &'static str> {
+    /// Preflight an existing tree under home without deleting anything; a missing root succeeds. Home and every
+    /// ancestor up to the selected root's parent are held and checked (no link, replacement or mount crossing),
+    /// then the shared capability checks the whole selected tree. `root_may_be_link` says how the selected root
+    /// itself is judged:
+    /// - `false`: a protected root that must be an ordinary directory; a link or reparse entry there is refused
+    ///   (the connector-uninstall preflight).
+    /// - `true`: a selected owned entry, which may itself be a link that deletion unlinks without visiting its
+    ///   target ([`remove_model_store`](Self::remove_model_store) preflights every model child this way).
+    ///
+    /// Callers retain their own exact root validation.
+    fn check_tree(path: &Path, home: &Path, root_may_be_link: bool) -> Result<(), &'static str> {
         if let Some(tree) = Prepared::open::<Self>(path, home)? {
-            match HeldDirectory::open(path, Access::NotWritableByOthers) {
-                Ok(root) => root.check_contents(&[]).map_err(|_| "unsafe-directory")?,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-                Err(_) => return Err("unsafe-directory"),
+            if !root_may_be_link {
+                match HeldDirectory::open(path, Access::NotWritableByOthers) {
+                    Ok(held) => held.check_contents(&[]).map_err(|_| "unsafe-directory")?,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                    Err(_) => return Err("unsafe-directory"),
+                }
             }
             tree.check()?;
         }
@@ -59,8 +67,9 @@ pub trait OwnedRemoval {
     }
 
     /// Remove exactly one allowlisted desktop tree. Links are unlinked as entries, never followed; ordinary
-    /// hard links are unlinked without altering other names or their contents. The tree is checked with [`check_tree`](Self::check_tree) first; all selected descendants are
-    /// preflighted before deletion and checked again by the shared capability while deleting.
+    /// hard links are unlinked without altering other names or their contents. Home and the held ancestors are
+    /// checked again immediately before deletion; the shared capability preflights the selected entry and all its
+    /// descendants before deleting any, and checks them again while deleting.
     fn remove_known(path: &Path, home: &Path) -> Result<(), &'static str> {
         if path == home {
             return Err("home-root");
@@ -78,22 +87,20 @@ pub trait OwnedRemoval {
         Ok(())
     }
 
-    /// Preflight all three engine-owned children before deleting any, preserving the model root and every
-    /// unlisted sibling. An absent store stays absent. Redirected model roots are refused, not traversed.
+    /// Preflight all three engine-owned children as selected entries with [`check_tree`](Self::check_tree)
+    /// before deleting any, then remove each with [`remove_known`](Self::remove_known), preserving the model root
+    /// and every unlisted sibling. An absent store stays absent. Redirected model roots are refused, not traversed.
     fn remove_model_store(root: &Path, home: &Path) -> Result<(), &'static str> {
         let scope = Self::scope(home).ok_or("outside-known-dirs")?;
         if scope.models() != Some(root) {
             return Err("outside-known-dirs");
         }
-        let mut trees = Vec::new();
-        for child in Scope::model_children(root) {
-            if let Some(tree) = Prepared::open::<Self>(&child, home)? {
-                tree.check()?;
-                trees.push(tree);
-            }
+        let children = Scope::model_children(root);
+        for child in &children {
+            Self::check_tree(child, home, true)?;
         }
-        for tree in trees {
-            tree.remove()?;
+        for child in &children {
+            Self::remove_known(child, home)?;
         }
         Ok(())
     }
@@ -378,12 +385,18 @@ mod tests {
         directory(&tree);
         put(&tree.join("payload"));
         Files::symlink(temp.path().join("absent"), tree.join("link"));
-        assert_eq!(Fixture::check_tree(&tree, &home), Ok(()));
+        assert_eq!(Fixture::check_tree(&tree, &home, false), Ok(()));
+        assert_eq!(Fixture::check_tree(&tree, &home, true), Ok(()));
         assert!(tree.join("payload").is_file());
+        // A protected directory root refuses a link; a selected entry may be one (deletion only unlinks it).
         Files::symlink(&tree, home.join("alias"));
-        assert!(Fixture::check_tree(&home.join("alias"), &home).is_err());
-        assert!(Fixture::check_tree(&home, &home).is_err());
-        assert!(Fixture::check_tree(temp.path(), &home).is_err());
+        assert!(Fixture::check_tree(&home.join("alias"), &home, false).is_err());
+        assert_eq!(Fixture::check_tree(&home.join("alias"), &home, true), Ok(()));
+        assert!(tree.join("payload").is_file());
+        for may_be_link in [false, true] {
+            assert!(Fixture::check_tree(&home, &home, may_be_link).is_err());
+            assert!(Fixture::check_tree(temp.path(), &home, may_be_link).is_err());
+        }
     }
 
     struct ChangedMount;

@@ -3,18 +3,14 @@
 
 use serde_json::{json, Value};
 use std::fs;
-#[cfg(target_os = "macos")]
-use std::fs::OpenOptions;
-#[cfg(target_os = "macos")]
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-#[cfg(target_os = "macos")]
 use std::process::Command;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tauri::{AppHandle, Manager, Webview};
 
 use crate::platform::reset_availability::RESET_AVAILABLE;
+use crate::platform::reset_cleanup::{NativeResetCleanup, ResetCleanup};
 use crate::platform::reset_handoff::{self, Handoff};
 use crate::AppState;
 
@@ -260,7 +256,7 @@ fn refuse_before_confirmation(app: &AppHandle, uninstall: bool) -> Result<(), &'
         return Err("reset.busy");
     }
     if uninstall {
-        removable_app_bundle()?;
+        NativeResetCleanup::removable_app()?;
     }
     Ok(())
 }
@@ -273,71 +269,6 @@ fn refuse_before_confirmation(_: &AppHandle, _: bool) -> Result<(), &'static str
 
 fn require_confirmation(accepted: bool) -> Result<(), Value> {
     accepted.then_some(()).ok_or_else(|| refused("reset.cancelled"))
-}
-
-/// The `.app` bundle this executable runs from: `<bundle>.app/Contents/MacOS/<executable>`. Anything else (a
-/// development build, a path with `..`, a translocated copy) has no bundle the uninstall may remove.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn app_bundle_of(exe: &Path) -> Result<PathBuf, &'static str> {
-    let clean = exe.is_absolute()
-        && exe.components().all(|part| matches!(part, std::path::Component::RootDir | std::path::Component::Normal(_)));
-    if !clean || exe.components().any(|part| part.as_os_str() == "AppTranslocation") {
-        return Err("reset.app-unremovable");
-    }
-    let macos = exe.parent().filter(|dir| dir.file_name().is_some_and(|name| name == "MacOS"));
-    let contents = macos.and_then(Path::parent).filter(|dir| dir.file_name().is_some_and(|name| name == "Contents"));
-    let bundle = contents.and_then(Path::parent).filter(|dir| {
-        dir.extension().is_some_and(|ext| ext == "app") && dir.parent().is_some_and(|parent| parent != Path::new("/"))
-    });
-    bundle.map(Path::to_path_buf).ok_or("reset.app-unremovable")
-}
-
-/// This app's own bundle, checked again by the helper right before it moves it: a real directory under its
-/// canonical path, with its Info.plist, in a folder this user may write.
-#[cfg(target_os = "macos")]
-fn removable_app_bundle() -> Result<PathBuf, &'static str> {
-    use std::os::unix::ffi::OsStrExt;
-    let exe = std::env::current_exe().and_then(fs::canonicalize).map_err(|_| "reset.app-unremovable")?;
-    let bundle = app_bundle_of(&exe)?;
-    let meta = fs::symlink_metadata(&bundle).map_err(|_| "reset.app-unremovable")?;
-    if !meta.is_dir()
-        || meta.file_type().is_symlink()
-        || fs::canonicalize(&bundle).ok().as_deref() != Some(bundle.as_path())
-        || !bundle.join("Contents/Info.plist").is_file()
-    {
-        return Err("reset.app-unremovable");
-    }
-    let parent = bundle.parent().ok_or("reset.app-unremovable")?;
-    let parent = std::ffi::CString::new(parent.as_os_str().as_bytes()).map_err(|_| "reset.app-unremovable")?;
-    if unsafe { libc::access(parent.as_ptr(), libc::W_OK) } != 0 {
-        return Err("reset.app-unremovable");
-    }
-    Ok(bundle)
-}
-
-/// Finder's own move to the Trash (`NSFileManager trashItemAtURL:`), so the app can be put back from there.
-#[cfg(target_os = "macos")]
-fn move_to_trash(bundle: &Path) -> Result<(), &'static str> {
-    use objc2::{class, msg_send, rc::autoreleasepool, runtime::AnyObject};
-    use objc2_foundation::NSString;
-    let text = bundle.to_str().ok_or("reset.app-unremovable")?;
-    let moved = autoreleasepool(|_| unsafe {
-        let manager: *mut AnyObject = msg_send![class!(NSFileManager), defaultManager];
-        let path = NSString::from_str(text);
-        let url: *mut AnyObject = msg_send![class!(NSURL), fileURLWithPath: &*path, isDirectory: true];
-        if manager.is_null() || url.is_null() {
-            return false;
-        }
-        let resulting: *mut *mut AnyObject = std::ptr::null_mut();
-        let error: *mut *mut AnyObject = std::ptr::null_mut();
-        let moved: bool = msg_send![manager, trashItemAtURL: url, resultingItemURL: resulting, error: error];
-        moved
-    });
-    if moved {
-        Ok(())
-    } else {
-        Err("reset.app-trash-failed")
-    }
 }
 
 fn begin_reset(app: &AppHandle, uninstall: bool) -> Answer {
@@ -482,39 +413,15 @@ fn residual_connector_data(data: &Path) -> bool {
     false
 }
 
-#[cfg(target_os = "macos")]
+/// The journal or report: bounded JSON published whole or not at all by the shared private-record writer (staged
+/// private, synced, then renamed into the private control directory; links never followed).
 fn write_atomic_json(path: &Path, value: &Value) -> Result<(), &'static str> {
-    use std::os::unix::fs::OpenOptionsExt;
+    use sidevoice_platform::fs::{Files, Fs};
     let bytes = serde_json::to_vec(value).map_err(|_| "report-write")?;
     if bytes.len() > 16 * 1024 {
         return Err("report-write");
     }
-    let tmp = path.with_extension(format!("json.tmp-{}", std::process::id()));
-    let result = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&tmp)
-            .map_err(|_| "report-write")?;
-        file.write_all(&bytes).map_err(|_| "report-write")?;
-        file.sync_all().map_err(|_| "report-write")?;
-        fs::rename(&tmp, path).map_err(|_| "report-write")?;
-        std::fs::File::open(path.parent().ok_or("report-write")?)
-            .and_then(|dir| dir.sync_all())
-            .map_err(|_| "report-write")?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(tmp);
-    }
-    result
-}
-
-#[cfg(not(target_os = "macos"))]
-fn write_atomic_json(_: &Path, _: &Value) -> Result<(), &'static str> {
-    Err("report-write")
+    Files::write_private(path, &bytes).map_err(|_| "report-write")
 }
 
 #[cfg(target_os = "macos")]
@@ -577,31 +484,10 @@ fn run_checked_uninstall<T>(home: &Path, data: &Path, invoke: impl FnOnce() -> R
 
 #[cfg(target_os = "macos")]
 fn validate_uninstall_scope(home: &Path, data: &Path) -> Result<PathBuf, &'static str> {
-    if account_home().as_deref() != Some(home) {
+    if NativeResetCleanup::account_home().as_deref() != Some(home) {
         return Err("unsafe-home");
     }
     validate_uninstall_scope_at(home, data)
-}
-
-#[cfg(target_os = "macos")]
-fn account_home() -> Option<PathBuf> {
-    use std::os::unix::ffi::OsStrExt;
-    let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
-    let mut found: *mut libc::passwd = std::ptr::null_mut();
-    let mut buffer = vec![0u8; 16 * 1024];
-    let result =
-        unsafe { libc::getpwuid_r(libc::geteuid(), &mut entry, buffer.as_mut_ptr().cast(), buffer.len(), &mut found) };
-    if result != 0 || found.is_null() || entry.pw_dir.is_null() {
-        return None;
-    }
-    let bytes = unsafe { std::ffi::CStr::from_ptr(entry.pw_dir) }.to_bytes();
-    Some(PathBuf::from(std::ffi::OsStr::from_bytes(bytes)))
-}
-
-/// The account that runs the app has no home to clean on a host without reset cleanup.
-#[cfg(not(target_os = "macos"))]
-fn account_home() -> Option<PathBuf> {
-    None
 }
 
 /// `D` on macOS with no override: the OS's standard place of `sidevoice-platform`'s `data_dir`.
@@ -644,8 +530,9 @@ fn validate_uninstall_scope_at(home: &Path, data: &Path) -> Result<PathBuf, &'st
     } else if fs::symlink_metadata(&record).is_err_and(|error| error.kind() != std::io::ErrorKind::NotFound) {
         return Err("unsafe-record");
     }
-    NativeOwnedRemoval::check_tree(data, home)?;
-    NativeOwnedRemoval::check_tree(&expected_releases, home)?;
+    // Protected roots, not selected entries: each must be an ordinary directory, never a link.
+    NativeOwnedRemoval::check_tree(data, home, false)?;
+    NativeOwnedRemoval::check_tree(&expected_releases, home, false)?;
     Ok(expected_releases)
 }
 
@@ -697,14 +584,14 @@ fn clean_up_after_exit(
 ) {
     use crate::platform::owned_removal::{NativeOwnedRemoval, OwnedRemoval};
     use crate::platform::webview_data;
-    let Some(home) = account_home() else { return };
+    let Some(home) = NativeResetCleanup::account_home() else { return };
     let Some(scope) = NativeOwnedRemoval::scope(&home) else { return };
     let browser = webview_data::locations(&home).and_then(|paths| webview_data::capture(parent_pid, paths));
     let Ok(lock) = helper.await_exit() else { return };
     let Some(report) = report_path() else { return };
     let Some(initial_failed) = initial.get("failed").and_then(Value::as_array) else { return };
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return };
-    if account_home().as_deref() != Some(home.as_path()) {
+    if NativeResetCleanup::account_home().as_deref() != Some(home.as_path()) {
         return;
     }
     let mut completed = Vec::new();
@@ -737,8 +624,8 @@ fn clean_up_after_exit(
     conclude_reset(lock, &report, &journal, completed, failed, &initial, uninstall);
 }
 
-/// The macOS end of the transaction: the app's preferences, then the report with a relaunch or the Trash move.
-#[cfg(target_os = "macos")]
+/// The end of the transaction: the app's native preferences, then the report with a relaunch or the move of the
+/// app where it can be restored from. The native results come from [`ResetCleanup`]; the decisions stay here.
 fn conclude_reset(
     lock: crate::platform::reset_handoff::Admission,
     report: &Path,
@@ -748,23 +635,9 @@ fn conclude_reset(
     initial: &Value,
     uninstall: bool,
 ) {
-    let domains = Command::new("/usr/bin/defaults").arg("domains").output();
-    match domains {
-        Ok(output) if output.status.success() => {
-            let present =
-                String::from_utf8_lossy(&output.stdout).split(',').any(|d| d.trim() == "dev.sidevoice.desktop");
-            if !present
-                || Command::new("/usr/bin/defaults")
-                    .args(["delete", "dev.sidevoice.desktop"])
-                    .status()
-                    .is_ok_and(|s| s.success())
-            {
-                completed.push("preferences");
-            } else {
-                failed.push(json!({"step": "preferences", "key": "remove"}));
-            }
-        }
-        _ => failed.push(json!({"step": "preferences", "key": "inspect"})),
+    match NativeResetCleanup::remove_preferences() {
+        Ok(()) => completed.push("preferences"),
+        Err(key) => failed.push(json!({"step": "preferences", "key": key})),
     }
     let agents = initial.get("agents").cloned().unwrap_or_else(|| json!({}));
     let relaunch = || {
@@ -776,27 +649,13 @@ fn conclude_reset(
             .is_some()
     };
     if uninstall {
-        let trash = || removable_app_bundle().and_then(|bundle| move_to_trash(&bundle));
+        let trash = || NativeResetCleanup::removable_app().and_then(|app| NativeResetCleanup::trash(&app));
         finish_uninstall_at(report, journal, &completed, failed, agents, write_atomic_json, trash, relaunch);
     } else {
         finish_reset_at(report, journal, &completed, failed, agents, write_atomic_json, relaunch);
     }
 }
 
-/// Reset cleanup is offered only where `RESET_AVAILABLE`; no other host reaches this point.
-#[cfg(not(target_os = "macos"))]
-fn conclude_reset(
-    _: crate::platform::reset_handoff::Admission,
-    _: &Path,
-    _: &Path,
-    _: Vec<&str>,
-    _: Vec<Value>,
-    _: &Value,
-    _: bool,
-) {
-}
-
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn finish_reset_at(
     report: &Path,
     journal: &Path,
@@ -824,7 +683,6 @@ fn finish_reset_at(
 /// The uninstall's last step. Only a clean run moves the app to the Trash, and it leaves no report: nothing is left
 /// to read it. A failed data step (anything but a retained agent registration, which the confirmation already names)
 /// keeps the app, and so does a failed move: the app relaunches, as after `deleteAll()`, and reports it.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 #[allow(clippy::too_many_arguments)]
 fn finish_uninstall_at(
     report: &Path,
@@ -1166,32 +1024,6 @@ mod uninstall_tests {
 
     fn read(path: &Path) -> Value {
         serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
-    }
-
-    #[test]
-    fn only_a_real_app_bundle_can_be_removed() {
-        let ok = |exe: &str| app_bundle_of(Path::new(exe));
-        assert_eq!(
-            ok("/Applications/Sidevoice.app/Contents/MacOS/sidevoice-desktop"),
-            Ok(PathBuf::from("/Applications/Sidevoice.app"))
-        );
-        assert_eq!(
-            ok("/Users/ana/Applications/Sidevoice Nightly.app/Contents/MacOS/sidevoice-desktop"),
-            Ok(PathBuf::from("/Users/ana/Applications/Sidevoice Nightly.app"))
-        );
-        for refused in [
-            // A development build has no bundle.
-            "/Users/ana/sidevoice-desktop/src-tauri/target/debug/sidevoice-desktop",
-            "/Applications/Sidevoice/Contents/MacOS/sidevoice-desktop",
-            "/Applications/Sidevoice.app/Contents/Resources/sidevoice-desktop",
-            "/Applications/Sidevoice.app/MacOS/sidevoice-desktop",
-            "/Sidevoice.app/Contents/MacOS/sidevoice-desktop",
-            "/Applications/../Sidevoice.app/Contents/MacOS/sidevoice-desktop",
-            "Sidevoice.app/Contents/MacOS/sidevoice-desktop",
-            "/private/var/folders/x/T/AppTranslocation/ABC/d/Sidevoice.app/Contents/MacOS/sidevoice-desktop",
-        ] {
-            assert_eq!(ok(refused), Err("reset.app-unremovable"), "{refused}");
-        }
     }
 
     #[test]

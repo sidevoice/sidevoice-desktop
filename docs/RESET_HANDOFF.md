@@ -9,8 +9,10 @@ module: no trait, no per-OS files. Whether this host offers reset is a separate 
 cleanup exists. The handoff works on all three.
 
 The reset transaction itself (pre-exit service and keychain steps, post-exit cleanup, report/journal,
-relaunch or move to the Trash) stays in `data.rs`, unchanged. Webview lifecycle/removal and the portable
-transaction remain separate work. This change does not alter uninstall policy or elevate any process.
+relaunch or move to the Trash) is sequenced in `data.rs`. Its native pieces sit behind platform interfaces:
+`owned_removal` (owned directories), `webview_data` (browser storage) and `reset_cleanup` (account home, native
+preferences, removal of the app itself); the journal and report go through the shared private-record writer.
+The Windows and Linux cleanup remains separate work. This change does not alter uninstall policy or elevate any process.
 
 ## Protocol and lifetime
 

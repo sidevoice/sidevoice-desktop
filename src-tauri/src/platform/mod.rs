@@ -22,5 +22,6 @@ pub mod webview_diagnostics;
 pub mod confirmation;
 pub mod owned_removal;
 pub mod reset_availability;
+pub mod reset_cleanup;
 pub mod reset_handoff;
 pub mod webview_data;
