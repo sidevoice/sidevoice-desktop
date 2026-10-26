@@ -32,7 +32,6 @@ use crate::platform::update_eligibility::{NativeUpdateEligibility, UpdateEligibi
 use crate::platform::computer_name::{ComputerName, SystemComputerName};
 use crate::platform::media_controls::{MediaControls, NativeMediaControls};
 use crate::platform::webview_diagnostics::{NativeWebviewDiagnostics, WebviewDiagnostics};
-use platform::microphone::{MicrophoneAccess, NativeMicrophone};
 use serde_json::{json, Value};
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
 use sidevoice_desktop_core::build_info::BuildInfo;
@@ -364,7 +363,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             &build,
             SystemComputerName::read().as_deref(),
             &debug_options,
-            NativeMicrophone::SETTINGS_URL.is_some(),
+            platform::microphone::settings_available(),
             &NativeWebviewDiagnostics::available(),
             NativeMediaControls::support(),
         ));

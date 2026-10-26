@@ -14,7 +14,6 @@ mod imp;
 #[cfg(target_os = "linux")]
 #[path = "microphone/linux.rs"]
 mod imp;
-pub use imp::NativeMicrophone;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccessState {
@@ -68,27 +67,52 @@ fn resolve(permission: AccessState, devices: Devices) -> AccessState {
     }
 }
 
-pub trait MicrophoneAccess {
+/// What each OS says, and nothing else: the shared rule and the device list are applied once, below.
+trait Os {
     /// The fixed system microphone privacy page, where the OS has a standard URI for it.
     const SETTINGS_URL: Option<&'static str> = None;
 
-    /// Inspect without prompting. Re-reads the OS every time. Denial takes precedence over a missing device, and an
-    /// OS that cannot be read is `Unavailable`, never a grant.
-    fn state() -> Result<AccessState, &'static str>;
+    /// The OS's permission alone, re-read every time and without prompting. An OS that cannot be read is
+    /// `Unavailable`, never a grant.
+    fn permission() -> Result<AccessState, &'static str>;
 
     /// Ask for access. Only macOS has a prompt (AVFoundation, the first time; afterwards the stored answer). Elsewhere
     /// there is nothing to ask — Windows' unpackaged desktop apps and Linux have no consent prompt — so this is
-    /// `state`. It never edits privacy settings.
-    fn request() -> impl Future<Output = Result<AccessState, &'static str>> + Send {
-        async { Self::state() }
+    /// `permission`. It never edits privacy settings.
+    fn ask() -> impl Future<Output = Result<AccessState, &'static str>> + Send {
+        async { Self::permission() }
     }
+}
 
-    /// Open the fixed system microphone privacy page through the registered opener plugin. Opening it proves
-    /// nothing about access. UnsupportedPlatform on hosts without a standard settings URI (Linux).
-    fn open_settings<R: Runtime>(app: &AppHandle<R>) -> Result<(), tauri_plugin_opener::Error> {
-        let url = Self::SETTINGS_URL.ok_or(tauri_plugin_opener::Error::UnsupportedPlatform)?;
-        app.opener().open_url(url, None::<&str>)
-    }
+fn state_of<O: Os>(devices: Devices) -> Result<AccessState, &'static str> {
+    Ok(resolve(O::permission()?, devices))
+}
+
+async fn request_of<O: Os>(devices: Devices) -> Result<AccessState, &'static str> {
+    Ok(resolve(O::ask().await?, devices))
+}
+
+/// Inspect without prompting. Re-reads the OS every time. Denial takes precedence over a missing device, and an OS
+/// that cannot be read is `Unavailable`, never a grant.
+pub fn state() -> Result<AccessState, &'static str> {
+    state_of::<imp::Native>(input_devices())
+}
+
+/// Ask for access (see `Os::ask`), then apply the same rule as `state`.
+pub async fn request() -> Result<AccessState, &'static str> {
+    request_of::<imp::Native>(input_devices()).await
+}
+
+/// Whether this OS has a fixed microphone privacy page to open.
+pub fn settings_available() -> bool {
+    imp::Native::SETTINGS_URL.is_some()
+}
+
+/// Open the fixed system microphone privacy page through the registered opener plugin. Opening it proves nothing
+/// about access. UnsupportedPlatform on hosts without a standard settings URI (Linux).
+pub fn open_settings<R: Runtime>(app: &AppHandle<R>) -> Result<(), tauri_plugin_opener::Error> {
+    let url = imp::Native::SETTINGS_URL.ok_or(tauri_plugin_opener::Error::UnsupportedPlatform)?;
+    app.opener().open_url(url, None::<&str>)
 }
 
 #[cfg(test)]
@@ -122,12 +146,48 @@ mod tests {
         assert_eq!(Devices::from(false), Devices::Absent);
     }
 
+    struct Allowed;
+    impl Os for Allowed {
+        fn permission() -> Result<AccessState, &'static str> {
+            Ok(AccessState::Granted)
+        }
+    }
+
+    struct Refused;
+    impl Os for Refused {
+        const SETTINGS_URL: Option<&'static str> = Some("settings:microphone");
+        fn permission() -> Result<AccessState, &'static str> {
+            Ok(AccessState::Denied)
+        }
+    }
+
+    struct Broken;
+    impl Os for Broken {
+        fn permission() -> Result<AccessState, &'static str> {
+            Err("unreadable")
+        }
+    }
+
+    #[tokio::test]
+    async fn an_os_only_supplies_its_permission_and_the_shared_rule_does_the_rest() {
+        assert_eq!(state_of::<Allowed>(Devices::Present), Ok(AccessState::Granted));
+        assert_eq!(state_of::<Allowed>(Devices::Absent), Ok(AccessState::NoDevice));
+        assert_eq!(state_of::<Refused>(Devices::Absent), Ok(AccessState::Denied));
+        assert_eq!(state_of::<Broken>(Devices::Present), Err("unreadable"));
+        // Without an override, asking is reading.
+        assert_eq!(request_of::<Allowed>(Devices::Unknown).await, Ok(AccessState::Unavailable));
+        assert_eq!(request_of::<Refused>(Devices::Present).await, Ok(AccessState::Denied));
+        assert_eq!(request_of::<Broken>(Devices::Present).await, Err("unreadable"));
+        assert_eq!(Allowed::SETTINGS_URL, None);
+        assert!(Refused::SETTINGS_URL.is_some());
+    }
+
     #[cfg(not(target_os = "macos"))]
     #[tokio::test]
     async fn state_and_request_answer_without_a_prompt_whatever_the_machine_has() {
         // CI machines have no audio hardware: any answer is fine, a failure or a hang is not.
-        let state = NativeMicrophone::state().unwrap();
-        assert_eq!(NativeMicrophone::request().await.unwrap(), state);
-        assert_ne!(state, AccessState::NotDetermined, "only macOS has a prompt to wait for");
+        let answer = state().unwrap();
+        assert_eq!(request().await.unwrap(), answer);
+        assert_ne!(answer, AccessState::NotDetermined, "only macOS has a prompt to wait for");
     }
 }

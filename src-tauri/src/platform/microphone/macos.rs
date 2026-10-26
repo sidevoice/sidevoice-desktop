@@ -1,21 +1,21 @@
-//! AVFoundation permission and the one-shot request callback; device presence is the shared cpal enumeration.
-use super::{input_devices, resolve, AccessState, MicrophoneAccess};
+//! AVFoundation permission and the one-shot request callback.
+use super::{AccessState, Os};
 use block2::RcBlock;
 use objc2::runtime::Bool;
 use objc2_av_foundation::{AVAuthorizationStatus, AVCaptureDevice, AVMediaType, AVMediaTypeAudio};
 use std::sync::Mutex;
 use tokio::sync::oneshot;
 
-pub struct NativeMicrophone;
-impl MicrophoneAccess for NativeMicrophone {
+pub struct Native;
+impl Os for Native {
     const SETTINGS_URL: Option<&'static str> =
         Some("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone");
 
-    fn state() -> Result<AccessState, &'static str> {
-        Ok(resolve(permission(authorization()?), input_devices()))
+    fn permission() -> Result<AccessState, &'static str> {
+        Ok(permission(authorization()?))
     }
 
-    async fn request() -> Result<AccessState, &'static str> {
+    async fn ask() -> Result<AccessState, &'static str> {
         let granted = request_access()?.await.map_err(|_| "The system did not answer the microphone request.")?;
         Ok(if granted { AccessState::Granted } else { AccessState::Denied })
     }

@@ -1,7 +1,7 @@
 //! Room-only microphone command: `host.microphone`'s state, request and open-settings, on every OS. Native policy
 //! lives in platform/microphone.
 use crate::{
-    platform::microphone::{AccessState, MicrophoneAccess, NativeMicrophone},
+    platform::microphone::{self as native, AccessState},
     refusal,
 };
 use serde_json::{json, Value};
@@ -11,10 +11,10 @@ use tauri::{AppHandle, Webview};
 pub async fn microphone(app: AppHandle, webview: Webview, action: String) -> Result<Value, Value> {
     crate::room_page(&app, &webview).map_err(|why| refusal("bad_request", why))?;
     let state = match action.as_str() {
-        "state" => NativeMicrophone::state(),
-        "request" => NativeMicrophone::request().await,
+        "state" => native::state(),
+        "request" => native::request().await,
         "open-settings" => {
-            return NativeMicrophone::open_settings(&app)
+            return native::open_settings(&app)
                 .map_err(|_| refusal("internal", "System Settings could not be opened."))
                 .map(|()| Value::Null)
         }
