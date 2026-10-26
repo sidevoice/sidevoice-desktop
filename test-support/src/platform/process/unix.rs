@@ -1,9 +1,10 @@
-use super::*;
+use super::Isolation;
 use process_wrap::std::{CommandWrap, ProcessSession};
 
 pub struct Os;
-impl Detach for Os {
-    fn detach(command: Command) -> io::Result<Box<dyn ChildWrapper>> {
-        CommandWrap::from(command).wrap(ProcessSession).spawn()
+
+impl Isolation for Os {
+    fn isolate(command: &mut CommandWrap) {
+        command.wrap(ProcessSession);
     }
 }

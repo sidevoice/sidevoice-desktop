@@ -1,6 +1,6 @@
-use super::*;
+//! Windows: endpoints are named pipes, which leave no directory.
+use super::Endpoints;
 
 pub struct Os;
-impl EndpointCleanup for Os {
-    fn forget(_data: &Path) {}
-}
+
+impl Endpoints for Os {}

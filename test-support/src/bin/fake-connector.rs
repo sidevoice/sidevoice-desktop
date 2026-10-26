@@ -1,10 +1,7 @@
 //! Native stand-in connector. Configuration lives beside the executable, never in shell text.
 use process_wrap::std::ChildWrapper;
 use serde_json::{json, Value};
-use sidevoice_desktop_test_support::{
-    fixture,
-    platform::process::{Detach, Detached},
-};
+use sidevoice_desktop_test_support::{fixture, platform::process};
 use std::{
     fs,
     io::Write,
@@ -51,7 +48,7 @@ fn main() {
         }
         let mut spawned: Box<dyn ChildWrapper> = if config["detached"] == true {
             child.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-            Detached::detach(child).unwrap()
+            process::detach(child).unwrap()
         } else {
             Box::new(child.spawn().unwrap())
         };
