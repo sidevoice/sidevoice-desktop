@@ -1,8 +1,8 @@
 # Provider credentials
 
-`platform/credentials.rs` owns the desktop `Credentials` interface: read, write/remove, and clear the
-provider namespace. The engine and bridge use the same store on every supported OS. The page can set a
-key, remove it, and ask whether it exists; it cannot read it back. Native voice availability is unchanged.
+`platform/credentials.rs` owns the provider keys through plain functions: `valid(provider)`, `read(provider)`,
+`write(provider, key | None)` and `clear_all()`, which clears the provider namespace. The engine and bridge use the
+same store on every supported OS. The page can set a key, remove it, and ask whether it exists; it cannot read it back. Native voice availability is unchanged.
 
 The implementation uses the maintained [keyring ecosystem](https://docs.rs/keyring/latest/keyring/):
 `keyring-core` with explicit native stores, as recommended for applications needing namespace search.
@@ -15,7 +15,7 @@ There is no global keyring default, plaintext fallback, or production in-memory 
 | Linux | `zbus-secret-service-keyring-store`, encrypted D-Bus session with the user's Secret Service; exact `service` and `username` attributes | Requires a reachable session bus and accessible Secret Service. Missing/inaccessible/locked stores return `credentials_unavailable`, never absence or a successful fallback. A store may use its normal unlock prompt; callers wait at most 30 seconds, then receive `credentials_unavailable`. |
 
 Provider IDs retain the existing syntax: 1–32 ASCII lowercase letters, digits or dashes. Valid IDs outside
-today's catalog can be stored and read. `clear()` removes the entire exact service, including unknown or
+today's catalog can be stored and read. `clear_all()` removes the entire exact service, including unknown or
 obsolete accounts, without consulting that catalog. macOS retains the former search-list scope through `security-framework`'s maintained safe API, adapted
 to keyring entries (the Apple keyring store itself only covers its selected default keychain). Windows uses an anchored, escaped namespace pattern and a delimiter forbidden in service
 names, so similarly named services are excluded. Linux searches the exact service attribute across
@@ -33,7 +33,7 @@ operations can be retried. An indefinitely unanswered prompt may require dismiss
 
 ## Reset
 
-The reset transaction (docs/BRIDGE.md, `deleteAll()`) is the one caller of `clear()`. Its common `begin_reset` in
+The reset transaction (docs/BRIDGE.md, `deleteAll()`) is the one caller of `clear_all()`. Its common `begin_reset` in
 `data.rs` clears the provider keys after the macOS connector service and agent-results steps and before the app exits,
 journalled as the `keychain` step; a failure is reported as `{step: "keychain", key: "reset.keychain-failed"}`. The step
 is the same on every host that runs the transaction. Today that is macOS alone: elsewhere `deleteAll()` refuses
@@ -45,12 +45,13 @@ there.
 Portable contract tests live with the interface and run without Tauri/model linkage via
 `cargo test -p sidevoice-desktop-test-support --test credentials`. The existing macOS and Windows PR
 jobs run them through `cargo xtask test-support`; the Linux workspace tests run them too.
-The shared concern holds the documented interface, the one public `ProviderCredentials` type and every
-store-independent body: validation, request handling, error categories, namespace deletion and the
-process-wide serialization macOS and Windows use. Each OS file implements only the private `NativeStore`
-hook: its store, entry options (Windows persistence), the namespace search (Windows anchored pattern),
-the macOS search-list deletion, and the Linux bounded admission. Callers use only the credential trait,
-including provider validation.
+The shared concern holds the public functions and every store-independent body: naming, validation, requests,
+namespace clearing (the store's exact `service` search, then one deletion per entry), admission and error categories.
+Its private `Os` trait, implemented by `Native` in `credentials/{macos,windows,linux}.rs`, has the real differences
+only: `store()`, the OS's keyring store, and `PROMPTS`, whether its calls can wait on an unanswered unlock prompt
+(Linux), which selects the bounded admission in common code. Windows' store applies local persistence to its entries and
+turns the exact `service` search into the anchored target pattern; macOS' store is the search-list adapter, whose search
+returns one entry per item found in any searchable keychain.
 
 Native regression fixtures live beside their OS implementation because they must exercise Keychain
 search-list/legacy APIs, CredMan persistence metadata and byte limits, or Secret Service bus failure and
@@ -66,7 +67,7 @@ read/write/clear: those operations intentionally hide the OS metadata and setup 
   clear in a temporary nondefault keychain added to the search list (restored afterward). Windows tests
   ASCII and supplementary-character size boundaries, preservation of the prior value after refusal,
   and stored local-machine persistence on both new and formerly roaming entries.
-- A fake slow Linux backend checks deadline expiry, immediate unavailable on retry, and recovery after
+- A fake slow backend (the bounded admission Linux uses, tested on every OS) checks deadline expiry, immediate unavailable on retry, and recovery after
   the pending operation ends. Linux's absent-bus test runs in an isolated child process. The native persistence test is explicitly
   ignored on headless CI: successful Secret Service storage, unlock UI, and real desktop integration
   remain **unverified**. On an unlocked desktop, run the test above with `native_contract -- --ignored`.

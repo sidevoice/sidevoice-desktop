@@ -1,71 +1,95 @@
-use keyring_core::{CredentialStore, Entry, Result};
-use std::{collections::HashMap, sync::Arc};
+//! Credential Manager generic passwords (`windows-native-keyring-store`), as a keyring store whose entries persist
+//! on this computer only and whose service search is the exact `<provider>/<service>` target namespace.
+use keyring_core::{api::CredentialStoreApi, CredentialStore, Entry, Result};
+use std::{any::Any, collections::HashMap, sync::Arc};
 
-/// Credential Manager generic passwords; operations serialized by the shared default admission.
-pub(super) struct Store;
+pub struct Native;
 
-impl super::NativeStore for Store {
+impl super::Os for Native {
     fn store() -> Result<Arc<CredentialStore>> {
-        // A service cannot contain the delimiter, so namespace matching is unambiguous even
-        // when a future account contains it. Persistence is set explicitly when building entries below.
-        Ok(windows_native_keyring_store::Store::new_with_configuration(&HashMap::from([
-            ("divider", "/"),
-            ("service_no_divider", "true"),
-        ]))?)
+        Ok(Arc::new(Local(credential_manager()?)))
     }
+}
 
+/// Targets are `<account>/<service>`. A service cannot contain the delimiter, so namespace matching is unambiguous
+/// even when a future account contains it.
+fn credential_manager() -> Result<Arc<windows_native_keyring_store::Store>> {
+    windows_native_keyring_store::Store::new_with_configuration(&HashMap::from([
+        ("divider", "/"),
+        ("service_no_divider", "true"),
+    ]))
+}
+
+struct Local(Arc<windows_native_keyring_store::Store>);
+
+impl CredentialStoreApi for Local {
+    fn vendor(&self) -> String {
+        self.0.vendor()
+    }
+    fn id(&self) -> String {
+        self.0.id()
+    }
     // keyring's set_password encodes UTF-16 and checks CRED_MAX_CREDENTIAL_BLOB_SIZE (2560
     // bytes) before CredWriteW. It rejects, never truncates. Provider ids (<=32 ASCII bytes)
     // and the fixed service also fit the target-name and username limits.
     // CRED_PERSIST_LOCAL_MACHINE: survives logoff on this computer, never roams with a profile.
-    fn entry(store: &CredentialStore, service: &str, provider: &str) -> Result<Entry> {
-        if store.as_any().is::<windows_native_keyring_store::Store>() {
-            store.build(service, provider, Some(&HashMap::from([("persistence", "Local")])))
-        } else {
-            // The portable contract uses keyring's in-memory sample store.
-            store.build(service, provider, None)
-        }
+    fn build(&self, service: &str, user: &str, _: Option<&HashMap<&str, &str>>) -> Result<Entry> {
+        self.0.build(service, user, Some(&HashMap::from([("persistence", "Local")])))
     }
-
-    fn namespace(service: &str) -> (&'static str, String) {
-        // Targets are <account>/<service>. Anchor both ends and escape the
-        // service so a similarly named service cannot be deleted. Accounts may be unknown.
-        ("pattern", format!(r"\A(?s:.*)/{}\z", regex::escape(service)))
+    fn search(&self, spec: &HashMap<&str, &str>) -> Result<Vec<Entry>> {
+        let service =
+            spec.get("service").ok_or_else(|| keyring_core::Error::Invalid("service".into(), "is required".into()))?;
+        // Anchor both ends and escape the service so a similarly named service is never found. Accounts may be unknown.
+        let pattern = format!(r"\A(?s:.*)/{}\z", regex::escape(service));
+        self.0.search(&HashMap::from([("pattern", pattern.as_str())]))
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 
+// Native fixtures stay here: they read Credential Manager's own persistence metadata and UTF-16 limits, which the
+// common requests intentionally hide. Each also runs the common contract where it applies.
 #[cfg(test)]
 mod tests {
-    use super::super::{tests::*, Credentials, Error};
+    use super::super::{clear_in, read_in, tests::*, write_in, Error};
+    use super::{credential_manager, Local};
+    use keyring_core::api::CredentialStoreApi;
+
+    fn native() -> Local {
+        Local(credential_manager().unwrap())
+    }
 
     #[test]
     fn native_contract() {
-        contract(&native_test_store());
+        contract(&native(), &test_service());
     }
 
     #[test]
     fn windows_size_limit_rejects_without_replacing() {
-        let store = native_test_store();
+        let _serial = serial();
+        let (store, service, openai) = (&native(), &test_service(), provider("openai"));
         for (fits, too_big) in [("a".repeat(1280), "a".repeat(1281)), ("🔐".repeat(640), "🔐".repeat(641))] {
-            store.write("openai", Some(&fits)).unwrap();
-            assert_eq!(store.write("openai", Some(&too_big)), Err(Error::TooLong));
-            assert_eq!(store.read("openai").unwrap().as_deref(), Some(fits.as_str()));
+            write_in(store, service, &openai, Some(&fits)).unwrap();
+            assert_eq!(write_in(store, service, &openai, Some(&too_big)), Err(Error::TooLong));
+            assert_eq!(read_in(store, service, &openai).unwrap().as_deref(), Some(fits.as_str()));
         }
-        store.clear().unwrap();
+        clear_in(store, service).unwrap();
     }
 
     #[test]
     fn windows_credentials_persist_only_on_this_computer() {
-        let store = native_test_store();
+        let _serial = serial();
+        let (store, service, openai) = (&native(), &test_service(), provider("openai"));
         // Read metadata back from CredMan, not just from the entry's creation modifiers.
-        store.write("openai", Some("test-only")).unwrap();
-        let raw = store.store.build(&store.service, "openai", None).unwrap();
+        write_in(store, service, &openai, Some("test-only")).unwrap();
+        let raw = store.0.build(service, "openai", None).unwrap();
         assert_eq!(raw.get_attributes().unwrap()["persistence"], "Local");
         // Updating an entry written by the previous implementation also removes roaming.
         raw.set_password("old-enterprise-test-only").unwrap();
         assert_eq!(raw.get_attributes().unwrap()["persistence"], "Enterprise");
-        store.write("openai", Some("replacement")).unwrap();
+        write_in(store, service, &openai, Some("replacement")).unwrap();
         assert_eq!(raw.get_attributes().unwrap()["persistence"], "Local");
-        store.clear().unwrap();
+        clear_in(store, service).unwrap();
     }
 }

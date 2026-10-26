@@ -1,20 +1,29 @@
-//! Provider secrets in the OS credential store. No store error or secret is formatted or logged.
+//! Provider secrets in the OS credential store (docs/CREDENTIALS.md). No store error or secret is formatted or logged.
 //! The service/account pair is the original macOS namespace, not a catalog-dependent list.
+//!
+//! The common code here owns the naming, validation, requests, namespace clearing, admission and error categories.
+//! What differs per OS is the store itself (`Os::store`), and whether its calls can wait on a prompt (`Os::PROMPTS`).
 
 use keyring_core::{CredentialStore, Entry};
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc, Mutex,
+    },
+    time::Duration,
+};
 
-#[cfg(target_os = "macos")]
-#[path = "credentials/macos.rs"]
-mod native;
-#[cfg(target_os = "windows")]
-#[path = "credentials/windows.rs"]
-mod native;
-#[cfg(target_os = "linux")]
-#[path = "credentials/linux.rs"]
-mod native;
+#[cfg_attr(target_os = "macos", path = "credentials/macos.rs")]
+#[cfg_attr(target_os = "windows", path = "credentials/windows.rs")]
+#[cfg_attr(target_os = "linux", path = "credentials/linux.rs")]
+mod imp;
+use imp::Native;
 
 const SERVICE: &str = "dev.sidevoice.desktop.providers";
+
+/// How long a caller waits for a store that can prompt (`Os::PROMPTS`) before answering `Unavailable`.
+const WAIT: Duration = Duration::from_secs(30);
 
 /// Safe error categories only: keyring errors can contain secret bytes or backend-supplied text.
 #[derive(Debug, PartialEq, Eq)]
@@ -35,256 +44,252 @@ impl From<keyring_core::Error> for Error {
     }
 }
 
-/// Provider keys in the native store. Backend admission and storage are sealed inside this concern.
-#[allow(private_bounds)]
-pub trait Credentials: Backend {
-    /// A provider id is a namespace key, not necessarily a member of today's catalog.
-    fn valid(provider: &str) -> bool
-    where
-        Self: Sized,
-    {
-        Provider::valid(provider)
-    }
+/// What differs per OS.
+trait Os {
+    /// Whether a store call can wait indefinitely on an unlock prompt nobody answers. Default: it cannot.
+    const PROMPTS: bool = false;
 
-    /// Read a provider's key. Missing is `None`; inaccessible storage is `Unavailable`.
-    fn read(&self, provider: &str) -> Result<Option<String>, Error> {
-        self.execute(Request::Read(Provider::new(provider)?))
-    }
-
-    /// Replace a key, or remove it for `None`. Removing a missing key succeeds.
-    /// Oversized credentials are refused before replacing the stored value; never truncated.
-    fn write(&self, provider: &str, secret: Option<&str>) -> Result<(), Error> {
-        self.execute(Request::Write(Provider::new(provider)?, secret.map(str::to_owned))).map(|_| ())
-    }
-
-    /// Delete the exact service namespace, including unknown or obsolete accounts.
-    /// An unrelated service is never removed; partial cleanup is an error.
-    fn clear(&self) -> Result<(), Error> {
-        self.execute(Request::Clear).map(|_| ())
-    }
-}
-
-/// Private implementation hook: callers can only perform the documented credential operations.
-trait Backend {
-    /// Execute a validated request using the native store's admission and persistence policy.
-    fn execute(&self, request: Request) -> Result<Option<String>, Error>;
-}
-
-/// What differs per OS, implemented once by each `native::Store`: the store, entry options, the namespace
-/// search, and admission. Validation, request handling and error categories are shared.
-trait NativeStore {
-    /// The native store, opened for each operation so a failure never sticks.
+    /// This OS's store, opened for each operation so a failure never sticks. Its entries for `(service, provider)`
+    /// carry the OS's own entry options, and its search for `{"service": <service>}` finds exactly that service's
+    /// entries, whatever their account.
     fn store() -> keyring_core::Result<Arc<CredentialStore>>;
-
-    /// One provider's entry. Default: the store's entry without options.
-    fn entry(store: &CredentialStore, service: &str, provider: &str) -> keyring_core::Result<Entry> {
-        store.build(service, provider, None)
-    }
-
-    /// The search specifier selecting exactly `service`'s entries, whatever their account.
-    /// Default: keyring's exact `service` attribute.
-    fn namespace(service: &str) -> (&'static str, String) {
-        ("service", service.to_owned())
-    }
-
-    /// Delete every entry `namespace` finds.
-    fn clear(store: &CredentialStore, service: &str) -> keyring_core::Result<()> {
-        let (key, value) = Self::namespace(service);
-        delete(store.search(&HashMap::from([(key, value.as_str())]))?)
-    }
-
-    /// Admit one operation. Default: operations are serialized within the process.
-    fn admit(operation: Operation) -> Result<Option<String>, Error> {
-        static ACCESS: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = ACCESS.lock().map_err(|_| Error::Failed)?;
-        operation()
-    }
 }
 
-/// One validated request bound to the native store, movable to a worker thread.
-type Operation = Box<dyn FnOnce() -> Result<Option<String>, Error> + Send>;
-
-/// The provider keys in this OS's credential store. A failure never installs a fallback or prevents a later retry.
-pub struct ProviderCredentials;
-
-impl Credentials for ProviderCredentials {}
-
-impl Backend for ProviderCredentials {
-    fn execute(&self, request: Request) -> Result<Option<String>, Error> {
-        use native::Store as Native;
-        Native::admit(Box::new(move || request.run(Native::store()?.as_ref(), SERVICE, Native::entry, Native::clear)))
-    }
+/// Whether `provider` is a well-formed id: a namespace key, not necessarily a member of today's catalog.
+pub fn valid(provider: &str) -> bool {
+    (1..=32).contains(&provider.len())
+        && provider.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
+/// A provider's key. Missing is `None`; inaccessible storage is `Unavailable`.
+pub fn read(provider: &str) -> Result<Option<String>, Error> {
+    let provider = Provider::new(provider)?;
+    admit(move || read_in(Native::store()?.as_ref(), SERVICE, &provider))
+}
+
+/// Replace a key, or remove it for `None`. Removing a missing key succeeds.
+/// Oversized credentials are refused before replacing the stored value; never truncated.
+pub fn write(provider: &str, secret: Option<&str>) -> Result<(), Error> {
+    let provider = Provider::new(provider)?;
+    let secret = secret.map(str::to_owned);
+    admit(move || write_in(Native::store()?.as_ref(), SERVICE, &provider, secret.as_deref()))
+}
+
+/// Delete the exact service namespace, including unknown or obsolete accounts.
+/// An unrelated service is never removed; partial cleanup is an error.
+pub fn clear_all() -> Result<(), Error> {
+    admit(|| clear_in(Native::store()?.as_ref(), SERVICE))
+}
+
+/// A validated provider id, owned so it can cross to a blocking worker.
 struct Provider(String);
 
 impl Provider {
-    fn valid(provider: &str) -> bool {
-        (1..=32).contains(&provider.len())
-            && provider.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-    }
-
     fn new(provider: &str) -> Result<Self, Error> {
-        if Self::valid(provider) {
+        if valid(provider) {
             Ok(Self(provider.to_owned()))
         } else {
             Err(Error::InvalidProvider)
         }
     }
-}
 
-/// Owned, validated input can cross a blocking worker boundary without borrowing caller data.
-enum Request {
-    Read(Provider),
-    Write(Provider, Option<String>),
-    Clear,
-}
-
-impl Request {
-    /// Shared keyring behavior; entry construction and exact namespace deletion come from the backend.
-    fn run(
-        self,
-        store: &CredentialStore,
-        service: &str,
-        entry: fn(&CredentialStore, &str, &str) -> keyring_core::Result<Entry>,
-        clear: fn(&CredentialStore, &str) -> keyring_core::Result<()>,
-    ) -> Result<Option<String>, Error> {
-        match self {
-            Self::Read(provider) => match entry(store, service, &provider.0)?.get_password() {
-                Ok(secret) => Ok(Some(secret)),
-                Err(keyring_core::Error::NoEntry) => Ok(None),
-                Err(error) => Err(error.into()),
-            },
-            Self::Write(provider, secret) => {
-                let entry = entry(store, service, &provider.0)?;
-                match secret {
-                    Some(secret) => entry.set_password(&secret)?,
-                    None => match entry.delete_credential() {
-                        Ok(()) | Err(keyring_core::Error::NoEntry) => (),
-                        Err(error) => return Err(error.into()),
-                    },
-                }
-                Ok(None)
-            }
-            Self::Clear => {
-                clear(store, service)?;
-                Ok(None)
-            }
-        }
+    fn entry(&self, store: &CredentialStore, service: &str) -> keyring_core::Result<Entry> {
+        store.build(service, &self.0, None)
     }
 }
 
-/// Delete each entry. Continues after a failure, but never reports partial cleanup as success;
-/// an entry already gone is not a failure.
-fn delete(entries: Vec<Entry>) -> keyring_core::Result<()> {
+fn read_in(store: &CredentialStore, service: &str, provider: &Provider) -> Result<Option<String>, Error> {
+    match provider.entry(store, service)?.get_password() {
+        Ok(secret) => Ok(Some(secret)),
+        Err(keyring_core::Error::NoEntry) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn write_in(store: &CredentialStore, service: &str, provider: &Provider, secret: Option<&str>) -> Result<(), Error> {
+    let entry = provider.entry(store, service)?;
+    match secret {
+        Some(secret) => entry.set_password(secret)?,
+        None => match entry.delete_credential() {
+            Ok(()) | Err(keyring_core::Error::NoEntry) => (),
+            Err(error) => return Err(error.into()),
+        },
+    }
+    Ok(())
+}
+
+/// Delete each entry the store finds for `service`. Continues after a failure, but never reports partial cleanup as
+/// success; an entry already gone is not a failure.
+fn clear_in(store: &CredentialStore, service: &str) -> Result<(), Error> {
     let mut failure = None;
-    for entry in entries {
+    for entry in store.search(&HashMap::from([("service", service)]))? {
         if let Err(error) = entry.delete_credential() {
             if !matches!(error, keyring_core::Error::NoEntry) {
                 failure = Some(error);
             }
         }
     }
-    failure.map_or(Ok(()), Err)
+    failure.map_or(Ok(()), |error| Err(error.into()))
+}
+
+/// Admit one store operation. A store that can prompt gets bounded admission: callers wait at most `WAIT`, and at
+/// most one operation is ever pending (see `bounded`). Any other store's operations are serialized within the process.
+fn admit<T: Send + 'static>(operation: impl FnOnce() -> Result<T, Error> + Send + 'static) -> Result<T, Error> {
+    static PENDING: AtomicBool = AtomicBool::new(false);
+    static SERIAL: Mutex<()> = Mutex::new(());
+    if Native::PROMPTS {
+        bounded(&PENDING, WAIT, operation)
+    } else {
+        let _guard = SERIAL.lock().map_err(|_| Error::Failed)?;
+        operation()
+    }
+}
+
+// A synchronous keyring backend cannot cancel an outstanding prompt. Do not detach a new worker for every retry:
+// retain one admission slot until the call really ends. A timed-out write has an unknown outcome; refusing
+// overlapping calls prevents a late completion from overwriting a subsequent write or running after a successful clear.
+fn bounded<T: Send + 'static>(
+    busy: &'static AtomicBool,
+    timeout: Duration,
+    operation: impl FnOnce() -> Result<T, Error> + Send + 'static,
+) -> Result<T, Error> {
+    busy.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).map_err(|_| Error::Unavailable)?;
+    struct Admission(&'static AtomicBool);
+    impl Drop for Admission {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::Release);
+        }
+    }
+    let admission = Admission(busy);
+    let (sender, receiver) = mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("credentials".into())
+        .spawn(move || {
+            let result = operation();
+            drop(admission);
+            let _ = sender.send(result);
+        })
+        .map_err(|_| Error::Unavailable)?;
+    receiver.recv_timeout(timeout).map_err(|_| Error::Unavailable)?
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use keyring_core::api::CredentialStoreApi;
 
-    pub(super) struct TestCredentials {
-        pub(super) store: Arc<CredentialStore>,
-        pub(super) service: String,
-        pub(super) clear: fn(&CredentialStore, &str) -> keyring_core::Result<()>,
+    pub(super) fn provider(id: &str) -> Provider {
+        Provider::new(id).unwrap()
     }
 
-    impl Credentials for TestCredentials {}
-
-    impl Backend for TestCredentials {
-        fn execute(&self, request: Request) -> Result<Option<String>, Error> {
-            // Fixtures share a deterministic test lock, independent of native admission state.
-            static ACCESS: std::sync::Mutex<()> = std::sync::Mutex::new(());
-            let _guard = ACCESS.lock().map_err(|_| Error::Failed)?;
-            request.run(self.store.as_ref(), &self.service, native::Store::entry, self.clear)
-        }
+    /// Fixtures share a deterministic test lock, independent of the native admission state.
+    pub(super) fn serial() -> std::sync::MutexGuard<'static, ()> {
+        static ACCESS: Mutex<()> = Mutex::new(());
+        ACCESS.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn memory_clear(store: &CredentialStore, service: &str) -> keyring_core::Result<()> {
-        // The sample store's service matcher is a regex, unlike native macOS/Linux stores.
-        let entries = store.search(&HashMap::new())?;
-        delete(
-            entries
-                .into_iter()
-                .filter(|entry| entry.get_specifiers().is_some_and(|(found, _)| found == service))
-                .collect(),
-        )
-    }
-
-    fn memory() -> TestCredentials {
-        TestCredentials {
-            store: keyring_core::sample::Store::new().unwrap(),
-            service: SERVICE.into(),
-            clear: memory_clear,
-        }
-    }
-
-    /// Same assertions through the interface, for the memory store and each native store.
-    pub(super) fn contract(store: &TestCredentials) {
-        let credentials: &dyn Credentials = store;
-        credentials.clear().unwrap();
-        assert_eq!(credentials.read("future-provider-42").unwrap(), None);
-        credentials.write("future-provider-42", None).unwrap();
-        credentials.write("future-provider-42", Some("test-only-α🔐")).unwrap();
-        assert_eq!(credentials.read("future-provider-42").unwrap().as_deref(), Some("test-only-α🔐"));
-        credentials.write("future-provider-42", Some("replacement")).unwrap();
-        assert_eq!(credentials.read("future-provider-42").unwrap().as_deref(), Some("replacement"));
-        credentials.write("future-provider-42", None).unwrap();
-        credentials.write("future-provider-42", None).unwrap();
-        assert_eq!(credentials.read("future-provider-42").unwrap(), None);
+    /// Same assertions for the memory store and each native store, through the common requests.
+    pub(super) fn contract(store: &CredentialStore, service: &str) {
+        let _serial = serial();
+        let future = provider("future-provider-42");
+        clear_in(store, service).unwrap();
+        assert_eq!(read_in(store, service, &future).unwrap(), None);
+        write_in(store, service, &future, None).unwrap();
+        write_in(store, service, &future, Some("test-only-α🔐")).unwrap();
+        assert_eq!(read_in(store, service, &future).unwrap().as_deref(), Some("test-only-α🔐"));
+        write_in(store, service, &future, Some("replacement")).unwrap();
+        assert_eq!(read_in(store, service, &future).unwrap().as_deref(), Some("replacement"));
+        write_in(store, service, &future, None).unwrap();
+        write_in(store, service, &future, None).unwrap();
+        assert_eq!(read_in(store, service, &future).unwrap(), None);
 
         // Cleanup must include a future account that the current validator does not accept.
-        let unknown = store.store.build(&store.service, "future_provider", None).unwrap();
+        let unknown = store.build(service, "future_provider", None).unwrap();
         unknown.set_password("test-only").unwrap();
-        credentials.write("openai", Some("test-only")).unwrap();
-        let other_services = [format!("{}.unrelated", store.service), format!("unrelated.{}", store.service)];
+        write_in(store, service, &provider("openai"), Some("test-only")).unwrap();
+        let other_services = [format!("{service}.unrelated"), format!("unrelated.{service}")];
         let others: Vec<_> = other_services
             .iter()
-            .map(|service| {
-                let entry = store.store.build(service, "openai", None).unwrap();
+            .map(|other| {
+                let entry = store.build(other, "openai", None).unwrap();
                 entry.set_password("unrelated-test-only").unwrap();
                 entry
             })
             .collect();
-        credentials.clear().unwrap();
+        clear_in(store, service).unwrap();
         assert!(matches!(unknown.get_password(), Err(keyring_core::Error::NoEntry)));
-        assert_eq!(credentials.read("openai").unwrap(), None);
+        assert_eq!(read_in(store, service, &provider("openai")).unwrap(), None);
         for other in others {
             let retained = other.get_password();
             other.delete_credential().unwrap();
             assert_eq!(retained.unwrap(), "unrelated-test-only");
         }
-        credentials.clear().unwrap();
+        clear_in(store, service).unwrap();
+    }
+
+    /// A unique test service: native tests never read or clear real provider credentials, even on a developer's
+    /// machine.
+    pub(super) fn test_service() -> String {
+        format!(
+            "dev.sidevoice.desktop.test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        )
+    }
+
+    /// keyring's in-memory sample store, whose service search is an unanchored regex, made exact as `Os::store`
+    /// requires of a native store.
+    struct Memory(Arc<CredentialStore>);
+
+    impl CredentialStoreApi for Memory {
+        fn vendor(&self) -> String {
+            self.0.vendor()
+        }
+        fn id(&self) -> String {
+            self.0.id()
+        }
+        fn build(
+            &self,
+            service: &str,
+            user: &str,
+            modifiers: Option<&HashMap<&str, &str>>,
+        ) -> keyring_core::Result<Entry> {
+            self.0.build(service, user, modifiers)
+        }
+        fn search(&self, spec: &HashMap<&str, &str>) -> keyring_core::Result<Vec<Entry>> {
+            let service = spec["service"];
+            Ok(self
+                .0
+                .search(&HashMap::new())?
+                .into_iter()
+                .filter(|entry| entry.get_specifiers().is_some_and(|(found, _)| found == service))
+                .collect())
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    fn memory() -> Memory {
+        Memory(keyring_core::sample::Store::new().unwrap())
     }
 
     #[test]
     fn memory_contract() {
-        let _native: &dyn Credentials = &ProviderCredentials;
-        contract(&memory());
+        contract(&memory(), SERVICE);
     }
 
     #[test]
     fn malformed_ids_cannot_address_credentials() {
-        let store = memory();
         for id in ["", "OpenAI", "with.dot", "with/slash", "with space", "é", &"a".repeat(33)] {
-            assert!(!ProviderCredentials::valid(id));
-            assert_eq!(ProviderCredentials.read(id), Err(Error::InvalidProvider));
-            assert_eq!(ProviderCredentials.write(id, Some("test-only")), Err(Error::InvalidProvider));
-            assert_eq!(store.read(id), Err(Error::InvalidProvider));
-            assert_eq!(store.write(id, Some("test-only")), Err(Error::InvalidProvider));
-            assert_eq!(store.write(id, None), Err(Error::InvalidProvider));
+            assert!(!valid(id));
+            assert_eq!(read(id), Err(Error::InvalidProvider));
+            assert_eq!(write(id, Some("test-only")), Err(Error::InvalidProvider));
+            assert_eq!(write(id, None), Err(Error::InvalidProvider));
         }
-        assert!(ProviderCredentials::valid(&"a".repeat(32)));
-        store.write(&"a".repeat(32), Some("test-only")).unwrap();
+        assert!(valid(&"a".repeat(32)));
+        let store = memory();
+        write_in(&store, SERVICE, &provider(&"a".repeat(32)), Some("test-only")).unwrap();
     }
 
     #[test]
@@ -310,32 +315,55 @@ mod tests {
     #[test]
     fn invalid_stored_text_is_an_error_not_a_missing_key() {
         let store = memory();
-        store.store.build(&store.service, "openai", None).unwrap().set_secret(&[0xff]).unwrap();
-        assert_eq!(store.read("openai"), Err(Error::Failed));
-        store.clear().unwrap();
+        store.build(SERVICE, "openai", None).unwrap().set_secret(&[0xff]).unwrap();
+        assert_eq!(read_in(&store, SERVICE, &provider("openai")), Err(Error::Failed));
+        clear_in(&store, SERVICE).unwrap();
     }
 
     #[test]
     fn ambiguous_accounts_are_removed_by_namespace_clear() {
         let store = memory();
         let modifiers = HashMap::from([("force-create", "true")]);
-        store.store.build(&store.service, "openai", Some(&modifiers)).unwrap();
-        store.store.build(&store.service, "openai", Some(&modifiers)).unwrap();
-        assert_eq!(store.read("openai"), Err(Error::Failed));
-        store.clear().unwrap();
-        assert_eq!(store.read("openai").unwrap(), None);
+        store.build(SERVICE, "openai", Some(&modifiers)).unwrap();
+        store.build(SERVICE, "openai", Some(&modifiers)).unwrap();
+        assert_eq!(read_in(&store, SERVICE, &provider("openai")), Err(Error::Failed));
+        clear_in(&store, SERVICE).unwrap();
+        assert_eq!(read_in(&store, SERVICE, &provider("openai")).unwrap(), None);
     }
 
-    pub(super) fn native_test_store() -> TestCredentials {
-        // Never read or clear real provider credentials, even on a developer's machine.
-        TestCredentials {
-            store: native::Store::store().unwrap(),
-            service: format!(
-                "dev.sidevoice.desktop.test-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
-            ),
-            clear: native::Store::clear,
+    #[test]
+    fn slow_backend_times_out_without_queuing_later_operations() {
+        use std::time::Instant;
+        static BUSY: AtomicBool = AtomicBool::new(false);
+        let (release, blocked) = mpsc::channel();
+        let (finished, completion) = mpsc::channel();
+        let started = Instant::now();
+        // A fake backend waiting for an unanswered prompt. No real store needed.
+        assert_eq!(
+            bounded(&BUSY, Duration::from_millis(20), move || {
+                blocked.recv().unwrap();
+                finished.send(()).unwrap();
+                Ok(())
+            }),
+            Err(Error::Unavailable)
+        );
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(BUSY.load(Ordering::Acquire));
+        let started = Instant::now();
+        assert_eq!(
+            bounded(&BUSY, Duration::from_secs(5), || -> Result<(), Error> {
+                panic!("a retry must not queue another backend operation")
+            }),
+            Err(Error::Unavailable)
+        );
+        assert!(started.elapsed() < Duration::from_secs(2));
+        release.send(()).unwrap();
+        completion.recv_timeout(Duration::from_secs(2)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while BUSY.load(Ordering::Acquire) {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
         }
+        assert_eq!(bounded(&BUSY, Duration::from_secs(2), || Ok(42)), Ok(42));
     }
 }

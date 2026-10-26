@@ -163,14 +163,14 @@ pub struct ProviderKeys;
 #[sidevoice_desktop_engine::sidevoice_engine::async_trait]
 impl sidevoice_desktop_engine::sidevoice_engine::Credentials for ProviderKeys {
     async fn credential(&self, provider: &str) -> sidevoice_desktop_engine::sidevoice_engine::Result<Option<String>> {
-        use crate::platform::credentials::{Credentials, ProviderCredentials};
+        use crate::platform::credentials;
         let provider = provider.to_owned();
-        let result = tauri::async_runtime::spawn_blocking(move || ProviderCredentials.read(&provider))
+        let result = tauri::async_runtime::spawn_blocking(move || credentials::read(&provider))
             .await
             .map_err(|_| sidevoice_desktop_engine::sidevoice_engine::Error::new("credentials-failed"))?;
         result.map_err(|error| {
             sidevoice_desktop_engine::sidevoice_engine::Error::new(match error {
-                crate::platform::credentials::Error::Unavailable => "credentials-unavailable",
+                credentials::Error::Unavailable => "credentials-unavailable",
                 _ => "credentials-failed",
             })
         })
@@ -179,10 +179,10 @@ impl sidevoice_desktop_engine::sidevoice_engine::Credentials for ProviderKeys {
 
 mod credentials {
     use super::{error, Error};
-    use crate::platform::credentials::{self, Credentials, ProviderCredentials};
+    use crate::platform::credentials;
 
     fn provider(provider: &str) -> Result<(), Error> {
-        if ProviderCredentials::valid(provider) {
+        if credentials::valid(provider) {
             Ok(())
         } else {
             Err(error::provider_invalid(provider))
@@ -206,11 +206,11 @@ mod credentials {
 
     pub fn write(id: &str, key: Option<&str>) -> Result<(), Error> {
         provider(id)?;
-        ProviderCredentials.write(id, key).map_err(refusal)
+        credentials::write(id, key).map_err(refusal)
     }
 
     pub fn has(id: &str) -> Result<bool, Error> {
         provider(id)?;
-        ProviderCredentials.read(id).map(|key| key.is_some()).map_err(refusal)
+        credentials::read(id).map(|key| key.is_some()).map_err(refusal)
     }
 }

@@ -1,111 +1,38 @@
+//! The user's Secret Service over an encrypted D-Bus session (`zbus-secret-service-keyring-store`), searched by the
+//! exact `service` attribute across collections. A locked collection can hold a call on an unlock prompt.
 use keyring_core::{CredentialStore, Result};
 use std::sync::Arc;
 
-/// The user's Secret Service over an encrypted D-Bus session, with bounded admission instead of the shared lock.
-pub(super) struct Store;
+pub struct Native;
 
-impl super::NativeStore for Store {
+impl super::Os for Native {
+    const PROMPTS: bool = true;
+
     fn store() -> Result<Arc<CredentialStore>> {
         Ok(zbus_secret_service_keyring_store::Store::new()?)
     }
-
-    fn admit(operation: super::Operation) -> std::result::Result<Option<String>, super::Error> {
-        bounded(&OPERATION, WAIT, operation)
-    }
 }
 
-// The synchronous keyring backend cannot cancel an outstanding D-Bus prompt. Do not
-// detach a new worker for every retry: retain one admission slot until it really ends.
-// A timed-out write has an unknown outcome; refusing overlapping calls prevents a late
-// completion from overwriting a subsequent write or running after a successful clear.
-static OPERATION: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-const WAIT: std::time::Duration = std::time::Duration::from_secs(30);
-
-fn bounded<T: Send + 'static>(
-    busy: &'static std::sync::atomic::AtomicBool,
-    timeout: std::time::Duration,
-    operation: impl FnOnce() -> std::result::Result<T, super::Error> + Send + 'static,
-) -> std::result::Result<T, super::Error> {
-    use std::sync::{atomic::Ordering, mpsc};
-    busy.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).map_err(|_| super::Error::Unavailable)?;
-    struct Admission(&'static std::sync::atomic::AtomicBool);
-    impl Drop for Admission {
-        fn drop(&mut self) {
-            self.0.store(false, Ordering::Release);
-        }
-    }
-    let admission = Admission(busy);
-    let (sender, receiver) = mpsc::sync_channel(1);
-    std::thread::Builder::new()
-        .name("credentials".into())
-        .spawn(move || {
-            let result = operation();
-            drop(admission);
-            let _ = sender.send(result);
-        })
-        .map_err(|_| super::Error::Unavailable)?;
-    receiver.recv_timeout(timeout).map_err(|_| super::Error::Unavailable)?
-}
-
+// Native fixtures stay here: they need a live Secret Service, or a session bus environment pointed elsewhere, which
+// the common requests cannot express.
 #[cfg(test)]
 mod tests {
-    use super::super::{tests::*, Credentials, Error, ProviderCredentials};
+    use super::super::{clear_all, read, tests::*, write, Error, Os};
+    use super::Native;
 
     #[test]
     #[ignore = "requires an unlocked desktop Secret Service; unverified on headless CI"]
     fn native_contract() {
-        contract(&native_test_store());
-    }
-
-    #[test]
-    fn slow_backend_times_out_without_queuing_later_operations() {
-        use std::{
-            sync::{
-                atomic::{AtomicBool, Ordering},
-                mpsc,
-            },
-            time::{Duration, Instant},
-        };
-        static BUSY: AtomicBool = AtomicBool::new(false);
-        let (release, blocked) = mpsc::channel();
-        let (finished, completion) = mpsc::channel();
-        let started = Instant::now();
-        // A fake backend waiting for an unanswered prompt. No real Secret Service needed.
-        assert_eq!(
-            super::bounded(&BUSY, Duration::from_millis(20), move || {
-                blocked.recv().unwrap();
-                finished.send(()).unwrap();
-                Ok(())
-            }),
-            Err(Error::Unavailable)
-        );
-        assert!(started.elapsed() < Duration::from_secs(2));
-        assert!(BUSY.load(Ordering::Acquire));
-        let started = Instant::now();
-        assert_eq!(
-            super::bounded(&BUSY, Duration::from_secs(5), || -> Result<(), Error> {
-                panic!("a retry must not queue another backend operation")
-            }),
-            Err(Error::Unavailable)
-        );
-        assert!(started.elapsed() < Duration::from_secs(2));
-        release.send(()).unwrap();
-        completion.recv_timeout(Duration::from_secs(2)).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while BUSY.load(Ordering::Acquire) {
-            assert!(Instant::now() < deadline);
-            std::thread::yield_now();
-        }
-        assert_eq!(super::bounded(&BUSY, Duration::from_secs(2), || Ok(42)), Ok(42));
+        contract(Native::store().unwrap().as_ref(), &test_service());
     }
 
     #[test]
     fn missing_secret_service_is_explicitly_unavailable() {
         const CHILD: &str = "SIDEVOICE_CREDENTIAL_UNAVAILABLE_TEST";
         if std::env::var_os(CHILD).is_some() {
-            assert_eq!(ProviderCredentials.read("openai"), Err(Error::Unavailable));
-            assert_eq!(ProviderCredentials.write("openai", Some("test-only")), Err(Error::Unavailable));
-            assert_eq!(ProviderCredentials.clear(), Err(Error::Unavailable));
+            assert_eq!(read("openai"), Err(Error::Unavailable));
+            assert_eq!(write("openai", Some("test-only")), Err(Error::Unavailable));
+            assert_eq!(clear_all(), Err(Error::Unavailable));
             return;
         }
         // Isolate the bus environment from concurrent tests and any real user's keyring.

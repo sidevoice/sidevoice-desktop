@@ -11,7 +11,7 @@ use tauri::{AppHandle, Manager, Webview};
 
 use crate::platform::host::RESET_AVAILABLE;
 use crate::platform::reset_handoff::{self, Handoff};
-use crate::platform::{account, app_data, uninstall};
+use crate::platform::{account, app_data, credentials, uninstall};
 use crate::AppState;
 
 #[derive(Default)]
@@ -280,8 +280,7 @@ fn begin_reset(app: &AppHandle, uninstall: bool) -> Answer {
     })?;
     let (mut failed, agents, service_outcome) = reset_before_exit()?;
     // The provider keys, on every host that runs the transaction, journalled as the last step before exit.
-    use crate::platform::credentials::{Credentials, ProviderCredentials};
-    if ProviderCredentials.clear().is_err() {
+    if credentials::clear_all().is_err() {
         failed.push(json!({"step": "keychain", "key": "reset.keychain-failed"}));
     }
     let journal = report_path().ok_or_else(|| refused("reset.helper-failed"))?.with_file_name("journal.json");

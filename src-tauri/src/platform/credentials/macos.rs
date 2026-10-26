@@ -1,37 +1,23 @@
-use keyring_core::{CredentialStore, Entry, Result};
-use std::sync::Arc;
-
-// Apple's keyring store constrains every lookup to a domain's default keychain.
-// Preserve the old app's search-list scope through the maintained security-framework
-// API, exposed as keyring entries so shared validation/error handling stays identical.
+//! Keychain Services generic passwords over the whole keychain search list.
+//!
+//! Apple's keyring store constrains every lookup to a domain's default keychain. The old app's search-list scope is
+//! kept through security-framework's maintained API, exposed as a keyring store (`SearchList`) so the common requests,
+//! validation and error categories stay identical. No handwritten Security/CoreFoundation FFI.
 use apple_native_keyring_store::keychain::decode_error;
 use keyring_core::{
     api::{CredentialApi, CredentialStoreApi},
-    Credential,
+    Credential, CredentialStore, Entry, Result,
 };
-use std::{any::Any, collections::HashMap};
+use std::{any::Any, collections::HashMap, sync::Arc};
 
-/// Keychain Services generic passwords over the whole search list; operations serialized by the shared default
-/// admission.
-pub(super) struct Store;
+/// errSecItemNotFound.
+const NOT_FOUND: i32 = -25300;
 
-impl super::NativeStore for Store {
+pub struct Native;
+
+impl super::Os for Native {
     fn store() -> Result<Arc<CredentialStore>> {
         Ok(Arc::new(SearchList))
-    }
-
-    fn clear(_store: &CredentialStore, service: &str) -> Result<()> {
-        // Preserve the old SecItemDelete search-list scope, including credentials outside the
-        // default login keychain. The keyring store's search is limited to its chosen keychain.
-        // security-framework owns the bindings; no handwritten Security/CoreFoundation FFI.
-        use security_framework::item::{ItemClass, ItemSearchOptions, Limit};
-        // Explicitly request all matches: the default limit on macOS deletes only one item.
-        match ItemSearchOptions::new().class(ItemClass::generic_password()).service(service).limit(Limit::All).delete()
-        {
-            Ok(()) => Ok(()),
-            Err(error) if error.code() == -25300 => Ok(()),
-            Err(error) => Err(decode_error(error)),
-        }
     }
 }
 
@@ -51,6 +37,29 @@ impl CredentialStoreApi for SearchList {
     fn build(&self, service: &str, user: &str, _: Option<&HashMap<&str, &str>>) -> Result<Entry> {
         Ok(Entry::new_with_credential(Arc::new(Password { service: service.into(), account: user.into() })))
     }
+    /// Every generic password of exactly `{"service": ..}` in the search list, one entry per item: an account kept in
+    /// two keychains is two entries, so deleting each removes both.
+    fn search(&self, spec: &HashMap<&str, &str>) -> Result<Vec<Entry>> {
+        use security_framework::item::{ItemClass, ItemSearchOptions, Limit};
+        let service =
+            spec.get("service").ok_or_else(|| keyring_core::Error::Invalid("service".into(), "is required".into()))?;
+        let found = match ItemSearchOptions::new()
+            .class(ItemClass::generic_password())
+            .service(service)
+            .load_attributes(true)
+            .limit(Limit::All)
+            .search()
+        {
+            Ok(found) => found,
+            Err(error) if error.code() == NOT_FOUND => return Ok(Vec::new()),
+            Err(error) => return Err(decode_error(error)),
+        };
+        Ok(found
+            .iter()
+            .filter_map(|item| item.simplify_dict()?.remove("acct"))
+            .map(|account| Entry::new_with_credential(Arc::new(Password { service: (*service).into(), account })))
+            .collect())
+    }
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -66,7 +75,7 @@ impl CredentialApi for Password {
         use security_framework::os::macos::passwords::find_generic_password;
         match find_generic_password(None, &self.service, &self.account) {
             Ok((_, mut item)) => item.set_password(secret).map_err(decode_error),
-            Err(error) if error.code() == -25300 => {
+            Err(error) if error.code() == NOT_FOUND => {
                 security_framework::passwords::set_generic_password(&self.service, &self.account, secret)
                     .map_err(decode_error)
             }
@@ -87,27 +96,30 @@ impl CredentialApi for Password {
     }
 }
 
+// Native fixtures stay here: they exercise the Keychain's own legacy and search-list APIs, which the common requests
+// intentionally hide. Each also runs the common contract where it applies.
 #[cfg(test)]
 mod tests {
-    use super::super::{tests::*, Credentials, NativeStore};
-    use super::Store;
+    use super::super::{clear_in, read_in, tests::*, write_in};
+    use super::SearchList;
 
     #[test]
     fn native_contract() {
-        contract(&native_test_store());
+        contract(&SearchList, &test_service());
     }
 
     #[test]
     fn legacy_macos_passwords_remain_readable_in_both_directions() {
         use security_framework::passwords::{get_generic_password, set_generic_password};
-        let store = native_test_store();
-        set_generic_password(&store.service, "openai", b"legacy-test-only").unwrap();
-        assert_eq!(store.read("openai").unwrap().as_deref(), Some("legacy-test-only"));
-        store.write("openai", Some("updated-test-only")).unwrap();
-        assert_eq!(get_generic_password(&store.service, "openai").unwrap(), b"updated-test-only");
-        set_generic_password(&store.service, "legacy_unknown", b"legacy-test-only").unwrap();
-        store.clear().unwrap();
-        assert_eq!(get_generic_password(&store.service, "legacy_unknown").unwrap_err().code(), -25300);
+        let _serial = serial();
+        let (store, service) = (&SearchList, &test_service());
+        set_generic_password(service, "openai", b"legacy-test-only").unwrap();
+        assert_eq!(read_in(store, service, &provider("openai")).unwrap().as_deref(), Some("legacy-test-only"));
+        write_in(store, service, &provider("openai"), Some("updated-test-only")).unwrap();
+        assert_eq!(get_generic_password(service, "openai").unwrap(), b"updated-test-only");
+        set_generic_password(service, "legacy_unknown", b"legacy-test-only").unwrap();
+        clear_in(store, service).unwrap();
+        assert_eq!(get_generic_password(service, "legacy_unknown").unwrap_err().code(), -25300);
     }
 
     #[test]
@@ -122,36 +134,28 @@ mod tests {
         const CHILD: &str = "SIDEVOICE_CREDENTIAL_SEARCH_LIST_TEST";
         const KEYCHAIN_PATH: &str = "SIDEVOICE_CREDENTIAL_KEYCHAIN_PATH";
         if let Ok(service) = std::env::var(CHILD) {
-            let store = TestCredentials { store: Store::store().unwrap(), service, clear: Store::clear };
+            let (store, service) = (&SearchList, service.as_str());
             let secondary = SecKeychain::open(std::env::var(KEYCHAIN_PATH).unwrap()).unwrap();
             // Establish that the fixture is reachable by the old app's lookup API too.
             assert_eq!(
-                security_framework::passwords::get_generic_password(&store.service, "openai").unwrap(),
+                security_framework::passwords::get_generic_password(service, "openai").unwrap(),
                 b"legacy-secondary"
             );
-            assert_eq!(store.read("openai").unwrap().as_deref(), Some("legacy-secondary"));
-            store.write("openai", Some("updated-secondary")).unwrap();
+            assert_eq!(read_in(store, service, &provider("openai")).unwrap().as_deref(), Some("legacy-secondary"));
+            write_in(store, service, &provider("openai"), Some("updated-secondary")).unwrap();
             use security_framework::os::macos::passwords::find_generic_password;
             assert_eq!(
-                find_generic_password(Some(std::slice::from_ref(&secondary)), &store.service, "openai")
-                    .unwrap()
-                    .0
-                    .as_ref(),
+                find_generic_password(Some(std::slice::from_ref(&secondary)), service, "openai").unwrap().0.as_ref(),
                 b"updated-secondary"
             );
-            store.write("openai", None).unwrap();
+            write_in(store, service, &provider("openai"), None).unwrap();
             assert_eq!(
-                find_generic_password(Some(std::slice::from_ref(&secondary)), &store.service, "openai")
-                    .unwrap_err()
-                    .code(),
+                find_generic_password(Some(std::slice::from_ref(&secondary)), service, "openai").unwrap_err().code(),
                 -25300
             );
-            secondary.set_generic_password(&store.service, "unknown_old", b"test-only").unwrap();
-            store.clear().unwrap();
-            assert_eq!(
-                find_generic_password(Some(&[secondary]), &store.service, "unknown_old").unwrap_err().code(),
-                -25300
-            );
+            secondary.set_generic_password(service, "unknown_old", b"test-only").unwrap();
+            clear_in(store, service).unwrap();
+            assert_eq!(find_generic_password(Some(&[secondary]), service, "unknown_old").unwrap_err().code(), -25300);
             return;
         }
         // Preserve the runner/developer's complete search list, including on assertion failure.
@@ -168,7 +172,7 @@ mod tests {
                 let _ = Command::new("/usr/bin/security").args(["delete-keychain", &self.path]).output();
             }
         }
-        let store = native_test_store();
+        let service = test_service();
         let output = security(&["list-keychains", "-d", "user"]);
         let previous: Vec<String> = String::from_utf8(output.stdout)
             .unwrap()
@@ -176,7 +180,7 @@ mod tests {
             .map(|line| line.trim().trim_matches('"').to_owned())
             .collect();
         let keychain = Keychain {
-            path: std::env::temp_dir().join(format!("{}.keychain-db", store.service)).to_str().unwrap().into(),
+            path: std::env::temp_dir().join(format!("{}.keychain-db", service)).to_str().unwrap().into(),
             previous,
         };
         security(&["create-keychain", "-p", "test-only", &keychain.path]);
@@ -186,12 +190,12 @@ mod tests {
         search.push(&keychain.path);
         security(&search);
         let secondary = SecKeychain::open(&keychain.path).unwrap();
-        secondary.set_generic_password(&store.service, "openai", b"legacy-secondary").unwrap();
+        secondary.set_generic_password(&service, "openai", b"legacy-secondary").unwrap();
         // Security.framework caches the search list per process. Other tests may already
         // have used it before the security CLI added this fixture; start a fresh process.
         let status = Command::new(std::env::current_exe().unwrap())
             .arg("macos_searches_nondefault_keychains_for_read_update_delete_and_clear")
-            .env(CHILD, &store.service)
+            .env(CHILD, &service)
             .env(KEYCHAIN_PATH, &keychain.path)
             .status()
             .unwrap();
