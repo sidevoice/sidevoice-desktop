@@ -27,7 +27,7 @@ mod tray;
 mod updater;
 mod voice;
 
-use crate::platform::update_eligibility::{NativeUpdateEligibility, UpdateEligibility};
+use crate::platform::update_eligibility;
 
 use crate::platform::application;
 use crate::platform::computer_name;
@@ -342,7 +342,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
         .initialization_script(bridge::WEBVIEW_LOG_SCRIPT)
         .initialization_script(bridge::script_for_origin(
             APP_ORIGIN,
-            NativeUpdateEligibility::available(&build.channel),
+            update_eligibility::available(&build.channel),
             &build,
             computer_name::read().as_deref(),
             &debug_options,

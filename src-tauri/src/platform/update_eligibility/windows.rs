@@ -1,15 +1,14 @@
-use super::UpdateEligibility;
-use sidevoice_desktop_core::updater;
-use tauri::utils::{config::BundleType, platform::bundle_type};
+use super::Native;
+use tauri::utils::config::BundleType;
 use winreg::{enums::HKEY_CURRENT_USER, RegKey};
 
-pub struct NativeUpdateEligibility;
+pub(super) struct Os;
 
-impl UpdateEligibility for NativeUpdateEligibility {
-    fn available(channel: &str) -> bool {
-        if updater::feed(channel).is_none() || bundle_type() != Some(BundleType::Nsis) {
-            return false;
-        }
+impl Native for Os {
+    const BUNDLE: Option<BundleType> = Some(BundleType::Nsis);
+
+    /// The registered per-user NSIS installation's own executable.
+    fn installed_here() -> bool {
         registration().is_some_and(|(location, binary)| {
             std::env::current_exe().is_ok_and(|exe| installed_executable(&exe, &location, &binary))
         })
