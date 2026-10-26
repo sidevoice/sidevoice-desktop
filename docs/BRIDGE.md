@@ -235,6 +235,11 @@ only allows from a click in the page. "Mostrar Sidevoice" opens the window for t
 `window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", version, engine, mediaKeys, build, muteShortcut, callControls, computerName?, localHost?, voice?, microphone?, updater? }`: the
 web UI feature-detects the desktop app by it, and each capability by its presence. `version` is the bridge's (2).
 
+`mediaKeys` is supplied by `MediaControls::support()`: `"native"` on macOS and `null` on Windows/Linux.
+It is independent of `host.voice`: with native voice and unavailable native media controls, the page
+keeps its Media Session handlers and Now Playing element. See [MEDIA_CONTROLS.md](MEDIA_CONTROLS.md)
+for the test boundary and hardware verification still needed.
+
 `computerName` is the name the person gave this computer, which the page proposes as the device's name: on macOS
 the Computer Name (System Settings → General → Sharing, «Mac de Ana»; SystemConfiguration's
 `SCDynamicStoreCopyComputerName`), not the `.local` hostname; on Windows the device name (the DNS host name, as typed);
@@ -837,10 +842,10 @@ host.debug?: {
 Each switch is a live getter: off by default, then what the app kept, then what the last `set` took. A switch the
 platform lacks always reads `false`.
 
-macOS: `inspectable` is `WKWebView.isInspectable` (macOS 13.3+; below that it has no effect), Safari → Develop lists
+macOS: `inspectable` is `WKWebView.isInspectable` (macOS 13.3+; below that it is omitted), Safari → Develop lists
 the webviews (docs/MACOS.md); `compositingBorders` and `repaintCounters` are WebKit's private `WKPreferences`
 `_setCompositingBordersVisible:` and `_setCompositingRepaintCountersVisible:`, set on each webview's live preferences
-and asked only where WebKit answers to them. All three are put on the room and the card as each is created and on each
+and offered only where WebKit provides their setters. All three are put on the room and the card as each is created and on each
 change. Windows and Linux: `available` is empty (Chromium's paint flags need a relaunch; no WebKitGTK binding is wired).
 The command is `debug_options` `{action: "set", name, enabled}`, answering `{available, inspectable,
 compositingBorders, repaintCounters}`; only the room page may call it (`capabilities/room.json`).
@@ -909,7 +914,7 @@ interface UpdaterStatus {
 - Add a command: a variant in `Command` (Rust), a `case` in `run` (JS), a test on each side.
 - Add a field: `CallSnapshot` uses `#[serde(default)]`, so old and new scripts interoperate;
   bump `version` only for a breaking change.
-- Tests: `npm test` (the script against a fake window, `host.voice`, `host.microphone`, `host.updater`, `host.build`, `host.muteShortcut`,
+- Tests: `npm run web && npm test` (the pinned page's media controls and the script against a fake window, `host.voice`, `host.microphone`, `host.updater`, `host.build`, `host.muteShortcut`,
   `host.callControls` and `host.localHost`'s install included), `cargo test -p sidevoice-desktop-core` (the voice call's builds, the media rule, the
   updater's status and the mute shortcut's form and shape among the rest) and `cargo test -p sidevoice-desktop-engine` (the engine
   over a test host), `cargo test -p sidevoice-local-host` (the local host against a stand-in core, its install against a stand-in

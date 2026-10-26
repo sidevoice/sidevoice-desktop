@@ -81,6 +81,7 @@ OpenSSL and xdo development packages).
 
 ```sh
 npm ci
+npm run web                                # fetch the pinned interface for the media-controls regression
 npm test                                   # the bridge script
 cd src-tauri
 cargo test -p sidevoice-desktop-core       # settings, bridge contract, media rules, the voice call's builds

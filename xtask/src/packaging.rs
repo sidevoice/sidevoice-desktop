@@ -7,25 +7,6 @@ use std::path::Path;
 use crate::util::{channel_config, ensure, read_bytes, repo, write, Channel, Cmd};
 use crate::Result;
 
-/// RFC 7396: objects merge, null removes a key, and arrays replace in full.
-fn merge(target: &mut Value, patch: Value) {
-    if let Value::Object(patch) = patch {
-        if !target.is_object() {
-            *target = serde_json::json!({});
-        }
-        let target = target.as_object_mut().unwrap();
-        for (key, value) in patch {
-            if value.is_null() {
-                target.remove(&key);
-            } else {
-                merge(target.entry(key).or_insert(Value::Null), value);
-            }
-        }
-    } else {
-        *target = patch;
-    }
-}
-
 fn moved(path: &str) -> String {
     match path {
         "Entitlements.plist" | "Info.plist" => format!("packaging/macos/{path}"),
@@ -75,7 +56,7 @@ pub fn compare(before: &str) -> Result<()> {
     for (os, targets) in [("macos", vec!["app", "dmg"]), ("windows", vec!["nsis"]), ("linux", vec!["deb", "appimage"])]
     {
         let mut current = base.clone();
-        merge(&mut current, json(&read_bytes(&repo().join(format!("src-tauri/tauri.{os}.conf.json")))?)?);
+        json_patch::merge(&mut current, &json(&read_bytes(&repo().join(format!("src-tauri/tauri.{os}.conf.json")))?)?);
         let mut previous = original.clone();
         // Tauri filters the old combined list to the formats supported on the selected host.
         let supported: Vec<Value> = previous["bundle"]["targets"]
@@ -100,8 +81,8 @@ pub fn compare(before: &str) -> Result<()> {
             let mut previous = previous.clone();
             let mut current = current.clone();
             if let Some(patch) = channel_config(channel, "0.2.2-nightly.17") {
-                merge(&mut previous, json(patch.as_bytes())?);
-                merge(&mut current, json(patch.as_bytes())?);
+                json_patch::merge(&mut previous, &json(patch.as_bytes())?);
+                json_patch::merge(&mut current, &json(patch.as_bytes())?);
             }
             ensure(
                 previous == current,
@@ -132,19 +113,4 @@ pub fn compare(before: &str) -> Result<()> {
     ensure(count > 0, "no assets compared")?;
     println!("{count} relocated assets: identical Git blob hashes (before {before})");
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn merge_patch_replaces_arrays_preserves_siblings_and_removes_nulls() {
-        let mut config = serde_json::json!({"bundle": {"targets": ["app", "nsis"], "icon": ["shared.png"], "macOS": {"signingIdentity": "-"}}, "remove": true});
-        merge(&mut config, serde_json::json!({"bundle": {"targets": ["nsis"]}, "remove": null}));
-        assert_eq!(
-            config,
-            serde_json::json!({"bundle": {"targets": ["nsis"], "icon": ["shared.png"], "macOS": {"signingIdentity": "-"}}})
-        );
-    }
 }

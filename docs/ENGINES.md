@@ -20,7 +20,7 @@ This app keeps what is the app's, in `src-tauri/engine/` (`sidevoice-desktop-eng
 - `Wanted` (`lib.rs`): which build an install is for, as the page names it — a catalogue build id, an engine, or
   neither for the recommended build.
 - `error.rs`: the keyed refusals, and how each of the engine's codes becomes one (with the code beside it as `code`).
-- `memory.rs`: what is available of the machine's memory now.
+- `platform/memory.rs`: what is available of the machine's memory now.
 
 ## The catalogue
 
