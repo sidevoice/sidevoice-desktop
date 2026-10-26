@@ -3,6 +3,8 @@
 //! Two non-inherited locks avoid a platform-specific lock transfer: the parent keeps `admission.lock`
 //! while the helper takes `reset.lock`. Startup must acquire both, keeping them through initialization.
 //! Only an authenticated, committed helper may wait for the parent's admission lock and continue.
+//! Where a running process's open files cannot be removed (Windows), the helper also waits for the parent itself to
+//! have terminated, through a hold on it taken while the handshake proves it alive.
 
 use serde::{Deserialize, Serialize};
 use sidevoice_platform::{
@@ -22,6 +24,33 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     runtime::Runtime,
 };
+
+#[cfg_attr(target_os = "macos", path = "reset_handoff/macos.rs")]
+#[cfg_attr(target_os = "windows", path = "reset_handoff/windows.rs")]
+#[cfg_attr(target_os = "linux", path = "reset_handoff/linux.rs")]
+mod imp;
+use imp::Native;
+
+/// What differs per OS: whether the parent's own exit must be awaited, and the hold that observes it.
+trait Os {
+    /// Whether a running process's open files are kept from removal (Windows). Where they are, the helper's cleanup
+    /// also waits for the parent to have terminated, every handle of it closed; the lock and EOF alone do not say so.
+    const OPEN_FILES_BLOCK_REMOVAL: bool = false;
+
+    /// A hold on one live process that can later tell whether it has terminated.
+    type Held: Send;
+
+    /// Hold the live process `pid`. Called only while the handshake proves the parent alive, so a reused PID is never
+    /// the one held.
+    fn hold(_pid: u32) -> io::Result<Self::Held> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+
+    /// Whether the held process has terminated. Never blocks.
+    fn terminated(_held: &Self::Held) -> io::Result<bool> {
+        Ok(false)
+    }
+}
 
 const HANDSHAKE: Duration = Duration::from_secs(5);
 const EXIT: Duration = Duration::from_secs(60);
@@ -78,14 +107,24 @@ impl Handoff {
     }
 }
 
-/// Launch this executable in helper mode, authenticate it and commit its plan. The returned guard must
-/// remain alive until process exit. Dropping it cancels and reaps the helper before releasing admission.
-/// This blocking operation belongs on the blocking pool, never inside a Tokio runtime.
-pub fn launch(admission: Admission, plan: ResetPlan) -> io::Result<Pending> {
-    let exe = std::env::current_exe()?;
-    let mut command = tokio::process::Command::new(exe);
+/// Launch `program` (this app's own executable, as the caller resolved and checked it) in helper mode, detached and
+/// windowless, authenticate it and commit its plan. The returned guard must remain alive until process exit.
+/// Dropping it cancels and reaps the helper before releasing admission. This blocking operation belongs on the
+/// blocking pool, never inside a Tokio runtime.
+pub fn launch(admission: Admission, plan: ResetPlan, program: &Path) -> io::Result<Pending> {
+    let mut command = tokio::process::Command::new(program);
     command.arg("--sidevoice-reset-helper");
     launch_command(admission, plan, command, HANDSHAKE)
+}
+
+/// Start `program` (the installed app, as the caller resolved and checked it) once cleanup is over: detached from the
+/// helper, windowless, with none of the helper's standard streams, and `marker=1` in its environment. A started
+/// process is not proof that the new app finished startup; that app's setup says so.
+pub fn relaunch(program: &Path, marker: &str) -> io::Result<()> {
+    let runtime = runtime()?;
+    let mut command = tokio::process::Command::new(program);
+    command.env(marker, "1").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    runtime.block_on(Processes::spawn_detached(command)).map(drop)
 }
 
 /// Finish startup and release the barrier. Transaction journal acknowledgement stays with its caller.
@@ -232,6 +271,8 @@ fn launch_command(
 /// caller may capture browser-process observations; it must perform no cleanup until `await_exit` succeeds.
 pub struct Helper {
     pub plan: ResetPlan,
+    /// The parent, held while the handshake proved it alive, where its own exit must be awaited.
+    parent: Option<<Native as Os>::Held>,
     root: PathBuf,
     reset: Lock,
     directory: HeldDirectory,
@@ -269,14 +310,18 @@ fn receive_at(root: &Path, timeout: Duration) -> io::Result<Helper> {
         })
         .await?
     })?;
+    // The parent is alive now: it waits in the handshake for this helper's readiness. Held from here, its termination
+    // can later be observed without trusting a PID that may have been reused by then. A hold that fails refuses.
+    let parent = if Native::OPEN_FILES_BLOCK_REMOVAL { Some(Native::hold(plan.parent_pid)?) } else { None };
     let reset = lock(root, "reset.lock")?;
-    Ok(Helper { plan, root: root.to_owned(), reset, directory, stream, runtime })
+    Ok(Helper { plan, parent, root: root.to_owned(), reset, directory, stream, runtime })
 }
 
 impl Helper {
     /// Acknowledge readiness, require explicit commit then channel EOF, and acquire the original parent's
     /// gate. EOF alone never authorizes cleanup. Holding both locks proves admission has passed to us;
-    /// numeric PID reuse cannot authorize this transition. Timeout/cancel fails without cleanup.
+    /// numeric PID reuse cannot authorize this transition. Where open files block removal, the held parent must
+    /// also have terminated. Timeout/cancel fails without cleanup.
     pub fn await_exit(self) -> io::Result<Admission> {
         self.wait_for_exit(EXIT)
     }
@@ -292,14 +337,22 @@ impl Helper {
                 if self.stream.read(&mut byte).await? != 0 {
                     return Err(io::Error::from(io::ErrorKind::Interrupted));
                 }
-                loop {
+                let gate = loop {
                     match lock(&self.root, "admission.lock") {
-                        Ok(gate) => return Ok(gate),
+                        Ok(gate) => break gate,
                         Err(error) if error.kind() == io::ErrorKind::WouldBlock => (),
                         Err(error) => return Err(error),
                     }
                     tokio::time::sleep(Duration::from_millis(20)).await;
+                };
+                // The gate is released as the parent's handles close, not after the last of them: its other files may
+                // still be open. Within the same deadline, wait for the process itself.
+                if let Some(parent) = &self.parent {
+                    while !Native::terminated(parent)? {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
                 }
+                Ok(gate)
             })
             .await?
         })?;
@@ -426,7 +479,7 @@ mod tests {
         // This test executable rejects the helper flag and exits: no capability ever comes back.
         let (_temp, root) = scratch();
         let started = Instant::now();
-        let refused = launch(at(&root).admit().unwrap(), plan()).err().unwrap();
+        let refused = launch(at(&root).admit().unwrap(), plan(), &std::env::current_exe().unwrap()).err().unwrap();
         // It may exit before the capability is written (BrokenPipe) or after (no reply: TimedOut); both fail closed.
         assert!(matches!(refused.kind(), io::ErrorKind::TimedOut | io::ErrorKind::BrokenPipe), "{refused}");
         assert!(started.elapsed() < HANDSHAKE + Duration::from_secs(5), "bounded by the handshake deadline");
@@ -575,6 +628,37 @@ mod tests {
         });
         assert!(root.join("refused").exists());
         assert!(!root.join("cleanup").exists());
+    }
+
+    #[test]
+    fn a_held_parent_is_terminated_only_once_it_has_exited() {
+        let (_temp, root) = scratch();
+        // This test executable in a mode that only sleeps: a live process to hold.
+        let name = module_path!().split_once("::").unwrap().1;
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &format!("{name}::helper_process")])
+            .env("SIDEVOICE_TEST_RESET_ROOT", &root)
+            .env("SIDEVOICE_TEST_RESET_MODE", "silent")
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        // A host that awaits the parent's exit holds a live process; elsewhere the handoff's own proof stands.
+        let held = Native::hold(child.id());
+        assert_eq!(held.is_ok(), Native::OPEN_FILES_BLOCK_REMOVAL);
+        if let Ok(held) = &held {
+            assert!(!Native::terminated(held).unwrap(), "a live process is not terminated");
+        }
+        child.kill().unwrap();
+        child.wait().unwrap();
+        if let Ok(held) = &held {
+            assert!(Native::terminated(held).unwrap(), "an exited process is");
+        }
+    }
+
+    #[test]
+    fn a_relaunch_that_cannot_start_says_so() {
+        let (_temp, root) = scratch();
+        assert!(relaunch(&root.join("missing"), "SIDEVOICE_TEST_RELAUNCH").is_err());
     }
 
     #[test]

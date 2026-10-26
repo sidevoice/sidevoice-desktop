@@ -35,6 +35,9 @@ interprocess = "2.4"
 [target.'cfg(windows)'.dependencies]
 # The process flags `process-wrap`'s `CreationFlags` takes.
 windows = { version = "0.62", features = ["Win32_System_Threading"] }
+# The reset handoff (`src-tauri`'s `platform/reset_handoff/windows.rs`, included by `tests/portable.rs`) holds the
+# parent process with it, as the app does.
+windows-sys = { version = "0.61", features = ["Win32_System_Threading"] }
 
 [dev-dependencies]
 keyring-core = { version = "1.0.1", features = ["sample"] }

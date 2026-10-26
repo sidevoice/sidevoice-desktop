@@ -4,7 +4,6 @@
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tauri::{AppHandle, Manager, Webview};
@@ -138,47 +137,41 @@ pub fn data_reset_report(app: AppHandle, webview: Webview) -> Answer {
     if !RESET_AVAILABLE {
         return Err(refused("reset.unavailable"));
     }
-    let path = report_path().ok_or_else(|| refused("reset.unavailable"))?;
-    consume_report_at(&path)
+    let dir = control_dir().ok_or_else(|| refused("reset.unavailable"))?;
+    consume_report_at(&dir)
 }
 
-fn consume_report_at(path: &Path) -> Answer {
-    if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
-        return Err(refused("reset.unsafe"));
-    }
-    match fs::read(path) {
-        Ok(bytes) if bytes.len() <= 16 * 1024 => {
+/// The report, or else the journal of an interrupted reset, read once from the control directory `dir` and removed.
+/// Every read and removal goes through the directory's held, checked handle (`sidevoice-platform`): a private
+/// directory, each record a private regular file (never a link, reparse point or second name) read within its bound.
+/// A refused record is `reset.unsafe` and stays.
+fn consume_report_at(dir: &Path) -> Answer {
+    use sidevoice_platform::fs::{Access, Directory, HeldDirectory};
+    use std::io::ErrorKind;
+    let refusal = |error: std::io::Error, otherwise| {
+        refused(if error.kind() == ErrorKind::PermissionDenied { "reset.unsafe" } else { otherwise })
+    };
+    let held = HeldDirectory::open(dir, Access::Private).map_err(|error| refusal(error, "reset.failed"))?;
+    let read = |name: &str| held.read(name.as_ref(), Access::Private, RECORD_LIMIT);
+    match read(REPORT).map_err(|error| refusal(error, "reset.failed"))? {
+        Some(bytes) => {
             let value: Value = serde_json::from_slice(&bytes).map_err(|_| refused("reset.failed"))?;
-            let journal = path.with_file_name("journal.json");
-            if let Err(error) = fs::remove_file(&journal) {
-                if error.kind() != std::io::ErrorKind::NotFound {
-                    return Err(refused("reset.report-failed"));
-                }
-            }
-            fs::remove_file(path).map_err(|_| refused("reset.failed"))?;
+            held.remove(JOURNAL.as_ref()).map_err(|error| refusal(error, "reset.report-failed"))?;
+            held.remove(REPORT.as_ref()).map_err(|error| refusal(error, "reset.failed"))?;
             Ok(value)
         }
-        Ok(_) => Err(refused("reset.failed")),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let journal = path.with_file_name("journal.json");
-            if fs::symlink_metadata(&journal).is_ok_and(|m| m.file_type().is_symlink()) {
-                return Err(refused("reset.unsafe"));
+        None => match read(JOURNAL).map_err(|error| refusal(error, "reset.report-failed"))? {
+            Some(bytes) => {
+                let progress: Value = serde_json::from_slice(&bytes).map_err(|_| refused("reset.report-failed"))?;
+                let mut failed = progress.get("failed").and_then(Value::as_array).cloned().unwrap_or_default();
+                failed.push(json!({"step":"helper", "key":"reset.interrupted"}));
+                held.remove(JOURNAL.as_ref()).map_err(|error| refusal(error, "reset.report-failed"))?;
+                Ok(
+                    json!({"state":"partial", "completed":progress.get("completed").cloned().unwrap_or_else(|| json!([])), "failed":failed, "agents":{}}),
+                )
             }
-            match fs::read(&journal) {
-                Ok(bytes) if bytes.len() <= 16 * 1024 => {
-                    let progress: Value = serde_json::from_slice(&bytes).map_err(|_| refused("reset.report-failed"))?;
-                    let mut failed = progress.get("failed").and_then(Value::as_array).cloned().unwrap_or_default();
-                    failed.push(json!({"step":"helper", "key":"reset.interrupted"}));
-                    fs::remove_file(&journal).map_err(|_| refused("reset.report-failed"))?;
-                    Ok(
-                        json!({"state":"partial", "completed":progress.get("completed").cloned().unwrap_or_else(|| json!([])), "failed":failed, "agents":{}}),
-                    )
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Value::Null),
-                _ => Err(refused("reset.report-failed")),
-            }
-        }
-        Err(_) => Err(refused("reset.failed")),
+            None => Ok(Value::Null),
+        },
     }
 }
 
@@ -276,12 +269,14 @@ fn begin_reset(app: &AppHandle, uninstall: bool) -> Answer {
     let admission = Handoff::new().and_then(|handoff| handoff.admit()).map_err(|error| {
         refused(if error.kind() == std::io::ErrorKind::WouldBlock { "reset.busy" } else { "reset.helper-failed" })
     })?;
+    // The program the helper runs and the relaunch starts, resolved and checked before anything is touched.
+    let program = installed_program().ok_or_else(|| refused("reset.helper-failed"))?;
     let (mut failed, agents, service_outcome) = reset_before_exit()?;
     // The provider keys, on every host that runs the transaction, journalled as the last step before exit.
     if credentials::clear_all().is_err() {
         failed.push(json!({"step": "keychain", "key": "reset.keychain-failed"}));
     }
-    let journal = report_path().ok_or_else(|| refused("reset.helper-failed"))?.with_file_name("journal.json");
+    let journal = control_dir().ok_or_else(|| refused("reset.helper-failed"))?.join(JOURNAL);
     write_atomic_json(
         &journal,
         &json!({"stage":"keychain", "completed":["service", "keychain"], "failed":failed.clone()}),
@@ -290,6 +285,7 @@ fn begin_reset(app: &AppHandle, uninstall: bool) -> Answer {
     let pending = reset_handoff::launch(
         admission,
         ResetPlan { parent_pid: std::process::id(), uninstall, initial: json!({"failed": failed, "agents": agents}) },
+        &program,
     )
     .map_err(|_| refused("reset.helper-failed"))?;
     *app.state::<AppState>().reset_helper.lock().unwrap() = Some(pending);
@@ -347,13 +343,14 @@ fn reset_before_exit() -> Result<(Vec<Value>, Value, &'static str), Value> {
         Err(NoConnectorCli::Unsupported) => return Err(refused("reset.unsupported-connector")),
         Err(NoConnectorCli::Refused) => return Err(refused("reset.unsafe")),
     };
-    let report = report_path().ok_or_else(|| refused("reset.helper-failed"))?;
+    let control = control_dir().ok_or_else(|| refused("reset.helper-failed"))?;
+    let report = control.join(REPORT);
     if let Err(error) = fs::remove_file(&report) {
         if error.kind() != std::io::ErrorKind::NotFound {
             return Err(refused("reset.report-failed"));
         }
     }
-    let journal = report.with_file_name("journal.json");
+    let journal = control.join(JOURNAL);
     write_atomic_json(&journal, &json!({"stage":"preflight", "completed":[], "failed":[]}))
         .map_err(|_| refused("reset.helper-failed"))?;
     let (service, service_outcome) = match installed_cli {
@@ -428,11 +425,16 @@ fn residual_connector_data(data: &Path) -> bool {
 /// private, synced, then renamed into the private control directory; links never followed).
 fn write_atomic_json(path: &Path, value: &Value) -> Result<(), &'static str> {
     use sidevoice_platform::fs::{Files, Fs};
+    Files::write_private(path, &record(value)?).map_err(|_| "report-write")
+}
+
+/// A journal or report as written: JSON within [`RECORD_LIMIT`].
+fn record(value: &Value) -> Result<Vec<u8>, &'static str> {
     let bytes = serde_json::to_vec(value).map_err(|_| "report-write")?;
-    if bytes.len() > 16 * 1024 {
+    if bytes.len() as u64 > RECORD_LIMIT {
         return Err("report-write");
     }
-    Files::write_private(path, &bytes).map_err(|_| "report-write")
+    Ok(bytes)
 }
 
 fn run_checked_uninstall<T>(
@@ -504,12 +506,32 @@ fn is_release_binary(path: &Path, releases: &Path) -> bool {
         if !id.to_string_lossy().starts_with('.') && *bin == "bin" && *name == connector_program().as_str())
 }
 
-/// The report sits in the handoff's private control directory, outside every reset deletion root.
-fn report_path() -> Option<PathBuf> {
+/// The report and the journal sit in the handoff's private control directory, outside every reset deletion root,
+/// made private (and checked with everything above it) by the shared private-directory API on every OS.
+fn control_dir() -> Option<PathBuf> {
     use sidevoice_platform::fs::{Files, Fs};
     let dir = reset_handoff::state_dir().ok()?;
     Files::ensure_private_dir(&dir).ok()?;
-    Some(dir.join("report.json"))
+    Some(dir)
+}
+
+/// The report the page reads once: what the reset did.
+const REPORT: &str = "report.json";
+/// The journal: what the reset is doing, written before each step's effect and before the helper deletes anything.
+const JOURNAL: &str = "journal.json";
+/// Both records are bounded JSON.
+const RECORD_LIMIT: u64 = 16 * 1024;
+/// The environment marker of the relaunch after a reset: that app's setup finalizes the report.
+const RELAUNCH_MARKER: &str = "SIDEVOICE_RESET_RELAUNCH";
+
+/// The installed app, as Tauri resolves its own binary (Linux: the AppImage itself rather than its temporary mount,
+/// which goes away with the app), checked as a Sidevoice program (`trusted_program`: this user's or the system's, and
+/// nobody else may change it or the folders above it). The helper and the relaunch start only this; neither the page
+/// nor the plan names a program.
+fn installed_program() -> Option<PathBuf> {
+    use sidevoice_platform::fs::{Files, Fs};
+    let program = tauri::process::current_binary(&tauri::Env::default()).ok()?;
+    Files::trusted_program(&program).ok()
 }
 
 /// Absolute, with no `.` or `..`: a drive or share prefix, the root, then plain names.
@@ -548,11 +570,17 @@ fn clean_up_after_exit(
         .and_then(|home| webview_data::locations(&home))
         .and_then(|paths| webview_data::capture(parent_pid, paths));
     let Ok(lock) = helper.await_exit() else { return };
-    let Some(report) = report_path() else { return };
+    let Some(control) = control_dir() else { return };
+    let report = control.join(REPORT);
     let Some(initial_failed) = initial.get("failed").and_then(Value::as_array) else { return };
     let mut completed = Vec::new();
     let mut failed = initial_failed.clone();
-    let journal = report.with_file_name("journal.json");
+    let journal = control.join(JOURNAL);
+    // The intent first: nothing is deleted before the journal says the cleanup has started. If it cannot say so,
+    // nothing is deleted, and the journal written before the exit reports the reset as interrupted.
+    if write_atomic_json(&journal, &json!({"stage":"cleanup", "completed":[], "failed":failed})).is_err() {
+        return;
+    }
     let browser = browser
         .and_then(|owner| webview_data::wait_released(owner, std::time::Instant::now() + Duration::from_secs(10)));
     // A journal that cannot be written stops the deletion: an interruption could no longer be reported.
@@ -590,10 +618,8 @@ fn conclude_reset(
     let relaunch = || {
         // Cleanup is over. A new app must acquire this lock independently.
         drop(lock);
-        std::env::current_exe()
-            .ok()
-            .and_then(|exe| Command::new(exe).env("SIDEVOICE_RESET_RELAUNCH", "1").spawn().ok())
-            .is_some()
+        // Resolved and checked again right before it starts.
+        installed_program().is_some_and(|program| reset_handoff::relaunch(&program, RELAUNCH_MARKER).is_ok())
     };
     if uninstall {
         let trash = || match uninstall::uninstall() {
@@ -665,19 +691,20 @@ fn finish_uninstall_at(
 }
 
 pub fn finalize_relaunched_reset() {
-    if std::env::var("SIDEVOICE_RESET_RELAUNCH").as_deref() != Ok("1") {
+    if std::env::var(RELAUNCH_MARKER).as_deref() != Ok("1") {
         return;
     }
-    let Some(report) = report_path() else { return };
-    let journal = report.with_file_name("journal.json");
-    let _ = finalize_relaunched_reset_at(&report, &journal);
+    let Some(control) = control_dir() else { return };
+    let _ = finalize_relaunched_reset_at(&control);
 }
 
-fn finalize_relaunched_reset_at(report: &Path, journal: &Path) -> Result<(), &'static str> {
-    let bytes = fs::read(journal).map_err(|_| "report-read")?;
-    if bytes.len() > 16 * 1024 {
-        return Err("report-read");
-    }
+/// The relaunched app's setup turns the helper's `awaiting-relaunch` journal in the control directory `dir` into the
+/// final report: read, written and removed through the directory's held, checked handle, as the page's read is.
+fn finalize_relaunched_reset_at(dir: &Path) -> Result<(), &'static str> {
+    use sidevoice_platform::fs::{Access, Directory, HeldDirectory};
+    let held = HeldDirectory::open(dir, Access::Private).map_err(|_| "report-read")?;
+    let bytes =
+        held.read(JOURNAL.as_ref(), Access::Private, RECORD_LIMIT).map_err(|_| "report-read")?.ok_or("report-read")?;
     let pending: Value = serde_json::from_slice(&bytes).map_err(|_| "report-read")?;
     if pending["stage"] != "awaiting-relaunch" {
         return Err("report-stage");
@@ -685,8 +712,8 @@ fn finalize_relaunched_reset_at(report: &Path, journal: &Path) -> Result<(), &'s
     let failed = pending.get("failed").and_then(Value::as_array).ok_or("report-stage")?;
     let value = json!({"state":if failed.is_empty() {"complete"} else {"partial"},
         "completed":pending["completed"],"failed":failed,"agents":pending["agents"]});
-    write_atomic_json(report, &value)?;
-    fs::remove_file(journal).map_err(|_| "report-remove")?;
+    held.write(REPORT.as_ref(), &record(&value)?).map_err(|_| "report-write")?;
+    held.remove(JOURNAL.as_ref()).map_err(|_| "report-remove")?;
     Ok(())
 }
 
@@ -825,7 +852,7 @@ mod tests {
         gate.leave();
     }
 
-    /// The report's directory as `report_path()` makes it: private, as the shared record writer requires.
+    /// The report's directory as `control_dir()` makes it: private, as the shared record writer requires.
     fn private_dir() -> (tempfile::TempDir, PathBuf) {
         let (temp, home) = fixture();
         let dir = home.join("control");
@@ -841,11 +868,11 @@ mod tests {
         write_atomic_json(&journal, &json!({"stage":"service", "completed":["service"], "failed":[]})).unwrap();
         // Readable as a private record: this user's, not readable or writable by others.
         assert!(Files::read_private(&journal, 16 * 1024).unwrap().is_some());
-        let interrupted = consume_report_at(&report).unwrap();
+        let interrupted = consume_report_at(&dir).unwrap();
         assert_eq!(interrupted["state"], "partial");
         assert_eq!(interrupted["completed"], json!(["service"]));
         assert_eq!(interrupted["failed"][0]["key"], "reset.interrupted");
-        assert_eq!(consume_report_at(&report), Ok(Value::Null));
+        assert_eq!(consume_report_at(&dir), Ok(Value::Null));
         write_atomic_json(&journal, &json!({"stage":"cleanup", "completed":["service", "models"], "failed":[]}))
             .unwrap();
         write_atomic_json(
@@ -853,13 +880,34 @@ mod tests {
             &json!({"state":"complete", "completed":["service", "models"], "failed":[], "agents":{}}),
         )
         .unwrap();
-        assert_eq!(consume_report_at(&report).unwrap()["state"], "complete");
-        assert_eq!(consume_report_at(&report), Ok(Value::Null));
+        assert_eq!(consume_report_at(&dir).unwrap()["state"], "complete");
+        assert_eq!(consume_report_at(&dir), Ok(Value::Null));
         let outside = temp.path().join("outside.json");
         fs::write(&outside, b"{}").unwrap();
         Files::symlink(&outside, &report);
-        assert_eq!(consume_report_at(&report), Err(refused("reset.unsafe")));
+        assert_eq!(consume_report_at(&dir), Err(refused("reset.unsafe")));
         assert!(outside.exists());
+    }
+
+    #[test]
+    fn records_are_read_within_their_bound_from_a_private_file_and_a_refused_one_stays() {
+        let (_temp, dir) = private_dir();
+        let (report, journal) = (dir.join(REPORT), dir.join(JOURNAL));
+        let oversized = vec![b' '; RECORD_LIMIT as usize + 1];
+        Files::write_private(&report, &oversized).unwrap();
+        assert_eq!(consume_report_at(&dir), Err(refused("reset.failed")));
+        assert!(report.exists());
+        fs::remove_file(&report).unwrap();
+        Files::write_private(&journal, &oversized).unwrap();
+        assert_eq!(finalize_relaunched_reset_at(&dir), Err("report-read"));
+        assert!(journal.exists());
+        // A journal with a second name is not a private record of ours: refused, and left as it is.
+        write_atomic_json(&journal, &json!({"stage":"awaiting-relaunch", "completed":[], "failed":[], "agents":{}}))
+            .unwrap();
+        fs::hard_link(&journal, dir.join("alias")).unwrap();
+        assert_eq!(consume_report_at(&dir), Err(refused("reset.unsafe")));
+        assert_eq!(finalize_relaunched_reset_at(&dir), Err("report-read"));
+        assert!(journal.exists() && !report.exists());
     }
 
     #[test]
@@ -876,9 +924,9 @@ mod tests {
         });
         assert!(launched);
         assert!(journal.exists());
-        finalize_relaunched_reset_at(&report, &journal).unwrap();
+        finalize_relaunched_reset_at(&dir).unwrap();
         assert!(!journal.exists());
-        assert_eq!(consume_report_at(&report).unwrap()["state"], "complete");
+        assert_eq!(consume_report_at(&dir).unwrap()["state"], "complete");
 
         let bad_write = |path: &Path, value: &Value| {
             if path == report {
@@ -889,10 +937,10 @@ mod tests {
         };
         finish_reset_at(&report, &journal, &["service"], vec![], json!({}), bad_write, || true);
         assert!(journal.exists());
-        assert_eq!(consume_report_at(&report).unwrap()["state"], "partial");
+        assert_eq!(consume_report_at(&dir).unwrap()["state"], "partial");
 
         finish_reset_at(&report, &journal, &["service"], vec![], json!({}), write_atomic_json, || false);
-        let failed = consume_report_at(&report).unwrap();
+        let failed = consume_report_at(&dir).unwrap();
         assert_eq!(failed["state"], "partial");
         assert_eq!(failed["failed"][0]["key"], "reset.relaunch-failed");
     }
