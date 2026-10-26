@@ -1,7 +1,7 @@
 //! macOS: Tauri's folders plus the window state macOS saves for the app and its `defaults` domain; the app removes
 //! itself to the Trash.
 
-use super::{delete_app_folders, remove_entry, Error, Os, Released, Steps, IDENTIFIER};
+use super::{delete_app_folders, home, remove_entry, Error, Os, Released, Steps, IDENTIFIER};
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -10,6 +10,22 @@ use std::process::Command;
 pub(super) struct Native;
 
 impl Os for Native {
+    /// `getpwuid_r(geteuid())`: the account database, not `HOME`.
+    fn account_home() -> Option<PathBuf> {
+        use std::os::unix::ffi::OsStrExt;
+        let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
+        let mut found: *mut libc::passwd = std::ptr::null_mut();
+        let mut buffer = vec![0u8; 16 * 1024];
+        let result = unsafe {
+            libc::getpwuid_r(libc::geteuid(), &mut entry, buffer.as_mut_ptr().cast(), buffer.len(), &mut found)
+        };
+        if result != 0 || found.is_null() || entry.pw_dir.is_null() {
+            return None;
+        }
+        let bytes = unsafe { std::ffi::CStr::from_ptr(entry.pw_dir) }.to_bytes();
+        Some(PathBuf::from(std::ffi::OsStr::from_bytes(bytes)))
+    }
+
     /// `~/Library/Logs/<id>`.
     fn log_dir(home: &Path, _local: &Path) -> PathBuf {
         home.join("Library/Logs").join(IDENTIFIER)
@@ -18,7 +34,7 @@ impl Os for Native {
     /// The folders, then the saved window state, then the `defaults` domain.
     fn delete_data(browser: &io::Result<Released>, steps: Steps) -> Result<(), Error> {
         delete_app_folders(browser, steps)?;
-        let saved = dirs::home_dir().ok_or("unsafe-home").and_then(|home| {
+        let saved = home().and_then(|home| {
             remove_entry(&home, &home.join("Library/Saved Application State").join(format!("{IDENTIFIER}.savedState")))
         });
         if !steps("saved-state", saved) || !steps("preferences", remove_preferences()) {

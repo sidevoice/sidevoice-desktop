@@ -8,6 +8,10 @@
 //! (`sidevoice-platform`'s `data_dir`) and the browser storage `webview_data` names. A folder inside another one
 //! is removed with it. Nothing comes from the page or from the reset plan.
 //!
+//! Every folder must be inside [`home`]: `dirs`' home only when it is the one the OS account database records for
+//! this user (`Os::account_home`), checked before the pre-exit connector work and again in the helper; another home
+//! (an alternate profile supplied as `HOME`) is refused before anything is deleted.
+//!
 //! Every removal goes through the shared held-root capability (`HeldDirectory` + `Removal`): the selected entry and
 //! its whole tree are preflighted before anything is deleted, links are unlinked and never followed, entry identity
 //! and mounts below the held parent are checked while deleting. That capability checks mounts only from the held
@@ -57,14 +61,14 @@ pub type Steps<'a> = &'a mut dyn FnMut(&'static str, Result<(), &'static str>) -
 /// removed only when `browser` proves its writers released (`webview_data`); otherwise those steps fail with
 /// `reset.process-busy` and stay. A missing folder is a completed step.
 pub fn delete_app_folders(browser: &io::Result<Released>, steps: Steps) -> Result<(), Error> {
-    let folders = match Folders::native() {
-        Ok(folders) => folders,
-        Err(key) => {
-            steps("app-data", Err(key));
-            return Err(Error::Failed(key));
-        }
-    };
-    folders.delete(browser, steps)
+    delete_folders(home().and_then(Places::native), browser, steps)
+}
+
+/// The account home every folder must be inside: `dirs`' home (which trusts `$HOME`, as Tauri does) only when it is
+/// the home the OS account database records for this user. Anything else, or a host without that record, is
+/// `unsafe-home`: callers do no destructive work in another home.
+pub fn home() -> Result<PathBuf, &'static str> {
+    accept_home(dirs::home_dir(), Native::account_home())
 }
 
 /// Delete all the app's data on this computer: its folders and, where the OS keeps more, that too.
@@ -101,6 +105,12 @@ pub fn check_tree(home: &Path, path: &Path) -> Result<(), &'static str> {
 
 /// What differs per OS. Hosts without more data than their folders, and without self-removal, keep the defaults.
 trait Os {
+    /// The home of the account running the app, as the OS account database records it (never `HOME`), or `None`
+    /// where there is none to check against; then [`home`] refuses.
+    fn account_home() -> Option<PathBuf> {
+        None
+    }
+
     /// Tauri's `app_log_dir` for this home and local data folder: `<local>/<id>/logs` (Linux, Windows).
     fn log_dir(_home: &Path, local: &Path) -> PathBuf {
         local.join(IDENTIFIER).join("logs")
@@ -122,6 +132,28 @@ trait Os {
     /// Remove the app itself, checking it again first.
     fn uninstall() -> Result<(), Error> {
         Err(Error::Unsupported)
+    }
+}
+
+fn accept_home(home: Option<PathBuf>, account: Option<PathBuf>) -> Result<PathBuf, &'static str> {
+    match (home, account) {
+        (Some(home), Some(account)) if home == account => Ok(home),
+        _ => Err("unsafe-home"),
+    }
+}
+
+/// Delete the folders of `places`, or report why there are none before deleting anything.
+fn delete_folders(
+    places: Result<Places, &'static str>,
+    browser: &io::Result<Released>,
+    steps: Steps,
+) -> Result<(), Error> {
+    match places {
+        Ok(places) => Folders::from(places).delete(browser, steps),
+        Err(key) => {
+            steps("app-data", Err(key));
+            Err(Error::Failed(key))
+        }
     }
 }
 
@@ -160,9 +192,9 @@ struct Folders {
 }
 
 impl Places {
-    fn native() -> Result<Self, &'static str> {
+    /// For the account `home` ([`home`]).
+    fn native(home: PathBuf) -> Result<Self, &'static str> {
         let unavailable = "reset.unavailable";
-        let home = dirs::home_dir().ok_or(unavailable)?;
         let local = dirs::data_local_dir().ok_or(unavailable)?;
         let webview = webview_data::locations(&home).map_err(|_| unavailable)?.paths().to_vec();
         Ok(Self {
@@ -177,10 +209,6 @@ impl Places {
 }
 
 impl Folders {
-    fn native() -> Result<Self, &'static str> {
-        Ok(Self::from(Places::native()?))
-    }
-
     /// `app-data`, `models`, browser storage that is no other folder (`webview`), `cache`, `logs`; a folder equal
     /// to or inside an earlier one is dropped (deleting the earlier one removes it).
     fn from(places: Places) -> Self {
@@ -370,6 +398,47 @@ mod tests {
     }
 
     #[test]
+    fn an_alternate_home_is_refused_before_anything_is_deleted() {
+        let (_temp, home) = fixture();
+        // A canonical, private, same-owner home restored inside the real one, supplied as `HOME`.
+        let alternate = home.join("restored-account-home");
+        directory(&alternate);
+        let places = macos(&alternate);
+        for path in [&places.data, &places.logs, &places.models.join("blobs")] {
+            for ancestor in
+                path.ancestors().collect::<Vec<_>>().into_iter().rev().filter(|dir| dir.starts_with(&alternate))
+            {
+                if !ancestor.exists() {
+                    directory(ancestor);
+                }
+            }
+            put(&path.join("payload"));
+        }
+        assert_eq!(accept_home(Some(alternate.clone()), Some(home.clone())), Err("unsafe-home"));
+        assert_eq!(accept_home(None, Some(home.clone())), Err("unsafe-home"));
+        assert_eq!(accept_home(Some(home.clone()), None), Err("unsafe-home"));
+        let mut seen = Vec::new();
+        let deleted = delete_folders(
+            accept_home(Some(alternate.clone()), Some(home.clone())).map(|home| macos(&home)),
+            &busy(),
+            &mut |name, result| {
+                seen.push((name, result));
+                true
+            },
+        );
+        assert!(matches!(deleted, Err(Error::Failed("unsafe-home"))));
+        assert_eq!(seen, vec![("app-data", Err("unsafe-home"))]);
+        let places = macos(&alternate);
+        for path in [&places.data, &places.logs, &places.models.join("blobs")] {
+            assert!(path.join("payload").is_file());
+        }
+        // The account's own home is accepted and its folders go.
+        let accepted = accept_home(Some(alternate.clone()), Some(alternate.clone())).map(|home| macos(&home));
+        assert!(delete_folders(accepted, &busy(), &mut |_, _| true).is_ok());
+        assert!(!places.logs.exists() && !places.models.join("blobs").exists());
+    }
+
+    #[test]
     fn a_folder_inside_another_goes_with_it_and_shared_places_are_named_once() {
         let home = Path::new("/home/ana");
         let local = home.join(".local/share");
@@ -394,7 +463,7 @@ mod tests {
 
     #[test]
     fn native_folders_are_inside_home_distinct_and_unnested() {
-        let Ok(folders) = Folders::native() else { return };
+        let Ok(folders) = home().and_then(Places::native).map(Folders::from) else { return };
         for (index, folder) in folders.list.iter().enumerate() {
             assert!(folder.path.starts_with(&folders.home) && folder.path != folders.home);
             assert!(folders.list[index + 1..]

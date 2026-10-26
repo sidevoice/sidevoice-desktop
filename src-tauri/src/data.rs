@@ -308,7 +308,8 @@ fn begin_reset(app: &AppHandle, uninstall: bool) -> Answer {
 fn reset_before_exit() -> Result<(Vec<Value>, Value, &'static str), Value> {
     use sidevoice_local_host::{cli::Cli, paths::DataDirs};
     let dirs = DataDirs::from_env().ok_or_else(|| refused("reset.unavailable"))?;
-    let home = std::env::var_os("HOME").map(PathBuf::from).ok_or_else(|| refused("reset.unavailable"))?;
+    // `HOME` only when it is this account's home in the account database: no other home is reset.
+    let home = app_data::home().map_err(|reason| json!({"key": "reset.unsafe", "reason": reason}))?;
     validate_uninstall_scope_at(&home, &dirs.data)
         .map_err(|reason| json!({"key": "reset.unsafe", "reason": reason}))?;
     let installed_cli = match Cli::installed(&dirs) {
@@ -481,6 +482,10 @@ fn fresh_service_absent_with(
 
 #[cfg(target_os = "macos")]
 fn run_checked_uninstall<T>(home: &Path, data: &Path, invoke: impl FnOnce() -> Result<T, Value>) -> Result<T, Value> {
+    // Still this account's home in the account database, right before the destructive call.
+    if app_data::home().as_deref() != Ok(home) {
+        return Err(json!({"key": "reset.unsafe", "reason": "unsafe-home"}));
+    }
     validate_uninstall_scope_at(home, data).map_err(|reason| json!({"key": "reset.unsafe", "reason": reason}))?;
     invoke()
 }
@@ -576,9 +581,9 @@ fn clean_up_after_exit(
     initial: Value,
 ) {
     use crate::platform::webview_data;
-    let unresolved = || std::io::Error::new(std::io::ErrorKind::NotFound, "no home folder for this account");
-    let browser = dirs::home_dir()
-        .ok_or_else(unresolved)
+    let unsafe_home = |reason| std::io::Error::new(std::io::ErrorKind::PermissionDenied, reason);
+    let browser = app_data::home()
+        .map_err(unsafe_home)
         .and_then(|home| webview_data::locations(&home))
         .and_then(|paths| webview_data::capture(parent_pid, paths));
     let Ok(lock) = helper.await_exit() else { return };

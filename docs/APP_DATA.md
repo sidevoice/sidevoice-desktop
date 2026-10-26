@@ -17,10 +17,15 @@ reset plan carries none.
   this user may write, not a disk image or translocated copy), and the removal (macOS: Finder's move to the Trash).
   Elsewhere `false` / `Unsupported`. `data.rs` refuses an uninstall before its confirmation when `uninstallable()`
   is false, deletes the data, and only after a clean deletion calls `uninstall()`.
+- `home()`: the account home every step works in: `dirs`' home (which trusts `$HOME`) only when it equals the home
+  the OS account database records for this user (`Os::account_home`; macOS `getpwuid_r(geteuid())`; none elsewhere,
+  so it refuses there). `data.rs` takes the connector preflight's home from it, checks it again right before the
+  installed uninstaller runs, and the helper's deletion resolves it again. An alternate home supplied as `HOME`
+  (say, a restored profile inside the real one) is refused before anything is deleted; a test pins that.
 - `check_tree(home, path)`: the read-only preflight of a protected root (the connector's data and releases, and
   browser storage before its removal).
 
-What differs per OS is a private `Os` trait (`app_data/{macos,linux,windows}.rs`): the log folder rule,
+What differs per OS is a private `Os` trait (`app_data/{macos,linux,windows}.rs`): the account home, the log folder rule,
 `delete_data`, `UNINSTALLABLE`, the self-removal check and `uninstall`. Reset is still offered on macOS only
 (`reset_availability`): the rest of the transaction is macOS-only.
 
