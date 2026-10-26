@@ -22,8 +22,8 @@ A `getUserMedia` call in the room page has to pass four gates. Each one is handl
 |---|---|---|
 | Secure context | The page is a secure context | The bundled interface on `tauri://localhost` is one (verified in CI) |
 | WebKit's per-origin decision | A `WKUIDelegate` answer for the origin | `on_permission_request` in `open_room` → `core/src/media.rs`: microphone **granted to the app's own pages only** (the bundled interface) where the page runs the call, denied to every page where the app runs it (macOS); camera and anything else denied. (wry's default, with no handler, grants everything to every page.) |
-| App privacy (TCC) | `NSMicrophoneUsageDescription` in `Info.plist` — without it macOS kills the app on first capture | `src-tauri/Info.plist`, merged by the bundler; CI checks it is in the built app |
-| Hardened runtime | `com.apple.security.device.audio-input` entitlement | `src-tauri/Entitlements.plist`; CI checks it is in the signature |
+| App privacy (TCC) | `NSMicrophoneUsageDescription` in `Info.plist` — without it macOS kills the app on first capture | `src-tauri/packaging/macos/Info.plist`, merged by the bundler; CI checks it is in the built app |
+| Hardened runtime | `com.apple.security.device.audio-input` entitlement | `src-tauri/packaging/macos/Entitlements.plist`; CI checks it is in the signature |
 
 On macOS the app runs the voice call itself (cpal; docs/BRIDGE.md → "The voice call"), so the WebKit gate denies the
 microphone to every page, the bundled interface included (`media::decide`), and the call's capture passes only the
@@ -46,7 +46,7 @@ WKWebView implements it with the system voice-processing unit.
 None. The app shows its own bundled interface and a device is admitted by pairing with the node (a one-time code
 the node issues; docs/TARGETS.md). There is no oauth2-proxy or Google login in the app.
 
-## Headset buttons (src/headset.rs)
+## Headset buttons (src/platform/media_controls/macos.rs)
 
 What macOS offers a plain app, checked against Apple's documentation (2026-09-30):
 
