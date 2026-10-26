@@ -47,15 +47,21 @@ Portable contract tests live with the interface and run without Tauri/model link
 `cargo test -p sidevoice-desktop-test-support --test credentials`. The existing macOS and Windows PR
 jobs run them through `cargo xtask test-support`; the Linux workspace tests run them too.
 The shared concern holds the public functions and every store-independent body: naming, validation, requests,
-namespace clearing (the store's exact `service` search, then deleting each entry it returns), admission and error categories.
-Its private `Os` trait, implemented by `Native` in `credentials/{macos,windows,linux}.rs`, has the real differences
-only: `store()`, the OS's keyring store, and `PROMPTS`, whether its calls can wait on an unanswered access or
-unlock prompt (macOS and Linux), from which common code selects the bounded admission. Windows' store applies local
-persistence to its entries and turns the exact `service` search into the anchored target pattern. macOS' store is the
-search-list adapter; its search returns the whole service as one entry, whose deletion is a single service-scoped
-`SecItemDelete` for all matches across the search list, so no account is read or decoded. Test builds give the public
-functions a per-process namespace, so the macOS and Windows fixtures of `read`/`write`/`clear_all` never touch a
-person's keys.
+the default namespace clear (the store's exact `service` search, then deleting each entry it returns), admission and
+error categories. Its private `Os` trait, implemented by `Native` in `credentials/{macos,windows,linux}.rs`, has the
+real differences only:
+
+- `store()`: the OS's keyring store. Windows' store applies local persistence to its entries and turns the exact
+  `service` search into the anchored target pattern. macOS' store is the search-list adapter; it has no search
+  (keyring's `NotSupportedByStore` default).
+- `clear_namespace(service)`: deletes the whole namespace. The default is the search-and-delete above (Windows, Linux).
+  macOS overrides it with one service-scoped `SecItemDelete` for all matches across the search list, so no account is
+  read or decoded.
+- `PROMPTS`: whether store calls can wait on an unanswered access or unlock prompt (macOS and Linux). Common code
+  selects the bounded admission from it.
+
+Test builds give the public functions a per-process namespace, so the macOS and Windows fixtures of
+`read`/`write`/`clear_all` never touch a person's keys.
 
 Native regression fixtures live beside their OS implementation because they must exercise Keychain
 search-list/legacy APIs, CredMan persistence metadata and byte limits, or Secret Service bus failure and

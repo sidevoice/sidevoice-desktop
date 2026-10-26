@@ -22,6 +22,19 @@ impl super::Os for Native {
     fn store() -> Result<Arc<CredentialStore>> {
         Ok(Arc::new(SearchList))
     }
+
+    /// One service-scoped SecItemDelete over the search list, as before the keyring adapter: every generic password of
+    /// exactly `service`, whatever its account, without reading or decoding any account. SecItemDelete deletes all
+    /// matches by default; `Limit::All` states that intent explicitly. Any failure is reported, never partial success.
+    fn clear_namespace(service: &str) -> std::result::Result<(), super::Error> {
+        use security_framework::item::{ItemClass, ItemSearchOptions, Limit};
+        match ItemSearchOptions::new().class(ItemClass::generic_password()).service(service).limit(Limit::All).delete()
+        {
+            Ok(()) => Ok(()),
+            Err(error) if error.code() == NOT_FOUND => Ok(()),
+            Err(error) => Err(decode_error(error).into()),
+        }
+    }
 }
 
 struct SearchList;
@@ -39,51 +52,6 @@ impl CredentialStoreApi for SearchList {
     }
     fn build(&self, service: &str, user: &str, _: Option<&HashMap<&str, &str>>) -> Result<Entry> {
         Ok(Entry::new_with_credential(Arc::new(Password { service: service.into(), account: user.into() })))
-    }
-    /// The exact `{"service": ..}` namespace as one entry, `Namespace`: deleting it deletes every generic password of
-    /// that service in the search list, whatever its account, without reading or decoding any account.
-    fn search(&self, spec: &HashMap<&str, &str>) -> Result<Vec<Entry>> {
-        let service =
-            spec.get("service").ok_or_else(|| keyring_core::Error::Invalid("service".into(), "is required".into()))?;
-        Ok(vec![Entry::new_with_credential(Arc::new(Namespace { service: (*service).into() }))])
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
-
-/// Every generic password of one service, across the search list. It holds no single secret.
-struct Namespace {
-    service: String,
-}
-
-impl CredentialApi for Namespace {
-    fn get_secret(&self) -> Result<Vec<u8>> {
-        Err(keyring_core::Error::Invalid("namespace".into(), "holds no single secret".into()))
-    }
-    fn set_secret(&self, _: &[u8]) -> Result<()> {
-        Err(keyring_core::Error::Invalid("namespace".into(), "holds no single secret".into()))
-    }
-    /// One service-scoped SecItemDelete over the search list, as before the keyring adapter. It explicitly asks for
-    /// all matches: the default limit on macOS deletes only one item. Any failure is reported, never partial success.
-    fn delete_credential(&self) -> Result<()> {
-        use security_framework::item::{ItemClass, ItemSearchOptions, Limit};
-        match ItemSearchOptions::new()
-            .class(ItemClass::generic_password())
-            .service(&self.service)
-            .limit(Limit::All)
-            .delete()
-        {
-            Ok(()) => Ok(()),
-            Err(error) if error.code() == NOT_FOUND => Ok(()),
-            Err(error) => Err(decode_error(error)),
-        }
-    }
-    fn get_credential(&self) -> Result<Option<Arc<Credential>>> {
-        Ok(None)
-    }
-    fn get_specifiers(&self) -> Option<(String, String)> {
-        None
     }
     fn as_any(&self) -> &dyn Any {
         self
@@ -125,12 +93,12 @@ impl CredentialApi for Password {
 // intentionally hide. Each also runs the common contract where it applies.
 #[cfg(test)]
 mod tests {
-    use super::super::{clear_all, clear_in, read, read_in, tests::*, write, write_in};
-    use super::SearchList;
+    use super::super::{clear_all, read, read_in, tests::*, write, write_in, Os};
+    use super::{Native, SearchList};
 
     #[test]
     fn native_contract() {
-        contract(&SearchList, &test_service());
+        contract(&SearchList, &test_service(), &Native::clear_namespace);
     }
 
     #[test]
@@ -153,7 +121,7 @@ mod tests {
         write_in(store, service, &provider("openai"), Some("updated-test-only")).unwrap();
         assert_eq!(get_generic_password(service, "openai").unwrap(), b"updated-test-only");
         set_generic_password(service, "legacy_unknown", b"legacy-test-only").unwrap();
-        clear_in(store, service).unwrap();
+        Native::clear_namespace(service).unwrap();
         assert_eq!(get_generic_password(service, "legacy_unknown").unwrap_err().code(), -25300);
     }
 
@@ -192,7 +160,11 @@ mod tests {
             // The same service/account in two searchable keychains: the default one and the secondary.
             secondary.set_generic_password(service, "duplicate", b"test-only").unwrap();
             security_framework::passwords::set_generic_password(service, "duplicate", b"test-only").unwrap();
-            clear_in(store, service).unwrap();
+            // Both copies exist before the clear: in the secondary keychain, and in the default one.
+            assert!(find_generic_password(Some(std::slice::from_ref(&secondary)), service, "duplicate").is_ok());
+            let default = SecKeychain::default().unwrap();
+            assert!(find_generic_password(Some(std::slice::from_ref(&default)), service, "duplicate").is_ok());
+            Native::clear_namespace(service).unwrap();
             assert_eq!(
                 find_generic_password(Some(std::slice::from_ref(&secondary)), service, "unknown_old")
                     .unwrap_err()
@@ -205,6 +177,10 @@ mod tests {
             );
             assert_eq!(
                 security_framework::passwords::get_generic_password(service, "duplicate").unwrap_err().code(),
+                -25300
+            );
+            assert_eq!(
+                find_generic_password(Some(std::slice::from_ref(&default)), service, "duplicate").unwrap_err().code(),
                 -25300
             );
             return;

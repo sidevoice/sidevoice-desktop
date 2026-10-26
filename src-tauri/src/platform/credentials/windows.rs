@@ -52,8 +52,9 @@ impl CredentialStoreApi for Local {
 // common requests intentionally hide. Each also runs the common contract where it applies.
 #[cfg(test)]
 mod tests {
+    use super::super::Os;
     use super::super::{clear_all, clear_in, read, read_in, tests::*, write, write_in, Error};
-    use super::{credential_manager, Local};
+    use super::{credential_manager, Local, Native};
     use keyring_core::api::CredentialStoreApi;
 
     fn native() -> Local {
@@ -62,7 +63,7 @@ mod tests {
 
     #[test]
     fn native_contract() {
-        contract(&native(), &test_service());
+        contract(&native(), &test_service(), &Native::clear_namespace);
     }
 
     #[test]
