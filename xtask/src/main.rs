@@ -157,9 +157,7 @@ fn main() -> ExitCode {
         ["sherpa-libs"] => checks::sherpa_libs(),
         ["macos", "app"] => macos("app", || macos::build_app(false, Channel::Dev)),
         ["macos", "app", "--signed"] => macos("app", || macos::build_app(true, Channel::Dev)),
-        ["macos", "app", "--channel", c] => {
-            Channel::parse(c).and_then(|c| macos("app", || macos::build_app(false, c)))
-        }
+        ["macos", "app", "--channel", c] => Channel::parse(c).and_then(|c| macos("app", || macos::build_app(false, c))),
         ["macos", "app", "--signed", "--channel", c] => {
             Channel::parse(c).and_then(|c| macos("app", || macos::build_app(true, c)))
         }
