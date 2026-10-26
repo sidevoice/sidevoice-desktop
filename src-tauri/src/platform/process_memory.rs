@@ -2,16 +2,6 @@
 
 use sidevoice_desktop_core::memory::Sample;
 
-#[cfg(target_os = "macos")]
-#[path = "process_memory/macos.rs"]
-mod imp;
-#[cfg(not(target_os = "macos"))]
-mod imp {
-    pub struct Os;
-    impl super::ProcessMemory for Os {}
-}
-pub use imp::Os as SystemProcessMemory;
-
 pub trait ProcessMemory {
     /// Sample this process, in bytes. Missing readings stay absent, including the macOS-only footprint,
     /// Metal allocation and vmmap accelerator regions. The portable observation is resident memory.
@@ -34,6 +24,21 @@ pub trait ProcessMemory {
 fn resident_bytes(bytes: u64) -> Option<u64> {
     (bytes > 0).then_some(bytes)
 }
+
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+pub use macos::SystemProcessMemory;
+
+#[cfg(target_os = "windows")]
+mod windows;
+#[cfg(target_os = "windows")]
+pub use windows::SystemProcessMemory;
+
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::SystemProcessMemory;
 
 #[cfg(test)]
 mod tests {

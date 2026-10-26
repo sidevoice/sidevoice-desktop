@@ -1,15 +1,9 @@
 //! `windows …`: the Windows app, started as the installer ships it. Its tools are the same as `macos`' (macos.rs), for the
 //! one thing that holds on every OS: it starts.
 
-use std::path::PathBuf;
-
+use crate::platform::first_open::{FirstOpen, Host};
 use crate::util::{ensure, read, repo, require_ci, sleep, wait_for, work, Cmd};
 use crate::Result;
-
-/// The app's binary as `tauri build` leaves it (`cargo xtask bundle` on Windows).
-fn binary() -> PathBuf {
-    repo().join("src-tauri/target/release/sidevoice-desktop.exe")
-}
 
 /// `windows first-open`: the app started with no settings, on a runner: the bundled interface comes up in the real
 /// WebView2, its controller attached to the web UI and reaching the app over IPC, and the app is still running a few
@@ -17,27 +11,10 @@ fn binary() -> PathBuf {
 pub fn first_open() -> Result<()> {
     // It writes the person's settings and data: a throwaway runner only.
     require_ci("windows first-open")?;
-    // Tauri uses Windows Known Folders, not APPDATA overrides. Refuse saved settings and WebView2 data;
-    // never delete a person's profile. This check requires a fresh runner even when CI=true is set locally.
-    Cmd::new("powershell.exe")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            r#"
-            foreach ($folder in @('ApplicationData', 'LocalApplicationData')) {
-                $root = [Environment]::GetFolderPath($folder)
-                if (!$root) { throw "Cannot resolve $folder" }
-                $profile = Join-Path $root 'dev.sidevoice.desktop'
-                if (Test-Path -LiteralPath $profile) {
-                    throw "windows first-open requires a fresh runner: $profile already exists"
-                }
-            }
-        "#,
-        ])
-        .run()?;
+    // This check requires a fresh runner even when CI=true is set locally.
+    Host::require_fresh_profile()?;
     let log = work("first-open")?.join("app.log");
-    let mut app = Cmd::new(binary())
+    let mut app = Cmd::new(Host::binary(&repo()))
         .env("SIDEVOICE_DEBUG", "1")
         .env("SIDEVOICE_DEBUG_PAGE", "probe.html")
         .env_remove("SIDEVOICE_DATA_DIR")

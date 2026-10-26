@@ -173,6 +173,8 @@ pub enum Registration {
     On,
     /// The system would not register it: another app may hold it.
     Refused,
+    /// No global shortcut backend is available in this desktop session.
+    Unavailable,
 }
 
 /// The mute shortcut as the system took it: `host.muteShortcut`'s `MuteShortcut` (docs/BRIDGE.md → "The mute

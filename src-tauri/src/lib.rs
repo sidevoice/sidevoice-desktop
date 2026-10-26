@@ -29,8 +29,11 @@ mod voice;
 
 use crate::platform::update_eligibility::{NativeUpdateEligibility, UpdateEligibility};
 
+use crate::platform::application::{Application, NativeApplication};
 use crate::platform::computer_name::{ComputerName, SystemComputerName};
+use crate::platform::host_capabilities::CAPABILITIES;
 use crate::platform::media_controls::{MediaControls, NativeMediaControls};
+use crate::platform::shortcut_access;
 use crate::platform::webview_diagnostics::{NativeWebviewDiagnostics, WebviewDiagnostics};
 use serde_json::{json, Value};
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
@@ -42,7 +45,6 @@ use std::sync::{Arc, Mutex};
 use tauri::utils::config::BackgroundThrottlingPolicy;
 use tauri::webview::{PageLoadEvent, PermissionKind, PermissionResponse};
 use tauri::{AppHandle, Manager, State, Webview, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 const ROOM_PREFIX: &str = "room-";
 /// The web interface bundled in the app (the sidevoice-web release `web.pin.json` names, `scripts/build-web.mjs`), at
@@ -63,13 +65,12 @@ pub(crate) struct AppState {
     shortcut_change: Mutex<()>,
     resetting: std::sync::atomic::AtomicBool,
     reset_admission: Mutex<data::Admission>,
-    #[cfg(target_os = "macos")]
-    reset_helper: Mutex<Option<std::process::Child>>,
+    reset_helper: Mutex<Option<platform::reset_handoff::Pending>>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
-        let preferred: Vec<String> = sys_locale::get_locales().collect();
+        let preferred = platform::locale::preferred();
         AppState {
             settings: Mutex::default(),
             call: Mutex::default(),
@@ -80,7 +81,6 @@ impl Default for AppState {
             shortcut_change: Mutex::default(),
             resetting: std::sync::atomic::AtomicBool::new(false),
             reset_admission: Mutex::default(),
-            #[cfg(target_os = "macos")]
             reset_helper: Mutex::default(),
         }
     }
@@ -90,28 +90,8 @@ impl Default for AppState {
 fn shortcut_status(state: &AppState) -> MuteShortcut {
     let mut status = state.shortcut.lock().unwrap().clone();
     let accelerator = status.accelerator.as_deref().unwrap_or_default();
-    status.voice_over =
-        status.state == Registration::On && settings::uses_voice_over_keys(accelerator) && voice_over_on();
+    status.voice_over = status.state == Registration::On && shortcut_access::reserved_chord_active(accelerator);
     status
-}
-
-/// Whether VoiceOver is running (macOS 10.13+).
-fn voice_over_on() -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        use objc2::{class, msg_send, runtime::AnyObject};
-        unsafe {
-            let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
-            msg_send![workspace, isVoiceOverEnabled]
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    false
-}
-
-/// A mute shortcut as the app keeps it (core `normalize_shortcut`, empty for none), if the system can read its key.
-fn checked_shortcut(text: &str) -> Option<String> {
-    settings::normalize_shortcut(text).filter(|a| a.is_empty() || a.parse::<Shortcut>().is_ok())
 }
 
 /// The one writer of settings.json: `change` applied to the stored settings, saved and kept under one lock, so the
@@ -157,7 +137,7 @@ async fn mute_shortcut(
         "get" => Ok(shortcut_status(&app.state::<AppState>())),
         "set" => {
             let text = accelerator.unwrap_or_default();
-            let accelerator = checked_shortcut(&text)
+            let accelerator = shortcut_access::checked(&text)
                 .ok_or_else(|| refusal("shortcut_invalid", format!("Not a shortcut: {text}")))?;
             change_shortcut(&app, |s| s.mute_shortcut = accelerator).map_err(|e| refusal("internal", e))
         }
@@ -327,6 +307,9 @@ fn reset_call_state(app: &AppHandle) {
 
 /// (Re)creates the room window: the bundled interface, bound to the app's own pages.
 fn open_room(app: &AppHandle) -> tauri::Result<()> {
+    // Reset captures browser writers before exit. A tray/reopen action must not create another
+    // WebKit/WebView2 process after that snapshot (or race reset admission while building it).
+    let Some(_permit) = data::admit(app) else { return Ok(()) };
     let state = app.state::<AppState>();
     let label = format!("{ROOM_PREFIX}{}", state.room_counter.fetch_add(1, Ordering::SeqCst) + 1);
     #[cfg(not(feature = "probe"))]
@@ -366,6 +349,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             platform::microphone::settings_available(),
             &NativeWebviewDiagnostics::available(),
             NativeMediaControls::support(),
+            CAPABILITIES,
         ));
     #[cfg(feature = "probe")]
     let builder = match probe::local_host_flow() {
@@ -384,7 +368,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
                 _ => media::Capture::Other,
             };
             let page = committed_origin.lock().unwrap().clone();
-            let decision = media::decide(capture, page.as_deref(), APP_ORIGIN, !bridge::voice_offered());
+            let decision = media::decide(capture, page.as_deref(), APP_ORIGIN, !CAPABILITIES.voice);
             debug(&format!("media {capture:?} for {page:?}: {decision:?}"));
             match decision {
                 media::Decision::Allow => PermissionResponse::Allow,
@@ -423,93 +407,22 @@ pub(crate) fn show_settings(app: &AppHandle) {
     send(app, Command::ShowSettings);
 }
 
-/// Makes the app the active one (macOS 14+). `set_focus` asks with `activateIgnoringOtherApps:`, which macOS 14
-/// deprecates for `activate`; older systems lack `activate` and need nothing more.
-fn activate_app() {
-    #[cfg(target_os = "macos")]
-    {
-        use objc2::{class, msg_send, runtime::AnyObject, sel};
-        // SAFETY: main thread (setup); `activate` only when the app answers to it.
-        unsafe {
-            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-            let responds: bool = msg_send![app, respondsToSelector: sel!(activate)];
-            if responds {
-                let _: () = msg_send![app, activate];
-            }
-        }
-    }
-}
-
 /// `SIDEVOICE_NO_CALL_CARD=1`: the app starts without the call controls card, to tell whether the card is what takes
 /// the Dock tile away on macOS (#117). A diagnostic switch: nothing else changes, the tray's card item does nothing.
 fn call_card_disabled() -> bool {
     std::env::var_os("SIDEVOICE_NO_CALL_CARD").is_some_and(|v| v == "1")
 }
 
-/// How macOS sees the app, for the app log (#117): the policy NSApp reports and the one Launch Services has for the
-/// process (`NSRunningApplication`, what the Dock and Cmd+Tab go by), hidden, whether it owns the menu bar, its
-/// bundle, and whether the room window is shown and on screen.
-#[cfg(target_os = "macos")]
+/// Native lifecycle observations plus the common diagnostic card setting (#117).
 fn app_report(app: &AppHandle) -> String {
-    use objc2::{class, msg_send, rc::Retained, runtime::AnyObject};
-    use objc2_foundation::NSString;
-    // NSApplicationActivationPolicy: 0 Regular (Dock tile, Cmd+Tab), 1 Accessory, 2 Prohibited.
-    // SAFETY: main thread (setup and `run_on_main_thread`); public AppKit getters.
-    let (policy, running_policy, hidden, owns_menu_bar, bundle) = unsafe {
-        let ns_app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-        let running: *mut AnyObject = msg_send![class!(NSRunningApplication), currentApplication];
-        let policy: isize = msg_send![ns_app, activationPolicy];
-        let running_policy: isize = msg_send![running, activationPolicy];
-        let hidden: bool = msg_send![ns_app, isHidden];
-        let owns_menu_bar: bool = msg_send![running, ownsMenuBar];
-        let bundle: Option<Retained<NSString>> = msg_send![running, bundleIdentifier];
-        (policy, running_policy, hidden, owns_menu_bar, bundle.map(|b| b.to_string()))
-    };
-    let room = room_window(app).map_or_else(
-        || "none".to_owned(),
-        |w| {
-            // NSWindowOcclusionStateVisible: set while any part of the window is on screen.
-            let onscreen = w.ns_window().is_ok_and(|ns| unsafe {
-                let state: usize = msg_send![ns as *mut AnyObject, occlusionState];
-                state & (1 << 1) != 0
-            });
-            format!("visible={},onscreen={onscreen}", w.is_visible().unwrap_or(false))
-        },
-    );
-    format!(
-        "{} policy={policy} running_policy={running_policy} hidden={hidden} owns_menu_bar={owns_menu_bar} bundle={} \
-         room={room} call_card={}",
-        call_controls::app_active(),
-        bundle.as_deref().unwrap_or("none"),
-        if call_card_disabled() { "off" } else { "on" }
-    )
+    format!("{} call_card={}", NativeApplication::report(app), if call_card_disabled() { "off" } else { "on" })
 }
 
-#[cfg(not(target_os = "macos"))]
-fn app_report(_app: &AppHandle) -> String {
-    format!("call_card={}", if call_card_disabled() { "off" } else { "on" })
-}
-
-/// Registers the global mute shortcut, replacing any previous one, keeps how it went and tells the room page
-/// (`host.muteShortcut.subscribe`). A refused one comes with the alternatives the system does take.
+/// Replace the shortcut, keep the actual outcome, and notify the room page.
 fn apply_shortcut(app: &AppHandle, accelerator: &str) {
-    let shortcuts = app.global_shortcut();
-    let _ = shortcuts.unregister_all();
-    let (state, alternatives) = if accelerator.is_empty() {
-        (Registration::Off, vec![])
-    } else if let Err(e) = shortcuts.register(accelerator) {
-        debug(&format!("shortcut {accelerator} refused: {e}"));
-        let alternatives = settings::shortcut_alternatives(accelerator)
-            .filter(|a| shortcuts.register(*a).is_ok() && shortcuts.unregister(*a).is_ok())
-            .map(str::to_owned)
-            .collect();
-        (Registration::Refused, alternatives)
-    } else {
-        (Registration::On, vec![])
-    };
+    let status = shortcut_access::replace(app, accelerator);
     let app_state = app.state::<AppState>();
-    *app_state.shortcut.lock().unwrap() =
-        MuteShortcut::new(accelerator, state, alternatives, cfg!(target_os = "macos"));
+    *app_state.shortcut.lock().unwrap() = status;
     if let Some(window) = room_window(app) {
         let status = json!(shortcut_status(&app_state));
         let _ =
@@ -593,15 +506,23 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
 }
 
 pub fn run() {
-    #[cfg(target_os = "macos")]
-    if !data::await_reset_idle() {
-        eprintln!("sidevoice: reset lock unavailable or cleanup still running"); // before the log exists
-        return;
-    }
+    use platform::reset_handoff::{self, Handoff};
+    let startup = match Handoff::new().and_then(|handoff| {
+        handoff.await_idle(std::time::Duration::from_secs(5 * 60), &std::sync::atomic::AtomicBool::new(false))
+    }) {
+        Ok(guard) => guard,
+        Err(_) => {
+            // Before the log and the app state exist: the system's language is read here.
+            let preferred = platform::locale::preferred();
+            let language = sidevoice_desktop_core::i18n::language(&preferred);
+            eprintln!("{}", sidevoice_desktop_core::i18n::t(language, "startup.reset_busy"));
+            return;
+        }
+    };
     let context = tauri::generate_context!();
     #[cfg(feature = "probe")]
     let context = probe::with_page(context);
-    #[cfg(all(feature = "probe", target_os = "macos"))]
+    #[cfg(feature = "probe")]
     probe::watch_exit_handlers();
     log_panics();
     // First, so everything after it is logged.
@@ -616,31 +537,14 @@ pub fn run() {
         let _runtime = tauri::async_runtime::handle().inner().enter();
         builder.manage(voice::VoiceState::default())
     };
-    builder
+    NativeApplication::configure(builder)
         .plugin(tauri_plugin_opener::Builder::new().open_js_links_on_click(false).build())
-        // A second launch (Finder, Spotlight) brings the running one forward instead.
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| show_room(app)))
-        .plugin(
-            tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
-                    if event.state() == ShortcutState::Pressed {
-                        send(app, Command::ToggleMute);
-                    }
-                })
-                .build(),
-        )
         .manage(AppState::default())
         .invoke_handler(handler())
-        .setup(|app| {
+        .setup(move |app| {
             let handle = app.handle().clone();
-            // A regular app with its Dock tile, asked for before any window or panel exists (#117). The policy is
-            // already Regular (Tao sets it at launch, no bundle key says otherwise) yet the operator's Mac showed no
-            // tile: the Dock one asks the process manager itself (`TransformProcessType` to foreground).
-            #[cfg(target_os = "macos")]
-            {
-                handle.set_activation_policy(tauri::ActivationPolicy::Regular)?;
-                handle.set_dock_visibility(true)?;
-            }
+            NativeApplication::prepare(&handle)?;
+            shortcut_access::configure(&handle);
             debug(&format!("launch {}", app_report(&handle)));
             tray::create(&handle)?;
             let media_app = handle.clone();
@@ -682,7 +586,7 @@ pub fn run() {
             // The room to the front, last so no window created after it takes it. Setup runs on Ready, after the
             // launch's own activation, which came before any window existed: the window stayed behind (Dock only).
             show_room(&handle);
-            activate_app();
+            NativeApplication::activate(&handle);
             // How macOS sees the app once everything exists, and again once activation has settled (#117).
             debug(&format!("ready {}", app_report(&handle)));
             let later = handle.clone();
@@ -693,6 +597,7 @@ pub fn run() {
             });
             #[cfg(target_os = "macos")]
             data::finalize_relaunched_reset();
+            reset_handoff::finish_startup(startup);
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -709,11 +614,7 @@ pub fn run() {
         .build(context)
         .expect("error while building the Sidevoice app")
         .run(|app, event| {
-            // macOS: clicking the Dock icon with no visible window.
-            #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen { has_visible_windows: false, .. } = event {
-                show_room(app);
-            }
+            NativeApplication::handle_event(app, &event);
             // Quitting, however the app ends (tray, ⌘Q, logout, a reset, an update's restart; `AppHandle::restart` from
             // the updater's thread comes here too), before `exit()` runs the C++ static destructors (#121): the voice
             // calls stop and every model and audio device is released; the call controls card's window goes; the local
@@ -732,6 +633,6 @@ pub fn run() {
 }
 
 /// The helper is the same signed executable, launched only after a confirmed reset or uninstall.
-pub fn run_reset_helper(parent_pid: Option<u32>, lock_fd: Option<i32>, uninstall: bool) {
-    data::run_reset_helper(parent_pid, lock_fd, uninstall);
+pub fn run_reset_helper() {
+    data::run_reset_helper();
 }

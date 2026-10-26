@@ -1438,6 +1438,20 @@ test("the app's muteShortcutEvent reaches host.muteShortcut's listeners, until t
   assert.deepEqual(seen, ["refused"]);
 });
 
+test("an unavailable shortcut backend reaches get, set and subscription without losing the saved chord", async () => {
+  const install = loadFactory();
+  const unavailable = { accelerator: "Ctrl+Alt+M", label: "Ctrl+Alt+M", state: "unavailable", alternatives: [], voiceOver: false };
+  const { win } = settingsWindow({ mute_shortcut: () => unavailable });
+  const api = install(win, ORIGIN);
+  assert.deepEqual(await api.host.muteShortcut.get(), unavailable);
+  assert.deepEqual(await api.host.muteShortcut.set("Ctrl+Alt+M"), unavailable);
+  const seen = [];
+  const stop = api.host.muteShortcut.subscribe((shortcut) => seen.push(shortcut));
+  api.muteShortcutEvent(unavailable);
+  assert.deepEqual(JSON.parse(JSON.stringify(seen)), [unavailable]);
+  stop();
+});
+
 test("host.callControls reads and sets alwaysShown through the call_controls_settings command, booleans only", async () => {
   const install = loadFactory();
   const { win, calls } = settingsWindow({
