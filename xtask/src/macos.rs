@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::platform::disk_image::{DiskImage, Host as DiskImageHost};
-use crate::platform::private_files::PrivateFiles;
+use crate::platform::private_files::{PrivateCreation, PrivateFiles};
 use crate::util::{
     contains, copy_dir, ensure, fresh_dir, in_ci, mkdir, random_hex, read, read_bytes, read_secret, repo, required_env,
     secret_path, sleep, version, wait_for, work, Channel, Cmd, SecretDir, TauriBuild,
