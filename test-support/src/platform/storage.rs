@@ -66,8 +66,6 @@ pub trait StorageFixture {
     fn with_search_only_ancestor(path: &Path, check: impl FnMut());
     /// A real system program accepted by the shared trust policy, including system links where supported.
     fn system_program() -> PathBuf;
-    /// Add sticky protection to a writable ancestor when supported; otherwise return false unchanged.
-    fn protect_shared_ancestor(path: &Path) -> bool;
     /// Set up a fresh private record, independent of a user's creation mask.
     fn record(path: &Path, bytes: &[u8]) {
         fs::write(path, bytes).unwrap();

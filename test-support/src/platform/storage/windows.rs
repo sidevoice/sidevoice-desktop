@@ -34,7 +34,4 @@ impl StorageFixture for NativeStorageFixtures {
     fn system_program() -> PathBuf {
         PathBuf::from(std::env::var_os("SystemRoot").expect("Windows directory")).join("System32/cmd.exe")
     }
-    fn protect_shared_ancestor(_path: &Path) -> bool {
-        false
-    } // No sticky-directory counterpart.
 }
