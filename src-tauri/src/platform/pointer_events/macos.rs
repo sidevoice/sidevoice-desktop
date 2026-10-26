@@ -16,13 +16,7 @@ pub struct NativePointerEvents;
 impl PointerEvents for NativePointerEvents {
     fn watch(app: &AppHandle, label: &'static str, margin: f64, state: State, sink: Sink) -> Option<Subscription> {
         set_cursor_in_background();
-        let mut subscription = polling(app, label, margin, state, sink.clone(), |inside, state| {
-            keep_hand(inside, state.hand);
-            if state.inside != inside && inside == Some(false) {
-                arrow_after_leaving();
-            }
-            false
-        });
+        let mut subscription = polling(app, label, margin, state, sink.clone(), None, Some(cursor));
         let stop = subscription.stopped.clone();
         let handler = block2::RcBlock::new(move |_event: std::ptr::NonNull<AnyObject>| {
             if !stop.load(Ordering::Acquire) {
@@ -51,6 +45,14 @@ impl PointerEvents for NativePointerEvents {
             }));
         }
         Some(subscription)
+    }
+}
+
+/// The cursor upkeep at each look at the pointer: the hand over the buttons, the arrow once it has left the card.
+fn cursor(inside: Option<bool>, page_wants_hand: bool, was_inside: Option<bool>) {
+    keep_hand(inside, page_wants_hand);
+    if was_inside != inside && inside == Some(false) {
+        arrow_after_leaving();
     }
 }
 

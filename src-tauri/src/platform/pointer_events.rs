@@ -50,18 +50,27 @@ impl Drop for Subscription {
     }
 }
 
-// A single outstanding callback prevents an unresponsive UI from accumulating work.
+/// One mouse button as the OS reports it between two looks: `(down now, pressed since the last look)`. The second is
+/// only a hint: another process may consume it, and fast clicks between looks are not guaranteed to show.
+type ButtonSample = (bool, bool);
+/// Native cursor upkeep, only where the app must set the cursor itself: `(inside, page wants the hand, was inside)`.
+type Cursor = fn(Option<bool>, bool, Option<bool>);
+
+// A single outstanding callback prevents an unresponsive UI from accumulating work. The worker checks that the card
+// is shown before asking the main thread for anything, so a hidden card costs the UI no wakeups. `buttons` samples
+// every mouse button where outside clicks are seen by polling; `cursor` is the native cursor upkeep.
 fn polling(
     app: &AppHandle,
     label: &'static str,
     margin: f64,
     state: State,
     sink: Sink,
-    native: impl FnMut(Option<bool>, &PointerState) -> bool + Send + 'static,
+    buttons: Option<fn() -> [ButtonSample; 3]>,
+    cursor: Option<Cursor>,
 ) -> Subscription {
     let stopped = Arc::new(AtomicBool::new(false));
     let queued = Arc::new(AtomicBool::new(false));
-    let native = Arc::new(Mutex::new(native));
+    let edges = Arc::new(Mutex::new(ButtonEdges::default()));
     let stop = stopped.clone();
     let app = app.clone();
     let task = tauri::async_runtime::spawn(async move {
@@ -70,11 +79,14 @@ fn polling(
             if stop.load(Ordering::Acquire) {
                 break;
             }
+            if !state().shown {
+                continue;
+            }
             if queued.swap(true, Ordering::AcqRel) {
                 continue;
             }
-            let (a, stop, queued, state, sink, native) =
-                (app.clone(), stop.clone(), queued.clone(), state.clone(), sink.clone(), native.clone());
+            let (a, stop, queued, state, sink, edges) =
+                (app.clone(), stop.clone(), queued.clone(), state.clone(), sink.clone(), edges.clone());
             if app
                 .run_on_main_thread(move || {
                     if !stop.load(Ordering::Acquire) {
@@ -92,7 +104,11 @@ fn polling(
                                         }
                                         .contains(p)
                                     });
-                                let outside = native.lock().unwrap()(inside, &current);
+                                if let Some(cursor) = cursor {
+                                    cursor(inside, current.hand, current.inside);
+                                }
+                                let outside = buttons.is_some_and(|samples| edges.lock().unwrap().pressed(samples()))
+                                    && inside == Some(false);
                                 // No native or application mutex is held while invoking a sink.
                                 if current.inside != inside {
                                     sink(PointerEvent::Inside(inside));
@@ -114,17 +130,14 @@ fn polling(
     Subscription { stopped, task, cleanup: None }
 }
 
-// Kept in the interface module so the Windows edge policy is tested on every host.
-#[cfg(any(windows, test))]
+// The edge policy is shared so every host tests it: native files only report what the buttons are doing.
 #[derive(Default)]
 struct ButtonEdges([bool; 3]);
-#[cfg(any(windows, test))]
 impl ButtonEdges {
-    fn pressed(&mut self, samples: [u16; 3]) -> bool {
+    fn pressed(&mut self, samples: [ButtonSample; 3]) -> bool {
         let mut pressed = false;
-        for (was_down, sample) in self.0.iter_mut().zip(samples) {
-            let down = sample & 0x8000 != 0;
-            pressed |= sample & 1 != 0 || (down && !*was_down);
+        for (was_down, (down, hint)) in self.0.iter_mut().zip(samples) {
+            pressed |= hint || (down && !*was_down);
             *was_down = down;
         }
         pressed
@@ -139,13 +152,15 @@ mod tests {
     #[test]
     fn held_buttons_do_not_repeat_and_consecutive_short_click_hints_are_not_lost() {
         let mut buttons = ButtonEdges::default();
-        assert!(buttons.pressed([0x8001, 0, 0]));
-        assert!(!buttons.pressed([0x8000, 0, 0]));
-        assert!(buttons.pressed([0x8000, 0x8000, 0]));
-        assert!(!buttons.pressed([0, 0, 0]));
-        assert!(buttons.pressed([1, 0, 0]));
-        assert!(buttons.pressed([1, 0, 0]));
-        assert!(!buttons.pressed([0, 0, 0]));
+        const UP: ButtonSample = (false, false);
+        const HELD: ButtonSample = (true, false);
+        assert!(buttons.pressed([(true, true), UP, UP]));
+        assert!(!buttons.pressed([HELD, UP, UP]));
+        assert!(buttons.pressed([HELD, HELD, UP]));
+        assert!(!buttons.pressed([UP, UP, UP]));
+        assert!(buttons.pressed([(false, true), UP, UP]));
+        assert!(buttons.pressed([(false, true), UP, UP]));
+        assert!(!buttons.pressed([UP, UP, UP]));
     }
 
     #[test]

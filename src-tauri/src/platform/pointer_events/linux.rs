@@ -7,10 +7,7 @@ impl PointerEvents for NativePointerEvents {
         if !NativeGeometry::capabilities().global_coordinates {
             return None;
         }
-        Some(polling(app, label, margin, state, sink, |_, state| {
-            // The page owns its cursor on X11; Linux has no outside-click backend.
-            let _ = state.hand;
-            false
-        }))
+        // The page owns its cursor on X11; Linux has no outside-click backend.
+        Some(polling(app, label, margin, state, sink, None, None))
     }
 }
