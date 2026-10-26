@@ -15,9 +15,9 @@ mod windows;
 #[cfg(target_os = "windows")]
 pub use windows::NativeCardWindow;
 #[cfg(target_os = "linux")]
-pub struct NativeCardWindow;
+mod linux;
 #[cfg(target_os = "linux")]
-impl CardWindow for NativeCardWindow {}
+pub use linux::NativeCardWindow;
 
 pub struct CardSpec {
     pub label: &'static str,
