@@ -897,10 +897,16 @@ mod tests {
         gate.leave();
     }
 
+    /// The report's directory as `report_path()` makes it: private, as the shared record writer requires.
+    fn private_dir() -> tempfile::TempDir {
+        use std::os::unix::fs::PermissionsExt;
+        tempfile::Builder::new().permissions(fs::Permissions::from_mode(0o700)).tempdir().unwrap()
+    }
+
     #[test]
     fn durable_journal_reports_interruption_then_allows_retry() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
+        let dir = private_dir();
         let report = dir.path().join("report.json");
         let journal = dir.path().join("journal.json");
         write_atomic_json(&journal, &json!({"stage":"service", "completed":["service"], "failed":[]})).unwrap();
@@ -927,7 +933,7 @@ mod tests {
 
     #[test]
     fn helper_reports_complete_only_after_relaunched_setup_and_keeps_failed_writes() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = private_dir();
         let report = dir.path().join("report.json");
         let journal = dir.path().join("journal.json");
         let mut launched = false;
