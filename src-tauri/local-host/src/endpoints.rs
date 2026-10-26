@@ -1,7 +1,7 @@
 //! Where the core and the connector listen (SEAMS §1, §2, §4): read from the records they publish, never worked out.
 //! The core writes `endpoint` in `C/core.json`; the connector writes `{pid, endpoint}` in `D/connector.json` once it
-//! listens and removes it when it exits cleanly. `endpoint` is the record `sidevoice-platform`'s `ipc` writes (an
-//! absolute socket path on Unix, in the user's runtime directory), parsed back with its own type.
+//! listens and removes it when it exits cleanly. `endpoint` is the record `sidevoice-platform`'s `ipc` writes, parsed
+//! back with its own type and handed on as it is.
 //!
 //! Both records are read as every file the app acts on is (`sidevoice_platform::fs::Directory`): through the directory's checked
 //! descriptor, opened without following a link and without blocking, a regular file of this user's.
@@ -11,33 +11,34 @@
 
 use crate::checks::Check;
 use crate::paths::DataDirs;
+use crate::platform::process;
 use crate::Refusal;
 use serde_json::Value;
 use sidevoice_platform::fs::{Access, Directory, HeldDirectory};
 use sidevoice_platform::ipc::Endpoint;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 const RECORD_LIMIT: u64 = 64 * 1024;
 
-/// The core's socket, from `C/core.json`: `C` private to this user, the record private too (it holds the core's token).
-pub fn core(dirs: &DataDirs) -> Result<PathBuf, Check> {
+/// The core's endpoint, from `C/core.json`: `C` private to this user, the record private too (it holds the core's
+/// token).
+pub fn core(dirs: &DataDirs) -> Result<Endpoint, Check> {
     let dir = HeldDirectory::open(&dirs.core(), Access::Private)
         .map_err(|e| crate::checks::storage_error(&dirs.core(), "identity.unsafe-directory", e))?;
     let record = read(&dir, &dirs.core_record(), Access::Private, "identity.unsafe-directory")?;
-    socket(&record, &dirs.core_record())
+    endpoint(&record, &dirs.core_record())
 }
 
-/// The connector's socket, from `D/connector.json`, when its `pid` is alive: `D` this user's and not writable by
+/// The connector's endpoint, from `D/connector.json`, when its `pid` is alive: `D` this user's and not writable by
 /// others, so is the record.
-pub fn connector(dirs: &DataDirs) -> Result<PathBuf, Check> {
+pub fn connector(dirs: &DataDirs) -> Result<Endpoint, Check> {
     let path = dirs.connector_record();
     let dir = HeldDirectory::open(&dirs.data, Access::NotWritableByOthers)
         .map_err(|e| crate::checks::storage_error(&dirs.data, "install.unsafe", e))?;
     let record = read(&dir, &path, Access::NotWritableByOthers, "install.unsafe")?;
-    let pid = record.get("pid").and_then(Value::as_u64).and_then(|pid| i32::try_from(pid).ok()).filter(|pid| *pid > 0);
-    match pid {
-        Some(pid) if alive(pid) => socket(&record, &path),
+    match record.get("pid").and_then(Value::as_u64).and_then(process::pid) {
+        Some(pid) if process::alive(pid) => endpoint(&record, &path),
         Some(_) => Err(Check::Missing),
         None => Err(invalid(&path, "no pid")),
     }
@@ -57,10 +58,9 @@ fn read(dir: &HeldDirectory, path: &Path, access: Access, key: &str) -> Result<V
     serde_json::from_slice(&bytes).map_err(|e| invalid(path, &e.to_string()))
 }
 
-fn socket(record: &Value, path: &Path) -> Result<PathBuf, Check> {
+fn endpoint(record: &Value, path: &Path) -> Result<Endpoint, Check> {
     let text = record.get("endpoint").and_then(Value::as_str).ok_or_else(|| invalid(path, "no endpoint"))?;
-    let endpoint: Endpoint = text.parse().map_err(|e: io::Error| invalid(path, &e.to_string()))?;
-    Ok(PathBuf::from(endpoint.to_string()))
+    text.parse().map_err(|e: io::Error| invalid(path, &e.to_string()))
 }
 
 fn invalid(path: &Path, why: &str) -> Check {
@@ -70,16 +70,12 @@ fn invalid(path: &Path, why: &str) -> Check {
     ))
 }
 
-/// Whether process `pid` exists (signal 0: nothing is sent). Not permitted still means it is there.
-fn alive(pid: i32) -> bool {
-    // SAFETY: kill with signal 0 only checks; it has no other effect.
-    unsafe { libc::kill(pid, 0) == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM) }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use sidevoice_desktop_test_support::platform::storage::{StorageFixture, StorageFixtures};
+    use sidevoice_platform::ipc::Address as _;
 
     fn dirs() -> (tempfile::TempDir, DataDirs) {
         let tmp = tempfile::tempdir().unwrap();
@@ -119,10 +115,11 @@ mod tests {
 
     #[test]
     fn the_core_is_where_its_record_says_and_nowhere_when_it_has_none() {
-        let (_tmp, dirs) = dirs();
+        let (tmp, dirs) = dirs();
         assert_eq!(core(&dirs), Err(Check::Missing));
-        write(&dirs.core_record(), r#"{"pid":1,"endpoint":"/run/user/1/sidevoice-ab/local.sock","token":"x"}"#);
-        assert_eq!(core(&dirs), Ok(PathBuf::from("/run/user/1/sidevoice-ab/local.sock")));
+        let local = Endpoint::new(tmp.path(), "local");
+        write(&dirs.core_record(), &json!({"pid": 1, "endpoint": local.to_string(), "token": "x"}).to_string());
+        assert_eq!(core(&dirs), Ok(local));
         for bad in ["{}", r#"{"endpoint":"relative.sock"}"#, r#"{"endpoint":3}"#, "nope"] {
             write(&dirs.core_record(), bad);
             assert!(matches!(core(&dirs), Err(Check::Unsafe(r)) if r.key == "endpoint.record-invalid"), "{bad}");
@@ -131,16 +128,19 @@ mod tests {
 
     #[test]
     fn the_connector_is_where_its_record_says_while_its_pid_is_alive() {
-        let (_tmp, dirs) = dirs();
+        let (tmp, dirs) = dirs();
         assert_eq!(connector(&dirs), Err(Check::Missing));
         let me = std::process::id();
-        write(
-            &dirs.connector_record(),
-            &format!(r#"{{"pid":{me},"endpoint":"/run/user/1/sidevoice-ab/connector.sock"}}"#),
-        );
-        assert_eq!(connector(&dirs), Ok(PathBuf::from("/run/user/1/sidevoice-ab/connector.sock")));
-        // A crashed connector leaves its record: a pid nobody has is stale.
-        let mut gone = std::process::Command::new("true").spawn().unwrap();
+        let endpoint = Endpoint::new(tmp.path(), "connector");
+        write(&dirs.connector_record(), &json!({"pid": me, "endpoint": endpoint.to_string()}).to_string());
+        assert_eq!(connector(&dirs), Ok(endpoint));
+        // A crashed connector leaves its record: a pid nobody has is stale. (This test binary, asked only to list its
+        // tests.)
+        let mut gone = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--list")
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
         let dead = gone.id();
         gone.wait().unwrap();
         write(&dirs.connector_record(), &format!(r#"{{"pid":{dead},"endpoint":"/run/user/1/x/connector.sock"}}"#));

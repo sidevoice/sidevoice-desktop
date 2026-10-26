@@ -42,7 +42,7 @@ and does not remove connector releases, conversations or agent registrations.
 
 The boundary is the OS user. Before any connect to the core's socket (the one `C/core.json` names) the app checks that `C` is a directory (not a
 link) owned by this user with mode & 077 = 0 (`identity.unsafe-directory`), and after connecting that the socket's peer
-is this user (`getpeereid` / `SO_PEERCRED`, `peer.uid-mismatch`).
+is this user (its effective uid read from the connection, `SO_PEERCRED` / `LOCAL_PEERCRED`, through `platform::ipc`; `peer.uid-mismatch`).
 Filesystem checks and record access use `sidevoice-platform` at core **v0.11.1** (`fs::Directory`,
 `HeldDirectory`, `Access`, and `Fs::trusted_program`); there is no desktop copy of those primitives. Discovery opens
 existing directories only. Missing directories/records remain absence; unsafe paths remain refusals. Every directory
@@ -209,7 +209,7 @@ MiB (`download-size`) and 15 min; any one read 30 s. Not checked: the registry's
 attestations (npm's ECDSA `dist.signatures`, sigstore) — what `npm install` checks by default is the integrity, as
 here.
 
-**Unpacking.** Into the private directory — `mkdtemp` (0700) in the system's temporary directory, then checked as the
+**Unpacking.** Into the private directory — a fresh `sidevoice-install-XXXXXX` made private (0700) in the system's temporary directory, then checked as the
 app's own directories are (this user's, private, every directory above it root's or this user's and closed to others,
 sticky as `/tmp` allowed; `install.unsafe`) — entry by entry, written by hand: every entry a plain file or directory
 below `package/`. Refused (`install.authenticity`, with the check): a path that is absolute, has an empty, `.` or `..`

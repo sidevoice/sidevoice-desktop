@@ -8,13 +8,11 @@
 
 use crate::checks::Check;
 use crate::paths::DataDirs;
+use crate::platform::process;
 use crate::Refusal;
 use serde_json::Value;
 use sidevoice_platform::fs::{Access, Directory, Files, Fs, HeldDirectory};
-use std::os::fd::{AsRawFd, OwnedFd};
-use std::os::unix::process::CommandExt;
 use std::process::{Command, ExitStatus, Stdio};
-use std::thread;
 use std::time::{Duration, Instant};
 
 const OUTPUT_LIMIT: u64 = 1024 * 1024;
@@ -110,53 +108,33 @@ impl Cli {
             .env("SIDEVOICE_DATA_DIR", &self.data)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .process_group(0);
-        // A program being written at that instant (an update, or any process that forked while holding it open for
-        // writing) cannot be run yet: ETXTBSY, tried again shortly.
-        let mut tries = 0;
-        let mut child = loop {
-            match command.spawn() {
-                Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) && tries < 5 => {
-                    tries += 1;
-                    thread::sleep(Duration::from_millis(50));
-                }
-                spawned => break spawned.map_err(|e| failed(format!("{} could not start: {e}", self.prefix[0])))?,
-            }
-        };
-        let group = child.id() as libc::pid_t;
-        let kill_group = || {
-            // SAFETY: signals the process group this run created; ESRCH (nobody left) is fine.
-            unsafe { libc::killpg(group, libc::SIGKILL) };
-        };
-        let mut streams =
-            [Stream::new(child.stdout.take().map(OwnedFd::from)), Stream::new(child.stderr.take().map(OwnedFd::from))];
+            .stderr(Stdio::piped());
+        let mut child =
+            process::spawn_tree(command).map_err(|e| failed(format!("{} could not start: {e}", self.prefix[0])))?;
+        let mut output = child.output(OUTPUT_LIMIT);
         let mut status = None;
         loop {
             if status.is_none() {
                 status = child.try_wait().ok().flatten();
                 if status.is_some() {
                     // The program answered and left: anything of its own still running only holds the pipes open.
-                    kill_group();
+                    child.kill_tree();
                 }
             }
-            let open = streams.iter().any(Stream::is_open);
-            if status.is_some() && !open {
+            if status.is_some() && !output.is_open() {
                 break;
             }
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 break;
             }
-            drain(&mut streams, left.min(Duration::from_millis(50)));
+            output.drain(left.min(Duration::from_millis(50)));
             tick();
         }
         if status.is_none() {
-            kill_group();
-            let _ = child.kill();
-            let _ = child.wait();
+            child.stop();
         }
-        let [stdout, stderr] = streams.map(|s| s.bytes);
+        let (stdout, stderr) = output.into_bytes();
         Ok(Ran { status, stdout, stderr })
     }
 }
@@ -168,53 +146,6 @@ pub struct Ran {
     pub status: Option<ExitStatus>,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
-}
-
-/// One of the program's output pipes, read without blocking past the deadline.
-struct Stream {
-    fd: Option<OwnedFd>,
-    bytes: Vec<u8>,
-}
-
-impl Stream {
-    fn new(fd: Option<OwnedFd>) -> Self {
-        Stream { fd, bytes: Vec::new() }
-    }
-
-    fn is_open(&self) -> bool {
-        self.fd.is_some()
-    }
-}
-
-/// Waits at most `wait` for any open stream to have something, and reads what there is. End of file, or an error,
-/// closes the stream; beyond [`OUTPUT_LIMIT`] bytes are read and dropped.
-fn drain(streams: &mut [Stream], wait: Duration) {
-    let mut polled: Vec<libc::pollfd> = streams
-        .iter()
-        .filter_map(|s| s.fd.as_ref())
-        .map(|fd| libc::pollfd { fd: fd.as_raw_fd(), events: libc::POLLIN, revents: 0 })
-        .collect();
-    let millis = wait.as_millis().clamp(1, 1000) as libc::c_int;
-    // SAFETY: `polled` is a valid array of its length; with none, poll only sleeps.
-    let ready = unsafe { libc::poll(polled.as_mut_ptr(), polled.len() as libc::nfds_t, millis) };
-    if ready <= 0 {
-        return;
-    }
-    let mut events = polled.iter().map(|p| p.revents);
-    for stream in streams.iter_mut().filter(|s| s.fd.is_some()) {
-        if events.next().unwrap_or(0) == 0 {
-            continue;
-        }
-        let fd = stream.fd.as_ref().expect("open").as_raw_fd();
-        let mut chunk = [0u8; 16 * 1024];
-        // SAFETY: `chunk` is writable for its length; the fd is open. poll said it would not block.
-        let n = unsafe { libc::read(fd, chunk.as_mut_ptr() as *mut libc::c_void, chunk.len()) };
-        if n <= 0 {
-            stream.fd = None;
-        } else if (stream.bytes.len() as u64) < OUTPUT_LIMIT {
-            stream.bytes.extend_from_slice(&chunk[..n as usize]);
-        }
-    }
 }
 
 /// A check's outcome for the CLI: missing is "not installed".

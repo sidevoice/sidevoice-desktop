@@ -11,9 +11,8 @@
 //! ever created, so a path built from checked segments below the directory stays below it.
 
 use crate::install::{Failure, Step};
-use std::fs::{DirBuilder, OpenOptions};
+use sidevoice_platform::fs::{Create, Files, Fs};
 use std::io::{self, Read, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 /// What one archive may unpack to.
@@ -69,7 +68,7 @@ fn segments(raw: &[u8]) -> Result<Vec<&str>, Failure> {
 
 /// Creates `path` (0700) unless it is a directory already: one this unpacking made, since nothing else writes here.
 fn directory(path: &Path) -> Result<(), Failure> {
-    match DirBuilder::new().mode(0o700).create(path) {
+    match Files::create_private_dir(path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => match std::fs::symlink_metadata(path) {
             Ok(meta) if meta.file_type().is_dir() => Ok(()),
@@ -133,13 +132,7 @@ pub fn extract(archive: impl Read, into: &Path, limits: Limits, cancelled: &dyn 
             directory(&at)?;
         }
         let executable = entry.header().mode().map(|mode| mode & 0o111 != 0).unwrap_or(false);
-        let mut file = match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(if executable { 0o700 } else { 0o600 })
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(&path)
-        {
+        let mut file = match Files::open_private(&path, if executable { Create::NewProgram } else { Create::New }) {
             Ok(file) => file,
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
                 return Err(refused("archive-path", format!("The archive holds {} twice.", path.display())));
@@ -175,7 +168,7 @@ mod tests {
     use super::*;
     use serde_json::json;
     use sidevoice_desktop_test_support::fake_registry::{gzip, tar_entry, tarball};
-    use std::os::unix::fs::PermissionsExt;
+    use sidevoice_desktop_test_support::platform::storage::{Others, StorageFixture, StorageFixtures};
 
     fn unpack(bytes: &[u8]) -> (tempfile::TempDir, Result<(), Failure>) {
         let tmp = tempfile::tempdir().unwrap();
@@ -203,11 +196,13 @@ mod tests {
         let (tmp, result) = unpack(&archive);
         result.unwrap();
         let root = tmp.path().join("package");
-        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(std::fs::read(root.join("bin/sidevoice-connector")).unwrap(), b"#!/bin/sh\n");
-        assert_eq!(mode(&root.join("bin/sidevoice-connector")), 0o700);
-        assert_eq!(mode(&root.join("package.json")), 0o600);
-        assert_eq!(mode(&root.join("notices/licenses")), 0o700);
+        let installer = root.join("bin/sidevoice-connector");
+        assert_eq!(std::fs::read(&installer).unwrap(), b"#!/bin/sh\n");
+        assert_eq!(StorageFixtures::others(&installer), Others::Nothing);
+        assert!(Files::trusted_program(&installer).is_ok(), "executable");
+        StorageFixtures::assert_private(&root.join("package.json"));
+        StorageFixtures::assert_not_executable(&root.join("package.json"));
+        StorageFixtures::assert_private(&root.join("notices/licenses"));
         assert_eq!(std::fs::read(root.join("notices/licenses/a.txt")).unwrap(), b"MIT");
     }
 

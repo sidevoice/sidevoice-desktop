@@ -1,7 +1,7 @@
 //! The local host: the core on this computer, as the desktop app reaches it (docs/LOCAL_HOST.md).
 //!
 //! - [`checks`]: before any connect, the core's directory is this user's and private, and the socket's peer is this
-//!   user (`getpeereid` / `SO_PEERCRED`).
+//!   user (read from the connection, [`platform::ipc`]).
 //! - [`endpoints`]: where the core and the connector listen, read from the records they publish (`C/core.json`,
 //!   `D/connector.json`), never computed.
 //! - [`core_socket`]: a minimal HTTP/1.1 client over the core's socket (`C/core.json`) — health, identity, local pairing.
@@ -16,14 +16,15 @@
 //!   from the npm registry (HTTPS, pinned to the registry, its SHA-512 checked), unpacked by hand into a private
 //!   directory, and its own installer run from there.
 //! - [`host`]: the startup cases, the poll, the actions and the install, tied together.
+//! - [`platform`]: everything that differs per OS — the local channel, child processes, the install's files — behind
+//!   plain functions; nothing else here touches the OS.
 //!
 //! The trust boundary is the OS user: the device token travels only over the socket, and the page only ever holds
 //! the proxy's in-memory secret (sidevoice design "Onboarding, hosts and settings" §1, §4.1).
 //!
-//! Unix only: the beta's local host is macOS (the app) and Linux (tests and headless machines); elsewhere the crate is
-//! empty and the app offers no local host.
-
-#![cfg(unix)]
+//! The beta's local host is macOS (the app) and Linux (tests and headless machines). The crate builds on Windows too,
+//! where what [`platform`] cannot do yet answers `Unsupported` and no peer is trusted; the app offers no local host
+//! there.
 
 pub mod checks;
 pub mod cli;
