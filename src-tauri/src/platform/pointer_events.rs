@@ -1,5 +1,5 @@
 //! Owned pointer observation. Workers only schedule bounded main-thread work; they never query windows or wait for UI.
-use super::desktop_geometry::{DesktopGeometry, NativeGeometry};
+use super::desktop_geometry;
 use sidevoice_desktop_core::call_controls::Rect;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -94,8 +94,8 @@ fn polling(
                         if current.shown {
                             if let Some(w) = a.get_webview_window(label) {
                                 let inside =
-                                    NativeGeometry::pointer(&a).zip(NativeGeometry::frame(&w)).map(|(p, at)| {
-                                        let margin = margin * NativeGeometry::unit(&w);
+                                    desktop_geometry::pointer(&a).zip(desktop_geometry::frame(&w)).map(|(p, at)| {
+                                        let margin = margin * desktop_geometry::unit(&w);
                                         Rect {
                                             x: at.x + margin,
                                             y: at.y + margin,
