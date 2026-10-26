@@ -1,6 +1,4 @@
 //! Native file-manager selection, provided by Tauri's official opener plugin on every desktop OS.
-//! The local-host command is still gated off on Windows until its separate platform migration is complete.
-#![cfg_attr(target_os = "windows", allow(dead_code))]
 
 use std::path::PathBuf;
 use tauri::{AppHandle, Runtime};

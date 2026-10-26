@@ -300,6 +300,7 @@ Every resolved path must be valid UTF-8 before any file is revealed. A non-UTF-8
 through a UTF-8 symlink) returns an error instead of risking selection of a different file: opener 2.7.0 uses
 lossy path conversion on macOS. This restriction applies to the common interface on every host.
 Missing logs retain `log.missing`; file-manager failures retain `reveal.failed` with a localized message.
-The local-host offer remains macOS-only pending its separate cross-platform migration. This interface alone
-adds no Windows/Linux local-host offer or webview opener permissions. Interactive file-manager selection still
+`reveal-log` does not need a local host: it always selects the app log, plus the core's (else connector's) log when a
+host reports one, so it runs on every OS. The local-host offer remains macOS-only pending its separate cross-platform
+migration; this adds no Windows/Linux local-host offer or webview opener permissions. Interactive file-manager selection still
 needs runtime verification on each OS; headless tests cover error propagation without opening a window.
