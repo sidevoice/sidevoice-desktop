@@ -4,7 +4,7 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use sidevoice_desktop_core::memory::{accelerator_bytes, Sample};
 
-pub struct Os;
+pub struct SystemProcessMemory;
 
 #[link(name = "Metal", kind = "framework")]
 extern "C" {
@@ -12,30 +12,26 @@ extern "C" {
     fn MTLCreateSystemDefaultDevice() -> *mut AnyObject;
 }
 
-#[allow(non_upper_case_globals)]
-extern "C" {
-    static mach_task_self_: u32;
-    fn task_info(task: u32, flavor: u32, info: *mut u32, count: *mut u32) -> i32;
-}
-
-/// `TASK_VM_INFO`, and where `phys_footprint` and `resident_size` lie in `task_vm_info_data_t` (a `mach_vm_size_t`
-/// is 8 bytes: `virtual_size`, then two `int`s, then `resident_size` at 16 ... `phys_footprint` at 144).
-const TASK_VM_INFO: u32 = 22;
-const RESIDENT_AT: usize = 16;
-const FOOTPRINT_AT: usize = 144;
-
 /// The footprint and the resident set, in bytes.
 fn task() -> (Option<u64>, Option<u64>) {
-    // The kernel fills as many 32-bit words as it has (the struct grows between releases); room for more than ever.
-    let mut info = [0u32; 128];
-    let mut count = info.len() as u32;
-    // SAFETY: `info` has `count` words; `mach_task_self_` is this process's task port, set before main.
-    let status = unsafe { task_info(mach_task_self_, TASK_VM_INFO, info.as_mut_ptr(), &mut count) };
-    if status != 0 || (count as usize) * 4 < FOOTPRINT_AT + 8 {
+    use mach2::kern_return::KERN_SUCCESS;
+    use mach2::message::mach_msg_type_number_t;
+    use mach2::task::task_info;
+    use mach2::task_info::{task_info_t, task_vm_info, TASK_VM_INFO};
+    use mach2::traps::mach_task_self;
+    use std::mem::{offset_of, size_of};
+
+    // The kernel fills as many 32-bit words as it has (the struct grows between releases); the rest stays zero.
+    let mut info = task_vm_info::default();
+    let mut count = (size_of::<task_vm_info>() / size_of::<u32>()) as mach_msg_type_number_t;
+    // SAFETY: `info` has room for `count` 32-bit words; `mach_task_self` is this process's task port.
+    let status =
+        unsafe { task_info(mach_task_self(), TASK_VM_INFO, (&raw mut info).cast::<i32>() as task_info_t, &mut count) };
+    // An older kernel stops before `phys_footprint`: nothing to report then.
+    if status != KERN_SUCCESS || (count as usize) * size_of::<u32>() < offset_of!(task_vm_info, phys_footprint) + 8 {
         return (None, None);
     }
-    let word = |at: usize| u64::from(info[at / 4]) | (u64::from(info[at / 4 + 1]) << 32);
-    (Some(word(FOOTPRINT_AT)), Some(word(RESIDENT_AT)))
+    (Some(info.phys_footprint), Some(info.resident_size))
 }
 
 /// What the process holds on the GPU through Metal: `currentAllocatedSize` of the default device. `None` with no GPU.
@@ -57,7 +53,7 @@ fn accelerator() -> Option<u64> {
 }
 
 /// A look at the process now.
-impl ProcessMemory for Os {
+impl ProcessMemory for SystemProcessMemory {
     fn sample() -> Sample {
         let (footprint, resident) = task();
         Sample { footprint, resident, metal: metal(), accelerator: accelerator() }

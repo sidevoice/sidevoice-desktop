@@ -31,6 +31,10 @@ getrandom = "0.3"
 # Preserve the bundler's inherited private creation mask without own FFI.
 rustix = { version = "1", features = ["process", "fs"] }
 
+[target.'cfg(windows)'.dependencies]
+# The Known Folders (RoamingAppData, LocalAppData) through SHGetKnownFolderPath.
+dirs = "7"
+
 [dev-dependencies]
 sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.11.1", features = ["test-support"] }
 tempfile = "3"

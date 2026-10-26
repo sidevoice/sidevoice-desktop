@@ -30,6 +30,7 @@ mod voice;
 use crate::platform::update_eligibility::{NativeUpdateEligibility, UpdateEligibility};
 
 use crate::platform::computer_name::{ComputerName, SystemComputerName};
+use crate::platform::host_capabilities::CAPABILITIES;
 use crate::platform::media_controls::{MediaControls, NativeMediaControls};
 use crate::platform::webview_diagnostics::{NativeWebviewDiagnostics, WebviewDiagnostics};
 use serde_json::{json, Value};
@@ -63,13 +64,12 @@ pub(crate) struct AppState {
     shortcut_change: Mutex<()>,
     resetting: std::sync::atomic::AtomicBool,
     reset_admission: Mutex<data::Admission>,
-    #[cfg(target_os = "macos")]
-    reset_helper: Mutex<Option<std::process::Child>>,
+    reset_helper: Mutex<Option<platform::reset_handoff::Pending>>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
-        let preferred: Vec<String> = sys_locale::get_locales().collect();
+        let preferred = platform::locale::preferred();
         AppState {
             settings: Mutex::default(),
             call: Mutex::default(),
@@ -80,7 +80,6 @@ impl Default for AppState {
             shortcut_change: Mutex::default(),
             resetting: std::sync::atomic::AtomicBool::new(false),
             reset_admission: Mutex::default(),
-            #[cfg(target_os = "macos")]
             reset_helper: Mutex::default(),
         }
     }
@@ -327,6 +326,9 @@ fn reset_call_state(app: &AppHandle) {
 
 /// (Re)creates the room window: the bundled interface, bound to the app's own pages.
 fn open_room(app: &AppHandle) -> tauri::Result<()> {
+    // Reset captures browser writers before exit. A tray/reopen action must not create another
+    // WebKit/WebView2 process after that snapshot (or race reset admission while building it).
+    let Some(_permit) = data::admit(app) else { return Ok(()) };
     let state = app.state::<AppState>();
     let label = format!("{ROOM_PREFIX}{}", state.room_counter.fetch_add(1, Ordering::SeqCst) + 1);
     #[cfg(not(feature = "probe"))]
@@ -366,6 +368,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             platform::microphone::SETTINGS_URL.is_some(),
             &NativeWebviewDiagnostics::available(),
             NativeMediaControls::support(),
+            CAPABILITIES,
         ));
     #[cfg(feature = "probe")]
     let builder = match probe::local_host_flow() {
@@ -384,7 +387,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
                 _ => media::Capture::Other,
             };
             let page = committed_origin.lock().unwrap().clone();
-            let decision = media::decide(capture, page.as_deref(), APP_ORIGIN, !bridge::voice_offered());
+            let decision = media::decide(capture, page.as_deref(), APP_ORIGIN, !CAPABILITIES.voice);
             debug(&format!("media {capture:?} for {page:?}: {decision:?}"));
             match decision {
                 media::Decision::Allow => PermissionResponse::Allow,
@@ -602,15 +605,23 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
 }
 
 pub fn run() {
-    #[cfg(target_os = "macos")]
-    if !data::await_reset_idle() {
-        eprintln!("sidevoice: reset lock unavailable or cleanup still running"); // before the log exists
-        return;
-    }
+    use platform::reset_handoff::{self, Handoff};
+    let startup = match Handoff::new().and_then(|handoff| {
+        handoff.await_idle(std::time::Duration::from_secs(5 * 60), &std::sync::atomic::AtomicBool::new(false))
+    }) {
+        Ok(guard) => guard,
+        Err(_) => {
+            // Before the log and the app state exist: the system's language is read here.
+            let preferred = platform::locale::preferred();
+            let language = sidevoice_desktop_core::i18n::language(&preferred);
+            eprintln!("{}", sidevoice_desktop_core::i18n::t(language, "startup.reset_busy"));
+            return;
+        }
+    };
     let context = tauri::generate_context!();
     #[cfg(feature = "probe")]
     let context = probe::with_page(context);
-    #[cfg(all(feature = "probe", target_os = "macos"))]
+    #[cfg(feature = "probe")]
     probe::watch_exit_handlers();
     log_panics();
     // First, so everything after it is logged.
@@ -640,7 +651,7 @@ pub fn run() {
         )
         .manage(AppState::default())
         .invoke_handler(handler())
-        .setup(|app| {
+        .setup(move |app| {
             let handle = app.handle().clone();
             // A regular app with its Dock tile, asked for before any window or panel exists (#117). The policy is
             // already Regular (Tao sets it at launch, no bundle key says otherwise) yet the operator's Mac showed no
@@ -702,6 +713,7 @@ pub fn run() {
             });
             #[cfg(target_os = "macos")]
             data::finalize_relaunched_reset();
+            reset_handoff::finish_startup(startup);
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -741,6 +753,6 @@ pub fn run() {
 }
 
 /// The helper is the same signed executable, launched only after a confirmed reset or uninstall.
-pub fn run_reset_helper(parent_pid: Option<u32>, lock_fd: Option<i32>, uninstall: bool) {
-    data::run_reset_helper(parent_pid, lock_fd, uninstall);
+pub fn run_reset_helper() {
+    data::run_reset_helper();
 }

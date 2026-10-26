@@ -22,7 +22,7 @@ probe = []
 tauri-build = { version = "2.7", features = [] }
 
 [dependencies]
-# Shared model paths and held-directory pairing storage, pinned to a released core tag.
+# Shared paths, held-directory storage, authenticated channels, detached helper execution and browser-data removal.
 sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.12.2" }
 sidevoice-desktop-core = { path = "core" }
 sidevoice-desktop-engine = { path = "engine" }
@@ -35,6 +35,8 @@ serde_json = "1"
 sys-locale = "0.3"
 # Match the registered NSIS executable by native file identity (also handles Windows path casing).
 same-file = "1"
+# The local data folder Tauri gives the webview (`app_local_data_dir`), for its storage removal; already in Tauri's graph.
+dirs = "7"
 # Probe-only RSS observations use the maintained portable API; no GPU estimates.
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 # Friendly computer names via the OS APIs (platform/computer_name); already in the shared platform graph.
@@ -43,7 +45,9 @@ url = "2.5"
 # The app's updates (src/updater.rs; docs/BRIDGE.md → "The updater"), from Rust only: the page gets none of its
 # commands. Its checks sleep on the app's Tokio runtime.
 tauri-plugin-updater = "2.13"
-tokio = { version = "1", features = ["time", "sync"] }
+tokio = { version = "1", features = ["time", "sync", "rt", "net", "io-util", "process"] }
+# A one-use helper capability, delivered only through its inherited stdin pipe.
+getrandom = "0.3"
 # The app log (src/lib.rs `applog`): a rotating, size-capped file in the platform's log directory, fed by the Rust side and
 # by the room page's console errors (bridge/webview-log.js).
 tauri-plugin-log = "2"
@@ -61,11 +65,13 @@ sidevoice-local-host = { path = "local-host", features = ["fetch"] }
 winreg = "0.55"
 # Whether a mouse button went down elsewhere, to close the call controls card's panels, and whether the room is on another
 # virtual desktop (DWM cloaked), for the card (src/call_controls.rs).
-windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_Storage_FileSystem", "Win32_Graphics_Dwm", "Win32_UI_Controls", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_Storage_FileSystem", "Win32_Graphics_Dwm", "Win32_UI_Controls", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Preserve the existing home-to-parent mount guard with maintained safe bindings.
 rustix = { version = "1", features = ["fs"] }
+# The typed Mach bindings (task_info, task_vm_info) for the process memory read (src/platform/process_memory/macos.rs).
+mach2 = "0.6"
 # The voice call the app runs itself (src/voice.rs, `host.voice`): sidevoice-voice with its native microphone and
 # speaker (cpal) and WebRTC's AEC3 between them, on the models the app hands it (src/voice/models.rs: the engine's).
 # It depends on no engine. The candidate source: a try's take (StartOptions, VoiceEvent::Take), the pause in the

@@ -144,8 +144,14 @@ impl<A: LaneAudio> VoiceState<A> {
     /// How long an idle minute is: a minute; CI's probe build can shorten it.
     fn idle_minute() -> Duration {
         #[cfg(feature = "probe")]
-        return crate::probe::idle_minute();
-        #[cfg(not(feature = "probe"))]
+        {
+            // With `SIDEVOICE_DEBUG_IDLE_MINUTE_MS`, how long it is: the models of a stopped call stay loaded for
+            // `idle_unload_minutes` of them, so `macos memory` can wait for them to be let go.
+            let millis = std::env::var("SIDEVOICE_DEBUG_IDLE_MINUTE_MS").ok().and_then(|v| v.parse::<u64>().ok());
+            if let Some(millis) = millis.filter(|&m| crate::debugging() && m > 0) {
+                return Duration::from_millis(millis);
+            }
+        }
         Duration::from_secs(60)
     }
 
@@ -157,7 +163,7 @@ impl<A: LaneAudio> VoiceState<A> {
             route: tokio::sync::Mutex::new(None),
             devices,
             watching: AtomicBool::new(false),
-            // CI's memory run shortens the minute so that the models' release is waited for (src/probe.rs).
+            // CI's memory run shortens the minute so that the models' release is waited for (`idle_minute`).
             minute: Self::idle_minute(),
             keeping: Mutex::new(Vec::new()),
             closing: AtomicBool::new(false),

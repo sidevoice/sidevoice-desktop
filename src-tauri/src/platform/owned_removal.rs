@@ -19,7 +19,6 @@ mod imp;
 #[cfg(target_os = "windows")]
 #[path = "owned_removal/windows.rs"]
 mod imp;
-#[cfg(any(target_os = "macos", test))]
 pub use imp::NativeOwnedRemoval;
 
 /// Opaque filesystem/mount identity; compared only for equality, never exposed to callers as a native handle.
@@ -28,8 +27,7 @@ pub struct Mount(Vec<u8>);
 
 /// The exact desktop-owned directories and model store for one account home. Selection remains desktop policy.
 pub struct Scope {
-    directories: Vec<PathBuf>,
-    models: PathBuf,
+    steps: Vec<(&'static str, PathBuf)>,
 }
 
 /// Owned cleanup and read-only connector preflight. Non-Mac reset remains disabled: those native implementations
@@ -46,6 +44,8 @@ pub trait OwnedRemoval {
 
     /// Preflight an existing tree under home without deleting anything. The selected root must be an ordinary
     /// directory; missing roots succeed. Callers retain their own exact connector-root validation.
+    /// Only the macOS connector-uninstall preflight asks for it; no portable caller exists yet.
+    #[cfg(any(target_os = "macos", test))]
     fn check_tree(path: &Path, home: &Path) -> Result<(), &'static str> {
         if let Some(tree) = Prepared::open::<Self>(path, home)? {
             match HeldDirectory::open(path, Access::NotWritableByOthers) {
@@ -59,15 +59,16 @@ pub trait OwnedRemoval {
     }
 
     /// Remove exactly one allowlisted desktop tree. Links are unlinked as entries, never followed; ordinary
-    /// hard links are unlinked without altering other names or their contents. All selected descendants are
+    /// hard links are unlinked without altering other names or their contents. The tree is checked with [`check_tree`](Self::check_tree) first; all selected descendants are
     /// preflighted before deletion and checked again by the shared capability while deleting.
     fn remove_known(path: &Path, home: &Path) -> Result<(), &'static str> {
         if path == home {
             return Err("home-root");
         }
         let scope = Self::scope(home).ok_or("outside-known-dirs")?;
-        if !scope.directories.iter().any(|known| known == path)
-            && !Scope::model_children(&scope.models).iter().any(|known| known == path)
+        let models = scope.models().ok_or("outside-known-dirs")?;
+        if !scope.steps.iter().any(|(name, known)| *name != "models" && known == path)
+            && !Scope::model_children(models).iter().any(|known| known == path)
         {
             return Err("outside-known-dirs");
         }
@@ -81,7 +82,7 @@ pub trait OwnedRemoval {
     /// unlisted sibling. An absent store stays absent. Redirected model roots are refused, not traversed.
     fn remove_model_store(root: &Path, home: &Path) -> Result<(), &'static str> {
         let scope = Self::scope(home).ok_or("outside-known-dirs")?;
-        if root != scope.models {
+        if scope.models() != Some(root) {
             return Err("outside-known-dirs");
         }
         let mut trees = Vec::new();
@@ -99,6 +100,15 @@ pub trait OwnedRemoval {
 }
 
 impl Scope {
+    /// The named cleanup steps in deletion order; the step named `models` is the shared model store.
+    pub fn steps(&self) -> &[(&'static str, PathBuf)] {
+        &self.steps
+    }
+
+    fn models(&self) -> Option<&Path> {
+        self.steps.iter().find(|(name, _)| *name == "models").map(|(_, path)| path.as_path())
+    }
+
     fn model_children(root: &Path) -> [PathBuf; 3] {
         ["blobs", "models", "partial"].map(|name| root.join(name))
     }
@@ -196,8 +206,11 @@ mod tests {
     impl OwnedRemoval for Fixture {
         fn scope(home: &Path) -> Option<Scope> {
             Some(Scope {
-                directories: vec![home.join("state"), home.join("mounted/state")],
-                models: home.join("store"),
+                steps: vec![
+                    ("state", home.join("state")),
+                    ("mounted", home.join("mounted/state")),
+                    ("models", home.join("store")),
+                ],
             })
         }
 
@@ -405,20 +418,23 @@ mod tests {
     fn native_scope_stays_inside_home_or_refuses_cleanup() {
         let (_temp, home) = fixture();
         if let Some(scope) = NativeOwnedRemoval::scope(&home) {
-            // Whatever roots a host supplies: distinct, strictly inside the home, disjoint from the model store.
-            assert!(!scope.directories.is_empty());
-            for (index, path) in scope.directories.iter().enumerate() {
+            // Whatever roots a host supplies: distinct, strictly inside the home, none nested in another, and
+            // each removable through the interface. The model store is the step named `models`.
+            let steps = scope.steps();
+            assert!(steps.iter().any(|(name, _)| *name == "models"));
+            for (index, (_, path)) in steps.iter().enumerate() {
                 assert!(path.starts_with(&home) && path != &home);
-                assert!(!path.starts_with(&scope.models) && !scope.models.starts_with(path));
-                assert!(scope.directories[index + 1..]
+                assert!(steps[index + 1..]
                     .iter()
-                    .all(|other| !other.starts_with(path) && !path.starts_with(other)));
+                    .all(|(_, other)| !other.starts_with(path) && !path.starts_with(other)));
             }
-            assert!(scope.models.starts_with(&home) && scope.models != home);
-            for path in &scope.directories {
-                assert_eq!(NativeOwnedRemoval::remove_known(path, &home), Ok(()));
+            for (name, path) in steps {
+                if *name == "models" {
+                    assert_eq!(NativeOwnedRemoval::remove_model_store(path, &home), Ok(()));
+                } else {
+                    assert_eq!(NativeOwnedRemoval::remove_known(path, &home), Ok(()));
+                }
             }
-            assert_eq!(NativeOwnedRemoval::remove_model_store(&scope.models, &home), Ok(()));
         } else {
             assert_eq!(NativeOwnedRemoval::remove_known(&home.join("state"), &home), Err("outside-known-dirs"));
         }

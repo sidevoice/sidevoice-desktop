@@ -33,4 +33,5 @@ libc = "0.2"
 rustix = { version = "1", features = ["fs"] }
 
 [dev-dependencies]
+serde = { version = "1", features = ["derive"] }
 tempfile = "3"

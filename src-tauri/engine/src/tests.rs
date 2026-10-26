@@ -4,8 +4,8 @@
 
 use super::*;
 use sidevoice_engine::{
-    async_trait, CatalogFragment, Credentials, Download, Family, Fetcher, HttpClient, HttpRequest, HttpResponse,
-    Storage,
+    async_trait, Accelerator, Capabilities, CatalogFragment, Credentials, Download, Family, Fetcher, HttpClient,
+    HttpRequest, HttpResponse, Runs, Storage,
 };
 use std::path::Path;
 
@@ -54,11 +54,12 @@ const PART: usize = 1000;
 struct TestHost {
     native: NativeHost,
     fetcher: ServedFetcher,
+    capabilities: Capabilities,
 }
 
 impl Host for TestHost {
-    fn capabilities(&self) -> sidevoice_engine::Capabilities {
-        self.native.capabilities()
+    fn capabilities(&self) -> Capabilities {
+        self.capabilities.clone()
     }
     fn storage(&self) -> &dyn Storage {
         self.native.storage()
@@ -118,6 +119,10 @@ fn engines(name: &str, stalls: bool) -> Test {
 /// `engines`; `shared`: another model, `echo-test`, whose one build's files are the same bytes as `whisper-test`'s int8
 /// build's (the engine stores a file once, by its SHA-256, and links it to each build).
 fn engines_with(name: &str, stalls: bool, shared: bool) -> Test {
+    engines_with_capabilities(name, stalls, shared, None)
+}
+
+fn engines_with_capabilities(name: &str, stalls: bool, shared: bool, supplied: Option<Capabilities>) -> Test {
     let root = std::env::temp_dir().join(format!("sidevoice-desktop-engine-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let files = vec![
@@ -165,7 +170,9 @@ fn engines_with(name: &str, stalls: bool, shared: bool) -> Test {
     }
     let catalog = TestCatalog(families.into_iter().map(|f| serde_json::from_value(f).unwrap()).collect());
     let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
-    let host = TestHost { native: NativeHost::new(&root).unwrap(), fetcher: ServedFetcher(files) };
+    let native = NativeHost::new(&root).unwrap();
+    let capabilities = supplied.unwrap_or_else(|| native.capabilities());
+    let host = TestHost { native, fetcher: ServedFetcher(files), capabilities: capabilities.clone() };
     let engines = NativeEngines::with(Box::new(host), vec![Box::new(catalog)], runtime.handle().clone()).unwrap();
     Test { engines, root, _runtime: runtime }
 }
@@ -186,10 +193,34 @@ fn capabilities_are_this_device_what_the_engine_runs_here_and_its_memory() {
     let test = engines("capabilities", false);
     let json = serde_json::to_value(&test.engines.device).unwrap();
     assert_eq!(json["runs"], "native");
-    assert_eq!(json["os"], std::env::consts::OS);
-    assert_eq!(json["arch"], std::env::consts::ARCH);
+    assert_eq!(json["os"], platform::capabilities::OS);
+    assert_eq!(json["arch"], platform::capabilities::ARCH);
     assert_eq!(json["has"], serde_json::json!(["cpu"]), "sherpa-onnx runs on the CPU in this build of the engine");
     assert!(json["memory_mb"].as_u64().is_some());
+}
+
+#[test]
+fn capabilities_report_explicit_host_identity_and_memory() {
+    let supplied = Capabilities {
+        runs: Runs::Native,
+        os: "fixture-os".into(),
+        arch: "fixture-arch".into(),
+        accelerators: vec![Accelerator::Cpu],
+        memory_mb: Some(2048),
+        cores: Some(4),
+    };
+    let test = engines_with_capabilities("explicit-capabilities", false, false, Some(supplied));
+    let json = serde_json::to_value(&test.engines.device).unwrap();
+    assert_eq!(json["runs"], "native");
+    assert_eq!(json["os"], "fixture-os");
+    assert_eq!(json["arch"], "fixture-arch");
+    assert_eq!(json["has"], serde_json::json!(["cpu"]));
+    assert_eq!(json["memory_mb"], 2048);
+    let mut downloads = 0;
+    let refused = test.engines.install("kokoro-test", ENGINE, &mut |_, _| downloads += 1).unwrap_err();
+    assert_eq!(refused.key, "model_needs_memory");
+    assert_eq!(refused.params["memory_mb"], 2048);
+    assert_eq!(downloads, 0);
 }
 
 #[test]

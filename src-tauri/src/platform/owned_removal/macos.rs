@@ -6,16 +6,17 @@ pub struct NativeOwnedRemoval;
 impl OwnedRemoval for NativeOwnedRemoval {
     fn scope(home: &Path) -> Option<Scope> {
         Some(Scope {
-            directories: [
-                "Library/Application Support/dev.sidevoice.desktop",
-                "Library/WebKit/dev.sidevoice.desktop",
-                "Library/Caches/dev.sidevoice.desktop",
-                "Library/Saved Application State/dev.sidevoice.desktop.savedState",
-                "Library/Logs/dev.sidevoice.desktop",
-            ]
-            .map(|name| home.join(name))
-            .into(),
-            models: home.join("Library/Application Support/Sidevoice").join(sidevoice_platform::data_dir::MODELS),
+            steps: vec![
+                ("app-data", home.join("Library/Application Support/dev.sidevoice.desktop")),
+                (
+                    "models",
+                    home.join("Library/Application Support/Sidevoice").join(sidevoice_platform::data_dir::MODELS),
+                ),
+                ("webview", home.join("Library/WebKit/dev.sidevoice.desktop")),
+                ("cache", home.join("Library/Caches/dev.sidevoice.desktop")),
+                ("saved-state", home.join("Library/Saved Application State/dev.sidevoice.desktop.savedState")),
+                ("logs", home.join("Library/Logs/dev.sidevoice.desktop")),
+            ],
         })
     }
 
