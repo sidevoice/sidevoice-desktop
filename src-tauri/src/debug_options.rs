@@ -6,7 +6,7 @@
 //! macOS: `WKWebView.isInspectable` (Safari's Web Inspector, macOS 13.3+), and WebKit's private debug preferences
 //! `_setCompositingBordersVisible:` (each composited layer outlined: what the GPU draws) and
 //! `_setCompositingRepaintCountersVisible:` (each layer's repaint count: what the CPU keeps painting), each asked only of
-//! what answers to it. Windows and Linux: none (platform `webview_diagnostics`).
+//! what answers to it. Windows and Linux: none (platform `diagnostics`).
 //!
 //! The native part is compiled only into a nightly or a dev build (`sidevoice_debug_options`, set by build.rs); in a
 //! release the command refuses and nothing touches WebKit's private API.
@@ -15,7 +15,7 @@ use serde_json::Value;
 use tauri::{AppHandle, Webview};
 
 #[cfg(sidevoice_debug_options)]
-use crate::platform::webview_diagnostics;
+use crate::platform::diagnostics;
 #[cfg(sidevoice_debug_options)]
 use sidevoice_desktop_core::debug_options::Switch;
 #[cfg(sidevoice_debug_options)]
@@ -42,12 +42,12 @@ pub async fn debug_options(
 
 #[cfg(sidevoice_debug_options)]
 fn set(app: &AppHandle, action: &str, name: Option<&str>, enabled: Option<bool>) -> Result<Value, Value> {
-    let switch = name.and_then(Switch::parse).filter(|s| webview_diagnostics::available().contains(s));
+    let switch = name.and_then(Switch::parse).filter(|s| diagnostics::webview_switches().contains(s));
     match (action, switch, enabled) {
         ("set", Some(switch), Some(on)) => {
             let kept = crate::change_settings(app, |s| s.debug.set(switch, on)).map_err(|e| refusal("internal", e))?;
             apply(app);
-            Ok(kept.debug.state(&webview_diagnostics::available()))
+            Ok(kept.debug.state(&diagnostics::webview_switches()))
         }
         _ => Err(refusal("bad_request", format!("not a developer option: {action} {name:?}"))),
     }
@@ -61,7 +61,7 @@ fn set(_: &AppHandle, _: &str, _: Option<&str>, _: Option<bool>) -> Result<Value
 /// Puts the kept switches on the webviews that exist: the room and the card. Called as each is created, and on a change.
 #[cfg(sidevoice_debug_options)]
 pub(crate) fn apply(app: &AppHandle) {
-    let available = webview_diagnostics::available();
+    let available = diagnostics::webview_switches();
     if available.is_empty() {
         return;
     }
@@ -72,7 +72,7 @@ pub(crate) fn apply(app: &AppHandle) {
         }
     }
     for window in [crate::room_window(app), app.get_webview_window(crate::call_controls::LABEL)].into_iter().flatten() {
-        if let Err(error) = webview_diagnostics::apply(&window, options) {
+        if let Err(error) = diagnostics::apply_webview_switches(&window, options) {
             log::warn!("webview diagnostics: {error}");
         }
     }

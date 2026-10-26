@@ -28,10 +28,10 @@ mod updater;
 mod voice;
 
 use crate::platform::application;
+use crate::platform::diagnostics;
 use crate::platform::host;
 use crate::platform::media_controls;
 use crate::platform::shortcut_access;
-use crate::platform::webview_diagnostics;
 use serde_json::{json, Value};
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
 use sidevoice_desktop_core::build_info::BuildInfo;
@@ -344,7 +344,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             host::name().as_deref(),
             &debug_options,
             platform::microphone::settings_available(),
-            &webview_diagnostics::available(),
+            &diagnostics::webview_switches(),
             media_controls::support(),
             host::capabilities(),
         ));
@@ -365,8 +365,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
                 _ => media::Capture::Other,
             };
             let page = committed_origin.lock().unwrap().clone();
-            let decision =
-                media::decide(capture, page.as_deref(), APP_ORIGIN, !host::capabilities().voice);
+            let decision = media::decide(capture, page.as_deref(), APP_ORIGIN, !host::capabilities().voice);
             debug(&format!("media {capture:?} for {page:?}: {decision:?}"));
             match decision {
                 media::Decision::Allow => PermissionResponse::Allow,

@@ -1,10 +1,10 @@
-//! Probe-only logging; native measurements belong to platform/process_memory.
+//! Probe-only logging; native measurements belong to platform/diagnostics.
 
-use crate::platform::process_memory;
+use crate::platform::diagnostics;
 
 /// Print the named measurements in the format CI reads.
 pub fn report(phase: &str) -> String {
-    let line = process_memory::sample().line(phase);
+    let line = diagnostics::memory().line(phase);
     println!("{line}");
     line
 }

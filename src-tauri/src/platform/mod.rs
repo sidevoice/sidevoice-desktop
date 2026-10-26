@@ -1,22 +1,16 @@
 //! Desktop operations supplied by the host platform.
 
 pub mod application;
-#[cfg(feature = "probe")]
-pub mod exit_diagnostics;
+pub mod diagnostics;
 pub mod host;
 pub mod locale;
 pub mod media_controls;
 pub mod microphone;
 #[cfg(test)]
 pub mod pairing_storage;
-#[cfg(any(test, feature = "probe"))]
-pub mod process_memory;
 pub mod reveal;
 pub mod shortcut_access;
 pub mod tray;
-#[cfg(feature = "probe")]
-pub mod voice_holds;
-pub mod webview_diagnostics;
 
 pub mod card_window;
 pub mod confirmation;
