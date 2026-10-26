@@ -24,11 +24,6 @@ pub const RESET_AVAILABLE: bool = cfg!(target_os = "macos");
 /// differs by OS, so there is no per-OS code.
 pub const APP_ORIGIN: &str = if cfg!(windows) { "http://tauri.localhost" } else { "tauri://localhost" };
 
-/// Whether this host is an Apple-silicon Mac, where the recommended Whisper build is the Metal one. Read only by the
-/// real-models call test.
-#[cfg(test)]
-pub const APPLE_SILICON: bool = cfg!(all(target_os = "macos", target_arch = "aarch64"));
-
 /// What differs per OS.
 trait Os {
     /// The name the person gave the device, kept apart from the network name (macOS Sharing's Computer Name,

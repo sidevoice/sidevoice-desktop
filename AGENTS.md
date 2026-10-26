@@ -57,8 +57,9 @@ Operator rule (2026-10-25). Applies to product code, tests, xtask and build scri
   phrased generically (say why in the PR).
 - **Enforced in CI** by its own `platform-boundary` check (next to Clippy's `disallowed-*`): any OS-specific code
   outside `platform` fails it. It stays red until the existing debt is fixed; there is no allowlist, with one exception: the crate attribute
-  `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]` in a `main.rs`, which the linker reads from the
-  binary crate root and so cannot live in `platform` (the guard accepts exactly that form).
+  `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]`, written exactly so as a file-scope inner attribute of a
+  Cargo binary root (`src/main.rs`, `src/bin/*.rs`, `src/bin/*/main.rs`), which the linker reads from the crate root and so
+  cannot live in `platform`.
 
 Reference in this repo: `platform/microphone.rs`, `platform/desktop_geometry.rs` and `platform/confirmation.rs`, each public
 plain functions over a private per-OS trait. (sidevoice-connector and core keep their separately approved public-trait
