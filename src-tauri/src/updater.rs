@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Webview};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
+use crate::platform::update_eligibility::{NativeUpdateEligibility, UpdateEligibility};
 use crate::AppState;
 
 /// One lock over the status and its update; `installing`: an install under way, which quitting waits for; `task`: the
@@ -35,30 +36,8 @@ fn feed() -> Option<url::Url> {
     core::feed(CHANNEL)
 }
 
-/// A build with a feed (a release or a nightly) that can replace itself: its `.app` bundle on a writable volume,
-/// AppImage or NSIS install.
-pub fn offered() -> bool {
-    use tauri::utils::{config::BundleType, platform::bundle_type};
-    feed().is_some()
-        && match bundle_type() {
-            Some(BundleType::App) => std::env::current_exe()
-                .is_ok_and(|exe| core::in_app_bundle(&exe) && exe.ancestors().nth(4).is_some_and(writable)),
-            Some(BundleType::AppImage) => std::env::var_os("APPIMAGE").is_some(),
-            Some(BundleType::Nsis) => true,
-            _ => false,
-        }
-}
-
-/// Not on a read-only volume (the .dmg, a translocated copy).
-fn writable(folder: &std::path::Path) -> bool {
-    let probe = folder.join(format!(".sidevoice-update-check-{}", std::process::id()));
-    let made = std::fs::OpenOptions::new().write(true).create_new(true).open(&probe);
-    let _ = std::fs::remove_file(&probe);
-    !made.is_err_and(|e| e.kind() == std::io::ErrorKind::ReadOnlyFilesystem)
-}
-
 pub fn setup(app: &AppHandle) {
-    if !offered() {
+    if !NativeUpdateEligibility::available(CHANNEL) {
         return;
     }
     if let Err(e) = app.plugin(tauri_plugin_updater::Builder::new().build()) {
@@ -249,7 +228,7 @@ pub fn quit(app: &AppHandle) {
         return;
     }
     let deadline = Instant::now() + Duration::from_secs(5 * 60);
-    while with(app, |u| u.installing) && Instant::now() < deadline {
+    while installing(app) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(100));
     }
     if current_mode(app) == Mode::Automatic {
@@ -263,7 +242,6 @@ pub fn quit(app: &AppHandle) {
     }
 }
 
-#[cfg(target_os = "macos")]
 pub fn installing(app: &AppHandle) -> bool {
     app.try_state::<Mutex<Updates>>().is_some_and(|_| with(app, |u| u.installing))
 }

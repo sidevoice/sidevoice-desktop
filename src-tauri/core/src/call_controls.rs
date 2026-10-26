@@ -393,6 +393,15 @@ impl Placements {
     }
 }
 
+/// The card advertises only a shortcut the system actually registered. The saved chord alone is no guarantee.
+pub fn shortcut_hint(shortcut: &crate::settings::MuteShortcut) -> &str {
+    if shortcut.state == crate::settings::Registration::On {
+        shortcut.label.as_deref().unwrap_or_default()
+    } else {
+        ""
+    }
+}
+
 /// A Tauri accelerator as the card's tooltip reads it: macOS's symbols (⌃⌥⇧⌘) run together, elsewhere the names joined
 /// with "+". Empty stays empty (no shortcut).
 pub fn shortcut_label(accelerator: &str, macos: bool) -> String {
@@ -435,6 +444,21 @@ mod tests {
 
     /// The whole rule (#165), every case: the card shows when switched on, in a call, not hidden for now, and either
     /// always shown or with the stage out of view, on screen or in the page.
+    #[test]
+    fn shortcut_hint_requires_successful_registration() {
+        use crate::settings::{MuteShortcut, Registration};
+        for macos in [false, true] {
+            let on = MuteShortcut::new("Ctrl+Alt+M", Registration::On, vec![], macos);
+            assert_eq!(shortcut_hint(&on), on.label.as_deref().unwrap());
+            for state in [Registration::Off, Registration::Refused, Registration::Unavailable] {
+                let kept = MuteShortcut::new("Ctrl+Alt+M", state, vec![], macos);
+                assert!(kept.label.is_some(), "a saved chord remains configured");
+                assert_eq!(shortcut_hint(&kept), "", "no working shortcut for {state:?}");
+            }
+        }
+        assert_eq!(shortcut_hint(&MuteShortcut::default()), "");
+    }
+
     #[test]
     fn the_card_shows_exactly_when_the_stage_is_out_of_view() {
         for bits in 0..64u8 {

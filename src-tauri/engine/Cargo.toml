@@ -14,7 +14,7 @@ publish = false
 # sherpa-onnx backend links sherpa-onnx's static libraries
 # (SHERPA_ONNX_LIB_DIR), its whisper.cpp backend compiles whisper.cpp from source with CMake, with Metal on Apple
 # silicon (docs/ENGINES.md).
-sidevoice-engine = { git = "https://github.com/sidevoice/sidevoice-engine", tag = "v0.5.0" }
+sidevoice-engine = { git = "https://github.com/sidevoice/sidevoice-engine", tag = "v0.6.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The engine's futures run on the app's Tokio runtime; installs race a cancel (src/lib.rs).

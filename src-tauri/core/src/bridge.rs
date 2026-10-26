@@ -27,27 +27,15 @@ const COMPUTER_NAME_PLACEHOLDER: &str = "\"__SIDEVOICE_COMPUTER_NAME__\"";
 const MICROPHONE_SETTINGS_PLACEHOLDER: &str = "\"__SIDEVOICE_MICROPHONE_SETTINGS__\"";
 const DEBUG_PLACEHOLDER: &str = "\"__SIDEVOICE_DEBUG__\"";
 
-/// Who answers the headset's buttons and media keys in a call: `native` where the app does (macOS,
-/// `src/headset.rs`), so the page does not answer them too; `None` elsewhere (the page's Media Session does).
-pub fn media_keys() -> Option<&'static str> {
-    if cfg!(target_os = "macos") {
-        Some("native")
-    } else {
-        None
-    }
-}
-
-/// Whether the app offers this computer's own core, the local host (`window.__sidevoiceDesktop.host.localHost`,
-/// docs/LOCAL_HOST.md): on macOS only, the beta's app platform (design O2). Elsewhere the app is a remote client.
-pub fn local_host_offered() -> bool {
-    cfg!(target_os = "macos")
-}
-
-/// Whether the app runs the voice call itself (`window.__sidevoiceDesktop.host.voice`, docs/BRIDGE.md → "The voice
-/// call"): on macOS only, where its echo canceller builds and the beta ships. Elsewhere the page runs the call, and the
-/// room window grants it the microphone (`media::decide`).
-pub fn voice_offered() -> bool {
-    cfg!(target_os = "macos")
+/// What the host platform offers the page beyond the web: the platform interface supplies it, the bridge only tells it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Capabilities {
+    /// This computer's own core, the local host (`window.__sidevoiceDesktop.host.localHost`, docs/LOCAL_HOST.md).
+    /// Without it the app is a remote client.
+    pub local_host: bool,
+    /// The app runs the voice call itself (`window.__sidevoiceDesktop.host.voice`, docs/BRIDGE.md -> "The voice
+    /// call"). Without it the page runs the call, and the room window grants it the microphone (`media::decide`).
+    pub voice: bool,
 }
 
 /// The call controls card's bridge script, with its origin placeholder still in place.
@@ -80,6 +68,9 @@ pub fn call_controls_push(patch: &serde_json::Value) -> String {
 /// told to the page (with the switches this platform has) only in a build that offers `host.debug` (core `debug_options`);
 /// `microphone_settings`: whether the platform can open its microphone privacy page, independently of native voice.
 /// `diagnostics`: native diagnostic switches the shell actually implements on this runtime.
+/// `media_keys`: media-control ownership supplied by the shell, independently of native voice.
+/// `capabilities`: what the host platform offers (`host.localHost`, `host.voice`).
+#[allow(clippy::too_many_arguments)]
 pub fn script_for_origin(
     origin: &str,
     updater: bool,
@@ -88,9 +79,11 @@ pub fn script_for_origin(
     debug: &crate::debug_options::DebugOptions,
     microphone_settings: bool,
     diagnostics: &[crate::debug_options::Switch],
+    media_keys: Option<&str>,
+    capabilities: Capabilities,
 ) -> String {
     let literal = serde_json::to_string(origin).expect("a string serialises");
-    let keys = serde_json::to_string(&media_keys()).expect("serialises");
+    let keys = serde_json::to_string(&media_keys).expect("serialises");
     let flag = |offered: bool| if offered { "true" } else { "false" };
     let debug = if crate::debug_options::offered(&build.channel) {
         debug.state(diagnostics).to_string()
@@ -100,8 +93,8 @@ pub fn script_for_origin(
     SCRIPT_TEMPLATE
         .replacen(ORIGIN_PLACEHOLDER, &literal, 1)
         .replacen(MEDIA_KEYS_PLACEHOLDER, &keys, 1)
-        .replacen(LOCAL_HOST_PLACEHOLDER, flag(local_host_offered()), 1)
-        .replacen(VOICE_PLACEHOLDER, flag(voice_offered()), 1)
+        .replacen(LOCAL_HOST_PLACEHOLDER, flag(capabilities.local_host), 1)
+        .replacen(VOICE_PLACEHOLDER, flag(capabilities.voice), 1)
         .replacen(UPDATER_PLACEHOLDER, flag(updater), 1)
         .replacen(BUILD_PLACEHOLDER, &serde_json::to_string(build).expect("serialises"), 1)
         .replacen(COMPUTER_NAME_PLACEHOLDER, &serde_json::to_string(&computer_name).expect("serialises"), 1)
@@ -388,6 +381,7 @@ mod tests {
     fn script_binds_the_origin_as_a_js_string() {
         let dev = BuildInfo::new("dev", "0.4.0", "", "");
         let off = crate::debug_options::DebugOptions::default();
+        let both = Capabilities { local_host: true, voice: true };
         let s = script_for_origin(
             "https://voice.example.com",
             false,
@@ -396,6 +390,8 @@ mod tests {
             &off,
             false,
             &crate::debug_options::Switch::ALL,
+            Some("native"),
+            both,
         );
         assert!(!s.contains("__SIDEVOICE_ROOM_ORIGIN__"));
         assert!(!s.contains("__SIDEVOICE_MEDIA_KEYS__"));
@@ -406,7 +402,7 @@ mod tests {
         assert!(!s.contains("__SIDEVOICE_COMPUTER_NAME__"));
         assert!(!s.contains("__SIDEVOICE_DEBUG__"));
         assert!(!s.contains("__SIDEVOICE_MICROPHONE_SETTINGS__"));
-        let platform = if cfg!(target_os = "macos") { r#""native", true, true"# } else { "null, false, false" };
+        let platform = r#""native", true, true"#;
         let dev_build = r#"{"channel":"dev","version":"0.4.0"}"#;
         // A dev build has the developer options: what the settings keep, and the switches this platform has.
         let debug = off.state(&crate::debug_options::Switch::ALL);
@@ -414,8 +410,10 @@ mod tests {
             r#"factory(window, "https://voice.example.com", {platform}, false, {dev_build}, null, {debug}, false)"#
         );
         assert!(s.contains(&expected), "{expected}");
-        let no_diagnostics = script_for_origin("https://voice.example.com", false, &dev, None, &off, false, &[]);
+        let no_diagnostics =
+            script_for_origin("https://voice.example.com", false, &dev, None, &off, false, &[], None, both);
         assert!(no_diagnostics.contains(&off.state(&[]).to_string()));
+        assert!(no_diagnostics.contains(r#"factory(window, "https://voice.example.com", null,"#));
         // A release that can update itself: the page gets `host.updater`, and `host.build` says it is a release.
         let release = BuildInfo::new("release", "0.4.0", "", "");
         let offered = script_for_origin(
@@ -426,6 +424,8 @@ mod tests {
             &off,
             true,
             &crate::debug_options::Switch::ALL,
+            Some("native"),
+            both,
         );
         let expected = format!(
             r#"factory(window, "https://voice.example.com", {platform}, true, {{"channel":"release","version":"0.4.0"}}, "Mac de Ana", null, true)"#
@@ -440,9 +440,42 @@ mod tests {
             &off,
             true,
             &crate::debug_options::Switch::ALL,
+            Some("native"),
+            both,
         );
         assert!(evil.contains(r#"factory(window, "\"); alert(1); (\"""#));
         assert!(evil.contains(r#"{"channel":"dev","version":"0.4.0"}, "\"); alert(1); (\"", "#));
+    }
+
+    #[test]
+    fn every_capability_combination_is_told_to_the_page_and_changes_nothing_else() {
+        let dev = BuildInfo::new("dev", "0.4.0", "", "");
+        let off = crate::debug_options::DebugOptions::default();
+        let script = |capabilities| {
+            script_for_origin(
+                "https://voice.example.com",
+                false,
+                &dev,
+                None,
+                &off,
+                false,
+                &[],
+                Some("native"),
+                capabilities,
+            )
+        };
+        let reference = script(Capabilities { local_host: true, voice: true });
+        for (local_host, voice) in [(false, false), (false, true), (true, false), (true, true)] {
+            let told = script(Capabilities { local_host, voice });
+            let line = format!(
+                r#"factory(window, "https://voice.example.com", "native", {local_host}, {voice}, false, {{"channel":"dev","version":"0.4.0"}}, null, "#
+            );
+            assert!(told.contains(&line), "{line}");
+            // Only those two values differ between combinations: restoring them yields the reference byte for byte.
+            let restored = told.replacen(&line, &line.replacen(&format!("{local_host}, {voice}"), "true, true", 1), 1);
+            assert_eq!(restored, reference, "local_host={local_host} voice={voice}");
+        }
+        assert_eq!(Capabilities::default(), Capabilities { local_host: false, voice: false });
     }
 
     #[test]
