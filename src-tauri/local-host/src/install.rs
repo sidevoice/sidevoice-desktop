@@ -87,7 +87,7 @@ impl Failure {
 
     /// A local file could not be written: a full disk is `install.disk`, anything else `install.failed`.
     pub fn io(e: &io::Error, step: Step, what: &str) -> Failure {
-        let full = matches!(e.raw_os_error(), Some(libc::ENOSPC) | Some(libc::EDQUOT));
+        let full = matches!(e.kind(), io::ErrorKind::StorageFull | io::ErrorKind::QuotaExceeded);
         Failure::new(if full { "install.disk" } else { "install.failed" }, step, format!("{what}: {e}"))
     }
 }
@@ -518,7 +518,17 @@ mod tests {
         assert_eq!(steps, ["download", "verification", "staging", "service-start", "pairing"]);
         let progress = Progress { step: Step::Download, done: Some(5), total: None, cancellable: true };
         assert_eq!(json!(progress), json!({"step": "download", "done": 5, "total": null, "cancellable": true}));
-        let disk = Failure::io(&io::Error::from_raw_os_error(libc::ENOSPC), Step::Staging, "w");
-        assert_eq!(disk.key, "install.disk");
+        let full = [io::Error::from(io::ErrorKind::StorageFull), io::Error::from(io::ErrorKind::QuotaExceeded)];
+        for error in full {
+            let disk = Failure::io(&error, Step::Staging, "w");
+            assert_eq!(disk.key, "install.disk");
+            assert_eq!(disk.step, Some(Step::Staging));
+            assert_eq!(disk.message, format!("w: {error}"));
+        }
+        let other = io::Error::new(io::ErrorKind::PermissionDenied, "denied");
+        let failure = Failure::io(&other, Step::Download, "save");
+        assert_eq!(failure.key, "install.failed");
+        assert_eq!(failure.step, Some(Step::Download));
+        assert_eq!(failure.message, format!("save: {other}"));
     }
 }
