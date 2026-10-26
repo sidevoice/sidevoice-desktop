@@ -622,21 +622,6 @@ fn mismatch() -> Refusal {
     Refusal::new("identity.mismatch", "The core on this computer did not prove the identity the app paired with.")
 }
 
-/// The computer's name, for the core's device list.
-pub fn computer_name() -> String {
-    let mut buf = [0u8; 256];
-    // SAFETY: the buffer is valid for its length; gethostname NUL-terminates within it or truncates.
-    let ok = unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) } == 0;
-    let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
-    let name = if ok { String::from_utf8_lossy(&buf[..end]).into_owned() } else { String::new() };
-    let name = name.strip_suffix(".local").unwrap_or(&name).to_string();
-    if name.is_empty() {
-        "Sidevoice".into()
-    } else {
-        name
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

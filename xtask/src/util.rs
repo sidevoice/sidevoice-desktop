@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::platform::lifecycle;
 use regex::Regex;
 use sidevoice_platform::fs::{Files, Fs};
 use sidevoice_platform::process::{Child, Process, Processes};
@@ -101,7 +102,7 @@ static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 /// Ctrl+C on every host, and SIGTERM/SIGHUP on Unix, stop new work and unwind resource guards.
 /// Children have their own groups/jobs, so running commands also observe this flag and stop their owned trees.
 pub fn on_interrupt() -> Result<()> {
-    ctrlc::set_handler(|| INTERRUPTED.store(true, Ordering::SeqCst)).map_err(|e| e.to_string())
+    lifecycle::register(|| INTERRUPTED.store(true, Ordering::SeqCst))
 }
 
 /// Keep async child IO alive between synchronous xtask steps (including background log readers).
@@ -639,31 +640,6 @@ pub fn read_secret(path: &Path) -> Result<Vec<u8>> {
     Files::read_private(path, 1024 * 1024)
         .map_err(|e| format!("{}: {e}", path.display()))?
         .ok_or_else(|| format!("{}: secret file is missing", path.display()))
-}
-
-/// While it lives, files this process and its children create are private to this user (umask 077), whatever the
-/// person's umask: Tauri's bundler writes the certificate it decodes with plain file creation.
-pub struct PrivateFiles {
-    #[cfg(unix)]
-    before: rustix::fs::Mode,
-}
-
-impl PrivateFiles {
-    pub fn start() -> PrivateFiles {
-        #[cfg(unix)]
-        {
-            PrivateFiles { before: rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o077)) }
-        }
-        #[cfg(not(unix))]
-        PrivateFiles {}
-    }
-}
-
-impl Drop for PrivateFiles {
-    fn drop(&mut self) {
-        #[cfg(unix)]
-        rustix::process::umask(self.before);
-    }
 }
 
 /// The permission bits of `path` (`stat -f %Lp`), on Unix.
