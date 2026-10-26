@@ -26,6 +26,11 @@ trait Os {
     /// folders no environment variable moves cannot: its first-open runs on a runner only.
     const SCRATCH_HOME: bool = false;
 
+    /// Where a scratch home is made: short, because a Unix socket's path is at most 104 bytes.
+    fn scratch_root() -> PathBuf {
+        std::env::temp_dir()
+    }
+
     /// The built app's binary, as `tauri build` leaves it on this host; `None` when the host has no first-open.
     fn app_binary() -> Option<PathBuf> {
         None
@@ -99,7 +104,7 @@ const SURVIVAL_SECONDS: f64 = 5.0;
 pub fn first_open() -> Result<()> {
     let Some(binary) = Native::app_binary() else { return Err(unsupported("first-open")) };
     let home = if Native::SCRATCH_HOME {
-        scratch_home("first-open")?
+        scratch_home("first-open", &Native::scratch_root())?
     } else {
         require_ci("release first-open")?;
         None

@@ -139,14 +139,14 @@ pub fn in_ci() -> bool {
 }
 
 /// The home a step that starts the app runs it with. On a runner (`CI=true`): `None`, the person's own, the app's
-/// settings and data as a fresh machine has them. Elsewhere: a scratch home of the step's own (`/tmp/svx-<step>`, short:
-/// a Unix socket's path is at most 104 bytes), made empty first, so that a laptop's own settings, pairing, local core and
-/// models are never touched.
-pub fn scratch_home(step: &str) -> Result<Option<PathBuf>> {
+/// settings and data as a fresh machine has them. Elsewhere: a scratch home of the step's own (`<root>/svx-<step>`; `root`
+/// is short: a Unix socket's path is at most 104 bytes), made empty first, so that a laptop's own settings, pairing,
+/// local core and models are never touched.
+pub fn scratch_home(step: &str, root: &Path) -> Result<Option<PathBuf>> {
     if in_ci() {
         return Ok(None);
     }
-    let home = PathBuf::from("/tmp").join(format!("svx-{step}"));
+    let home = root.join(format!("svx-{step}"));
     fresh_dir(&home)?;
     eprintln!("(off a runner: the app runs with HOME={}, this machine's own data untouched)", home.display());
     Ok(Some(home))

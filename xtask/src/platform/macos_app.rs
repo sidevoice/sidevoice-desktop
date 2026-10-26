@@ -57,7 +57,7 @@ pub struct AppHome {
 
 impl AppHome {
     pub fn new(step: &str) -> Result<AppHome> {
-        match scratch_home(step)? {
+        match scratch_home(step, Path::new("/tmp"))? {
             Some(home) => Ok(AppHome { home, scratch: true }),
             None => Ok(AppHome { home: home()?, scratch: false }),
         }

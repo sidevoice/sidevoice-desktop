@@ -24,6 +24,10 @@ impl Os for Native {
 
     const SCRATCH_HOME: bool = true;
 
+    fn scratch_root() -> PathBuf {
+        PathBuf::from("/tmp")
+    }
+
     const INTERFACE_PAGE: &'static str = r"page tauri://localhost/voice/index\.html";
 
     fn app_binary() -> Option<PathBuf> {
