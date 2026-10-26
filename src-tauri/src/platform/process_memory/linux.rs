@@ -1,6 +1,7 @@
-use super::ProcessMemory;
+//! Only the portable resident-memory observation is available here.
 
-/// Uses the trait's portable resident-memory observation.
-pub struct SystemProcessMemory;
+use super::Native;
 
-impl ProcessMemory for SystemProcessMemory {}
+pub(super) struct Os;
+
+impl Native for Os {}
