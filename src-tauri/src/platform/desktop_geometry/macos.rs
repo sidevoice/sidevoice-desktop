@@ -4,6 +4,11 @@ use tauri::{AppHandle, Runtime, WebviewWindow};
 
 pub struct NativeGeometry;
 impl DesktopGeometry for NativeGeometry {
+    fn monitor_units(scale: f64) -> (f64, f64) {
+        // Restore AppKit desktop points from Tao's per-monitor physical coordinates.
+        (1.0, 1.0 / scale)
+    }
+
     fn unit<R: Runtime>(_w: &WebviewWindow<R>) -> f64 {
         1.0
     }
@@ -29,9 +34,4 @@ impl DesktopGeometry for NativeGeometry {
     fn place<R: Runtime>(w: &WebviewWindow<R>, at: Point) {
         let _ = w.set_position(tauri::LogicalPosition::new(at.x, at.y));
     }
-}
-
-// Restore AppKit desktop points from Tao's per-monitor physical coordinates.
-pub(super) fn monitor_units(scale: f64) -> (f64, f64) {
-    (1.0, 1.0 / scale)
 }

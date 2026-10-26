@@ -10,8 +10,3 @@ impl DesktopGeometry for NativeGeometry {
         GeometryCapabilities { global_coordinates: available }
     }
 }
-
-// X11 uses physical pixels. Wayland returns no global geometry before this conversion is reached.
-pub(super) fn monitor_units(scale: f64) -> (f64, f64) {
-    (scale, 1.0)
-}
