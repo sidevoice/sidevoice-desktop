@@ -150,7 +150,7 @@ fn main() -> ExitCode {
         ["icons"] => checks::icons(),
         ["packaging", "compare", before] => packaging::compare(before),
         ["packaging", "files", dir, output] => packaging::files(dir, output),
-        ["two-users"] => checks::two_users(),
+        ["two-users"] => platform::two_users::run(),
         ["bundle"] => checks::bundle(Channel::Dev),
         ["bundle", "--channel", c] => Channel::parse(c).and_then(checks::bundle),
         ["engine-rev"] => checks::engine_rev(),
