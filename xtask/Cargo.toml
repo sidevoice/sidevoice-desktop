@@ -21,7 +21,7 @@ sha2 = "0.10"
 regex = "1"
 # The platform-boundary check reads Rust tokens (comments and string contents are not code) and `use` trees.
 proc-macro2 = { version = "1", features = ["span-locations"] }
-syn = { version = "2", default-features = false, features = ["full", "parsing", "proc-macro"] }
+syn = { version = "2", default-features = false, features = ["full", "parsing", "proc-macro", "visit"] }
 
 # Shared child lifetime, private files and release-target facts; no core application dependency.
 sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.12.4" }
