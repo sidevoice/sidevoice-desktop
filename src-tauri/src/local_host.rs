@@ -2,12 +2,14 @@
 //!
 //! The work is the `sidevoice-local-host` crate's (the checks, the pairing over the core's socket, the proxy, the
 //! poll); this module starts it with the app's own paths, answers the page's commands, and stops it as the app quits.
-//! Offered on macOS only (design O2; `platform::host_capabilities`): elsewhere every command refuses `unsupported`.
+//! Offered on macOS only (design O2; `platform::host_capabilities`): elsewhere every command refuses `unsupported`,
+//! except `reveal-log`, which needs no local host (the app's own log).
 //!
 //! Only the room window's own page may call these (capabilities/room.json, and [`crate::room_page`] in each). A
 //! refusal is `{key, message}`, as the native engine's (docs/BRIDGE.md).
 
 use serde_json::{json, Value};
+use std::path::PathBuf;
 use tauri::{AppHandle, Manager, Webview};
 
 /// A command's answer: a value, or a refusal `{key, message}`.
@@ -51,9 +53,12 @@ pub async fn local_host_action(app: AppHandle, webview: Webview, action: String)
     if app.state::<crate::AppState>().resetting.load(std::sync::atomic::Ordering::SeqCst) {
         return Err(refusal("reset.busy", "Data reset is under way."));
     }
-    tauri::async_runtime::spawn_blocking(move || imp::action(&app, &action))
-        .await
-        .map_err(|e| refusal("internal", &e.to_string()))?
+    tauri::async_runtime::spawn_blocking(move || match action.as_str() {
+        "reveal-log" => reveal(&app),
+        _ => imp::action(&app, &action),
+    })
+    .await
+    .map_err(|e| refusal("internal", &e.to_string()))?
 }
 
 /// `npx sidevoice pair-device --json`, on the person's click: `{code, expires_in, reach}`.
@@ -98,6 +103,31 @@ pub fn local_host_install_progress(app: AppHandle, webview: Webview, job: String
 pub fn local_host_install_cancel(app: AppHandle, webview: Webview, job: String) -> Answer {
     caller(&app, &webview)?;
     imp::cancel_install(&app, &job)
+}
+
+/// Select the existing app log, and the core's (else connector) log when there is a local host, in the native file
+/// manager, without a shell. The app log needs no connector, so this runs on every OS: the answer is the local host's
+/// state after it, `null` where there is none.
+fn reveal(app: &AppHandle) -> Answer {
+    use sidevoice_desktop_core::i18n::t;
+
+    let logs = logs_to_show(crate::app_log_file(app), imp::host_log(app));
+    let language = app.state::<crate::AppState>().language;
+    if logs.is_empty() {
+        return Err(refusal("log.missing", t(language, "local_host.log_missing")));
+    }
+    crate::platform::reveal::files(app, &logs).map_err(|error| {
+        log::warn!("Could not reveal logs: {error}");
+        refusal("reveal.failed", t(language, "local_host.reveal_failed"))
+    })?;
+    Ok(imp::state(app).unwrap_or(Value::Null))
+}
+
+/// What "Ver registro" shows: the app's own log first, then the core's (else the connector's) one, each only if it is
+/// a file. The app's is there with or without a connector.
+fn logs_to_show(app: Option<PathBuf>, connector: Option<PathBuf>) -> Vec<PathBuf> {
+    let is_file = |path: &PathBuf| std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file());
+    app.into_iter().chain(connector).filter(is_file).collect()
 }
 
 /// At start: the proxy and the poll, for the app's lifetime (macOS).
@@ -187,10 +217,6 @@ mod imp {
         let host = host(app)?;
         let report = match name {
             "reconnect" => host.reconnect(),
-            "reveal-log" => {
-                reveal(app, &host)?;
-                host.state()
-            }
             other => {
                 let action = Action::parse(other).ok_or_else(|| refusal("bad_request", "Unknown action."))?;
                 host.act(action).map_err(|r| json!(r))?
@@ -199,20 +225,9 @@ mod imp {
         Ok(json!(report))
     }
 
-    /// Select existing app/core (else connector) logs in the native file manager, without a shell.
-    fn reveal(app: &AppHandle, host: &LocalHost) -> Result<(), Value> {
-        use crate::platform::reveal::{NativeReveal, Reveal};
-        use sidevoice_desktop_core::i18n::t;
-
-        let logs = sidevoice_local_host::paths::logs_to_show(crate::app_log_file(app), host.log_path());
-        let language = app.state::<crate::AppState>().language;
-        if logs.is_empty() {
-            return Err(refusal("log.missing", t(language, "local_host.log_missing")));
-        }
-        NativeReveal::files(app, &logs).map_err(|error| {
-            log::warn!("Could not reveal logs: {error}");
-            refusal("reveal.failed", t(language, "local_host.reveal_failed"))
-        })
+    /// The core's log (else the connector's), when there is a host to say.
+    pub fn host_log(app: &AppHandle) -> Option<std::path::PathBuf> {
+        host(app).ok().and_then(|host| host.log_path())
     }
 
     pub fn pairing_code(app: &AppHandle) -> Answer {
@@ -265,6 +280,9 @@ mod imp {
     pub fn pairing_code(_app: &AppHandle) -> Answer {
         Err(unsupported())
     }
+    pub fn host_log(_app: &AppHandle) -> Option<std::path::PathBuf> {
+        None
+    }
     pub struct Begun;
     pub fn begin_install(_app: &AppHandle, _job: &str) -> Result<Begun, serde_json::Value> {
         Err(unsupported())
@@ -277,5 +295,24 @@ mod imp {
     }
     pub fn cancel_install(_app: &AppHandle, _job: &str) -> Answer {
         Err(unsupported())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shows_the_app_log_then_the_connectors_and_only_what_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, core) = (dir.path().join("app.log"), dir.path().join("core.log"));
+        let missing = dir.path().join("nope.log");
+        assert!(logs_to_show(None, None).is_empty());
+        assert!(logs_to_show(Some(missing.clone()), None).is_empty());
+        std::fs::write(&app, "x").unwrap();
+        assert_eq!(logs_to_show(Some(app.clone()), None), vec![app.clone()]);
+        assert_eq!(logs_to_show(Some(app.clone()), Some(missing)), vec![app.clone()]);
+        std::fs::write(&core, "x").unwrap();
+        assert_eq!(logs_to_show(Some(app.clone()), Some(core.clone())), vec![app, core]);
     }
 }
