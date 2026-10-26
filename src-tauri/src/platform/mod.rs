@@ -24,6 +24,7 @@ pub mod webview_diagnostics;
 pub mod card_window;
 pub mod confirmation;
 pub mod desktop_geometry;
+pub mod pointer_events;
 pub mod reset_availability;
 pub mod reset_handoff;
 pub mod window_visibility;
