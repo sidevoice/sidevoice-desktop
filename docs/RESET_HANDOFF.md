@@ -1,13 +1,14 @@
 # Reset helper handoff
 
-`platform::reset_handoff::ResetHandoff` owns admission, launch, startup exclusion and cancellation.
-The same executable runs `--sidevoice-reset-helper` before Tauri initializes. Only macOS currently offers
-reset. Windows/Linux implement and compile the handoff without exposing reset or doing cleanup.
-Webview lifecycle/removal and the reset transaction remain separate work.
+Reset (delete all data, uninstall) is a Desktop capability. `platform::reset_handoff::ResetHandoff` owns
+only the handoff — admission, launch of the same executable with `--sidevoice-reset-helper` before Tauri
+initializes, the authenticated plan, the wait for the app's exit, startup exclusion, deadlines and
+cancellation — plus `reset_available()`, the answer to whether this host offers reset. macOS answers
+true; Windows and Linux answer false until the portable transaction lands, and the handoff works on all three.
 
-The existing macOS helper dispatch lives in `platform/reset_helper/macos.rs`; its transaction helpers,
-models deletion and report/journal functions remain in `data.rs`.
-This change does not alter uninstall policy or elevate any process.
+The reset transaction itself (pre-exit service and keychain steps, post-exit cleanup, report/journal,
+relaunch or move to the Trash) stays in `data.rs`, unchanged. Webview lifecycle/removal and the portable
+transaction remain separate work. This change does not alter uninstall policy or elevate any process.
 
 ## Protocol and lifetime
 
@@ -74,11 +75,13 @@ are selected from `reset_handoff/{macos,windows,linux}.rs`; the shared checked f
 child libraries still supply the protocol on every host. The existing real-uid macOS directory naming
 uses the same `libc::getuid` call; this relocation adds no unsafe operation or native binding.
 
-`ResetHelper` is the separate helper-mode dispatch interface. The caller in `data.rs` invokes it without
-host checks. macOS retains the original order: authenticate, observe WebKit children, await committed
-parent exit and admission, clean up, release admission before relaunch. Windows and Linux retain their
-original authenticate → await committed exit → release sequence and perform no cleanup. The macOS
-transaction body was moved mechanically; its helper functions only gained crate visibility.
+Callers never ask which OS they run on. The reset and report commands, the native confirmation and the
+exclusive admission compile on every host and refuse with `reset.unavailable` before any confirmation or
+data access when `reset_available()` is false. The helper receives the authenticated plan on every host; when
+reset is unavailable it completes the committed wait and releases it without cleaning anything up. On macOS
+the existing order is kept: authenticate, observe WebKit children, await committed parent exit and
+admission, clean up, release admission before relaunch. The reset report lives in the handoff's private
+control directory (`state_dir()`), which on macOS is the same per-user temporary directory as before.
 
 The handoff protocol tests remain portable and included by the existing native fixture target; a path
 contract test also checks that control state cannot be removed with the standard data root. The macOS
