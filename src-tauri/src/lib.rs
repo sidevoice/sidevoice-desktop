@@ -68,7 +68,7 @@ pub(crate) struct AppState {
 
 impl Default for AppState {
     fn default() -> Self {
-        let preferred: Vec<String> = sys_locale::get_locales().collect();
+        let preferred = platform::locale::preferred();
         AppState {
             settings: Mutex::default(),
             call: Mutex::default(),
@@ -607,7 +607,7 @@ pub fn run() {
         Ok(guard) => guard,
         Err(_) => {
             // Before the log and the app state exist: the system's language is read here.
-            let preferred: Vec<String> = sys_locale::get_locales().collect();
+            let preferred = platform::locale::preferred();
             let language = sidevoice_desktop_core::i18n::language(&preferred);
             eprintln!("{}", sidevoice_desktop_core::i18n::t(language, "startup.reset_busy"));
             return;

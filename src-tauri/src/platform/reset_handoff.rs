@@ -427,7 +427,8 @@ mod tests {
         let (_temp, root) = scratch();
         let started = Instant::now();
         let refused = launch(at(&root).admit().unwrap(), plan()).err().unwrap();
-        assert_eq!(refused.kind(), io::ErrorKind::TimedOut);
+        // It may exit before the capability is written (BrokenPipe) or after (no reply: TimedOut); both fail closed.
+        assert!(matches!(refused.kind(), io::ErrorKind::TimedOut | io::ErrorKind::BrokenPipe), "{refused}");
         assert!(started.elapsed() < HANDSHAKE + Duration::from_secs(5), "bounded by the handshake deadline");
         assert!(at(&root).admit().is_ok(), "a failed launch releases admission");
     }
