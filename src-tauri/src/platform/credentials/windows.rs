@@ -52,7 +52,7 @@ impl CredentialStoreApi for Local {
 // common requests intentionally hide. Each also runs the common contract where it applies.
 #[cfg(test)]
 mod tests {
-    use super::super::{clear_in, read_in, tests::*, write_in, Error};
+    use super::super::{clear_all, clear_in, read, read_in, tests::*, write, write_in, Error};
     use super::{credential_manager, Local};
     use keyring_core::api::CredentialStoreApi;
 
@@ -63,6 +63,16 @@ mod tests {
     #[test]
     fn native_contract() {
         contract(&native(), &test_service());
+    }
+
+    #[test]
+    fn public_functions_round_trip_in_the_test_namespace() {
+        // Test builds give the public functions a per-process namespace (`namespace`): no person's keys are touched.
+        assert_eq!(read("openai"), Ok(None));
+        write("openai", Some("test-only")).unwrap();
+        assert_eq!(read("openai").unwrap().as_deref(), Some("test-only"));
+        clear_all().unwrap();
+        assert_eq!(read("openai"), Ok(None));
     }
 
     #[test]

@@ -22,6 +22,18 @@ use imp::Native;
 
 const SERVICE: &str = "dev.sidevoice.desktop.providers";
 
+/// The namespace the public functions use: `SERVICE`. Test builds give them a per-process namespace of their own, so
+/// fixtures of the public functions on a native store never read or clear a person's keys.
+fn namespace() -> &'static str {
+    #[cfg(not(test))]
+    return SERVICE;
+    #[cfg(test)]
+    {
+        static TEST: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        TEST.get_or_init(tests::test_service)
+    }
+}
+
 /// How long a caller waits for a store that can prompt (`Os::PROMPTS`) before answering `Unavailable`.
 const WAIT: Duration = Duration::from_secs(30);
 
@@ -46,7 +58,8 @@ impl From<keyring_core::Error> for Error {
 
 /// What differs per OS.
 trait Os {
-    /// Whether a store call can wait indefinitely on an unlock prompt nobody answers. Default: it cannot.
+    /// Whether a store call can wait on an access or unlock prompt the person has not answered: an observation of the
+    /// store; `admit` decides what follows from it. Default: it cannot.
     const PROMPTS: bool = false;
 
     /// This OS's store, opened for each operation so a failure never sticks. Its entries for `(service, provider)`
@@ -64,7 +77,7 @@ pub fn valid(provider: &str) -> bool {
 /// A provider's key. Missing is `None`; inaccessible storage is `Unavailable`.
 pub fn read(provider: &str) -> Result<Option<String>, Error> {
     let provider = Provider::new(provider)?;
-    admit(move || read_in(Native::store()?.as_ref(), SERVICE, &provider))
+    admit(move || read_in(Native::store()?.as_ref(), namespace(), &provider))
 }
 
 /// Replace a key, or remove it for `None`. Removing a missing key succeeds.
@@ -72,13 +85,13 @@ pub fn read(provider: &str) -> Result<Option<String>, Error> {
 pub fn write(provider: &str, secret: Option<&str>) -> Result<(), Error> {
     let provider = Provider::new(provider)?;
     let secret = secret.map(str::to_owned);
-    admit(move || write_in(Native::store()?.as_ref(), SERVICE, &provider, secret.as_deref()))
+    admit(move || write_in(Native::store()?.as_ref(), namespace(), &provider, secret.as_deref()))
 }
 
 /// Delete the exact service namespace, including unknown or obsolete accounts.
 /// An unrelated service is never removed; partial cleanup is an error.
 pub fn clear_all() -> Result<(), Error> {
-    admit(|| clear_in(Native::store()?.as_ref(), SERVICE))
+    admit(|| clear_in(Native::store()?.as_ref(), namespace()))
 }
 
 /// A validated provider id, owned so it can cross to a blocking worker.

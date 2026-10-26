@@ -24,8 +24,9 @@ collections. Clear reports any deletion failure instead of claiming partial clea
 Backend errors are reduced to fixed categories; their messages, debug values, and malformed secret bytes
 never reach logs or the bridge. The bridge retains `provider_invalid`, `credentials_failed`, and
 `credentials_unavailable`; an oversized write also carries `reason: "too_long"`. A credential trial uses only its supplied key and does not open the persisted store (the existing macOS behavior). All store work runs on
-blocking workers. macOS and Windows operations are serialized within the process. Linux uses nonblocking
-admission and a 30-second response deadline, with no global mutex held across a prompt. The synchronous
+blocking workers. Windows operations, which never prompt, are serialized within the process. macOS (Keychain access
+and unlock prompts) and Linux (Secret Service unlock prompts) use nonblocking admission and a 30-second response
+deadline, with no global mutex held across a prompt. The synchronous
 keyring backend cannot cancel a pending call: after a timeout the outcome remains unknown, and later
 calls return unavailable immediately until that operation ends. Only one worker can remain pending;
 retries never accumulate threads or race a late write against a subsequent write/clear. Once it ends,
@@ -46,12 +47,15 @@ Portable contract tests live with the interface and run without Tauri/model link
 `cargo test -p sidevoice-desktop-test-support --test credentials`. The existing macOS and Windows PR
 jobs run them through `cargo xtask test-support`; the Linux workspace tests run them too.
 The shared concern holds the public functions and every store-independent body: naming, validation, requests,
-namespace clearing (the store's exact `service` search, then one deletion per entry), admission and error categories.
+namespace clearing (the store's exact `service` search, then deleting each entry it returns), admission and error categories.
 Its private `Os` trait, implemented by `Native` in `credentials/{macos,windows,linux}.rs`, has the real differences
-only: `store()`, the OS's keyring store, and `PROMPTS`, whether its calls can wait on an unanswered unlock prompt
-(Linux), which selects the bounded admission in common code. Windows' store applies local persistence to its entries and
-turns the exact `service` search into the anchored target pattern; macOS' store is the search-list adapter, whose search
-returns one entry per item found in any searchable keychain.
+only: `store()`, the OS's keyring store, and `PROMPTS`, whether its calls can wait on an unanswered access or
+unlock prompt (macOS and Linux), from which common code selects the bounded admission. Windows' store applies local
+persistence to its entries and turns the exact `service` search into the anchored target pattern. macOS' store is the
+search-list adapter; its search returns the whole service as one entry, whose deletion is a single service-scoped
+`SecItemDelete` for all matches across the search list, so no account is read or decoded. Test builds give the public
+functions a per-process namespace, so the macOS and Windows fixtures of `read`/`write`/`clear_all` never touch a
+person's keys.
 
 Native regression fixtures live beside their OS implementation because they must exercise Keychain
 search-list/legacy APIs, CredMan persistence metadata and byte limits, or Secret Service bus failure and
@@ -64,7 +68,8 @@ read/write/clear: those operations intentionally hide the OS metadata and setup 
   text, namespace cleanup/isolation, and removal of backend error details.
 - Native tests use unique test services, never production credentials. macOS also checks old-API
   writes read through the new interface and new writes read through the old API, plus read/update/remove/
-  clear in a temporary nondefault keychain added to the search list (restored afterward). Windows tests
+  clear in a temporary nondefault keychain added to the search list (restored afterward), including the same
+  service/account kept in both that keychain and the default one. Windows tests
   ASCII and supplementary-character size boundaries, preservation of the prior value after refusal,
   and stored local-machine persistence on both new and formerly roaming entries.
 - A fake slow backend (the bounded admission Linux uses, tested on every OS) checks deadline expiry, immediate unavailable on retry, and recovery after
