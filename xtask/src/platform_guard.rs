@@ -326,7 +326,7 @@ fn os_path_literal(value: &str) -> bool {
         "/Users/",
     ];
     let bytes = value.as_bytes();
-    UNIX_ROOTS.iter().any(|root| value.starts_with(root))
+    UNIX_ROOTS.iter().any(|root| value.starts_with(root) || value == root.trim_end_matches('/'))
         || value.starts_with("~/Library")
         || value.starts_with("\\\\.\\")
         || value.starts_with("\\\\?\\")
@@ -976,6 +976,7 @@ mod tests {
         assert_eq!(n("fn f() { let _ = std::path::PathBuf::from(\"C:\\\\Windows\\\\x\"); }"), 1);
         assert_eq!(n("fn f(c: &mut C) { c.args([\"-o\", \"/dev/null\"]).arg(r\"\\\\.\\pipe\\x\"); }"), 2);
         assert_eq!(n("fn f() { std::fs::read(Path::new(\"/etc/hosts\")); }"), 1);
+        assert_eq!(n("fn f() { let _ = std::path::PathBuf::from(\"/tmp\"); }"), 1);
         // Documentation and data are not operations.
         assert_eq!(n("/// Reads /proc/self/status.\nfn f() { let _ = \"/proc/self/status\"; let _ = String::from(\"/dev/null\"); }"), 0);
         assert_eq!(n("fn f() { std::fs::read_to_string(\"notes/readme.txt\"); }"), 0);
