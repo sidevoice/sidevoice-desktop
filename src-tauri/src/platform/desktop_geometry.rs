@@ -16,20 +16,11 @@ mod linux;
 #[cfg(target_os = "linux")]
 use linux::Os;
 
-/// The units of the desktop. Each OS builds in one of them; tests use both.
-#[cfg_attr(not(test), allow(dead_code))]
-#[derive(Clone, Copy)]
-enum Space {
-    /// AppKit points: Tao's "physical" values are each scaled by a different display (the pointer's by the main one,
-    /// a window's or monitor's by its own), so each is divided back by that display's scale.
-    Points,
-    /// Physical pixels, one coordinate space for every display: Tao's values as they are.
-    Pixels,
-}
-
 trait Native {
-    /// macOS: Points (Tao scales each value by a different display). Windows/X11: Pixels.
-    const SPACE: Space;
+    /// Whether the desktop is in AppKit points (macOS) rather than physical pixels (Windows/X11). In points, Tao's
+    /// "physical" values are each scaled by a different display (the pointer's by the main one, a window's or
+    /// monitor's by its own), so each is divided back by that display's scale; in pixels they are used as they are.
+    const POINTS: bool;
     /// Linux overrides: Wayland hides global positions and Tao answers (0,0) instead of an error.
     fn global_coordinates() -> bool {
         true
@@ -47,12 +38,9 @@ pub fn global_coordinates() -> bool {
 pub fn pointer<R: Runtime>(app: &AppHandle<R>) -> Option<Point> {
     gated(global_coordinates(), || {
         let p = app.cursor_position().ok()?;
-        let scale = match Os::SPACE {
-            // Tao scales the global pointer by the main display, not the display beneath the pointer.
-            Space::Points => app.primary_monitor().ok()??.scale_factor(),
-            Space::Pixels => 1.0,
-        };
-        Some(Point { x: from_physical(Os::SPACE, p.x, scale), y: from_physical(Os::SPACE, p.y, scale) })
+        // Tao scales the global pointer by the main display, not the display beneath the pointer.
+        let scale = if Os::POINTS { app.primary_monitor().ok()??.scale_factor() } else { 1.0 };
+        Some(Point { x: from_physical(Os::POINTS, p.x, scale), y: from_physical(Os::POINTS, p.y, scale) })
     })
 }
 
@@ -60,11 +48,8 @@ pub fn pointer<R: Runtime>(app: &AppHandle<R>) -> Option<Point> {
 pub fn frame<R: Runtime>(w: &WebviewWindow<R>) -> Option<Rect> {
     gated(global_coordinates(), || {
         let (at, size) = (w.outer_position().ok()?, w.outer_size().ok()?);
-        let scale = match Os::SPACE {
-            Space::Points => w.scale_factor().ok()?,
-            Space::Pixels => 1.0,
-        };
-        let desktop = |v: f64| from_physical(Os::SPACE, v, scale);
+        let scale = if Os::POINTS { w.scale_factor().ok()? } else { 1.0 };
+        let desktop = |v: f64| from_physical(Os::POINTS, v, scale);
         Some(Rect {
             x: desktop(at.x as f64),
             y: desktop(at.y as f64),
@@ -76,18 +61,20 @@ pub fn frame<R: Runtime>(w: &WebviewWindow<R>) -> Option<Rect> {
 
 /// One logical pixel of this window, in desktop units.
 pub fn unit<R: Runtime>(w: &WebviewWindow<R>) -> f64 {
-    match Os::SPACE {
-        Space::Points => 1.0,
-        Space::Pixels => w.scale_factor().unwrap_or(1.0),
+    if Os::POINTS {
+        1.0
+    } else {
+        w.scale_factor().unwrap_or(1.0)
     }
 }
 
 /// Place in desktop units, without changing focus; do nothing when global placement is unavailable.
 pub fn place<R: Runtime>(w: &WebviewWindow<R>, at: Point) {
     gated(global_coordinates(), || {
-        let _ = match Os::SPACE {
-            Space::Points => w.set_position(tauri::LogicalPosition::new(at.x, at.y)),
-            Space::Pixels => w.set_position(tauri::PhysicalPosition::new(at.x.round() as i32, at.y.round() as i32)),
+        let _ = if Os::POINTS {
+            w.set_position(tauri::LogicalPosition::new(at.x, at.y))
+        } else {
+            w.set_position(tauri::PhysicalPosition::new(at.x.round() as i32, at.y.round() as i32))
         };
         Some(())
     });
@@ -122,10 +109,11 @@ fn gated<T>(available: bool, query: impl FnOnce() -> Option<T>) -> Option<T> {
 }
 
 /// A Tao "physical" value that Tao scaled by `scale`, in desktop units.
-fn from_physical(space: Space, value: f64, scale: f64) -> f64 {
-    match space {
-        Space::Points => value / scale,
-        Space::Pixels => value,
+fn from_physical(points: bool, value: f64, scale: f64) -> f64 {
+    if points {
+        value / scale
+    } else {
+        value
     }
 }
 
@@ -140,7 +128,7 @@ fn monitor_display(m: &Monitor) -> (Rect, Display) {
     let (at, size, work) = (m.position(), m.size(), m.work_area());
     let name = m.name().cloned().unwrap_or_else(|| format!("{}x{}", size.width, size.height));
     monitor_geometry(
-        Os::SPACE,
+        Os::POINTS,
         &name,
         m.scale_factor(),
         Point { x: at.x as f64, y: at.y as f64 },
@@ -154,12 +142,9 @@ fn monitor_display(m: &Monitor) -> (Rect, Display) {
     )
 }
 
-fn monitor_geometry(space: Space, name: &str, scale: f64, at: Point, size: Size, work: Rect) -> (Rect, Display) {
+fn monitor_geometry(points: bool, name: &str, scale: f64, at: Point, size: Size, work: Rect) -> (Rect, Display) {
     // Desktop units per logical pixel, and per Tao pixel of this monitor.
-    let (unit, to_desktop) = match space {
-        Space::Points => (1.0, 1.0 / scale),
-        Space::Pixels => (scale, 1.0),
-    };
+    let (unit, to_desktop) = if points { (1.0, 1.0 / scale) } else { (scale, 1.0) };
     let whole = Rect {
         x: at.x * to_desktop,
         y: at.y * to_desktop,
@@ -179,8 +164,6 @@ fn monitor_geometry(space: Space, name: &str, scale: f64, at: Point, size: Size,
 mod tests {
     use super::*;
 
-    const SPACES: [Space; 2] = [Space::Points, Space::Pixels];
-
     #[test]
     fn unavailable_session_never_queries_or_invents_desktop_coordinates() {
         assert!(gated::<Point>(false, || panic!("queried an unavailable session")).is_none());
@@ -189,9 +172,9 @@ mod tests {
 
     #[test]
     fn monitor_changes_use_fresh_geometry_and_missing_keys_fall_through_to_the_pointer() {
-        for space in SPACES {
+        for points in [true, false] {
             let first = monitor_geometry(
-                space,
+                points,
                 "first",
                 1.0,
                 Point { x: 0.0, y: 0.0 },
@@ -199,7 +182,7 @@ mod tests {
                 Rect { x: 0.0, y: 0.0, width: 1920.0, height: 1040.0 },
             );
             let second = monitor_geometry(
-                space,
+                points,
                 "second",
                 1.0,
                 Point { x: 1920.0, y: 0.0 },
@@ -217,7 +200,7 @@ mod tests {
             assert!(selected_display(&[], Some(&key), Some(pointer)).is_none());
             // The same saved key gets the current work area, never a cached copy of the old monitor.
             let changed = monitor_geometry(
-                space,
+                points,
                 "first",
                 1.0,
                 Point { x: 0.0, y: 0.0 },
@@ -230,10 +213,10 @@ mod tests {
 
     #[test]
     fn mixed_dpi_keeps_work_area_in_logical_pixels_and_round_trips_desktop_points() {
-        for space in SPACES {
+        for points in [true, false] {
             for scale in [1.0, 1.25, 1.5, 2.0] {
                 let (whole, display) = monitor_geometry(
-                    space,
+                    points,
                     "left",
                     scale,
                     Point { x: -2560.0, y: -200.0 },
