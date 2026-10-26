@@ -4,20 +4,11 @@ use sidevoice_desktop_core::settings::{self, MuteShortcut, Registration};
 use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_global_shortcut::{GlobalShortcut, Shortcut, ShortcutState};
 
-#[cfg(target_os = "macos")]
-mod macos;
-#[cfg(target_os = "macos")]
-use macos::Os as Native;
-
-#[cfg(target_os = "windows")]
-mod windows;
-#[cfg(target_os = "windows")]
-use windows::Os as Native;
-
-#[cfg(target_os = "linux")]
-mod linux;
-#[cfg(target_os = "linux")]
-use linux::Os as Native;
+#[cfg_attr(target_os = "macos", path = "shortcut_access/macos.rs")]
+#[cfg_attr(target_os = "windows", path = "shortcut_access/windows.rs")]
+#[cfg_attr(target_os = "linux", path = "shortcut_access/linux.rs")]
+mod imp;
+use imp::Os;
 
 #[derive(PartialEq, Eq)]
 enum LabelStyle {
@@ -26,7 +17,7 @@ enum LabelStyle {
 }
 
 /// The only parts of shortcut handling that differ per OS; everything else is the plain functions below.
-trait Backend {
+trait Native {
     /// Whether this session can use the plugin backend. Linux requires an actual X11 GDK display;
     /// Wayland has no backend in global-hotkey, even when an XWayland DISPLAY is present.
     fn backend_available() -> bool {
@@ -52,7 +43,7 @@ pub fn checked(text: &str) -> Option<String> {
 
 /// Install the maintained global-shortcut plugin on the UI thread. A missing backend must not stop startup.
 pub fn configure(app: &AppHandle) {
-    if !Native::backend_available() {
+    if !Os::backend_available() {
         log::info!("global shortcuts unavailable in this desktop session");
         return;
     }
@@ -71,15 +62,15 @@ pub fn configure(app: &AppHandle) {
 /// Replace the app's shortcut and probe alternatives only on refusal. Registration dispatches to the UI
 /// thread; callers must not hold locks needed by it. Empty disables even when no backend is available.
 pub fn replace<R: Runtime>(app: &AppHandle<R>, accelerator: &str) -> MuteShortcut {
-    replace_with::<R, Native>(app, accelerator)
+    replace_with::<R, Os>(app, accelerator)
 }
 
 /// Whether the host currently reports its accessibility reservation for this chord (VoiceOver on macOS).
 pub fn reserved_chord_active(chord: &str) -> bool {
-    Native::reserved_chord_active(chord)
+    Os::reserved_chord_active(chord)
 }
 
-fn replace_with<R: Runtime, B: Backend>(app: &AppHandle<R>, accelerator: &str) -> MuteShortcut {
+fn replace_with<R: Runtime, N: Native>(app: &AppHandle<R>, accelerator: &str) -> MuteShortcut {
     let shortcuts = app.try_state::<GlobalShortcut<R>>();
     if let Some(shortcuts) = &shortcuts {
         let _ = shortcuts.unregister_all();
@@ -100,7 +91,7 @@ fn replace_with<R: Runtime, B: Backend>(app: &AppHandle<R>, accelerator: &str) -
     } else {
         (Registration::Unavailable, vec![])
     };
-    MuteShortcut::new(accelerator, state, alternatives, B::label_style() == LabelStyle::Symbols)
+    MuteShortcut::new(accelerator, state, alternatives, N::label_style() == LabelStyle::Symbols)
 }
 
 #[cfg(test)]
@@ -108,7 +99,7 @@ mod tests {
     use super::*;
 
     struct Baseline;
-    impl Backend for Baseline {}
+    impl Native for Baseline {}
 
     #[test]
     fn validation_accepts_normalized_keys_and_rejects_unknown_keys() {
@@ -133,7 +124,7 @@ mod tests {
     #[test]
     fn label_styles_preserve_the_accelerator_and_accessibility_is_not_fabricated() {
         struct SymbolLabels;
-        impl Backend for SymbolLabels {
+        impl Native for SymbolLabels {
             fn label_style() -> LabelStyle {
                 LabelStyle::Symbols
             }
@@ -141,7 +132,7 @@ mod tests {
         let app = tauri::test::mock_app();
         assert_eq!(replace_with::<_, SymbolLabels>(app.handle(), "Ctrl+Alt+M").label.as_deref(), Some("⌃⌥M"));
         assert_eq!(replace_with::<_, Baseline>(app.handle(), "Ctrl+Alt+M").label.as_deref(), Some("Ctrl+Alt+M"));
-        assert!(!<Baseline as Backend>::reserved_chord_active("Ctrl+Alt+M"));
+        assert!(!<Baseline as Native>::reserved_chord_active("Ctrl+Alt+M"));
         assert!(!reserved_chord_active("Shift+M"));
     }
 }
