@@ -7,20 +7,18 @@ pub struct GeometryCapabilities {
     pub global_coordinates: bool,
 }
 
-#[cfg_attr(target_os = "macos", path = "desktop_geometry/macos.rs")]
-#[cfg_attr(target_os = "linux", path = "desktop_geometry/linux.rs")]
-#[cfg(not(target_os = "windows"))]
-mod imp;
-#[cfg(not(target_os = "windows"))]
-pub use imp::NativeGeometry;
-
-/// The shared physical-pixel geometry used when an OS needs no overrides.
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+pub use macos::NativeGeometry;
 #[cfg(target_os = "windows")]
-pub struct PhysicalGeometry;
+mod windows;
 #[cfg(target_os = "windows")]
-impl DesktopGeometry for PhysicalGeometry {}
-#[cfg(target_os = "windows")]
-pub use PhysicalGeometry as NativeGeometry;
+pub use windows::NativeGeometry;
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::NativeGeometry;
 
 pub trait DesktopGeometry {
     /// Convert a monitor's scale to desktop units per logical pixel and desktop units per Tauri pixel.
