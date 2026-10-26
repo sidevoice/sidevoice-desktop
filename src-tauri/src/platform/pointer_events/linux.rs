@@ -7,6 +7,6 @@ pub struct Native;
 /// globally, so the page's own events are used.
 impl Observations for Native {
     fn available() -> bool {
-        desktop_geometry::global_coordinates()
+        desktop_geometry::positions_available()
     }
 }

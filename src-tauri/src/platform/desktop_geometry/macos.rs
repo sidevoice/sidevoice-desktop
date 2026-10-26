@@ -1,6 +1,6 @@
-use super::Native;
+use super::{CoordinateUnit, Native};
 
 pub(super) struct Os;
 impl Native for Os {
-    const POINTS: bool = true;
+    const UNIT: CoordinateUnit = CoordinateUnit::Points;
 }

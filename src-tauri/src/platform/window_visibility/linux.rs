@@ -9,7 +9,7 @@ pub struct Native;
 /// unfocused window counts as off screen there.
 impl Observations for Native {
     fn on_screen<R: Runtime>(w: &WebviewWindow<R>) -> Option<bool> {
-        let wayland = !desktop_geometry::global_coordinates();
+        let wayland = !desktop_geometry::positions_available();
         wayland.then(|| w.is_focused().unwrap_or(false))
     }
 }
