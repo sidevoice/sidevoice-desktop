@@ -1,33 +1,12 @@
 //! Self-update eligibility; feed, download, install and restart remain owned by the updater plugin.
-//! Tauri supplies bundle identity; Windows additionally verifies its NSIS installation record.
-
-use sidevoice_desktop_core::updater;
-use tauri::utils::{config::BundleType, platform::bundle_type};
-
-#[cfg(target_os = "windows")]
-#[path = "update_eligibility/windows.rs"]
-mod imp;
-#[cfg(not(target_os = "windows"))]
-mod imp {
-    pub struct Os;
-    impl super::UpdateEligibility for Os {}
-}
-pub use imp::Os as NativeUpdateEligibility;
+//! Each OS file decides from Tauri's bundle identity; Windows additionally verifies its NSIS installation record.
 
 pub trait UpdateEligibility {
-    /// A release/nightly running from a writable macOS app volume, an AppImage launched as such, or an NSIS
-    /// installation can use the plugin's update/restart path. Dev builds, deb/rpm, MSI and bare binaries cannot.
-    /// Windows also requires this executable to match the per-user NSIS registration.
-    /// Bundle identity comes from Tauri; APPIMAGE is the AppImage runtime's own path, not a guessed executable suffix.
-    fn available(channel: &str) -> bool {
-        updater::feed(channel).is_some()
-            && match bundle_type() {
-                Some(BundleType::App) => std::env::current_exe().is_ok_and(|exe| {
-                    updater::in_app_bundle(&exe) && exe.ancestors().nth(4).is_some_and(writable_volume)
-                }),
-                Some(BundleType::AppImage) => std::env::var_os("APPIMAGE").is_some_and(|path| !path.is_empty()),
-                _ => false,
-            }
+    /// Whether this run is an installation the updater plugin can update and restart: a release/nightly running
+    /// from a writable macOS app volume, an AppImage launched as such, or the registered per-user NSIS installation.
+    /// Dev builds, deb/rpm, MSI, bare binaries and hosts without an update path report `false`.
+    fn available(_channel: &str) -> bool {
+        false
     }
 }
 
@@ -49,19 +28,20 @@ fn installed_executable(exe: &std::path::Path, location: &str, binary: &str) -> 
         && same_file::is_same_file(exe, directory.join(binary)).unwrap_or(false)
 }
 
-/// Preserve the volume check: failure for reasons other than a read-only filesystem is left to the updater.
-/// Only unlink a probe we created, so an existing file is never removed during eligibility discovery.
-fn writable_volume(folder: &std::path::Path) -> bool {
-    let probe = folder.join(format!(".sidevoice-update-check-{}", std::process::id()));
-    match std::fs::OpenOptions::new().write(true).create_new(true).open(&probe) {
-        Ok(file) => {
-            drop(file);
-            let _ = std::fs::remove_file(&probe);
-            true
-        }
-        Err(error) => error.kind() != std::io::ErrorKind::ReadOnlyFilesystem,
-    }
-}
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+pub use macos::NativeUpdateEligibility;
+
+#[cfg(target_os = "windows")]
+mod windows;
+#[cfg(target_os = "windows")]
+pub use windows::NativeUpdateEligibility;
+
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::NativeUpdateEligibility;
 
 #[cfg(test)]
 mod tests {

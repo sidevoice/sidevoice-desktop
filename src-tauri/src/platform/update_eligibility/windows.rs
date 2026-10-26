@@ -3,9 +3,9 @@ use sidevoice_desktop_core::updater;
 use tauri::utils::{config::BundleType, platform::bundle_type};
 use winreg::{enums::HKEY_CURRENT_USER, RegKey};
 
-pub struct Os;
+pub struct NativeUpdateEligibility;
 
-impl UpdateEligibility for Os {
+impl UpdateEligibility for NativeUpdateEligibility {
     fn available(channel: &str) -> bool {
         if updater::feed(channel).is_none() || bundle_type() != Some(BundleType::Nsis) {
             return false;
