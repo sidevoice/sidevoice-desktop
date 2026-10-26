@@ -30,15 +30,12 @@ mod macos;
 #[cfg(target_os = "macos")]
 pub use macos::NativeMediaControls;
 
-#[cfg(target_os = "windows")]
-mod windows;
-#[cfg(target_os = "windows")]
-pub use windows::NativeMediaControls;
+/// Hosts without a native media-control owner (Linux X11 and Wayland, Windows) keep the page's Media Session.
+#[cfg(not(target_os = "macos"))]
+pub struct NativeMediaControls;
 
-#[cfg(target_os = "linux")]
-mod linux;
-#[cfg(target_os = "linux")]
-pub use linux::NativeMediaControls;
+#[cfg(not(target_os = "macos"))]
+impl MediaControls for NativeMediaControls {}
 
 #[cfg(test)]
 mod tests {
