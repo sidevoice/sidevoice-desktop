@@ -7,7 +7,7 @@ impl super::ComputerName for Name {
         let pretty =
             std::fs::read_to_string("/etc/machine-info").ok().and_then(|file| computer_name::pretty_hostname(&file));
         pretty
-            .or_else(|| std::fs::read_to_string("/proc/sys/kernel/hostname").ok())
+            .or_else(|| whoami::hostname().ok())
             .and_then(|name| computer_name::given(&name))
     }
 }
