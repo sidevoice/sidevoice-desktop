@@ -54,6 +54,9 @@ tauri-plugin-log = "2"
 # The system microphone privacy page, from Rust only (platform/microphone.rs).
 tauri-plugin-opener = "2"
 log = "0.4"
+# Whether an audio input device exists (platform/microphone): enumeration only, no stream, no prompt. WASAPI on Windows,
+# CoreAudio on macOS; no feature is needed for either. Already in the tree through sidevoice-voice.
+cpal = { version = "0.18", default-features = false }
 
 # This computer's own core, its pairing and the page's proxy (src/local_host.rs; docs/LOCAL_HOST.md). Unix sockets.
 # `fetch`: its install's HTTPS client, for "Prepare this computer" (docs/LOCAL_HOST.md → Install).
@@ -64,8 +67,9 @@ sidevoice-local-host = { path = "local-host", features = ["fetch"] }
 # The taskbar's colour, to draw the tray mark in the brand's look for it (src/tray.rs).
 winreg = "0.55"
 # Whether a mouse button went down elsewhere, to close the call controls card's panels, and whether the room is on another
-# virtual desktop (DWM cloaked), for the card (src/call_controls.rs).
-windows-sys = { version = "0.61", features = ["Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_Storage_FileSystem", "Win32_Graphics_Dwm", "Win32_UI_Controls", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell"] }
+# virtual desktop (DWM cloaked), for the card (src/call_controls.rs); the microphone device worker's COM apartment
+# (src/platform/microphone/windows.rs).
+windows-sys = { version = "0.61", features = ["Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_Storage_FileSystem", "Win32_Graphics_Dwm", "Win32_UI_Controls", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_System_Com"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # The typed Mach bindings (task_info, task_vm_info) for the process memory read (src/platform/process_memory/macos.rs).
@@ -101,6 +105,9 @@ core-foundation = "0.10"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
+# The microphone check reads the sound server, not ALSA hints: cpal's pure-Rust PulseAudio host (it also serves PipeWire,
+# through pipewire-pulse). No libpulse, libpipewire or libclang: see platform/microphone/linux.rs.
+cpal = { version = "0.18", default-features = false, features = ["pulseaudio"] }
 # Tauri's existing native toolkit; explicit Cancel default/response for destructive confirmations.
 gtk = "0.18"
 
