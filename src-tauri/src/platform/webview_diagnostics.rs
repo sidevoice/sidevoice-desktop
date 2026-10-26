@@ -8,10 +8,8 @@ use sidevoice_desktop_core::debug_options::Switch;
 #[path = "webview_diagnostics/macos.rs"]
 mod imp;
 #[cfg(not(all(sidevoice_debug_options, target_os = "macos")))]
-mod imp {
-    pub struct Os;
-    impl super::WebviewDiagnostics for Os {}
-}
+#[path = "webview_diagnostics/unavailable.rs"]
+mod imp;
 pub use imp::Os as NativeWebviewDiagnostics;
 
 pub trait WebviewDiagnostics {
