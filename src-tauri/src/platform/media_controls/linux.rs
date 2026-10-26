@@ -1,7 +1,7 @@
 //! X11 and Wayland have no native media-control owner yet; the page retains Media Session.
 
-use super::MediaControls;
+use super::Native;
 
-pub struct NativeMediaControls;
+pub(super) struct Os;
 
-impl MediaControls for NativeMediaControls {}
+impl Native for Os {}

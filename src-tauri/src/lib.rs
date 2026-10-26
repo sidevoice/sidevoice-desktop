@@ -32,7 +32,7 @@ use crate::platform::update_eligibility::{NativeUpdateEligibility, UpdateEligibi
 use crate::platform::application;
 use crate::platform::computer_name;
 use crate::platform::host_capabilities::CAPABILITIES;
-use crate::platform::media_controls::{MediaControls, NativeMediaControls};
+use crate::platform::media_controls;
 use crate::platform::shortcut_access;
 use crate::platform::webview_diagnostics::{NativeWebviewDiagnostics, WebviewDiagnostics};
 use serde_json::{json, Value};
@@ -172,7 +172,7 @@ fn bridge_state(
     // its facts carry the conversation's words, which stay out of the log.
     debug_detail(|| format!("bridge_state {:?}", CallSnapshot { rest: Default::default(), ..snapshot.clone() }));
     tray::update(&app, &snapshot);
-    NativeMediaControls::update(&app, &snapshot);
+    media_controls::update(&app, &snapshot);
     call_controls::update(&app);
     Ok(())
 }
@@ -299,7 +299,7 @@ fn reset_call_state(app: &AppHandle) {
     let snapshot = CallSnapshot::default();
     *app.state::<AppState>().call.lock().unwrap() = snapshot.clone();
     tray::update(app, &snapshot);
-    NativeMediaControls::update(app, &snapshot);
+    media_controls::update(app, &snapshot);
     call_controls::update(app);
     #[cfg(target_os = "macos")]
     voice::page_changed(app);
@@ -348,7 +348,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             &debug_options,
             platform::microphone::settings_available(),
             &NativeWebviewDiagnostics::available(),
-            NativeMediaControls::support(),
+            media_controls::support(),
             CAPABILITIES,
         ));
     #[cfg(feature = "probe")]
@@ -547,7 +547,7 @@ pub fn run() {
             debug(&format!("launch {}", app_report(&handle)));
             tray::create(&handle)?;
             let media_app = handle.clone();
-            NativeMediaControls::attach(&handle, Arc::new(move |command| send(&media_app, command)));
+            media_controls::attach(&handle, Arc::new(move |command| send(&media_app, command)));
             // The model root is shared per OS user on this machine (docs/ENGINES.md).
             // Without it the app still runs; the page then finds no native engine to use.
             let engine_root =

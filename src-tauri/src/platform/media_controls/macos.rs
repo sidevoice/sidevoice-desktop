@@ -23,7 +23,7 @@ use objc2_media_player::{
 use std::ptr::NonNull;
 use std::time::{Duration, Instant};
 
-use super::{CommandSink, MediaControls};
+use super::{CommandSink, Native};
 use sidevoice_desktop_core::bridge::CallSnapshot;
 use sidevoice_desktop_core::headset::{media_command_action, mute_gesture_action};
 use std::sync::Mutex;
@@ -85,12 +85,10 @@ fn on_mute_gesture(app: &AppHandle, muted: bool) -> bool {
     true
 }
 
-pub struct NativeMediaControls;
+pub(super) struct Os;
 
-impl MediaControls for NativeMediaControls {
-    fn support() -> Option<&'static str> {
-        Some("native")
-    }
+impl Native for Os {
+    const NATIVE: bool = true;
 
     fn attach(app: &AppHandle, sink: CommandSink) {
         app.manage(Headset { call: Mutex::default(), sink });
