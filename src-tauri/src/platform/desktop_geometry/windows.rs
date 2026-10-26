@@ -1,5 +1,6 @@
-use super::DesktopGeometry;
+use super::{Native, Space};
 
-/// Windows uses physical pixels, which the shared defaults already provide.
-pub struct NativeGeometry;
-impl DesktopGeometry for NativeGeometry {}
+pub(super) struct Os;
+impl Native for Os {
+    const SPACE: Space = Space::Pixels;
+}

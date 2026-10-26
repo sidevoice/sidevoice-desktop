@@ -1,12 +1,13 @@
-use super::{DesktopGeometry, GeometryCapabilities};
+use super::{Native, Space};
 use gtk::prelude::*;
 
-pub struct NativeGeometry;
-impl DesktopGeometry for NativeGeometry {
-    fn capabilities() -> GeometryCapabilities {
+pub(super) struct Os;
+impl Native for Os {
+    const SPACE: Space = Space::Pixels;
+
+    fn global_coordinates() -> bool {
+        // The backend GTK selected, compared by type name: `gdk::backend()` panics on an unknown backend.
         static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        let available = *AVAILABLE
-            .get_or_init(|| gtk::gdk::Display::default().is_some_and(|d| d.type_().name() == "GdkX11Display"));
-        GeometryCapabilities { global_coordinates: available }
+        *AVAILABLE.get_or_init(|| gtk::gdk::Display::default().is_some_and(|d| d.type_().name() == "GdkX11Display"))
     }
 }
