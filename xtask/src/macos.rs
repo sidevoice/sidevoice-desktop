@@ -5,9 +5,11 @@ use sidevoice_platform::fs::{Create, Files, Fs};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::platform::disk_image::{DiskImage, Host as DiskImageHost};
+use crate::platform::private_files::{PrivateCreation, PrivateFiles};
 use crate::util::{
     contains, copy_dir, ensure, fresh_dir, in_ci, mkdir, random_hex, read, read_bytes, read_secret, repo, required_env,
-    secret_path, sleep, version, wait_for, work, Channel, Cmd, PrivateFiles, SecretDir, TauriBuild,
+    secret_path, sleep, version, wait_for, work, Channel, Cmd, SecretDir, TauriBuild,
 };
 use crate::Result;
 
@@ -107,7 +109,7 @@ fn notary_key(dir: &SecretDir) -> Result<PathBuf> {
 }
 
 /// `macos app [--signed] [--channel release|nightly|dev]`: the app bundle (hardened runtime,
-/// src-tauri/Entitlements.plist), built for its channel (default `dev`). Ad-hoc signed; or, with `--signed`, signed by
+/// src-tauri/packaging/macos/Entitlements.plist), built for its channel (default `dev`). Ad-hoc signed; or, with `--signed`, signed by
 /// Tauri's bundler with the Developer ID (`APPLE_SIGNING_IDENTITY`; `APPLE_CERTIFICATE` and
 /// `APPLE_CERTIFICATE_PASSWORD`, imported into a keychain of the bundler's own, or else the login keychain's),
 /// notarized with the API key (`APPLE_API_KEY`, `APPLE_API_ISSUER`, and the key file, see [`notary_key`]) and
@@ -385,15 +387,6 @@ pub fn first_open() -> Result<()> {
 /// Gatekeeper does not know.
 pub fn dmg(signed: bool) -> Result<()> {
     let work = work("dmg")?;
-    let venv = work.join("dmgbuild");
-    Cmd::new("python3").args(["-m", "venv"]).arg(&venv).run()?;
-    Cmd::new(venv.join("bin/pip")).args(["install", "--quiet", "dmgbuild==1.6.7"]).run()?;
-    // One TIFF with the 1x and 2x drawings: Finder picks the one for the screen.
-    let background = work.join("background.tiff");
-    Cmd::new("tiffutil")
-        .args(["-cathidpicheck", "src-tauri/dmg/background.png", "src-tauri/dmg/background@2x.png", "-out"])
-        .arg(&background)
-        .run()?;
     // No older image beside this one, to be checksummed or uploaded with it.
     let dist = repo().join("dist");
     mkdir(&dist)?;
@@ -401,15 +394,17 @@ pub fn dmg(signed: bool) -> Result<()> {
         fs::remove_file(&old).map_err(|e| format!("{}: {e}", old.display()))?;
     }
     let dmg = dmg_path()?;
-    Cmd::new(venv.join("bin/dmgbuild"))
-        .args(["-s", "scripts/dmg-settings.py"])
-        .arg("-D")
-        .arg(format!("app={}", app().display()))
-        .arg("-D")
-        .arg(format!("background={}", background.display()))
-        .args(["-D", "layout=src-tauri/dmg/layout.json", "-D", "icon=src-tauri/icons/icon.icns", "Sidevoice"])
-        .arg(&dmg)
-        .run()?;
+    DiskImageHost.assemble(
+        &work,
+        &app(),
+        [
+            Path::new("src-tauri/packaging/macos/dmg/background.png"),
+            Path::new("src-tauri/packaging/macos/dmg/background@2x.png"),
+        ],
+        Path::new("src-tauri/packaging/macos/dmg/layout.json"),
+        Path::new("src-tauri/packaging/macos/icon.icns"),
+        &dmg,
+    )?;
     Cmd::new("hdiutil").arg("verify").arg(&dmg).run()?;
     // Check the app as shipped, inside the image, not the one in the build tree.
     let mount = Mount::attach(&dmg, &work.join("mount"))?;

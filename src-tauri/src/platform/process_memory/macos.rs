@@ -4,7 +4,7 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use sidevoice_desktop_core::memory::{accelerator_bytes, Sample};
 
-pub struct Os;
+pub struct SystemProcessMemory;
 
 #[link(name = "Metal", kind = "framework")]
 extern "C" {
@@ -57,7 +57,7 @@ fn accelerator() -> Option<u64> {
 }
 
 /// A look at the process now.
-impl ProcessMemory for Os {
+impl ProcessMemory for SystemProcessMemory {
     fn sample() -> Sample {
         let (footprint, resident) = task();
         Sample { footprint, resident, metal: metal(), accelerator: accelerator() }

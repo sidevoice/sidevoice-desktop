@@ -20,6 +20,7 @@
 use crate::checks::Check;
 use crate::cli::Cli;
 use crate::npm::{self, Fetch};
+use crate::platform::target::current_package;
 use crate::tarball;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -189,7 +190,7 @@ impl Job {
 /// How an install goes, and its bounds.
 #[derive(Debug, Clone)]
 pub struct Options {
-    /// This computer's platform package (`npm::this_platform`); none has no release (`install.no-bundle`).
+    /// This computer's platform package; none has no release (`install.no-bundle`).
     pub package: Option<String>,
     /// Where the private directory is made: the system's temporary directory.
     pub temp: PathBuf,
@@ -207,7 +208,7 @@ pub struct Options {
 impl Options {
     pub fn standard() -> Options {
         Options {
-            package: npm::this_platform(),
+            package: current_package(),
             temp: std::env::temp_dir(),
             download_limit: 512 * 1024 * 1024,
             download_time: Duration::from_secs(15 * 60),
@@ -485,7 +486,7 @@ mod tests {
     fn the_real_registry_resolves_downloads_and_unpacks() {
         let tmp = tempfile::tempdir().unwrap();
         let options = Options { temp: tmp.path().into(), ..Options::standard() };
-        let options = Options { package: npm::this_platform(), ..options };
+        let options = Options { package: current_package(), ..options };
         let fetch = npm::Https::new().unwrap();
         let job = Job::new("real");
         let (release, dist) = npm::resolve(&fetch, options.package.as_deref().unwrap()).unwrap();

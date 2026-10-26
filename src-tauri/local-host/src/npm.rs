@@ -39,7 +39,7 @@ pub trait Fetch: Send + Sync {
     fn get(&self, url: &str) -> Result<Response, Failure>;
 }
 
-/// The platform package for npm's names of this OS and CPU (Rust's `std::env::consts`), if npm has names for them.
+/// The platform package for npm's names of an OS and CPU, if npm has names for them.
 pub fn platform_package(os: &str, arch: &str) -> Option<String> {
     let os = match os {
         "macos" => "darwin",
@@ -52,11 +52,6 @@ pub fn platform_package(os: &str, arch: &str) -> Option<String> {
         _ => return None,
     };
     Some(format!("{PLATFORM_PREFIX}{os}-{cpu}"))
-}
-
-/// This computer's platform package.
-pub fn this_platform() -> Option<String> {
-    platform_package(std::env::consts::OS, std::env::consts::ARCH)
 }
 
 /// The release to install: the latest `sidevoice`'s version, and the platform package to get it from.
