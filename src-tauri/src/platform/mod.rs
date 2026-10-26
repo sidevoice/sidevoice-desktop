@@ -11,7 +11,7 @@ pub mod pairing_storage;
 pub mod process_memory;
 pub mod reveal;
 pub mod tray;
-#[cfg(feature = "probe")]
+#[cfg(any(test, feature = "probe"))]
 pub mod voice_holds;
 pub mod webview_diagnostics;
 
