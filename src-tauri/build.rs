@@ -1,68 +1,73 @@
 fn main() {
     build_channel();
     link_macos_clang_runtime();
+    embed_windows_manifest();
+    // The Windows manifest is linked by embed_windows_manifest, not by tauri-build.
+    let windows = tauri_build::WindowsAttributes::new_without_app_manifest();
     // The app's own commands, declared so capabilities can grant them per window/origin:
     // the room window `bridge_state`, `bridge_level` and `bridge_playback` (+ `debug_log`), the native engine, the
     // voice call (`voice_*`, macOS) and the local host (`local_host_*`), the mute shortcut and the call controls settings (`mute_shortcut`,
     // `call_controls_settings`), the app's updates (`updater`), the microphone permission (`microphone`, macOS) and the
     // developer options (`debug_options`), the call controls card its own six.
-    tauri_build::try_build(tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
-        "bridge_state",
-        "bridge_level",
-        "bridge_playback",
-        "call_controls_ready",
-        "call_controls_run",
-        "call_controls_layout",
-        "call_controls_drag",
-        "call_controls_resize",
-        "call_controls_cursor",
-        "debug_log",
-        "engine_capabilities",
-        "engine_installed",
-        "engine_install",
-        "engine_progress",
-        "engine_cancel",
-        "engine_uninstall",
-        "engine_memory",
-        "engine_catalogs",
-        "engine_set_credential",
-        "engine_has_credential",
-        "engine_test_credential",
-        "engine_refresh",
-        "voice_create_call",
-        "voice_route_input",
-        "voice_dispose_call",
-        "voice_ready",
-        "voice_update",
-        "voice_preload",
-        "voice_start",
-        "voice_stop",
-        "voice_say",
-        "voice_cancel_say",
-        "voice_mute",
-        "voice_cancel_input",
-        "voice_end_input",
-        "voice_audio_devices",
-        "voice_set_audio_devices",
-        "local_host_state",
-        "local_host_pairing",
-        "local_host_action",
-        "local_host_pairing_code",
-        "local_host_install",
-        "local_host_install_progress",
-        "local_host_install_cancel",
-        "data_pairings_read",
-        "data_pairings_write",
-        "data_delete_all",
-        "data_uninstall",
-        "data_reset_report",
-        "mute_shortcut",
-        "call_controls_settings",
-        "updater",
-        "microphone",
-        "microphone_open_settings",
-        "debug_options",
-    ])))
+    tauri_build::try_build(tauri_build::Attributes::new().windows_attributes(windows).app_manifest(
+        tauri_build::AppManifest::new().commands(&[
+            "bridge_state",
+            "bridge_level",
+            "bridge_playback",
+            "call_controls_ready",
+            "call_controls_run",
+            "call_controls_layout",
+            "call_controls_drag",
+            "call_controls_resize",
+            "call_controls_cursor",
+            "debug_log",
+            "engine_capabilities",
+            "engine_installed",
+            "engine_install",
+            "engine_progress",
+            "engine_cancel",
+            "engine_uninstall",
+            "engine_memory",
+            "engine_catalogs",
+            "engine_set_credential",
+            "engine_has_credential",
+            "engine_test_credential",
+            "engine_refresh",
+            "voice_create_call",
+            "voice_route_input",
+            "voice_dispose_call",
+            "voice_ready",
+            "voice_update",
+            "voice_preload",
+            "voice_start",
+            "voice_stop",
+            "voice_say",
+            "voice_cancel_say",
+            "voice_mute",
+            "voice_cancel_input",
+            "voice_end_input",
+            "voice_audio_devices",
+            "voice_set_audio_devices",
+            "local_host_state",
+            "local_host_pairing",
+            "local_host_action",
+            "local_host_pairing_code",
+            "local_host_install",
+            "local_host_install_progress",
+            "local_host_install_cancel",
+            "data_pairings_read",
+            "data_pairings_write",
+            "data_delete_all",
+            "data_uninstall",
+            "data_reset_report",
+            "mute_shortcut",
+            "call_controls_settings",
+            "updater",
+            "microphone",
+            "microphone_open_settings",
+            "debug_options",
+        ]),
+    ))
     .expect("failed to run tauri-build");
 }
 
@@ -109,4 +114,20 @@ fn build_channel() {
     if channel != "release" {
         println!("cargo:rustc-cfg=sidevoice_debug_options");
     }
+}
+
+/// The Windows application manifest (packaging/windows/app.manifest: Common Controls v6, which WebView2 and tao's
+/// dialogs import from comctl32), linked into every executable the package builds, the unit-test binaries included.
+/// tauri-build's own manifest goes into the app's binaries only (`rustc-link-arg-bins`), so a test binary without it
+/// fails to start (STATUS_ENTRYPOINT_NOT_FOUND); this is the workaround Tauri uses for its own tests
+/// (tauri-apps/tauri#13419), with tauri-build's manifest turned off so the app's binaries carry one.
+fn embed_windows_manifest() {
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("msvc") {
+        return;
+    }
+    let manifest = std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"))
+        .join("packaging/windows/app.manifest");
+    println!("cargo:rerun-if-changed={}", manifest.display());
+    println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+    println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
 }
