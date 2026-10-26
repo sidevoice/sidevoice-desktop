@@ -97,11 +97,15 @@ during a write. This operation does not provide atomic confinement against that 
 has direct access to the account's files. This limit does not relax the exact-root, no-follow and
 mount/device checks for a stable filesystem layout.
 
-Before uninstall, native creates a private operation journal and takes an interprocess reset lock.
-Model operations, voice model loads, credential writes, local-host actions and updater writes share an
-atomic admission gate with reset. The helper inherits the lock, acknowledges readiness before the app
-quits, records cleanup stages, and releases the lock only after its work ends. The helper marks the
-inherited lock descriptor close-on-exec, so the relaunched app acquires the lock independently.
+Before uninstall, native creates a private operation journal and takes the reset admission: two
+interprocess locks, `admission.lock` and `reset.lock`. Model operations, voice model loads, credential
+writes, local-host actions and updater writes share an atomic admission gate with reset. Nothing is
+inherited: the app keeps `admission.lock` and releases `reset.lock`, which the helper acquires on its own.
+The helper authenticates with a one-time capability on its stdin, receives the plan over the local channel,
+acknowledges readiness before the app quits, and cleans up only after an explicit commit, the channel's end
+and its own acquisition of `admission.lock`; it records cleanup stages and releases both locks after its
+work ends. Startup takes both locks independently, so a relaunched app waits for that. Authentication,
+cancellation and deadlines: [RESET_HANDOFF.md](RESET_HANDOFF.md).
 The helper records an awaiting-relaunch journal; only the new app after its setup publishes a complete
 report. A failed startup leaves the journal as a partial report for the next launch.
 
@@ -234,6 +238,11 @@ only allows from a click in the page. "Mostrar Sidevoice" opens the window for t
 
 `window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", version, engine, mediaKeys, build, muteShortcut, callControls, computerName?, localHost?, voice?, microphone?, updater? }`: the
 web UI feature-detects the desktop app by it, and each capability by its presence. `version` is the bridge's (2).
+
+`mediaKeys` is supplied by `MediaControls::support()`: `"native"` on macOS and `null` on Windows/Linux.
+It is independent of `host.voice`: with native voice and unavailable native media controls, the page
+keeps its Media Session handlers and Now Playing element. See [MEDIA_CONTROLS.md](MEDIA_CONTROLS.md)
+for the test boundary and hardware verification still needed.
 
 `computerName` is the name the person gave this computer, which the page proposes as the device's name: on macOS
 the Computer Name (System Settings → General → Sharing, «Mac de Ana»; SystemConfiguration's
@@ -688,7 +697,7 @@ interface MicrophonePermission {
 - `onChange(listener)`: `listener()` whenever `state()` changes, so on a permission change and on a microphone
   plugged in or out; the page reads `state()` again. Polled every 2 s while anyone listens; returns `stop`.
 - `request()`: `AVCaptureDevice.requestAccess(for: .audio)`: macOS's own prompt the first time (with
-  `NSMicrophoneUsageDescription`, `src-tauri/Info.plist`); afterwards it answers at once with the stored answer, no
+  `NSMicrophoneUsageDescription`, `src-tauri/packaging/macos/Info.plist`); afterwards it answers at once with the stored answer, no
   prompt.
 - `openSettings()`: opens System Settings at Privacy & Security › Microphone
   (`x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone`, through `tauri-plugin-opener`), where a
@@ -730,7 +739,7 @@ interface MuteShortcutBridge {
 interface MuteShortcut {
   accelerator: string | null;   // as the app keeps it: "Ctrl+Alt+M"; null when there is none
   label: string | null;         // as this system writes it: "⌃⌥M" on macOS, "Ctrl+Alt+M" elsewhere
-  state: "on" | "off" | "refused";  // refused: the system would not take it (another app may hold it)
+  state: "on" | "off" | "refused" | "unavailable";  // refused: the system would not take it (another app may hold it)
   alternatives: string[];       // refused: accelerators the system does take, to offer instead (set one as it is)
   voiceOver: boolean;           // macOS: VoiceOver is on and the shortcut holds Control and Option together
 }
@@ -744,6 +753,8 @@ interface MuteShortcut {
   core `settings::normalize_shortcut`), and answers it as `accelerator`. `Cmd` is the Command key (Super elsewhere).
   Anything else — no modifier, no key or two, a character no key makes (`µ` from Option+M on a Mac, a dead key) —
   rejects `{key: "shortcut_invalid", message}` and changes nothing. One the system refuses is kept, and answered `refused`.
+- `unavailable` means no global shortcut backend in this session (including native Wayland). The saved
+  accelerator and label remain present, with no alternatives and `voiceOver: false`; disabling still returns `off`.
 - Kept with the app's settings (`muteShortcut`), set only from the page.
 - App → page: `window.__sidevoiceDesktop.muteShortcutEvent(shortcut)` (`webview.eval`) whenever the app registers it
   (set from the page), to `subscribe`'s listeners. `voiceOver` is read when asked: VoiceOver
@@ -909,7 +920,7 @@ interface UpdaterStatus {
 - Add a command: a variant in `Command` (Rust), a `case` in `run` (JS), a test on each side.
 - Add a field: `CallSnapshot` uses `#[serde(default)]`, so old and new scripts interoperate;
   bump `version` only for a breaking change.
-- Tests: `npm test` (the script against a fake window, `host.voice`, `host.microphone`, `host.updater`, `host.build`, `host.muteShortcut`,
+- Tests: `npm run web && npm test` (the pinned page's media controls and the script against a fake window, `host.voice`, `host.microphone`, `host.updater`, `host.build`, `host.muteShortcut`,
   `host.callControls` and `host.localHost`'s install included), `cargo test -p sidevoice-desktop-core` (the voice call's builds, the media rule, the
   updater's status and the mute shortcut's form and shape among the rest) and `cargo test -p sidevoice-desktop-engine` (the engine
   over a test host), `cargo test -p sidevoice-local-host` (the local host against a stand-in core, its install against a stand-in

@@ -3,7 +3,7 @@
 //! listens and removes it when it exits cleanly. `endpoint` is the record `sidevoice-platform`'s `ipc` writes (an
 //! absolute socket path on Unix, in the user's runtime directory), parsed back with its own type.
 //!
-//! Both records are read as every file the app acts on is (`trusted::Dir`): through the directory's checked
+//! Both records are read as every file the app acts on is (`sidevoice_platform::fs::Directory`): through the directory's checked
 //! descriptor, opened without following a link and without blocking, a regular file of this user's.
 //!
 //! A record that is not there, or a connector record whose `pid` is dead (it stays after a crash), is no host:
@@ -11,9 +11,9 @@
 
 use crate::checks::Check;
 use crate::paths::DataDirs;
-use crate::trusted::Dir;
 use crate::Refusal;
 use serde_json::Value;
+use sidevoice_platform::fs::{Access, Directory, HeldDirectory};
 use sidevoice_platform::ipc::Endpoint;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -22,8 +22,9 @@ const RECORD_LIMIT: u64 = 64 * 1024;
 
 /// The core's socket, from `C/core.json`: `C` private to this user, the record private too (it holds the core's token).
 pub fn core(dirs: &DataDirs) -> Result<PathBuf, Check> {
-    let dir = Dir::open(&dirs.core(), 0o077, "identity.unsafe-directory")?;
-    let record = read(&dir, "core.json", 0o077)?;
+    let dir = HeldDirectory::open(&dirs.core(), Access::Private)
+        .map_err(|e| crate::checks::storage_error(&dirs.core(), "identity.unsafe-directory", e))?;
+    let record = read(&dir, &dirs.core_record(), Access::Private, "identity.unsafe-directory")?;
     socket(&record, &dirs.core_record())
 }
 
@@ -31,8 +32,9 @@ pub fn core(dirs: &DataDirs) -> Result<PathBuf, Check> {
 /// others, so is the record.
 pub fn connector(dirs: &DataDirs) -> Result<PathBuf, Check> {
     let path = dirs.connector_record();
-    let dir = Dir::open(&dirs.data, 0o022, "install.unsafe")?;
-    let record = read(&dir, "connector.json", 0o022)?;
+    let dir = HeldDirectory::open(&dirs.data, Access::NotWritableByOthers)
+        .map_err(|e| crate::checks::storage_error(&dirs.data, "install.unsafe", e))?;
+    let record = read(&dir, &path, Access::NotWritableByOthers, "install.unsafe")?;
     let pid = record.get("pid").and_then(Value::as_u64).and_then(|pid| i32::try_from(pid).ok()).filter(|pid| *pid > 0);
     match pid {
         Some(pid) if alive(pid) => socket(&record, &path),
@@ -41,13 +43,18 @@ pub fn connector(dirs: &DataDirs) -> Result<PathBuf, Check> {
     }
 }
 
-fn read(dir: &Dir, name: &str, mask: u32) -> Result<Value, Check> {
-    let path = dir.path().join(name);
-    let bytes = dir.read(name, mask, RECORD_LIMIT + 1)?;
-    if bytes.len() as u64 > RECORD_LIMIT {
-        return Err(invalid(&path, "too large"));
-    }
-    serde_json::from_slice(&bytes).map_err(|e| invalid(&path, &e.to_string()))
+fn read(dir: &HeldDirectory, path: &Path, access: Access, key: &str) -> Result<Value, Check> {
+    let bytes = dir
+        .read(path.file_name().expect("record leaf"), access, RECORD_LIMIT)
+        .map_err(|e| {
+            if e.kind() == io::ErrorKind::InvalidData {
+                invalid(path, "too large")
+            } else {
+                crate::checks::storage_error(path, key, e)
+            }
+        })?
+        .ok_or(Check::Missing)?;
+    serde_json::from_slice(&bytes).map_err(|e| invalid(path, &e.to_string()))
 }
 
 fn socket(record: &Value, path: &Path) -> Result<PathBuf, Check> {
@@ -72,25 +79,42 @@ fn alive(pid: i32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
-
-    fn chmod(path: &Path, mode: u32) {
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
-    }
+    use sidevoice_desktop_test_support::platform::storage::{StorageFixture, StorageFixtures};
 
     fn dirs() -> (tempfile::TempDir, DataDirs) {
         let tmp = tempfile::tempdir().unwrap();
         let data = tmp.path().join("d");
         std::fs::create_dir_all(data.join("core")).unwrap();
-        chmod(&data, 0o700);
-        chmod(&data.join("core"), 0o700);
+        StorageFixtures::private(&data);
+        StorageFixtures::private(&data.join("core"));
         (tmp, DataDirs::new(data))
     }
 
     fn write(path: &Path, text: &str) {
         let _ = std::fs::remove_file(path);
         std::fs::write(path, text).unwrap();
-        chmod(path, 0o600);
+        StorageFixtures::private(path);
+    }
+
+    #[test]
+    fn absent_discovery_never_creates_and_unsafe_ancestry_is_not_absence() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = DataDirs::new(tmp.path().join("absent"));
+        assert_eq!(core(&dirs), Err(Check::Missing));
+        assert_eq!(connector(&dirs), Err(Check::Missing));
+        assert!(!dirs.data.exists());
+        StorageFixtures::writable(tmp.path());
+        assert!(matches!(core(&dirs), Err(Check::Unsafe(_))));
+        assert!(matches!(connector(&dirs), Err(Check::Unsafe(_))));
+        assert!(!dirs.data.exists());
+        StorageFixtures::private(tmp.path());
+    }
+
+    #[test]
+    fn oversized_records_are_invalid_not_absent() {
+        let (_tmp, dirs) = dirs();
+        write(&dirs.core_record(), &" ".repeat(RECORD_LIMIT as usize + 1));
+        assert!(matches!(core(&dirs), Err(Check::Unsafe(r)) if r.key == "endpoint.record-invalid"));
     }
 
     #[test]
@@ -131,27 +155,26 @@ mod tests {
         let me = std::process::id();
         let body = format!(r#"{{"pid":{me},"endpoint":"/run/user/1/x/connector.sock"}}"#);
         // A named pipe in its place: opened without blocking and refused as not a regular file.
-        let fifo = std::ffi::CString::new(dirs.connector_record().to_str().unwrap()).unwrap();
-        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        StorageFixtures::special_record(&dirs.connector_record());
         assert!(matches!(connector(&dirs), Err(Check::Unsafe(_))));
         std::fs::remove_file(dirs.connector_record()).unwrap();
         // A link to a good file is not followed.
         let real = tmp.path().join("real.json");
         write(&real, &body);
-        std::os::unix::fs::symlink(&real, dirs.connector_record()).unwrap();
+        StorageFixtures::symlink(&real, dirs.connector_record());
         assert!(matches!(connector(&dirs), Err(Check::Unsafe(_))));
         // Writable by others: refused.
         std::fs::remove_file(dirs.connector_record()).unwrap();
         write(&dirs.connector_record(), &body);
-        chmod(&dirs.connector_record(), 0o666);
+        StorageFixtures::writable(&dirs.connector_record());
         assert!(matches!(connector(&dirs), Err(Check::Unsafe(_))));
         // The core's record: a link, or readable by others, is refused too.
         write(&real, r#"{"endpoint":"/run/user/1/x/local.sock"}"#);
-        std::os::unix::fs::symlink(&real, dirs.core_record()).unwrap();
+        StorageFixtures::symlink(&real, dirs.core_record());
         assert!(matches!(core(&dirs), Err(Check::Unsafe(_))));
         std::fs::remove_file(dirs.core_record()).unwrap();
         write(&dirs.core_record(), r#"{"endpoint":"/run/user/1/x/local.sock"}"#);
-        chmod(&dirs.core_record(), 0o644);
+        StorageFixtures::readable(&dirs.core_record());
         assert!(matches!(core(&dirs), Err(Check::Unsafe(_))));
     }
 }

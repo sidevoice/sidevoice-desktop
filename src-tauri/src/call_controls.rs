@@ -582,13 +582,14 @@ fn full_state(app: &AppHandle, call: &CallSnapshot) -> serde_json::Value {
             (inner.level, inner.pointer_inside, inner.outside_clicks, inner.told_place, inner.told_size.flatten())
         })
         .unwrap_or((0, None, 0, None, None));
+    let shortcut = crate::shortcut_status(&app.state::<AppState>());
     let mut state = serde_json::json!({
         "call": call,
         "level": level,
         "pointerInside": pointer,
         "outsideClicks": clicks,
         "alwaysExpanded": settings.call_controls_always_shown,
-        "muteShortcut": logic::shortcut_label(&settings.mute_shortcut, cfg!(target_os = "macos")),
+        "muteShortcut": logic::shortcut_hint(&shortcut),
         "size": size.map(size_json),
     });
     if let Some(place) = place {

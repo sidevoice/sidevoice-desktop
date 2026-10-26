@@ -85,11 +85,17 @@ pub fn is_update(file: &str) -> bool {
 
 /// Each platform a release updates (latest.json's key), and its update's name for `version`.
 pub fn update_files(version: &str) -> [(&'static str, String); 3] {
+    // Desktop package membership and Tauri artifact suffixes stay here; OS/CPU facts come from the shared table.
     [
-        ("darwin-aarch64", format!("Sidevoice_{version}_aarch64.app.tar.gz")),
-        ("windows-x86_64", format!("Sidevoice_{version}_x64-setup.exe")),
-        ("linux-x86_64", format!("Sidevoice_{version}_amd64.AppImage")),
+        ("macos", "aarch64", "aarch64.app.tar.gz"),
+        ("windows", "x86_64", "x64-setup.exe"),
+        ("linux", "x86_64", "amd64.AppImage"),
     ]
+    .map(|(os, arch, suffix)| {
+        let target = sidevoice_platform::target::for_platform(os, arch).expect("published desktop target");
+        let key = if target.os == "macos" { "darwin-aarch64" } else { target.name };
+        (key, format!("Sidevoice_{version}_{suffix}"))
+    })
 }
 
 /// latest.json, tauri-plugin-updater's static manifest: the version and each platform's `{signature, url}` under

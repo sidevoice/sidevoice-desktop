@@ -3,15 +3,23 @@
 
 use std::ffi::OsStr;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::platform::lifecycle;
 use regex::Regex;
+use sidevoice_platform::fs::{Files, Fs};
+use sidevoice_platform::process::{Child, Process, Processes};
+use sidevoice_platform::stop::{StopRequest, StopRequests};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
+use tokio::process::Command;
+use tokio::runtime::Runtime;
+use tokio::task::JoinHandle;
 
 use crate::Result;
 
@@ -91,28 +99,34 @@ pub fn sleep(seconds: f64) {
 
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
-/// Ctrl-C (SIGINT) or SIGTERM (a cancelled CI run) no longer ends the xtask on the spot: the program it runs gets the
-/// signal too and stops, the xtask then starts nothing more ([`interrupted`]) and unwinds, and its guards remove what
-/// they hold (secret files, keychains, mounts, programs in the background). After a SIGKILL nothing can:
-/// `cargo xtask macos forget-secrets` removes what signing left.
-#[cfg(unix)]
-pub fn on_interrupt() {
-    extern "C" {
-        fn signal(signum: i32, handler: usize) -> usize;
-    }
-    extern "C" fn flag(_: i32) {
-        INTERRUPTED.store(true, Ordering::SeqCst);
-    }
-    // SAFETY: the handler only stores to an atomic, which is async-signal-safe. SIGINT is 2 and SIGTERM 15 on Linux
-    // and macOS.
-    unsafe {
-        signal(2, flag as extern "C" fn(i32) as usize);
-        signal(15, flag as extern "C" fn(i32) as usize);
+/// Ctrl+C on every host, and SIGTERM/SIGHUP on Unix, stop new work and unwind resource guards.
+/// Children have their own groups/jobs, so running commands also observe this flag and stop their owned trees.
+pub fn on_interrupt() -> Result<()> {
+    lifecycle::register(|| INTERRUPTED.store(true, Ordering::SeqCst))
+}
+
+/// Keep async child IO alive between synchronous xtask steps (including background log readers).
+fn runtime() -> &'static Runtime {
+    static RUNTIME: OnceLock<Runtime> = OnceLock::new();
+    RUNTIME.get_or_init(|| Runtime::new().expect("xtask child runtime"))
+}
+
+async fn cancelled() {
+    while interrupted().is_ok() {
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 
-#[cfg(not(unix))]
-pub fn on_interrupt() {}
+/// Ask only an owned, still-waitable leader; always clean up its tree, even after the leader exits.
+async fn stop_child(child: &mut Child) {
+    if matches!(child.try_wait(), Ok(None)) {
+        if let Some(pid) = child.id() {
+            let _ = StopRequests::ask(pid);
+        }
+        let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+    }
+    child.kill_tree().await;
+}
 
 /// `Err` once the xtask was interrupted: nothing more is started.
 pub fn interrupted() -> Result<()> {
@@ -195,12 +209,24 @@ impl Cmd {
     }
 
     /// Runs it, its output going through; fails unless it succeeds.
-    pub fn run(mut self) -> Result<()> {
+    pub fn run(self) -> Result<()> {
         interrupted()?;
         let what = self.shown();
         eprintln!("$ {what}");
-        let status = self.command.status().map_err(|e| format!("{what}: {e}"))?;
-        status.success().then_some(()).ok_or_else(|| format!("{what}: {status}"))
+        runtime().block_on(async {
+            let mut child = Processes::spawn_tree(self.command).await.map_err(|e| format!("{what}: {e}"))?;
+            let status = tokio::select! {
+                status = child.wait() => status.map_err(|e| format!("{what}: {e}")),
+                () = cancelled() => Err("interrupted".into()),
+            };
+            if interrupted().is_err() {
+                stop_child(&mut child).await;
+            } else {
+                child.kill_tree().await;
+            }
+            let status = status?;
+            status.success().then_some(()).ok_or_else(|| format!("{what}: {status}"))
+        })
     }
 
     /// Runs it and returns its standard output then its standard error (as `2>&1` had them); fails unless it
@@ -227,22 +253,43 @@ impl Cmd {
         interrupted()?;
         let what = self.shown();
         eprintln!("$ {what} < (input) > (file)");
-        let mut child =
-            self.command.stdin(Stdio::piped()).stdout(Stdio::from(out)).spawn().map_err(|e| format!("{what}: {e}"))?;
-        let written = child.stdin.take().expect("piped").write_all(input);
-        let status = child.wait().map_err(|e| format!("{what}: {e}"))?;
-        written.map_err(|e| format!("{what}: {e}"))?;
-        status.success().then_some(()).ok_or_else(|| format!("{what}: {status}"))
+        self.command.stdin(Stdio::piped()).stdout(Stdio::from(out));
+        runtime().block_on(async {
+            let mut child = Processes::spawn_tree(self.command).await.map_err(|e| format!("{what}: {e}"))?;
+            let mut stdin = child.stdin().expect("piped");
+            let result = tokio::select! {
+                result = async {
+                    stdin.write_all(input).await.map_err(|e| format!("{what}: {e}"))?;
+                    drop(stdin);
+                    let status = child.wait().await.map_err(|e| format!("{what}: {e}"))?;
+                    status.success().then_some(()).ok_or_else(|| format!("{what}: {status}"))
+                } => result,
+                () = cancelled() => Err("interrupted".into()),
+            };
+            if interrupted().is_err() {
+                stop_child(&mut child).await;
+            } else {
+                child.kill_tree().await;
+            }
+            result
+        })
     }
 
     fn capture(mut self, with_stderr: bool) -> Result<(bool, String, String)> {
         interrupted()?;
         let what = self.shown();
         eprintln!("$ {what}");
-        if !with_stderr {
-            self.command.stderr(Stdio::inherit());
-        }
-        let out = self.command.output().map_err(|e| format!("{what}: {e}"))?;
+        self.command.stdin(Stdio::null()).stdout(Stdio::piped());
+        self.command.stderr(if with_stderr { Stdio::piped() } else { Stdio::inherit() });
+        let out = runtime().block_on(async {
+            let child = Processes::spawn_tree(self.command).await.map_err(|e| format!("{what}: {e}"))?;
+            // No new command deadline or output cap: build/release commands can be long and verbose.
+            tokio::select! {
+                out = child.output(Duration::from_secs(100 * 365 * 24 * 3600), Duration::from_secs(3), usize::MAX) =>
+                    out.map_err(|e| format!("{what}: {e}")),
+                () = cancelled() => Err("interrupted".into()),
+            }
+        })?;
         let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
         if with_stderr {
             text += &String::from_utf8_lossy(&out.stderr);
@@ -257,14 +304,9 @@ impl Cmd {
         let file = File::create(log).map_err(|e| format!("{}: {e}", log.display()))?;
         let err = file.try_clone().map_err(|e| e.to_string())?;
         eprintln!("$ {what} > {} 2>&1 &", log.display());
-        let child = self
-            .command
-            .stdin(Stdio::null())
-            .stdout(Stdio::from(file))
-            .stderr(Stdio::from(err))
-            .spawn()
-            .map_err(|e| format!("{what}: {e}"))?;
-        Ok(Background { child, readers: Vec::new() })
+        self.command.stdin(Stdio::null()).stdout(Stdio::from(file)).stderr(Stdio::from(err));
+        let child = runtime().block_on(Processes::spawn_tree(self.command)).map_err(|e| format!("{what}: {e}"))?;
+        Ok(Background { pid: child.id().expect("owned child leader"), child, readers: Vec::new() })
     }
 
     /// Starts it in the background, each line it writes (either stream) into `log` with the time before it
@@ -274,23 +316,18 @@ impl Cmd {
         let what = self.shown();
         let file = Arc::new(Mutex::new(File::create(log).map_err(|e| format!("{}: {e}", log.display()))?));
         eprintln!("$ {what} > (timed) {} 2>&1 &", log.display());
-        let mut child = self
-            .command
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("{what}: {e}"))?;
-        let stdout: Box<dyn Read + Send> = Box::new(child.stdout.take().expect("piped"));
-        let stderr: Box<dyn Read + Send> = Box::new(child.stderr.take().expect("piped"));
+        self.command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let mut child = runtime().block_on(Processes::spawn_tree(self.command)).map_err(|e| format!("{what}: {e}"))?;
+        let stdout: Box<dyn AsyncRead + Send + Unpin> = Box::new(child.stdout().expect("piped"));
+        let stderr: Box<dyn AsyncRead + Send + Unpin> = Box::new(child.stderr().expect("piped"));
         let readers = [stdout, stderr]
             .into_iter()
             .map(|stream| {
                 let file = Arc::clone(&file);
-                thread::spawn(move || {
+                runtime().spawn(async move {
                     let mut reader = BufReader::new(stream);
                     let mut line = Vec::new();
-                    while reader.read_until(b'\n', &mut line).is_ok_and(|n| n > 0) {
+                    while reader.read_until(b'\n', &mut line).await.is_ok_and(|n| n > 0) {
                         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs_f64();
                         let mut file = file.lock().expect("the log's lock");
                         let _ = write!(file, "{now:.2} ");
@@ -301,19 +338,20 @@ impl Cmd {
                 })
             })
             .collect();
-        Ok(Background { child, readers })
+        Ok(Background { pid: child.id().expect("owned child leader"), child, readers })
     }
 }
 
-/// A program running in the background. Stopped (as `kill` stops it: SIGTERM) when dropped.
+/// An owned background tree, asked to leave and then killed whole when dropped.
 pub struct Background {
     child: Child,
-    readers: Vec<thread::JoinHandle<()>>,
+    pid: u32,
+    readers: Vec<JoinHandle<()>>,
 }
 
 impl Background {
     pub fn pid(&self) -> u32 {
-        self.child.id()
+        self.pid
     }
 
     pub fn running(&mut self) -> bool {
@@ -335,18 +373,9 @@ impl Background {
         }
     }
 
-    /// Asks it to stop (SIGTERM, as `kill PID` did), and waits a few seconds for it before killing it outright.
+    /// Asks the owned leader to stop, gives it five seconds, then kills/reaps the whole group or job.
     pub fn stop(&mut self) {
-        if !self.running() {
-            return self.join();
-        }
-        terminate(self.child.id());
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while self.running() && Instant::now() < deadline {
-            sleep(0.1);
-        }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        runtime().block_on(stop_child(&mut self.child));
         self.join();
     }
 
@@ -356,7 +385,9 @@ impl Background {
         while self.readers.iter().any(|reader| !reader.is_finished()) && Instant::now() < deadline {
             sleep(0.05);
         }
-        self.readers.retain(|reader| !reader.is_finished());
+        for reader in self.readers.drain(..) {
+            reader.abort();
+        }
     }
 }
 
@@ -364,14 +395,6 @@ impl Drop for Background {
     fn drop(&mut self) {
         self.stop();
     }
-}
-
-/// SIGTERM to `pid` (`kill PID`); nothing if it is gone.
-pub fn terminate(pid: u32) {
-    #[cfg(unix)]
-    let _ = Command::new("kill").arg(pid.to_string()).stderr(Stdio::null()).status();
-    #[cfg(not(unix))]
-    let _ = Command::new("taskkill").args(["/PID", &pid.to_string()]).stderr(Stdio::null()).status();
 }
 
 /// A log's text so far ("" when there is none yet).
@@ -590,15 +613,14 @@ impl SecretDir {
         if path.exists() {
             fs::remove_dir_all(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         }
-        private_dir(&path)?;
+        Files::ensure_private_dir(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         Ok(SecretDir { path })
     }
 
     /// A new file in it holding `bytes`, created readable and writable by this user only (0600).
     pub fn file(&self, name: &str, bytes: &[u8]) -> Result<PathBuf> {
         let path = self.path.join(name);
-        let mut file = private_file(&path)?;
-        file.write_all(bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        Files::create_private(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
         Ok(path)
     }
 }
@@ -613,73 +635,11 @@ impl Drop for SecretDir {
     }
 }
 
-#[cfg(unix)]
-fn private_dir(path: &Path) -> Result<()> {
-    use std::os::unix::fs::DirBuilderExt;
-    fs::DirBuilder::new().mode(0o700).create(path).map_err(|e| format!("{}: {e}", path.display()))
-}
-
-/// A new file at `path`, only this user may read or write it (0600); it must not exist yet.
-#[cfg(unix)]
-pub fn private_file(path: &Path) -> Result<File> {
-    use std::os::unix::fs::OpenOptionsExt;
-    fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)
-        .map_err(|e| format!("{}: {e}", path.display()))
-}
-
-#[cfg(not(unix))]
-fn private_dir(_: &Path) -> Result<()> {
-    Err("secrets are only written on macOS".into())
-}
-
-#[cfg(not(unix))]
-pub fn private_file(_: &Path) -> Result<File> {
-    Err("secrets are only written on macOS".into())
-}
-
-/// While it lives, files this process and its children create are private to this user (umask 077), whatever the
-/// person's umask: Tauri's bundler writes the certificate it decodes with plain file creation.
-pub struct PrivateFiles {
-    #[cfg(unix)]
-    before: ModeT,
-}
-
-#[cfg(target_os = "macos")]
-type ModeT = u16;
-#[cfg(all(unix, not(target_os = "macos")))]
-type ModeT = u32;
-
-impl PrivateFiles {
-    pub fn start() -> PrivateFiles {
-        #[cfg(unix)]
-        {
-            extern "C" {
-                fn umask(mask: ModeT) -> ModeT;
-            }
-            // SAFETY: umask only swaps the process's file mode mask.
-            let before = unsafe { umask(0o077) };
-            PrivateFiles { before }
-        }
-        #[cfg(not(unix))]
-        PrivateFiles {}
-    }
-}
-
-impl Drop for PrivateFiles {
-    fn drop(&mut self) {
-        #[cfg(unix)]
-        {
-            extern "C" {
-                fn umask(mask: ModeT) -> ModeT;
-            }
-            // SAFETY: as in new; the mask comes from umask itself.
-            unsafe { umask(self.before) };
-        }
-    }
+/// Read an existing secret through the shared checked handle, without putting its contents in diagnostics.
+pub fn read_secret(path: &Path) -> Result<Vec<u8>> {
+    Files::read_private(path, 1024 * 1024)
+        .map_err(|e| format!("{}: {e}", path.display()))?
+        .ok_or_else(|| format!("{}: secret file is missing", path.display()))
 }
 
 /// The permission bits of `path` (`stat -f %Lp`), on Unix.
@@ -709,7 +669,7 @@ pub fn chmod(path: &Path, _: u32) -> Result<()> {
 /// `bytes` random bytes from the system, as hex (`openssl rand -hex <bytes>`).
 pub fn random_hex(bytes: usize) -> Result<String> {
     let mut buffer = vec![0u8; bytes];
-    File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut buffer)).map_err(|e| format!("/dev/urandom: {e}"))?;
+    getrandom::fill(&mut buffer).map_err(|e| e.to_string())?;
     Ok(buffer.iter().map(|b| format!("{b:02x}")).collect())
 }
 
@@ -729,6 +689,141 @@ pub fn require_ci(command: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fixture(mode: &str) -> Cmd {
+        Cmd::new(std::env::current_exe().unwrap())
+            .args(["--ignored", "--exact", "--nocapture", "util::tests::child_fixture"])
+            .env("SIDEVOICE_XTASK_FIXTURE", mode)
+    }
+
+    // Native fixtures exercise the same command interface on Linux, macOS and Windows.
+    #[test]
+    #[ignore = "child fixture"]
+    fn child_fixture() {
+        match std::env::var("SIDEVOICE_XTASK_FIXTURE").unwrap().as_str() {
+            "output" => {
+                std::io::stdout().write_all(&vec![b'o'; 128 * 1024]).unwrap();
+                std::io::stderr().write_all(&vec![b'e'; 128 * 1024]).unwrap();
+                println!("\nfixture-out");
+                eprintln!("fixture-err");
+            }
+            "input" => {
+                let text = std::io::read_to_string(std::io::stdin()).unwrap();
+                println!("input={text}");
+            }
+            "sleep" => sleep(30.0),
+            "orphan" => {
+                // Deliberately leave a descendant holding both output pipes; the outer command owns cleanup.
+                #[allow(clippy::zombie_processes)]
+                let child = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--ignored", "--exact", "--nocapture", "util::tests::child_fixture"])
+                    .env("SIDEVOICE_XTASK_FIXTURE", "sleep")
+                    .spawn()
+                    .unwrap();
+                println!("descendant={}", child.id());
+            }
+            "interrupt" => {
+                on_interrupt().unwrap();
+                // Keep the process-global interruption flag in this subprocess, isolated from sibling tests.
+                let dir = SecretDir::new(&format!("xtask-interrupt-{}", std::process::id())).unwrap();
+                dir.file("key", b"fixture-secret").unwrap();
+                println!("secret-dir={}", dir.path.display());
+                if std::env::var_os("SIDEVOICE_XTASK_WAIT_FOR_SIGNAL").is_none() {
+                    thread::spawn(|| {
+                        sleep(0.2);
+                        INTERRUPTED.store(true, Ordering::SeqCst);
+                    });
+                }
+                assert_eq!(fixture("sleep").run().unwrap_err(), "interrupted");
+                assert_eq!(fixture("output").run().unwrap_err(), "interrupted");
+                drop(dir);
+                println!("unwound");
+            }
+            _ => panic!("unknown fixture"),
+        }
+    }
+
+    #[test]
+    fn command_output_and_failure_diagnostics_keep_their_contract() {
+        let (ok, text) = fixture("output").attempt().unwrap();
+        assert!(ok);
+        assert!(text.contains(&"o".repeat(128 * 1024)) && text.contains(&"e".repeat(128 * 1024)));
+        assert!(text.find("fixture-out").unwrap() < text.find("fixture-err").unwrap());
+        let err = Cmd::new("sidevoice-xtask-missing-fixture").secret("fixture-secret").run().unwrap_err();
+        assert!(err.contains("***") && !err.contains("fixture-secret"));
+    }
+
+    #[test]
+    fn piped_input_closes_and_background_logs_keep_both_streams() {
+        let dir = tempfile::tempdir().unwrap();
+        let piped = dir.path().join("input");
+        fixture("input").pipe(b"fixture-input", File::create(&piped).unwrap()).unwrap();
+        assert!(read(&piped).contains("input=fixture-input"));
+        for timed in [false, true] {
+            let log = dir.path().join("log");
+            let mut child =
+                if timed { fixture("output").spawn_timed(&log) } else { fixture("output").spawn(&log) }.unwrap();
+            assert!(child.ended(10).unwrap().success());
+            child.stop();
+            let text = read(&log);
+            assert!(text.contains("fixture-out") && text.contains("fixture-err"));
+            if timed {
+                assert!(text.lines().all(|line| line.split_once(' ').unwrap().0.parse::<f64>().is_ok()));
+            }
+        }
+    }
+
+    fn assert_gone(pid: u32) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Processes::identity(pid).is_some() && Instant::now() < deadline {
+            sleep(0.02);
+        }
+        assert!(Processes::identity(pid).is_none(), "owned descendant stayed alive");
+    }
+
+    #[test]
+    fn an_exited_leaders_descendant_cannot_hold_capture_or_background_open() {
+        let start = Instant::now();
+        let text = fixture("orphan").output().unwrap();
+        assert!(start.elapsed() < Duration::from_secs(15));
+        let pid = text.lines().find_map(|line| line.strip_prefix("descendant=")).unwrap().parse().unwrap();
+        assert_gone(pid);
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("log");
+        let mut child = fixture("orphan").spawn(&log).unwrap();
+        assert!(child.ended(10).unwrap().success());
+        drop(child);
+        let pid = read(&log).lines().find_map(|line| line.strip_prefix("descendant=")).unwrap().parse().unwrap();
+        assert_gone(pid);
+    }
+
+    #[test]
+    fn interruption_stops_work_and_unwinds_secret_guards() {
+        let text = fixture("interrupt").output().unwrap();
+        assert!(text.contains("unwound"));
+        let path = text.lines().find_map(|line| line.strip_prefix("secret-dir=")).unwrap();
+        assert!(!Path::new(path).exists());
+    }
+
+    #[test]
+    fn secret_files_use_shared_private_reads_and_are_removed_on_drop() {
+        let parent = tempfile::tempdir().unwrap();
+        let path = parent.path().join("secrets");
+        {
+            let dir = SecretDir::new(path.to_str().unwrap()).unwrap();
+            let key = dir.file("key", b"fixture-secret").unwrap();
+            assert_eq!(read_secret(&key).unwrap(), b"fixture-secret");
+            use sidevoice_platform::fs::TestFiles;
+            Files::let_others_read(&key);
+            assert!(read_secret(&key).is_err(), "a readable-by-others key was accepted");
+            Files::shut_others_out(&key);
+            assert_eq!(read_secret(&key).unwrap(), b"fixture-secret");
+            assert!(dir.file("key", b"replacement").is_err());
+            let missing = read_secret(&dir.path.join("missing")).unwrap_err();
+            assert!(!missing.contains("fixture-secret"));
+        }
+        assert!(!path.exists());
+    }
 
     #[test]
     fn a_tauri_build_is_its_arguments_in_order() {

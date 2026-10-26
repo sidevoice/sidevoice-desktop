@@ -1,16 +1,21 @@
 //! `macos …`: the Apple-Silicon app and its .dmg, built, signed, checked and started as a release ships them
 //! (RELEASING.md, "macOS signing and notarization"). The probe build and the native flows are in probe.rs.
 
+use sidevoice_platform::fs::{Create, Files, Fs};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::platform::disk_image::{DiskImage, Host as DiskImageHost};
+use crate::platform::private_files::{PrivateCreation, PrivateFiles};
 use crate::util::{
-    contains, copy_dir, ensure, fresh_dir, in_ci, mkdir, private_file, random_hex, read, read_bytes, repo,
-    required_env, secret_path, sleep, version, wait_for, work, Channel, Cmd, PrivateFiles, SecretDir, TauriBuild,
+    contains, copy_dir, ensure, fresh_dir, in_ci, mkdir, random_hex, read, read_bytes, read_secret, repo, required_env,
+    secret_path, sleep, version, wait_for, work, Channel, Cmd, SecretDir, TauriBuild,
 };
 use crate::Result;
 
-pub const TRIPLE: &str = "aarch64-apple-darwin";
+pub fn release_target() -> &'static sidevoice_platform::target::ReleaseTarget {
+    sidevoice_platform::target::for_platform("macos", "aarch64").expect("published macOS target")
+}
 /// The app's identifier (tauri.conf.json): its directory under Application Support.
 const IDENTIFIER: &str = "dev.sidevoice.desktop";
 /// Where the stand-in node (test/fixtures/fake-node.py) listens.
@@ -18,7 +23,7 @@ pub const FAKE_NODE_PORT: &str = "8768";
 
 /// The bundle every `macos` command works on, as `tauri build --target aarch64-apple-darwin` leaves it.
 pub fn app() -> PathBuf {
-    repo().join("src-tauri/target").join(TRIPLE).join("release/bundle/macos/Sidevoice.app")
+    repo().join("src-tauri/target").join(release_target().triple).join("release/bundle/macos/Sidevoice.app")
 }
 
 /// The app's binary in [`app`].
@@ -89,25 +94,28 @@ impl AppHome {
 
 /// The notary's API key (App Store Connect) as the file `notarytool` and Tauri's bundler read: `APPLE_API_KEY_P8`
 /// (its contents) written to a file only this user may read, removed with `dir`; or, on a laptop, the file
-/// `APPLE_API_KEY_PATH` already names.
+/// `APPLE_API_KEY_PATH` names, read through a checked private handle and staged in the same private directory.
 fn notary_key(dir: &SecretDir) -> Result<PathBuf> {
     match std::env::var("APPLE_API_KEY_P8") {
         Ok(p8) if !p8.is_empty() => dir.file("AuthKey.p8", format!("{p8}\n").as_bytes()),
         _ => match std::env::var_os("APPLE_API_KEY_PATH") {
-            Some(path) if Path::new(&path).is_file() => Ok(path.into()),
+            Some(path) => {
+                let bytes = read_secret(Path::new(&path))?;
+                dir.file("AuthKey.p8", &bytes)
+            }
             _ => Err("neither APPLE_API_KEY_P8 nor APPLE_API_KEY_PATH (a file) is set (RELEASING.md)".into()),
         },
     }
 }
 
 /// `macos app [--signed] [--channel release|nightly|dev]`: the app bundle (hardened runtime,
-/// src-tauri/Entitlements.plist), built for its channel (default `dev`). Ad-hoc signed; or, with `--signed`, signed by
+/// src-tauri/packaging/macos/Entitlements.plist), built for its channel (default `dev`). Ad-hoc signed; or, with `--signed`, signed by
 /// Tauri's bundler with the Developer ID (`APPLE_SIGNING_IDENTITY`; `APPLE_CERTIFICATE` and
 /// `APPLE_CERTIFICATE_PASSWORD`, imported into a keychain of the bundler's own, or else the login keychain's),
 /// notarized with the API key (`APPLE_API_KEY`, `APPLE_API_ISSUER`, and the key file, see [`notary_key`]) and
 /// stapled. A release's (signed only) or a nightly's also makes the update artifact ([`update_artifact`]).
 pub fn build_app(signed: bool, channel: Channel) -> Result<()> {
-    let build = TauriBuild { target: Some(TRIPLE), bundles: "app", channel, ..TauriBuild::default() };
+    let build = TauriBuild { target: Some(release_target().triple), bundles: "app", channel, ..TauriBuild::default() };
     ensure(signed || channel != Channel::Release, "a release's app is signed: `macos app --signed --channel release`")?;
     if signed {
         build_signed(build)?;
@@ -379,15 +387,6 @@ pub fn first_open() -> Result<()> {
 /// Gatekeeper does not know.
 pub fn dmg(signed: bool) -> Result<()> {
     let work = work("dmg")?;
-    let venv = work.join("dmgbuild");
-    Cmd::new("python3").args(["-m", "venv"]).arg(&venv).run()?;
-    Cmd::new(venv.join("bin/pip")).args(["install", "--quiet", "dmgbuild==1.6.7"]).run()?;
-    // One TIFF with the 1x and 2x drawings: Finder picks the one for the screen.
-    let background = work.join("background.tiff");
-    Cmd::new("tiffutil")
-        .args(["-cathidpicheck", "src-tauri/dmg/background.png", "src-tauri/dmg/background@2x.png", "-out"])
-        .arg(&background)
-        .run()?;
     // No older image beside this one, to be checksummed or uploaded with it.
     let dist = repo().join("dist");
     mkdir(&dist)?;
@@ -395,15 +394,17 @@ pub fn dmg(signed: bool) -> Result<()> {
         fs::remove_file(&old).map_err(|e| format!("{}: {e}", old.display()))?;
     }
     let dmg = dmg_path()?;
-    Cmd::new(venv.join("bin/dmgbuild"))
-        .args(["-s", "scripts/dmg-settings.py"])
-        .arg("-D")
-        .arg(format!("app={}", app().display()))
-        .arg("-D")
-        .arg(format!("background={}", background.display()))
-        .args(["-D", "layout=src-tauri/dmg/layout.json", "-D", "icon=src-tauri/icons/icon.icns", "Sidevoice"])
-        .arg(&dmg)
-        .run()?;
+    DiskImageHost.assemble(
+        &work,
+        &app(),
+        [
+            Path::new("src-tauri/packaging/macos/dmg/background.png"),
+            Path::new("src-tauri/packaging/macos/dmg/background@2x.png"),
+        ],
+        Path::new("src-tauri/packaging/macos/dmg/layout.json"),
+        Path::new("src-tauri/packaging/macos/icon.icns"),
+        &dmg,
+    )?;
     Cmd::new("hdiutil").arg("verify").arg(&dmg).run()?;
     // Check the app as shipped, inside the image, not the one in the build tree.
     let mount = Mount::attach(&dmg, &work.join("mount"))?;
@@ -477,7 +478,10 @@ impl Keychain {
         Cmd::new("security").args(["set-keychain-settings", "-lut", "3600"]).arg(path).run()?;
         Cmd::new("security").args(["unlock-keychain", "-p"]).secret(password).arg(path).run()?;
         let p12 = keychain.dir.path.join("certificate.p12");
-        Cmd::new("base64").arg("--decode").pipe(certificate.as_bytes(), private_file(&p12)?)?;
+        Cmd::new("base64").arg("--decode").pipe(
+            certificate.as_bytes(),
+            Files::open_private(&p12, Create::New).map_err(|e| format!("{}: {e}", p12.display()))?,
+        )?;
         let imported = Cmd::new("security")
             .arg("import")
             .arg(&p12)

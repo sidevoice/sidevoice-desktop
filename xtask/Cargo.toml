@@ -13,11 +13,30 @@ description = "Build tooling for the desktop app: every CI step, run as `cargo x
 [dependencies]
 # tauri.conf.json's version, notarytool's answer.
 serde_json = "1"
+# RFC 7396 merge-patch, as Tauri layers its per-OS and per-channel config.
+json-patch = { version = "4", default-features = false }
 # SHA256SUMS.
 sha2 = "0.10"
 # The checks on what the app and its stand-ins log, as the YAML's grep patterns were.
 regex = "1"
 
+# Shared child lifetime, private files and release-target facts; no core application dependency.
+sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.12.4" }
+tokio = { version = "1", features = ["rt-multi-thread", "process", "io-util", "time", "macros"] }
+# Ctrl+C on every host, plus SIGTERM/SIGHUP on Unix CI runners.
+ctrlc = { version = "3.5", features = ["termination"] }
+getrandom = "0.3"
+
+[target.'cfg(unix)'.dependencies]
+# Preserve the bundler's inherited private creation mask without own FFI.
+rustix = { version = "1", features = ["process", "fs"] }
+
+[target.'cfg(windows)'.dependencies]
+# The Known Folders (RoamingAppData, LocalAppData) through SHGetKnownFolderPath.
+dirs = "7"
+
 [dev-dependencies]
+sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.12.4", features = ["test-support"] }
+tempfile = "3"
 # How tauri-plugin-updater orders versions: the tests check the nightly's against it.
 semver = "1"
