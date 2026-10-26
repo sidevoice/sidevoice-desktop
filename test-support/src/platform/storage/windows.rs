@@ -21,7 +21,11 @@ impl StorageFixture for NativeStorageFixtures {
         fs::create_dir(path).unwrap();
     }
     fn replace_directory(path: &Path, moved: &Path) -> Replacement {
-        assert_eq!(fs::rename(path, moved).unwrap_err().kind(), std::io::ErrorKind::PermissionDenied);
+        // The held handle does not share DELETE, so the rename's open of the directory is a sharing violation, which
+        // std has no `ErrorKind` for.
+        const ERROR_SHARING_VIOLATION: i32 = 32;
+        let error = fs::rename(path, moved).expect_err("renamed a held directory");
+        assert_eq!(error.raw_os_error(), Some(ERROR_SHARING_VIOLATION), "{error}");
         Replacement::Prevented
     }
     fn with_search_only_ancestor(_path: &Path, mut check: impl FnMut()) {
