@@ -11,7 +11,7 @@ use tauri::{AppHandle, Webview};
 pub async fn microphone(app: AppHandle, webview: Webview, action: String) -> Result<Value, Value> {
     crate::room_page(&app, &webview).map_err(|why| refusal("bad_request", why))?;
     let state = match action.as_str() {
-        "state" => native::state(),
+        "state" => native::state().await,
         "request" => native::request().await,
         "open-settings" => {
             return native::open_settings(&app)

@@ -2,7 +2,8 @@
 //! AppCapability is documented for packaged apps; Sidevoice ships an unpackaged NSIS executable, which has no consent
 //! prompt: `ask` is `permission`.
 use super::{AccessState, Os};
-use std::io::ErrorKind;
+use std::{io::ErrorKind, ptr};
+use windows_sys::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
 use winreg::{
     enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE},
     RegKey, HKEY,
@@ -21,6 +22,38 @@ impl Os for Native {
             setting(HKEY_LOCAL_MACHINE, MICROPHONE),
             setting(HKEY_CURRENT_USER, &format!(r"{MICROPHONE}\NonPackaged")),
         ]))
+    }
+
+    /// The device worker joins the multithreaded apartment before cpal's first call. cpal would otherwise make it a
+    /// single-threaded apartment, which must pump window messages; the worker parks on a channel and never would.
+    /// cpal accepts the thread already being in the multithreaded apartment.
+    fn on_worker_thread(work: impl FnOnce()) {
+        let _apartment = Apartment::enter();
+        work()
+    }
+}
+
+/// This thread's membership of COM's multithreaded apartment, left on drop when entering it succeeded.
+struct Apartment {
+    entered: bool,
+}
+
+impl Apartment {
+    fn enter() -> Self {
+        // SAFETY: the reserved argument must be null; the call only affects this thread. S_OK and S_FALSE (already
+        // initialised the same way) both count once and are balanced on drop. A failure (RPC_E_CHANGED_MODE when the
+        // thread is already in another apartment) leaves nothing to balance, and cpal then uses COM as it finds it.
+        let entered = unsafe { CoInitializeEx(ptr::null(), COINIT_MULTITHREADED as u32) } >= 0;
+        Apartment { entered }
+    }
+}
+
+impl Drop for Apartment {
+    fn drop(&mut self) {
+        if self.entered {
+            // SAFETY: balances this thread's successful CoInitializeEx, on the same thread.
+            unsafe { CoUninitialize() }
+        }
     }
 }
 

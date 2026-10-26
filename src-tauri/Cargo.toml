@@ -63,8 +63,9 @@ sidevoice-local-host = { path = "local-host", features = ["fetch"] }
 # The taskbar's colour, to draw the tray mark in the brand's look for it (src/tray.rs).
 winreg = "0.55"
 # Whether a mouse button went down elsewhere, to close the call controls card's panels, and whether the room is on another
-# virtual desktop (DWM cloaked), for the card (src/call_controls.rs).
-windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_Storage_FileSystem", "Win32_Graphics_Dwm", "Win32_UI_Controls", "Win32_UI_WindowsAndMessaging"] }
+# virtual desktop (DWM cloaked), for the card (src/call_controls.rs); the microphone device worker's COM apartment
+# (src/platform/microphone/windows.rs).
+windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_Storage_FileSystem", "Win32_Graphics_Dwm", "Win32_UI_Controls", "Win32_UI_WindowsAndMessaging", "Win32_System_Com"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # The voice call the app runs itself (src/voice.rs, `host.voice`): sidevoice-voice with its native microphone and

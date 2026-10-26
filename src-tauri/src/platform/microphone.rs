@@ -3,11 +3,13 @@
 use cpal::traits::HostTrait;
 use std::{
     future::Future,
-    sync::{mpsc, OnceLock},
+    sync::{mpsc, Arc, Mutex, OnceLock},
     thread,
+    time::{Duration, Instant},
 };
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_opener::OpenerExt;
+use tokio::sync::watch;
 
 #[cfg(target_os = "macos")]
 #[path = "microphone/macos.rs"]
@@ -49,37 +51,117 @@ impl From<bool> for Devices {
     }
 }
 
+/// How long a caller waits for the device list before answering `Devices::Unknown`.
+const DEADLINE: Duration = Duration::from_secs(2);
+
+/// A host open that fails after this long timed out rather than being refused, and may have left its connection
+/// attempt stuck inside the audio library (cpal's PulseAudio handshake gives up after two seconds and abandons its
+/// thread).
+const STALLED_OPEN: Duration = Duration::from_secs(1);
+
 /// Whether an audio input device exists, as seen by this OS's audio host (`Os::audio_host`). Enumeration opens no
 /// stream and so never triggers a privacy prompt or a capture indicator.
-///
-/// It always runs on one dedicated long-lived thread, started on first use and parked on its channel in between:
-/// WASAPI's enumerator needs COM initialised on the calling thread, and cpal initialises it only on the thread that
-/// first enumerates, so every later enumeration must come from that same thread. The caller waits for the answer.
-fn input_devices() -> Devices {
-    static WORKER: OnceLock<Option<mpsc::Sender<mpsc::Sender<Devices>>>> = OnceLock::new();
-    let worker = WORKER.get_or_init(|| {
-        let (jobs_tx, jobs) = mpsc::channel::<mpsc::Sender<Devices>>();
-        thread::Builder::new()
-            .name("microphone-devices".into())
-            .spawn(move || {
-                for reply in jobs {
-                    let _ = reply.send(scan::<imp::Native>());
-                }
-            })
-            .ok()
-            .map(|_| jobs_tx)
+async fn input_devices() -> Devices {
+    static DEVICES: OnceLock<Option<Enumerator>> = OnceLock::new();
+    let enumerator = DEVICES.get_or_init(|| {
+        Enumerator::start(|jobs| imp::Native::on_worker_thread(|| jobs.serve(scanner::<imp::Native>())))
     });
-    let Some(worker) = worker else { return Devices::Unknown };
-    let (reply, answer) = mpsc::channel();
-    worker.send(reply).ok().and_then(|()| answer.recv().ok()).unwrap_or(Devices::Unknown)
+    match enumerator {
+        Some(enumerator) => enumerator.devices(DEADLINE).await,
+        None => Devices::Unknown,
+    }
 }
 
-fn scan<O: Os>() -> Devices {
-    // A host that cannot be opened or a listing that fails says nothing about the hardware.
-    let Some(host) = O::audio_host() else { return Devices::Unknown };
-    match host.input_devices() {
-        Ok(mut devices) => devices.any(|device| O::is_capture_source(&device)).into(),
-        Err(_) => Devices::Unknown,
+/// The enumeration the worker runs. The audio host is opened once and kept, and each request lists its devices afresh
+/// (the connection is reused, the inventory is never cached). It is opened again only after it failed, one attempt at a
+/// time since there is one worker. A host open that stalled is never retried: its stuck attempt cannot be cancelled,
+/// and retrying would strand one more thread and socket on every poll, so the answer stays `Unknown` until the app
+/// restarts.
+fn scanner<O: Os>() -> impl FnMut() -> Devices {
+    let mut host = None;
+    let mut stalled = false;
+    move || {
+        if host.is_none() && !stalled {
+            let opening = Instant::now();
+            host = O::audio_host();
+            stalled = host.is_none() && opening.elapsed() >= STALLED_OPEN;
+        }
+        // A host that cannot be opened or a listing that fails says nothing about the hardware.
+        let Some(open) = &host else { return Devices::Unknown };
+        match open.input_devices() {
+            Ok(mut devices) => devices.any(|device| O::is_capture_source(&device)).into(),
+            Err(_) => {
+                host = None;
+                Devices::Unknown
+            }
+        }
+    }
+}
+
+/// One long-lived thread that owns the audio host and runs one enumeration at a time (on Windows, COM's apartment
+/// belongs to the thread, so every call into the host must come from the same one).
+///
+/// Callers never queue and never wait past their deadline: a caller that arrives while an enumeration runs waits for
+/// that one's answer rather than asking for another. No replacement thread or connection is ever started. The residual
+/// limit: an enumeration that never returns (a sound server that accepted the connection and stopped answering; cpal
+/// cannot cancel a blocked listing) strands this one thread for the life of the app, and every caller from then on
+/// answers `Unknown` after its deadline.
+struct Enumerator {
+    /// Whether an enumeration has been asked for and not yet answered. Guards the hand-off with the worker.
+    running: Arc<Mutex<bool>>,
+    jobs: mpsc::Sender<()>,
+    answers: watch::Receiver<Devices>,
+}
+
+/// The worker's end of an `Enumerator`.
+struct Jobs {
+    running: Arc<Mutex<bool>>,
+    jobs: mpsc::Receiver<()>,
+    answers: watch::Sender<Devices>,
+}
+
+impl Jobs {
+    /// Answer each request with a fresh `enumerate`, for as long as the `Enumerator` lives.
+    fn serve(self, mut enumerate: impl FnMut() -> Devices) {
+        for () in self.jobs {
+            let devices = enumerate();
+            let mut running = self.running.lock().unwrap();
+            *running = false;
+            self.answers.send_replace(devices);
+        }
+    }
+}
+
+impl Enumerator {
+    /// Start the worker thread, which runs `worker` with its end. `None` when no thread can be started.
+    fn start(worker: impl FnOnce(Jobs) + Send + 'static) -> Option<Self> {
+        let running = Arc::new(Mutex::new(false));
+        let (jobs_tx, jobs) = mpsc::channel();
+        let (answers_tx, answers) = watch::channel(Devices::Unknown);
+        let end = Jobs { running: running.clone(), jobs, answers: answers_tx };
+        thread::Builder::new().name("microphone-devices".into()).spawn(move || worker(end)).ok()?;
+        Some(Enumerator { running, jobs: jobs_tx, answers })
+    }
+
+    /// The running enumeration's answer, or a new one's when none runs; `Unknown` past `deadline` or when the worker
+    /// is gone. The wait is async and holds no runtime thread.
+    async fn devices(&self, deadline: Duration) -> Devices {
+        let mut answer = {
+            let mut running = self.running.lock().unwrap();
+            let mut answer = self.answers.clone();
+            answer.mark_unchanged();
+            if !*running {
+                if self.jobs.send(()).is_err() {
+                    return Devices::Unknown;
+                }
+                *running = true;
+            }
+            answer
+        };
+        match tokio::time::timeout(deadline, answer.changed()).await {
+            Ok(Ok(())) => *answer.borrow(),
+            _ => Devices::Unknown,
+        }
     }
 }
 
@@ -109,6 +191,12 @@ trait Os {
         Some(cpal::default_host())
     }
 
+    /// Run `work`, the device worker thread's whole life, after preparing that thread for the audio host's first call
+    /// as this OS needs. Nothing to prepare by default.
+    fn on_worker_thread(work: impl FnOnce()) {
+        work()
+    }
+
     /// Whether an input device the host lists is a real capture source rather than, say, the monitor of an output.
     fn is_capture_source(_device: &cpal::Device) -> bool {
         true
@@ -132,13 +220,13 @@ async fn request_of<O: Os>(devices: Devices) -> Result<AccessState, &'static str
 
 /// Inspect without prompting. Re-reads the OS every time. Denial takes precedence over a missing device, and an OS
 /// that cannot be read is `Unavailable`, never a grant.
-pub fn state() -> Result<AccessState, &'static str> {
-    state_of::<imp::Native>(input_devices())
+pub async fn state() -> Result<AccessState, &'static str> {
+    state_of::<imp::Native>(input_devices().await)
 }
 
 /// Ask for access (see `Os::ask`), then apply the same rule as `state`.
 pub async fn request() -> Result<AccessState, &'static str> {
-    request_of::<imp::Native>(input_devices()).await
+    request_of::<imp::Native>(input_devices().await).await
 }
 
 /// Whether this OS has a fixed microphone privacy page to open.
@@ -156,6 +244,7 @@ pub fn open_settings<R: Runtime>(app: &AppHandle<R>) -> Result<(), tauri_plugin_
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 
     #[test]
     fn denial_beats_a_missing_device_and_a_missing_device_beats_the_rest() {
@@ -220,18 +309,67 @@ mod tests {
         assert!(Refused::SETTINGS_URL.is_some());
     }
 
-    #[test]
-    fn enumeration_from_any_thread_goes_through_the_one_worker() {
-        let answers: Vec<_> = (0..4).map(|_| thread::spawn(input_devices)).collect();
-        let answers: Vec<_> = answers.into_iter().map(|answer| answer.join().unwrap()).collect();
-        assert!(answers.iter().all(|answer| *answer == input_devices()));
+    /// An enumerator whose fake enumeration answers `Present` only when the test releases it, counting its runs.
+    fn held() -> (Enumerator, Arc<AtomicUsize>, mpsc::Sender<()>) {
+        let runs = Arc::new(AtomicUsize::new(0));
+        let (release, released) = mpsc::channel::<()>();
+        let counted = runs.clone();
+        let enumerator = Enumerator::start(move |jobs| {
+            jobs.serve(|| {
+                counted.fetch_add(1, SeqCst);
+                released.recv().map_or(Devices::Unknown, |()| Devices::Present)
+            })
+        })
+        .unwrap();
+        (enumerator, runs, release)
+    }
+
+    const LONG: Duration = Duration::from_secs(30);
+    const SHORT: Duration = Duration::from_millis(50);
+
+    #[tokio::test]
+    async fn callers_during_an_enumeration_share_its_answer() {
+        let (enumerator, runs, release) = held();
+        let release = async {
+            while runs.load(SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+            release.send(()).unwrap();
+        };
+        let answers = tokio::join!(enumerator.devices(LONG), enumerator.devices(LONG), release);
+        assert_eq!(answers, (Devices::Present, Devices::Present, ()));
+        assert_eq!(runs.load(SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_stuck_enumeration_answers_unknown_and_queues_nothing_behind_it() {
+        let (enumerator, runs, release) = held();
+        for _ in 0..5 {
+            assert_eq!(enumerator.devices(SHORT).await, Devices::Unknown);
+        }
+        assert_eq!(runs.load(SeqCst), 1);
+        // Once it returns, the next caller gets a fresh enumeration.
+        release.send(()).unwrap();
+        while *enumerator.running.lock().unwrap() {
+            tokio::task::yield_now().await;
+        }
+        release.send(()).unwrap();
+        assert_eq!(enumerator.devices(LONG).await, Devices::Present);
+        assert_eq!(runs.load(SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn a_dead_worker_answers_unknown_at_once() {
+        let enumerator = Enumerator::start(|jobs| jobs.serve(|| panic!("enumeration failed"))).unwrap();
+        assert_eq!(enumerator.devices(LONG).await, Devices::Unknown);
+        assert_eq!(enumerator.devices(LONG).await, Devices::Unknown);
     }
 
     #[cfg(not(target_os = "macos"))]
     #[tokio::test]
     async fn state_and_request_answer_without_a_prompt_whatever_the_machine_has() {
         // CI machines have no audio hardware: any answer is fine, a failure or a hang is not.
-        let answer = state().unwrap();
+        let answer = state().await.unwrap();
         assert_eq!(request().await.unwrap(), answer);
         assert_ne!(answer, AccessState::NotDetermined, "only macOS has a prompt to wait for");
     }
