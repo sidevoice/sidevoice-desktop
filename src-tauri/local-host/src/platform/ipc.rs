@@ -27,6 +27,12 @@ trait Os {
     /// A user as this OS names one: compared with this process's, shown in a refusal.
     type User: PartialEq + fmt::Display;
 
+    /// Connects to the endpoint recorded as `endpoint`, waiting at most `wait` for a free instance where a listener
+    /// can have none (a busy pipe). As `interprocess` does: a socket's connect never waits for one.
+    fn connect(endpoint: &str, _wait: Duration) -> io::Result<Local> {
+        Local::connect(endpoint.to_fs_name::<GenericFilePath>()?)
+    }
+
     /// The user this process runs as: the trust boundary.
     fn this_user() -> io::Result<Self::User> {
         Err(unsupported())
@@ -97,11 +103,19 @@ pub struct Stream {
     shared: Arc<<Native as Os>::Shared>,
 }
 
+/// How long connecting waits for a listener that has no free instance (Windows: every instance of the pipe taken,
+/// by anyone who could create or open it) before giving up: the peer is only checked once connected.
+const CONNECT_WAIT: Duration = Duration::from_secs(2);
+
 /// Connects to `endpoint`. Nothing about the peer is checked yet: that is [`Stream::peer`]. Nobody listening is
-/// [`io::ErrorKind::NotFound`] or [`io::ErrorKind::ConnectionRefused`].
+/// [`io::ErrorKind::NotFound`] or [`io::ErrorKind::ConnectionRefused`]; a listener with no free instance for
+/// [`CONNECT_WAIT`], an error too.
 pub fn connect(endpoint: &Endpoint) -> io::Result<Stream> {
-    let name = endpoint.to_string().to_fs_name::<GenericFilePath>()?;
-    Local::connect(name).map(|local| Stream { local, shared: Arc::default() })
+    connect_within(endpoint, CONNECT_WAIT)
+}
+
+fn connect_within(endpoint: &Endpoint, wait: Duration) -> io::Result<Stream> {
+    Native::connect(&endpoint.to_string(), wait).map(|local| Stream { local, shared: Arc::default() })
 }
 
 impl Stream {
@@ -252,6 +266,46 @@ mod tests {
         stream.shutdown().unwrap();
         assert_eq!(blocked.join().unwrap().unwrap(), 0, "ended");
         assert!((&stream).write_all(b"x").is_err(), "nothing is written after the end");
+        drop(hold);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn a_listener_with_no_free_instance_is_given_up_on_within_the_wait() {
+        let tmp = tempfile::tempdir().unwrap();
+        let endpoint = scratch_endpoint(tmp.path(), "t");
+        // Never accepts: a pipe's one instance is taken by the first client, a socket's backlog keeps the rest.
+        let _listener = listen(&endpoint).unwrap();
+        let wait = Duration::from_millis(300);
+        let mut held = Vec::new();
+        for _ in 0..3 {
+            let started = std::time::Instant::now();
+            if let Ok(stream) = connect_within(&endpoint, wait) {
+                held.push(stream);
+            }
+            assert!(started.elapsed() < wait + Duration::from_secs(3), "bounded: {:?}", started.elapsed());
+        }
+    }
+
+    #[test]
+    fn ending_a_connection_stops_a_blocked_write_and_a_read_on_other_threads() {
+        let (_tmp, stream, hold, server) = silent();
+        let mut reader = stream.try_clone().unwrap();
+        let reading = std::thread::spawn(move || reader.read(&mut [0u8; 8]));
+        let mut writer = stream.try_clone().unwrap();
+        // Nobody reads the other end: the writes fill the buffers and then block.
+        let writing = std::thread::spawn(move || {
+            let chunk = vec![0u8; 64 * 1024];
+            loop {
+                if let Err(e) = writer.write(&chunk) {
+                    return e;
+                }
+            }
+        });
+        std::thread::sleep(Duration::from_millis(300));
+        stream.shutdown().unwrap();
+        assert_eq!(reading.join().unwrap().unwrap(), 0, "the read ended");
+        writing.join().unwrap();
         drop(hold);
         server.join().unwrap();
     }

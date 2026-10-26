@@ -1,23 +1,32 @@
 //! Windows: a named pipe, through `interprocess`.
 //!
+//! Connecting waits a bounded time for a free instance (`ConnectWaitMode::Timeout`, through `interprocess`'s named
+//! pipe API: its `local_socket` connect waits forever). Whoever holds every instance of a name, any user who could
+//! create the pipe first, can otherwise keep the app waiting before the peer is ever checked.
+//!
 //! Who is at the other end: the pipe's server process (`GetNamedPipeServerProcessId`, through `interprocess`), named
 //! by the user SID in its token, read through `sysinfo` like this process's own: the check `sidevoice_platform::ipc`
 //! makes on its own pipes. A process whose token cannot be read is not a user anybody is compared with: an error, so
-//! the peer is not trusted.
+//! the peer is not trusted. The pid and the token are two observations, not one atomic one.
 //!
 //! `interprocess`'s named pipes have no timeouts, and a pipe has no half-close; what a connection's clones share keeps
 //! both. A read or write with a deadline runs while a watchdog thread waits for it; past the deadline the watchdog
 //! cancels the pipe's I/O (`CancelIoEx`: `interprocess` does its I/O overlapped, so another thread can cancel it) until
-//! the operation returns, which then fails as `TimedOut`. Ending a connection marks it ended and cancels whatever is
-//! under way on it, the same way, until nothing is; from then on its reads give 0 and its writes fail. The server sees
-//! it closed once every handle on it is dropped.
+//! the operation returns, which then fails as `TimedOut`. The cancellation reaches every read and write under way on
+//! the connection, through any clone, not only the late one. A write that fails (late, cancelled, or otherwise) may
+//! have reached the peer in part, so it ends the connection. Ending a connection marks it ended and cancels whatever
+//! is under way on it, the same way, until nothing is; from then on its reads give 0 and its writes fail. The server
+//! sees it closed once every handle on it is dropped.
 
 use super::Os;
 use interprocess::local_socket::traits::StreamCommon as _;
 use interprocess::local_socket::Stream as Local;
+use interprocess::os::windows::named_pipe::local_socket::Stream as LocalPipe;
+use interprocess::os::windows::named_pipe::{pipe_mode::Bytes, DuplexPipeStream};
+use interprocess::ConnectWaitMode;
 use std::fmt;
 use std::io::{self, Read, Write};
-use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle};
+use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, OwnedHandle};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Mutex, PoisonError};
@@ -81,10 +90,25 @@ impl Os for Native {
         Ok(bounded(stream, shared, get(&shared.read), || reader.read(buf))?.unwrap_or(0))
     }
 
+    /// A write that fails may have sent part of its bytes: nothing tells where the peer's reading stands, so the
+    /// connection is ended.
     fn write(stream: &Local, shared: &Shared, buf: &[u8]) -> io::Result<usize> {
         let mut writer = stream;
-        bounded(stream, shared, get(&shared.write), || writer.write(buf))?
-            .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "the connection was ended"))
+        match bounded(stream, shared, get(&shared.write), || writer.write(buf)) {
+            Ok(Some(written)) => Ok(written),
+            Ok(None) => Err(io::Error::new(io::ErrorKind::BrokenPipe, "the connection was ended")),
+            Err(e) => {
+                let _ = Self::shutdown(stream, shared);
+                Err(e)
+            }
+        }
+    }
+
+    fn connect(endpoint: &str, wait: Duration) -> io::Result<Local> {
+        let pipe = DuplexPipeStream::<Bytes>::connect_by_path_with_wait_mode(endpoint, ConnectWaitMode::Timeout(wait))?;
+        // A stream fresh from `connect` is not split: it always gives its handle up.
+        let handle = OwnedHandle::try_from(pipe).map_err(|_| io::Error::other("the pipe could not be taken over"))?;
+        Ok(Local::NamedPipe(LocalPipe::try_from(handle).map_err(io::Error::from)?))
     }
 
     fn shutdown(stream: &Local, shared: &Shared) -> io::Result<()> {
