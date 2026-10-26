@@ -2,4 +2,6 @@
 
 pub mod disk_image;
 
+pub mod lifecycle;
+
 pub mod private_files;
