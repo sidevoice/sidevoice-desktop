@@ -3,6 +3,7 @@ use serde_json::json;
 use sidevoice_desktop_test_support::fixture;
 use sidevoice_desktop_test_support::platform::storage::{StorageFixture, StorageFixtures};
 use sidevoice_local_host::{cli::Cli, paths::DataDirs, Refusal};
+use sidevoice_platform::process::{Process, Processes};
 use std::{
     thread,
     time::{Duration, Instant},
@@ -53,14 +54,11 @@ fn no_json_a_crash_or_a_hang_are_failures() {
 }
 
 /// Whether `pid` is still running (a zombie waiting for its reaper is not).
-fn alive(pid: i32) -> bool {
-    // SAFETY: signal 0 only asks whether the process exists.
-    let exists = unsafe { libc::kill(pid, 0) } == 0;
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
-    exists && !stat.rsplit_once(')').is_some_and(|(_, rest)| rest.trim_start().starts_with('Z'))
+fn alive(pid: u32) -> bool {
+    Processes::identity(pid).is_some()
 }
 
-fn dead_soon(pid: i32) -> bool {
+fn dead_soon(pid: u32) -> bool {
     (0..100).any(|_| {
         !alive(pid) || {
             thread::sleep(Duration::from_millis(20));
@@ -69,7 +67,7 @@ fn dead_soon(pid: i32) -> bool {
     })
 }
 
-fn pid_in(path: &std::path::Path) -> i32 {
+fn pid_in(path: &std::path::Path) -> u32 {
     std::fs::read_to_string(path).unwrap().trim().parse().unwrap()
 }
 
@@ -99,13 +97,14 @@ fn a_timeout_kills_the_whole_run() {
 fn what_the_program_detaches_into_its_own_session_stays() {
     let tmp = tempfile::tempdir().unwrap();
     let pid = tmp.path().join("pid");
-    let cli = fake(tmp.path(), json!({"detached":true,"pid":pid}));
+    let stop = tmp.path().join("stop");
+    let cli = fake(tmp.path(), json!({"detached":true,"pid":pid,"stop":stop}));
     assert_eq!(cli.run(&["service", "start", "--json"], Duration::from_secs(10)).unwrap()["ok"], true);
     let pid = pid_in(&pid);
     thread::sleep(Duration::from_millis(200));
     assert!(alive(pid), "a service the program started on its own stays");
-    // SAFETY: the test's own process.
-    unsafe { libc::kill(pid, libc::SIGKILL) };
+    std::fs::write(&stop, b"").unwrap();
+    assert!(dead_soon(pid), "the sleeper ends when told to");
 }
 
 #[test]

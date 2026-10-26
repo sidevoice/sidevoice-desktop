@@ -56,8 +56,4 @@ impl StorageFixture for NativeStorageFixtures {
     fn system_program() -> PathBuf {
         PathBuf::from("/bin/sh")
     }
-    fn protect_shared_ancestor(path: &Path) -> bool {
-        mode(path, 0o1777);
-        true
-    }
 }

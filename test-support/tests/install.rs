@@ -2,11 +2,11 @@
 use serde_json::json;
 use sidevoice_desktop_test_support::fake_registry::FakeRegistry;
 use sidevoice_desktop_test_support::fixture;
+use sidevoice_desktop_test_support::platform::storage::{StorageFixture, StorageFixtures};
+use sidevoice_desktop_test_support::platform::temp;
 use sidevoice_local_host::install::*;
-use std::os::unix::process::ExitStatusExt;
-use std::process::ExitStatus;
+use sidevoice_platform::fs::{Files, TestFiles};
 use std::{
-    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
@@ -21,8 +21,8 @@ struct World {
 
 impl World {
     fn new() -> World {
-        let tmp = tempfile::Builder::new().prefix("svin").tempdir_in("/tmp").unwrap();
-        std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let tmp = tempfile::Builder::new().prefix("svin").tempdir_in(temp::short_root()).unwrap();
+        Files::shut_others_out(tmp.path());
         let data = tmp.path().join("d");
         let temp = tmp.path().join("t");
         std::fs::create_dir(&temp).unwrap();
@@ -187,22 +187,25 @@ fn download_bounds_hold() {
 fn the_private_directory_is_private_and_below_a_safe_root_only() {
     let world = World::new();
     let scratch = Scratch::create(&world.temp).unwrap();
-    let meta = std::fs::metadata(scratch.path()).unwrap();
-    assert_eq!(meta.permissions().mode() & 0o777, 0o700);
+    StorageFixtures::assert_private(scratch.path());
     let path = scratch.path().to_path_buf();
     drop(scratch);
     assert!(!path.exists());
-    std::fs::set_permissions(&world.temp, std::fs::Permissions::from_mode(0o777)).unwrap();
+    Files::let_others_change(&world.temp);
     let failure = Scratch::create(&world.temp.join(".")).unwrap_err();
     assert_eq!(failure.key, "install.unsafe", "a temporary directory others can write in, not sticky");
-    std::fs::set_permissions(&world.temp, std::fs::Permissions::from_mode(0o1777)).unwrap();
-    assert!(Scratch::create(&world.temp).is_ok(), "sticky, as /tmp");
+    if temp::share_sticky(&world.temp) {
+        assert!(Scratch::create(&world.temp).is_ok(), "sticky, as /tmp");
+    }
     assert_eq!(Scratch::create(Path::new("relative")).unwrap_err().key, "install.unsafe");
 }
 
 #[test]
 fn installer_keys_map_to_the_pages() {
-    let failed = ExitStatus::from_raw(1 << 8);
+    let world = World::new();
+    let program = world.tmp.path().join(fixture::program_name());
+    fixture::install(Path::new(env!("CARGO_BIN_EXE_fake-connector")), &program, &json!({"exit": 1})).unwrap();
+    let failed = std::process::Command::new(&program).status().unwrap();
     let answer = |key: &str| json!({"ok": false, "error": {"key": key, "params": {"detail": "d"}, "message": "m"}});
     for (theirs, ours, step) in [
         ("install.rolled-back", "install.rollback", Step::ServiceStart),
