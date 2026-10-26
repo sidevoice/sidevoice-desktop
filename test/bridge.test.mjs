@@ -55,10 +55,13 @@ test("does nothing on any other origin (auth pages, other sites)", () => {
   assert.equal(calls.length, 0);
 });
 
-test("the macOS data bridge uses fixed native commands and no page-supplied paths", async () => {
+// The factory's arguments up to the microphone settings, then the reset and the uninstall offers.
+const resetArgs = (reset, uninstall) => [null, false, false, false, undefined, undefined, undefined, false, reset, uninstall];
+
+test("the data bridge uses fixed native commands and no page-supplied paths", async () => {
   const install = loadFactory();
   const { win, calls } = fakeWindow(ORIGIN);
-  const api = install(win, ORIGIN, null, true);
+  const api = install(win, ORIGIN, ...resetArgs(true, true));
   assert.equal(typeof api.host.data.deleteAll, "function");
   assert.equal(typeof api.host.data.resetReport, "function");
   assert.equal(typeof api.host.data.uninstall, "function");
@@ -81,6 +84,23 @@ test("the macOS data bridge uses fixed native commands and no page-supplied path
   assert.equal(otherData.deleteAll, undefined);
   assert.equal(otherData.resetReport, undefined);
   assert.equal(otherData.uninstall, undefined);
+});
+
+test("the reset is offered on its own, the uninstall only with it, and neither follows the local host", () => {
+  const install = loadFactory();
+  // Windows and Linux: the reset, without the app's own removal.
+  const reset = install(fakeWindow(ORIGIN).win, ORIGIN, ...resetArgs(true, false)).host.data;
+  assert.equal(typeof reset.deleteAll, "function");
+  assert.equal(typeof reset.resetReport, "function");
+  assert.equal(reset.uninstall, undefined);
+  // No uninstall without the reset it starts with.
+  const lone = install(fakeWindow(ORIGIN).win, ORIGIN, ...resetArgs(false, true)).host.data;
+  assert.equal(lone.deleteAll, undefined);
+  assert.equal(lone.uninstall, undefined);
+  // The local host alone offers no reset.
+  const localOnly = install(fakeWindow(ORIGIN).win, ORIGIN, null, true).host.data;
+  assert.equal(localOnly.deleteAll, undefined);
+  assert.equal(localOnly.uninstall, undefined);
 });
 
 test("reports not-ready first, then the real state once the room's controller exists", async () => {
