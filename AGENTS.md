@@ -39,7 +39,9 @@ Operator rule (2026-10-25). Applies to product code, tests, xtask and build scri
   once there. Per-OS differences live in a **private trait** implemented in `platform/<concern>/{macos,windows,linux}.rs`,
   with **one named method or const per real difference** and honest defaults (`None`, no-op, `false`,
   `Unsupported`). OS files override only what they actually do; an empty impl is fine. The concern file selects the
-  OS file with `cfg_attr(target_os = ..., path = ...)`, the only `cfg` allowed in common files.
+  OS file with `cfg_attr(target_os = ..., path = ...)`, the only `cfg` allowed in common files. One exception: a
+  value-only difference (no behaviour) may use `cfg!` in a plain module with no trait and no OS files, e.g. `data_dir`
+  or `RESET_AVAILABLE`.
 - **Platforms return observations/capabilities; decisions live in common code** (fallbacks, cascades, thresholds).
   No `fallback` fields, no closures or pieces passed by each OS into a common helper. An OS that cannot do
   something keeps the honest default; callers never ask which OS they run on (no caller OS gates).
@@ -54,4 +56,6 @@ Operator rule (2026-10-25). Applies to product code, tests, xtask and build scri
 - **Enforced in CI** by its own `platform-boundary` check (next to Clippy's `disallowed-*`): any OS-specific code
   outside `platform` fails it. It stays red until the existing debt is fixed; there is no allowlist.
 
-Reference: sidevoice-connector `connector/src/platform/user.rs` and `user/{unix,windows}.rs`.
+Reference in this repo: `platform/microphone.rs`, `platform/desktop_geometry.rs` and `platform/confirmation.rs`, each public
+plain functions over a private per-OS trait. (sidevoice-connector and core keep their separately approved public-trait
+shape; do not copy it here.)
