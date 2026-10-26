@@ -695,7 +695,7 @@ interface MicrophonePermission {
 - `onChange(listener)`: `listener()` whenever `state()` changes, so on a permission change and on a microphone
   plugged in or out; the page reads `state()` again. Polled every 2 s while anyone listens; returns `stop`.
 - `request()`: `AVCaptureDevice.requestAccess(for: .audio)`: macOS's own prompt the first time (with
-  `NSMicrophoneUsageDescription`, `src-tauri/Info.plist`); afterwards it answers at once with the stored answer, no
+  `NSMicrophoneUsageDescription`, `src-tauri/packaging/macos/Info.plist`); afterwards it answers at once with the stored answer, no
   prompt.
 - `openSettings()`: opens System Settings at Privacy & Security › Microphone
   (`x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone`, through `tauri-plugin-opener`), where a

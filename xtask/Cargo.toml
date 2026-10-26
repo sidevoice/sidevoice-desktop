@@ -13,6 +13,8 @@ description = "Build tooling for the desktop app: every CI step, run as `cargo x
 [dependencies]
 # tauri.conf.json's version, notarytool's answer.
 serde_json = "1"
+# RFC 7396 merge-patch, as Tauri layers its per-OS and per-channel config.
+json-patch = { version = "4", default-features = false }
 # SHA256SUMS.
 sha2 = "0.10"
 # The checks on what the app and its stand-ins log, as the YAML's grep patterns were.
