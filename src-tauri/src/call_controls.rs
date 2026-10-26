@@ -11,6 +11,7 @@
 //!
 //! When it shows, where it sits and how it moves are `sidevoice_desktop_core::call_controls`.
 
+use crate::platform::card_window::{CardSpec, CardWindow, NativeCardWindow};
 use crate::{debug, AppState};
 use serde::Deserialize;
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
@@ -21,9 +22,7 @@ use sidevoice_desktop_core::settings::{self, APP_ORIGIN};
 use std::path::PathBuf;
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
-use tauri::utils::config::BackgroundThrottlingPolicy;
-use tauri::webview::{PermissionKind, PermissionResponse};
-use tauri::{AppHandle, LogicalSize, Manager, Monitor, Webview, WebviewUrl, WebviewWindow};
+use tauri::{AppHandle, LogicalSize, Manager, Monitor, Webview, WebviewWindow};
 
 pub const LABEL: &str = "call-controls";
 const PAGE: &str = "voice/call-controls.html";
@@ -32,7 +31,7 @@ const PAGE: &str = "voice/call-controls.html";
 const FIRST_SIZE: Size = Size { width: 414.0, height: 82.0 };
 /// How often the app looks at the pointer while the card shows: a window that never takes focus may get no hover
 /// events of its own (Windows, Linux X11), so the app tells the card when the pointer is over it. On macOS the card's
-/// WebKit gets them too ([`hover_while_inactive`]).
+/// WebKit gets them too (the native card window tracking area).
 const POINTER_EVERY: Duration = Duration::from_millis(80);
 /// How often the app looks at whether the room's stage is in view ([`watch_view`]).
 const VIEW_EVERY: Duration = Duration::from_millis(500);
@@ -46,20 +45,6 @@ const PREVIEW_AFTER_USE: Duration = Duration::from_millis(2000);
 const PREVIEW_EVERY: Duration = Duration::from_millis(200);
 /// The largest window the page may ask for, in logical pixels.
 const MAX_SIDE: f64 = 8000.0;
-
-#[cfg(target_os = "macos")]
-tauri_nspanel::tauri_panel! {
-    panel!(CallControlsPanel {
-        config: {
-            can_become_key_window: false,
-            // It never becomes key (above), yet says it is: WebKit sets the page's CSS cursor only for a key window
-            // (#139, [`hover_while_inactive`]). AppKit still sends the keyboard to the real key window, the person's app.
-            is_key_window: true,
-            can_become_main_window: false,
-            is_floating_panel: true
-        }
-    })
-}
 
 #[derive(Default)]
 struct Inner {
@@ -152,10 +137,8 @@ fn wayland() -> bool {
 
 /// Quitting: the card's window goes, with its webview.
 pub fn close(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window(LABEL) {
-        if let Err(e) = window.destroy() {
-            debug(&format!("call-controls not closed: {e}"));
-        }
+    if let Err(e) = NativeCardWindow::close(app, LABEL) {
+        debug(&format!("call-controls not closed: {e}"));
     }
 }
 
@@ -174,41 +157,11 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     if let Some(probe) = crate::probe::card_script() {
         script.push_str(probe);
     }
-    let size = FIRST_SIZE;
-
+    NativeCardWindow::create(app, CardSpec { label: LABEL, page: PAGE, size: FIRST_SIZE, script })?;
     #[cfg(target_os = "macos")]
     {
-        use tauri_nspanel::{CollectionBehavior, PanelBuilder, PanelLevel, StyleMask};
-        PanelBuilder::<_, CallControlsPanel>::new(app, LABEL)
-            .url(WebviewUrl::App(PAGE.into()))
-            .size(tauri::Size::Logical(LogicalSize::new(size.width, size.height)))
-            .level(PanelLevel::Status)
-            .collection_behavior(
-                CollectionBehavior::new().can_join_all_spaces().full_screen_auxiliary().stationary().ignores_cycle(),
-            )
-            .add_style_mask(StyleMask::empty().nonactivating_panel())
-            .hides_on_deactivate(false)
-            .has_shadow(false)
-            .transparent(true)
-            .with_window(move |w| window_options(w, script))
-            .build()?;
-        // No `.no_activate(true)` above: it parks the app at `Prohibited` while the panel is built, and macOS does not
-        // bring the Dock icon back when the policy returns to `Regular` (#117). The card is created before the room is
-        // shown and the app activated (lib.rs setup), so there is no focus for it to steal.
-        prevent_activation(app);
         set_cursor_in_background();
         watch_clicks(app);
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let builder = tauri::WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App(PAGE.into()))
-            .inner_size(size.width, size.height)
-            .always_on_top(true)
-            .visible_on_all_workspaces(true)
-            .skip_taskbar(true)
-            .focusable(false)
-            .shadow(false);
-        window_options(builder, script).build()?;
     }
     if !wayland() {
         watch_pointer(app.clone());
@@ -217,32 +170,6 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     crate::debug_options::apply(app);
     debug("call-controls created");
     Ok(())
-}
-
-/// What every platform's card window has.
-fn window_options<'a, R: tauri::Runtime, M: Manager<R>>(
-    builder: tauri::WebviewWindowBuilder<'a, R, M>,
-    script: String,
-) -> tauri::WebviewWindowBuilder<'a, R, M> {
-    builder
-        .title("Sidevoice")
-        .decorations(false)
-        .transparent(true)
-        .resizable(false)
-        .visible(false)
-        .focused(false)
-        .accept_first_mouse(true)
-        .initialization_script(script)
-        // It shows a live call: never suspend or throttle it.
-        .background_throttling(BackgroundThrottlingPolicy::Disabled)
-        .on_navigation(|url| {
-            sidevoice_desktop_core::media::navigation_allowed(url.scheme(), &settings::url_origin(url), APP_ORIGIN)
-        })
-        // The card captures nothing: the microphone is the room's. Without a handler WebKit would grant.
-        .on_permission_request(|_webview, kind: PermissionKind| {
-            debug(&format!("call-controls permission {kind:?} denied"));
-            PermissionResponse::Deny
-        })
 }
 
 fn window(app: &AppHandle) -> Option<WebviewWindow> {
@@ -523,7 +450,7 @@ fn apply_visible(app: &AppHandle, visible: bool, decision: u64) {
     let _ = app.run_on_main_thread(move || {
         let latest = card(&a).is_some_and(|card| card.0.lock().unwrap().visibility.is(decision));
         if latest {
-            set_visible(&a, visible);
+            NativeCardWindow::set_visible(&a, LABEL, visible);
         } else {
             debug(&format!("call-controls {} skipped: changed meanwhile", if visible { "show" } else { "hide" }));
         }
@@ -686,83 +613,6 @@ fn push(app: &AppHandle, patch: serde_json::Value) {
     if let Some(w) = window(app) {
         let _ = w.eval(bridge::call_controls_push(&patch));
     }
-}
-
-/// On the main thread ([`apply_visible`]): AppKit wants its windows touched there.
-fn set_visible(app: &AppHandle, visible: bool) {
-    #[cfg(target_os = "macos")]
-    {
-        use tauri_nspanel::ManagerExt;
-        if let Ok(panel) = app.get_webview_panel(LABEL) {
-            // orderFrontRegardless / orderOut: shown without activating the app or taking the key window.
-            if visible {
-                if let Some(w) = window(app) {
-                    hover_while_inactive(&w);
-                }
-                panel.show();
-                debug(&format!("call-controls panel {}", describe(panel.as_panel())));
-            } else {
-                panel.hide()
-            }
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    if let Some(w) = window(app) {
-        let _ = if visible { w.show() } else { w.hide() };
-    }
-}
-
-/// What the panel is, for CI's log (SIDEVOICE_DEBUG=1): how it was asked to behave, read back from AppKit.
-#[cfg(target_os = "macos")]
-fn describe(panel: &tauri_nspanel::objc2_app_kit::NSPanel) -> String {
-    use tauri_nspanel::objc2::{class, msg_send, runtime::AnyObject};
-    // NSWindowStyleMaskNonactivatingPanel, NSWindowCollectionBehaviorCanJoinAllSpaces / FullScreenAuxiliary.
-    const NONACTIVATING: usize = 1 << 7;
-    const ALL_SPACES: usize = 1 << 0;
-    const FULL_SCREEN_AUXILIARY: usize = 1 << 8;
-    let (mask, level, behavior, key, visible, number): (usize, isize, usize, bool, bool, isize) = unsafe {
-        (
-            msg_send![panel, styleMask],
-            msg_send![panel, level],
-            msg_send![panel, collectionBehavior],
-            // AppKit's own key window: the panel answers `isKeyWindow` with yes for WebKit's sake (#139).
-            {
-                let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-                let key: *mut AnyObject = msg_send![app, keyWindow];
-                std::ptr::eq(key.cast_const().cast(), panel)
-            },
-            msg_send![panel, isVisible],
-            msg_send![panel, windowNumber],
-        )
-    };
-    format!(
-        "nonactivating={} level={level} all_spaces={} fullscreen_auxiliary={} key={key} visible={visible} window={number} pid={} {}",
-        mask & NONACTIVATING != 0,
-        behavior & ALL_SPACES != 0,
-        behavior & FULL_SCREEN_AUXILIARY != 0,
-        std::process::id(),
-        app_active()
-    )
-}
-
-/// Whether the app is the active one: showing, hovering or clicking the card must never make it so (CI's log).
-pub(crate) fn app_active() -> String {
-    #[cfg(target_os = "macos")]
-    {
-        use tauri_nspanel::objc2::{class, msg_send, runtime::AnyObject};
-        let active: bool = unsafe {
-            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-            msg_send![app, isActive]
-        };
-        // NSApplicationActivationPolicyRegular is 0: the Dock icon, Dock Quit and Cmd+Tab (the card must not change it).
-        let policy: isize = unsafe {
-            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-            msg_send![app, activationPolicy]
-        };
-        format!("app_active={active} regular={}", policy == 0)
-    }
-    #[cfg(not(target_os = "macos"))]
-    String::new()
 }
 
 // Geometry on the desktop (see `Display`): physical pixels on Windows and Linux; points on macOS, where Tao's
@@ -1050,7 +900,7 @@ pub fn call_controls_run(app: AppHandle, webview: Webview, command: serde_json::
         debug(&format!("call-controls refused {command}: {e}"));
         format!("not a card command: {e}")
     })?;
-    debug(&format!("call-controls run {} {}", command.name(), app_active()));
+    debug(&format!("call-controls run {} {}", command.name(), NativeCardWindow::app_active()));
     if command == Command::OpenSettings {
         crate::show_room(&app);
     }
@@ -1169,7 +1019,13 @@ pub fn call_controls_drag(app: AppHandle, webview: Webview, phase: DragPhase) ->
             let spot = Spot::of(rest, body, display.work);
             inner.placements.displays.insert(display.key.clone(), spot);
             save(&inner);
-            debug(&format!("call-controls dropped at {:.0},{:.0} on {} {}", rest.x, rest.y, display.key, app_active()));
+            debug(&format!(
+                "call-controls dropped at {:.0},{:.0} on {} {}",
+                rest.x,
+                rest.y,
+                display.key,
+                NativeCardWindow::app_active()
+            ));
             inner.rest = Some((display, spot));
             drop(inner);
             place(&app);
@@ -1290,83 +1146,6 @@ fn watch_clicks(app: &AppHandle) {
     // For the app's lifetime: the monitor is never removed, and AppKit hands it back autoreleased, so it is kept here.
     std::mem::forget(monitor);
     std::mem::forget(handler);
-}
-
-/// macOS: tells the window server, too, that the card never activates the app. NSPanel does so only when it is created
-/// with the non-activating style; tauri-nspanel adds that style to an existing window, so AppKit treats the panel as
-/// non-activating while the window server does not, and a drag on the card made the app frontmost (focus taken from
-/// the person's app, CI's card step). `_setPreventsActivation:` is what NSPanel itself calls at creation:
-/// https://philz.blog/nspanel-nonactivating-style-mask-flag/
-#[cfg(target_os = "macos")]
-fn prevent_activation(app: &AppHandle) {
-    use tauri_nspanel::objc2::{msg_send, runtime::Bool, sel};
-    use tauri_nspanel::ManagerExt;
-    let Ok(panel) = app.get_webview_panel(LABEL) else { return };
-    let panel = panel.as_panel();
-    // SAFETY: main thread (setup); a private NSWindow method, called only when the window answers to it.
-    let applied = unsafe {
-        let responds: bool = msg_send![panel, respondsToSelector: sel!(_setPreventsActivation:)];
-        if responds {
-            let _: () = msg_send![panel, _setPreventsActivation: Bool::YES];
-        }
-        responds
-    };
-    debug(&format!("call-controls prevents activation: {applied}"));
-}
-
-/// macOS: hover on a card that is never key while the app is inactive (#139). WebKit tracks the mouse with a tracking
-/// area that is active only in the key window (`NSTrackingActiveInKeyWindow`, WebKit's `WebViewImpl.mm`
-/// `trackingAreaOptions()`), so the card's page never saw the pointer move: no `:hover`, no `mouseenter`. That area
-/// is replaced by the same one active always, which AppKit delivers to inactive apps too; WebKit only re-creates it
-/// when the system's scroller style changes, so it is replaced again each time the card shows. Idempotent.
-#[cfg(target_os = "macos")]
-fn hover_while_inactive(w: &WebviewWindow) {
-    use tauri_nspanel::objc2::{class, msg_send, rc::Retained, runtime::AnyObject};
-    use tauri_nspanel::NSRect;
-    // NSTrackingActiveInKeyWindow, NSTrackingActiveAlways.
-    const IN_KEY_WINDOW: usize = 0x20;
-    const ALWAYS: usize = 0x80;
-    let _ = w.with_webview(|webview| {
-        let view = webview.inner() as *mut AnyObject;
-        if view.is_null() {
-            return;
-        }
-        // SAFETY: the window's own WKWebView, on the main thread (`with_webview`); the areas are kept retained while
-        // the view's own list changes.
-        let replaced = unsafe {
-            let list: Option<Retained<AnyObject>> = msg_send![view, trackingAreas];
-            let areas: Vec<Retained<AnyObject>> = list
-                .map(|list| {
-                    let count: usize = msg_send![&*list, count];
-                    (0..count).map(|i| msg_send![&*list, objectAtIndex: i]).collect()
-                })
-                .unwrap_or_default();
-            let mut replaced = 0;
-            for area in areas {
-                let options: usize = msg_send![&*area, options];
-                if options & IN_KEY_WINDOW == 0 {
-                    continue;
-                }
-                let rect: NSRect = msg_send![&*area, rect];
-                let owner: *mut AnyObject = msg_send![&*area, owner];
-                let user_info: *mut AnyObject = msg_send![&*area, userInfo];
-                let alloc: *mut AnyObject = msg_send![class!(NSTrackingArea), alloc];
-                let always: *mut AnyObject = msg_send![
-                    alloc,
-                    initWithRect: rect,
-                    options: (options & !IN_KEY_WINDOW) | ALWAYS,
-                    owner: owner,
-                    userInfo: user_info
-                ];
-                let Some(always) = Retained::from_raw(always) else { continue };
-                let _: () = msg_send![view, removeTrackingArea: &*area];
-                let _: () = msg_send![view, addTrackingArea: &*always];
-                replaced += 1;
-            }
-            replaced
-        };
-        debug(&format!("call-controls tracks the pointer while inactive: replaced={replaced}"));
-    });
 }
 
 /// macOS: lets the app set the cursor while it is not the active app (#139). The window server ignores a cursor set
@@ -1497,7 +1276,7 @@ fn watch_pointer(app: AppHandle) {
                 keep_hand(&app, inside, hand);
             }
             if changed {
-                debug(&format!("call-controls pointer inside={inside:?} {}", app_active()));
+                debug(&format!("call-controls pointer inside={inside:?} {}", NativeCardWindow::app_active()));
                 push(&app, serde_json::json!({ "pointerInside": inside }));
                 #[cfg(target_os = "macos")]
                 if inside == Some(false) {

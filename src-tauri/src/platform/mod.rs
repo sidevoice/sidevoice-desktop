@@ -21,6 +21,7 @@ pub mod tray;
 pub mod voice_holds;
 pub mod webview_diagnostics;
 
+pub mod card_window;
 pub mod confirmation;
 pub mod reset_availability;
 pub mod reset_handoff;
