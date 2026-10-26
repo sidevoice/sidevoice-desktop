@@ -1,12 +1,18 @@
-use super::{sample, Visibility, WindowVisibility};
+use super::Observations;
 use sidevoice_desktop_core::call_controls::{self as logic, Rect};
 use tauri::{Runtime, WebviewWindow};
-pub struct NativeVisibility;
-impl WindowVisibility for NativeVisibility {
-    fn observe<R: Runtime>(window: Option<&WebviewWindow<R>>, stage: Option<Rect>) -> Visibility {
-        sample(window, |w| (on_screen(w), false), |w| uncovered(w, stage))
+pub struct Native;
+
+impl Observations for Native {
+    fn on_screen<R: Runtime>(w: &WebviewWindow<R>) -> Option<bool> {
+        on_screen(w)
+    }
+
+    fn uncovered<R: Runtime>(w: &WebviewWindow<R>, stage: Option<Rect>) -> Option<f64> {
+        uncovered(w, stage)
     }
 }
+
 /// macOS: AppKit's occlusion state, clear while no part of the window is on screen (fully covered, or on another Space).
 fn on_screen<R: Runtime>(w: &WebviewWindow<R>) -> Option<bool> {
     use tauri_nspanel::objc2::{msg_send, runtime::AnyObject};

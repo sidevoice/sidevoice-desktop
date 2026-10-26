@@ -14,7 +14,7 @@
 use crate::platform::card_window::{CardSpec, CardWindow, NativeCardWindow};
 use crate::platform::desktop_geometry;
 use crate::platform::pointer_events::{NativePointerEvents, PointerEvent, PointerEvents, PointerState, Subscription};
-use crate::platform::window_visibility::{NativeVisibility, Visibility, WindowVisibility};
+use crate::platform::window_visibility::{self, Visibility};
 use crate::{debug, AppState};
 use serde::Deserialize;
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
@@ -203,7 +203,7 @@ fn stage_in_view(app: &AppHandle) -> Option<(bool, Visibility, Option<bool>)> {
     let page = card(app).and_then(|card| card.0.lock().unwrap().page);
     let rect = page.and_then(|p| p.rect);
     let a = app.clone();
-    let shown = on_main(app, move || NativeVisibility::observe(crate::room_window(&a).as_ref(), rect))?;
+    let shown = on_main(app, move || window_visibility::observe(crate::room_window(&a).as_ref(), rect))?;
     let page_shows = page.map(|p| p.shown);
     Some((logic::stage_in_view(shown.stage_on_screen(), page_shows), shown, page_shows))
 }
