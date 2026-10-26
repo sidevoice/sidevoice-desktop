@@ -1,8 +1,12 @@
+#[path = "build/platform.rs"]
+mod platform;
+
 fn main() {
     build_channel();
     link_macos_clang_runtime();
-    // The Windows manifest goes in through the linker for every executable, test binaries included
-    // (.cargo/config.toml), so tauri-build adds none of its own.
+    platform::app_manifest::link_into_every_executable();
+    // The application manifest is linked into every executable, test binaries included (platform::app_manifest), so
+    // tauri-build adds none of its own.
     let windows = tauri_build::WindowsAttributes::new_without_app_manifest();
     // The app's own commands, declared so capabilities can grant them per window/origin:
     // the room window `bridge_state`, `bridge_level` and `bridge_playback` (+ `debug_log`), the native engine, the
