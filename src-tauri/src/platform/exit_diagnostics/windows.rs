@@ -1,7 +1,7 @@
 //! No native library whose exit destructors the probe observes runs here.
 
-use super::ExitDiagnostics;
+use super::Native;
 
-pub struct NativeExitDiagnostics;
+pub(super) struct Os;
 
-impl ExitDiagnostics for NativeExitDiagnostics {}
+impl Native for Os {}

@@ -2,11 +2,11 @@
 //! built) from one list, the last registered first. Registered before whisper.cpp's Metal device is built, this runs
 //! after its destructor, which aborts when a model is still loaded (#121).
 
-use super::ExitDiagnostics;
+use super::Native;
 
-pub struct NativeExitDiagnostics;
+pub(super) struct Os;
 
-impl ExitDiagnostics for NativeExitDiagnostics {
+impl Native for Os {
     fn report_handlers_ran() {
         extern "C" fn ran() {
             eprintln!("sidevoice: probe: exit handlers ran");

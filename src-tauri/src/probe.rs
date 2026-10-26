@@ -13,7 +13,7 @@
 
 use std::borrow::Cow;
 
-use crate::platform::exit_diagnostics::{ExitDiagnostics, NativeExitDiagnostics};
+use crate::platform::exit_diagnostics;
 use crate::platform::voice_holds::{NativeVoiceHolds, VoiceHolds};
 use tauri::utils::assets::{AssetKey, AssetsIter, CspHash};
 use tauri::{App, AppHandle, Assets, Context, Runtime};
@@ -48,7 +48,7 @@ pub fn watch_exit_handlers() {
     if !crate::debugging() || std::env::var_os("SIDEVOICE_DEBUG_EXIT").is_none() {
         return;
     }
-    NativeExitDiagnostics::report_handlers_ran();
+    exit_diagnostics::report_handlers_ran();
 }
 
 /// With `SIDEVOICE_DEBUG_PAGE=memory.html`, at each line `probe-memory PHASE` the page logs: the app's memory then,
