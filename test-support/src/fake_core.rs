@@ -423,11 +423,6 @@ pub fn write_frame_masked(
     stream.write_all(&out)
 }
 
-/// Removes runtime directories left by the fixtures (Unix only; pipes leave no files).
-pub fn forget(data: &Path) {
-    crate::platform::forget(data);
-}
-
 /// Blocking adapter for adversarial line-JSON connector fixtures, over the same shared listener.
 pub struct ConnectorListener {
     runtime: tokio::runtime::Runtime,

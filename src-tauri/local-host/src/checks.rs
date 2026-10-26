@@ -5,8 +5,8 @@
 //! A path that is not there is not unsafe: it is [`Check::Missing`], and the caller treats the host as absent.
 
 use crate::Refusal;
+use sidevoice_platform::fs::{Access, Directory, HeldDirectory};
 use std::io;
-use std::os::unix::fs::MetadataExt;
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
@@ -32,57 +32,30 @@ impl From<Check> for Refusal {
     }
 }
 
-fn unsafe_directory(path: &Path, why: &str) -> Check {
-    Check::Unsafe(Refusal::new(
-        "identity.unsafe-directory",
-        format!("{} is not a private directory of this user ({why}); the app does not connect to it.", path.display()),
-    ))
+/// Preserve the host's absent/refused distinction and the caller's stable refusal key.
+pub(crate) fn storage_error(path: &Path, key: &str, error: io::Error) -> Check {
+    if error.kind() == io::ErrorKind::NotFound {
+        Check::Missing
+    } else {
+        Check::Unsafe(Refusal::new(
+            key,
+            format!("{} cannot be trusted ({error}); use an ordinary directory owned by this user and not writable by others.", path.display()),
+        ))
+    }
 }
 
-/// The core's directory: a real directory (not a link), owned by this user, mode & 077 = 0.
+/// The core's existing directory, checked with its ancestry; discovery never creates it.
 pub fn private_dir(path: &Path) -> Result<(), Check> {
-    let meta = match std::fs::symlink_metadata(path) {
-        Ok(meta) => meta,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Err(Check::Missing),
-        Err(e) => return Err(unsafe_directory(path, &e.to_string())),
-    };
-    if !meta.file_type().is_dir() {
-        return Err(unsafe_directory(path, "not a directory"));
-    }
-    if meta.uid() != uid() {
-        return Err(unsafe_directory(path, &format!("owned by uid {}", meta.uid())));
-    }
-    if meta.mode() & 0o077 != 0 {
-        return Err(unsafe_directory(path, &format!("mode {:o}", meta.mode() & 0o777)));
-    }
-    Ok(())
+    HeldDirectory::open(path, Access::Private)
+        .map(|_| ())
+        .map_err(|e| storage_error(path, "identity.unsafe-directory", e))
 }
 
-/// The connector's directory or a file in it the app acts on (`install.json`): owned by this user, and neither its
-/// group nor others can write it. Not a link.
+/// The connector's existing directory, readable by others but never writable by them.
 pub fn owned_not_writable(path: &Path) -> Result<(), Check> {
-    let meta = match std::fs::symlink_metadata(path) {
-        Ok(meta) => meta,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Err(Check::Missing),
-        Err(e) => return Err(unsafe_file(path, &e.to_string())),
-    };
-    if meta.file_type().is_symlink() {
-        return Err(unsafe_file(path, "a symbolic link"));
-    }
-    if meta.uid() != uid() {
-        return Err(unsafe_file(path, &format!("owned by uid {}", meta.uid())));
-    }
-    if meta.mode() & 0o022 != 0 {
-        return Err(unsafe_file(path, &format!("mode {:o}", meta.mode() & 0o777)));
-    }
-    Ok(())
-}
-
-fn unsafe_file(path: &Path, why: &str) -> Check {
-    Check::Unsafe(Refusal::new(
-        "install.unsafe",
-        format!("{} may be changed by another user ({why}); the app does not run what it names.", path.display()),
-    ))
+    HeldDirectory::open(path, Access::NotWritableByOthers)
+        .map(|_| ())
+        .map_err(|e| storage_error(path, "install.unsafe", e))
 }
 
 /// The uid of the process at the other end of a connected Unix socket.
@@ -149,12 +122,9 @@ pub fn connect(dir: &Path, socket: &Path, dir_check: fn(&Path) -> Result<(), Che
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
+    use sidevoice_desktop_test_support::platform::storage::{StorageFixture, StorageFixtures};
+    use sidevoice_platform::fs::Directory;
     use std::os::unix::net::UnixListener;
-
-    fn chmod(path: &Path, mode: u32) {
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
-    }
 
     #[test]
     fn a_private_directory_passes_and_anything_looser_does_not() {
@@ -162,27 +132,26 @@ mod tests {
         let dir = tmp.path().join("core");
         assert_eq!(private_dir(&dir), Err(Check::Missing));
         std::fs::create_dir(&dir).unwrap();
-        chmod(&dir, 0o700);
+        StorageFixtures::private(&dir);
         assert_eq!(private_dir(&dir), Ok(()));
-        for mode in [0o750, 0o705, 0o770, 0o777, 0o710] {
-            chmod(&dir, mode);
-            let Err(Check::Unsafe(refusal)) = private_dir(&dir) else { panic!("mode {mode:o} passed") };
+        StorageFixtures::private_directory_violations(&dir, || {
+            let Err(Check::Unsafe(refusal)) = private_dir(&dir) else { panic!("insecure access passed") };
             assert_eq!(refusal.key, "identity.unsafe-directory");
-        }
+        });
     }
 
     #[test]
-    fn a_link_or_a_file_is_not_the_core_directory() {
+    fn a_link_of_this_users_leads_to_the_core_directory_but_a_file_is_not_one() {
         let tmp = tempfile::tempdir().unwrap();
         let real = tmp.path().join("real");
         std::fs::create_dir(&real).unwrap();
-        chmod(&real, 0o700);
+        StorageFixtures::private(&real);
         let link = tmp.path().join("core");
-        std::os::unix::fs::symlink(&real, &link).unwrap();
-        assert!(matches!(private_dir(&link), Err(Check::Unsafe(_))));
+        StorageFixtures::symlink(&real, &link);
+        assert_eq!(private_dir(&link), Ok(()));
         let file = tmp.path().join("file");
         std::fs::write(&file, b"").unwrap();
-        chmod(&file, 0o600);
+        StorageFixtures::private(&file);
         assert!(matches!(private_dir(&file), Err(Check::Unsafe(_))));
     }
 
@@ -190,23 +159,28 @@ mod tests {
     fn install_record_must_not_be_writable_by_others() {
         let tmp = tempfile::tempdir().unwrap();
         let file = tmp.path().join("install.json");
-        assert_eq!(owned_not_writable(&file), Err(Check::Missing));
+        let dir = HeldDirectory::open(tmp.path(), Access::NotWritableByOthers).unwrap();
+        let check = || {
+            dir.read("install.json".as_ref(), Access::NotWritableByOthers, 1024)
+                .map_err(|e| storage_error(&file, "install.unsafe", e))?
+                .ok_or(Check::Missing)
+        };
+        assert_eq!(check(), Err(Check::Missing));
         std::fs::write(&file, b"{}").unwrap();
-        for mode in [0o600, 0o644, 0o640, 0o700, 0o755] {
-            chmod(&file, mode);
-            assert_eq!(owned_not_writable(&file), Ok(()), "mode {mode:o}");
-        }
-        for mode in [0o620, 0o602, 0o666, 0o777] {
-            chmod(&file, mode);
-            let Err(Check::Unsafe(refusal)) = owned_not_writable(&file) else { panic!("mode {mode:o} passed") };
-            assert_eq!(refusal.key, "install.unsafe");
-        }
+        StorageFixtures::record_access_cases(&file, |trusted| {
+            if trusted {
+                assert_eq!(check(), Ok(b"{}".to_vec()));
+            } else {
+                let Err(Check::Unsafe(refusal)) = check() else { panic!("writable record passed") };
+                assert_eq!(refusal.key, "install.unsafe");
+            }
+        });
     }
 
     #[test]
     fn the_peer_of_our_own_socket_is_us() {
         let tmp = tempfile::tempdir().unwrap();
-        chmod(tmp.path(), 0o700);
+        StorageFixtures::private(tmp.path());
         let path = tmp.path().join("s.sock");
         let _listener = UnixListener::bind(&path).unwrap();
         let stream = connect(tmp.path(), &path, private_dir).unwrap();
@@ -214,8 +188,8 @@ mod tests {
         // Nobody listening: absent, not unsafe.
         assert_eq!(connect(tmp.path(), &tmp.path().join("none.sock"), private_dir).err(), Some(Check::Missing));
         // A loose directory: refused before any connect.
-        chmod(tmp.path(), 0o755);
+        StorageFixtures::readable(tmp.path());
         assert!(matches!(connect(tmp.path(), &path, private_dir), Err(Check::Unsafe(_))));
-        chmod(tmp.path(), 0o700);
+        StorageFixtures::private(tmp.path());
     }
 }

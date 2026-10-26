@@ -90,19 +90,21 @@ fn write_pairings_with(path: &Path, value: &Value, before_write: impl FnOnce()) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::platform::pairing_storage::{NativePairingRace, PairingRace, Replacement};
+    use crate::platform::pairing_storage::{self, Replacement};
     use sidevoice_platform::fs::{Others, TestFiles};
     use std::fs;
 
     #[test]
-    fn pairings_refuse_symlinked_parent_and_file() {
+    fn pairings_follow_a_link_on_the_way_but_refuse_one_as_the_file() {
         let home = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         fs::create_dir(home.path().join("app")).unwrap();
         Files::symlink(outside.path(), home.path().join("app/redirect"));
         let redirected = home.path().join("app/redirect/pairings.json");
-        assert_eq!(read_pairings(&redirected), Err(refused("reset.unsafe")));
-        assert_eq!(write_pairings(&redirected, &json!({"pairings": []})), Err(refused("reset.unsafe")));
+        // A link of this user's on the way is followed to the private directory it leads to.
+        assert_eq!(write_pairings(&redirected, &json!({"pairings": []})), Ok(Value::Null));
+        assert!(outside.path().join("pairings.json").exists());
+        assert_eq!(read_pairings(&redirected), Ok(json!({"pairings": []})));
         let file = home.path().join("app/pairings.json");
         Files::symlink(outside.path().join("other.json"), &file);
         assert_eq!(read_pairings(&file), Err(refused("reset.unsafe")));
@@ -135,7 +137,7 @@ mod tests {
         let moved = home.join("moved-app");
         let mut replaced = false;
         let result = write_pairings_with(&file, &value, || {
-            replaced = NativePairingRace::replace_ancestor(&app, &moved, Replacement::Redirect(&outside));
+            replaced = pairing_storage::replace_ancestor(&app, &moved, Replacement::Redirect(&outside));
         });
         if replaced {
             assert_eq!(result, Err(refused("reset.unsafe")));
@@ -233,7 +235,7 @@ mod tests {
         let moved = root.join("moved");
         let mut replaced = false;
         let result = write_pairings_with(&file, &value, || {
-            replaced = NativePairingRace::replace_ancestor(&ancestor, &moved, Replacement::Directory);
+            replaced = pairing_storage::replace_ancestor(&ancestor, &moved, Replacement::Directory);
             if replaced {
                 fs::create_dir(ancestor.join("app")).unwrap();
                 fs::write(&file, b"decoy").unwrap();

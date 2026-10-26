@@ -77,3 +77,24 @@ and it is an open question for the person who decides the defaults.
 
 Not checked: Orca (GNOME's screen reader), the X11 `Ctrl+Alt+Backspace` option, Ubuntu Dock's own schema, and
 distributions' own KDE defaults.
+
+## Desktop platform boundary
+
+`platform::application` (`configure`, `prepare`, `activate`, `handle_event`, `report`) owns single-instance setup, native launch policy, activation, reopen and diagnostic
+observations. The common shell still shows/restores/focuses the room and keeps it alive when closed. macOS retains
+its Regular activation policy, visible Dock tile, macOS 14+ activation and Dock reopen handling. Windows/Linux use
+Tauri window focus and the existing single-instance plugin. No native accessibility equivalent is inferred there.
+
+`platform::shortcut_access` owns the maintained global-shortcut plugin, live VoiceOver reservation and label style.
+The saved default and alternatives above are unchanged; [#10](https://github.com/sidevoice/sidevoice-desktop/issues/10)
+remains the operator's decision. A backend failure leaves the app running and reports `unavailable` through
+`host.muteShortcut`; an individual registration conflict remains `refused`. An empty shortcut remains `off`.
+
+The plugin's [global-hotkey backend](https://docs.rs/global-hotkey/0.8.0/global_hotkey/) supports Windows, macOS and
+Linux X11. Native Wayland reports `unavailable`, including sessions that also expose an XWayland `DISPLAY`; GTK's
+actual display backend is checked. X11 registration remains subject to the window manager's restrictions.
+Windows Magnifier/AltGr and Linux accessibility conflicts listed above remain unobserved, rather than reported safe.
+
+Runtime verification for this extraction is pending on macOS, Windows and Linux X11/Wayland. Cross-compilation
+checks the interface and portable tests check unavailable/disabled states and labels; neither establishes native
+focus, key delivery or assistive-technology behavior.

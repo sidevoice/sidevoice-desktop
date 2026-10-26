@@ -12,6 +12,8 @@
 //! checks.
 
 use std::borrow::Cow;
+
+use crate::platform::diagnostics;
 use tauri::utils::assets::{AssetKey, AssetsIter, CspHash};
 use tauri::{App, AppHandle, Assets, Context, Runtime};
 
@@ -39,20 +41,13 @@ pub fn exit_on(app: &AppHandle, line: &str) {
 }
 
 /// With `SIDEVOICE_DEBUG_EXIT`, from the start: a handler `exit()` runs after the static destructors of the C++
-/// libraries linked in. `exit()` runs the handlers registered with `atexit` and those destructors (`__cxa_atexit`,
-/// when each static is built) from one list, the last registered first; this one is registered before any model is
-/// loaded, so before whisper.cpp's Metal device is built, and runs after its destructor, which aborts when a model is
-/// still loaded (#121). Its line in the log says that destructor ran to its end. `macos exit` checks it.
-#[cfg(target_os = "macos")]
+/// libraries linked in (the platform registers it, src/platform/diagnostics.rs). `macos exit` checks that its
+/// line is in the log (#121).
 pub fn watch_exit_handlers() {
     if !crate::debugging() || std::env::var_os("SIDEVOICE_DEBUG_EXIT").is_none() {
         return;
     }
-    extern "C" fn ran() {
-        eprintln!("sidevoice: probe: exit handlers ran");
-    }
-    // SAFETY: registers a plain function, which only writes to stderr.
-    unsafe { libc::atexit(ran) };
+    diagnostics::report_exit_handlers();
 }
 
 /// With `SIDEVOICE_DEBUG_PAGE=memory.html`, at each line `probe-memory PHASE` the page logs: the app's memory then,
@@ -64,25 +59,12 @@ pub fn memory_on(app: &tauri::AppHandle, line: &str) {
         return;
     }
     let phase = phase.trim().to_owned();
-    let _ = app;
-    #[cfg(target_os = "macos")]
-    if let Some(state) = tauri::Manager::try_state::<crate::voice::VoiceState>(app) {
-        println!("memory-holds phase={phase} {}", state.held());
+    if let Some(held) = diagnostics::voice_holds(app) {
+        println!("memory-holds phase={phase} {held}");
     }
     std::thread::spawn(move || {
         crate::memory::report(&phase);
     });
-}
-
-/// With `SIDEVOICE_DEBUG_IDLE_MINUTE_MS`, how long the voice host's idle minute is (src/voice/host.rs): the models of a
-/// stopped call stay loaded for `idle_unload_minutes` of them, so `macos memory` can wait for them to be let go.
-#[cfg(target_os = "macos")]
-pub fn idle_minute() -> std::time::Duration {
-    let millis = std::env::var("SIDEVOICE_DEBUG_IDLE_MINUTE_MS").ok().and_then(|v| v.parse::<u64>().ok());
-    match millis {
-        Some(millis) if crate::debugging() && millis > 0 => std::time::Duration::from_millis(millis),
-        _ => std::time::Duration::from_secs(60),
-    }
 }
 
 pub const PAGE: &str = "probe.html";

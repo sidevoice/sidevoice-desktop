@@ -11,6 +11,10 @@
 //!
 //! When it shows, where it sits and how it moves are `sidevoice_desktop_core::call_controls`.
 
+use crate::platform::card_window::{CardSpec, CardWindow, NativeCardWindow};
+use crate::platform::desktop_geometry;
+use crate::platform::pointer_events::{self, PointerEvent, PointerState, Subscription};
+use crate::platform::window_visibility::{self, Visibility};
 use crate::{debug, AppState};
 use serde::Deserialize;
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
@@ -19,21 +23,15 @@ use sidevoice_desktop_core::call_controls::{
 };
 use sidevoice_desktop_core::settings::{self, APP_ORIGIN};
 use std::path::PathBuf;
-use std::sync::{Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tauri::utils::config::BackgroundThrottlingPolicy;
-use tauri::webview::{PermissionKind, PermissionResponse};
-use tauri::{AppHandle, LogicalSize, Manager, Monitor, Webview, WebviewUrl, WebviewWindow};
+use tauri::{AppHandle, LogicalSize, Manager, Webview, WebviewWindow};
 
 pub const LABEL: &str = "call-controls";
 const PAGE: &str = "voice/call-controls.html";
 /// The card at rest, its window's shadow margin included, until the page reports its own size: the title card at its
 /// Medium size, the default format (the web's `CARD_WIDTHS`).
 const FIRST_SIZE: Size = Size { width: 414.0, height: 82.0 };
-/// How often the app looks at the pointer while the card shows: a window that never takes focus may get no hover
-/// events of its own (Windows, Linux X11), so the app tells the card when the pointer is over it. On macOS the card's
-/// WebKit gets them too ([`hover_while_inactive`]).
-const POINTER_EVERY: Duration = Duration::from_millis(80);
 /// How often the app looks at whether the room's stage is in view ([`watch_view`]).
 const VIEW_EVERY: Duration = Duration::from_millis(500);
 /// The card's shadow margin inside its window (the web build's CARD_MARGIN): the pointer over it is not over the card.
@@ -47,22 +45,10 @@ const PREVIEW_EVERY: Duration = Duration::from_millis(200);
 /// The largest window the page may ask for, in logical pixels.
 const MAX_SIDE: f64 = 8000.0;
 
-#[cfg(target_os = "macos")]
-tauri_nspanel::tauri_panel! {
-    panel!(CallControlsPanel {
-        config: {
-            can_become_key_window: false,
-            // It never becomes key (above), yet says it is: WebKit sets the page's CSS cursor only for a key window
-            // (#139, [`hover_while_inactive`]). AppKit still sends the keyboard to the real key window, the person's app.
-            is_key_window: true,
-            can_become_main_window: false,
-            is_floating_panel: true
-        }
-    })
-}
-
 #[derive(Default)]
 struct Inner {
+    closed: bool,
+    pointer_subscription: Option<Subscription>,
     /// Hidden for now, by the card's × or the tray's "hide": until the stage comes into view or leaves it again, or the
     /// next call (core `still_hidden`).
     hidden: bool,
@@ -132,7 +118,7 @@ struct Resize {
     anchor: Rect,
 }
 
-/// The card's state, and the signal its pointer watcher waits on while the card is hidden.
+/// The card's state and owned pointer subscription.
 ///
 /// The lock is never held across a call that waits for the main thread: a window or monitor query (`outer_position`,
 /// `available_monitors`, `cursor_position`, ...) from another thread waits for the main thread to answer it, and the
@@ -140,22 +126,21 @@ struct Resize {
 /// other for good (#170). The state is read and decided under the lock; the window is queried before and changed
 /// after, with [`logic::Latest`] so that a change decided earlier never lands after a later one.
 #[derive(Default)]
-pub struct Card(Mutex<Inner>, Condvar);
-
-/// Whether the app runs as a Wayland client: GTK picks Wayland when there is a Wayland display, unless `GDK_BACKEND`
-/// says otherwise (`GDK_BACKEND=x11` runs it under XWayland, where it is an X11 card).
-fn wayland() -> bool {
-    cfg!(target_os = "linux")
-        && std::env::var_os("WAYLAND_DISPLAY").is_some_and(|d| !d.is_empty())
-        && !std::env::var("GDK_BACKEND").is_ok_and(|b| b.trim_start().starts_with("x11"))
-}
+pub struct Card(Mutex<Inner>);
 
 /// Quitting: the card's window goes, with its webview.
 pub fn close(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window(LABEL) {
-        if let Err(e) = window.destroy() {
-            debug(&format!("call-controls not closed: {e}"));
-        }
+    let subscription = card(app).and_then(|card| {
+        let mut inner = card.0.lock().unwrap();
+        inner.closed = true;
+        inner.shown = false;
+        inner.preview_until = None;
+        inner.pointer_subscription.take()
+    });
+    // Native cleanup may run on the main thread immediately: never drop under the card lock.
+    drop(subscription);
+    if let Err(e) = NativeCardWindow::close(app, LABEL) {
+        debug(&format!("call-controls not closed: {e}"));
     }
 }
 
@@ -163,86 +148,40 @@ pub fn close(app: &AppHandle) {
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let config_dir = crate::data::desktop_dir(app).ok();
     let placements = config_dir.as_deref().map(Placements::load).unwrap_or_default();
-    let pointer_inside = if wayland() { None } else { Some(false) };
-    app.manage(Card(
-        Mutex::new(Inner { placements, config_dir, pointer_inside, ..Default::default() }),
-        Condvar::new(),
-    ));
+    let pointer_inside = if !desktop_geometry::positions_available() { None } else { Some(false) };
+    app.manage(Card(Mutex::new(Inner { placements, config_dir, pointer_inside, ..Default::default() })));
     #[allow(unused_mut)] // the probe build adds its own
-    let mut script = bridge::call_controls_script(APP_ORIGIN, !wayland());
+    let mut script = bridge::call_controls_script(APP_ORIGIN, desktop_geometry::positions_available());
     #[cfg(feature = "probe")]
     if let Some(probe) = crate::probe::card_script() {
         script.push_str(probe);
     }
-    let size = FIRST_SIZE;
-
-    #[cfg(target_os = "macos")]
-    {
-        use tauri_nspanel::{CollectionBehavior, PanelBuilder, PanelLevel, StyleMask};
-        PanelBuilder::<_, CallControlsPanel>::new(app, LABEL)
-            .url(WebviewUrl::App(PAGE.into()))
-            .size(tauri::Size::Logical(LogicalSize::new(size.width, size.height)))
-            .level(PanelLevel::Status)
-            .collection_behavior(
-                CollectionBehavior::new().can_join_all_spaces().full_screen_auxiliary().stationary().ignores_cycle(),
-            )
-            .add_style_mask(StyleMask::empty().nonactivating_panel())
-            .hides_on_deactivate(false)
-            .has_shadow(false)
-            .transparent(true)
-            .with_window(move |w| window_options(w, script))
-            .build()?;
-        // No `.no_activate(true)` above: it parks the app at `Prohibited` while the panel is built, and macOS does not
-        // bring the Dock icon back when the policy returns to `Regular` (#117). The card is created before the room is
-        // shown and the app activated (lib.rs setup), so there is no focus for it to steal.
-        prevent_activation(app);
-        set_cursor_in_background();
-        watch_clicks(app);
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let builder = tauri::WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App(PAGE.into()))
-            .inner_size(size.width, size.height)
-            .always_on_top(true)
-            .visible_on_all_workspaces(true)
-            .skip_taskbar(true)
-            .focusable(false)
-            .shadow(false);
-        window_options(builder, script).build()?;
-    }
-    if !wayland() {
-        watch_pointer(app.clone());
+    NativeCardWindow::create(app, CardSpec { label: LABEL, page: PAGE, size: FIRST_SIZE, script })?;
+    let state_app = app.clone();
+    let sink_app = app.clone();
+    let subscription = pointer_events::watch(
+        app,
+        LABEL,
+        MARGIN,
+        Arc::new(move || {
+            let Some(card) = card(&state_app) else {
+                return PointerState { shown: false, hand: false, inside: None };
+            };
+            let inner = card.0.lock().unwrap();
+            PointerState { shown: inner.shown && !inner.closed, hand: inner.hand, inside: inner.pointer_inside }
+        }),
+        Arc::new(move |event| match event {
+            PointerEvent::OutsideClick => outside_click(&sink_app),
+            PointerEvent::Inside(inside) => report_pointer_inside(&sink_app, inside),
+        }),
+    );
+    if let Some(card) = card(app) {
+        card.0.lock().unwrap().pointer_subscription = subscription;
     }
     watch_view(app.clone());
     crate::debug_options::apply(app);
     debug("call-controls created");
     Ok(())
-}
-
-/// What every platform's card window has.
-fn window_options<'a, R: tauri::Runtime, M: Manager<R>>(
-    builder: tauri::WebviewWindowBuilder<'a, R, M>,
-    script: String,
-) -> tauri::WebviewWindowBuilder<'a, R, M> {
-    builder
-        .title("Sidevoice")
-        .decorations(false)
-        .transparent(true)
-        .resizable(false)
-        .visible(false)
-        .focused(false)
-        .accept_first_mouse(true)
-        .initialization_script(script)
-        // It shows a live call: never suspend or throttle it.
-        .background_throttling(BackgroundThrottlingPolicy::Disabled)
-        .on_navigation(|url| {
-            sidevoice_desktop_core::media::navigation_allowed(url.scheme(), &settings::url_origin(url), APP_ORIGIN)
-        })
-        // The card captures nothing: the microphone is the room's. Without a handler WebKit would grant.
-        .on_permission_request(|_webview, kind: PermissionKind| {
-            debug(&format!("call-controls permission {kind:?} denied"));
-            PermissionResponse::Deny
-        })
 }
 
 fn window(app: &AppHandle) -> Option<WebviewWindow> {
@@ -253,23 +192,6 @@ fn card(app: &AppHandle) -> Option<tauri::State<'_, Card>> {
     app.try_state::<Card>()
 }
 
-/// What the system shows of the room's window, for its stage (core `stage_on_screen`), as the log says it.
-#[derive(Debug, Clone, Copy)]
-struct Shown {
-    shown: bool,
-    minimised: bool,
-    /// macOS: not fully covered nor on another Space; Windows: not on another virtual desktop; Wayland: focused.
-    on_screen: bool,
-    /// The part of the stage no other app's window covers, where the app can measure it (macOS).
-    uncovered: Option<f64>,
-}
-
-impl Shown {
-    fn stage_on_screen(&self) -> bool {
-        logic::stage_on_screen(self.shown, self.minimised, self.on_screen, self.uncovered)
-    }
-}
-
 /// Whether the person can see the room's stage (#165): the system shows it (core `stage_on_screen`) and the page does
 /// (core `stage_in_view`). Which app has the focus is not part of it: the room in front with its stage, another app
 /// focused, is still in view. With what the system said and what the page said, for the log; `None` once the app is
@@ -277,11 +199,11 @@ impl Shown {
 ///
 /// The card's lock is held only to read what the page said; the window is asked on the main thread with it released
 /// (#170).
-fn stage_in_view(app: &AppHandle) -> Option<(bool, Shown, Option<bool>)> {
+fn stage_in_view(app: &AppHandle) -> Option<(bool, Visibility, Option<bool>)> {
     let page = card(app).and_then(|card| card.0.lock().unwrap().page);
     let rect = page.and_then(|p| p.rect);
     let a = app.clone();
-    let shown = on_main(app, move || system_shows(&a, rect))?;
+    let shown = on_main(app, move || window_visibility::observe(crate::room_window(&a).as_ref(), rect))?;
     let page_shows = page.map(|p| p.shown);
     Some((logic::stage_in_view(shown.stage_on_screen(), page_shows), shown, page_shows))
 }
@@ -294,140 +216,14 @@ fn on_main<T: Send + 'static>(app: &AppHandle, f: impl FnOnce() -> T + Send + 's
         let _ = tx.send(f());
     })
     .ok()?;
-    rx.recv().ok()
-}
-
-/// On the main thread ([`stage_in_view`]): AppKit and the window handles want it. `stage` is where the page says its
-/// stage is; without it, the room's whole content.
-fn system_shows(app: &AppHandle, stage: Option<Rect>) -> Shown {
-    let Some(w) = crate::room_window(app) else {
-        return Shown { shown: false, minimised: false, on_screen: false, uncovered: None };
-    };
-    let shown = w.is_visible().unwrap_or(false);
-    let minimised = w.is_minimized().unwrap_or(false);
-    let on_screen = on_screen(&w);
-    let uncovered = if shown && !minimised && on_screen { uncovered(&w, stage) } else { None };
-    Shown { shown, minimised, on_screen, uncovered }
-}
-
-/// macOS: AppKit's occlusion state, clear while no part of the window is on screen (fully covered, or on another Space).
-#[cfg(target_os = "macos")]
-fn on_screen(w: &WebviewWindow) -> bool {
-    use tauri_nspanel::objc2::{msg_send, runtime::AnyObject};
-    // NSWindowOcclusionStateVisible: set while any part of the window is on screen.
-    const VISIBLE: usize = 1 << 1;
-    // SAFETY: the window's own NSWindow, read on the main thread ([`system_shows`]).
-    w.ns_window().is_ok_and(|ns| unsafe {
-        let state: usize = msg_send![ns as *mut AnyObject, occlusionState];
-        state & VISIBLE != 0
-    })
-}
-
-/// Windows: DWM cloaks a window on another virtual desktop. How much other windows cover it is not measured.
-#[cfg(windows)]
-fn on_screen(w: &WebviewWindow) -> bool {
-    use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
-    let Ok(hwnd) = w.hwnd() else { return true };
-    let mut cloaked: u32 = 0;
-    // SAFETY: the room's own window handle, and a u32 as large as the attribute.
-    let read = unsafe {
-        DwmGetWindowAttribute(
-            hwnd.0 as _,
-            DWMWA_CLOAKED as _,
-            (&mut cloaked as *mut u32).cast(),
-            std::mem::size_of::<u32>() as u32,
-        )
-    };
-    read != 0 || cloaked == 0
-}
-
-/// Linux: X11 is not measured (a covered room counts as seen); Wayland shows the app nothing of other windows, so there
-/// the room counts as seen only while it has the focus, as before #165.
-#[cfg(target_os = "linux")]
-fn on_screen(w: &WebviewWindow) -> bool {
-    !wayland() || w.is_focused().unwrap_or(false)
-}
-
-/// macOS: the part of the stage (on the desktop) no other app's window above the room covers, from the window server's
-/// list of the windows in front of it. Ordinary and floating windows count; the Dock, menus, the menu bar and the app's
-/// own windows (the card) do not. Window bounds need no permission (only their titles would).
-#[cfg(target_os = "macos")]
-fn uncovered(w: &WebviewWindow, stage: Option<Rect>) -> Option<f64> {
-    use core_foundation::array::{CFArray, CFArrayRef};
-    use core_foundation::base::{CFType, TCFType};
-    use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
-    use core_foundation::number::CFNumber;
-    use core_foundation::string::CFString;
-    use tauri_nspanel::objc2::{msg_send, runtime::AnyObject};
-
-    #[repr(C)]
-    #[derive(Default)]
-    struct CGRect {
-        x: f64,
-        y: f64,
-        width: f64,
-        height: f64,
+    loop {
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(value) => return Some(value),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return None,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) if closed(app) => return None,
+            Err(_) => {}
+        }
     }
-    #[link(name = "CoreGraphics", kind = "framework")]
-    extern "C" {
-        fn CGWindowListCopyWindowInfo(option: u32, relative_to: u32) -> CFArrayRef;
-        fn CGRectMakeWithDictionaryRepresentation(dict: CFDictionaryRef, rect: *mut CGRect) -> bool;
-    }
-    // kCGWindowListOptionOnScreenAboveWindow | kCGWindowListExcludeDesktopElements.
-    const ABOVE: u32 = (1 << 1) | (1 << 4);
-    // kCGDockWindowLevel: the Dock and what floats over it (menus, the menu bar, the card) cover no window.
-    const DOCK_LEVEL: i64 = 20;
-
-    // The room's content on the desktop in points, top-left origin: as the window server gives windows' bounds.
-    let scale = w.scale_factor().ok()?;
-    let (at, size) = (w.inner_position().ok()?, w.inner_size().ok()?);
-    let content = Rect {
-        x: at.x as f64 / scale,
-        y: at.y as f64 / scale,
-        width: size.width as f64 / scale,
-        height: size.height as f64 / scale,
-    };
-    let target = match stage {
-        Some(s) => Rect { x: content.x + s.x, y: content.y + s.y, width: s.width, height: s.height },
-        None => content,
-    };
-    // SAFETY: the room's own NSWindow, on the main thread.
-    let number = w.ns_window().ok().map(|ns| -> isize { unsafe { msg_send![ns as *mut AnyObject, windowNumber] } })?;
-    // SAFETY: CoreGraphics' own function; the array it creates is released by its wrapper.
-    let raw = unsafe { CGWindowListCopyWindowInfo(ABOVE, u32::try_from(number).ok()?) };
-    if raw.is_null() {
-        return None;
-    }
-    let windows: CFArray<CFDictionary<CFString, CFType>> = unsafe { CFArray::wrap_under_create_rule(raw) };
-    let own = i64::from(std::process::id());
-    let number_of = |d: &CFDictionary<CFString, CFType>, key: &'static str| {
-        d.find(CFString::from_static_string(key)).and_then(|v| v.downcast::<CFNumber>())
-    };
-    let above: Vec<Rect> = windows
-        .iter()
-        .filter_map(|d| {
-            let layer = number_of(&d, "kCGWindowLayer")?.to_i64()?;
-            let pid = number_of(&d, "kCGWindowOwnerPID")?.to_i64()?;
-            let alpha = number_of(&d, "kCGWindowAlpha").and_then(|a| a.to_f64()).unwrap_or(1.0);
-            if !(0..DOCK_LEVEL).contains(&layer) || pid == own || alpha <= 0.0 {
-                return None;
-            }
-            let bounds = d.find(CFString::from_static_string("kCGWindowBounds"))?;
-            if !bounds.instance_of::<CFDictionary>() {
-                return None;
-            }
-            let mut r = CGRect::default();
-            // SAFETY: a CFDictionary (checked above), as CoreGraphics wrote it.
-            unsafe { CGRectMakeWithDictionaryRepresentation(bounds.as_CFTypeRef() as CFDictionaryRef, &mut r) }
-                .then_some(Rect { x: r.x, y: r.y, width: r.width, height: r.height })
-        })
-        .collect();
-    Some(logic::uncovered(target, &above))
-}
-
-#[cfg(not(target_os = "macos"))]
-fn uncovered(_: &WebviewWindow, _: Option<Rect>) -> Option<f64> {
-    None
 }
 
 /// Minimising, covering, Space changes and windows of other apps moving raise no window event Tauri forwards, so the app
@@ -438,6 +234,9 @@ fn watch_view(app: AppHandle) {
         let mut was = None;
         loop {
             std::thread::sleep(VIEW_EVERY);
+            if closed(&app) {
+                return;
+            }
             let Some((now, shown, page)) = stage_in_view(&app) else { return };
             if was.replace(now).is_some_and(|before| before != now) {
                 debug(&format!("call-controls stage in view={now}: {shown:?} page={page:?}"));
@@ -450,6 +249,9 @@ fn watch_view(app: AppHandle) {
 /// Shows or hides the card for the call as it is now, and tells it what changed. Called on every change of the call,
 /// of the room window's view, of the settings, of the card's × and of the tray's "hide".
 pub fn update(app: &AppHandle) {
+    if closed(app) {
+        return;
+    }
     let Some(card) = card(app) else { return };
     let call = app.state::<AppState>().call.lock().unwrap().clone();
     let Some((in_view, _, _)) = stage_in_view(app) else { return };
@@ -459,6 +261,9 @@ pub fn update(app: &AppHandle) {
     let enabled = app.state::<AppState>().settings.lock().unwrap().as_ref().is_none_or(|s| s.call_controls_enabled);
     let (show, hide, unhidden, reason, decision) = {
         let mut inner = card.0.lock().unwrap();
+        if inner.closed {
+            return;
+        }
         let hidden = logic::still_hidden(inner.hidden, call.joined, inner.stage_in_view, in_view);
         let unhidden = inner.hidden && !hidden;
         inner.hidden = hidden;
@@ -502,7 +307,6 @@ pub fn update(app: &AppHandle) {
         settle_size(app);
         apply_visible(app, true, decision);
         debug(&format!("call-controls shown: {reason}"));
-        card.1.notify_all();
     } else if hide {
         apply_visible(app, false, decision);
         debug(&format!("call-controls hidden: {reason}"));
@@ -521,9 +325,12 @@ pub fn update(app: &AppHandle) {
 fn apply_visible(app: &AppHandle, visible: bool, decision: u64) {
     let a = app.clone();
     let _ = app.run_on_main_thread(move || {
-        let latest = card(&a).is_some_and(|card| card.0.lock().unwrap().visibility.is(decision));
+        let latest = card(&a).is_some_and(|card| {
+            let inner = card.0.lock().unwrap();
+            !inner.closed && inner.visibility.is(decision)
+        });
         if latest {
-            set_visible(&a, visible);
+            NativeCardWindow::set_visible(&a, LABEL, visible);
         } else {
             debug(&format!("call-controls {} skipped: changed meanwhile", if visible { "show" } else { "hide" }));
         }
@@ -534,9 +341,12 @@ fn apply_visible(app: &AppHandle, visible: bool, decision: u64) {
 fn move_when_latest(app: &AppHandle, at: Point, decision: u64) {
     let a = app.clone();
     let _ = app.run_on_main_thread(move || {
-        let latest = card(&a).is_some_and(|card| card.0.lock().unwrap().moves.is(decision));
+        let latest = card(&a).is_some_and(|card| {
+            let inner = card.0.lock().unwrap();
+            !inner.closed && inner.moves.is(decision)
+        });
         if let (true, Some(w)) = (latest, window(&a)) {
-            move_to(&w, at);
+            desktop_geometry::place(&w, at);
         }
     });
 }
@@ -548,8 +358,8 @@ fn move_when_latest(app: &AppHandle, at: Point, decision: u64) {
 fn settle_size(app: &AppHandle) {
     let (Some(card), Some(w)) = (card(app), window(app)) else { return };
     let Some(wanted) = card.0.lock().unwrap().size else { return };
-    let Some(actual) = frame(&w) else { return };
-    let unit = unit(&w);
+    let Some(actual) = desktop_geometry::frame(&w) else { return };
+    let unit = desktop_geometry::unit(&w);
     let (aw, ah) = (actual.width / unit, actual.height / unit);
     if (aw - wanted.width).abs() > 1.0 || (ah - wanted.height).abs() > 1.0 {
         debug(&format!("call-controls window was {aw:.0}x{ah:.0}, set to {:.0}x{:.0}", wanted.width, wanted.height));
@@ -600,6 +410,9 @@ fn preview(app: &AppHandle) {
     let app = app.clone();
     std::thread::spawn(move || loop {
         std::thread::sleep(PREVIEW_EVERY);
+        if closed(&app) {
+            return;
+        }
         update(&app);
         let Some(card) = self::card(&app) else { return };
         let mut inner = card.0.lock().unwrap();
@@ -662,13 +475,14 @@ fn full_state(app: &AppHandle, call: &CallSnapshot) -> serde_json::Value {
             (inner.level, inner.pointer_inside, inner.outside_clicks, inner.told_place, inner.told_size.flatten())
         })
         .unwrap_or((0, None, 0, None, None));
+    let shortcut = crate::shortcut_status(&app.state::<AppState>());
     let mut state = serde_json::json!({
         "call": call,
         "level": level,
         "pointerInside": pointer,
         "outsideClicks": clicks,
         "alwaysExpanded": settings.call_controls_always_shown,
-        "muteShortcut": logic::shortcut_label(&settings.mute_shortcut, cfg!(target_os = "macos")),
+        "muteShortcut": logic::shortcut_hint(&shortcut),
         "size": size.map(size_json),
     });
     if let Some(place) = place {
@@ -687,156 +501,6 @@ fn push(app: &AppHandle, patch: serde_json::Value) {
     }
 }
 
-/// On the main thread ([`apply_visible`]): AppKit wants its windows touched there.
-fn set_visible(app: &AppHandle, visible: bool) {
-    #[cfg(target_os = "macos")]
-    {
-        use tauri_nspanel::ManagerExt;
-        if let Ok(panel) = app.get_webview_panel(LABEL) {
-            // orderFrontRegardless / orderOut: shown without activating the app or taking the key window.
-            if visible {
-                if let Some(w) = window(app) {
-                    hover_while_inactive(&w);
-                }
-                panel.show();
-                debug(&format!("call-controls panel {}", describe(panel.as_panel())));
-            } else {
-                panel.hide()
-            }
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    if let Some(w) = window(app) {
-        let _ = if visible { w.show() } else { w.hide() };
-    }
-}
-
-/// What the panel is, for CI's log (SIDEVOICE_DEBUG=1): how it was asked to behave, read back from AppKit.
-#[cfg(target_os = "macos")]
-fn describe(panel: &tauri_nspanel::objc2_app_kit::NSPanel) -> String {
-    use tauri_nspanel::objc2::{class, msg_send, runtime::AnyObject};
-    // NSWindowStyleMaskNonactivatingPanel, NSWindowCollectionBehaviorCanJoinAllSpaces / FullScreenAuxiliary.
-    const NONACTIVATING: usize = 1 << 7;
-    const ALL_SPACES: usize = 1 << 0;
-    const FULL_SCREEN_AUXILIARY: usize = 1 << 8;
-    let (mask, level, behavior, key, visible, number): (usize, isize, usize, bool, bool, isize) = unsafe {
-        (
-            msg_send![panel, styleMask],
-            msg_send![panel, level],
-            msg_send![panel, collectionBehavior],
-            // AppKit's own key window: the panel answers `isKeyWindow` with yes for WebKit's sake (#139).
-            {
-                let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-                let key: *mut AnyObject = msg_send![app, keyWindow];
-                std::ptr::eq(key.cast_const().cast(), panel)
-            },
-            msg_send![panel, isVisible],
-            msg_send![panel, windowNumber],
-        )
-    };
-    format!(
-        "nonactivating={} level={level} all_spaces={} fullscreen_auxiliary={} key={key} visible={visible} window={number} pid={} {}",
-        mask & NONACTIVATING != 0,
-        behavior & ALL_SPACES != 0,
-        behavior & FULL_SCREEN_AUXILIARY != 0,
-        std::process::id(),
-        app_active()
-    )
-}
-
-/// Whether the app is the active one: showing, hovering or clicking the card must never make it so (CI's log).
-pub(crate) fn app_active() -> String {
-    #[cfg(target_os = "macos")]
-    {
-        use tauri_nspanel::objc2::{class, msg_send, runtime::AnyObject};
-        let active: bool = unsafe {
-            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-            msg_send![app, isActive]
-        };
-        // NSApplicationActivationPolicyRegular is 0: the Dock icon, Dock Quit and Cmd+Tab (the card must not change it).
-        let policy: isize = unsafe {
-            let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-            msg_send![app, activationPolicy]
-        };
-        format!("app_active={active} regular={}", policy == 0)
-    }
-    #[cfg(not(target_os = "macos"))]
-    String::new()
-}
-
-// Geometry on the desktop (see `Display`): physical pixels on Windows and Linux; points on macOS, where Tao's
-// "physical" positions are each scaled by a different display (the pointer's by the main one, a window's by its own).
-
-/// One logical pixel of this window, in desktop units.
-fn unit(w: &WebviewWindow) -> f64 {
-    if cfg!(target_os = "macos") {
-        1.0
-    } else {
-        w.scale_factor().unwrap_or(1.0)
-    }
-}
-
-/// The pointer on the desktop.
-fn pointer(app: &AppHandle) -> Option<Point> {
-    let p = app.cursor_position().ok()?;
-    let scale = if cfg!(target_os = "macos") { app.primary_monitor().ok()??.scale_factor() } else { 1.0 };
-    Some(Point { x: p.x / scale, y: p.y / scale })
-}
-
-/// The window on the desktop.
-fn frame(w: &WebviewWindow) -> Option<Rect> {
-    let (at, size) = (w.outer_position().ok()?, w.outer_size().ok()?);
-    let scale = if cfg!(target_os = "macos") { w.scale_factor().ok()? } else { 1.0 };
-    Some(Rect {
-        x: at.x as f64 / scale,
-        y: at.y as f64 / scale,
-        width: size.width as f64 / scale,
-        height: size.height as f64 / scale,
-    })
-}
-
-fn move_to(w: &WebviewWindow, at: Point) {
-    #[cfg(target_os = "macos")]
-    let _ = w.set_position(tauri::LogicalPosition::new(at.x, at.y));
-    #[cfg(not(target_os = "macos"))]
-    let _ = w.set_position(tauri::PhysicalPosition::new(at.x.round() as i32, at.y.round() as i32));
-}
-
-/// A monitor's whole area on the desktop, and the display it is to the card (its work area).
-fn monitor_display(m: &Monitor) -> (Rect, Display) {
-    let scale = m.scale_factor();
-    let (unit, to_desktop) = if cfg!(target_os = "macos") { (1.0, 1.0 / scale) } else { (scale, 1.0) };
-    let (at, size, work) = (m.position(), m.size(), m.work_area());
-    let whole = Rect {
-        x: at.x as f64 * to_desktop,
-        y: at.y as f64 * to_desktop,
-        width: size.width as f64 * to_desktop,
-        height: size.height as f64 * to_desktop,
-    };
-    let name = m.name().cloned().unwrap_or_else(|| format!("{}x{}", size.width, size.height));
-    let display = Display::new(
-        &name,
-        unit,
-        Point { x: work.position.x as f64 * to_desktop, y: work.position.y as f64 * to_desktop },
-        Size { width: work.size.width as f64 / scale, height: work.size.height as f64 / scale },
-    );
-    (whole, display)
-}
-
-/// The display with this key, else the one at `at` (on the desktop), else the room window's, else the primary.
-fn display(app: &AppHandle, key: Option<&str>, at: Option<Point>) -> Option<Display> {
-    let all: Vec<(Rect, Display)> = app.available_monitors().unwrap_or_default().iter().map(monitor_display).collect();
-    let by_key = key.and_then(|key| all.iter().find(|(_, d)| d.key == key));
-    let by_point = || at.and_then(|p| all.iter().find(|(whole, _)| whole.contains(p)));
-    if let Some((_, d)) = by_key.or_else(by_point) {
-        return Some(d.clone());
-    }
-    crate::room_window(app)
-        .and_then(|w| w.current_monitor().ok().flatten())
-        .or_else(|| app.primary_monitor().ok().flatten())
-        .map(|m| monitor_display(&m).1)
-}
-
 /// The preferred corner: where a card first appears, and where a click on a corner in Settings puts it.
 fn default_corner(app: &AppHandle) -> Corner {
     app.state::<AppState>().settings.lock().unwrap().as_ref().map(|s| s.call_controls_corner).unwrap_or_default()
@@ -846,7 +510,7 @@ fn default_corner(app: &AppHandle) -> Corner {
 /// body there, the window around it, moved just enough for all of it to fit. Then tells the card its place and its
 /// resized size there, when they changed. On Wayland the compositor places it.
 fn place(app: &AppHandle) {
-    if wayland() {
+    if !desktop_geometry::positions_available() {
         return;
     }
     let corner = default_corner(app);
@@ -856,7 +520,9 @@ fn place(app: &AppHandle) {
     }
     let key = card.0.lock().unwrap().rest.as_ref().map(|(d, _)| d.key.clone());
     // The monitors are the main thread's to answer: asked with the lock released (#170).
-    let Some(display) = display(app, key.as_deref(), None) else { return };
+    let Some(display) = desktop_geometry::display(app, crate::room_window(app).as_ref(), key.as_deref(), None) else {
+        return;
+    };
     let (to, decision, patch) = {
         let mut inner = card.0.lock().unwrap();
         let size = inner.size.unwrap_or(FIRST_SIZE);
@@ -1012,7 +678,7 @@ pub fn call_controls_ready(app: AppHandle, webview: Webview) -> Result<(), Strin
 }
 
 /// Whether the pointer is over something clickable in the card (its CSS cursor is the hand). The app sets the hand
-/// itself while the pointer is over the card ([`keep_hand`]).
+/// itself while the pointer is over the card (the native pointer subscription).
 #[tauri::command]
 pub fn call_controls_cursor(app: AppHandle, webview: Webview, hand: bool) -> Result<(), String> {
     from_card_window(&webview)?;
@@ -1049,7 +715,7 @@ pub fn call_controls_run(app: AppHandle, webview: Webview, command: serde_json::
         debug(&format!("call-controls refused {command}: {e}"));
         format!("not a card command: {e}")
     })?;
-    debug(&format!("call-controls run {} {}", command.name(), app_active()));
+    debug(&format!("call-controls run {} {}", command.name(), NativeCardWindow::app_active()));
     if command == Command::OpenSettings {
         crate::show_room(&app);
     }
@@ -1132,7 +798,7 @@ pub enum DragPhase {
 pub fn call_controls_drag(app: AppHandle, webview: Webview, phase: DragPhase) -> Result<(), String> {
     from_card_window(&webview)?;
     let (Some(card), Some(w)) = (card(&app), window(&app)) else { return Ok(()) };
-    if wayland() {
+    if !desktop_geometry::positions_available() {
         if let DragPhase::Start = phase {
             let _ = w.start_dragging();
         }
@@ -1141,13 +807,14 @@ pub fn call_controls_drag(app: AppHandle, webview: Webview, phase: DragPhase) ->
     // The pointer, the window and the monitors are asked with the card's lock released (#170).
     match phase {
         DragPhase::Start => {
-            let drag =
-                pointer(&app).zip(frame(&w)).map(|(pointer, at)| Drag { pointer, window: Point { x: at.x, y: at.y } });
+            let drag = desktop_geometry::pointer(&app)
+                .zip(desktop_geometry::frame(&w))
+                .map(|(pointer, at)| Drag { pointer, window: Point { x: at.x, y: at.y } });
             card.0.lock().unwrap().drag = drag;
         }
         DragPhase::Move => {
             let drag = card.0.lock().unwrap().drag;
-            if let (Some(drag), Some(p)) = (drag, pointer(&app)) {
+            if let (Some(drag), Some(p)) = (drag, desktop_geometry::pointer(&app)) {
                 let to = Point { x: drag.window.x + p.x - drag.pointer.x, y: drag.window.y + p.y - drag.pointer.y };
                 let decision = card.0.lock().unwrap().moves.advance();
                 move_when_latest(&app, to, decision);
@@ -1155,10 +822,13 @@ pub fn call_controls_drag(app: AppHandle, webview: Webview, phase: DragPhase) ->
         }
         DragPhase::End => {
             let drag = card.0.lock().unwrap().drag.take();
-            let (Some(drag), Some(p)) = (drag, pointer(&app)) else { return Ok(()) };
+            let (Some(drag), Some(p)) = (drag, desktop_geometry::pointer(&app)) else { return Ok(()) };
             let dropped = Point { x: drag.window.x + p.x - drag.pointer.x, y: drag.window.y + p.y - drag.pointer.y };
             // The display the pointer let go on; the card's corner may be just off it.
-            let Some(display) = display(&app, None, Some(p)) else { return Ok(()) };
+            let Some(display) = desktop_geometry::display(&app, crate::room_window(&app).as_ref(), None, Some(p))
+            else {
+                return Ok(());
+            };
             let mut inner = card.0.lock().unwrap();
             let size = inner.size.unwrap_or(FIRST_SIZE);
             let anchor = inner.anchor.unwrap_or_else(|| logic::anchor(size, None, MARGIN));
@@ -1168,7 +838,13 @@ pub fn call_controls_drag(app: AppHandle, webview: Webview, phase: DragPhase) ->
             let spot = Spot::of(rest, body, display.work);
             inner.placements.displays.insert(display.key.clone(), spot);
             save(&inner);
-            debug(&format!("call-controls dropped at {:.0},{:.0} on {} {}", rest.x, rest.y, display.key, app_active()));
+            debug(&format!(
+                "call-controls dropped at {:.0},{:.0} on {} {}",
+                rest.x,
+                rest.y,
+                display.key,
+                NativeCardWindow::app_active()
+            ));
             inner.rest = Some((display, spot));
             drop(inner);
             place(&app);
@@ -1194,7 +870,7 @@ fn opposite(edge: Edge) -> Corner {
 #[tauri::command]
 pub fn call_controls_resize(app: AppHandle, webview: Webview, phase: DragPhase, edge: Edge) -> Result<(), String> {
     from_card_window(&webview)?;
-    if wayland() {
+    if !desktop_geometry::positions_available() {
         return Ok(());
     }
     let (Some(card), Some(w)) = (card(&app), window(&app)) else { return Ok(()) };
@@ -1210,15 +886,17 @@ pub fn call_controls_resize(app: AppHandle, webview: Webview, phase: DragPhase, 
     // The pointer and the window are asked with the card's lock released (#170).
     match phase {
         DragPhase::Start => {
-            let resize = pointer(&app).zip(frame(&w)).zip(display).map(|((pointer, at), display)| {
-                let corner = display.to_local(Point { x: at.x, y: at.y });
-                let window = Rect { x: corner.x, y: corner.y, width: size.width, height: size.height };
-                Resize { edge, pointer, display, window, anchor }
-            });
+            let resize = desktop_geometry::pointer(&app).zip(desktop_geometry::frame(&w)).zip(display).map(
+                |((pointer, at), display)| {
+                    let corner = display.to_local(Point { x: at.x, y: at.y });
+                    let window = Rect { x: corner.x, y: corner.y, width: size.width, height: size.height };
+                    Resize { edge, pointer, display, window, anchor }
+                },
+            );
             card.0.lock().unwrap().resize = resize;
         }
         DragPhase::Move | DragPhase::End => {
-            let (Some(resize), Some(p)) = (resize, pointer(&app)) else { return Ok(()) };
+            let (Some(resize), Some(p)) = (resize, desktop_geometry::pointer(&app)) else { return Ok(()) };
             let dx = (p.x - resize.pointer.x) / resize.display.unit;
             let dy = (p.y - resize.pointer.y) / resize.display.unit;
             let to = logic::resized(resize.window, resize.edge, dx, dy, min_width, min_height, resize.display.work);
@@ -1257,7 +935,6 @@ pub fn call_controls_resize(app: AppHandle, webview: Webview, phase: DragPhase, 
 }
 
 /// A click in another app while the card shows: the card closes an open panel. (Linux: not detected.)
-#[cfg(any(target_os = "macos", windows))]
 fn outside_click(app: &AppHandle) {
     let Some(card) = card(app) else { return };
     let clicks = {
@@ -1274,243 +951,21 @@ fn outside_click(app: &AppHandle) {
     push(app, serde_json::json!({ "outsideClicks": clicks }));
 }
 
-/// macOS: AppKit tells the app about clicks in other apps (a global monitor sees mouse buttons without the
-/// Accessibility permission; it never sees the keyboard, nor clicks on the app's own windows).
-#[cfg(target_os = "macos")]
-fn watch_clicks(app: &AppHandle) {
-    use tauri_nspanel::objc2::{class, msg_send, runtime::AnyObject};
-    // NSEventMaskLeftMouseDown | NSEventMaskRightMouseDown | NSEventMaskOtherMouseDown.
-    const MOUSE_DOWN: u64 = (1 << 1) | (1 << 3) | (1 << 25);
-    let app = app.clone();
-    let handler = block2::RcBlock::new(move |_event: std::ptr::NonNull<AnyObject>| outside_click(&app));
-    let monitor: Option<tauri_nspanel::objc2::rc::Retained<AnyObject>> =
-        unsafe { msg_send![class!(NSEvent), addGlobalMonitorForEventsMatchingMask: MOUSE_DOWN, handler: &*handler] };
-    debug(&format!("call-controls watching clicks elsewhere: {}", monitor.is_some()));
-    // For the app's lifetime: the monitor is never removed, and AppKit hands it back autoreleased, so it is kept here.
-    std::mem::forget(monitor);
-    std::mem::forget(handler);
+fn closed(app: &AppHandle) -> bool {
+    card(app).is_none_or(|card| card.0.lock().unwrap().closed)
 }
 
-/// macOS: tells the window server, too, that the card never activates the app. NSPanel does so only when it is created
-/// with the non-activating style; tauri-nspanel adds that style to an existing window, so AppKit treats the panel as
-/// non-activating while the window server does not, and a drag on the card made the app frontmost (focus taken from
-/// the person's app, CI's card step). `_setPreventsActivation:` is what NSPanel itself calls at creation:
-/// https://philz.blog/nspanel-nonactivating-style-mask-flag/
-#[cfg(target_os = "macos")]
-fn prevent_activation(app: &AppHandle) {
-    use tauri_nspanel::objc2::{msg_send, runtime::Bool, sel};
-    use tauri_nspanel::ManagerExt;
-    let Ok(panel) = app.get_webview_panel(LABEL) else { return };
-    let panel = panel.as_panel();
-    // SAFETY: main thread (setup); a private NSWindow method, called only when the window answers to it.
-    let applied = unsafe {
-        let responds: bool = msg_send![panel, respondsToSelector: sel!(_setPreventsActivation:)];
-        if responds {
-            let _: () = msg_send![panel, _setPreventsActivation: Bool::YES];
+fn report_pointer_inside(app: &AppHandle, inside: Option<bool>) {
+    let changed = card(app).is_some_and(|card| {
+        let mut inner = card.0.lock().unwrap();
+        let changed = inner.shown && !inner.closed && inner.pointer_inside != inside;
+        if changed {
+            inner.pointer_inside = inside;
         }
-        responds
-    };
-    debug(&format!("call-controls prevents activation: {applied}"));
-}
-
-/// macOS: hover on a card that is never key while the app is inactive (#139). WebKit tracks the mouse with a tracking
-/// area that is active only in the key window (`NSTrackingActiveInKeyWindow`, WebKit's `WebViewImpl.mm`
-/// `trackingAreaOptions()`), so the card's page never saw the pointer move: no `:hover`, no `mouseenter`. That area
-/// is replaced by the same one active always, which AppKit delivers to inactive apps too; WebKit only re-creates it
-/// when the system's scroller style changes, so it is replaced again each time the card shows. Idempotent.
-#[cfg(target_os = "macos")]
-fn hover_while_inactive(w: &WebviewWindow) {
-    use tauri_nspanel::objc2::{class, msg_send, rc::Retained, runtime::AnyObject};
-    use tauri_nspanel::NSRect;
-    // NSTrackingActiveInKeyWindow, NSTrackingActiveAlways.
-    const IN_KEY_WINDOW: usize = 0x20;
-    const ALWAYS: usize = 0x80;
-    let _ = w.with_webview(|webview| {
-        let view = webview.inner() as *mut AnyObject;
-        if view.is_null() {
-            return;
-        }
-        // SAFETY: the window's own WKWebView, on the main thread (`with_webview`); the areas are kept retained while
-        // the view's own list changes.
-        let replaced = unsafe {
-            let list: Option<Retained<AnyObject>> = msg_send![view, trackingAreas];
-            let areas: Vec<Retained<AnyObject>> = list
-                .map(|list| {
-                    let count: usize = msg_send![&*list, count];
-                    (0..count).map(|i| msg_send![&*list, objectAtIndex: i]).collect()
-                })
-                .unwrap_or_default();
-            let mut replaced = 0;
-            for area in areas {
-                let options: usize = msg_send![&*area, options];
-                if options & IN_KEY_WINDOW == 0 {
-                    continue;
-                }
-                let rect: NSRect = msg_send![&*area, rect];
-                let owner: *mut AnyObject = msg_send![&*area, owner];
-                let user_info: *mut AnyObject = msg_send![&*area, userInfo];
-                let alloc: *mut AnyObject = msg_send![class!(NSTrackingArea), alloc];
-                let always: *mut AnyObject = msg_send![
-                    alloc,
-                    initWithRect: rect,
-                    options: (options & !IN_KEY_WINDOW) | ALWAYS,
-                    owner: owner,
-                    userInfo: user_info
-                ];
-                let Some(always) = Retained::from_raw(always) else { continue };
-                let _: () = msg_send![view, removeTrackingArea: &*area];
-                let _: () = msg_send![view, addTrackingArea: &*always];
-                replaced += 1;
-            }
-            replaced
-        };
-        debug(&format!("call-controls tracks the pointer while inactive: replaced={replaced}"));
+        changed
     });
-}
-
-/// macOS: lets the app set the cursor while it is not the active app (#139). The window server ignores a cursor set
-/// by an app in the background, so the hand over the card's buttons never showed; `SetsCursorInBackground` is the
-/// connection property it honours instead. Private, looked up at run time: where it is gone the card only keeps the
-/// arrow. WebKit sets a cursor only while the pointer is over its own window, and the app puts the arrow back when the
-/// pointer leaves the card ([`arrow_after_leaving`]).
-#[cfg(target_os = "macos")]
-fn set_cursor_in_background() {
-    use core_foundation::base::TCFType;
-    use core_foundation::boolean::CFBoolean;
-    use core_foundation::string::CFString;
-    type MainConnection = unsafe extern "C" fn() -> i32;
-    type SetProperty = unsafe extern "C" fn(i32, i32, *const std::ffi::c_void, *const std::ffi::c_void) -> i32;
-    let symbol = |name: &std::ffi::CStr| unsafe { libc::dlsym(libc::RTLD_DEFAULT, name.as_ptr()) };
-    let main = symbol(c"CGSMainConnectionID");
-    let set = symbol(c"CGSSetConnectionProperty");
-    let result = if main.is_null() || set.is_null() {
-        "missing".to_string()
-    } else {
-        // SAFETY: CoreGraphics' own functions, with the signatures it has had since Mac OS X 10.4.
-        unsafe {
-            let main = std::mem::transmute::<*mut std::ffi::c_void, MainConnection>(main);
-            let set = std::mem::transmute::<*mut std::ffi::c_void, SetProperty>(set);
-            let connection = main();
-            let key = CFString::from_static_string("SetsCursorInBackground");
-            let error = set(
-                connection,
-                connection,
-                key.as_concrete_TypeRef().cast(),
-                CFBoolean::true_value().as_concrete_TypeRef().cast(),
-            );
-            if error == 0 {
-                "true".to_string()
-            } else {
-                format!("error {error}")
-            }
-        }
-    };
-    debug(&format!("call-controls sets the cursor in background: {result}"));
-}
-
-/// macOS: the pointer left the card: the cursor it showed there (a hand over a button) goes back to the arrow, since the
-/// app under the pointer may not set its own until the pointer enters one of its views again.
-#[cfg(target_os = "macos")]
-fn arrow_after_leaving(app: &AppHandle) {
-    let _ = app.run_on_main_thread(|| {
-        use tauri_nspanel::objc2::{class, msg_send, runtime::AnyObject};
-        // SAFETY: NSCursor's class methods, on the main thread.
-        unsafe {
-            let current: *mut AnyObject = msg_send![class!(NSCursor), currentCursor];
-            let arrow: *mut AnyObject = msg_send![class!(NSCursor), arrowCursor];
-            if current != arrow {
-                let _: () = msg_send![arrow, set];
-            }
-        }
-    });
-}
-
-/// macOS: the hand over the card's buttons while another app is in front (#166). WebKit sets the card's cursor only when
-/// the pointer moves over it, and an app in front that sets its own cursor on every mouse move (a text editor's I-beam)
-/// takes it back at once, so the hand is set again at each look at the pointer ([`logic::must_set_hand`]).
-#[cfg(target_os = "macos")]
-fn keep_hand(app: &AppHandle, inside: Option<bool>, page_wants_hand: bool) {
-    if inside != Some(true) || !page_wants_hand {
-        return;
+    if changed {
+        debug(&format!("call-controls pointer inside={inside:?} {}", NativeCardWindow::app_active()));
+        push(app, serde_json::json!({ "pointerInside": inside }));
     }
-    let _ = app.run_on_main_thread(move || {
-        use tauri_nspanel::objc2::{class, msg_send, runtime::AnyObject};
-        // SAFETY: NSCursor's class methods, on the main thread.
-        unsafe {
-            let current: *mut AnyObject = msg_send![class!(NSCursor), currentCursor];
-            let hand: *mut AnyObject = msg_send![class!(NSCursor), pointingHandCursor];
-            if logic::must_set_hand(inside, page_wants_hand, current == hand) {
-                let _: () = msg_send![hand, set];
-            }
-        }
-    });
-}
-
-/// Windows: whether a mouse button went down since the last look (the pointer watcher's pace).
-#[cfg(windows)]
-fn button_down() -> bool {
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON};
-    // The high bit is "down now"; the low bit "pressed since the last call", so a quick click is not missed.
-    [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON].iter().any(|&key| unsafe { GetAsyncKeyState(key as i32) } as u16 & 0x8001 != 0)
-}
-
-/// While the card shows, tells it when the pointer comes over it or leaves (see [`POINTER_EVERY`]); on Windows, also
-/// when the person clicks elsewhere. One thread for the app's lifetime, asleep while the card is hidden.
-fn watch_pointer(app: AppHandle) {
-    std::thread::spawn(move || {
-        #[cfg(windows)]
-        let mut was_down = false;
-        loop {
-            {
-                let Some(card) = card(&app) else { return };
-                let mut inner = card.0.lock().unwrap();
-                while !inner.shown {
-                    inner = card.1.wait(inner).unwrap();
-                }
-            }
-            std::thread::sleep(POINTER_EVERY);
-            let Some(w) = window(&app) else { return };
-            let inside = pointer(&app).zip(frame(&w)).map(|(p, at)| {
-                let margin = MARGIN * unit(&w);
-                Rect {
-                    x: at.x + margin,
-                    y: at.y + margin,
-                    width: at.width - 2.0 * margin,
-                    height: at.height - 2.0 * margin,
-                }
-                .contains(p)
-            });
-            let changed = {
-                let Some(card) = card(&app) else { return };
-                let mut inner = card.0.lock().unwrap();
-                // Hidden meanwhile: what the pointer did is of no use to the next showing.
-                let changed = inner.shown && inner.pointer_inside != inside;
-                if changed {
-                    inner.pointer_inside = inside;
-                }
-                changed
-            };
-            #[cfg(target_os = "macos")]
-            {
-                let hand = card(&app).is_some_and(|card| card.0.lock().unwrap().hand);
-                keep_hand(&app, inside, hand);
-            }
-            if changed {
-                debug(&format!("call-controls pointer inside={inside:?} {}", app_active()));
-                push(&app, serde_json::json!({ "pointerInside": inside }));
-                #[cfg(target_os = "macos")]
-                if inside == Some(false) {
-                    arrow_after_leaving(&app);
-                }
-            }
-            #[cfg(windows)]
-            {
-                let down = button_down();
-                if down && !was_down && inside == Some(false) {
-                    outside_click(&app);
-                }
-                was_down = down;
-            }
-        }
-    });
 }

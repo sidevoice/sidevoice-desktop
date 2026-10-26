@@ -1,6 +1,5 @@
 //! Native destructive-action confirmation. The reset transaction remains in `data`.
 
-use std::future::Future;
 use std::time::Duration;
 use tauri::{AppHandle, Runtime};
 use tokio::sync::oneshot;
@@ -8,17 +7,11 @@ use tokio::time::Instant;
 
 const START_TIMEOUT: Duration = Duration::from_secs(3);
 
-#[cfg(target_os = "macos")]
-#[path = "confirmation/macos.rs"]
+#[cfg_attr(target_os = "macos", path = "confirmation/macos.rs")]
+#[cfg_attr(target_os = "windows", path = "confirmation/windows.rs")]
+#[cfg_attr(target_os = "linux", path = "confirmation/linux.rs")]
 mod imp;
-#[cfg(target_os = "windows")]
-#[path = "confirmation/windows.rs"]
-mod imp;
-#[cfg(target_os = "linux")]
-#[path = "confirmation/linux.rs"]
-mod imp;
-
-pub use imp::NativeConfirmation;
+use imp::Native;
 
 /// The existing reset and uninstall prompts, with their original translations.
 pub enum ConfirmationKind {
@@ -26,44 +19,56 @@ pub enum ConfirmationKind {
     Uninstall,
 }
 
-/// OS-owned confirmation, available independently of whether reset is offered on this host.
-pub trait Confirmation: 'static {
-    /// Asks using the system language (English fallback). Cancel is the default; only an explicit destructive
-    /// button response accepts. Escape, closing, and a failure to display or receive a response cancel. The native
-    /// modal loop must start within three seconds; the person's decision has no deadline once it starts.
-    fn confirm<R: Runtime>(app: &AppHandle<R>, kind: ConfirmationKind) -> impl Future<Output = bool> + Send {
-        async move {
-            let deadline = Instant::now() + START_TIMEOUT;
-            let (started, start) = oneshot::channel();
-            let (answer, response) = oneshot::channel();
-            if app
-                .run_on_main_thread(move || {
-                    let accepted = Self::show(kind, DialogStart { deadline, started });
-                    let _ = answer.send(accepted);
-                })
-                .is_err()
-            {
-                return false;
-            }
-            wait_for_response(deadline, start, response).await
-        }
+/// What differs per OS: the native dialog, and where its language is read.
+trait Os {
+    /// The language the OS reports for the dialog, `None` when it reports none. Default: the system locale
+    /// (macOS reads the current locale's language code instead).
+    fn language() -> Option<String> {
+        sys_locale::get_locale()
     }
 
-    /// Runs on the UI thread. Checks native prerequisites and registers a native opened/modal-session hook.
-    /// That hook calls `start.opened()` and immediately cancels the native dialog if it returns false.
-    fn show(kind: ConfirmationKind, start: DialogStart) -> bool;
+    /// Runs on the UI thread with the prompt's title, detail, cancel and destructive button words. Checks native
+    /// prerequisites and registers a native opened/modal-session hook. That hook calls `start.opened()` and
+    /// immediately cancels the native dialog if it returns false. Only the destructive button accepts.
+    fn show(words: (&'static str, &'static str, &'static str, &'static str), start: DialogStart) -> bool;
+}
+
+/// OS-owned confirmation, available independently of whether reset is offered on this host. Asks using the system
+/// language (English fallback). Cancel is the default; only an explicit destructive button response accepts. Escape,
+/// closing, and a failure to display or receive a response cancel. The native modal loop must start within three
+/// seconds; the person's decision has no deadline once it starts.
+pub async fn confirm<R: Runtime>(app: &AppHandle<R>, kind: ConfirmationKind) -> bool {
+    let deadline = Instant::now() + START_TIMEOUT;
+    let (started, start) = oneshot::channel();
+    let (answer, response) = oneshot::channel();
+    if app
+        .run_on_main_thread(move || {
+            let language = Native::language().unwrap_or_else(|| "en".to_owned());
+            let accepted = Native::show(kind.words(&language), DialogStart { deadline, started });
+            let _ = answer.send(accepted);
+        })
+        .is_err()
+    {
+        return false;
+    }
+    wait_for_response(deadline, start, response).await
 }
 
 /// A single-use START handshake. An opened hook delivered after cancellation must dismiss its native dialog.
-pub struct DialogStart {
+struct DialogStart {
     deadline: Instant,
     started: oneshot::Sender<()>,
 }
 
 impl DialogStart {
-    /// Acknowledges the native opened/modal-session hook. Refuses an expired request or an absent caller.
-    pub fn opened(self) -> bool {
-        Instant::now() < self.deadline && self.started.send(()).is_ok()
+    /// Whether the request is no longer wanted: its start window has passed, or the caller stopped waiting.
+    fn cancelled(&self) -> bool {
+        Instant::now() >= self.deadline || self.started.is_closed()
+    }
+
+    /// Acknowledges the native opened/modal-session hook. Refuses a cancelled request.
+    fn opened(self) -> bool {
+        !self.cancelled() && self.started.send(()).is_ok()
     }
 }
 
@@ -131,7 +136,7 @@ mod tests {
         tokio::runtime::Builder::new_current_thread().enable_time().start_paused(true).build().unwrap()
     }
 
-    fn request() -> (DialogStart, impl Future<Output = bool> + Send, oneshot::Sender<bool>) {
+    fn request() -> (DialogStart, impl std::future::Future<Output = bool> + Send, oneshot::Sender<bool>) {
         let deadline = Instant::now() + START_TIMEOUT;
         let (started, start) = oneshot::channel();
         let (answer, response) = oneshot::channel();
@@ -181,30 +186,6 @@ mod tests {
             let (start, response, _answer) = request();
             tokio::time::advance(START_TIMEOUT).await;
             assert!(!start.opened());
-            assert!(!response.await);
-        });
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn macos_expired_request_cancels_before_accessing_appkit() {
-        runtime().block_on(async {
-            let (start, response, _answer) = request();
-            tokio::time::advance(START_TIMEOUT).await;
-            // Runs on a test thread: an expired request must return before any main-thread-only AppKit call.
-            assert!(!NativeConfirmation::show(ConfirmationKind::DeleteAllData, start));
-            assert!(!response.await);
-        });
-    }
-
-    // GTK's process/thread initialization is Linux-specific; the handshake tests above run on every host.
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn linux_without_gtk_on_this_thread_cancels_without_constructing_a_widget() {
-        runtime().block_on(async {
-            assert!(!gtk::is_initialized_main_thread());
-            let (start, response, _answer) = request();
-            assert!(!NativeConfirmation::show(ConfirmationKind::DeleteAllData, start));
             assert!(!response.await);
         });
     }

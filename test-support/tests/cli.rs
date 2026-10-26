@@ -1,8 +1,9 @@
 #![cfg(unix)]
 use serde_json::json;
 use sidevoice_desktop_test_support::fixture;
+use sidevoice_desktop_test_support::platform::storage::{StorageFixture, StorageFixtures};
 use sidevoice_local_host::{cli::Cli, paths::DataDirs, Refusal};
-use std::os::unix::fs::PermissionsExt;
+use sidevoice_platform::process::{Process, Processes};
 use std::{
     thread,
     time::{Duration, Instant},
@@ -53,14 +54,11 @@ fn no_json_a_crash_or_a_hang_are_failures() {
 }
 
 /// Whether `pid` is still running (a zombie waiting for its reaper is not).
-fn alive(pid: i32) -> bool {
-    // SAFETY: signal 0 only asks whether the process exists.
-    let exists = unsafe { libc::kill(pid, 0) } == 0;
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
-    exists && !stat.rsplit_once(')').is_some_and(|(_, rest)| rest.trim_start().starts_with('Z'))
+fn alive(pid: u32) -> bool {
+    Processes::identity(pid).is_some()
 }
 
-fn dead_soon(pid: i32) -> bool {
+fn dead_soon(pid: u32) -> bool {
     (0..100).any(|_| {
         !alive(pid) || {
             thread::sleep(Duration::from_millis(20));
@@ -69,7 +67,7 @@ fn dead_soon(pid: i32) -> bool {
     })
 }
 
-fn pid_in(path: &std::path::Path) -> i32 {
+fn pid_in(path: &std::path::Path) -> u32 {
     std::fs::read_to_string(path).unwrap().trim().parse().unwrap()
 }
 
@@ -99,19 +97,20 @@ fn a_timeout_kills_the_whole_run() {
 fn what_the_program_detaches_into_its_own_session_stays() {
     let tmp = tempfile::tempdir().unwrap();
     let pid = tmp.path().join("pid");
-    let cli = fake(tmp.path(), json!({"detached":true,"pid":pid}));
+    let stop = tmp.path().join("stop");
+    let cli = fake(tmp.path(), json!({"detached":true,"pid":pid,"stop":stop}));
     assert_eq!(cli.run(&["service", "start", "--json"], Duration::from_secs(10)).unwrap()["ok"], true);
     let pid = pid_in(&pid);
     thread::sleep(Duration::from_millis(200));
     assert!(alive(pid), "a service the program started on its own stays");
-    // SAFETY: the test's own process.
-    unsafe { libc::kill(pid, libc::SIGKILL) };
+    std::fs::write(&stop, b"").unwrap();
+    assert!(dead_soon(pid), "the sleeper ends when told to");
 }
 
 #[test]
 fn what_runs_is_what_was_checked_even_if_a_link_is_retargeted() {
     let tmp = tempfile::tempdir().unwrap();
-    std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    StorageFixtures::private(tmp.path());
     let program = |name: &str| {
         let path = tmp.path().join(name);
         fixture::install(std::path::Path::new(env!("CARGO_BIN_EXE_fake-connector")), &path, &json!({"which":name}))
@@ -120,14 +119,14 @@ fn what_runs_is_what_was_checked_even_if_a_link_is_retargeted() {
     };
     let (genuine, replacement) = (program("genuine"), program("replacement"));
     let link = tmp.path().join("sidevoice");
-    std::os::unix::fs::symlink(&genuine, &link).unwrap();
+    StorageFixtures::symlink(&genuine, &link);
     let dirs = DataDirs::new(tmp.path());
     std::fs::write(dirs.install_record(), format!(r#"{{"command":["{}"]}}"#, link.display())).unwrap();
-    std::fs::set_permissions(dirs.install_record(), std::fs::Permissions::from_mode(0o600)).unwrap();
+    StorageFixtures::private(&dirs.install_record());
     let cli = Cli::installed(&dirs).unwrap();
     // Between the check and the run, the link is pointed elsewhere.
     std::fs::remove_file(&link).unwrap();
-    std::os::unix::fs::symlink(&replacement, &link).unwrap();
+    StorageFixtures::symlink(&replacement, &link);
     let answer = cli.run(&["x"], Duration::from_secs(5)).unwrap();
     assert_eq!(answer["which"], "genuine", "the checked target runs, not the link's new one");
     let canonical_data = std::fs::canonicalize(tmp.path()).unwrap();
@@ -137,36 +136,53 @@ fn what_runs_is_what_was_checked_even_if_a_link_is_retargeted() {
 #[test]
 fn only_an_install_record_of_absolute_paths_names_the_cli() {
     let tmp = tempfile::tempdir().unwrap();
-    std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    StorageFixtures::private(tmp.path());
     let dirs = DataDirs::new(tmp.path());
     assert_eq!(Cli::installed(&dirs).unwrap_err().key, "cli.unavailable");
-    let write = |text: &str, mode: u32| {
+    let write = |text: &str, writable: bool| {
         std::fs::write(dirs.install_record(), text).unwrap();
-        std::fs::set_permissions(dirs.install_record(), std::fs::Permissions::from_mode(mode)).unwrap();
+        StorageFixtures::private(&dirs.install_record());
+        if writable {
+            StorageFixtures::writable(&dirs.install_record());
+        }
     };
-    let script = tmp.path().join("cli.mjs");
-    std::fs::write(&script, b"").unwrap();
-    let executable = env!("CARGO_BIN_EXE_fake-connector");
-    let record = json!({"command":[executable, script]}).to_string();
-    write(&record, 0o600);
-    let cli = Cli::installed(&dirs).unwrap();
-    let canonical = |p: &str| std::fs::canonicalize(p).unwrap().display().to_string();
-    assert_eq!(cli.prefix, [canonical(executable), canonical(&script.display().to_string())]);
-    // What the command names must be root's or this user's and closed to others too.
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o666)).unwrap();
+    let executable = tmp.path().join(fixture::program_name());
+    let bytes = std::fs::read(env!("CARGO_BIN_EXE_fake-connector")).unwrap();
+    std::fs::write(&executable, &bytes).unwrap();
+    fixture::configure(&executable, &json!({})).unwrap();
+    let record = json!({"command":[executable]}).to_string();
+    write(&record, false);
+    // Native applications must be executable; discovery never changes their contents or permissions.
     assert_eq!(Cli::installed(&dirs).unwrap_err().key, "install.unsafe");
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o644)).unwrap();
-    write(r#"{"command":["/nonexistent/node"]}"#, 0o600);
+    assert_eq!(std::fs::read(&executable).unwrap(), bytes);
+    StorageFixtures::assert_not_executable(&executable);
+    StorageFixtures::executable(&executable);
+    let cli = Cli::installed(&dirs).unwrap();
+    assert_eq!(cli.prefix, [std::fs::canonicalize(&executable).unwrap().display().to_string()]);
+    let answer = cli.run(&["service", "start", "--json"], Duration::from_secs(5)).unwrap();
+    assert_eq!(answer["args"], "service start --json");
+    // The recorded native application must remain closed to writes by others.
+    StorageFixtures::writable(&executable);
+    assert_eq!(Cli::installed(&dirs).unwrap_err().key, "install.unsafe");
+    StorageFixtures::private(&executable);
+    let missing = tmp.path().join("missing").join(fixture::program_name());
+    write(&json!({"command":[missing]}).to_string(), false);
     assert_eq!(Cli::installed(&dirs).unwrap_err().key, "cli.unavailable");
-    for bad in [r#"{"command":["node","cli.mjs"]}"#, r#"{"command":[]}"#, r#"{"command":"/bin/sh"}"#, "{}", "nope"] {
-        write(bad, 0o600);
+    for bad in [
+        json!({"command":[fixture::program_name()]}).to_string(),
+        json!({"command":[]}).to_string(),
+        json!({"command":executable}).to_string(),
+        "{}".into(),
+        "nope".into(),
+    ] {
+        write(&bad, false);
         let key = Cli::installed(&dirs).unwrap_err().key;
         assert_eq!(key, "install.unreadable", "{bad}");
     }
-    write(&json!({"command":[executable]}).to_string(), 0o666);
+    write(&json!({"command":[executable]}).to_string(), true);
     assert_eq!(Cli::installed(&dirs).unwrap_err().key, "install.unsafe");
-    write(&json!({"command":[executable]}).to_string(), 0o600);
-    std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o777)).unwrap();
+    write(&json!({"command":[executable]}).to_string(), false);
+    StorageFixtures::writable(tmp.path());
     assert_eq!(Cli::installed(&dirs).unwrap_err().key, "install.unsafe");
-    std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    StorageFixtures::private(tmp.path());
 }

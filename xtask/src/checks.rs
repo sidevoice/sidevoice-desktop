@@ -54,10 +54,11 @@ pub fn clippy(boundary: bool) -> Result<()> {
     }
 }
 
-/// `test`: the bridge script's tests (`npm test`) and the app's Rust tests (`cargo test --workspace`).
+/// `test`: the bridge script's tests (`npm test`) and the app's Rust tests (`cargo test --workspace`), every crate's even
+/// when one fails.
 pub fn test() -> Result<()> {
     Cmd::new(npm()).arg("test").run()?;
-    Cmd::new("cargo").args(["test", "--workspace"]).dir(repo().join("src-tauri")).run()
+    Cmd::new("cargo").args(["test", "--workspace", "--no-fail-fast"]).dir(repo().join("src-tauri")).run()
 }
 
 /// Portable fixtures, also run by the existing macOS and Windows PR jobs.

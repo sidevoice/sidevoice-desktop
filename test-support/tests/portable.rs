@@ -1,6 +1,8 @@
 //! The same fixture executable and core listener are exercised on Linux, macOS and Windows.
 use serde_json::{json, Value};
-use sidevoice_desktop_test_support::{fake_core::FakeCore, fixture};
+use sidevoice_desktop_test_support::platform::endpoint_cleanup;
+use sidevoice_desktop_test_support::platform::registry::RegistryTransport;
+use sidevoice_desktop_test_support::{fake_core::FakeCore, fake_registry::FakeRegistry, fixture};
 use sidevoice_platform::ipc::{Channel, Channels, Endpoint};
 use std::{
     path::{Path, PathBuf},
@@ -63,6 +65,21 @@ fn registry_packages_the_native_executable_and_configuration() {
 }
 
 #[test]
+fn registry_transport_preserves_missing_and_malformed_responses() {
+    let registry = FakeRegistry::release("0.8.1", "@sidevoice/sidevoice-fixture", &[]);
+    let missing = registry.get("https://registry.npmjs.org/missing");
+    assert_eq!((missing.status, missing.length), (404, None));
+
+    let url = registry.tarball_url();
+    registry.serve_with_length(&url, b"short".to_vec(), 99);
+    let mut response = registry.get(&url);
+    let mut body = Vec::new();
+    std::io::Read::read_to_end(&mut response.body, &mut body).unwrap();
+    assert_eq!((response.status, response.length, body), (200, Some(99), b"short".to_vec()));
+    assert_eq!(registry.asked(), ["https://registry.npmjs.org/missing", url.as_str()]);
+}
+
+#[test]
 fn fake_core_publishes_and_serves_the_shared_channel() {
     let tmp = tempfile::tempdir().unwrap();
     let data = tmp.path().join("d");
@@ -85,7 +102,7 @@ fn fake_core_publishes_and_serves_the_shared_channel() {
     });
     core.stop();
     assert!(!data.join("core/core.json").exists());
-    sidevoice_desktop_test_support::fake_core::forget(&data);
+    endpoint_cleanup::forget(&data);
 }
 
 #[test]
@@ -153,9 +170,14 @@ fn closing_an_older_call_keeps_the_newer_call_open() {
         .await
     });
     core.stop();
-    sidevoice_desktop_test_support::fake_core::forget(&data);
+    endpoint_cleanup::forget(&data);
     result.unwrap();
 }
+
+// Exercise the shell's actual handoff protocol in the existing Windows/macOS fixture jobs,
+// without linking a webview. Tests remain colocated with the desktop platform interface.
+#[path = "../../src-tauri/src/platform/reset_handoff.rs"]
+mod reset_handoff;
 
 // Exercise the actual shell pairing store without linking the native UI.
 #[path = "../../src-tauri/src/platform/pairing_storage.rs"]

@@ -1,10 +1,7 @@
-use super::TrayAppearance;
+use super::Os;
 
-pub struct Appearance;
+pub(super) struct Native;
 
-impl TrayAppearance for Appearance {
-    fn creation_failed(error: tauri::Error) -> tauri::Result<()> {
-        log::warn!("Tray unavailable; continuing with the room window: {error}");
-        Ok(())
-    }
+impl Os for Native {
+    const TRAY_OPTIONAL: bool = true;
 }

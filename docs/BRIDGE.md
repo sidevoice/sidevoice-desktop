@@ -19,7 +19,7 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 | `src-tauri/src/call_controls.rs`, `src-tauri/core/src/call_controls.rs` | The card's window, and when it shows, where it sits and how it moves (unit-tested). |
 | `src-tauri/src/updater.rs`, `src-tauri/core/src/updater.rs`, `src-tauri/core/src/build_info.rs` | The app's updates, behind `updater`, and what this build is, `build` (below). |
 | `src-tauri/src/debug_options.rs`, `src-tauri/core/src/debug_options.rs` | The developer options, behind `debug` in a nightly or a dev build (below). |
-| `src-tauri/src/platform/computer_name.rs`, `src-tauri/core/src/computer_name.rs` | This computer's name, `computerName` (below; the Linux file's parsing unit-tested). |
+| `src-tauri/src/platform/host.rs`, `src-tauri/core/src/computer_name.rs` | This computer's name, `computerName` (below; the Linux file's parsing unit-tested). |
 
 ## What the bridge reads and calls in the web UI
 
@@ -58,7 +58,7 @@ macOS-only; elsewhere the bridge omits them and the native commands refuse `{key
 
 `deleteAll()` is the confirmed Settings › Advanced action. Native also displays an OS-owned confirmation
 with Cancel as its default button on every invocation; cancelling rejects `{key: "reset.cancelled"}` before
-any uninstall or deletion. `platform::confirmation::Confirmation` owns the native prompt: the existing NSAlert on
+any uninstall or deletion. `platform::confirmation::confirm` owns the native prompt: the existing NSAlert on
 macOS, TaskDialogIndirect with an explicit Cancel default on Windows, and GTK with an explicit Cancel response on
 Linux. The capability is implemented on all three hosts; the reset offer and transaction remain macOS-only.
 The shared confirmation interface cancels unless the native opened hook arrives within three seconds; a dialog
@@ -78,13 +78,14 @@ connector's `--version --json` response. An older, silent, malformed or timed-ou
 The connector removes the service, its releases, its data and registrations it owns. Native then forgets
 Sidevoice's provider keys and starts a helper from the app executable. The helper waits for the app to
 exit and for its observed WebKit children to exit before removing its exact Application Support,
-shared-model store's engine-owned `blobs`, `models` and `partial` children, WebKit, cache,
-saved-state and log paths and its `defaults` domain. Other programs' siblings in the shared model
+shared-model store's engine-owned `blobs`, `models` and `partial` children, WebKit, cache and log
+paths, then its saved window state and its `defaults` domain (docs/APP_DATA.md). Other programs' siblings in the shared model
 store remain. A WebKit child that
-does not exit leaves a partial result and its storage in place. Paths are derived natively from an
-exact allowlist, checked again before each top-level removal, and traversed without following
-symlinks or crossing a mount/device boundary. A failed check is reported, with that directory left
-in place. Connector data and release roots must be the exact default
+does not exit leaves a partial result and its storage in place. Paths are derived natively by Tauri's documented folder rule, checked again before each top-level removal, and traversed without following
+symlink targets or crossing a mount/device boundary. Symlinks are unlinked as entries and cleanup continues;
+hard links lose only the selected name, and ordinary shortcut files are removed as files. The shared model
+store itself and redirected ancestors remain protected roots. All three engine-owned children are preflighted
+before any is removed. A failed check is reported, with that directory left in place. Connector data and release roots must be the exact default
 Sidevoice roots; unsafe environment overrides or install records refuse before the installed uninstaller runs.
 If installation metadata is absent, a fresh service/process check and a check for residual connector data
 must both pass before the service is called absent. A retained recovery executable named by `install.json`
@@ -97,11 +98,15 @@ during a write. This operation does not provide atomic confinement against that 
 has direct access to the account's files. This limit does not relax the exact-root, no-follow and
 mount/device checks for a stable filesystem layout.
 
-Before uninstall, native creates a private operation journal and takes an interprocess reset lock.
-Model operations, voice model loads, credential writes, local-host actions and updater writes share an
-atomic admission gate with reset. The helper inherits the lock, acknowledges readiness before the app
-quits, records cleanup stages, and releases the lock only after its work ends. The helper marks the
-inherited lock descriptor close-on-exec, so the relaunched app acquires the lock independently.
+Before uninstall, native creates a private operation journal and takes the reset admission: two
+interprocess locks, `admission.lock` and `reset.lock`. Model operations, voice model loads, credential
+writes, local-host actions and updater writes share an atomic admission gate with reset. Nothing is
+inherited: the app keeps `admission.lock` and releases `reset.lock`, which the helper acquires on its own.
+The helper authenticates with a one-time capability on its stdin, receives the plan over the local channel,
+acknowledges readiness before the app quits, and cleans up only after an explicit commit, the channel's end
+and its own acquisition of `admission.lock`; it records cleanup stages and releases both locks after its
+work ends. Startup takes both locks independently, so a relaunched app waits for that. Authentication,
+cancellation and deadlines: [RESET_HANDOFF.md](RESET_HANDOFF.md).
 The helper records an awaiting-relaunch journal; only the new app after its setup publishes a complete
 report. A failed startup leaves the journal as a partial report for the next launch.
 
@@ -232,10 +237,10 @@ Evaluated by the app with `webview.eval` (works with the window hidden); the com
 Joining is deliberately **not** a tray command: joining unlocks audio output, which the webview
 only allows from a click in the page. "Mostrar Sidevoice" opens the window for that.
 
-`window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", version, engine, mediaKeys, build, muteShortcut, callControls, computerName?, localHost?, voice?, microphone?, updater? }`: the
+`window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", version, engine, mediaKeys, build, muteShortcut, callControls, computerName?, localHost?, voice?, microphone, updater? }`: the
 web UI feature-detects the desktop app by it, and each capability by its presence. `version` is the bridge's (2).
 
-`mediaKeys` is supplied by `MediaControls::support()`: `"native"` on macOS and `null` on Windows/Linux.
+`mediaKeys` is supplied by `platform::media_controls::support()`: `"native"` on macOS and `null` on Windows/Linux.
 It is independent of `host.voice`: with native voice and unavailable native media controls, the page
 keeps its Media Session handlers and Now Playing element. See [MEDIA_CONTROLS.md](MEDIA_CONTROLS.md)
 for the test boundary and hardware verification still needed.
@@ -245,7 +250,7 @@ the Computer Name (System Settings → General → Sharing, «Mac de Ana»; Syst
 `SCDynamicStoreCopyComputerName`), not the `.local` hostname; on Windows the device name (the DNS host name, as typed);
 on Linux the pretty hostname (`PRETTY_HOSTNAME` in `/etc/machine-info`, `hostnamectl set-hostname --pretty`), else
 the hostname. A non-empty string, trimmed; absent when the system has none, and the page then names the device
-itself. Read each time the room window opens (`src-tauri/src/platform/computer_name.rs`, core `computer_name`).
+itself. Read each time the room window opens (`src-tauri/src/platform/host.rs`, core `computer_name`).
 
 ## The local host
 
@@ -672,54 +677,57 @@ What is this app's own:
 
 ## The microphone permission
 
-Where the app runs the voice call (`host.voice`, macOS), the room page is never granted `getUserMedia`, so it can
-neither trigger macOS's microphone prompt (TCC) nor read its answer. `window.__sidevoiceDesktop.host.microphone` does
-it for the page, on the app's own privacy entry, the one the voice call uses: the web's first-run setup asks for the
-microphone early through it, rather than at the first call. On macOS it is a frozen object with the native permission methods:
+`window.__sidevoiceDesktop.host.microphone` is the app's own microphone access, on every OS (the system's answer, never
+the webview's: no `getUserMedia` is opened to read it). Where the app runs the voice call (`host.voice`, macOS), the room
+page is never granted `getUserMedia`, so it can neither trigger macOS's microphone prompt (TCC) nor read its answer;
+the web's first-run setup asks early through this rather than at the first call.
 
 ```ts
 interface MicrophonePermission {
   state(): Promise<"prompt" | "granted" | "denied" | "missing">;
-  request(): Promise<"granted" | "denied">;
-  openSettings(): Promise<void>;
+  request(): Promise<"granted" | "denied" | "missing">;
+  openSettings?(): Promise<void>;
   onChange(listener: () => void): () => void;
 }
 ```
 
-- `state()`: `AVCaptureDevice.authorizationStatus(for: .audio)`: not determined → `"prompt"`, authorized →
-  `"granted"`, denied or restricted → `"denied"`. Where it is not denied and no audio input device exists
-  (`AVCaptureDevice.default(for: .audio)` is nil), `"missing"`: the OS knows the devices, so the bridge owns device
-  availability, and a denial stands whatever is plugged in. Never prompts.
-- `onChange(listener)`: `listener()` whenever `state()` changes, so on a permission change and on a microphone
-  plugged in or out; the page reads `state()` again. Polled every 2 s while anyone listens; returns `stop`.
-- `request()`: `AVCaptureDevice.requestAccess(for: .audio)`: macOS's own prompt the first time (with
-  `NSMicrophoneUsageDescription`, `src-tauri/packaging/macos/Info.plist`); afterwards it answers at once with the stored answer, no
-  prompt.
-- `openSettings()`: opens System Settings at Privacy & Security › Microphone
-  (`x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone`, through `tauri-plugin-opener`), where a
-  denial is undone.
+- `state()`: never prompts, and reads the system afresh each time. A denial stands whatever is plugged in; otherwise
+  no audio input device is `"missing"`. A system that does not answer (below) rejects with `internal`; the bridge has
+  no extra state string for it, and it is never a grant.
+- `request()`: macOS only has a prompt: `AVCaptureDevice.requestAccess(for: .audio)` asks the first time (with
+  `NSMicrophoneUsageDescription`, `src-tauri/packaging/macos/Info.plist`), afterwards it answers at once with the stored
+  answer. On Windows and Linux it is `state()`: there is nothing to ask.
+- `onChange(listener)`: `listener()` whenever `state()` changes, so on a permission change and on a microphone plugged
+  in or out; the page reads `state()` again. Polled every 2 s while anyone listens; returns `stop`.
+- `openSettings()`: only where the OS has a standard microphone privacy page (macOS and Windows; absent on Linux, which
+  has none). It opens a fixed URL through `tauri-plugin-opener` (Rust API) and accepts no URL or program from the page; no
+  generic opener permission is granted to JavaScript, and the plugin's automatic link interception is disabled.
+  Opening it says nothing about access. The page detects it by presence.
 - A refusal rejects `{key, message}`: `bad_request` for a malformed call or another caller, `internal` when the system
-  does not answer or System Settings does not open.
-- Command behind it: `microphone {action}`, `action` `state`, `request` or `open-settings` (`src-tauri/src/microphone.rs`),
-  macOS only. Granted to the room window (`capabilities/room.json`); it re-checks that the caller is the current room
-  window on the app's own page.
+  does not answer or Settings does not open.
+- Command behind it: `microphone {action}`, `action` `state`, `request` or `open-settings` (`src-tauri/src/microphone.rs`).
+  Granted to the room window (`capabilities/room.json`); it re-checks that the caller is the current room window on the
+  app's own page.
 
-On Windows, `host.microphone` is a frozen settings-only object:
+Per OS (`src-tauri/src/platform/microphone.rs`; the rule every OS shares is one function there: a denial beats a missing
+device, a missing device beats everything else, and a grant needs a readable device list):
 
-```ts
-interface MicrophoneSettings {
-  openSettings(): Promise<void>;
-}
-```
-
-It opens `ms-settings:privacy-microphone` through `tauri-plugin-opener` (Rust API). The page must feature-detect
-`state` and `request` independently: Windows still reads and requests capture access through the webview, and opening
-Settings says nothing about whether capture is allowed. No native Windows permission poll is offered. Linux has no
-standard privacy-settings link and does not expose this object. The settings-only command is
-`microphone_open_settings`, granted only to the room, with the same current-room/origin check and refusal contract as
-`microphone`. It accepts no URL or program from the page. No generic opener permission is granted to JavaScript, and
-the plugin's automatic link interception is disabled. Native access-state and capture-error work remains separate.
-The existing macOS `microphone {action: "open-settings"}` command remains supported.
+- **macOS:** `AVCaptureDevice.authorizationStatus(for: .audio)`: not determined → `"prompt"`, authorized → `"granted"`,
+  denied or restricted → `"denied"`; no `AVCaptureDevice.default(for: .audio)` → `"missing"`. Settings:
+  `x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone`.
+- **Windows:** the registry privacy policy, read with `winreg` (no writes): the machine switch
+  (`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone`) and this user's
+  desktop-app switch (`HKCU\…\microphone\NonPackaged`), value `Value`. Sidevoice is an unpackaged NSIS executable, so
+  the packaged-app AppCapability API does not apply and the Store-app switch and per-executable timestamps are not read.
+  `Deny` in either is `"denied"`. A missing key or value counts as allowed: Windows' default for desktop apps is allow,
+  and no key exists until the person first opens that page. A value or key this code cannot interpret is unavailable
+  (a rejection), never a grant. Then the device check below. Settings: `ms-settings:privacy-microphone`. Unpackaged desktop
+  apps have no consent prompt, so `request()` is `state()`.
+- **Linux:** no consent prompt, no privacy page, no desktop permission: granted when an input device exists, else
+  `"missing"`.
+- **Device presence (Windows, Linux):** `cpal` (WASAPI active capture endpoints; ALSA PCM hints, which include the
+  PipeWire/Pulse ALSA plugins where installed) lists the input devices; no stream is opened. A listing that fails is not
+  an empty one: it is unavailable.
 
 ## The mute shortcut
 
@@ -735,7 +743,7 @@ interface MuteShortcutBridge {
 interface MuteShortcut {
   accelerator: string | null;   // as the app keeps it: "Ctrl+Alt+M"; null when there is none
   label: string | null;         // as this system writes it: "⌃⌥M" on macOS, "Ctrl+Alt+M" elsewhere
-  state: "on" | "off" | "refused";  // refused: the system would not take it (another app may hold it)
+  state: "on" | "off" | "refused" | "unavailable";  // refused: the system would not take it (another app may hold it)
   alternatives: string[];       // refused: accelerators the system does take, to offer instead (set one as it is)
   voiceOver: boolean;           // macOS: VoiceOver is on and the shortcut holds Control and Option together
 }
@@ -749,6 +757,8 @@ interface MuteShortcut {
   core `settings::normalize_shortcut`), and answers it as `accelerator`. `Cmd` is the Command key (Super elsewhere).
   Anything else — no modifier, no key or two, a character no key makes (`µ` from Option+M on a Mac, a dead key) —
   rejects `{key: "shortcut_invalid", message}` and changes nothing. One the system refuses is kept, and answered `refused`.
+- `unavailable` means no global shortcut backend in this session (including native Wayland). The saved
+  accelerator and label remain present, with no alternatives and `voiceOver: false`; disabling still returns `off`.
 - Kept with the app's settings (`muteShortcut`), set only from the page.
 - App → page: `window.__sidevoiceDesktop.muteShortcutEvent(shortcut)` (`webview.eval`) whenever the app registers it
   (set from the page), to `subscribe`'s listeners. `voiceOver` is read when asked: VoiceOver

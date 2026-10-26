@@ -19,9 +19,12 @@ json-patch = { version = "4", default-features = false }
 sha2 = "0.10"
 # The checks on what the app and its stand-ins log, as the YAML's grep patterns were.
 regex = "1"
+# The platform-boundary check reads Rust tokens (comments and string contents are not code) and `use` trees.
+proc-macro2 = { version = "1", features = ["span-locations"] }
+syn = { version = "2", default-features = false, features = ["full", "parsing", "proc-macro", "visit"] }
 
 # Shared child lifetime, private files and release-target facts; no core application dependency.
-sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.11.1" }
+sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.12.4" }
 tokio = { version = "1", features = ["rt-multi-thread", "process", "io-util", "time", "macros"] }
 # Ctrl+C on every host, plus SIGTERM/SIGHUP on Unix CI runners.
 ctrlc = { version = "3.5", features = ["termination"] }
@@ -31,8 +34,12 @@ getrandom = "0.3"
 # Preserve the bundler's inherited private creation mask without own FFI.
 rustix = { version = "1", features = ["process", "fs"] }
 
+[target.'cfg(windows)'.dependencies]
+# The Known Folders (RoamingAppData, LocalAppData) through SHGetKnownFolderPath.
+dirs = "7"
+
 [dev-dependencies]
-sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.11.1", features = ["test-support"] }
+sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.12.4", features = ["test-support"] }
 tempfile = "3"
 # How tauri-plugin-updater orders versions: the tests check the nightly's against it.
 semver = "1"

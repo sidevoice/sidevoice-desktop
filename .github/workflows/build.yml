@@ -1,8 +1,8 @@
 name: build
 
 # What runs when (RELEASING.md):
-# - pull request: lint + unit tests on Linux, the Windows and Linux app builds (the repo is public: Actions minutes
-#   are free), and the Apple-Silicon native flows: the probe app's (`macos-native`) and a call on the engine's real
+# - pull request: lint + unit tests on Linux, unit tests on Windows, the Windows and Linux app builds (the repo is
+#   public: Actions minutes are free), and the Apple-Silicon native flows: the probe app's (`macos-native`) and a call on the engine's real
 #   models (`macos-call`). No .dmg.
 # - push to main, manual run: everything, installers included. On main, once the installers' jobs (`macos`, `linux`,
 #   `windows`) and the lint pass, the `nightly` pre-release is replaced; the native flows run beside them and the
@@ -64,7 +64,7 @@ jobs:
       - name: Webview toolkit (the shell links against it even to lint)
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libasound2-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
       - uses: ./.github/actions/setup-rust
       - uses: actions/setup-node@v4
         with:
@@ -88,7 +88,7 @@ jobs:
       - name: Webview toolkit (the shell links against it even to lint)
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libasound2-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
       - uses: ./.github/actions/setup-rust
       - uses: actions/setup-node@v4
         with:
@@ -269,7 +269,7 @@ jobs:
       - name: Portable native local-host fixtures
         run: cargo xtask test-support
       - name: Reset cleanup safety tests (temporary directories only)
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib data::tests -- --test-threads=1
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib -- data::tests platform::webview_data --test-threads=1
       - name: The local host from the bundled page (stand-in core on its published socket, pairing, proxy, refusals)
         run: cargo xtask macos local-host
       - name: What the interface's window offers (probe page, same origin and permission rule)
@@ -340,7 +340,7 @@ jobs:
           ref: ${{ inputs.release-tag }}
       - run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libasound2-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - uses: ./.github/actions/setup-rust
       - uses: actions/setup-node@v4
         with:
@@ -418,6 +418,14 @@ jobs:
             src-tauri/target/release/bundle/nsis/*.exe.sig
           retention-days: 7
           if-no-files-found: error
+      # Last, so the installer and its first open always run: the same tests the Linux job runs, here with the
+      # Windows-only ones (platform/), every crate's even when one fails. Through xtask, which runs cargo in src-tauri:
+      # only from there does Cargo read src-tauri/.cargo/config.toml, whose static C runtime the engine's native
+      # libraries need to link (LNK2038 otherwise). The bridge script's tests read the web interface, as on Linux.
+      - name: The web interface at the pin (web.pin.json)
+        run: cargo xtask web
+      - name: Bridge script and Rust unit tests
+        run: cargo xtask test
 
   # Publish: the installers of this run go to the release that called it, or replace the rolling `nightly` pre-release
   # (RELEASING.md). Pull requests never get here. Two jobs with the same steps (a YAML anchor) because a job's `needs`

@@ -16,6 +16,13 @@
       "packaging/linux/icons/icon.png",
       "packaging/macos/icon.icns",
       "packaging/windows/icon.ico"
-    ]
+    ],
+    "linux": {
+      "deb": {
+        "depends": [
+          "libasound2t64 | libasound2"
+        ]
+      }
+    }
   }
 }
