@@ -160,6 +160,8 @@ jobs:
         with:
           path: target/web
           key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs', 'scripts/web-release.mjs') }}
+      - name: The build tooling's own tests (xtask), including the macOS tooling's
+        run: cargo test --locked --manifest-path xtask/Cargo.toml
       - name: Build the app bundle (ad-hoc signed, hardened runtime, entitlements)
         if: needs.changes.outputs.sign != 'true'
         # The nightly's update artifact is signed with the updater's key; no PR or manual run reads it.
@@ -259,7 +261,7 @@ jobs:
           path: target/web
           key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs', 'scripts/web-release.mjs') }}
       - name: Build the CI probe app (feature probe; never shipped)
-        run: cargo xtask release probe-app
+        run: cargo xtask probe probe-app
       - name: Record produced probe bundle file list
         run: cargo xtask packaging files src-tauri/target/aarch64-apple-darwin/release/bundle packaging-macos-probe.txt
       - uses: actions/upload-artifact@v4
@@ -271,13 +273,13 @@ jobs:
       - name: Reset cleanup safety tests (temporary directories only)
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib -- data::tests platform::webview_data --test-threads=1
       - name: The local host from the bundled page (stand-in core on its published socket, pairing, proxy, refusals)
-        run: cargo xtask release local-host
+        run: cargo xtask probe local-host
       - name: What the interface's window offers (probe page, same origin and permission rule)
-        run: cargo xtask release probe
+        run: cargo xtask probe probe
       - name: The call controls card over a full-screen editor (never activating, clicks, drag, typing, states)
-        run: cargo xtask release card
+        run: cargo xtask probe card
       - name: Restarting and quitting with a model on the GPU loaded (each process ends cleanly, no crash report)
-        run: cargo xtask release exit
+        run: cargo xtask probe exit
       # Informational for now: the settings-cycle step of this walk intermittently keeps 50 to 330 MiB after the models' idle
       # keep (about one run in two), with the host holding nothing (#145). It becomes a gate once that is fixed.
       # A run takes about 4.5 minutes; the app also hangs in the card-cycle step in about 40% of runs (#27), which used to
@@ -286,7 +288,7 @@ jobs:
       - name: The app's footprint stays flat over models, calls and setting changes (table, fails only on clear growth)
         continue-on-error: true
         timeout-minutes: 8
-        run: cargo xtask release memory
+        run: cargo xtask probe memory
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -319,11 +321,11 @@ jobs:
       - name: A call on the engine's real models through the app's adapter (recorded speech in, a reply out)
         env:
           SIDEVOICE_REAL_CALL_MODELS: ${{ runner.temp }}/real-call-models
-        run: cargo xtask release voice-models
+        run: cargo xtask probe voice-models
       - name: The footprint and Metal allocation stay flat over calls and changes of a call's settings (table, fails only on clear growth)
         env:
           SIDEVOICE_REAL_CALL_MODELS: ${{ runner.temp }}/real-call-models
-        run: cargo xtask release voice-memory
+        run: cargo xtask probe voice-memory
       - if: steps.models.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@v4
         with:

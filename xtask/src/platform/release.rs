@@ -49,46 +49,6 @@ trait Os {
     fn package_screens() -> Result<()> {
         Err(unsupported("package-screens"))
     }
-
-    /// The app built with the `probe` feature (CI only, never shipped) over the release app.
-    fn probe_app() -> Result<()> {
-        Err(unsupported("probe-app"))
-    }
-
-    /// On the probe app, the local host from the bundled page: pairing, the proxy, its refusals.
-    fn local_host() -> Result<()> {
-        Err(unsupported("local-host"))
-    }
-
-    /// On the probe app, the probe page: origin, loopback, the native engine, the voice call, the headset.
-    fn probe() -> Result<()> {
-        Err(unsupported("probe"))
-    }
-
-    /// A call on the engine's real models through the app's adapter (the ignored tests).
-    fn voice_models() -> Result<()> {
-        Err(unsupported("voice-models"))
-    }
-
-    /// The host's calls on the engine's real models with the process's footprint taken at each step.
-    fn voice_memory() -> Result<()> {
-        Err(unsupported("voice-memory"))
-    }
-
-    /// On the probe app, the same over a long session in the app.
-    fn memory() -> Result<()> {
-        Err(unsupported("memory"))
-    }
-
-    /// On the probe app, the call controls card over a full-screen editor.
-    fn card() -> Result<()> {
-        Err(unsupported("card"))
-    }
-
-    /// On the probe app, quitting and restarting with a model on the GPU loaded.
-    fn exit() -> Result<()> {
-        Err(unsupported("exit"))
-    }
 }
 
 #[cfg_attr(target_os = "macos", path = "release/macos.rs")]
@@ -141,44 +101,4 @@ pub fn forget_secrets() -> Result<()> {
 /// `release package-screens`.
 pub fn package_screens() -> Result<()> {
     Native::package_screens()
-}
-
-/// `release probe-app`.
-pub fn probe_app() -> Result<()> {
-    Native::probe_app()
-}
-
-/// `release local-host`.
-pub fn local_host() -> Result<()> {
-    Native::local_host()
-}
-
-/// `release probe`.
-pub fn probe() -> Result<()> {
-    Native::probe()
-}
-
-/// `release voice-models`.
-pub fn voice_models() -> Result<()> {
-    Native::voice_models()
-}
-
-/// `release voice-memory`.
-pub fn voice_memory() -> Result<()> {
-    Native::voice_memory()
-}
-
-/// `release memory`.
-pub fn memory() -> Result<()> {
-    Native::memory()
-}
-
-/// `release card`.
-pub fn card() -> Result<()> {
-    Native::card()
-}
-
-/// `release exit`.
-pub fn exit() -> Result<()> {
-    Native::exit()
 }

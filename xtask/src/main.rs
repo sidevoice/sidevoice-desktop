@@ -52,18 +52,18 @@
 //! - `release forget-secrets`: whatever a signing step cut short left (its keychain, certificate and key files); CI
 //!   runs it at the end of the job, whatever happened.
 //! - `release package-screens` (informational): the .dmg's window as Finder shows it, light and dark, into dmg-screens/.
-//! - `release probe-app`: the app built with the `probe` feature (CI only, never shipped) over the release app.
-//! - `release local-host`: on the probe app, the local host from the bundled page: pairing, the proxy, its refusals.
-//! - `release probe`: on the probe app, the probe page: origin, loopback, the native engine, the voice call, the headset.
-//! - `release voice-models`: a call on the engine's real models through the app's adapter (the ignored tests). Reads
+//! - `probe probe-app`: the app built with the `probe` feature (CI only, never shipped) over the release app.
+//! - `probe local-host`: on the probe app, the local host from the bundled page: pairing, the proxy, its refusals.
+//! - `probe probe`: on the probe app, the probe page: origin, loopback, the native engine, the voice call, the headset.
+//! - `probe voice-models`: a call on the engine's real models through the app's adapter (the ignored tests). Reads
 //!   `SIDEVOICE_REAL_CALL_MODELS`: a folder to keep the models in between runs (CI caches it); unset, a scratch one.
-//! - `release voice-memory`: the host's calls on the engine's real models with the process's footprint and Metal allocation
+//! - `probe voice-memory`: the host's calls on the engine's real models with the process's footprint and Metal allocation
 //!   taken at each step (idle, a call with the models loaded, the call ended and the idle keep run out, ten calls, a
 //!   call whose settings change), as a table; it fails only on clear growth (memory.rs says what and why).
-//! - `release memory`: on the probe app, the same over a long session in the app: models, calls, the call controls
+//! - `probe memory`: on the probe app, the same over a long session in the app: models, calls, the call controls
 //!   card's settings, the audio devices and the voice settings changed over and over (#145).
-//! - `release card`: on the probe app, the call controls card over a full-screen editor (screenshots into card-shots/).
-//! - `release exit`: on the probe app, quitting and restarting (as an installed update does) with a model on the GPU
+//! - `probe card`: on the probe app, the call controls card over a full-screen editor (screenshots into card-shots/).
+//! - `probe exit`: on the probe app, quitting and restarting (as an installed update does) with a model on the GPU
 //!   loaded: each process ends with status 0 and no crash report (#121).
 //!
 //! The commands that start the app (`first-open`, `probe`, `card`) run it with the runner's home on a
@@ -108,8 +108,8 @@ const USAGE: &str =
   | sherpa-libs | release app [--signed] [--channel C] | release check-app [--signed] | release first-open
   | release package [--signed] | release sign-package | release checksums | release forget-secrets
   | release package-screens
-  | release probe-app | release local-host | release probe | release voice-models | release card | release exit
-  | release memory | release voice-memory
+  | probe probe-app | probe local-host | probe probe | probe voice-models | probe card | probe exit
+  | probe memory | probe voice-memory
   | packaging compare BEFORE_REF | packaging files DIR OUTPUT
   | publish assets release TAG | publish assets nightly | publish release TAG | publish nightly
   | release-pr-title [BRANCH] | release-pr-checks
@@ -152,14 +152,14 @@ fn main() -> ExitCode {
         ["release", "forget-secrets"] => platform::release::forget_secrets(),
         ["release", "checksums"] => platform::release::checksums(),
         ["release", "package-screens"] => platform::release::package_screens(),
-        ["release", "probe-app"] => platform::release::probe_app(),
-        ["release", "local-host"] => platform::release::local_host(),
-        ["release", "probe"] => platform::release::probe(),
-        ["release", "voice-models"] => platform::release::voice_models(),
-        ["release", "card"] => platform::release::card(),
-        ["release", "exit"] => platform::release::exit(),
-        ["release", "memory"] => platform::release::memory(),
-        ["release", "voice-memory"] => platform::release::voice_memory(),
+        ["probe", "probe-app"] => platform::probe::probe_app(),
+        ["probe", "local-host"] => platform::probe::local_host(),
+        ["probe", "probe"] => platform::probe::probe(),
+        ["probe", "voice-models"] => platform::probe::voice_models(),
+        ["probe", "card"] => platform::probe::card(),
+        ["probe", "exit"] => platform::probe::exit(),
+        ["probe", "memory"] => platform::probe::memory(),
+        ["probe", "voice-memory"] => platform::probe::voice_memory(),
         ["publish", "assets", kind] => publish::assemble(kind, None),
         ["publish", "assets", kind, tag] => publish::assemble(kind, Some(tag)),
         ["publish", "release", tag] => publish::release(tag),

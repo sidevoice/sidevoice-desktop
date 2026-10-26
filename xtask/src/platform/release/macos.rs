@@ -1,5 +1,5 @@
 //! macOS: the Apple-Silicon app and its `.dmg`, signed with `codesign`, notarized with `notarytool`, checked with
-//! `plutil` and `spctl`, stapled, and the native flows on the probe app.
+//! `plutil` and `spctl`, and stapled.
 
 use super::Os;
 use crate::util::Channel;
@@ -7,10 +7,6 @@ use crate::Result;
 
 #[path = "macos/app.rs"]
 mod app;
-#[path = "macos/memory.rs"]
-mod memory;
-#[path = "macos/probe.rs"]
-mod probe;
 
 pub struct Native;
 
@@ -45,37 +41,5 @@ impl Os for Native {
 
     fn package_screens() -> Result<()> {
         app::dmg_screens()
-    }
-
-    fn probe_app() -> Result<()> {
-        probe::probe_app()
-    }
-
-    fn local_host() -> Result<()> {
-        probe::local_host()
-    }
-
-    fn probe() -> Result<()> {
-        probe::probe()
-    }
-
-    fn voice_models() -> Result<()> {
-        probe::voice_models()
-    }
-
-    fn voice_memory() -> Result<()> {
-        probe::voice_memory()
-    }
-
-    fn memory() -> Result<()> {
-        probe::memory()
-    }
-
-    fn card() -> Result<()> {
-        probe::card()
-    }
-
-    fn exit() -> Result<()> {
-        probe::exit()
     }
 }

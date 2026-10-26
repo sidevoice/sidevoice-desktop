@@ -1,4 +1,4 @@
-//! The memory measurements (#145): `release memory` (the probe app through a long session) and `release voice-memory` (the
+//! The memory measurements (#145): `probe memory` (the probe app through a long session) and `probe voice-memory` (the
 //! host's calls on the engine's real models). Both print `memory phase=NAME footprint=N resident=N metal=N|na
 //! accelerator=N|na` lines (src-tauri/core/src/memory.rs); this reads them back, prints a compact table and fails only
 //! on growth that is clear.

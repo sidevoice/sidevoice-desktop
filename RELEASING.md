@@ -46,9 +46,9 @@ secrets into the environment of the steps that need them, choose which steps run
 - `.github/actions/setup-rust`: `cargo xtask engine-rev` and `sherpa-libs`; release-please.yml and pr-title.yml:
   `release-pr-checks` and `release-pr-title`.
 
-On a laptop, `npm ci` first. The `release` commands that start the app (`first-open`, `probe`,
-`card`) run it off a runner with a scratch home (`/tmp/svx-<step>`), never with this machine's own settings,
-pairing, local core or models; `probe` expects no provider key in the login keychain, as on a runner. Unsigned and
+On a laptop, `npm ci` first. The commands that start the app (`release first-open`, `probe probe`,
+`probe card`) run it off a runner with a scratch home (`/tmp/svx-<step>`), never with this machine's own settings,
+pairing, local core or models; `probe probe` expects no provider key in the login keychain, as on a runner. Unsigned and
 probe builds ignore any `APPLE_*` variables in the environment. Every build is a `dev` build unless `--channel`
 says otherwise (Channels, below), and only a `release` or `nightly` build reads the updater's key. Ctrl-C unwinds
 cleanly; if a signing step was killed outright, `cargo xtask release forget-secrets` removes its keychain and key files.

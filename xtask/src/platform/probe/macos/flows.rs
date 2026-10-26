@@ -7,15 +7,15 @@ use std::fs;
 use std::path::Path;
 use std::time::Instant;
 
-use super::app::{app_command, binary, fake_node, release_target, AppHome, PROBE_ONLY};
 use crate::platform::file_mode::mode;
+use crate::platform::macos_app::{app_command, binary, fake_node, release_target, AppHome, PROBE_ONLY};
 use crate::util::{
     contains, ensure, grep, has, interrupted, line_count, lines_after, re, read, read_bytes, repo, sleep, wait_for,
     work, Background, Cmd, TauriBuild,
 };
 use crate::Result;
 
-/// `release probe-app`: the app built with the `probe` feature, over the release app's place; it does carry the page
+/// `probe probe-app`: the app built with the `probe` feature, over the release app's place; it does carry the page
 /// and its switch (so the release app's check for them means something).
 pub fn probe_app() -> Result<()> {
     let build = TauriBuild {
@@ -24,7 +24,7 @@ pub fn probe_app() -> Result<()> {
         features: Some("probe"),
         ..TauriBuild::default()
     };
-    super::app::unsigned(build.command()?).run()?;
+    crate::platform::macos_app::unsigned(build.command()?).run()?;
     let bytes = read_bytes(&binary())?;
     for marker in PROBE_ONLY {
         ensure(contains(&bytes, marker), format!("the probe build does not carry {marker}"))?;
@@ -71,7 +71,7 @@ pub fn proxy_port(log: &str) -> Option<String> {
     log.lines().find_map(|l| line.captures(l)).map(|c| c[1].to_owned())
 }
 
-/// `release local-host`: the local host from the bundled page, in the probe app: a stand-in core on its published socket
+/// `probe local-host`: the local host from the bundled page, in the probe app: a stand-in core on its published socket
 /// (`local-host-ci core`), pairing, the proxy, and what it refuses. A home of its own (/tmp/svhome), for the data
 /// directory (macOS: ~/Library/Application Support/Sidevoice) and the app's config.
 pub fn local_host() -> Result<()> {
@@ -138,7 +138,7 @@ pub fn local_host() -> Result<()> {
     }
     ensure(!has(&core_text, "auth=other|/api/local/health origin=tauri"), "the core saw what it should not")?;
     // The token, stored by the app alone: 0600 in its config directory.
-    let store = super::app::app_data(home).join("local-host.json");
+    let store = crate::platform::macos_app::app_data(home).join("local-host.json");
     let bits = mode(&store)?;
     ensure(bits == 0o600, format!("{} is {bits:o}, not 600", store.display()))
 }
@@ -213,7 +213,7 @@ pub fn last_word_after(line: &str, key: &str) -> String {
     re(&format!(r".* {key}=([^ ]+) .*")).captures(line).map_or_else(|| line.to_owned(), |c| c[1].to_owned())
 }
 
-/// `release probe`: the probe page in the interface's window, the same origin and permission rule as the room: a
+/// `probe probe`: the probe page in the interface's window, the same origin and permission rule as the room: a
 /// secure context with WebCrypto, a node on loopback reached with a device token, no microphone for the page, the
 /// native engine ([`check_engine_line`]) and its storage, the voice call ([`check_voice_line`]) and its settings,
 /// and the headset's buttons.
@@ -305,7 +305,7 @@ pub fn probe() -> Result<()> {
     ensure(!text.contains("headset airpods"), "echo recorded as a gesture")
 }
 
-/// `release exit`: quitting and restarting after a call (#121). The probe app runs the probe page, which ends with
+/// `probe exit`: quitting and restarting after a call (#121). The probe app runs the probe page, which ends with
 /// whisper-tiny's whisper.cpp build (Metal) loaded, then restarts as an installed update does
 /// (`SIDEVOICE_DEBUG_EXIT=restart`, src-tauri/src/probe.rs); the relaunched app runs the page again and quits as the
 /// tray's Quit does. Each process must release every model before `exit()`, then run the C++ static destructors to
@@ -316,7 +316,7 @@ pub fn exit() -> Result<()> {
     let logs = work("exit")?;
     let log = logs.join("exit.log");
     // Where macOS writes them: the user's own home, whatever HOME the app was given.
-    let reports = super::app::home()?.join("Library/Logs/DiagnosticReports");
+    let reports = crate::platform::macos_app::home()?.join("Library/Logs/DiagnosticReports");
     let before: Vec<_> = crash_reports(&reports);
     let mut app =
         data.app(&[("SIDEVOICE_DEBUG_PAGE", "probe.html"), ("SIDEVOICE_DEBUG_EXIT", "restart")]).spawn(&log)?;
@@ -389,7 +389,7 @@ fn paths(dir: &Path) -> Vec<std::path::PathBuf> {
     found
 }
 
-/// `release voice-models`: a call on the engine's real models through the app's adapter: Silero, Whisper tiny on
+/// `probe voice-models`: a call on the engine's real models through the app's adapter: Silero, Whisper tiny on
 /// whisper.cpp and Kokoro, downloaded into a scratch folder, or kept in `SIDEVOICE_REAL_CALL_MODELS` (CI caches it);
 /// the turn must come back as the clip's words and the reply must be spoken and heard
 /// (src-tauri/src/voice/models/tests.rs). With them, the rest of the macOS-only voice tests: the native host's lanes
@@ -411,7 +411,7 @@ pub fn voice_models() -> Result<()> {
         .run()
 }
 
-/// `release voice-memory`: the host's calls on the engine's real models, the process's footprint and Metal allocation
+/// `probe voice-memory`: the host's calls on the engine's real models, the process's footprint and Metal allocation
 /// taken at each step (src-tauri/src/voice/host/memory.rs, the ignored test): idle, a call with the models loaded, the
 /// call ended and the idle keep run out, ten calls back to back, a call whose settings change twelve times. The table
 /// is printed; the run fails only on clear growth ([`crate::memory`]). Reads `SIDEVOICE_REAL_CALL_MODELS` as
@@ -430,7 +430,7 @@ pub fn voice_memory() -> Result<()> {
     super::memory::report(&text, super::memory::VOICE_RULES)
 }
 
-/// `release memory`: the probe app through a long session (test/fixtures/memory.html): models loaded and let go after the
+/// `probe memory`: the probe app through a long session (test/fixtures/memory.html): models loaded and let go after the
 /// idle keep (shortened to two seconds a minute), ten calls, the call controls card's settings changed forty times,
 /// the audio devices listed and chosen forty times and watched for forty seconds, the voice settings changed twenty
 /// times. The app prints its own footprint and Metal allocation at each step (`probe-memory PHASE`); the table is
@@ -611,7 +611,7 @@ impl Card {
     }
 }
 
-/// `release card`: the call controls card over a full-screen editor: a non-activating panel that never takes the
+/// `probe card`: the call controls card over a full-screen editor: a non-activating panel that never takes the
 /// keyboard from the editor, its controls on hover, its conversations on a click, dragged and remembered, its mute
 /// and hang-up buttons clicked, and each of a call's states (screenshots into card-shots/). Every check runs; it
 /// fails at the end with each that did not hold.
