@@ -63,7 +63,6 @@ pub(crate) struct AppState {
     shortcut_change: Mutex<()>,
     resetting: std::sync::atomic::AtomicBool,
     reset_admission: Mutex<data::Admission>,
-    #[cfg(target_os = "macos")]
     reset_helper: Mutex<Option<platform::reset_handoff::Pending>>,
 }
 
@@ -80,7 +79,6 @@ impl Default for AppState {
             shortcut_change: Mutex::default(),
             resetting: std::sync::atomic::AtomicBool::new(false),
             reset_admission: Mutex::default(),
-            #[cfg(target_os = "macos")]
             reset_helper: Mutex::default(),
         }
     }

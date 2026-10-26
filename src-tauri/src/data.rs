@@ -11,7 +11,6 @@ use std::path::{Path, PathBuf};
 #[cfg(target_os = "macos")]
 use std::process::Command;
 use std::sync::atomic::Ordering;
-#[cfg(target_os = "macos")]
 use std::time::Duration;
 use tauri::{AppHandle, Manager, Webview};
 
@@ -329,13 +328,40 @@ fn move_to_trash(bundle: &Path) -> Result<(), &'static str> {
     }
 }
 
-#[cfg(target_os = "macos")]
 fn begin_reset(app: &AppHandle, uninstall: bool) -> Answer {
     use crate::platform::reset_handoff::ResetPlan;
-    use sidevoice_local_host::{cli::Cli, paths::DataDirs};
     let admission = DesktopReset::admit().map_err(|error| {
         refused(if error.kind() == std::io::ErrorKind::WouldBlock { "reset.busy" } else { "reset.helper-failed" })
     })?;
+    let (failed, agents, service_outcome) = reset_before_exit()?;
+    let pending = DesktopReset::launch(
+        admission,
+        ResetPlan { parent_pid: std::process::id(), uninstall, initial: json!({"failed": failed, "agents": agents}) },
+    )
+    .map_err(|_| refused("reset.helper-failed"))?;
+    *app.state::<AppState>().reset_helper.lock().unwrap() = Some(pending);
+    let app_to_quit = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(700));
+        app_to_quit.exit(0);
+    });
+    let mut pending = vec!["app-data", "models", "webview", "cache", "saved-state", "logs", "preferences"];
+    if uninstall {
+        pending.push("app");
+    }
+    let state = match (failed.is_empty(), uninstall) {
+        (false, _) => "partial",
+        (true, false) => "needs-restart",
+        (true, true) => "needs-quit",
+    };
+    Ok(json!({"state": state, "service": service_outcome, "agents": agents, "failed": failed, "pending": pending}))
+}
+
+/// The existing macOS steps before the app exits, under the held admission: the connector service and its
+/// agents, then the keychain, journalled. Returns the failures so far, the agents' results and the service outcome.
+#[cfg(target_os = "macos")]
+fn reset_before_exit() -> Result<(Vec<Value>, Value, &'static str), Value> {
+    use sidevoice_local_host::{cli::Cli, paths::DataDirs};
     let dirs = DataDirs::from_env().ok_or_else(|| refused("reset.unavailable"))?;
     let home = std::env::var_os("HOME").map(PathBuf::from).ok_or_else(|| refused("reset.unavailable"))?;
     validate_uninstall_scope(&home, &dirs.data).map_err(|reason| json!({"key": "reset.unsafe", "reason": reason}))?;
@@ -391,32 +417,12 @@ fn begin_reset(app: &AppHandle, uninstall: bool) -> Answer {
         &json!({"stage":"agent-results", "completed":["service", "keychain"], "failed":failed.clone()}),
     )
     .map_err(|_| refused("reset.report-failed"))?;
-    let pending = DesktopReset::launch(
-        admission,
-        ResetPlan { parent_pid: std::process::id(), uninstall, initial: json!({"failed": failed, "agents": agents}) },
-    )
-    .map_err(|_| refused("reset.helper-failed"))?;
-    *app.state::<AppState>().reset_helper.lock().unwrap() = Some(pending);
-    let app_to_quit = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(700));
-        app_to_quit.exit(0);
-    });
-    let mut pending = vec!["app-data", "models", "webview", "cache", "saved-state", "logs", "preferences"];
-    if uninstall {
-        pending.push("app");
-    }
-    let state = match (failed.is_empty(), uninstall) {
-        (false, _) => "partial",
-        (true, false) => "needs-restart",
-        (true, true) => "needs-quit",
-    };
-    Ok(json!({"state": state, "service": service_outcome, "agents": agents, "failed": failed, "pending": pending}))
+    Ok((failed, agents, service_outcome))
 }
 
-/// The pre-exit transaction exists only on macOS; `confirmed_reset` refuses before this elsewhere.
+/// The reset transaction exists only on macOS; `confirmed_reset` refuses before this elsewhere.
 #[cfg(not(target_os = "macos"))]
-fn begin_reset(_: &AppHandle, _: bool) -> Answer {
+fn reset_before_exit() -> Result<(Vec<Value>, Value, &'static str), Value> {
     Err(refused("reset.unavailable"))
 }
 
@@ -1000,89 +1006,100 @@ fn webkit_gone(pids: &[u32]) -> bool {
     false
 }
 
-/// Called in the helper process, before Tauri. The authenticated plan arrives on every host; a host without the
-/// reset transaction completes the committed wait and releases it without cleaning anything up.
+/// Called in the helper process, before Tauri. The authenticated plan arrives on every host.
 pub fn run_reset_helper() {
     let Ok(helper) = DesktopReset::receive() else { return };
+    let (parent_pid, uninstall, initial) = (helper.plan.parent_pid, helper.plan.uninstall, helper.plan.initial.clone());
     if !DesktopReset::reset_available() {
+        // Complete the committed wait and release it; nothing is cleaned up.
         drop(helper.await_exit());
-        return;
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let webkit = webkit_children(helper.plan.parent_pid);
-        let (initial, uninstall) = (helper.plan.initial.clone(), helper.plan.uninstall);
-        let Ok(lock) = helper.await_exit() else { return };
-        let Some(report) = report_path() else { return };
-        let Some(initial_failed) = initial.get("failed").and_then(Value::as_array) else { return };
-        let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return };
-        if account_home().as_deref() != Some(home.as_path()) {
-            return;
-        }
-        let mut completed = Vec::new();
-        let mut failed = initial_failed.clone();
-        let journal = report.with_file_name("journal.json");
-        let webkit_safe = webkit.as_ref().is_some_and(|children| webkit_gone(children));
-        let paths = [
-            ("app-data", home.join("Library/Application Support/dev.sidevoice.desktop")),
-            ("models", standard_models(&home)),
-            ("webview", home.join("Library/WebKit/dev.sidevoice.desktop")),
-            ("cache", home.join("Library/Caches/dev.sidevoice.desktop")),
-            ("saved-state", home.join("Library/Saved Application State/dev.sidevoice.desktop.savedState")),
-            ("logs", home.join("Library/Logs/dev.sidevoice.desktop")),
-        ];
-        for (name, path) in paths {
-            if name == "webview" && !webkit_safe {
-                failed.push(json!({"step": "webview", "key": "reset.process-busy"}));
-            } else {
-                let removed =
-                    if name == "models" { remove_model_store(&path, &home) } else { remove_known(&path, &home) };
-                match removed {
-                    Ok(()) => completed.push(name),
-                    Err(key) => failed.push(json!({"step": name, "key": key})),
-                }
-            }
-            if write_atomic_json(&journal, &json!({"stage":"cleanup", "completed":completed, "failed":failed})).is_err()
-            {
-                failed.push(json!({"step":"report", "key":"reset.report-failed"}));
-                break;
-            }
-        }
-        let domains = Command::new("/usr/bin/defaults").arg("domains").output();
-        match domains {
-            Ok(output) if output.status.success() => {
-                let present =
-                    String::from_utf8_lossy(&output.stdout).split(',').any(|d| d.trim() == "dev.sidevoice.desktop");
-                if !present
-                    || Command::new("/usr/bin/defaults")
-                        .args(["delete", "dev.sidevoice.desktop"])
-                        .status()
-                        .is_ok_and(|s| s.success())
-                {
-                    completed.push("preferences");
-                } else {
-                    failed.push(json!({"step": "preferences", "key": "remove"}));
-                }
-            }
-            _ => failed.push(json!({"step": "preferences", "key": "inspect"})),
-        }
-        let agents = initial.get("agents").cloned().unwrap_or_else(|| json!({}));
-        let relaunch = || {
-            // Cleanup is over. A new app must acquire this lock independently.
-            drop(lock);
-            std::env::current_exe()
-                .ok()
-                .and_then(|exe| Command::new(exe).env("SIDEVOICE_RESET_RELAUNCH", "1").spawn().ok())
-                .is_some()
-        };
-        if uninstall {
-            let trash = || removable_app_bundle().and_then(|bundle| move_to_trash(&bundle));
-            finish_uninstall_at(&report, &journal, &completed, failed, agents, write_atomic_json, trash, relaunch);
-        } else {
-            finish_reset_at(&report, &journal, &completed, failed, agents, write_atomic_json, relaunch);
-        }
+    } else {
+        clean_up_after_exit(helper, parent_pid, uninstall, initial);
     }
 }
+
+/// The existing macOS helper transaction: observe WebKit children, await the committed exit, clean up,
+/// write the report, release admission, then relaunch or move the app to the Trash.
+#[cfg(target_os = "macos")]
+fn clean_up_after_exit(
+    helper: crate::platform::reset_handoff::Helper,
+    parent_pid: u32,
+    uninstall: bool,
+    initial: Value,
+) {
+    let webkit = webkit_children(parent_pid);
+    let Ok(lock) = helper.await_exit() else { return };
+    let Some(report) = report_path() else { return };
+    let Some(initial_failed) = initial.get("failed").and_then(Value::as_array) else { return };
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return };
+    if account_home().as_deref() != Some(home.as_path()) {
+        return;
+    }
+    let mut completed = Vec::new();
+    let mut failed = initial_failed.clone();
+    let journal = report.with_file_name("journal.json");
+    let webkit_safe = webkit.as_ref().is_some_and(|children| webkit_gone(children));
+    let paths = [
+        ("app-data", home.join("Library/Application Support/dev.sidevoice.desktop")),
+        ("models", standard_models(&home)),
+        ("webview", home.join("Library/WebKit/dev.sidevoice.desktop")),
+        ("cache", home.join("Library/Caches/dev.sidevoice.desktop")),
+        ("saved-state", home.join("Library/Saved Application State/dev.sidevoice.desktop.savedState")),
+        ("logs", home.join("Library/Logs/dev.sidevoice.desktop")),
+    ];
+    for (name, path) in paths {
+        if name == "webview" && !webkit_safe {
+            failed.push(json!({"step": "webview", "key": "reset.process-busy"}));
+        } else {
+            let removed = if name == "models" { remove_model_store(&path, &home) } else { remove_known(&path, &home) };
+            match removed {
+                Ok(()) => completed.push(name),
+                Err(key) => failed.push(json!({"step": name, "key": key})),
+            }
+        }
+        if write_atomic_json(&journal, &json!({"stage":"cleanup", "completed":completed, "failed":failed})).is_err() {
+            failed.push(json!({"step":"report", "key":"reset.report-failed"}));
+            break;
+        }
+    }
+    let domains = Command::new("/usr/bin/defaults").arg("domains").output();
+    match domains {
+        Ok(output) if output.status.success() => {
+            let present =
+                String::from_utf8_lossy(&output.stdout).split(',').any(|d| d.trim() == "dev.sidevoice.desktop");
+            if !present
+                || Command::new("/usr/bin/defaults")
+                    .args(["delete", "dev.sidevoice.desktop"])
+                    .status()
+                    .is_ok_and(|s| s.success())
+            {
+                completed.push("preferences");
+            } else {
+                failed.push(json!({"step": "preferences", "key": "remove"}));
+            }
+        }
+        _ => failed.push(json!({"step": "preferences", "key": "inspect"})),
+    }
+    let agents = initial.get("agents").cloned().unwrap_or_else(|| json!({}));
+    let relaunch = || {
+        // Cleanup is over. A new app must acquire this lock independently.
+        drop(lock);
+        std::env::current_exe()
+            .ok()
+            .and_then(|exe| Command::new(exe).env("SIDEVOICE_RESET_RELAUNCH", "1").spawn().ok())
+            .is_some()
+    };
+    if uninstall {
+        let trash = || removable_app_bundle().and_then(|bundle| move_to_trash(&bundle));
+        finish_uninstall_at(&report, &journal, &completed, failed, agents, write_atomic_json, trash, relaunch);
+    } else {
+        finish_reset_at(&report, &journal, &completed, failed, agents, write_atomic_json, relaunch);
+    }
+}
+
+/// The reset transaction exists only on macOS; `run_reset_helper` never calls this elsewhere.
+#[cfg(not(target_os = "macos"))]
+fn clean_up_after_exit(_: crate::platform::reset_handoff::Helper, _: u32, _: bool, _: Value) {}
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn finish_reset_at(
