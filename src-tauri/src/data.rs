@@ -474,7 +474,7 @@ fn validate_uninstall_scope_at(home: &Path, standard: &Path, data: &Path) -> Res
             return Err("outside-known-dirs");
         }
         let command = value.get("command").and_then(Value::as_array).ok_or("unsafe-record")?;
-        let recovery = standard.join(".uninstall-recovery").join("sidevoice-connector");
+        let recovery = standard.join(".uninstall-recovery").join(connector_program());
         if command.len() != 1
             || !matches!(command[0].as_str(), Some(path) if is_release_binary(Path::new(path), &expected_releases) || Path::new(path) == recovery)
         {
@@ -489,14 +489,19 @@ fn validate_uninstall_scope_at(home: &Path, standard: &Path, data: &Path) -> Res
     Ok(expected_releases)
 }
 
-/// `R/releases/<id>/bin/sidevoice-connector`: the command the connector's `install` records for the release it
-/// selects, `<id>` one plain name.
+/// The connector's executable file name: `sidevoice-connector`, with this OS's executable suffix (`.exe` on Windows).
+fn connector_program() -> String {
+    format!("sidevoice-connector{}", std::env::consts::EXE_SUFFIX)
+}
+
+/// `R/releases/<id>/bin/sidevoice-connector` ([`connector_program`]): the command the connector's `install` records
+/// for the release it selects, `<id>` one plain name.
 fn is_release_binary(path: &Path, releases: &Path) -> bool {
     use std::path::Component;
     let Ok(rest) = path.strip_prefix(releases.join("releases")) else { return false };
     let parts: Vec<_> = rest.components().collect();
     matches!(parts.as_slice(), [Component::Normal(id), Component::Normal(bin), Component::Normal(name)]
-        if !id.to_string_lossy().starts_with('.') && *bin == "bin" && *name == "sidevoice-connector")
+        if !id.to_string_lossy().starts_with('.') && *bin == "bin" && *name == connector_program().as_str())
 }
 
 /// The report sits in the handoff's private control directory, outside every reset deletion root.
@@ -746,14 +751,14 @@ mod tests {
         let releases = data.join("install");
         fs::write(
             data.join("install.json"),
-            json!({"releases": releases, "command": [releases.join("releases").join("1.2.3").join("bin").join("sidevoice-connector")]})
+            json!({"releases": releases, "command": [releases.join("releases").join("1.2.3").join("bin").join(connector_program())]})
                 .to_string(),
         )
         .unwrap();
         assert_eq!(validate_uninstall_scope_at(&home, &data, &data), Ok(releases.clone()));
         fs::write(
             data.join("install.json"),
-            json!({"releases": releases, "command": [data.join(".uninstall-recovery").join("sidevoice-connector")]})
+            json!({"releases": releases, "command": [data.join(".uninstall-recovery").join(connector_program())]})
                 .to_string(),
         )
         .unwrap();
@@ -767,7 +772,7 @@ mod tests {
         // Not the layout the connector records: `current` is a link of the old installer, not a release.
         fs::write(
             data.join("install.json"),
-            json!({"releases": releases, "command": [releases.join("current").join("bin").join("sidevoice-connector")]})
+            json!({"releases": releases, "command": [releases.join("current").join("bin").join(connector_program())]})
                 .to_string(),
         )
         .unwrap();

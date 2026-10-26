@@ -43,13 +43,17 @@ and the reset plan carries none.
   the browser storage and the deletion. An alternate home supplied as `HOME` (say, a restored profile inside the
   real one) is refused before anything is deleted; a test pins that.
 
-Reset is offered on macOS, Windows and Linux (`platform::host::RESET_AVAILABLE`, true on all three): the transaction in
-`data.rs` is one flow for every host. Removing the app itself stays macOS-only (`platform::uninstall::available`). The
-connector step runs only for an installed connector. With no install record, `platform::connector_service` must
+The transaction in `data.rs` is one flow for every host, but reset is still offered on macOS only
+(`platform::host::RESET_AVAILABLE`). Linux and Windows wait for a containment-checked open below the account home in
+the shared filesystem (`sidevoice-platform`: today a folder can be swapped for a link between its check and its open)
+and, on Windows, a connector CLI the app can run (the Windows local host). Removing the app itself stays macOS-only
+(`platform::uninstall::available`).
+
+The connector step runs only for an installed connector. With no install record, `platform::connector_service` must
 prove the connector's service absent, fresh from the OS (macOS: launchd and `ps`; Linux: systemd's user manager and
 the process list; Windows: Task Scheduler and the process list); a missing record alone is never that proof, and any
-doubt refuses with `reset.service-failed` before anything is deleted. An installed connector on Windows still refuses
-with `reset.unsupported-connector`: the local host cannot run its CLI there yet.
+doubt refuses with `reset.service-failed` before anything is deleted. An installed connector on a host where the app
+cannot run its CLI (Windows) refuses with `reset.unsupported-connector`.
 
 ## Which folders
 

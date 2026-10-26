@@ -15,11 +15,12 @@ use imp::Native;
 /// confirmation or data access, and a reset helper only completes the committed wait: the handoff
 /// (`reset_handoff`) works on every host either way.
 ///
-/// The reset transaction in `data.rs` runs on every host now (the app's data through `app_data` and `webview_data`,
-/// the provider keys through `credentials`, the connector's uninstall through its recorded CLI), so it is true on
-/// all three; removing the uninstall of the app itself stays where the host can do it (`uninstall::available`). The
-/// constant is removed once the remaining reset steps are in (plan rows 43, 44, then row 5).
-pub const RESET_AVAILABLE: bool = true;
+/// The reset transaction in `data.rs` is one flow for every host, but it is offered only on macOS for now. Linux and
+/// Windows wait for: the shared filesystem's containment-checked open below the account home (a `sidevoice-platform`
+/// release) and, on Windows, a connector CLI the app can run there (the Windows local host). Only this value differs
+/// by OS. The constant is removed once they are in (plan row 5). Removing the app itself is separate
+/// (`uninstall::available`).
+pub const RESET_AVAILABLE: bool = cfg!(target_os = "macos");
 
 /// What differs per OS.
 trait Os {
