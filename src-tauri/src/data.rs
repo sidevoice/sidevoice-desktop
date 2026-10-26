@@ -142,9 +142,11 @@ pub fn data_reset_report(app: AppHandle, webview: Webview) -> Answer {
 }
 
 /// The report, or else the journal of an interrupted reset, read once from the control directory `dir` and removed.
-/// Every read and removal goes through the directory's held, checked handle (`sidevoice-platform`): a private
-/// directory, each record a private regular file (never a link, reparse point or second name) read within its bound.
-/// A refused record is `reset.unsafe` and stays.
+/// Every read and removal goes through the directory's held, checked handle (`sidevoice-platform`), in a private
+/// directory. A record read must be a private regular file with one name (else `reset.unsafe`, kept) within its bound
+/// (else `reset.failed` for the report, `reset.report-failed` for the journal, kept). Once a valid report is read,
+/// the journal beside it is obsolete and removed unread: any regular file with one name that others cannot write,
+/// never a link or reparse point.
 fn consume_report_at(dir: &Path) -> Answer {
     use sidevoice_platform::fs::{Access, Directory, HeldDirectory};
     use std::io::ErrorKind;
@@ -525,11 +527,16 @@ const RECORD_LIMIT: u64 = 16 * 1024;
 const RELAUNCH_MARKER: &str = "SIDEVOICE_RESET_RELAUNCH";
 
 /// The installed app, as Tauri resolves its own binary (Linux: the AppImage itself rather than its temporary mount,
-/// which goes away with the app), checked as a Sidevoice program (`trusted_program`: this user's or the system's, and
-/// nobody else may change it or the folders above it). The helper and the relaunch start only this; neither the page
-/// nor the plan names a program.
+/// which goes away with the app; Tauri takes it from `APPIMAGE`, an environment the app trusts as it trusts `HOME`),
+/// checked as a Sidevoice program (`trusted_program`: this user's or the system's, and nobody else may change it or the
+/// folders above it). Where the handoff keeps its shipped launch (`reset_handoff::program_checked` false: macOS), the
+/// executable as the OS names it. The helper and the relaunch start only this; neither the page nor the plan names a
+/// program.
 fn installed_program() -> Option<PathBuf> {
     use sidevoice_platform::fs::{Files, Fs};
+    if !reset_handoff::program_checked() {
+        return std::env::current_exe().ok();
+    }
     let program = tauri::process::current_binary(&tauri::Env::default()).ok()?;
     Files::trusted_program(&program).ok()
 }
@@ -576,8 +583,10 @@ fn clean_up_after_exit(
     let mut completed = Vec::new();
     let mut failed = initial_failed.clone();
     let journal = control.join(JOURNAL);
-    // The intent first: nothing is deleted before the journal says the cleanup has started. If it cannot say so,
-    // nothing is deleted, and the journal written before the exit reports the reset as interrupted.
+    // The intent first: nothing is deleted before the journal write saying the cleanup has started has returned. If it
+    // fails, nothing is deleted, and the journal written before the exit reports the reset as interrupted. This covers
+    // a crash of the helper; whether the record also survives a power loss is the shared writer's guarantee (Unix
+    // syncs the file and the directory; Windows does not yet make the rename durable: docs/RESET_HANDOFF.md).
     if write_atomic_json(&journal, &json!({"stage":"cleanup", "completed":[], "failed":failed})).is_err() {
         return;
     }

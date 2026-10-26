@@ -17,7 +17,8 @@ use imp::Native;
 ///
 /// The reset transaction in `data.rs` is one flow for every host, but it is offered only on macOS for now. Linux and
 /// Windows wait for: the shared filesystem's containment-checked open below the account home (a `sidevoice-platform`
-/// release) and, on Windows, a connector CLI the app can run there (the Windows local host). Only this value differs
+/// release) and, on Windows, a connector CLI the app can run there (the Windows local host) and a durable journal
+/// publication (the shared private-record writer does not yet make its rename durable there). Only this value differs
 /// by OS. The constant is removed once they are in (plan row 5). Removing the app itself is separate
 /// (`uninstall::available`).
 pub const RESET_AVAILABLE: bool = cfg!(target_os = "macos");

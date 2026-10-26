@@ -37,6 +37,11 @@ trait Os {
     /// also waits for the parent to have terminated, every handle of it closed; the lock and EOF alone do not say so.
     const OPEN_FILES_BLOCK_REMOVAL: bool = false;
 
+    /// Whether the program the helper and the relaunch start is the app's binary as Tauri resolves it, checked as a
+    /// Sidevoice program (`trusted_program`). `false` keeps the launch this host shipped with: its own executable as
+    /// the OS names it, unchecked.
+    const PROGRAM_CHECKED: bool = true;
+
     /// A hold on one live process that can later tell whether it has terminated.
     type Held: Send;
 
@@ -115,6 +120,13 @@ pub fn launch(admission: Admission, plan: ResetPlan, program: &Path) -> io::Resu
     let mut command = tokio::process::Command::new(program);
     command.arg("--sidevoice-reset-helper");
     launch_command(admission, plan, command, HANDSHAKE)
+}
+
+/// Whether the caller resolves the helper's and the relaunch's program through Tauri and checks it with
+/// `trusted_program` before starting it (see [`launch`] and [`relaunch`]); otherwise it starts its own executable as the
+/// OS names it.
+pub fn program_checked() -> bool {
+    Native::PROGRAM_CHECKED
 }
 
 /// Start `program` (the installed app, as the caller resolved and checked it) once cleanup is over: detached from the
@@ -310,8 +322,10 @@ fn receive_at(root: &Path, timeout: Duration) -> io::Result<Helper> {
         })
         .await?
     })?;
-    // The parent is alive now: it waits in the handshake for this helper's readiness. Held from here, its termination
-    // can later be observed without trusting a PID that may have been reused by then. A hold that fails refuses.
+    // Held from here, the parent's termination can later be observed by handle rather than by PID. The plan may have
+    // been read from the buffer after the parent died and its PID was reused: then the process held is another one.
+    // That cannot authorize cleanup: a parent that died here never sees this helper's readiness, so never sends the
+    // COMMIT that `wait_for_exit` requires before the lock and the termination. A hold that fails refuses.
     let parent = if Native::OPEN_FILES_BLOCK_REMOVAL { Some(Native::hold(plan.parent_pid)?) } else { None };
     let reset = lock(root, "reset.lock")?;
     Ok(Helper { plan, parent, root: root.to_owned(), reset, directory, stream, runtime })
