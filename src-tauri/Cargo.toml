@@ -66,6 +66,8 @@ winreg = "0.55"
 windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_Storage_FileSystem", "Win32_Graphics_Dwm", "Win32_UI_Controls", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+# The typed Mach bindings (task_info, task_vm_info) for the process memory read (src/platform/process_memory/macos.rs).
+mach2 = "0.6"
 # The voice call the app runs itself (src/voice.rs, `host.voice`): sidevoice-voice with its native microphone and
 # speaker (cpal) and WebRTC's AEC3 between them, on the models the app hands it (src/voice/models.rs: the engine's).
 # It depends on no engine. The candidate source: a try's take (StartOptions, VoiceEvent::Take), the pause in the
