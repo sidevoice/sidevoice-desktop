@@ -13,7 +13,7 @@
 //! Limits, by design of a token scan: a program name or OS variable reaching `Command::new` through a constant
 //! or a computed value, and a bare function imported by glob (`use libc::*`), are not followed.
 use std::{
-    collections::{BTreeSet, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     path::Path,
     str::FromStr,
 };
@@ -143,58 +143,197 @@ fn string_value(literal: &proc_macro2::Literal) -> Option<String> {
     syn::parse_str::<syn::LitStr>(&literal.to_string()).ok().map(|lit| lit.value())
 }
 
-/// `(path, rename)` of every leaf of a `use` tree.
+/// `(path, rename)` of every leaf of a `use` tree; a glob's rename is `*`.
 fn leaves(tree: &syn::UseTree, prefix: &mut Vec<String>, out: &mut Vec<(Vec<String>, Option<String>)>) {
+    let name = |id: &syn::Ident| id.to_string().trim_start_matches("r#").to_string();
     match tree {
         syn::UseTree::Path(p) => {
-            prefix.push(p.ident.to_string());
+            prefix.push(name(&p.ident));
             leaves(&p.tree, prefix, out);
             prefix.pop();
         }
         syn::UseTree::Name(n) => {
             let mut path = prefix.clone();
             if n.ident != "self" {
-                path.push(n.ident.to_string());
+                path.push(name(&n.ident));
             }
             out.push((path, None));
         }
         syn::UseTree::Rename(r) => {
             let mut path = prefix.clone();
             if r.ident != "self" {
-                path.push(r.ident.to_string());
+                path.push(name(&r.ident));
             }
-            out.push((path, Some(r.rename.to_string())));
+            out.push((path, Some(name(&r.rename))));
         }
-        syn::UseTree::Glob(_) => out.push((prefix.clone(), None)),
+        syn::UseTree::Glob(_) => out.push((prefix.clone(), Some("*".into()))),
         syn::UseTree::Group(g) => g.items.iter().for_each(|item| leaves(item, prefix, out)),
     }
 }
 
 /// Whether a resolved path is an OS API.
 fn os_path(path: &[String]) -> bool {
-    let at = |i: usize| path.get(i).map(|s| s.trim_start_matches("r#"));
+    let at = |i: usize| path.get(i).map(String::as_str);
     match at(0) {
         Some("std" | "core" | "alloc") => {
             at(1) == Some("os")
                 || (at(1) == Some("env") && at(2) == Some("consts") && matches!(at(3), Some("OS" | "FAMILY")))
         }
+        // Local sockets and pipes: Unix sockets, Windows named pipes, and the crate that abstracts them.
+        Some("tokio") => {
+            (at(1) == Some("net")
+                && (at(2).is_some_and(|name| name.starts_with("Unix")) || matches!(at(2), Some("unix" | "windows"))))
+                || (at(1) == Some("signal") && matches!(at(2), Some("unix" | "windows")))
+        }
+        Some("mio") => at(1) == Some("net") && at(2).is_some_and(|name| name.starts_with("Unix")),
+        Some("interprocess") => true,
         Some(root) => is_os_crate(root),
         None => false,
     }
 }
 
+/// Whether a string is a path that exists on one OS only (`/proc/…`, `C:\…`, a named pipe).
+fn os_path_literal(value: &str) -> bool {
+    const UNIX_ROOTS: [&str; 14] = [
+        "/proc/",
+        "/sys/",
+        "/dev/",
+        "/etc/",
+        "/usr/",
+        "/bin/",
+        "/sbin/",
+        "/var/",
+        "/run/",
+        "/tmp/",
+        "/Library/",
+        "/System/",
+        "/Applications/",
+        "/Users/",
+    ];
+    let bytes = value.as_bytes();
+    UNIX_ROOTS.iter().any(|root| value.starts_with(root))
+        || value.starts_with("~/Library")
+        || value.starts_with("\\\\.\\")
+        || value.starts_with("\\\\?\\")
+        || (bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && matches!(bytes[2], b'\\' | b'/'))
+}
+
+/// Free functions and constructors whose argument is a filesystem path.
+const FS_FUNCTIONS: [&str; 22] = [
+    "read",
+    "read_to_string",
+    "read_dir",
+    "read_link",
+    "write",
+    "open",
+    "create",
+    "create_new",
+    "create_dir",
+    "create_dir_all",
+    "remove_file",
+    "remove_dir",
+    "remove_dir_all",
+    "metadata",
+    "symlink_metadata",
+    "canonicalize",
+    "copy",
+    "rename",
+    "exists",
+    "try_exists",
+    "set_permissions",
+    "hard_link",
+];
+/// Methods whose argument is a path or a command line.
+const PATH_METHODS: [&str; 5] = ["arg", "args", "join", "current_dir", "open"];
+
+/// Shared by every file: names a build script or another module defines for the rest.
+#[derive(Default, Clone, PartialEq)]
+struct Shared {
+    /// OS conditions defined by `cfg_aliases!` (a build script defines what other files use).
+    cfg_aliases: HashSet<String>,
+    /// Types that wrap a process `Command` (`struct Cmd { command: Command }`, `type Run = Command`).
+    command_types: HashSet<String>,
+}
+
+fn is_command_type(name: &str, shared: &Shared) -> bool {
+    name.ends_with("Command") || name.ends_with("CommandWrap") || shared.command_types.contains(name)
+}
+
 #[derive(Default)]
 struct Scan {
-    /// OS conditions defined by `cfg_aliases!`, repository-wide (a build script defines what other files use).
-    cfg_aliases: HashSet<String>,
-    /// Names this file binds to OS paths (`use libc as sys;`).
-    bound: HashSet<String>,
-    /// Names that are a process `Command` under another name.
-    commands: HashSet<String>,
+    shared: Shared,
+    /// Every path each name in this file is imported as (`use libc as sys;` binds `sys` to `libc`).
+    imports: HashMap<String, Vec<Vec<String>>>,
     lines: BTreeSet<usize>,
+    /// Literals already reported, by position.
+    literals: HashSet<(usize, usize)>,
     count: usize,
     /// First pass: only learn names, report nothing.
     collecting: bool,
+}
+
+/// The path starting at `trees[at]` (`a::b::<T>::c`): its segments and the index after it.
+fn parse_path(trees: &[TokenTree], at: usize) -> (Vec<String>, usize) {
+    let mut segments: Vec<String> = ident(&trees[at]).into_iter().collect();
+    let mut end = at + 1;
+    while path_sep(trees, end) {
+        match trees.get(end + 2) {
+            Some(tree) if ident(tree).is_some() => {
+                segments.extend(ident(tree));
+                end += 3;
+            }
+            Some(TokenTree::Punct(p)) if p.as_char() == '<' => {
+                let mut depth = 0;
+                let mut k = end + 2;
+                while k < trees.len() {
+                    if punct(trees.get(k), '<') {
+                        depth += 1;
+                    } else if punct(trees.get(k), '>') && !(k > 0 && punct(trees.get(k - 1), '-')) {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    k += 1;
+                }
+                end = (k + 1).min(trees.len());
+            }
+            _ => break,
+        }
+    }
+    (segments, end)
+}
+
+fn any_group(tree: Option<&TokenTree>) -> Option<TokenStream> {
+    match tree {
+        Some(TokenTree::Group(g)) => Some(g.stream()),
+        _ => None,
+    }
+}
+
+fn first_string(stream: TokenStream) -> Option<String> {
+    match stream.into_iter().next() {
+        Some(TokenTree::Literal(lit)) => string_value(&lit),
+        _ => None,
+    }
+}
+
+fn cargo_os_variable(value: &str) -> bool {
+    value.strip_prefix("CARGO_CFG_").is_some_and(|name| OS_ENV_SUFFIXES.contains(&name))
+}
+
+/// `#[link(name = "AppKit", kind = "framework")]`, also nested in `cfg_attr`.
+fn native_os_link(trees: &[TokenTree]) -> bool {
+    trees.iter().enumerate().any(|(i, tree)| match tree {
+        TokenTree::Group(g) => native_os_link(&flat(g.stream())),
+        TokenTree::Ident(id) if id == "link" => group(trees.get(i + 1), Delimiter::Parenthesis).is_some_and(|args| {
+            flat(args).iter().any(|arg| {
+                matches!(arg, TokenTree::Literal(lit)
+                    if string_value(lit).is_some_and(|kind| matches!(kind.as_str(), "framework" | "raw-dylib")))
+            })
+        }),
+        _ => false,
+    })
 }
 
 impl Scan {
@@ -205,14 +344,55 @@ impl Scan {
         }
     }
 
+    /// Every way `segments` can be read once the imports of this file are expanded.
+    fn expand(&self, segments: &[String], depth: usize) -> Vec<Vec<String>> {
+        let imported = segments.first().and_then(|first| self.imports.get(first));
+        match imported {
+            Some(paths) if depth > 0 => paths
+                .iter()
+                .flat_map(|path| {
+                    let mut full = path.clone();
+                    full.extend_from_slice(&segments[1..]);
+                    if full.first() == segments.first() {
+                        vec![full]
+                    } else {
+                        self.expand(&full, depth - 1)
+                    }
+                })
+                .collect(),
+            _ => vec![segments.to_vec()],
+        }
+    }
+
     fn bind(&mut self, at: &TokenTree, leaves: Vec<(Vec<String>, Option<String>)>) {
         for (path, rename) in leaves {
-            if path.last().is_some_and(|last| last.ends_with("Command") || last.ends_with("CommandWrap")) {
-                self.commands.extend(rename.clone());
-            }
             if os_path(&path) {
                 self.found(at);
-                self.bound.extend(rename.or_else(|| path.last().cloned()));
+            }
+            let name = rename.or_else(|| path.last().cloned());
+            if let Some(name) = name.filter(|name| name != "*" && name != "_") {
+                let paths = self.imports.entry(name).or_default();
+                if !paths.contains(&path) {
+                    paths.push(path);
+                }
+            }
+        }
+    }
+
+    /// An OS path inside the arguments of a filesystem or command operation counts once per literal.
+    fn path_literals(&mut self, trees: &[TokenTree]) {
+        for tree in trees {
+            match tree {
+                TokenTree::Group(g) => self.path_literals(&flat(g.stream())),
+                TokenTree::Literal(lit) => {
+                    let start = lit.span().start();
+                    if string_value(lit).is_some_and(|value| os_path_literal(&value))
+                        && (self.collecting || self.literals.insert((start.line, start.column)))
+                    {
+                        self.found(tree);
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -222,26 +402,19 @@ impl Scan {
         while i < trees.len() {
             match &trees[i] {
                 TokenTree::Group(g) => self.walk(&flat(g.stream())),
-                TokenTree::Literal(lit) => {
-                    if string_value(lit).is_some_and(|value| {
-                        value.strip_prefix("CARGO_CFG_").is_some_and(|name| OS_ENV_SUFFIXES.contains(&name))
-                    }) {
-                        self.found(&trees[i]);
-                    }
-                }
                 TokenTree::Punct(p) if p.as_char() == '#' => {
                     let at = i + usize::from(punct(trees.get(i + 1), '!')) + 1;
                     if let Some(inner) = group(trees.get(at), Delimiter::Bracket) {
                         let body = flat(inner.clone());
                         let name = body.first().and_then(ident);
                         let cfg = matches!(name.as_deref(), Some("cfg" | "cfg_attr"));
-                        if name.as_deref() == Some("windows_subsystem") {
+                        if name.as_deref() == Some("windows_subsystem") || native_os_link(&body) {
                             self.found(&trees[i]);
                         }
-                        if cfg && names_os(&inner, &self.cfg_aliases) {
+                        if cfg && names_os(&inner, &self.shared.cfg_aliases) {
                             self.found(&trees[i]);
                         }
-                        // Other attributes can carry paths and strings (`link`, `doc`): scan them like any tokens.
+                        // Other attributes can carry paths and strings (`doc`): scan them like any tokens.
                         if !cfg {
                             self.walk(&body);
                         }
@@ -252,7 +425,7 @@ impl Scan {
                     i = self.item(trees, i);
                     continue;
                 }
-                TokenTree::Punct(_) => {}
+                TokenTree::Literal(_) | TokenTree::Punct(_) => {}
             }
             i += 1;
         }
@@ -262,8 +435,16 @@ impl Scan {
     fn item(&mut self, trees: &[TokenTree], i: usize) -> usize {
         let tree = &trees[i];
         let name = ident(tree).unwrap_or_default();
-        let sep = path_sep(trees, i + 1);
-        let start = !mid_path(trees, i);
+        let bang = punct(trees.get(i + 1), '!');
+        if i > 0 && punct(trees.get(i - 1), '.') {
+            // A method call: `.arg("/dev/null")`, `.join("C:\\x")`.
+            if PATH_METHODS.contains(&name.as_str()) {
+                if let Some(args) = group(trees.get(i + 1), Delimiter::Parenthesis) {
+                    self.path_literals(&flat(args));
+                }
+            }
+            return i + 1;
+        }
         let extern_crate = name == "extern" && trees.get(i + 1).and_then(ident).as_deref() == Some("crate");
         if name == "use" || extern_crate {
             let end = trees[i..].iter().position(|t| punct(Some(t), ';')).map_or(trees.len(), |p| i + p);
@@ -275,60 +456,105 @@ impl Scan {
                     self.bind(tree, out);
                 }
             } else if let Ok(item) = syn::parse2::<syn::ItemExternCrate>(tokens) {
-                let rename = item.rename.map(|(_, id)| id.to_string());
+                let rename = item.rename.map(|(_, id)| id.to_string().trim_start_matches("r#").to_string());
                 self.bind(tree, vec![(vec![item.ident.to_string()], rename)]);
             }
             return end + 1;
         }
-        if name == "cfg" && punct(trees.get(i + 1), '!') {
-            if let Some(inner) = group(trees.get(i + 2), Delimiter::Parenthesis) {
-                if names_os(&inner, &self.cfg_aliases) {
+        if matches!(name.as_str(), "struct" | "type") {
+            self.learn_command_type(trees, i);
+        }
+        if bang && name == "cfg" {
+            if let Some(inner) = any_group(trees.get(i + 2)) {
+                if names_os(&inner, &self.shared.cfg_aliases) {
                     self.found(tree);
                 }
                 return i + 3;
             }
         }
-        if name == "cfg_aliases" && punct(trees.get(i + 1), '!') {
+        if bang && matches!(name.as_str(), "env" | "option_env") {
+            if let Some(inner) = any_group(trees.get(i + 2)) {
+                if first_string(inner).is_some_and(|value| cargo_os_variable(&value)) {
+                    self.found(tree);
+                }
+                return i + 3;
+            }
+        }
+        if bang && name == "cfg_aliases" {
             if let Some(TokenTree::Group(body)) = trees.get(i + 2) {
                 self.define_cfg_aliases(&flat(body.stream()));
                 return i + 3;
             }
         }
-        if sep && start {
-            if matches!(name.as_str(), "std" | "core" | "alloc") {
-                let seg = |n: usize| trees.get(i + 3 + 3 * n).and_then(ident);
-                let os = seg(0).as_deref() == Some("os");
-                let consts = seg(0).as_deref() == Some("env")
-                    && path_sep(trees, i + 4)
-                    && seg(1).as_deref() == Some("consts")
-                    && path_sep(trees, i + 7)
-                    && matches!(seg(2).as_deref(), Some("OS" | "FAMILY"));
-                if os || consts {
-                    self.found(tree);
-                }
-            } else if is_os_crate(&name) || self.bound.contains(&name) {
-                self.found(tree);
-            }
-        }
-        // `Command::new("sh")`, wherever the type came from (`std::process::`, `tokio::process::`, an alias).
-        if sep
-            && (name.ends_with("Command") || name.ends_with("CommandWrap") || self.commands.contains(&name))
-            && matches!(trees.get(i + 3).and_then(ident).as_deref(), Some("new" | "with_new"))
-        {
-            let program =
-                group(trees.get(i + 4), Delimiter::Parenthesis).and_then(|args| match args.into_iter().next() {
-                    Some(TokenTree::Literal(lit)) => string_value(&lit),
-                    _ => None,
-                });
-            if let Some(program) = program {
-                let file = program.rsplit(['/', '\\']).next().unwrap_or_default().to_lowercase();
-                let stem = file.strip_suffix(".exe").or_else(|| file.strip_suffix(".cmd")).unwrap_or(&file);
-                if OS_PROGRAMS.contains(&stem) {
-                    self.found(tree);
-                }
-            }
+        if !mid_path(trees, i) {
+            self.path(trees, i);
         }
         i + 1
+    }
+
+    /// `struct Cmd { command: Command, … }` and `type Run = Command;` make `Cmd`/`Run` a command type.
+    fn learn_command_type(&mut self, trees: &[TokenTree], at: usize) {
+        let Some(name) = trees.get(at + 1).and_then(ident) else {
+            return;
+        };
+        let mut wraps = false;
+        for tree in &trees[at + 2..] {
+            match tree {
+                TokenTree::Punct(p) if p.as_char() == ';' => break,
+                TokenTree::Group(g) => {
+                    wraps |= mentions_command(g.stream());
+                    if g.delimiter() == Delimiter::Brace {
+                        break;
+                    }
+                }
+                TokenTree::Ident(id) => wraps |= is_command_type(&id.to_string(), &self.shared),
+                _ => {}
+            }
+        }
+        if wraps {
+            self.shared.command_types.insert(name);
+        }
+    }
+
+    /// A path in expression, type or pattern position, and the call that may follow it.
+    fn path(&mut self, trees: &[TokenTree], at: usize) {
+        let (segments, end) = parse_path(trees, at);
+        let options = self.expand(&segments, 3);
+        if segments.len() > 1 && options.iter().any(|path| os_path(path)) {
+            self.found(&trees[at]);
+        }
+        let Some(args) = group(trees.get(end), Delimiter::Parenthesis) else {
+            return;
+        };
+        let (mut program, mut cargo_var, mut fs_path) = (None, false, false);
+        for path in &options {
+            let [.., prev, last] = path.as_slice() else {
+                continue;
+            };
+            if matches!(last.as_str(), "new" | "with_new") && is_command_type(prev, &self.shared) {
+                program = program.or_else(|| first_string(args.clone()));
+            }
+            if matches!(last.as_str(), "var" | "var_os") && path.len() == 3 && path[..2] == ["std", "env"] {
+                cargo_var |= first_string(args.clone()).is_some_and(|value| cargo_os_variable(&value));
+            }
+            fs_path |= (matches!(prev.as_str(), "fs" | "File" | "OpenOptions")
+                && FS_FUNCTIONS.contains(&last.as_str()))
+                || (matches!(prev.as_str(), "Path" | "PathBuf" | "OsStr" | "OsString")
+                    && matches!(last.as_str(), "new" | "from"));
+        }
+        if let Some(program) = program {
+            let file = program.rsplit(['/', '\\']).next().unwrap_or_default().to_lowercase();
+            let stem = file.strip_suffix(".exe").or_else(|| file.strip_suffix(".cmd")).unwrap_or(&file);
+            if OS_PROGRAMS.contains(&stem) {
+                self.found(&trees[at]);
+            }
+        }
+        if cargo_var {
+            self.found(&trees[at]);
+        }
+        if fs_path {
+            self.path_literals(&flat(args));
+        }
     }
 
     /// `cfg_aliases! { name: { condition }, … }`: each alias that names an OS counts, and becomes one.
@@ -338,29 +564,40 @@ impl Scan {
                 continue;
             };
             let condition: TokenStream = entry[1..].iter().cloned().collect();
-            if names_os(&condition, &self.cfg_aliases) {
+            if names_os(&condition, &self.shared.cfg_aliases) {
                 self.found(&entry[0]);
-                self.cfg_aliases.insert(alias);
+                self.shared.cfg_aliases.insert(alias);
             }
         }
     }
 }
 
-/// What one file holds: OS operations (count and lines), plus the OS aliases it defines for the others.
+fn mentions_command(stream: TokenStream) -> bool {
+    stream.into_iter().any(|tree| match tree {
+        TokenTree::Ident(id) => {
+            let name = id.to_string();
+            name.ends_with("Command") || name.ends_with("CommandWrap")
+        }
+        TokenTree::Group(g) => mentions_command(g.stream()),
+        _ => false,
+    })
+}
+
+/// What one file holds: OS operations (count and lines), plus the names it defines for the others.
 struct Report {
     count: usize,
     lines: BTreeSet<usize>,
-    cfg_aliases: HashSet<String>,
+    shared: Shared,
 }
 
-fn scan(source: &str, cfg_aliases: &HashSet<String>) -> Result<Report> {
+fn scan(source: &str, shared: &Shared) -> Result<Report> {
     let stream = TokenStream::from_str(source).map_err(|e| e.to_string())?;
     let trees = flat(stream);
-    let mut scan = Scan { cfg_aliases: cfg_aliases.clone(), collecting: true, ..Scan::default() };
+    let mut scan = Scan { shared: shared.clone(), collecting: true, ..Scan::default() };
     scan.walk(&trees);
     scan.collecting = false;
     scan.walk(&trees);
-    Ok(Report { count: scan.count, lines: scan.lines, cfg_aliases: scan.cfg_aliases })
+    Ok(Report { count: scan.count, lines: scan.lines, shared: scan.shared })
 }
 
 /// Platform code (the `platform` module, `platform.rs`) is where the OS belongs.
@@ -386,21 +623,23 @@ pub fn check() -> Result<()> {
         let source = std::fs::read_to_string(root.join(&path)).map_err(|e| format!("{path}: {e}"))?;
         files.push((path, source));
     }
-    // OS aliases are defined in one file (a build script) and used in others, and may build on each other.
-    let mut aliases = HashSet::new();
+    // OS aliases and command wrappers are defined in one file and used in others, and may build on each other.
+    let mut shared = Shared::default();
     loop {
-        let before = aliases.len();
+        let before = shared.clone();
         for (path, source) in files.iter().filter(|(path, _)| !exempt(Path::new(path))) {
-            aliases.extend(scan(source, &aliases).map_err(|e| format!("{path}: {e}"))?.cfg_aliases);
+            let found = scan(source, &shared).map_err(|e| format!("{path}: {e}"))?.shared;
+            shared.cfg_aliases.extend(found.cfg_aliases);
+            shared.command_types.extend(found.command_types);
         }
-        if aliases.len() == before {
+        if shared == before {
             break;
         }
     }
     let mut errors = Vec::new();
     let mut total = 0;
     for (path, source) in files.iter().filter(|(path, _)| !exempt(Path::new(path))) {
-        let report = scan(source, &aliases).map_err(|e| format!("{path}: {e}"))?;
+        let report = scan(source, &shared).map_err(|e| format!("{path}: {e}"))?;
         if report.count > 0 {
             total += report.count;
             let lines: Vec<String> = report.lines.iter().map(usize::to_string).collect();
@@ -423,7 +662,7 @@ mod tests {
     use super::*;
 
     fn n(source: &str) -> usize {
-        scan(source, &HashSet::new()).unwrap().count
+        scan(source, &Shared::default()).unwrap().count
     }
 
     #[test]
@@ -474,11 +713,11 @@ mod tests {
     #[test]
     fn resolves_cfg_aliases_across_files() {
         let build = "fn main() { cfg_aliases::cfg_aliases! { apple: { target_vendor = \"apple\" }, mac: { all(apple, x) }, other: { feature = \"x\" } } }";
-        let aliases = scan(build, &HashSet::new()).unwrap();
+        let aliases = scan(build, &Shared::default()).unwrap();
         assert_eq!(aliases.count, 2);
-        assert_eq!(aliases.cfg_aliases, HashSet::from(["apple".to_string(), "mac".to_string()]));
+        assert_eq!(aliases.shared.cfg_aliases, HashSet::from(["apple".to_string(), "mac".to_string()]));
         let user = "#[cfg(mac)] fn a() {} #[cfg(other)] fn b() {} fn c() { if cfg!(apple) {} }";
-        assert_eq!(scan(user, &aliases.cfg_aliases).unwrap().count, 2);
+        assert_eq!(scan(user, &aliases.shared).unwrap().count, 2);
     }
 
     #[test]
@@ -497,6 +736,83 @@ mod tests {
 
     #[test]
     fn rejects_unreadable_source() {
-        assert!(scan("fn f() { \"unterminated }", &HashSet::new()).is_err());
+        assert!(scan("fn f() { \"unterminated }", &Shared::default()).is_err());
+    }
+
+    fn with_wrapper(source: &str) -> usize {
+        let shared = Shared { command_types: HashSet::from(["Cmd".to_string()]), ..Shared::default() };
+        scan(source, &shared).unwrap().count
+    }
+
+    #[test]
+    fn resolves_portable_parent_imports() {
+        assert_eq!(n("use std::env; fn f() { let _ = env::consts::OS; }"), 1);
+        assert_eq!(n("use std::env::consts; fn f() { let _ = consts::FAMILY; }"), 1);
+        assert_eq!(n("use std as s; fn f() { let _ = s::os::unix::fs::chown; }"), 1);
+        assert_eq!(n("use std::{env as e, os}; fn f() { let _ = e::consts::OS; os::unix::raw::pid_t::MAX; }"), 3);
+        // Portable uses of the same parents stay allowed.
+        assert_eq!(n("use std::env; fn f() { let _ = env::var(\"PORTABLE_SETTING\"); let _ = env::consts::ARCH; }"), 0);
+    }
+
+    #[test]
+    fn sees_cfg_in_every_macro_delimiter() {
+        assert_eq!(
+            n("fn f() { let _ = cfg! { unix }; let _ = cfg![windows]; let _ = cfg!(target_os = \"linux\"); }"),
+            3
+        );
+        let build = "fn main() { cfg_aliases::cfg_aliases! { mac: { target_os = \"macos\" } } }";
+        let aliases = scan(build, &Shared::default()).unwrap();
+        assert_eq!(scan("fn f() { let _ = cfg![mac]; let _ = cfg! { mac }; }", &aliases.shared).unwrap().count, 2);
+    }
+
+    #[test]
+    fn sees_commands_through_generics_raw_names_and_wrappers() {
+        assert_eq!(n("fn f() { std::process::Command::new::<&str>(\"sh\"); }"), 1);
+        assert_eq!(n("use std::process::Command as r#Run; fn f() { r#Run::new(\"sh\"); }"), 1);
+        assert_eq!(n("use std::process::Command as Run; fn f() { Run::new(\"cmd.exe\"); }"), 1);
+        assert_eq!(with_wrapper("use crate::util::Cmd; fn f() { Cmd::new(\"powershell.exe\"); }"), 1);
+        assert_eq!(with_wrapper("use crate::util::Cmd; fn f() { Cmd::new(\"git\").arg(\"status\"); }"), 0);
+        let defined = "pub struct Cmd { command: Command, shown: Vec<String> } type Run = tokio::process::Command;";
+        let learned = scan(defined, &Shared::default()).unwrap().shared.command_types;
+        assert_eq!(learned, HashSet::from(["Cmd".to_string(), "Run".to_string()]));
+        assert_eq!(n("struct Plain { shown: Vec<String> } fn f() { Plain::new(\"sh\"); }"), 0);
+    }
+
+    #[test]
+    fn catches_local_sockets() {
+        assert_eq!(n("fn f() { let _ = tokio::net::UnixStream::connect(\"socket\"); }"), 1);
+        assert_eq!(n("use tokio::net::{TcpStream, UnixListener}; fn f() {}"), 1);
+        assert_eq!(n("fn f() { let _ = tokio::net::windows::named_pipe::ClientOptions::new(); }"), 1);
+        assert_eq!(n("fn f() { let _ = tokio::net::TcpStream::connect(\"127.0.0.1:1\"); }"), 0);
+    }
+
+    #[test]
+    fn catches_os_paths_in_operations_only() {
+        assert_eq!(n("fn f() { let _ = std::fs::read_to_string(\"/proc/self/status\"); }"), 1);
+        assert_eq!(n("fn f() { let _ = std::path::PathBuf::from(\"C:\\\\Windows\\\\x\"); }"), 1);
+        assert_eq!(n("fn f(c: &mut C) { c.args([\"-o\", \"/dev/null\"]).arg(r\"\\\\.\\pipe\\x\"); }"), 2);
+        assert_eq!(n("fn f() { std::fs::read(Path::new(\"/etc/hosts\")); }"), 1);
+        // Documentation and data are not operations.
+        assert_eq!(n("/// Reads /proc/self/status.\nfn f() { let _ = \"/proc/self/status\"; let _ = String::from(\"/dev/null\"); }"), 0);
+        assert_eq!(n("fn f() { std::fs::read_to_string(\"notes/readme.txt\"); }"), 0);
+    }
+
+    #[test]
+    fn catches_native_framework_links() {
+        assert_eq!(n("#[link(name = \"AppKit\", kind = \"framework\")] extern \"C\" {}"), 1);
+        assert_eq!(n("#[cfg_attr(feature = \"x\", link(name = \"AppKit\", kind = \"framework\"))] extern \"C\" {}"), 1);
+        assert_eq!(n("#[link(name = \"m\")] extern \"C\" {}"), 0);
+    }
+
+    #[test]
+    fn counts_cargo_variables_only_when_read() {
+        assert_eq!(n("fn main() { let _ = std::env::var_os(\"CARGO_CFG_TARGET_FAMILY\"); }"), 1);
+        assert_eq!(n("use std::env::var as get; fn main() { let _ = get(\"CARGO_CFG_UNIX\"); }"), 1);
+        assert_eq!(n("use std::env; fn main() { let _ = env::var(\"CARGO_CFG_UNIX\"); }"), 1);
+        assert_eq!(
+            n("const X: &str = env!(\"CARGO_CFG_TARGET_OS\"); fn f() { option_env![\"CARGO_CFG_WINDOWS\"]; }"),
+            2
+        );
+        assert_eq!(n("const EXAMPLE: &str = \"CARGO_CFG_TARGET_OS\"; #[test] fn f() { assert_eq!(name(), \"CARGO_CFG_TARGET_OS\"); }"), 0);
     }
 }
