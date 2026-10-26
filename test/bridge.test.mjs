@@ -1230,7 +1230,7 @@ test("the host's keys: updater only where the app can update itself, build alway
   // A dev build, a .deb, a bare binary: the app passes false, and the page shows nothing to update.
   for (const offered of [undefined, false, "__SIDEVOICE_UPDATER__", "true"]) {
     const api = install(fakeWindow(ORIGIN).win, ORIGIN, null, false, false, offered, { channel: "nightly", version: "0.4.0" });
-    assert.deepEqual(Object.keys(api.host).sort(), ["app", "build", "callControls", "data", "engine", "mediaKeys", "muteShortcut", "version"], String(offered));
+    assert.deepEqual(Object.keys(api.host).sort(), ["app", "build", "callControls", "data", "engine", "mediaKeys", "microphone", "muteShortcut", "version"], String(offered));
     api.updaterEvent({ state: "idle" }); // nothing listens, nothing breaks
   }
   const api = install(fakeWindow(ORIGIN).win, ORIGIN, "native", true, true, true, { channel: "release", version: "0.4.0" });
@@ -1311,38 +1311,29 @@ test("the app's updaterEvent hands each listener the status, until it stops", ()
 
 // ---- host.microphone: the app's microphone permission, for the page's first-run setup (docs/BRIDGE.md) ----
 
-test("host.microphone with native voice keeps its permission methods", () => {
+test("host.microphone is on every OS, with or without native voice; openSettings only where the OS has a page", async () => {
   const install = loadFactory();
-  for (const offered of [undefined, false, "__SIDEVOICE_VOICE__", "true"]) {
-    const api = install(fakeWindow(ORIGIN).win, ORIGIN, null, true, offered);
-    assert.equal("microphone" in api.host, false, String(offered));
+  for (const voice of [false, true]) {
+    const withSettings = install(fakeWindow(ORIGIN).win, ORIGIN, null, false, voice, false, undefined, undefined, undefined, true);
+    assert.equal("voice" in withSettings.host, voice);
+    assert.deepEqual(Object.keys(withSettings.host.microphone).sort(), ["onChange", "openSettings", "request", "state"]);
+    assert.ok(Object.isFrozen(withSettings.host.microphone));
+    for (const offered of [undefined, false, "true", "__SIDEVOICE_MICROPHONE_SETTINGS__"]) {
+      const api = install(fakeWindow(ORIGIN).win, ORIGIN, null, false, voice, false, undefined, undefined, undefined, offered);
+      assert.deepEqual(Object.keys(api.host.microphone).sort(), ["onChange", "request", "state"], "Linux: no settings page");
+    }
   }
-  const api = install(fakeWindow(ORIGIN).win, ORIGIN, "native", true, true);
-  assert.ok("voice" in api.host);
-  assert.deepEqual(Object.keys(api.host.microphone).sort(), ["onChange", "openSettings", "request", "state"]);
-  assert.ok(Object.isFrozen(api.host.microphone));
-});
-
-test("settings-only microphone capability opens settings without claiming permission or polling", async () => {
-  const install = loadFactory();
-  const { win, calls, tick } = fakeWindow(ORIGIN);
+  const { win, calls } = fakeWindow(ORIGIN);
   const api = install(win, ORIGIN, null, false, false, false, undefined, undefined, undefined, true);
-  assert.equal("voice" in api.host, false);
-  assert.deepEqual(Object.keys(api.host.microphone), ["openSettings"]);
-  assert.ok(Object.isFrozen(api.host.microphone));
   assert.equal(await api.host.microphone.openSettings(), undefined);
-  assert.deepEqual(calls.filter(([cmd]) => cmd === "microphone_open_settings"), [["microphone_open_settings", undefined]]);
-  assert.equal(calls.some(([cmd]) => cmd === "microphone"), false);
-  tick(); await flush();
-  assert.equal(calls.some(([cmd]) => cmd === "microphone"), false, "no native permission poll");
-  for (const offered of [undefined, false, "true", "__SIDEVOICE_MICROPHONE_SETTINGS__"]) {
-    assert.equal("microphone" in install(fakeWindow(ORIGIN).win, ORIGIN, null, false, false, false, undefined, undefined, undefined, offered).host, false);
-  }
+  await api.host.microphone.state();
+  await api.host.microphone.request();
+  assert.deepEqual(calls.filter(([cmd]) => cmd.startsWith("microphone")), [
+    ["microphone", { action: "open-settings" }],
+    ["microphone", { action: "state" }],
+    ["microphone", { action: "request" }],
+  ], "without native voice, the same command: the OS answers, not the webview");
   assert.equal(install(fakeWindow("https://other.example").win, ORIGIN, null, false, false, false, undefined, undefined, undefined, true), null);
-  const refusal = { key: "internal", message: "System Settings could not be opened." };
-  const failing = settingsWindow({ microphone_open_settings: () => Object.assign(new Error(), { refusal }) });
-  const microphone = install(failing.win, ORIGIN, null, false, false, false, undefined, undefined, undefined, true).host.microphone;
-  await assert.rejects(microphone.openSettings(), (error) => error === refusal);
 });
 
 test("host.microphone calls the microphone command with its action, and passes refusals on", async () => {
@@ -1351,7 +1342,7 @@ test("host.microphone calls the microphone command with its action, and passes r
   const { win, calls } = settingsWindow({
     microphone: ({ action }) => (action === "open-settings" ? null : answer),
   });
-  const microphone = install(win, ORIGIN, "native", true, true).host.microphone;
+  const microphone = install(win, ORIGIN, "native", true, true, false, undefined, undefined, undefined, true).host.microphone;
   assert.equal(await microphone.state(), "prompt");
   answer = "granted";
   assert.equal(await microphone.request(), "granted");
@@ -1363,7 +1354,7 @@ test("host.microphone calls the microphone command with its action, and passes r
   ]);
   const refusal = { key: "internal", message: "System Settings could not be opened." };
   const failing = settingsWindow({ microphone: () => Object.assign(new Error(), { refusal }) });
-  const host = install(failing.win, ORIGIN, "native", true, true).host;
+  const host = install(failing.win, ORIGIN, "native", true, true, false, undefined, undefined, undefined, true).host;
   await assert.rejects(host.microphone.openSettings(), (error) => error === refusal);
 });
 

@@ -360,9 +360,9 @@
     } };
   }
 
-  /** The app's microphone permission (docs/BRIDGE.md → "The microphone permission"), onto the `microphone` command:
-   *  where the app runs the voice call, the page is never granted `getUserMedia`, so it can neither ask macOS for the
-   *  microphone nor read whether it may. The first-run setup asks through this. Only with `voice` (macOS). */
+  /** The app's microphone access (docs/BRIDGE.md → "The microphone permission"), onto the `microphone` command, on every
+   *  OS: the system's own answer, never the webview's. Where the app runs the voice call (macOS) the page is never granted
+   *  `getUserMedia`, so this is also how it asks macOS for the microphone. The first-run setup asks through this. */
   function microphone() {
     const listeners = new Set();
     let timer = null;
@@ -382,11 +382,13 @@
       /** `"prompt"` (not asked yet), `"granted"`, `"denied"` (denied, or forbidden by the system) or `"missing"` (not
        *  denied, and no audio input device exists). Never prompts. */
       state: () => call("microphone", { action: "state" }),
-      /** macOS's own prompt the first time; afterwards the stored answer at once, with no prompt: `"granted"` or
-       *  `"denied"`. */
+      /** macOS's own prompt the first time; afterwards, and on every other OS, the same as `state()` (there is no prompt to
+       *  wait for), so any of `state()`'s answers. */
       request: () => call("microphone", { action: "request" }),
-      /** Opens System Settings at Privacy & Security › Microphone, where a denial is undone. */
-      openSettings: () => call("microphone", { action: "open-settings" }).then(() => undefined),
+      /** Opens the system's microphone privacy page, where a denial is undone. Only where the OS has one (not Linux). */
+      ...(microphoneSettingsOffered === true ? {
+        openSettings: () => call("microphone", { action: "open-settings" }).then(() => undefined),
+      } : {}),
       /** `listener()` whenever `state()` changes: the permission (in System Settings) or a microphone plugged in or
        *  out; read it with `state()`. Polled every 2 s while anyone listens. Returns `stop`. */
       onChange(listener) {
@@ -810,10 +812,8 @@
       }),
       // Only where the app runs the voice call (macOS): the page then neither opens the microphone nor runs models.
       ...(voiceCall ? { voice: voiceCall.host } : {}),
-      // Native voice owns permission on macOS. Windows keeps capture permission in the page and offers only settings.
-      ...(voiceCall ? { microphone: microphone() } : microphoneSettingsOffered === true ? {
-        microphone: Object.freeze({ openSettings: () => call("microphone_open_settings").then(() => undefined) }),
-      } : {}),
+      // The app's native microphone access, on every OS (src/platform/microphone.rs).
+      microphone: microphone(),
       /** What this build is: a release, a nightly (both with `updater`), or a development build. */
       build: Object.freeze({ ...build }),
       // The name the person gave this computer ("Mac de Ana"): the page proposes it as the device's name. Only
