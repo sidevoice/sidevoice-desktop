@@ -2,4 +2,5 @@
 
 pub mod disk_image;
 pub mod first_open;
+pub mod lifecycle;
 pub mod private_files;
