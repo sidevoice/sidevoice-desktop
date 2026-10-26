@@ -4646,6 +4646,7 @@ version = "0.2.1"
 dependencies = [
  "block2",
  "core-foundation 0.10.1",
+ "core-graphics",
  "cpal",
  "dirs",
  "futures-util",
