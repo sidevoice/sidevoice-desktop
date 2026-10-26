@@ -29,7 +29,7 @@ mod voice;
 
 use crate::platform::update_eligibility::{NativeUpdateEligibility, UpdateEligibility};
 
-use crate::platform::application::{Application, NativeApplication};
+use crate::platform::application;
 use crate::platform::computer_name::{ComputerName, SystemComputerName};
 use crate::platform::host_capabilities::CAPABILITIES;
 use crate::platform::media_controls::{MediaControls, NativeMediaControls};
@@ -415,7 +415,7 @@ fn call_card_disabled() -> bool {
 
 /// Native lifecycle observations plus the common diagnostic card setting (#117).
 fn app_report(app: &AppHandle) -> String {
-    format!("{} call_card={}", NativeApplication::report(app), if call_card_disabled() { "off" } else { "on" })
+    format!("{} call_card={}", application::report(app), if call_card_disabled() { "off" } else { "on" })
 }
 
 /// Replace the shortcut, keep the actual outcome, and notify the room page.
@@ -536,13 +536,13 @@ pub fn run() {
         let _runtime = tauri::async_runtime::handle().inner().enter();
         builder.manage(voice::VoiceState::default())
     };
-    NativeApplication::configure(builder)
+    application::configure(builder)
         .plugin(tauri_plugin_opener::Builder::new().open_js_links_on_click(false).build())
         .manage(AppState::default())
         .invoke_handler(handler())
         .setup(move |app| {
             let handle = app.handle().clone();
-            NativeApplication::prepare(&handle)?;
+            application::prepare(&handle)?;
             shortcut_access::configure(&handle);
             debug(&format!("launch {}", app_report(&handle)));
             tray::create(&handle)?;
@@ -585,7 +585,7 @@ pub fn run() {
             // The room to the front, last so no window created after it takes it. Setup runs on Ready, after the
             // launch's own activation, which came before any window existed: the window stayed behind (Dock only).
             show_room(&handle);
-            NativeApplication::activate(&handle);
+            application::activate(&handle);
             // How macOS sees the app once everything exists, and again once activation has settled (#117).
             debug(&format!("ready {}", app_report(&handle)));
             let later = handle.clone();
@@ -613,7 +613,7 @@ pub fn run() {
         .build(context)
         .expect("error while building the Sidevoice app")
         .run(|app, event| {
-            NativeApplication::handle_event(app, &event);
+            application::handle_event(app, &event);
             // Quitting, however the app ends (tray, ⌘Q, logout, a reset, an update's restart; `AppHandle::restart` from
             // the updater's thread comes here too), before `exit()` runs the C++ static destructors (#121): the voice
             // calls stop and every model and audio device is released; the call controls card's window goes; the local
