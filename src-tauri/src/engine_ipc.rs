@@ -189,22 +189,13 @@ mod credentials {
         }
     }
 
+    /// Never the backend's error text: it can contain secret bytes.
     fn refusal(error: credentials::Error) -> Error {
-        // The page translates the existing refusal code; its fallback message is keyed too.
-        // Never expose the backend's error text: it can contain secret bytes.
-        let code = match error {
-            credentials::Error::Unavailable => "credentials_unavailable",
-            _ => "credentials_failed",
-        };
-        let mut refusal = Error {
-            key: code,
-            params: Default::default(),
-            message: sidevoice_desktop_core::i18n::t("en", code).into(),
-        };
-        if error == credentials::Error::TooLong {
-            refusal.params.insert("reason", "too_long".into());
+        match error {
+            credentials::Error::Unavailable => error::credentials_unavailable(),
+            credentials::Error::TooLong => error::credentials_too_long(),
+            credentials::Error::InvalidProvider | credentials::Error::Failed => error::credentials_failed(),
         }
-        refusal
     }
 
     pub fn check(id: &str) -> Result<(), Error> {

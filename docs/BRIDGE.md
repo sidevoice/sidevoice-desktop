@@ -508,7 +508,7 @@ sidevoice-engine itself fails with is one of these keys, with the engine's own c
 | `catalog_not_found` | `code`, `catalog` | `setCredential`, `testCredential` or `refresh` for a provider the engine does not have |
 | `provider_invalid` | `provider` | not a provider id (lowercase letters, digits and dashes) |
 | `credentials_unavailable` | — | credential access when the OS store is unavailable or locked |
-| `credentials_failed` | — | the keychain would not keep, remove or read a key |
+| `credentials_failed` | `reason` (`too_long`, only for a key longer than the store keeps) | the OS credential store would not keep, remove or read a key |
 | `voice_not_started` | `code` (`not-started`) | an `update` of a call the app has not made (its start was refused) |
 | `voice_failed` | `code` (the call's: `microphone-denied`, `audio-device-unavailable`, the engine's `model-load-failed`, …, or `stopped`) | the call could not start, or was stopped before it worked; a `preload` that could not load a slot |
 | `engine_unavailable` | — | the engine did not start with the app |
