@@ -8,9 +8,10 @@ use std::path::Path;
 use std::time::Instant;
 
 use crate::macos::{app_command, binary, fake_node, release_target, AppHome, PROBE_ONLY};
+use crate::platform::file_mode::mode;
 use crate::util::{
-    contains, ensure, grep, has, interrupted, line_count, lines_after, mode, re, read, read_bytes, repo, sleep,
-    wait_for, work, Background, Cmd, TauriBuild,
+    contains, ensure, grep, has, interrupted, line_count, lines_after, re, read, read_bytes, repo, sleep, wait_for,
+    work, Background, Cmd, TauriBuild,
 };
 use crate::Result;
 

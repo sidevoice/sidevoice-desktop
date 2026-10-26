@@ -129,7 +129,7 @@ const USAGE: &str =
 
 /// The `macos` commands run on macOS only: its tools (codesign, hdiutil, the window server) are the point.
 fn macos(command: &str, step: impl FnOnce() -> Result<()>) -> Result<()> {
-    util::require_os("macos", &format!("macos {command}"))?;
+    platform::host::require_os("macos", &format!("macos {command}"))?;
     step()
 }
 
@@ -179,7 +179,7 @@ fn main() -> ExitCode {
         ["macos", "memory"] => macos("memory", probe::memory),
         ["macos", "voice-memory"] => macos("voice-memory", probe::voice_memory),
         ["windows", "first-open"] => {
-            util::require_os("windows", "windows first-open").and_then(|()| windows::first_open())
+            platform::host::require_os("windows", "windows first-open").and_then(|()| windows::first_open())
         }
         ["publish", "assets", kind] => publish::assemble(kind, None),
         ["publish", "assets", kind, tag] => publish::assemble(kind, Some(tag)),

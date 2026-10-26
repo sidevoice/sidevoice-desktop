@@ -4,7 +4,9 @@
 use std::fs;
 use std::path::Path;
 
-use crate::util::{chmod, ensure, grep, mkdir, npm, read, repo, require_ci, require_os, sleep, Cmd};
+use crate::platform::file_mode::chmod;
+use crate::platform::host::{self, npm, require_os};
+use crate::util::{ensure, grep, mkdir, read, repo, require_ci, sleep, Cmd};
 use crate::Result;
 
 /// `web`: the web interface at the pin (web.pin.json), into ui/voice/ (`npm run web`, scripts/build-web.mjs).
@@ -209,13 +211,12 @@ pub fn sherpa_libs() -> Result<()> {
 /// `dev`). A release's or a nightly's also signs the AppImage and the installer as updates (a `.deb` cannot update
 /// itself; its `.sig` is not published); `publish assets` checks the signatures.
 pub fn bundle(channel: crate::util::Channel) -> Result<()> {
-    let bundles = match std::env::consts::OS {
-        "linux" => "deb,appimage",
-        "windows" => "nsis",
-        os => return Err(format!("`cargo xtask bundle` is for Linux and Windows, not {os}: see `cargo xtask macos`")),
+    let Some(bundles) = host::installer_bundles() else {
+        let os = host::name();
+        return Err(format!("`cargo xtask bundle` is for Linux and Windows, not {os}: see `cargo xtask macos`"));
     };
     let mut command = crate::util::TauriBuild { bundles, channel, ..Default::default() }.command()?;
-    if std::env::consts::OS == "windows" {
+    if host::installers_for_any_cpu() {
         // Installers must run on other CPUs too, including when bundled on a laptop.
         command = command.env("GGML_NATIVE", "OFF");
     }

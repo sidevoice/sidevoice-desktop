@@ -456,15 +456,6 @@ pub fn contains(bytes: &[u8], text: &str) -> bool {
     bytes.windows(text.len()).any(|window| window == text.as_bytes())
 }
 
-/// The npm launcher: a `.cmd` on Windows.
-pub fn npm() -> &'static str {
-    if cfg!(windows) {
-        "npm.cmd"
-    } else {
-        "npm"
-    }
-}
-
 /// What a build is for (RELEASING.md → "Channels"): `dev`, the default, is a laptop's, a PR's or a manual run's.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Channel {
@@ -642,40 +633,11 @@ pub fn read_secret(path: &Path) -> Result<Vec<u8>> {
         .ok_or_else(|| format!("{}: secret file is missing", path.display()))
 }
 
-/// The permission bits of `path` (`stat -f %Lp`), on Unix.
-#[cfg(unix)]
-pub fn mode(path: &Path) -> Result<u32> {
-    use std::os::unix::fs::PermissionsExt;
-    let meta = fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    Ok(meta.permissions().mode() & 0o7777)
-}
-
-#[cfg(not(unix))]
-pub fn mode(path: &Path) -> Result<u32> {
-    Err(format!("{}: no Unix permissions here", path.display()))
-}
-
-#[cfg(unix)]
-pub fn chmod(path: &Path, mode: u32) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(|e| format!("{}: {e}", path.display()))
-}
-
-#[cfg(not(unix))]
-pub fn chmod(path: &Path, _: u32) -> Result<()> {
-    Err(format!("{}: no Unix permissions here", path.display()))
-}
-
 /// `bytes` random bytes from the system, as hex (`openssl rand -hex <bytes>`).
 pub fn random_hex(bytes: usize) -> Result<String> {
     let mut buffer = vec![0u8; bytes];
     getrandom::fill(&mut buffer).map_err(|e| e.to_string())?;
     Ok(buffer.iter().map(|b| format!("{b:02x}")).collect())
-}
-
-/// Requires `os` (`std::env::consts::OS`): the command's tools are that system's.
-pub fn require_os(os: &str, command: &str) -> Result<()> {
-    ensure(std::env::consts::OS == os, format!("`cargo xtask {command}` runs on {os}"))
 }
 
 /// Requires a CI runner: the command changes the machine (adds a user) in a way meant for a throwaway one.
@@ -890,8 +852,8 @@ mod tests {
 
     #[test]
     fn a_secret_argument_is_never_shown() {
-        let cmd = Cmd::new("security").args(["unlock-keychain", "-p"]).secret("hunter2").arg("k.keychain-db");
-        assert_eq!(cmd.shown(), "security unlock-keychain -p *** k.keychain-db");
+        let cmd = Cmd::new("tool").args(["unlock", "-p"]).secret("hunter2").arg("k.db");
+        assert_eq!(cmd.shown(), "tool unlock -p *** k.db");
     }
 
     #[test]
