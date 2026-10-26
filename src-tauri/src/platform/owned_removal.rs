@@ -402,14 +402,23 @@ mod tests {
     }
 
     #[test]
-    fn native_scope_has_only_the_existing_desktop_names_or_refuses_cleanup() {
+    fn native_scope_stays_inside_home_or_refuses_cleanup() {
         let (_temp, home) = fixture();
         if let Some(scope) = NativeOwnedRemoval::scope(&home) {
-            assert_eq!(scope.directories.len(), 5);
-            assert_eq!(scope.models, home.join("Library/Application Support/Sidevoice/Models"));
+            // Whatever roots a host supplies: distinct, strictly inside the home, disjoint from the model store.
+            assert!(!scope.directories.is_empty());
+            for (index, path) in scope.directories.iter().enumerate() {
+                assert!(path.starts_with(&home) && path != &home);
+                assert!(!path.starts_with(&scope.models) && !scope.models.starts_with(path));
+                assert!(scope.directories[index + 1..]
+                    .iter()
+                    .all(|other| !other.starts_with(path) && !path.starts_with(other)));
+            }
+            assert!(scope.models.starts_with(&home) && scope.models != home);
             for path in &scope.directories {
                 assert_eq!(NativeOwnedRemoval::remove_known(path, &home), Ok(()));
             }
+            assert_eq!(NativeOwnedRemoval::remove_model_store(&scope.models, &home), Ok(()));
         } else {
             assert_eq!(NativeOwnedRemoval::remove_known(&home.join("state"), &home), Err("outside-known-dirs"));
         }
