@@ -5,6 +5,10 @@ use winreg::{enums::HKEY_CURRENT_USER, RegKey};
 pub(super) struct Native;
 
 impl Os for Native {
+    fn host_name() -> Option<String> {
+        whoami::hostname().ok()
+    }
+
     const BUNDLE: Option<BundleType> = Some(BundleType::Nsis);
 
     /// The registered per-user NSIS installation's own executable.

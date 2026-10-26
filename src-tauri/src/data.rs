@@ -14,7 +14,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tauri::{AppHandle, Manager, Webview};
 
-use crate::platform::reset_availability::RESET_AVAILABLE;
+use crate::platform::host::RESET_AVAILABLE;
 use crate::platform::reset_handoff::{self, Handoff};
 use crate::AppState;
 

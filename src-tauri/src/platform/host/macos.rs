@@ -1,10 +1,17 @@
 use super::Os;
+use sidevoice_desktop_core::bridge::Capabilities;
 use sidevoice_desktop_core::updater;
 use tauri::utils::config::BundleType;
 
 pub(super) struct Native;
 
 impl Os for Native {
+    fn device_name() -> Option<String> {
+        whoami::devicename().ok()
+    }
+
+    const CAPABILITIES: Capabilities = Capabilities { local_host: true, voice: true };
+
     const BUNDLE: Option<BundleType> = Some(BundleType::App);
 
     /// Only an app bundle running from a writable app volume can use the plugin's update/restart path.

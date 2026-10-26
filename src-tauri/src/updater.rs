@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Webview};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
-use crate::platform::update_eligibility;
+use crate::platform::host;
 use crate::AppState;
 
 /// One lock over the status and its update; `installing`: an install under way, which quitting waits for; `task`: the
@@ -37,7 +37,7 @@ fn feed() -> Option<url::Url> {
 }
 
 pub fn setup(app: &AppHandle) {
-    if !update_eligibility::available(CHANNEL) {
+    if !host::updates_available(CHANNEL) {
         return;
     }
     if let Err(e) = app.plugin(tauri_plugin_updater::Builder::new().build()) {

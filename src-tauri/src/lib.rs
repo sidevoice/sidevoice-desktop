@@ -27,11 +27,8 @@ mod tray;
 mod updater;
 mod voice;
 
-use crate::platform::update_eligibility;
-
 use crate::platform::application;
-use crate::platform::computer_name;
-use crate::platform::host_capabilities;
+use crate::platform::host;
 use crate::platform::media_controls;
 use crate::platform::shortcut_access;
 use crate::platform::webview_diagnostics;
@@ -342,14 +339,14 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
         .initialization_script(bridge::WEBVIEW_LOG_SCRIPT)
         .initialization_script(bridge::script_for_origin(
             APP_ORIGIN,
-            update_eligibility::available(&build.channel),
+            host::updates_available(&build.channel),
             &build,
-            computer_name::read().as_deref(),
+            host::name().as_deref(),
             &debug_options,
             platform::microphone::settings_available(),
             &webview_diagnostics::available(),
             media_controls::support(),
-            host_capabilities::capabilities(),
+            host::capabilities(),
         ));
     #[cfg(feature = "probe")]
     let builder = match probe::local_host_flow() {
@@ -369,7 +366,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             };
             let page = committed_origin.lock().unwrap().clone();
             let decision =
-                media::decide(capture, page.as_deref(), APP_ORIGIN, !host_capabilities::capabilities().voice);
+                media::decide(capture, page.as_deref(), APP_ORIGIN, !host::capabilities().voice);
             debug(&format!("media {capture:?} for {page:?}: {decision:?}"));
             match decision {
                 media::Decision::Allow => PermissionResponse::Allow,

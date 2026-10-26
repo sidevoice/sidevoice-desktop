@@ -1,12 +1,9 @@
 //! Desktop operations supplied by the host platform.
 
-pub mod update_eligibility;
-
 pub mod application;
-pub mod computer_name;
 #[cfg(feature = "probe")]
 pub mod exit_diagnostics;
-pub mod host_capabilities;
+pub mod host;
 pub mod locale;
 pub mod media_controls;
 pub mod microphone;
@@ -25,7 +22,6 @@ pub mod card_window;
 pub mod confirmation;
 pub mod desktop_geometry;
 pub mod pointer_events;
-pub mod reset_availability;
 pub mod reset_handoff;
 pub mod window_visibility;
 

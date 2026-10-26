@@ -39,7 +39,7 @@ same-file = "1"
 dirs = "7"
 # Probe-only RSS observations use the maintained portable API; no GPU estimates.
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
-# Friendly computer names via the OS APIs (platform/computer_name); already in the shared platform graph.
+# Friendly computer names via the OS APIs (platform/host); already in the shared platform graph.
 whoami = "2.1"
 url = "2.5"
 # The app's updates (src/updater.rs; docs/BRIDGE.md → "The updater"), from Rust only: the page gets none of its

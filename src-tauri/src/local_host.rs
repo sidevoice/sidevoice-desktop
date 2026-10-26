@@ -2,7 +2,7 @@
 //!
 //! The work is the `sidevoice-local-host` crate's (the checks, the pairing over the core's socket, the proxy, the
 //! poll); this module starts it with the app's own paths, answers the page's commands, and stops it as the app quits.
-//! Offered on macOS only (design O2; `platform::host_capabilities`): elsewhere every command refuses `unsupported`,
+//! Offered on macOS only (design O2; `platform::host`): elsewhere every command refuses `unsupported`,
 //! except `reveal-log`, which needs no local host (the app's own log).
 //!
 //! Only the room window's own page may call these (capabilities/room.json, and [`crate::room_page`] in each). A
@@ -154,7 +154,7 @@ pub fn installing(app: &AppHandle) -> bool {
 #[cfg(unix)]
 mod imp {
     use super::{refusal, unsupported, Answer};
-    use crate::platform::host_capabilities;
+    use crate::platform::host;
     use serde_json::{json, Value};
     use sidevoice_local_host::host::{Action, Config, Installing, LocalHost};
     use sidevoice_local_host::install;
@@ -171,7 +171,7 @@ mod imp {
     }
 
     pub fn setup(app: &AppHandle) {
-        if !host_capabilities::capabilities().local_host {
+        if !host::capabilities().local_host {
             return;
         }
         // `D`, by the rule every Sidevoice program shares (`SIDEVOICE_DATA_DIR`, else the OS standard place).
