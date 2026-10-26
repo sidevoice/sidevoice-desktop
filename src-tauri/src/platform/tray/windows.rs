@@ -9,6 +9,6 @@ impl TrayAppearance for Appearance {
             .and_then(|key| key.get_value::<u32, _>("SystemUsesLightTheme"))
             .map(|light| light == 1)
             .unwrap_or(false);
-        super::colored(state, light)
+        Self::colored(state, light)
     }
 }

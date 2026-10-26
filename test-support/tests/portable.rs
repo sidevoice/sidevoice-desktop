@@ -1,6 +1,7 @@
 //! The same fixture executable and core listener are exercised on Linux, macOS and Windows.
 use serde_json::{json, Value};
-use sidevoice_desktop_test_support::{fake_core::FakeCore, fixture};
+use sidevoice_desktop_test_support::platform::registry::RegistryTransport;
+use sidevoice_desktop_test_support::{fake_core::FakeCore, fake_registry::FakeRegistry, fixture};
 use sidevoice_platform::ipc::{Channel, Channels, Endpoint};
 use std::{
     path::{Path, PathBuf},
@@ -60,6 +61,21 @@ fn registry_packages_the_native_executable_and_configuration() {
     let answer = Command::new(program).args(["install", "--json"]).output().unwrap();
     assert!(answer.status.success());
     assert_eq!(serde_json::from_slice::<Value>(&answer.stdout).unwrap(), config["response"]);
+}
+
+#[test]
+fn registry_transport_preserves_missing_and_malformed_responses() {
+    let registry = FakeRegistry::release("0.8.1", "@sidevoice/sidevoice-fixture", &[]);
+    let missing = registry.get("https://registry.npmjs.org/missing");
+    assert_eq!((missing.status, missing.length), (404, None));
+
+    let url = registry.tarball_url();
+    registry.serve_with_length(&url, b"short".to_vec(), 99);
+    let mut response = registry.get(&url);
+    let mut body = Vec::new();
+    std::io::Read::read_to_end(&mut response.body, &mut body).unwrap();
+    assert_eq!((response.status, response.length, body), (200, Some(99), b"short".to_vec()));
+    assert_eq!(registry.asked(), ["https://registry.npmjs.org/missing", url.as_str()]);
 }
 
 #[test]
@@ -156,3 +172,12 @@ fn closing_an_older_call_keeps_the_newer_call_open() {
     sidevoice_desktop_test_support::fake_core::forget(&data);
     result.unwrap();
 }
+
+// Exercise the actual shell pairing store without linking the native UI.
+#[path = "../../src-tauri/src/platform/pairing_storage.rs"]
+mod pairing_storage;
+mod platform {
+    pub(crate) use crate::pairing_storage;
+}
+#[path = "../../src-tauri/src/data/pairings.rs"]
+mod pairings;
