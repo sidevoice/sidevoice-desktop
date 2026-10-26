@@ -11,8 +11,8 @@ The reset transaction itself (pre-exit service and keychain steps, post-exit cle
 relaunch or move to the Trash) is sequenced in `data.rs`. Its native pieces sit behind platform interfaces:
 `app_data` (every folder the app keeps, the native extras and removal of the app itself; docs/APP_DATA.md) and
 `webview_data` (browser storage); the journal and report go through the shared private-record writer. The flow is
-the same on every host; what Windows and Linux still lack is a fresh proof that the connector's service is absent
-(plan row 43) and the journal/relaunch hardening on Windows (plan row 44). This change does not alter uninstall
+the same on every host; what Windows still lacks is the journal/relaunch hardening (plan row 44) and running an
+installed connector's CLI. This change does not alter uninstall
 policy or elevate any process.
 
 ## Protocol and lifetime
@@ -91,10 +91,9 @@ admission, clean up, release admission before relaunch. The reset report lives i
 control directory (`state_dir()`), checked with the same private-directory API as the locks.
 
 The transaction steps (pre-confirmation checks, service before exit, provider keys, cleanup after exit, the
-relaunched app's report) are one flow in `data.rs` for every host. The only step still selected by OS there is the
-fresh proof that the connector's service is absent when its install record is missing (macOS: launchd and the
-process list; elsewhere no proof, so the reset refuses before deleting anything); moving it behind a platform
-concern with Windows and Linux proofs is plan row 43. The provider-key step is common
+relaunched app's report) are one flow in `data.rs` for every host. With no connector install record, the
+connector step is skipped only on a fresh proof that the connector's service is absent, which
+`platform::connector_service` reads from each OS (service manager jobs and running programs; fail-closed). The provider-key step is common
 (`platform::credentials`, docs/CREDENTIALS.md).
 
 The handoff protocol tests remain portable and included by the existing native fixture target; a path
