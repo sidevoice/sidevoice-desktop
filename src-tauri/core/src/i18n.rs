@@ -38,6 +38,7 @@ fn leak(key: &str) -> &'static str {
 const EN: &[(&str, &str)] = &[
     ("local_host.log_missing", "There is no log on this computer yet."),
     ("local_host.reveal_failed", "The file manager could not show the log."),
+    ("startup.reset_busy", "Sidevoice could not start: a reset is still finishing, or its lock is unavailable."),
     ("tray.not_loaded", "Sidevoice · room not loaded"),
     ("tray.no_call", "No call"),
     ("tray.reconnecting", "Reconnecting…"),
@@ -56,6 +57,7 @@ const EN: &[(&str, &str)] = &[
 const ES: &[(&str, &str)] = &[
     ("local_host.log_missing", "Todavía no hay ningún registro en este equipo."),
     ("local_host.reveal_failed", "El gestor de archivos no pudo mostrar el registro."),
+    ("startup.reset_busy", "Sidevoice no pudo iniciarse: todavía se está completando un restablecimiento o no se puede acceder a su bloqueo."),
     ("tray.not_loaded", "Sidevoice · sala sin cargar"),
     ("tray.no_call", "Sin llamada"),
     ("tray.reconnecting", "Reconectando…"),
