@@ -2,6 +2,7 @@
 
 pub mod update_eligibility;
 
+pub mod application;
 pub mod computer_name;
 #[cfg(feature = "probe")]
 pub mod exit_diagnostics;
@@ -14,6 +15,7 @@ pub mod pairing_storage;
 #[cfg(any(test, feature = "probe"))]
 pub mod process_memory;
 pub mod reveal;
+pub mod shortcut_access;
 pub mod tray;
 #[cfg(any(test, feature = "probe"))]
 pub mod voice_holds;
