@@ -398,7 +398,9 @@ jobs:
         run: cargo xtask test-support
       # The same tests the Linux job runs, here with the Windows-only ones (platform/). Through xtask, which runs cargo
       # in src-tauri: only from there does Cargo read src-tauri/.cargo/config.toml, whose static C runtime the engine's
-      # native libraries need to link (LNK2038 otherwise).
+      # native libraries need to link (LNK2038 otherwise). The bridge script's tests read the web interface, as on Linux.
+      - name: The web interface at the pin (web.pin.json)
+        run: cargo xtask web
       - name: Bridge script and Rust unit tests
         run: cargo xtask test
       - name: Build the installers
