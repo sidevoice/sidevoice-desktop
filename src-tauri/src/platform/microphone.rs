@@ -1,7 +1,11 @@
 //! Native microphone access on every OS: the OS privacy policy and whether an input device exists, read fresh on each
 //! call. Nothing is cached, no stream is opened, and the webview's own capture outcome plays no part.
 use cpal::traits::HostTrait;
-use std::future::Future;
+use std::{
+    future::Future,
+    sync::{mpsc, OnceLock},
+    thread,
+};
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_opener::OpenerExt;
 
@@ -45,13 +49,36 @@ impl From<bool> for Devices {
     }
 }
 
-/// Whether an audio input device exists, from cpal's host enumeration (WASAPI active endpoints, CoreAudio, ALSA PCM
-/// hints). Enumeration opens no stream and so never triggers a privacy prompt or a capture indicator.
+/// Whether an audio input device exists, as seen by this OS's audio host (`Os::audio_host`). Enumeration opens no
+/// stream and so never triggers a privacy prompt or a capture indicator.
+///
+/// It always runs on one dedicated long-lived thread, started on first use and parked on its channel in between:
+/// WASAPI's enumerator needs COM initialised on the calling thread, and cpal initialises it only on the thread that
+/// first enumerates, so every later enumeration must come from that same thread. The caller waits for the answer.
 fn input_devices() -> Devices {
-    let Some(id) = cpal::available_hosts().into_iter().next() else { return Devices::Unknown };
-    // A host or a listing that fails says nothing about the hardware.
-    match cpal::host_from_id(id).and_then(|host| host.input_devices()) {
-        Ok(mut devices) => devices.next().is_some().into(),
+    static WORKER: OnceLock<Option<mpsc::Sender<mpsc::Sender<Devices>>>> = OnceLock::new();
+    let worker = WORKER.get_or_init(|| {
+        let (jobs_tx, jobs) = mpsc::channel::<mpsc::Sender<Devices>>();
+        thread::Builder::new()
+            .name("microphone-devices".into())
+            .spawn(move || {
+                for reply in jobs {
+                    let _ = reply.send(scan::<imp::Native>());
+                }
+            })
+            .ok()
+            .map(|_| jobs_tx)
+    });
+    let Some(worker) = worker else { return Devices::Unknown };
+    let (reply, answer) = mpsc::channel();
+    worker.send(reply).ok().and_then(|()| answer.recv().ok()).unwrap_or(Devices::Unknown)
+}
+
+fn scan<O: Os>() -> Devices {
+    // A host that cannot be opened or a listing that fails says nothing about the hardware.
+    let Some(host) = O::audio_host() else { return Devices::Unknown };
+    match host.input_devices() {
+        Ok(mut devices) => devices.any(|device| O::is_capture_source(&device)).into(),
         Err(_) => Devices::Unknown,
     }
 }
@@ -75,6 +102,17 @@ trait Os {
     /// The OS's permission alone, re-read every time and without prompting. An OS that cannot be read is
     /// `Unavailable`, never a grant.
     fn permission() -> Result<AccessState, &'static str>;
+
+    /// The audio host whose input devices count as microphones; `None` when it cannot be opened, which says nothing
+    /// about the hardware (`Devices::Unknown`). The platform default wherever that is trustworthy.
+    fn audio_host() -> Option<cpal::Host> {
+        Some(cpal::default_host())
+    }
+
+    /// Whether an input device the host lists is a real capture source rather than, say, the monitor of an output.
+    fn is_capture_source(_device: &cpal::Device) -> bool {
+        true
+    }
 
     /// Ask for access. Only macOS has a prompt (AVFoundation, the first time; afterwards the stored answer). Elsewhere
     /// there is nothing to ask — Windows' unpackaged desktop apps and Linux have no consent prompt — so this is
@@ -180,6 +218,13 @@ mod tests {
         assert_eq!(request_of::<Broken>(Devices::Present).await, Err("unreadable"));
         assert_eq!(Allowed::SETTINGS_URL, None);
         assert!(Refused::SETTINGS_URL.is_some());
+    }
+
+    #[test]
+    fn enumeration_from_any_thread_goes_through_the_one_worker() {
+        let answers: Vec<_> = (0..4).map(|_| thread::spawn(input_devices)).collect();
+        let answers: Vec<_> = answers.into_iter().map(|answer| answer.join().unwrap()).collect();
+        assert!(answers.iter().all(|answer| *answer == input_devices()));
     }
 
     #[cfg(not(target_os = "macos"))]
