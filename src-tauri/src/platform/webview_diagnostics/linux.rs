@@ -1,7 +1,7 @@
 //! X11 and Wayland have no WebKitGTK diagnostic binding implemented; the empty availability list and rejecting `apply` are the defaults.
 
-use super::WebviewDiagnostics;
+use super::Native;
 
-pub struct Os;
+pub(super) struct Os;
 
-impl WebviewDiagnostics for Os {}
+impl Native for Os {}

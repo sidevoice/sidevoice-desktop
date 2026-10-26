@@ -1,4 +1,4 @@
-use super::WebviewDiagnostics;
+use super::Native;
 #[cfg(sidevoice_debug_options)]
 use objc2::runtime::{AnyClass, AnyObject, Bool};
 #[cfg(sidevoice_debug_options)]
@@ -6,14 +6,14 @@ use objc2::{msg_send, sel};
 #[cfg(sidevoice_debug_options)]
 use sidevoice_desktop_core::debug_options::{DebugOptions, Switch};
 
-pub struct Os;
+pub(super) struct Os;
 
 /// Releases have no native setters: the defaults (nothing available, `apply` rejected) stand.
 #[cfg(not(sidevoice_debug_options))]
-impl WebviewDiagnostics for Os {}
+impl Native for Os {}
 
 #[cfg(sidevoice_debug_options)]
-impl WebviewDiagnostics for Os {
+impl Native for Os {
     fn available() -> Vec<Switch> {
         let has = |name, selector| AnyClass::get(name).is_some_and(|class| class.instance_method(selector).is_some());
         [
@@ -27,9 +27,6 @@ impl WebviewDiagnostics for Os {
     }
 
     fn apply(window: &tauri::WebviewWindow, options: DebugOptions) -> Result<(), String> {
-        if Switch::ALL.into_iter().any(|switch| options.get(switch) && !Self::available().contains(&switch)) {
-            return Err("unsupported webview diagnostic switch".into());
-        }
         window
             .with_webview(move |webview| {
                 let view = webview.inner() as *mut AnyObject;

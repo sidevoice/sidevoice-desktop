@@ -34,7 +34,7 @@ use crate::platform::computer_name;
 use crate::platform::host_capabilities::CAPABILITIES;
 use crate::platform::media_controls;
 use crate::platform::shortcut_access;
-use crate::platform::webview_diagnostics::{NativeWebviewDiagnostics, WebviewDiagnostics};
+use crate::platform::webview_diagnostics;
 use serde_json::{json, Value};
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
 use sidevoice_desktop_core::build_info::BuildInfo;
@@ -347,7 +347,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             computer_name::read().as_deref(),
             &debug_options,
             platform::microphone::settings_available(),
-            &NativeWebviewDiagnostics::available(),
+            &webview_diagnostics::available(),
             media_controls::support(),
             CAPABILITIES,
         ));
