@@ -6,7 +6,9 @@ mod imp;
 #[cfg(windows)]
 #[path = "platform/windows.rs"]
 mod imp;
+pub mod local_host;
 pub mod registry;
+pub mod temp;
 pub use imp::Os as Host;
 pub trait FixtureHost {
     /// Spawn a service outside the caller's process group/job.
