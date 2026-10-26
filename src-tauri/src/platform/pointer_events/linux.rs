@@ -1,13 +1,12 @@
-use super::{polling, PointerEvents, Sink, State, Subscription};
+use super::Native as Observations;
 use crate::platform::desktop_geometry;
-use tauri::AppHandle;
-pub struct NativePointerEvents;
-impl PointerEvents for NativePointerEvents {
-    fn watch(app: &AppHandle, label: &'static str, margin: f64, state: State, sink: Sink) -> Option<Subscription> {
-        if !desktop_geometry::global_coordinates() {
-            return None;
-        }
-        // The page owns its cursor on X11; Linux has no outside-click backend.
-        Some(polling(app, label, margin, state, sink, None, None))
+
+pub struct Native;
+
+/// Linux: the page owns its cursor on X11 and there is no outside-click backend; Wayland cannot observe the pointer
+/// globally, so the page's own events are used.
+impl Observations for Native {
+    fn available() -> bool {
+        desktop_geometry::global_coordinates()
     }
 }

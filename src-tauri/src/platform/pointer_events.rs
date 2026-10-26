@@ -12,7 +12,6 @@ use tauri::{AppHandle, Manager};
 #[cfg_attr(target_os = "windows", path = "pointer_events/windows.rs")]
 #[cfg_attr(target_os = "linux", path = "pointer_events/linux.rs")]
 mod imp;
-pub use imp::NativePointerEvents;
 
 pub struct PointerState {
     pub shown: bool,
@@ -26,19 +25,40 @@ pub enum PointerEvent {
 pub type State = Arc<dyn Fn() -> PointerState + Send + Sync>;
 pub type Sink = Arc<dyn Fn(PointerEvent) + Send + Sync>;
 
-pub trait PointerEvents {
-    /// Install during main-thread setup. State is read without holding native locks; callbacks run on the main
-    /// thread. `None` means global observation is unavailable (Wayland uses the page's own events).
-    /// Drop the subscription outside application locks to cancel queued callbacks and remove native monitors.
-    fn watch(app: &AppHandle, label: &'static str, margin: f64, state: State, sink: Sink) -> Option<Subscription>;
+/// What an OS does differently while the pointer is watched; everything else is [`watch`]. Each runs with no
+/// application mutex held.
+trait Native {
+    /// Whether the pointer can be observed globally at all. Where it cannot (Wayland) the page's own events are used.
+    fn available() -> bool {
+        true
+    }
+
+    /// One-time setup before the first look at the pointer.
+    fn prepare() {}
+
+    /// Every mouse button as the OS reports it, where outside clicks are seen by polling; `None` where they are not.
+    fn button_samples() -> Option<[ButtonSample; 3]> {
+        None
+    }
+
+    /// The native cursor upkeep at each look at the pointer, only where the app must set the cursor itself.
+    fn cursor_upkeep(_inside: Option<bool>, _page_wants_hand: bool, _was_inside: Option<bool>) {}
+
+    /// Outside clicks delivered by the OS instead of polled: reported to `sink` until `stopped`. Returns what removes
+    /// the native monitor, `None` where the OS offers none.
+    fn click_monitor(_app: &AppHandle, _stopped: Arc<AtomicBool>, _sink: Sink) -> Option<Cleanup> {
+        None
+    }
 }
+
+type Cleanup = Box<dyn FnOnce() + Send>;
 
 /// Owned cancellation and native cleanup. Dropping never joins a worker or waits for the main thread.
 /// A callback already executing may finish; queued callbacks check cancellation before accessing the app.
 pub struct Subscription {
     stopped: Arc<AtomicBool>,
     task: tauri::async_runtime::JoinHandle<()>,
-    cleanup: Option<Box<dyn FnOnce() + Send>>,
+    cleanup: Option<Cleanup>,
 }
 impl Drop for Subscription {
     fn drop(&mut self) {
@@ -53,24 +73,22 @@ impl Drop for Subscription {
 /// One mouse button as the OS reports it between two looks: `(down now, pressed since the last look)`. The second is
 /// only a hint: another process may consume it, and fast clicks between looks are not guaranteed to show.
 type ButtonSample = (bool, bool);
-/// Native cursor upkeep, only where the app must set the cursor itself: `(inside, page wants the hand, was inside)`.
-type Cursor = fn(Option<bool>, bool, Option<bool>);
 
 // A single outstanding callback prevents an unresponsive UI from accumulating work. The worker checks that the card
-// is shown before asking the main thread for anything, so a hidden card costs the UI no wakeups. `buttons` samples
-// every mouse button where outside clicks are seen by polling; `cursor` is the native cursor upkeep.
-fn polling(
-    app: &AppHandle,
-    label: &'static str,
-    margin: f64,
-    state: State,
-    sink: Sink,
-    buttons: Option<fn() -> [ButtonSample; 3]>,
-    cursor: Option<Cursor>,
-) -> Subscription {
+// is shown before asking the main thread for anything, so a hidden card costs the UI no wakeups.
+
+/// Install during main-thread setup. State is read without holding native locks; callbacks run on the main thread.
+/// `None` means global observation is unavailable (Wayland uses the page's own events).
+/// Drop the subscription outside application locks to cancel queued callbacks and remove native monitors.
+pub fn watch(app: &AppHandle, label: &'static str, margin: f64, state: State, sink: Sink) -> Option<Subscription> {
+    if !imp::Native::available() {
+        return None;
+    }
+    imp::Native::prepare();
     let stopped = Arc::new(AtomicBool::new(false));
     let queued = Arc::new(AtomicBool::new(false));
     let edges = Arc::new(Mutex::new(ButtonEdges::default()));
+    let cleanup = imp::Native::click_monitor(app, stopped.clone(), sink.clone());
     let stop = stopped.clone();
     let app = app.clone();
     let task = tauri::async_runtime::spawn(async move {
@@ -104,10 +122,9 @@ fn polling(
                                         }
                                         .contains(p)
                                     });
-                                if let Some(cursor) = cursor {
-                                    cursor(inside, current.hand, current.inside);
-                                }
-                                let outside = buttons.is_some_and(|samples| edges.lock().unwrap().pressed(samples()))
+                                imp::Native::cursor_upkeep(inside, current.hand, current.inside);
+                                let outside = imp::Native::button_samples()
+                                    .is_some_and(|samples| edges.lock().unwrap().pressed(samples))
                                     && inside == Some(false);
                                 // No native or application mutex is held while invoking a sink.
                                 if current.inside != inside {
@@ -127,7 +144,7 @@ fn polling(
             }
         }
     });
-    Subscription { stopped, task, cleanup: None }
+    Some(Subscription { stopped, task, cleanup })
 }
 
 // The edge policy is shared so every host tests it: native files only report what the buttons are doing.

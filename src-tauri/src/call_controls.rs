@@ -13,7 +13,7 @@
 
 use crate::platform::card_window::{CardSpec, CardWindow, NativeCardWindow};
 use crate::platform::desktop_geometry;
-use crate::platform::pointer_events::{NativePointerEvents, PointerEvent, PointerEvents, PointerState, Subscription};
+use crate::platform::pointer_events::{self, PointerEvent, PointerState, Subscription};
 use crate::platform::window_visibility::{self, Visibility};
 use crate::{debug, AppState};
 use serde::Deserialize;
@@ -159,7 +159,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     NativeCardWindow::create(app, CardSpec { label: LABEL, page: PAGE, size: FIRST_SIZE, script })?;
     let state_app = app.clone();
     let sink_app = app.clone();
-    let subscription = NativePointerEvents::watch(
+    let subscription = pointer_events::watch(
         app,
         LABEL,
         MARGIN,

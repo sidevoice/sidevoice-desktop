@@ -1,10 +1,13 @@
-use super::{polling, PointerEvent, PointerEvents, Sink, State, Subscription};
+use super::{Cleanup, Native as Observations, PointerEvent, Sink};
 use crate::debug;
 use sidevoice_desktop_core::call_controls as logic;
 use std::{
     cell::RefCell,
     collections::HashMap,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc,
+    },
 };
 use tauri::AppHandle;
 use tauri_nspanel::objc2::{class, msg_send, rc::Retained, runtime::AnyObject};
@@ -12,14 +15,25 @@ use tauri_nspanel::objc2::{class, msg_send, rc::Retained, runtime::AnyObject};
 // AppKit objects stay on their owning thread; only an opaque numeric cleanup key crosses threads.
 thread_local! { static MONITORS: RefCell<HashMap<u64, Retained<AnyObject>>> = RefCell::new(HashMap::new()); }
 static NEXT_MONITOR: AtomicU64 = AtomicU64::new(1);
-pub struct NativePointerEvents;
-impl PointerEvents for NativePointerEvents {
-    fn watch(app: &AppHandle, label: &'static str, margin: f64, state: State, sink: Sink) -> Option<Subscription> {
+pub struct Native;
+
+/// macOS: outside clicks come from a global NSEvent monitor, and the app sets the cursor itself.
+impl Observations for Native {
+    fn prepare() {
         set_cursor_in_background();
-        let mut subscription = polling(app, label, margin, state, sink.clone(), None, Some(cursor));
-        let stop = subscription.stopped.clone();
+    }
+
+    /// The hand over the buttons, the arrow once the pointer has left the card.
+    fn cursor_upkeep(inside: Option<bool>, page_wants_hand: bool, was_inside: Option<bool>) {
+        keep_hand(inside, page_wants_hand);
+        if was_inside != inside && inside == Some(false) {
+            arrow_after_leaving();
+        }
+    }
+
+    fn click_monitor(app: &AppHandle, stopped: Arc<AtomicBool>, sink: Sink) -> Option<Cleanup> {
         let handler = block2::RcBlock::new(move |_event: std::ptr::NonNull<AnyObject>| {
-            if !stop.load(Ordering::Acquire) {
+            if !stopped.load(Ordering::Acquire) {
                 sink(PointerEvent::OutsideClick);
             }
         });
@@ -29,30 +43,20 @@ impl PointerEvents for NativePointerEvents {
             msg_send![class!(NSEvent), addGlobalMonitorForEventsMatchingMask: MOUSE_DOWN, handler: &*handler]
         };
         debug(&format!("call-controls watching clicks elsewhere: {}", monitor.is_some()));
-        if let Some(monitor) = monitor {
-            let id = NEXT_MONITOR.fetch_add(1, Ordering::Relaxed);
-            MONITORS.with(|monitors| monitors.borrow_mut().insert(id, monitor));
-            let app = app.clone();
-            subscription.cleanup = Some(Box::new(move || {
-                let _ = app.run_on_main_thread(move || {
-                    if let Some(monitor) = MONITORS.with(|monitors| monitors.borrow_mut().remove(&id)) {
-                        // SAFETY: the retained NSEvent monitor, removed on the main thread before releasing it.
-                        unsafe {
-                            let _: () = msg_send![class!(NSEvent), removeMonitor: &*monitor];
-                        }
+        let monitor = monitor?;
+        let id = NEXT_MONITOR.fetch_add(1, Ordering::Relaxed);
+        MONITORS.with(|monitors| monitors.borrow_mut().insert(id, monitor));
+        let app = app.clone();
+        Some(Box::new(move || {
+            let _ = app.run_on_main_thread(move || {
+                if let Some(monitor) = MONITORS.with(|monitors| monitors.borrow_mut().remove(&id)) {
+                    // SAFETY: the retained NSEvent monitor, removed on the main thread before releasing it.
+                    unsafe {
+                        let _: () = msg_send![class!(NSEvent), removeMonitor: &*monitor];
                     }
-                });
-            }));
-        }
-        Some(subscription)
-    }
-}
-
-/// The cursor upkeep at each look at the pointer: the hand over the buttons, the arrow once it has left the card.
-fn cursor(inside: Option<bool>, page_wants_hand: bool, was_inside: Option<bool>) {
-    keep_hand(inside, page_wants_hand);
-    if was_inside != inside && inside == Some(false) {
-        arrow_after_leaving();
+                }
+            });
+        }))
     }
 }
 
