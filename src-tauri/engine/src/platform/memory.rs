@@ -1,15 +1,5 @@
 //! Physical memory observations, without model-selection policy.
 
-#[cfg(target_os = "macos")]
-#[path = "memory/macos.rs"]
-mod imp;
-#[cfg(not(target_os = "macos"))]
-mod imp {
-    pub struct Os;
-    impl super::Memory for Os {}
-}
-pub use imp::Os as SystemMemory;
-
 pub struct MemorySnapshot {
     pub total_bytes: Option<u64>,
     pub available_bytes: Option<u64>,
@@ -39,6 +29,21 @@ pub trait Memory {
         }
     }
 }
+
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+pub use macos::SystemMemory;
+
+#[cfg(target_os = "windows")]
+mod windows;
+#[cfg(target_os = "windows")]
+pub use windows::SystemMemory;
+
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::SystemMemory;
 
 #[cfg(test)]
 mod tests {
