@@ -518,10 +518,7 @@ mod tests {
         assert_eq!(steps, ["download", "verification", "staging", "service-start", "pairing"]);
         let progress = Progress { step: Step::Download, done: Some(5), total: None, cancellable: true };
         assert_eq!(json!(progress), json!({"step": "download", "done": 5, "total": null, "cancellable": true}));
-        let full = [
-            io::Error::from(io::ErrorKind::StorageFull),
-            io::Error::from(io::ErrorKind::QuotaExceeded),
-        ];
+        let full = [io::Error::from(io::ErrorKind::StorageFull), io::Error::from(io::ErrorKind::QuotaExceeded)];
         for error in full {
             let disk = Failure::io(&error, Step::Staging, "w");
             assert_eq!(disk.key, "install.disk");
