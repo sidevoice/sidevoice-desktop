@@ -19,7 +19,7 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 | `src-tauri/src/call_controls.rs`, `src-tauri/core/src/call_controls.rs` | The card's window, and when it shows, where it sits and how it moves (unit-tested). |
 | `src-tauri/src/updater.rs`, `src-tauri/core/src/updater.rs`, `src-tauri/core/src/build_info.rs` | The app's updates, behind `updater`, and what this build is, `build` (below). |
 | `src-tauri/src/debug_options.rs`, `src-tauri/core/src/debug_options.rs` | The developer options, behind `debug` in a nightly or a dev build (below). |
-| `src-tauri/src/platform/computer_name.rs`, `src-tauri/core/src/computer_name.rs` | This computer's name, `computerName` (below; the Linux file's parsing unit-tested). |
+| `src-tauri/src/platform/host.rs`, `src-tauri/core/src/computer_name.rs` | This computer's name, `computerName` (below; the Linux file's parsing unit-tested). |
 
 ## What the bridge reads and calls in the web UI
 
@@ -58,7 +58,7 @@ macOS-only; elsewhere the bridge omits them and the native commands refuse `{key
 
 `deleteAll()` is the confirmed Settings › Advanced action. Native also displays an OS-owned confirmation
 with Cancel as its default button on every invocation; cancelling rejects `{key: "reset.cancelled"}` before
-any uninstall or deletion. `platform::confirmation::Confirmation` owns the native prompt: the existing NSAlert on
+any uninstall or deletion. `platform::confirmation::confirm` owns the native prompt: the existing NSAlert on
 macOS, TaskDialogIndirect with an explicit Cancel default on Windows, and GTK with an explicit Cancel response on
 Linux. The capability is implemented on all three hosts; the reset offer and transaction remain macOS-only.
 The shared confirmation interface cancels unless the native opened hook arrives within three seconds; a dialog
@@ -239,7 +239,7 @@ only allows from a click in the page. "Mostrar Sidevoice" opens the window for t
 `window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", version, engine, mediaKeys, build, muteShortcut, callControls, computerName?, localHost?, voice?, microphone, updater? }`: the
 web UI feature-detects the desktop app by it, and each capability by its presence. `version` is the bridge's (2).
 
-`mediaKeys` is supplied by `MediaControls::support()`: `"native"` on macOS and `null` on Windows/Linux.
+`mediaKeys` is supplied by `platform::media_controls::support()`: `"native"` on macOS and `null` on Windows/Linux.
 It is independent of `host.voice`: with native voice and unavailable native media controls, the page
 keeps its Media Session handlers and Now Playing element. See [MEDIA_CONTROLS.md](MEDIA_CONTROLS.md)
 for the test boundary and hardware verification still needed.
@@ -249,7 +249,7 @@ the Computer Name (System Settings → General → Sharing, «Mac de Ana»; Syst
 `SCDynamicStoreCopyComputerName`), not the `.local` hostname; on Windows the device name (the DNS host name, as typed);
 on Linux the pretty hostname (`PRETTY_HOSTNAME` in `/etc/machine-info`, `hostnamectl set-hostname --pretty`), else
 the hostname. A non-empty string, trimmed; absent when the system has none, and the page then names the device
-itself. Read each time the room window opens (`src-tauri/src/platform/computer_name.rs`, core `computer_name`).
+itself. Read each time the room window opens (`src-tauri/src/platform/host.rs`, core `computer_name`).
 
 ## The local host
 

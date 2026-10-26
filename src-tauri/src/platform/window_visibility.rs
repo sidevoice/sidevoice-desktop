@@ -9,7 +9,7 @@ mod imp;
 
 /// What an OS can honestly observe about the room window beyond what Tauri reports everywhere. Both run on the main
 /// thread with no application mutex held; `None` means this OS cannot tell, never proof either way.
-trait Observations {
+trait Os {
     /// Whether any part of the window is on screen (not on another workspace, not occluded).
     fn on_screen<R: Runtime>(_: &WebviewWindow<R>) -> Option<bool> {
         None

@@ -80,7 +80,7 @@ distributions' own KDE defaults.
 
 ## Desktop platform boundary
 
-`platform::Application` owns single-instance setup, native launch policy, activation, reopen and diagnostic
+`platform::application` (`configure`, `prepare`, `activate`, `handle_event`, `report`) owns single-instance setup, native launch policy, activation, reopen and diagnostic
 observations. The common shell still shows/restores/focuses the room and keeps it alive when closed. macOS retains
 its Regular activation policy, visible Dock tile, macOS 14+ activation and Dock reopen handling. Windows/Linux use
 Tauri window focus and the existing single-instance plugin. No native accessibility equivalent is inferred there.

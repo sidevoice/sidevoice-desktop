@@ -1,7 +1,7 @@
 //! Windows has no native media-control owner yet; the page retains Media Session.
 
-use super::MediaControls;
+use super::Os;
 
-pub struct NativeMediaControls;
+pub(super) struct Native;
 
-impl MediaControls for NativeMediaControls {}
+impl Os for Native {}

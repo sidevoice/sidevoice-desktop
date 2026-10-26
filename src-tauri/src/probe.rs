@@ -13,8 +13,7 @@
 
 use std::borrow::Cow;
 
-use crate::platform::exit_diagnostics::{ExitDiagnostics, NativeExitDiagnostics};
-use crate::platform::voice_holds::{NativeVoiceHolds, VoiceHolds};
+use crate::platform::diagnostics;
 use tauri::utils::assets::{AssetKey, AssetsIter, CspHash};
 use tauri::{App, AppHandle, Assets, Context, Runtime};
 
@@ -42,13 +41,13 @@ pub fn exit_on(app: &AppHandle, line: &str) {
 }
 
 /// With `SIDEVOICE_DEBUG_EXIT`, from the start: a handler `exit()` runs after the static destructors of the C++
-/// libraries linked in (the platform registers it, src/platform/exit_diagnostics.rs). `macos exit` checks that its
+/// libraries linked in (the platform registers it, src/platform/diagnostics.rs). `macos exit` checks that its
 /// line is in the log (#121).
 pub fn watch_exit_handlers() {
     if !crate::debugging() || std::env::var_os("SIDEVOICE_DEBUG_EXIT").is_none() {
         return;
     }
-    NativeExitDiagnostics::report_handlers_ran();
+    diagnostics::report_exit_handlers();
 }
 
 /// With `SIDEVOICE_DEBUG_PAGE=memory.html`, at each line `probe-memory PHASE` the page logs: the app's memory then,
@@ -60,7 +59,7 @@ pub fn memory_on(app: &tauri::AppHandle, line: &str) {
         return;
     }
     let phase = phase.trim().to_owned();
-    if let Some(held) = NativeVoiceHolds::held(app) {
+    if let Some(held) = diagnostics::voice_holds(app) {
         println!("memory-holds phase={phase} {held}");
     }
     std::thread::spawn(move || {

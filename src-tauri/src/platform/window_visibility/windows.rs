@@ -1,10 +1,10 @@
-use super::Observations;
+use super::Os;
 use tauri::{Runtime, WebviewWindow};
 
 pub struct Native;
 
 /// Windows: DWM cloaks a window on another virtual desktop. How much other windows cover it is not measured.
-impl Observations for Native {
+impl Os for Native {
     fn on_screen<R: Runtime>(w: &WebviewWindow<R>) -> Option<bool> {
         use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
         let hwnd = w.hwnd().ok()?;

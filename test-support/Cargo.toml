@@ -27,6 +27,9 @@ futures-util = { version = "0.3", features = ["sink"] }
 
 [target.'cfg(unix)'.dependencies]
 sidevoice-local-host = { path = "../src-tauri/local-host" }
+# The core's socket opened raw, without the peer check `sidevoice_platform::ipc` adds (local_host's attack); already
+# in the graph through it.
+interprocess = "2.4"
 
 [target.'cfg(windows)'.dependencies]
 # The process flags `process-wrap`'s `CreationFlags` takes.

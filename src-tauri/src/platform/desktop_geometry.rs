@@ -6,15 +6,15 @@ use tauri::{AppHandle, Monitor, Runtime, WebviewWindow};
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
-use macos::Os;
+use macos::Native;
 #[cfg(target_os = "windows")]
 mod windows;
 #[cfg(target_os = "windows")]
-use windows::Os;
+use windows::Native;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
-use linux::Os;
+use linux::Native;
 
 /// The unit desktop positions and sizes are in.
 #[derive(Clone, Copy, PartialEq)]
@@ -26,7 +26,7 @@ enum CoordinateUnit {
     Pixels,
 }
 
-trait Native {
+trait Os {
     /// Physical pixels unless the OS overrides it (macOS: points).
     const UNIT: CoordinateUnit = CoordinateUnit::Pixels;
     /// Linux overrides: Wayland hides desktop positions and Tao answers (0,0) instead of an error.
@@ -39,7 +39,7 @@ trait Native {
 /// First call must be on the main thread during setup, before workers start: Linux observes the GTK backend actually
 /// selected, including XWayland, rather than environment hints.
 pub fn positions_available() -> bool {
-    Os::positions_available()
+    Native::positions_available()
 }
 
 /// The pointer on the desktop.
@@ -47,8 +47,9 @@ pub fn pointer<R: Runtime>(app: &AppHandle<R>) -> Option<Point> {
     if_positions_available(positions_available(), || {
         let p = app.cursor_position().ok()?;
         // Tao scales the global pointer by the main display, not the display beneath the pointer.
-        let scale = if Os::UNIT == CoordinateUnit::Points { app.primary_monitor().ok()??.scale_factor() } else { 1.0 };
-        Some(Point { x: from_physical(Os::UNIT, p.x, scale), y: from_physical(Os::UNIT, p.y, scale) })
+        let scale =
+            if Native::UNIT == CoordinateUnit::Points { app.primary_monitor().ok()??.scale_factor() } else { 1.0 };
+        Some(Point { x: from_physical(Native::UNIT, p.x, scale), y: from_physical(Native::UNIT, p.y, scale) })
     })
 }
 
@@ -56,8 +57,8 @@ pub fn pointer<R: Runtime>(app: &AppHandle<R>) -> Option<Point> {
 pub fn frame<R: Runtime>(w: &WebviewWindow<R>) -> Option<Rect> {
     if_positions_available(positions_available(), || {
         let (at, size) = (w.outer_position().ok()?, w.outer_size().ok()?);
-        let scale = if Os::UNIT == CoordinateUnit::Points { w.scale_factor().ok()? } else { 1.0 };
-        let desktop = |v: f64| from_physical(Os::UNIT, v, scale);
+        let scale = if Native::UNIT == CoordinateUnit::Points { w.scale_factor().ok()? } else { 1.0 };
+        let desktop = |v: f64| from_physical(Native::UNIT, v, scale);
         Some(Rect {
             x: desktop(at.x as f64),
             y: desktop(at.y as f64),
@@ -69,7 +70,7 @@ pub fn frame<R: Runtime>(w: &WebviewWindow<R>) -> Option<Rect> {
 
 /// One logical pixel of this window, in desktop units.
 pub fn unit<R: Runtime>(w: &WebviewWindow<R>) -> f64 {
-    if Os::UNIT == CoordinateUnit::Points {
+    if Native::UNIT == CoordinateUnit::Points {
         1.0
     } else {
         w.scale_factor().unwrap_or(1.0)
@@ -79,7 +80,7 @@ pub fn unit<R: Runtime>(w: &WebviewWindow<R>) -> f64 {
 /// Place in desktop units, without changing focus; do nothing when global placement is unavailable.
 pub fn place<R: Runtime>(w: &WebviewWindow<R>, at: Point) {
     if_positions_available(positions_available(), || {
-        let _ = if Os::UNIT == CoordinateUnit::Points {
+        let _ = if Native::UNIT == CoordinateUnit::Points {
             w.set_position(tauri::LogicalPosition::new(at.x, at.y))
         } else {
             w.set_position(tauri::PhysicalPosition::new(at.x.round() as i32, at.y.round() as i32))
@@ -136,7 +137,7 @@ fn monitor_display(m: &Monitor) -> (Rect, Display) {
     let (at, size, work) = (m.position(), m.size(), m.work_area());
     let name = m.name().cloned().unwrap_or_else(|| format!("{}x{}", size.width, size.height));
     monitor_geometry(
-        Os::UNIT,
+        Native::UNIT,
         &name,
         m.scale_factor(),
         Point { x: at.x as f64, y: at.y as f64 },

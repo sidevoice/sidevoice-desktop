@@ -35,17 +35,29 @@ Operator rule (2026-10-25). Applies to product code, tests, xtask and build scri
 - **Only `platform` touches the operating system.** Each crate has one `platform` module. It is the only place with
   `cfg(target_os | unix | windows | target_family)`, `cfg!` on those, `std::os::*`, `libc`, `rustix`, `windows-sys`,
   `objc2`/AppKit, OS commands, local sockets/pipes or OS-specific paths. Everything else is host-agnostic.
-- **One file per concern:** `platform/<concern>.rs`. When the behaviour differs per OS, that file declares a
-  documented trait, and its `cfg` picks `platform/<concern>/<os>.rs`, each implementing the trait with the minimum
-  code. The concern file holds only the trait, the shared types and that selection, never an OS body.
-- **An OS that cannot do something still implements the method**, returning a documented fallback (`None`,
-  "unknown", a coarser value) that callers handle. Callers never ask which OS they run on.
-- **Only a value differs** (a folder name, a shortcut label): a plain module with that value is enough, no trait.
-- **Callers import the trait and its type**; no forwarding wrappers or free functions repeating the trait.
+- **One file per concern:** `platform/<concern>.rs` exposes **public plain functions**; the common logic is written
+  once there. Per-OS differences live in a **private trait named `Os`**, implemented by a type named `Native` (`impl Os for Native`)
+  in `platform/<concern>/{macos,windows,linux}.rs`,
+  with **one named method or const per real difference** and honest defaults (`None`, no-op, `false`,
+  `Unsupported`). OS files override only what they actually do; an empty impl is fine. The concern file selects the
+  OS file with `cfg_attr(target_os = ..., path = ...)` as `mod imp`, the only `cfg` allowed in common files; common
+  code calls `Native::method()` / `Native::CONST` (`use imp::Native`). One exception: a
+  value-only difference (no behaviour) may use `cfg!` in a plain module with no trait and no OS files, e.g. `data_dir`
+  or `RESET_AVAILABLE`.
+- **Platforms return observations/capabilities; decisions live in common code** (fallbacks, cascades, thresholds).
+  No `fallback` fields, no closures or pieces passed by each OS into a common helper. An OS that cannot do
+  something keeps the honest default; callers never ask which OS they run on (no caller OS gates).
+- **What the UI must know is a const** (e.g. `SETTINGS_URL: Option<&str>`, `UNINSTALLABLE: bool`) read through a
+  plain function.
+- **Callers use the public functions** (`platform::<concern>::f()`); the trait and the OS types are private.
+- **Libraries first:** use what Tauri and maintained crates already provide before writing platform code; own
+  `unsafe` only where nothing maintained exists, justified in the PR.
+- **No `allow(dead_code)`** to cover an OS that does not use something.
 - **Tests are written against the interface** and run on every OS; no per-OS test modules unless it cannot be
   phrased generically (say why in the PR).
-- **Maintained crates first**; own `unsafe` only where nothing maintained exists, justified in the PR.
 - **Enforced in CI** by its own `platform-boundary` check (next to Clippy's `disallowed-*`): any OS-specific code
   outside `platform` fails it. It stays red until the existing debt is fixed; there is no allowlist.
 
-Reference: sidevoice-connector `connector/src/platform/user.rs` and `user/{unix,windows}.rs`.
+Reference in this repo: `platform/microphone.rs`, `platform/desktop_geometry.rs` and `platform/confirmation.rs`, each public
+plain functions over a private per-OS trait. (sidevoice-connector and core keep their separately approved public-trait
+shape; do not copy it here.)

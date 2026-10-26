@@ -1,16 +1,23 @@
-use super::UpdateEligibility;
+use super::Os;
+use sidevoice_desktop_core::bridge::Capabilities;
 use sidevoice_desktop_core::updater;
-use tauri::utils::{config::BundleType, platform::bundle_type};
+use tauri::utils::config::BundleType;
 
-pub struct NativeUpdateEligibility;
+pub(super) struct Native;
 
-impl UpdateEligibility for NativeUpdateEligibility {
-    /// Only a release/nightly running from a writable app volume can use the plugin's update/restart path.
-    fn available(channel: &str) -> bool {
-        updater::feed(channel).is_some()
-            && bundle_type() == Some(BundleType::App)
-            && std::env::current_exe()
-                .is_ok_and(|exe| updater::in_app_bundle(&exe) && exe.ancestors().nth(4).is_some_and(writable_volume))
+impl Os for Native {
+    fn device_name() -> Option<String> {
+        whoami::devicename().ok()
+    }
+
+    const CAPABILITIES: Capabilities = Capabilities { local_host: true, voice: true };
+
+    const BUNDLE: Option<BundleType> = Some(BundleType::App);
+
+    /// Only an app bundle running from a writable app volume can use the plugin's update/restart path.
+    fn installed_here() -> bool {
+        std::env::current_exe()
+            .is_ok_and(|exe| updater::in_app_bundle(&exe) && exe.ancestors().nth(4).is_some_and(writable_volume))
     }
 }
 
