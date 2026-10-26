@@ -55,31 +55,6 @@ impl DataDirs {
     }
 }
 
-/// What "Ver registro" shows: the app's own log first, then the core's (else the connector's) one, each only if it is
-/// a file. The app's is there with or without a connector.
-pub fn logs_to_show(app: Option<PathBuf>, connector: Option<PathBuf>) -> Vec<PathBuf> {
-    app.into_iter().chain(connector).filter(|p| is_file(p)).collect()
-}
-
 fn is_file(path: &Path) -> bool {
     std::fs::symlink_metadata(path).map(|m| m.is_file()).unwrap_or(false)
-}
-
-#[cfg(test)]
-mod log_tests {
-    use super::*;
-
-    #[test]
-    fn shows_the_app_log_then_the_connectors_and_only_what_exists() {
-        let dir = tempfile::tempdir().unwrap();
-        let (app, core) = (dir.path().join("app.log"), dir.path().join("core.log"));
-        let missing = dir.path().join("nope.log");
-        assert!(logs_to_show(None, None).is_empty());
-        assert!(logs_to_show(Some(missing.clone()), None).is_empty());
-        std::fs::write(&app, "x").unwrap();
-        assert_eq!(logs_to_show(Some(app.clone()), None), vec![app.clone()]);
-        assert_eq!(logs_to_show(Some(app.clone()), Some(missing)), vec![app.clone()]);
-        std::fs::write(&core, "x").unwrap();
-        assert_eq!(logs_to_show(Some(app.clone()), Some(core.clone())), vec![app, core]);
-    }
 }

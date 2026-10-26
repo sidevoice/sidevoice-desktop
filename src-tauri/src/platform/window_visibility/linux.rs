@@ -4,12 +4,18 @@ use tauri::{Runtime, WebviewWindow};
 
 pub struct Native;
 
-/// Linux: X11 offers no workspace or coverage observation, so the room counts as visible unless hidden or minimised.
-/// Wayland offers none either (a client cannot see where it is); focus is the best available estimate, so an
-/// unfocused window counts as off screen there.
 impl Observations for Native {
+    /// Linux has no workspace or occlusion query, so what it can say depends on the display server:
+    ///
+    /// - With global positions (X11), it reports nothing: the room counts as on screen unless hidden or minimised.
+    /// - Without them (Wayland, which hides every window's position and workspace from the app), focus is the only
+    ///   signal left, so an unfocused room counts as off screen. It is an estimate: an unfocused window may still
+    ///   be visible.
     fn on_screen<R: Runtime>(w: &WebviewWindow<R>) -> Option<bool> {
-        let wayland = !desktop_geometry::positions_available();
-        wayland.then(|| w.is_focused().unwrap_or(false))
+        if desktop_geometry::positions_available() {
+            None
+        } else {
+            Some(w.is_focused().unwrap_or(false))
+        }
     }
 }
