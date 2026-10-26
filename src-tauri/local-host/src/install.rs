@@ -17,7 +17,6 @@
 //! ([`Failure`]): the keys sidevoice-web knows where one fits (`local-host-install.ts`), the installer's own keys
 //! through ([`installer_failure`]).
 
-use crate::checks::Check;
 use crate::cli::Cli;
 use crate::npm::{self, Fetch};
 use crate::platform::target::current_package;
@@ -25,6 +24,7 @@ use crate::tarball;
 use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha512};
+use sidevoice_platform::fs::{Access, Directory, HeldDirectory};
 use std::ffi::{CString, OsString};
 use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
@@ -246,13 +246,11 @@ impl Scratch {
         buffer.pop();
         // Removed again, by this name, if the check below refuses it.
         let mut scratch = Scratch { path: PathBuf::from(OsString::from_vec(buffer)) };
-        let checked =
-            crate::trusted::Dir::open(&scratch.path, 0o077, "install.unsafe").map_err(|check| match check {
-                Check::Unsafe(refusal) => unsafe_root(refusal.message),
-                Check::Missing => unsafe_root(format!("{} went away.", scratch.path.display())),
-            })?;
-        // What is used from here on is the directory as checked, every link resolved.
-        scratch.path = checked.path().to_path_buf();
+        HeldDirectory::open(&scratch.path, Access::Private)
+            .map_err(|error| unsafe_root(format!("{}: {error}", scratch.path.display())))?;
+        // Resolve only after the shared policy has accepted the original ancestry (e.g. macOS /var).
+        scratch.path =
+            scratch.path.canonicalize().map_err(|error| unsafe_root(format!("{}: {error}", scratch.path.display())))?;
         Ok(scratch)
     }
 

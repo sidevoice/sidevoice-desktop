@@ -14,3 +14,4 @@ pub trait FixtureHost {
     /// Remove filesystem endpoint directories; named pipes leave none.
     fn forget(_data: &Path) {}
 }
+pub mod storage;
