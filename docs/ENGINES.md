@@ -4,7 +4,7 @@ The app's speech models run on **sidevoice-engine** (`sidevoice/sidevoice-engine
 (`src-tauri/engine/Cargo.toml`, pinned to the v0.5.0 tag). The engine owns the catalogue of
 models, local and remote, the downloads, which build of a model runs on this machine, and the models in memory.
 
-On macOS the app runs the voice call itself with **sidevoice-voice** (`sidevoice/sidevoice-voice`, `src-tauri/src/voice.rs`,
+The app runs the voice call itself with **sidevoice-voice** (`sidevoice/sidevoice-voice`, `src-tauri/src/voice.rs`,
 docs/BRIDGE.md → "The voice call"), on that same engine: the microphone, voice activity and turns, transcription,
 speech, playback, barge-in and what was heard. What is in memory is what the call holds: its three models (the voice
 activity detector, speech to text, text to speech) stay loaded across calls, and leave memory once the call has been
@@ -80,8 +80,8 @@ The engine's sherpa-onnx backend links sherpa-onnx's prebuilt static libraries. 
 Without it, sherpa-onnx's build script downloads them itself, unchecked. The engine's whisper.cpp backend compiles
 whisper.cpp and ggml from source: the build needs CMake, a C++ compiler and libclang (for `bindgen`); on Linux
 x86_64, `src-tauri/.cargo/config.toml` compiles it with libstdc++'s old string ABI, as sherpa-onnx's libraries there
-are. On macOS, sidevoice-voice's echo canceller builds WebRTC's C++ with meson and ninja (`brew install meson ninja
-pkg-config`). The Rust version is the engine's, `src-tauri/rust-toolchain.toml`.
+are. sidevoice-voice's echo canceller (Sonora) is pure Rust and needs no build tools. The Rust version is the engine's,
+`src-tauri/rust-toolchain.toml`.
 
 ## Verified in CI
 
