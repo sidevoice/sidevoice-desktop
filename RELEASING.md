@@ -190,7 +190,7 @@ steps are skipped, and every secret those steps name resolves to nothing unless 
 from a fork never has the repository's secrets.)
 
 - The app: Tauri's bundler imports `APPLE_CERTIFICATE` into a keychain of its own, signs every binary with
-  `APPLE_SIGNING_IDENTITY`, the hardened runtime and `src-tauri/Entitlements.plist` (the microphone; the keychain
+  `APPLE_SIGNING_IDENTITY`, the hardened runtime and `src-tauri/packaging/macos/Entitlements.plist` (the microphone; the keychain
   items the app keeps need no entitlement outside the sandbox), notarizes it with the App Store Connect API key
   (`APPLE_API_KEY`, `APPLE_API_ISSUER`, and `APPLE_API_KEY_P8` written to a file only the job can read,
   `APPLE_API_KEY_PATH`) and staples the ticket.

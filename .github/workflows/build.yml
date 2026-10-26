@@ -168,7 +168,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.changes.outputs.channel == 'nightly' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
         run: cargo xtask macos app --channel ${{ needs.changes.outputs.channel }}
       # Tauri's bundler imports the certificate into a keychain of its own, signs every binary with the hardened runtime
-      # and the entitlements (src-tauri/Entitlements.plist), then notarizes the app with the API key (the .p8 as a file
+      # and the entitlements (src-tauri/packaging/macos/Entitlements.plist), then notarizes the app with the API key (the .p8 as a file
       # only the runner's user may read, removed when the step ends) and staples it.
       - name: Build the app bundle (Developer ID signed, hardened runtime, notarized and stapled)
         if: needs.changes.outputs.sign == 'true'
@@ -207,6 +207,12 @@ jobs:
         run: cargo xtask macos sign-dmg
       - name: The .dmg's checksum
         run: cargo xtask macos checksums
+      - name: Record produced bundle file lists
+        run: cargo xtask packaging files src-tauri/target/aarch64-apple-darwin/release/bundle packaging-macos.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packaging-macos
+          path: packaging-macos.txt
       # Each signing step removes its keychain and key files when it ends; this catches one that was cut short.
       - name: Remove the signing keychain and the notary's key
         if: always() && needs.changes.outputs.sign == 'true'
@@ -254,6 +260,12 @@ jobs:
           key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs', 'scripts/web-release.mjs') }}
       - name: Build the CI probe app (feature probe; never shipped)
         run: cargo xtask macos probe-app
+      - name: Record produced probe bundle file list
+        run: cargo xtask packaging files src-tauri/target/aarch64-apple-darwin/release/bundle packaging-macos-probe.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packaging-macos-probe
+          path: packaging-macos-probe.txt
       - name: Portable native local-host fixtures
         run: cargo xtask test-support
       - name: Reset cleanup safety tests (temporary directories only)
@@ -346,6 +358,12 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ (needs.changes.outputs.channel == 'release' || needs.changes.outputs.channel == 'nightly') && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ (needs.changes.outputs.channel == 'release' || needs.changes.outputs.channel == 'nightly') && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
         run: cargo xtask bundle --channel ${{ needs.changes.outputs.channel }}
+      - name: Record produced bundle file lists
+        run: cargo xtask packaging files src-tauri/target/release/bundle packaging-linux.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packaging-linux
+          path: packaging-linux.txt
       - uses: actions/upload-artifact@v4
         with:
           name: Sidevoice-Linux-x64
@@ -386,6 +404,12 @@ jobs:
       # The Windows app starts: the bundled interface comes up in WebView2 (no settings; a throwaway runner only).
       - name: First open (no settings), the bundled interface comes up
         run: cargo xtask windows first-open
+      - name: Record produced bundle file lists
+        run: cargo xtask packaging files src-tauri/target/release/bundle packaging-windows.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packaging-windows
+          path: packaging-windows.txt
       - uses: actions/upload-artifact@v4
         with:
           name: Sidevoice-Windows-x64

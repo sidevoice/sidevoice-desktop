@@ -12,36 +12,12 @@
     "windows": [],
     "security": {
       "csp": null
-    },
-    "macOSPrivateApi": true
+    }
   },
   "bundle": {
     "active": true,
-    "targets": [
-      "app",
-      "dmg",
-      "deb",
-      "appimage",
-      "nsis"
-    ],
     "category": "Productivity",
     "shortDescription": "Give your agent a voice.",
-    "icon": [
-      "icons/32x32.png",
-      "icons/64x64.png",
-      "icons/128x128.png",
-      "icons/128x128@2x.png",
-      "icons/icon.png",
-      "icons/icon.icns",
-      "icons/icon.ico"
-    ],
-    "macOS": {
-      "minimumSystemVersion": "13.0",
-      "signingIdentity": "-",
-      "hardenedRuntime": true,
-      "entitlements": "Entitlements.plist",
-      "infoPlist": "Info.plist"
-    },
     "longDescription": "Sidevoice: give your coding agent a voice. Keep the conversation.",
     "license": "Apache-2.0",
     "copyright": "Copyright 2026 Ruben Pahino"
