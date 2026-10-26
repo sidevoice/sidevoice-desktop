@@ -61,9 +61,14 @@ struct DialogStart {
 }
 
 impl DialogStart {
-    /// Acknowledges the native opened/modal-session hook. Refuses an expired request or an absent caller.
+    /// Whether the request is no longer wanted: its start window has passed, or the caller stopped waiting.
+    fn cancelled(&self) -> bool {
+        Instant::now() >= self.deadline || self.started.is_closed()
+    }
+
+    /// Acknowledges the native opened/modal-session hook. Refuses a cancelled request.
     fn opened(self) -> bool {
-        Instant::now() < self.deadline && self.started.send(()).is_ok()
+        !self.cancelled() && self.started.send(()).is_ok()
     }
 }
 

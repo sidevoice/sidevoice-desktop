@@ -2,10 +2,6 @@ use super::{DialogStart, Native};
 
 pub(super) struct Os;
 
-fn cancelled(start: &DialogStart) -> bool {
-    tokio::time::Instant::now() >= start.deadline || start.started.is_closed()
-}
-
 impl Native for Os {
     /// The current locale's language code, as AppKit's own alerts read it.
     fn language() -> Option<String> {
@@ -26,7 +22,7 @@ impl Native for Os {
         use std::sync::{Arc, Mutex};
 
         // A callback delayed on the main queue must never show an already-cancelled request.
-        if cancelled(&start) {
+        if start.cancelled() {
             return false;
         }
         // NSAlert's first button is the default. The destructive button is deliberately second.
@@ -56,7 +52,7 @@ impl Native for Os {
                 let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
                 let _: () = msg_send![app, activateIgnoringOtherApps: true];
                 // Activation can itself be delayed. Recheck before entering the modal session.
-                let expired = start.lock().unwrap().as_ref().is_some_and(cancelled);
+                let expired = start.lock().unwrap().as_ref().is_some_and(DialogStart::cancelled);
                 if expired {
                     start.lock().unwrap().take();
                     let _: () = msg_send![alert, release];
