@@ -23,28 +23,19 @@ fn on_screen<R: Runtime>(w: &WebviewWindow<R>) -> Option<bool> {
 /// list of the windows in front of it. Ordinary and floating windows count; the Dock, menus, the menu bar and the app's
 /// own windows (the card) do not. Window bounds need no permission (only their titles would).
 fn uncovered<R: Runtime>(w: &WebviewWindow<R>, stage: Option<Rect>) -> Option<f64> {
-    use core_foundation::array::{CFArray, CFArrayRef};
+    use core_foundation::array::CFArray;
     use core_foundation::base::{CFType, TCFType};
-    use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
+    use core_foundation::dictionary::CFDictionary;
     use core_foundation::number::CFNumber;
     use core_foundation::string::CFString;
+    use core_graphics::geometry::CGRect;
+    use core_graphics::window::{
+        copy_window_info, kCGWindowListExcludeDesktopElements, kCGWindowListOptionOnScreenAboveWindow,
+    };
     use tauri_nspanel::objc2::{msg_send, runtime::AnyObject};
 
-    #[repr(C)]
-    #[derive(Default)]
-    struct CGRect {
-        x: f64,
-        y: f64,
-        width: f64,
-        height: f64,
-    }
-    #[link(name = "CoreGraphics", kind = "framework")]
-    extern "C" {
-        fn CGWindowListCopyWindowInfo(option: u32, relative_to: u32) -> CFArrayRef;
-        fn CGRectMakeWithDictionaryRepresentation(dict: CFDictionaryRef, rect: *mut CGRect) -> bool;
-    }
     // kCGWindowListOptionOnScreenAboveWindow | kCGWindowListExcludeDesktopElements.
-    const ABOVE: u32 = (1 << 1) | (1 << 4);
+    const ABOVE: u32 = kCGWindowListOptionOnScreenAboveWindow | kCGWindowListExcludeDesktopElements;
     // kCGDockWindowLevel: the Dock and what floats over it (menus, the menu bar, the card) cover no window.
     const DOCK_LEVEL: i64 = 20;
 
@@ -63,12 +54,11 @@ fn uncovered<R: Runtime>(w: &WebviewWindow<R>, stage: Option<Rect>) -> Option<f6
     };
     // SAFETY: the room's own NSWindow, on the main thread.
     let number = w.ns_window().ok().map(|ns| -> isize { unsafe { msg_send![ns as *mut AnyObject, windowNumber] } })?;
-    // SAFETY: CoreGraphics' own function; the array it creates is released by its wrapper.
-    let raw = unsafe { CGWindowListCopyWindowInfo(ABOVE, u32::try_from(number).ok()?) };
-    if raw.is_null() {
-        return None;
-    }
-    let windows: CFArray<CFDictionary<CFString, CFType>> = unsafe { CFArray::wrap_under_create_rule(raw) };
+    let raw = copy_window_info(ABOVE, u32::try_from(number).ok()?)?;
+    // SAFETY: the window server's list of window-info dictionaries (string keys, CF values); the extra retain is released
+    // with the wrapper.
+    let windows: CFArray<CFDictionary<CFString, CFType>> =
+        unsafe { CFArray::wrap_under_get_rule(raw.as_concrete_TypeRef()) };
     let own = i64::from(std::process::id());
     let number_of = |d: &CFDictionary<CFString, CFType>, key: &'static str| {
         d.find(CFString::from_static_string(key)).and_then(|v| v.downcast::<CFNumber>())
@@ -82,14 +72,9 @@ fn uncovered<R: Runtime>(w: &WebviewWindow<R>, stage: Option<Rect>) -> Option<f6
             if !(0..DOCK_LEVEL).contains(&layer) || pid == own || alpha <= 0.0 {
                 return None;
             }
-            let bounds = d.find(CFString::from_static_string("kCGWindowBounds"))?;
-            if !bounds.instance_of::<CFDictionary>() {
-                return None;
-            }
-            let mut r = CGRect::default();
-            // SAFETY: a CFDictionary (checked above), as CoreGraphics wrote it.
-            unsafe { CGRectMakeWithDictionaryRepresentation(bounds.as_CFTypeRef() as CFDictionaryRef, &mut r) }
-                .then_some(Rect { x: r.x, y: r.y, width: r.width, height: r.height })
+            let bounds = d.find(CFString::from_static_string("kCGWindowBounds"))?.downcast::<CFDictionary>()?;
+            let r = CGRect::from_dict_representation(&bounds)?;
+            Some(Rect { x: r.origin.x, y: r.origin.y, width: r.size.width, height: r.size.height })
         })
         .collect();
     Some(logic::uncovered(target, &above))
