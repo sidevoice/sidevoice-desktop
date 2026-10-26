@@ -41,6 +41,11 @@ pub struct ResetPlan {
 
 /// Desktop reset protocol; all hosts use the shared checked filesystem, IPC and child primitives.
 pub trait ResetHandoff {
+    /// Whether Desktop offers reset (delete all data, uninstall) on this host. When false, callers refuse
+    /// before any confirmation or data access, and a helper only completes the committed wait. The handoff
+    /// itself works on every host either way.
+    fn reset_available() -> bool;
+
     /// Private control state outside every reset deletion root. Never follows SIDEVOICE_DATA_DIR.
     fn state_dir() -> io::Result<PathBuf>;
 
@@ -314,6 +319,10 @@ mod tests {
 
     struct TestReset;
     impl ResetHandoff for TestReset {
+        fn reset_available() -> bool {
+            true
+        }
+
         fn state_dir() -> io::Result<PathBuf> {
             TEST_ROOT.with(|root| Ok(root.borrow().clone()))
         }

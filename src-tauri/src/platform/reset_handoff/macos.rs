@@ -5,6 +5,10 @@ use std::{io, path::PathBuf};
 pub struct DesktopReset;
 
 impl ResetHandoff for DesktopReset {
+    fn reset_available() -> bool {
+        true
+    }
+
     fn state_dir() -> io::Result<PathBuf> {
         // SAFETY: getuid has no preconditions. Keep the existing real-uid directory naming contract.
         let uid = unsafe { libc::getuid() };
