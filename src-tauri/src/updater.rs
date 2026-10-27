@@ -2,6 +2,7 @@
 
 use serde_json::{json, Value};
 use sidevoice_desktop_core::updater::{self as core, ErrorCode, Mode, State, Status};
+use sidevoice_local_host::redact;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Webview};
@@ -172,7 +173,7 @@ async fn download_task(app: AppHandle, update: Update, token: core::Token, _perm
                 (u.status, u.bytes) = (Status::new(State::Ready, &update.version), Some(bytes));
             }
             Err(e) => {
-                log::error!("updater download failed: {e:?}");
+                log::error!("updater download failed: {}", redact::text(&e.to_string(), 400));
                 u.status = Status::new(State::Available, &update.version).failed(ErrorCode::DownloadFailed);
             }
         }
@@ -222,7 +223,7 @@ fn install(app: &AppHandle, restart: bool) {
     with(app, |u| {
         u.installing = false;
         if let Err(e) = &installed {
-            log::error!("updater install failed: {e:?}");
+            log::error!("updater install failed: {}", redact::text(&e.to_string(), 400));
             (u.bytes, u.status) = (Some(bytes), u.status.clone().failed(ErrorCode::InstallFailed));
         }
     });

@@ -20,6 +20,7 @@
 use crate::cli::Cli;
 use crate::npm::{self, Fetch};
 use crate::platform::target::current_package;
+use crate::redact;
 use crate::tarball;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -97,34 +98,47 @@ impl Failure {
 }
 
 impl Failure {
-    /// What the app log records of a failed install, whole: key, step, message, params and every line of the
-    /// installer's error output. The page already gets all of it; a line that names a credential is withheld here.
+    /// What the app log records of a failed install: key, step, message, the known-safe params and every line of the
+    /// installer's error output. The installer's key, message, params and output come from outside: the key is logged
+    /// only if it has the shape of one, the params only by an allowlist ([`LOGGED_PARAMS`]) and their values, the
+    /// message and the output redacted ([`redact`]). The page gets the failure whole, not through here.
     pub fn log_report(&self) -> String {
-        let mut report = format!("{}: {}", self.key, self.message);
+        let key_ok = !self.key.is_empty()
+            && self.key.len() <= 64
+            && self.key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '-' | '_'));
+        let key = if key_ok { self.key.as_str() } else { "[invalid key]" };
+        let mut report = format!("{key}: {}", redact::text(&self.message, 400));
         if let Some(step) = self.step {
             report.push_str(&format!("\n  step: {}", json!(step).as_str().unwrap_or("?")));
         }
-        if let Some(params) = &self.params {
-            report.push_str(&format!("\n  params: {params}"));
+        if let Some(params) = self.params.as_ref().and_then(Value::as_object) {
+            let mut logged = Vec::new();
+            for (name, value) in params {
+                let shown = match value {
+                    Value::String(text) if LOGGED_PARAMS.contains(&name.as_str()) => Some(redact::text(text, 100)),
+                    Value::Number(_) | Value::Bool(_) if LOGGED_PARAMS.contains(&name.as_str()) => {
+                        Some(value.to_string())
+                    }
+                    _ => None,
+                };
+                logged.push(shown.map_or_else(|| "[withheld]".to_string(), |shown| format!("{name}={shown}")));
+            }
+            report.push_str(&format!("\n  params: {}", logged.join(", ")));
         }
         if let Some(tail) = &self.log_tail {
             report.push_str("\n  installer log tail:");
-            for line in tail {
+            for line in redact::lines(tail.iter().map(String::as_str)) {
                 report.push_str("\n    ");
-                report.push_str(if may_hold_secret(line) { "[line withheld: may hold a credential]" } else { line });
+                report.push_str(&line);
             }
         }
         report
     }
 }
 
-/// A line that may carry a token, a password, an authorization header or a URL with credentials.
-fn may_hold_secret(line: &str) -> bool {
-    const MARKERS: [&str; 7] = ["token", "secret", "password", "passwd", "authorization", "bearer", "api_key"];
-    let lower = line.to_ascii_lowercase();
-    let url_user = line.split("://").skip(1).any(|rest| rest.split('/').next().is_some_and(|host| host.contains('@')));
-    url_user || MARKERS.iter().any(|m| lower.contains(m))
-}
+/// The params whose names are known to carry no credential (`check`: sidevoice-web's `INSTALL_CHECKS`); the others
+/// are counted in the log, not shown.
+const LOGGED_PARAMS: &[&str] = &["check", "version", "expected", "found", "status"];
 
 impl std::fmt::Display for Failure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -497,19 +511,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_log_report_has_the_key_step_message_and_the_whole_tail_without_credentials() {
+    fn the_log_report_has_the_key_step_message_and_the_whole_tail() {
         let mut failure = Failure::new("install.failed", Step::Staging, "The installer refused.");
-        failure.log_tail = Some(vec![
-            "connector: unsafe private directory /tmp/x".into(),
-            "using Authorization: Bearer abc".into(),
-            "fetch https://user:pw@registry.example/pkg".into(),
-        ]);
+        failure.log_tail =
+            Some(vec!["connector: unsafe private directory /tmp/x".into(), "tokenizer initialization failed".into()]);
         let report = failure.log_report();
         assert!(report.starts_with("install.failed: The installer refused."), "{report}");
         assert!(report.contains("step: staging"), "{report}");
         assert!(report.contains("unsafe private directory /tmp/x"), "{report}");
-        assert!(!report.contains("abc") && !report.contains("pw@"), "{report}");
-        assert_eq!(report.matches("withheld").count(), 2);
+        assert!(report.contains("tokenizer initialization failed"), "{report}");
+    }
+
+    #[test]
+    fn a_key_that_is_not_shaped_like_one_is_not_logged() {
+        let failure = Failure::new("https://x/?token=sensitive", Step::Staging, "m");
+        assert!(!failure.log_report().contains("sensitive"));
     }
 
     #[test]

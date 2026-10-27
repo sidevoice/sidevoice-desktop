@@ -231,3 +231,32 @@ fn installer_keys_map_to_the_pages() {
     let shapeless = installer_failure(Some(&json!({"ok": false, "error": "boom"})), failed, Step::Staging);
     assert_eq!(shapeless.key, "install.failed");
 }
+
+#[test]
+fn what_the_installer_answers_reaches_the_log_only_redacted_and_by_allowlist() {
+    let world = World::new();
+    let program = world.tmp.path().join(fixture::program_name());
+    fixture::install(Path::new(env!("CARGO_BIN_EXE_fake-connector")), &program, &json!({"exit": 1})).unwrap();
+    let failed = std::process::Command::new(&program).status().unwrap();
+    let answer = json!({"ok": false, "error": {
+        "key": "connector.failed",
+        "message": "Authentication failed for https://u:pw-secret@example.invalid/x?code=sensitive-code token=sensitive-token",
+        "params": {
+            "token": "sensitive-value",
+            "url": "https://example.invalid/?code=sensitive-code",
+            "nested": {"password": "sensitive-nested"},
+            "check": "manifest",
+            "version": "1.2.3",
+        },
+    }});
+    let mut failure = installer_failure(Some(&answer), failed, Step::Staging);
+    failure.log_tail = Some(vec!["fetch https://example.invalid/d?X-Amz-Signature=sensitive-sig".into()]);
+    let report = failure.log_report();
+    for secret in ["sensitive", "pw-secret"] {
+        assert!(!report.contains(secret), "{report}");
+    }
+    assert!(report.contains("check=manifest") && report.contains("version=1.2.3"), "{report}");
+    assert!(report.contains("[withheld]") && report.contains("example.invalid"), "{report}");
+    // The page still gets the failure whole.
+    assert!(json!(failure).to_string().contains("sensitive-value"));
+}

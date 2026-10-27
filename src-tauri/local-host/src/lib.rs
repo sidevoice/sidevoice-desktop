@@ -39,6 +39,7 @@ pub mod npm;
 pub mod paths;
 pub mod platform;
 pub mod proxy;
+pub mod redact;
 mod runtime;
 pub mod state;
 pub mod store;
