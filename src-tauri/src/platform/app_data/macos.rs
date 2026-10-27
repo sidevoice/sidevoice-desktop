@@ -8,14 +8,15 @@ use std::process::Command;
 pub(super) struct Native;
 
 impl Os for Native {
-    /// The logs, then the saved window state, then the `defaults` domain.
+    /// The logs, then the saved window state, then the `defaults` domain (only for a held home).
     fn delete_extra_data(home: &Home, steps: Steps) -> Result<(), Error> {
         for (name, path) in places(&home.path) {
             if !steps(name, home.remove_entry(&path)) {
                 return Err(Error::Stopped);
             }
         }
-        if !steps("preferences", remove_preferences()) {
+        // Not a folder: only for a home that was checked and held, so a refused home deletes nothing.
+        if !steps("preferences", home.acquired().and_then(|_| remove_preferences())) {
             return Err(Error::Stopped);
         }
         Ok(())

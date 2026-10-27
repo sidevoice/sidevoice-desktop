@@ -71,23 +71,30 @@ its whole tree are preflighted before anything is deleted, then checked again wh
 reparse entries) are unlinked, never followed; hard links lose only the selected name; a `.lnk` shortcut is an
 ordinary file; mount and device changes below the held parent are refused. The model store's three children are
 preflighted together before any is removed; the store and other siblings stay. Missing folders are completed steps.
-macOS's `defaults` domain (`preferences`) is not a folder: it is deleted with `/usr/bin/defaults`, outside all this.
+macOS's `defaults` domain (`preferences`) is not a folder: it is deleted with `/usr/bin/defaults`, outside all this,
+and only when the home was acquired (below); a refused home resets no preferences either.
 
-**The home.** A deletion acquires the account home once, before its first folder step, and every folder step uses
-that held home. It must be its own canonical path (compared with `dunce`, no Windows verbatim prefixes), not a
-volume's root (its parent on its volume, read with `file-id`), and its ancestry must be fixed: every directory from
-the filesystem root down to the home is a real directory (no link or reparse point) that this account could not take
-out and replace in the directory above (`account::may_replace`). On Unix that is a directory the account does not own
-and cannot write and search (`access(2)`, so groups and ACLs count), or a sticky one whose entry the account does not
+**The home.** A deletion acquires the account home once, before its first folder step, and every step uses that held
+home. It must be its own canonical path (compared with `dunce`, no Windows verbatim prefixes), not a volume's root
+(its parent on its volume, read with `file-id`), and its ancestry must be fixed: every directory from the filesystem
+root down to the home is a real directory (no link or reparse point) that this account could not take out and
+replace in the directory above (`account::may_replace`). On Unix that is a directory the account does not own and
+cannot write and search (`access(2)`, so groups and ACLs count), or a sticky one whose entry the account does not
 own; on Windows the system's own access check, by opening with each right: no `WRITE_DAC`/`WRITE_OWNER` on the
-directory, and not both `FILE_ADD_SUBDIRECTORY` there and a way to remove the entry. Only then is the home opened, so
-the directory held is the one checked: nothing on the way to it can be swapped for a link in between. A home this
-refuses is an unsupported layout and fails closed with `unsafe-directory` (nothing is deleted), for example a home
-under a directory the account owns (`/srv/accounts/ana/profile` with `/srv/accounts/ana` the account's), directly in
-a world-writable sticky directory, or anywhere an elevated or root process runs (it may change everything). Ordinary
-homes pass: `/home/<name>`, `/Users/<name>`, Fedora Atomic's `/var/home/<name>` (when the account database
-records it there), `C:\Users\<name>`. A home recorded through a link (`/home/<name>` with `/home` a link) is refused
-by the canonical-path check, as before.
+directory, and not both `FILE_ADD_SUBDIRECTORY` there and a way to remove the entry. The home is then opened beneath
+its held parent with `Directory::open_beneath`, so no link or reparse point is followed at the home itself: a home
+swapped for a link, or (Windows) an empty home turned into a junction in place, after the checks is refused. The
+parent and everything above it cannot be swapped (fixed ancestry) nor turned into a link in place (each contains the
+next directory down; Windows makes a junction only of an empty directory), so the directory held is the one checked.
+A home this refuses is an unsupported layout and fails closed with `unsafe-directory`: no folder is touched and no
+preferences are reset. For example a home under a directory the account owns (`/srv/accounts/ana/profile` with
+`/srv/accounts/ana` the account's), directly in a world-writable sticky directory, on another mount or device than its
+parent (a mounted home such as systemd-homed's, a per-user Btrfs subvolume), or anywhere an elevated or root process
+runs (it may change everything). Ordinary homes pass: `/home/<name>` (also with `/home` its own mount),
+`/Users/<name>`, Fedora Atomic's `/var/home/<name>` (when the account database records it there), `C:\Users\<name>`.
+A home recorded through a link (`/home/<name>` with `/home` a link) is refused by the canonical-path check, as before.
+The checks assume the account's credentials are stable and unprivileged while they run (they are this process's
+groups and token; set-ID launches are not supported).
 
 **Below the home.** Every directory a removal works in (the held parent, the model store, a browser storage root's
 parent) is reached beneath the held home with the shared `Directory::open_beneath`, one component at a time relative
