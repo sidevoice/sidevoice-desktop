@@ -23,6 +23,8 @@ pub enum Replacement {
 
 /// Fixture mutations, with the permission and link implementation supplied by the pinned shared crate.
 pub trait StorageFixture {
+    /// Whether running a file is a permission on it (Unix: the execute bits), so that one without it is refused.
+    const EXECUTION_IS_A_PERMISSION: bool;
     /// Make a scratch path private to its owner.
     fn private(path: &Path) {
         Files::shut_others_out(path);

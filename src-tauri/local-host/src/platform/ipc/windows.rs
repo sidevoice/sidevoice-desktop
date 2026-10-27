@@ -104,6 +104,12 @@ impl Os for Native {
         }
     }
 
+    /// Nothing: a write is in the pipe once it returns, nothing of it is held here. `interprocess`'s flush waits,
+    /// unbounded, until the peer has read it all (`FlushFileBuffers`): a peer that stops reading would hold it forever.
+    fn flush(_stream: &Local) -> io::Result<()> {
+        Ok(())
+    }
+
     fn connect(endpoint: &str, wait: Duration) -> io::Result<Local> {
         let pipe = DuplexPipeStream::<Bytes>::connect_by_path_with_wait_mode(endpoint, ConnectWaitMode::Timeout(wait))?;
         // A stream fresh from `connect` is not split: it always gives its handle up.

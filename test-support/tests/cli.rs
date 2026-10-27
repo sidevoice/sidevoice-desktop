@@ -111,16 +111,16 @@ fn what_runs_is_what_was_checked_even_if_a_link_is_retargeted() {
     let tmp = tempfile::tempdir().unwrap();
     StorageFixtures::private(tmp.path());
     let program = |name: &str| {
-        let path = tmp.path().join(name);
+        let path = tmp.path().join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
         fixture::install(std::path::Path::new(env!("CARGO_BIN_EXE_fake-connector")), &path, &json!({"which":name}))
             .unwrap();
         path
     };
     let (genuine, replacement) = (program("genuine"), program("replacement"));
-    let link = tmp.path().join("sidevoice");
+    let link = tmp.path().join(fixture::program_name());
     StorageFixtures::symlink(&genuine, &link);
     let dirs = DataDirs::new(tmp.path());
-    std::fs::write(dirs.install_record(), format!(r#"{{"command":["{}"]}}"#, link.display())).unwrap();
+    std::fs::write(dirs.install_record(), json!({"command": [link]}).to_string()).unwrap();
     StorageFixtures::private(&dirs.install_record());
     let cli = Cli::installed(&dirs).unwrap();
     // Between the check and the run, the link is pointed elsewhere.
@@ -151,8 +151,11 @@ fn only_an_install_record_of_absolute_paths_names_the_cli() {
     fixture::configure(&executable, &json!({})).unwrap();
     let record = json!({"command":[executable]}).to_string();
     write(&record, false);
-    // Native applications must be executable; discovery never changes their contents or permissions.
-    assert_eq!(Cli::installed(&dirs).unwrap_err().key, "install.unsafe");
+    // Native applications must be executable where that is a permission (Windows: the `.exe` name is what runs);
+    // discovery never changes their contents or permissions.
+    if StorageFixtures::EXECUTION_IS_A_PERMISSION {
+        assert_eq!(Cli::installed(&dirs).unwrap_err().key, "install.unsafe");
+    }
     assert_eq!(std::fs::read(&executable).unwrap(), bytes);
     StorageFixtures::assert_not_executable(&executable);
     StorageFixtures::executable(&executable);
