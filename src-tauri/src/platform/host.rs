@@ -11,6 +11,10 @@ use tauri::utils::{config::BundleType, platform::bundle_type};
 mod imp;
 use imp::Native;
 
+/// The origin Tauri serves the app's own pages from: what a node sees as the interface's `Origin`. Only this value
+/// differs by OS, so there is no per-OS code.
+pub const APP_ORIGIN: &str = if cfg!(windows) { "http://tauri.localhost" } else { "tauri://localhost" };
+
 /// What differs per OS.
 trait Os {
     /// The name the person gave the device, kept apart from the network name (macOS Sharing's Computer Name,
@@ -26,8 +30,8 @@ trait Os {
     }
 
     /// What the host offers the page beyond the web: this computer's own core (the local host) and the voice call
-    /// run by the app. Nothing beyond the web unless the OS offers it; macOS offers both (the beta's app platform,
-    /// design O2, where the echo canceller builds), elsewhere the app is a remote client and the page runs the call.
+    /// run by the app. Nothing beyond the web unless the OS offers it: macOS offers both; Windows and Linux offer the
+    /// voice call (Sonora echo cancellation, pure Rust) and are otherwise a remote client (the core runs elsewhere).
     const CAPABILITIES: Capabilities = Capabilities { local_host: false, voice: false };
 
     /// The bundle the updater plugin can update and restart here; `None` where there is none.

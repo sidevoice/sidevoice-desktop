@@ -55,7 +55,7 @@
 //! - `probe probe-app`: the app built with the `probe` feature (CI only, never shipped) over the release app.
 //! - `probe local-host`: on the probe app, the local host from the bundled page: pairing, the proxy, its refusals.
 //! - `probe probe`: on the probe app, the probe page: origin, loopback, the native engine, the voice call, the headset.
-//! - `probe voice-models`: a call on the engine's real models through the app's adapter (the ignored tests). Reads
+//! - `probe voice-models`: a call on the engine's real models through the app's adapter (the ignored tests; macOS, Windows). Reads
 //!   `SIDEVOICE_REAL_CALL_MODELS`: a folder to keep the models in between runs (CI caches it); unset, a scratch one.
 //! - `probe voice-memory`: the host's calls on the engine's real models with the process's footprint and Metal allocation
 //!   taken at each step (idle, a call with the models loaded, the call ended and the idle keep run out, ten calls, a

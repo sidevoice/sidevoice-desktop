@@ -1,6 +1,6 @@
 //! The engine's adapter on runtimes of its own: its native work leaves the async workers free, and a whole call through
 //! it, on the engine's real models, hears recorded speech and plays a reply. The real call downloads its models: it is
-//! ignored unless asked for (`--ignored`), which the macOS CI job does.
+//! ignored unless asked for (`--ignored`), which the macOS and Windows CI jobs do.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -52,7 +52,7 @@ pub(crate) fn speech() -> Vec<f32> {
     while &wav[at..at + 4] != b"data" {
         at += 8 + u32::from_le_bytes(wav[at + 4..at + 8].try_into().unwrap()) as usize;
     }
-    wav[at + 8..].chunks_exact(2).map(|pair| f32::from(i16::from_le_bytes([pair[0], pair[1]])) / 32_768.0).collect()
+    wav[at + 8..].as_chunks::<2>().0.iter().map(|pair| f32::from(i16::from_le_bytes(*pair)) / 32_768.0).collect()
 }
 
 /// A microphone that says the clip, then silence, in real time, and a speaker that plays at once what it is given.
@@ -117,7 +117,7 @@ async fn next<T>(events: &mut Events, want: impl Fn(VoiceEvent) -> Option<T>) ->
 }
 
 #[test]
-#[ignore = "downloads real models; the macOS CI job runs it"]
+#[ignore = "downloads real models; the macOS and Windows CI jobs run it"]
 fn a_call_on_the_engines_real_models_hears_speech_and_plays_a_reply() {
     let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build().unwrap();
     // The engine's storage: a scratch folder of this run's, removed at the end; or SIDEVOICE_REAL_CALL_MODELS, kept (CI
@@ -137,12 +137,11 @@ fn a_call_on_the_engines_real_models_hears_speech_and_plays_a_reply() {
         .and_then(|m| m.local.as_ref())
         .expect("whisper-tiny is a local model");
     let build = local.recommended_build.clone().expect("a whisper-tiny build runs here");
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    {
-        let recommended = local.builds.iter().find(|candidate| candidate.id == build).unwrap();
-        assert!(recommended.available, "the recommended Whisper build runs here");
+    let recommended = local.builds.iter().find(|candidate| candidate.id == build).unwrap();
+    assert!(recommended.available, "the recommended Whisper build runs here");
+    // Whatever accelerator the engine recommends, a Metal one is Whisper.cpp on the GPU.
+    if recommended.accelerator.as_deref() == Some("metal") {
         assert_eq!(recommended.backend, "whisper-cpp");
-        assert_eq!(recommended.accelerator.as_deref(), Some("metal"));
         assert_eq!(recommended.accelerator_class, Some("gpu"));
     }
     let settings: VoiceSettings = serde_json::from_value(json!({
@@ -160,7 +159,7 @@ fn a_call_on_the_engines_real_models_hears_speech_and_plays_a_reply() {
     let played = Arc::new(Mutex::new(Vec::new()));
     let io = Fixture { sink: None, stop: Arc::default(), played: Arc::clone(&played) };
     runtime.block_on(async {
-        let loader = EngineLoader::new(engines.engine(), Arc::new(ModelCache::default()));
+        let loader = EngineLoader::shared(engines.engine(), Arc::new(ModelCache::default()));
         let setup = Halves::new(&loader, &choice, None).setup().unwrap();
         let (call, mut events) = VoiceCall::new(Box::new(io), setup);
         call.start(StartOptions::default());

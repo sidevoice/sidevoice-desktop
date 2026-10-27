@@ -1,8 +1,8 @@
 name: Set up Rust and the native engine's libraries
 description: >-
-  Installs the Rust toolchain src-tauri/rust-toolchain.toml pins (and on macOS the voice call's build tools: meson,
-  ninja, pkg-config), restores the Rust build cache (the app's workspace and xtask/), and fetches the sherpa-onnx
-  static libraries that sidevoice-engine links with `cargo xtask sherpa-libs` (that engine's own command, at the
+  Installs the Rust toolchain src-tauri/rust-toolchain.toml pins, restores the Rust build cache (the app's workspace
+  and xtask/), and fetches the sherpa-onnx static libraries that sidevoice-engine links with `cargo xtask sherpa-libs`
+  (that engine's own command, at the
   commit src-tauri/Cargo.lock pins): checked against the digests it pins, kept outside target/ and linked through
   SHERPA_ONNX_LIB_DIR (which the command exports), so no build script downloads anything unchecked.
   Both caches are written only by a push to main (the nightly, and a release: release-please runs on one); a pull
@@ -37,11 +37,6 @@ runs:
         set -euo pipefail
         rustup toolchain install
         rustc --version
-    # WebRTC's audio processing (sidevoice-voice's echo cancellation, macOS) builds its C++ with meson and ninja.
-    - name: The voice call's build tools (macOS)
-      if: runner.os == 'macOS'
-      shell: bash
-      run: brew install meson ninja pkg-config
     - uses: Swatinem/rust-cache@v2
       with:
         workspaces: |
