@@ -9,7 +9,6 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tauri::{AppHandle, Manager, Webview};
 
-use crate::platform::host::RESET_AVAILABLE;
 use crate::platform::reset_handoff::{self, Handoff};
 use crate::platform::{account, app_data, connector_service, credentials, uninstall};
 use crate::AppState;
@@ -135,9 +134,6 @@ pub fn data_pairings_write(app: AppHandle, webview: Webview, value: Value) -> An
 #[tauri::command]
 pub fn data_reset_report(app: AppHandle, webview: Webview) -> Answer {
     caller(&app, &webview)?;
-    if !RESET_AVAILABLE {
-        return Err(refused("reset.unavailable"));
-    }
     let path = report_path().ok_or_else(|| refused("reset.unavailable"))?;
     consume_report_at(&path)
 }
@@ -182,12 +178,6 @@ fn consume_report_at(path: &Path) -> Answer {
     }
 }
 
-/// What the page is offered of the reset (`host.data`, docs/BRIDGE.md): delete-all and its report wherever this
-/// transaction runs, the uninstall only where the host can also remove the app (`uninstall::available`).
-pub fn offered() -> sidevoice_desktop_core::bridge::Reset {
-    sidevoice_desktop_core::bridge::Reset { delete_all: RESET_AVAILABLE, uninstall: uninstall::available() }
-}
-
 #[tauri::command]
 pub async fn data_delete_all(app: AppHandle, webview: Webview) -> Answer {
     caller(&app, &webview)?;
@@ -201,13 +191,10 @@ pub async fn data_uninstall(app: AppHandle, webview: Webview) -> Answer {
     confirmed_reset(app, true).await
 }
 
-/// A host without the reset transaction refuses before the confirmation and before any data is touched.
+/// The confirmed reset, on every host: the checks and the native confirmation come before any data is touched.
 async fn confirmed_reset(app: AppHandle, uninstall: bool) -> Answer {
     use crate::platform::confirmation::{self, ConfirmationKind};
     use crate::platform::webview_data;
-    if !RESET_AVAILABLE {
-        return Err(refused("reset.unavailable"));
-    }
     let state = app.state::<AppState>();
     if !begin_exclusive(&app) {
         return Err(refused("reset.busy"));
@@ -525,12 +512,7 @@ fn clean_absolute(path: &Path) -> bool {
 pub fn run_reset_helper() {
     let Ok(helper) = Handoff::new().and_then(|handoff| handoff.receive()) else { return };
     let (parent_pid, uninstall, initial) = (helper.plan.parent_pid, helper.plan.uninstall, helper.plan.initial.clone());
-    if !RESET_AVAILABLE {
-        // Complete the committed wait and release it; nothing is cleaned up.
-        drop(helper.await_exit());
-    } else {
-        clean_up_after_exit(helper, parent_pid, uninstall, initial);
-    }
+    clean_up_after_exit(helper, parent_pid, uninstall, initial);
 }
 
 /// The helper transaction: observe the browser writers, await the committed exit, delete the app's data
