@@ -35,12 +35,15 @@ use std::time::{Duration, Instant, SystemTime};
 pub const BUSY: &str = "install.busy";
 /// What an install the person cancelled rejects with.
 pub const CANCELLED: &str = "install.cancelled";
-/// The installer inside the package, where the installer itself expects to be (`<package>/bin/`).
-pub const INSTALLER: &str = "bin/sidevoice-connector";
+/// The installer inside the package, where the installer itself expects to be (`<package>/bin/`), named as this OS
+/// names a program (`bin/sidevoice-connector.exe` on Windows).
+pub fn bundled_installer() -> String {
+    sidevoice_platform::target::exe_name("bin/sidevoice-connector")
+}
 
 /// The installer's path in the package's archive.
-fn installer_entry() -> String {
-    format!("{}/{INSTALLER}", tarball::ROOT)
+pub(crate) fn installer_entry() -> String {
+    format!("{}/{}", tarball::ROOT, bundled_installer())
 }
 
 /// Where an install is.
@@ -292,14 +295,14 @@ pub fn prepare(job: &Job, fetch: &dyn Fetch, data: &Path, options: &Options) -> 
     tarball::extract(io::BufReader::new(file), scratch.path(), &installer_entry(), options.unpack, &|| {
         job.cancelled()
     })?;
-    let installer = scratch.path().join(tarball::ROOT).join(INSTALLER);
+    let installer = scratch.path().join(tarball::ROOT).join(bundled_installer());
     match std::fs::symlink_metadata(&installer) {
         Ok(meta) if meta.file_type().is_file() => {}
         _ => {
             return Err(Failure::new(
                 "install.no-bundle",
                 Step::Staging,
-                format!("{} {} carries no {INSTALLER}.", release.package, release.version),
+                format!("{} {} carries no {}.", release.package, release.version, bundled_installer()),
             ))
         }
     }
@@ -512,7 +515,7 @@ mod tests {
         let file = std::fs::File::open(&archive).unwrap();
         tarball::extract(io::BufReader::new(file), scratch.path(), &installer_entry(), options.unpack, &|| false)
             .unwrap();
-        let installer = scratch.path().join(tarball::ROOT).join(INSTALLER);
+        let installer = scratch.path().join(tarball::ROOT).join(bundled_installer());
         assert!(Files::trusted_program(&installer).is_ok(), "executable");
         assert!(scratch.path().join("package/connector.json").is_file());
         let progress = job.progress();

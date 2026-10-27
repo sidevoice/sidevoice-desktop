@@ -229,11 +229,14 @@ mod tests {
     use sidevoice_desktop_test_support::fake_registry::{gzip, tar_entry, tarball};
     use sidevoice_desktop_test_support::platform::storage::{Others, StorageFixture, StorageFixtures};
 
-    const PROGRAM: &str = "package/bin/sidevoice-connector";
+    /// The installer's entry, as this OS names a program.
+    fn program() -> String {
+        crate::install::installer_entry()
+    }
 
     fn unpack(bytes: &[u8]) -> (tempfile::TempDir, Result<(), Failure>) {
         let tmp = tempfile::tempdir().unwrap();
-        let result = extract(bytes, tmp.path(), PROGRAM, LIMITS, &|| false);
+        let result = extract(bytes, tmp.path(), &program(), LIMITS, &|| false);
         (tmp, result)
     }
 
@@ -249,15 +252,16 @@ mod tests {
 
     #[test]
     fn a_package_unpacks_with_its_executable_and_private_modes() {
+        let program = format!("package/{}", crate::install::bundled_installer());
         let archive = tarball(&[
             ("package/package.json", b"{}".as_slice(), 0o644),
-            ("package/bin/sidevoice-connector", b"#!/bin/sh\n".as_slice(), 0o755),
+            (program.as_str(), b"#!/bin/sh\n".as_slice(), 0o755),
             ("package/notices/licenses/a.txt", b"MIT".as_slice(), 0o644),
         ]);
         let (tmp, result) = unpack(&archive);
         result.unwrap();
         let root = tmp.path().join("package");
-        let installer = root.join("bin/sidevoice-connector");
+        let installer = root.join(crate::install::bundled_installer());
         assert_eq!(std::fs::read(&installer).unwrap(), b"#!/bin/sh\n");
         assert_eq!(StorageFixtures::others(&installer), Others::Nothing);
         assert!(Files::trusted_program(&installer).is_ok(), "executable");
@@ -269,10 +273,10 @@ mod tests {
 
     #[test]
     fn the_installer_is_written_runnable_even_when_the_archive_does_not_say_so() {
-        let archive = tarball(&[("package/bin/sidevoice-connector", b"#!/bin/sh\n".as_slice(), 0o644)]);
+        let archive = tarball(&[(program().as_str(), b"#!/bin/sh\n".as_slice(), 0o644)]);
         let (tmp, result) = unpack(&archive);
         result.unwrap();
-        let installer = tmp.path().join("package/bin/sidevoice-connector");
+        let installer = tmp.path().join(program());
         assert_eq!(StorageFixtures::others(&installer), Others::Nothing);
         assert!(Files::trusted_program(&installer).is_ok(), "executable");
     }
@@ -410,12 +414,12 @@ mod tests {
         let archive = tarball(&[("package/a", vec![1u8; 4096].as_slice(), 0o644)]);
         let tmp = tempfile::tempdir().unwrap();
         let small = Limits { bytes: 1000, entries: 10 };
-        let failure = extract(archive.as_slice(), tmp.path(), PROGRAM, small, &|| false).unwrap_err();
+        let failure = extract(archive.as_slice(), tmp.path(), &program(), small, &|| false).unwrap_err();
         assert_eq!(failure.params, Some(json!({"check": "archive-size"})));
         let many = tarball(&[("package/a", b"".as_slice(), 0o644), ("package/b", b"".as_slice(), 0o644)]);
         let tmp = tempfile::tempdir().unwrap();
         let few = Limits { bytes: 1000, entries: 1 };
-        let failure = extract(many.as_slice(), tmp.path(), PROGRAM, few, &|| false).unwrap_err();
+        let failure = extract(many.as_slice(), tmp.path(), &program(), few, &|| false).unwrap_err();
         assert_eq!(failure.params, Some(json!({"check": "archive-size"})));
     }
 
@@ -423,7 +427,7 @@ mod tests {
     fn a_cancel_stops_the_unpacking() {
         let archive = tarball(&[("package/a", b"1".as_slice(), 0o644)]);
         let tmp = tempfile::tempdir().unwrap();
-        let failure = extract(archive.as_slice(), tmp.path(), PROGRAM, LIMITS, &|| true).unwrap_err();
+        let failure = extract(archive.as_slice(), tmp.path(), &program(), LIMITS, &|| true).unwrap_err();
         assert_eq!((failure.key.as_str(), failure.step), ("install.cancelled", Some(Step::Staging)));
     }
 }

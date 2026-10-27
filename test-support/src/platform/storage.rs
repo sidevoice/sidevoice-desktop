@@ -23,6 +23,8 @@ pub enum Replacement {
 
 /// Fixture mutations, with the permission and link implementation supplied by the pinned shared crate.
 pub trait StorageFixture {
+    /// Whether running a file is a permission on it (Unix: the execute bits), so that one without it is refused.
+    const EXECUTION_IS_A_PERMISSION: bool;
     /// Make a scratch path private to its owner.
     fn private(path: &Path) {
         Files::shut_others_out(path);
@@ -59,6 +61,8 @@ pub trait StorageFixture {
     fn record_access_cases(path: &Path, check: impl FnMut(bool));
     /// A non-regular record, including one that could block a naive reader where supported.
     fn special_record(path: &Path);
+    /// Remove what [`Self::special_record`] put at `path`.
+    fn remove_special_record(path: &Path);
     /// Attempt to replace the held directory by renaming it; expected refusal is host-specific.
     fn replace_directory(path: &Path, moved: &Path) -> Replacement;
     /// Run the storage regression below search-only ancestry and verify its access is unchanged.
