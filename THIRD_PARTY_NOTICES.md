@@ -25,12 +25,11 @@ them, as listed.
     https://github.com/k2-fsa/sherpa-onnx (the release `src-tauri/Cargo.lock` pins, 1.13.8).
   - **whisper.cpp** and **ggml** (MIT), compiled from source through **whisper-rs** (Unlicense).
 
-### The voice call, linked into the app binary (macOS)
+### The voice call, linked into the app binary
 
 - **sidevoice-voice** (Apache-2.0), a Rust dependency, and through it:
-  - **WebRTC's audio processing** (AEC3, the high-pass filter, noise suppression, gain control), BSD-3-Clause, as
-    PulseAudio packages it in `webrtc-audio-processing`, compiled from source by the `webrtc-audio-processing` crate
-    (its bindings under the same license), with **Abseil** (Apache-2.0).
+  - **Sonora** (BSD-3-Clause), a pure-Rust port of WebRTC's audio processing (AEC3, the high-pass filter, noise
+    suppression, gain control).
   - **cpal** (Apache-2.0) for the microphone and speaker, and **rtrb** (MIT or Apache-2.0).
 
 ## Downloaded when the call first needs a model, not shipped
@@ -47,8 +46,7 @@ license does not replace those terms.
 - https://github.com/k2-fsa/sherpa-onnx
 - https://github.com/microsoft/onnxruntime
 - https://github.com/ggml-org/whisper.cpp
-- https://gitlab.freedesktop.org/pulseaudio/webrtc-audio-processing
-- https://github.com/abseil/abseil-cpp
+- https://github.com/dignifiedquire/sonora
 - https://github.com/RustAudio/cpal
 - https://github.com/tauri-apps/tauri
 - https://github.com/snakers4/silero-vad

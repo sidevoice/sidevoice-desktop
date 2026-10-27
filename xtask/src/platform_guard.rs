@@ -10,6 +10,10 @@
 //! - a `Command::new("<program>")` of a program that exists on one OS only (shells, `uname`, `launchctl`…);
 //! - the Cargo OS variables (`CARGO_CFG_TARGET_OS`…) read by a build script.
 //!
+//! The one exception is `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]` as a file-scope inner
+//! attribute of a Cargo binary root (`src/main.rs`, `src/bin/*.rs`, `src/bin/*/main.rs` of a crate): the linker reads
+//! it from the crate root, so it cannot move into `platform`. Any other predicate, value, placement or file counts.
+//!
 //! Inside `platform` the OS is allowed, but its shape is checked (recipe items 1-2):
 //! - `platform/mod.rs` carries no OS `cfg`/`cfg_attr` and no `allow`/`expect` of `dead_code` or `unused*` lints, at
 //!   any depth of an attribute (`cfg_attr(test, allow(dead_code))` included): an OS that cannot do something says so
@@ -167,6 +171,44 @@ fn os_attr(name: &str, args: &TokenStream, aliases: &HashSet<String>) -> bool {
         }
         other => other == "windows_subsystem",
     }
+}
+
+/// The one OS attribute allowed outside `platform`: `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]`,
+/// as a file-scope inner attribute of a Cargo binary root (see [`binary_root`]). The linker reads it from the crate
+/// root, so it cannot live in a module; no other predicate, value or placement is accepted in its place.
+fn console_subsystem(body: &[TokenTree]) -> bool {
+    if body.first().and_then(ident).as_deref() != Some("cfg_attr") {
+        return false;
+    }
+    let args = group(body.get(1), Delimiter::Parenthesis).unwrap_or_default();
+    let parts = flat(args);
+    let mut parts = parts.split(|tree| punct(Some(tree), ','));
+    let predicate = parts.next().unwrap_or_default();
+    let attribute = parts.next().unwrap_or_default();
+    let not_debug = predicate.len() == 2
+        && ident(&predicate[0]).as_deref() == Some("not")
+        && group(predicate.get(1), Delimiter::Parenthesis).is_some_and(
+            |inner| matches!(flat(inner).as_slice(), [only] if ident(only).as_deref() == Some("debug_assertions")),
+        );
+    not_debug
+        && parts.next().is_none()
+        && attribute.len() == 3
+        && ident(&attribute[0]).as_deref() == Some("windows_subsystem")
+        && punct(attribute.get(1), '=')
+        && matches!(attribute.get(2), Some(TokenTree::Literal(lit)) if string_value(lit).as_deref() == Some("windows"))
+}
+
+/// Whether `path` (relative to the repository `root`) is the root of a Cargo binary: `src/main.rs`, `src/bin/*.rs` or
+/// `src/bin/*/main.rs` of a crate (a folder holding a `Cargo.toml`). A `[[bin]] path` elsewhere is not followed.
+fn binary_root(root: &Path, path: &str) -> bool {
+    let parts: Vec<&str> = path.split('/').collect();
+    let crate_dir = match parts.as_slice() {
+        [dir @ .., "src", "main.rs"] => dir,
+        [dir @ .., "src", "bin", name] if name.ends_with(".rs") => dir,
+        [dir @ .., "src", "bin", _, "main.rs"] => dir,
+        _ => return false,
+    };
+    root.join(crate_dir.join("/")).join("Cargo.toml").is_file()
 }
 
 /// [`os_attr`] on the tokens inside `#[..]`.
@@ -385,6 +427,10 @@ struct Scan {
     count: usize,
     /// First pass: only learn names, report nothing.
     collecting: bool,
+    /// The file is a Cargo binary root, where the console-subsystem crate attribute is allowed at file scope.
+    crate_root: bool,
+    /// How many groups (braces, parentheses, brackets) enclose the tokens being walked; 0 is file scope.
+    depth: usize,
 }
 
 /// The path starting at `trees[at]` (`a::b::<T>::c`): its segments and the index after it.
@@ -538,17 +584,23 @@ impl Scan {
         let mut i = 0;
         while i < trees.len() {
             match &trees[i] {
-                TokenTree::Group(g) => self.walk(&flat(g.stream())),
+                TokenTree::Group(g) => {
+                    self.depth += 1;
+                    self.walk(&flat(g.stream()));
+                    self.depth -= 1;
+                }
                 TokenTree::Punct(p) if p.as_char() == '#' => {
                     let at = i + usize::from(punct(trees.get(i + 1), '!')) + 1;
                     if let Some(inner) = group(trees.get(at), Delimiter::Bracket) {
                         let body = flat(inner.clone());
                         let name = body.first().and_then(ident);
                         let cfg = matches!(name.as_deref(), Some("cfg" | "cfg_attr"));
-                        if name.as_deref() == Some("windows_subsystem") || native_os_link(&body) {
+                        let inner = punct(trees.get(i + 1), '!');
+                        let allowed = self.crate_root && self.depth == 0 && inner && console_subsystem(&body);
+                        if !allowed && (name.as_deref() == Some("windows_subsystem") || native_os_link(&body)) {
                             self.found(&trees[i]);
                         }
-                        if cfg && os_attr_tokens(&body, &self.shared.cfg_aliases) {
+                        if !allowed && cfg && os_attr_tokens(&body, &self.shared.cfg_aliases) {
                             self.found(&trees[i]);
                         }
                         // Other attributes can carry paths and strings (`doc`): scan them like any tokens.
@@ -743,9 +795,14 @@ struct Report {
 }
 
 fn scan(source: &str, shared: &Shared) -> Result<Report> {
+    scan_file(source, shared, false)
+}
+
+/// [`scan`] of a file that is (`crate_root`) or is not a Cargo binary root.
+fn scan_file(source: &str, shared: &Shared, crate_root: bool) -> Result<Report> {
     let stream = TokenStream::from_str(source).map_err(|e| e.to_string())?;
     let trees = flat(stream);
-    let mut scan = Scan { shared: shared.clone(), collecting: true, ..Scan::default() };
+    let mut scan = Scan { shared: shared.clone(), collecting: true, crate_root, ..Scan::default() };
     scan.walk(&trees);
     scan.collecting = false;
     scan.walk(&trees);
@@ -821,7 +878,7 @@ fn inspect(root: &Path) -> Result<()> {
         let report = if exempt(Path::new(path)) {
             scan_platform(source, platform_root(Path::new(path)), &shared)
         } else {
-            scan(source, &shared)
+            scan_file(source, &shared, binary_root(root, path))
         }
         .map_err(|e| format!("{path}: {e}"))?;
         if report.count > 0 {
@@ -884,6 +941,46 @@ mod tests {
         assert_eq!(n("use std::os as o; fn f() -> o::unix::raw::pid_t { 0 }"), 2);
         assert_eq!(n("use windows_sys::Win32::Foundation as f; fn g() { let _ = f::CloseHandle; }"), 2);
         assert_eq!(n("extern crate libc as l; fn f() { l::getpid(); }"), 2);
+    }
+
+    #[test]
+    fn allows_only_the_console_subsystem_attribute_of_a_crate_root() {
+        let attribute = "#![cfg_attr(not(debug_assertions), windows_subsystem = \"windows\")] fn main() {}";
+        assert_eq!(scan_file(attribute, &Shared::default(), true).unwrap().count, 0);
+        assert_eq!(n(attribute), 1, "not in a module");
+        for other in [
+            "#![windows_subsystem = \"windows\"] fn main() {}",
+            "#![cfg_attr(windows, windows_subsystem = \"windows\")] fn main() {}",
+            "#![cfg_attr(test, windows_subsystem = \"windows\")] fn main() {}",
+            "#![cfg_attr(not(debug_assertions), windows_subsystem = \"console\")] fn main() {}",
+            "#![cfg_attr(not(debug_assertions), windows_subsystem = \"windows\", cfg(unix))] fn main() {}",
+            "#[cfg_attr(not(debug_assertions), windows_subsystem = \"windows\")] fn main() {}",
+            "#![cfg(unix)] fn main() {}",
+            "mod child { #![cfg_attr(not(debug_assertions), windows_subsystem = \"windows\")] }",
+            "fn f() { #![cfg_attr(not(debug_assertions), windows_subsystem = \"windows\")] }",
+        ] {
+            assert_eq!(scan_file(other, &Shared::default(), true).unwrap().count, 1, "{other}");
+        }
+    }
+
+    #[test]
+    fn only_cargo_binary_roots_may_carry_the_subsystem_attribute() {
+        let root = std::env::temp_dir().join(format!("platform-guard-roots-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("app")).unwrap();
+        std::fs::write(root.join("app/Cargo.toml"), "").unwrap();
+        for path in ["app/src/main.rs", "app/src/bin/tool.rs", "app/src/bin/tool/main.rs"] {
+            assert!(binary_root(&root, path), "{path}");
+        }
+        for path in [
+            "app/src/helper/main.rs",
+            "app/src/lib.rs",
+            "app/src/bin/tool/other.rs",
+            "other/src/main.rs",
+            "src/main.rs",
+        ] {
+            assert!(!binary_root(&root, path), "{path}");
+        }
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

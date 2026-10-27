@@ -299,9 +299,9 @@ mod tests {
     #[test]
     fn only_an_app_bundle_s_executable_is_replaceable() {
         use std::path::Path;
-        assert!(in_app_bundle(Path::new("/Applications/Sidevoice.app/Contents/MacOS/sidevoice-desktop")));
-        assert!(!in_app_bundle(Path::new("/Users/me/src/target/release/sidevoice-desktop")), "a bare binary");
-        assert!(!in_app_bundle(Path::new("/Applications/Sidevoice/Contents/MacOS/sidevoice-desktop")));
+        assert!(in_app_bundle(Path::new("Applications/Sidevoice.app/Contents/MacOS/sidevoice-desktop")));
+        assert!(!in_app_bundle(Path::new("me/src/target/release/sidevoice-desktop")), "a bare binary");
+        assert!(!in_app_bundle(Path::new("Applications/Sidevoice/Contents/MacOS/sidevoice-desktop")));
         assert!(!in_app_bundle(Path::new("sidevoice-desktop")));
     }
 

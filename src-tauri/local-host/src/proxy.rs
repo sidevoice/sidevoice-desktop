@@ -38,7 +38,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
 
-/// The bundled page's origins (`sidevoice_desktop_core::settings::APP_ORIGIN`, per platform): either is the app.
+/// The bundled page's origins: `tauri://localhost` (macOS, Linux) and `http://tauri.localhost` (Windows). Either is the app,
+/// accepted on every host.
 pub const APP_ORIGINS: [&str; 2] = ["tauri://localhost", "http://tauri.localhost"];
 pub const METHODS: [&str; 5] = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 pub const REQUEST_HEADERS: [&str; 3] = ["authorization", "content-type", "accept"];

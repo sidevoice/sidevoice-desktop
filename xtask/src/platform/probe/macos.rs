@@ -21,10 +21,6 @@ impl Os for Native {
         flows::probe()
     }
 
-    fn voice_models() -> Result<()> {
-        flows::voice_models()
-    }
-
     fn voice_memory_log() -> Result<String> {
         flows::voice_memory_log()
     }
