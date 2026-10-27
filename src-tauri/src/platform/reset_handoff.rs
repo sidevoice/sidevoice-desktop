@@ -37,6 +37,10 @@ trait Os {
     /// also waits for the parent to have terminated, every handle of it closed; the lock and EOF alone do not say so.
     const OPEN_FILES_BLOCK_REMOVAL: bool = false;
 
+    /// Whether the installed app is checked as a Sidevoice program before the helper or the relaunch starts it. Where
+    /// it is not, the handoff keeps the launch it shipped with: the executable as the OS names it, unchecked.
+    const PROGRAM_CHECKED: bool = true;
+
     /// A hold on one live process that can later tell whether it has terminated.
     type Held: Send;
 
@@ -105,6 +109,19 @@ impl Handoff {
     pub fn receive(&self) -> io::Result<Helper> {
         receive_at(&self.root, HANDSHAKE)
     }
+}
+
+/// The installed app, as Tauri resolves its own binary (Linux: the AppImage itself rather than its temporary mount,
+/// which goes away with the app; Tauri takes it from `APPIMAGE`, an environment the app trusts as it trusts `HOME`),
+/// checked as a Sidevoice program (`trusted_program`: this user's or the system's, and nobody else may change it or the
+/// folders above it). Where the handoff keeps its shipped launch (`PROGRAM_CHECKED` false), the executable as the OS
+/// names it. The helper and the relaunch start only this; neither the page nor the plan names a program.
+pub fn installed_program() -> Option<PathBuf> {
+    if !Native::PROGRAM_CHECKED {
+        return std::env::current_exe().ok();
+    }
+    let program = tauri::process::current_binary(&tauri::Env::default()).ok()?;
+    Files::trusted_program(&program).ok()
 }
 
 /// Launch `program` (this app's own executable, as the caller resolved and checked it) in helper mode, detached and

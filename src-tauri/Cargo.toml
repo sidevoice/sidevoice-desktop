@@ -75,8 +75,10 @@ cpal = { version = "0.18", default-features = false }
 [target.'cfg(unix)'.dependencies]
 sidevoice-local-host = { path = "local-host", features = ["fetch"] }
 # The account home the user database records, and what this user may change in a directory on the way to it
-# (platform/account/unix.rs: `access`), never `HOME`; already in the graph.
-nix = { version = "0.31", default-features = false, features = ["user", "fs"] }
+# (platform/account/unix.rs: `access`), never `HOME`; whether a browser writer has exited (signal zero,
+# platform/webview_data/{linux,macos}.rs) and this user's launchd domain (platform/connector_service/macos.rs);
+# already in the graph.
+nix = { version = "0.31", default-features = false, features = ["user", "fs", "signal"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-native-keyring-store = "1.1"
