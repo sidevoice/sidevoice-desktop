@@ -187,7 +187,8 @@ impl Folders {
         for folder in &self.list {
             let result = if self.webview.contains(&folder.path) {
                 match browser {
-                    Ok(released) => home.remove_browser_storage(released, &folder.path),
+                    Ok(released) => check_tree(&home.path, &folder.path)
+                        .and_then(|_| home.remove_browser_storage(released, &folder.path)),
                     Err(_) => Err("reset.process-busy"),
                 }
             } else if folder.path == self.models {
@@ -287,13 +288,11 @@ impl Home {
         }
     }
 
-    /// Remove one browser storage root, released (`webview_data`). It must be an ordinary directory, never a link.
+    /// Remove one browser storage root, released (`webview_data`), which refuses a root that is a link.
     fn remove_browser_storage(&self, released: &Released, path: &Path) -> Result<(), &'static str> {
-        let (parent, name) = split(path)?;
+        let (parent, _) = split(path)?;
         match self.reach(parent)? {
-            Some(held) => {
-                check_entry(&held, name).and_then(|_| webview_data::remove(released, &held, path).map_err(|_| "remove"))
-            }
+            Some(held) => webview_data::remove(released, &held, path).map_err(|_| "remove"),
             None => Ok(()),
         }
     }
