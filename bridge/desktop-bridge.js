@@ -414,7 +414,7 @@
    *  (through the app's proxy, with this launch's secret — never the device token), the service's actions, and
    *  installing Sidevoice here (`install`, `cancel`). Each action resolves the state after it (`{state, failure?, core?,
    *  product_version, service?, calls?, attempts?, limit?, installed?, reachable}`) or rejects `{key, message}`.
-   *  Only where the app offers a local host (macOS, Windows). */
+   *  Only where the app offers a local host (macOS). */
   function localHost() {
     const listeners = new Set();
     let last = null; // the state last delivered, as JSON
@@ -796,7 +796,7 @@
       /** `"native"`: the app answers headset buttons / media keys in a call, so the page must not register its
        *  own Media Session handlers (both would toggle the microphone on one click). `null`: the page does. */
       mediaKeys: mediaKeys === "native" ? "native" : null,
-      // Only where the app offers this computer's own core (macOS, Windows): the page hides what is not there.
+      // Only where the app offers this computer's own core (macOS): the page hides what is not there.
       ...(localHostOffered === true ? { localHost: Object.freeze(localHost()) } : {}),
       // Private pairings are available on every desktop platform; machine reset only where the app has the reset
       // transaction (macOS), independently of the local host.

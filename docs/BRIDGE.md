@@ -255,7 +255,7 @@ itself. Read each time the room window opens (`src-tauri/src/platform/host.rs`, 
 
 ## The local host
 
-`host.localHost` is there only where the app offers this computer's own core (macOS, Windows); elsewhere it is
+`host.localHost` is there only where the app offers this computer's own core (macOS); elsewhere it is
 absent and the page hides what needs it. Nothing runs until the page calls it. Contract, states and actions:
 docs/LOCAL_HOST.md.
 

@@ -36,8 +36,7 @@ trait Os {
 
     /// What the host offers the page beyond the web: this computer's own core (the local host) and the voice call
     /// run by the app. Nothing beyond the web unless the OS offers it; macOS offers both (the beta's app platform,
-    /// design O2, where the echo canceller builds), Windows the local host; elsewhere the app is a remote client, and
-    /// wherever the app does not run the call, the page does.
+    /// design O2, where the echo canceller builds); elsewhere the app is a remote client and the page runs the call.
     const CAPABILITIES: Capabilities = Capabilities { local_host: false, voice: false };
 
     /// The bundle the updater plugin can update and restart here; `None` where there is none.

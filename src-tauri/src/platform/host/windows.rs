@@ -10,9 +10,12 @@ impl Os for Native {
         whoami::hostname().ok()
     }
 
-    /// This computer's own core: the connector installs it per user (Task Scheduler) and the app reaches it over its
-    /// named pipe. The voice call stays the page's.
-    const CAPABILITIES: Capabilities = Capabilities { local_host: true, voice: false };
+    /// Not the local host yet, though it is wired (the connector installs per user with Task Scheduler; the app reaches
+    /// the core over its named pipe). Blocker (#262 review r3, decision 5): the connector CLI runs in a Job Object
+    /// without breakaway, so a connector/core it starts on demand (pairing) is killed as soon as the CLI run ends.
+    /// `local_host: true` once that is resolved and the installed flow has run on a real Windows machine. The voice
+    /// call stays the page's.
+    const CAPABILITIES: Capabilities = Capabilities { local_host: false, voice: false };
 
     const BUNDLE: Option<BundleType> = Some(BundleType::Nsis);
 
