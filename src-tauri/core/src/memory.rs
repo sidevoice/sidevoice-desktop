@@ -1,4 +1,4 @@
-//! The process's memory as CI measures it (`cargo xtask macos memory`, `macos voice-memory`; #145): what one sample is,
+//! The process's memory as CI measures it (`cargo xtask probe memory`, `probe voice-memory`; #145): what one sample is,
 //! the line it is printed as, and how the system's `vmmap` summary is read. Taking the sample is the shell platform's
 //! (platform/diagnostics.rs); the pure parts are here so they are tested anywhere. `xtask` reads lines by their keys.
 

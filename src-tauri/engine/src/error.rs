@@ -153,14 +153,20 @@ pub fn provider_invalid(provider: &str) -> Error {
     Error::new("provider_invalid", format!("Not a provider id: {provider:?}.")).with("provider", provider)
 }
 
-/// The app keeps the keys of remote providers only where it has a keychain (macOS).
+/// The OS credential store is unavailable or locked: no key was read, kept or removed.
 pub fn credentials_unavailable() -> Error {
-    Error::new("credentials_unavailable", "This app keeps no provider keys on this system.")
+    Error::new("credentials_unavailable", "The system credential store is unavailable or locked.")
 }
 
-/// The keychain would not keep, remove or read a key.
-pub fn credentials_failed(detail: impl fmt::Display) -> Error {
-    Error::new("credentials_failed", format!("The keychain failed: {detail}"))
+/// The OS credential store would not keep, remove or read a key. Never the store's own words: they can carry secret
+/// bytes.
+pub fn credentials_failed() -> Error {
+    Error::new("credentials_failed", "The system credential store could not read, save or remove the provider key.")
+}
+
+/// A key longer than the OS credential store keeps (Windows): refused before writing, the kept key unchanged.
+pub fn credentials_too_long() -> Error {
+    credentials_failed().with("reason", "too_long")
 }
 
 /// A catalogue id that is none of the engine's (`local`, or a provider compiled into it).

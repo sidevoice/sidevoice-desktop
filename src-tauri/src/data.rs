@@ -3,12 +3,7 @@
 
 use serde_json::{json, Value};
 use std::fs;
-#[cfg(target_os = "macos")]
-use std::fs::OpenOptions;
-#[cfg(target_os = "macos")]
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-#[cfg(target_os = "macos")]
 use std::process::Command;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -16,6 +11,7 @@ use tauri::{AppHandle, Manager, Webview};
 
 use crate::platform::host::RESET_AVAILABLE;
 use crate::platform::reset_handoff::{self, Handoff};
+use crate::platform::{account, app_data, credentials, uninstall};
 use crate::AppState;
 
 #[derive(Default)]
@@ -228,9 +224,14 @@ async fn confirmed_reset(app: AppHandle, uninstall: bool) -> Answer {
         end_exclusive(&app);
         return Err(refused("reset.busy"));
     }
-    if let Err(key) = refuse_before_confirmation(&app, uninstall) {
+    if let Err(key) = refuse_before_confirmation(&app) {
         end_exclusive(&app);
         return Err(refused(key));
+    }
+    // A host that cannot remove the app refuses before the data goes.
+    if uninstall && !uninstall::available() {
+        end_exclusive(&app);
+        return Err(refused("reset.app-unremovable"));
     }
     if let Err(refusal) = require_confirmation(
         confirmation::confirm(
@@ -252,22 +253,19 @@ async fn confirmed_reset(app: AppHandle, uninstall: bool) -> Answer {
     answer
 }
 
-/// The transaction's own refusals before the confirmation and before any data is touched: a connector install
-/// in progress, and an app that cannot remove its own bundle (a disk image, a translocated or read-only copy).
+/// The transaction's own refusal before the confirmation and before any data is touched: a connector install
+/// in progress.
 #[cfg(target_os = "macos")]
-fn refuse_before_confirmation(app: &AppHandle, uninstall: bool) -> Result<(), &'static str> {
+fn refuse_before_confirmation(app: &AppHandle) -> Result<(), &'static str> {
     if crate::local_host::installing(app) {
         return Err("reset.busy");
-    }
-    if uninstall {
-        removable_app_bundle()?;
     }
     Ok(())
 }
 
 /// The reset transaction exists only on macOS; `confirmed_reset` refuses before this elsewhere.
 #[cfg(not(target_os = "macos"))]
-fn refuse_before_confirmation(_: &AppHandle, _: bool) -> Result<(), &'static str> {
+fn refuse_before_confirmation(_: &AppHandle) -> Result<(), &'static str> {
     Err("reset.unavailable")
 }
 
@@ -275,77 +273,22 @@ fn require_confirmation(accepted: bool) -> Result<(), Value> {
     accepted.then_some(()).ok_or_else(|| refused("reset.cancelled"))
 }
 
-/// The `.app` bundle this executable runs from: `<bundle>.app/Contents/MacOS/<executable>`. Anything else (a
-/// development build, a path with `..`, a translocated copy) has no bundle the uninstall may remove.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn app_bundle_of(exe: &Path) -> Result<PathBuf, &'static str> {
-    let clean = exe.is_absolute()
-        && exe.components().all(|part| matches!(part, std::path::Component::RootDir | std::path::Component::Normal(_)));
-    if !clean || exe.components().any(|part| part.as_os_str() == "AppTranslocation") {
-        return Err("reset.app-unremovable");
-    }
-    let macos = exe.parent().filter(|dir| dir.file_name().is_some_and(|name| name == "MacOS"));
-    let contents = macos.and_then(Path::parent).filter(|dir| dir.file_name().is_some_and(|name| name == "Contents"));
-    let bundle = contents.and_then(Path::parent).filter(|dir| {
-        dir.extension().is_some_and(|ext| ext == "app") && dir.parent().is_some_and(|parent| parent != Path::new("/"))
-    });
-    bundle.map(Path::to_path_buf).ok_or("reset.app-unremovable")
-}
-
-/// This app's own bundle, checked again by the helper right before it moves it: a real directory under its
-/// canonical path, with its Info.plist, in a folder this user may write.
-#[cfg(target_os = "macos")]
-fn removable_app_bundle() -> Result<PathBuf, &'static str> {
-    use std::os::unix::ffi::OsStrExt;
-    let exe = std::env::current_exe().and_then(fs::canonicalize).map_err(|_| "reset.app-unremovable")?;
-    let bundle = app_bundle_of(&exe)?;
-    let meta = fs::symlink_metadata(&bundle).map_err(|_| "reset.app-unremovable")?;
-    if !meta.is_dir()
-        || meta.file_type().is_symlink()
-        || fs::canonicalize(&bundle).ok().as_deref() != Some(bundle.as_path())
-        || !bundle.join("Contents/Info.plist").is_file()
-    {
-        return Err("reset.app-unremovable");
-    }
-    let parent = bundle.parent().ok_or("reset.app-unremovable")?;
-    let parent = std::ffi::CString::new(parent.as_os_str().as_bytes()).map_err(|_| "reset.app-unremovable")?;
-    if unsafe { libc::access(parent.as_ptr(), libc::W_OK) } != 0 {
-        return Err("reset.app-unremovable");
-    }
-    Ok(bundle)
-}
-
-/// Finder's own move to the Trash (`NSFileManager trashItemAtURL:`), so the app can be put back from there.
-#[cfg(target_os = "macos")]
-fn move_to_trash(bundle: &Path) -> Result<(), &'static str> {
-    use objc2::{class, msg_send, rc::autoreleasepool, runtime::AnyObject};
-    use objc2_foundation::NSString;
-    let text = bundle.to_str().ok_or("reset.app-unremovable")?;
-    let moved = autoreleasepool(|_| unsafe {
-        let manager: *mut AnyObject = msg_send![class!(NSFileManager), defaultManager];
-        let path = NSString::from_str(text);
-        let url: *mut AnyObject = msg_send![class!(NSURL), fileURLWithPath: &*path, isDirectory: true];
-        if manager.is_null() || url.is_null() {
-            return false;
-        }
-        let resulting: *mut *mut AnyObject = std::ptr::null_mut();
-        let error: *mut *mut AnyObject = std::ptr::null_mut();
-        let moved: bool = msg_send![manager, trashItemAtURL: url, resultingItemURL: resulting, error: error];
-        moved
-    });
-    if moved {
-        Ok(())
-    } else {
-        Err("reset.app-trash-failed")
-    }
-}
-
 fn begin_reset(app: &AppHandle, uninstall: bool) -> Answer {
     use crate::platform::reset_handoff::ResetPlan;
     let admission = Handoff::new().and_then(|handoff| handoff.admit()).map_err(|error| {
         refused(if error.kind() == std::io::ErrorKind::WouldBlock { "reset.busy" } else { "reset.helper-failed" })
     })?;
-    let (failed, agents, service_outcome) = reset_before_exit()?;
+    let (mut failed, agents, service_outcome) = reset_before_exit()?;
+    // The provider keys, on every host that runs the transaction, journalled as the last step before exit.
+    if credentials::clear_all().is_err() {
+        failed.push(json!({"step": "keychain", "key": "reset.keychain-failed"}));
+    }
+    let journal = report_path().ok_or_else(|| refused("reset.helper-failed"))?.with_file_name("journal.json");
+    write_atomic_json(
+        &journal,
+        &json!({"stage":"keychain", "completed":["service", "keychain"], "failed":failed.clone()}),
+    )
+    .map_err(|_| refused("reset.report-failed"))?;
     let pending = reset_handoff::launch(
         admission,
         ResetPlan { parent_pid: std::process::id(), uninstall, initial: json!({"failed": failed, "agents": agents}) },
@@ -370,13 +313,16 @@ fn begin_reset(app: &AppHandle, uninstall: bool) -> Answer {
 }
 
 /// The existing macOS steps before the app exits, under the held admission: the connector service and its
-/// agents, then the keychain, journalled. Returns the failures so far, the agents' results and the service outcome.
+/// agents, journalled; `begin_reset` then clears the provider keys. Returns the failures so far, the agents' results
+/// and the service outcome.
 #[cfg(target_os = "macos")]
 fn reset_before_exit() -> Result<(Vec<Value>, Value, &'static str), Value> {
     use sidevoice_local_host::{cli::Cli, paths::DataDirs};
     let dirs = DataDirs::from_env().ok_or_else(|| refused("reset.unavailable"))?;
-    let home = std::env::var_os("HOME").map(PathBuf::from).ok_or_else(|| refused("reset.unavailable"))?;
-    validate_uninstall_scope(&home, &dirs.data).map_err(|reason| json!({"key": "reset.unsafe", "reason": reason}))?;
+    // `HOME` only when it is this account's home in the account database: no other home is reset.
+    let home = account::home().map_err(|reason| json!({"key": "reset.unsafe", "reason": reason}))?;
+    validate_uninstall_scope_at(&home, &dirs.data)
+        .map_err(|reason| json!({"key": "reset.unsafe", "reason": reason}))?;
     let installed_cli = match Cli::installed(&dirs) {
         Ok(cli) => {
             probe_safe_connector(&cli, Duration::from_secs(10))?;
@@ -412,23 +358,12 @@ fn reset_before_exit() -> Result<(Vec<Value>, Value, &'static str), Value> {
     write_atomic_json(&journal, &json!({"stage":"service", "completed":["service"], "failed":[]}))
         .map_err(|_| refused("reset.report-failed"))?;
     let mut failed = Vec::<Value>::new();
-    if crate::keychain::delete_service().is_err() {
-        failed.push(json!({"step": "keychain", "key": "reset.keychain-failed"}));
-    }
-    write_atomic_json(
-        &journal,
-        &json!({"stage":"keychain", "completed":["service", "keychain"], "failed":failed.clone()}),
-    )
-    .map_err(|_| refused("reset.report-failed"))?;
     let agents = service.get("agents").cloned().unwrap_or_else(|| json!({}));
     for agent in retained_agents(&agents) {
         failed.push(json!({"step": "agents", "key": "reset.agent-remains", "agent": agent}));
     }
-    write_atomic_json(
-        &journal,
-        &json!({"stage":"agent-results", "completed":["service", "keychain"], "failed":failed.clone()}),
-    )
-    .map_err(|_| refused("reset.report-failed"))?;
+    write_atomic_json(&journal, &json!({"stage":"agent-results", "completed":["service"], "failed":failed.clone()}))
+        .map_err(|_| refused("reset.report-failed"))?;
     Ok((failed, agents, service_outcome))
 }
 
@@ -482,34 +417,15 @@ fn residual_connector_data(data: &Path) -> bool {
     false
 }
 
-#[cfg(target_os = "macos")]
+/// The journal or report: bounded JSON published whole or not at all by the shared private-record writer (staged
+/// private, synced, then renamed into the private control directory; links never followed).
 fn write_atomic_json(path: &Path, value: &Value) -> Result<(), &'static str> {
-    use std::os::unix::fs::OpenOptionsExt;
+    use sidevoice_platform::fs::{Files, Fs};
     let bytes = serde_json::to_vec(value).map_err(|_| "report-write")?;
     if bytes.len() > 16 * 1024 {
         return Err("report-write");
     }
-    let tmp = path.with_extension(format!("json.tmp-{}", std::process::id()));
-    let result = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&tmp)
-            .map_err(|_| "report-write")?;
-        file.write_all(&bytes).map_err(|_| "report-write")?;
-        file.sync_all().map_err(|_| "report-write")?;
-        fs::rename(&tmp, path).map_err(|_| "report-write")?;
-        std::fs::File::open(path.parent().ok_or("report-write")?)
-            .and_then(|dir| dir.sync_all())
-            .map_err(|_| "report-write")?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(tmp);
-    }
-    result
+    Files::write_private(path, &bytes).map_err(|_| "report-write")
 }
 
 #[cfg(target_os = "macos")]
@@ -566,43 +482,18 @@ fn fresh_service_absent_with(
 
 #[cfg(target_os = "macos")]
 fn run_checked_uninstall<T>(home: &Path, data: &Path, invoke: impl FnOnce() -> Result<T, Value>) -> Result<T, Value> {
-    validate_uninstall_scope(home, data).map_err(|reason| json!({"key": "reset.unsafe", "reason": reason}))?;
+    // Still this account's home in the account database, right before the destructive call.
+    if account::home().as_deref() != Ok(home) {
+        return Err(json!({"key": "reset.unsafe", "reason": "unsafe-home"}));
+    }
+    validate_uninstall_scope_at(home, data).map_err(|reason| json!({"key": "reset.unsafe", "reason": reason}))?;
     invoke()
-}
-
-#[cfg(target_os = "macos")]
-fn validate_uninstall_scope(home: &Path, data: &Path) -> Result<PathBuf, &'static str> {
-    if account_home().as_deref() != Some(home) {
-        return Err("unsafe-home");
-    }
-    validate_uninstall_scope_at(home, data)
-}
-
-#[cfg(target_os = "macos")]
-fn account_home() -> Option<PathBuf> {
-    use std::os::unix::ffi::OsStrExt;
-    let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
-    let mut found: *mut libc::passwd = std::ptr::null_mut();
-    let mut buffer = vec![0u8; 16 * 1024];
-    let result =
-        unsafe { libc::getpwuid_r(libc::geteuid(), &mut entry, buffer.as_mut_ptr().cast(), buffer.len(), &mut found) };
-    if result != 0 || found.is_null() || entry.pw_dir.is_null() {
-        return None;
-    }
-    let bytes = unsafe { std::ffi::CStr::from_ptr(entry.pw_dir) }.to_bytes();
-    Some(PathBuf::from(std::ffi::OsStr::from_bytes(bytes)))
 }
 
 /// `D` on macOS with no override: the OS's standard place of `sidevoice-platform`'s `data_dir`.
 #[cfg(target_os = "macos")]
 fn standard_data(home: &Path) -> PathBuf {
     home.join("Library/Application Support/Sidevoice")
-}
-
-/// The shared models folder as [`shared_model_root`] places it for this home (the OS standard place; on macOS it is in `D`).
-#[cfg(target_os = "macos")]
-fn standard_models(home: &Path) -> PathBuf {
-    standard_data(home).join(sidevoice_platform::data_dir::MODELS)
 }
 
 #[cfg(target_os = "macos")]
@@ -638,8 +529,9 @@ fn validate_uninstall_scope_at(home: &Path, data: &Path) -> Result<PathBuf, &'st
     } else if fs::symlink_metadata(&record).is_err_and(|error| error.kind() != std::io::ErrorKind::NotFound) {
         return Err("unsafe-record");
     }
-    guarded_tree(data, home, false, true, &mount_identity)?;
-    guarded_tree(&expected_releases, home, false, true, &mount_identity)?;
+    // Protected roots, not selected entries: each must be an ordinary directory, never a link.
+    app_data::check_tree(home, data)?;
+    app_data::check_tree(home, &expected_releases)?;
     Ok(expected_releases)
 }
 
@@ -663,314 +555,9 @@ fn report_path() -> Option<PathBuf> {
 }
 
 #[cfg(target_os = "macos")]
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct MountIdentity {
-    device: u64,
-    mounted_at: Vec<u8>,
-}
-
-#[cfg(target_os = "macos")]
-fn mount_identity(fd: i32, _: &Path) -> Result<MountIdentity, &'static str> {
-    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
-    let mut fs_stat: libc::statfs = unsafe { std::mem::zeroed() };
-    if unsafe { libc::fstat(fd, &mut stat) } != 0 || unsafe { libc::fstatfs(fd, &mut fs_stat) } != 0 {
-        return Err("inspect-mount");
-    }
-    let mounted_at = unsafe { std::ffi::CStr::from_ptr(fs_stat.f_mntonname.as_ptr()) }.to_bytes().to_vec();
-    Ok(MountIdentity { device: stat.st_dev as u64, mounted_at })
-}
-
-#[cfg(target_os = "macos")]
 fn clean_absolute(path: &Path) -> bool {
     path.is_absolute()
         && path.components().all(|part| matches!(part, std::path::Component::RootDir | std::path::Component::Normal(_)))
-}
-
-#[cfg(target_os = "macos")]
-fn known_cleanup_path(path: &Path, home: &Path) -> Result<(), &'static str> {
-    if path == home {
-        return Err("home-root");
-    }
-    if !clean_absolute(home) || !clean_absolute(path) || home.parent().is_none_or(|p| p == Path::new("/")) {
-        return Err("unsafe-path");
-    }
-    let allowed = [
-        home.join("Library/Application Support/dev.sidevoice.desktop"),
-        standard_models(home).join("blobs"),
-        standard_models(home).join("models"),
-        standard_models(home).join("partial"),
-        home.join("Library/WebKit/dev.sidevoice.desktop"),
-        home.join("Library/Caches/dev.sidevoice.desktop"),
-        home.join("Library/Saved Application State/dev.sidevoice.desktop.savedState"),
-        home.join("Library/Logs/dev.sidevoice.desktop"),
-    ];
-    if !allowed.iter().any(|candidate| candidate == path) {
-        return Err("outside-known-dirs");
-    }
-    if fs::canonicalize(home).ok().as_deref() != Some(home) {
-        return Err("unsafe-home");
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn open_dir_at(parent: i32, name: &std::ffi::OsStr) -> Result<std::os::fd::OwnedFd, &'static str> {
-    use std::os::fd::FromRawFd;
-    use std::os::unix::ffi::OsStrExt;
-    let name = std::ffi::CString::new(name.as_bytes()).map_err(|_| "unsafe-name")?;
-    let fd = unsafe {
-        libc::openat(parent, name.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-    };
-    if fd < 0 {
-        return Err("unsafe-directory");
-    }
-    Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) })
-}
-
-#[cfg(target_os = "macos")]
-fn open_absolute_dir(path: &Path) -> Result<std::os::fd::OwnedFd, &'static str> {
-    use std::os::fd::{AsRawFd, FromRawFd};
-    if !clean_absolute(path) {
-        return Err("unsafe-path");
-    }
-    let root = unsafe { libc::open(c"/".as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC) };
-    if root < 0 {
-        return Err("unsafe-path");
-    }
-    let mut current = unsafe { std::os::fd::OwnedFd::from_raw_fd(root) };
-    for part in path.components().skip(1) {
-        let std::path::Component::Normal(name) = part else { return Err("unsafe-path") };
-        current = open_dir_at(current.as_raw_fd(), name)?;
-    }
-    Ok(current)
-}
-
-#[cfg(target_os = "macos")]
-fn same_entry(parent: i32, name: &std::ffi::CStr, opened: i32) -> Result<(), &'static str> {
-    let mut named: libc::stat = unsafe { std::mem::zeroed() };
-    let mut held: libc::stat = unsafe { std::mem::zeroed() };
-    if unsafe { libc::fstatat(parent, name.as_ptr(), &mut named, libc::AT_SYMLINK_NOFOLLOW) } != 0
-        || unsafe { libc::fstat(opened, &mut held) } != 0
-        || named.st_dev != held.st_dev
-        || named.st_ino != held.st_ino
-    {
-        return Err("changed-path");
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn walk_owned(
-    fd: i32,
-    relative: &Path,
-    expected: &MountIdentity,
-    probe: &impl Fn(i32, &Path) -> Result<MountIdentity, &'static str>,
-    remove: bool,
-    allow_links: bool,
-    depth: usize,
-) -> Result<(), &'static str> {
-    use std::os::fd::{AsRawFd, FromRawFd};
-    use std::os::unix::ffi::OsStrExt;
-    if depth > 64 {
-        return Err("too-deep");
-    }
-    if probe(fd, relative)? != *expected {
-        return Err("mount-boundary");
-    }
-    // dup shares the directory offset with the held descriptor. A fresh open lets the
-    // preflight and removal passes each enumerate the full directory.
-    let copy = unsafe {
-        libc::openat(fd, c".".as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-    };
-    if copy < 0 {
-        return Err("inspect");
-    }
-    let stream = unsafe { libc::fdopendir(copy) };
-    if stream.is_null() {
-        unsafe { libc::close(copy) };
-        return Err("inspect");
-    }
-    let result = (|| {
-        loop {
-            unsafe {
-                *libc::__error() = 0;
-            }
-            let entry = unsafe { libc::readdir(stream) };
-            if entry.is_null() {
-                if unsafe { *libc::__error() } != 0 {
-                    return Err("inspect");
-                } else {
-                    break;
-                }
-            }
-            let name = unsafe { std::ffi::CStr::from_ptr((*entry).d_name.as_ptr()) };
-            if name.to_bytes() == b"." || name.to_bytes() == b".." {
-                continue;
-            }
-            let child_relative = relative.join(std::ffi::OsStr::from_bytes(name.to_bytes()));
-            let mut stat: libc::stat = unsafe { std::mem::zeroed() };
-            if unsafe { libc::fstatat(fd, name.as_ptr(), &mut stat, libc::AT_SYMLINK_NOFOLLOW) } != 0 {
-                return Err("inspect");
-            }
-            if stat.st_dev as u64 != expected.device {
-                return Err("mount-boundary");
-            }
-            let kind = stat.st_mode & libc::S_IFMT;
-            if kind == libc::S_IFLNK {
-                if allow_links {
-                    continue;
-                } else {
-                    return Err("symlink");
-                }
-            }
-            if kind == libc::S_IFDIR {
-                let child = open_dir_at(fd, std::ffi::OsStr::from_bytes(name.to_bytes()))?;
-                walk_owned(child.as_raw_fd(), &child_relative, expected, probe, remove, allow_links, depth + 1)?;
-                if remove {
-                    same_entry(fd, name, child.as_raw_fd())?;
-                    if unsafe { libc::unlinkat(fd, name.as_ptr(), libc::AT_REMOVEDIR) } != 0 {
-                        return Err("remove");
-                    }
-                }
-            } else if kind == libc::S_IFREG {
-                let file = unsafe {
-                    libc::openat(
-                        fd,
-                        name.as_ptr(),
-                        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
-                    )
-                };
-                if file < 0 {
-                    return Err("unsafe-file");
-                }
-                let file = unsafe { std::os::fd::OwnedFd::from_raw_fd(file) };
-                if probe(file.as_raw_fd(), &child_relative)? != *expected {
-                    return Err("mount-boundary");
-                }
-                if remove {
-                    same_entry(fd, name, file.as_raw_fd())?;
-                    if unsafe { libc::unlinkat(fd, name.as_ptr(), 0) } != 0 {
-                        return Err("remove");
-                    }
-                }
-            } else if !allow_links {
-                return Err("unsafe-entry");
-            }
-        }
-        Ok(())
-    })();
-    unsafe { libc::closedir(stream) };
-    result
-}
-
-#[cfg(target_os = "macos")]
-fn guarded_tree(
-    path: &Path,
-    home: &Path,
-    remove: bool,
-    allow_links: bool,
-    probe: &impl Fn(i32, &Path) -> Result<MountIdentity, &'static str>,
-) -> Result<(), &'static str> {
-    use std::os::fd::AsRawFd;
-    use std::os::unix::ffi::OsStrExt;
-    let relative = path.strip_prefix(home).map_err(|_| "outside-home")?;
-    if relative.as_os_str().is_empty() {
-        return Err("home-root");
-    }
-    if !clean_absolute(path) || !clean_absolute(home) {
-        return Err("unsafe-path");
-    }
-    if fs::canonicalize(home).ok().as_deref() != Some(home) {
-        return Err("unsafe-home");
-    }
-    let home_fd = open_absolute_dir(home)?;
-    let expected = probe(home_fd.as_raw_fd(), Path::new(""))?;
-    if expected.mounted_at == home.as_os_str().as_bytes() {
-        return Err("volume-root");
-    }
-    let parts: Vec<_> = relative.components().collect();
-    let mut parent = home_fd;
-    let mut prefix = PathBuf::new();
-    for part in &parts[..parts.len() - 1] {
-        let std::path::Component::Normal(name) = part else { return Err("unsafe-path") };
-        prefix.push(name);
-        parent = match open_dir_at(parent.as_raw_fd(), name) {
-            Ok(fd) => fd,
-            Err(_) if !parent_path_exists(parent.as_raw_fd(), name) => return Ok(()),
-            Err(error) => return Err(error),
-        };
-        if probe(parent.as_raw_fd(), &prefix)? != expected {
-            return Err("mount-boundary");
-        }
-    }
-    let std::path::Component::Normal(name) = parts[parts.len() - 1] else { return Err("unsafe-path") };
-    let target = match open_dir_at(parent.as_raw_fd(), name) {
-        Ok(fd) => fd,
-        Err(_) if !parent_path_exists(parent.as_raw_fd(), name) => return Ok(()),
-        Err(error) => return Err(error),
-    };
-    walk_owned(target.as_raw_fd(), relative, &expected, probe, false, allow_links, 0)?;
-    if remove {
-        walk_owned(target.as_raw_fd(), relative, &expected, probe, true, allow_links, 0)?;
-        let name = std::ffi::CString::new(name.as_bytes()).map_err(|_| "unsafe-name")?;
-        same_entry(parent.as_raw_fd(), &name, target.as_raw_fd())?;
-        if unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR) } != 0 {
-            return Err("remove");
-        }
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn remove_known_with(
-    path: &Path,
-    home: &Path,
-    probe: &impl Fn(i32, &Path) -> Result<MountIdentity, &'static str>,
-) -> Result<(), &'static str> {
-    known_cleanup_path(path, home)?;
-    // Recheck the exact top-level name immediately before guarded traversal. A missing
-    // directory is already gone; a link, alias or changed ancestor is a reported refusal.
-    match fs::symlink_metadata(path) {
-        Ok(meta) => {
-            if !meta.is_dir() || meta.file_type().is_symlink() || fs::canonicalize(path).ok().as_deref() != Some(path) {
-                return Err("changed-path");
-            }
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(_) => return Err("inspect"),
-    }
-    guarded_tree(path, home, true, false, probe)
-}
-
-#[cfg(target_os = "macos")]
-fn remove_known(path: &Path, home: &Path) -> Result<(), &'static str> {
-    remove_known_with(path, home, &mount_identity)
-}
-
-#[cfg(target_os = "macos")]
-fn remove_model_store(root: &Path, home: &Path) -> Result<(), &'static str> {
-    if root != standard_models(home) {
-        return Err("outside-known-dirs");
-    }
-    let children = ["blobs", "models", "partial"].map(|name| root.join(name));
-    // Validate every owned child before removing any. Other programs may have their own siblings here.
-    for child in &children {
-        known_cleanup_path(child, home)?;
-        guarded_tree(child, home, false, false, &mount_identity)?;
-    }
-    for child in &children {
-        remove_known(child, home)?;
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn parent_path_exists(parent: i32, name: &std::ffi::OsStr) -> bool {
-    use std::os::unix::ffi::OsStrExt;
-    let Ok(name) = std::ffi::CString::new(name.as_bytes()) else { return true };
-    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
-    let result = unsafe { libc::fstatat(parent, name.as_ptr(), &mut stat, libc::AT_SYMLINK_NOFOLLOW) };
-    result == 0 || std::io::Error::last_os_error().kind() != std::io::ErrorKind::NotFound
 }
 
 /// Called in the helper process, before Tauri. The authenticated plan arrives on every host.
@@ -985,9 +572,8 @@ pub fn run_reset_helper() {
     }
 }
 
-/// The existing macOS helper transaction: observe the browser writers, await the committed exit, clean up,
-/// write the report, release admission, then relaunch or move the app to the Trash.
-#[cfg(target_os = "macos")]
+/// The helper transaction: observe the browser writers, await the committed exit, delete the app's data
+/// (`app_data`, journalled step by step), then conclude (report, relaunch or remove the app).
 fn clean_up_after_exit(
     helper: crate::platform::reset_handoff::Helper,
     parent_pid: u32,
@@ -995,68 +581,50 @@ fn clean_up_after_exit(
     initial: Value,
 ) {
     use crate::platform::webview_data;
-    let Some(home) = account_home() else { return };
-    let browser = webview_data::locations(&home).and_then(|paths| webview_data::capture(parent_pid, paths));
+    let unsafe_home = |reason| std::io::Error::new(std::io::ErrorKind::PermissionDenied, reason);
+    let browser = account::home()
+        .map_err(unsafe_home)
+        .and_then(|home| webview_data::locations(&home))
+        .and_then(|paths| webview_data::capture(parent_pid, paths));
     let Ok(lock) = helper.await_exit() else { return };
     let Some(report) = report_path() else { return };
     let Some(initial_failed) = initial.get("failed").and_then(Value::as_array) else { return };
-    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return };
-    if account_home().as_deref() != Some(home.as_path()) {
-        return;
-    }
     let mut completed = Vec::new();
     let mut failed = initial_failed.clone();
     let journal = report.with_file_name("journal.json");
     let browser = browser
         .and_then(|owner| webview_data::wait_released(owner, std::time::Instant::now() + Duration::from_secs(10)));
-    let paths = [
-        ("app-data", home.join("Library/Application Support/dev.sidevoice.desktop")),
-        ("models", standard_models(&home)),
-        ("webview", home.join("Library/WebKit/dev.sidevoice.desktop")),
-        ("cache", home.join("Library/Caches/dev.sidevoice.desktop")),
-        ("saved-state", home.join("Library/Saved Application State/dev.sidevoice.desktop.savedState")),
-        ("logs", home.join("Library/Logs/dev.sidevoice.desktop")),
-    ];
-    for (name, path) in paths {
-        let browser_storage = matches!(name, "app-data" | "webview" | "cache");
-        if browser_storage && browser.is_err() {
-            failed.push(json!({"step": name, "key": "reset.process-busy"}));
-        } else {
-            let removed = if browser_storage {
-                webview_data::remove(browser.as_ref().unwrap(), &path).map_err(|_| "remove")
-            } else if name == "models" {
-                remove_model_store(&path, &home)
-            } else {
-                remove_known(&path, &home)
-            };
-            match removed {
-                Ok(()) => completed.push(name),
-                Err(key) => failed.push(json!({"step": name, "key": key})),
-            }
+    // A journal that cannot be written stops the deletion: an interruption could no longer be reported.
+    let mut step = |step: &'static str, result: Result<(), &'static str>| {
+        match result {
+            Ok(()) => completed.push(step),
+            Err(key) => failed.push(json!({"step": step, "key": key})),
         }
-        if write_atomic_json(&journal, &json!({"stage":"cleanup", "completed":completed, "failed":failed})).is_err() {
+        let written = write_atomic_json(&journal, &json!({"stage":"cleanup", "completed":completed, "failed":failed}));
+        if written.is_err() {
             failed.push(json!({"step":"report", "key":"reset.report-failed"}));
-            break;
         }
-    }
-    let domains = Command::new("/usr/bin/defaults").arg("domains").output();
-    match domains {
-        Ok(output) if output.status.success() => {
-            let present =
-                String::from_utf8_lossy(&output.stdout).split(',').any(|d| d.trim() == "dev.sidevoice.desktop");
-            if !present
-                || Command::new("/usr/bin/defaults")
-                    .args(["delete", "dev.sidevoice.desktop"])
-                    .status()
-                    .is_ok_and(|s| s.success())
-            {
-                completed.push("preferences");
-            } else {
-                failed.push(json!({"step": "preferences", "key": "remove"}));
-            }
-        }
-        _ => failed.push(json!({"step": "preferences", "key": "inspect"})),
-    }
+        written.is_ok()
+    };
+    // Still this account's home in the account record, right before the deletion; no other home is deleted.
+    let _ = match account::home() {
+        Ok(home) => app_data::delete_data(&home, &browser, &mut step).is_ok(),
+        Err(key) => step("app-data", Err(key)),
+    };
+    conclude_reset(lock, &report, &journal, completed, failed, &initial, uninstall);
+}
+
+/// The end of the transaction: the report with a relaunch, or the removal of the app where it can be restored from
+/// (`uninstall::uninstall`). The decisions stay here.
+fn conclude_reset(
+    lock: crate::platform::reset_handoff::Admission,
+    report: &Path,
+    journal: &Path,
+    completed: Vec<&str>,
+    failed: Vec<Value>,
+    initial: &Value,
+    uninstall: bool,
+) {
     let agents = initial.get("agents").cloned().unwrap_or_else(|| json!({}));
     let relaunch = || {
         // Cleanup is over. A new app must acquire this lock independently.
@@ -1067,18 +635,17 @@ fn clean_up_after_exit(
             .is_some()
     };
     if uninstall {
-        let trash = || removable_app_bundle().and_then(|bundle| move_to_trash(&bundle));
-        finish_uninstall_at(&report, &journal, &completed, failed, agents, write_atomic_json, trash, relaunch);
+        let trash = || match uninstall::uninstall() {
+            Ok(()) => Ok(()),
+            Err(app_data::Error::Failed(key)) => Err(key),
+            Err(_) => Err("reset.app-unremovable"),
+        };
+        finish_uninstall_at(report, journal, &completed, failed, agents, write_atomic_json, trash, relaunch);
     } else {
-        finish_reset_at(&report, &journal, &completed, failed, agents, write_atomic_json, relaunch);
+        finish_reset_at(report, journal, &completed, failed, agents, write_atomic_json, relaunch);
     }
 }
 
-/// The reset transaction exists only on macOS; `run_reset_helper` never calls this elsewhere.
-#[cfg(not(target_os = "macos"))]
-fn clean_up_after_exit(_: crate::platform::reset_handoff::Helper, _: u32, _: bool, _: Value) {}
-
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn finish_reset_at(
     report: &Path,
     journal: &Path,
@@ -1106,7 +673,6 @@ fn finish_reset_at(
 /// The uninstall's last step. Only a clean run moves the app to the Trash, and it leaves no report: nothing is left
 /// to read it. A failed data step (anything but a retained agent registration, which the confirmation already names)
 /// keeps the app, and so does a failed move: the app relaunches, as after `deleteAll()`, and reports it.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 #[allow(clippy::too_many_arguments)]
 fn finish_uninstall_at(
     report: &Path,
@@ -1168,99 +734,6 @@ fn finalize_relaunched_reset_at(report: &Path, journal: &Path) -> Result<(), &'s
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
-    #[test]
-    fn cleanup_refuses_symlinked_target_parent_and_child() {
-        let home = tempfile::tempdir().unwrap();
-        let outside = tempfile::tempdir().unwrap();
-        let canonical = fs::canonicalize(home.path()).unwrap();
-        let root = canonical.as_path();
-        fs::write(outside.path().join("sentinel"), "unrelated").unwrap();
-        fs::create_dir_all(root.join("Library/Caches")).unwrap();
-        std::os::unix::fs::symlink(outside.path(), root.join("Library/Caches/dev.sidevoice.desktop")).unwrap();
-        assert_eq!(remove_known(root, root), Err("home-root"));
-        assert!(remove_known(&root.join("Library/Caches/dev.sidevoice.desktop"), root).is_err());
-        assert!(outside.path().exists());
-        assert_eq!(fs::read(outside.path().join("sentinel")).unwrap(), b"unrelated");
-        fs::remove_file(root.join("Library/Caches/dev.sidevoice.desktop")).unwrap();
-        fs::remove_dir(root.join("Library/Caches")).unwrap();
-        std::os::unix::fs::symlink(outside.path(), root.join("Library/Caches")).unwrap();
-        assert!(remove_known(&root.join("Library/Caches/dev.sidevoice.desktop"), root).is_err());
-        assert!(outside.path().exists());
-        assert_eq!(fs::read(outside.path().join("sentinel")).unwrap(), b"unrelated");
-        fs::remove_file(root.join("Library/Caches")).unwrap();
-        fs::create_dir_all(root.join("Library/Caches/dev.sidevoice.desktop")).unwrap();
-        std::os::unix::fs::symlink(outside.path(), root.join("Library/Caches/dev.sidevoice.desktop/escape")).unwrap();
-        assert_eq!(remove_known(&root.join("Library/Caches/dev.sidevoice.desktop"), root), Err("symlink"));
-        assert!(root.join("Library/Caches/dev.sidevoice.desktop").exists());
-        assert!(outside.path().exists());
-        assert_eq!(fs::read(outside.path().join("sentinel")).unwrap(), b"unrelated");
-    }
-
-    #[test]
-    fn cleanup_handles_missing_and_only_removes_named_directory() {
-        let home = tempfile::tempdir().unwrap();
-        let canonical = fs::canonicalize(home.path()).unwrap();
-        let root = canonical.as_path();
-        let parent = root.join("Library/Caches");
-        fs::create_dir_all(&parent).unwrap();
-        let target = parent.join("dev.sidevoice.desktop");
-        assert_eq!(remove_known(&target, root), Ok(()));
-        fs::create_dir(&target).unwrap();
-        fs::write(target.join("owned"), "only in temp").unwrap();
-        fs::create_dir(parent.join("unrelated")).unwrap();
-        assert_eq!(remove_known(&target, root), Ok(()));
-        assert!(!target.exists());
-        assert!(parent.join("unrelated").exists());
-    }
-
-    #[test]
-    fn shared_store_removes_only_engine_owned_children() {
-        let home = tempfile::tempdir().unwrap();
-        let home = fs::canonicalize(home.path()).unwrap();
-        let root = standard_models(&home);
-        for child in ["blobs", "models", "partial"] {
-            fs::create_dir_all(root.join(child)).unwrap();
-            fs::write(root.join(child).join("owned"), b"model").unwrap();
-        }
-        fs::create_dir(root.join("other-program")).unwrap();
-        fs::write(root.join("other-program/sentinel"), b"unrelated").unwrap();
-        assert_eq!(remove_model_store(&root, &home), Ok(()));
-        for child in ["blobs", "models", "partial"] {
-            assert!(!root.join(child).exists());
-        }
-        assert_eq!(fs::read(root.join("other-program/sentinel")).unwrap(), b"unrelated");
-    }
-
-    #[test]
-    fn cleanup_refuses_target_and_child_mount_boundaries_before_erasing_sentinels() {
-        let home = tempfile::tempdir().unwrap();
-        let home = fs::canonicalize(home.path()).unwrap();
-        let target = home.join("Library/Caches/dev.sidevoice.desktop");
-        fs::create_dir_all(target.join("mounted")).unwrap();
-        fs::write(target.join("mounted/sentinel"), b"unrelated").unwrap();
-        fs::write(target.join("owned"), b"owned").unwrap();
-        let target_relative = Path::new("Library/Caches/dev.sidevoice.desktop");
-        let target_mount = |fd, relative: &Path| {
-            let mut id = mount_identity(fd, relative)?;
-            if relative == target_relative {
-                id.mounted_at = b"/foreign-volume".to_vec();
-            }
-            Ok(id)
-        };
-        assert_eq!(remove_known_with(&target, &home, &target_mount), Err("mount-boundary"));
-        assert!(target.join("owned").exists());
-        let child_mount = |fd, relative: &Path| {
-            let mut id = mount_identity(fd, relative)?;
-            if relative.ends_with("mounted") {
-                id.device += 1;
-            }
-            Ok(id)
-        };
-        assert_eq!(remove_known_with(&target, &home, &child_mount), Err("mount-boundary"));
-        assert_eq!(fs::read(target.join("mounted/sentinel")).unwrap(), b"unrelated");
-        assert!(target.join("owned").exists());
-    }
-
     #[test]
     fn connector_uninstall_scope_refuses_overrides_before_fake_cli_runs() {
         let home = tempfile::tempdir().unwrap();
@@ -1424,10 +897,16 @@ mod tests {
         gate.leave();
     }
 
+    /// The report's directory as `report_path()` makes it: private, as the shared record writer requires.
+    fn private_dir() -> tempfile::TempDir {
+        use std::os::unix::fs::PermissionsExt;
+        tempfile::Builder::new().permissions(fs::Permissions::from_mode(0o700)).tempdir().unwrap()
+    }
+
     #[test]
     fn durable_journal_reports_interruption_then_allows_retry() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
+        let dir = private_dir();
         let report = dir.path().join("report.json");
         let journal = dir.path().join("journal.json");
         write_atomic_json(&journal, &json!({"stage":"service", "completed":["service"], "failed":[]})).unwrap();
@@ -1454,7 +933,7 @@ mod tests {
 
     #[test]
     fn helper_reports_complete_only_after_relaunched_setup_and_keeps_failed_writes() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = private_dir();
         let report = dir.path().join("report.json");
         let journal = dir.path().join("journal.json");
         let mut launched = false;
@@ -1541,32 +1020,6 @@ mod uninstall_tests {
 
     fn read(path: &Path) -> Value {
         serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
-    }
-
-    #[test]
-    fn only_a_real_app_bundle_can_be_removed() {
-        let ok = |exe: &str| app_bundle_of(Path::new(exe));
-        assert_eq!(
-            ok("/Applications/Sidevoice.app/Contents/MacOS/sidevoice-desktop"),
-            Ok(PathBuf::from("/Applications/Sidevoice.app"))
-        );
-        assert_eq!(
-            ok("/Users/ana/Applications/Sidevoice Nightly.app/Contents/MacOS/sidevoice-desktop"),
-            Ok(PathBuf::from("/Users/ana/Applications/Sidevoice Nightly.app"))
-        );
-        for refused in [
-            // A development build has no bundle.
-            "/Users/ana/sidevoice-desktop/src-tauri/target/debug/sidevoice-desktop",
-            "/Applications/Sidevoice/Contents/MacOS/sidevoice-desktop",
-            "/Applications/Sidevoice.app/Contents/Resources/sidevoice-desktop",
-            "/Applications/Sidevoice.app/MacOS/sidevoice-desktop",
-            "/Sidevoice.app/Contents/MacOS/sidevoice-desktop",
-            "/Applications/../Sidevoice.app/Contents/MacOS/sidevoice-desktop",
-            "Sidevoice.app/Contents/MacOS/sidevoice-desktop",
-            "/private/var/folders/x/T/AppTranslocation/ABC/d/Sidevoice.app/Contents/MacOS/sidevoice-desktop",
-        ] {
-            assert_eq!(ok(refused), Err("reset.app-unremovable"), "{refused}");
-        }
     }
 
     #[test]

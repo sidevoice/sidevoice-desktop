@@ -138,6 +138,20 @@ pub fn in_ci() -> bool {
     std::env::var("CI").is_ok_and(|ci| ci == "true")
 }
 
+/// The home a step that starts the app runs it with. On a runner (`CI=true`): `None`, the person's own, the app's
+/// settings and data as a fresh machine has them. Elsewhere: a scratch home of the step's own (`<root>/svx-<step>`; `root`
+/// is short: a Unix socket's path is at most 104 bytes), made empty first, so that a laptop's own settings, pairing,
+/// local core and models are never touched.
+pub fn scratch_home(step: &str, root: &Path) -> Result<Option<PathBuf>> {
+    if in_ci() {
+        return Ok(None);
+    }
+    let home = root.join(format!("svx-{step}"));
+    fresh_dir(&home)?;
+    eprintln!("(off a runner: the app runs with HOME={}, this machine's own data untouched)", home.display());
+    Ok(Some(home))
+}
+
 /// The variable `name`, which must be set and not empty. Its value is never printed.
 pub fn required_env(name: &str) -> Result<String> {
     match std::env::var(name) {
@@ -456,15 +470,6 @@ pub fn contains(bytes: &[u8], text: &str) -> bool {
     bytes.windows(text.len()).any(|window| window == text.as_bytes())
 }
 
-/// The npm launcher: a `.cmd` on Windows.
-pub fn npm() -> &'static str {
-    if cfg!(windows) {
-        "npm.cmd"
-    } else {
-        "npm"
-    }
-}
-
 /// What a build is for (RELEASING.md → "Channels"): `dev`, the default, is a laptop's, a PR's or a manual run's.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Channel {
@@ -596,7 +601,7 @@ impl TauriBuild<'_> {
 }
 
 /// Where the secrets directory `name` goes: under `RUNNER_TEMP` on a runner, the system's temporary directory
-/// elsewhere. A fixed place, so that `macos forget-secrets` finds what a run that was cut short left.
+/// elsewhere. A fixed place, so that `release forget-secrets` finds what a run that was cut short left.
 pub fn secret_path(name: &str) -> PathBuf {
     std::env::var_os("RUNNER_TEMP").map(PathBuf::from).unwrap_or_else(std::env::temp_dir).join(name)
 }
@@ -642,40 +647,11 @@ pub fn read_secret(path: &Path) -> Result<Vec<u8>> {
         .ok_or_else(|| format!("{}: secret file is missing", path.display()))
 }
 
-/// The permission bits of `path` (`stat -f %Lp`), on Unix.
-#[cfg(unix)]
-pub fn mode(path: &Path) -> Result<u32> {
-    use std::os::unix::fs::PermissionsExt;
-    let meta = fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    Ok(meta.permissions().mode() & 0o7777)
-}
-
-#[cfg(not(unix))]
-pub fn mode(path: &Path) -> Result<u32> {
-    Err(format!("{}: no Unix permissions here", path.display()))
-}
-
-#[cfg(unix)]
-pub fn chmod(path: &Path, mode: u32) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(|e| format!("{}: {e}", path.display()))
-}
-
-#[cfg(not(unix))]
-pub fn chmod(path: &Path, _: u32) -> Result<()> {
-    Err(format!("{}: no Unix permissions here", path.display()))
-}
-
 /// `bytes` random bytes from the system, as hex (`openssl rand -hex <bytes>`).
 pub fn random_hex(bytes: usize) -> Result<String> {
     let mut buffer = vec![0u8; bytes];
     getrandom::fill(&mut buffer).map_err(|e| e.to_string())?;
     Ok(buffer.iter().map(|b| format!("{b:02x}")).collect())
-}
-
-/// Requires `os` (`std::env::consts::OS`): the command's tools are that system's.
-pub fn require_os(os: &str, command: &str) -> Result<()> {
-    ensure(std::env::consts::OS == os, format!("`cargo xtask {command}` runs on {os}"))
 }
 
 /// Requires a CI runner: the command changes the machine (adds a user) in a way meant for a throwaway one.
@@ -890,8 +866,8 @@ mod tests {
 
     #[test]
     fn a_secret_argument_is_never_shown() {
-        let cmd = Cmd::new("security").args(["unlock-keychain", "-p"]).secret("hunter2").arg("k.keychain-db");
-        assert_eq!(cmd.shown(), "security unlock-keychain -p *** k.keychain-db");
+        let cmd = Cmd::new("tool").args(["unlock", "-p"]).secret("hunter2").arg("k.db");
+        assert_eq!(cmd.shown(), "tool unlock -p *** k.db");
     }
 
     #[test]
