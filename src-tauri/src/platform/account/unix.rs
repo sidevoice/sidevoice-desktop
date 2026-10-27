@@ -7,23 +7,27 @@ use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-pub(super) fn recorded_home() -> Option<PathBuf> {
-    User::from_uid(Uid::effective()).ok().flatten().map(|user| user.dir)
-}
+pub(super) struct Native;
 
-/// The owner of `dir` may change its mode and so its entries. Otherwise renaming an entry away and creating another
-/// under its name both need write and search on `dir`; under the sticky bit only the entry's owner (or `dir`'s) may
-/// rename it.
-pub(super) fn may_replace(dir: &Path, child: &Path) -> io::Result<bool> {
-    let me = Uid::effective().as_raw();
-    let directory = std::fs::symlink_metadata(dir)?;
-    if directory.uid() == me {
-        return Ok(true);
+impl super::Os for Native {
+    fn recorded_home() -> Option<PathBuf> {
+        User::from_uid(Uid::effective()).ok().flatten().map(|user| user.dir)
     }
-    match access(dir, AccessFlags::W_OK | AccessFlags::X_OK) {
-        Ok(()) => {}
-        Err(Errno::EACCES | Errno::EROFS) => return Ok(false),
-        Err(error) => return Err(error.into()),
+
+    /// The owner of `dir` may change its mode and so its entries. Otherwise renaming an entry away and creating
+    /// another under its name both need write and search on `dir`; under the sticky bit only the entry's owner (or
+    /// `dir`'s) may rename it.
+    fn may_replace(dir: &Path, child: &Path) -> io::Result<bool> {
+        let me = Uid::effective().as_raw();
+        let directory = std::fs::symlink_metadata(dir)?;
+        if directory.uid() == me {
+            return Ok(true);
+        }
+        match access(dir, AccessFlags::W_OK | AccessFlags::X_OK) {
+            Ok(()) => {}
+            Err(Errno::EACCES | Errno::EROFS) => return Ok(false),
+            Err(error) => return Err(error.into()),
+        }
+        Ok(directory.mode() & 0o1000 == 0 || std::fs::symlink_metadata(child)?.uid() == me)
     }
-    Ok(directory.mode() & 0o1000 == 0 || std::fs::symlink_metadata(child)?.uid() == me)
 }

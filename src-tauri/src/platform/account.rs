@@ -4,18 +4,16 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-#[cfg(unix)]
-#[path = "account/unix.rs"]
+#[cfg_attr(unix, path = "account/unix.rs")]
+#[cfg_attr(windows, path = "account/windows.rs")]
 mod imp;
-#[cfg(windows)]
-#[path = "account/windows.rs"]
-mod imp;
+use imp::Native;
 
 /// The account home: `dirs`' home (which trusts `HOME`, as Tauri does) only when it is the home the OS account
 /// record has for this user. Anything else, or no record, is `unsafe-home`: callers do no destructive work in
 /// another home.
 pub fn home() -> Result<PathBuf, &'static str> {
-    accept(dirs::home_dir(), imp::recorded_home())
+    accept(dirs::home_dir(), Native::recorded_home())
 }
 
 /// Whether this account could take the entry `child` out of the directory `dir` and put something else under its
@@ -24,7 +22,17 @@ pub fn home() -> Result<PathBuf, &'static str> {
 /// all the way down, the account cannot swap its home or anything above it for a link. A failed inspection is an
 /// error, never `false`.
 pub fn may_replace(dir: &Path, child: &Path) -> io::Result<bool> {
-    imp::may_replace(dir, child)
+    Native::may_replace(dir, child)
+}
+
+/// What differs per OS: where the account record puts the home, and how this account's rights on a directory are
+/// read.
+trait Os {
+    /// The home the OS account record has for this user (never `HOME`), if any.
+    fn recorded_home() -> Option<PathBuf>;
+
+    /// As [`may_replace`].
+    fn may_replace(dir: &Path, child: &Path) -> io::Result<bool>;
 }
 
 fn accept(home: Option<PathBuf>, recorded: Option<PathBuf>) -> Result<PathBuf, &'static str> {
@@ -49,6 +57,6 @@ mod tests {
 
     #[test]
     fn every_host_records_an_absolute_home() {
-        assert!(imp::recorded_home().is_some_and(|home| home.is_absolute()));
+        assert!(Native::recorded_home().is_some_and(|home| home.is_absolute()));
     }
 }
