@@ -10,7 +10,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager, Webview};
 
 use crate::platform::reset_handoff::{self, Handoff};
-use crate::platform::{account, app_data, credentials, uninstall};
+use crate::platform::{account, app_data, connector_service, credentials, uninstall};
 use crate::AppState;
 
 #[derive(Default)]
@@ -316,14 +316,21 @@ fn reset_before_exit() -> Result<(Vec<Value>, Value, &'static str), Value> {
             probe_safe_connector(&cli, Duration::from_secs(10))?;
             Some(cli)
         }
-        Err(_) if !data.join(INSTALL_RECORD).exists() => {
-            // A missing record is only an absent service when all owned data is gone too.
-            if !fresh_service_absent(&home) || residual_connector_data(&data) {
+        // No install record: the connector step runs only for an installed connector, so it is skipped when the
+        // service is proven absent. The proof is the OS's fresh answer (`connector_service`: the service manager's
+        // jobs and the running programs), never the missing record itself; and an interrupted uninstall may have
+        // left data behind. Any doubt refuses before anything is touched.
+        Err(_)
+            if fs::symlink_metadata(data.join(INSTALL_RECORD))
+                .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            if !connector_service::absent(&home) || residual_connector_data(&data) {
                 return Err(refused("reset.service-failed"));
             }
             None
         }
-        // A recorded connector this host cannot run: its service stays, so nothing is reset.
+        // A recorded connector this host cannot run (Windows until the local host runs its CLI there): its service
+        // stays, so nothing is reset.
         Err(NoConnectorCli::Unsupported) => return Err(refused("reset.unsupported-connector")),
         Err(NoConnectorCli::Refused) => return Err(refused("reset.unsafe")),
     };
@@ -413,68 +420,6 @@ fn write_atomic_json(path: &Path, value: &Value) -> Result<(), &'static str> {
         return Err("report-write");
     }
     Files::write_private(path, &bytes).map_err(|_| "report-write")
-}
-
-/// Fresh proof that the connector's service is gone: its launchd jobs and processes (macOS). This proof is still
-/// selected by OS here: moving it behind a platform concern, with the Windows and Linux proofs, is separate work
-/// (plan row 43, D-SERVICE-ABSENCE).
-#[cfg(target_os = "macos")]
-fn fresh_service_absent(home: &Path) -> bool {
-    fresh_service_absent_with(
-        home,
-        |label| {
-            let target = format!("gui/{}/{label}", unsafe { libc::geteuid() });
-            let Ok(output) = Command::new("/bin/launchctl").args(["print", &target]).output() else { return false };
-            if output.status.success() {
-                return false;
-            }
-            let detail = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
-            output.status.code() == Some(113) || detail.contains("could not find service")
-        },
-        || {
-            let Ok(output) = Command::new("/bin/ps").args(["-axo", "comm="]).output() else { return false };
-            output.status.success() && !managed_process_in_ps(&output.stdout)
-        },
-    )
-}
-
-/// No proof of the service's absence on this host yet (plan row 43): a missing install record is never taken for an
-/// absent service, and the reset refuses before anything is deleted.
-#[cfg(not(target_os = "macos"))]
-fn fresh_service_absent(_home: &Path) -> bool {
-    false
-}
-
-#[cfg(target_os = "macos")]
-fn managed_process_in_ps(output: &[u8]) -> bool {
-    String::from_utf8_lossy(output).lines().any(|line| {
-        let path = Path::new(line.trim());
-        matches!(
-            path.file_name().and_then(|name| name.to_str()),
-            Some("sidevoice-core-rust" | "sidevoice-core" | "sidevoice-connector")
-        )
-    })
-}
-
-#[cfg(target_os = "macos")]
-fn fresh_service_absent_with(
-    home: &Path,
-    launchd_absent: impl Fn(&str) -> bool,
-    processes_absent: impl Fn() -> bool,
-) -> bool {
-    if fs::canonicalize(home).ok().as_deref() != Some(home) {
-        return false;
-    }
-    for label in ["dev.sidevoice.core", "dev.sidevoice.connector"] {
-        match fs::symlink_metadata(home.join("Library/LaunchAgents").join(format!("{label}.plist"))) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            _ => return false,
-        }
-        if !launchd_absent(label) {
-            return false;
-        }
-    }
-    processes_absent()
 }
 
 fn run_checked_uninstall<T>(
@@ -1029,35 +974,6 @@ mod connector_cli_tests {
         assert!(!marker.exists());
         assert_eq!(cli.run(&["uninstall", "--json"], Duration::from_secs(2)).unwrap()["state"], "removed");
         assert!(marker.exists());
-    }
-}
-
-/// The macOS proof of the service's absence (launchd and `ps`), which only macOS has; plan row 43 moves it.
-#[cfg(all(test, target_os = "macos"))]
-mod service_absence_tests {
-    use super::*;
-
-    #[test]
-    fn missing_install_record_requires_fresh_launchd_and_process_absence() {
-        let home = tempfile::tempdir().unwrap();
-        let home = fs::canonicalize(home.path()).unwrap();
-        assert!(!fresh_service_absent_with(&home, |_| false, || true));
-        assert!(!fresh_service_absent_with(&home, |_| true, || false));
-        assert!(fresh_service_absent_with(&home, |_| true, || true));
-        fs::create_dir_all(home.join("Library/LaunchAgents")).unwrap();
-        fs::write(home.join("Library/LaunchAgents/dev.sidevoice.core.plist"), b"orphan").unwrap();
-        assert!(!fresh_service_absent_with(&home, |_| true, || true));
-    }
-
-    #[test]
-    fn production_process_parser_recognizes_bundled_core() {
-        assert!(managed_process_in_ps(
-            b"/Users/test/Library/Application Support/Sidevoice/install/releases/1.2.3/core/bin/sidevoice-core-rust\n"
-        ));
-        assert!(managed_process_in_ps(
-            b"/Users/test/Library/Application Support/Sidevoice/install/releases/1.2.3/bin/sidevoice-connector\n"
-        ));
-        assert!(!managed_process_in_ps(b"/usr/bin/other-service\n"));
     }
 }
 

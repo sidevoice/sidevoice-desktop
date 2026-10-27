@@ -90,7 +90,9 @@ store itself and redirected ancestors remain protected roots. All three engine-o
 before any is removed. A failed check is reported, with that directory left in place. Connector data and release roots must be the exact default
 Sidevoice roots (`D` by `sidevoice-platform`'s one rule, `data_dir::standard`, inside the account home); unsafe environment overrides or install records refuse before the installed uninstaller runs.
 If installation metadata is absent, a fresh service/process check and a check for residual connector data
-must both pass before the service is called absent. Each OS observes its own service manager and processes (plan row 43). A connector recorded on a host where the app cannot run its
+must both pass before the service is called absent. That check is `platform::connector_service`: launchd and the process list on macOS, systemd's user manager and
+the process list on Linux, Task Scheduler and the process list on Windows; any doubt (a manager that cannot be asked,
+an unreadable answer or process list) refuses with `{key: "reset.service-failed"}`. A connector recorded on a host where the app cannot run its
 CLI refuses with `{key: "reset.unsupported-connector"}`. A retained recovery executable named by `install.json`
 is used on a partial-uninstall retry. Custom profiles and separately installed cores are excluded.
 No page-supplied path is deleted.

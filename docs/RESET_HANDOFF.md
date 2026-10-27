@@ -87,10 +87,9 @@ admission, clean up, release admission before relaunch. The reset report lives i
 control directory (`state_dir()`), checked with the same private-directory API as the locks.
 
 The transaction steps (pre-confirmation checks, service before exit, provider keys, cleanup after exit, the
-relaunched app's report) are one flow in `data.rs` for every host. The only step still selected by OS there is the
-fresh proof that the connector's service is absent when its install record is missing (macOS: launchd and the
-process list; elsewhere no proof, so the reset refuses before deleting anything); moving it behind a platform
-concern with Windows and Linux proofs is plan row 43. The provider-key step is common
+relaunched app's report) are one flow in `data.rs` for every host. With no connector install record, the
+connector step is skipped only on a fresh proof that the connector's service is absent, which
+`platform::connector_service` reads from each OS (service manager jobs and running programs; fail-closed). The provider-key step is common
 (`platform::credentials`, docs/CREDENTIALS.md).
 
 The handoff protocol tests remain portable and included by the existing native fixture target; a path

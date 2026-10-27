@@ -80,6 +80,8 @@ nix = { version = "0.31", default-features = false, features = ["user"] }
 [target.'cfg(windows)'.dependencies]
 windows-native-keyring-store = "1.1"
 regex = "1"
+# The Task Scheduler task list (`schtasks /FO CSV`) read as CSV, quoting decoded (platform/connector_service/windows.rs).
+csv = "1"
 # The taskbar's colour, to draw the tray mark in the brand's look for it (src/tray.rs).
 winreg = "0.55"
 # Whether a mouse button went down elsewhere, to close the call controls card's panels, and whether the room is on another
