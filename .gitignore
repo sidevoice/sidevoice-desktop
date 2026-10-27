@@ -1,6 +1,8 @@
 node_modules/
 src-tauri/target/
 src-tauri/gen/schemas/
+# Held by src-tauri/build.rs while it regenerates the command permissions.
+src-tauri/.build.lock
 dist/
 *.dmg
 .DS_Store
