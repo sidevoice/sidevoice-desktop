@@ -108,7 +108,7 @@ fn responsible_pid(pid: Pid) -> io::Result<Pid> {
 // test cannot be phrased against the shared interface; the shared lifetime tests cover the rest.
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{spawn_writer, Fixture};
+    use super::super::tests::{remove_at, spawn_writer, Fixture};
     use super::*;
 
     #[test]
@@ -153,7 +153,7 @@ mod tests {
         assert!(writer.wait().unwrap().success());
         let released = wait_released_with::<Fixture>(retry, deadline).unwrap();
         assert_eq!(std::fs::read(selected.join("cookies")).unwrap(), b"last shutdown write");
-        remove(&released, &selected).unwrap();
+        remove_at(&released, &selected).unwrap();
         assert!(!selected.exists());
     }
 }

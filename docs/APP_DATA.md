@@ -75,21 +75,58 @@ Caches, Logs, Saved Application State, then `preferences`.
 
 ## Removal policy
 
-Every removal goes through the shared held-root capability (`HeldDirectory` + `Removal`): a selected entry and its
-whole tree are preflighted before anything is deleted, then checked again while deleting; links (and Windows
+Every folder removal goes through the shared held-root capability (`HeldDirectory` + `Removal`): a selected entry and
+its whole tree are preflighted before anything is deleted, then checked again while deleting; links (and Windows
 reparse entries) are unlinked, never followed; hard links lose only the selected name; a `.lnk` shortcut is an
 ordinary file; mount and device changes below the held parent are refused. The model store's three children are
 preflighted together before any is removed; the store and other siblings stay. Missing folders are completed steps.
+macOS's `defaults` domain (`preferences`) is not a folder: it is deleted with `/usr/bin/defaults`, outside all this,
+and only when the home was acquired (below); a refused home resets no preferences either.
 
-The shared capability checks mounts only from the held parent down. Until it covers the rest, `app_data` refuses,
-between the account home and that parent: a home that is not its own canonical path or is a volume's root, any
-directory on the way that is not its own canonical path (any link), and any directory on another volume. Paths are
-compared with `dunce` (no Windows verbatim prefixes) and volumes read with `file-id` (maintained, notify-rs). A
-same-device bind mount on Linux is not detected by this interim check; the former Linux mount-ID probe moves to
-the shared capability as a follow-up.
+**The home.** A deletion acquires the account home once, before its first folder step, and every step uses that held
+home. It is first opened without following a link at it (`Fs::open_read`; a link there is refused), and that handle
+stays open while it is checked: a directory, its own canonical path (compared with `dunce`, no Windows verbatim
+prefixes), not a volume's root (its parent on its volume, read with `file-id`), and with fixed ancestry: every
+directory from the filesystem root down to the home is a real directory (no link or reparse point) that this account
+could not take out and replace in the directory above (`account::may_replace`). On Unix that is a directory the
+account does not own and cannot write and search (`access(2)`, so groups and ACLs count), or a sticky one whose entry
+the account does not own; on Windows the system's own access check, by opening with each right: no
+`WRITE_DAC`/`WRITE_OWNER` on the directory, and not both `FILE_ADD_SUBDIRECTORY` there and a way to remove the entry.
+The home is then held with `Directory::open_identified`, bound to the validated handle: the held directory's identity
+(device and inode; Windows volume serial and file id) must equal the validated one's, compared while both are open,
+and on Windows the held directory must be no reparse point. A link or junction swapped in at the home or above it
+after validation, including an empty home or parent turned into a junction in place, leads elsewhere and is refused.
 
-As before, a malicious process with the same account or administrator privileges can race filesystem layout
-changes; this is not atomic confinement against it. Runtime errors can leave partial cleanup; the journal and retry
-remain necessary. Cleanup never elevates, launches a shell, kills writers or schedules deletion after reboot.
+The two checks answer different questions, so both stay. Identity binding makes the directory held the one validated.
+Fixed ancestry makes the directory validated the account's home: without it, an account that can change a directory
+above its home could move another real directory to the home's path before the deletion starts, and a handle opened
+there, validated and held, would be that directory, with nothing to tell it apart.
+
+A home this refuses is an unsupported layout and fails closed with `unsafe-directory`: no folder is touched and no
+preferences are reset. For example a home under a directory the account owns (`/srv/accounts/ana/profile` with
+`/srv/accounts/ana` the account's), directly in a world-writable sticky directory, or anywhere an elevated or root
+process runs (it may change everything). A home on another device than its parent (its own filesystem: LUKS, a
+per-user Btrfs subvolume, a network share) is refused by the volume-root policy (`volume-root`). Ordinary homes pass:
+`/home/<name>` (also with `/home` its own mount), `/Users/<name>`, Fedora Atomic's `/var/home/<name>` (when the
+account database records it there), `C:\Users\<name>`, and a home that is its own mount on its parent's device (a
+bind mount, as systemd-homed activates its directory and fscrypt homes). A home recorded through a link
+(`/home/<name>` with `/home` a link) is refused by the canonical-path check, as before. The checks assume the
+account's credentials are stable and unprivileged while they run (they are this process's groups and token; set-ID
+launches are not supported).
+
+**Below the home.** Every directory a removal works in (the held parent, the model store, a browser storage root's
+parent) is reached beneath the held home with the shared `Directory::open_beneath`, one component at a time relative
+to the handle before it, never by path: a link, junction or other reparse point anywhere on the way (the directory
+itself included), and a directory on another device, mount (a same-device bind mount included) or volume, are
+refused. A browser storage root must itself be an ordinary directory, opened beneath its parent.
+
+`check_tree` (the connector's protected roots, and the browser storage preflight) deletes nothing: it acquires its own
+home (canonical, not a volume root, but without the fixed-ancestry check) and checks the tree beneath it. No removal
+relies on it: the deletion that follows uses the home it acquired itself and repeats its own checks.
+
+A process with the same account can still change what is *inside* a held directory while it is being deleted; the
+removal capability rechecks identity and refuses replaced ancestors, but this is not atomic confinement against an
+administrator. Runtime errors can leave partial cleanup; the journal and retry remain necessary. Cleanup never
+elevates, launches a shell, kills writers or schedules deletion after reboot.
 
 This is deletion code: it requires human review before merge.
