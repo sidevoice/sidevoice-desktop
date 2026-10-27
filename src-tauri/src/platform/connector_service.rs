@@ -16,6 +16,15 @@ mod imp;
 use imp::Native;
 
 use std::path::Path;
+use std::time::Duration;
+
+/// How long a service manager or process-list command may take: the connector's own deadline for its manager
+/// commands (sidevoice-connector `platform/service.rs`, `MANAGER_LIMIT`).
+const COMMAND_LIMIT: Duration = Duration::from_secs(30);
+/// How long its output may take to end once it has exited.
+const PIPE_GRACE: Duration = Duration::from_secs(2);
+/// The most output kept per stream; more is an answer that was not read whole.
+const OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
 
 /// The connector's jobs (sidevoice-connector `service/jobs.rs`), by the names each service manager derives what it
 /// calls them from: the reverse-DNS label (launchd) and the short name (the systemd unit `<name>.service`, the Windows
@@ -69,6 +78,33 @@ fn managed(reported: &str) -> bool {
     let name = name.to_ascii_lowercase();
     let name = name.strip_suffix(std::env::consts::EXE_SUFFIX).unwrap_or(&name);
     PROGRAMS.iter().any(|program| name == *program || (name.len() == SHORT_NAME && program.starts_with(name)))
+}
+
+/// Run `program` with `args` through the shared bounded runner (`sidevoice-platform` `process`: its own process
+/// group or Job Object, no console window, killed and reaped on any exit from the wait), at most [`COMMAND_LIMIT`].
+/// `None` when it could not be started, missed its deadline, or its output was cut short or did not end: an answer
+/// that was not read whole is never one that says "absent". Runs on a thread of its own with its own runtime, so it
+/// can be called from any context.
+fn run(program: &str, args: &[&str]) -> Option<sidevoice_platform::process::Output> {
+    run_within(COMMAND_LIMIT, program, args)
+}
+
+fn run_within(limit: Duration, program: &str, args: &[&str]) -> Option<sidevoice_platform::process::Output> {
+    use sidevoice_platform::process::{Process, Processes};
+    use std::process::Stdio;
+    let mut command = tokio::process::Command::new(program);
+    command.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().ok()?;
+        runtime.block_on(async move {
+            let child = Processes::spawn_tree(command).await.ok()?;
+            let output = child.output(limit, PIPE_GRACE, OUTPUT_LIMIT).await.ok()?;
+            (output.complete && !output.truncated).then_some(output)
+        })
+    })
+    .join()
+    .ok()
+    .flatten()
 }
 
 /// What differs per OS. A host whose manager this module cannot ask keeps the defaults: the service is never proven
@@ -164,6 +200,26 @@ mod tests {
         assert!(!managed("sidevoice"));
         assert!(!managed("sidevoice-desktop"));
         assert!(!managed(""));
+    }
+
+    /// Not a check: the slow command the deadline test runs (this test binary, asked for this test alone).
+    #[test]
+    #[ignore]
+    fn sleeper() {
+        std::thread::sleep(Duration::from_secs(20));
+    }
+
+    #[test]
+    fn a_command_past_its_deadline_is_no_answer() {
+        let program = std::env::current_exe().unwrap();
+        let program = program.to_str().unwrap();
+        let listed = run_within(Duration::from_secs(20), program, &["--list"]).expect("a quick command answers");
+        assert!(listed.status.success());
+        let started = std::time::Instant::now();
+        let slow = ["--ignored", "--exact", "platform::connector_service::tests::sleeper"];
+        assert!(run_within(Duration::from_millis(500), program, &slow).is_none());
+        assert!(started.elapsed() < Duration::from_secs(10), "the slow command was killed, not waited for");
+        assert!(run("/nonexistent/sidevoice-no-such-program", &[]).is_none());
     }
 
     /// The real observation on this host: a test run never proves a service exists, but every answer it gives must be

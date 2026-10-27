@@ -1,9 +1,8 @@
 //! macOS: launchd. A job is the LaunchAgent `~/Library/LaunchAgents/<label>.plist` loaded in this user's GUI domain
-//! (`gui/<uid>/<label>`); the running programs come from `ps`.
+//! (`gui/<uid>/<label>`); the running programs come from `ps`. Both commands go through the bounded runner.
 
-use super::{Os, Seen};
+use super::{run, Os, Seen};
 use std::path::Path;
-use std::process::Command;
 
 pub(super) struct Native;
 
@@ -15,7 +14,7 @@ impl Os for Native {
             Err(_) => return Seen::Unknown,
         }
         let target = format!("gui/{}/{}", unsafe { libc::geteuid() }, label);
-        let Ok(output) = Command::new("/bin/launchctl").args(["print", &target]).output() else { return Seen::Unknown };
+        let Some(output) = run("/bin/launchctl", &["print", &target]) else { return Seen::Unknown };
         if output.status.success() {
             return Seen::Present;
         }
@@ -28,7 +27,7 @@ impl Os for Native {
     }
 
     fn programs() -> Option<Vec<String>> {
-        let output = Command::new("/bin/ps").args(["-axo", "comm="]).output().ok()?;
+        let output = run("/bin/ps", &["-axo", "comm="])?;
         output.status.success().then(|| String::from_utf8_lossy(&output.stdout).lines().map(str::to_owned).collect())
     }
 }
