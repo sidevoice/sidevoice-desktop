@@ -41,12 +41,6 @@ trait Os {
         None
     }
 
-    /// What the app's voice host holds now; `None` where the app runs no call of its own.
-    #[cfg(feature = "probe")]
-    fn held<R: Runtime>(_app: &AppHandle<R>) -> Option<String> {
-        None
-    }
-
     /// The switches with native setters in this build/runtime; none where no binding is implemented.
     fn webview_switches() -> Vec<Switch> {
         Vec::new()
@@ -100,12 +94,11 @@ fn resident_bytes(bytes: u64) -> Option<u64> {
     (bytes > 0).then_some(bytes)
 }
 
-/// What the app's voice host holds now (`keeps=N lanes=M`), or `None` when this host runs no call of its own.
-/// The call runs in the app on macOS only; elsewhere the page runs it, so there is nothing to report. That
-/// difference is `crate::voice` being macOS-only; this goes once the app's voice call is host-agnostic.
+/// What the app's voice host holds now (`keeps=N lanes=M`), or `None` while no voice host is managed.
 #[cfg(feature = "probe")]
 pub fn voice_holds<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
-    Native::held(app)
+    use tauri::Manager;
+    app.try_state::<crate::voice::VoiceState>().map(|state| state.held())
 }
 
 /// Only switches with native setters in this build/runtime. Empty in releases and on Windows/Linux,
@@ -165,7 +158,7 @@ mod tests {
 
     #[cfg(feature = "probe")]
     #[test]
-    fn an_app_without_a_call_of_its_own_holds_nothing_to_report() {
+    fn an_app_without_a_voice_host_holds_nothing_to_report() {
         let app = tauri::test::mock_builder().build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
         assert_eq!(voice_holds(app.handle()), None);
     }

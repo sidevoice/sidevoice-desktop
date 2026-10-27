@@ -19,7 +19,7 @@ already have with your agent into a voice call. The agent keeps its context and 
 speaks its replies, and you answer by voice and can interrupt it — from the sofa or on a walk, not only at your desk.
 
 **sidevoice-desktop** is the app you call from, for macOS, Windows and Linux. A call lives in its own window with a
-tray icon and a global mute shortcut. On Macs the call itself runs natively: your microphone, turns, transcription,
+tray icon and a global mute shortcut. The call itself runs natively: your microphone, turns, transcription,
 the agent's voice and its echo cancellation, on your computer.
 
 ## How it fits
@@ -28,7 +28,7 @@ the agent's voice and its echo cancellation, on your computer.
 |---|---|
 | [sidevoice-connector](https://github.com/sidevoice/sidevoice-connector) | What you install on the machine where your agents run: their voice tools, and the supervisor of that machine's core. |
 | [sidevoice-core](https://github.com/sidevoice/sidevoice-core) | The room: the conversations, presence and routing to the agents. Text and events only; the app talks to it. |
-| [sidevoice-voice](https://github.com/sidevoice/sidevoice-voice) | The voice call: turns, transcription, speech, playback, barge-in, echo cancellation. Compiled into the app on macOS. |
+| [sidevoice-voice](https://github.com/sidevoice/sidevoice-voice) | The voice call: turns, transcription, speech, playback, barge-in, echo cancellation. Compiled into the app. |
 | [sidevoice-engine](https://github.com/sidevoice/sidevoice-engine) | The models, local and remote, and their catalogue. Compiled into the app. |
 | **sidevoice-desktop** (this repository) | The app you call from. |
 | [sidevoice-web](https://github.com/sidevoice/sidevoice-web) | The call interface. The app bundles a recorded build of it and never loads a remote page. |
@@ -41,12 +41,10 @@ Beta. What works today:
 - The tray (menu-bar) icon with the call state (idle, live, muted): mute, hang up, show the window, the room's Settings, quit.
   Closing the window keeps the call going.
 - A global mute shortcut (⌘⇧M on macOS, Ctrl+Shift+M elsewhere; configurable in the room's Settings).
-- On Macs (macOS 13+), the voice call runs in the app: the microphone and the speaker with the app's own echo
-  cancellation (WebRTC AEC3), transcription (Whisper, on Metal on Apple Silicon) and speech (Kokoro) downloaded the
-  first time they are needed, or a provider (OpenAI, ElevenLabs) with your own key, kept in the macOS keychain.
-  **For now the voice call is macOS only:** the Windows and Linux builds run the call in the page, and the page they
-  bundle cannot load its voice modules until `@sidevoice/voice` and `@sidevoice/engine` are published on npm, so
-  they open rooms but cannot talk yet.
+- The voice call runs in the app: the microphone and the speaker with the app's own echo cancellation (Sonora, pure
+  Rust), transcription (Whisper, on Metal on Apple Silicon) and speech (Kokoro) downloaded the first time they are
+  needed. A provider (OpenAI, ElevenLabs) with your own key is kept in the macOS keychain, so on Windows and Linux
+  the call uses local models only for now.
 
 The macOS build is ad-hoc signed and not notarized yet, so macOS blocks it on first open (below).
 

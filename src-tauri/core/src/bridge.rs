@@ -26,6 +26,7 @@ const BUILD_PLACEHOLDER: &str = "\"__SIDEVOICE_BUILD__\"";
 const COMPUTER_NAME_PLACEHOLDER: &str = "\"__SIDEVOICE_COMPUTER_NAME__\"";
 const MICROPHONE_SETTINGS_PLACEHOLDER: &str = "\"__SIDEVOICE_MICROPHONE_SETTINGS__\"";
 const DEBUG_PLACEHOLDER: &str = "\"__SIDEVOICE_DEBUG__\"";
+const UNINSTALL_PLACEHOLDER: &str = "\"__SIDEVOICE_UNINSTALL__\"";
 
 /// What the host platform offers the page beyond the web: the platform interface supplies it, the bridge only tells it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -70,6 +71,8 @@ pub fn call_controls_push(patch: &serde_json::Value) -> String {
 /// `diagnostics`: native diagnostic switches the shell actually implements on this runtime.
 /// `media_keys`: media-control ownership supplied by the shell, independently of native voice.
 /// `capabilities`: what the host platform offers (`host.localHost`, `host.voice`).
+/// `uninstall`: whether the app can also remove itself after the reset (`host.data.uninstall`); delete-all and its
+/// report (`host.data.deleteAll`, `resetReport`) are on every host.
 #[allow(clippy::too_many_arguments)]
 pub fn script_for_origin(
     origin: &str,
@@ -81,6 +84,7 @@ pub fn script_for_origin(
     diagnostics: &[crate::debug_options::Switch],
     media_keys: Option<&str>,
     capabilities: Capabilities,
+    uninstall: bool,
 ) -> String {
     let literal = serde_json::to_string(origin).expect("a string serialises");
     let keys = serde_json::to_string(&media_keys).expect("serialises");
@@ -100,6 +104,7 @@ pub fn script_for_origin(
         .replacen(COMPUTER_NAME_PLACEHOLDER, &serde_json::to_string(&computer_name).expect("serialises"), 1)
         .replacen(DEBUG_PLACEHOLDER, &debug, 1)
         .replacen(MICROPHONE_SETTINGS_PLACEHOLDER, flag(microphone_settings), 1)
+        .replacen(UNINSTALL_PLACEHOLDER, flag(uninstall), 1)
 }
 
 /// The bridge's version: the room page sends it in every snapshot (bridge/desktop-bridge.js).
@@ -392,6 +397,7 @@ mod tests {
             &crate::debug_options::Switch::ALL,
             Some("native"),
             both,
+            false,
         );
         assert!(!s.contains("__SIDEVOICE_ROOM_ORIGIN__"));
         assert!(!s.contains("__SIDEVOICE_MEDIA_KEYS__"));
@@ -402,16 +408,17 @@ mod tests {
         assert!(!s.contains("__SIDEVOICE_COMPUTER_NAME__"));
         assert!(!s.contains("__SIDEVOICE_DEBUG__"));
         assert!(!s.contains("__SIDEVOICE_MICROPHONE_SETTINGS__"));
+        assert!(!s.contains("__SIDEVOICE_UNINSTALL__"));
         let platform = r#""native", true, true"#;
         let dev_build = r#"{"channel":"dev","version":"0.4.0"}"#;
         // A dev build has the developer options: what the settings keep, and the switches this platform has.
         let debug = off.state(&crate::debug_options::Switch::ALL);
         let expected = format!(
-            r#"factory(window, "https://voice.example.com", {platform}, false, {dev_build}, null, {debug}, false)"#
+            r#"factory(window, "https://voice.example.com", {platform}, false, {dev_build}, null, {debug}, false, false)"#
         );
         assert!(s.contains(&expected), "{expected}");
         let no_diagnostics =
-            script_for_origin("https://voice.example.com", false, &dev, None, &off, false, &[], None, both);
+            script_for_origin("https://voice.example.com", false, &dev, None, &off, false, &[], None, both, false);
         assert!(no_diagnostics.contains(&off.state(&[]).to_string()));
         assert!(no_diagnostics.contains(r#"factory(window, "https://voice.example.com", null,"#));
         // A release that can update itself: the page gets `host.updater`, and `host.build` says it is a release.
@@ -426,9 +433,10 @@ mod tests {
             &crate::debug_options::Switch::ALL,
             Some("native"),
             both,
+            true,
         );
         let expected = format!(
-            r#"factory(window, "https://voice.example.com", {platform}, true, {{"channel":"release","version":"0.4.0"}}, "Mac de Ana", null, true)"#
+            r#"factory(window, "https://voice.example.com", {platform}, true, {{"channel":"release","version":"0.4.0"}}, "Mac de Ana", null, true, true)"#
         );
         assert!(offered.contains(&expected), "{expected}");
         // A hostile value cannot break out of the string literal.
@@ -442,6 +450,7 @@ mod tests {
             &crate::debug_options::Switch::ALL,
             Some("native"),
             both,
+            false,
         );
         assert!(evil.contains(r#"factory(window, "\"); alert(1); (\"""#));
         assert!(evil.contains(r#"{"channel":"dev","version":"0.4.0"}, "\"); alert(1); (\"", "#));
@@ -462,6 +471,7 @@ mod tests {
                 &[],
                 Some("native"),
                 capabilities,
+                false,
             )
         };
         let reference = script(Capabilities { local_host: true, voice: true });
@@ -476,6 +486,32 @@ mod tests {
             assert_eq!(restored, reference, "local_host={local_host} voice={voice}");
         }
         assert_eq!(Capabilities::default(), Capabilities { local_host: false, voice: false });
+    }
+
+    /// The uninstall is told apart from the local host; delete-all needs no flag (every host).
+    #[test]
+    fn the_uninstall_offer_is_told_to_the_page_and_changes_nothing_else() {
+        let dev = BuildInfo::new("dev", "0.4.0", "", "");
+        let off = crate::debug_options::DebugOptions::default();
+        let script = |uninstall| {
+            script_for_origin(
+                "https://voice.example.com",
+                false,
+                &dev,
+                None,
+                &off,
+                false,
+                &[],
+                None,
+                Capabilities::default(),
+                uninstall,
+            )
+        };
+        // The factory's last arguments: the microphone settings (false here), then the uninstall.
+        let call = |told: &str| format!("false, {told});\n}})(function installDesktopBridge(");
+        let (without, with) = (script(false), script(true));
+        assert!(without.contains(&call("false")) && with.contains(&call("true")));
+        assert_eq!(with.replacen(&call("true"), &call("false"), 1), without);
     }
 
     #[test]

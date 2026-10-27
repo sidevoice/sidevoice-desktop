@@ -146,9 +146,35 @@ pub fn absent(app: &AppHandle) -> bool {
     imp::absent(app)
 }
 
-#[cfg(target_os = "macos")]
+/// A connector install under way: the reset refuses before its confirmation. Never where there is no local host.
 pub fn installing(app: &AppHandle) -> bool {
     imp::installing(app)
+}
+
+/// The connector's CLI as the reset runs it: the one the install in `D` recorded, checked as the local-host crate
+/// checks it (`Cli::installed`). Nothing else runs the connector's `uninstall`.
+pub use imp::ConnectorCli;
+
+/// Why the reset has no connector CLI to run.
+pub enum NoConnectorCli {
+    /// The app cannot run the connector's CLI on this host (the local-host crate is not built here).
+    Unsupported,
+    /// The install record in `D` is missing or unsafe, or names nothing runnable.
+    Refused,
+}
+
+/// The connector's CLI the install in `data` (`D`) recorded, for the reset's connector step.
+pub fn connector_cli(data: &std::path::Path) -> Result<ConnectorCli, NoConnectorCli> {
+    imp::connector_cli(data).ok_or(if imp::RUNS_CONNECTOR_CLI {
+        NoConnectorCli::Refused
+    } else {
+        NoConnectorCli::Unsupported
+    })
+}
+
+/// Run the connector's CLI with `args`, waiting at most `timeout`: its JSON answer when it says `ok`, else `None`.
+pub fn run_connector(cli: &ConnectorCli, args: &[&str], timeout: std::time::Duration) -> Option<Value> {
+    imp::run_connector(cli, args, timeout)
 }
 
 #[cfg(unix)]
@@ -204,9 +230,21 @@ mod imp {
     pub fn absent(app: &AppHandle) -> bool {
         host(app).is_ok_and(|host| json!(host.state())["state"] == "absent")
     }
-    #[cfg(target_os = "macos")]
     pub fn installing(app: &AppHandle) -> bool {
         host(app).is_ok_and(|host| json!(host.state())["state"] == "installing")
+    }
+
+    pub use sidevoice_local_host::cli::Cli as ConnectorCli;
+
+    /// The local-host crate runs the connector's CLI here.
+    pub const RUNS_CONNECTOR_CLI: bool = true;
+
+    pub fn connector_cli(data: &std::path::Path) -> Option<ConnectorCli> {
+        ConnectorCli::installed(&DataDirs::new(data)).ok()
+    }
+
+    pub fn run_connector(cli: &ConnectorCli, args: &[&str], timeout: std::time::Duration) -> Option<Value> {
+        cli.run(args, timeout).ok()
     }
 
     pub fn pairing(app: &AppHandle) -> Answer {
@@ -282,6 +320,22 @@ mod imp {
     }
     pub fn host_log(_app: &AppHandle) -> Option<std::path::PathBuf> {
         None
+    }
+    pub fn installing(_app: &AppHandle) -> bool {
+        false
+    }
+    /// No connector CLI the app can run here: never made.
+    pub enum ConnectorCli {}
+    pub const RUNS_CONNECTOR_CLI: bool = false;
+    pub fn connector_cli(_data: &std::path::Path) -> Option<ConnectorCli> {
+        None
+    }
+    pub fn run_connector(
+        cli: &ConnectorCli,
+        _args: &[&str],
+        _timeout: std::time::Duration,
+    ) -> Option<serde_json::Value> {
+        match *cli {}
     }
     pub struct Begun;
     pub fn begin_install(_app: &AppHandle, _job: &str) -> Result<Begun, serde_json::Value> {
