@@ -4,7 +4,7 @@
 //!
 //! A path that is not there is not unsafe: it is [`Check::Missing`], and the caller treats the host as absent.
 
-use crate::platform::ipc::{self, Peer, Stream};
+use crate::platform::ipc::{self, Stream};
 use crate::Refusal;
 use sidevoice_platform::fs::{Access, Directory, HeldDirectory};
 use sidevoice_platform::ipc::Endpoint;
@@ -52,29 +52,20 @@ pub fn owned_not_writable(path: &Path) -> Result<(), Check> {
         .map_err(|e| storage_error(path, "install.unsafe", e))
 }
 
-/// Connects to `endpoint`, whose directory is `dir`, after checking `dir` with `dir_check`, and refuses a peer that is
-/// not this user. An endpoint nobody listens on (absent, refused) is [`Check::Missing`].
+/// Connects to `endpoint`, whose directory is `dir`, after checking `dir` with `dir_check`, and refuses a server that is
+/// not this user (`peer.uid-mismatch`; the shared channel checks the process at the other end). An endpoint nobody
+/// listens on (absent, refused) is [`Check::Missing`].
 pub fn connect(dir: &Path, endpoint: &Endpoint, dir_check: fn(&Path) -> Result<(), Check>) -> Result<Stream, Check> {
     dir_check(dir)?;
-    let stream = match ipc::connect(endpoint) {
-        Ok(stream) => stream,
-        Err(e) if matches!(e.kind(), io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused) => {
-            return Err(Check::Missing)
-        }
-        Err(e) => {
-            return Err(Check::Unsafe(Refusal::new("socket.unreachable", format!("{endpoint} cannot be reached: {e}"))))
-        }
-    };
-    let peer = stream.peer().map_err(|e| {
-        Check::Unsafe(Refusal::new("peer.uid-mismatch", format!("Who answers on {endpoint} is unknown: {e}")))
-    })?;
-    if let Peer::Other(peer) = peer {
-        return Err(Check::Unsafe(Refusal::new(
+    match ipc::connect(endpoint) {
+        Ok(stream) => Ok(stream),
+        Err(e) if matches!(e.kind(), io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused) => Err(Check::Missing),
+        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => Err(Check::Unsafe(Refusal::new(
             "peer.uid-mismatch",
-            format!("{endpoint} is served by {peer}, not this user; the app does not talk to it."),
-        )));
+            format!("{endpoint} is not served by this user ({e}); the app does not talk to it."),
+        ))),
+        Err(e) => Err(Check::Unsafe(Refusal::new("socket.unreachable", format!("{endpoint} cannot be reached: {e}")))),
     }
-    Ok(stream)
 }
 
 #[cfg(test)]
@@ -82,6 +73,7 @@ mod tests {
     use super::*;
     use sidevoice_desktop_test_support::platform::storage::{StorageFixture, StorageFixtures};
     use sidevoice_platform::fs::Directory;
+    use sidevoice_platform::ipc::Address as _;
 
     #[test]
     fn a_private_directory_passes_and_anything_looser_does_not() {
@@ -138,12 +130,11 @@ mod tests {
     fn the_peer_of_our_own_socket_is_us() {
         let tmp = tempfile::tempdir().unwrap();
         StorageFixtures::private(tmp.path());
-        let endpoint = ipc::scratch_endpoint(tmp.path(), "s");
+        let endpoint = Endpoint::new(tmp.path(), "s");
         let _listener = ipc::listen(&endpoint).unwrap();
-        let stream = connect(tmp.path(), &endpoint, private_dir).unwrap();
-        assert_eq!(stream.peer().unwrap(), Peer::ThisUser);
+        connect(tmp.path(), &endpoint, private_dir).unwrap();
         // Nobody listening: absent, not unsafe.
-        let none = ipc::scratch_endpoint(tmp.path(), "none");
+        let none = Endpoint::new(tmp.path(), "none");
         assert_eq!(connect(tmp.path(), &none, private_dir).err(), Some(Check::Missing));
         // A loose directory: refused before any connect.
         StorageFixtures::readable(tmp.path());

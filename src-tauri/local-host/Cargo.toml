@@ -1,7 +1,7 @@
 [package]
 name = "sidevoice-local-host"
 version = "0.1.0"
-description = "The local host (docs/LOCAL_HOST.md): this computer's core reached over its private local channel, paired by the app, its state, and the proxy the bundled page talks to. Blocking IO, no Tauri; what differs per OS is in `platform`."
+description = "The local host (docs/LOCAL_HOST.md): this computer's core reached over its private local channel, paired by the app, its state, and the proxy the bundled page talks to. Blocking IO, no Tauri; the OS is reached through `sidevoice-platform`."
 edition = "2021"
 rust-version = "1.98"
 license = "Apache-2.0"
@@ -13,19 +13,18 @@ publish = false
 fetch = ["dep:reqwest"]
 
 [dependencies]
-# `D`, the local data directory, by the one rule every Sidevoice program shares, and the endpoint records the core
-# and the connector publish in it (`ipc::Endpoint`): at the tag of a core release.
-sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.12.4" }
+# The OS for the local host, at the tag of a core release: `D`, the local data directory, by the one rule every
+# Sidevoice program shares (`data_dir`); the endpoint records the core and the connector publish in it, the local
+# channel and its check that the server is this user (`ipc`); a run as a tree of its own, its bounded output, and
+# whether a recorded process is there (`process`); private files, trusted programs and which file a handle is (`fs`).
+sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.14.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The computer's kernel hostname, used when naming the core's local pairing.
 gethostname = "1.1"
-# The local channel (`platform::ipc`): Unix sockets and Windows named pipes behind one blocking API, and the peer's
-# credentials; the crate `sidevoice_platform::ipc` is built on, already in the tree.
-interprocess = "2.4"
-# A run as a tree of its own (`platform::process`): a process group on Unix; already in the tree through
-# sidevoice-platform.
-process-wrap = { version = "10", default-features = false, features = ["std", "process-group"] }
+# `sidevoice_platform`'s local channel and child execution are async; the local host blocks, so it drives them on a
+# runtime of its own (`runtime`). Already in the tree through sidevoice-platform.
+tokio = { version = "1", features = ["rt-multi-thread", "time", "io-util", "macros", "sync", "process"] }
 # The install's scratch directory: a fresh name below the temporary directory, taken only if nobody has it, created
 # private by `sidevoice_platform::fs` (`install::Scratch`); already in the tree.
 tempfile = "3"
@@ -44,11 +43,6 @@ tar = { version = "0.4", default-features = false }
 # The registry over HTTPS, blocking (`fetch` only): the reqwest, TLS stack (rustls, the platform's verifier) and system
 # proxy the engine's model downloads and the app's updater already use; only its `blocking` client is added.
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls", "system-proxy"], optional = true }
-
-# Unix (`platform`): this process's effective uid, signal 0 to ask whether a process exists, and `poll` on a child's
-# pipes, with no `unsafe` of ours; already in the tree through sidevoice-platform.
-[target.'cfg(unix)'.dependencies]
-rustix = { version = "1", features = ["process", "event"] }
 
 [dev-dependencies]
 sidevoice-desktop-test-support = { path = "../../test-support" }

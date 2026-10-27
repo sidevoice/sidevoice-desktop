@@ -41,8 +41,9 @@ and does not remove connector releases, conversations or agent registrations.
 ## Trust
 
 The boundary is the OS user. Before any connect to the core's socket (the one `C/core.json` names) the app checks that `C` is a directory (not a
-link) owned by this user with mode & 077 = 0 (`identity.unsafe-directory`), and after connecting that the socket's peer
-is this user (its effective uid read from the connection, `SO_PEERCRED` / `LOCAL_PEERCRED`, through `platform::ipc`; `peer.uid-mismatch`).
+link) owned by this user with mode & 077 = 0 (`identity.unsafe-directory`), and on connecting that the process at
+the other end is this user (`sidevoice_platform::ipc`'s connect: the peer's effective uid on Unix, the user of the pipe
+server's process on Windows; `peer.uid-mismatch`).
 Filesystem checks and record access use `sidevoice-platform` at core **v0.11.1** (`fs::Directory`,
 `HeldDirectory`, `Access`, and `Fs::trusted_program`); there is no desktop copy of those primitives. Discovery opens
 existing directories only. Missing directories/records remain absence; unsafe paths remain refusals. Every directory
@@ -146,8 +147,9 @@ inferred from `service` or from the service's own `installed`.
 Through `install.json` `command` only — an array of absolute paths, then the subcommand; never a shell, never a PATH
 lookup, always a deadline (`Cli::installed` is the one place R4 extends with the bundled executable; the one program
 run from elsewhere is the package's own installer, from the install's private directory, Install below). The deadline
-covers the program's exit and both its output streams. Each run is a process group of its own: once the program has
-exited, whatever of its group still runs (a child holding the pipes) is killed, and on a timeout the whole group is.
+covers the program's exit; its output streams then have 0.5 s more to close. Each run is a tree of its own
+(`sidevoice_platform::process`: a process group, a Job Object on Windows): once the program has exited, whatever of its
+tree still runs (a child holding the pipes) is killed at most 0.5 s later, and on a timeout the whole tree is.
 What it hands to the service manager (`service start` → launchd) or starts detached in a session of its own is not in
 the group and stays.
 
@@ -219,7 +221,8 @@ file, anything else, or an archive that does not decode (`archive-type`); more t
 (`archive-size`). Files are created anew (`O_EXCL`, no link followed) 0600, or 0700 where the archive marks them
 executable; directories 0700; nothing else of an entry (owner, times) is applied. An entry that is already there is
 refused (`archive-path`). No link is ever created, so a path built from checked segments stays inside. The package must
-carry `bin/sidevoice-connector` as a regular file (`install.no-bundle`), which is then made 0700.
+carry `bin/sidevoice-connector` as a regular file (`install.no-bundle`), which is always written 0700, and run only
+once `Fs::trusted_program` accepts it.
 
 **The installer** runs as the CLI does (Actions, above): its absolute path, no shell, a process group of its own,
 `SIDEVOICE_DATA_DIR` = `D`, the rest of the app's environment as it is (the agents it registers are found with the
@@ -230,7 +233,8 @@ its group (a release it was staging is cleaned by the next install, which the in
 (docs/BRIDGE.md lists them: `install.rolled-back` → `install.rollback`, `install.verify-failed` →
 `service.start.failed`, `core.package-missing` → `install.no-bundle`, `core.package-mismatch` → `install.authenticity`
 `manifest`, `service.busy` → `install.busy`, `connector.failed` → `install.failed`), any other key as it is; with its
-params, its message and its last 20 lines of error output (`log_tail`).
+params, its message and its last 20 lines of error output (`log_tail`; none when it was killed at its deadline, until
+`sidevoice_platform::process` keeps the output of a run it kills).
 
 **After it.** The state is read fresh (the installed version too). If the app's pairing had been refused (`refused`),
 it pairs again, as `reconnect()` does: the person asked for this computer. A core the app cannot reach within 30 s

@@ -5017,11 +5017,8 @@ dependencies = [
  "flate2",
  "gethostname",
  "getrandom 0.3.4",
- "interprocess",
  "p256",
- "process-wrap",
  "reqwest",
- "rustix",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -5030,12 +5027,13 @@ dependencies = [
  "subtle",
  "tar",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]
 name = "sidevoice-platform"
-version = "0.12.4"
-source = "git+https://github.com/sidevoice/sidevoice-core?tag=v0.12.4#a3cc858a5931416e8a2ddc0b91e312b42370055c"
+version = "0.14.0"
+source = "git+https://github.com/sidevoice/sidevoice-core?tag=v0.14.0#87c0ec409aa5eba2f30f76022fc739da762b4d2a"
 dependencies = [
  "dirs",
  "exacl",
