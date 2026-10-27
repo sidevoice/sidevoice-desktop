@@ -13,7 +13,7 @@ impl Os for Native {
             Ok(_) => return Seen::Present,
             Err(_) => return Seen::Unknown,
         }
-        let target = format!("gui/{}/{}", unsafe { libc::geteuid() }, label);
+        let target = format!("gui/{}/{}", nix::unistd::Uid::effective(), label);
         let Some(output) = run("/bin/launchctl", &["print", &target]) else { return Seen::Unknown };
         if output.status.success() {
             return Seen::Present;
