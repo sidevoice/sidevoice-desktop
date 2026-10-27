@@ -216,8 +216,10 @@ impl Cmd {
     /// The program and its arguments as the process will get them.
     #[cfg(test)]
     pub fn argv(&self) -> Vec<String> {
-        let program = self.command.get_program().to_string_lossy().into_owned();
-        std::iter::once(program).chain(self.command.get_args().map(|arg| arg.to_string_lossy().into_owned())).collect()
+        let program = self.command.as_std().get_program().to_string_lossy().into_owned();
+        std::iter::once(program)
+            .chain(self.command.as_std().get_args().map(|arg| arg.to_string_lossy().into_owned()))
+            .collect()
     }
 
     /// What goes to the program's standard input.
