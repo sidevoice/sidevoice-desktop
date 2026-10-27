@@ -9,7 +9,7 @@ license = "Apache-2.0"
 description = "Local-host fixtures and native fake connector; never shipped."
 
 [dependencies]
-sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.13.0", features = ["test-support"] }
+sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.14.0", features = ["test-support"] }
 process-wrap = { version = "10", default-features = false, features = ["std", "process-session", "creation-flags"] }
 serde_json = "1"
 base64 = "0.22"

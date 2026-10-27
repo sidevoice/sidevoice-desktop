@@ -12,24 +12,25 @@
 //! `home` must still be the account home (`account::home`) when the deletion starts; another home (an alternate
 //! profile supplied as `HOME`) is refused before anything is deleted.
 //!
-//! For a deletion the account home is checked (its own canonical path, not a volume's root, and every directory from
-//! the filesystem root down to it one this account cannot swap: `account::may_replace`) and then held beneath its
-//! held parent without following a link (`Home::hold`); a home under a directory the account owns or may write, or on
-//! another mount than its parent, is refused (`unsafe-directory`). Each directory a removal works in is then
-//! reached beneath that held home with `Directory::open_beneath`, one component at a time relative to the handle
-//! before it: no step goes by path between the check and the handle the removal uses, and a link, junction or other
-//! reparse point on the way (the directory itself included) or a change of device, mount or volume is refused. The
-//! removal itself is the shared held-root capability (`HeldDirectory` + `Removal`): the selected entry and its whole
-//! tree are preflighted before anything is deleted, links are unlinked and never followed, entry identity and mounts
-//! below the held parent are checked while deleting. [`check_tree`] (also the browser storage preflight) deletes
-//! nothing and acquires its own home, without the ancestry check; the removal that follows does not rely on it. What
-//! is not a folder (macOS's `defaults` domain) is outside this, and is reset only for a held home.
+//! For a deletion the account home is opened without following a link and checked through that handle (its own
+//! canonical path, not a volume's root, and every directory from the filesystem root down to it one this account
+//! cannot swap: `account::may_replace`), then held bound to that very directory (`Directory::open_identified`); a home
+//! under a directory the account owns or may write is refused (`unsafe-directory`). Each directory a removal works in
+//! is then reached beneath that held home with `Directory::open_beneath`, one component at a time relative to the
+//! handle before it: no step goes by path between the check and the handle the removal uses, and a link, junction or
+//! other reparse point on the way (the directory itself included) or a change of device, mount or volume is refused.
+//! The removal itself is the shared held-root capability (`HeldDirectory` + `Removal`): the selected entry and its
+//! whole tree are preflighted before anything is deleted, links are unlinked and never followed, entry identity and
+//! mounts below the held parent are checked while deleting. [`check_tree`] (also the browser storage preflight)
+//! deletes nothing and acquires its own home, without the ancestry check; the removal that follows does not rely on
+//! it. What is not a folder (macOS's `defaults` domain) is outside this, and is reset only for a held home.
 
 use crate::platform::account;
 use crate::platform::webview_data::{self, Released};
-use sidevoice_platform::fs::{Access, Directory, HeldDirectory};
+use sidevoice_platform::fs::{Access, Directory, Files, Fs, HeldDirectory};
 use sidevoice_platform::removal::Removal;
 use std::ffi::OsStr;
+use std::fs::File;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
@@ -239,12 +240,11 @@ impl std::ops::Deref for Held<'_> {
 }
 
 impl Home {
-    /// Check that `path` is a clean absolute path, its own canonical form, not a volume's root (its parent is on its
-    /// volume), and that its ancestry is fixed ([`fixed_ancestry`]), then hold it beneath its parent ([`Home::hold`]):
-    /// the directory held is the one checked, with nothing on the way swapped for a link or turned into one.
+    /// Acquire the account home for a deletion: [`Home::validate`] it, check while that handle stays open that its
+    /// ancestry is fixed ([`fixed_ancestry`]), then hold the very directory validated ([`Home::hold`]).
     fn open(path: &Path) -> Self {
-        let held = Self::check(path).and_then(|()| match fixed_ancestry(path) {
-            Ok(true) => Self::hold(path),
+        let held = Self::validate(path).and_then(|validated| match fixed_ancestry(path) {
+            Ok(true) => Self::hold(path, &validated),
             _ => Err("unsafe-directory"),
         });
         Self { path: path.to_path_buf(), held }
@@ -253,12 +253,19 @@ impl Home {
     /// For [`check_tree`] only, which deletes nothing: [`Home::open`] without the fixed-ancestry check. A deletion
     /// never uses it: it acquires the home with [`Home::open`] itself.
     fn read_only(path: &Path) -> Self {
-        Self { path: path.to_path_buf(), held: Self::check(path).and_then(|()| Self::hold(path)) }
+        Self { path: path.to_path_buf(), held: Self::validate(path).and_then(|validated| Self::hold(path, &validated)) }
     }
 
-    fn check(path: &Path) -> Result<(), &'static str> {
+    /// Open `path` without following a link at it (`Fs::open_read`: a link there is refused) and check, with that
+    /// handle open, that it is a directory at a clean absolute path that is its own canonical form and not a volume's
+    /// root (its parent is on its volume). The handle is returned open: it is what [`Home::hold`] binds to.
+    fn validate(path: &Path) -> Result<File, &'static str> {
         if !clean_absolute(path) || path.components().filter(|part| matches!(part, Component::Normal(_))).count() < 2 {
             return Err("unsafe-path");
+        }
+        let validated = Files::open_read(path).map_err(|_| "unsafe-home")?;
+        if !validated.metadata().is_ok_and(|metadata| metadata.is_dir()) {
+            return Err("unsafe-home");
         }
         if dunce::canonicalize(path).ok().as_deref() != Some(path) {
             return Err("unsafe-home");
@@ -268,21 +275,19 @@ impl Home {
         if volume(outer).map_err(|_| "inspect-mount")? != expected {
             return Err("volume-root");
         }
-        Ok(())
+        Ok(validated)
     }
 
-    /// Hold the home as a child of its held parent, opened beneath it with no link or reparse point followed
-    /// (`Directory::open_beneath`), so the directory held is the real one at the checked path, never what a link or a
-    /// junction made in place would lead to. Opening the parent follows trusted links, but nothing on its way can be
-    /// swapped ([`fixed_ancestry`]) or turned into a link in place: each directory down to the parent contains the
-    /// next one, and Windows makes a junction only of an empty directory. A home on another device, mount or volume
-    /// than its parent is refused with the rest (`unsafe-directory`).
-    fn hold(path: &Path) -> Result<HeldDirectory, &'static str> {
-        let (parent, name) = split(path).map_err(|_| "unsafe-home")?;
-        let parent = HeldDirectory::open(parent, Access::NotWritableByOthers).map_err(|_| "unsafe-home")?;
-        parent.open_beneath(Path::new(name), Access::NotWritableByOthers).map_err(|error| match error.kind() {
-            io::ErrorKind::NotFound => "unsafe-home",
-            _ => "unsafe-directory",
+    /// Hold the directory `validated` is open on, at `path` (`Directory::open_identified`): the held leaf's identity
+    /// must be the validated handle's, compared while both are open, so a link or junction swapped in at the home or
+    /// above it after validation (on Windows also an empty home turned into a junction in place) leads elsewhere and
+    /// is refused (`unsafe-directory`).
+    fn hold(path: &Path, validated: &File) -> Result<HeldDirectory, &'static str> {
+        HeldDirectory::open_identified(path, Access::NotWritableByOthers, validated).map_err(|error| {
+            match error.kind() {
+                io::ErrorKind::NotFound => "unsafe-home",
+                _ => "unsafe-directory",
+            }
         })
     }
 
@@ -374,7 +379,7 @@ fn volume(path: &Path) -> io::Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sidevoice_platform::fs::{Files, Fs, TestFiles};
+    use sidevoice_platform::fs::TestFiles;
     use std::fs;
 
     fn fixture() -> (tempfile::TempDir, PathBuf) {
@@ -792,21 +797,30 @@ mod tests {
         assert!(outside_intact(&backup.join("Library/Application Support/Sidevoice/Models")));
     }
 
-    /// The home swapped for a link after its checks and before it is opened (on Windows an empty home can even be
-    /// turned into a junction in place): it is opened beneath its parent without following the link, and refused.
+    /// The home swapped for a link after it was validated and before it is held (on Windows an empty home can even be
+    /// turned into a junction in place): the directory that would be held is not the one validated, and is refused.
     #[test]
     fn a_home_swapped_for_a_link_between_its_checks_and_its_open_is_refused() {
         let (temp, home) = fixture();
         let backup = temp.path().join("backup");
+        let moved = temp.path().join("moved");
         outside_layout(&backup);
-        assert_eq!(Home::check(&home), Ok(()));
-        fs::remove_dir(&home).unwrap();
+        let validated = Home::validate(&home).unwrap();
+        fs::rename(&home, &moved).unwrap();
         Files::symlink(&backup, &home);
-        assert_eq!(Home::hold(&home).err(), Some("unsafe-directory"));
+        assert_eq!(Home::hold(&home, &validated).err(), Some("unsafe-directory"));
         assert!(outside_intact(&backup));
-        // The same home as a real directory again is held.
+        // A real directory put at the path in its place is not the one validated either.
         fs::remove_file(&home).or_else(|_| fs::remove_dir(&home)).unwrap();
         directory(&home);
-        assert!(Home::hold(&home).is_ok());
+        assert_eq!(Home::hold(&home, &validated).err(), Some("unsafe-directory"));
+        // The validated home back at its path is held; a link already at the path is refused when validating.
+        fs::remove_dir(&home).unwrap();
+        fs::rename(&moved, &home).unwrap();
+        assert!(Home::hold(&home, &validated).is_ok());
+        drop(validated);
+        fs::rename(&home, &moved).unwrap();
+        Files::symlink(&moved, &home);
+        assert_eq!(Home::validate(&home).err(), Some("unsafe-home"));
     }
 }
