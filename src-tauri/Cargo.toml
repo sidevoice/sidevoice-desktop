@@ -66,8 +66,9 @@ cpal = { version = "0.18", default-features = false }
 # `fetch`: its install's HTTPS client, for "Prepare this computer" (docs/LOCAL_HOST.md → Install).
 [target.'cfg(unix)'.dependencies]
 sidevoice-local-host = { path = "local-host", features = ["fetch"] }
-# The account home the user database records (platform/account/unix.rs), never `HOME`; already in the graph.
-nix = { version = "0.31", default-features = false, features = ["user"] }
+# The account home the user database records, and what this user may change in a directory on the way to it
+# (platform/account/unix.rs: `access`), never `HOME`; already in the graph.
+nix = { version = "0.31", default-features = false, features = ["user", "fs"] }
 
 [target.'cfg(windows)'.dependencies]
 # The taskbar's colour, to draw the tray mark in the brand's look for it (src/tray.rs).

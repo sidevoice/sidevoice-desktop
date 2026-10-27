@@ -12,13 +12,17 @@
 //! `home` must still be the account home (`account::home`) when the deletion starts; another home (an alternate
 //! profile supplied as `HOME`) is refused before anything is deleted.
 //!
-//! The account home is checked once (its own canonical path, not a volume's root) and held. Every directory a
-//! deletion works in is then reached beneath that held home with `Directory::open_beneath`, one component at a time
-//! relative to the handle before it: no step goes by path between the check and the handle the removal uses, and a
-//! link, junction or other reparse point on the way (the directory itself included) or a change of device, mount or
-//! volume is refused. Every removal goes through the shared held-root capability (`HeldDirectory` + `Removal`): the
-//! selected entry and its whole tree are preflighted before anything is deleted, links are unlinked and never
-//! followed, entry identity and mounts below the held parent are checked while deleting.
+//! For a deletion the account home is checked (its own canonical path, not a volume's root, and every directory from
+//! the filesystem root down to it one this account cannot swap: `account::may_replace`) and then held; a home under a
+//! directory the account owns or may write is refused (`unsafe-directory`). Each directory a removal works in is then
+//! reached beneath that held home with `Directory::open_beneath`, one component at a time relative to the handle
+//! before it: no step goes by path between the check and the handle the removal uses, and a link, junction or other
+//! reparse point on the way (the directory itself included) or a change of device, mount or volume is refused. The
+//! removal itself is the shared held-root capability (`HeldDirectory` + `Removal`): the selected entry and its whole
+//! tree are preflighted before anything is deleted, links are unlinked and never followed, entry identity and mounts
+//! below the held parent are checked while deleting. [`check_tree`] (also the browser storage preflight) deletes
+//! nothing and acquires its own home, without the ancestry check; the removal that follows does not rely on it. What
+//! is not a folder (macOS's `defaults` domain) is outside this.
 
 use crate::platform::account;
 use crate::platform::webview_data::{self, Released};
@@ -69,11 +73,7 @@ pub fn delete_data(home: &Path, browser: &io::Result<Released>, steps: Steps) ->
 /// whole tree could be removed. It must be an ordinary directory, reached from `home` with no link or volume
 /// change. A missing directory passes. The `Err` is a short reason.
 pub fn check_tree(home: &Path, path: &Path) -> Result<(), &'static str> {
-    let (parent, name) = split(path)?;
-    match Home::open(home).reach(parent)? {
-        Some(held) => check_entry(&held, name),
-        None => Ok(()),
-    }
+    Home::read_only(home).check_tree(path)
 }
 
 /// What the OS keeps for the app beyond its folders. Hosts with nothing more keep the default.
@@ -238,14 +238,24 @@ impl std::ops::Deref for Held<'_> {
 }
 
 impl Home {
-    /// Check that `path` is a clean absolute path, its own canonical form, and not a volume's root (its parent is
-    /// on its volume), then hold it. The account home's parent is not this user's to replace, so the home held is
-    /// the one checked.
+    /// Check that `path` is a clean absolute path, its own canonical form, not a volume's root (its parent is on its
+    /// volume), and that its ancestry is fixed ([`fixed_ancestry`]), then hold it. Opening follows links, so it is the
+    /// fixed ancestry that makes the directory held the one checked: nothing on the way can be swapped for a link.
     fn open(path: &Path) -> Self {
-        Self { path: path.to_path_buf(), held: Self::check(path) }
+        let held = Self::check(path).and_then(|()| match fixed_ancestry(path) {
+            Ok(true) => Self::hold(path),
+            _ => Err("unsafe-directory"),
+        });
+        Self { path: path.to_path_buf(), held }
     }
 
-    fn check(path: &Path) -> Result<HeldDirectory, &'static str> {
+    /// For [`check_tree`] only, which deletes nothing: [`Home::open`] without the fixed-ancestry check. A deletion
+    /// never uses it: it acquires the home with [`Home::open`] itself.
+    fn read_only(path: &Path) -> Self {
+        Self { path: path.to_path_buf(), held: Self::check(path).and_then(|()| Self::hold(path)) }
+    }
+
+    fn check(path: &Path) -> Result<(), &'static str> {
         if !clean_absolute(path) || path.components().filter(|part| matches!(part, Component::Normal(_))).count() < 2 {
             return Err("unsafe-path");
         }
@@ -257,6 +267,10 @@ impl Home {
         if volume(outer).map_err(|_| "inspect-mount")? != expected {
             return Err("volume-root");
         }
+        Ok(())
+    }
+
+    fn hold(path: &Path) -> Result<HeldDirectory, &'static str> {
         HeldDirectory::open(path, Access::NotWritableByOthers).map_err(|_| "unsafe-home")
     }
 
@@ -288,6 +302,15 @@ impl Home {
         }
     }
 
+    /// [`check_tree`] beneath this held home.
+    fn check_tree(&self, path: &Path) -> Result<(), &'static str> {
+        let (parent, name) = split(path)?;
+        match self.reach(parent)? {
+            Some(held) => check_entry(&held, name),
+            None => Ok(()),
+        }
+    }
+
     /// Remove one browser storage root, released (`webview_data`), which refuses a root that is a link.
     fn remove_browser_storage(&self, released: &Released, path: &Path) -> Result<(), &'static str> {
         let (parent, _) = split(path)?;
@@ -296,6 +319,22 @@ impl Home {
             None => Ok(()),
         }
     }
+}
+
+/// Whether nothing from the filesystem root down to `home` (canonical) can be swapped by this account: every directory
+/// on the way, `home` included, is a real directory (no link or reparse point), and this account could not replace it
+/// inside the directory above (`account::may_replace`). Checked root first, so each step names the entry in a
+/// directory already found fixed. A layout this refuses (a home under a directory the account owns or may write) is
+/// unsupported: no destructive work is done there.
+fn fixed_ancestry(home: &Path) -> io::Result<bool> {
+    let chain: Vec<&Path> = home.ancestors().collect();
+    for pair in chain.windows(2).rev() {
+        let (child, dir) = (pair[0], pair[1]);
+        if !std::fs::symlink_metadata(child)?.is_dir() || account::may_replace(dir, child)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn clean_absolute(path: &Path) -> bool {
@@ -336,8 +375,14 @@ mod tests {
         Files::create_private(path, b"preserve outside owned names").unwrap();
     }
 
+    /// The fixture home as a read-only check holds it: fixtures live under a temporary directory this account owns,
+    /// which [`Home::open`] refuses (`a_home_under_a_directory_this_account_can_change_is_refused_before_it_is_held`).
+    fn held(home: &Path) -> Home {
+        Home::read_only(home)
+    }
+
     fn remove_entry(home: &Path, path: &Path) -> Result<(), &'static str> {
-        Home::open(home).remove_entry(path)
+        held(home).remove_entry(path)
     }
 
     /// macOS as `dirs`, Tauri's common rule, `data_dir` and `webview_data` resolve it for `home`: the logs that rule
@@ -373,7 +418,7 @@ mod tests {
     ) -> Vec<(&'static str, Result<(), &'static str>)> {
         let mut seen = Vec::new();
         assert!(folders
-            .delete(&Home::open(home), browser, &mut |name, result| {
+            .delete(&held(home), browser, &mut |name, result| {
                 seen.push((name, result));
                 true
             })
@@ -433,9 +478,7 @@ mod tests {
             assert!(path.join("payload").is_file());
         }
         // The account's own home is accepted and its folders go.
-        assert!(
-            delete_folders(&Home::open(&alternate), Ok(separate_logs(&alternate)), &busy(), &mut |_, _| true).is_ok()
-        );
+        assert!(delete_folders(&held(&alternate), Ok(separate_logs(&alternate)), &busy(), &mut |_, _| true).is_ok());
         assert!(!places.logs.exists() && !places.models.join("blobs").exists());
     }
 
@@ -514,7 +557,7 @@ mod tests {
         let folders = Folders::from(macos(&home));
         let mut seen = 0;
         assert!(matches!(
-            folders.delete(&Home::open(&home), &busy(), &mut |_, _| {
+            folders.delete(&held(&home), &busy(), &mut |_, _| {
                 seen += 1;
                 false
             }),
@@ -561,10 +604,10 @@ mod tests {
             put(&folders.models.join(child).join("payload"));
         }
         Files::let_others_change(&folders.models.join("partial"));
-        assert!(folders.remove_models(&Home::open(&home)).is_err());
+        assert!(folders.remove_models(&held(&home)).is_err());
         assert!(folders.models.join("models/payload").is_file());
         Files::shut_others_out(&folders.models.join("partial"));
-        assert_eq!(folders.remove_models(&Home::open(&home)), Ok(()));
+        assert_eq!(folders.remove_models(&held(&home)), Ok(()));
         assert!(MODEL_CHILDREN.iter().all(|child| fs::symlink_metadata(folders.models.join(child)).is_err()));
         assert!(outside.join("sentinel").is_file());
     }
@@ -582,7 +625,7 @@ mod tests {
         let mut places = macos(&home);
         places.models = home.join("linked");
         directory(&outside.join("blobs"));
-        assert!(Folders::from(places).remove_models(&Home::open(&home)).is_err());
+        assert!(Folders::from(places).remove_models(&held(&home)).is_err());
         assert!(outside.join("blobs").is_dir());
         let alias = temp.path().join("home-alias");
         Files::symlink(&home, &alias);
@@ -601,11 +644,11 @@ mod tests {
         directory(&tree);
         put(&tree.join("payload"));
         Files::symlink(temp.path().join("absent"), tree.join("link"));
-        assert_eq!(check_tree(&home, &tree), Ok(()));
-        assert_eq!(check_tree(&home, &home.join("missing")), Ok(()));
+        assert_eq!(held(&home).check_tree(&tree), Ok(()));
+        assert_eq!(held(&home).check_tree(&home.join("missing")), Ok(()));
         Files::symlink(&tree, home.join("alias"));
-        assert!(check_tree(&home, &home.join("alias")).is_err());
-        assert!(check_tree(&home, temp.path()).is_err());
+        assert!(held(&home).check_tree(&home.join("alias")).is_err());
+        assert!(held(&home).check_tree(temp.path()).is_err());
         assert!(tree.join("payload").is_file());
     }
 
@@ -642,7 +685,7 @@ mod tests {
         directory(&home.join("Library/Application Support/Sidevoice"));
         Files::symlink(&outside, &places.models);
         let mut seen = Vec::new();
-        let _ = delete_folders(&Home::open(&home), Ok(places), &busy(), &mut |name, result| {
+        let _ = delete_folders(&held(&home), Ok(places), &busy(), &mut |name, result| {
             seen.push((name, result));
             true
         });
@@ -676,7 +719,7 @@ mod tests {
         let mut places = macos(&home);
         places.models = store.clone();
         let folders = Folders::from(places);
-        let held = Home::open(&home);
+        let held = held(&home);
         // Validated and held; now swap the store (a deletion root) and `state` (an ancestor of `state/logs`).
         fs::rename(&store, home.join("store-moved")).unwrap();
         Files::symlink(&outside, &store);
@@ -685,12 +728,49 @@ mod tests {
         assert_eq!(folders.remove_models(&held), Err("unsafe-directory"));
         assert_eq!(held.remove_entry(&state.join("logs").join("payload")), Err("unsafe-directory"));
         assert_eq!(held.remove_entry(&state.join("logs")), Err("unsafe-directory"));
-        assert_eq!(check_tree(&home, &state.join("logs")), Err("unsafe-directory"));
-        assert_eq!(check_tree(&home, &store), Err("unsafe-directory"));
+        assert_eq!(held.check_tree(&state.join("logs")), Err("unsafe-directory"));
+        assert_eq!(held.check_tree(&store), Err("unsafe-directory"));
         assert!(outside_intact(&outside));
         assert!(outside_intact(&home.join("store-moved")) && outside_intact(&home.join("state-moved")));
         // A link that is itself the selected entry is unlinked, never followed.
         assert_eq!(held.remove_entry(&state), Ok(()));
         assert!(fs::symlink_metadata(&state).is_err() && outside_intact(&outside));
+    }
+
+    /// The layout in which the account could swap its home for a link between the checks and the open: a home under a
+    /// directory the account owns. It is refused before the home is opened, and nothing is deleted.
+    #[test]
+    fn a_home_under_a_directory_this_account_can_change_is_refused_before_it_is_held() {
+        let (temp, home) = fixture();
+        let places = separate_logs(&home);
+        for path in [places.logs.as_path(), places.models.parent().unwrap()] {
+            for ancestor in path.ancestors().collect::<Vec<_>>().into_iter().rev().filter(|dir| dir.starts_with(&home))
+            {
+                if !ancestor.exists() {
+                    directory(ancestor);
+                }
+            }
+        }
+        outside_layout(&places.models);
+        put(&places.logs.join("payload"));
+        assert!(account::may_replace(home.parent().unwrap(), &home).unwrap());
+        assert!(!fixed_ancestry(&home).unwrap());
+        let refused = Home::open(&home);
+        assert!(matches!(refused.held, Err("unsafe-directory")));
+        let mut seen = Vec::new();
+        let _ = delete_folders(&refused, Ok(places), &busy(), &mut |name, result| {
+            seen.push((name, result));
+            true
+        });
+        let places = separate_logs(&home);
+        assert_eq!(seen[1], ("models", Err("unsafe-directory")));
+        assert_eq!(seen[4], ("logs", Err("unsafe-directory")));
+        assert!(outside_intact(&places.models) && places.logs.join("payload").is_file());
+        // The swap itself, done before the home is opened: the link is not its own canonical path.
+        let backup = temp.path().join("backup");
+        fs::rename(&home, &backup).unwrap();
+        Files::symlink(&backup, &home);
+        assert!(matches!(Home::open(&home).held, Err("unsafe-home")));
+        assert!(outside_intact(&backup.join("Library/Application Support/Sidevoice/Models")));
     }
 }

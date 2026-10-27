@@ -1,7 +1,8 @@
 //! The account running the app. Destructive work (deleting the app's data, the connector's uninstall) happens only
 //! in [`home`], and only when `HOME` names the home the OS account record has for this user.
 
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
 #[path = "account/unix.rs"]
@@ -15,6 +16,15 @@ mod imp;
 /// another home.
 pub fn home() -> Result<PathBuf, &'static str> {
     accept(dirs::home_dir(), imp::recorded_home())
+}
+
+/// Whether this account could take the entry `child` out of the directory `dir` and put something else under its
+/// name, now or after first changing `dir`'s access (`dir` a directory, `child` a name directly in it). Asked of every
+/// directory from the filesystem root down to the home before destructive work there: where the answer is `false`
+/// all the way down, the account cannot swap its home or anything above it for a link. A failed inspection is an
+/// error, never `false`.
+pub fn may_replace(dir: &Path, child: &Path) -> io::Result<bool> {
+    imp::may_replace(dir, child)
 }
 
 fn accept(home: Option<PathBuf>, recorded: Option<PathBuf>) -> Result<PathBuf, &'static str> {

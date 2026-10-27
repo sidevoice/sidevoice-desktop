@@ -66,20 +66,38 @@ Caches, Logs, Saved Application State, then `preferences`.
 
 ## Removal policy
 
-Every removal goes through the shared held-root capability (`HeldDirectory` + `Removal`): a selected entry and its
-whole tree are preflighted before anything is deleted, then checked again while deleting; links (and Windows
+Every folder removal goes through the shared held-root capability (`HeldDirectory` + `Removal`): a selected entry and
+its whole tree are preflighted before anything is deleted, then checked again while deleting; links (and Windows
 reparse entries) are unlinked, never followed; hard links lose only the selected name; a `.lnk` shortcut is an
 ordinary file; mount and device changes below the held parent are refused. The model store's three children are
 preflighted together before any is removed; the store and other siblings stay. Missing folders are completed steps.
+macOS's `defaults` domain (`preferences`) is not a folder: it is deleted with `/usr/bin/defaults`, outside all this.
 
-The account home is checked once and held: it must be its own canonical path (compared with `dunce`, no Windows
-verbatim prefixes) and not a volume's root (its parent on its volume, read with `file-id`). Every directory a
-removal works in (the held parent, the model store, a browser storage root's parent) is then reached beneath that
-held home with the shared `Directory::open_beneath`, one component at a time relative to the handle before it,
-never by path: a link, junction or other reparse point anywhere on the way (the directory itself included), and a
-directory on another device, mount (a same-device bind mount included) or volume, are refused. Nothing is checked by
-path and then reopened, so the directory the removal holds is the one that was checked. A browser storage root and a
-protected connector root (`check_tree`) must themselves be ordinary directories, opened beneath their parent.
+**The home.** A deletion acquires the account home once, before its first folder step, and every folder step uses
+that held home. It must be its own canonical path (compared with `dunce`, no Windows verbatim prefixes), not a
+volume's root (its parent on its volume, read with `file-id`), and its ancestry must be fixed: every directory from
+the filesystem root down to the home is a real directory (no link or reparse point) that this account could not take
+out and replace in the directory above (`account::may_replace`). On Unix that is a directory the account does not own
+and cannot write and search (`access(2)`, so groups and ACLs count), or a sticky one whose entry the account does not
+own; on Windows the system's own access check, by opening with each right: no `WRITE_DAC`/`WRITE_OWNER` on the
+directory, and not both `FILE_ADD_SUBDIRECTORY` there and a way to remove the entry. Only then is the home opened, so
+the directory held is the one checked: nothing on the way to it can be swapped for a link in between. A home this
+refuses is an unsupported layout and fails closed with `unsafe-directory` (nothing is deleted), for example a home
+under a directory the account owns (`/srv/accounts/ana/profile` with `/srv/accounts/ana` the account's), directly in
+a world-writable sticky directory, or anywhere an elevated or root process runs (it may change everything). Ordinary
+homes pass: `/home/<name>`, `/Users/<name>`, Fedora Atomic's `/var/home/<name>` (when the account database
+records it there), `C:\Users\<name>`. A home recorded through a link (`/home/<name>` with `/home` a link) is refused
+by the canonical-path check, as before.
+
+**Below the home.** Every directory a removal works in (the held parent, the model store, a browser storage root's
+parent) is reached beneath the held home with the shared `Directory::open_beneath`, one component at a time relative
+to the handle before it, never by path: a link, junction or other reparse point anywhere on the way (the directory
+itself included), and a directory on another device, mount (a same-device bind mount included) or volume, are
+refused. A browser storage root must itself be an ordinary directory, opened beneath its parent.
+
+`check_tree` (the connector's protected roots, and the browser storage preflight) deletes nothing: it acquires its own
+home (canonical, not a volume root, but without the fixed-ancestry check) and checks the tree beneath it. No removal
+relies on it: the deletion that follows uses the home it acquired itself and repeats its own checks.
 
 A process with the same account can still change what is *inside* a held directory while it is being deleted; the
 removal capability rechecks identity and refuses replaced ancestors, but this is not atomic confinement against an
