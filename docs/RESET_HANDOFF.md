@@ -88,8 +88,8 @@ job does not escape that job; an early helper death prevents cleanup and leaves 
 `relaunch`, and `state_dir()`, a sibling of the standard data root (`…/dev.sidevoice.desktop-reset`) on every host.
 The shared checked filesystem, channel and child libraries supply most of what differs per OS. The rest is a private
 `trait Os` in `reset_handoff/{macos,linux,windows}.rs`: `OPEN_FILES_BLOCK_REMOVAL` (default `false`; Windows `true`)
-and the hold that observes the parent's termination (`hold`, `terminated`; honest defaults: nothing can be held), and
-`PROGRAM_CHECKED` (default `true`; macOS `false`, read through `program_checked()`).
+and the hold that observes the parent's termination (`hold`, `terminated`; honest defaults: nothing can be held). The program check is not part of it:
+`installed_program` in `data.rs` holds `PROGRAM_CHECKED` (`true`; macOS `false`).
 The decision (wait for termination where open files block removal, refuse when the hold fails) is in the common
 file. Windows' hold is the one own `unsafe`: `OpenProcess(PROCESS_SYNCHRONIZE)` and a zero-timeout
 `WaitForSingleObject`, as `webview_data` already does; nothing maintained offers a bounded wait on a process

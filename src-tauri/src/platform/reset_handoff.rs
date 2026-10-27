@@ -37,11 +37,6 @@ trait Os {
     /// also waits for the parent to have terminated, every handle of it closed; the lock and EOF alone do not say so.
     const OPEN_FILES_BLOCK_REMOVAL: bool = false;
 
-    /// Whether the program the helper and the relaunch start is the app's binary as Tauri resolves it, checked as a
-    /// Sidevoice program (`trusted_program`). `false` keeps the launch this host shipped with: its own executable as
-    /// the OS names it, unchecked.
-    const PROGRAM_CHECKED: bool = true;
-
     /// A hold on one live process that can later tell whether it has terminated.
     type Held: Send;
 
@@ -120,13 +115,6 @@ pub fn launch(admission: Admission, plan: ResetPlan, program: &Path) -> io::Resu
     let mut command = tokio::process::Command::new(program);
     command.arg("--sidevoice-reset-helper");
     launch_command(admission, plan, command, HANDSHAKE)
-}
-
-/// Whether the caller resolves the helper's and the relaunch's program through Tauri and checks it with
-/// `trusted_program` before starting it (see [`launch`] and [`relaunch`]); otherwise it starts its own executable as the
-/// OS names it.
-pub fn program_checked() -> bool {
-    Native::PROGRAM_CHECKED
 }
 
 /// Start `program` (the installed app, as the caller resolved and checked it) once cleanup is over: detached from the

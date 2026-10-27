@@ -529,12 +529,15 @@ const RELAUNCH_MARKER: &str = "SIDEVOICE_RESET_RELAUNCH";
 /// The installed app, as Tauri resolves its own binary (Linux: the AppImage itself rather than its temporary mount,
 /// which goes away with the app; Tauri takes it from `APPIMAGE`, an environment the app trusts as it trusts `HOME`),
 /// checked as a Sidevoice program (`trusted_program`: this user's or the system's, and nobody else may change it or the
-/// folders above it). Where the handoff keeps its shipped launch (`reset_handoff::program_checked` false: macOS), the
+/// folders above it). Where the handoff keeps its shipped launch (`PROGRAM_CHECKED` false: macOS), the
 /// executable as the OS names it. The helper and the relaunch start only this; neither the page nor the plan names a
 /// program.
 fn installed_program() -> Option<PathBuf> {
     use sidevoice_platform::fs::{Files, Fs};
-    if !reset_handoff::program_checked() {
+    // The launch macOS shipped with: `current_exe`, unchecked. Tauri's resolver refuses an executable path with any
+    // link in it, which used to work; tightening macOS is the operator's decision (see the PR).
+    const PROGRAM_CHECKED: bool = cfg!(not(target_os = "macos"));
+    if !PROGRAM_CHECKED {
         return std::env::current_exe().ok();
     }
     let program = tauri::process::current_binary(&tauri::Env::default()).ok()?;
