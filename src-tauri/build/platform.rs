@@ -3,3 +3,6 @@
 
 #[path = "platform/app_manifest.rs"]
 pub mod app_manifest;
+
+#[path = "platform/clang_runtime.rs"]
+pub mod clang_runtime;

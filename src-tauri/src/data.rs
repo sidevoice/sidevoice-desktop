@@ -310,9 +310,16 @@ fn begin_reset(app: &AppHandle, uninstall: bool) -> Answer {
     Ok(json!({"state": state, "service": service_outcome, "agents": agents, "failed": failed, "pending": pending}))
 }
 
+<<<<<<< ours
 /// The steps before the app exits, under the held admission: the connector service and its agents, journalled;
 /// `begin_reset` then clears the provider keys. Returns the failures so far, the agents' results and the service
 /// outcome. The same on every host: `D` by `sidevoice-platform`'s one rule, which must be its standard place.
+=======
+/// The existing macOS steps before the app exits, under the held admission: the connector service and its
+/// agents, journalled; `begin_reset` then clears the provider keys. Returns the failures so far, the agents' results
+/// and the service outcome.
+#[cfg(target_os = "macos")]
+>>>>>>> theirs
 fn reset_before_exit() -> Result<(Vec<Value>, Value, &'static str), Value> {
     use crate::local_host::{self, NoConnectorCli};
     use sidevoice_platform::data_dir;
