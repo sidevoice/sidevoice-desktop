@@ -11,9 +11,9 @@ use crate::checks::{self, Check};
 use crate::endpoints;
 use crate::http::{self, Response};
 use crate::identity;
+use crate::platform::ipc::Stream;
 use crate::Refusal;
 use serde::{Deserialize, Serialize};
-use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
 /// How long the app waits for the core's own answers. Health is the readiness probe: 2 s (design §4.2).
@@ -91,10 +91,10 @@ impl CoreSocket {
     }
 
     /// A connection to the core, after the directory and peer checks, with `timeout` on reads and writes.
-    pub fn connect(&self, timeout: Option<Duration>) -> Result<UnixStream, CoreError> {
+    pub fn connect(&self, timeout: Option<Duration>) -> Result<Stream, CoreError> {
         checks::private_dir(&self.dirs.core())?;
-        let socket = endpoints::core(&self.dirs)?;
-        let stream = checks::connect(&self.dirs.core(), &socket, checks::private_dir)?;
+        let endpoint = endpoints::core(&self.dirs)?;
+        let stream = checks::connect(&self.dirs.core(), &endpoint, checks::private_dir)?;
         stream
             .set_read_timeout(timeout)
             .and_then(|_| stream.set_write_timeout(timeout))

@@ -27,11 +27,11 @@
 use crate::core_socket::CoreSocket;
 use crate::http::{self, Headers, RequestHead};
 use crate::identity;
+use crate::platform::ipc;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
-use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -284,14 +284,14 @@ pub fn upstream_head(head: &RequestHead, token: &str, upgrade: bool) -> Vec<u8> 
 /// A socket of a tunnel, kept to shut it down from outside.
 enum Closer {
     Tcp(TcpStream),
-    Unix(UnixStream),
+    Local(ipc::Stream),
 }
 
 impl Closer {
     fn close(&self) {
         let _ = match self {
             Closer::Tcp(s) => s.shutdown(Shutdown::Both),
-            Closer::Unix(s) => s.shutdown(Shutdown::Both),
+            Closer::Local(s) => s.shutdown(),
         };
     }
 }
@@ -600,7 +600,7 @@ fn tunnel(shared: &Shared, client: &mut TcpStream, id: u64, progress: &AtomicU64
         let token = inner.token.clone();
         if token.is_some() {
             if let Ok(clone) = upstream.try_clone() {
-                inner.tunnels.entry(id).or_default().push(Closer::Unix(clone));
+                inner.tunnels.entry(id).or_default().push(Closer::Local(clone));
             }
         }
         token
@@ -649,12 +649,12 @@ fn tunnel(shared: &Shared, client: &mut TcpStream, id: u64, progress: &AtomicU64
         let (Ok(mut from_client), Ok(mut to_core)) = (client.try_clone(), upstream.try_clone()) else { return };
         let inbound = thread::spawn(move || {
             let _ = io::copy(&mut from_client, &mut to_core);
-            let _ = to_core.shutdown(Shutdown::Both);
+            let _ = to_core.shutdown();
             let _ = from_client.shutdown(Shutdown::Both);
         });
         let _ = io::copy(&mut upstream, client);
         let _ = client.shutdown(Shutdown::Both);
-        let _ = upstream.shutdown(Shutdown::Both);
+        let _ = upstream.shutdown();
         let _ = inbound.join();
         return;
     }

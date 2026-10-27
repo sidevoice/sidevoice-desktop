@@ -24,23 +24,27 @@ use crate::tarball;
 use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha512};
-use sidevoice_platform::fs::{Access, Directory, HeldDirectory};
-use std::ffi::{CString, OsString};
-use std::fs::OpenOptions;
+use sidevoice_platform::fs::{Access, Create, Directory, FileId, Files, Fs, HeldDirectory};
 use std::io::{self, Read, Write};
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::sync::{Mutex, MutexGuard};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 /// What a second install is refused with while one runs (and what the installer's own lock, `service.busy`, becomes).
 pub const BUSY: &str = "install.busy";
 /// What an install the person cancelled rejects with.
 pub const CANCELLED: &str = "install.cancelled";
-/// The installer inside the package, where the installer itself expects to be (`<package>/bin/`).
-pub const INSTALLER: &str = "bin/sidevoice-connector";
+/// The installer inside the package, where the installer itself expects to be (`<package>/bin/`), named as this OS
+/// names a program (`bin/sidevoice-connector.exe` on Windows).
+pub fn bundled_installer() -> String {
+    sidevoice_platform::target::exe_name("bin/sidevoice-connector")
+}
+
+/// The installer's path in the package's archive.
+pub(crate) fn installer_entry() -> String {
+    format!("{}/{}", tarball::ROOT, bundled_installer())
+}
 
 /// Where an install is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -226,26 +230,25 @@ pub struct Scratch {
 }
 
 impl Scratch {
-    /// `mkdtemp` below `root` (0700, a name nobody else can take), then checked as the app checks its own
-    /// directories: this user's, private, every directory above it safe from other users (sticky, as `/tmp`, is fine).
+    /// A new private directory below `root` (`Fs::create_private_dir`: 0700 on Unix) under a fresh name
+    /// (`sidevoice-install-` and six random characters, `tempfile`'s, taken only if nobody has it), then checked as the
+    /// app checks its own directories: this user's, private, every directory above it safe from other users (sticky,
+    /// as `/tmp`, is fine).
     pub fn create(root: &Path) -> Result<Scratch, Failure> {
         let unsafe_root = |why: String| Failure::new("install.unsafe", Step::Download, why);
         if !root.is_absolute() {
             return Err(unsafe_root(format!("The temporary directory {} is not absolute.", root.display())));
         }
-        let template = root.join("sidevoice-install-XXXXXX");
-        let template = CString::new(template.as_os_str().as_bytes())
-            .map_err(|_| unsafe_root(format!("{} cannot name a directory.", root.display())))?;
-        let mut buffer = template.into_bytes_with_nul();
-        // SAFETY: `buffer` is a NUL-terminated, writable template that mkdtemp fills in place.
-        let made = unsafe { libc::mkdtemp(buffer.as_mut_ptr() as *mut libc::c_char) };
-        if made.is_null() {
-            let e = io::Error::last_os_error();
-            return Err(Failure::io(&e, Step::Download, &format!("Could not make a directory in {}", root.display())));
-        }
-        buffer.pop();
+        let made = tempfile::Builder::new()
+            .prefix("sidevoice-install-")
+            .rand_bytes(6)
+            .make_in(root, Files::create_private_dir)
+            .and_then(|made| made.keep().map_err(|e| e.error))
+            .map_err(|e| {
+                Failure::io(&e, Step::Download, &format!("Could not make a directory in {}", root.display()))
+            })?;
         // Removed again, by this name, if the check below refuses it.
-        let mut scratch = Scratch { path: PathBuf::from(OsString::from_vec(buffer)) };
+        let mut scratch = Scratch { path: made.1 };
         HeldDirectory::open(&scratch.path, Access::Private)
             .map_err(|error| unsafe_root(format!("{}: {error}", scratch.path.display())))?;
         // Resolve only after the shared policy has accepted the original ancestry (e.g. macOS /var).
@@ -289,25 +292,28 @@ pub fn prepare(job: &Job, fetch: &dyn Fetch, data: &Path, options: &Options) -> 
     job.enter(Step::Staging)?;
     let file =
         std::fs::File::open(&archive).map_err(|e| Failure::io(&e, Step::Staging, "Could not read the download"))?;
-    tarball::extract(io::BufReader::new(file), scratch.path(), options.unpack, &|| job.cancelled())?;
-    let installer = scratch.path().join(tarball::ROOT).join(INSTALLER);
+    tarball::extract(io::BufReader::new(file), scratch.path(), &installer_entry(), options.unpack, &|| {
+        job.cancelled()
+    })?;
+    let installer = scratch.path().join(tarball::ROOT).join(bundled_installer());
     match std::fs::symlink_metadata(&installer) {
         Ok(meta) if meta.file_type().is_file() => {}
         _ => {
             return Err(Failure::new(
                 "install.no-bundle",
                 Step::Staging,
-                format!("{} {} carries no {INSTALLER}.", release.package, release.version),
+                format!("{} {} carries no {}.", release.package, release.version, bundled_installer()),
             ))
         }
     }
-    std::fs::set_permissions(&installer, std::fs::Permissions::from_mode(0o700))
-        .map_err(|e| Failure::io(&e, Step::Staging, "Could not make the installer executable"))?;
+    // Unpacked as a program (`tarball::extract`); what runs is the path checked here.
+    let installer = Files::trusted_program(&installer)
+        .map_err(|e| Failure::io(&e, Step::Staging, "The installer cannot be run"))?;
     job.commit()?;
     run_installer(job, &installer, data, options.installer_time)
 }
 
-/// The tarball into `file` (new, 0600), its SHA-512 as it comes; within the size and time bounds, and stopping on a
+/// The tarball into `file` (new and private, no link followed: `Fs::open_private`), its SHA-512 as it comes; within the size and time bounds, and stopping on a
 /// cancel between chunks.
 fn download(
     job: &Job,
@@ -327,12 +333,7 @@ fn download(
         return Err(too_big(options.download_limit));
     }
     job.bytes(0, total)?;
-    let mut out = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(file)
+    let mut out = Files::open_private(file, Create::New)
         .map_err(|e| Failure::io(&e, Step::Download, "Could not save the download"))?;
     let mut body = response.body;
     let mut hasher = Sha512::new();
@@ -372,11 +373,6 @@ fn download(
     Ok(hasher.finalize().into())
 }
 
-/// What tells that the installer has written `install.json`: the file as it stands (a rename over it makes another).
-fn record_identity(path: &Path) -> Option<(u64, u64, i64, i64)> {
-    std::fs::symlink_metadata(path).ok().map(|m| (m.dev(), m.ino(), m.mtime(), m.mtime_nsec()))
-}
-
 /// Its error output's last lines, for `log_tail`: at most 20, each at most 400 characters.
 fn log_tail(stderr: &[u8]) -> Vec<String> {
     let text = String::from_utf8_lossy(stderr);
@@ -389,6 +385,14 @@ fn log_tail(stderr: &[u8]) -> Vec<String> {
     lines[lines.len().saturating_sub(20)..].to_vec()
 }
 
+/// A file as it stands: which file `path` names (the identity of a handle opened on it without following a link,
+/// `Fs::open_read` and `Fs::identity`) and when it was last written. Another reading differs once the file was written,
+/// or another took its name (a rename over it). `None` when there is nothing there, a link, or it cannot be told.
+fn stamp(path: &Path) -> Option<(FileId, SystemTime)> {
+    let file = Files::open_read(path).ok()?;
+    Some((Files::identity(&file).ok()?, file.metadata().ok()?.modified().ok()?))
+}
+
 /// `installer install --json`, with `SIDEVOICE_DATA_DIR` = `data`, as the app runs the CLI (no shell, a process group
 /// of its own, killed past `timeout`). `service-start` once `install.json` changes.
 fn run_installer(job: &Job, installer: &Path, data: &Path, timeout: Duration) -> Result<Value, Failure> {
@@ -396,10 +400,10 @@ fn run_installer(job: &Job, installer: &Path, data: &Path, timeout: Duration) ->
         .to_str()
         .ok_or_else(|| Failure::new("install.unsafe", Step::Staging, "The temporary directory's path is not UTF-8."))?;
     let record = data.join("install.json");
-    let before = record_identity(&record);
+    let before = stamp(&record);
     let cli = Cli { prefix: vec![program.to_string()], data: data.to_path_buf() };
     let mut tick = || {
-        if job.step() == Step::Staging && record_identity(&record) != before {
+        if job.step() == Step::Staging && stamp(&record) != before {
             let _ = job.enter(Step::ServiceStart);
         }
     };
@@ -461,6 +465,22 @@ pub fn installer_failure(answer: Option<&Value>, status: ExitStatus, step: Step)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stamp_changes_when_another_file_takes_the_name_and_not_otherwise() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("install.json");
+        assert_eq!(stamp(&path), None);
+        std::fs::write(&path, b"{}").unwrap();
+        let before = stamp(&path);
+        assert!(before.is_some());
+        assert_eq!(stamp(&path), before);
+        let other = tmp.path().join("other.json");
+        std::fs::write(&other, b"{}").unwrap();
+        std::fs::rename(&other, &path).unwrap();
+        assert_ne!(stamp(&path), before);
+    }
+
     #[test]
     fn once_the_installer_runs_a_cancel_is_refused() {
         let job = Job::new("j");
@@ -493,9 +513,10 @@ mod tests {
         let digest = download(&job, &fetch, &dist, &archive, &options).unwrap();
         assert_eq!(digest, dist.sha512, "{} {}", release.package, release.version);
         let file = std::fs::File::open(&archive).unwrap();
-        tarball::extract(io::BufReader::new(file), scratch.path(), options.unpack, &|| false).unwrap();
-        let installer = scratch.path().join(tarball::ROOT).join(INSTALLER);
-        assert!(std::fs::metadata(&installer).unwrap().permissions().mode() & 0o100 != 0, "executable");
+        tarball::extract(io::BufReader::new(file), scratch.path(), &installer_entry(), options.unpack, &|| false)
+            .unwrap();
+        let installer = scratch.path().join(tarball::ROOT).join(bundled_installer());
+        assert!(Files::trusted_program(&installer).is_ok(), "executable");
         assert!(scratch.path().join("package/connector.json").is_file());
         let progress = job.progress();
         assert_eq!(progress.done, progress.total, "{progress:?}");

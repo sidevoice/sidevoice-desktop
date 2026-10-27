@@ -6,6 +6,7 @@ fn mode(path: &Path, mode: u32) {
     fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
 }
 impl StorageFixture for NativeStorageFixtures {
+    const EXECUTION_IS_A_PERMISSION: bool = true;
     fn assert_private(path: &Path) {
         Files::check_private(&Files::open_read(path).unwrap()).unwrap();
         let metadata = fs::metadata(path).unwrap();
@@ -33,6 +34,9 @@ impl StorageFixture for NativeStorageFixtures {
     fn special_record(path: &Path) {
         // The POSIX utility covers both supported Unix hosts without introducing own FFI.
         assert!(std::process::Command::new("mkfifo").args(["-m", "600"]).arg(path).status().unwrap().success());
+    }
+    fn remove_special_record(path: &Path) {
+        fs::remove_file(path).unwrap();
     }
     fn replace_directory(path: &Path, moved: &Path) -> Replacement {
         fs::rename(path, moved).unwrap();

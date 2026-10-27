@@ -2,6 +2,7 @@ use super::*;
 
 pub struct NativeStorageFixtures;
 impl StorageFixture for NativeStorageFixtures {
+    const EXECUTION_IS_A_PERMISSION: bool = false;
     fn assert_not_executable(_path: &Path) {} // Execution is selected by the loader/extension, not a permission bit.
     fn private_directory_violations(path: &Path, mut check: impl FnMut()) {
         Self::readable(path);
@@ -19,6 +20,9 @@ impl StorageFixture for NativeStorageFixtures {
     }
     fn special_record(path: &Path) {
         fs::create_dir(path).unwrap();
+    }
+    fn remove_special_record(path: &Path) {
+        fs::remove_dir(path).unwrap();
     }
     fn replace_directory(path: &Path, moved: &Path) -> Replacement {
         // The held handle does not share DELETE, so the rename's open of the directory is a sharing violation, which

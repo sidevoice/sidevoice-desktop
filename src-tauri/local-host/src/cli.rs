@@ -11,13 +11,16 @@ use crate::paths::DataDirs;
 use crate::Refusal;
 use serde_json::Value;
 use sidevoice_platform::fs::{Access, Directory, Files, Fs, HeldDirectory};
-use std::os::fd::{AsRawFd, OwnedFd};
-use std::os::unix::process::CommandExt;
-use std::process::{Command, ExitStatus, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use sidevoice_platform::process::{Process, Processes};
+use std::process::{ExitStatus, Stdio};
+use std::time::Duration;
 
-const OUTPUT_LIMIT: u64 = 1024 * 1024;
+const OUTPUT_LIMIT: usize = 1024 * 1024;
+/// How long the output may stay open once the program has exited (a child of its own still holding the pipes) before
+/// the rest of its tree is killed.
+const PIPE_GRACE: Duration = Duration::from_millis(500);
+/// How often [`Cli::exec`] calls its `tick` while the program runs.
+const TICK: Duration = Duration::from_millis(50);
 const RECORD_LIMIT: u64 = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,11 +71,12 @@ impl Cli {
         Ok(Cli { prefix: verified, data })
     }
 
-    /// Runs `prefix + args` and waits at most `timeout` — for the process to exit **and** for both its output streams
-    /// to close: its JSON answer when it says `ok`, else its `{key, message}`.
+    /// Runs `prefix + args` and waits at most `timeout` for the process to exit, then at most [`PIPE_GRACE`] for both
+    /// its output streams to close: its JSON answer when it says `ok`, else its `{key, message}`.
     ///
-    /// The run is a process group of its own. Whatever is left in it once the program exits (a child still holding
-    /// the pipes) is killed, and on a timeout the whole group is. What the program hands to the service manager
+    /// The run is a tree of its own (`sidevoice_platform::process`: a process group, a Job Object on Windows). Whatever
+    /// is left in it once the program has exited (a child still holding the pipes) is killed at most [`PIPE_GRACE`]
+    /// later, and on a timeout the whole tree is. What the program hands to the service manager
     /// (`service start` → launchd) or starts detached in a session of its own is not in the group, and stays.
     pub fn run(&self, args: &[&str], timeout: Duration) -> Result<Value, Refusal> {
         let failed = |why: String| Refusal::new("cli.failed", why);
@@ -96,125 +100,52 @@ impl Cli {
         Err(refusal_of(&answer).unwrap_or_else(|| failed(format!("`{}` exited {status}: {}", args.join(" "), tail()))))
     }
 
-    /// Runs `prefix + args` as [`Self::run`] does — a process group of its own, at most `timeout` for its exit and both
-    /// its output streams — and hands back what it left, `status` `None` when the deadline came first (the whole group
-    /// was killed). `tick` is called about every 50 ms while it runs. Only a program that cannot start is a refusal
+    /// Runs `prefix + args` as [`Self::run`] does — a tree of its own, at most `timeout` for the program's exit, then
+    /// at most [`PIPE_GRACE`] for both its output streams to close — and hands back what it left, `status` `None` when
+    /// the deadline came first (the whole tree was killed; what it wrote is not kept then). `tick` is called about every
+    /// 50 ms while it runs. Only a program that cannot start, or whose output cannot be read, is a refusal
     /// (`cli.failed`).
     pub fn exec(&self, args: &[&str], timeout: Duration, tick: &mut dyn FnMut()) -> Result<Ran, Refusal> {
         let failed = |why: String| Refusal::new("cli.failed", why);
-        let deadline = Instant::now() + timeout;
-        let mut command = Command::new(&self.prefix[0]);
+        let mut command = tokio::process::Command::new(&self.prefix[0]);
         command
             .args(&self.prefix[1..])
             .args(args)
             .env("SIDEVOICE_DATA_DIR", &self.data)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .process_group(0);
-        // A program being written at that instant (an update, or any process that forked while holding it open for
-        // writing) cannot be run yet: ETXTBSY, tried again shortly.
-        let mut tries = 0;
-        let mut child = loop {
-            match command.spawn() {
-                Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) && tries < 5 => {
-                    tries += 1;
-                    thread::sleep(Duration::from_millis(50));
-                }
-                spawned => break spawned.map_err(|e| failed(format!("{} could not start: {e}", self.prefix[0])))?,
-            }
-        };
-        let group = child.id() as libc::pid_t;
-        let kill_group = || {
-            // SAFETY: signals the process group this run created; ESRCH (nobody left) is fine.
-            unsafe { libc::killpg(group, libc::SIGKILL) };
-        };
-        let mut streams =
-            [Stream::new(child.stdout.take().map(OwnedFd::from)), Stream::new(child.stderr.take().map(OwnedFd::from))];
-        let mut status = None;
-        loop {
-            if status.is_none() {
-                status = child.try_wait().ok().flatten();
-                if status.is_some() {
-                    // The program answered and left: anything of its own still running only holds the pipes open.
-                    kill_group();
+            .stderr(Stdio::piped());
+        let output = crate::runtime::block_on(async {
+            let child = Processes::spawn_tree(command)
+                .await
+                .map_err(|e| failed(format!("{} could not start: {e}", self.prefix[0])))?;
+            let output = child.output(timeout, PIPE_GRACE, OUTPUT_LIMIT);
+            tokio::pin!(output);
+            let mut every = tokio::time::interval(TICK);
+            loop {
+                tokio::select! {
+                    output = &mut output => return Ok::<_, Refusal>(output),
+                    _ = every.tick() => tick(),
                 }
             }
-            let open = streams.iter().any(Stream::is_open);
-            if status.is_some() && !open {
-                break;
+        })?;
+        match output {
+            Ok(output) => Ok(Ran { status: Some(output.status), stdout: output.stdout, stderr: output.stderr }),
+            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                Ok(Ran { status: None, stdout: Vec::new(), stderr: Vec::new() })
             }
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                break;
-            }
-            drain(&mut streams, left.min(Duration::from_millis(50)));
-            tick();
+            Err(e) => Err(failed(format!("{}'s output could not be read: {e}", self.prefix[0]))),
         }
-        if status.is_none() {
-            kill_group();
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-        let [stdout, stderr] = streams.map(|s| s.bytes);
-        Ok(Ran { status, stdout, stderr })
     }
 }
 
 /// What a run left ([`Cli::exec`]): its exit status, `None` when it was killed at the deadline, and what it wrote (at
-/// most 1 MiB of each stream).
+/// most 1 MiB of each stream; nothing when it was killed).
 #[derive(Debug)]
 pub struct Ran {
     pub status: Option<ExitStatus>,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
-}
-
-/// One of the program's output pipes, read without blocking past the deadline.
-struct Stream {
-    fd: Option<OwnedFd>,
-    bytes: Vec<u8>,
-}
-
-impl Stream {
-    fn new(fd: Option<OwnedFd>) -> Self {
-        Stream { fd, bytes: Vec::new() }
-    }
-
-    fn is_open(&self) -> bool {
-        self.fd.is_some()
-    }
-}
-
-/// Waits at most `wait` for any open stream to have something, and reads what there is. End of file, or an error,
-/// closes the stream; beyond [`OUTPUT_LIMIT`] bytes are read and dropped.
-fn drain(streams: &mut [Stream], wait: Duration) {
-    let mut polled: Vec<libc::pollfd> = streams
-        .iter()
-        .filter_map(|s| s.fd.as_ref())
-        .map(|fd| libc::pollfd { fd: fd.as_raw_fd(), events: libc::POLLIN, revents: 0 })
-        .collect();
-    let millis = wait.as_millis().clamp(1, 1000) as libc::c_int;
-    // SAFETY: `polled` is a valid array of its length; with none, poll only sleeps.
-    let ready = unsafe { libc::poll(polled.as_mut_ptr(), polled.len() as libc::nfds_t, millis) };
-    if ready <= 0 {
-        return;
-    }
-    let mut events = polled.iter().map(|p| p.revents);
-    for stream in streams.iter_mut().filter(|s| s.fd.is_some()) {
-        if events.next().unwrap_or(0) == 0 {
-            continue;
-        }
-        let fd = stream.fd.as_ref().expect("open").as_raw_fd();
-        let mut chunk = [0u8; 16 * 1024];
-        // SAFETY: `chunk` is writable for its length; the fd is open. poll said it would not block.
-        let n = unsafe { libc::read(fd, chunk.as_mut_ptr() as *mut libc::c_void, chunk.len()) };
-        if n <= 0 {
-            stream.fd = None;
-        } else if (stream.bytes.len() as u64) < OUTPUT_LIMIT {
-            stream.bytes.extend_from_slice(&chunk[..n as usize]);
-        }
-    }
 }
 
 /// A check's outcome for the CLI: missing is "not installed".

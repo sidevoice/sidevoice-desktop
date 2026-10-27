@@ -15,8 +15,8 @@ const LINE_LIMIT: u64 = 1024 * 1024;
 /// `node.status`'s result, or `None` when no connector of this user answers in time (absent, unsafe, silent, or an
 /// answer that is not one).
 pub fn node_status(dirs: &DataDirs) -> Option<Value> {
-    let socket = endpoints::connector(dirs).ok()?;
-    let stream = checks::connect(&dirs.data, &socket, checks::owned_not_writable).ok()?;
+    let endpoint = endpoints::connector(dirs).ok()?;
+    let stream = checks::connect(&dirs.data, &endpoint, checks::owned_not_writable).ok()?;
     stream.set_read_timeout(Some(TIMEOUT)).ok()?;
     stream.set_write_timeout(Some(TIMEOUT)).ok()?;
     let mut writer = &stream;
