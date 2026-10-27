@@ -23,7 +23,7 @@ mod tests {
     #[test]
     #[ignore = "requires an unlocked desktop Secret Service; unverified on headless CI"]
     fn native_contract() {
-        contract(Native::store().unwrap().as_ref(), &test_service());
+        contract(Native::store().unwrap().as_ref(), &test_service(), &Native::clear_namespace);
     }
 
     #[test]
