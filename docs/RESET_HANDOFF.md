@@ -90,9 +90,10 @@ the existing order is kept: authenticate, observe WebKit children, await committ
 admission, clean up, release admission before relaunch. The reset report lives in the handoff's private
 control directory (`state_dir()`), checked with the same private-directory API as the locks.
 
-The macOS transaction steps themselves (pre-confirmation bundle check, service and keychain before exit,
-cleanup after exit) are still selected by OS in `data.rs`; moving their native operations behind platform
-concerns is the reset transaction work that follows this handoff.
+The macOS transaction steps themselves (pre-confirmation bundle check, service before exit, cleanup after
+exit) are still selected by OS in `data.rs`; moving their native operations behind platform concerns is the reset
+transaction work that follows this handoff. The provider-key step before exit is already common
+(`platform::credentials`, docs/CREDENTIALS.md).
 
 The handoff protocol tests remain portable and included by the existing native fixture target; a path
 contract test also checks that control state cannot be removed with the standard data root. The macOS
