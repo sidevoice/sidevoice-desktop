@@ -6,7 +6,7 @@
 
 use crate::Refusal;
 use sidevoice_platform::fs::{Access, Directory, HeldDirectory};
-use sidevoice_platform::ipc::blocking::{Listener, Stream};
+use sidevoice_platform::ipc::blocking::Stream;
 use sidevoice_platform::ipc::Endpoint;
 use std::io;
 use std::path::Path;
@@ -73,6 +73,7 @@ mod tests {
     use super::*;
     use sidevoice_desktop_test_support::platform::storage::{StorageFixture, StorageFixtures};
     use sidevoice_platform::fs::Directory;
+    use sidevoice_platform::ipc::blocking::Listener;
     use sidevoice_platform::ipc::Address as _;
 
     #[test]
