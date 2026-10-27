@@ -104,8 +104,11 @@ impl Os for Native {
         }
     }
 
-    /// Nothing: a write is in the pipe once it returns, nothing of it is held here. `interprocess`'s flush waits,
-    /// unbounded, until the peer has read it all (`FlushFileBuffers`): a peer that stops reading would hold it forever.
+    /// Nothing: a write is in the pipe once it returns, nothing of it is held here. The same as the trait's default:
+    /// `interprocess`'s `local_socket::Stream::flush` is already `Ok(())` (2.4), so this changes no behaviour; it only
+    /// says so here. It is not `FlushFileBuffers`, which `DuplexPipeStream::flush` (not used here) calls and which waits
+    /// until the peer has read everything. What a dropped pipe still held is flushed by `interprocess`'s own linger
+    /// pool, not by this.
     fn flush(_stream: &Local) -> io::Result<()> {
         Ok(())
     }
