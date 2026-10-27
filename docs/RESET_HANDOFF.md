@@ -94,17 +94,11 @@ the existing order is kept: authenticate, observe WebKit children, await committ
 admission, clean up, release admission before relaunch. The reset report lives in the handoff's private
 control directory (`state_dir()`), checked with the same private-directory API as the locks.
 
-<<<<<<< ours
 The transaction steps (pre-confirmation checks, service before exit, provider keys, cleanup after exit, the
 relaunched app's report) are one flow in `data.rs` for every host. The only step still selected by OS there is the
 fresh proof that the connector's service is absent when its install record is missing (macOS: launchd and the
 process list; elsewhere no proof, so the reset refuses before deleting anything); moving it behind a platform
 concern with Windows and Linux proofs is plan row 43. The provider-key step is common
-=======
-The macOS transaction steps themselves (pre-confirmation bundle check, service before exit, cleanup after
-exit) are still selected by OS in `data.rs`; moving their native operations behind platform concerns is the reset
-transaction work that follows this handoff. The provider-key step before exit is already common
->>>>>>> theirs
 (`platform::credentials`, docs/CREDENTIALS.md).
 
 The handoff protocol tests remain portable and included by the existing native fixture target; a path
