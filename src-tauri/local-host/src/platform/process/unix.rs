@@ -16,6 +16,9 @@ impl Os for Native {
     /// `pid_t` is signed.
     const MAX_PID: u64 = i32::MAX as u64;
 
+    /// A session of its own is another process group.
+    const DETACHED_LEAVES_THE_TREE: bool = true;
+
     fn contain(command: &mut CommandWrap) -> io::Result<()> {
         command.wrap(ProcessGroup::leader());
         Ok(())

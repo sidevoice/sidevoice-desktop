@@ -71,7 +71,8 @@ impl Cli {
     ///
     /// The run is a process group of its own. Whatever is left in it once the program exits (a child still holding
     /// the pipes) is killed, and on a timeout the whole group is. What the program hands to the service manager
-    /// (`service start` → launchd) or starts detached in a session of its own is not in the group, and stays.
+    /// (`service start` → launchd) is not in the group, and stays; so does what it starts detached where that leaves
+    /// the run ([`process::detached_leaves_the_tree`]), and elsewhere that is killed with the run.
     pub fn run(&self, args: &[&str], timeout: Duration) -> Result<Value, Refusal> {
         let failed = |why: String| Refusal::new("cli.failed", why);
         let ran = self.exec(args, timeout, &mut || {})?;
