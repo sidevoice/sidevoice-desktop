@@ -92,7 +92,10 @@ const PERMISSIONS: &str = "src-tauri/permissions";
 /// file per declared command), then nothing under src-tauri/permissions differs from what is committed.
 pub fn permissions() -> Result<()> {
     Cmd::new("cargo").args(["check", "-p", "sidevoice-desktop"]).dir(repo().join("src-tauri")).run()?;
-    let changes = Cmd::new("git").args(["status", "--porcelain", "--untracked-files=all", "--", PERMISSIONS]).dir(repo()).stdout()?;
+    let changes = Cmd::new("git")
+        .args(["status", "--porcelain", "--untracked-files=all", "--", PERMISSIONS])
+        .dir(repo())
+        .stdout()?;
     ensure(
         changes.trim().is_empty(),
         format!(
