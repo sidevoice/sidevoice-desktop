@@ -4,15 +4,17 @@ Reset (delete all data, uninstall) is a Desktop capability. `platform::reset_han
 handoff — admission, launch of the same executable with `--sidevoice-reset-helper` before Tauri
 initializes, the authenticated plan, the wait for the app's exit, startup exclusion, deadlines and
 cancellation — and its control directory, `state_dir()`. Both are identical on every host, so it is a plain
-module: no trait, no per-OS files. Whether this host offers reset is a separate constant,
-`platform::host::RESET_AVAILABLE`: true on macOS, false on Windows and Linux until their reset
-cleanup exists. The handoff works on all three.
+module: no trait, no per-OS files. Reset is offered on every host, and the
+handoff works on all three.
 
 The reset transaction itself (pre-exit service and keychain steps, post-exit cleanup, report/journal,
 relaunch or move to the Trash) is sequenced in `data.rs`. Its native pieces sit behind platform interfaces:
 `app_data` (every folder the app keeps, the native extras and removal of the app itself; docs/APP_DATA.md) and
-`webview_data` (browser storage); the journal and report go through the shared private-record writer. The rest of
-the Windows and Linux transaction remains separate work. This change does not alter uninstall policy or elevate any process.
+`webview_data` (browser storage); the journal and report go through the shared private-record writer. The flow is
+the same on every host; the deletion stack (this flow, the connector step with its per-OS service observation, the Windows handoff and
+trusted-handle journal) and the containment-checked open beneath the held home (`sidevoice-platform`'s
+`open_beneath`, desktop#267) merge together: the safety work is complete only with all of them. This change does not alter uninstall
+policy or elevate any process.
 
 ## Protocol and lifetime
 
@@ -51,8 +53,8 @@ Normal guard destruction means cancellation, not a successful handoff.
 | Host | Storage and transport | Process/lifetime |
 | --- | --- | --- |
 | macOS | Private sibling of the standard Sidevoice data directory, independent of `SIDEVOICE_DATA_DIR`; shared ancestry, owner/mode, no-follow and single-link checks. Shared Unix socket with peer uid checks on both ends. | Same executable, detached process group, non-inherited std file locks. Existing WebKit observation/cleanup unchanged. |
-| Linux | Private sibling of the standard Sidevoice data directory, independent of `SIDEVOICE_DATA_DIR`; shared ancestry, owner/mode, no-follow and single-link checks. Shared Unix socket with peer uid checks on both ends. | Same executable, detached process group, std file locks. No reset UI or cleanup enablement. |
-| Windows | Private sibling of the standard Sidevoice data directory; protected owner-only DACLs from creation, owner checks, held ancestry and reparse/hard-link refusal. Shared local-only named pipe with peer SID checks on both ends. | Same executable, windowless detached child, std file locks; no numeric HANDLE inheritance or PID authorization. No reset UI or cleanup enablement. |
+| Linux | Private sibling of the standard Sidevoice data directory, independent of `SIDEVOICE_DATA_DIR`; shared ancestry, owner/mode, no-follow and single-link checks. Shared Unix socket with peer uid checks on both ends. | Same executable, detached process group, std file locks. Reset offered; the same cleanup runs after the handoff. |
+| Windows | Private sibling of the standard Sidevoice data directory; protected owner-only DACLs from creation, owner checks, held ancestry and reparse/hard-link refusal. Shared local-only named pipe with peer SID checks on both ends. | Same executable, windowless detached child, std file locks; no numeric HANDLE inheritance or PID authorization. Reset offered; the same cleanup runs after the handoff. |
 
 The boundary is other ordinary OS users. Same-user malicious code, administrators and replacement of the
 running program by that user are outside it. Shared APIs reject redirected/junction roots rather than
@@ -79,20 +81,16 @@ job does not escape that job; an early helper death prevents cleanup and leaves 
 shared checked filesystem, channel and child libraries supply what differs per OS. It adds no unsafe
 operation or native binding.
 
-`host.rs` holds `RESET_AVAILABLE`, the one value that differs by OS (`cfg!`). It moves to the
-reset cleanup concern when that exists and disappears once Windows and Linux get their cleanup.
-
-The reset and report commands, the native confirmation and the
-exclusive admission compile on every host and refuse with `reset.unavailable` before any confirmation or
-data access when `RESET_AVAILABLE` is false. The helper receives the authenticated plan on every host; when
-reset is unavailable it completes the committed wait and releases it without cleaning anything up. On macOS
-the existing order is kept: authenticate, observe WebKit children, await committed parent exit and
+The reset and report commands, the native confirmation and the exclusive admission run on every host. The
+helper receives the authenticated plan on every host and cleans up after the committed exit. The order is: authenticate, observe WebKit children, await committed parent exit and
 admission, clean up, release admission before relaunch. The reset report lives in the handoff's private
 control directory (`state_dir()`), checked with the same private-directory API as the locks.
 
-The macOS transaction steps themselves (pre-confirmation bundle check, service before exit, cleanup after
-exit) are still selected by OS in `data.rs`; moving their native operations behind platform concerns is the reset
-transaction work that follows this handoff. The provider-key step before exit is already common
+The transaction steps (pre-confirmation checks, service before exit, provider keys, cleanup after exit, the
+relaunched app's report) are one flow in `data.rs` for every host. The only step still selected by OS there is the
+fresh proof that the connector's service is absent when its install record is missing (macOS: launchd and the
+process list; elsewhere no proof, so the reset refuses before deleting anything); moving it behind a platform
+concern with Windows and Linux proofs is plan row 43. The provider-key step is common
 (`platform::credentials`, docs/CREDENTIALS.md).
 
 The handoff protocol tests remain portable and included by the existing native fixture target; a path

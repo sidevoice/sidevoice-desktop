@@ -1,0 +1,2 @@
+# The bridge scripts are embedded with include_str! and matched byte for byte by tests: keep LF on every checkout.
+bridge/*.js text eol=lf

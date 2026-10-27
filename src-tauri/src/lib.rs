@@ -345,6 +345,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             &diagnostics::webview_switches(),
             media_controls::support(),
             host::capabilities(),
+            platform::uninstall::available(),
         ));
     #[cfg(feature = "probe")]
     let builder = match probe::local_host_flow() {
@@ -569,7 +570,6 @@ pub fn run() {
                 let report = later.clone();
                 let _ = later.run_on_main_thread(move || debug(&format!("settled {}", app_report(&report))));
             });
-            #[cfg(target_os = "macos")]
             data::finalize_relaunched_reset();
             reset_handoff::finish_startup(startup);
             Ok(())

@@ -42,8 +42,7 @@ Operator rule (2026-10-25). Applies to product code, tests, xtask and build scri
   `Unsupported`). OS files override only what they actually do; an empty impl is fine. The concern file selects the
   OS file with `cfg_attr(target_os = ..., path = ...)` as `mod imp`, the only `cfg` allowed in common files; common
   code calls `Native::method()` / `Native::CONST` (`use imp::Native`). One exception: a
-  value-only difference (no behaviour) may use `cfg!` in a plain module with no trait and no OS files, e.g. `data_dir`
-  or `RESET_AVAILABLE`.
+  value-only difference (no behaviour) may use `cfg!` in a plain module with no trait and no OS files, e.g. `data_dir`.
 - **Platforms return observations/capabilities; decisions live in common code** (fallbacks, cascades, thresholds).
   No `fallback` fields, no closures or pieces passed by each OS into a common helper. An OS that cannot do
   something keeps the honest default; callers never ask which OS they run on (no caller OS gates).

@@ -43,7 +43,10 @@ and the reset plan carries none.
   the browser storage and the deletion. An alternate home supplied as `HOME` (say, a restored profile inside the
   real one) is refused before anything is deleted; a test pins that.
 
-Reset is still offered on macOS only (`platform::host::RESET_AVAILABLE`): the rest of the transaction is macOS-only.
+The transaction in `data.rs` is one flow, offered on macOS, Windows and Linux. Removing the app itself stays macOS-only
+(`platform::uninstall::available`), a product decision. The deletion stack (this flow, the connector step with its per-OS service observation, the Windows handoff and
+trusted-handle journal) and the containment-checked open beneath the held home (`sidevoice-platform`'s
+`open_beneath`, desktop#267) merge together: the safety work is complete only with all of them.
 
 ## Which folders
 

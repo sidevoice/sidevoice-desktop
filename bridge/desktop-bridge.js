@@ -14,8 +14,8 @@
 // bundled interface) it does nothing at all.
 (function (factory) {
   if (typeof module === "object" && module.exports) module.exports = factory; // unit tests
-  else factory(window, "__SIDEVOICE_ROOM_ORIGIN__", "__SIDEVOICE_MEDIA_KEYS__", "__SIDEVOICE_LOCAL_HOST__", "__SIDEVOICE_VOICE__", "__SIDEVOICE_UPDATER__", "__SIDEVOICE_BUILD__", "__SIDEVOICE_COMPUTER_NAME__", "__SIDEVOICE_DEBUG__", "__SIDEVOICE_MICROPHONE_SETTINGS__");
-})(function installDesktopBridge(win, roomOrigin, mediaKeys, localHostOffered, voiceOffered, updaterOffered, build, computerName, debugState, microphoneSettingsOffered) {
+  else factory(window, "__SIDEVOICE_ROOM_ORIGIN__", "__SIDEVOICE_MEDIA_KEYS__", "__SIDEVOICE_LOCAL_HOST__", "__SIDEVOICE_VOICE__", "__SIDEVOICE_UPDATER__", "__SIDEVOICE_BUILD__", "__SIDEVOICE_COMPUTER_NAME__", "__SIDEVOICE_DEBUG__", "__SIDEVOICE_MICROPHONE_SETTINGS__", "__SIDEVOICE_UNINSTALL__");
+})(function installDesktopBridge(win, roomOrigin, mediaKeys, localHostOffered, voiceOffered, updaterOffered, build, computerName, debugState, microphoneSettingsOffered, uninstallOffered) {
   "use strict";
   // scheme://host rather than location.origin: the app's own pages (tauri://localhost) may have an opaque origin.
   if (win.location.protocol + "//" + win.location.host !== roomOrigin) return null;
@@ -798,16 +798,17 @@
       mediaKeys: mediaKeys === "native" ? "native" : null,
       // Only where the app offers this computer's own core (O2: macOS): the page hides what is not there.
       ...(localHostOffered === true ? { localHost: Object.freeze(localHost()) } : {}),
-      // Private pairings are available on every desktop platform; machine reset is macOS-only.
+      // Private pairings and the reset are available on every desktop platform; the uninstall only where the app can
+      // also remove itself (macOS).
       data: Object.freeze({
         pairings: Object.freeze({
           read: () => call("data_pairings_read"),
           write: (value) => call("data_pairings_write", { value }).then(() => undefined),
         }),
-        ...(localHostOffered === true ? {
-          deleteAll: () => call("data_delete_all"),
+        deleteAll: () => call("data_delete_all"),
+        resetReport: () => call("data_reset_report"),
+        ...(uninstallOffered === true ? {
           uninstall: () => call("data_uninstall"),
-          resetReport: () => call("data_reset_report"),
         } : {}),
       }),
       // Only where the app runs the voice call (macOS): the page then neither opens the microphone nor runs models.
