@@ -14,7 +14,6 @@ mod call_controls;
 mod data;
 mod debug_options;
 mod engine_ipc;
-mod keychain;
 mod local_host;
 /// A look at the process's own memory, for CI's measurements of it (#145). Never in a release.
 #[cfg(any(test, feature = "probe"))]
@@ -532,11 +531,7 @@ pub fn run() {
             // Without it the app still runs; the page then finds no native engine to use.
             let engine_root =
                 data::shared_model_root().ok_or_else(|| std::io::Error::other("no home for the shared model store"))?;
-            // The keys of remote providers come from the keychain (macOS); elsewhere the app keeps none.
-            #[cfg(target_os = "macos")]
-            let credentials = keychain::Keychain;
-            #[cfg(not(target_os = "macos"))]
-            let credentials = sidevoice_desktop_engine::sidevoice_engine::NoCredentials;
+            let credentials = engine_ipc::ProviderKeys;
             match sidevoice_desktop_engine::NativeEngines::new(
                 engine_root,
                 credentials,

@@ -11,7 +11,7 @@ use tauri::{AppHandle, Manager, Webview};
 
 use crate::platform::host::RESET_AVAILABLE;
 use crate::platform::reset_handoff::{self, Handoff};
-use crate::platform::{account, app_data, uninstall};
+use crate::platform::{account, app_data, credentials, uninstall};
 use crate::AppState;
 
 #[derive(Default)]
@@ -278,7 +278,17 @@ fn begin_reset(app: &AppHandle, uninstall: bool) -> Answer {
     let admission = Handoff::new().and_then(|handoff| handoff.admit()).map_err(|error| {
         refused(if error.kind() == std::io::ErrorKind::WouldBlock { "reset.busy" } else { "reset.helper-failed" })
     })?;
-    let (failed, agents, service_outcome) = reset_before_exit()?;
+    let (mut failed, agents, service_outcome) = reset_before_exit()?;
+    // The provider keys, on every host that runs the transaction, journalled as the last step before exit.
+    if credentials::clear_all().is_err() {
+        failed.push(json!({"step": "keychain", "key": "reset.keychain-failed"}));
+    }
+    let journal = report_path().ok_or_else(|| refused("reset.helper-failed"))?.with_file_name("journal.json");
+    write_atomic_json(
+        &journal,
+        &json!({"stage":"keychain", "completed":["service", "keychain"], "failed":failed.clone()}),
+    )
+    .map_err(|_| refused("reset.report-failed"))?;
     let pending = reset_handoff::launch(
         admission,
         ResetPlan { parent_pid: std::process::id(), uninstall, initial: json!({"failed": failed, "agents": agents}) },
@@ -303,7 +313,8 @@ fn begin_reset(app: &AppHandle, uninstall: bool) -> Answer {
 }
 
 /// The existing macOS steps before the app exits, under the held admission: the connector service and its
-/// agents, then the keychain, journalled. Returns the failures so far, the agents' results and the service outcome.
+/// agents, journalled; `begin_reset` then clears the provider keys. Returns the failures so far, the agents' results
+/// and the service outcome.
 #[cfg(target_os = "macos")]
 fn reset_before_exit() -> Result<(Vec<Value>, Value, &'static str), Value> {
     use sidevoice_local_host::{cli::Cli, paths::DataDirs};
@@ -347,23 +358,12 @@ fn reset_before_exit() -> Result<(Vec<Value>, Value, &'static str), Value> {
     write_atomic_json(&journal, &json!({"stage":"service", "completed":["service"], "failed":[]}))
         .map_err(|_| refused("reset.report-failed"))?;
     let mut failed = Vec::<Value>::new();
-    if crate::keychain::delete_service().is_err() {
-        failed.push(json!({"step": "keychain", "key": "reset.keychain-failed"}));
-    }
-    write_atomic_json(
-        &journal,
-        &json!({"stage":"keychain", "completed":["service", "keychain"], "failed":failed.clone()}),
-    )
-    .map_err(|_| refused("reset.report-failed"))?;
     let agents = service.get("agents").cloned().unwrap_or_else(|| json!({}));
     for agent in retained_agents(&agents) {
         failed.push(json!({"step": "agents", "key": "reset.agent-remains", "agent": agent}));
     }
-    write_atomic_json(
-        &journal,
-        &json!({"stage":"agent-results", "completed":["service", "keychain"], "failed":failed.clone()}),
-    )
-    .map_err(|_| refused("reset.report-failed"))?;
+    write_atomic_json(&journal, &json!({"stage":"agent-results", "completed":["service"], "failed":failed.clone()}))
+        .map_err(|_| refused("reset.report-failed"))?;
     Ok((failed, agents, service_outcome))
 }
 
