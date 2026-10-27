@@ -5,18 +5,19 @@ handoff — admission, launch of the same executable with `--sidevoice-reset-hel
 initializes, the authenticated plan, the wait for the app's exit, startup exclusion, deadlines and
 cancellation — and its control directory, `state_dir()`. The protocol and the directory are the same on every
 host; one thing differs, behind a private per-OS trait: where a running process's open files cannot be removed
-(Windows), the helper also waits for the parent process itself to have terminated. Whether this host offers reset is a separate constant,
-`platform::host::RESET_AVAILABLE`: true on macOS, false on Linux and Windows until the shared filesystem's
-containment-checked open and, on Windows, its local host and a durable journal publication land. The
+(Windows), the helper also waits for the parent process itself to have terminated. Reset is offered on every host,
+and the
 handoff works on all three.
 
 The reset transaction itself (pre-exit service and keychain steps, post-exit cleanup, report/journal,
 relaunch or move to the Trash) is sequenced in `data.rs`. Its native pieces sit behind platform interfaces:
 `app_data` (every folder the app keeps, the native extras and removal of the app itself; docs/APP_DATA.md) and
 `webview_data` (browser storage); the journal and report go through the shared private-record writer and are read
-back through the control directory's held, checked handle. The flow is the same on every host; what Linux and Windows
-still lack is a containment-checked open below the account home (`sidevoice-platform`, sidevoice-core#212), and on
-Windows a connector CLI the app can run and a durable journal publication (below). This change does not alter uninstall
+back through the control directory's held, checked handle. The flow is the same on every host. The deletion stack
+(this flow, the connector step with its per-OS service observation, this Windows handoff and trusted-handle journal)
+and the containment-checked open beneath the held home (`sidevoice-platform`'s `open_beneath`, desktop#267) merge
+together: the safety work is complete only with all of them. On Windows the journal's publication is not yet durable
+across a power loss (below), and a recorded connector still needs a CLI the app can run there. This change does not alter uninstall
 policy or elevate any process.
 
 ## Protocol and lifetime
@@ -61,8 +62,8 @@ Normal guard destruction means cancellation, not a successful handoff.
 | Host | Storage and transport | Process/lifetime |
 | --- | --- | --- |
 | macOS | Private sibling of the standard Sidevoice data directory, independent of `SIDEVOICE_DATA_DIR`; shared ancestry, owner/mode, no-follow and single-link checks. Shared Unix socket with peer uid checks on both ends. | Same executable, detached process group, non-inherited std file locks. Existing WebKit observation/cleanup unchanged. |
-| Linux | Private sibling of the standard Sidevoice data directory, independent of `SIDEVOICE_DATA_DIR`; shared ancestry, owner/mode, no-follow and single-link checks. Shared Unix socket with peer uid checks on both ends. | Same executable (an AppImage: the AppImage file itself, not its temporary mount), detached process group, std file locks. Reset not offered yet (containment-checked open). |
-| Windows | Private sibling of the standard Sidevoice data directory; protected owner-only DACLs from creation, owner checks, held ancestry and reparse/hard-link refusal. Shared local-only named pipe with peer SID checks on both ends. | Same executable, windowless detached child, std file locks; no numeric HANDLE inheritance or PID authorization. Cleanup also waits for the parent's termination through a handle held from the handshake. Windowless detached relaunch. Reset not offered yet (containment-checked open, Windows local host). |
+| Linux | Private sibling of the standard Sidevoice data directory, independent of `SIDEVOICE_DATA_DIR`; shared ancestry, owner/mode, no-follow and single-link checks. Shared Unix socket with peer uid checks on both ends. | Same executable (an AppImage: the AppImage file itself, not its temporary mount), detached process group, std file locks. Reset offered. |
+| Windows | Private sibling of the standard Sidevoice data directory; protected owner-only DACLs from creation, owner checks, held ancestry and reparse/hard-link refusal. Shared local-only named pipe with peer SID checks on both ends. | Same executable, windowless detached child, std file locks; no numeric HANDLE inheritance or PID authorization. Cleanup also waits for the parent's termination through a handle held from the handshake. Windowless detached relaunch. Reset offered. |
 
 The boundary is other ordinary OS users. Same-user malicious code, administrators and replacement of the
 running program by that user are outside it. Shared APIs reject redirected/junction roots rather than
@@ -95,14 +96,8 @@ file. Windows' hold is the one own `unsafe`: `OpenProcess(PROCESS_SYNCHRONIZE)` 
 `WaitForSingleObject`, as `webview_data` already does; nothing maintained offers a bounded wait on a process
 held from a given moment (`sysinfo`'s `Process::wait` is unbounded).
 
-`host.rs` holds `RESET_AVAILABLE`, the one value that differs by OS (`cfg!`): true on macOS only. It
-disappears once Linux and Windows get the remaining steps.
-
-The reset and report commands, the native confirmation and the
-exclusive admission compile on every host and refuse with `reset.unavailable` before any confirmation or
-data access when `RESET_AVAILABLE` is false. The helper receives the authenticated plan on every host; when
-reset is unavailable it completes the committed wait and releases it without cleaning anything up. On macOS
-the existing order is kept: authenticate, observe WebKit children, await committed parent exit and
+The reset and report commands, the native confirmation and the exclusive admission run on every host. The
+helper receives the authenticated plan on every host and cleans up after the committed exit. The order is: authenticate, observe WebKit children, await committed parent exit and
 admission, clean up, release admission before relaunch. The reset report lives in the handoff's private
 control directory (`state_dir()`), checked with the same private-directory API as the locks.
 
@@ -135,7 +130,7 @@ reset. That ordering covers a crash of the helper or the app. Surviving a power 
 durable when the write returns: on Unix the shared writer syncs the staged file and then the directory after the
 rename; on Windows it flushes the staged file but renames it without write-through and has no directory flush, so the
 newest record may be lost on power loss. Making that rename durable (`MOVEFILE_WRITE_THROUGH` or a flush in
-`sidevoice-platform`'s writer) is a blocker for offering the reset on Windows, next to the containment-checked open.
+`sidevoice-platform`'s writer) is open work; until then a power loss mid-reset on Windows can report an older stage.
 
 The page's report read (`data_reset_report`) and the relaunched app's finalization read, write and remove the
 records through the control directory's held handle (`HeldDirectory`). A record read must be a private regular file

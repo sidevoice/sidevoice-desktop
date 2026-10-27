@@ -34,11 +34,9 @@ operations can be retried. An indefinitely unanswered prompt may require dismiss
 ## Reset
 
 The reset transaction (docs/BRIDGE.md, `deleteAll()`) is the one caller of `clear_all()`. Its common `begin_reset` in
-`data.rs` clears the provider keys after the macOS connector service and agent-results steps and before the app exits,
+`data.rs` clears the provider keys after the connector service and agent-results steps and before the app exits,
 journalled as the `keychain` step; a failure is reported as `{step: "keychain", key: "reset.keychain-failed"}`. The step
-is the same on every host that runs the transaction. Today that is macOS alone: elsewhere `deleteAll()` refuses
-`reset.unavailable` before touching anything, so Windows and Linux keep their keys until the reset transaction runs
-there.
+is the same on macOS, Windows and Linux.
 
 ## Verification
 
