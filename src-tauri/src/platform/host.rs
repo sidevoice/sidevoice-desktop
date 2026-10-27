@@ -1,7 +1,5 @@
-//! What the host computer is and offers: its name, what the page may use beyond the web, whether reset exists, and
-//! whether this run can update itself. Per-OS differences live in `host/{macos,windows,linux}.rs`.
+//! What the host computer is and offers: its name, whether reset exists, and whether this run can update itself. Per-OS differences live in `host/{macos,windows,linux}.rs`.
 
-use sidevoice_desktop_core::bridge::Capabilities;
 use sidevoice_desktop_core::{computer_name, updater};
 use tauri::utils::{config::BundleType, platform::bundle_type};
 
@@ -34,11 +32,6 @@ trait Os {
         None
     }
 
-    /// What the host offers the page beyond the web: this computer's own core (the local host) and the voice call
-    /// run by the app. Nothing beyond the web unless the OS offers it; macOS offers both (the beta's app platform,
-    /// design O2, where the echo canceller builds); elsewhere the app is a remote client and the page runs the call.
-    const CAPABILITIES: Capabilities = Capabilities { local_host: false, voice: false };
-
     /// The bundle the updater plugin can update and restart here; `None` where there is none.
     const BUNDLE: Option<BundleType> = None;
 
@@ -53,12 +46,6 @@ trait Os {
 /// surrounding whitespace; return None for absent/blank names so the page can name the device.
 pub fn name() -> Option<String> {
     Native::device_name().or_else(Native::host_name).and_then(|name| computer_name::given(&name))
-}
-
-/// What this host offers the page beyond the web. The bridge only tells the page; the callers that gate on a
-/// capability ask here too.
-pub fn capabilities() -> Capabilities {
-    Native::CAPABILITIES
 }
 
 /// Whether this run is an installation the updater plugin can update and restart: a release/nightly running
@@ -83,13 +70,6 @@ mod tests {
             assert_eq!(name, name.trim());
             assert_eq!(computer_name::given(&name).as_deref(), Some(name.as_str()));
         }
-    }
-
-    #[test]
-    fn a_host_offers_nothing_beyond_the_web_unless_it_says_so() {
-        struct Remote;
-        impl Os for Remote {}
-        assert_eq!(Remote::CAPABILITIES, Capabilities { local_host: false, voice: false });
     }
 
     #[test]

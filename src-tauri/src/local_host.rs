@@ -3,14 +3,12 @@
 //! The work is the `sidevoice-local-host` crate's (the checks, the pairing over the core's local channel, the proxy,
 //! the poll); this module starts it with the app's own paths, answers the page's commands, and stops it as the app
 //! quits. It is the same on every OS: what differs (a Unix socket or a named pipe, a process group or a Job Object) is
-//! the crate's `platform`. Whether this host offers it is `platform::host::capabilities().local_host`; where it does
-//! not, nothing starts and every command refuses `unsupported`, except `reveal-log`, which needs no local host (the
-//! app's own log).
+//! the crate's `platform`. It starts with the app on every OS; if it could not (no data directory, the proxy did not
+//! start), every command refuses `unsupported`, except `reveal-log`, which needs no local host (the app's own log).
 //!
 //! Only the room window's own page may call these (capabilities/room.json, and [`crate::room_page`] in each). A
 //! refusal is `{key, message}`, as the native engine's (docs/BRIDGE.md).
 
-use crate::platform::host;
 use serde_json::{json, Value};
 use sidevoice_local_host::host::{Action, Config, Installing, LocalHost};
 use sidevoice_local_host::install;
@@ -29,7 +27,7 @@ fn refusal(key: &str, message: &str) -> Value {
 }
 
 fn unsupported() -> Value {
-    refusal("unsupported", "This app offers no local host on this system.")
+    refusal("unsupported", "The local host did not start on this computer.")
 }
 
 fn caller(app: &AppHandle, webview: &Webview) -> Result<(), Value> {
@@ -171,11 +169,8 @@ fn logs_to_show(app: Option<PathBuf>, connector: Option<PathBuf>) -> Vec<PathBuf
     app.into_iter().chain(connector).filter(is_file).collect()
 }
 
-/// At start, where this host offers the local host: the proxy and the poll, for the app's lifetime.
+/// At start: the proxy and the poll, for the app's lifetime.
 pub fn setup(app: &AppHandle) {
-    if !host::capabilities().local_host {
-        return;
-    }
     // `D`, by the rule every Sidevoice program shares (`SIDEVOICE_DATA_DIR`, else the OS standard place).
     let Some(dirs) = DataDirs::from_env() else {
         crate::debug("local-host off: no data directory");

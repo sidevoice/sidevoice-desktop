@@ -22,9 +22,8 @@
 //! The trust boundary is the OS user: the device token travels only over the socket, and the page only ever holds
 //! the proxy's in-memory secret (sidevoice design "Onboarding, hosts and settings" §1, §4.1).
 //!
-//! The app offers the local host on macOS; Windows and Linux run it in tests and headless machines. On every OS, what
-//! [`platform`] cannot observe is refused: an unknown peer is not trusted, a process that cannot be asked about is not
-//! alive.
+//! The app offers the local host on every OS. Everywhere, what [`platform`] cannot observe is refused: an unknown peer
+//! is not trusted, a process that cannot be asked about is not alive.
 
 pub mod checks;
 pub mod cli;

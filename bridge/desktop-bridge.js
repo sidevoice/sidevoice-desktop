@@ -147,8 +147,8 @@
    *  device's microphone and speaker and the app's own echo cancellation. It implements `VoiceHost`, the seam
    *  `@sidevoice/voice` defines (js/voice-host.d.ts), which `createVoiceHost` implements in a browser. The call knows
    *  nothing of the room: the page tells the room the turns `onTurn` gives it, and has the call `say` what the room
-   *  sends, through a handle that tells how it went. A refusal rejects with `{key, message, …params}`. Only where the
-   *  app offers it (macOS); elsewhere the page runs the call itself. */
+   *  sends, through a handle that tells how it went. A refusal rejects with `{key, message, …params}`. Offered on every
+   *  OS (core `bridge`); the factory keeps the flag while the page reads it. */
   /** Native implementation of sidevoice-voice's VoiceHost. The host owns one microphone, speaker and model pool;
    *  `start(settings)` makes a call with an input half, an output half or both, which owns its events, playback and
    *  recognition state, and `preload(settings)` loads the models a call of them would use. */
@@ -361,8 +361,8 @@
   }
 
   /** The app's microphone access (docs/BRIDGE.md → "The microphone permission"), onto the `microphone` command, on every
-   *  OS: the system's own answer, never the webview's. Where the app runs the voice call (macOS) the page is never granted
-   *  `getUserMedia`, so this is also how it asks macOS for the microphone. The first-run setup asks through this. */
+   *  OS: the system's own answer, never the webview's. The app runs the voice call, so the page is never granted
+   *  `getUserMedia`: this is also how it asks the OS for the microphone. The first-run setup asks through this. */
   function microphone() {
     const listeners = new Set();
     let timer = null;
@@ -414,7 +414,7 @@
    *  (through the app's proxy, with this launch's secret — never the device token), the service's actions, and
    *  installing Sidevoice here (`install`, `cancel`). Each action resolves the state after it (`{state, failure?, core?,
    *  product_version, service?, calls?, attempts?, limit?, installed?, reachable}`) or rejects `{key, message}`.
-   *  Only where the app offers a local host (macOS). */
+   *  Offered on every OS (core `bridge`). */
   function localHost() {
     const listeners = new Set();
     let last = null; // the state last delivered, as JSON
@@ -775,7 +775,7 @@
     return true;
   }
 
-  // Only where the app runs the voice call itself (macOS): elsewhere the page runs it.
+  // The app runs the voice call on every OS (core `bridge` always says so; the flag stays while the page reads it).
   const voiceCall = voiceOffered === true ? voice() : null;
   // Only in a release or a nightly that can update itself (core `updater::offered`).
   const updates = updaterOffered === true ? updater() : null;
@@ -796,7 +796,7 @@
       /** `"native"`: the app answers headset buttons / media keys in a call, so the page must not register its
        *  own Media Session handlers (both would toggle the microphone on one click). `null`: the page does. */
       mediaKeys: mediaKeys === "native" ? "native" : null,
-      // Only where the app offers this computer's own core (macOS): the page hides what is not there.
+      // This computer's own core, on every OS (core `bridge` always says so).
       ...(localHostOffered === true ? { localHost: Object.freeze(localHost()) } : {}),
       // Private pairings are available on every desktop platform; machine reset only where the app has the reset
       // transaction (macOS), independently of the local host.
@@ -811,7 +811,7 @@
           resetReport: () => call("data_reset_report"),
         } : {}),
       }),
-      // Only where the app runs the voice call (macOS): the page then neither opens the microphone nor runs models.
+      // The voice call the app runs: the page neither opens the microphone nor runs models.
       ...(voiceCall ? { voice: voiceCall.host } : {}),
       // The app's native microphone access, on every OS (src/platform/microphone.rs).
       microphone: microphone(),

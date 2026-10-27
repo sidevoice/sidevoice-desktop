@@ -1,5 +1,4 @@
 use super::Os;
-use sidevoice_desktop_core::bridge::Capabilities;
 use sidevoice_desktop_core::updater;
 use tauri::utils::config::BundleType;
 
@@ -9,8 +8,6 @@ impl Os for Native {
     fn device_name() -> Option<String> {
         whoami::devicename().ok()
     }
-
-    const CAPABILITIES: Capabilities = Capabilities { local_host: true, voice: true };
 
     const BUNDLE: Option<BundleType> = Some(BundleType::App);
 

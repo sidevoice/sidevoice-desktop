@@ -1,5 +1,4 @@
 use super::Os;
-use sidevoice_desktop_core::bridge::Capabilities;
 use tauri::utils::config::BundleType;
 use winreg::{enums::HKEY_CURRENT_USER, RegKey};
 
@@ -9,13 +8,6 @@ impl Os for Native {
     fn host_name() -> Option<String> {
         whoami::hostname().ok()
     }
-
-    /// Not the local host yet, though it is wired (the connector installs per user with Task Scheduler; the app reaches
-    /// the core over its named pipe). Blocker (#262 review r3, decision 5): the connector CLI runs in a Job Object
-    /// without breakaway, so a connector/core it starts on demand (pairing) is killed as soon as the CLI run ends.
-    /// `local_host: true` once that is resolved and the installed flow has run on a real Windows machine. The voice
-    /// call stays the page's.
-    const CAPABILITIES: Capabilities = Capabilities { local_host: false, voice: false };
 
     const BUNDLE: Option<BundleType> = Some(BundleType::Nsis);
 

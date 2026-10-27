@@ -1,9 +1,9 @@
 # The local host
 
 The core on the computer where the app runs, as the app finds it, pairs with it and lets the bundled page talk to it
-(sidevoice design "Onboarding, hosts and settings" rev. 3, §4.1, §4.2, §4.7; release R1). Offered on macOS
-(`platform::host` `CAPABILITIES`); the same code builds on Windows and Linux and is tested on both, where the app does
-not offer it yet (Windows: a service the CLI starts on demand dies with its Job Object, #262). The app ships no
+(sidevoice design "Onboarding, hosts and settings" rev. 3, §4.1, §4.2, §4.7; release R1). Offered on every OS
+(macOS, Windows, Linux): the app starts it at launch. On Windows it needs a connector that starts the core through Task
+Scheduler (connector#307): one the CLI starts on demand would die with the CLI run's Job Object (#262). The app ships no
 connector: the machine is installed with `npx sidevoice@latest install`, or by the app itself from that same npm
 package, without Node («Prepare this computer»; Install, below); either way the app then runs that installation's CLI.
 
@@ -185,8 +185,8 @@ report `start_at_login` leaves `installed` absent, and the page falls back to wh
 
 «Prepare this computer» (`install(onProgress)`, `cancel(job)`; docs/BRIDGE.md → The local host) does what
 `npx sidevoice@latest install` does, without Node: it fetches the npm package itself and runs the installer inside it
-(`src-tauri/local-host/src/{npm,tarball,install}.rs`; the steps in `host.rs`). Only where the app offers the local
-host (macOS); one install at a time (`install.busy`), and while it runs the state is `installing`.
+(`src-tauri/local-host/src/{npm,tarball,install}.rs`; the steps in `host.rs`). On every OS; one install at a
+time (`install.busy`), and while it runs the state is `installing`.
 
 | Step | What | Cancellable |
 |---|---|---|
@@ -318,5 +318,5 @@ through a UTF-8 symlink) returns an error instead of risking selection of a diff
 lossy path conversion on macOS. This restriction applies to the common interface on every host.
 Missing logs retain `log.missing`; file-manager failures retain `reveal.failed` with a localized message.
 `reveal-log` does not need a local host: it always selects the app log, plus the core's (else connector's) log when a
-host reports one, so it runs on every OS. The local-host offer is macOS only for now; this adds no webview opener permissions. Interactive file-manager selection still
+host reports one, so it runs on every OS. The local host is offered on every OS; this adds no webview opener permissions. Interactive file-manager selection still
 needs runtime verification on each OS; headless tests cover error propagation without opening a window.

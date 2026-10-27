@@ -239,7 +239,8 @@ Joining is deliberately **not** a tray command: joining unlocks audio output, wh
 only allows from a click in the page. "Mostrar Sidevoice" opens the window for that.
 
 `window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", version, engine, mediaKeys, build, muteShortcut, callControls, computerName?, localHost?, voice?, microphone, updater? }`: the
-web UI feature-detects the desktop app by it, and each capability by its presence. `version` is the bridge's (2).
+web UI feature-detects the desktop app by it, and each capability by its presence. `localHost` and `voice` are present
+on every OS (core `bridge` tells the page a fixed `true`; the flags stay while web v0.11.0 reads them). `version` is the bridge's (2).
 
 `mediaKeys` is supplied by `platform::media_controls::support()`: `"native"` on macOS and `null` on Windows/Linux.
 It is independent of `host.voice`: with native voice and unavailable native media controls, the page
@@ -255,8 +256,8 @@ itself. Read each time the room window opens (`src-tauri/src/platform/host.rs`, 
 
 ## The local host
 
-`host.localHost` is there only where the app offers this computer's own core (macOS); elsewhere it is
-absent and the page hides what needs it. Nothing runs until the page calls it. Contract, states and actions:
+`host.localHost` is there on every OS: the app always offers this computer's own core (core `bridge`; the page
+still feature-detects it, and would hide what needs it without it). Nothing runs until the page calls it. Contract, states and actions:
 docs/LOCAL_HOST.md.
 
 | Call | Returns / does |
@@ -530,7 +531,7 @@ microphone and speaker (cpal) and WebRTC's AEC3 between them, so the shared outp
 (`src-tauri/src/voice.rs`; sidevoice/sidevoice-core#89). sidevoice-voice names no model and depends on no engine:
 the app fills its interfaces (voice activity, transcriber, speaker, end of turn) with the engine's models
 (`src-tauri/src/voice/models.rs`). The room window's page is then never granted the microphone
-(`media::decide`) and runs no model: it keeps the room. Each call knows nothing of the room: the page keeps one call per conversation, routes the shared microphone to one call, tags each call's events with its own destination, and has each call say what the room sends through a handle that tells how it went. Elsewhere `host.voice` is absent and the page runs the call
+(the room window's permission handler denies every request, `src/lib.rs`) and runs no model: it keeps the room. Each call knows nothing of the room: the page keeps one call per conversation, routes the shared microphone to one call, tags each call's events with its own destination, and has each call say what the room sends through a handle that tells how it went. Elsewhere `host.voice` is absent and the page runs the call
 itself over `@sidevoice/voice` in the webview, the room window granting it the microphone: the page pinned now
 (`web.pin.json`) cannot load those modules until they are on npm, so on Windows and Linux there is no voice yet.
 
@@ -679,8 +680,8 @@ What is this app's own:
 ## The microphone permission
 
 `window.__sidevoiceDesktop.host.microphone` is the app's own microphone access, on every OS (the system's answer, never
-the webview's: no `getUserMedia` is opened to read it). Where the app runs the voice call (`host.voice`, macOS), the room
-page is never granted `getUserMedia`, so it can neither trigger macOS's microphone prompt (TCC) nor read its answer;
+the webview's: no `getUserMedia` is opened to read it). The app runs the voice call (`host.voice`), so the room
+page is never granted `getUserMedia`: it can neither trigger the OS's microphone prompt (macOS: TCC) nor read its answer;
 the web's first-run setup asks early through this rather than at the first call.
 
 ```ts
