@@ -10,6 +10,10 @@ use sidevoice_platform::ipc::blocking::Stream;
 use sidevoice_platform::ipc::Endpoint;
 use std::io;
 use std::path::Path;
+use std::time::Duration;
+
+/// How long a connect may wait for the other side to take it.
+const CONNECT_WAIT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Check {
@@ -57,7 +61,7 @@ pub fn owned_not_writable(path: &Path) -> Result<(), Check> {
 /// listens on (absent, refused) is [`Check::Missing`].
 pub fn connect(dir: &Path, endpoint: &Endpoint, dir_check: fn(&Path) -> Result<(), Check>) -> Result<Stream, Check> {
     dir_check(dir)?;
-    match Stream::connect(endpoint) {
+    match Stream::connect_within(endpoint, CONNECT_WAIT) {
         Ok(stream) => Ok(stream),
         Err(e) if matches!(e.kind(), io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused) => Err(Check::Missing),
         Err(e) if e.kind() == io::ErrorKind::PermissionDenied => Err(Check::Unsafe(Refusal::new(

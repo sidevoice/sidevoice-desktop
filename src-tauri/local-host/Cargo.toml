@@ -24,7 +24,7 @@ serde_json = "1"
 gethostname = "1.1"
 # `sidevoice_platform`'s local channel and child execution are async; the local host blocks, so it drives them on a
 # runtime of its own (`runtime`). Already in the tree through sidevoice-platform.
-tokio = { version = "1", features = ["rt-multi-thread", "time", "io-util", "macros", "sync", "process"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "macros", "process"] }
 # The install's scratch directory: a fresh name below the temporary directory, taken only if nobody has it, created
 # private by `sidevoice_platform::fs` (`install::Scratch`); already in the tree.
 tempfile = "3"
