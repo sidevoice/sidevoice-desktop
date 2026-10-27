@@ -55,10 +55,13 @@ test("does nothing on any other origin (auth pages, other sites)", () => {
   assert.equal(calls.length, 0);
 });
 
-test("the macOS data bridge uses fixed native commands and no page-supplied paths", async () => {
+// The factory's arguments up to the microphone settings, then the uninstall offer.
+const uninstallArgs = (uninstall) => [null, false, false, false, undefined, undefined, undefined, false, uninstall];
+
+test("the data bridge uses fixed native commands and no page-supplied paths", async () => {
   const install = loadFactory();
   const { win, calls } = fakeWindow(ORIGIN);
-  const api = install(win, ORIGIN, null, true, false, false, undefined, null, null, false, true);
+  const api = install(win, ORIGIN, ...uninstallArgs(true));
   assert.equal(typeof api.host.data.deleteAll, "function");
   assert.equal(typeof api.host.data.resetReport, "function");
   assert.equal(typeof api.host.data.uninstall, "function");
@@ -74,21 +77,23 @@ test("the macOS data bridge uses fixed native commands and no page-supplied path
     ["data_uninstall", undefined],
     ["data_reset_report", undefined],
   ]);
-  const other = fakeWindow(ORIGIN);
-  const otherData = install(other.win, ORIGIN).host.data;
-  assert.equal(typeof otherData.pairings.read, "function");
-  assert.equal(typeof otherData.pairings.write, "function");
-  assert.equal(otherData.deleteAll, undefined);
-  assert.equal(otherData.resetReport, undefined);
-  assert.equal(otherData.uninstall, undefined);
-  // Windows: the local host without the reset transaction. Reset follows its own flag, not the local host.
-  for (const offered of [undefined, false, "__SIDEVOICE_RESET__", "true"]) {
-    const host = install(fakeWindow(ORIGIN).win, ORIGIN, null, true, false, false, undefined, null, null, false, offered).host;
-    assert.equal(typeof host.localHost, "object", String(offered));
-    assert.equal(host.data.deleteAll, undefined, String(offered));
-    assert.equal(host.data.resetReport, undefined, String(offered));
-    assert.equal(host.data.uninstall, undefined, String(offered));
-  }
+});
+
+test("the reset is on every host, the uninstall only where offered, and neither follows the local host", () => {
+  const install = loadFactory();
+  // Windows and Linux: the reset, without the app's own removal.
+  const reset = install(fakeWindow(ORIGIN).win, ORIGIN, ...uninstallArgs(false)).host.data;
+  assert.equal(typeof reset.pairings.read, "function");
+  assert.equal(typeof reset.deleteAll, "function");
+  assert.equal(typeof reset.resetReport, "function");
+  assert.equal(reset.uninstall, undefined);
+  // Nothing told: the reset is still there, the uninstall is not.
+  const plain = install(fakeWindow(ORIGIN).win, ORIGIN).host.data;
+  assert.equal(typeof plain.deleteAll, "function");
+  assert.equal(plain.uninstall, undefined);
+  // The local host alone offers no uninstall.
+  const localOnly = install(fakeWindow(ORIGIN).win, ORIGIN, null, true).host.data;
+  assert.equal(localOnly.uninstall, undefined);
 });
 
 test("reports not-ready first, then the real state once the room's controller exists", async () => {
@@ -998,7 +1003,6 @@ test("the placeholders the app replaces are present exactly once", () => {
   assert.equal(source.split("__SIDEVOICE_MEDIA_KEYS__").length, 2);
   assert.equal(source.split("__SIDEVOICE_LOCAL_HOST__").length, 2);
   assert.equal(source.split("__SIDEVOICE_VOICE__").length, 2);
-  assert.equal(source.split("__SIDEVOICE_RESET__").length, 2);
 });
 
 test("says who answers the media keys", () => {

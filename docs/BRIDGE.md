@@ -12,7 +12,7 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 | `src-tauri/core/src/bridge.rs` | The contract on the Rust side: `CallSnapshot`, `Command`, and how the tray renders a snapshot. Unit-tested. |
 | `src-tauri/src/lib.rs` | Wiring: the `bridge_state` command, `send(Command)`; `capabilities/room.json`. The mute shortcut, behind `muteShortcut`, and the one writer of the app's settings (below). |
 | `src-tauri/src/engine_ipc.rs` | The engine's commands, behind `engine` (below): its catalogues, provider keys and models on disk. |
-| `src-tauri/src/voice.rs`, `src-tauri/src/platform/credentials.rs`, `src-tauri/core/src/voice.rs` | The voice call the app runs, behind `voice` (macOS; below), the keychain the engine reads provider keys from, and the models it picks from the catalogues (unit-tested). |
+| `src-tauri/src/voice.rs`, `src-tauri/src/platform/credentials.rs`, `src-tauri/core/src/voice.rs` | The voice call the app runs, behind `voice` (below), the keychain the engine reads provider keys from, and the models it picks from the catalogues (unit-tested). |
 | `src-tauri/src/local_host.rs`, `src-tauri/local-host/` | This computer's own core, behind `localHost` (below; docs/LOCAL_HOST.md). |
 | `src-tauri/src/tray.rs` | The menu-bar icon and its menu. |
 | `bridge/call-controls-bridge.js` | Injected into the call controls card's window (below). |
@@ -46,22 +46,23 @@ Keeping these two names stable is the web UI's side of the contract.
 
 ## Page → app
 
-### Private data and reset (`host.data`, macOS)
+### Private data and reset (`host.data`)
 
 The bundled room page receives `host.data.pairings` on macOS, Windows and Linux. Its `read()` resolves
 `{pairings: [...], pendingRevokes: [...]}` and `write({pairings, pendingRevokes})` resolves `undefined`
 after a bounded, private, atomic write under the app's Application Support directory. Both arrays contain
 remote pairing credentials; pending revocations remain native until the remote machine acknowledges them.
 Local-host pairing is derived from the verified socket and is never stored there. Neither call accepts a
-path. Browser pages keep their own browser storage. `deleteAll()`, `uninstall()` and `resetReport()` are
-macOS-only (`RESET_AVAILABLE`, told to the bridge apart from `localHost`); elsewhere the bridge omits them and the
-native commands refuse `{key: "reset.unavailable"}`.
+path. Browser pages keep their own browser storage. `deleteAll()` and `resetReport()` are present on every
+desktop host; `uninstall()` only where the app can also remove itself (macOS, `platform::uninstall::available`, which
+the app tells the bridge apart from the local host). Called directly where the bridge omits it, `data_uninstall`
+refuses `{key: "reset.app-unremovable"}` before anything is deleted.
 
 `deleteAll()` is the confirmed Settings › Advanced action. Native also displays an OS-owned confirmation
 with Cancel as its default button on every invocation; cancelling rejects `{key: "reset.cancelled"}` before
 any uninstall or deletion. `platform::confirmation::confirm` owns the native prompt: the existing NSAlert on
 macOS, TaskDialogIndirect with an explicit Cancel default on Windows, and GTK with an explicit Cancel response on
-Linux. The capability is implemented on all three hosts; the reset offer and transaction remain macOS-only.
+Linux. The capability, the offer and the transaction are the same on all three hosts.
 The shared confirmation interface cancels unless the native opened hook arrives within three seconds; a dialog
 that appears later is immediately dismissed. Once opened, the person's decision has no timeout. The hooks are
 Windows' `TDN_CREATED`, GTK's map event, and a macOS block scheduled in `NSModalPanelRunLoopMode`.
@@ -87,9 +88,12 @@ symlink targets or crossing a mount/device boundary. Symlinks are unlinked as en
 hard links lose only the selected name, and ordinary shortcut files are removed as files. The shared model
 store itself and redirected ancestors remain protected roots. All three engine-owned children are preflighted
 before any is removed. A failed check is reported, with that directory left in place. Connector data and release roots must be the exact default
-Sidevoice roots; unsafe environment overrides or install records refuse before the installed uninstaller runs.
+Sidevoice roots (`D` by `sidevoice-platform`'s one rule, `data_dir::standard`, inside the account home); unsafe environment overrides or install records refuse before the installed uninstaller runs.
 If installation metadata is absent, a fresh service/process check and a check for residual connector data
-must both pass before the service is called absent. A retained recovery executable named by `install.json`
+must both pass before the service is called absent. That check is `platform::connector_service`: launchd and the process list on macOS, systemd's user manager and
+the process list on Linux, Task Scheduler and the process list on Windows; any doubt (a manager that cannot be asked,
+an unreadable answer or process list) refuses with `{key: "reset.service-failed"}`. A connector recorded on a host where the app cannot run its
+CLI refuses with `{key: "reset.unsupported-connector"}`. A retained recovery executable named by `install.json`
 is used on a partial-uninstall retry. Custom profiles and separately installed cores are excluded.
 No page-supplied path is deleted.
 
@@ -526,12 +530,12 @@ sidevoice-engine itself fails with is one of these keys, with the engine's own c
 
 ## The voice call
 
-On macOS the app runs the voice host itself: sidevoice-voice (`sidevoice/sidevoice-voice`) with the device's own
-microphone and speaker (cpal) and WebRTC's AEC3 between them, so the shared output cancels its echo
+The app runs the voice host itself: sidevoice-voice (`sidevoice/sidevoice-voice`) with the device's own
+microphone and speaker (cpal) and Sonora's echo canceller (pure Rust) between them, so the shared output cancels its echo
 (`src-tauri/src/voice.rs`; sidevoice/sidevoice-core#89). sidevoice-voice names no model and depends on no engine:
 the app fills its interfaces (voice activity, transcriber, speaker, end of turn) with the engine's models
 (`src-tauri/src/voice/models.rs`). The room window's page is then never granted the microphone
-(the room window's permission handler denies every request, `src/lib.rs`) and runs no model: it keeps the room. Each call knows nothing of the room: the page keeps one call per conversation, routes the shared microphone to one call, tags each call's events with its own destination, and has each call say what the room sends through a handle that tells how it went. Elsewhere `host.voice` is absent and the page runs the call
+(the room window's permission handler denies every request, `src/lib.rs`) and runs no model: it keeps the room. Each call knows nothing of the room: the page keeps one call per conversation, routes the shared microphone to one call, tags each call's events with its own destination, and has each call say what the room sends through a handle that tells how it went. Where the app does not run it, `host.voice` is absent and the page runs the call
 itself over `@sidevoice/voice` in the webview, the room window granting it the microphone: the page pinned now
 (`web.pin.json`) cannot load those modules until they are on npm, so on Windows and Linux there is no voice yet.
 

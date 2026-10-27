@@ -42,8 +42,7 @@ Operator rule (2026-10-25). Applies to product code, tests, xtask and build scri
   `Unsupported`). OS files override only what they actually do; an empty impl is fine. The concern file selects the
   OS file with `cfg_attr(target_os = ..., path = ...)` as `mod imp`, the only `cfg` allowed in common files; common
   code calls `Native::method()` / `Native::CONST` (`use imp::Native`). One exception: a
-  value-only difference (no behaviour) may use `cfg!` in a plain module with no trait and no OS files, e.g. `data_dir`
-  or `RESET_AVAILABLE`.
+  value-only difference (no behaviour) may use `cfg!` in a plain module with no trait and no OS files, e.g. `data_dir`.
 - **Platforms return observations/capabilities; decisions live in common code** (fallbacks, cascades, thresholds).
   No `fallback` fields, no closures or pieces passed by each OS into a common helper. An OS that cannot do
   something keeps the honest default; callers never ask which OS they run on (no caller OS gates).
@@ -56,7 +55,10 @@ Operator rule (2026-10-25). Applies to product code, tests, xtask and build scri
 - **Tests are written against the interface** and run on every OS; no per-OS test modules unless it cannot be
   phrased generically (say why in the PR).
 - **Enforced in CI** by its own `platform-boundary` check (next to Clippy's `disallowed-*`): any OS-specific code
-  outside `platform` fails it. It stays red until the existing debt is fixed; there is no allowlist.
+  outside `platform` fails it. It stays red until the existing debt is fixed; there is no allowlist, with one exception: the crate attribute
+  `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]`, written exactly so as a file-scope inner attribute of a
+  Cargo binary root (`src/main.rs`, `src/bin/*.rs`, `src/bin/*/main.rs`), which the linker reads from the crate root and so
+  cannot live in `platform`.
 
 Reference in this repo: `platform/microphone.rs`, `platform/desktop_geometry.rs` and `platform/confirmation.rs`, each public
 plain functions over a private per-OS trait. (sidevoice-connector and core keep their separately approved public-trait

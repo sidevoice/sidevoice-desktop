@@ -194,9 +194,35 @@ pub fn shutdown(app: &AppHandle) {
     }
 }
 
-/// Whether "Prepare this computer" is under way: the reset transaction refuses to begin meanwhile.
+/// A missing install record is safe to treat as absent only when the observer also sees no service.
+#[cfg(target_os = "macos")]
+pub fn absent(app: &AppHandle) -> bool {
+    hosted(app).is_ok_and(|host| json!(host.state())["state"] == "absent")
+}
+
+/// A connector install under way: the reset refuses before its confirmation. Never where there is no local host.
 pub fn installing(app: &AppHandle) -> bool {
     hosted(app).is_ok_and(|host| json!(host.state())["state"] == "installing")
+}
+
+/// The connector's CLI as the reset runs it: the one the install in `D` recorded, checked as the local-host crate
+/// checks it (`Cli::installed`). Nothing else runs the connector's `uninstall`.
+pub use sidevoice_local_host::cli::Cli as ConnectorCli;
+
+/// Why the reset has no connector CLI to run.
+pub enum NoConnectorCli {
+    /// The install record in `D` is missing or unsafe, or names nothing runnable.
+    Refused,
+}
+
+/// The connector's CLI the install in `data` (`D`) recorded, for the reset's connector step.
+pub fn connector_cli(data: &std::path::Path) -> Result<ConnectorCli, NoConnectorCli> {
+    ConnectorCli::installed(&DataDirs::new(data)).map_err(|_| NoConnectorCli::Refused)
+}
+
+/// Run the connector's CLI with `args`, waiting at most `timeout`: its JSON answer when it says `ok`, else `None`.
+pub fn run_connector(cli: &ConnectorCli, args: &[&str], timeout: std::time::Duration) -> Option<Value> {
+    cli.run(args, timeout).ok()
 }
 
 #[cfg(test)]

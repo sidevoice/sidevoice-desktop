@@ -62,27 +62,27 @@ pub fn wait_released(owner: Owner, deadline: Instant) -> io::Result<Released> {
     wait_released_with::<Native>(owner, deadline)
 }
 
-/// Remove one exact allowlisted root only after browser release, using core's held-parent removal.
-/// No directory is created or repaired; a missing root is success. Redirected roots are refused.
-/// The caller keeps recovery records outside these roots and retains its reset/launch lock.
-pub fn remove(released: &Released, path: &Path) -> io::Result<()> {
+/// Remove one exact allowlisted root only after browser release, using core's held-parent removal. `parent` is the
+/// root's parent, held by the caller without following links (`app_data` reaches it beneath the account home); the
+/// root is opened beneath it, never by path. No directory is created or repaired; a missing root is success. A root
+/// that is a link (symlink, junction) is refused, not unlinked. The caller keeps recovery records outside these roots
+/// and retains its reset/launch lock.
+pub fn remove(released: &Released, parent: &HeldDirectory, path: &Path) -> io::Result<()> {
     if !released.0.paths().iter().any(|allowed| allowed == path) {
         return Err(io::Error::new(io::ErrorKind::PermissionDenied, "outside webview roots"));
     }
-    // Opening the target first rejects root symlinks/junctions rather than unlinking them.
-    let target = match HeldDirectory::open(path, Access::NotWritableByOthers) {
+    let name = path.file_name().ok_or_else(Owner::busy)?;
+    // Opening the target beneath the parent first rejects root symlinks/junctions rather than unlinking them.
+    let target = match parent.open_beneath(Path::new(name), Access::NotWritableByOthers) {
         Ok(target) => target,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error),
     };
-    let parent = path.parent().ok_or_else(Owner::busy)?;
-    let name = path.file_name().ok_or_else(Owner::busy)?;
-    let held = HeldDirectory::open(parent, Access::NotWritableByOthers)?;
-    held.check_contents(&[name])?;
+    parent.check_contents(&[name])?;
     // Windows denies deleting the target while the target's own held handle is open. The parent
     // remains held, and Removal repeats identity/ownership/mount checks before and during deletion.
     drop(target);
-    held.remove_contents(&[name])
+    parent.remove_contents(&[name])
 }
 
 // What varies per OS, and nothing else. Browser cleanup only: no service stop, reset lock, journal,
@@ -278,11 +278,35 @@ mod tests {
         std::fs::write(selected.join("cookies"), "old session").unwrap();
         std::fs::write(root.join("other-app"), "keep").unwrap();
         let released = Released(Locations::new(vec![selected.clone()]).unwrap());
-        assert!(remove(&released, &root).is_err());
-        remove(&released, &selected).unwrap();
-        remove(&released, &selected).unwrap();
+        let parent = HeldDirectory::open(&root, Access::NotWritableByOthers).unwrap();
+        assert!(remove(&released, &parent, &root).is_err());
+        remove_at(&released, &selected).unwrap();
+        remove_at(&released, &selected).unwrap();
         assert!(!selected.exists());
         assert_eq!(std::fs::read(root.join("other-app")).unwrap(), b"keep");
+    }
+
+    /// [`remove`] with `path`'s parent held as the caller would (fixtures sit in an ordinary temporary folder).
+    pub(super) fn remove_at(released: &Released, path: &Path) -> io::Result<()> {
+        let parent = HeldDirectory::open(path.parent().unwrap(), Access::NotWritableByOthers)?;
+        remove(released, &parent, path)
+    }
+
+    #[test]
+    fn a_linked_root_is_refused_and_its_target_stays() {
+        use sidevoice_platform::fs::{Files, TestFiles};
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let outside = root.join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("cookies"), "another profile").unwrap();
+        let selected = root.join(IDENTIFIER);
+        Files::symlink(&outside, &selected);
+        let parent = HeldDirectory::open(&root, Access::NotWritableByOthers).unwrap();
+        let released = Released(Locations::new(vec![selected.clone()]).unwrap());
+        assert_eq!(remove(&released, &parent, &selected).unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert!(std::fs::symlink_metadata(&selected).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read(outside.join("cookies")).unwrap(), b"another profile");
     }
 
     #[test]
@@ -334,7 +358,7 @@ mod tests {
         let reap = thread::spawn(move || child.wait().unwrap());
         let released = wait_released_with::<Fixture>(owner, deadline).unwrap();
         assert_eq!(std::fs::read(selected.join("cookies")).unwrap(), b"last shutdown write");
-        remove(&released, &selected).unwrap();
+        remove_at(&released, &selected).unwrap();
         assert!(reap.join().unwrap().success());
         assert!(!selected.exists());
     }

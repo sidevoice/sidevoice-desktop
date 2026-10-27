@@ -28,13 +28,13 @@ mod voice;
 
 use crate::platform::application;
 use crate::platform::diagnostics;
-use crate::platform::host;
+use crate::platform::host::{self, APP_ORIGIN};
 use crate::platform::media_controls;
 use crate::platform::shortcut_access;
 use serde_json::{json, Value};
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
 use sidevoice_desktop_core::build_info::BuildInfo;
-use sidevoice_desktop_core::settings::{MuteShortcut, Registration, Settings, APP_ORIGIN};
+use sidevoice_desktop_core::settings::{MuteShortcut, Registration, Settings};
 use sidevoice_desktop_core::{media, settings};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -297,7 +297,6 @@ fn reset_call_state(app: &AppHandle) {
     tray::update(app, &snapshot);
     media_controls::update(app, &snapshot);
     call_controls::update(app);
-    #[cfg(target_os = "macos")]
     voice::page_changed(app);
 }
 
@@ -341,7 +340,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             platform::microphone::settings_available(),
             &diagnostics::webview_switches(),
             media_controls::support(),
-            host::RESET_AVAILABLE,
+            platform::uninstall::available(),
         ));
     #[cfg(feature = "probe")]
     let builder = match probe::local_host_flow() {
@@ -413,59 +412,49 @@ fn apply_shortcut(app: &AppHandle, accelerator: &str) {
     }
 }
 
-/// The app's commands, with `$extra` (each after a comma) after them.
-macro_rules! commands {
-    ($($extra:tt)*) => {
-        tauri::generate_handler![
-            bridge_state,
-            bridge_level,
-            bridge_playback,
-            call_controls::call_controls_ready,
-            call_controls::call_controls_run,
-            call_controls::call_controls_layout,
-            call_controls::call_controls_drag,
-            call_controls::call_controls_resize,
-            call_controls::call_controls_cursor,
-            debug_log,
-            engine_ipc::engine_capabilities,
-            engine_ipc::engine_installed,
-            engine_ipc::engine_install,
-            engine_ipc::engine_progress,
-            engine_ipc::engine_cancel,
-            engine_ipc::engine_uninstall,
-            engine_ipc::engine_memory,
-            engine_ipc::engine_catalogs,
-            engine_ipc::engine_set_credential,
-            engine_ipc::engine_has_credential,
-            engine_ipc::engine_test_credential,
-            engine_ipc::engine_refresh,
-            local_host::local_host_state,
-            local_host::local_host_pairing,
-            local_host::local_host_action,
-            local_host::local_host_pairing_code,
-            local_host::local_host_install,
-            local_host::local_host_install_progress,
-            local_host::local_host_install_cancel,
-            data::data_pairings_read,
-            data::data_pairings_write,
-            data::data_delete_all,
-            data::data_uninstall,
-            data::data_reset_report,
-            mute_shortcut,
-            call_controls::call_controls_settings,
-            updater::updater,
-            debug_options::debug_options,
-            microphone::microphone
-            $($extra)*
-        ]
-    };
-}
-
-/// Every command, and the voice call's where the app runs the call (`host.voice`: macOS).
-#[cfg(target_os = "macos")]
+/// Every command, the voice call's included (`host.voice`, src/voice.rs).
 fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
-    commands![
-        , voice::voice_create_call,
+    tauri::generate_handler![
+        bridge_state,
+        bridge_level,
+        bridge_playback,
+        call_controls::call_controls_ready,
+        call_controls::call_controls_run,
+        call_controls::call_controls_layout,
+        call_controls::call_controls_drag,
+        call_controls::call_controls_resize,
+        call_controls::call_controls_cursor,
+        debug_log,
+        engine_ipc::engine_capabilities,
+        engine_ipc::engine_installed,
+        engine_ipc::engine_install,
+        engine_ipc::engine_progress,
+        engine_ipc::engine_cancel,
+        engine_ipc::engine_uninstall,
+        engine_ipc::engine_memory,
+        engine_ipc::engine_catalogs,
+        engine_ipc::engine_set_credential,
+        engine_ipc::engine_has_credential,
+        engine_ipc::engine_test_credential,
+        engine_ipc::engine_refresh,
+        local_host::local_host_state,
+        local_host::local_host_pairing,
+        local_host::local_host_action,
+        local_host::local_host_pairing_code,
+        local_host::local_host_install,
+        local_host::local_host_install_progress,
+        local_host::local_host_install_cancel,
+        data::data_pairings_read,
+        data::data_pairings_write,
+        data::data_delete_all,
+        data::data_uninstall,
+        data::data_reset_report,
+        mute_shortcut,
+        call_controls::call_controls_settings,
+        updater::updater,
+        debug_options::debug_options,
+        microphone::microphone,
+        voice::voice_create_call,
         voice::voice_route_input,
         voice::voice_dispose_call,
         voice::voice_ready,
@@ -481,11 +470,6 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
         voice::voice_audio_devices,
         voice::voice_set_audio_devices
     ]
-}
-
-#[cfg(not(target_os = "macos"))]
-fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
-    commands![]
 }
 
 pub fn run() {
@@ -514,7 +498,6 @@ pub fn run() {
     let builder = <platform::card_window::NativeCardWindow as platform::card_window::CardWindow>::configure(builder);
     // The voice call the app runs (`host.voice`, src/voice.rs).
     // Its shared audio starts its dispatcher on Tokio, so it is built inside the runtime the commands run on.
-    #[cfg(target_os = "macos")]
     let builder = {
         let _runtime = tauri::async_runtime::handle().inner().enter();
         builder.manage(voice::VoiceState::default())
@@ -573,7 +556,6 @@ pub fn run() {
                 let report = later.clone();
                 let _ = later.run_on_main_thread(move || debug(&format!("settled {}", app_report(&report))));
             });
-            #[cfg(target_os = "macos")]
             data::finalize_relaunched_reset();
             reset_handoff::finish_startup(startup);
             Ok(())
@@ -600,7 +582,6 @@ pub fn run() {
             // ends the process itself (Windows, starting the installer): its before-exit hook stops the local host then
             // (`updater::before_exit`).
             if let tauri::RunEvent::Exit = event {
-                #[cfg(target_os = "macos")]
                 voice::shutdown(app);
                 call_controls::close(app);
                 local_host::shutdown(app);

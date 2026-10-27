@@ -725,3 +725,25 @@ fn close_lets_go_of_every_model_before_its_idle_minutes() {
     runtime.block_on(async { within(state.preload(other(), 30)).await.unwrap() });
     assert_eq!(fake.holders("other"), 0, "a preload after the quit keeps nothing");
 }
+
+/// A call on the machine's own microphone and speaker (no stand-in), as a hosted CI runner has them, which is often with
+/// none: it is ready, or it fails by the code of what failed, within the time `ready` gives; it never hangs, panics or
+/// takes the process down, and the lane it made is released either way. Which of the two depends on the machine.
+#[test]
+fn a_call_on_the_machines_own_devices_is_ready_or_fails_by_a_code_and_the_lane_is_released() {
+    runtime().block_on(async {
+        let state = VoiceState::default();
+        let (seen, fake) = (Seen::default(), fake());
+        state.create_call("a".into()).await.unwrap();
+        state
+            .open("a", applied(&fake, &chosen(Some("words"), Some("voice"), None), None, 0), false, seen.page())
+            .await
+            .unwrap();
+        if let Err(refused) = within(state.ready("a")).await {
+            let code = refused.params["code"].as_str().unwrap_or_default();
+            assert!(!code.is_empty(), "a failed call says why: {refused:?}");
+        }
+        within(state.dispose_call("a")).await.unwrap();
+        assert!(within(state.ready("a")).await.is_err(), "the lane is gone");
+    });
+}
