@@ -70,6 +70,12 @@ trait Os {
         stream.write(buf)
     }
 
+    /// Flushes what this process still holds of `stream`'s writes. As `interprocess` does: nothing is held for a socket.
+    fn flush(stream: &Local) -> io::Result<()> {
+        let mut stream = stream;
+        stream.flush()
+    }
+
     /// Ends `stream` both ways, for every clone of it too, so whoever reads or writes it on another thread stops.
     fn shutdown(_stream: &Local, _shared: &Self::Shared) -> io::Result<()> {
         Err(unsupported())
@@ -174,7 +180,7 @@ impl Write for &Stream {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        (&self.local).flush()
+        Native::flush(&self.local)
     }
 }
 
@@ -196,6 +202,19 @@ mod tests {
     use super::*;
     use interprocess::local_socket::traits::Listener as _;
 
+    /// How long a test waits for a thread that should stop: past it, the test fails instead of hanging.
+    const STOP_LIMIT: Duration = Duration::from_secs(20);
+
+    /// What `thread` returned; a failure naming `what` when it is still running after [`STOP_LIMIT`].
+    fn joined<T>(thread: std::thread::JoinHandle<T>, what: &str) -> T {
+        let started = std::time::Instant::now();
+        while !thread.is_finished() {
+            assert!(started.elapsed() < STOP_LIMIT, "{what} did not stop within {STOP_LIMIT:?}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        thread.join().unwrap()
+    }
+
     #[test]
     fn this_users_own_listener_is_this_user_and_bytes_flow_both_ways() {
         let tmp = tempfile::tempdir().unwrap();
@@ -215,7 +234,7 @@ mod tests {
         let mut echoed = [0u8; 5];
         stream.try_clone().unwrap().read_exact(&mut echoed).unwrap();
         assert_eq!(&echoed, b"hello");
-        server.join().unwrap();
+        joined(server, "the echo server");
         stream.shutdown().unwrap();
         assert_eq!(stream.read(&mut echoed).unwrap(), 0, "ended");
     }
@@ -246,15 +265,18 @@ mod tests {
         let (_tmp, stream, hold, server) = silent();
         stream.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
         let started = std::time::Instant::now();
-        let error = (&stream).read(&mut [0u8; 8]).unwrap_err();
+        let reader = stream.try_clone().unwrap();
+        let reading = std::thread::spawn(move || (&reader).read(&mut [0u8; 8]).unwrap_err());
+        let error = joined(reading, "a read past its deadline");
         assert!(matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut), "{error:?}");
         assert!(started.elapsed() < Duration::from_secs(5), "bounded: {:?}", started.elapsed());
         // A clone shares the deadline.
-        let error = stream.try_clone().unwrap().read(&mut [0u8; 8]).unwrap_err();
+        let mut clone = stream.try_clone().unwrap();
+        let error = joined(std::thread::spawn(move || clone.read(&mut [0u8; 8]).unwrap_err()), "the clone's read");
         assert!(matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut), "{error:?}");
         (&stream).write_all(b"still open").unwrap();
         drop(hold);
-        server.join().unwrap();
+        joined(server, "the silent server");
     }
 
     #[test]
@@ -264,10 +286,10 @@ mod tests {
         let blocked = std::thread::spawn(move || reader.read(&mut [0u8; 8]));
         std::thread::sleep(Duration::from_millis(200));
         stream.shutdown().unwrap();
-        assert_eq!(blocked.join().unwrap().unwrap(), 0, "ended");
+        assert_eq!(joined(blocked, "the blocked read").unwrap(), 0, "ended");
         assert!((&stream).write_all(b"x").is_err(), "nothing is written after the end");
         drop(hold);
-        server.join().unwrap();
+        joined(server, "the silent server");
     }
 
     #[test]
@@ -304,9 +326,9 @@ mod tests {
         });
         std::thread::sleep(Duration::from_millis(300));
         stream.shutdown().unwrap();
-        assert_eq!(reading.join().unwrap().unwrap(), 0, "the read ended");
-        writing.join().unwrap();
+        assert_eq!(joined(reading, "the blocked read").unwrap(), 0, "the read ended");
+        joined(writing, "the blocked write");
         drop(hold);
-        server.join().unwrap();
+        joined(server, "the silent server");
     }
 }

@@ -2,6 +2,7 @@ use super::*;
 
 pub struct NativeStorageFixtures;
 impl StorageFixture for NativeStorageFixtures {
+    const EXECUTION_IS_A_PERMISSION: bool = false;
     fn assert_not_executable(_path: &Path) {} // Execution is selected by the loader/extension, not a permission bit.
     fn private_directory_violations(path: &Path, mut check: impl FnMut()) {
         Self::readable(path);

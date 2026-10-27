@@ -6,6 +6,7 @@ fn mode(path: &Path, mode: u32) {
     fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
 }
 impl StorageFixture for NativeStorageFixtures {
+    const EXECUTION_IS_A_PERMISSION: bool = true;
     fn assert_private(path: &Path) {
         Files::check_private(&Files::open_read(path).unwrap()).unwrap();
         let metadata = fs::metadata(path).unwrap();
