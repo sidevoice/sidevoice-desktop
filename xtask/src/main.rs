@@ -18,9 +18,9 @@
 //!   installer. With `--channel release` or `nightly`, the AppImage and the installer are also signed as updates
 //!   (their `.sig`, checked).
 //!
-//! The Windows app, in the `windows` job after `bundle` (windows.rs):
+//! The Windows app, in the `windows` job after `bundle` (platform/release/windows.rs):
 //!
-//! - `windows first-open` (a CI runner): the app started with no settings: the bundled interface comes up.
+//! - `release first-open` (a CI runner): the app started with no settings: the bundled interface comes up.
 //!
 //! Setting up a build (`.github/actions/setup-rust`):
 //!
@@ -28,42 +28,42 @@
 //! - `sherpa-libs`: sherpa-onnx's libraries, checked, by that engine's own `cargo xtask sherpa-libs`; prints their
 //!   directory (`export SHERPA_ONNX_LIB_DIR="$(cargo xtask sherpa-libs)"`) and, on a runner, exports it.
 //!
-//! The macOS app and .dmg (Apple Silicon), in the order CI runs them (macos.rs, probe.rs): `app` to `dmg-screens` in
+//! The macOS app and .dmg (Apple Silicon), in the order CI runs them (platform/release/macos/): `app` to `package-screens` in
 //! the `macos` job; beside it, `probe-app`, `local-host`, `probe`, `card` and `exit` in `macos-native`, and
 //! `voice-models` and `voice-memory` in `macos-call`, `memory` after `exit`:
 //!
-//! - `macos app [--signed] [--channel C]`: the app bundle, ad-hoc signed; with `--signed`, signed with the Developer
+//! - `release app [--signed] [--channel C]`: the app bundle, ad-hoc signed; with `--signed`, signed with the Developer
 //!   ID, notarized and stapled by Tauri's bundler. Reads `APPLE_SIGNING_IDENTITY`, `APPLE_API_KEY`,
 //!   `APPLE_API_ISSUER`, and `APPLE_API_KEY_P8` (the .p8's contents, written to a 0600 file removed when it ends) or
 //!   `APPLE_API_KEY_PATH` (a private .p8 on a laptop, checked and staged in the same scratch directory); `APPLE_CERTIFICATE` and `APPLE_CERTIFICATE_PASSWORD` when set (else
 //!   the bundler signs from the login keychain). With `--signed --channel release` (or `--channel nightly`), also the
 //!   update artifact: dist/Sidevoice_<version>_aarch64.app.tar.gz and its `.sig`, checked unpacked as the app is.
-//! - `macos check-app [--signed]`: what a first open depends on: Info.plist, the signature (`--signed`: the Developer
+//! - `release check-app [--signed]`: what a first open depends on: Info.plist, the signature (`--signed`: the Developer
 //!   ID's, `APPLE_TEAM_ID`'s, timestamped, notarized, stapled, and Gatekeeper takes it), entitlements, the icon, arm64,
 //!   no CI probe inside.
-//! - `macos first-open`: the app started with no settings: the bundled interface comes up.
-//! - `macos dmg [--signed]`: dist/Sidevoice_<version>_aarch64.dmg with the brand's window, verified, the app inside
+//! - `release first-open`: the app started with no settings: the bundled interface comes up.
+//! - `release package [--signed]`: dist/Sidevoice_<version>_aarch64.dmg with the brand's window, verified, the app inside
 //!   checked; without `--signed`, docs/FIRST_OPEN.txt beside it.
-//! - `macos sign-dmg`: the .dmg signed with the Developer ID (from a keychain of its own holding
+//! - `release sign-package`: the .dmg signed with the Developer ID (from a keychain of its own holding
 //!   `APPLE_CERTIFICATE`), notarized with notarytool, stapled, and checked with the app inside as a download has
-//!   them. Reads what `macos app --signed` reads. Its keychain, certificate and key files are removed when it ends,
+//!   them. Reads what `release app --signed` reads. Its keychain, certificate and key files are removed when it ends,
 //!   whatever happened.
-//! - `macos checksums`: dist/SHA256SUMS.txt for the .dmg.
-//! - `macos forget-secrets`: whatever a signing step cut short left (its keychain, certificate and key files); CI
+//! - `release checksums`: dist/SHA256SUMS.txt for the .dmg.
+//! - `release forget-secrets`: whatever a signing step cut short left (its keychain, certificate and key files); CI
 //!   runs it at the end of the job, whatever happened.
-//! - `macos dmg-screens` (informational): the .dmg's window as Finder shows it, light and dark, into dmg-screens/.
-//! - `macos probe-app`: the app built with the `probe` feature (CI only, never shipped) over the release app.
-//! - `macos local-host`: on the probe app, the local host from the bundled page: pairing, the proxy, its refusals.
-//! - `macos probe`: on the probe app, the probe page: origin, loopback, the native engine, the voice call, the headset.
-//! - `macos voice-models`: a call on the engine's real models through the app's adapter (the ignored tests). Reads
+//! - `release package-screens` (informational): the .dmg's window as Finder shows it, light and dark, into dmg-screens/.
+//! - `probe probe-app`: the app built with the `probe` feature (CI only, never shipped) over the release app.
+//! - `probe local-host`: on the probe app, the local host from the bundled page: pairing, the proxy, its refusals.
+//! - `probe probe`: on the probe app, the probe page: origin, loopback, the native engine, the voice call, the headset.
+//! - `probe voice-models`: a call on the engine's real models through the app's adapter (the ignored tests). Reads
 //!   `SIDEVOICE_REAL_CALL_MODELS`: a folder to keep the models in between runs (CI caches it); unset, a scratch one.
-//! - `macos voice-memory`: the host's calls on the engine's real models with the process's footprint and Metal allocation
+//! - `probe voice-memory`: the host's calls on the engine's real models with the process's footprint and Metal allocation
 //!   taken at each step (idle, a call with the models loaded, the call ended and the idle keep run out, ten calls, a
 //!   call whose settings change), as a table; it fails only on clear growth (memory.rs says what and why).
-//! - `macos memory`: on the probe app, the same over a long session in the app: models, calls, the call controls
+//! - `probe memory`: on the probe app, the same over a long session in the app: models, calls, the call controls
 //!   card's settings, the audio devices and the voice settings changed over and over (#145).
-//! - `macos card`: on the probe app, the call controls card over a full-screen editor (screenshots into card-shots/).
-//! - `macos exit`: on the probe app, quitting and restarting (as an installed update does) with a model on the GPU
+//! - `probe card`: on the probe app, the call controls card over a full-screen editor (screenshots into card-shots/).
+//! - `probe exit`: on the probe app, quitting and restarting (as an installed update does) with a model on the GPU
 //!   loaded: each process ends with status 0 and no crash report (#121).
 //!
 //! The commands that start the app (`first-open`, `probe`, `card`) run it with the runner's home on a
@@ -71,7 +71,7 @@
 //! this machine's own settings, pairing, local core and models are never touched (`local-host` always has its own,
 //! /tmp/svhome). `probe` expects no provider key in the login keychain, as on a runner. Unsigned and probe builds
 //! drop every `APPLE_*` signing variable. Ctrl-C or SIGTERM stops the running program and unwinds: secret files,
-//! keychains, mounts and background programs are removed; after a hard kill, `macos forget-secrets` removes what
+//! keychains, mounts and background programs are removed; after a hard kill, `release forget-secrets` removes what
 //! signing left.
 //!
 //! Publishing (the `publish` job; publish.rs), `gh` with `GH_TOKEN` and `GH_REPO`:
@@ -98,40 +98,22 @@
 //!
 //! This tooling's own tests: `cargo test --manifest-path xtask/Cargo.toml`.
 
-mod checks;
-mod macos;
-mod memory;
-mod packaging;
-mod platform;
-mod platform_guard;
-mod probe;
-mod publish;
-mod util;
-mod windows;
-
 use std::process::ExitCode;
 
-use util::Channel;
-
-pub type Result<T> = std::result::Result<T, String>;
+use xtask::util::Channel;
+use xtask::{checks, packaging, platform, platform_guard, publish, util};
 
 const USAGE: &str =
     "usage: cargo xtask web | lint | platform-guard | platform-clippy | test | icons | two-users | bundle [--channel C] | engine-rev
-  | sherpa-libs | macos app [--signed] [--channel C] | macos check-app [--signed] | macos first-open
-  | macos dmg [--signed] | macos sign-dmg | macos checksums | macos forget-secrets | macos dmg-screens
-  | macos probe-app | macos local-host | macos probe | macos voice-models | macos card | macos exit
-  | macos memory | macos voice-memory
-  | windows first-open
+  | sherpa-libs | release app [--signed] [--channel C] | release check-app [--signed] | release first-open
+  | release package [--signed] | release sign-package | release checksums | release forget-secrets
+  | release package-screens
+  | probe probe-app | probe local-host | probe probe | probe voice-models | probe card | probe exit
+  | probe memory | probe voice-memory
   | packaging compare BEFORE_REF | packaging files DIR OUTPUT
   | publish assets release TAG | publish assets nightly | publish release TAG | publish nightly
   | release-pr-title [BRANCH] | release-pr-checks
 (C: release, nightly or dev, the default; xtask/src/main.rs says what each does)";
-
-/// The `macos` commands run on macOS only: its tools (codesign, hdiutil, the window server) are the point.
-fn macos(command: &str, step: impl FnOnce() -> Result<()>) -> Result<()> {
-    util::require_os("macos", &format!("macos {command}"))?;
-    step()
-}
 
 fn main() -> ExitCode {
     if let Err(error) = util::on_interrupt() {
@@ -150,37 +132,34 @@ fn main() -> ExitCode {
         ["icons"] => checks::icons(),
         ["packaging", "compare", before] => packaging::compare(before),
         ["packaging", "files", dir, output] => packaging::files(dir, output),
-        ["two-users"] => checks::two_users(),
+        ["two-users"] => platform::two_users::run(),
         ["bundle"] => checks::bundle(Channel::Dev),
         ["bundle", "--channel", c] => Channel::parse(c).and_then(checks::bundle),
         ["engine-rev"] => checks::engine_rev(),
         ["sherpa-libs"] => checks::sherpa_libs(),
-        ["macos", "app"] => macos("app", || macos::build_app(false, Channel::Dev)),
-        ["macos", "app", "--signed"] => macos("app", || macos::build_app(true, Channel::Dev)),
-        ["macos", "app", "--channel", c] => Channel::parse(c).and_then(|c| macos("app", || macos::build_app(false, c))),
-        ["macos", "app", "--signed", "--channel", c] => {
-            Channel::parse(c).and_then(|c| macos("app", || macos::build_app(true, c)))
+        ["release", "app"] => platform::release::build_app(false, Channel::Dev),
+        ["release", "app", "--signed"] => platform::release::build_app(true, Channel::Dev),
+        ["release", "app", "--channel", c] => Channel::parse(c).and_then(|c| platform::release::build_app(false, c)),
+        ["release", "app", "--signed", "--channel", c] => {
+            Channel::parse(c).and_then(|c| platform::release::build_app(true, c))
         }
-        ["macos", "check-app"] => macos("check-app", || macos::check_app(false)),
-        ["macos", "check-app", "--signed"] => macos("check-app", || macos::check_app(true)),
-        ["macos", "first-open"] => macos("first-open", macos::first_open),
-        ["macos", "dmg"] => macos("dmg", || macos::dmg(false)),
-        ["macos", "dmg", "--signed"] => macos("dmg", || macos::dmg(true)),
-        ["macos", "sign-dmg"] => macos("sign-dmg", macos::sign_dmg),
-        ["macos", "forget-secrets"] => macos("forget-secrets", macos::forget_secrets),
-        ["macos", "checksums"] => macos("checksums", macos::checksums),
-        ["macos", "dmg-screens"] => macos("dmg-screens", macos::dmg_screens),
-        ["macos", "probe-app"] => macos("probe-app", probe::probe_app),
-        ["macos", "local-host"] => macos("local-host", probe::local_host),
-        ["macos", "probe"] => macos("probe", probe::probe),
-        ["macos", "voice-models"] => macos("voice-models", probe::voice_models),
-        ["macos", "card"] => macos("card", probe::card),
-        ["macos", "exit"] => macos("exit", probe::exit),
-        ["macos", "memory"] => macos("memory", probe::memory),
-        ["macos", "voice-memory"] => macos("voice-memory", probe::voice_memory),
-        ["windows", "first-open"] => {
-            util::require_os("windows", "windows first-open").and_then(|()| windows::first_open())
-        }
+        ["release", "check-app"] => platform::release::check_app(false),
+        ["release", "check-app", "--signed"] => platform::release::check_app(true),
+        ["release", "first-open"] => platform::release::first_open(),
+        ["release", "package"] => platform::release::package(false),
+        ["release", "package", "--signed"] => platform::release::package(true),
+        ["release", "sign-package"] => platform::release::sign_package(),
+        ["release", "forget-secrets"] => platform::release::forget_secrets(),
+        ["release", "checksums"] => platform::release::checksums(),
+        ["release", "package-screens"] => platform::release::package_screens(),
+        ["probe", "probe-app"] => platform::probe::probe_app(),
+        ["probe", "local-host"] => platform::probe::local_host(),
+        ["probe", "probe"] => platform::probe::probe(),
+        ["probe", "voice-models"] => platform::probe::voice_models(),
+        ["probe", "card"] => platform::probe::card(),
+        ["probe", "exit"] => platform::probe::exit(),
+        ["probe", "memory"] => platform::probe::memory(),
+        ["probe", "voice-memory"] => platform::probe::voice_memory(),
         ["publish", "assets", kind] => publish::assemble(kind, None),
         ["publish", "assets", kind, tag] => publish::assemble(kind, Some(tag)),
         ["publish", "release", tag] => publish::release(tag),
