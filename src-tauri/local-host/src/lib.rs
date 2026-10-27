@@ -1,7 +1,7 @@
 //! The local host: the core on this computer, as the desktop app reaches it (docs/LOCAL_HOST.md).
 //!
 //! - [`checks`]: before any connect, the core's directory is this user's and private; the server at the other end of
-//!   the socket must be this user (`sidevoice_platform::ipc`'s connect checks it, [`platform::ipc`]).
+//!   the socket must be this user (`sidevoice_platform::ipc::blocking`'s connect checks it).
 //! - [`endpoints`]: where the core and the connector listen, read from the records they publish (`C/core.json`,
 //!   `D/connector.json`), never computed.
 //! - [`core_socket`]: a minimal HTTP/1.1 client over the core's socket (`C/core.json`) — health, identity, local pairing.

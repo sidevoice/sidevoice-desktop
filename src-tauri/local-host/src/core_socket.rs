@@ -11,9 +11,9 @@ use crate::checks::{self, Check};
 use crate::endpoints;
 use crate::http::{self, Response};
 use crate::identity;
-use crate::platform::ipc::Stream;
 use crate::Refusal;
 use serde::{Deserialize, Serialize};
+use sidevoice_platform::ipc::blocking::Stream;
 use std::time::Duration;
 
 /// How long the app waits for the core's own answers. Health is the readiness probe: 2 s (design §4.2).

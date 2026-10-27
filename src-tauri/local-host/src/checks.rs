@@ -4,9 +4,9 @@
 //!
 //! A path that is not there is not unsafe: it is [`Check::Missing`], and the caller treats the host as absent.
 
-use crate::platform::ipc::{self, Stream};
 use crate::Refusal;
 use sidevoice_platform::fs::{Access, Directory, HeldDirectory};
+use sidevoice_platform::ipc::blocking::{Listener, Stream};
 use sidevoice_platform::ipc::Endpoint;
 use std::io;
 use std::path::Path;
@@ -57,7 +57,7 @@ pub fn owned_not_writable(path: &Path) -> Result<(), Check> {
 /// listens on (absent, refused) is [`Check::Missing`].
 pub fn connect(dir: &Path, endpoint: &Endpoint, dir_check: fn(&Path) -> Result<(), Check>) -> Result<Stream, Check> {
     dir_check(dir)?;
-    match ipc::connect(endpoint) {
+    match Stream::connect(endpoint) {
         Ok(stream) => Ok(stream),
         Err(e) if matches!(e.kind(), io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused) => Err(Check::Missing),
         Err(e) if e.kind() == io::ErrorKind::PermissionDenied => Err(Check::Unsafe(Refusal::new(
@@ -131,7 +131,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         StorageFixtures::private(tmp.path());
         let endpoint = Endpoint::new(tmp.path(), "s");
-        let _listener = ipc::listen(&endpoint).unwrap();
+        let _listener = Listener::listen(&endpoint).unwrap();
         connect(tmp.path(), &endpoint, private_dir).unwrap();
         // Nobody listening: absent, not unsafe.
         let none = Endpoint::new(tmp.path(), "none");
