@@ -663,8 +663,8 @@ dependencies = [
 
 [[package]]
 name = "sidevoice-platform"
-version = "0.14.1"
-source = "git+https://github.com/sidevoice/sidevoice-core?tag=v0.14.1#c6ab00c5ffadd087816c5bc14108e26c03e6af0e"
+version = "0.15.0"
+source = "git+https://github.com/sidevoice/sidevoice-core?tag=v0.15.0#181ca9c757c994e1f41ee6c35b14b38fffa5d975"
 dependencies = [
  "dirs",
  "exacl",

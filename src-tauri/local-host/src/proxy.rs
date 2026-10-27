@@ -27,7 +27,7 @@
 use crate::core_socket::CoreSocket;
 use crate::http::{self, Headers, RequestHead};
 use crate::identity;
-use crate::platform::ipc;
+use sidevoice_platform::ipc::blocking;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
@@ -284,7 +284,7 @@ pub fn upstream_head(head: &RequestHead, token: &str, upgrade: bool) -> Vec<u8> 
 /// A socket of a tunnel, kept to shut it down from outside.
 enum Closer {
     Tcp(TcpStream),
-    Local(ipc::Stream),
+    Local(blocking::Stream),
 }
 
 impl Closer {
