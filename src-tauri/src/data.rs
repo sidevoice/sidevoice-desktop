@@ -941,8 +941,8 @@ mod tests {
     }
 }
 
-/// The reset's connector step against test-support's native fake connector (`fake-connector`, which the workspace's
-/// tests build), on every host.
+/// The reset's connector step against test-support's native fake connector (`fixture::fake_connector`, built fresh from
+/// this checkout), on every host.
 #[cfg(test)]
 mod connector_cli_tests {
     use super::tests::{fixture, private_dirs, standard};
@@ -955,9 +955,9 @@ mod connector_cli_tests {
         fake::install(&fake::fake_connector(), program, &config).unwrap();
     }
 
-    /// The arguments of the fake connector's last run (its `ran` file), empty if it never ran.
-    fn last_run(ran: &Path) -> String {
-        fs::read_to_string(ran).unwrap_or_default()
+    /// Every run of the fake connector, in order (its append-only `calls` file): empty if it never ran.
+    fn calls(log: &Path) -> Vec<String> {
+        fs::read_to_string(log).unwrap_or_default().lines().map(str::to_owned).collect()
     }
 
     #[test]
@@ -972,16 +972,16 @@ mod connector_cli_tests {
         for (name, mut config, accepted) in cases {
             let dir = tempfile::tempdir().unwrap();
             let program = dir.path().join(fake::program_name());
-            let ran = dir.path().join("ran");
-            config["ran"] = json!(ran);
+            let log = dir.path().join("calls");
+            config["calls"] = json!(log);
             connector(&program, config);
             let cli = Cli { prefix: vec![program.to_string_lossy().into_owned()], data: dir.path().join(".sidevoice") };
             let checked = probe_safe_connector(&cli, Duration::from_secs(10));
             assert_eq!(checked.is_ok(), accepted, "{name}");
-            assert!(last_run(&ran).starts_with("--version --json "), "{name}: the probe only asks for the version");
+            assert_eq!(calls(&log), ["--version --json"], "{name}: the probe only asks for the version");
             if checked.is_ok() {
                 cli.run(&["uninstall", "--json"], Duration::from_secs(10)).unwrap();
-                assert!(last_run(&ran).starts_with("uninstall --json "), "{name}");
+                assert_eq!(calls(&log), ["--version --json", "uninstall --json"], "{name}");
             }
         }
         let dir = tempfile::tempdir().unwrap();
@@ -998,17 +998,17 @@ mod connector_cli_tests {
         let recovery = data.join(".uninstall-recovery");
         private_dirs(&home, &recovery);
         let program = recovery.join(fake::program_name());
-        let ran = home.join("retry-invoked");
-        connector(&program, json!({"ran": ran, "response": {"ok": true, "safe_uninstall": 1, "state": "removed"}}));
+        let log = home.join("retry-calls");
+        connector(&program, json!({"calls": log, "response": {"ok": true, "safe_uninstall": 1, "state": "removed"}}));
         let releases = data.join("install");
         fs::write(data.join("install.json"), json!({"releases": releases.clone(), "command": [program]}).to_string())
             .unwrap();
         assert_eq!(validate_uninstall_scope_at(&home, &data, &data), Ok(releases));
         let Ok(cli) = crate::local_host::connector_cli(&data) else { panic!("the recorded recovery executable runs") };
         assert_eq!(probe_safe_connector(&cli, Duration::from_secs(10)), Ok(()));
-        assert!(last_run(&ran).starts_with("--version --json "), "the probe only asks for the version");
+        assert_eq!(calls(&log), ["--version --json"], "the probe only asks for the version");
         assert_eq!(cli.run(&["uninstall", "--json"], Duration::from_secs(10)).unwrap()["state"], "removed");
-        assert!(last_run(&ran).starts_with("uninstall --json "));
+        assert_eq!(calls(&log), ["--version --json", "uninstall --json"]);
     }
 }
 

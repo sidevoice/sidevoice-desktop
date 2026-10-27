@@ -14,18 +14,29 @@ pub fn config_path(program: &Path) -> PathBuf {
     program.with_extension("fixture.json")
 }
 /// The native fake connector (`src/bin/fake-connector.rs`) for tests of other packages, which have no
-/// `CARGO_BIN_EXE_fake-connector`: built by the workspace's tests (`cargo test --workspace`) into the profile directory
-/// that holds the running test binary's `deps`.
+/// `CARGO_BIN_EXE_fake-connector`: built from this checkout's sources by the Cargo running the tests (a no-op when it
+/// is fresh) the first time it is asked for, and the path Cargo reports for it. Never a missing, stale or other
+/// checkout's binary.
 pub fn fake_connector() -> PathBuf {
-    let test = std::env::current_exe().expect("the running test binary");
-    let profile = test.parent().and_then(Path::parent).expect("a test binary under <target>/<profile>/deps");
-    let program = profile.join(format!("fake-connector{}", std::env::consts::EXE_SUFFIX));
-    assert!(
-        program.is_file(),
-        "{} is missing: the workspace's tests (`cargo test --workspace`) build it",
-        program.display()
-    );
-    program
+    static BUILT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    BUILT.get_or_init(build_fake_connector).clone()
+}
+fn build_fake_connector() -> PathBuf {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| env!("CARGO").into());
+    let built = std::process::Command::new(cargo)
+        .args(["build", "--quiet", "--message-format=json", "--bin", "fake-connector", "--manifest-path"])
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
+        .stderr(std::process::Stdio::inherit())
+        .output()
+        .expect("Cargo runs");
+    assert!(built.status.success(), "the fake connector does not build");
+    let executable = String::from_utf8_lossy(&built.stdout).lines().find_map(|line| {
+        let message: Value = serde_json::from_str(line).ok()?;
+        (message["reason"] == "compiler-artifact" && message["target"]["name"] == "fake-connector")
+            .then(|| message["executable"].as_str().map(PathBuf::from))
+            .flatten()
+    });
+    executable.expect("Cargo names the fake connector it built")
 }
 pub fn install(executable: &Path, program: &Path, config: &Value) -> io::Result<()> {
     Files::open_private(program, Create::NewProgram)?.write_all(&std::fs::read(executable)?)?;
