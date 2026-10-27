@@ -149,7 +149,7 @@ fn the_footprint_stays_flat_over_calls_and_changes() {
     runtime.block_on(async {
         let mut state = VoiceState::new(Audio, NativeDevices::default());
         state.minute = MINUTE;
-        let loader = EngineLoader::new(engines.engine(), Arc::clone(&state.model_cache));
+        let loader = EngineLoader::shared(engines.engine(), Arc::clone(&state.model_cache));
 
         // The engine is up and its catalogues listed; no model is loaded.
         report("idle").await;

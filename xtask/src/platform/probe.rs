@@ -6,6 +6,7 @@ pub mod checks;
 pub mod memory;
 
 use crate::platform::host;
+use crate::util::{repo, Cmd};
 use crate::Result;
 
 /// A host's way to run each flow. Every method is one real difference between hosts; the default is that the host has
@@ -24,11 +25,6 @@ trait Os {
     /// On the probe app, the probe page: origin, loopback, the native engine, the voice call, the headset.
     fn probe() -> Result<()> {
         Err(unsupported("probe"))
-    }
-
-    /// A call on the engine's real models through the app's adapter (the ignored tests).
-    fn voice_models() -> Result<()> {
-        Err(unsupported("voice-models"))
     }
 
     /// Runs the host's calls on the engine's real models and returns the log with a `memory phase=…` line at each step
@@ -80,9 +76,27 @@ pub fn probe() -> Result<()> {
     Native::probe()
 }
 
-/// `probe voice-models`.
+/// `probe voice-models`: a call on the engine's real models through the app's adapter: Silero, Whisper tiny on
+/// whisper.cpp and Kokoro, downloaded into a scratch folder, or kept in `SIDEVOICE_REAL_CALL_MODELS` (CI caches it);
+/// the turn must come back as the clip's words and the reply must be spoken and heard, with injected audio in place of
+/// the devices (src-tauri/src/voice/models/engine/tests.rs). With it, the rest of the voice tests: the native host's
+/// lanes over stand-in shared devices, and a call on the machine's own devices, which is ready or fails by a code
+/// (src-tauri/src/voice/host/tests.rs). The same on every OS: nothing in it differs.
 pub fn voice_models() -> Result<()> {
-    Native::voice_models()
+    Cmd::new("cargo")
+        .args([
+            "test",
+            "--release",
+            "--lib",
+            "voice::",
+            "--",
+            "--include-ignored",
+            "--nocapture",
+            "--skip",
+            "voice::host::memory",
+        ])
+        .dir(repo().join("src-tauri"))
+        .run()
 }
 
 /// `probe voice-memory`.

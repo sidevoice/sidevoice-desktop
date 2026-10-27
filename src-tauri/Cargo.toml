@@ -50,7 +50,14 @@ url = "2.5"
 # The app's updates (src/updater.rs; docs/BRIDGE.md → "The updater"), from Rust only: the page gets none of its
 # commands. Its checks sleep on the app's Tokio runtime.
 tauri-plugin-updater = "2.13"
-tokio = { version = "1", features = ["time", "sync", "rt", "net", "io-util", "process"] }
+# The call runs on this runtime too; the models' native work goes to its blocking pool (src/voice/models.rs).
+tokio = { version = "1", features = ["time", "sync", "rt", "rt-multi-thread", "net", "io-util", "process", "macros"] }
+# The voice call the app runs itself (src/voice.rs, `host.voice`): sidevoice-voice with its native microphone and
+# speaker (cpal) and Sonora's pure-Rust echo cancellation between them (no C++ to build), on the models the app hands
+# it (src/voice/models.rs: the engine's). It depends on no engine. The candidate source: a try's take (StartOptions,
+# VoiceEvent::Take), the pause in the person's speech, and the rendered speaker's level (VoiceEvent::PlaybackLevel).
+sidevoice-voice = { git = "https://github.com/sidevoice/sidevoice-voice", tag = "v0.7.4" }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 # A one-use helper capability, delivered only through its inherited stdin pipe.
 getrandom = "0.3"
 # The app log (src/lib.rs `applog`): a rotating, size-capped file in the platform's log directory, fed by the Rust side and
@@ -84,15 +91,6 @@ windows-sys = { version = "0.61", features = ["Win32_System_Threading", "Win32_U
 apple-native-keyring-store = { version = "1.0.2", features = ["keychain"] }
 # The typed Mach bindings (task_info, task_vm_info) for the process memory read (src/platform/diagnostics/macos.rs).
 mach2 = "0.6"
-# The voice call the app runs itself (src/voice.rs, `host.voice`): sidevoice-voice with its native microphone and
-# speaker (cpal) and WebRTC's AEC3 between them, on the models the app hands it (src/voice/models.rs: the engine's).
-# It depends on no engine. The candidate source: a try's take (StartOptions, VoiceEvent::Take), the pause in the
-# person's speech, and the rendered speaker's level (VoiceEvent::PlaybackLevel). macOS only: AEC3's C++ does not build
-# on Windows, and the beta ships on macOS. Its build needs meson, ninja and pkg-config.
-sidevoice-voice = { git = "https://github.com/sidevoice/sidevoice-voice", tag = "v0.7.3" }
-futures-util = { version = "0.3", default-features = false, features = ["std"] }
-# The call runs on the app's Tokio runtime; the models' native work goes to its blocking pool (src/voice/models.rs).
-tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "time", "macros"] }
 # Legacy keychain namespace deletion and compatibility tests (platform/credentials).
 security-framework = "3"
 libc = "0.2"
