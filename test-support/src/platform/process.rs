@@ -13,11 +13,12 @@ use imp::Os;
 
 /// The only part of starting a detached service that differs per OS.
 trait Isolation {
-    /// Adds the `process-wrap` wrapper that takes the child out of the caller's session, group or job. None by default.
+    /// Adds the `process-wrap` wrapper that detaches the child. None by default.
     fn isolate(_command: &mut CommandWrap) {}
 }
 
-/// Spawns `command` outside the caller's process group, job or session, as a service handed to an independent owner.
+/// Spawns `command` detached, as a service started on its own: a session of its own (Unix); on Windows a process
+/// group of its own with no console, as the connector detaches the core, which stays in an enclosing job.
 pub fn detach(command: Command) -> io::Result<Box<dyn ChildWrapper>> {
     let mut command = CommandWrap::from(command);
     Os::isolate(&mut command);

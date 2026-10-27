@@ -50,9 +50,9 @@ reqwest = { version = "0.13", default-features = false, features = ["blocking", 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["process", "event"] }
 
-# Windows (`platform`): the user SID of a process, and whether one is running (`sysinfo`, as `sidevoice_platform::ipc`
-# checks its pipe peers); a file's volume serial number and index (`winapi-util`); the process creation flag type
-# `process-wrap` takes, cancelling a pipe's I/O and peeking at a child's pipes (`windows`). All already in the tree
+# Windows (`platform`): the user SID of a process (`sysinfo`, as `sidevoice_platform::ipc` checks its pipe peers); a
+# file's volume serial number and index (`winapi-util`); the process creation flag type `process-wrap` takes, cancelling
+# a pipe's I/O, peeking at a child's pipes and asking whether a process is running (`windows`). All already in the tree
 # through sidevoice-platform.
 [target.'cfg(windows)'.dependencies]
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }

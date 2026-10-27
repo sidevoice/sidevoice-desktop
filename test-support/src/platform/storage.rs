@@ -61,6 +61,8 @@ pub trait StorageFixture {
     fn record_access_cases(path: &Path, check: impl FnMut(bool));
     /// A non-regular record, including one that could block a naive reader where supported.
     fn special_record(path: &Path);
+    /// Remove what [`Self::special_record`] put at `path`.
+    fn remove_special_record(path: &Path);
     /// Attempt to replace the held directory by renaming it; expected refusal is host-specific.
     fn replace_directory(path: &Path, moved: &Path) -> Replacement;
     /// Run the storage regression below search-only ancestry and verify its access is unchanged.

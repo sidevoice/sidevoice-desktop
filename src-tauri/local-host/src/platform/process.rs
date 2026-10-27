@@ -22,6 +22,11 @@ trait Os {
     /// The largest process id the OS hands out.
     const MAX_PID: u64;
 
+    /// Whether something the program starts detached (a session or process group of its own) leaves its tree, and so
+    /// outlives [`Tree::kill_tree`]. Not where the tree holds everything started in it and allows nothing to break
+    /// away.
+    const DETACHED_LEAVES_THE_TREE: bool = false;
+
     /// Makes `command` start a tree of its own, which [`Tree::kill_tree`] kills whole.
     fn contain(_command: &mut CommandWrap) -> io::Result<()> {
         Err(io::Error::new(io::ErrorKind::Unsupported, "running a program is not available on this OS yet"))
@@ -47,6 +52,12 @@ pub fn pid(raw: u64) -> Option<u32> {
 /// Whether process `pid` is there. One that exists but is not ours still is; one that cannot be asked about is not.
 pub fn alive(pid: u32) -> bool {
     Native::exists(pid).unwrap_or(false)
+}
+
+/// Whether something the program run by [`spawn_tree`] starts detached outlives the run's [`Tree::kill_tree`] (a
+/// service it starts on its own, not through the service manager). Where it does not, it ends with the run.
+pub fn detached_leaves_the_tree() -> bool {
+    Native::DETACHED_LEAVES_THE_TREE
 }
 
 /// Starts `command` as a tree of its own. A program being written at that instant (an update, or any process that

@@ -15,7 +15,8 @@ use imp::Native;
 /// What differs per OS.
 trait Os {
     /// Lets this user, and nobody else, run the file at `path`. Where running is not a permission on the file, there
-    /// is nothing to do.
+    /// is nothing to mark; where who else may run it is only set when the file is created, one open to others is
+    /// refused.
     fn make_runnable(_path: &Path) -> io::Result<()> {
         Ok(())
     }
@@ -28,7 +29,8 @@ trait Os {
     }
 }
 
-/// Lets this user, and nobody else, run the file at `path` (Unix: `0700`).
+/// Lets this user, and nobody else, run the file at `path` (Unix: `0700`; Windows: a file created private stays so,
+/// one that is not is refused).
 pub fn make_runnable(path: &Path) -> io::Result<()> {
     Native::make_runnable(path)
 }
@@ -51,6 +53,7 @@ pub fn stamp(path: &Path) -> Option<Stamp> {
 mod tests {
     use super::*;
     use sidevoice_desktop_test_support::platform::storage::{Others, StorageFixture, StorageFixtures};
+    use sidevoice_platform::fs::{Create, Files, Fs};
 
     #[test]
     fn a_stamp_changes_when_another_file_takes_the_name_and_not_otherwise() {
@@ -71,8 +74,16 @@ mod tests {
     fn a_runnable_file_stays_this_users() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("program");
-        std::fs::write(&path, b"").unwrap();
+        // As the install unpacks its installer: new and private.
+        Files::open_private(&path, Create::NewProgram).unwrap();
         make_runnable(&path).unwrap();
         assert_eq!(StorageFixtures::others(&path), Others::Nothing);
+        // One somebody else may read is never made runnable as it is: made this user's alone (Unix) or refused
+        // (where who may run it is only set when it is created).
+        StorageFixtures::readable(&path);
+        match make_runnable(&path) {
+            Ok(()) => assert_eq!(StorageFixtures::others(&path), Others::Nothing),
+            Err(e) => assert_eq!(e.kind(), io::ErrorKind::PermissionDenied, "{e}"),
+        }
     }
 }
