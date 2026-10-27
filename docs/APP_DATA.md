@@ -72,15 +72,18 @@ reparse entries) are unlinked, never followed; hard links lose only the selected
 ordinary file; mount and device changes below the held parent are refused. The model store's three children are
 preflighted together before any is removed; the store and other siblings stay. Missing folders are completed steps.
 
-The shared capability checks mounts only from the held parent down. Until it covers the rest, `app_data` refuses,
-between the account home and that parent: a home that is not its own canonical path or is a volume's root, any
-directory on the way that is not its own canonical path (any link), and any directory on another volume. Paths are
-compared with `dunce` (no Windows verbatim prefixes) and volumes read with `file-id` (maintained, notify-rs). A
-same-device bind mount on Linux is not detected by this interim check; the former Linux mount-ID probe moves to
-the shared capability as a follow-up.
+The account home is checked once and held: it must be its own canonical path (compared with `dunce`, no Windows
+verbatim prefixes) and not a volume's root (its parent on its volume, read with `file-id`). Every directory a
+removal works in (the held parent, the model store, a browser storage root's parent) is then reached beneath that
+held home with the shared `Directory::open_beneath`, one component at a time relative to the handle before it,
+never by path: a link, junction or other reparse point anywhere on the way (the directory itself included), and a
+directory on another device, mount (a same-device bind mount included) or volume, are refused. Nothing is checked by
+path and then reopened, so the directory the removal holds is the one that was checked. A browser storage root and a
+protected connector root (`check_tree`) must themselves be ordinary directories, opened beneath their parent.
 
-As before, a malicious process with the same account or administrator privileges can race filesystem layout
-changes; this is not atomic confinement against it. Runtime errors can leave partial cleanup; the journal and retry
-remain necessary. Cleanup never elevates, launches a shell, kills writers or schedules deletion after reboot.
+A process with the same account can still change what is *inside* a held directory while it is being deleted; the
+removal capability rechecks identity and refuses replaced ancestors, but this is not atomic confinement against an
+administrator. Runtime errors can leave partial cleanup; the journal and retry remain necessary. Cleanup never
+elevates, launches a shell, kills writers or schedules deletion after reboot.
 
 This is deletion code: it requires human review before merge.

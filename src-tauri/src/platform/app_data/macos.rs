@@ -1,7 +1,7 @@
 //! macOS keeps more for the app than its folders: its logs in `~/Library/Logs`, the window state it saves, and the
 //! app's `defaults` domain.
 
-use super::{remove_entry, Error, Os, Steps, IDENTIFIER};
+use super::{Error, Home, Os, Steps, IDENTIFIER};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -9,9 +9,9 @@ pub(super) struct Native;
 
 impl Os for Native {
     /// The logs, then the saved window state, then the `defaults` domain.
-    fn delete_extra_data(home: &Path, steps: Steps) -> Result<(), Error> {
-        for (name, path) in places(home) {
-            if !steps(name, remove_entry(home, &path)) {
+    fn delete_extra_data(home: &Home, steps: Steps) -> Result<(), Error> {
+        for (name, path) in places(&home.path) {
+            if !steps(name, home.remove_entry(&path)) {
                 return Err(Error::Stopped);
             }
         }
