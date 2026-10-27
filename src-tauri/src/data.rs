@@ -9,7 +9,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager, Webview};
 
 use crate::platform::reset_handoff::{self, Handoff};
-use crate::platform::{account, app_data, connector_service, credentials, uninstall};
+use crate::platform::{account, app_data, application, connector_service, credentials, uninstall};
 use crate::AppState;
 
 #[derive(Default)]
@@ -259,7 +259,7 @@ fn begin_reset(app: &AppHandle, uninstall: bool) -> Answer {
         refused(if error.kind() == std::io::ErrorKind::WouldBlock { "reset.busy" } else { "reset.helper-failed" })
     })?;
     // The program the helper runs and the relaunch starts, resolved and checked before anything is touched.
-    let program = installed_program().ok_or_else(|| refused("reset.helper-failed"))?;
+    let program = application::installed_program().ok_or_else(|| refused("reset.helper-failed"))?;
     let (mut failed, agents, service_outcome) = reset_before_exit()?;
     // The provider keys, on every host that runs the transaction, journalled as the last step before exit.
     if credentials::clear_all().is_err() {
@@ -510,24 +510,6 @@ const RECORD_LIMIT: u64 = 16 * 1024;
 /// The environment marker of the relaunch after a reset: that app's setup finalizes the report.
 const RELAUNCH_MARKER: &str = "SIDEVOICE_RESET_RELAUNCH";
 
-/// The installed app, as Tauri resolves its own binary (Linux: the AppImage itself rather than its temporary mount,
-/// which goes away with the app; Tauri takes it from `APPIMAGE`, an environment the app trusts as it trusts `HOME`),
-/// checked as a Sidevoice program (`trusted_program`: this user's or the system's, and nobody else may change it or the
-/// folders above it). Where the handoff keeps its shipped launch (`PROGRAM_CHECKED` false: macOS), the
-/// executable as the OS names it. The helper and the relaunch start only this; neither the page nor the plan names a
-/// program.
-fn installed_program() -> Option<PathBuf> {
-    use sidevoice_platform::fs::{Files, Fs};
-    // The launch macOS shipped with: `current_exe`, unchecked. Tauri's resolver refuses an executable path with any
-    // link in it, which used to work; tightening macOS is the operator's decision (see the PR).
-    const PROGRAM_CHECKED: bool = cfg!(not(target_os = "macos"));
-    if !PROGRAM_CHECKED {
-        return std::env::current_exe().ok();
-    }
-    let program = tauri::process::current_binary(&tauri::Env::default()).ok()?;
-    Files::trusted_program(&program).ok()
-}
-
 /// Absolute, with no `.` or `..`: a drive or share prefix, the root, then plain names.
 fn clean_absolute(path: &Path) -> bool {
     use std::path::Component;
@@ -610,7 +592,8 @@ fn conclude_reset(
         // Cleanup is over. A new app must acquire this lock independently.
         drop(lock);
         // Resolved and checked again right before it starts.
-        installed_program().is_some_and(|program| reset_handoff::relaunch(&program, RELAUNCH_MARKER).is_ok())
+        application::installed_program()
+            .is_some_and(|program| reset_handoff::relaunch(&program, RELAUNCH_MARKER).is_ok())
     };
     if uninstall {
         let trash = || match uninstall::uninstall() {

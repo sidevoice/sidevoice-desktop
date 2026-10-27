@@ -4,7 +4,7 @@
 use nix::errno::Errno;
 use nix::unistd::{access, AccessFlags, Uid, User};
 use std::io;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 pub(super) struct Native;
@@ -28,6 +28,6 @@ impl super::Os for Native {
             Err(Errno::EACCES | Errno::EROFS) => return Ok(false),
             Err(error) => return Err(error.into()),
         }
-        Ok(directory.mode() & 0o1000 == 0 || std::fs::symlink_metadata(child)?.uid() == me)
+        Ok(directory.permissions().mode() & 0o1000 == 0 || std::fs::symlink_metadata(child)?.uid() == me)
     }
 }

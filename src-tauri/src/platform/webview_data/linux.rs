@@ -1,19 +1,17 @@
 use super::*;
+use nix::errno::Errno;
+use nix::sys::signal::kill;
 
 pub(super) struct Native;
 
 impl Os for Native {
     fn exited(pid: u32) -> io::Result<bool> {
         let pid = libc::pid_t::try_from(pid).ok().filter(|pid| *pid > 1).ok_or_else(Owner::busy)?;
-        // SAFETY: signal zero inspects a positive PID without sending a signal or touching memory.
-        if unsafe { libc::kill(pid, 0) } == 0 {
-            return Ok(false);
-        }
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() == Some(libc::ESRCH) {
-            Ok(true)
-        } else {
-            Err(error)
+        // Signal zero (`None`) inspects a positive PID without sending a signal.
+        match kill(nix::unistd::Pid::from_raw(pid), None) {
+            Ok(()) => Ok(false),
+            Err(Errno::ESRCH) => Ok(true),
+            Err(error) => Err(error.into()),
         }
     }
 
