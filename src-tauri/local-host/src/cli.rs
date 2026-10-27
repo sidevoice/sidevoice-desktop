@@ -8,14 +8,19 @@
 
 use crate::checks::Check;
 use crate::paths::DataDirs;
-use crate::platform::process;
 use crate::Refusal;
 use serde_json::Value;
 use sidevoice_platform::fs::{Access, Directory, Files, Fs, HeldDirectory};
-use std::process::{Command, ExitStatus, Stdio};
-use std::time::{Duration, Instant};
+use sidevoice_platform::process::{Process, Processes};
+use std::process::{ExitStatus, Stdio};
+use std::time::Duration;
 
-const OUTPUT_LIMIT: u64 = 1024 * 1024;
+const OUTPUT_LIMIT: usize = 1024 * 1024;
+/// How long the output may stay open once the program has exited (a child of its own still holding the pipes) before
+/// the rest of its tree is killed.
+const PIPE_GRACE: Duration = Duration::from_millis(500);
+/// How often [`Cli::exec`] calls its `tick` while the program runs.
+const TICK: Duration = Duration::from_millis(50);
 const RECORD_LIMIT: u64 = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,13 +71,15 @@ impl Cli {
         Ok(Cli { prefix: verified, data })
     }
 
-    /// Runs `prefix + args` and waits at most `timeout` — for the process to exit **and** for both its output streams
-    /// to close: its JSON answer when it says `ok`, else its `{key, message}`.
+    /// Runs `prefix + args` and waits at most `timeout` for the process to exit, then at most [`PIPE_GRACE`] for both
+    /// its output streams to close: its JSON answer when it says `ok`, else its `{key, message}`.
     ///
-    /// The run is a process group of its own. Whatever is left in it once the program exits (a child still holding
-    /// the pipes) is killed, and on a timeout the whole group is. What the program hands to the service manager
-    /// (`service start` → launchd) is not in the group, and stays; so does what it starts detached where that leaves
-    /// the run ([`process::detached_leaves_the_tree`]), and elsewhere that is killed with the run.
+    /// The run is a tree of its own (`sidevoice_platform::process`: a process group, a Job Object on Windows). Whatever
+    /// is left in it once the program has exited (a child still holding the pipes) is killed at most [`PIPE_GRACE`]
+    /// later, and on a timeout the whole tree is. What the program hands to the service manager
+    /// (`service start` → launchd) is not in the tree, and stays; so does what it starts detached where that leaves the
+    /// tree (a session of its own), and where the tree holds it (a Job Object allows no breakaway) it is killed with the
+    /// run.
     pub fn run(&self, args: &[&str], timeout: Duration) -> Result<Value, Refusal> {
         let failed = |why: String| Refusal::new("cli.failed", why);
         let ran = self.exec(args, timeout, &mut || {})?;
@@ -95,14 +102,14 @@ impl Cli {
         Err(refusal_of(&answer).unwrap_or_else(|| failed(format!("`{}` exited {status}: {}", args.join(" "), tail()))))
     }
 
-    /// Runs `prefix + args` as [`Self::run`] does — in the program's own directory, a process group of its own, at most `timeout` for its exit and both
-    /// its output streams — and hands back what it left, `status` `None` when the deadline came first (the whole group
-    /// was killed). `tick` is called about every 50 ms while it runs. Only a program that cannot start is a refusal
+    /// Runs `prefix + args` as [`Self::run`] does — in the program's own directory, a tree of its own, at most `timeout`
+    /// for the program's exit, then at most [`PIPE_GRACE`] for both its output streams to close — and hands back what it
+    /// left, `status` `None` when the deadline came first (the whole tree was killed; what it wrote is not kept then).
+    /// `tick` is called about every 50 ms while it runs. Only a program that cannot start, or whose output cannot be read, is a refusal
     /// (`cli.failed`).
     pub fn exec(&self, args: &[&str], timeout: Duration, tick: &mut dyn FnMut()) -> Result<Ran, Refusal> {
         let failed = |why: String| Refusal::new("cli.failed", why);
-        let deadline = Instant::now() + timeout;
-        let mut command = Command::new(&self.prefix[0]);
+        let mut command = tokio::process::Command::new(&self.prefix[0]);
         // The program's own directory, checked with it, as the working directory: never the app's, which can be anywhere
         // (on Windows the current directory is also where a DLL loaded by bare name may be found).
         if let Some(dir) = std::path::Path::new(&self.prefix[0]).parent() {
@@ -115,38 +122,32 @@ impl Cli {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let mut child =
-            process::spawn_tree(command).map_err(|e| failed(format!("{} could not start: {e}", self.prefix[0])))?;
-        let mut output = child.output(OUTPUT_LIMIT);
-        let mut status = None;
-        loop {
-            if status.is_none() {
-                status = child.try_wait().ok().flatten();
-                if status.is_some() {
-                    // The program answered and left: anything of its own still running only holds the pipes open.
-                    child.kill_tree();
+        let output = crate::runtime::block_on(async {
+            let child = Processes::spawn_tree(command)
+                .await
+                .map_err(|e| failed(format!("{} could not start: {e}", self.prefix[0])))?;
+            let output = child.output(timeout, PIPE_GRACE, OUTPUT_LIMIT);
+            tokio::pin!(output);
+            let mut every = tokio::time::interval(TICK);
+            loop {
+                tokio::select! {
+                    output = &mut output => return Ok::<_, Refusal>(output),
+                    _ = every.tick() => tick(),
                 }
             }
-            if status.is_some() && !output.is_open() {
-                break;
+        })?;
+        match output {
+            Ok(output) => Ok(Ran { status: Some(output.status), stdout: output.stdout, stderr: output.stderr }),
+            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                Ok(Ran { status: None, stdout: Vec::new(), stderr: Vec::new() })
             }
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                break;
-            }
-            output.drain(left.min(Duration::from_millis(50)));
-            tick();
+            Err(e) => Err(failed(format!("{}'s output could not be read: {e}", self.prefix[0]))),
         }
-        if status.is_none() {
-            child.stop();
-        }
-        let (stdout, stderr) = output.into_bytes();
-        Ok(Ran { status, stdout, stderr })
     }
 }
 
 /// What a run left ([`Cli::exec`]): its exit status, `None` when it was killed at the deadline, and what it wrote (at
-/// most 1 MiB of each stream).
+/// most 1 MiB of each stream; nothing when it was killed).
 #[derive(Debug)]
 pub struct Ran {
     pub status: Option<ExitStatus>,

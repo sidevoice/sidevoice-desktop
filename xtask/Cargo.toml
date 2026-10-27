@@ -24,7 +24,7 @@ proc-macro2 = { version = "1", features = ["span-locations"] }
 syn = { version = "2", default-features = false, features = ["full", "parsing", "proc-macro", "visit"] }
 
 # Shared child lifetime, private files and release-target facts; no core application dependency.
-sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.12.4" }
+sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.14.0" }
 tokio = { version = "1", features = ["rt-multi-thread", "process", "io-util", "time", "macros"] }
 # Ctrl+C on every host, plus SIGTERM/SIGHUP on Unix CI runners.
 ctrlc = { version = "3.5", features = ["termination"] }
@@ -39,7 +39,7 @@ rustix = { version = "1", features = ["process", "fs"] }
 dirs = "7"
 
 [dev-dependencies]
-sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.12.4", features = ["test-support"] }
+sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.14.0", features = ["test-support"] }
 tempfile = "3"
 # How tauri-plugin-updater orders versions: the tests check the nightly's against it.
 semver = "1"

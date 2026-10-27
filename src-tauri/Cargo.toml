@@ -24,7 +24,7 @@ tauri-build = { version = "2.7", features = [] }
 [dependencies]
 keyring-core = "1.0.1"
 # Shared paths, held-directory storage, authenticated channels, detached helper execution and browser-data removal.
-sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.12.4" }
+sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.14.0" }
 sidevoice-desktop-core = { path = "core" }
 sidevoice-desktop-engine = { path = "engine" }
 tauri = { version = "2.12", features = ["tray-icon", "image-png", "macos-private-api"] }
@@ -127,7 +127,7 @@ gtk = "0.18"
 [dev-dependencies]
 keyring-core = { version = "1.0.1", features = ["sample"] }
 # Portable pairing attack fixtures from the pinned shared filesystem interface.
-sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.12.4", features = ["test-support"] }
+sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.14.0", features = ["test-support"] }
 # Deterministic startup-deadline tests; no wall-clock sleeps.
 tokio = { version = "1", features = ["rt", "test-util"] }
 # Mock runtime for the platform interface tests; no native explorer is opened.

@@ -8,7 +8,7 @@
 //! link (`archive-link`); a device, a FIFO, a sparse file or anything else that is not a file or a directory
 //! (`archive-type`, also for an archive that does not decode); more than [`Limits`] allow (`archive-size`). Nothing is
 //! taken from an entry but its path, its contents and whether it is executable: files are written 0600 (0700 when the
-//! archive marks them executable, as `bin/sidevoice-connector`), directories 0700, each created anew — an entry that
+//! archive marks them executable, and the installer always), directories 0700, each created anew — an entry that
 //! is already there (twice in the archive, or a file where a directory is) is refused (`archive-path`). No link is
 //! ever created, so a path built from checked segments below the directory stays below it.
 
@@ -132,8 +132,16 @@ fn directory(path: &Path) -> Result<(), Failure> {
 }
 
 /// Unpacks the gzipped tar `archive` into `into` (an existing private directory): see the module's documentation.
+/// The entry at `program` (its path in the archive, `package/bin/sidevoice-connector`) is written as a program whatever
+/// the archive says of it.
 /// `cancelled` is asked between entries and between chunks; when it says so, this stops with `install.cancelled`.
-pub fn extract(archive: impl Read, into: &Path, limits: Limits, cancelled: &dyn Fn() -> bool) -> Result<(), Failure> {
+pub fn extract(
+    archive: impl Read,
+    into: &Path,
+    program: &str,
+    limits: Limits,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(), Failure> {
     let undecodable = |e: io::Error| refused("archive-type", format!("The package does not unpack: {e}"));
     let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(archive));
     let mut entries_seen = 0usize;
@@ -181,7 +189,8 @@ pub fn extract(archive: impl Read, into: &Path, limits: Limits, cancelled: &dyn 
             at.push(segment);
             directory(&at)?;
         }
-        let executable = entry.header().mode().map(|mode| mode & 0o111 != 0).unwrap_or(false);
+        let executable =
+            segments.join("/") == program || entry.header().mode().map(|mode| mode & 0o111 != 0).unwrap_or(false);
         let mut file = match Files::open_private(&path, if executable { Create::NewProgram } else { Create::New }) {
             Ok(file) => file,
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
@@ -220,9 +229,14 @@ mod tests {
     use sidevoice_desktop_test_support::fake_registry::{gzip, tar_entry, tarball};
     use sidevoice_desktop_test_support::platform::storage::{Others, StorageFixture, StorageFixtures};
 
+    /// The installer's entry, as this OS names a program.
+    fn program() -> String {
+        crate::install::installer_entry()
+    }
+
     fn unpack(bytes: &[u8]) -> (tempfile::TempDir, Result<(), Failure>) {
         let tmp = tempfile::tempdir().unwrap();
-        let result = extract(bytes, tmp.path(), LIMITS, &|| false);
+        let result = extract(bytes, tmp.path(), &program(), LIMITS, &|| false);
         (tmp, result)
     }
 
@@ -255,6 +269,16 @@ mod tests {
         StorageFixtures::assert_not_executable(&root.join("package.json"));
         StorageFixtures::assert_private(&root.join("notices/licenses"));
         assert_eq!(std::fs::read(root.join("notices/licenses/a.txt")).unwrap(), b"MIT");
+    }
+
+    #[test]
+    fn the_installer_is_written_runnable_even_when_the_archive_does_not_say_so() {
+        let archive = tarball(&[(program().as_str(), b"#!/bin/sh\n".as_slice(), 0o644)]);
+        let (tmp, result) = unpack(&archive);
+        result.unwrap();
+        let installer = tmp.path().join(program());
+        assert_eq!(StorageFixtures::others(&installer), Others::Nothing);
+        assert!(Files::trusted_program(&installer).is_ok(), "executable");
     }
 
     #[test]
@@ -390,12 +414,12 @@ mod tests {
         let archive = tarball(&[("package/a", vec![1u8; 4096].as_slice(), 0o644)]);
         let tmp = tempfile::tempdir().unwrap();
         let small = Limits { bytes: 1000, entries: 10 };
-        let failure = extract(archive.as_slice(), tmp.path(), small, &|| false).unwrap_err();
+        let failure = extract(archive.as_slice(), tmp.path(), &program(), small, &|| false).unwrap_err();
         assert_eq!(failure.params, Some(json!({"check": "archive-size"})));
         let many = tarball(&[("package/a", b"".as_slice(), 0o644), ("package/b", b"".as_slice(), 0o644)]);
         let tmp = tempfile::tempdir().unwrap();
         let few = Limits { bytes: 1000, entries: 1 };
-        let failure = extract(many.as_slice(), tmp.path(), few, &|| false).unwrap_err();
+        let failure = extract(many.as_slice(), tmp.path(), &program(), few, &|| false).unwrap_err();
         assert_eq!(failure.params, Some(json!({"check": "archive-size"})));
     }
 
@@ -403,7 +427,7 @@ mod tests {
     fn a_cancel_stops_the_unpacking() {
         let archive = tarball(&[("package/a", b"1".as_slice(), 0o644)]);
         let tmp = tempfile::tempdir().unwrap();
-        let failure = extract(archive.as_slice(), tmp.path(), LIMITS, &|| true).unwrap_err();
+        let failure = extract(archive.as_slice(), tmp.path(), &program(), LIMITS, &|| true).unwrap_err();
         assert_eq!((failure.key.as_str(), failure.step), ("install.cancelled", Some(Step::Staging)));
     }
 }
