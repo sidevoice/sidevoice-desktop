@@ -1,6 +1,6 @@
-#![cfg(unix)]
 use serde_json::json;
 use sidevoice_desktop_test_support::fixture;
+use sidevoice_desktop_test_support::platform::process;
 use sidevoice_desktop_test_support::platform::storage::{StorageFixture, StorageFixtures};
 use sidevoice_local_host::{cli::Cli, paths::DataDirs, Refusal};
 use sidevoice_platform::process::{Process, Processes};
@@ -93,14 +93,21 @@ fn a_timeout_kills_the_whole_run() {
     assert!(dead_soon(pid_in(&pid)), "the child was killed with the program");
 }
 
+/// A service the program starts on its own, detached as the connector detaches the core, stays where a detached
+/// process leaves the run's tree. Where it does not (a Job Object that allows no breakaway), it ends with the run: a
+/// known gap, open for the operator's decision in sidevoice-desktop#262.
 #[test]
-fn what_the_program_detaches_into_its_own_session_stays() {
+fn what_the_program_detaches_stays_only_where_it_leaves_the_run() {
     let tmp = tempfile::tempdir().unwrap();
     let pid = tmp.path().join("pid");
     let stop = tmp.path().join("stop");
     let cli = fake(tmp.path(), json!({"detached":true,"pid":pid,"stop":stop}));
     assert_eq!(cli.run(&["service", "start", "--json"], Duration::from_secs(10)).unwrap()["ok"], true);
     let pid = pid_in(&pid);
+    if !process::detached_leaves_the_tree() {
+        assert!(dead_soon(pid), "what the program detached is killed with the run");
+        return;
+    }
     thread::sleep(Duration::from_millis(200));
     assert!(alive(pid), "a service the program started on its own stays");
     std::fs::write(&stop, b"").unwrap();
@@ -112,16 +119,16 @@ fn what_runs_is_what_was_checked_even_if_a_link_is_retargeted() {
     let tmp = tempfile::tempdir().unwrap();
     StorageFixtures::private(tmp.path());
     let program = |name: &str| {
-        let path = tmp.path().join(name);
+        let path = tmp.path().join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
         fixture::install(std::path::Path::new(env!("CARGO_BIN_EXE_fake-connector")), &path, &json!({"which":name}))
             .unwrap();
         path
     };
     let (genuine, replacement) = (program("genuine"), program("replacement"));
-    let link = tmp.path().join("sidevoice");
+    let link = tmp.path().join(fixture::program_name());
     StorageFixtures::symlink(&genuine, &link);
     let dirs = DataDirs::new(tmp.path());
-    std::fs::write(dirs.install_record(), format!(r#"{{"command":["{}"]}}"#, link.display())).unwrap();
+    std::fs::write(dirs.install_record(), json!({"command": [link]}).to_string()).unwrap();
     StorageFixtures::private(&dirs.install_record());
     let cli = Cli::installed(&dirs).unwrap();
     // Between the check and the run, the link is pointed elsewhere.
@@ -152,8 +159,11 @@ fn only_an_install_record_of_absolute_paths_names_the_cli() {
     fixture::configure(&executable, &json!({})).unwrap();
     let record = json!({"command":[executable]}).to_string();
     write(&record, false);
-    // Native applications must be executable; discovery never changes their contents or permissions.
-    assert_eq!(Cli::installed(&dirs).unwrap_err().key, "install.unsafe");
+    // Native applications must be executable where that is a permission (Windows: the `.exe` name is what runs);
+    // discovery never changes their contents or permissions.
+    if StorageFixtures::EXECUTION_IS_A_PERMISSION {
+        assert_eq!(Cli::installed(&dirs).unwrap_err().key, "install.unsafe");
+    }
     assert_eq!(std::fs::read(&executable).unwrap(), bytes);
     StorageFixtures::assert_not_executable(&executable);
     StorageFixtures::executable(&executable);

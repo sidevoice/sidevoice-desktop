@@ -77,7 +77,9 @@ impl Cli {
     /// The run is a tree of its own (`sidevoice_platform::process`: a process group, a Job Object on Windows). Whatever
     /// is left in it once the program has exited (a child still holding the pipes) is killed at most [`PIPE_GRACE`]
     /// later, and on a timeout the whole tree is. What the program hands to the service manager
-    /// (`service start` → launchd) or starts detached in a session of its own is not in the group, and stays.
+    /// (`service start` → launchd) is not in the tree, and stays; so does what it starts detached where that leaves the
+    /// tree (a session of its own), and where the tree holds it (a Job Object allows no breakaway) it is killed with the
+    /// run.
     pub fn run(&self, args: &[&str], timeout: Duration) -> Result<Value, Refusal> {
         let failed = |why: String| Refusal::new("cli.failed", why);
         let ran = self.exec(args, timeout, &mut || {})?;
@@ -160,7 +162,7 @@ fn checked<T>(result: Result<T, Check>) -> Result<T, Refusal> {
 fn command(install: &Value) -> Option<Vec<String>> {
     let items = install.get("command")?.as_array()?;
     let prefix: Vec<String> = items.iter().map(|v| v.as_str().map(str::to_string)).collect::<Option<_>>()?;
-    let absolute = |p: &String| p.starts_with('/') && !p.contains('\0');
+    let absolute = |p: &String| std::path::Path::new(p).is_absolute() && !p.contains('\0');
     (!prefix.is_empty() && prefix.iter().all(absolute)).then_some(prefix)
 }
 

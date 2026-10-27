@@ -1,6 +1,5 @@
-#![cfg(unix)]
-//! The local host end to end on this machine: a stand-in core on a real Unix socket (HTTP and a WebSocket echo), the
-//! app's pairing with it and the startup cases (design §4.1), the proxy a page talks to — forwarding with the token
+//! The local host end to end on this machine: a stand-in core on the real local channel (HTTP and a WebSocket echo),
+//! the app's pairing with it and the startup cases (design §4.1), the proxy a page talks to — forwarding with the token
 //! swapped in, a socket spliced both ways, the refusals — and the service's state and actions through a stand-in
 //! connector and CLI.
 
@@ -414,7 +413,7 @@ fn with_nothing_installed_the_host_is_absent() {
 fn install_fake_cli(dirs: &DataDirs, status: &str) -> PathBuf {
     std::fs::create_dir_all(&dirs.data).unwrap();
     StorageFixtures::private(&dirs.data);
-    let script = dirs.data.join("fake-cli");
+    let script = fake_cli(dirs);
     let log = dirs.data.join("calls.log");
     fixture::install(
         Path::new(env!("CARGO_BIN_EXE_fake-connector")),
@@ -426,6 +425,24 @@ fn install_fake_cli(dirs: &DataDirs, status: &str) -> PathBuf {
     StorageFixtures::private(&dirs.install_record());
     set_version(dirs, json!("0.8.1"));
     log
+}
+
+/// Where [`install_fake_cli`] puts the stand-in: a native program's name, the only kind Windows trusts (`.exe`).
+fn fake_cli(dirs: &DataDirs) -> PathBuf {
+    dirs.data.join(format!("fake-cli{}", std::env::consts::EXE_SUFFIX))
+}
+
+/// How long [`wait_for`] waits for a stand-in to get somewhere.
+const WAIT_LIMIT: Duration = Duration::from_secs(30);
+
+/// Waits until `done` holds; past [`WAIT_LIMIT`] the test fails naming `what`, rather than waiting forever for a step
+/// a stand-in that never ran will not take.
+fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
+    let started = std::time::Instant::now();
+    while !done() {
+        assert!(started.elapsed() < WAIT_LIMIT, "{what}: not within {WAIT_LIMIT:?}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 fn calls(log: &Path) -> Vec<String> {
@@ -482,7 +499,7 @@ fn a_connector_without_start_at_sign_in_refuses_it_with_a_key_at_once() {
     let world = World::new();
     let log = install_fake_cli(&world.dirs, r#"{"ok":true,"state":"running","service":"launchd"}"#);
     // As a connector whose command line has no `service login` answers `--json` (clap's error, keyed).
-    let script = world.dirs.data.join("fake-cli");
+    let script = fake_cli(&world.dirs);
     fixture::configure(
         &script,
         &json!({"mode":"host","status":{"ok":true,"state":"running","service":"launchd"},"unsupported_login":true}),
@@ -507,7 +524,7 @@ fn a_connector_without_start_at_sign_in_refuses_it_with_a_key_at_once() {
 fn install_login_cli(dirs: &DataDirs) -> (PathBuf, PathBuf) {
     let log = install_fake_cli(dirs, "{}");
     let dir = dirs.data.clone();
-    fixture::configure(&dir.join("fake-cli"), &json!({"mode":"login"})).unwrap();
+    fixture::configure(&fake_cli(dirs), &json!({"mode":"login"})).unwrap();
     (log, dir)
 }
 
@@ -539,16 +556,12 @@ fn a_poll_in_flight_cannot_put_back_the_status_an_action_replaced() {
         let host = host.clone();
         move || host.poll()
     });
-    while !calls(&log).iter().any(|c| c == "service status --json") {
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    wait_for("the poll runs `service status`", || calls(&log).iter().any(|c| c == "service status --json"));
     let acting = std::thread::spawn({
         let host = host.clone();
         move || host.act(Action::LoginOn)
     });
-    while !calls(&log).iter().any(|c| c == "service login on --json") {
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    wait_for("the action runs `service login on`", || calls(&log).iter().any(|c| c == "service login on --json"));
     // Let the action's CLI return and reach the cache before the held poll stores its older answer.
     std::thread::sleep(Duration::from_millis(300));
     std::fs::write(dir.join("release"), "").unwrap();
@@ -690,9 +703,9 @@ fn the_installed_version_is_asked_once_per_program_and_after_actions() {
     assert_eq!(host.state().product_version.as_deref(), Some("0.8.1"));
 
     // An update selects another release: the command resolves to another program, which is asked.
-    let release = world.dirs.data.join("fake-cli-0.9.0");
-    std::fs::copy(world.dirs.data.join("fake-cli"), &release).unwrap();
-    std::fs::copy(fixture::config_path(&world.dirs.data.join("fake-cli")), fixture::config_path(&release)).unwrap();
+    let release = world.dirs.data.join(format!("fake-cli-0.9.0{}", std::env::consts::EXE_SUFFIX));
+    std::fs::copy(fake_cli(&world.dirs), &release).unwrap();
+    std::fs::copy(fixture::config_path(&fake_cli(&world.dirs)), fixture::config_path(&release)).unwrap();
     std::fs::write(world.dirs.install_record(), json!({"command": [release]}).to_string()).unwrap();
     set_version(&world.dirs, json!("0.9.0"));
     assert_eq!(host.poll().product_version.as_deref(), Some("0.9.0"));
@@ -750,9 +763,7 @@ fn an_action_during_a_poll_still_refreshes_the_version() {
         std::thread::spawn(move || host.poll().product_version)
     };
     // The poll has read the old version and is still answering.
-    while !read.exists() {
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    wait_for("the poll reads the version", || read.exists());
     set_version(&world.dirs, json!("0.9.0"));
     std::fs::remove_file(&slow).unwrap();
     assert_eq!(host.act(Action::Restart).unwrap().product_version.as_deref(), Some("0.9.0"));
@@ -982,9 +993,7 @@ fn a_cancel_is_honoured_by_id_until_the_installer_runs() {
     let options = install_options(&world);
     let failure = std::thread::scope(|scope| {
         let running = scope.spawn(|| installing.run(&registry, &options));
-        while host.install_progress("slow").and_then(|p| p.done).is_none() {
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        wait_for("the download makes progress", || host.install_progress("slow").and_then(|p| p.done).is_some());
         assert!(!host.cancel_install("another"), "only its own id");
         assert!(host.cancel_install("slow"));
         running.join().unwrap()

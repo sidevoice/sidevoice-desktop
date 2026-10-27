@@ -1,11 +1,8 @@
 //! Registry transport for fixture archives and its native installer adapter.
 use crate::fake_registry::FakeRegistry;
+use sidevoice_local_host::{install::Failure, npm::Fetch};
 use std::io::{self, Read};
 use std::time::Duration;
-
-#[cfg(unix)]
-#[path = "registry/unix.rs"]
-mod imp;
 
 /// A response supplied by the in-memory registry, including deliberately malformed lengths.
 pub struct Response {
@@ -43,5 +40,12 @@ impl RegistryTransport for FakeRegistry {
             None => Box::new(io::Cursor::new(served.body)),
         };
         Response { status: served.status, length: served.length, body }
+    }
+}
+
+impl Fetch for FakeRegistry {
+    fn get(&self, url: &str) -> Result<sidevoice_local_host::npm::Response, Failure> {
+        let Response { status, length, body } = RegistryTransport::get(self, url);
+        Ok(sidevoice_local_host::npm::Response { status, length, body })
     }
 }

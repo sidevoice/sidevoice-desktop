@@ -44,7 +44,12 @@ impl std::fmt::Debug for Stream {
 /// listening is [`io::ErrorKind::NotFound`] or [`io::ErrorKind::ConnectionRefused`]; nobody taking the connection
 /// within [`CONNECT_WAIT`] is [`io::ErrorKind::TimedOut`].
 pub fn connect(endpoint: &Endpoint) -> io::Result<Stream> {
-    let connected = block_on(async { tokio::time::timeout(CONNECT_WAIT, Channels::connect(endpoint)).await });
+    connect_within(endpoint, CONNECT_WAIT)
+}
+
+/// [`connect`], waiting at most `wait` for the other side to take the connection.
+fn connect_within(endpoint: &Endpoint, wait: Duration) -> io::Result<Stream> {
+    let connected = block_on(async { tokio::time::timeout(wait, Channels::connect(endpoint)).await });
     let channel = connected.map_err(|_| {
         io::Error::new(io::ErrorKind::TimedOut, format!("{endpoint} did not take the connection in time"))
     })??;
@@ -200,6 +205,19 @@ mod tests {
     use sidevoice_platform::ipc::Address as _;
     use std::time::Instant;
 
+    /// How long a test waits for a thread that should stop: past it, the test fails instead of hanging.
+    const STOP_LIMIT: Duration = Duration::from_secs(20);
+
+    /// What `thread` returned; a failure naming `what` when it is still running after [`STOP_LIMIT`].
+    fn joined<T>(thread: std::thread::JoinHandle<T>, what: &str) -> T {
+        let started = Instant::now();
+        while !thread.is_finished() {
+            assert!(started.elapsed() < STOP_LIMIT, "{what} did not stop within {STOP_LIMIT:?}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        thread.join().unwrap()
+    }
+
     /// The endpoint `name` for a scratch directory open to this user alone, where a listener may be made.
     fn endpoint(dir: &tempfile::TempDir, name: &str) -> Endpoint {
         StorageFixtures::private(dir.path());
@@ -227,7 +245,7 @@ mod tests {
         stream.try_clone().unwrap().read_exact(&mut echoed).unwrap();
         assert_eq!(&echoed, b"hello");
         stream.shutdown().unwrap();
-        server.join().unwrap();
+        joined(server, "the echo server, once the connection ended");
         assert_eq!(stream.read(&mut echoed).unwrap(), 0, "ended");
         assert_eq!(stream.write(b"x").unwrap_err().kind(), io::ErrorKind::BrokenPipe);
     }
@@ -239,36 +257,89 @@ mod tests {
         assert!(matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused), "{error:?}");
     }
 
-    #[test]
-    fn a_read_past_its_deadline_fails_and_the_connection_stays_usable() {
+    /// A connection to a listener that accepts and then says nothing, kept open until the returned sender is dropped.
+    fn silent() -> (tempfile::TempDir, Stream, std::sync::mpsc::Sender<()>, std::thread::JoinHandle<()>) {
         let tmp = tempfile::tempdir().unwrap();
-        let endpoint = endpoint(&tmp, "d");
+        let endpoint = endpoint(&tmp, "t");
         let listener = listen(&endpoint).unwrap();
+        let (hold, release) = std::sync::mpsc::channel::<()>();
+        let server = std::thread::spawn(move || {
+            let _stream = accept(&listener).unwrap();
+            let _ = release.recv();
+        });
         let stream = connect(&endpoint).unwrap();
-        let mut server = accept(&listener).unwrap();
-        let clone = stream.try_clone().unwrap();
-        stream.set_read_timeout(Some(Duration::from_millis(100))).unwrap();
-        let mut byte = [0u8; 1];
-        let started = Instant::now();
-        assert_eq!((&clone).read(&mut byte).unwrap_err().kind(), io::ErrorKind::TimedOut, "clones share it");
-        assert!(started.elapsed() < Duration::from_secs(5));
-        server.write_all(b"x").unwrap();
-        (&stream).read_exact(&mut byte).unwrap();
-        assert_eq!(&byte, b"x");
-        assert_eq!(stream.set_read_timeout(Some(Duration::ZERO)).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+        (tmp, stream, hold, server)
     }
 
     #[test]
-    fn shutdown_on_one_handle_stops_a_read_blocked_on_another() {
-        let tmp = tempfile::tempdir().unwrap();
-        let endpoint = endpoint(&tmp, "s");
-        let listener = listen(&endpoint).unwrap();
-        let stream = connect(&endpoint).unwrap();
-        let _server = accept(&listener).unwrap();
+    fn a_read_past_its_deadline_fails_and_the_connection_stays_usable() {
+        let (_tmp, stream, hold, server) = silent();
+        stream.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
+        let started = Instant::now();
         let reader = stream.try_clone().unwrap();
-        let blocked = std::thread::spawn(move || (&reader).read(&mut [0u8; 1]));
-        std::thread::sleep(Duration::from_millis(100));
+        let reading = std::thread::spawn(move || (&reader).read(&mut [0u8; 8]).unwrap_err());
+        assert_eq!(joined(reading, "a read past its deadline").kind(), io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(5), "bounded: {:?}", started.elapsed());
+        // A clone shares the deadline.
+        let mut clone = stream.try_clone().unwrap();
+        let error = joined(std::thread::spawn(move || clone.read(&mut [0u8; 8]).unwrap_err()), "the clone's read");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        (&stream).write_all(b"still open").unwrap();
+        assert_eq!(stream.set_read_timeout(Some(Duration::ZERO)).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+        drop(hold);
+        joined(server, "the silent server");
+    }
+
+    #[test]
+    fn ending_a_connection_stops_a_read_blocked_on_another_thread() {
+        let (_tmp, stream, hold, server) = silent();
+        let mut reader = stream.try_clone().unwrap();
+        let blocked = std::thread::spawn(move || reader.read(&mut [0u8; 8]));
+        std::thread::sleep(Duration::from_millis(200));
         stream.shutdown().unwrap();
-        assert_eq!(blocked.join().unwrap().unwrap(), 0);
+        assert_eq!(joined(blocked, "the blocked read").unwrap(), 0, "ended");
+        assert!((&stream).write_all(b"x").is_err(), "nothing is written after the end");
+        drop(hold);
+        joined(server, "the silent server");
+    }
+
+    #[test]
+    fn a_listener_with_no_free_instance_is_given_up_on_within_the_wait() {
+        let tmp = tempfile::tempdir().unwrap();
+        let endpoint = endpoint(&tmp, "t");
+        // Never accepts: a pipe's one instance is taken by the first client, a socket's backlog keeps the rest.
+        let _listener = listen(&endpoint).unwrap();
+        let wait = Duration::from_millis(300);
+        let mut held = Vec::new();
+        for _ in 0..3 {
+            let started = Instant::now();
+            if let Ok(stream) = connect_within(&endpoint, wait) {
+                held.push(stream);
+            }
+            assert!(started.elapsed() < wait + Duration::from_secs(3), "bounded: {:?}", started.elapsed());
+        }
+    }
+
+    #[test]
+    fn ending_a_connection_stops_a_blocked_write_and_a_read_on_other_threads() {
+        let (_tmp, stream, hold, server) = silent();
+        let mut reader = stream.try_clone().unwrap();
+        let reading = std::thread::spawn(move || reader.read(&mut [0u8; 8]));
+        let mut writer = stream.try_clone().unwrap();
+        // Nobody reads the other end: the writes fill the buffers and then block.
+        let writing = std::thread::spawn(move || {
+            let chunk = vec![0u8; 64 * 1024];
+            loop {
+                if let Err(e) = writer.write(&chunk) {
+                    return e;
+                }
+            }
+        });
+        std::thread::sleep(Duration::from_millis(300));
+        stream.shutdown().unwrap();
+        assert_eq!(joined(reading, "the blocked read").unwrap(), 0, "the read ended");
+        joined(writing, "the blocked write");
+        drop(hold);
+        joined(server, "the silent server");
     }
 }
