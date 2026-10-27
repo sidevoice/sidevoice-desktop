@@ -11,11 +11,11 @@
 
 use crate::checks::Check;
 use crate::paths::DataDirs;
-use crate::platform::process;
 use crate::Refusal;
 use serde_json::Value;
 use sidevoice_platform::fs::{Access, Directory, HeldDirectory};
 use sidevoice_platform::ipc::Endpoint;
+use sidevoice_platform::process::{Process, Processes};
 use std::io;
 use std::path::Path;
 
@@ -30,15 +30,16 @@ pub fn core(dirs: &DataDirs) -> Result<Endpoint, Check> {
     endpoint(&record, &dirs.core_record())
 }
 
-/// The connector's endpoint, from `D/connector.json`, when its `pid` is alive: `D` this user's and not writable by
-/// others, so is the record.
+/// The connector's endpoint, from `D/connector.json`, when its `pid` is alive (a live process, not a zombie, as
+/// `Processes::identity` observes it): `D` this user's and not writable by others, so is the record.
 pub fn connector(dirs: &DataDirs) -> Result<Endpoint, Check> {
     let path = dirs.connector_record();
     let dir = HeldDirectory::open(&dirs.data, Access::NotWritableByOthers)
         .map_err(|e| crate::checks::storage_error(&dirs.data, "install.unsafe", e))?;
     let record = read(&dir, &path, Access::NotWritableByOthers, "install.unsafe")?;
-    match record.get("pid").and_then(Value::as_u64).and_then(process::pid) {
-        Some(pid) if process::alive(pid) => endpoint(&record, &path),
+    let pid = record.get("pid").and_then(Value::as_u64).and_then(|pid| u32::try_from(pid).ok()).filter(|pid| *pid > 0);
+    match pid {
+        Some(pid) if Processes::identity(pid).is_some() => endpoint(&record, &path),
         Some(_) => Err(Check::Missing),
         None => Err(invalid(&path, "no pid")),
     }

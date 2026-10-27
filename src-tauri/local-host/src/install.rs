@@ -19,18 +19,17 @@
 
 use crate::cli::Cli;
 use crate::npm::{self, Fetch};
-use crate::platform::files;
 use crate::platform::target::current_package;
 use crate::tarball;
 use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha512};
-use sidevoice_platform::fs::{Access, Create, Directory, Files, Fs, HeldDirectory};
+use sidevoice_platform::fs::{Access, Create, Directory, FileId, Files, Fs, HeldDirectory};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::sync::{Mutex, MutexGuard};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 /// What a second install is refused with while one runs (and what the installer's own lock, `service.busy`, becomes).
 pub const BUSY: &str = "install.busy";
@@ -39,7 +38,12 @@ pub const CANCELLED: &str = "install.cancelled";
 /// The installer inside the package, where the installer itself expects to be (`<package>/bin/`), named as this OS
 /// names a program (`bin/sidevoice-connector.exe` on Windows).
 pub fn bundled_installer() -> String {
-    format!("bin/sidevoice-connector{}", std::env::consts::EXE_SUFFIX)
+    sidevoice_platform::target::exe_name("bin/sidevoice-connector")
+}
+
+/// The installer's path in the package's archive.
+pub(crate) fn installer_entry() -> String {
+    format!("{}/{}", tarball::ROOT, bundled_installer())
 }
 
 /// Where an install is.
@@ -288,7 +292,9 @@ pub fn prepare(job: &Job, fetch: &dyn Fetch, data: &Path, options: &Options) -> 
     job.enter(Step::Staging)?;
     let file =
         std::fs::File::open(&archive).map_err(|e| Failure::io(&e, Step::Staging, "Could not read the download"))?;
-    tarball::extract(io::BufReader::new(file), scratch.path(), options.unpack, &|| job.cancelled())?;
+    tarball::extract(io::BufReader::new(file), scratch.path(), &installer_entry(), options.unpack, &|| {
+        job.cancelled()
+    })?;
     let installer = scratch.path().join(tarball::ROOT).join(bundled_installer());
     match std::fs::symlink_metadata(&installer) {
         Ok(meta) if meta.file_type().is_file() => {}
@@ -300,8 +306,9 @@ pub fn prepare(job: &Job, fetch: &dyn Fetch, data: &Path, options: &Options) -> 
             ))
         }
     }
-    files::make_runnable(&installer)
-        .map_err(|e| Failure::io(&e, Step::Staging, "Could not make the installer executable"))?;
+    // Unpacked as a program (`tarball::extract`); what runs is the path checked here.
+    let installer = Files::trusted_program(&installer)
+        .map_err(|e| Failure::io(&e, Step::Staging, "The installer cannot be run"))?;
     job.commit()?;
     run_installer(job, &installer, data, options.installer_time)
 }
@@ -378,6 +385,14 @@ fn log_tail(stderr: &[u8]) -> Vec<String> {
     lines[lines.len().saturating_sub(20)..].to_vec()
 }
 
+/// A file as it stands: which file `path` names (the identity of a handle opened on it without following a link,
+/// `Fs::open_read` and `Fs::identity`) and when it was last written. Another reading differs once the file was written,
+/// or another took its name (a rename over it). `None` when there is nothing there, a link, or it cannot be told.
+fn stamp(path: &Path) -> Option<(FileId, SystemTime)> {
+    let file = Files::open_read(path).ok()?;
+    Some((Files::identity(&file).ok()?, file.metadata().ok()?.modified().ok()?))
+}
+
 /// `installer install --json`, with `SIDEVOICE_DATA_DIR` = `data`, as the app runs the CLI (no shell, a process group
 /// of its own, killed past `timeout`). `service-start` once `install.json` changes.
 fn run_installer(job: &Job, installer: &Path, data: &Path, timeout: Duration) -> Result<Value, Failure> {
@@ -385,10 +400,10 @@ fn run_installer(job: &Job, installer: &Path, data: &Path, timeout: Duration) ->
         .to_str()
         .ok_or_else(|| Failure::new("install.unsafe", Step::Staging, "The temporary directory's path is not UTF-8."))?;
     let record = data.join("install.json");
-    let before = files::stamp(&record);
+    let before = stamp(&record);
     let cli = Cli { prefix: vec![program.to_string()], data: data.to_path_buf() };
     let mut tick = || {
-        if job.step() == Step::Staging && files::stamp(&record) != before {
+        if job.step() == Step::Staging && stamp(&record) != before {
             let _ = job.enter(Step::ServiceStart);
         }
     };
@@ -450,6 +465,22 @@ pub fn installer_failure(answer: Option<&Value>, status: ExitStatus, step: Step)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stamp_changes_when_another_file_takes_the_name_and_not_otherwise() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("install.json");
+        assert_eq!(stamp(&path), None);
+        std::fs::write(&path, b"{}").unwrap();
+        let before = stamp(&path);
+        assert!(before.is_some());
+        assert_eq!(stamp(&path), before);
+        let other = tmp.path().join("other.json");
+        std::fs::write(&other, b"{}").unwrap();
+        std::fs::rename(&other, &path).unwrap();
+        assert_ne!(stamp(&path), before);
+    }
+
     #[test]
     fn once_the_installer_runs_a_cancel_is_refused() {
         let job = Job::new("j");
@@ -482,7 +513,8 @@ mod tests {
         let digest = download(&job, &fetch, &dist, &archive, &options).unwrap();
         assert_eq!(digest, dist.sha512, "{} {}", release.package, release.version);
         let file = std::fs::File::open(&archive).unwrap();
-        tarball::extract(io::BufReader::new(file), scratch.path(), options.unpack, &|| false).unwrap();
+        tarball::extract(io::BufReader::new(file), scratch.path(), &installer_entry(), options.unpack, &|| false)
+            .unwrap();
         let installer = scratch.path().join(tarball::ROOT).join(bundled_installer());
         assert!(Files::trusted_program(&installer).is_ok(), "executable");
         assert!(scratch.path().join("package/connector.json").is_file());
