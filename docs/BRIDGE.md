@@ -53,18 +53,16 @@ The bundled room page receives `host.data.pairings` on macOS, Windows and Linux.
 after a bounded, private, atomic write under the app's Application Support directory. Both arrays contain
 remote pairing credentials; pending revocations remain native until the remote machine acknowledges them.
 Local-host pairing is derived from the verified socket and is never stored there. Neither call accepts a
-path. Browser pages keep their own browser storage. `deleteAll()` and `resetReport()` are offered where the reset
-is available (`platform::host::RESET_AVAILABLE`: macOS for now); `uninstall()` only where the app can also remove itself (macOS, `platform::uninstall::available`).
-Where the bridge omits them the native commands refuse: `{key: "reset.unavailable"}` without the reset, and
-`{key: "reset.app-unremovable"}` for an uninstall the host cannot do. The app tells the bridge both offers
-(`data::offered`), apart from the local host.
+path. Browser pages keep their own browser storage. `deleteAll()` and `resetReport()` are present on every
+desktop host; `uninstall()` only where the app can also remove itself (macOS, `platform::uninstall::available`, which
+the app tells the bridge apart from the local host). Called directly where the bridge omits it, `data_uninstall`
+refuses `{key: "reset.app-unremovable"}` before anything is deleted.
 
 `deleteAll()` is the confirmed Settings › Advanced action. Native also displays an OS-owned confirmation
 with Cancel as its default button on every invocation; cancelling rejects `{key: "reset.cancelled"}` before
 any uninstall or deletion. `platform::confirmation::confirm` owns the native prompt: the existing NSAlert on
 macOS, TaskDialogIndirect with an explicit Cancel default on Windows, and GTK with an explicit Cancel response on
-Linux. The capability and the transaction are the same on all three hosts; the offer follows
-`platform::host::RESET_AVAILABLE`.
+Linux. The capability, the offer and the transaction are the same on all three hosts.
 The shared confirmation interface cancels unless the native opened hook arrives within three seconds; a dialog
 that appears later is immediately dismissed. Once opened, the person's decision has no timeout. The hooks are
 Windows' `TDN_CREATED`, GTK's map event, and a macOS block scheduled in `NSModalPanelRunLoopMode`.
@@ -92,8 +90,7 @@ store itself and redirected ancestors remain protected roots. All three engine-o
 before any is removed. A failed check is reported, with that directory left in place. Connector data and release roots must be the exact default
 Sidevoice roots (`D` by `sidevoice-platform`'s one rule, `data_dir::standard`, inside the account home); unsafe environment overrides or install records refuse before the installed uninstaller runs.
 If installation metadata is absent, a fresh service/process check and a check for residual connector data
-must both pass before the service is called absent. On macOS that check is launchd and the process list; Linux and Windows have none yet (plan
-row 43), which is one reason they do not offer the reset. A connector recorded on a host where the app cannot run its
+must both pass before the service is called absent. Each OS observes its own service manager and processes (plan row 43). A connector recorded on a host where the app cannot run its
 CLI refuses with `{key: "reset.unsupported-connector"}`. A retained recovery executable named by `install.json`
 is used on a partial-uninstall retry. Custom profiles and separately installed cores are excluded.
 No page-supplied path is deleted.

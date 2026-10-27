@@ -346,7 +346,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             &diagnostics::webview_switches(),
             media_controls::support(),
             host::capabilities(),
-            data::offered(),
+            platform::uninstall::available(),
         ));
     #[cfg(feature = "probe")]
     let builder = match probe::local_host_flow() {

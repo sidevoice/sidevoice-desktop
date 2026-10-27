@@ -26,7 +26,6 @@ const BUILD_PLACEHOLDER: &str = "\"__SIDEVOICE_BUILD__\"";
 const COMPUTER_NAME_PLACEHOLDER: &str = "\"__SIDEVOICE_COMPUTER_NAME__\"";
 const MICROPHONE_SETTINGS_PLACEHOLDER: &str = "\"__SIDEVOICE_MICROPHONE_SETTINGS__\"";
 const DEBUG_PLACEHOLDER: &str = "\"__SIDEVOICE_DEBUG__\"";
-const RESET_PLACEHOLDER: &str = "\"__SIDEVOICE_RESET__\"";
 const UNINSTALL_PLACEHOLDER: &str = "\"__SIDEVOICE_UNINSTALL__\"";
 
 /// What the host platform offers the page beyond the web: the platform interface supplies it, the bridge only tells it.
@@ -38,16 +37,6 @@ pub struct Capabilities {
     /// The app runs the voice call itself (`window.__sidevoiceDesktop.host.voice`, docs/BRIDGE.md -> "The voice
     /// call"). Without it the page runs the call, and the room window grants it the microphone (`media::decide`).
     pub voice: bool,
-}
-
-/// What the page is offered of the app's reset (docs/BRIDGE.md -> "Private data and reset"): the reset transaction
-/// supplies it, the bridge only tells it.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Reset {
-    /// Delete all the app's data, and read its report (`host.data.deleteAll`, `host.data.resetReport`).
-    pub delete_all: bool,
-    /// The reset, then the app itself removed (`host.data.uninstall`). Offered only with `delete_all`.
-    pub uninstall: bool,
 }
 
 /// The call controls card's bridge script, with its origin placeholder still in place.
@@ -82,7 +71,8 @@ pub fn call_controls_push(patch: &serde_json::Value) -> String {
 /// `diagnostics`: native diagnostic switches the shell actually implements on this runtime.
 /// `media_keys`: media-control ownership supplied by the shell, independently of native voice.
 /// `capabilities`: what the host platform offers (`host.localHost`, `host.voice`).
-/// `reset`: what the page is offered of the app's reset (`host.data.deleteAll`, `resetReport`, `uninstall`).
+/// `uninstall`: whether the app can also remove itself after the reset (`host.data.uninstall`); delete-all and its
+/// report (`host.data.deleteAll`, `resetReport`) are on every host.
 #[allow(clippy::too_many_arguments)]
 pub fn script_for_origin(
     origin: &str,
@@ -94,7 +84,7 @@ pub fn script_for_origin(
     diagnostics: &[crate::debug_options::Switch],
     media_keys: Option<&str>,
     capabilities: Capabilities,
-    reset: Reset,
+    uninstall: bool,
 ) -> String {
     let literal = serde_json::to_string(origin).expect("a string serialises");
     let keys = serde_json::to_string(&media_keys).expect("serialises");
@@ -114,8 +104,7 @@ pub fn script_for_origin(
         .replacen(COMPUTER_NAME_PLACEHOLDER, &serde_json::to_string(&computer_name).expect("serialises"), 1)
         .replacen(DEBUG_PLACEHOLDER, &debug, 1)
         .replacen(MICROPHONE_SETTINGS_PLACEHOLDER, flag(microphone_settings), 1)
-        .replacen(RESET_PLACEHOLDER, flag(reset.delete_all), 1)
-        .replacen(UNINSTALL_PLACEHOLDER, flag(reset.delete_all && reset.uninstall), 1)
+        .replacen(UNINSTALL_PLACEHOLDER, flag(uninstall), 1)
 }
 
 /// The bridge's version: the room page sends it in every snapshot (bridge/desktop-bridge.js).
@@ -408,7 +397,7 @@ mod tests {
             &crate::debug_options::Switch::ALL,
             Some("native"),
             both,
-            Reset::default(),
+            false,
         );
         assert!(!s.contains("__SIDEVOICE_ROOM_ORIGIN__"));
         assert!(!s.contains("__SIDEVOICE_MEDIA_KEYS__"));
@@ -419,28 +408,17 @@ mod tests {
         assert!(!s.contains("__SIDEVOICE_COMPUTER_NAME__"));
         assert!(!s.contains("__SIDEVOICE_DEBUG__"));
         assert!(!s.contains("__SIDEVOICE_MICROPHONE_SETTINGS__"));
-        assert!(!s.contains("__SIDEVOICE_RESET__"));
         assert!(!s.contains("__SIDEVOICE_UNINSTALL__"));
         let platform = r#""native", true, true"#;
         let dev_build = r#"{"channel":"dev","version":"0.4.0"}"#;
         // A dev build has the developer options: what the settings keep, and the switches this platform has.
         let debug = off.state(&crate::debug_options::Switch::ALL);
         let expected = format!(
-            r#"factory(window, "https://voice.example.com", {platform}, false, {dev_build}, null, {debug}, false, false, false)"#
+            r#"factory(window, "https://voice.example.com", {platform}, false, {dev_build}, null, {debug}, false, false)"#
         );
         assert!(s.contains(&expected), "{expected}");
-        let no_diagnostics = script_for_origin(
-            "https://voice.example.com",
-            false,
-            &dev,
-            None,
-            &off,
-            false,
-            &[],
-            None,
-            both,
-            Reset::default(),
-        );
+        let no_diagnostics =
+            script_for_origin("https://voice.example.com", false, &dev, None, &off, false, &[], None, both, false);
         assert!(no_diagnostics.contains(&off.state(&[]).to_string()));
         assert!(no_diagnostics.contains(r#"factory(window, "https://voice.example.com", null,"#));
         // A release that can update itself: the page gets `host.updater`, and `host.build` says it is a release.
@@ -455,10 +433,10 @@ mod tests {
             &crate::debug_options::Switch::ALL,
             Some("native"),
             both,
-            Reset { delete_all: true, uninstall: true },
+            true,
         );
         let expected = format!(
-            r#"factory(window, "https://voice.example.com", {platform}, true, {{"channel":"release","version":"0.4.0"}}, "Mac de Ana", null, true, true, true)"#
+            r#"factory(window, "https://voice.example.com", {platform}, true, {{"channel":"release","version":"0.4.0"}}, "Mac de Ana", null, true, true)"#
         );
         assert!(offered.contains(&expected), "{expected}");
         // A hostile value cannot break out of the string literal.
@@ -472,7 +450,7 @@ mod tests {
             &crate::debug_options::Switch::ALL,
             Some("native"),
             both,
-            Reset::default(),
+            false,
         );
         assert!(evil.contains(r#"factory(window, "\"); alert(1); (\"""#));
         assert!(evil.contains(r#"{"channel":"dev","version":"0.4.0"}, "\"); alert(1); (\"", "#));
@@ -493,7 +471,7 @@ mod tests {
                 &[],
                 Some("native"),
                 capabilities,
-                Reset::default(),
+                false,
             )
         };
         let reference = script(Capabilities { local_host: true, voice: true });
@@ -510,12 +488,12 @@ mod tests {
         assert_eq!(Capabilities::default(), Capabilities { local_host: false, voice: false });
     }
 
-    /// The reset is told apart from the local host: delete-all where the transaction runs, the uninstall only with it.
+    /// The uninstall is told apart from the local host; delete-all needs no flag (every host).
     #[test]
-    fn every_reset_offer_is_told_to_the_page_and_changes_nothing_else() {
+    fn the_uninstall_offer_is_told_to_the_page_and_changes_nothing_else() {
         let dev = BuildInfo::new("dev", "0.4.0", "", "");
         let off = crate::debug_options::DebugOptions::default();
-        let script = |reset| {
+        let script = |uninstall| {
             script_for_origin(
                 "https://voice.example.com",
                 false,
@@ -526,21 +504,14 @@ mod tests {
                 &[],
                 None,
                 Capabilities::default(),
-                reset,
+                uninstall,
             )
         };
-        let reference = script(Reset::default());
-        // The factory's last arguments: the microphone settings (false here), then the reset and the uninstall.
+        // The factory's last arguments: the microphone settings (false here), then the uninstall.
         let call = |told: &str| format!("false, {told});\n}})(function installDesktopBridge(");
-        assert!(reference.contains(&call("false, false")));
-        for (delete_all, uninstall, told) in
-            [(false, true, "false, false"), (true, false, "true, false"), (true, true, "true, true")]
-        {
-            let script = script(Reset { delete_all, uninstall });
-            assert!(script.contains(&call(told)), "{delete_all} {uninstall}");
-            assert_eq!(script.replacen(&call(told), &call("false, false"), 1), reference, "{delete_all} {uninstall}");
-        }
-        assert_eq!(Reset::default(), Reset { delete_all: false, uninstall: false });
+        let (without, with) = (script(false), script(true));
+        assert!(without.contains(&call("false")) && with.contains(&call("true")));
+        assert_eq!(with.replacen(&call("true"), &call("false"), 1), without);
     }
 
     #[test]

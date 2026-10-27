@@ -1,5 +1,5 @@
-//! What the host computer is and offers: its name, what the page may use beyond the web, whether reset exists, and
-//! whether this run can update itself. Per-OS differences live in `host/{macos,windows,linux}.rs`.
+//! What the host computer is and offers: its name, what the page may use beyond the web, and whether this run
+//! can update itself. Per-OS differences live in `host/{macos,windows,linux}.rs`.
 
 use sidevoice_desktop_core::bridge::Capabilities;
 use sidevoice_desktop_core::{computer_name, updater};
@@ -10,17 +10,6 @@ use tauri::utils::{config::BundleType, platform::bundle_type};
 #[cfg_attr(target_os = "linux", path = "host/linux.rs")]
 mod imp;
 use imp::Native;
-
-/// Whether Desktop offers reset (delete all data, uninstall) on this host. When false, callers refuse before any
-/// confirmation or data access, and a reset helper only completes the committed wait: the handoff
-/// (`reset_handoff`) works on every host either way.
-///
-/// The reset transaction in `data.rs` is one flow for every host, but it is offered only on macOS for now. Linux and
-/// Windows wait for: the shared filesystem's containment-checked open below the account home (a `sidevoice-platform`
-/// release), the connector's service observation (plan row 43) and, on Windows, a connector CLI the app can run
-/// there (the Windows local host). Only this value differs by OS. The constant is removed once they are in (plan
-/// row 5). Removing the app itself is separate (`uninstall::available`).
-pub const RESET_AVAILABLE: bool = cfg!(target_os = "macos");
 
 /// What differs per OS.
 trait Os {
