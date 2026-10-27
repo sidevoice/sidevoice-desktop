@@ -27,11 +27,14 @@ const VAD_RATE: u32 = 16_000;
 /// Minimize sherpa's holds to avoid stacking them with the Pipecat-style turn chain while that issue is unresolved.
 const VAD_OPTIONS: VadOptions = VadOptions { threshold: 0.6, min_silence_ms: 1, min_speech_ms: 1 };
 
+/// One model's place in the cache: the lock its load holds, and the model once loaded.
+type Slot = Arc<tokio::sync::Mutex<Option<Weak<dyn Model>>>>;
+
 /// One cache for the desktop host. It holds weak references so models nobody holds are let go; calls asking for the
 /// same model share the load and the resulting instance, and loads of different models go on at the same time.
 #[derive(Default)]
 pub struct ModelCache {
-    loaded: Mutex<HashMap<String, Arc<tokio::sync::Mutex<Option<Weak<dyn Model>>>>>>,
+    loaded: Mutex<HashMap<String, Slot>>,
 }
 
 impl ModelCache {
@@ -58,7 +61,7 @@ pub(crate) struct EngineLoader {
 }
 
 impl EngineLoader {
-    pub(crate) fn new(engine: Arc<Engine>, cache: Arc<ModelCache>) -> Arc<dyn Loader> {
+    pub(crate) fn shared(engine: Arc<Engine>, cache: Arc<ModelCache>) -> Arc<dyn Loader> {
         Arc::new(EngineLoader { engine, cache })
     }
 

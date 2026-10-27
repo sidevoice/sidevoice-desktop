@@ -1,5 +1,5 @@
-//! What the host computer is and offers: its name, what the page may use beyond the web, whether reset exists, and
-//! whether this run can update itself. Per-OS differences live in `host/{macos,windows,linux}.rs`.
+//! What the host computer is and offers: its name, what the page may use beyond the web, and whether this run
+//! can update itself. Per-OS differences live in `host/{macos,windows,linux}.rs`.
 
 use sidevoice_desktop_core::bridge::Capabilities;
 use sidevoice_desktop_core::{computer_name, updater};
@@ -11,14 +11,9 @@ use tauri::utils::{config::BundleType, platform::bundle_type};
 mod imp;
 use imp::Native;
 
-/// Whether Desktop offers reset (delete all data, uninstall) on this host. When false, callers refuse before any
-/// confirmation or data access, and a reset helper only completes the committed wait: the handoff
-/// (`reset_handoff`) works on every host either way.
-///
-/// The deletion itself (`app_data`, with `webview_data` for browser storage) has a body on every host; what is still
-/// macOS-only is the rest of the transaction in `data.rs` (connector service, keychain; plan rows 15, 16, 42–44).
-/// Only this value differs by OS, so there is no per-OS code. It disappears once Windows and Linux get those steps.
-pub const RESET_AVAILABLE: bool = cfg!(target_os = "macos");
+/// The origin Tauri serves the app's own pages from: what a node sees as the interface's `Origin`. Only this value
+/// differs by OS, so there is no per-OS code.
+pub const APP_ORIGIN: &str = if cfg!(windows) { "http://tauri.localhost" } else { "tauri://localhost" };
 
 /// What differs per OS.
 trait Os {
@@ -35,8 +30,8 @@ trait Os {
     }
 
     /// What the host offers the page beyond the web: this computer's own core (the local host) and the voice call
-    /// run by the app. Nothing beyond the web unless the OS offers it; macOS offers both (the beta's app platform,
-    /// design O2, where the echo canceller builds), elsewhere the app is a remote client and the page runs the call.
+    /// run by the app. Nothing beyond the web unless the OS offers it: macOS offers both; Windows and Linux offer the
+    /// voice call (Sonora echo cancellation, pure Rust) and are otherwise a remote client (the core runs elsewhere).
     const CAPABILITIES: Capabilities = Capabilities { local_host: false, voice: false };
 
     /// The bundle the updater plugin can update and restart here; `None` where there is none.

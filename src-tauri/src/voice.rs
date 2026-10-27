@@ -1,6 +1,6 @@
 //! The voice call, run by the app itself (`window.__sidevoiceDesktop.host.voice`, docs/BRIDGE.md → "The voice call"):
 //! sidevoice-voice's `VoiceCall` with the models the app picks on its engine (`models`), the device's own
-//! microphone and speaker, the system's default ones or those the page chooses (`NativeDevices`), and WebRTC's echo
+//! microphone and speaker, the system's default ones or those the page chooses (`NativeDevices`), and Sonora's echo
 //! cancellation between them (`NativeIo`). A call has an input half, an output half or both, and loads and opens only
 //! what its halves use; the page changes it while it runs (`voice_update`) and loads models ahead of it
 //! (`voice_preload`). The page keeps the room, which the call knows nothing of: it tells the room the call's turns, and
@@ -15,10 +15,6 @@
 //! samples in base64, core `voice::take`), and each step of something said as `{type: "say", data: {key, event}}`, and
 //! the audio devices when they change as `{type: "devices", data}`. A page that loads anew finds the call stopped, its
 //! models still loaded.
-//!
-//! macOS only: the echo canceller's C++ does not build on Windows yet, and the beta ships on macOS. Elsewhere the page
-//! runs the call itself.
-#![cfg(target_os = "macos")]
 
 mod host;
 mod models;
@@ -139,7 +135,7 @@ pub async fn voice_start(
     state.lane(&key).await?;
     let engines = engines(&app)?;
     let choice = choice_of(&engines, &settings).await?;
-    let loader = EngineLoader::new(engines.engine(), Arc::clone(&state.model_cache));
+    let loader = EngineLoader::shared(engines.engine(), Arc::clone(&state.model_cache));
     let applied = Applied { halves: Halves::new(&loader, &choice, None), settings };
     state.open(&key, applied, take.unwrap_or(false), page_sink(&app)).await
 }
@@ -180,7 +176,7 @@ pub async fn voice_update(
     let settings = current.settings.changed(change);
     let engines = engines(&app)?;
     let choice = choice_of(&engines, &settings).await?;
-    let loader = EngineLoader::new(engines.engine(), Arc::clone(&state.model_cache));
+    let loader = EngineLoader::shared(engines.engine(), Arc::clone(&state.model_cache));
     let applied = Applied { halves: Halves::new(&loader, &choice, Some(&current.halves)), settings };
     state.update(&key, applied).await
 }
@@ -202,7 +198,7 @@ pub async fn voice_preload(
     let _permit = crate::data::admit(&app).ok_or_else(reset_busy)?;
     let engines = engines(&app)?;
     let choice = choice_of(&engines, &settings).await?;
-    let loader = EngineLoader::new(engines.engine(), Arc::clone(&state.model_cache));
+    let loader = EngineLoader::shared(engines.engine(), Arc::clone(&state.model_cache));
     let minutes = settings.idle_unload_minutes.unwrap_or(IDLE_UNLOAD_MINUTES);
     state
         .preload(Halves::new(&loader, &choice, None), minutes)

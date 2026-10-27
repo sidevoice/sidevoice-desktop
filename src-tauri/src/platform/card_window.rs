@@ -1,7 +1,8 @@
 //! Non-activating call-card window construction and visibility. Native access stays here.
+use super::host::APP_ORIGIN;
 use crate::debug;
 use sidevoice_desktop_core::call_controls::Size;
-use sidevoice_desktop_core::settings::{self, APP_ORIGIN};
+use sidevoice_desktop_core::settings;
 use tauri::utils::config::BackgroundThrottlingPolicy;
 use tauri::webview::{PermissionKind, PermissionResponse};
 use tauri::{AppHandle, Manager, WebviewUrl};

@@ -4,14 +4,12 @@
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tauri::{AppHandle, Manager, Webview};
 
-use crate::platform::host::RESET_AVAILABLE;
 use crate::platform::reset_handoff::{self, Handoff};
-use crate::platform::{account, app_data, credentials, uninstall};
+use crate::platform::{account, app_data, connector_service, credentials, uninstall};
 use crate::AppState;
 
 #[derive(Default)]
@@ -85,7 +83,6 @@ fn refused(key: &str) -> Value {
     json!({ "key": key })
 }
 
-#[cfg(target_os = "macos")]
 fn retained_agents(agents: &Value) -> Vec<String> {
     agents
         .as_object()
@@ -136,50 +133,43 @@ pub fn data_pairings_write(app: AppHandle, webview: Webview, value: Value) -> An
 #[tauri::command]
 pub fn data_reset_report(app: AppHandle, webview: Webview) -> Answer {
     caller(&app, &webview)?;
-    if !RESET_AVAILABLE {
-        return Err(refused("reset.unavailable"));
-    }
-    let path = report_path().ok_or_else(|| refused("reset.unavailable"))?;
-    consume_report_at(&path)
+    let dir = control_dir().ok_or_else(|| refused("reset.unavailable"))?;
+    consume_report_at(&dir)
 }
 
-fn consume_report_at(path: &Path) -> Answer {
-    if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
-        return Err(refused("reset.unsafe"));
-    }
-    match fs::read(path) {
-        Ok(bytes) if bytes.len() <= 16 * 1024 => {
+/// The report, or else the journal of an interrupted reset, read once from the control directory `dir` and removed.
+/// Every read and removal goes through the directory's held, checked handle (`sidevoice-platform`), in a private
+/// directory. A record read must be a private regular file with one name (else `reset.unsafe`, kept) within its bound
+/// (else `reset.failed` for the report, `reset.report-failed` for the journal, kept). Once a valid report is read,
+/// the journal beside it is obsolete and removed unread: any regular file with one name that others cannot write,
+/// never a link or reparse point.
+fn consume_report_at(dir: &Path) -> Answer {
+    use sidevoice_platform::fs::{Access, Directory, HeldDirectory};
+    use std::io::ErrorKind;
+    let refusal = |error: std::io::Error, otherwise| {
+        refused(if error.kind() == ErrorKind::PermissionDenied { "reset.unsafe" } else { otherwise })
+    };
+    let held = HeldDirectory::open(dir, Access::Private).map_err(|error| refusal(error, "reset.failed"))?;
+    let read = |name: &str| held.read(name.as_ref(), Access::Private, RECORD_LIMIT);
+    match read(REPORT).map_err(|error| refusal(error, "reset.failed"))? {
+        Some(bytes) => {
             let value: Value = serde_json::from_slice(&bytes).map_err(|_| refused("reset.failed"))?;
-            let journal = path.with_file_name("journal.json");
-            if let Err(error) = fs::remove_file(&journal) {
-                if error.kind() != std::io::ErrorKind::NotFound {
-                    return Err(refused("reset.report-failed"));
-                }
-            }
-            fs::remove_file(path).map_err(|_| refused("reset.failed"))?;
+            held.remove(JOURNAL.as_ref()).map_err(|error| refusal(error, "reset.report-failed"))?;
+            held.remove(REPORT.as_ref()).map_err(|error| refusal(error, "reset.failed"))?;
             Ok(value)
         }
-        Ok(_) => Err(refused("reset.failed")),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let journal = path.with_file_name("journal.json");
-            if fs::symlink_metadata(&journal).is_ok_and(|m| m.file_type().is_symlink()) {
-                return Err(refused("reset.unsafe"));
+        None => match read(JOURNAL).map_err(|error| refusal(error, "reset.report-failed"))? {
+            Some(bytes) => {
+                let progress: Value = serde_json::from_slice(&bytes).map_err(|_| refused("reset.report-failed"))?;
+                let mut failed = progress.get("failed").and_then(Value::as_array).cloned().unwrap_or_default();
+                failed.push(json!({"step":"helper", "key":"reset.interrupted"}));
+                held.remove(JOURNAL.as_ref()).map_err(|error| refusal(error, "reset.report-failed"))?;
+                Ok(
+                    json!({"state":"partial", "completed":progress.get("completed").cloned().unwrap_or_else(|| json!([])), "failed":failed, "agents":{}}),
+                )
             }
-            match fs::read(&journal) {
-                Ok(bytes) if bytes.len() <= 16 * 1024 => {
-                    let progress: Value = serde_json::from_slice(&bytes).map_err(|_| refused("reset.report-failed"))?;
-                    let mut failed = progress.get("failed").and_then(Value::as_array).cloned().unwrap_or_default();
-                    failed.push(json!({"step":"helper", "key":"reset.interrupted"}));
-                    fs::remove_file(&journal).map_err(|_| refused("reset.report-failed"))?;
-                    Ok(
-                        json!({"state":"partial", "completed":progress.get("completed").cloned().unwrap_or_else(|| json!([])), "failed":failed, "agents":{}}),
-                    )
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Value::Null),
-                _ => Err(refused("reset.report-failed")),
-            }
-        }
-        Err(_) => Err(refused("reset.failed")),
+            None => Ok(Value::Null),
+        },
     }
 }
 
@@ -196,13 +186,10 @@ pub async fn data_uninstall(app: AppHandle, webview: Webview) -> Answer {
     confirmed_reset(app, true).await
 }
 
-/// A host without the reset transaction refuses before the confirmation and before any data is touched.
+/// The confirmed reset, on every host: the checks and the native confirmation come before any data is touched.
 async fn confirmed_reset(app: AppHandle, uninstall: bool) -> Answer {
     use crate::platform::confirmation::{self, ConfirmationKind};
     use crate::platform::webview_data;
-    if !RESET_AVAILABLE {
-        return Err(refused("reset.unavailable"));
-    }
     let state = app.state::<AppState>();
     if !begin_exclusive(&app) {
         return Err(refused("reset.busy"));
@@ -255,18 +242,11 @@ async fn confirmed_reset(app: AppHandle, uninstall: bool) -> Answer {
 
 /// The transaction's own refusal before the confirmation and before any data is touched: a connector install
 /// in progress.
-#[cfg(target_os = "macos")]
 fn refuse_before_confirmation(app: &AppHandle) -> Result<(), &'static str> {
     if crate::local_host::installing(app) {
         return Err("reset.busy");
     }
     Ok(())
-}
-
-/// The reset transaction exists only on macOS; `confirmed_reset` refuses before this elsewhere.
-#[cfg(not(target_os = "macos"))]
-fn refuse_before_confirmation(_: &AppHandle) -> Result<(), &'static str> {
-    Err("reset.unavailable")
 }
 
 fn require_confirmation(accepted: bool) -> Result<(), Value> {
@@ -278,12 +258,14 @@ fn begin_reset(app: &AppHandle, uninstall: bool) -> Answer {
     let admission = Handoff::new().and_then(|handoff| handoff.admit()).map_err(|error| {
         refused(if error.kind() == std::io::ErrorKind::WouldBlock { "reset.busy" } else { "reset.helper-failed" })
     })?;
+    // The program the helper runs and the relaunch starts, resolved and checked before anything is touched.
+    let program = installed_program().ok_or_else(|| refused("reset.helper-failed"))?;
     let (mut failed, agents, service_outcome) = reset_before_exit()?;
     // The provider keys, on every host that runs the transaction, journalled as the last step before exit.
     if credentials::clear_all().is_err() {
         failed.push(json!({"step": "keychain", "key": "reset.keychain-failed"}));
     }
-    let journal = report_path().ok_or_else(|| refused("reset.helper-failed"))?.with_file_name("journal.json");
+    let journal = control_dir().ok_or_else(|| refused("reset.helper-failed"))?.join(JOURNAL);
     write_atomic_json(
         &journal,
         &json!({"stage":"keychain", "completed":["service", "keychain"], "failed":failed.clone()}),
@@ -292,6 +274,7 @@ fn begin_reset(app: &AppHandle, uninstall: bool) -> Answer {
     let pending = reset_handoff::launch(
         admission,
         ResetPlan { parent_pid: std::process::id(), uninstall, initial: json!({"failed": failed, "agents": agents}) },
+        &program,
     )
     .map_err(|_| refused("reset.helper-failed"))?;
     *app.state::<AppState>().reset_helper.lock().unwrap() = Some(pending);
@@ -312,44 +295,58 @@ fn begin_reset(app: &AppHandle, uninstall: bool) -> Answer {
     Ok(json!({"state": state, "service": service_outcome, "agents": agents, "failed": failed, "pending": pending}))
 }
 
-/// The existing macOS steps before the app exits, under the held admission: the connector service and its
-/// agents, journalled; `begin_reset` then clears the provider keys. Returns the failures so far, the agents' results
-/// and the service outcome.
-#[cfg(target_os = "macos")]
+/// The steps before the app exits, under the held admission: the connector service and its agents, journalled;
+/// `begin_reset` then clears the provider keys. Returns the failures so far, the agents' results and the service
+/// outcome. The same on every host: `D` by `sidevoice-platform`'s one rule, which must be its standard place.
 fn reset_before_exit() -> Result<(Vec<Value>, Value, &'static str), Value> {
-    use sidevoice_local_host::{cli::Cli, paths::DataDirs};
-    let dirs = DataDirs::from_env().ok_or_else(|| refused("reset.unavailable"))?;
+    use crate::local_host::{self, NoConnectorCli};
+    use sidevoice_platform::data_dir;
+    // `D` as every Sidevoice program resolves it (`SIDEVOICE_DATA_DIR`, else the standard place); the scope check
+    // accepts only the standard place.
+    let data = data_dir::resolve(|name| std::env::var_os(name)).map_err(|_| refused("reset.unavailable"))?;
+    let standard = data_dir::standard().ok_or_else(|| refused("reset.unavailable"))?;
     // `HOME` only when it is this account's home in the account database: no other home is reset.
     let home = account::home().map_err(|reason| json!({"key": "reset.unsafe", "reason": reason}))?;
-    validate_uninstall_scope_at(&home, &dirs.data)
+    validate_uninstall_scope_at(&home, &standard, &data)
         .map_err(|reason| json!({"key": "reset.unsafe", "reason": reason}))?;
-    let installed_cli = match Cli::installed(&dirs) {
+    let installed_cli = match local_host::connector_cli(&data) {
         Ok(cli) => {
             probe_safe_connector(&cli, Duration::from_secs(10))?;
             Some(cli)
         }
-        Err(_) if !dirs.install_record().exists() => {
-            // A missing record is only an absent service when all owned data is gone too.
-            if !fresh_service_absent(&home) || residual_connector_data(&dirs.data) {
+        // No install record: the connector step runs only for an installed connector, so it is skipped when the
+        // service is proven absent. The proof is the OS's fresh answer (`connector_service`: the service manager's
+        // jobs and the running programs), never the missing record itself; and an interrupted uninstall may have
+        // left data behind. Any doubt refuses before anything is touched.
+        Err(_)
+            if fs::symlink_metadata(data.join(INSTALL_RECORD))
+                .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            if !connector_service::absent(&home) || residual_connector_data(&data) {
                 return Err(refused("reset.service-failed"));
             }
             None
         }
-        Err(_) => return Err(refused("reset.unsafe")),
+        // A recorded connector this host cannot run (Windows until the local host runs its CLI there): its service
+        // stays, so nothing is reset.
+        Err(NoConnectorCli::Unsupported) => return Err(refused("reset.unsupported-connector")),
+        Err(NoConnectorCli::Refused) => return Err(refused("reset.unsafe")),
     };
-    let report = report_path().ok_or_else(|| refused("reset.helper-failed"))?;
+    let control = control_dir().ok_or_else(|| refused("reset.helper-failed"))?;
+    let report = control.join(REPORT);
     if let Err(error) = fs::remove_file(&report) {
         if error.kind() != std::io::ErrorKind::NotFound {
             return Err(refused("reset.report-failed"));
         }
     }
-    let journal = report.with_file_name("journal.json");
+    let journal = control.join(JOURNAL);
     write_atomic_json(&journal, &json!({"stage":"preflight", "completed":[], "failed":[]}))
         .map_err(|_| refused("reset.helper-failed"))?;
     let (service, service_outcome) = match installed_cli {
         Some(cli) => (
-            run_checked_uninstall(&home, &dirs.data, || {
-                cli.run(&["uninstall", "--json"], Duration::from_secs(180)).map_err(|_| refused("reset.service-failed"))
+            run_checked_uninstall(&home, &standard, &data, || {
+                local_host::run_connector(&cli, &["uninstall", "--json"], Duration::from_secs(180))
+                    .ok_or_else(|| refused("reset.service-failed"))
             })?,
             "removed",
         ),
@@ -367,13 +364,9 @@ fn reset_before_exit() -> Result<(Vec<Value>, Value, &'static str), Value> {
     Ok((failed, agents, service_outcome))
 }
 
-/// The reset transaction exists only on macOS; `confirmed_reset` refuses before this elsewhere.
-#[cfg(not(target_os = "macos"))]
-fn reset_before_exit() -> Result<(Vec<Value>, Value, &'static str), Value> {
-    Err(refused("reset.unavailable"))
-}
+/// The connector's install record in `D`: the active installation and the command that runs its CLI.
+const INSTALL_RECORD: &str = "install.json";
 
-#[cfg(target_os = "macos")]
 fn require_safe_uninstall(version: &Value) -> Result<(), Value> {
     if version.get("ok") == Some(&Value::Bool(true))
         && version.get("safe_uninstall").and_then(Value::as_u64).is_some_and(|level| level >= 1)
@@ -384,13 +377,12 @@ fn require_safe_uninstall(version: &Value) -> Result<(), Value> {
     }
 }
 
-#[cfg(target_os = "macos")]
-fn probe_safe_connector(cli: &sidevoice_local_host::cli::Cli, timeout: Duration) -> Result<(), Value> {
-    let version = cli.run(&["--version", "--json"], timeout).map_err(|_| refused("reset.unsupported-connector"))?;
+fn probe_safe_connector(cli: &crate::local_host::ConnectorCli, timeout: Duration) -> Result<(), Value> {
+    let version = crate::local_host::run_connector(cli, &["--version", "--json"], timeout)
+        .ok_or_else(|| refused("reset.unsupported-connector"))?;
     require_safe_uninstall(&version)
 }
 
-#[cfg(target_os = "macos")]
 fn residual_connector_data(data: &Path) -> bool {
     // A missing record is not proof that an interrupted uninstall finished its data phase: the releases (`D/install`) are
     // an entry of `D` too.
@@ -403,7 +395,8 @@ fn residual_connector_data(data: &Path) -> bool {
     for entry in entries {
         let Ok(entry) = entry else { return true };
         let name = entry.file_name();
-        // `Models` is the engine's (docs/ENGINES.md); on macOS its place is `D`: not the connector's to leave behind.
+        // `Models` is the engine's (docs/ENGINES.md), in the standard `D` the scope check requires: not the
+        // connector's to leave behind.
         if name == models {
             continue;
         }
@@ -421,94 +414,46 @@ fn residual_connector_data(data: &Path) -> bool {
 /// private, synced, then renamed into the private control directory; links never followed).
 fn write_atomic_json(path: &Path, value: &Value) -> Result<(), &'static str> {
     use sidevoice_platform::fs::{Files, Fs};
+    Files::write_private(path, &record(value)?).map_err(|_| "report-write")
+}
+
+/// A journal or report as written: JSON within [`RECORD_LIMIT`].
+fn record(value: &Value) -> Result<Vec<u8>, &'static str> {
     let bytes = serde_json::to_vec(value).map_err(|_| "report-write")?;
-    if bytes.len() > 16 * 1024 {
+    if bytes.len() as u64 > RECORD_LIMIT {
         return Err("report-write");
     }
-    Files::write_private(path, &bytes).map_err(|_| "report-write")
+    Ok(bytes)
 }
 
-#[cfg(target_os = "macos")]
-fn fresh_service_absent(home: &Path) -> bool {
-    fresh_service_absent_with(
-        home,
-        |label| {
-            let target = format!("gui/{}/{label}", unsafe { libc::geteuid() });
-            let Ok(output) = Command::new("/bin/launchctl").args(["print", &target]).output() else { return false };
-            if output.status.success() {
-                return false;
-            }
-            let detail = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
-            output.status.code() == Some(113) || detail.contains("could not find service")
-        },
-        || {
-            let Ok(output) = Command::new("/bin/ps").args(["-axo", "comm="]).output() else { return false };
-            output.status.success() && !managed_process_in_ps(&output.stdout)
-        },
-    )
-}
-
-#[cfg(target_os = "macos")]
-fn managed_process_in_ps(output: &[u8]) -> bool {
-    String::from_utf8_lossy(output).lines().any(|line| {
-        let path = Path::new(line.trim());
-        matches!(
-            path.file_name().and_then(|name| name.to_str()),
-            Some("sidevoice-core-rust" | "sidevoice-core" | "sidevoice-connector")
-        )
-    })
-}
-
-#[cfg(target_os = "macos")]
-fn fresh_service_absent_with(
+fn run_checked_uninstall<T>(
     home: &Path,
-    launchd_absent: impl Fn(&str) -> bool,
-    processes_absent: impl Fn() -> bool,
-) -> bool {
-    if fs::canonicalize(home).ok().as_deref() != Some(home) {
-        return false;
-    }
-    for label in ["dev.sidevoice.core", "dev.sidevoice.connector"] {
-        match fs::symlink_metadata(home.join("Library/LaunchAgents").join(format!("{label}.plist"))) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            _ => return false,
-        }
-        if !launchd_absent(label) {
-            return false;
-        }
-    }
-    processes_absent()
-}
-
-#[cfg(target_os = "macos")]
-fn run_checked_uninstall<T>(home: &Path, data: &Path, invoke: impl FnOnce() -> Result<T, Value>) -> Result<T, Value> {
+    standard: &Path,
+    data: &Path,
+    invoke: impl FnOnce() -> Result<T, Value>,
+) -> Result<T, Value> {
     // Still this account's home in the account database, right before the destructive call.
     if account::home().as_deref() != Ok(home) {
         return Err(json!({"key": "reset.unsafe", "reason": "unsafe-home"}));
     }
-    validate_uninstall_scope_at(home, data).map_err(|reason| json!({"key": "reset.unsafe", "reason": reason}))?;
+    validate_uninstall_scope_at(home, standard, data)
+        .map_err(|reason| json!({"key": "reset.unsafe", "reason": reason}))?;
     invoke()
 }
 
-/// `D` on macOS with no override: the OS's standard place of `sidevoice-platform`'s `data_dir`.
-#[cfg(target_os = "macos")]
-fn standard_data(home: &Path) -> PathBuf {
-    home.join("Library/Application Support/Sidevoice")
-}
-
-#[cfg(target_os = "macos")]
-fn validate_uninstall_scope_at(home: &Path, data: &Path) -> Result<PathBuf, &'static str> {
-    if !clean_absolute(home) || fs::canonicalize(home).ok().as_deref() != Some(home) {
+/// The connector's data `data` is the one the reset may uninstall: the standard `D` (`standard`,
+/// `sidevoice-platform`'s `data_dir::standard`, the same rule on every OS) inside the account home `home`, with the
+/// releases `D/install` in it. An override (`SIDEVOICE_DATA_DIR`) is not a known directory, nor is a standard place
+/// outside the home. Returns the releases directory.
+fn validate_uninstall_scope_at(home: &Path, standard: &Path, data: &Path) -> Result<PathBuf, &'static str> {
+    if !clean_absolute(home) || dunce::canonicalize(home).ok().as_deref() != Some(home) {
         return Err("unsafe-home");
     }
-    // `D` on macOS: the standard place of `sidevoice-platform`'s `data_dir`, and the releases `D/install` in it. An
-    // override (`SIDEVOICE_DATA_DIR`) is not a known directory.
-    let expected_data = standard_data(home);
-    if data != expected_data || !clean_absolute(data) {
+    if data != standard || !clean_absolute(data) || !data.starts_with(home) || data == home {
         return Err("outside-known-dirs");
     }
-    let expected_releases = sidevoice_local_host::paths::DataDirs::new(&expected_data).releases();
-    let record = data.join("install.json");
+    let expected_releases = sidevoice_platform::data_dir::releases_dir(standard);
+    let record = data.join(INSTALL_RECORD);
     if let Ok(meta) = fs::symlink_metadata(&record) {
         if !meta.is_file() || meta.file_type().is_symlink() || meta.len() > 64 * 1024 {
             return Err("unsafe-record");
@@ -520,7 +465,7 @@ fn validate_uninstall_scope_at(home: &Path, data: &Path) -> Result<PathBuf, &'st
             return Err("outside-known-dirs");
         }
         let command = value.get("command").and_then(Value::as_array).ok_or("unsafe-record")?;
-        let recovery = expected_data.join(".uninstall-recovery/sidevoice-connector");
+        let recovery = standard.join(".uninstall-recovery").join(connector_program());
         if command.len() != 1
             || !matches!(command[0].as_str(), Some(path) if is_release_binary(Path::new(path), &expected_releases) || Path::new(path) == recovery)
         {
@@ -535,41 +480,71 @@ fn validate_uninstall_scope_at(home: &Path, data: &Path) -> Result<PathBuf, &'st
     Ok(expected_releases)
 }
 
-/// `R/releases/<id>/bin/sidevoice-connector`: the command the connector's `install` records for the release it
-/// selects, `<id>` one plain name.
-#[cfg(target_os = "macos")]
+/// The connector's executable file name: `sidevoice-connector`, with this OS's executable suffix (`.exe` on Windows).
+fn connector_program() -> String {
+    format!("sidevoice-connector{}", std::env::consts::EXE_SUFFIX)
+}
+
+/// `R/releases/<id>/bin/sidevoice-connector` ([`connector_program`]): the command the connector's `install` records
+/// for the release it selects, `<id>` one plain name.
 fn is_release_binary(path: &Path, releases: &Path) -> bool {
     use std::path::Component;
     let Ok(rest) = path.strip_prefix(releases.join("releases")) else { return false };
     let parts: Vec<_> = rest.components().collect();
     matches!(parts.as_slice(), [Component::Normal(id), Component::Normal(bin), Component::Normal(name)]
-        if !id.to_string_lossy().starts_with('.') && *bin == "bin" && *name == "sidevoice-connector")
+        if !id.to_string_lossy().starts_with('.') && *bin == "bin" && *name == connector_program().as_str())
 }
 
-/// The report sits in the handoff's private control directory, outside every reset deletion root.
-fn report_path() -> Option<PathBuf> {
+/// The report and the journal sit in the handoff's private control directory, outside every reset deletion root,
+/// made private (and checked with everything above it) by the shared private-directory API on every OS.
+fn control_dir() -> Option<PathBuf> {
     use sidevoice_platform::fs::{Files, Fs};
     let dir = reset_handoff::state_dir().ok()?;
     Files::ensure_private_dir(&dir).ok()?;
-    Some(dir.join("report.json"))
+    Some(dir)
 }
 
-#[cfg(target_os = "macos")]
+/// The report the page reads once: what the reset did.
+const REPORT: &str = "report.json";
+/// The journal: what the reset is doing, written before each step's effect and before the helper deletes anything.
+const JOURNAL: &str = "journal.json";
+/// Both records are bounded JSON.
+const RECORD_LIMIT: u64 = 16 * 1024;
+/// The environment marker of the relaunch after a reset: that app's setup finalizes the report.
+const RELAUNCH_MARKER: &str = "SIDEVOICE_RESET_RELAUNCH";
+
+/// The installed app, as Tauri resolves its own binary (Linux: the AppImage itself rather than its temporary mount,
+/// which goes away with the app; Tauri takes it from `APPIMAGE`, an environment the app trusts as it trusts `HOME`),
+/// checked as a Sidevoice program (`trusted_program`: this user's or the system's, and nobody else may change it or the
+/// folders above it). Where the handoff keeps its shipped launch (`PROGRAM_CHECKED` false: macOS), the
+/// executable as the OS names it. The helper and the relaunch start only this; neither the page nor the plan names a
+/// program.
+fn installed_program() -> Option<PathBuf> {
+    use sidevoice_platform::fs::{Files, Fs};
+    // The launch macOS shipped with: `current_exe`, unchecked. Tauri's resolver refuses an executable path with any
+    // link in it, which used to work; tightening macOS is the operator's decision (see the PR).
+    const PROGRAM_CHECKED: bool = cfg!(not(target_os = "macos"));
+    if !PROGRAM_CHECKED {
+        return std::env::current_exe().ok();
+    }
+    let program = tauri::process::current_binary(&tauri::Env::default()).ok()?;
+    Files::trusted_program(&program).ok()
+}
+
+/// Absolute, with no `.` or `..`: a drive or share prefix, the root, then plain names.
 fn clean_absolute(path: &Path) -> bool {
+    use std::path::Component;
     path.is_absolute()
-        && path.components().all(|part| matches!(part, std::path::Component::RootDir | std::path::Component::Normal(_)))
+        && path
+            .components()
+            .all(|part| matches!(part, Component::Prefix(_) | Component::RootDir | Component::Normal(_)))
 }
 
 /// Called in the helper process, before Tauri. The authenticated plan arrives on every host.
 pub fn run_reset_helper() {
     let Ok(helper) = Handoff::new().and_then(|handoff| handoff.receive()) else { return };
     let (parent_pid, uninstall, initial) = (helper.plan.parent_pid, helper.plan.uninstall, helper.plan.initial.clone());
-    if !RESET_AVAILABLE {
-        // Complete the committed wait and release it; nothing is cleaned up.
-        drop(helper.await_exit());
-    } else {
-        clean_up_after_exit(helper, parent_pid, uninstall, initial);
-    }
+    clean_up_after_exit(helper, parent_pid, uninstall, initial);
 }
 
 /// The helper transaction: observe the browser writers, await the committed exit, delete the app's data
@@ -587,11 +562,19 @@ fn clean_up_after_exit(
         .and_then(|home| webview_data::locations(&home))
         .and_then(|paths| webview_data::capture(parent_pid, paths));
     let Ok(lock) = helper.await_exit() else { return };
-    let Some(report) = report_path() else { return };
+    let Some(control) = control_dir() else { return };
+    let report = control.join(REPORT);
     let Some(initial_failed) = initial.get("failed").and_then(Value::as_array) else { return };
     let mut completed = Vec::new();
     let mut failed = initial_failed.clone();
-    let journal = report.with_file_name("journal.json");
+    let journal = control.join(JOURNAL);
+    // The intent first: nothing is deleted before the journal write saying the cleanup has started has returned. If it
+    // fails, nothing is deleted, and the journal written before the exit reports the reset as interrupted. This covers
+    // a crash of the helper; whether the record also survives a power loss is the shared writer's guarantee (Unix
+    // syncs the file and the directory; Windows does not yet make the rename durable: docs/RESET_HANDOFF.md).
+    if write_atomic_json(&journal, &json!({"stage":"cleanup", "completed":[], "failed":failed})).is_err() {
+        return;
+    }
     let browser = browser
         .and_then(|owner| webview_data::wait_released(owner, std::time::Instant::now() + Duration::from_secs(10)));
     // A journal that cannot be written stops the deletion: an interruption could no longer be reported.
@@ -629,10 +612,8 @@ fn conclude_reset(
     let relaunch = || {
         // Cleanup is over. A new app must acquire this lock independently.
         drop(lock);
-        std::env::current_exe()
-            .ok()
-            .and_then(|exe| Command::new(exe).env("SIDEVOICE_RESET_RELAUNCH", "1").spawn().ok())
-            .is_some()
+        // Resolved and checked again right before it starts.
+        installed_program().is_some_and(|program| reset_handoff::relaunch(&program, RELAUNCH_MARKER).is_ok())
     };
     if uninstall {
         let trash = || match uninstall::uninstall() {
@@ -703,22 +684,21 @@ fn finish_uninstall_at(
     finish_reset_at(report, journal, completed, failed, agents, write, relaunch);
 }
 
-#[cfg(target_os = "macos")]
 pub fn finalize_relaunched_reset() {
-    if std::env::var("SIDEVOICE_RESET_RELAUNCH").as_deref() != Ok("1") {
+    if std::env::var(RELAUNCH_MARKER).as_deref() != Ok("1") {
         return;
     }
-    let Some(report) = report_path() else { return };
-    let journal = report.with_file_name("journal.json");
-    let _ = finalize_relaunched_reset_at(&report, &journal);
+    let Some(control) = control_dir() else { return };
+    let _ = finalize_relaunched_reset_at(&control);
 }
 
-#[cfg(target_os = "macos")]
-fn finalize_relaunched_reset_at(report: &Path, journal: &Path) -> Result<(), &'static str> {
-    let bytes = fs::read(journal).map_err(|_| "report-read")?;
-    if bytes.len() > 16 * 1024 {
-        return Err("report-read");
-    }
+/// The relaunched app's setup turns the helper's `awaiting-relaunch` journal in the control directory `dir` into the
+/// final report: read, written and removed through the directory's held, checked handle, as the page's read is.
+fn finalize_relaunched_reset_at(dir: &Path) -> Result<(), &'static str> {
+    use sidevoice_platform::fs::{Access, Directory, HeldDirectory};
+    let held = HeldDirectory::open(dir, Access::Private).map_err(|_| "report-read")?;
+    let bytes =
+        held.read(JOURNAL.as_ref(), Access::Private, RECORD_LIMIT).map_err(|_| "report-read")?.ok_or("report-read")?;
     let pending: Value = serde_json::from_slice(&bytes).map_err(|_| "report-read")?;
     if pending["stage"] != "awaiting-relaunch" {
         return Err("report-stage");
@@ -726,64 +706,104 @@ fn finalize_relaunched_reset_at(report: &Path, journal: &Path) -> Result<(), &'s
     let failed = pending.get("failed").and_then(Value::as_array).ok_or("report-stage")?;
     let value = json!({"state":if failed.is_empty() {"complete"} else {"partial"},
         "completed":pending["completed"],"failed":failed,"agents":pending["agents"]});
-    write_atomic_json(report, &value)?;
-    fs::remove_file(journal).map_err(|_| "report-remove")?;
+    held.write(REPORT.as_ref(), &record(&value)?).map_err(|_| "report-write")?;
+    held.remove(JOURNAL.as_ref()).map_err(|_| "report-remove")?;
     Ok(())
 }
 
-#[cfg(all(test, target_os = "macos"))]
+/// The transaction's decisions, on every host.
+#[cfg(test)]
 mod tests {
     use super::*;
+    use sidevoice_platform::fs::{Files, Fs, TestFiles};
+
+    /// A private, canonical scratch folder (as `app_data`'s tests make it) and an account home inside it.
+    pub(super) fn fixture() -> (tempfile::TempDir, PathBuf) {
+        let temp = tempfile::Builder::new().tempdir_in(dunce::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
+        Files::shut_others_out(temp.path());
+        let home = dunce::canonicalize(temp.path()).unwrap().join("home");
+        Files::create_private_dir(&home).unwrap();
+        (temp, home)
+    }
+
+    /// `path` and every missing folder between `home` and it, private.
+    pub(super) fn private_dirs(home: &Path, path: &Path) {
+        for dir in path.ancestors().collect::<Vec<_>>().into_iter().rev().filter(|dir| dir.starts_with(home)) {
+            if !dir.exists() {
+                Files::create_private_dir(dir).unwrap();
+            }
+        }
+    }
+
+    /// The standard `D` of a fixture home, as `data_dir::standard` names it on any OS: only its place in the home
+    /// matters to the scope check.
+    pub(super) fn standard(home: &Path) -> PathBuf {
+        home.join("standard").join("Sidevoice")
+    }
+
     #[test]
     fn connector_uninstall_scope_refuses_overrides_before_fake_cli_runs() {
-        let home = tempfile::tempdir().unwrap();
-        let home = fs::canonicalize(home.path()).unwrap();
+        let (temp, home) = fixture();
+        let data = standard(&home);
         let mut invoked = false;
-        for data in
+        for elsewhere in
             [home.clone(), PathBuf::from("/"), home.join("../other"), home.join("Documents"), PathBuf::from("relative")]
         {
-            assert!(run_checked_uninstall(&home, &data, || {
+            assert!(run_checked_uninstall(&home, &data, &elsewhere, || {
                 invoked = true;
                 Ok(())
             })
             .is_err());
         }
         assert!(!invoked);
-        let data = home.join("Library/Application Support/Sidevoice");
         assert_eq!(
-            validate_uninstall_scope_at(&home, &home.join(".sidevoice")),
+            validate_uninstall_scope_at(&home, &data, &home.join(".sidevoice")),
             Err("outside-known-dirs"),
             "the old directory is not known"
         );
-        fs::create_dir_all(&data).unwrap();
+        // A standard place outside the account home (an `XDG_DATA_HOME` elsewhere) is not known either.
+        let outside = temp.path().join("elsewhere").join("Sidevoice");
+        assert_eq!(validate_uninstall_scope_at(&home, &outside, &outside), Err("outside-known-dirs"));
+        assert_eq!(validate_uninstall_scope_at(&home, &home, &home), Err("outside-known-dirs"));
+        private_dirs(&home, &data);
         fs::write(data.join("install.json"), json!({"releases": home.join("Documents/sidevoice")}).to_string())
             .unwrap();
-        assert_eq!(validate_uninstall_scope_at(&home, &data), Err("outside-known-dirs"));
+        assert_eq!(validate_uninstall_scope_at(&home, &data, &data), Err("outside-known-dirs"));
         let releases = data.join("install");
         fs::write(
             data.join("install.json"),
-            json!({"releases": releases, "command": [releases.join("releases/1.2.3/bin/sidevoice-connector")]})
+            json!({"releases": releases, "command": [releases.join("releases").join("1.2.3").join("bin").join(connector_program())]})
                 .to_string(),
         )
         .unwrap();
-        assert!(validate_uninstall_scope_at(&home, &data).is_ok());
+        assert_eq!(validate_uninstall_scope_at(&home, &data, &data), Ok(releases.clone()));
         fs::write(
             data.join("install.json"),
-            json!({"releases": releases, "command": [data.join(".uninstall-recovery/sidevoice-connector")]})
+            json!({"releases": releases, "command": [data.join(".uninstall-recovery").join(connector_program())]})
                 .to_string(),
         )
         .unwrap();
-        assert!(validate_uninstall_scope_at(&home, &data).is_ok());
-        fs::write(data.join("install.json"), json!({"releases": releases, "command": ["/usr/bin/rm"]}).to_string())
-            .unwrap();
-        assert_eq!(validate_uninstall_scope_at(&home, &data), Err("unsafe-record"));
+        assert!(validate_uninstall_scope_at(&home, &data, &data).is_ok());
+        fs::write(
+            data.join("install.json"),
+            json!({"releases": releases, "command": [temp.path().join("other-program")]}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(validate_uninstall_scope_at(&home, &data, &data), Err("unsafe-record"));
         // Not the layout the connector records: `current` is a link of the old installer, not a release.
         fs::write(
             data.join("install.json"),
-            json!({"releases": releases, "command": [releases.join("current/bin/sidevoice-connector")]}).to_string(),
+            json!({"releases": releases, "command": [releases.join("current").join("bin").join(connector_program())]})
+                .to_string(),
         )
         .unwrap();
-        assert_eq!(validate_uninstall_scope_at(&home, &data), Err("unsafe-record"));
+        assert_eq!(validate_uninstall_scope_at(&home, &data, &data), Err("unsafe-record"));
+        // A linked `D` is refused, never traversed.
+        fs::remove_file(data.join("install.json")).unwrap();
+        let linked = standard(&home.join("linked"));
+        private_dirs(&home, linked.parent().unwrap());
+        Files::symlink(&data, &linked);
+        assert!(validate_uninstall_scope_at(&home, &linked, &linked).is_err());
     }
 
     #[test]
@@ -799,77 +819,6 @@ mod tests {
         }
         assert_eq!(require_safe_uninstall(&json!({"ok":true,"safe_uninstall":1})), Ok(()));
         assert_eq!(require_safe_uninstall(&json!({"ok":true,"safe_uninstall":2})), Ok(()));
-    }
-
-    #[test]
-    fn fake_installed_connectors_refuse_without_safe_capability() {
-        use sidevoice_local_host::cli::Cli;
-        use std::os::unix::fs::PermissionsExt;
-        let cases = [
-            ("missing", r#"{"ok":true,"version":"0.6.0"}"#, false),
-            ("zero", r#"{"ok":true,"safe_uninstall":0}"#, false),
-            ("one", r#"{"ok":true,"safe_uninstall":1}"#, true),
-            ("two", r#"{"ok":true,"safe_uninstall":2}"#, true),
-            ("garbage", "not-json", false),
-        ];
-        for (name, answer, accepted) in cases {
-            let dir = tempfile::tempdir().unwrap();
-            let script = dir.path().join("sidevoice-connector");
-            let marker = dir.path().join("uninstall-invoked");
-            fs::write(
-                &script,
-                format!(
-                    "#!/bin/sh\nif [ \"$1\" = \"--version\" ] && [ \"$2\" = \"--json\" ]; then\n  printf '%s\\n' '{answer}'\nelse\n  : > '{}'\n  printf '%s\\n' '{{\"ok\":true}}'\nfi\n",
-                    marker.display()
-                ),
-            )
-            .unwrap();
-            fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
-            let cli = Cli { prefix: vec![script.to_string_lossy().into_owned()], data: dir.path().join(".sidevoice") };
-            let checked = probe_safe_connector(&cli, Duration::from_secs(2));
-            assert_eq!(checked.is_ok(), accepted, "{name}");
-            if checked.is_ok() {
-                cli.run(&["uninstall", "--json"], Duration::from_secs(2)).unwrap();
-            }
-            assert_eq!(marker.exists(), accepted, "{name}: unsafe uninstall invocation");
-        }
-        let dir = tempfile::tempdir().unwrap();
-        let script = dir.path().join("slow-sidevoice-connector");
-        fs::write(&script, "#!/bin/sh\nsleep 2\n").unwrap();
-        fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
-        let cli = Cli { prefix: vec![script.to_string_lossy().into_owned()], data: dir.path().join(".sidevoice") };
-        assert_eq!(probe_safe_connector(&cli, Duration::from_millis(100)), Err(refused("reset.unsupported-connector")));
-    }
-
-    #[test]
-    fn retained_connector_record_uses_recovery_executable_on_retry() {
-        use sidevoice_local_host::{cli::Cli, paths::DataDirs};
-        use std::os::unix::fs::PermissionsExt;
-        let home = tempfile::tempdir().unwrap();
-        let home = fs::canonicalize(home.path()).unwrap();
-        let data = home.join("Library/Application Support/Sidevoice");
-        let recovery = data.join(".uninstall-recovery");
-        fs::create_dir_all(&recovery).unwrap();
-        let script = recovery.join("sidevoice-connector");
-        let marker = home.join("retry-invoked");
-        fs::write(
-            &script,
-            format!(
-                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf '%s\\n' '{{\"ok\":true,\"safe_uninstall\":1}}'\nelse\n  : > '{}'\n  printf '%s\\n' '{{\"ok\":true,\"state\":\"removed\"}}'\nfi\n",
-                marker.display()
-            ),
-        )
-        .unwrap();
-        fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
-        let releases = data.join("install");
-        fs::write(data.join("install.json"), json!({"releases": releases.clone(), "command": [script]}).to_string())
-            .unwrap();
-        assert_eq!(validate_uninstall_scope_at(&home, &data), Ok(releases));
-        let cli = Cli::installed(&DataDirs::new(&data)).unwrap();
-        assert_eq!(probe_safe_connector(&cli, Duration::from_secs(2)), Ok(()));
-        assert!(!marker.exists());
-        assert_eq!(cli.run(&["uninstall", "--json"], Duration::from_secs(2)).unwrap()["state"], "removed");
-        assert!(marker.exists());
     }
 
     #[test]
@@ -897,25 +846,27 @@ mod tests {
         gate.leave();
     }
 
-    /// The report's directory as `report_path()` makes it: private, as the shared record writer requires.
-    fn private_dir() -> tempfile::TempDir {
-        use std::os::unix::fs::PermissionsExt;
-        tempfile::Builder::new().permissions(fs::Permissions::from_mode(0o700)).tempdir().unwrap()
+    /// The report's directory as `control_dir()` makes it: private, as the shared record writer requires.
+    fn private_dir() -> (tempfile::TempDir, PathBuf) {
+        let (temp, home) = fixture();
+        let dir = home.join("control");
+        Files::create_private_dir(&dir).unwrap();
+        (temp, dir)
     }
 
     #[test]
     fn durable_journal_reports_interruption_then_allows_retry() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = private_dir();
-        let report = dir.path().join("report.json");
-        let journal = dir.path().join("journal.json");
+        let (temp, dir) = private_dir();
+        let report = dir.join("report.json");
+        let journal = dir.join("journal.json");
         write_atomic_json(&journal, &json!({"stage":"service", "completed":["service"], "failed":[]})).unwrap();
-        assert_eq!(fs::metadata(&journal).unwrap().permissions().mode() & 0o077, 0);
-        let interrupted = consume_report_at(&report).unwrap();
+        // Readable as a private record: this user's, not readable or writable by others.
+        assert!(Files::read_private(&journal, 16 * 1024).unwrap().is_some());
+        let interrupted = consume_report_at(&dir).unwrap();
         assert_eq!(interrupted["state"], "partial");
         assert_eq!(interrupted["completed"], json!(["service"]));
         assert_eq!(interrupted["failed"][0]["key"], "reset.interrupted");
-        assert_eq!(consume_report_at(&report), Ok(Value::Null));
+        assert_eq!(consume_report_at(&dir), Ok(Value::Null));
         write_atomic_json(&journal, &json!({"stage":"cleanup", "completed":["service", "models"], "failed":[]}))
             .unwrap();
         write_atomic_json(
@@ -923,19 +874,41 @@ mod tests {
             &json!({"state":"complete", "completed":["service", "models"], "failed":[], "agents":{}}),
         )
         .unwrap();
-        assert_eq!(consume_report_at(&report).unwrap()["state"], "complete");
-        assert_eq!(consume_report_at(&report), Ok(Value::Null));
-        let outside = tempfile::NamedTempFile::new().unwrap();
-        std::os::unix::fs::symlink(outside.path(), &report).unwrap();
-        assert_eq!(consume_report_at(&report), Err(refused("reset.unsafe")));
-        assert!(outside.path().exists());
+        assert_eq!(consume_report_at(&dir).unwrap()["state"], "complete");
+        assert_eq!(consume_report_at(&dir), Ok(Value::Null));
+        let outside = temp.path().join("outside.json");
+        fs::write(&outside, b"{}").unwrap();
+        Files::symlink(&outside, &report);
+        assert_eq!(consume_report_at(&dir), Err(refused("reset.unsafe")));
+        assert!(outside.exists());
+    }
+
+    #[test]
+    fn records_are_read_within_their_bound_from_a_private_file_and_a_refused_one_stays() {
+        let (_temp, dir) = private_dir();
+        let (report, journal) = (dir.join(REPORT), dir.join(JOURNAL));
+        let oversized = vec![b' '; RECORD_LIMIT as usize + 1];
+        Files::write_private(&report, &oversized).unwrap();
+        assert_eq!(consume_report_at(&dir), Err(refused("reset.failed")));
+        assert!(report.exists());
+        fs::remove_file(&report).unwrap();
+        Files::write_private(&journal, &oversized).unwrap();
+        assert_eq!(finalize_relaunched_reset_at(&dir), Err("report-read"));
+        assert!(journal.exists());
+        // A journal with a second name is not a private record of ours: refused, and left as it is.
+        write_atomic_json(&journal, &json!({"stage":"awaiting-relaunch", "completed":[], "failed":[], "agents":{}}))
+            .unwrap();
+        fs::hard_link(&journal, dir.join("alias")).unwrap();
+        assert_eq!(consume_report_at(&dir), Err(refused("reset.unsafe")));
+        assert_eq!(finalize_relaunched_reset_at(&dir), Err("report-read"));
+        assert!(journal.exists() && !report.exists());
     }
 
     #[test]
     fn helper_reports_complete_only_after_relaunched_setup_and_keeps_failed_writes() {
-        let dir = private_dir();
-        let report = dir.path().join("report.json");
-        let journal = dir.path().join("journal.json");
+        let (_temp, dir) = private_dir();
+        let report = dir.join("report.json");
+        let journal = dir.join("journal.json");
         let mut launched = false;
         finish_reset_at(&report, &journal, &["service", "app-data"], vec![], json!({}), write_atomic_json, || {
             assert!(journal.exists());
@@ -945,9 +918,9 @@ mod tests {
         });
         assert!(launched);
         assert!(journal.exists());
-        finalize_relaunched_reset_at(&report, &journal).unwrap();
+        finalize_relaunched_reset_at(&dir).unwrap();
         assert!(!journal.exists());
-        assert_eq!(consume_report_at(&report).unwrap()["state"], "complete");
+        assert_eq!(consume_report_at(&dir).unwrap()["state"], "complete");
 
         let bad_write = |path: &Path, value: &Value| {
             if path == report {
@@ -958,45 +931,24 @@ mod tests {
         };
         finish_reset_at(&report, &journal, &["service"], vec![], json!({}), bad_write, || true);
         assert!(journal.exists());
-        assert_eq!(consume_report_at(&report).unwrap()["state"], "partial");
+        assert_eq!(consume_report_at(&dir).unwrap()["state"], "partial");
 
         finish_reset_at(&report, &journal, &["service"], vec![], json!({}), write_atomic_json, || false);
-        let failed = consume_report_at(&report).unwrap();
+        let failed = consume_report_at(&dir).unwrap();
         assert_eq!(failed["state"], "partial");
         assert_eq!(failed["failed"][0]["key"], "reset.relaunch-failed");
     }
 
     #[test]
-    fn missing_install_record_requires_fresh_launchd_and_process_absence() {
-        let home = tempfile::tempdir().unwrap();
-        let home = fs::canonicalize(home.path()).unwrap();
-        assert!(!fresh_service_absent_with(&home, |_| false, || true));
-        assert!(!fresh_service_absent_with(&home, |_| true, || false));
-        assert!(fresh_service_absent_with(&home, |_| true, || true));
-        fs::create_dir_all(home.join("Library/LaunchAgents")).unwrap();
-        fs::write(home.join("Library/LaunchAgents/dev.sidevoice.core.plist"), b"orphan").unwrap();
-        assert!(!fresh_service_absent_with(&home, |_| true, || true));
-    }
-
-    #[test]
-    fn production_process_parser_recognizes_bundled_core() {
-        assert!(managed_process_in_ps(
-            b"/Users/test/Library/Application Support/Sidevoice/install/releases/1.2.3/core/bin/sidevoice-core-rust\n"
-        ));
-        assert!(managed_process_in_ps(
-            b"/Users/test/Library/Application Support/Sidevoice/install/releases/1.2.3/bin/sidevoice-connector\n"
-        ));
-        assert!(!managed_process_in_ps(b"/usr/bin/other-service\n"));
-    }
-
-    #[test]
     fn missing_record_with_residual_connector_data_refuses_absent_retry() {
-        let home = tempfile::tempdir().unwrap();
-        let home = fs::canonicalize(home.path()).unwrap();
-        let data = home.join("Library/Application Support/Sidevoice");
+        let (_temp, home) = fixture();
+        let data = standard(&home);
         assert!(!residual_connector_data(&data));
-        fs::create_dir_all(&data).unwrap();
+        private_dirs(&home, &data);
         fs::write(data.join("install.lock"), b"marker").unwrap();
+        assert!(!residual_connector_data(&data));
+        // The engine's models live in the standard `D` on every OS: not the connector's.
+        fs::create_dir(data.join(sidevoice_platform::data_dir::MODELS)).unwrap();
         assert!(!residual_connector_data(&data));
         fs::write(data.join("core-secret"), b"sentinel").unwrap();
         assert!(residual_connector_data(&data));
@@ -1009,7 +961,83 @@ mod tests {
     }
 }
 
-/// The uninstall's platform-neutral decisions run on every platform's tests; the macOS-only parts above do not.
+/// The connector's CLI is the local-host crate's, built on Unix hosts only, and these fake connectors are POSIX shell
+/// scripts: there is no host-neutral way to phrase them.
+#[cfg(all(test, unix))]
+mod connector_cli_tests {
+    use super::tests::{fixture, private_dirs, standard};
+    use super::*;
+    use sidevoice_local_host::cli::Cli;
+    use sidevoice_platform::fs::{Files, TestFiles};
+
+    fn script(path: &Path, body: &str) {
+        fs::write(path, body).unwrap();
+        Files::make_executable(path);
+    }
+
+    #[test]
+    fn fake_installed_connectors_refuse_without_safe_capability() {
+        let cases = [
+            ("missing", r#"{"ok":true,"version":"0.6.0"}"#, false),
+            ("zero", r#"{"ok":true,"safe_uninstall":0}"#, false),
+            ("one", r#"{"ok":true,"safe_uninstall":1}"#, true),
+            ("two", r#"{"ok":true,"safe_uninstall":2}"#, true),
+            ("garbage", "not-json", false),
+        ];
+        for (name, answer, accepted) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            let program = dir.path().join("sidevoice-connector");
+            let marker = dir.path().join("uninstall-invoked");
+            script(
+                &program,
+                &format!(
+                    "#!/bin/sh\nif [ \"$1\" = \"--version\" ] && [ \"$2\" = \"--json\" ]; then\n  printf '%s\\n' '{answer}'\nelse\n  : > '{}'\n  printf '%s\\n' '{{\"ok\":true}}'\nfi\n",
+                    marker.display()
+                ),
+            );
+            let cli = Cli { prefix: vec![program.to_string_lossy().into_owned()], data: dir.path().join(".sidevoice") };
+            let checked = probe_safe_connector(&cli, Duration::from_secs(2));
+            assert_eq!(checked.is_ok(), accepted, "{name}");
+            if checked.is_ok() {
+                cli.run(&["uninstall", "--json"], Duration::from_secs(2)).unwrap();
+            }
+            assert_eq!(marker.exists(), accepted, "{name}: unsafe uninstall invocation");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("slow-sidevoice-connector");
+        script(&program, "#!/bin/sh\nsleep 2\n");
+        let cli = Cli { prefix: vec![program.to_string_lossy().into_owned()], data: dir.path().join(".sidevoice") };
+        assert_eq!(probe_safe_connector(&cli, Duration::from_millis(100)), Err(refused("reset.unsupported-connector")));
+    }
+
+    #[test]
+    fn retained_connector_record_uses_recovery_executable_on_retry() {
+        let (_temp, home) = fixture();
+        let data = standard(&home);
+        let recovery = data.join(".uninstall-recovery");
+        private_dirs(&home, &recovery);
+        let program = recovery.join("sidevoice-connector");
+        let marker = home.join("retry-invoked");
+        script(
+            &program,
+            &format!(
+                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf '%s\\n' '{{\"ok\":true,\"safe_uninstall\":1}}'\nelse\n  : > '{}'\n  printf '%s\\n' '{{\"ok\":true,\"state\":\"removed\"}}'\nfi\n",
+                marker.display()
+            ),
+        );
+        let releases = data.join("install");
+        fs::write(data.join("install.json"), json!({"releases": releases.clone(), "command": [program]}).to_string())
+            .unwrap();
+        assert_eq!(validate_uninstall_scope_at(&home, &data, &data), Ok(releases));
+        let Ok(cli) = crate::local_host::connector_cli(&data) else { panic!("the recorded recovery executable runs") };
+        assert_eq!(probe_safe_connector(&cli, Duration::from_secs(2)), Ok(()));
+        assert!(!marker.exists());
+        assert_eq!(cli.run(&["uninstall", "--json"], Duration::from_secs(2)).unwrap()["state"], "removed");
+        assert!(marker.exists());
+    }
+}
+
+/// The uninstall's decisions, on every host (only macOS removes the app: `uninstall::available`).
 #[cfg(test)]
 mod uninstall_tests {
     use super::*;
