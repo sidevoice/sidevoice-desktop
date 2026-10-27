@@ -28,16 +28,11 @@ const MICROPHONE_SETTINGS_PLACEHOLDER: &str = "\"__SIDEVOICE_MICROPHONE_SETTINGS
 const DEBUG_PLACEHOLDER: &str = "\"__SIDEVOICE_DEBUG__\"";
 const UNINSTALL_PLACEHOLDER: &str = "\"__SIDEVOICE_UNINSTALL__\"";
 
-/// What the host platform offers the page beyond the web: the platform interface supplies it, the bridge only tells it.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Capabilities {
-    /// This computer's own core, the local host (`window.__sidevoiceDesktop.host.localHost`, docs/LOCAL_HOST.md).
-    /// Without it the app is a remote client.
-    pub local_host: bool,
-    /// The app runs the voice call itself (`window.__sidevoiceDesktop.host.voice`, docs/BRIDGE.md -> "The voice
-    /// call"). Without it the page runs the call, and the room window grants it the microphone (`media::decide`).
-    pub voice: bool,
-}
+/// What the app tells the page it offers beyond the web, the same on every OS: this computer's own core, the local host
+/// (`window.__sidevoiceDesktop.host.localHost`, docs/LOCAL_HOST.md), and the voice call the app runs itself
+/// (`window.__sidevoiceDesktop.host.voice`, docs/BRIDGE.md -> "The voice call"). Both are always offered; the page
+/// (web v0.11.0) still reads them, so the bridge keeps telling it until a web release no longer does.
+const OFFERED: &str = "true";
 
 /// The call controls card's bridge script, with its origin placeholder still in place.
 pub const CALL_CONTROLS_SCRIPT_TEMPLATE: &str = include_str!("../../../bridge/call-controls-bridge.js");
@@ -70,7 +65,7 @@ pub fn call_controls_push(patch: &serde_json::Value) -> String {
 /// `microphone_settings`: whether the platform can open its microphone privacy page, independently of native voice.
 /// `diagnostics`: native diagnostic switches the shell actually implements on this runtime.
 /// `media_keys`: media-control ownership supplied by the shell, independently of native voice.
-/// `capabilities`: what the host platform offers (`host.localHost`, `host.voice`).
+/// `host.localHost` and `host.voice` are always offered ([`OFFERED`]).
 /// `uninstall`: whether the app can also remove itself after the reset (`host.data.uninstall`); delete-all and its
 /// report (`host.data.deleteAll`, `resetReport`) are on every host.
 #[allow(clippy::too_many_arguments)]
@@ -83,7 +78,6 @@ pub fn script_for_origin(
     microphone_settings: bool,
     diagnostics: &[crate::debug_options::Switch],
     media_keys: Option<&str>,
-    capabilities: Capabilities,
     uninstall: bool,
 ) -> String {
     let literal = serde_json::to_string(origin).expect("a string serialises");
@@ -97,8 +91,8 @@ pub fn script_for_origin(
     SCRIPT_TEMPLATE
         .replacen(ORIGIN_PLACEHOLDER, &literal, 1)
         .replacen(MEDIA_KEYS_PLACEHOLDER, &keys, 1)
-        .replacen(LOCAL_HOST_PLACEHOLDER, flag(capabilities.local_host), 1)
-        .replacen(VOICE_PLACEHOLDER, flag(capabilities.voice), 1)
+        .replacen(LOCAL_HOST_PLACEHOLDER, OFFERED, 1)
+        .replacen(VOICE_PLACEHOLDER, OFFERED, 1)
         .replacen(UPDATER_PLACEHOLDER, flag(updater), 1)
         .replacen(BUILD_PLACEHOLDER, &serde_json::to_string(build).expect("serialises"), 1)
         .replacen(COMPUTER_NAME_PLACEHOLDER, &serde_json::to_string(&computer_name).expect("serialises"), 1)
@@ -386,7 +380,6 @@ mod tests {
     fn script_binds_the_origin_as_a_js_string() {
         let dev = BuildInfo::new("dev", "0.4.0", "", "");
         let off = crate::debug_options::DebugOptions::default();
-        let both = Capabilities { local_host: true, voice: true };
         let s = script_for_origin(
             "https://voice.example.com",
             false,
@@ -396,7 +389,6 @@ mod tests {
             false,
             &crate::debug_options::Switch::ALL,
             Some("native"),
-            both,
             false,
         );
         assert!(!s.contains("__SIDEVOICE_ROOM_ORIGIN__"));
@@ -418,7 +410,7 @@ mod tests {
         );
         assert!(s.contains(&expected), "{expected}");
         let no_diagnostics =
-            script_for_origin("https://voice.example.com", false, &dev, None, &off, false, &[], None, both, false);
+            script_for_origin("https://voice.example.com", false, &dev, None, &off, false, &[], None, false);
         assert!(no_diagnostics.contains(&off.state(&[]).to_string()));
         assert!(no_diagnostics.contains(r#"factory(window, "https://voice.example.com", null,"#));
         // A release that can update itself: the page gets `host.updater`, and `host.build` says it is a release.
@@ -432,7 +424,6 @@ mod tests {
             true,
             &crate::debug_options::Switch::ALL,
             Some("native"),
-            both,
             true,
         );
         let expected = format!(
@@ -449,7 +440,6 @@ mod tests {
             true,
             &crate::debug_options::Switch::ALL,
             Some("native"),
-            both,
             false,
         );
         assert!(evil.contains(r#"factory(window, "\"); alert(1); (\"""#));
@@ -457,35 +447,13 @@ mod tests {
     }
 
     #[test]
-    fn every_capability_combination_is_told_to_the_page_and_changes_nothing_else() {
+    fn the_local_host_and_the_voice_call_are_offered_on_every_os() {
         let dev = BuildInfo::new("dev", "0.4.0", "", "");
         let off = crate::debug_options::DebugOptions::default();
-        let script = |capabilities| {
-            script_for_origin(
-                "https://voice.example.com",
-                false,
-                &dev,
-                None,
-                &off,
-                false,
-                &[],
-                Some("native"),
-                capabilities,
-                false,
-            )
-        };
-        let reference = script(Capabilities { local_host: true, voice: true });
-        for (local_host, voice) in [(false, false), (false, true), (true, false), (true, true)] {
-            let told = script(Capabilities { local_host, voice });
-            let line = format!(
-                r#"factory(window, "https://voice.example.com", "native", {local_host}, {voice}, false, {{"channel":"dev","version":"0.4.0"}}, null, "#
-            );
-            assert!(told.contains(&line), "{line}");
-            // Only those two values differ between combinations: restoring them yields the reference byte for byte.
-            let restored = told.replacen(&line, &line.replacen(&format!("{local_host}, {voice}"), "true, true", 1), 1);
-            assert_eq!(restored, reference, "local_host={local_host} voice={voice}");
-        }
-        assert_eq!(Capabilities::default(), Capabilities { local_host: false, voice: false });
+        let told =
+            script_for_origin("https://voice.example.com", false, &dev, None, &off, false, &[], Some("native"), false);
+        let line = r#"factory(window, "https://voice.example.com", "native", true, true, false, {"channel":"dev","version":"0.4.0"}, null, "#;
+        assert!(told.contains(line), "{line}");
     }
 
     /// The uninstall is told apart from the local host; delete-all needs no flag (every host).
@@ -494,18 +462,7 @@ mod tests {
         let dev = BuildInfo::new("dev", "0.4.0", "", "");
         let off = crate::debug_options::DebugOptions::default();
         let script = |uninstall| {
-            script_for_origin(
-                "https://voice.example.com",
-                false,
-                &dev,
-                None,
-                &off,
-                false,
-                &[],
-                None,
-                Capabilities::default(),
-                uninstall,
-            )
+            script_for_origin("https://voice.example.com", false, &dev, None, &off, false, &[], None, uninstall)
         };
         // The factory's last arguments: the microphone settings (false here), then the uninstall.
         let call = |told: &str| format!("false, {told});\n}})(function installDesktopBridge(");

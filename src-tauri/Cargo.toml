@@ -69,11 +69,12 @@ log = "0.4"
 # Whether an audio input device exists (platform/microphone): enumeration only, no stream, no prompt. WASAPI on Windows,
 # CoreAudio on macOS; no feature is needed for either. Already in the tree through sidevoice-voice.
 cpal = { version = "0.18", default-features = false }
-
-# This computer's own core, its pairing and the page's proxy (src/local_host.rs; docs/LOCAL_HOST.md). Unix sockets.
+# This computer's own core, its pairing and the page's proxy (src/local_host.rs; docs/LOCAL_HOST.md), on every OS: the
+# crate's `platform` speaks a Unix socket or a Windows named pipe.
 # `fetch`: its install's HTTPS client, for "Prepare this computer" (docs/LOCAL_HOST.md → Install).
-[target.'cfg(unix)'.dependencies]
 sidevoice-local-host = { path = "local-host", features = ["fetch"] }
+
+[target.'cfg(unix)'.dependencies]
 # The account home the user database records, and what this user may change in a directory on the way to it
 # (platform/account/unix.rs: `access`), never `HOME`; whether a browser writer has exited (signal zero,
 # platform/webview_data/{linux,macos}.rs) and this user's launchd domain (platform/connector_service/macos.rs);

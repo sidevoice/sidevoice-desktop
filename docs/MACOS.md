@@ -21,12 +21,12 @@ A `getUserMedia` call in the room page has to pass four gates. Each one is handl
 | Gate | What it needs | Where |
 |---|---|---|
 | Secure context | The page is a secure context | The bundled interface on `tauri://localhost` is one (verified in CI) |
-| WebKit's per-origin decision | A `WKUIDelegate` answer for the origin | `on_permission_request` in `open_room` → `core/src/media.rs`: microphone **granted to the app's own pages only** (the bundled interface) where the page runs the call, denied to every page where the app runs it (macOS); camera and anything else denied. (wry's default, with no handler, grants everything to every page.) |
+| WebKit's per-origin decision | A `WKUIDelegate` answer for the origin | `on_permission_request` in `open_room` → `core/src/media.rs`: microphone, camera and anything else **denied to every page**, the bundled interface included: the app runs the voice call. (wry's default, with no handler, grants everything to every page.) |
 | App privacy (TCC) | `NSMicrophoneUsageDescription` in `Info.plist` — without it macOS kills the app on first capture | `src-tauri/packaging/macos/Info.plist`, merged by the bundler; CI checks it is in the built app |
 | Hardened runtime | `com.apple.security.device.audio-input` entitlement | `src-tauri/packaging/macos/Entitlements.plist`; CI checks it is in the signature |
 
 On macOS the app runs the voice call itself (cpal; docs/BRIDGE.md → "The voice call"), so the WebKit gate denies the
-microphone to every page, the bundled interface included (`media::decide`), and the call's capture passes only the
+microphone to every page, the bundled interface included (the room window's permission handler, `src/lib.rs`), and the call's capture passes only the
 other two. The page then cannot ask macOS for the microphone, nor read whether it may: the web's first-run setup asks
 for it through `host.microphone` (`src-tauri/src/microphone.rs`; docs/BRIDGE.md → "The microphone permission"), which
 reads the app's permission, shows macOS's prompt (`AVCaptureDevice.requestAccess`) and opens System Settings at the

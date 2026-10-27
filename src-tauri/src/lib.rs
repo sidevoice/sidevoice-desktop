@@ -39,7 +39,7 @@ use sidevoice_desktop_core::{media, settings};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::utils::config::BackgroundThrottlingPolicy;
-use tauri::webview::{PageLoadEvent, PermissionKind, PermissionResponse};
+use tauri::webview::{PageLoadEvent, PermissionResponse};
 use tauri::{AppHandle, Manager, State, Webview, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
 const ROOM_PREFIX: &str = "room-";
@@ -319,10 +319,6 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
     *state.room_label.lock().unwrap() = Some(label.clone());
     reset_call_state(app);
 
-    // The origin of the page the window has committed to, kept from the page-load events so the permission
-    // handler never has to query the webview re-entrantly from WebKit's delegate.
-    let committed_origin: Arc<Mutex<Option<String>>> = Arc::default();
-    let committed_for_load = committed_origin.clone();
     let page_app = app.clone();
     // `host.build`, as xtask built this copy (build.rs).
     let version = app.package_info().version.to_string();
@@ -344,7 +340,6 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             platform::microphone::settings_available(),
             &diagnostics::webview_switches(),
             media_controls::support(),
-            host::capabilities(),
             platform::uninstall::available(),
         ));
     #[cfg(feature = "probe")]
@@ -357,24 +352,15 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
         .background_throttling(BackgroundThrottlingPolicy::Disabled)
         // Only the app's own pages: the interface never navigates away (a link elsewhere goes nowhere).
         .on_navigation(|url| media::navigation_allowed(url.scheme(), &settings::url_origin(url), APP_ORIGIN))
-        .on_permission_request(move |_webview, kind| {
-            let capture = match kind {
-                PermissionKind::Microphone => media::Capture::Microphone,
-                PermissionKind::Camera => media::Capture::Camera,
-                _ => media::Capture::Other,
-            };
-            let page = committed_origin.lock().unwrap().clone();
-            let decision = media::decide(capture, page.as_deref(), APP_ORIGIN, !host::capabilities().voice);
-            debug(&format!("media {capture:?} for {page:?}: {decision:?}"));
-            match decision {
-                media::Decision::Allow => PermissionResponse::Allow,
-                media::Decision::Deny => PermissionResponse::Deny,
-            }
+        // No page captures anything: the app runs the voice call (`host.voice`, src/voice.rs) and owns the microphone.
+        // wry grants every request when the app sets no handler; this one denies the microphone, the camera and the rest.
+        .on_permission_request(|_webview, kind| {
+            debug(&format!("media {kind:?}: denied"));
+            PermissionResponse::Deny
         })
         .on_page_load(move |_webview, payload| {
             // `Started` is WebKit's didCommitNavigation: after redirects, main frame only.
             if payload.event() == PageLoadEvent::Started {
-                *committed_for_load.lock().unwrap() = Some(settings::url_origin(payload.url()));
                 debug(&format!("page {}", payload.url()));
                 reset_call_state(&page_app);
             }
@@ -543,7 +529,7 @@ pub fn run() {
                 }
                 Err(e) => log::error!("the native engine did not start: {} ({})", e.key, e.message),
             }
-            // This computer's own core, if any (macOS): found, paired, proxied for the page (docs/LOCAL_HOST.md).
+            // This computer's own core, on every OS: found, paired, proxied for the page (docs/LOCAL_HOST.md).
             local_host::setup(&handle);
             let stored = data::desktop_dir(&handle).ok().and_then(|dir| settings::load(&dir));
             *app.state::<AppState>().settings.lock().unwrap() = stored.clone();
@@ -592,7 +578,9 @@ pub fn run() {
             // Quitting, however the app ends (tray, ⌘Q, logout, a reset, an update's restart; `AppHandle::restart` from
             // the updater's thread comes here too), before `exit()` runs the C++ static destructors (#121): the voice
             // calls stop and every model and audio device is released; the call controls card's window goes; the local
-            // host's proxy stops and closes every tunnel; an update ready installs (automatic mode).
+            // host's proxy stops and closes every tunnel; an update ready installs (automatic mode). Not when the updater
+            // ends the process itself (Windows, starting the installer): its before-exit hook stops the local host then
+            // (`updater::before_exit`).
             if let tauri::RunEvent::Exit = event {
                 voice::shutdown(app);
                 call_controls::close(app);

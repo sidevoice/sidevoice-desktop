@@ -102,14 +102,19 @@ impl Cli {
         Err(refusal_of(&answer).unwrap_or_else(|| failed(format!("`{}` exited {status}: {}", args.join(" "), tail()))))
     }
 
-    /// Runs `prefix + args` as [`Self::run`] does — a tree of its own, at most `timeout` for the program's exit, then
-    /// at most [`PIPE_GRACE`] for both its output streams to close — and hands back what it left, `status` `None` when
-    /// the deadline came first (the whole tree was killed; what it wrote is not kept then). `tick` is called about every
-    /// 50 ms while it runs. Only a program that cannot start, or whose output cannot be read, is a refusal
+    /// Runs `prefix + args` as [`Self::run`] does — in the program's own directory, a tree of its own, at most `timeout`
+    /// for the program's exit, then at most [`PIPE_GRACE`] for both its output streams to close — and hands back what it
+    /// left, `status` `None` when the deadline came first (the whole tree was killed; what it wrote is not kept then).
+    /// `tick` is called about every 50 ms while it runs. Only a program that cannot start, or whose output cannot be read, is a refusal
     /// (`cli.failed`).
     pub fn exec(&self, args: &[&str], timeout: Duration, tick: &mut dyn FnMut()) -> Result<Ran, Refusal> {
         let failed = |why: String| Refusal::new("cli.failed", why);
         let mut command = tokio::process::Command::new(&self.prefix[0]);
+        // The program's own directory, checked with it, as the working directory: never the app's, which can be anywhere
+        // (on Windows the current directory is also where a DLL loaded by bare name may be found).
+        if let Some(dir) = std::path::Path::new(&self.prefix[0]).parent() {
+            command.current_dir(dir);
+        }
         command
             .args(&self.prefix[1..])
             .args(args)

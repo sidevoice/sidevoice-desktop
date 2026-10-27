@@ -327,9 +327,6 @@ fn reset_before_exit() -> Result<(Vec<Value>, Value, &'static str), Value> {
             }
             None
         }
-        // A recorded connector this host cannot run (Windows until the local host runs its CLI there): its service
-        // stays, so nothing is reset.
-        Err(NoConnectorCli::Unsupported) => return Err(refused("reset.unsupported-connector")),
         Err(NoConnectorCli::Refused) => return Err(refused("reset.unsafe")),
     };
     let control = control_dir().ok_or_else(|| refused("reset.helper-failed"))?;

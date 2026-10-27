@@ -23,8 +23,8 @@
 //! The trust boundary is the OS user: the device token travels only over the socket, and the page only ever holds
 //! the proxy's in-memory secret (sidevoice design "Onboarding, hosts and settings" §1, §4.1).
 //!
-//! The beta's local host is macOS (the app) and Linux (tests and headless machines). The crate builds and runs on Windows
-//! too, through the same shared crate; the app offers no local host there yet.
+//! The app offers the local host on every OS. Everywhere, what `sidevoice_platform` cannot observe is refused: an
+//! unknown peer is not trusted, a process that cannot be asked about is not alive.
 
 pub mod checks;
 pub mod cli;

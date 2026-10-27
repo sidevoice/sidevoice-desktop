@@ -28,6 +28,17 @@ fn the_answer_is_the_json_on_stdout() {
 }
 
 #[test]
+fn the_program_runs_in_its_own_directory_not_the_apps() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cli = fake(tmp.path(), json!({}));
+    let answer = cli.run(&["x"], Duration::from_secs(5)).unwrap();
+    let cwd = std::path::PathBuf::from(answer["cwd"].as_str().expect("the fake says where it ran"));
+    let program_dir = std::path::Path::new(&cli.prefix[0]).parent().unwrap();
+    assert_eq!(cwd.canonicalize().unwrap(), program_dir.canonicalize().unwrap());
+    assert_ne!(cwd.canonicalize().unwrap(), std::env::current_dir().unwrap().canonicalize().unwrap());
+}
+
+#[test]
 fn a_refusal_carries_its_key() {
     let tmp = tempfile::tempdir().unwrap();
     let cli =

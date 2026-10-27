@@ -61,7 +61,6 @@ mod tests {
             false,
             &[],
             support(),
-            Default::default(),
             false,
         );
         let literal = serde_json::to_string(&support()).unwrap();

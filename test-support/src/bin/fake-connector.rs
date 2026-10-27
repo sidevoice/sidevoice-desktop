@@ -118,7 +118,8 @@ fn main() {
             } else if let Some(response) = config.get("response") {
                 emit(response);
             } else {
-                emit(&json!({"ok":true,"args":args.join(" "),"data":data,"which":config["which"]}));
+                let cwd = std::env::current_dir().ok();
+                emit(&json!({"ok":true,"args":args.join(" "),"data":data,"which":config["which"],"cwd":cwd}));
             }
         }
     }
