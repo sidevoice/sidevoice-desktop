@@ -108,18 +108,20 @@ pub fn keychain_list(text: &str) -> Vec<String> {
     text.lines().map(|line| line.trim().trim_matches('"').to_owned()).filter(|path| !path.is_empty()).collect()
 }
 
-/// `security` in its interactive mode (`security -i`), given `commands` (each a list of words) on its standard
+/// `security` in its interactive mode (`security -i`), given the one command `words` on its standard
 /// input. `security` takes a password only as a `-p`/`-P`/`-k` argument, which any local user can read in the process
 /// list; its interactive mode reads the same commands from stdin, so the passwords never reach argv.
-pub fn security_session(commands: &[Vec<&str>]) -> Result<Cmd> {
-    let mut script = String::new();
-    for words in commands {
-        let line = words.iter().map(|word| security_word(word)).collect::<Result<Vec<_>>>()?;
-        script += &line.join(" ");
-        script.push('\n');
-    }
-    Ok(Cmd::new("security").arg("-i").stdin_text(script))
+pub fn security_session(words: &[&str]) -> Result<Cmd> {
+    let words = words.iter().map(|word| security_word(word)).collect::<Result<Vec<_>>>()?;
+    let line = words.join(" ");
+    ensure(line.len() <= SECURITY_LINE_MAX, "a command for `security` is too long for its input line")?;
+    Ok(Cmd::new("security").arg("-i").stdin_text(line + "\n"))
 }
+
+/// The longest line (LF excluded) `security -i` takes whole: its reader has a 4,095-byte buffer and, past it, would
+/// read the rest of the line as another command. A line of exactly 4,095 bytes leaves its LF as an empty command
+/// that clears the previous one's failure.
+const SECURITY_LINE_MAX: usize = 4094;
 
 /// One word of an interactive `security` command: in double quotes, with `\` and `"` escaped. A line break cannot
 /// be carried by a line-based input, so a word with one is refused.
@@ -130,17 +132,17 @@ fn security_word(word: &str) -> Result<String> {
 
 /// `security create-keychain`, the keychain's password on stdin.
 pub fn create_keychain(keychain: &Path, password: &str) -> Result<Cmd> {
-    security_session(&[vec!["create-keychain", "-p", password, &keychain.display().to_string()]])
+    security_session(&["create-keychain", "-p", password, &keychain.display().to_string()])
 }
 
 /// `security unlock-keychain`, the keychain's password on stdin.
 pub fn unlock_keychain(keychain: &Path, password: &str) -> Result<Cmd> {
-    security_session(&[vec!["unlock-keychain", "-p", password, &keychain.display().to_string()]])
+    security_session(&["unlock-keychain", "-p", password, &keychain.display().to_string()])
 }
 
 /// `security import` of the .p12 `file` into `keychain` for codesign, the file's password on stdin.
 pub fn import_certificate(file: &Path, keychain: &Path, password: &str) -> Result<Cmd> {
-    security_session(&[vec![
+    security_session(&[
         "import",
         &file.display().to_string(),
         "-k",
@@ -149,13 +151,13 @@ pub fn import_certificate(file: &Path, keychain: &Path, password: &str) -> Resul
         password,
         "-T",
         "/usr/bin/codesign",
-    ]])
+    ])
 }
 
 /// `security set-key-partition-list` letting Apple's tools and codesign use the keys without a prompt, the
 /// keychain's password on stdin.
 pub fn allow_codesign(keychain: &Path, password: &str) -> Result<Cmd> {
-    security_session(&[vec![
+    security_session(&[
         "set-key-partition-list",
         "-S",
         "apple-tool:,apple:,codesign:",
@@ -163,7 +165,7 @@ pub fn allow_codesign(keychain: &Path, password: &str) -> Result<Cmd> {
         "-k",
         password,
         &keychain.display().to_string(),
-    ]])
+    ])
 }
 
 /// What `codesign -dvvv` says of a signature, as far as the checks go.
@@ -355,5 +357,24 @@ TeamIdentifier=AB12CD34EF
     #[test]
     fn a_value_with_a_line_break_is_refused_rather_than_split_into_two_commands() {
         assert!(create_keychain(Path::new("k"), "a\nimport x").is_err());
+    }
+
+    #[test]
+    fn a_line_over_the_security_readers_limit_is_refused_without_naming_the_value() {
+        let keychain = Path::new("k");
+        // `"create-keychain" "-p" "" "k"` is 29 bytes.
+        let base = create_keychain(keychain, "").unwrap().input().unwrap().len() - 1;
+        let fits = |password: &str| create_keychain(keychain, password).is_ok();
+        assert!(fits(&"a".repeat(4094 - base)));
+        assert!(!fits(&"a".repeat(4095 - base)));
+        assert!(!fits(&"a".repeat(4096 - base)));
+        // Escaping counts: each `"` and `\` is two bytes on the line.
+        assert!(fits(&format!("{}{}", "\"".repeat(10), "a".repeat(4094 - base - 20))));
+        assert!(!fits(&format!("{}{}", "\"".repeat(11), "a".repeat(4094 - base - 20))));
+        // Bytes, not characters.
+        assert!(fits(&"é".repeat((4094 - base) / 2)));
+        assert!(!fits(&"é".repeat((4094 - base) / 2 + 1)));
+        let secret = format!("SECRET{}", "a".repeat(5000));
+        assert!(!create_keychain(keychain, &secret).unwrap_err().contains("SECRET"));
     }
 }

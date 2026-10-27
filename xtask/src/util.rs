@@ -323,14 +323,18 @@ impl Cmd {
         self.command.stderr(if with_stderr { Stdio::piped() } else { Stdio::inherit() });
         let out = runtime().block_on(async {
             let mut child = Processes::spawn_tree(self.command).await.map_err(|e| format!("{what}: {e}"))?;
-            if let Some(input) = input {
-                let mut stdin = child.stdin().expect("piped");
-                stdin.write_all(input.as_bytes()).await.map_err(|e| format!("{what}: {e}"))?;
-                drop(stdin);
-            }
+            let stdin = input.map(|input| (child.stdin().expect("piped"), input));
+            // Written while the output is read (a child that fills its output pipes before it has read all its input
+            // would block both), and under the same cancellation. A write that fails (the child exited without reading
+            // it all) is told by the child's status.
+            let write = async move {
+                if let Some((mut stdin, input)) = stdin {
+                    let _ = stdin.write_all(input.as_bytes()).await;
+                }
+            };
             // No new command deadline or output cap: build/release commands can be long and verbose.
             tokio::select! {
-                out = child.output(Duration::from_secs(100 * 365 * 24 * 3600), Duration::from_secs(3), usize::MAX) =>
+                (out, ()) = async { tokio::join!(child.output(Duration::from_secs(100 * 365 * 24 * 3600), Duration::from_secs(3), usize::MAX), write) } =>
                     out.map_err(|e| format!("{what}: {e}")),
                 () = cancelled() => Err("interrupted".into()),
             }
@@ -718,6 +722,13 @@ mod tests {
                 let text = std::io::read_to_string(std::io::stdin()).unwrap();
                 println!("input={text}");
             }
+            "output-then-input" => {
+                // More output than the pipes hold before any input is read: both ends block unless the parent reads
+                // while it writes.
+                std::io::stdout().write_all(&vec![b'o'; 1024 * 1024]).unwrap();
+                let text = std::io::read_to_string(std::io::stdin()).unwrap();
+                println!("\ninput-len={}", text.len());
+            }
             "sleep" => sleep(30.0),
             "orphan" => {
                 // Deliberately leave a descendant holding both output pipes; the outer command owns cleanup.
@@ -748,6 +759,13 @@ mod tests {
             }
             _ => panic!("unknown fixture"),
         }
+    }
+
+    #[test]
+    fn input_is_written_while_the_output_is_read() {
+        let (ok, text) = fixture("output-then-input").stdin_text("x".repeat(1024 * 1024)).attempt().unwrap();
+        assert!(ok);
+        assert!(text.contains("input-len=1048576"), "{}", &text[text.len().saturating_sub(200)..]);
     }
 
     #[test]
