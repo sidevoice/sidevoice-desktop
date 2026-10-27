@@ -21,6 +21,9 @@ impl StorageFixture for NativeStorageFixtures {
     fn special_record(path: &Path) {
         fs::create_dir(path).unwrap();
     }
+    fn remove_special_record(path: &Path) {
+        fs::remove_dir(path).unwrap();
+    }
     fn replace_directory(path: &Path, moved: &Path) -> Replacement {
         // The held handle does not share DELETE, so the rename's open of the directory is a sharing violation, which
         // std has no `ErrorKind` for.

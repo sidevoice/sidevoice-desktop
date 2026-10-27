@@ -154,10 +154,11 @@ mod tests {
         let (tmp, dirs) = dirs();
         let me = std::process::id();
         let body = format!(r#"{{"pid":{me},"endpoint":"/run/user/1/x/connector.sock"}}"#);
-        // A named pipe in its place: opened without blocking and refused as not a regular file.
+        // Something that is not a regular file in its place (a FIFO where the host has them): opened without blocking
+        // and refused.
         StorageFixtures::special_record(&dirs.connector_record());
         assert!(matches!(connector(&dirs), Err(Check::Unsafe(_))));
-        std::fs::remove_file(dirs.connector_record()).unwrap();
+        StorageFixtures::remove_special_record(&dirs.connector_record());
         // A link to a good file is not followed.
         let real = tmp.path().join("real.json");
         write(&real, &body);

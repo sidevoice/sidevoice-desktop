@@ -35,6 +35,9 @@ impl StorageFixture for NativeStorageFixtures {
         // The POSIX utility covers both supported Unix hosts without introducing own FFI.
         assert!(std::process::Command::new("mkfifo").args(["-m", "600"]).arg(path).status().unwrap().success());
     }
+    fn remove_special_record(path: &Path) {
+        fs::remove_file(path).unwrap();
+    }
     fn replace_directory(path: &Path, moved: &Path) -> Replacement {
         fs::rename(path, moved).unwrap();
         Replacement::Replaced
