@@ -164,6 +164,8 @@ pub fn required_env(name: &str) -> Result<String> {
 pub struct Cmd {
     command: Command,
     shown: Vec<String>,
+    /// Text for the program's standard input (where a secret goes, never on the command line).
+    input: Option<String>,
 }
 
 impl Cmd {
@@ -180,7 +182,7 @@ impl Cmd {
             command.env_remove("RUSTUP_TOOLCHAIN").env_remove("RUSTUP_TOOLCHAIN_SOURCE");
         }
         command.env_remove("CARGO");
-        Cmd { command, shown: vec![program.as_ref().to_string_lossy().into_owned()] }
+        Cmd { command, shown: vec![program.as_ref().to_string_lossy().into_owned()], input: None }
     }
 
     pub fn arg(mut self, arg: impl AsRef<OsStr>) -> Cmd {
@@ -196,11 +198,32 @@ impl Cmd {
         self
     }
 
-    /// An argument that is a secret (a password, a key's id): passed as it is, printed as `***`.
+    /// An argument that is not to be printed (a key's id, an identity): passed as it is, printed as `***`. Never
+    /// for a password: that goes on the standard input ([`Cmd::stdin_text`]), as argv is readable by other users.
     pub fn secret(mut self, arg: impl AsRef<OsStr>) -> Cmd {
         self.shown.push("***".into());
         self.command.arg(arg);
         self
+    }
+
+    /// `input` on the program's standard input; it is not shown, and only [`Cmd::output`], [`Cmd::stdout`] and
+    /// [`Cmd::attempt`] send it.
+    pub fn stdin_text(mut self, input: impl Into<String>) -> Cmd {
+        self.input = Some(input.into());
+        self
+    }
+
+    /// The program and its arguments as the process will get them.
+    #[cfg(test)]
+    pub fn argv(&self) -> Vec<String> {
+        let program = self.command.get_program().to_string_lossy().into_owned();
+        std::iter::once(program).chain(self.command.get_args().map(|arg| arg.to_string_lossy().into_owned())).collect()
+    }
+
+    /// What goes to the program's standard input.
+    #[cfg(test)]
+    pub fn input(&self) -> Option<&str> {
+        self.input.as_deref()
     }
 
     pub fn dir(mut self, dir: impl AsRef<Path>) -> Cmd {
@@ -293,10 +316,16 @@ impl Cmd {
         interrupted()?;
         let what = self.shown();
         eprintln!("$ {what}");
-        self.command.stdin(Stdio::null()).stdout(Stdio::piped());
+        let input = self.input.take();
+        self.command.stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped());
         self.command.stderr(if with_stderr { Stdio::piped() } else { Stdio::inherit() });
         let out = runtime().block_on(async {
-            let child = Processes::spawn_tree(self.command).await.map_err(|e| format!("{what}: {e}"))?;
+            let mut child = Processes::spawn_tree(self.command).await.map_err(|e| format!("{what}: {e}"))?;
+            if let Some(input) = input {
+                let mut stdin = child.stdin().expect("piped");
+                stdin.write_all(input.as_bytes()).await.map_err(|e| format!("{what}: {e}"))?;
+                drop(stdin);
+            }
             // No new command deadline or output cap: build/release commands can be long and verbose.
             tokio::select! {
                 out = child.output(Duration::from_secs(100 * 365 * 24 * 3600), Duration::from_secs(3), usize::MAX) =>

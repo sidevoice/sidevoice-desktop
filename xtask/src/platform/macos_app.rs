@@ -108,6 +108,64 @@ pub fn keychain_list(text: &str) -> Vec<String> {
     text.lines().map(|line| line.trim().trim_matches('"').to_owned()).filter(|path| !path.is_empty()).collect()
 }
 
+/// `security` in its interactive mode (`security -i`), given `commands` (each a list of words) on its standard
+/// input. `security` takes a password only as a `-p`/`-P`/`-k` argument, which any local user can read in the process
+/// list; its interactive mode reads the same commands from stdin, so the passwords never reach argv.
+pub fn security_session(commands: &[Vec<&str>]) -> Result<Cmd> {
+    let mut script = String::new();
+    for words in commands {
+        let line = words.iter().map(|word| security_word(word)).collect::<Result<Vec<_>>>()?;
+        script += &line.join(" ");
+        script.push('\n');
+    }
+    Ok(Cmd::new("security").arg("-i").stdin_text(script))
+}
+
+/// One word of an interactive `security` command: in double quotes, with `\` and `"` escaped. A line break cannot
+/// be carried by a line-based input, so a word with one is refused.
+fn security_word(word: &str) -> Result<String> {
+    ensure(!word.contains(['\n', '\r', '\0']), "a value for `security` holds a line break or a NUL")?;
+    Ok(format!("\"{}\"", word.replace('\\', "\\\\").replace('"', "\\\"")))
+}
+
+/// `security create-keychain`, the keychain's password on stdin.
+pub fn create_keychain(keychain: &Path, password: &str) -> Result<Cmd> {
+    security_session(&[vec!["create-keychain", "-p", password, &keychain.display().to_string()]])
+}
+
+/// `security unlock-keychain`, the keychain's password on stdin.
+pub fn unlock_keychain(keychain: &Path, password: &str) -> Result<Cmd> {
+    security_session(&[vec!["unlock-keychain", "-p", password, &keychain.display().to_string()]])
+}
+
+/// `security import` of the .p12 `file` into `keychain` for codesign, the file's password on stdin.
+pub fn import_certificate(file: &Path, keychain: &Path, password: &str) -> Result<Cmd> {
+    security_session(&[vec![
+        "import",
+        &file.display().to_string(),
+        "-k",
+        &keychain.display().to_string(),
+        "-P",
+        password,
+        "-T",
+        "/usr/bin/codesign",
+    ]])
+}
+
+/// `security set-key-partition-list` letting Apple's tools and codesign use the keys without a prompt, the
+/// keychain's password on stdin.
+pub fn allow_codesign(keychain: &Path, password: &str) -> Result<Cmd> {
+    security_session(&[vec![
+        "set-key-partition-list",
+        "-S",
+        "apple-tool:,apple:,codesign:",
+        "-s",
+        "-k",
+        password,
+        &keychain.display().to_string(),
+    ]])
+}
+
 /// What `codesign -dvvv` says of a signature, as far as the checks go.
 #[derive(Debug, Default, PartialEq)]
 pub struct Signature {
@@ -268,5 +326,34 @@ TeamIdentifier=AB12CD34EF
     #[test]
     fn an_unsigned_build_drops_every_signing_variable() {
         assert!(SIGNING_ENV.contains(&"APPLE_SIGNING_IDENTITY") && SIGNING_ENV.contains(&"APPLE_API_KEY_P8"));
+    }
+
+    const KEYCHAIN_PASSWORD: &str = "keychain-pw-0123456789abcdef";
+    const CERTIFICATE_PASSWORD: &str = "p12 \"pw\" \\ with spaces";
+
+    #[test]
+    fn no_signing_command_carries_a_password_in_its_argv() {
+        let keychain = Path::new("/tmp/sidevoice-signing/sidevoice-signing.keychain-db");
+        let p12 = Path::new("/tmp/sidevoice-signing/certificate.p12");
+        let commands = [
+            create_keychain(keychain, KEYCHAIN_PASSWORD).unwrap(),
+            unlock_keychain(keychain, KEYCHAIN_PASSWORD).unwrap(),
+            import_certificate(p12, keychain, CERTIFICATE_PASSWORD).unwrap(),
+            allow_codesign(keychain, KEYCHAIN_PASSWORD).unwrap(),
+        ];
+        for cmd in &commands {
+            let argv = cmd.argv();
+            assert_eq!(argv, ["security", "-i"], "{argv:?}");
+            assert!(!cmd.shown().contains("pw"), "{}", cmd.shown());
+        }
+        let script = |cmd: &Cmd| cmd.input().unwrap().to_owned();
+        assert!(script(&commands[0]).contains(KEYCHAIN_PASSWORD));
+        assert!(script(&commands[2]).contains(r#""-P" "p12 \"pw\" \\ with spaces""#), "{}", script(&commands[2]));
+        assert!(script(&commands[3]).contains(KEYCHAIN_PASSWORD));
+    }
+
+    #[test]
+    fn a_value_with_a_line_break_is_refused_rather_than_split_into_two_commands() {
+        assert!(create_keychain(Path::new("k"), "a\nimport x").is_err());
     }
 }
