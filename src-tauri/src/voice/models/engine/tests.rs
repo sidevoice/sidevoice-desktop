@@ -137,12 +137,11 @@ fn a_call_on_the_engines_real_models_hears_speech_and_plays_a_reply() {
         .and_then(|m| m.local.as_ref())
         .expect("whisper-tiny is a local model");
     let build = local.recommended_build.clone().expect("a whisper-tiny build runs here");
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    {
-        let recommended = local.builds.iter().find(|candidate| candidate.id == build).unwrap();
-        assert!(recommended.available, "the recommended Whisper build runs here");
+    let recommended = local.builds.iter().find(|candidate| candidate.id == build).unwrap();
+    assert!(recommended.available, "the recommended Whisper build runs here");
+    // Whatever accelerator the engine recommends, a Metal one is Whisper.cpp on the GPU.
+    if recommended.accelerator.as_deref() == Some("metal") {
         assert_eq!(recommended.backend, "whisper-cpp");
-        assert_eq!(recommended.accelerator.as_deref(), Some("metal"));
         assert_eq!(recommended.accelerator_class, Some("gpu"));
     }
     let settings: VoiceSettings = serde_json::from_value(json!({

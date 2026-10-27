@@ -16,12 +16,6 @@ pub const DEFAULT_MUTE_SHORTCUT: &str = "Ctrl+Alt+M";
 
 pub const FILE_NAME: &str = "settings.json";
 
-/// The origin Tauri serves the app's own pages from: what a node sees as the interface's `Origin`.
-#[cfg(windows)]
-pub const APP_ORIGIN: &str = "http://tauri.localhost";
-#[cfg(not(windows))]
-pub const APP_ORIGIN: &str = "tauri://localhost";
-
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {

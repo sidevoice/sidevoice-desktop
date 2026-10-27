@@ -28,13 +28,13 @@ mod voice;
 
 use crate::platform::application;
 use crate::platform::diagnostics;
-use crate::platform::host;
+use crate::platform::host::{self, APP_ORIGIN};
 use crate::platform::media_controls;
 use crate::platform::shortcut_access;
 use serde_json::{json, Value};
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
 use sidevoice_desktop_core::build_info::BuildInfo;
-use sidevoice_desktop_core::settings::{MuteShortcut, Registration, Settings, APP_ORIGIN};
+use sidevoice_desktop_core::settings::{MuteShortcut, Registration, Settings};
 use sidevoice_desktop_core::{media, settings};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};

@@ -20,6 +20,10 @@ use imp::Native;
 /// Only this value differs by OS, so there is no per-OS code. It disappears once Windows and Linux get those steps.
 pub const RESET_AVAILABLE: bool = cfg!(target_os = "macos");
 
+/// The origin Tauri serves the app's own pages from: what a node sees as the interface's `Origin`. Only this value
+/// differs by OS, so there is no per-OS code.
+pub const APP_ORIGIN: &str = if cfg!(windows) { "http://tauri.localhost" } else { "tauri://localhost" };
+
 /// What differs per OS.
 trait Os {
     /// The name the person gave the device, kept apart from the network name (macOS Sharing's Computer Name,
