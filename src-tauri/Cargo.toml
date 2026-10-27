@@ -131,6 +131,8 @@ gtk = "0.18"
 keyring-core = { version = "1.0.1", features = ["sample"] }
 # Portable pairing attack fixtures from the pinned shared filesystem interface.
 sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.14.1", features = ["test-support"] }
+# The native fake connector the reset's connector step runs in its tests (`data::connector_cli_tests`).
+sidevoice-desktop-test-support = { path = "../test-support" }
 # Deterministic startup-deadline tests; no wall-clock sleeps.
 tokio = { version = "1", features = ["rt", "test-util"] }
 # Mock runtime for the platform interface tests; no native explorer is opened.

@@ -194,12 +194,6 @@ pub fn shutdown(app: &AppHandle) {
     }
 }
 
-/// A missing install record is safe to treat as absent only when the observer also sees no service.
-#[cfg(target_os = "macos")]
-pub fn absent(app: &AppHandle) -> bool {
-    hosted(app).is_ok_and(|host| json!(host.state())["state"] == "absent")
-}
-
 /// A connector install under way: the reset refuses before its confirmation. Never where there is no local host.
 pub fn installing(app: &AppHandle) -> bool {
     hosted(app).is_ok_and(|host| json!(host.state())["state"] == "installing")
