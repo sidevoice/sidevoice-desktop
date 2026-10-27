@@ -96,6 +96,36 @@ impl Failure {
     }
 }
 
+impl Failure {
+    /// What the app log records of a failed install, whole: key, step, message, params and every line of the
+    /// installer's error output. The page already gets all of it; a line that names a credential is withheld here.
+    pub fn log_report(&self) -> String {
+        let mut report = format!("{}: {}", self.key, self.message);
+        if let Some(step) = self.step {
+            report.push_str(&format!("\n  step: {}", json!(step).as_str().unwrap_or("?")));
+        }
+        if let Some(params) = &self.params {
+            report.push_str(&format!("\n  params: {params}"));
+        }
+        if let Some(tail) = &self.log_tail {
+            report.push_str("\n  installer log tail:");
+            for line in tail {
+                report.push_str("\n    ");
+                report.push_str(if may_hold_secret(line) { "[line withheld: may hold a credential]" } else { line });
+            }
+        }
+        report
+    }
+}
+
+/// A line that may carry a token, a password, an authorization header or a URL with credentials.
+fn may_hold_secret(line: &str) -> bool {
+    const MARKERS: [&str; 7] = ["token", "secret", "password", "passwd", "authorization", "bearer", "api_key"];
+    let lower = line.to_ascii_lowercase();
+    let url_user = line.split("://").skip(1).any(|rest| rest.split('/').next().is_some_and(|host| host.contains('@')));
+    url_user || MARKERS.iter().any(|m| lower.contains(m))
+}
+
 impl std::fmt::Display for Failure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}: {}", self.key, self.message)
@@ -465,6 +495,22 @@ pub fn installer_failure(answer: Option<&Value>, status: ExitStatus, step: Step)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_log_report_has_the_key_step_message_and_the_whole_tail_without_credentials() {
+        let mut failure = Failure::new("install.failed", Step::Staging, "The installer refused.");
+        failure.log_tail = Some(vec![
+            "connector: unsafe private directory /tmp/x".into(),
+            "using Authorization: Bearer abc".into(),
+            "fetch https://user:pw@registry.example/pkg".into(),
+        ]);
+        let report = failure.log_report();
+        assert!(report.starts_with("install.failed: The installer refused."), "{report}");
+        assert!(report.contains("step: staging"), "{report}");
+        assert!(report.contains("unsafe private directory /tmp/x"), "{report}");
+        assert!(!report.contains("abc") && !report.contains("pw@"), "{report}");
+        assert_eq!(report.matches("withheld").count(), 2);
+    }
 
     #[test]
     fn a_stamp_changes_when_another_file_takes_the_name_and_not_otherwise() {

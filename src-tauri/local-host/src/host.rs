@@ -523,17 +523,15 @@ impl LocalHost {
     /// before the last pass so that it says what is there.
     fn run_install(&self, job: &Arc<Job>, fetch: &dyn Fetch, options: &install::Options) -> Result<Report, Failure> {
         let outcome = install::prepare(job, fetch, &self.config.dirs.data, options);
-        match &outcome {
-            Ok(answer) => {
-                (self.log)(&format!(
-                    "local-host install {}: {} {}",
-                    job.id(),
-                    answer["action"].as_str().unwrap_or("done"),
-                    answer["version"].as_str().unwrap_or("?")
-                ));
-                self.settle(job, options.settle_time);
-            }
-            Err(failure) => (self.log)(&format!("local-host install {} failed: {failure}", job.id())),
+        // A failure is logged in full, at error level, by the app (`run_install` in `src/local_host.rs`).
+        if let Ok(answer) = &outcome {
+            (self.log)(&format!(
+                "local-host install {}: {} {}",
+                job.id(),
+                answer["action"].as_str().unwrap_or("done"),
+                answer["version"].as_str().unwrap_or("?")
+            ));
+            self.settle(job, options.settle_time);
         }
         self.end_install(job);
         let pass = self.invalidate();
