@@ -13,6 +13,20 @@ pub fn program_name() -> String {
 pub fn config_path(program: &Path) -> PathBuf {
     program.with_extension("fixture.json")
 }
+/// The native fake connector (`src/bin/fake-connector.rs`) for tests of other packages, which have no
+/// `CARGO_BIN_EXE_fake-connector`: built by the workspace's tests (`cargo test --workspace`) into the profile directory
+/// that holds the running test binary's `deps`.
+pub fn fake_connector() -> PathBuf {
+    let test = std::env::current_exe().expect("the running test binary");
+    let profile = test.parent().and_then(Path::parent).expect("a test binary under <target>/<profile>/deps");
+    let program = profile.join(format!("fake-connector{}", std::env::consts::EXE_SUFFIX));
+    assert!(
+        program.is_file(),
+        "{} is missing: the workspace's tests (`cargo test --workspace`) build it",
+        program.display()
+    );
+    program
+}
 pub fn install(executable: &Path, program: &Path, config: &Value) -> io::Result<()> {
     Files::open_private(program, Create::NewProgram)?.write_all(&std::fs::read(executable)?)?;
     configure(program, config)

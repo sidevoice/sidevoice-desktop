@@ -941,51 +941,52 @@ mod tests {
     }
 }
 
-/// The connector's CLI is the local-host crate's, built on Unix hosts only, and these fake connectors are POSIX shell
-/// scripts: there is no host-neutral way to phrase them.
-#[cfg(all(test, unix))]
+/// The reset's connector step against test-support's native fake connector (`fake-connector`, which the workspace's
+/// tests build), on every host.
+#[cfg(test)]
 mod connector_cli_tests {
     use super::tests::{fixture, private_dirs, standard};
     use super::*;
+    use sidevoice_desktop_test_support::fixture as fake;
     use sidevoice_local_host::cli::Cli;
-    use sidevoice_platform::fs::{Files, TestFiles};
 
-    fn script(path: &Path, body: &str) {
-        fs::write(path, body).unwrap();
-        Files::make_executable(path);
+    /// A fake connector at `program` that answers as `config` says.
+    fn connector(program: &Path, config: Value) {
+        fake::install(&fake::fake_connector(), program, &config).unwrap();
+    }
+
+    /// The arguments of the fake connector's last run (its `ran` file), empty if it never ran.
+    fn last_run(ran: &Path) -> String {
+        fs::read_to_string(ran).unwrap_or_default()
     }
 
     #[test]
     fn fake_installed_connectors_refuse_without_safe_capability() {
         let cases = [
-            ("missing", r#"{"ok":true,"version":"0.6.0"}"#, false),
-            ("zero", r#"{"ok":true,"safe_uninstall":0}"#, false),
-            ("one", r#"{"ok":true,"safe_uninstall":1}"#, true),
-            ("two", r#"{"ok":true,"safe_uninstall":2}"#, true),
-            ("garbage", "not-json", false),
+            ("missing", json!({"response": {"ok": true, "version": "0.6.0"}}), false),
+            ("zero", json!({"response": {"ok": true, "safe_uninstall": 0}}), false),
+            ("one", json!({"response": {"ok": true, "safe_uninstall": 1}}), true),
+            ("two", json!({"response": {"ok": true, "safe_uninstall": 2}}), true),
+            ("garbage", json!({"stdout": "not-json"}), false),
         ];
-        for (name, answer, accepted) in cases {
+        for (name, mut config, accepted) in cases {
             let dir = tempfile::tempdir().unwrap();
-            let program = dir.path().join("sidevoice-connector");
-            let marker = dir.path().join("uninstall-invoked");
-            script(
-                &program,
-                &format!(
-                    "#!/bin/sh\nif [ \"$1\" = \"--version\" ] && [ \"$2\" = \"--json\" ]; then\n  printf '%s\\n' '{answer}'\nelse\n  : > '{}'\n  printf '%s\\n' '{{\"ok\":true}}'\nfi\n",
-                    marker.display()
-                ),
-            );
+            let program = dir.path().join(fake::program_name());
+            let ran = dir.path().join("ran");
+            config["ran"] = json!(ran);
+            connector(&program, config);
             let cli = Cli { prefix: vec![program.to_string_lossy().into_owned()], data: dir.path().join(".sidevoice") };
-            let checked = probe_safe_connector(&cli, Duration::from_secs(2));
+            let checked = probe_safe_connector(&cli, Duration::from_secs(10));
             assert_eq!(checked.is_ok(), accepted, "{name}");
+            assert!(last_run(&ran).starts_with("--version --json "), "{name}: the probe only asks for the version");
             if checked.is_ok() {
-                cli.run(&["uninstall", "--json"], Duration::from_secs(2)).unwrap();
+                cli.run(&["uninstall", "--json"], Duration::from_secs(10)).unwrap();
+                assert!(last_run(&ran).starts_with("uninstall --json "), "{name}");
             }
-            assert_eq!(marker.exists(), accepted, "{name}: unsafe uninstall invocation");
         }
         let dir = tempfile::tempdir().unwrap();
-        let program = dir.path().join("slow-sidevoice-connector");
-        script(&program, "#!/bin/sh\nsleep 2\n");
+        let program = dir.path().join(fake::program_name());
+        connector(&program, json!({"delay_ms": 2000, "response": {"ok": true, "safe_uninstall": 1}}));
         let cli = Cli { prefix: vec![program.to_string_lossy().into_owned()], data: dir.path().join(".sidevoice") };
         assert_eq!(probe_safe_connector(&cli, Duration::from_millis(100)), Err(refused("reset.unsupported-connector")));
     }
@@ -996,24 +997,18 @@ mod connector_cli_tests {
         let data = standard(&home);
         let recovery = data.join(".uninstall-recovery");
         private_dirs(&home, &recovery);
-        let program = recovery.join("sidevoice-connector");
-        let marker = home.join("retry-invoked");
-        script(
-            &program,
-            &format!(
-                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf '%s\\n' '{{\"ok\":true,\"safe_uninstall\":1}}'\nelse\n  : > '{}'\n  printf '%s\\n' '{{\"ok\":true,\"state\":\"removed\"}}'\nfi\n",
-                marker.display()
-            ),
-        );
+        let program = recovery.join(fake::program_name());
+        let ran = home.join("retry-invoked");
+        connector(&program, json!({"ran": ran, "response": {"ok": true, "safe_uninstall": 1, "state": "removed"}}));
         let releases = data.join("install");
         fs::write(data.join("install.json"), json!({"releases": releases.clone(), "command": [program]}).to_string())
             .unwrap();
         assert_eq!(validate_uninstall_scope_at(&home, &data, &data), Ok(releases));
         let Ok(cli) = crate::local_host::connector_cli(&data) else { panic!("the recorded recovery executable runs") };
-        assert_eq!(probe_safe_connector(&cli, Duration::from_secs(2)), Ok(()));
-        assert!(!marker.exists());
-        assert_eq!(cli.run(&["uninstall", "--json"], Duration::from_secs(2)).unwrap()["state"], "removed");
-        assert!(marker.exists());
+        assert_eq!(probe_safe_connector(&cli, Duration::from_secs(10)), Ok(()));
+        assert!(last_run(&ran).starts_with("--version --json "), "the probe only asks for the version");
+        assert_eq!(cli.run(&["uninstall", "--json"], Duration::from_secs(10)).unwrap()["state"], "removed");
+        assert!(last_run(&ran).starts_with("uninstall --json "));
     }
 }
 
