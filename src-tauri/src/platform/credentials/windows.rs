@@ -20,6 +20,10 @@ fn credential_manager() -> Result<Arc<windows_native_keyring_store::Store>> {
     ]))
 }
 
+/// The library store, adapted at its two Windows-specific points. Persistence is a per-entry modifier in
+/// windows-native-keyring-store 1.1 (default `Enterprise`, which roams); `new_with_configuration` accepts only the
+/// target delimiters. Its search takes a `pattern` regex instead of an exact `service`. Wrapping `build` and `search`
+/// keeps both inside this file, and the common requests and default `clear_namespace` unchanged.
 struct Local(Arc<windows_native_keyring_store::Store>);
 
 impl CredentialStoreApi for Local {
