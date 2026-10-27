@@ -2,7 +2,8 @@
 //! The service/account pair is the original macOS namespace, not a catalog-dependent list.
 //!
 //! The common code here owns the naming, validation, requests, namespace clearing, admission and error categories.
-//! What differs per OS is the store itself (`Os::store`), and whether its calls can wait on a prompt (`Os::PROMPTS`).
+//! What differs per OS is the store itself (`Os::store`), how a whole namespace is deleted (`Os::clear_namespace`) and
+//! whether store calls can wait on a prompt (`Os::PROMPTS`).
 
 use keyring_core::{CredentialStore, Entry};
 use std::{
@@ -63,9 +64,14 @@ trait Os {
     const PROMPTS: bool = false;
 
     /// This OS's store, opened for each operation so a failure never sticks. Its entries for `(service, provider)`
-    /// carry the OS's own entry options, and its search for `{"service": <service>}` finds exactly that service's
-    /// entries, whatever their account.
+    /// carry the OS's own entry options.
     fn store() -> keyring_core::Result<Arc<CredentialStore>>;
+
+    /// Delete every entry of exactly `service`, whatever its account. Default: the store's search for
+    /// `{"service": <service>}`, which must find exactly that service's entries, then each entry it returns (`clear_in`).
+    fn clear_namespace(service: &str) -> Result<(), Error> {
+        clear_in(Self::store()?.as_ref(), service)
+    }
 }
 
 /// Whether `provider` is a well-formed id: a namespace key, not necessarily a member of today's catalog.
@@ -91,7 +97,7 @@ pub fn write(provider: &str, secret: Option<&str>) -> Result<(), Error> {
 /// Delete the exact service namespace, including unknown or obsolete accounts.
 /// An unrelated service is never removed; partial cleanup is an error.
 pub fn clear_all() -> Result<(), Error> {
-    admit(|| clear_in(Native::store()?.as_ref(), namespace()))
+    admit(|| Native::clear_namespace(namespace()))
 }
 
 /// A validated provider id, owned so it can cross to a blocking worker.
@@ -202,10 +208,11 @@ mod tests {
     }
 
     /// Same assertions for the memory store and each native store, through the common requests.
-    pub(super) fn contract(store: &CredentialStore, service: &str) {
+    /// `clear` is the namespace clear under test: `clear_in` over `store`, or the OS's `Os::clear_namespace`.
+    pub(super) fn contract(store: &CredentialStore, service: &str, clear: &dyn Fn(&str) -> Result<(), Error>) {
         let _serial = serial();
         let future = provider("future-provider-42");
-        clear_in(store, service).unwrap();
+        clear(service).unwrap();
         assert_eq!(read_in(store, service, &future).unwrap(), None);
         write_in(store, service, &future, None).unwrap();
         write_in(store, service, &future, Some("test-only-α🔐")).unwrap();
@@ -229,7 +236,7 @@ mod tests {
                 entry
             })
             .collect();
-        clear_in(store, service).unwrap();
+        clear(service).unwrap();
         assert!(matches!(unknown.get_password(), Err(keyring_core::Error::NoEntry)));
         assert_eq!(read_in(store, service, &provider("openai")).unwrap(), None);
         for other in others {
@@ -237,7 +244,7 @@ mod tests {
             other.delete_credential().unwrap();
             assert_eq!(retained.unwrap(), "unrelated-test-only");
         }
-        clear_in(store, service).unwrap();
+        clear(service).unwrap();
     }
 
     /// A unique test service: native tests never read or clear real provider credentials, even on a developer's
@@ -289,7 +296,8 @@ mod tests {
 
     #[test]
     fn memory_contract() {
-        contract(&memory(), SERVICE);
+        let store = memory();
+        contract(&store, SERVICE, &|service| clear_in(&store, service));
     }
 
     #[test]
