@@ -375,6 +375,6 @@ TeamIdentifier=AB12CD34EF
         assert!(fits(&"é".repeat((4094 - base) / 2)));
         assert!(!fits(&"é".repeat((4094 - base) / 2 + 1)));
         let secret = format!("SECRET{}", "a".repeat(5000));
-        assert!(!create_keychain(keychain, &secret).unwrap_err().contains("SECRET"));
+        assert!(!create_keychain(keychain, &secret).err().unwrap().contains("SECRET"));
     }
 }
