@@ -4,6 +4,10 @@ use tauri::AppHandle;
 pub(super) struct Native;
 
 impl Os for Native {
+    // The launch macOS shipped with: `current_exe`, unchecked. Tauri's resolver refuses an executable path with any
+    // link in it, which used to work; tightening macOS is the operator's decision.
+    const PROGRAM_CHECKED: bool = false;
+
     fn prepare(app: &AppHandle) -> tauri::Result<()> {
         // Ask for a regular Dock application before creating any window or panel (#117).
         app.set_activation_policy(tauri::ActivationPolicy::Regular)?;
