@@ -385,6 +385,7 @@ jobs:
         with:
           ref: ${{ inputs.release-tag }}
       - uses: ./.github/actions/setup-rust
+        id: rust
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -428,6 +429,27 @@ jobs:
         run: cargo xtask web
       - name: Bridge script and Rust unit tests
         run: cargo xtask test
+      # The native call on Windows, as far as a hosted runner allows: the engine's real models (Silero, Whisper tiny,
+      # Kokoro) on injected audio (recorded speech in, the turn's words and a spoken reply out), the host's lanes on
+      # stand-in devices, and a call on the runner's own devices (it has none), which must be ready or fail by a code,
+      # never hang. Acoustic echo cancellation and a real microphone/speaker need hardware (PR #258).
+      - if: ${{ !cancelled() }}
+        uses: actions/cache/restore@v4
+        id: models
+        with:
+          path: ${{ runner.temp }}/real-call-models
+          key: real-call-models-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.engine-rev }}-${{ hashFiles('src-tauri/src/voice/models/engine/tests.rs') }}
+          restore-keys: real-call-models-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.engine-rev }}-
+      - name: A call on the engine's real models (injected audio) and on the runner's own devices
+        if: ${{ !cancelled() }}
+        env:
+          SIDEVOICE_REAL_CALL_MODELS: ${{ runner.temp }}/real-call-models
+        run: cargo xtask probe voice-models
+      - if: steps.models.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/real-call-models
+          key: ${{ steps.models.outputs.cache-primary-key }}
 
   # Publish: the installers of this run go to the release that called it, or replace the rolling `nightly` pre-release
   # (RELEASING.md). Pull requests never get here. Two jobs with the same steps (a YAML anchor) because a job's `needs`

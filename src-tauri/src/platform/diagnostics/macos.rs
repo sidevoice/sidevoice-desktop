@@ -74,12 +74,6 @@ impl Os for Native {
         sidevoice_desktop_core::memory::accelerator_bytes(&String::from_utf8_lossy(&out.stdout))
     }
 
-    #[cfg(feature = "probe")]
-    fn held<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Option<String> {
-        use tauri::Manager;
-        app.try_state::<crate::voice::VoiceState>().map(|state| state.held())
-    }
-
     #[cfg(sidevoice_debug_options)]
     fn webview_switches() -> Vec<Switch> {
         use objc2::runtime::AnyClass;

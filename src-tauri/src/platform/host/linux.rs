@@ -1,4 +1,5 @@
 use super::Os;
+use sidevoice_desktop_core::bridge::Capabilities;
 use sidevoice_desktop_core::computer_name;
 use tauri::utils::config::BundleType;
 
@@ -12,6 +13,8 @@ impl Os for Native {
     fn host_name() -> Option<String> {
         whoami::hostname().ok()
     }
+
+    const CAPABILITIES: Capabilities = Capabilities { local_host: false, voice: true };
 
     /// Only an AppImage can update itself; deb/rpm are managed by the system.
     const BUNDLE: Option<BundleType> = Some(BundleType::AppImage);
