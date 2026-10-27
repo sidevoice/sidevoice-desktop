@@ -4932,6 +4932,7 @@ dependencies = [
  "serde_json",
  "sidevoice-desktop-core",
  "sidevoice-desktop-engine",
+ "sidevoice-desktop-test-support",
  "sidevoice-local-host",
  "sidevoice-platform",
  "sidevoice-voice",

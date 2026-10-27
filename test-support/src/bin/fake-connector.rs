@@ -35,6 +35,11 @@ fn main() {
         fs::write(ran, format!("{} {} {}", args.join(" "), data.display(), std::env::current_dir().unwrap().display()))
             .unwrap();
     }
+    // Every run's arguments, one line each and never overwritten: the whole history of calls, in order.
+    if let Some(calls) = config["calls"].as_str() {
+        let mut log = fs::OpenOptions::new().create(true).append(true).open(calls).unwrap();
+        writeln!(log, "{}", args.join(" ")).unwrap();
+    }
     if config["install_record"] == true {
         fs::create_dir_all(&data).unwrap();
         fs::write(data.join("install.json.tmp"), "{}").unwrap();
