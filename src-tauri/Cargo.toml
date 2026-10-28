@@ -56,7 +56,7 @@ tokio = { version = "1", features = ["time", "sync", "rt", "rt-multi-thread", "n
 # speaker (cpal) and Sonora's pure-Rust echo cancellation between them (no C++ to build), on the models the app hands
 # it (src/voice/models.rs: the engine's). It depends on no engine. The candidate source: a try's take (StartOptions,
 # VoiceEvent::Take), the pause in the person's speech, and the rendered speaker's level (VoiceEvent::PlaybackLevel).
-sidevoice-voice = { git = "https://github.com/sidevoice/sidevoice-voice", tag = "v0.7.4" }
+sidevoice-voice = { git = "https://github.com/sidevoice/sidevoice-voice", tag = "v0.7.5" }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 # A one-use helper capability, delivered only through its inherited stdin pipe.
 getrandom = "0.3"
