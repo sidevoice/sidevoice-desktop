@@ -207,7 +207,7 @@ pub fn stage_in_view(on_screen: bool, page_shows_it: Option<bool>) -> bool {
 pub const STAGE_SEEN: f64 = 0.25;
 
 /// Whether the system shows the room's stage: its window shown, not minimised, on screen (macOS: not fully covered nor
-/// on another Space; Windows: not on another virtual desktop) and, where the app can measure it (macOS), at least
+/// on another Space; Windows: not on another virtual desktop) and, where the app can measure it (macOS, Windows), at least
 /// [`STAGE_SEEN`] of the stage not under other apps' windows (`uncovered`, [`uncovered`]).
 pub fn stage_on_screen(shown: bool, minimised: bool, on_screen: bool, uncovered: Option<f64>) -> bool {
     shown && !minimised && on_screen && uncovered.is_none_or(|part| part >= STAGE_SEEN)
