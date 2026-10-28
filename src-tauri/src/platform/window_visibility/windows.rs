@@ -32,7 +32,15 @@ impl Os for Native {
 /// Whether a window above the room hides part of it: visible, not minimised, not cloaked, another process's (the card
 /// is ours), able to take activation and not click-through. The taskbar, tooltips and overlays that never activate do
 /// not count, as the Dock and menus do not on macOS.
-fn covers(visible: bool, iconic: bool, cloaked: bool, own: bool, no_activate: bool, transparent: bool, alpha: u8) -> bool {
+fn covers(
+    visible: bool,
+    iconic: bool,
+    cloaked: bool,
+    own: bool,
+    no_activate: bool,
+    transparent: bool,
+    alpha: u8,
+) -> bool {
     visible && !iconic && !cloaked && !own && !no_activate && !transparent && alpha > 0
 }
 
