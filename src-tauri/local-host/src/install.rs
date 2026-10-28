@@ -96,6 +96,100 @@ impl Failure {
     }
 }
 
+impl Failure {
+    /// What the app log records of a failed install: the key, the step and the known-safe params, structured fields
+    /// only. The installer's message, its other params and its error output are free text from outside: they are not
+    /// logged (the key says what failed); the page gets the failure whole, not through here. The key is logged only
+    /// if it has the shape of one, and the params only by an allowlist of names whose values match their grammar ([`param_value_ok`]).
+    pub fn log_report(&self) -> String {
+        let key_ok = !self.key.is_empty()
+            && self.key.len() <= 64
+            && self.key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '-' | '_'));
+        let mut report = if key_ok { self.key.clone() } else { "[invalid key]".to_string() };
+        if let Some(step) = self.step {
+            report.push_str(&format!(" at step {}", json!(step).as_str().unwrap_or("?")));
+        }
+        if let Some(params) = self.params.as_ref().and_then(Value::as_object) {
+            let mut logged = Vec::new();
+            let mut withheld = 0;
+            for (name, value) in params {
+                match value {
+                    Value::String(text) if param_value_ok(name, text) => logged.push(format!("{name}={text}")),
+                    Value::Number(n) if name == "status" && n.is_u64() => logged.push(format!("{name}={n}")),
+                    _ => withheld += 1,
+                }
+            }
+            if !logged.is_empty() {
+                report.push_str(&format!(" ({})", logged.join(", ")));
+            }
+            if withheld > 0 {
+                report.push_str(&format!(" [{withheld} param(s) not logged]"));
+            }
+        }
+        report
+    }
+}
+
+/// The `check` values a failure carries: sidevoice-web's `INSTALL_CHECKS`, the closed set the installer emits.
+const CHECKS: &[&str] = &[
+    "sha256",
+    "sigstore",
+    "sigstore-bundle",
+    "issuer",
+    "workflow",
+    "source",
+    "repository-id",
+    "runner",
+    "build-config",
+    "predicate",
+    "subject",
+    "manifest",
+    "developer-override",
+    "platform",
+    "download",
+    "download-size",
+    "archive-path",
+    "archive-link",
+    "archive-size",
+    "archive-type",
+];
+
+/// A release version as the connector lets one be (`valid_version`: `[A-Za-z0-9.+_-]`, at most 64 characters, plus
+/// `+` and 12 hex digits on a collision): a number first (`1`, `1.2`, `1.2.3`), the rest from that alphabet, at most 96.
+fn is_version(text: &str) -> bool {
+    text.len() <= 96
+        && text.starts_with(|c: char| c.is_ascii_digit())
+        && text.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '_' | '-'))
+}
+
+/// A digest: lowercase hex of a SHA-1 (npm `shasum`), SHA-256 or SHA-512 length.
+fn is_digest(text: &str) -> bool {
+    matches!(text.len(), 40 | 64 | 128) && text.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+}
+
+/// A value is logged only if it has its param's grammar (never sanitized): `check` one of [`CHECKS`]; `version` a
+/// release version; `expected` and `found` a version or a digest; `status` is logged only as a number (the
+/// connector sends no word for it).
+fn param_value_ok(name: &str, text: &str) -> bool {
+    match name {
+        "check" => CHECKS.contains(&text),
+        "version" => is_version(text),
+        "expected" | "found" => is_version(text) || is_digest(text),
+        _ => false,
+    }
+}
+
+/// The install id as logged: the page's id is caller-supplied, so it is logged only if it has the shape of an id
+/// (`[A-Za-z0-9_-]{1,64}`), else `[invalid job]`.
+pub fn loggable_job(id: &str) -> &str {
+    let ok = (1..=64).contains(&id.len()) && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'));
+    if ok {
+        id
+    } else {
+        "[invalid job]"
+    }
+}
+
 impl std::fmt::Display for Failure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}: {}", self.key, self.message)
@@ -465,6 +559,50 @@ pub fn installer_failure(answer: Option<&Value>, status: ExitStatus, step: Step)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_log_report_has_the_key_the_step_and_the_known_params_and_no_free_text() {
+        let mut failure = Failure::new("install.failed", Step::Staging, "free text: token=sensitive");
+        failure.params = Some(json!({"check": "manifest", "detail": "unsafe private directory /tmp/x"}));
+        failure.log_tail = Some(vec!["connector: unsafe private directory /tmp/x".into()]);
+        let report = failure.log_report();
+        assert_eq!(report, "install.failed at step staging (check=manifest) [1 param(s) not logged]");
+    }
+
+    #[test]
+    fn param_values_that_are_not_their_grammar_are_counted_not_logged() {
+        let mut failure = Failure::new("install.failed", Step::Staging, "m");
+        failure.params = Some(json!({
+            "found": "/home/alice/private", "expected": "hunter2", "version": "https://u:p@h/x?token=s",
+            "status": "secret", "check": "C:\\Users\\a",
+        }));
+        assert_eq!(failure.log_report(), "install.failed at step staging [5 param(s) not logged]");
+        let long = format!("1.2.3-{}+abcdef123456", "x".repeat(56));
+        failure.params = Some(
+            json!({"version": "1.2", "expected": "1.2.3_dev", "found": long, "status": 404, "check": "archive-link"}),
+        );
+        let report = failure.log_report();
+        assert!(
+            report.contains("version=1.2")
+                && report.contains("expected=1.2.3_dev")
+                && report.contains(&long)
+                && report.contains("status=404"),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn a_job_id_is_logged_only_if_it_is_shaped_like_one() {
+        assert_eq!(loggable_job("3f2a-9c_1"), "3f2a-9c_1");
+        assert_eq!(loggable_job("https://example.invalid/?token=secret"), "[invalid job]");
+        assert_eq!(loggable_job("/home/alice/private"), "[invalid job]");
+    }
+
+    #[test]
+    fn a_key_that_is_not_shaped_like_one_is_not_logged() {
+        let failure = Failure::new("https://x/?token=sensitive", Step::Staging, "m");
+        assert!(!failure.log_report().contains("sensitive"));
+    }
 
     #[test]
     fn a_stamp_changes_when_another_file_takes_the_name_and_not_otherwise() {
