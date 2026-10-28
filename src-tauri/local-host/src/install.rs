@@ -510,7 +510,6 @@ mod tests {
     use super::*;
 
     #[test]
-    #[test]
     fn the_log_report_has_the_key_the_step_and_the_known_params_and_no_free_text() {
         let mut failure = Failure::new("install.failed", Step::Staging, "free text: token=sensitive");
         failure.params = Some(json!({"check": "manifest", "detail": "unsafe private directory /tmp/x"}));
@@ -519,6 +518,7 @@ mod tests {
         assert_eq!(report, "install.failed at step staging (check=manifest) [1 param(s) not logged]");
     }
 
+    #[test]
     fn a_key_that_is_not_shaped_like_one_is_not_logged() {
         let failure = Failure::new("https://x/?token=sensitive", Step::Staging, "m");
         assert!(!failure.log_report().contains("sensitive"));
