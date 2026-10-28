@@ -98,38 +98,37 @@ impl Failure {
 }
 
 impl Failure {
-    /// What the app log records of a failed install: key, step, message, the known-safe params and every line of the
-    /// installer's error output. The installer's key, message, params and output come from outside: the key is logged
-    /// only if it has the shape of one, the params only by an allowlist ([`LOGGED_PARAMS`]) and their values, the
-    /// message and the output redacted ([`redact`]). The page gets the failure whole, not through here.
+    /// What the app log records of a failed install: the key, the step and the known-safe params, structured fields
+    /// only. The installer's message, its other params and its error output are free text from outside: they are not
+    /// logged (the key says what failed); the page gets the failure whole, not through here. The key is logged only
+    /// if it has the shape of one, and the params only by an allowlist ([`LOGGED_PARAMS`]).
     pub fn log_report(&self) -> String {
         let key_ok = !self.key.is_empty()
             && self.key.len() <= 64
             && self.key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '-' | '_'));
-        let key = if key_ok { self.key.as_str() } else { "[invalid key]" };
-        let mut report = format!("{key}: {}", redact::text(&self.message, 400));
+        let mut report = if key_ok { self.key.clone() } else { "[invalid key]".to_string() };
         if let Some(step) = self.step {
-            report.push_str(&format!("\n  step: {}", json!(step).as_str().unwrap_or("?")));
+            report.push_str(&format!(" at step {}", json!(step).as_str().unwrap_or("?")));
         }
         if let Some(params) = self.params.as_ref().and_then(Value::as_object) {
             let mut logged = Vec::new();
+            let mut withheld = 0;
             for (name, value) in params {
-                let shown = match value {
-                    Value::String(text) if LOGGED_PARAMS.contains(&name.as_str()) => Some(redact::text(text, 100)),
-                    Value::Number(_) | Value::Bool(_) if LOGGED_PARAMS.contains(&name.as_str()) => {
-                        Some(value.to_string())
+                match value {
+                    Value::String(text) if LOGGED_PARAMS.contains(&name.as_str()) => {
+                        logged.push(format!("{name}={}", redact::text(text, 100)))
                     }
-                    _ => None,
-                };
-                logged.push(shown.map_or_else(|| "[withheld]".to_string(), |shown| format!("{name}={shown}")));
+                    Value::Number(_) | Value::Bool(_) if LOGGED_PARAMS.contains(&name.as_str()) => {
+                        logged.push(format!("{name}={value}"))
+                    }
+                    _ => withheld += 1,
+                }
             }
-            report.push_str(&format!("\n  params: {}", logged.join(", ")));
-        }
-        if let Some(tail) = &self.log_tail {
-            report.push_str("\n  installer log tail:");
-            for line in redact::lines(tail.iter().map(String::as_str)) {
-                report.push_str("\n    ");
-                report.push_str(&line);
+            if !logged.is_empty() {
+                report.push_str(&format!(" ({})", logged.join(", ")));
+            }
+            if withheld > 0 {
+                report.push_str(&format!(" [{withheld} param(s) not logged]"));
             }
         }
         report
@@ -137,7 +136,7 @@ impl Failure {
 }
 
 /// The params whose names are known to carry no credential (`check`: sidevoice-web's `INSTALL_CHECKS`); the others
-/// are counted in the log, not shown.
+/// (the connector's only one is `detail`, free text) are counted in the log, not shown.
 const LOGGED_PARAMS: &[&str] = &["check", "version", "expected", "found", "status"];
 
 impl std::fmt::Display for Failure {
@@ -511,18 +510,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_log_report_has_the_key_step_message_and_the_whole_tail() {
-        let mut failure = Failure::new("install.failed", Step::Staging, "The installer refused.");
-        failure.log_tail =
-            Some(vec!["connector: unsafe private directory /tmp/x".into(), "tokenizer initialization failed".into()]);
+    #[test]
+    fn the_log_report_has_the_key_the_step_and_the_known_params_and_no_free_text() {
+        let mut failure = Failure::new("install.failed", Step::Staging, "free text: token=sensitive");
+        failure.params = Some(json!({"check": "manifest", "detail": "unsafe private directory /tmp/x"}));
+        failure.log_tail = Some(vec!["connector: unsafe private directory /tmp/x".into()]);
         let report = failure.log_report();
-        assert!(report.starts_with("install.failed: The installer refused."), "{report}");
-        assert!(report.contains("step: staging"), "{report}");
-        assert!(report.contains("unsafe private directory /tmp/x"), "{report}");
-        assert!(report.contains("tokenizer initialization failed"), "{report}");
+        assert_eq!(report, "install.failed at step staging (check=manifest) [1 param(s) not logged]");
     }
 
-    #[test]
     fn a_key_that_is_not_shaped_like_one_is_not_logged() {
         let failure = Failure::new("https://x/?token=sensitive", Step::Staging, "m");
         assert!(!failure.log_report().contains("sensitive"));

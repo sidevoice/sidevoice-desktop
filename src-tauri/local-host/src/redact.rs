@@ -1,6 +1,6 @@
 //! Text from outside (an installer's message and error output, a library's error) made fit for the app log: redacted
 //! by default. Credentials are recognised by what surrounds them (a sensitive name before `=`/`:`, a sensitive word
-//! before the value, a URL's userinfo, query and fragment, a private-key block, a long opaque string), not by a list of
+//! before the value, a URL's userinfo, query and fragment, a long opaque string), not by a list of
 //! spellings alone; what is left (paths, messages, versions) stays, because it is what a diagnosis needs.
 
 /// What stands where a value was withheld.
@@ -123,32 +123,9 @@ pub fn line(text: &str) -> String {
     out
 }
 
-/// Lines in order, redacted; a private-key block (`-----BEGIN ...` to `-----END ...`) is withheld whole, and so is
-/// the rest of one whose start is not among the lines.
-pub fn lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> Vec<String> {
-    let mut in_key = false;
-    lines
-        .into_iter()
-        .map(|text| {
-            if text.contains("-----BEGIN") {
-                in_key = !text.contains("-----END");
-                return WITHHELD.to_string();
-            }
-            if in_key {
-                in_key = !text.contains("-----END");
-                return WITHHELD.to_string();
-            }
-            if text.contains("-----END") {
-                return WITHHELD.to_string();
-            }
-            line(text)
-        })
-        .collect()
-}
-
 /// A free text, redacted and cut to `limit` characters.
 pub fn text(text: &str, limit: usize) -> String {
-    let all = lines(text.lines()).join(" / ");
+    let all = text.lines().map(line).collect::<Vec<_>>().join(" / ");
     if all.chars().count() <= limit {
         return all;
     }
@@ -196,22 +173,6 @@ mod tests {
             line("/home/u/.local/share/sidevoice/connector/bin/installer-1234567890abcdef12345678"),
             "/home/u/.local/share/sidevoice/connector/bin/installer-1234567890abcdef12345678"
         );
-    }
-
-    #[test]
-    fn a_private_key_block_is_withheld_whole_even_without_its_header() {
-        let out = lines([
-            "before",
-            "-----BEGIN PRIVATE KEY-----",
-            "MIIEvQIBADANBg",
-            "kqhkiG9w0BAQ",
-            "-----END PRIVATE KEY-----",
-            "after",
-        ]);
-        assert_eq!(out, ["before", WITHHELD, WITHHELD, WITHHELD, WITHHELD, "after"]);
-        let out = lines(["short", "tail of a body", "-----END PRIVATE KEY-----", "after"]);
-        assert_eq!(out[3], "after");
-        assert_eq!(out[2], WITHHELD);
     }
 
     #[test]
