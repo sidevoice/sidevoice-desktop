@@ -155,17 +155,11 @@ const CHECKS: &[&str] = &[
 ];
 
 /// A release version as the connector lets one be (`valid_version`: `[A-Za-z0-9.+_-]`, at most 64 characters, plus
-/// `+` and 12 hex digits on a collision): digits and dots first, the rest from that alphabet, at most 96.
+/// `+` and 12 hex digits on a collision): a number first (`1`, `1.2`, `1.2.3`), the rest from that alphabet, at most 96.
 fn is_version(text: &str) -> bool {
-    let mut parts = text.splitn(3, '.');
-    let digits = |p: Option<&str>| p.is_some_and(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()));
-    let rest = parts.clone().nth(2).unwrap_or("");
     text.len() <= 96
-        && digits(parts.next())
-        && digits(parts.next())
-        && !rest.is_empty()
-        && rest.starts_with(|c: char| c.is_ascii_digit())
-        && rest.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '_' | '-'))
+        && text.starts_with(|c: char| c.is_ascii_digit())
+        && text.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '_' | '-'))
 }
 
 /// A digest: lowercase hex of a SHA-1 (npm `shasum`), SHA-256 or SHA-512 length.
@@ -584,10 +578,15 @@ mod tests {
         }));
         assert_eq!(failure.log_report(), "install.failed at step staging [5 param(s) not logged]");
         let long = format!("1.2.3-{}+abcdef123456", "x".repeat(56));
-        failure.params = Some(json!({"version": "1.2.3_dev", "found": long, "status": 404, "check": "archive-link"}));
+        failure.params = Some(
+            json!({"version": "1.2", "expected": "1.2.3_dev", "found": long, "status": 404, "check": "archive-link"}),
+        );
         let report = failure.log_report();
         assert!(
-            report.contains("version=1.2.3_dev") && report.contains(&long) && report.contains("status=404"),
+            report.contains("version=1.2")
+                && report.contains("expected=1.2.3_dev")
+                && report.contains(&long)
+                && report.contains("status=404"),
             "{report}"
         );
     }
