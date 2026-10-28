@@ -19,7 +19,7 @@ package, without Node («Prepare this computer»; Install, below); either way th
 
 `D` is the data directory every Sidevoice program shares, by one rule owned by `sidevoice-platform`'s `data_dir` (the app
 depends on that crate, at the tag of a core release): `$SIDEVOICE_DATA_DIR`, else the OS's standard place — macOS
-`~/Library/Application Support/Sidevoice`, Linux `$XDG_DATA_HOME/sidevoice`, Windows `%LOCALAPPDATA%\Sidevoice`. `C` = `D/core`
+`~/Library/Application Support/Sidevoice`, Linux `$XDG_DATA_HOME/sidevoice`, Windows `%LOCALAPPDATA%\Sidevoice\Data` (not `%LOCALAPPDATA%\Sidevoice`, the per-user install dir). `C` = `D/core`
 is the core's, the connector's releases are in `D/install`; the shared model directory (`Models`, below) is in the OS standard place, so in `D` only when `D` is not overridden (macOS: its standard place). The app writes in none of them.
 
 Where the core and the connector listen is **read, not computed**: the core writes `endpoint` in `C/core.json`, the
