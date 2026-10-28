@@ -3,7 +3,10 @@
 //! prompt: `ask` is `permission`.
 use super::{AccessState, Os};
 use std::{io::ErrorKind, ptr};
-use windows_sys::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
+use windows_sys::Win32::{
+    System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED},
+    UI::WindowsAndMessaging::{GetSystemMetrics, SM_REMOTESESSION},
+};
 use winreg::{
     enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE},
     RegKey, HKEY,
@@ -30,6 +33,11 @@ impl Os for Native {
     fn on_worker_thread(work: impl FnOnce()) {
         let _apartment = Apartment::enter();
         work()
+    }
+
+    fn remote_session() -> Option<bool> {
+        // SAFETY: reads one metric of this process's session and takes nothing that must stay valid.
+        Some(unsafe { GetSystemMetrics(SM_REMOTESESSION) } != 0)
     }
 }
 

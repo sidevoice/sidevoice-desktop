@@ -1,6 +1,6 @@
 //! Native microphone access on every OS: the OS privacy policy and whether an input device exists, read fresh on each
 //! call. Nothing is cached, no stream is opened, and the webview's own capture outcome plays no part.
-use cpal::traits::HostTrait;
+use cpal::traits::{DeviceTrait, HostTrait};
 use std::{
     future::Future,
     sync::{mpsc, Arc, Mutex, OnceLock},
@@ -75,11 +75,41 @@ async fn input_devices() -> Devices {
     }
 }
 
-/// The enumeration the worker runs, on this OS's audio host.
+/// The enumeration the worker runs, on this OS's audio host. It logs what it sees whenever that changes (`seen`).
 fn scanner<O: Os>() -> impl FnMut() -> Devices {
-    reusing_host(O::audio_host, |host: &cpal::Host| {
-        host.input_devices().ok().map(|mut devices| devices.any(|device| O::is_capture_source(&device)))
+    let mut last = None;
+    reusing_host(O::audio_host, move |host: &cpal::Host| {
+        let endpoints = host.input_devices().ok()?.filter(|device| O::is_capture_source(device)).count();
+        let now = (endpoints, O::remote_session());
+        if last != Some(now) {
+            last = Some(now);
+            let default = host.default_input_device().map(|device| device.default_input_config());
+            log::info!("{}", seen(endpoints, now.1, default));
+        }
+        Some(endpoints > 0)
     })
+}
+
+/// What the device check saw, for the log: a count, a flag and the default input's format. Never a device name or
+/// id, which can carry personal text.
+fn seen(
+    endpoints: usize,
+    remote_session: Option<bool>,
+    default: Option<Result<cpal::SupportedStreamConfig, cpal::Error>>,
+) -> String {
+    let default = match default {
+        None => "none".to_string(),
+        Some(Ok(config)) => {
+            format!("{} Hz, {} ch, {}", config.sample_rate(), config.channels(), config.sample_format())
+        }
+        Some(Err(error)) => format!("unreadable ({:?})", error.kind()),
+    };
+    let remote = match remote_session {
+        Some(true) => "yes",
+        Some(false) => "no",
+        None => "unknown",
+    };
+    format!("microphone devices: {endpoints} capture endpoints; default input: {default}; remote session: {remote}")
 }
 
 /// Enumerate with `list` (`None` when the listing fails) on a host from `open` (`None` when it cannot be opened). The
@@ -90,7 +120,10 @@ fn scanner<O: Os>() -> impl FnMut() -> Devices {
 /// connection behind (cpal's PulseAudio client does not always stop its reactor thread when dropped), so at most
 /// `MAX_HOSTS` hosts are ever opened. A host open that stalled is never retried: its stuck attempt cannot be cancelled.
 /// An open refused at once (no sound server yet) leaves nothing behind and is retried on the next request.
-fn reusing_host<H>(mut open: impl FnMut() -> Option<H>, list: impl Fn(&H) -> Option<bool>) -> impl FnMut() -> Devices {
+fn reusing_host<H>(
+    mut open: impl FnMut() -> Option<H>,
+    mut list: impl FnMut(&H) -> Option<bool>,
+) -> impl FnMut() -> Devices {
     let mut host = None;
     let mut opened = 0;
     let mut stalled = false;
@@ -214,6 +247,11 @@ trait Os {
         work()
     }
 
+    /// Whether this process runs in a remote desktop session, for the device log. `None` where it is not read.
+    fn remote_session() -> Option<bool> {
+        None
+    }
+
     /// Whether an input device the host lists is a real capture source rather than, say, the monitor of an output.
     fn is_capture_source(_device: &cpal::Device) -> bool {
         true
@@ -280,6 +318,22 @@ mod tests {
         ] {
             assert_eq!(resolve(permission, devices), expected, "{permission:?} with {devices:?}");
         }
+    }
+
+    #[test]
+    fn the_device_log_says_counts_and_formats_only() {
+        let config =
+            cpal::SupportedStreamConfig::new(2, 44_100, cpal::SupportedBufferSize::Unknown, cpal::SampleFormat::F32);
+        assert_eq!(
+            seen(1, Some(true), Some(Ok(config))),
+            "microphone devices: 1 capture endpoints; default input: 44100 Hz, 2 ch, f32; remote session: yes"
+        );
+        assert_eq!(
+            seen(0, None, None),
+            "microphone devices: 0 capture endpoints; default input: none; remote session: unknown"
+        );
+        let unreadable = seen(2, Some(false), Some(Err(cpal::Error::new(cpal::ErrorKind::DeviceNotAvailable))));
+        assert!(unreadable.contains("default input: unreadable (DeviceNotAvailable)"), "{unreadable}");
     }
 
     #[test]
