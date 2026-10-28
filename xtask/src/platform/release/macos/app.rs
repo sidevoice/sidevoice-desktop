@@ -51,6 +51,7 @@ pub fn build_app(signed: bool, channel: Channel) -> Result<()> {
     )?;
     if signed {
         build_signed(build)?;
+        staple_app()?;
     } else {
         unsigned(build.command()?).run()?;
     }
@@ -78,27 +79,57 @@ fn build_signed(build: TauriBuild) -> Result<()> {
     built
 }
 
-/// The update a running app downloads (docs/BRIDGE.md → "The updater"): the app as the bundler packed it,
-/// `dist/Sidevoice_<version>_aarch64.app.tar.gz`, with its `.sig` (made with the updater's key, checked by the app
-/// against tauri.conf.json's public key). A `signed` one is checked unpacked as the app is: Developer ID signed, its
-/// ticket stapled, and Gatekeeper takes it as notarized (a nightly's too).
+/// The update a running app downloads (docs/BRIDGE.md → "The updater"): the app as `dist/Sidevoice_<version>_aarch64.app.tar.gz`,
+/// with its `.sig` (made with the updater's key, checked by the app against tauri.conf.json's public key). A `signed`
+/// one is packed again from the app as it is once [`staple_app`] has stapled it (the bundler's own archive was made
+/// before, and Apple's ticket may not have reached its CDN when the bundler stapled), signed again with the updater's
+/// key, and checked unpacked as the app is: Developer ID signed, its ticket stapled, and Gatekeeper takes it as
+/// notarized (a nightly's too).
 fn update_artifact(signed: bool) -> Result<()> {
     let bundle = app().with_file_name("Sidevoice.app.tar.gz");
     let dist = repo().join("dist");
     mkdir(&dist)?;
     let update = dist.join(format!("Sidevoice_{}_aarch64.app.tar.gz", version()?));
     let sig = PathBuf::from(format!("{}.sig", update.display()));
-    fs::copy(&bundle, &update).map_err(|e| format!("{}: {e}", bundle.display()))?;
-    let bundle_sig = PathBuf::from(format!("{}.sig", bundle.display()));
-    fs::copy(&bundle_sig, &sig).map_err(|e| format!("{}: {e}", bundle_sig.display()))?;
     if signed {
+        let app = app();
+        let parent = app.parent().ok_or("the app has no parent directory")?;
+        // COPYFILE_DISABLE: no AppleDouble (`._*`) entries beside the files in the archive.
+        Cmd::new("tar")
+            .env("COPYFILE_DISABLE", "1")
+            .arg("-czf")
+            .arg(&update)
+            .arg("-C")
+            .arg(parent)
+            .arg("Sidevoice.app")
+            .run()?;
+        // The updater's key and its password are in the environment, as the bundler reads them.
+        Cmd::new("node")
+            .arg(repo().join("node_modules/@tauri-apps/cli/tauri.js"))
+            .args(["signer", "sign"])
+            .arg(&update)
+            .run()?;
+        ensure(sig.is_file(), format!("{} is not there: the updater's key signed nothing", sig.display()))?;
         // What it unpacks to is the notarized app, its ticket stapled.
         let unpacked = work("update-artifact")?.join("unpacked");
         fresh_dir(&unpacked)?;
         Cmd::new("tar").arg("-xzf").arg(&update).arg("-C").arg(&unpacked).run()?;
         stapler("validate", unpacked.join("Sidevoice.app"))?;
+    } else {
+        fs::copy(&bundle, &update).map_err(|e| format!("{}: {e}", bundle.display()))?;
+        let bundle_sig = PathBuf::from(format!("{}.sig", bundle.display()));
+        fs::copy(&bundle_sig, &sig).map_err(|e| format!("{}: {e}", bundle_sig.display()))?;
     }
     Ok(())
+}
+
+/// The built app's notarization ticket stapled, for minutes if need be. The bundler staples right after Apple accepts
+/// the submission, and when the ticket has not reached the ticket service yet its stapling does not take, though the
+/// build goes on; validating later cannot fix that, stapling again can.
+fn staple_app() -> Result<()> {
+    let app = app();
+    stapler_waiting("staple", &app, &STAPLE_WAITS)?;
+    stapler("validate", &app)
 }
 
 /// The user's keychain search list (`security list-keychains -d user`).
@@ -487,8 +518,15 @@ fn osa(lines: &[&str]) -> Result<String> {
 /// `xcrun stapler <action> <path>`, retried: both actions ask Apple's ticket service (CloudKit), and a runner's
 /// connection to it drops now and then ("The network connection was lost", error 68) though the ticket is fine.
 fn stapler(action: &str, path: impl AsRef<Path>) -> Result<()> {
+    stapler_waiting(action, path, &[15.0, 30.0, 60.0])
+}
+
+/// How long [`staple_app`] waits for Apple's ticket between its attempts (seconds): about eight minutes in all.
+const STAPLE_WAITS: [f64; 6] = [15.0, 30.0, 60.0, 120.0, 120.0, 120.0];
+
+/// [`stapler`] with `waits` between its attempts.
+fn stapler_waiting(action: &str, path: impl AsRef<Path>, waits: &[f64]) -> Result<()> {
     let path = path.as_ref();
-    let waits = [15.0, 30.0, 60.0];
     for (attempt, wait) in waits.iter().enumerate() {
         match Cmd::new("xcrun").args(["stapler", action]).arg(path).run() {
             Ok(()) => return Ok(()),
