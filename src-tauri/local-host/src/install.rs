@@ -130,19 +130,57 @@ impl Failure {
     }
 }
 
-/// The params logged are those named here (`check`: sidevoice-web's `INSTALL_CHECKS`; the connector's only other one,
-/// `detail`, is free text and is counted, not shown). A value is logged only if it has its param's grammar (never sanitized): `check` and `status` a short identifier,
-/// `version`, `expected` and `found` a version or a hash (no `/`, `\`, `=` or `:`).
+/// The `check` values a failure carries: sidevoice-web's `INSTALL_CHECKS`, the closed set the installer emits.
+const CHECKS: &[&str] = &[
+    "sha256",
+    "sigstore",
+    "sigstore-bundle",
+    "issuer",
+    "workflow",
+    "source",
+    "repository-id",
+    "runner",
+    "build-config",
+    "predicate",
+    "subject",
+    "manifest",
+    "developer-override",
+    "platform",
+    "download",
+    "download-size",
+    "archive-path",
+    "archive-link",
+    "archive-size",
+    "archive-type",
+];
+
+/// A release version as the connector lets one be (`valid_version`: `[A-Za-z0-9.+_-]`, at most 64 characters, plus
+/// `+` and 12 hex digits on a collision): digits and dots first, the rest from that alphabet, at most 96.
+fn is_version(text: &str) -> bool {
+    let mut parts = text.splitn(3, '.');
+    let digits = |p: Option<&str>| p.is_some_and(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()));
+    let rest = parts.clone().nth(2).unwrap_or("");
+    text.len() <= 96
+        && digits(parts.next())
+        && digits(parts.next())
+        && !rest.is_empty()
+        && rest.starts_with(|c: char| c.is_ascii_digit())
+        && rest.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '_' | '-'))
+}
+
+/// A digest: lowercase hex of a SHA-1 (npm `shasum`), SHA-256 or SHA-512 length.
+fn is_digest(text: &str) -> bool {
+    matches!(text.len(), 40 | 64 | 128) && text.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+}
+
+/// A value is logged only if it has its param's grammar (never sanitized): `check` one of [`CHECKS`]; `version` a
+/// release version; `expected` and `found` a version or a digest; `status` is logged only as a number (the
+/// connector sends no word for it).
 fn param_value_ok(name: &str, text: &str) -> bool {
-    let id = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '-');
     match name {
-        "check" | "status" => (1..=32).contains(&text.len()) && text.chars().all(id),
-        "version" | "expected" | "found" => {
-            let mut chars = text.chars();
-            text.len() <= 64
-                && chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
-                && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '-'))
-        }
+        "check" => CHECKS.contains(&text),
+        "version" => is_version(text),
+        "expected" | "found" => is_version(text) || is_digest(text),
         _ => false,
     }
 }
@@ -541,14 +579,17 @@ mod tests {
     fn param_values_that_are_not_their_grammar_are_counted_not_logged() {
         let mut failure = Failure::new("install.failed", Step::Staging, "m");
         failure.params = Some(json!({
-            "found": "/home/alice/private", "expected": "hunter2=x", "version": "https://u:p@h/x?token=s",
-            "status": "arbitrary diagnostic text", "check": "C:\\Users\\a",
+            "found": "/home/alice/private", "expected": "hunter2", "version": "https://u:p@h/x?token=s",
+            "status": "secret", "check": "C:\\Users\\a",
         }));
         assert_eq!(failure.log_report(), "install.failed at step staging [5 param(s) not logged]");
-        failure.params =
-            Some(json!({"version": "1.2.3-rc.1+b5", "found": "sha256-abc", "status": 404, "check": "archive-link"}));
+        let long = format!("1.2.3-{}+abcdef123456", "x".repeat(56));
+        failure.params = Some(json!({"version": "1.2.3_dev", "found": long, "status": 404, "check": "archive-link"}));
         let report = failure.log_report();
-        assert!(report.contains("version=1.2.3-rc.1+b5") && report.contains("status=404"), "{report}");
+        assert!(
+            report.contains("version=1.2.3_dev") && report.contains(&long) && report.contains("status=404"),
+            "{report}"
+        );
     }
 
     #[test]
