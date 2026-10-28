@@ -164,6 +164,8 @@ pub fn required_env(name: &str) -> Result<String> {
 pub struct Cmd {
     command: Command,
     shown: Vec<String>,
+    /// Text for the program's standard input (where a secret goes, never on the command line).
+    input: Option<String>,
 }
 
 impl Cmd {
@@ -180,7 +182,7 @@ impl Cmd {
             command.env_remove("RUSTUP_TOOLCHAIN").env_remove("RUSTUP_TOOLCHAIN_SOURCE");
         }
         command.env_remove("CARGO");
-        Cmd { command, shown: vec![program.as_ref().to_string_lossy().into_owned()] }
+        Cmd { command, shown: vec![program.as_ref().to_string_lossy().into_owned()], input: None }
     }
 
     pub fn arg(mut self, arg: impl AsRef<OsStr>) -> Cmd {
@@ -196,11 +198,34 @@ impl Cmd {
         self
     }
 
-    /// An argument that is a secret (a password, a key's id): passed as it is, printed as `***`.
+    /// An argument that is not to be printed (a key's id, an identity): passed as it is, printed as `***`. Never
+    /// for a password: that goes on the standard input ([`Cmd::stdin_text`]), as argv is readable by other users.
     pub fn secret(mut self, arg: impl AsRef<OsStr>) -> Cmd {
         self.shown.push("***".into());
         self.command.arg(arg);
         self
+    }
+
+    /// `input` on the program's standard input; it is not shown, and only [`Cmd::output`], [`Cmd::stdout`] and
+    /// [`Cmd::attempt`] send it.
+    pub fn stdin_text(mut self, input: impl Into<String>) -> Cmd {
+        self.input = Some(input.into());
+        self
+    }
+
+    /// The program and its arguments as the process will get them.
+    #[cfg(test)]
+    pub fn argv(&self) -> Vec<String> {
+        let program = self.command.as_std().get_program().to_string_lossy().into_owned();
+        std::iter::once(program)
+            .chain(self.command.as_std().get_args().map(|arg| arg.to_string_lossy().into_owned()))
+            .collect()
+    }
+
+    /// What goes to the program's standard input.
+    #[cfg(test)]
+    pub fn input(&self) -> Option<&str> {
+        self.input.as_deref()
     }
 
     pub fn dir(mut self, dir: impl AsRef<Path>) -> Cmd {
@@ -293,14 +318,30 @@ impl Cmd {
         interrupted()?;
         let what = self.shown();
         eprintln!("$ {what}");
-        self.command.stdin(Stdio::null()).stdout(Stdio::piped());
+        let input = self.input.take();
+        self.command.stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped());
         self.command.stderr(if with_stderr { Stdio::piped() } else { Stdio::inherit() });
         let out = runtime().block_on(async {
-            let child = Processes::spawn_tree(self.command).await.map_err(|e| format!("{what}: {e}"))?;
+            let mut child = Processes::spawn_tree(self.command).await.map_err(|e| format!("{what}: {e}"))?;
+            let stdin = input.map(|input| (child.stdin().expect("piped"), input));
+            // Written while the output is read (a child that fills its output pipes before it has read all its input
+            // would block both), and under the same cancellation. A failed write (the child closed its input or exited
+            // without reading it all) fails the command unless the child failed itself, which is then the better news.
+            let write = async move {
+                match stdin {
+                    Some((mut stdin, input)) => stdin.write_all(input.as_bytes()).await.map_err(|e| e.to_string()),
+                    None => Ok(()),
+                }
+            };
             // No new command deadline or output cap: build/release commands can be long and verbose.
             tokio::select! {
-                out = child.output(Duration::from_secs(100 * 365 * 24 * 3600), Duration::from_secs(3), usize::MAX) =>
-                    out.map_err(|e| format!("{what}: {e}")),
+                (out, written) = async { tokio::join!(child.output(Duration::from_secs(100 * 365 * 24 * 3600), Duration::from_secs(3), usize::MAX), write) } => {
+                    let out = out.map_err(|e| format!("{what}: {e}"))?;
+                    match written {
+                        Err(e) if out.status.success() => Err(format!("{what}: its input was not delivered: {e}")),
+                        _ => Ok(out),
+                    }
+                }
                 () = cancelled() => Err("interrupted".into()),
             }
         })?;
@@ -687,6 +728,14 @@ mod tests {
                 let text = std::io::read_to_string(std::io::stdin()).unwrap();
                 println!("input={text}");
             }
+            "output-then-input" => {
+                // More output than the pipes hold before any input is read: both ends block unless the parent reads
+                // while it writes.
+                std::io::stdout().write_all(&vec![b'o'; 1024 * 1024]).unwrap();
+                let text = std::io::read_to_string(std::io::stdin()).unwrap();
+                println!("\ninput-len={}", text.len());
+            }
+            "exit-unread" => {}
             "sleep" => sleep(30.0),
             "orphan" => {
                 // Deliberately leave a descendant holding both output pipes; the outer command owns cleanup.
@@ -717,6 +766,19 @@ mod tests {
             }
             _ => panic!("unknown fixture"),
         }
+    }
+
+    #[test]
+    fn input_is_written_while_the_output_is_read() {
+        let (ok, text) = fixture("output-then-input").stdin_text("x".repeat(1024 * 1024)).attempt().unwrap();
+        assert!(ok);
+        assert!(text.contains("input-len=1048576"), "{}", &text[text.len().saturating_sub(200)..]);
+    }
+
+    #[test]
+    fn a_child_that_succeeds_without_reading_its_input_is_a_failure() {
+        let err = fixture("exit-unread").stdin_text("x".repeat(4 * 1024 * 1024)).attempt().unwrap_err();
+        assert!(err.contains("input was not delivered") && !err.contains("xxxx"), "{err}");
     }
 
     #[test]

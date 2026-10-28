@@ -6,8 +6,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::platform::macos_app::{
-    app, binary, keychain_list, notarized, notary_status, region, release_target, signing_keychain, unsigned,
-    Signature, KEYCHAIN, PROBE_ONLY, SIGNING,
+    allow_codesign, app, binary, create_keychain, import_certificate, keychain_list, notarized, notary_status, region,
+    release_target, signing_keychain, unlock_keychain, unsigned, Signature, KEYCHAIN, PROBE_ONLY, SIGNING,
 };
 use crate::platform::private_files::{PrivateCreation, PrivateFiles};
 use crate::util::{
@@ -291,31 +291,24 @@ impl Keychain {
         let dir = SecretDir::new(SIGNING)?;
         let keychain = Keychain { path: dir.path.join(KEYCHAIN), password: random_hex(24)?, dir };
         let (path, password) = (&keychain.path, &keychain.password);
-        Cmd::new("security").args(["create-keychain", "-p"]).secret(password).arg(path).run()?;
+        create_keychain(path, password)?.output()?;
         Cmd::new("security").args(["set-keychain-settings", "-lut", "3600"]).arg(path).run()?;
-        Cmd::new("security").args(["unlock-keychain", "-p"]).secret(password).arg(path).run()?;
+        unlock_keychain(path, password)?.output()?;
         let p12 = keychain.dir.path.join("certificate.p12");
         Cmd::new("base64").arg("--decode").pipe(
             certificate.as_bytes(),
             Files::open_private(&p12, Create::New).map_err(|e| format!("{}: {e}", p12.display()))?,
         )?;
-        let imported = Cmd::new("security")
-            .arg("import")
-            .arg(&p12)
-            .arg("-k")
-            .arg(path)
-            .arg("-P")
-            .secret(&certificate_password)
-            .args(["-T", "/usr/bin/codesign"])
-            .stdout()
-            .map(drop);
+        let imported = import_certificate(&p12, path, &certificate_password).and_then(Cmd::output).map(drop);
         let _ = fs::remove_file(&p12);
         imported?;
-        Cmd::new("security")
-            .args(["set-key-partition-list", "-S", "apple-tool:,apple:,codesign:", "-s", "-k"])
-            .secret(password)
-            .arg(path)
-            .stdout()?;
+        allow_codesign(path, password)?.output()?;
+        // `security -i` need not fail when a command does, so the keychain itself says whether the import worked.
+        let identities = Cmd::new("security").args(["find-identity", "-p", "codesigning"]).arg(path).stdout()?;
+        ensure(
+            !identities.contains(" 0 identities found"),
+            "the certificate was not imported into the signing keychain",
+        )?;
         // codesign takes the identity from this keychain (`--keychain`), but reaches its key and certificate chain
         // through the user's search list: off the list, signing fails with "The specified item could not be found in
         // the keychain". So it goes on the list, as the bundler's own does; deleting it takes it off.
