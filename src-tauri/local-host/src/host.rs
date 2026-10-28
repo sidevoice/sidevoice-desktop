@@ -496,7 +496,7 @@ impl LocalHost {
         inner.report.state = State::Installing;
         inner.report.failure = None;
         drop(inner);
-        (self.log)(&format!("local-host install {id} started"));
+        (self.log)(&format!("local-host install {} started", install::loggable_job(id)));
         Ok(Installing { host: self.clone(), job })
     }
 
@@ -527,7 +527,7 @@ impl LocalHost {
         if let Ok(answer) = &outcome {
             (self.log)(&format!(
                 "local-host install {}: {} {}",
-                job.id(),
+                install::loggable_job(job.id()),
                 answer["action"].as_str().unwrap_or("done"),
                 answer["version"].as_str().unwrap_or("?")
             ));

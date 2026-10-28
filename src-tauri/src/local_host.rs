@@ -143,7 +143,7 @@ fn run_install(installing: Installing) -> Answer {
         log::error!("local-host install could not start: {}", failure.log_report());
         json!(failure)
     })?;
-    let job = installing.id().to_string();
+    let job = install::loggable_job(installing.id()).to_string();
     installing.run(&fetch, &install::Options::standard()).map(|report| json!(report)).map_err(|failure| {
         log::error!("local-host install {job} failed: {}", failure.log_report());
         json!(failure)

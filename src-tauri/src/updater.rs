@@ -2,7 +2,6 @@
 
 use serde_json::{json, Value};
 use sidevoice_desktop_core::updater::{self as core, ErrorCode, Mode, State, Status};
-use sidevoice_local_host::redact;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Webview};
@@ -126,7 +125,8 @@ async fn look(app: &AppHandle, timeout: Duration) {
             }
         }
         Err(e) => {
-            crate::debug(&format!("updater check failed: {e}"));
+            let _ = &e;
+            crate::debug("updater check failed (the updater's error text is not logged)");
             u.status = u.status.clone().failed(ErrorCode::CheckFailed);
         }
     });
@@ -173,7 +173,8 @@ async fn download_task(app: AppHandle, update: Update, token: core::Token, _perm
                 (u.status, u.bytes) = (Status::new(State::Ready, &update.version), Some(bytes));
             }
             Err(e) => {
-                log::error!("updater download failed: {}", redact::text(&e.to_string(), 400));
+                let _ = &e;
+                log::error!("updater download failed (the updater's error text is not logged)");
                 u.status = Status::new(State::Available, &update.version).failed(ErrorCode::DownloadFailed);
             }
         }
@@ -222,8 +223,8 @@ fn install(app: &AppHandle, restart: bool) {
     let installed = update.restart_after_install(restart).install(&bytes);
     with(app, |u| {
         u.installing = false;
-        if let Err(e) = &installed {
-            log::error!("updater install failed: {}", redact::text(&e.to_string(), 400));
+        if installed.is_err() {
+            log::error!("updater install failed (the updater's error text is not logged)");
             (u.bytes, u.status) = (Some(bytes), u.status.clone().failed(ErrorCode::InstallFailed));
         }
     });

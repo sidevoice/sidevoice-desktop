@@ -20,7 +20,6 @@
 use crate::cli::Cli;
 use crate::npm::{self, Fetch};
 use crate::platform::target::current_package;
-use crate::redact;
 use crate::tarball;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -101,7 +100,7 @@ impl Failure {
     /// What the app log records of a failed install: the key, the step and the known-safe params, structured fields
     /// only. The installer's message, its other params and its error output are free text from outside: they are not
     /// logged (the key says what failed); the page gets the failure whole, not through here. The key is logged only
-    /// if it has the shape of one, and the params only by an allowlist ([`LOGGED_PARAMS`]).
+    /// if it has the shape of one, and the params only by an allowlist of names whose values match their grammar ([`param_value_ok`]).
     pub fn log_report(&self) -> String {
         let key_ok = !self.key.is_empty()
             && self.key.len() <= 64
@@ -115,12 +114,8 @@ impl Failure {
             let mut withheld = 0;
             for (name, value) in params {
                 match value {
-                    Value::String(text) if LOGGED_PARAMS.contains(&name.as_str()) => {
-                        logged.push(format!("{name}={}", redact::text(text, 100)))
-                    }
-                    Value::Number(_) | Value::Bool(_) if LOGGED_PARAMS.contains(&name.as_str()) => {
-                        logged.push(format!("{name}={value}"))
-                    }
+                    Value::String(text) if param_value_ok(name, text) => logged.push(format!("{name}={text}")),
+                    Value::Number(n) if name == "status" && n.is_u64() => logged.push(format!("{name}={n}")),
                     _ => withheld += 1,
                 }
             }
@@ -135,9 +130,33 @@ impl Failure {
     }
 }
 
-/// The params whose names are known to carry no credential (`check`: sidevoice-web's `INSTALL_CHECKS`); the others
-/// (the connector's only one is `detail`, free text) are counted in the log, not shown.
-const LOGGED_PARAMS: &[&str] = &["check", "version", "expected", "found", "status"];
+/// The params logged are those named here (`check`: sidevoice-web's `INSTALL_CHECKS`; the connector's only other one,
+/// `detail`, is free text and is counted, not shown). A value is logged only if it has its param's grammar (never sanitized): `check` and `status` a short identifier,
+/// `version`, `expected` and `found` a version or a hash (no `/`, `\`, `=` or `:`).
+fn param_value_ok(name: &str, text: &str) -> bool {
+    let id = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '-');
+    match name {
+        "check" | "status" => (1..=32).contains(&text.len()) && text.chars().all(id),
+        "version" | "expected" | "found" => {
+            let mut chars = text.chars();
+            text.len() <= 64
+                && chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
+                && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '-'))
+        }
+        _ => false,
+    }
+}
+
+/// The install id as logged: the page's id is caller-supplied, so it is logged only if it has the shape of an id
+/// (`[A-Za-z0-9_-]{1,64}`), else `[invalid job]`.
+pub fn loggable_job(id: &str) -> &str {
+    let ok = (1..=64).contains(&id.len()) && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'));
+    if ok {
+        id
+    } else {
+        "[invalid job]"
+    }
+}
 
 impl std::fmt::Display for Failure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -516,6 +535,27 @@ mod tests {
         failure.log_tail = Some(vec!["connector: unsafe private directory /tmp/x".into()]);
         let report = failure.log_report();
         assert_eq!(report, "install.failed at step staging (check=manifest) [1 param(s) not logged]");
+    }
+
+    #[test]
+    fn param_values_that_are_not_their_grammar_are_counted_not_logged() {
+        let mut failure = Failure::new("install.failed", Step::Staging, "m");
+        failure.params = Some(json!({
+            "found": "/home/alice/private", "expected": "hunter2=x", "version": "https://u:p@h/x?token=s",
+            "status": "arbitrary diagnostic text", "check": "C:\\Users\\a",
+        }));
+        assert_eq!(failure.log_report(), "install.failed at step staging [5 param(s) not logged]");
+        failure.params =
+            Some(json!({"version": "1.2.3-rc.1+b5", "found": "sha256-abc", "status": 404, "check": "archive-link"}));
+        let report = failure.log_report();
+        assert!(report.contains("version=1.2.3-rc.1+b5") && report.contains("status=404"), "{report}");
+    }
+
+    #[test]
+    fn a_job_id_is_logged_only_if_it_is_shaped_like_one() {
+        assert_eq!(loggable_job("3f2a-9c_1"), "3f2a-9c_1");
+        assert_eq!(loggable_job("https://example.invalid/?token=secret"), "[invalid job]");
+        assert_eq!(loggable_job("/home/alice/private"), "[invalid job]");
     }
 
     #[test]
