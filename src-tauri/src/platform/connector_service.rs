@@ -32,9 +32,9 @@ const OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
 const JOBS: [(&str, &str); 2] =
     [("dev.sidevoice.core", "sidevoice-core"), ("dev.sidevoice.connector", "sidevoice-connector")];
 
-/// The programs the connector's service runs (the core's `sidevoice-core-rust`, the connector, and on Windows the
-/// windowless starter `sidevoice-background`), plus `sidevoice-core` as older installs name it.
-const PROGRAMS: [&str; 4] = ["sidevoice-core-rust", "sidevoice-core", "sidevoice-connector", "sidevoice-background"];
+/// The programs the connector's service runs (the core's `sidevoice-core`, the connector, and on Windows the
+/// windowless starter `sidevoice-background`).
+const PROGRAMS: [&str; 3] = ["sidevoice-core", "sidevoice-connector", "sidevoice-background"];
 
 /// The longest name some systems keep for a process (Linux's `comm`, 15 bytes): a name of exactly that length that
 /// starts a managed program's name is taken for it.
@@ -185,15 +185,13 @@ mod tests {
         let exe = std::env::consts::EXE_SUFFIX;
         let releases = Path::new("Sidevoice").join("install").join("releases").join("1.2.3");
         for program in [
-            releases.join("core").join("bin").join(format!("sidevoice-core-rust{exe}")),
+            releases.join("core").join("bin").join(format!("sidevoice-core{exe}")),
             releases.join("bin").join(format!("sidevoice-connector{exe}")),
             releases.join("bin").join(format!("sidevoice-background{exe}")),
-            Path::new("sidevoice-core").to_path_buf(),
         ] {
             assert!(managed(&program.to_string_lossy()), "{}", program.display());
         }
         // Cut short by the OS (Linux `comm`), or in another case.
-        assert!(managed("sidevoice-core-"));
         assert!(managed("sidevoice-conne"));
         assert!(managed(&format!("SIDEVOICE-CONNECTOR{exe}")));
         assert!(!managed("/usr/bin/other-service"));
