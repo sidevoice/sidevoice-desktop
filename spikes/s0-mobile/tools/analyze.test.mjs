@@ -25,13 +25,13 @@ function run({ locks = [[MIN, 11 * MIN]], holderEvery = 5000, edit = (r) => r } 
   }
   r.push({ t: T0 + 500, src: "page", k: "ws-open", id: 1 });
   for (let t = 15000; t < end; t += 15000) {
-    r.push({ t: T0 + t, src: "page", k: "ws-in", type: "voice-ping" }, { t: T0 + t + 20, src: "page", k: "ws-out", type: "voice-pong" });
+    r.push({ t: T0 + t, src: "page", k: "ws-in", id: 1, type: "voice-ping" }, { t: T0 + t + 20, src: "page", k: "ws-out", id: 1, type: "voice-pong" });
   }
   for (let seq = 1, t = 30_000; t < end - 10_000; seq++, t += MIN) {
     r.push({ t: T0 + t, src: "native", k: "synthetic-emitted", seq },
       { t: T0 + t + 10, src: "page", k: "synthetic-received", seq },
-      { t: T0 + t + 20, src: "page", k: "ws-out", type: "voice-user-turn", text: `S0 synthetic turn ${seq}, emitted…` },
-      { t: T0 + t + 4000, src: "page", k: "ws-in", type: "voice-reply", text: `S0 echo ${seq}` },
+      { t: T0 + t + 20, src: "page", k: "ws-out", id: 1, type: "voice-user-turn", text: `S0 synthetic turn ${seq}, emitted…` },
+      { t: T0 + t + 4000, src: "page", k: "ws-in", id: 1, type: "voice-reply", text: `S0 echo ${seq}` },
       { t: T0 + t + 4010, src: "page", k: "say", text: `S0 echo ${seq}` });
   }
   return analyze(edit(r));
@@ -110,15 +110,67 @@ test("the page timer stopping while native lives fails", () => {
   assert.equal(result.outcome, "fail");
 });
 
+/** Frames between `lost` and `back` never arrive; the socket closes at `closed`, socket 2 opens at `back` and carries
+ *  everything after. */
+const lanLoss = (lost, closed, back) => (r) => [
+  ...r.filter((e) => !(e.t > lost && e.t < back && (e.k === "ws-in" || e.k === "ws-out")))
+    .map((e) => (e.t >= back && e.id === 1 ? { ...e, id: 2 } : e)),
+  { t: closed, src: "page", k: "ws-close", id: 1, code: 1006 }, { t: back, src: "page", k: "ws-open", id: 2 },
+];
+
 test("a LAN loss the page recovers from within the lock still passes", () => {
-  const down = [T0 + 4 * MIN, T0 + 5 * MIN];
-  const result = run({ edit: (r) => [...r.filter((e) => !(e.t > down[0] && e.t < down[1] && (e.k === "ws-in" || e.k === "ws-out"))),
-    { t: down[0], src: "page", k: "ws-close", code: 1006 }, { t: down[1], src: "page", k: "ws-open", id: 2 }] });
+  const result = run({ edit: lanLoss(T0 + 4 * MIN, T0 + 4 * MIN, T0 + 5 * MIN) });
   assert.equal(result.outcome, "pass", result.why.join("; "));
 });
 
 test("a socket that never comes back fails", () => {
   const result = run({ edit: (r) => [...r.filter((e) => !(e.t > T0 + 4 * MIN && (e.k === "ws-in" || e.k === "ws-out" || e.k === "say"))),
-    { t: T0 + 4 * MIN, src: "page", k: "ws-close", code: 1006 }] });
+    { t: T0 + 4 * MIN, src: "page", k: "ws-close", id: 1, code: 1006 }] });
   assert.equal(result.outcome, "fail");
+});
+
+test("repro 1: a muted lock whose socket is down almost all of it never passes", () => {
+  // 11 min locked and muted; the socket closes at +1 s and a new one opens at +659 s: no confirmed exchange.
+  // The lock starts half a second off the core's 15 s beat, so no exchange sits on its edge.
+  const a = MIN + 500, b = a + 11 * MIN;
+  const result = run({
+    locks: [[a, 11 * MIN]],
+    edit: (r) => [
+      ...r.filter((e) => !(e.t > T0 + a && e.t < T0 + b && (e.k === "ws-in" || e.k === "ws-out" || e.k === "say")))
+        .flatMap((e) => (e.k === "synthetic-received" && e.t > T0 + a && e.t < T0 + b
+          ? [e, { t: e.t + 1, src: "page", k: "synthetic-dropped", seq: e.seq, reason: "muted" }] : [e]))
+        .map((e) => (e.t >= T0 + a + 659_000 && e.id === 1 ? { ...e, id: 2 } : e)),
+      { t: T0 + a + 1000, src: "page", k: "ws-close", id: 1, code: 1006 },
+      { t: T0 + a + 659_000, src: "page", k: "ws-open", id: 2 },
+    ],
+  });
+  assert.notEqual(result.outcome, "pass");
+  assert.equal(result.intervals[0].heartbeat_exchanges, 0);
+});
+
+test("repro 2: our frames on one socket and the core's on another are no exchange", () => {
+  // Socket 2 opens beside socket 1; while locked the page answers on socket 2 only, and the core speaks on socket 1.
+  const result = run({
+    locks: [[MIN + 500, 11 * MIN]],
+    edit: (r) => [
+      ...r.map((e) => (inLock(e, MIN + 500) && e.k === "ws-out" ? { ...e, id: 2 } : e)),
+      { t: T0 + 600, src: "page", k: "ws-open", id: 2 },
+    ],
+  });
+  assert.notEqual(result.outcome, "pass");
+  // Only the pong sent on socket 1 just before the lock, answered by the core on socket 1 just after it.
+  assert.ok(result.intervals[0].heartbeat_exchanges <= 1);
+});
+
+test("repro 3: a 60 s LAN loss whose close arrives 45 s in, then reconnects, passes", () => {
+  const lost = T0 + 4 * MIN + 1000;
+  const result = run({ edit: lanLoss(lost, lost + 45_000, lost + 62_000) });
+  assert.equal(result.outcome, "pass", result.why.join("; "));
+});
+
+test("a reconnect longer than the LAN-loss step is not a pass", () => {
+  const lost = T0 + 4 * MIN + 1000;
+  const result = run({ edit: lanLoss(lost, lost + 45_000, lost + 200_000) });
+  assert.equal(result.outcome, "inconclusive");
+  assert.match(result.why.join(), /longer than the LAN-loss step/);
 });

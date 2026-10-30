@@ -11,10 +11,12 @@
 //   page stopped.
 // - heartbeat: only confirmed exchanges count. One is a frame from the core received after the page sent one since the
 //   core's previous frame (the core's voice-ping answered and its next frame received, or a frame of ours answered).
-//   Confirmed exchanges must never be more than HEARTBEAT_BUDGET_MS apart across the interval, its edges included
-//   (core rust/server/call/heartbeat.rs: a 15 s interval, two misses). None at all is a stopped heartbeat. A socket
-//   that closes and opens again within the interval (LAN loss and reconnect) has its outage excluded; one that does
-//   not open again is a stopped heartbeat.
+//   An exchange belongs to one socket: our frame and the core's answer on the same socket id. Confirmed exchanges
+//   must never be more than HEARTBEAT_BUDGET_MS apart across the interval, its edges included (core
+//   rust/server/call/heartbeat.rs: a 15 s interval, two misses), and there must be at least one: none is never a pass.
+//   An outage (the room socket closing, a newer socket opening) is exempt from the network loss the phone logged, or
+//   else from the closing socket's last confirmed exchange, to the reopen, for at most OUTAGE_MAX_MS (the LAN-loss
+//   step); a longer one is inconclusive, one that never reopens is a stopped heartbeat.
 // - turns: every synthetic turn emitted at least TURN_DEADLINE_MS before the interval ends must have its reply said
 //   within TURN_DEADLINE_MS, unless the page dropped it because the call was muted (the mute step). An interval of
 //   MIN_LOCKED_MS or more needs at least one such round trip unless all its turns were dropped as muted.
@@ -36,6 +38,9 @@ export const PAGE_MAX_GAP_MS = 5 * 1000;
 export const PAGE_STOPPED_MS = 30 * 1000;
 export const HEARTBEAT_BUDGET_MS = 30 * 1000;
 export const TURN_DEADLINE_MS = 120 * 1000;
+/** The LAN-loss step takes the paired machine off the network for 60 s; the core's 30 s budget and the page's
+ *  reconnect (1, 2, 5 s, then every 5 s) on top. */
+export const OUTAGE_MAX_MS = 120 * 1000;
 
 /** The largest step between `times` within [from, to], the edges included. */
 function maxGap(times, from, to) {
@@ -58,43 +63,66 @@ function lockedIntervals(all, end) {
   return locks;
 }
 
-/** Times of confirmed heartbeat exchanges: a core frame received after the page sent one since the core's last. */
+/** Confirmed heartbeat exchanges, per socket: a core frame received on a socket after the page sent a frame on that
+ *  same socket since the core's previous frame there. `{t, socket}`. */
 function confirmedExchanges(all) {
-  const times = [];
-  let sentSinceLastIn = false;
+  const exchanges = [];
+  const sent = new Map();
   for (const e of all) {
     if (e.src !== "page") continue;
-    if (e.k === "ws-out") sentSinceLastIn = true;
+    if (e.k === "ws-out") sent.set(e.id, true);
     else if (e.k === "ws-in") {
-      if (sentSinceLastIn) times.push(e.t);
-      sentSinceLastIn = false;
-    } else if (e.k === "ws-close" || e.k === "ws-open") sentSinceLastIn = false;
+      if (sent.get(e.id)) exchanges.push({ t: e.t, socket: e.id });
+      sent.set(e.id, false);
+    } else if (e.k === "ws-close" || e.k === "ws-open") sent.set(e.id, false);
   }
-  return times;
+  return exchanges;
 }
 
-/** Spans a socket was down and came back, within [from, to]; and whether one went down for good. */
-function outages(all, from, to) {
-  const spans = [];
-  let down = null, unrecovered = false;
-  for (const e of all) {
-    if (e.src !== "page" || e.t < from || e.t > to) continue;
-    if (e.k === "ws-close" && down === null) down = e.t;
-    if (e.k === "ws-open" && down !== null) { spans.push([down, e.t]); down = null; }
+/**
+ * The heartbeat across [from, to]. An outage is the room socket (the newest one opened) closing and a newer socket
+ * opening after it. It is exempt only up to OUTAGE_MAX_MS (the how-to's LAN-loss step): from the network
+ * loss the phone logged (system `network-lost`), else from the last confirmed exchange on the closing socket (the
+ * moment evidence stopped: losing the paired machine's LAN leaves the phone's own network up, so it logs nothing
+ * native), to the newer socket's open. Outside exempt outages, confirmed exchanges must never be more than
+ * HEARTBEAT_BUDGET_MS apart, edges included, and there must be at least one.
+ */
+function heartbeat(all, exchanges, from, to) {
+  const inside = (t) => t >= from && t <= to;
+  const sockets = all.filter((e) => e.src === "page" && (e.k === "ws-open" || e.k === "ws-close"));
+  const losses = all.filter((e) => e.src === "system" && e.k === "network-lost").map((e) => e.t);
+  const outages = [];
+  let current = null, down = null, unrecovered = false, tooLong = false;
+  for (const e of sockets) {
+    if (e.t > to) break;
+    if (e.k === "ws-open") {
+      if (current === null || e.id > current) {
+        if (down !== null && e.id > down.socket) {
+          if (e.t - down.start <= OUTAGE_MAX_MS) outages.push([down.start, e.t]);
+          else if (inside(e.t)) tooLong = true;
+          down = null;
+        }
+        current = e.id;
+      }
+    } else if (e.id === current && down === null) {
+      const last = exchanges.filter((x) => x.socket === e.id && x.t <= e.t).at(-1)?.t ?? e.t;
+      const loss = losses.filter((t) => t >= last && t <= e.t).at(0);
+      down = { socket: e.id, start: loss ?? last };
+    }
   }
-  if (down !== null) unrecovered = true;
-  return { spans, unrecovered, downSince: down };
-}
-
-/** The largest step between confirmed exchanges in [from, to], outside the recovered outages. */
-function heartbeatGap(exchanges, from, to, spans, downSince) {
+  if (down !== null && down.start <= to) unrecovered = true;
+  const downBefore = unrecovered && down.start < from;
+  const counted = exchanges.filter((x) => inside(x.t) && !outages.some(([a, b]) => x.t > a && x.t < b)).map((x) => x.t);
   const pieces = [];
   let start = from;
-  for (const [a, b] of spans) { pieces.push([start, a]); start = b; }
-  pieces.push([start, downSince ?? to]);
-  let max = 0;
-  for (const [a, b] of pieces) if (b > a) max = Math.max(max, maxGap(exchanges, a, b));
-  return max;
+  for (const [a, b] of outages.filter(([a, b]) => b > from && a < to).sort((x, y) => x[0] - y[0])) {
+    pieces.push([start, Math.max(start, a)]);
+    start = Math.min(to, b);
+  }
+  pieces.push([start, unrecovered ? Math.max(start, Math.min(to, down.start)) : to]);
+  let gap = 0;
+  for (const [a, b] of pieces) if (b > a) gap = Math.max(gap, maxGap(counted, a, b));
+  return { exchanges: counted.length, gap, reconnects: outages.filter(([, b]) => inside(b)).length, unrecovered, downBefore, tooLong };
 }
 
 export function analyze(records) {
@@ -130,7 +158,7 @@ export function analyze(records) {
   const intervals = locks.map(([a, b]) => {
     const inside = (t) => t >= a && t <= b;
     const ht = holderTicks.filter((e) => inside(e.t));
-    const { spans, unrecovered, downSince } = outages(all, a, b);
+    const beat = heartbeat(all, exchanges, a, b);
     const turns = [...synthetic.values()].filter((x) => inside(x.emitted));
     const muted = turns.filter((x) => x.dropped === "muted");
     const due = turns.filter((x) => x.dropped !== "muted" && x.emitted <= b - TURN_DEADLINE_MS);
@@ -145,10 +173,11 @@ export function analyze(records) {
       native_max_gap_s: maxGap(nativeTicks, a, b) / 1000,
       page_ticks: pageTicks.filter(inside).length,
       page_max_gap_s: maxGap(pageTicks, a, b) / 1000,
-      heartbeat_exchanges: exchanges.filter(inside).length,
-      heartbeat_max_gap_s: heartbeatGap(exchanges, a, b, spans, downSince) / 1000,
-      reconnects: spans.length,
-      socket_down_for_good: unrecovered,
+      heartbeat_exchanges: beat.exchanges,
+      heartbeat_max_gap_s: beat.gap / 1000,
+      reconnects: beat.reconnects,
+      socket_down_for_good: beat.unrecovered,
+      outage_too_long: beat.tooLong,
       synthetic: turns.length, muted_turns: muted.length, turns_due: due.length, turns_late: late.length,
       round_trips: due.length - late.length,
     };
@@ -157,12 +186,16 @@ export function analyze(records) {
       row.native_max_gap_s * 1000 <= NATIVE_MAX_GAP_MS;
     row.page_alive = row.page_max_gap_s * 1000 <= PAGE_MAX_GAP_MS;
     row.page_stopped = row.page_max_gap_s * 1000 > PAGE_STOPPED_MS;
-    row.heartbeat_alive = !unrecovered && row.heartbeat_max_gap_s * 1000 <= HEARTBEAT_BUDGET_MS;
+    // Zero confirmed exchanges is never a live heartbeat, whatever else holds.
+    row.heartbeat_alive = !beat.unrecovered && !beat.tooLong && beat.exchanges > 0 && beat.gap <= HEARTBEAT_BUDGET_MS;
     const allMuted = turns.length > 0 && muted.length === turns.length;
     row.turns_ok = late.length === 0 && (!row.qualifying || allMuted || row.round_trips > 0);
     if (row.interrupted.length) row.verdict = "inconclusive: native audio interrupted";
     else if (!row.native_alive) row.verdict = "inconclusive: native audio or the app's clock not alive";
     else if (row.page_stopped) row.verdict = "fail: page timer stopped";
+    else if (beat.downBefore) row.verdict = "inconclusive: no call socket when the lock began";
+    else if (beat.tooLong) row.verdict = "inconclusive: socket outage longer than the LAN-loss step";
+    else if (!row.heartbeat_alive && b - a <= HEARTBEAT_BUDGET_MS && !beat.unrecovered) row.verdict = "inconclusive: no heartbeat evidence";
     else if (!row.heartbeat_alive) row.verdict = "fail: heartbeat stopped";
     else if (!row.page_alive) row.verdict = "inconclusive: page timer irregular";
     else if (!row.turns_ok) row.verdict = "inconclusive: turns without a reply (responder, pairing or routing)";
