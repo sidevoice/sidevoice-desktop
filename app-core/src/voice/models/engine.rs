@@ -8,14 +8,14 @@
 //! so the worker hands its other tasks on for that while.
 
 #[cfg(test)]
-pub(crate) mod tests;
+mod tests;
 
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
-use sidevoice_desktop_core::voice::{ModelChoice, LOCAL_CATALOG};
-use sidevoice_desktop_engine::sidevoice_engine::{Cancel, Engine, Error, Model, Progress, VadOptions, VadStream};
+use crate::voice::{ModelChoice, LOCAL_CATALOG};
+use sidevoice_engine::{Cancel, Engine, Error, Model, Progress, VadOptions, VadStream};
 use sidevoice_voice::{async_trait, EndOfTurnModel, Speaker, Transcriber, Vad, VadFrame};
 
 use super::Loader;
@@ -40,7 +40,7 @@ pub struct ModelCache {
 impl ModelCache {
     /// The models someone still holds (a call, a preload, a stream, a load under way), by their key; none once every
     /// model the engine loaded has been dropped.
-    pub(crate) fn held(&self) -> Vec<String> {
+    pub fn held(&self) -> Vec<String> {
         let mut held: Vec<String> = lock(&self.loaded)
             .iter()
             .filter(|(_, entry)| match entry.try_lock() {
@@ -55,13 +55,13 @@ impl ModelCache {
 }
 
 /// The engine's models, each loaded by its catalogue, or as its build for a local model with a build chosen.
-pub(crate) struct EngineLoader {
+pub struct EngineLoader {
     engine: Arc<Engine>,
     cache: Arc<ModelCache>,
 }
 
 impl EngineLoader {
-    pub(crate) fn shared(engine: Arc<Engine>, cache: Arc<ModelCache>) -> Arc<dyn Loader> {
+    pub fn shared(engine: Arc<Engine>, cache: Arc<ModelCache>) -> Arc<dyn Loader> {
         Arc::new(EngineLoader { engine, cache })
     }
 

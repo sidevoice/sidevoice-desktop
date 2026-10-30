@@ -243,30 +243,11 @@ fn log_panics() {
     }));
 }
 
-fn debugging() -> bool {
-    std::env::var_os("SIDEVOICE_DEBUG").is_some_and(|v| v == "1")
-}
-
-/// Diagnostics on stderr, only with `SIDEVOICE_DEBUG=1` (CI's smoke tests read them).
-pub(crate) fn debug(message: &str) {
-    log::info!("{message}");
-    if debugging() {
-        eprintln!("sidevoice: {message}");
-    }
-}
-
-/// A line too frequent or too large for the log by default: in it at level `debug` (`SIDEVOICE_LOG_LEVEL`), and on stderr
-/// with `SIDEVOICE_DEBUG=1`.
-pub(crate) fn debug_detail(message: impl FnOnce() -> String) {
-    if !debugging() && !log::log_enabled!(log::Level::Debug) {
-        return;
-    }
-    let message = message();
-    log::debug!("{message}");
-    if debugging() {
-        eprintln!("sidevoice: {message}");
-    }
-}
+// Diagnostics on stderr with `SIDEVOICE_DEBUG=1` (CI's smoke tests read them): sidevoice-app-core's, shared with the
+// call host.
+#[cfg(feature = "probe")]
+use sidevoice_app_core::debug::enabled as debugging;
+pub(crate) use sidevoice_app_core::debug::{debug, debug_detail};
 
 /// A line from a page's diagnostics (the CI probe), printed only with `SIDEVOICE_DEBUG=1`.
 #[tauri::command]
@@ -519,7 +500,7 @@ pub fn run() {
             let engine_root =
                 data::shared_model_root().ok_or_else(|| std::io::Error::other("no home for the shared model store"))?;
             let credentials = engine_ipc::ProviderKeys;
-            match sidevoice_desktop_engine::NativeEngines::new(
+            match sidevoice_app_core::engine::NativeEngines::new(
                 engine_root,
                 credentials,
                 tauri::async_runtime::handle().inner().clone(),

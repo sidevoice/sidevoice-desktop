@@ -193,8 +193,8 @@ fn capabilities_are_this_device_what_the_engine_runs_here_and_its_memory() {
     let test = engines("capabilities", false);
     let json = serde_json::to_value(&test.engines.device).unwrap();
     assert_eq!(json["runs"], "native");
-    assert_eq!(json["os"], platform::capabilities::OS);
-    assert_eq!(json["arch"], platform::capabilities::ARCH);
+    assert_eq!(json["os"], crate::platform::capabilities::OS);
+    assert_eq!(json["arch"], crate::platform::capabilities::ARCH);
     assert_eq!(json["has"], serde_json::json!(["cpu"]), "sherpa-onnx runs on the CPU in this build of the engine");
     assert!(json["memory_mb"].as_u64().is_some());
 }

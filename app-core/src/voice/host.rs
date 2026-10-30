@@ -10,11 +10,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use super::meters::Meters;
+use super::{self as choice, VoiceSettings};
 use futures_util::StreamExt;
 use serde::Serialize;
 use serde_json::{json, Value};
-use sidevoice_desktop_core::voice::meters::Meters;
-use sidevoice_desktop_core::voice::{self as choice, VoiceSettings};
 use sidevoice_voice::{
     AudioIo, Events, InputPort, Listening, NativeDevices, SayCancel, SayEvent, SayOptions, SayOutcome,
     SharedNativeAudio, StartOptions, StopReason, Take, VoiceCall, VoiceEvent,
@@ -25,9 +25,6 @@ use tokio::task::JoinHandle;
 use super::models::{Halves, ModelCache};
 
 #[cfg(test)]
-mod memory;
-
-#[cfg(test)]
 mod tests;
 
 /// The keeps (`VoiceState::keep`) still waiting to let go, for CI's memory run.
@@ -35,7 +32,7 @@ mod tests;
 static PENDING_KEEPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// How long the models of a stopped call, or of a preload, stay loaded when the settings do not say, in minutes.
-pub(crate) const IDLE_UNLOAD_MINUTES: u32 = 10;
+pub const IDLE_UNLOAD_MINUTES: u32 = 10;
 
 /// The microphone and the speaker every call's lane is attached to: the device's own (`SharedNativeAudio`), or a
 /// stand-in.
@@ -65,14 +62,14 @@ pub type Page = Arc<dyn Fn(Value) + Send + Sync>;
 
 /// What a call runs now: the person's settings and the halves the app made from them.
 #[derive(Clone)]
-pub(crate) struct Applied {
-    pub(crate) settings: VoiceSettings,
-    pub(crate) halves: Halves,
+pub struct Applied {
+    pub settings: VoiceSettings,
+    pub halves: Halves,
 }
 
 impl Applied {
     /// How long the models stay loaded once nothing holds them, in minutes.
-    pub(crate) fn idle_minutes(&self) -> u32 {
+    pub fn idle_minutes(&self) -> u32 {
         self.settings.idle_unload_minutes.unwrap_or(IDLE_UNLOAD_MINUTES)
     }
 }
@@ -82,23 +79,23 @@ impl Applied {
 pub struct VoiceState<A: LaneAudio = SharedNativeAudio> {
     calls: tokio::sync::Mutex<HashMap<String, Arc<CallLane<A::Port>>>>,
     audio: A,
-    pub(super) model_cache: Arc<ModelCache>,
+    pub model_cache: Arc<ModelCache>,
     route: tokio::sync::Mutex<Option<String>>,
-    pub(super) devices: NativeDevices,
-    pub(super) watching: AtomicBool,
+    pub devices: NativeDevices,
+    pub watching: AtomicBool,
     /// How long an idle minute is: a minute.
-    minute: Duration,
+    pub minute: Duration,
     /// The tasks keeping a stopped call's or a preload's models for their idle minutes.
     keeping: Mutex<Vec<JoinHandle<()>>>,
     /// Quitting: nothing is kept any more; what would be is let go at once.
     closing: AtomicBool,
 }
 
-pub(super) struct CallLane<P> {
+pub struct CallLane<P> {
     call: tokio::sync::Mutex<Option<Running>>,
     /// Held while a change of the call's settings is made, so that changes are made one after the other, in the order
     /// they were asked.
-    pub(super) changing: tokio::sync::Mutex<()>,
+    pub changing: tokio::sync::Mutex<()>,
     io: Mutex<Option<Box<dyn AudioIo>>>,
     input: P,
     /// What the page last asked of `mute`, kept from the lane's creation: the call is made with it.
@@ -134,7 +131,7 @@ fn not_started() -> Refusal {
 }
 
 /// `voice_failed` with the call's own `code`, after `what`.
-pub(super) fn failed(what: &str, code: String) -> Refusal {
+pub fn failed(what: &str, code: String) -> Refusal {
     let mut refused = refusal("voice_failed", format!("{what}: {code}."));
     refused.params.insert("code".into(), json!(code));
     refused
@@ -148,14 +145,14 @@ impl<A: LaneAudio> VoiceState<A> {
             // With `SIDEVOICE_DEBUG_IDLE_MINUTE_MS`, how long it is: the models of a stopped call stay loaded for
             // `idle_unload_minutes` of them, so `probe memory` can wait for them to be let go.
             let millis = std::env::var("SIDEVOICE_DEBUG_IDLE_MINUTE_MS").ok().and_then(|v| v.parse::<u64>().ok());
-            if let Some(millis) = millis.filter(|&m| crate::debugging() && m > 0) {
+            if let Some(millis) = millis.filter(|&m| crate::debug::enabled() && m > 0) {
                 return Duration::from_millis(millis);
             }
         }
         Duration::from_secs(60)
     }
 
-    pub(super) fn new(audio: A, devices: NativeDevices) -> Self {
+    pub fn new(audio: A, devices: NativeDevices) -> Self {
         Self {
             calls: tokio::sync::Mutex::new(HashMap::new()),
             audio,
@@ -170,11 +167,11 @@ impl<A: LaneAudio> VoiceState<A> {
         }
     }
 
-    pub(super) async fn lane(&self, key: &str) -> Result<Arc<CallLane<A::Port>>, Refusal> {
+    pub async fn lane(&self, key: &str) -> Result<Arc<CallLane<A::Port>>, Refusal> {
         self.calls.lock().await.get(key).cloned().ok_or_else(|| refusal("bad_request", "Unknown voice call."))
     }
 
-    pub(super) async fn create_call(&self, key: String) -> Result<(), Refusal> {
+    pub async fn create_call(&self, key: String) -> Result<(), Refusal> {
         if !valid_key(&key) {
             return Err(refusal("bad_request", "Invalid voice call key."));
         }
@@ -187,7 +184,7 @@ impl<A: LaneAudio> VoiceState<A> {
         Ok(())
     }
 
-    pub(super) async fn route_input(&self, key: Option<String>) -> Result<(), Refusal> {
+    pub async fn route_input(&self, key: Option<String>) -> Result<(), Refusal> {
         let mut route = self.route.lock().await;
         let target = match key.as_deref() {
             Some(key) => Some(self.lane(key).await?),
@@ -222,7 +219,7 @@ impl<A: LaneAudio> VoiceState<A> {
 
     /// CI's memory run (src/probe.rs): what the host holds now, as `keeps=N lanes=M`.
     #[cfg(feature = "probe")]
-    pub(crate) fn held(&self) -> String {
+    pub fn held(&self) -> String {
         let lanes = self.calls.try_lock().map_or("busy".to_owned(), |calls| calls.len().to_string());
         format!("keeps={} lanes={lanes}", PENDING_KEEPS.load(Ordering::SeqCst))
     }
@@ -238,7 +235,7 @@ impl<A: LaneAudio> VoiceState<A> {
 
     /// Stops the call, what it still had to tell handed to the page (its sayings' ends, the end of an open turn, its
     /// take), then releases its lane: the last lane closes the devices. The models it loaded stay for its idle minutes.
-    pub(super) async fn dispose_call(&self, key: &str) -> Result<(), Refusal> {
+    pub async fn dispose_call(&self, key: &str) -> Result<(), Refusal> {
         {
             let mut route = self.route.lock().await;
             if route.as_deref() == Some(key) {
@@ -258,7 +255,7 @@ impl<A: LaneAudio> VoiceState<A> {
     /// starts it: it loads the models its halves use, opens the speaker and, with an input half, the microphone, and
     /// listens (`ready` says when). With `take`, the call keeps what the microphone gives from then until that
     /// listening ends, and hands it to the page then.
-    pub(super) async fn open(&self, key: &str, applied: Applied, take: bool, page: Page) -> Result<(), Refusal> {
+    pub async fn open(&self, key: &str, applied: Applied, take: bool, page: Page) -> Result<(), Refusal> {
         let lane = self.lane(key).await?;
         let mut running = lane.call.lock().await;
         if running.is_some() {
@@ -276,7 +273,7 @@ impl<A: LaneAudio> VoiceState<A> {
     }
 
     /// What the lane's call runs now.
-    pub(super) async fn applied(&self, key: &str) -> Result<Applied, Refusal> {
+    pub async fn applied(&self, key: &str) -> Result<Applied, Refusal> {
         let lane = self.lane(key).await?;
         let running = lane.call.lock().await;
         running.as_ref().map(|running| running.applied.clone()).ok_or_else(not_started)
@@ -285,7 +282,7 @@ impl<A: LaneAudio> VoiceState<A> {
     /// Changes the lane's call to `applied` without restarting it (sidevoice-voice's `update`): a half whose models
     /// are the same keeps what it loaded, a change of models loads them while the call goes on as it was, and each
     /// half's change takes effect at its safe point. Resolves once the change is accepted.
-    pub(super) async fn update(&self, key: &str, applied: Applied) -> Result<(), Refusal> {
+    pub async fn update(&self, key: &str, applied: Applied) -> Result<(), Refusal> {
         let lane = self.lane(key).await?;
         let mut running = lane.call.lock().await;
         let running = running.as_mut().ok_or_else(not_started)?;
@@ -298,7 +295,7 @@ impl<A: LaneAudio> VoiceState<A> {
     /// Resolves once the call works: at its first state that is not idle (`off` for a call without an input half).
     /// Rejects with the code of why it does not (a model that cannot load, the devices refused, ...), or `stopped`
     /// when a stop came first.
-    pub(super) async fn ready(&self, key: &str) -> Result<(), Refusal> {
+    pub async fn ready(&self, key: &str) -> Result<(), Refusal> {
         let lane = self.lane(key).await?;
         let waiting = {
             let mut lifecycle = lane.lifecycle.lock().unwrap();
@@ -321,7 +318,7 @@ impl<A: LaneAudio> VoiceState<A> {
     /// Loads the models `halves` use, ahead of a call, and keeps them for `minutes` from the end of the load: a call
     /// that starts on the same models meanwhile takes them without loading. What loaded stays when a slot did not
     /// load; the code of that one is the error.
-    pub(super) async fn preload(&self, halves: Halves, minutes: u32) -> Result<(), String> {
+    pub async fn preload(&self, halves: Halves, minutes: u32) -> Result<(), String> {
         let (loaded, failed) = halves.load().await;
         self.keep(loaded, minutes);
         failed.map_or(Ok(()), Err)
@@ -329,11 +326,11 @@ impl<A: LaneAudio> VoiceState<A> {
 
     /// Stops the call's listening and speaking; the lane stays until it is disposed. Returns once the idle state that
     /// answers the stop has reached the page and every saying under way has told its end; false when there is no call.
-    pub(super) async fn stop(&self, key: &str) -> Result<bool, Refusal> {
+    pub async fn stop(&self, key: &str) -> Result<bool, Refusal> {
         Ok(self.lane(key).await?.stop().await)
     }
 
-    pub(super) async fn say(
+    pub async fn say(
         &self,
         key: &str,
         say_key: String,
@@ -369,7 +366,7 @@ impl<A: LaneAudio> VoiceState<A> {
         Ok(())
     }
 
-    pub(super) async fn cancel_say(&self, key: &str, say_key: &str) -> Result<(), Refusal> {
+    pub async fn cancel_say(&self, key: &str, say_key: &str) -> Result<(), Refusal> {
         let lane = self.lane(key).await?;
         if let Some(cancel) = lane.sayings.lock().unwrap().get(say_key) {
             cancel.cancel();
@@ -378,7 +375,7 @@ impl<A: LaneAudio> VoiceState<A> {
     }
 
     /// Kept for the call from the lane's creation on, and applied to it once it exists.
-    pub(super) async fn mute(&self, key: &str, muted: bool) -> Result<(), Refusal> {
+    pub async fn mute(&self, key: &str, muted: bool) -> Result<(), Refusal> {
         let lane = self.lane(key).await?;
         lane.muted.store(muted, Ordering::SeqCst);
         if let Some(running) = lane.call.lock().await.as_ref() {
@@ -388,7 +385,7 @@ impl<A: LaneAudio> VoiceState<A> {
     }
 
     /// Before the call there is nothing to cancel.
-    pub(super) async fn cancel_input(&self, key: &str) -> Result<(), Refusal> {
+    pub async fn cancel_input(&self, key: &str) -> Result<(), Refusal> {
         let lane = self.lane(key).await?;
         if let Some(running) = lane.call.lock().await.as_ref() {
             running.call.cancel_input();
@@ -398,7 +395,7 @@ impl<A: LaneAudio> VoiceState<A> {
 
     /// Closes the call's open turn now with what was captured so far; resolves once it is closed (not transcribed).
     /// With no call yet, nothing open, or the call stopped, nothing happens and it resolves.
-    pub(super) async fn end_input(&self, key: &str) -> Result<(), Refusal> {
+    pub async fn end_input(&self, key: &str) -> Result<(), Refusal> {
         let lane = self.lane(key).await?;
         let closed = match lane.call.lock().await.as_ref() {
             Some(running) => running.call.end_input(),
@@ -412,7 +409,7 @@ impl<A: LaneAudio> VoiceState<A> {
     /// then waits, every `poll`, for no model of the engine to be held (a dropped call's own task ends after it; a
     /// transcription under way finishes). Returns the models still held when `limit` passed, by their key; none once
     /// every one was released.
-    pub(super) async fn close(&self, limit: Duration, poll: Duration) -> Vec<String> {
+    pub async fn close(&self, limit: Duration, poll: Duration) -> Vec<String> {
         let deadline = tokio::time::Instant::now() + limit;
         self.closing.store(true, Ordering::SeqCst);
         if tokio::time::timeout_at(deadline, self.clear()).await.is_err() {
@@ -436,7 +433,7 @@ impl<A: LaneAudio> VoiceState<A> {
     }
 
     /// No route and no lanes: each old call is stopped and released, and keeps its models for its idle minutes.
-    pub(super) async fn clear(&self) {
+    pub async fn clear(&self) {
         {
             let mut route = self.route.lock().await;
             let _ = self.audio.route_input(None).await;
@@ -557,11 +554,11 @@ impl Lifecycle {
 pub struct Refusal {
     key: String,
     #[serde(flatten)]
-    pub(super) params: serde_json::Map<String, Value>,
+    pub params: serde_json::Map<String, Value>,
     message: String,
 }
 
-pub(super) fn refusal(key: &str, message: impl Into<String>) -> Refusal {
+pub fn refusal(key: &str, message: impl Into<String>) -> Refusal {
     let mut params = serde_json::Map::new();
     params.insert("code".into(), json!(key.trim_start_matches("voice_").replace('_', "-")));
     Refusal { key: key.into(), params, message: message.into() }
@@ -571,7 +568,7 @@ pub(super) fn refusal(key: &str, message: impl Into<String>) -> Refusal {
 /// `model-unknown`, `model-unfit`, `catalog-not-found`, `build-not-found`, `vad-unavailable`,
 /// `end-of-turn-unavailable`, or the engine's own, such as `credential-missing` or why a chosen build does not run),
 /// the model, and what a provider said (`detail`).
-pub(super) fn refused(r: choice::Refusal) -> Refusal {
+pub fn refused(r: choice::Refusal) -> Refusal {
     let mut refused = refusal(&format!("voice_{}", r.code.replace('-', "_")), r.message);
     refused.params.insert("code".into(), json!(r.code));
     refused.params.insert("model".into(), json!(r.model));
@@ -583,7 +580,7 @@ pub(super) fn refused(r: choice::Refusal) -> Refusal {
 
 /// Forward events with their immutable call key. Asynchronous delivery never consults the current input route. The
 /// idle state that answers a stop answers it once it is handed to the page. The meters go only when the page would draw
-/// them differently (core `voice::meters`): about 60 a second otherwise, silence included (desktop#149).
+/// them differently (`voice::meters`): about 60 a second otherwise, silence included (desktop#149).
 fn forward(page: Page, key: String, mut events: Events, lifecycle: Arc<Mutex<Lifecycle>>, released: Arc<Mutex<bool>>) {
     tokio::spawn(async move {
         let mut meters = Meters::default();
@@ -598,12 +595,19 @@ fn forward(page: Page, key: String, mut events: Events, lifecycle: Arc<Mutex<Lif
             }
             let mut value = match &event {
                 VoiceEvent::Take(take) => {
-                    crate::debug(&format!("voice take: {} samples, {} turns", take.samples.len(), take.turns.len()));
+                    crate::debug::debug(&format!(
+                        "voice take: {} samples, {} turns",
+                        take.samples.len(),
+                        take.turns.len()
+                    ));
                     page_take(take)
                 }
                 _ => {
                     if !matches!(event, VoiceEvent::Level(_) | VoiceEvent::PlaybackLevel(_)) {
-                        crate::debug(&format!("voice event {}", serde_json::to_string(&event).unwrap_or_default()));
+                        crate::debug::debug(&format!(
+                            "voice event {}",
+                            serde_json::to_string(&event).unwrap_or_default()
+                        ));
                     }
                     serde_json::to_value(&event).unwrap_or(Value::Null)
                 }
@@ -633,7 +637,7 @@ fn forward(page: Page, key: String, mut events: Events, lifecycle: Arc<Mutex<Lif
     });
 }
 
-/// A take as the page gets it (core `voice::take`).
+/// A take as the page gets it (`voice::take`).
 fn page_take(take: &Take) -> Value {
     choice::take::page_event(
         take.sample_rate,

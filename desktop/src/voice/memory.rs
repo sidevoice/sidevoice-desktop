@@ -11,14 +11,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use sidevoice_desktop_core::voice::{choose, CatalogCandidates, VoiceSettings};
-use sidevoice_desktop_engine::sidevoice_engine::NoCredentials;
-use sidevoice_desktop_engine::NativeEngines;
-use sidevoice_voice::{AudioIo, NativeDevices};
-
-use super::super::models::real_call::Fixture;
-use super::super::models::{EngineLoader, Halves};
-use super::{Applied, LaneAudio, Page, VoiceState};
+use sidevoice_app_core::engine::sidevoice_engine::NoCredentials;
+use sidevoice_app_core::engine::NativeEngines;
+use sidevoice_app_core::sidevoice_voice::{AudioIo, NativeDevices};
+use sidevoice_app_core::voice::host::{Applied, LaneAudio, Page, VoiceState};
+use sidevoice_app_core::voice::models::fixture::Fixture;
+use sidevoice_app_core::voice::models::{EngineLoader, Halves, Loader};
+use sidevoice_app_core::voice::{candidates, choose, CatalogCandidates, VoiceSettings};
 
 /// The host's idle minute for the measurement; a stopped call's models stay `idle_unload_minutes` of them.
 const MINUTE: Duration = Duration::from_secs(2);
@@ -97,7 +96,7 @@ fn settings(which: usize, build: &str) -> VoiceSettings {
 async fn call(
     state: &VoiceState<Audio>,
     catalogs: &[CatalogCandidates],
-    loader: &Arc<dyn super::super::models::Loader>,
+    loader: &Arc<dyn Loader>,
     build: &str,
     key: &str,
     live: Option<&str>,
@@ -137,7 +136,7 @@ fn the_footprint_stays_flat_over_calls_and_changes() {
         kept.clone().unwrap_or_else(|| std::env::temp_dir().join(format!("sidevoice-memory-{}", std::process::id())));
     let engines = NativeEngines::new(&root, NoCredentials, runtime.handle().clone()).unwrap();
     let views = engines.catalogs().unwrap();
-    let catalogs: Vec<CatalogCandidates> = views.iter().map(crate::voice::candidates).collect();
+    let catalogs: Vec<CatalogCandidates> = views.iter().map(candidates).collect();
     let build = views[0]
         .models
         .iter()
