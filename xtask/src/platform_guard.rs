@@ -23,8 +23,19 @@
 //!   OS stays in that OS's file.
 //!   An OS condition on the trait, on an inline module around it or on the whole file counts the same.
 //!
+//! Host kinds are not OS conditions, and have no place anywhere, `platform` included (D-RULE, AGENTS.md → "Host kind is
+//! a crate boundary"). What counts, in every Rust file:
+//! - `desktop` or `mobile` (the conditions tauri-build defines) in `cfg`, `cfg_attr` or `cfg!`, and
+//!   `feature = "desktop"` or `feature = "mobile"` there;
+//! - a `cfg_aliases!` entry named `desktop` or `mobile`, or built on one, and every use of such an alias;
+//! - a build script printing `cargo:rustc-cfg=desktop` or `=mobile`.
+//!
+//! Code for one kind of host lives in the crate of that host; `host_graph` checks the crates' dependencies.
+//!
 //! Limits, by design of a token scan: a program name or OS variable reaching `Command::new` through a constant
-//! or a computed value, and a bare function imported by glob (`use libc::*`), are not followed.
+//! or a computed value, a bare function imported by glob (`use libc::*`) and the arms of `cfg_select!` are not
+//! followed, and an alias that groups OS values under a name of its own (`any(target_os = "ios", ..)` as `handheld`)
+//! is for review, not for this scan.
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     path::Path,
@@ -53,6 +64,8 @@ const OS_CRATE_PREFIXES: [&str; 3] = ["objc2", "core_foundation", "windows_"];
 /// Names that make a `cfg`/`cfg_attr` predicate or an attribute OS-specific.
 const OS_CONDITIONS: [&str; 6] =
     ["target_os", "target_family", "target_vendor", "unix", "windows", "windows_subsystem"];
+/// The host kinds (D-RULE): tauri-build's `desktop` and `mobile` conditions, and the Cargo features by those names.
+const HOST_KINDS: [&str; 2] = ["desktop", "mobile"];
 /// Cargo's view of the target OS, as build scripts read it: `CARGO_CFG_<suffix>`.
 const OS_ENV_SUFFIXES: [&str; 4] = ["TARGET_OS", "TARGET_FAMILY", "UNIX", "WINDOWS"];
 /// Programs that exist on one OS only (or whose behaviour is that OS's), matched on the file stem, lowercased.
@@ -152,24 +165,58 @@ fn names_os(stream: &TokenStream, aliases: &HashSet<String>) -> bool {
     })
 }
 
+/// Host kinds anywhere in a predicate: the conditions `desktop` and `mobile`, an alias built on one, and
+/// `feature = "desktop"` or `feature = "mobile"`.
+fn names_host(stream: &TokenStream, aliases: &HashSet<String>) -> bool {
+    let trees = flat(stream.clone());
+    trees.iter().enumerate().any(|(at, tree)| match tree {
+        TokenTree::Ident(id) => {
+            let name = id.to_string();
+            let feature = name == "feature"
+                && punct(trees.get(at + 1), '=')
+                && matches!(trees.get(at + 2), Some(TokenTree::Literal(lit))
+                    if string_value(lit).is_some_and(|value| HOST_KINDS.contains(&value.as_str())));
+            feature || HOST_KINDS.contains(&name.as_str()) || aliases.contains(&name)
+        }
+        TokenTree::Group(g) => names_host(&g.stream(), aliases),
+        _ => false,
+    })
+}
+
 /// Whether one attribute (`name` and the tokens of its parentheses) is an OS condition: a `cfg` predicate, a
 /// `cfg_attr` predicate, or a `cfg`/`cfg_attr`/`windows_subsystem` among the attributes a `cfg_attr` applies.
 /// Other payloads (`doc = stringify!(unix)`, `derive(..)`) are data, not conditions.
 fn os_attr(name: &str, args: &TokenStream, aliases: &HashSet<String>) -> bool {
+    condition_attr(name, args, &|predicate| names_os(predicate, aliases), &|other| other == "windows_subsystem")
+}
+
+/// [`os_attr`] for the host kinds: no attribute is one by itself, only a predicate that names one.
+fn host_attr(name: &str, args: &TokenStream, aliases: &HashSet<String>) -> bool {
+    condition_attr(name, args, &|predicate| names_host(predicate, aliases), &|_| false)
+}
+
+/// Whether one attribute holds a condition: a `cfg` predicate, a `cfg_attr` predicate, or a `cfg`/`cfg_attr` among the
+/// attributes a `cfg_attr` applies, as `names` says of a predicate; or any other attribute `other` takes for one.
+fn condition_attr(
+    name: &str,
+    args: &TokenStream,
+    names: &dyn Fn(&TokenStream) -> bool,
+    other: &dyn Fn(&str) -> bool,
+) -> bool {
     match name {
-        "cfg" => names_os(args, aliases),
+        "cfg" => names(args),
         "cfg_attr" => {
             let parts = flat(args.clone());
             let mut parts = parts.split(|tree| punct(Some(tree), ','));
             let predicate: TokenStream = parts.next().unwrap_or_default().iter().cloned().collect();
-            names_os(&predicate, aliases)
+            names(&predicate)
                 || parts.any(|part| {
                     let nested = part.first().and_then(ident).unwrap_or_default();
                     let args = group(part.get(1), Delimiter::Parenthesis).unwrap_or_default();
-                    os_attr(&nested, &args, aliases)
+                    condition_attr(&nested, &args, names, other)
                 })
         }
-        other => other == "windows_subsystem",
+        name => other(name),
     }
 }
 
@@ -408,6 +455,8 @@ const PATH_METHODS: [&str; 5] = ["arg", "args", "join", "current_dir", "open"];
 struct Shared {
     /// OS conditions defined by `cfg_aliases!` (a build script defines what other files use).
     cfg_aliases: HashSet<String>,
+    /// Host kinds defined the same way: entries named like one or built on one.
+    host_aliases: HashSet<String>,
     /// Types that wrap a process `Command` (`struct Cmd { command: Command }`, `type Run = Command`).
     command_types: HashSet<String>,
 }
@@ -825,6 +874,89 @@ fn scan_platform(source: &str, root: bool, shared: &Shared) -> Result<Report> {
     Ok(Report { count: scan.count, lines: scan.lines, shared: scan.shared })
 }
 
+/// Host-kind conditions of one file, wherever they stand: attributes (inside macros such as `cfg_if!` too), `cfg!`
+/// and `cfg_aliases!`, and the strings a build script prints to define one.
+#[derive(Default)]
+struct Hosts {
+    aliases: HashSet<String>,
+    lines: BTreeSet<usize>,
+    count: usize,
+}
+
+impl Hosts {
+    fn found(&mut self, tree: &TokenTree) {
+        self.count += 1;
+        self.lines.insert(tree.span().start().line);
+    }
+
+    fn walk(&mut self, trees: &[TokenTree]) {
+        for (at, tree) in trees.iter().enumerate() {
+            match tree {
+                TokenTree::Group(g) => self.walk(&flat(g.stream())),
+                TokenTree::Punct(p) if p.as_char() == '#' => {
+                    let body = at + usize::from(punct(trees.get(at + 1), '!')) + 1;
+                    if let Some(inner) = group(trees.get(body), Delimiter::Bracket) {
+                        let inner = flat(inner);
+                        let name = inner.first().and_then(ident).unwrap_or_default();
+                        let args = group(inner.get(1), Delimiter::Parenthesis).unwrap_or_default();
+                        if host_attr(&name, &args, &self.aliases) {
+                            self.found(tree);
+                        }
+                    }
+                }
+                TokenTree::Ident(id) if punct(trees.get(at + 1), '!') => {
+                    let Some(inner) = any_group(trees.get(at + 2)) else {
+                        continue;
+                    };
+                    match id.to_string().as_str() {
+                        "cfg" if names_host(&inner, &self.aliases) => self.found(tree),
+                        "cfg_aliases" => self.define(&flat(inner)),
+                        _ => {}
+                    }
+                }
+                TokenTree::Literal(lit) if string_value(lit).is_some_and(|value| prints_host_cfg(&value)) => {
+                    self.found(tree);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// `cfg_aliases! { name: { condition }, … }`: an entry named like a host kind or built on one counts, and becomes one.
+    fn define(&mut self, body: &[TokenTree]) {
+        for entry in body.split(|tree| punct(Some(tree), ',')) {
+            let Some(alias) = entry.first().and_then(ident) else {
+                continue;
+            };
+            let condition: TokenStream = entry[1..].iter().cloned().collect();
+            if HOST_KINDS.contains(&alias.as_str()) || names_host(&condition, &self.aliases) {
+                self.found(&entry[0]);
+                self.aliases.insert(alias);
+            }
+        }
+    }
+}
+
+/// Whether a string is what a build script prints to define a host-kind condition (`cargo:rustc-cfg=mobile`, or with
+/// the `cargo::` prefix).
+fn prints_host_cfg(value: &str) -> bool {
+    let rest = value.strip_prefix("cargo::").or_else(|| value.strip_prefix("cargo:"));
+    rest.and_then(|rest| rest.strip_prefix("rustc-cfg="))
+        .is_some_and(|name| HOST_KINDS.contains(&name.split('=').next().unwrap_or_default()))
+}
+
+/// The host-kind conditions of one file, wherever it is (`platform` included), and the aliases it defines.
+fn scan_host(source: &str, shared: &Shared) -> Result<Report> {
+    let trees = flat(TokenStream::from_str(source).map_err(|e| e.to_string())?);
+    let mut hosts = Hosts { aliases: shared.host_aliases.clone(), ..Hosts::default() };
+    // Twice: an alias counts where it is used even above the entry that defines it.
+    hosts.walk(&trees);
+    (hosts.count, hosts.lines) = (0, BTreeSet::new());
+    hosts.walk(&trees);
+    let shared = Shared { host_aliases: hosts.aliases, ..shared.clone() };
+    Ok(Report { count: hosts.count, lines: hosts.lines, shared })
+}
+
 /// `platform/mod.rs`: the module root, which only declares and picks.
 fn platform_root(path: &Path) -> bool {
     path.file_name().is_some_and(|name| name == "mod.rs")
@@ -858,7 +990,8 @@ fn inspect(root: &Path) -> Result<()> {
         let source = std::fs::read_to_string(root.join(&path)).map_err(|e| format!("{path}: {e}"))?;
         files.push((path, source));
     }
-    // OS aliases and command wrappers are defined in one file and used in others, and may build on each other.
+    // OS aliases, host-kind aliases and command wrappers are defined in one file and used in others, and may build on
+    // each other.
     let mut shared = Shared::default();
     loop {
         let before = shared.clone();
@@ -867,6 +1000,8 @@ fn inspect(root: &Path) -> Result<()> {
             let found = scan(source, &shared).map_err(|e| format!("{path}: {e}"))?.shared;
             shared.cfg_aliases.extend(found.cfg_aliases);
             shared.command_types.extend(found.command_types);
+            let hosts = scan_host(source, &shared).map_err(|e| format!("{path}: {e}"))?.shared;
+            shared.host_aliases.extend(hosts.host_aliases);
         }
         if shared == before {
             break;
@@ -874,6 +1009,7 @@ fn inspect(root: &Path) -> Result<()> {
     }
     let mut errors = Vec::new();
     let mut total = 0;
+    let mut reported = BTreeSet::new();
     for (path, source) in &files {
         let report = if exempt(Path::new(path)) {
             scan_platform(source, platform_root(Path::new(path)), &shared)
@@ -881,20 +1017,24 @@ fn inspect(root: &Path) -> Result<()> {
             scan_file(source, &shared, binary_root(root, path))
         }
         .map_err(|e| format!("{path}: {e}"))?;
-        if report.count > 0 {
-            total += report.count;
-            let lines: Vec<String> = report.lines.iter().map(usize::to_string).collect();
-            errors.push(format!(
-                "{path}: {} OS occurrences (lines {}); move OS code into platform",
-                report.count,
-                lines.join(", ")
-            ));
+        // The host kinds are everyone's: `platform` files are read for them too.
+        let hosts = scan_host(source, &shared).map_err(|e| format!("{path}: {e}"))?;
+        for (report, what, fix) in [
+            (report, "OS occurrences", "move OS code into platform"),
+            (hosts, "host-kind conditions", "host kind is a crate boundary: put the code in the crate that owns it"),
+        ] {
+            if report.count > 0 {
+                total += report.count;
+                reported.insert(path);
+                let lines: Vec<String> = report.lines.iter().map(usize::to_string).collect();
+                errors.push(format!("{path}: {} {what} (lines {}); {fix}", report.count, lines.join(", ")));
+            }
         }
     }
     if errors.is_empty() {
         Ok(())
     } else {
-        Err(format!("{}\nPlatform boundary: {total} OS occurrences in {} files", errors.join("\n"), errors.len()))
+        Err(format!("{}\nPlatform boundary: {total} violations in {} files", errors.join("\n"), reported.len()))
     }
 }
 
@@ -1241,5 +1381,114 @@ mod tests {
         assert_eq!(other("#![cfg_attr(windows, cfg(feature = \"x\"))]\ntrait T { fn f(); }"), 1);
         assert_eq!(other("#[cfg_attr(test, cfg(feature = \"x\"))] mod m { trait T { fn f(); } }"), 0);
         assert_eq!(other("#[cfg_attr(windows, allow(dead_code))] mod m { trait T { fn f(); } }"), 0);
+    }
+
+    fn host(source: &str) -> usize {
+        scan_host(source, &Shared::default()).unwrap().count
+    }
+
+    #[test]
+    fn host_kind_conditions_are_found_in_every_form() {
+        for source in [
+            "#[cfg(desktop)] fn a() {}",
+            "#[cfg(mobile)] fn a() {}",
+            "#![cfg(desktop)]",
+            "#[cfg(not(mobile))] fn a() {}",
+            "#[cfg(all(feature = \"x\", any(desktop, mobile)))] struct S;",
+            "#[cfg_attr(desktop, derive(Debug))] struct S;",
+            "#[cfg_attr(test, cfg(mobile))] fn a() {}",
+            "#[cfg_attr(test, cfg_attr(not(desktop), inline))] fn a() {}",
+            "cfg_if::cfg_if! { if #[cfg(desktop)] { fn a() {} } else { fn a() {} } }",
+            "#[cfg(feature = \"desktop\")] fn a() {}",
+            "#[cfg(not(feature = \"mobile\"))] fn a() {}",
+            "mod m { #![cfg(desktop)] }",
+            "fn main() { println!(\"cargo:rustc-cfg=mobile\"); }",
+            "fn main() { println!(\"cargo::rustc-cfg=desktop\"); }",
+        ] {
+            assert_eq!(host(source), 1, "{source}");
+        }
+        assert_eq!(host("fn f() { if cfg!(desktop) {} let _ = cfg![mobile]; let _ = cfg! { not(desktop) }; }"), 3);
+    }
+
+    #[test]
+    fn host_kind_words_that_are_not_conditions_are_left_alone() {
+        for source in [
+            // Names, data and documentation.
+            "fn desktop() {} struct Mobile; let mobile = 1;",
+            "/// Not for #[cfg(desktop)] or cfg!(mobile).\nfn f() { let _ = \"#[cfg(desktop)] cfg!(mobile)\"; }",
+            "// #[cfg(mobile)]\nfn f() {}",
+            "fn main() { println!(\"cargo:rustc-cfg=tray\"); println!(\"cargo:rerun-if-changed=desktop\"); }",
+            // Other conditions, the OS ones included: the other scan's.
+            "#[cfg(feature = \"tray\")] #[cfg(test)] #[cfg(target_os = \"ios\")] #[cfg(any(unix, windows))] fn a() {}",
+            "#[cfg(feature = \"x\")] #[cfg_attr(test, doc = stringify!(desktop))] fn a() {}",
+            "#[cfg(target_os = \"desktop\")] fn a() {}",
+        ] {
+            assert_eq!(host(source), 0, "{source}");
+        }
+    }
+
+    #[test]
+    fn host_kind_aliases_count_where_they_are_defined_and_where_they_are_used() {
+        let build = "fn main() { cfg_aliases::cfg_aliases! { handheld: { mobile }, tablet: { all(handheld, x) }, \
+                     plain: { feature = \"x\" }, desktop: { target_os = \"macos\" }, os: { windows } } }";
+        let defined = scan_host(build, &Shared::default()).unwrap();
+        assert_eq!(defined.count, 3, "handheld, tablet, desktop");
+        assert_eq!(
+            defined.shared.host_aliases,
+            HashSet::from(["handheld".to_string(), "tablet".to_string(), "desktop".to_string()])
+        );
+        let user = "#[cfg(handheld)] fn a() {} #[cfg(plain)] #[cfg(os)] fn b() {} fn c() { let _ = cfg!(tablet); }";
+        assert_eq!(scan_host(user, &defined.shared).unwrap().count, 2);
+        // An alias above its definition in the same file counts too.
+        assert_eq!(host(&format!("#[cfg(handheld)] fn a() {{}} {build}")), 4);
+    }
+
+    #[test]
+    fn host_kinds_are_found_inside_platform_and_outside_it() {
+        let files = [
+            ("app/src/lib.rs", "#[cfg(mobile)] pub fn outside() {}"),
+            ("app/src/platform/concern.rs", "#[cfg(desktop)] pub fn inside() {}"),
+            ("app/src/platform/concern/ios.rs", "#[cfg(target_os = \"ios\")] pub fn os() {}"),
+            ("app/src/platform/mod.rs", "mod concern; #[cfg(feature = \"mobile\")] mod gated;"),
+            ("app/build/platform.rs", "pub fn configure() { cfg_aliases::cfg_aliases! { handheld: { mobile } } }"),
+            ("app/src/other.rs", "#[cfg(handheld)] pub fn by_alias() {}"),
+        ];
+        let message = fixture_repo(&files).unwrap_err();
+        for path in
+            ["src/lib.rs", "src/platform/concern.rs", "src/platform/mod.rs", "build/platform.rs", "src/other.rs"]
+        {
+            let line = message.lines().find(|line| line.contains(path)).unwrap_or_default();
+            assert!(line.contains("host-kind conditions"), "{path}: {message}");
+        }
+        assert!(!message.contains("ios.rs"), "{message}");
+        assert!(message.contains("5 violations in 5 files"), "{message}");
+        // The rest of the tree passes.
+        let clean = [
+            ("app/src/lib.rs", "pub fn shared() {}"),
+            ("app/src/platform/concern.rs", "pub trait Concern { fn f(&self); }"),
+            ("app/src/platform/concern/ios.rs", "#[cfg(target_os = \"ios\")] pub fn os() {}"),
+            (
+                "app/src/platform/concern/macos.rs",
+                "#[cfg(any(target_os = \"macos\", target_os = \"ios\"))] fn apple() {}",
+            ),
+        ];
+        fixture_repo(&clean).unwrap();
+    }
+
+    /// `inspect` over a Git repository holding `files`.
+    fn fixture_repo(files: &[(&str, &str)]) -> Result<()> {
+        let dir = tempfile::tempdir().unwrap();
+        for (path, source) in files {
+            let path = dir.path().join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, source).unwrap();
+        }
+        assert!(std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap()
+            .success());
+        inspect(dir.path())
     }
 }

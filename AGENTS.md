@@ -63,3 +63,25 @@ Operator rule (2026-10-25). Applies to product code, tests, xtask and build scri
 Reference in this repo: `platform/microphone.rs`, `platform/desktop_geometry.rs` and `platform/confirmation.rs`, each public
 plain functions over a private per-OS trait. (sidevoice-connector and core keep their separately approved public-trait
 shape; do not copy it here.)
+
+## Host kind is a crate boundary
+
+Operator decision (2026-10-30). Applies like the platform rule above: product code, tests, xtask and build scripts.
+
+- **A kind of host is a crate, never a condition.** The desktop app (`desktop/`) and the mobile app (`mobile/`) are
+  separate crates at the workspace root, each composing the crates it uses. What both use lives in a shared crate
+  (`app-core/`, `app-tauri/`) that takes whatever differs through a trait the app implements or a value it passes in,
+  and never names an app. Not every crate exists yet: the checks look for each by its directory.
+- **No `cfg(desktop)` or `cfg(mobile)`** (the conditions tauri-build defines), no `feature = "desktop"` or
+  `feature = "mobile"`, and no `cfg_aliases!` entry named like one or built on one. Not outside `platform`, and not
+  inside it. Where the OS is what differs, say which one: `target_os` in `platform`, one file per OS (`ios` and
+  `android` are OSes like `macos`).
+- **Dependencies point one way:** the apps name `app-tauri`, which names Tauri and `app-core`, which names voice and
+  engine. `desktop/` and `mobile/` depend on neither each other nor anything that depends on the other, the shared
+  crates on neither app, and `app-core` has no shell (Tauri, wry, tao) in its closure.
+- **A build for iOS or Android names its package:** `-p`, never `--workspace`, `--all` or `--exclude`; the workspace
+  holds the other kind of host too.
+- **Enforced in CI**, in the Platform boundary job: `cargo xtask platform-guard` (the conditions, in every Rust file,
+  `platform` included) and `cargo xtask host-graph` (the crates' dependencies on each supported target, from
+  `cargo metadata`, and the workflows' builds for mobile targets). They read tokens and resolution and build nothing;
+  their limits are in the head of `xtask/src/platform_guard.rs` and `xtask/src/host_graph.rs`.

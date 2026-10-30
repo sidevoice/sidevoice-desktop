@@ -72,8 +72,11 @@ jobs:
           cache: npm
       - run: npm ci
       - run: cargo xtask web
-      - name: OS-specific source outside platform
+      - name: OS-specific source outside platform, and host-kind conditions anywhere
         run: cargo xtask platform-guard
+      - name: Host kind is a crate boundary (the crates' dependencies, builds for mobile targets)
+        if: ${{ !cancelled() }}
+        run: cargo xtask host-graph
       - name: Disallowed OS APIs (app and xtask)
         if: ${{ !cancelled() }}
         run: cargo xtask platform-clippy
