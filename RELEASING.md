@@ -9,11 +9,11 @@ two apart.
 ## Two products in one repository
 
 The mobile app (`mobile/`, plan: sidevoice/sidevoice-desktop#289) does not exist yet and nothing here builds it. What
-is ready for it, so that adding it changes nothing of the desktop app's releases:
+is ready for it, so that adding it needs no change to the desktop app's tags, releases or nightly:
 
 | | Desktop app (today) | Mobile app (when it exists) |
 |---|---|---|
-| release-please package | `.`: every commit except the ones that touch only `mobile/` | `mobile` |
+| release-please package | `.` (every commit; with the mobile package, every commit except the ones that touch only `mobile/`) | `mobile` |
 | Tag | `vX.Y.Z` (unchanged) | `mobile-vX.Y.Z` |
 | Changelog | `CHANGELOG.md` | `mobile/CHANGELOG.md` |
 | Release PR | `chore(main): release X.Y.Z` | `chore(main): release mobile X.Y.Z` (its own PR and branch: `separate-pull-requests`) |
@@ -24,14 +24,23 @@ is ready for it, so that adding it changes nothing of the desktop app's releases
   `releases/latest/download/latest.json` (Updates, below): `latest` is one per repository. `xtask publish` therefore
   accepts only a desktop tag (`vX.Y.Z`, `-rc.N` allowed) and publishes nothing else, and a release of another product
   is never published as latest.
-- **Adding the mobile package** is one block in `release-please-config.json`, next to the `.` one, with its own
-  `extra-files` (its `tauri.conf.json`, its `Cargo.toml` files, its `Cargo.lock` entries):
-  `"mobile": { "release-type": "simple", "component": "mobile", "initial-version": "0.1.0", "bump-minor-pre-major": true,
-  "extra-files": [ … ] }`. The tag takes the component by default (`include-component-in-tag` is `false` only on the
-  desktop package).
+- **Adding the mobile package** is two edits of `release-please-config.json`, made together:
+  - a block next to the `.` one, with its own `extra-files` (its `tauri.conf.json`, its `Cargo.toml` files, its
+    `Cargo.lock` entries):
+    `"mobile": { "release-type": "simple", "component": "mobile", "initial-version": "0.1.0", "bump-minor-pre-major": true,
+    "extra-files": [ … ] }`. The tag takes the component by default (`include-component-in-tag` is `false` only on the
+    desktop package);
+  - `"exclude-paths": ["mobile"]` on the `.` package. release-please gives the root package every commit, so without it
+    the mobile commits would land in the desktop's version and changelog.
+- **`Release-As` once the mobile package exists.** `exclude-paths` also drops a commit that touches no file, and
+  release-please gives such a commit to every package but the root. So the empty commit of "A release candidate, or any
+  explicit version" (below) then sets the **mobile** version only; for the desktop app the footer goes on a commit that
+  changes at least one file outside `mobile/` (the PR that needs the release does; with nothing else to merge, a
+  one-line fix in this file). Until the mobile package exists there is no exclusion and the empty commit works for the
+  desktop app as documented below.
 - **A commit that changes only a shared crate** (`app-core/`, `app-tauri/`) belongs to the `.` package, not to `mobile`:
   release-please attributes a commit to a package by the files it touches, and a package is one directory. A mobile
-  release for such a change needs a commit that touches `mobile/` (`Release-As:`, below, if the version is chosen).
+  release for such a change needs a commit that touches `mobile/`, or the empty `Release-As` commit above.
 
 ## What each act means
 
@@ -157,7 +166,9 @@ Release-As: 0.3.0-rc.1
 The release PR then proposes exactly that version. A version with a `-` suffix is published as a **pre-release
 and never as latest**. The next candidate is `Release-As: 0.3.0-rc.2`; the final one is `Release-As: 0.3.0`
 (say it: after a candidate, do not leave the next version to the computation). With nothing else to merge, a PR
-with one empty commit (`git commit --allow-empty`) carries the footer.
+with one empty commit (`git commit --allow-empty`) carries the footer. (Once the mobile package exists, an empty
+commit versions the mobile app and the desktop app needs a commit that changes a file: "Two products in one
+repository", above.)
 
 ## Nightly
 

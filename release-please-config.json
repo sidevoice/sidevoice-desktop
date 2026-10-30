@@ -8,7 +8,6 @@
     ".": {
       "release-type": "simple",
       "include-component-in-tag": false,
-      "exclude-paths": ["mobile"],
       "bump-minor-pre-major": true,
       "extra-files": [
         { "type": "json", "path": "desktop/tauri.conf.json", "jsonpath": "$.version" },
