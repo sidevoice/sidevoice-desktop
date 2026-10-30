@@ -202,3 +202,23 @@ test("repro 5: exchanges on an old socket do not mask a dead current socket", ()
   const result = run({ edit: (r) => [...r, { t: T0 + 70_000, src: "page", k: "ws-open", id: 2 }] });
   assert.notEqual(result.outcome, "pass", result.why.join("; "));
 });
+
+test("repro 6: the current socket is the one opened last, whatever its id", () => {
+  // The healthy run, with socket 0 opening at 70 s while every exchange stays on socket 1.
+  const result = run({ edit: (r) => [...r, { t: T0 + 70_000, src: "page", k: "ws-open", id: 0 }] });
+  assert.notEqual(result.outcome, "pass", result.why.join("; "));
+});
+
+test("repro 7: a recovery at the unlock instant does not count toward the lock", () => {
+  // The lock ends at 720 s. The LAN goes at 631 s; socket 2 opens at 705 s and its first exchange is at 720 s.
+  const result = run({ edit: lanLoss(T0 + 631_000, T0 + 660_000, T0 + 705_000) });
+  assert.equal(result.intervals[0].to, T0 + 12 * MIN);
+  assert.notEqual(result.outcome, "pass", result.why.join("; "));
+});
+
+test("repro 8: a send the socket refused confirms nothing", () => {
+  // While locked, every frame the page sends is followed by ws-out-failed for that socket.
+  const result = run({ edit: (r) => r.flatMap((e) => (inLock(e) && e.k === "ws-out"
+    ? [e, { t: e.t + 1, src: "page", k: "ws-out-failed", id: e.id }] : [e])) });
+  assert.notEqual(result.outcome, "pass", result.why.join("; "));
+});

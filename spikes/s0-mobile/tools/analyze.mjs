@@ -10,8 +10,9 @@
 // - page: its 1 s timer through the bridge, never more than PAGE_MAX_GAP_MS apart; a gap past PAGE_STOPPED_MS is the
 //   page stopped.
 // - heartbeat: only confirmed exchanges on the current socket count. An exchange is a core frame received on a socket
-//   after the page sent a frame on that same socket since the core's previous frame there; the current socket is the
-//   newest one opened, so once a newer socket opens, exchanges on any older one count as nothing. Counted exchanges
+//   after the page sent a frame on that same socket since the core's previous frame there (a refused send confirms
+//   nothing); the current socket is the one opened most recently, so once another opens, exchanges on any older one
+//   count as nothing. Exchanges at or after the unlock do not count toward the lock. Counted exchanges
 //   must never be more than HEARTBEAT_BUDGET_MS apart across the interval, its edges included (core
 //   rust/server/call/heartbeat.rs: a 15 s interval, two misses); none at all is never a pass. The one thing forgiven
 //   is an outage (the LAN-loss step): the gap before a newer socket's first counted exchange, from the network loss
@@ -65,15 +66,17 @@ function lockedIntervals(all, end) {
 }
 
 /** Confirmed exchanges on the current socket: a core frame received on a socket after the page sent a frame on that
- *  same socket since the core's previous frame there, while that socket is the newest one opened. `{t, socket}`. */
+ *  same socket since the core's previous frame there, while that socket is the one opened most recently (by the order
+ *  of its ws-open, never by its id). A send the socket refused (`ws-out-failed`) confirms nothing: contradictory
+ *  evidence never confirms. `{t, socket}`. */
 function confirmedExchanges(all) {
   const exchanges = [];
   const sent = new Map();
   let newest = null;
   for (const e of all) {
     if (e.src !== "page") continue;
-    if (e.k === "ws-open") { newest = newest === null ? e.id : Math.max(newest, e.id); sent.set(e.id, false); }
-    else if (e.k === "ws-close") sent.set(e.id, false);
+    if (e.k === "ws-open") { newest = e.id; sent.set(e.id, false); }
+    else if (e.k === "ws-close" || e.k === "ws-out-failed") sent.set(e.id, false);
     else if (e.k === "ws-out") sent.set(e.id, true);
     else if (e.k === "ws-in") {
       if (sent.get(e.id) && e.id === newest) exchanges.push({ t: e.t, socket: e.id });
@@ -84,20 +87,22 @@ function confirmedExchanges(all) {
 }
 
 /**
- * The heartbeat across [from, to]: the largest gap between counted exchanges (the interval's edges included), where
+ * The heartbeat across [from, to): the largest gap between counted exchanges (the interval's edges included; an
+ * exchange at or after the unlock does not count toward the lock), where
  * the gap before a newer socket's first counted exchange is forgiven from the network loss the phone logged (else
  * the previous counted exchange) to that exchange, when that span is OUTAGE_MAX_MS or less and the interval has not
  * already forgiven OUTAGE_MAX_MS.
  */
 function heartbeat(all, exchanges, from, to) {
   const losses = all.filter((e) => e.src === "system" && e.k === "network-lost").map((e) => e.t);
-  const inside = exchanges.filter((x) => x.t >= from && x.t <= to);
+  const inside = exchanges.filter((x) => x.t >= from && x.t < to);
   const before = exchanges.filter((x) => x.t < from).at(-1);
   const points = [before ?? { t: from, socket: null }, ...inside, { t: to, socket: null }];
   let gap = 0, forgiven = 0, reconnects = 0, tooLong = false;
   for (let i = 1; i < points.length; i++) {
     const p = points[i - 1], q = points[i];
-    const switched = p.socket !== null && q.socket !== null && q.socket > p.socket;
+    // Only the current socket's exchanges are counted, so a different socket is one opened since.
+    const switched = p.socket !== null && q.socket !== null && q.socket !== p.socket;
     if (switched) {
       const start = losses.filter((t) => t > p.t && t < q.t).at(-1) ?? p.t;
       if (q.t - start > OUTAGE_MAX_MS) tooLong = true;
