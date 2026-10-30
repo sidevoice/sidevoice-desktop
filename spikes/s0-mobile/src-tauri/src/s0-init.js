@@ -123,9 +123,13 @@
         this.addEventListener("close", (e) => { sockets.delete(this); send("ws-close", { id, code: e.code, reason: e.reason, clean: e.wasClean }); });
         this.addEventListener("message", (e) => frame("in", id, e.data));
       }
+      // Logged once the socket took the frame: an attempt the socket refused is logged as such. Taken is still not
+      // received; analyze.mjs counts a heartbeat only when the core's next frame follows (a confirmed exchange).
       send(data) {
+        let result;
+        try { result = super.send(data); } catch (error) { send("ws-out-failed", { id: this.__s0, error: String(error) }); throw error; }
         frame("out", this.__s0, data);
-        return super.send(data);
+        return result;
       }
     }
     window.WebSocket = S0Socket;

@@ -188,7 +188,28 @@ class HolderPlugin: Plugin {
           for (key, value) in info { data["\(key)"] = "\(value)" }
         }
         self?.writeSystem(kind, data)
+        self?.markInterrupted(kind, note)
       })
+    }
+  }
+
+  /// Marks the native audio as interrupted in the holder's log when the event stopped it: an interruption that began,
+  /// the media services reset, the engine's configuration change (the engine stops itself), or a route change that
+  /// left it stopped. The analyzer makes such a locked interval inconclusive ("native audio interrupted"), never a
+  /// fail. Nothing is restarted.
+  private func markInterrupted(_ kind: String, _ note: Notification) {
+    guard running else { return }
+    let began = (note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt) == AVAudioSession.InterruptionType.began.rawValue
+    let stopped = !(engine?.isRunning ?? false)
+    let invalid: Bool
+    switch kind {
+    case "audio-interruption": invalid = began
+    case "audio-services-reset", "engine-configuration-change": invalid = true
+    case "audio-route-change": invalid = stopped
+    default: invalid = false
+    }
+    if invalid {
+      write("native-audio-interrupted", ["cause": kind, "engine_running": !stopped])
     }
   }
 
