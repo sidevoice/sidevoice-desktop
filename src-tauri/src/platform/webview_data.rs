@@ -14,7 +14,7 @@ mod imp;
 use imp::Native;
 
 /// The app's bundle identifier (`tauri.conf.json`), which names its browser storage on every host.
-const IDENTIFIER: &str = "dev.sidevoice.desktop";
+const IDENTIFIER: &str = "ai.sidevoice.desktop";
 
 /// Native-resolved allowlist, never populated from the page or a reset payload.
 pub struct Locations(Vec<PathBuf>);

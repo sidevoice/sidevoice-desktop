@@ -33,7 +33,7 @@ The app's own file is `local-host.json` (0600) in its config directory:
 `{fp, public_key, device_id, token, host, paired_at}`, the only copy of its device token.
 
 The app now uses Tauri's app data directory for this file, settings, call-control placement and
-remote pairings; on macOS it is `~/Library/Application Support/dev.sidevoice.desktop`. The
+remote pairings; on macOS it is `~/Library/Application Support/ai.sidevoice.desktop`. The
 shared downloaded-model directory is `Models` in the OS standard place (`sidevoice-platform`'s `data_dir::models_dir`, independent of `SIDEVOICE_DATA_DIR`; on macOS `~/Library/Application Support/Sidevoice/Models`). Settings ›
 Advanced can run the **installed connector's top-level** `uninstall --json` before clearing the
 app's own data after exit. `localHost.serviceUninstall()` below remains a service-manager action

@@ -36,7 +36,7 @@ macOS asks once ("Sidevoice quiere acceder al micrófono"). The answer is stored
 signature: with ad-hoc signing each new build is a "new" app and may ask again; a release, signed with the Developer
 ID, keeps its answer from one version to the next.
 If it was denied: System Settings → Privacy & Security → Microphone, or
-`tccutil reset Microphone dev.sidevoice.desktop`.
+`tccutil reset Microphone ai.sidevoice.desktop`.
 
 Echo cancellation is the web UI's own (`echoCancellation` constraints, `'all'` where supported);
 WKWebView implements it with the system voice-processing unit.

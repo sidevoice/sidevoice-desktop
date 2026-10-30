@@ -18,7 +18,7 @@ macOS la bloquea la primera vez; se abre así:
 5. Pulsa "Entrar en la sala": macOS pregunta por el micrófono → Permitir.
 
 Si el micrófono se denegó por error: Ajustes del Sistema → Privacidad y seguridad →
-Micrófono → activa Sidevoice (o, en Terminal: tccutil reset Microphone dev.sidevoice.desktop).
+Micrófono → activa Sidevoice (o, en Terminal: tccutil reset Microphone ai.sidevoice.desktop).
 
 Cerrar la ventana no cuelga: Sidevoice sigue en la barra de menús (icono de barras).
 Desde ahí: silenciar, colgar, mostrar la ventana, ajustes, salir.

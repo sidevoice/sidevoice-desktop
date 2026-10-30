@@ -41,7 +41,7 @@ mod imp;
 use imp::Native;
 
 /// The app's bundle identifier (`tauri.conf.json`), which names its folders on every host.
-const IDENTIFIER: &str = "dev.sidevoice.desktop";
+const IDENTIFIER: &str = "ai.sidevoice.desktop";
 
 /// The engine-owned children of the model store; the store itself and any other sibling stay.
 const MODEL_CHILDREN: [&str; 3] = ["blobs", "models", "partial"];
@@ -462,10 +462,10 @@ mod tests {
         assert_eq!(
             named(&Folders::from(macos(home))),
             vec![
-                ("app-data", home.join("Library/Application Support/dev.sidevoice.desktop")),
+                ("app-data", home.join("Library/Application Support/ai.sidevoice.desktop")),
                 ("models", models.clone()),
-                ("webview", home.join("Library/WebKit/dev.sidevoice.desktop")),
-                ("cache", home.join("Library/Caches/dev.sidevoice.desktop")),
+                ("webview", home.join("Library/WebKit/ai.sidevoice.desktop")),
+                ("cache", home.join("Library/Caches/ai.sidevoice.desktop")),
             ]
         );
         assert_eq!(models, Path::new("/Users/ana/Library/Application Support/Sidevoice/Models"));

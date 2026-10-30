@@ -149,7 +149,7 @@ mod tests {
         let shared = tmp.path().join("shared");
         fs::create_dir(&shared).unwrap();
         StorageFixtures::writable(&shared);
-        let dir = shared.join("dev.sidevoice.desktop");
+        let dir = shared.join("ai.sidevoice.desktop");
         assert!(save(&dir, &pairing()).is_err(), "refused under a directory others can rename in");
         assert_eq!(load(&dir), None);
         StorageFixtures::private(&shared);

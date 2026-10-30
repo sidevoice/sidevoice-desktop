@@ -61,12 +61,12 @@ mod tests {
         assert_eq!(
             all,
             vec![
-                ("app-data", support.join("dev.sidevoice.desktop")),
+                ("app-data", support.join("ai.sidevoice.desktop")),
                 ("models", support.join("Sidevoice/Models")),
-                ("webview", home.join("Library/WebKit/dev.sidevoice.desktop")),
-                ("cache", home.join("Library/Caches/dev.sidevoice.desktop")),
-                ("logs", home.join("Library/Logs/dev.sidevoice.desktop")),
-                ("saved-state", home.join("Library/Saved Application State/dev.sidevoice.desktop.savedState")),
+                ("webview", home.join("Library/WebKit/ai.sidevoice.desktop")),
+                ("cache", home.join("Library/Caches/ai.sidevoice.desktop")),
+                ("logs", home.join("Library/Logs/ai.sidevoice.desktop")),
+                ("saved-state", home.join("Library/Saved Application State/ai.sidevoice.desktop.savedState")),
             ]
         );
     }

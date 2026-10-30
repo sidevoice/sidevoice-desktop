@@ -21,7 +21,7 @@ use std::{
 mod imp;
 use imp::Native;
 
-const SERVICE: &str = "dev.sidevoice.desktop.providers";
+const SERVICE: &str = "ai.sidevoice.desktop.providers";
 
 /// The namespace the public functions use: `SERVICE`. Test builds give them a per-process namespace of their own, so
 /// fixtures of the public functions on a native store never read or clear a person's keys.
@@ -251,7 +251,7 @@ mod tests {
     /// machine.
     pub(super) fn test_service() -> String {
         format!(
-            "dev.sidevoice.desktop.test-{}-{}",
+            "ai.sidevoice.desktop.test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         )
