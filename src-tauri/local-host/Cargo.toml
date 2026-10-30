@@ -17,7 +17,7 @@ fetch = ["dep:reqwest"]
 # Sidevoice program shares (`data_dir`); the endpoint records the core and the connector publish in it, the local
 # channel and its check that the server is this user (`ipc`); a run as a tree of its own, its bounded output, and
 # whether a recorded process is there (`process`); private files, trusted programs and which file a handle is (`fs`).
-sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.15.1" }
+sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.16.1" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The computer's kernel hostname, used when naming the core's local pairing.
