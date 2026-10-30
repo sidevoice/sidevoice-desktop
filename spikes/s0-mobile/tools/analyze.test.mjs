@@ -174,3 +174,31 @@ test("a reconnect longer than the LAN-loss step is not a pass", () => {
   assert.equal(result.outcome, "inconclusive");
   assert.match(result.why.join(), /longer than the LAN-loss step/);
 });
+
+test("repro 4: chained socket opens without exchanges hide nothing", () => {
+  // A muted lock from 60 s to 720 s; one exchange at 60.002 s; socket 1 closes at 61 s; sockets 2–6 open at 180, 300,
+  // 420, 540 and 660 s and each closes 1 s later; socket 7 opens at 719 s. Nothing else is exchanged.
+  const a = MIN, b = 12 * MIN;
+  const result = run({
+    edit: (r) => {
+      const kept = r.filter((e) => !(e.t >= T0 + a && e.t <= T0 + b && (e.k === "ws-in" || e.k === "ws-out" || e.k === "say")))
+        .flatMap((e) => (e.k === "synthetic-received" && e.t > T0 + a && e.t < T0 + b
+          ? [e, { t: e.t + 1, src: "page", k: "synthetic-dropped", seq: e.seq, reason: "muted" }] : [e]))
+        .filter((e) => !(e.t > T0 + b && e.id === 1));
+      kept.push({ t: T0 + a - 5000, src: "page", k: "ws-out", id: 1, type: "voice-pong" },
+        { t: T0 + a + 2, src: "page", k: "ws-in", id: 1, type: "voice-ping" },
+        { t: T0 + 61_000, src: "page", k: "ws-close", id: 1, code: 1006 });
+      [180, 300, 420, 540, 660].forEach((s, i) => kept.push(
+        { t: T0 + s * 1000, src: "page", k: "ws-open", id: i + 2 }, { t: T0 + s * 1000 + 1000, src: "page", k: "ws-close", id: i + 2, code: 1006 }));
+      kept.push({ t: T0 + 719_000, src: "page", k: "ws-open", id: 7 });
+      return kept;
+    },
+  });
+  assert.notEqual(result.outcome, "pass", result.why.join("; "));
+});
+
+test("repro 5: exchanges on an old socket do not mask a dead current socket", () => {
+  // The healthy run, with socket 2 opening at 70 s while every exchange stays on socket 1.
+  const result = run({ edit: (r) => [...r, { t: T0 + 70_000, src: "page", k: "ws-open", id: 2 }] });
+  assert.notEqual(result.outcome, "pass", result.why.join("; "));
+});
