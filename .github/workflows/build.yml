@@ -22,6 +22,10 @@ name: build
 on:
   push:
     branches: [main]
+    # This workflow is the desktop product's (RELEASING.md → "Two products"): a push that touches only the mobile
+    # product's directory neither rebuilds nor replaces the desktop nightly. A pull request always runs everything:
+    # its checks are required.
+    paths-ignore: ["mobile/**"]
   pull_request:
   workflow_dispatch:
     inputs:
@@ -454,6 +458,7 @@ jobs:
           key: ${{ steps.models.outputs.cache-primary-key }}
 
   # Publish: the installers of this run go to the release that called it, or replace the rolling `nightly` pre-release
+  # (the desktop's: another product's nightly is a chain of jobs of its own, outside the `needs` below)
   # (RELEASING.md). Pull requests never get here. Two jobs with the same steps (a YAML anchor) because a job's `needs`
   # cannot depend on the run: the nightly waits for the installers' jobs and the lint only, while the native flows
   # (`macos-native`, `macos-call`) run on beside it; a release waits for every job, so it never ships with a native
