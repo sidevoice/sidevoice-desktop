@@ -1,6 +1,6 @@
 # Native remote pairing storage
 
-`src-tauri/src/data/pairings.rs` owns the existing remote-pairing schema and maps storage errors to the existing
+`desktop/src/data/pairings.rs` owns the existing remote-pairing schema and maps storage errors to the existing
 bridge refusal keys. The room commands and their caller checks stay in `data.rs`. The path is still Tauri's app-data
 `pairings.json`; local-host's `local-host.json` is a separate store.
 

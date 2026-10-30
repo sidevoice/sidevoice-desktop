@@ -41,9 +41,9 @@ only while those checks permit it. X11/Wayland selection follows GTK's actual ba
 - `app_active` on Windows/Linux: a Tauri room-focus diagnostic could replace the empty string, clearly labelled as focus rather than app activation.
 - Cursor maintenance on macOS: try the public Tauri cursor setter during polling as a fallback when the runtime CGS property is unavailable; background effectiveness needs checking.
 
-## Card OS code still outside `src-tauri/src/platform`
+## Card OS code still outside `desktop/src/platform`
 
-References below are revision-qualified because each extraction shortens `src-tauri/src/call_controls.rs`; they
+References below are revision-qualified because each extraction shortens `desktop/src/call_controls.rs`; they
 identify existing code, not proposed fixes. The final-stack shortcut-label branch remains outside platform.
 
 - Main (`bf68c04`), `src-tauri/src/call_controls.rs:50`, `:147`, `:179`, `:202`, `:691`, `:716`, `:748`: NSPanel declaration, environment-based Wayland detection, construction/show policy and AppKit diagnostics; moved by #207/#208.

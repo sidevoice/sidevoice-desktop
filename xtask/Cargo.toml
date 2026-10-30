@@ -6,7 +6,7 @@ license = "Apache-2.0"
 publish = false
 description = "Build tooling for the desktop app: every CI step, run as `cargo xtask <command>` (.cargo/config.toml)."
 
-# A package of its own, beside the app's workspace (src-tauri/): it builds with no webview, native engine or C
+# A package of its own, beside the repository's Cargo workspace (the root Cargo.toml): it builds with no webview, native engine or C
 # toolchain, on any machine with Rust.
 [workspace]
 

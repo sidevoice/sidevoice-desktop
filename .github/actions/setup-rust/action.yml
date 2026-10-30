@@ -1,9 +1,9 @@
 name: Set up Rust and the native engine's libraries
 description: >-
-  Installs the Rust toolchain src-tauri/rust-toolchain.toml pins, restores the Rust build cache (the app's workspace
+  Installs the Rust toolchain desktop/rust-toolchain.toml pins, restores the Rust build cache (the app's workspace
   and xtask/), and fetches the sherpa-onnx static libraries that sidevoice-engine links with `cargo xtask sherpa-libs`
   (that engine's own command, at the
-  commit src-tauri/Cargo.lock pins): checked against the digests it pins, kept outside target/ and linked through
+  commit Cargo.lock pins): checked against the digests it pins, kept outside target/ and linked through
   SHERPA_ONNX_LIB_DIR (which the command exports), so no build script downloads anything unchecked.
   Both caches are written only by a push to main (the nightly, and a release: release-please runs on one); a pull
   request or a manual run only restores them, so its caches never evict main's from the repository's 10 GB.
@@ -24,15 +24,15 @@ inputs:
 
 outputs:
   engine-rev:
-    description: The sidevoice-engine commit src-tauri/Cargo.lock pins (`cargo xtask engine-rev`).
+    description: The sidevoice-engine commit Cargo.lock pins (`cargo xtask engine-rev`).
     value: ${{ steps.engine.outputs.rev }}
 
 runs:
   using: composite
   steps:
-    - name: Toolchain (src-tauri/rust-toolchain.toml)
+    - name: Toolchain (desktop/rust-toolchain.toml)
       shell: bash
-      working-directory: src-tauri
+      working-directory: desktop
       run: |
         set -euo pipefail
         rustup toolchain install
@@ -40,7 +40,7 @@ runs:
     - uses: Swatinem/rust-cache@v2
       with:
         workspaces: |
-          src-tauri
+          .
           xtask
         shared-key: ${{ inputs.cache }}
         save-if: ${{ inputs.save-cache == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}

@@ -18,7 +18,7 @@ const OTHER: &str = "sidevoice-other";
 pub fn run() -> Result<()> {
     require_os("linux", "two-users")?;
     require_ci("two-users")?;
-    let app = repo().join("src-tauri");
+    let app = repo().join("desktop");
     Cmd::new("cargo")
         .args(["build", "-p", "sidevoice-desktop-test-support", "--bin", "local-host-ci"])
         .dir(&app)
@@ -28,7 +28,7 @@ pub fn run() -> Result<()> {
     mkdir(dir)?;
     chmod(dir, 0o755)?;
     let tool = dir.join("local-host-ci");
-    fs::copy(app.join("target/debug/local-host-ci"), &tool).map_err(|e| format!("{}: {e}", tool.display()))?;
+    fs::copy(repo().join("target/debug/local-host-ci"), &tool).map_err(|e| format!("{}: {e}", tool.display()))?;
     chmod(&tool, 0o755)?;
     if !Cmd::new("id").arg(OTHER).attempt()?.0 {
         Cmd::new("sudo").args(["useradd", "--create-home", OTHER]).run()?;

@@ -81,16 +81,17 @@ OpenSSL and xdo development packages).
 npm ci
 npm run web                                # fetch the pinned interface for the media-controls regression
 npm test                                   # the bridge script
-cd src-tauri
+cd desktop
 cargo test -p sidevoice-desktop-core       # settings, bridge contract, media rules, the voice call's builds
 cargo clippy --workspace --all-targets -- -D warnings
 npx tauri dev                              # needs a desktop: macOS, Windows, or Linux with WebKitGTK 4.1
 ```
 
 ```
-src-tauri/src/       the shell: windows, tray, shortcut, commands, the voice call (voice.rs) and its keychain
-src-tauri/core/      pure logic (settings, bridge contract, media rules, voice builds), testable without Tauri
-src-tauri/engine/    the app's side of sidevoice-engine (ids, install jobs, refusals)
+Cargo.toml           the Rust workspace: desktop/ with its crates, and test-support/ (xtask/ is a workspace of its own)
+desktop/src/         the shell: windows, tray, shortcut, commands, the voice call (voice.rs) and its keychain
+desktop/core/        pure logic (settings, bridge contract, media rules, voice builds), testable without Tauri
+desktop/engine/      the app's side of sidevoice-engine (ids, install jobs, refusals)
 bridge/              the script injected into the call page: the page side of the bridge
 ui/                  ui/voice/ holds the web interface, the pinned release (not committed)
 brand/               the brand files the icons and installer art are generated from

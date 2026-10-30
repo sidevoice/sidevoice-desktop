@@ -2,7 +2,7 @@
 <html lang="en">
 <head><meta charset="utf-8"><title>Sidevoice · call controls probe (CI)</title></head>
 <body>
-<p>CI only, served only by the app built with the <code>probe</code> feature (src-tauri/src/probe.rs): loaded into the
+<p>CI only, served only by the app built with the <code>probe</code> feature (desktop/src/probe.rs): loaded into the
 room window with SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_PAGE=card-probe.html. It reports a call through the bridge, as the
 room does, and walks it through the states the call controls card shows (sidevoice/sidevoice-desktop#4), one phase at
 a time: the first long enough for CI to click, drag and type around the card, the others for a screenshot each. It is

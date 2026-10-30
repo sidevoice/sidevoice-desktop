@@ -95,7 +95,7 @@ mod tests {
         );
         for refused in [
             // A development build has no bundle.
-            "/Users/ana/sidevoice-desktop/src-tauri/target/debug/sidevoice-desktop",
+            "/Users/ana/sidevoice-desktop/target/debug/sidevoice-desktop",
             "/Applications/Sidevoice/Contents/MacOS/sidevoice-desktop",
             "/Applications/Sidevoice.app/Contents/Resources/sidevoice-desktop",
             "/Applications/Sidevoice.app/MacOS/sidevoice-desktop",
