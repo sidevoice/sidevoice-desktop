@@ -18,7 +18,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 
-use regex::{NoExpand, Regex};
+use regex::Regex;
 use serde_json::Value;
 use serde_yaml_ng::Value as Yaml;
 
@@ -146,8 +146,8 @@ pub fn violations(metadata: &Value) -> Result<Vec<String>> {
 ///
 /// The YAML is parsed, so its comments are not commands, and the shell is read word by word (quotes, `#` comments, `;`,
 /// `&&`, `|`, a backslash at the end of a line). A `--target ${{ matrix.key }}` is read as each literal value the job's
-/// matrix gives that key. A target that cannot be known (another expression, a shell variable, a matrix made by
-/// `fromJSON`) counts as a mobile one: say it, or name the package.
+/// matrix gives that key, row by row. A target that cannot be known (another expression, a shell variable, a matrix
+/// made by `fromJSON`) counts as a mobile one: say it, or name the package.
 pub fn unscoped_mobile_builds(text: &str) -> Result<Vec<String>> {
     let document: Yaml = serde_yaml_ng::from_str(text).map_err(|e| e.to_string())?;
     // A workflow has `jobs.<id>.steps`; a composite action, `runs.steps`.
@@ -160,7 +160,7 @@ pub fn unscoped_mobile_builds(text: &str) -> Result<Vec<String>> {
     }
     let mut places = Vec::new();
     for (place, job) in jobs {
-        let matrix = matrix_values(job.get("strategy").and_then(|strategy| strategy.get("matrix")));
+        let matrix = matrix_rows(job.get("strategy").and_then(|strategy| strategy.get("matrix")));
         let steps = job.get("steps").and_then(Yaml::as_sequence).into_iter().flatten();
         for (number, step) in steps.enumerate() {
             let Some(script) = step.get("run").and_then(Yaml::as_str) else {
@@ -186,45 +186,78 @@ fn scalar(value: &Yaml) -> Option<String> {
     }
 }
 
-/// The literal values a job's matrix gives each key: its lists, and the keys of its `include` entries. A matrix that is
-/// an expression gives none.
-fn matrix_values(matrix: Option<&Yaml>) -> HashMap<String, Vec<String>> {
-    let mut values: HashMap<String, Vec<String>> = HashMap::new();
+/// The rows of a job's matrix, as GitHub makes them: one for each combination of its lists (less the `exclude`d ones),
+/// each `include` entry added to the rows it does not contradict, or a row of its own when it fits none. A matrix that
+/// is an expression has no rows we can read.
+fn matrix_rows(matrix: Option<&Yaml>) -> Vec<HashMap<String, String>> {
     let Some(Yaml::Mapping(matrix)) = matrix else {
-        return values;
+        return Vec::new();
     };
-    for (key, value) in matrix {
-        match (key.as_str(), value) {
-            (Some("include"), Yaml::Sequence(entries)) => {
-                for (key, value) in entries.iter().filter_map(Yaml::as_mapping).flatten() {
-                    values.entry(key.as_str().unwrap_or_default().to_owned()).or_default().extend(scalar(value));
-                }
-            }
-            (Some("exclude"), _) => {}
-            (Some(key), Yaml::Sequence(items)) => {
-                values.entry(key.to_owned()).or_default().extend(items.iter().filter_map(scalar));
-            }
-            _ => {}
-        }
-    }
-    values
-}
-
-/// `script` once for each combination of the values the matrix gives the keys it names (`${{ matrix.key }}`); an
-/// expression stays where the matrix gives no value.
-fn expansions(script: &str, matrix: &HashMap<String, Vec<String>>) -> Vec<String> {
-    let mut scripts = vec![script.to_owned()];
-    for (key, values) in matrix {
-        let expression = Regex::new(&format!(r"\$\{{\{{\s*matrix\.{}\s*\}}\}}", regex::escape(key))).expect("a regex");
-        if values.is_empty() || !expression.is_match(script) {
-            continue;
-        }
-        scripts = scripts
+    let entries = |key: &str| -> Vec<HashMap<String, String>> {
+        let entries = matrix.get(key).and_then(Yaml::as_sequence).into_iter().flatten().filter_map(Yaml::as_mapping);
+        entries
+            .map(|entry| entry.iter().filter_map(|(k, v)| Some((k.as_str()?.to_owned(), scalar(v)?))).collect())
+            .collect()
+    };
+    let lists: Vec<(String, Vec<String>)> = matrix
+        .iter()
+        .filter_map(|(key, value)| {
+            Some((key.as_str()?.to_owned(), value.as_sequence()?.iter().filter_map(scalar).collect()))
+        })
+        .filter(|(key, _)| key != "include" && key != "exclude")
+        .collect();
+    let mut rows = vec![HashMap::new()];
+    for (key, values) in &lists {
+        rows = rows
             .iter()
-            .flat_map(|script| values.iter().map(|value| expression.replace_all(script, NoExpand(value)).into_owned()))
+            .flat_map(|row: &HashMap<String, String>| {
+                values.iter().map(move |value| {
+                    let mut row = row.clone();
+                    row.insert(key.clone(), value.clone());
+                    row
+                })
+            })
             .collect();
     }
-    scripts
+    if lists.is_empty() {
+        rows.clear();
+    }
+    let excluded = entries("exclude");
+    rows.retain(|row| !excluded.iter().any(|exclude| exclude.iter().all(|(key, value)| row.get(key) == Some(value))));
+    for include in entries("include") {
+        // The keys the lists give are the original ones: an include never changes them, and adds the rest to the rows
+        // it agrees with.
+        let agrees = |row: &HashMap<String, String>| {
+            lists.iter().all(|(key, _)| include.get(key).is_none_or(|value| row.get(key) == Some(value)))
+        };
+        let mut added = false;
+        for row in rows.iter_mut().filter(|row| agrees(row)) {
+            row.extend(include.iter().map(|(key, value)| (key.clone(), value.clone())));
+            added = true;
+        }
+        if !added {
+            rows.push(include);
+        }
+    }
+    rows
+}
+
+/// `script` once for each row of the matrix, with the row's values in the `${{ matrix.key }}` expressions it names; an
+/// expression stays where its row has no value for the key.
+fn expansions(script: &str, rows: &[HashMap<String, String>]) -> Vec<String> {
+    let expression = Regex::new(r"\$\{\{\s*matrix\.([A-Za-z0-9_-]+)\s*\}\}").expect("a regex");
+    let with = |row: &HashMap<String, String>| {
+        expression
+            .replace_all(script, |found: &regex::Captures| {
+                row.get(&found[1]).cloned().unwrap_or_else(|| found[0].to_owned())
+            })
+            .into_owned()
+    };
+    if rows.is_empty() {
+        vec![script.to_owned()]
+    } else {
+        rows.iter().map(with).collect()
+    }
 }
 
 /// The commands of a shell script, each as its words: quotes taken off, a `${{ … }}` expression kept whole (GitHub
@@ -295,8 +328,16 @@ fn commands(script: &str) -> Vec<Vec<String>> {
     commands
 }
 
+/// Words that run what follows them: `env FOO=bar cargo …`, `flock lock cargo …`, `time`, `nice -n 5`, `sh -c '…'`. Their
+/// own arguments (options, a lock file, a duration) are not read: the command is the first `cargo` after them, or a
+/// quoted script.
+const WRAPPERS: [&str; 21] = [
+    "env", "time", "nice", "ionice", "nohup", "setsid", "stdbuf", "timeout", "flock", "exec", "command", "sudo", "sh",
+    "bash", "zsh", "dash", "then", "do", "else", "if", "while",
+];
+
 /// Whether one command is a `cargo` build for a mobile target (or `cargo ndk`, which is Android's) that does not name
-/// its package, or names the whole workspace.
+/// its package, or names the whole workspace. Behind a wrapper (`WRAPPERS`) it is the same command.
 fn unscoped_mobile_build(words: &[String]) -> bool {
     // `CC=zigcc cargo …`: the leading assignments are not the command.
     let assignment = |word: &String| {
@@ -309,8 +350,21 @@ fn unscoped_mobile_build(words: &[String]) -> bool {
     let Some(at) = words.iter().position(|word| !assignment(word)) else {
         return false;
     };
-    if Path::new(&words[at]).file_name().is_none_or(|name| name != "cargo") {
-        return false;
+    let program = Path::new(&words[at]).file_name().map(|name| name.to_string_lossy().into_owned());
+    match program.as_deref() {
+        Some("cargo") => {}
+        Some(wrapper) if WRAPPERS.contains(&wrapper) => {
+            let rest = &words[at + 1..];
+            let cargo = rest.iter().position(|word| Path::new(word).file_name().is_some_and(|name| name == "cargo"));
+            // A script handed to the wrapper (`flock lock -c 'cargo …'`, `sh -c "…"`) is read as commands.
+            let script = |word: &String| word.contains(char::is_whitespace);
+            return cargo.is_some_and(|cargo| unscoped_mobile_build(&rest[cargo..]))
+                || rest
+                    .iter()
+                    .filter(|word| script(word))
+                    .any(|word| commands(word).iter().any(|c| unscoped_mobile_build(c)));
+        }
+        _ => return false,
     }
     let args = &words[at + 1..];
     let targets = args.iter().enumerate().filter_map(|(at, arg)| match arg.strip_prefix("--target=") {
@@ -550,6 +604,45 @@ jobs:
         target: [aarch64-apple-ios]
     steps:
       - run: cargo build -p sidevoice-mobile --target ${{ matrix.target }}
+  # Include entries are whole rows: (linux, --workspace) and (ios, -p mobile) never make (ios, --workspace).
+  matrix-rows:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            scope: --workspace
+          - target: aarch64-apple-ios
+            scope: -p sidevoice-mobile
+    steps:
+      - run: cargo build ${{ matrix.scope }} --target ${{ matrix.target }}
+  matrix-merged:
+    strategy:
+      matrix:
+        os: [macos-15, ubuntu-24.04]
+        include:
+          - os: macos-15
+            target: aarch64-apple-ios
+            scope: -p sidevoice-mobile
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            scope: --workspace
+    steps:
+      - run: cargo build ${{ matrix.scope }} --target ${{ matrix.target }}
+  matrix-excluded:
+    strategy:
+      matrix:
+        target: [aarch64-apple-ios, x86_64-unknown-linux-gnu]
+        scope: [-p sidevoice-mobile, --workspace]
+        exclude:
+          - target: aarch64-apple-ios
+            scope: --workspace
+    steps:
+      - run: cargo build ${{ matrix.scope }} --target ${{ matrix.target }}
+  wrapped:
+    steps:
+      - run: env FOO=bar cargo build -p sidevoice-mobile --target aarch64-apple-ios
+      - run: flock /tmp/cargo-build.lock cargo test --workspace
+      - run: time cargo build --target x86_64-unknown-linux-gnu
 ";
         assert_eq!(found(ok), Vec::<String>::new());
         let bad = "\
@@ -588,6 +681,25 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - run: cargo build --target ${{ matrix.target }}
+  matrix-row:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            scope: -p sidevoice-desktop
+          - target: aarch64-apple-ios
+            scope: --workspace
+    steps:
+      - run: cargo build ${{ matrix.scope }} --target ${{ matrix.target }}
+  wrapped:
+    steps:
+      - run: env FOO=bar cargo build --workspace --target aarch64-apple-ios
+      - run: time cargo build --target aarch64-apple-ios
+      - run: nice -n 10 cargo build --target aarch64-linux-android
+      - run: flock /tmp/cargo-build.lock cargo build --workspace --target aarch64-apple-ios
+      - run: flock -w 600 /tmp/lock -c 'cargo build --target aarch64-apple-ios'
+      - run: sudo -E env CC=zigcc cargo ndk -t arm64-v8a build
+      - run: bash -c \"cargo build --target aarch64-apple-ios\"
 ";
         let bad: Vec<String> = found(bad);
         let steps = |job: &str| bad.iter().filter(|place| place.starts_with(&format!("job `{job}`"))).count();
@@ -607,6 +719,10 @@ jobs:
         assert_eq!(steps("matrix-unknown"), 2, "{bad:?}");
         assert_eq!(steps("matrix-mobile"), 1, "{bad:?}");
         assert_eq!(steps("matrix-expression"), 1, "{bad:?}");
+        // Whole rows of a matrix: only (ios, --workspace) is a build of the workspace.
+        assert_eq!(steps("matrix-row"), 1, "{bad:?}");
+        // Behind a wrapper it is the same command.
+        assert_eq!(steps("wrapped"), 7, "{bad:?}");
         // A composite action holds its steps under `runs`.
         let action = "runs:\n  using: composite\n  steps:\n    - run: cargo build --target aarch64-linux-android\n";
         assert_eq!(found(action), ["the action, step 1"]);

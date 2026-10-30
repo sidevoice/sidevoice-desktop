@@ -29,7 +29,10 @@
 //!   `feature = "desktop"` or `feature = "mobile"` there;
 //! - a `cfg_aliases!` entry named `desktop` or `mobile`, or built on one, and every use of such an alias;
 //! - a host kind given to a `macro_rules!` that puts its argument in a `cfg` (`gate!(mobile)` for
-//!   `($c:meta) => { #[cfg($c)] .. }`), wherever the macro is defined;
+//!   `($c:meta) => { #[cfg($c)] .. }`), wherever the macro is defined: only an argument that reaches the `cfg` counts, by
+//!   its position among the call's comma-separated ones (`named!(test, desktop)` names a function `desktop`), except
+//!   where the matcher is not a plain list of fragments (a repetition, a separator other than the comma), which reads
+//!   every argument;
 //! - a build script that prints `cargo:rustc-cfg=desktop` or `=mobile` (or declares one with `rustc-check-cfg`);
 //! - in a `Cargo.toml`: a feature named `desktop` or `mobile`, a `[target.'cfg(..)']` table whose predicate names one,
 //!   and a `check-cfg` lint that declares one.
@@ -462,8 +465,9 @@ struct Shared {
     cfg_aliases: HashSet<String>,
     /// Host kinds defined the same way: entries named like one or built on one.
     host_aliases: HashSet<String>,
-    /// `macro_rules!` that put an argument in a `cfg` predicate (`gate!(mobile)` is `#[cfg(mobile)]`).
-    gate_macros: HashSet<String>,
+    /// `macro_rules!` that put an argument in a `cfg` predicate (`gate!(mobile)` is `#[cfg(mobile)]`), and which
+    /// arguments reach it.
+    gate_macros: HashMap<String, Reach>,
     /// Types that wrap a process `Command` (`struct Cmd { command: Command }`, `type Run = Command`).
     command_types: HashSet<String>,
 }
@@ -888,7 +892,7 @@ fn scan_platform(source: &str, root: bool, shared: &Shared) -> Result<Report> {
 struct Hosts {
     aliases: HashSet<String>,
     /// The `macro_rules!` that put an argument in a `cfg` predicate: `gate!(mobile)` is `#[cfg(mobile)]`.
-    gates: HashSet<String>,
+    gates: HashMap<String, Reach>,
     /// The file is a build script (or a module of one), where `println!` is how a `cfg` is defined.
     build_script: bool,
     lines: BTreeSet<usize>,
@@ -921,8 +925,8 @@ impl Hosts {
                     if name == "macro_rules" {
                         let defined = trees.get(at + 2).and_then(ident);
                         if let (Some(defined), Some(body)) = (defined, any_group(trees.get(at + 3))) {
-                            if puts_a_variable_in_cfg(&flat(body)) {
-                                self.gates.insert(defined);
+                            if let Some(reach) = gate_reach(&flat(body)) {
+                                self.gates.entry(defined).and_modify(|known| known.merge(&reach)).or_insert(reach);
                             }
                         }
                         continue;
@@ -938,7 +942,9 @@ impl Hosts {
                         {
                             self.found(tree);
                         }
-                        gate if self.gates.contains(gate) && names_host(&inner, &self.aliases) => self.found(tree),
+                        gate if self.gates.get(gate).is_some_and(|reach| reach.names_host(&inner, &self.aliases)) => {
+                            self.found(tree);
+                        }
                         _ => {}
                     }
                 }
@@ -973,25 +979,115 @@ fn defines_host_cfg(value: String) -> bool {
         .is_some_and(|check| TokenStream::from_str(check).is_ok_and(|check| names_host(&check, &HashSet::new())))
 }
 
-/// Whether the tokens of a `macro_rules!` body put a metavariable in a `cfg` predicate: `#[cfg($c)]`,
-/// `cfg_attr($c, ..)` or `cfg!($c)`. Such a macro passes whatever it is given to `cfg`.
-fn puts_a_variable_in_cfg(trees: &[TokenTree]) -> bool {
-    fn has_variable(trees: &[TokenTree]) -> bool {
-        trees.iter().enumerate().any(|(at, tree)| match tree {
-            TokenTree::Group(g) => has_variable(&flat(g.stream())),
-            TokenTree::Punct(p) if p.as_char() == '$' => trees.get(at + 1).and_then(ident).is_some(),
-            _ => false,
-        })
-    }
-    trees.iter().enumerate().any(|(at, tree)| match tree {
-        TokenTree::Group(g) => puts_a_variable_in_cfg(&flat(g.stream())),
-        TokenTree::Ident(id) if id == "cfg" || id == "cfg_attr" => {
-            let call = group(trees.get(at + 1), Delimiter::Parenthesis);
-            let bang = if punct(trees.get(at + 1), '!') { any_group(trees.get(at + 2)) } else { None };
-            call.or(bang).is_some_and(|args| has_variable(&flat(args)))
+/// Which arguments of a call to a gate macro reach its `cfg`.
+#[derive(Clone, Debug, PartialEq)]
+enum Reach {
+    /// The arguments at these positions among the call's comma-separated ones: for `($condition:meta, $name:ident)`
+    /// the first, so in `named!(test, desktop)` `desktop` is only a name.
+    Positions(BTreeSet<usize>),
+    /// Every argument: the macro's matcher is not a plain list of fragments (a repetition, a separator other than the
+    /// comma, a delimiter of its own), so the call's commas do not tell the positions.
+    Any,
+}
+
+impl Reach {
+    fn merge(&mut self, other: &Reach) {
+        match (&mut *self, other) {
+            (Reach::Positions(mine), Reach::Positions(theirs)) => mine.extend(theirs),
+            _ => *self = Reach::Any,
         }
-        _ => false,
-    })
+    }
+
+    /// Whether the call's `arguments` give a host kind to an argument that reaches the `cfg`.
+    fn names_host(&self, arguments: &TokenStream, aliases: &HashSet<String>) -> bool {
+        match self {
+            Reach::Any => names_host(arguments, aliases),
+            Reach::Positions(positions) => commas(&flat(arguments.clone()))
+                .into_iter()
+                .enumerate()
+                .any(|(at, argument)| positions.contains(&at) && names_host(&argument.into_iter().collect(), aliases)),
+        }
+    }
+}
+
+/// `trees` cut at their top-level commas.
+fn commas(trees: &[TokenTree]) -> Vec<Vec<TokenTree>> {
+    trees.split(|tree| punct(Some(tree), ',')).map(<[TokenTree]>::to_vec).collect()
+}
+
+/// The metavariables the tokens of a `macro_rules!` transcriber put in a `cfg` predicate: `#[cfg($c)]`,
+/// `cfg_attr($c, ..)` or `cfg!($c)`. Such a macro passes whatever it is given for them to `cfg`.
+fn cfg_variables(trees: &[TokenTree]) -> HashSet<String> {
+    fn variables(trees: &[TokenTree], found: &mut HashSet<String>) {
+        for (at, tree) in trees.iter().enumerate() {
+            match tree {
+                TokenTree::Group(g) => variables(&flat(g.stream()), found),
+                TokenTree::Punct(p) if p.as_char() == '$' => found.extend(trees.get(at + 1).and_then(ident)),
+                _ => {}
+            }
+        }
+    }
+    let mut found = HashSet::new();
+    for (at, tree) in trees.iter().enumerate() {
+        match tree {
+            TokenTree::Group(g) => found.extend(cfg_variables(&flat(g.stream()))),
+            TokenTree::Ident(id) if id == "cfg" || id == "cfg_attr" => {
+                let call = group(trees.get(at + 1), Delimiter::Parenthesis);
+                let bang = if punct(trees.get(at + 1), '!') { any_group(trees.get(at + 2)) } else { None };
+                if let Some(args) = call.or(bang) {
+                    variables(&flat(args), &mut found);
+                }
+            }
+            _ => {}
+        }
+    }
+    found
+}
+
+/// What a `macro_rules!` body does with its arguments: `None` when no arm puts one in a `cfg`, else which of them it
+/// is. Each arm is `(matcher) => { transcriber }`; a body that is not arms is read whole, as taking any argument.
+fn gate_reach(body: &[TokenTree]) -> Option<Reach> {
+    let (mut reach, mut at) = (None::<Reach>, 0);
+    while at < body.len() {
+        let arm = (
+            any_group(body.get(at)),
+            punct(body.get(at + 1), '=') && punct(body.get(at + 2), '>'),
+            any_group(body.get(at + 3)),
+        );
+        let (Some(matcher), true, Some(transcriber)) = arm else {
+            return (!cfg_variables(body).is_empty()).then_some(Reach::Any);
+        };
+        at += 4 + usize::from(punct(body.get(at + 4), ';'));
+        let used = cfg_variables(&flat(transcriber));
+        if used.is_empty() {
+            continue;
+        }
+        let matcher = flat(matcher);
+        // A plain list is fragments (`$name:kind`) and commas, and nothing else at its top level.
+        let plain = matcher.iter().all(|tree| match tree {
+            TokenTree::Punct(p) => matches!(p.as_char(), ',' | '$' | ':'),
+            TokenTree::Group(_) => false,
+            _ => true,
+        });
+        let arm = if plain {
+            let reaching = |segment: &Vec<TokenTree>| {
+                segment.iter().enumerate().any(|(at, tree)| {
+                    punct(Some(tree), '$')
+                        && segment.get(at + 1).and_then(ident).is_some_and(|name| used.contains(&name))
+                })
+            };
+            let segments = commas(&matcher);
+            let positions = segments.iter().enumerate().filter(|(_, segment)| reaching(segment));
+            Reach::Positions(positions.map(|(at, _)| at).collect())
+        } else {
+            Reach::Any
+        };
+        match &mut reach {
+            Some(known) => known.merge(&arm),
+            None => reach = Some(arm),
+        }
+    }
+    reach
 }
 
 /// The host-kind conditions of one Rust file, wherever it is (`platform` included), and what it defines for the
@@ -1088,7 +1184,9 @@ fn inspect(root: &Path) -> Result<()> {
             shared.command_types.extend(found.command_types);
             let hosts = scan_host(source, &shared, build_script(path)).map_err(|e| format!("{path}: {e}"))?.shared;
             shared.host_aliases.extend(hosts.host_aliases);
-            shared.gate_macros.extend(hosts.gate_macros);
+            for (name, reach) in hosts.gate_macros {
+                shared.gate_macros.entry(name).and_modify(|known| known.merge(&reach)).or_insert(reach);
+            }
         }
         if shared == before {
             break;
@@ -1570,9 +1668,33 @@ mod tests {
         ] {
             assert_eq!(host(&source), 0, "{source}");
         }
+        // Only the arguments that reach the `cfg` are looked at: `desktop` as the name of a function is a name.
+        let named = "macro_rules! named { ($condition:meta, $name:ident) => { #[cfg($condition)] fn $name() {} }; }";
+        assert_eq!(host(&format!("{named} named!(mobile, test);")), 1);
+        assert_eq!(host(&format!("{named} named!(any(unix, desktop), test);")), 1);
+        for source in [
+            format!("{named} named!(test, desktop); named!(unix, mobile);"),
+            // The same, across arms: the position is the arm's own.
+            "macro_rules! arms { ($name:ident) => {}; ($name:ident, $c:meta) => { #[cfg($c)] fn $name() {} }; } \
+             arms!(mobile); arms!(mobile, test);"
+                .to_owned(),
+        ] {
+            assert_eq!(host(&source), 0, "{source}");
+        }
+        // A matcher that is not a plain list of fragments (a repetition, a separator of its own) cannot tell the
+        // positions, so every argument is looked at.
+        for source in [
+            "macro_rules! each { ($($c:meta),*) => { $(#[cfg($c)] fn f() {})* }; } each!(test, mobile);",
+            "macro_rules! with { ($name:ident = $c:meta) => { #[cfg($c)] fn $name() {} }; } with!(f = desktop);",
+            // Each arm adds the positions that reach its `cfg`.
+            "macro_rules! arms { ($c:meta, $name:ident) => { #[cfg($c)] fn $name() {} }; \
+             ($name:ident, $c:meta) => { #[cfg($c)] fn $name() {} }; } arms!(f, mobile);",
+        ] {
+            assert_eq!(host(source), 1, "{source}");
+        }
         // Defined in one file, used in another.
         let defined = scan_host(gate, &Shared::default(), false).unwrap();
-        assert!(defined.count == 0 && defined.shared.gate_macros.contains("gate"));
+        assert!(defined.count == 0 && defined.shared.gate_macros.contains_key("gate"));
         assert_eq!(scan_host("gate!(mobile);", &defined.shared, false).unwrap().count, 1);
     }
 
