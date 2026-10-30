@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.3.0](https://github.com/sidevoice/sidevoice-desktop/compare/v0.2.1...v0.3.0) (2026-10-30)
+
+
+### ⚠ BREAKING CHANGES
+
+* rename the core binary to sidevoice-core ([#285](https://github.com/sidevoice/sidevoice-desktop/issues/285))
+
+### Features
+
+* abstract native reset confirmation across desktop platforms ([#199](https://github.com/sidevoice/sidevoice-desktop/issues/199)) ([02916bf](https://github.com/sidevoice/sidevoice-desktop/commit/02916bf3484be5f01e9225f9f17ed1d68ae54f20))
+* **data:** one rule for the shared models folder ([#190](https://github.com/sidevoice/sidevoice-desktop/issues/190)) ([848d6a7](https://github.com/sidevoice/sidevoice-desktop/commit/848d6a708a44d22e65ecbb14c4c0069e4bc09afe))
+* **local-host:** find the connector and core through the shared data directory ([#189](https://github.com/sidevoice/sidevoice-desktop/issues/189)) ([010d858](https://github.com/sidevoice/sidevoice-desktop/commit/010d85811e5f404df30476e9e38c0d754e268f23))
+* **local-host:** Windows named pipes, Job Object trees and file identity ([#262](https://github.com/sidevoice/sidevoice-desktop/issues/262)) ([c592b56](https://github.com/sidevoice/sidevoice-desktop/commit/c592b5678f44aeec535c1e4462c2733a4ac3463c))
+* open Windows microphone privacy settings ([#197](https://github.com/sidevoice/sidevoice-desktop/issues/197)) ([7564b41](https://github.com/sidevoice/sidevoice-desktop/commit/7564b41284ee26934030588a90a0734008f7ccfa))
+* **platform:** add microphone access interface ([#214](https://github.com/sidevoice/sidevoice-desktop/issues/214)) ([54f9d69](https://github.com/sidevoice/sidevoice-desktop/commit/54f9d69277a57e7aa206ca327693bf3f71bda682))
+* **platform:** authenticate reset helper handoff across desktop hosts ([#216](https://github.com/sidevoice/sidevoice-desktop/issues/216)) ([86bee48](https://github.com/sidevoice/sidevoice-desktop/commit/86bee485d143cdc22f190ed9bd53ea70b373e77b))
+* **platform:** local host and native voice on every OS, no per-OS capability ([#264](https://github.com/sidevoice/sidevoice-desktop/issues/264)) ([3a14443](https://github.com/sidevoice/sidevoice-desktop/commit/3a14443aae78f68864cfba2c14ca94c9807cd1c9))
+* **platform:** store provider credentials across desktop hosts ([#219](https://github.com/sidevoice/sidevoice-desktop/issues/219)) ([c248f77](https://github.com/sidevoice/sidevoice-desktop/commit/c248f77ba726a2fb853bc030e7875519d43f13b8))
+* **reset:** connector step only if installed, with a fail-closed service-absence proof per OS ([#263](https://github.com/sidevoice/sidevoice-desktop/issues/263)) ([95d9c2d](https://github.com/sidevoice/sidevoice-desktop/commit/95d9c2d7609f75a86ebc586a3f8fbfea13dd6785))
+* **reset:** one reset flow on every desktop host ([#261](https://github.com/sidevoice/sidevoice-desktop/issues/261)) ([f872087](https://github.com/sidevoice/sidevoice-desktop/commit/f872087c8ce52841e6f1a6b1c5a5864ed7f5fede))
+* **reset:** Windows-safe helper handoff, checked relaunch and trusted-handle journal ([#265](https://github.com/sidevoice/sidevoice-desktop/issues/265)) ([c79acc9](https://github.com/sidevoice/sidevoice-desktop/commit/c79acc991449c3227dd598a0fc2ff6ff13c55dc5))
+* **voice:** native voice call on Windows and Linux with sidevoice-voice 0.7.4 ([#258](https://github.com/sidevoice/sidevoice-desktop/issues/258)) ([ab2d5b5](https://github.com/sidevoice/sidevoice-desktop/commit/ab2d5b5d2f6174abf85655e711619e6111740c52))
+
+
+### Bug Fixes
+
+* **build:** regenerate command permissions and fail CI on drift ([#272](https://github.com/sidevoice/sidevoice-desktop/issues/272)) ([9a591c7](https://github.com/sidevoice/sidevoice-desktop/commit/9a591c730b538146aa8a6eca6cd19e9c56fc96a7))
+* **call-controls:** the card is told whether each conversation's machine can be reached ([#194](https://github.com/sidevoice/sidevoice-desktop/issues/194)) ([2bc59a7](https://github.com/sidevoice/sidevoice-desktop/commit/2bc59a734d7d9c319dc30841ff45391e65894b0a))
+* **call-controls:** the card's pick of a conversation whose agent is away reaches the room ([#193](https://github.com/sidevoice/sidevoice-desktop/issues/193)) ([2e7bae2](https://github.com/sidevoice/sidevoice-desktop/commit/2e7bae2c925c2db50cb04bf5aa05fcf0c73ea666))
+* **engine:** pin sidevoice-engine v0.6.0 ([#252](https://github.com/sidevoice/sidevoice-desktop/issues/252)) ([c33d43d](https://github.com/sidevoice/sidevoice-desktop/commit/c33d43d6fbf501f2bdbe5281518458ba40f34f73))
+* **install:** log the installer's failure detail ([#271](https://github.com/sidevoice/sidevoice-desktop/issues/271)) ([be174d9](https://github.com/sidevoice/sidevoice-desktop/commit/be174d9e8314608970b4f8acbdf3414f92ac7fe0))
+* **microphone:** log what the device check sees ([#281](https://github.com/sidevoice/sidevoice-desktop/issues/281)) ([38237c0](https://github.com/sidevoice/sidevoice-desktop/commit/38237c0f0c4c95ad8216476aa37a5ed78832178b))
+* **platform:** reach data deletion roots beneath the held home without following links ([#267](https://github.com/sidevoice/sidevoice-desktop/issues/267)) ([be6b31e](https://github.com/sidevoice/sidevoice-desktop/commit/be6b31e1b8ce935aab7ff6cbfdc3d2fc8dfab7d0))
+* **platform:** read macOS task_vm_info through mach2 bindings ([#248](https://github.com/sidevoice/sidevoice-desktop/issues/248)) ([0dbf770](https://github.com/sidevoice/sidevoice-desktop/commit/0dbf77038776d8e97b0383724ba4f6e8e68d72c3))
+* **platform:** report probe memory on every host ([#238](https://github.com/sidevoice/sidevoice-desktop/issues/238)) ([ba11e0f](https://github.com/sidevoice/sidevoice-desktop/commit/ba11e0f7ae921723c7aeb12c462aa73c01f714af))
+* **release:** staple the signed app with retries, then repack and re-sign the update ([#276](https://github.com/sidevoice/sidevoice-desktop/issues/276)) ([1b5589d](https://github.com/sidevoice/sidevoice-desktop/commit/1b5589d6ddf90fd41b50f5d4f5794b49c9bf36f5))
+* **windows:** declare UTF-8 as the app's ANSI code page ([#286](https://github.com/sidevoice/sidevoice-desktop/issues/286)) ([b651efc](https://github.com/sidevoice/sidevoice-desktop/commit/b651efc2f35f22151a7d1c6534233a3c467e3d76))
+* **windows:** show the floating card when another app covers the room ([#280](https://github.com/sidevoice/sidevoice-desktop/issues/280)) ([f02bef0](https://github.com/sidevoice/sidevoice-desktop/commit/f02bef06ba404abc1d57d6b8eb27c4b086567600))
+* **xtask:** keep signing passwords off the command line ([#273](https://github.com/sidevoice/sidevoice-desktop/issues/273)) ([1a91ad7](https://github.com/sidevoice/sidevoice-desktop/commit/1a91ad732025b56dc2b2930ae8f3bb2a01a38fe2))
+* **xtask:** token-aware platform guard with alias and OS-command coverage ([#232](https://github.com/sidevoice/sidevoice-desktop/issues/232)) ([890f1b4](https://github.com/sidevoice/sidevoice-desktop/commit/890f1b4ee212447e0c5351a3a143fb87599866b0))
+
+
+### Code Refactoring
+
+* rename the core binary to sidevoice-core ([#285](https://github.com/sidevoice/sidevoice-desktop/issues/285)) ([65a3e4d](https://github.com/sidevoice/sidevoice-desktop/commit/65a3e4d2123552019fa6dc73f7906f9362cd4194))
+
 ## [0.2.1](https://github.com/sidevoice/sidevoice-desktop/compare/v0.2.0...v0.2.1) (2026-10-21)
 
 
