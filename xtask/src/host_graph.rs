@@ -6,17 +6,21 @@
 //! - the shared crates, `app-core/` and `app-tauri/`, depend on neither host crate;
 //! - `app-core/` has no shell in its closure: no Tauri, no webview and no window crate, in any kind of dependency.
 //!
-//! They are read from `cargo metadata`, once for each supported target, so a dependency under a `cfg(target_os)` is
-//! seen on the targets it applies to. This reads resolution only: it builds nothing, so it runs before a crate has
-//! its iOS or Android bodies. A crate that is not in the workspace yet has nothing to violate and is not looked for.
+//! They are read from `cargo metadata` with every feature on, once for each supported target: a dependency behind a
+//! feature (`shell = ["dep:tauri"]`) is a dependency of the crate that has the feature, and one under a
+//! `cfg(target_os)` is seen on the targets it applies to. This reads resolution only: it builds nothing, so it runs
+//! before a crate has its iOS or Android bodies. A crate that is not in the workspace yet has nothing to violate and is
+//! not looked for. (What the manifests say of the host kinds, as a feature or a target table, is `platform_guard`'s.)
 //!
 //! A build for a mobile target names its package (`-p`): the workspace holds the other kind of host too, and a
-//! workspace-wide build for iOS or Android would try to build it. The workflows are read for that.
+//! workspace-wide build for iOS or Android would try to build it. The steps of the workflows and composite actions
+//! (`.github`, `.yml` and `.yaml`) are read for that, as parsed YAML and shell words, with a matrix's literal values.
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 
-use regex::Regex;
+use regex::{NoExpand, Regex};
 use serde_json::Value;
+use serde_yaml_ng::Value as Yaml;
 
 use crate::util::{repo, Cmd};
 use crate::Result;
@@ -136,35 +140,192 @@ pub fn violations(metadata: &Value) -> Result<Vec<String>> {
     Ok(found)
 }
 
-/// Lines (1-based) of the workflow `text` that build for iOS or Android without naming the package, or for the whole
-/// workspace: a `cargo` command with a mobile `--target` (or `cargo ndk`) that has no `-p`/`--package`, or has
-/// `--workspace`, `--all` or `--exclude`.
-pub fn unscoped_mobile_builds(text: &str) -> Vec<usize> {
-    let mobile = Regex::new(r"\bcargo\b(?:.*--target[= ]\S*-(?:ios|android)|\s+ndk\b)").expect("a regex");
-    let scoped = Regex::new(r"\s(-p\S*|--package\b\S*)(\s|$)").expect("a regex");
-    let wide = Regex::new(r"\s(?:--workspace|--all|--exclude)(?:\s|=|$)").expect("a regex");
-    let mut found = Vec::new();
-    let (mut command, mut start) = (String::new(), 0);
-    for (index, line) in text.lines().enumerate() {
-        let line = line.trim();
-        if command.is_empty() {
-            start = index + 1;
-        }
-        // A command continues on the next line after a backslash. Comments and step names are not commands.
-        if line.starts_with('#') || line.starts_with("- name:") || line.starts_with("name:") {
-            continue;
-        }
-        command.push(' ');
-        command.push_str(line.trim_end_matches('\\'));
-        if line.ends_with('\\') {
-            continue;
-        }
-        if mobile.is_match(&command) && (!scoped.is_match(&command) || wide.is_match(&command)) {
-            found.push(start);
-        }
-        command.clear();
+/// Where the workflow or composite action `text` builds for a mobile target without naming its package, or for the
+/// whole workspace: a step whose `run` has a `cargo` command with a mobile `--target` (or `cargo ndk`) and no
+/// `-p`/`--package`, or with `--workspace`, `--all` or `--exclude`.
+///
+/// The YAML is parsed, so its comments are not commands, and the shell is read word by word (quotes, `#` comments, `;`,
+/// `&&`, `|`, a backslash at the end of a line). A `--target ${{ matrix.key }}` is read as each literal value the job's
+/// matrix gives that key. A target that cannot be known (another expression, a shell variable, a matrix made by
+/// `fromJSON`) counts as a mobile one: say it, or name the package.
+pub fn unscoped_mobile_builds(text: &str) -> Result<Vec<String>> {
+    let document: Yaml = serde_yaml_ng::from_str(text).map_err(|e| e.to_string())?;
+    // A workflow has `jobs.<id>.steps`; a composite action, `runs.steps`.
+    let mut jobs: Vec<(String, &Yaml)> = Vec::new();
+    if let Some(Yaml::Mapping(map)) = document.get("jobs") {
+        jobs.extend(map.iter().filter_map(|(id, job)| Some((format!("job `{}`", id.as_str()?), job))));
     }
-    found
+    if let Some(runs) = document.get("runs") {
+        jobs.push(("the action".to_owned(), runs));
+    }
+    let mut places = Vec::new();
+    for (place, job) in jobs {
+        let matrix = matrix_values(job.get("strategy").and_then(|strategy| strategy.get("matrix")));
+        let steps = job.get("steps").and_then(Yaml::as_sequence).into_iter().flatten();
+        for (number, step) in steps.enumerate() {
+            let Some(script) = step.get("run").and_then(Yaml::as_str) else {
+                continue;
+            };
+            let unscoped = expansions(script, &matrix)
+                .iter()
+                .any(|script| commands(script).iter().any(|command| unscoped_mobile_build(command)));
+            if unscoped {
+                places.push(format!("{place}, step {}", number + 1));
+            }
+        }
+    }
+    Ok(places)
+}
+
+fn scalar(value: &Yaml) -> Option<String> {
+    match value {
+        Yaml::String(text) => Some(text.clone()),
+        Yaml::Number(number) => Some(number.to_string()),
+        Yaml::Bool(flag) => Some(flag.to_string()),
+        _ => None,
+    }
+}
+
+/// The literal values a job's matrix gives each key: its lists, and the keys of its `include` entries. A matrix that is
+/// an expression gives none.
+fn matrix_values(matrix: Option<&Yaml>) -> HashMap<String, Vec<String>> {
+    let mut values: HashMap<String, Vec<String>> = HashMap::new();
+    let Some(Yaml::Mapping(matrix)) = matrix else {
+        return values;
+    };
+    for (key, value) in matrix {
+        match (key.as_str(), value) {
+            (Some("include"), Yaml::Sequence(entries)) => {
+                for (key, value) in entries.iter().filter_map(Yaml::as_mapping).flatten() {
+                    values.entry(key.as_str().unwrap_or_default().to_owned()).or_default().extend(scalar(value));
+                }
+            }
+            (Some("exclude"), _) => {}
+            (Some(key), Yaml::Sequence(items)) => {
+                values.entry(key.to_owned()).or_default().extend(items.iter().filter_map(scalar));
+            }
+            _ => {}
+        }
+    }
+    values
+}
+
+/// `script` once for each combination of the values the matrix gives the keys it names (`${{ matrix.key }}`); an
+/// expression stays where the matrix gives no value.
+fn expansions(script: &str, matrix: &HashMap<String, Vec<String>>) -> Vec<String> {
+    let mut scripts = vec![script.to_owned()];
+    for (key, values) in matrix {
+        let expression = Regex::new(&format!(r"\$\{{\{{\s*matrix\.{}\s*\}}\}}", regex::escape(key))).expect("a regex");
+        if values.is_empty() || !expression.is_match(script) {
+            continue;
+        }
+        scripts = scripts
+            .iter()
+            .flat_map(|script| values.iter().map(|value| expression.replace_all(script, NoExpand(value)).into_owned()))
+            .collect();
+    }
+    scripts
+}
+
+/// The commands of a shell script, each as its words: quotes taken off, a `${{ … }}` expression kept whole (GitHub
+/// substitutes it before the shell runs, quotes or not), `#` comments dropped, a backslash-newline joining lines, and
+/// `;`, `&`, `|` and newlines ending a command.
+fn commands(script: &str) -> Vec<Vec<String>> {
+    let chars: Vec<char> = script.chars().collect();
+    let (mut commands, mut words, mut word) = (Vec::new(), Vec::new(), String::new());
+    let (mut quote, mut in_word, mut at) = (None::<char>, false, 0);
+    while at < chars.len() {
+        let c = chars[at];
+        if c == '$' && chars.get(at + 1) == Some(&'{') && chars.get(at + 2) == Some(&'{') {
+            let end = (at..chars.len().saturating_sub(1)).find(|&i| chars[i] == '}' && chars[i + 1] == '}');
+            let end = end.map_or(chars.len(), |end| end + 2);
+            word.extend(&chars[at..end]);
+            (in_word, at) = (true, end);
+            continue;
+        }
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some('"'), '\\') if at + 1 < chars.len() => {
+                at += 1;
+                word.push(chars[at]);
+            }
+            (Some(_), c) => word.push(c),
+            (None, '\'' | '"') => (quote, in_word) = (Some(c), true),
+            (None, '\\') => {
+                // A backslash-newline joins the lines; before anything else it quotes the next character.
+                at += 1;
+                if let Some(&next) = chars.get(at).filter(|next| **next != '\n') {
+                    word.push(next);
+                    in_word = true;
+                }
+            }
+            (None, '#') if !in_word => {
+                while chars.get(at + 1).is_some_and(|next| *next != '\n') {
+                    at += 1;
+                }
+            }
+            (None, c) if c.is_whitespace() && c != '\n' => {
+                if in_word {
+                    words.push(std::mem::take(&mut word));
+                }
+                in_word = false;
+            }
+            (None, '\n' | ';' | '&' | '|') => {
+                if in_word {
+                    words.push(std::mem::take(&mut word));
+                }
+                in_word = false;
+                if !words.is_empty() {
+                    commands.push(std::mem::take(&mut words));
+                }
+            }
+            (None, c) => {
+                word.push(c);
+                in_word = true;
+            }
+        }
+        at += 1;
+    }
+    if in_word {
+        words.push(word);
+    }
+    if !words.is_empty() {
+        commands.push(words);
+    }
+    commands
+}
+
+/// Whether one command is a `cargo` build for a mobile target (or `cargo ndk`, which is Android's) that does not name
+/// its package, or names the whole workspace.
+fn unscoped_mobile_build(words: &[String]) -> bool {
+    // `CC=zigcc cargo …`: the leading assignments are not the command.
+    let assignment = |word: &String| {
+        word.split_once('=').is_some_and(|(name, _)| {
+            !name.is_empty()
+                && !name.starts_with(|c: char| c.is_ascii_digit())
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        })
+    };
+    let Some(at) = words.iter().position(|word| !assignment(word)) else {
+        return false;
+    };
+    if Path::new(&words[at]).file_name().is_none_or(|name| name != "cargo") {
+        return false;
+    }
+    let args = &words[at + 1..];
+    let targets = args.iter().enumerate().filter_map(|(at, arg)| match arg.strip_prefix("--target=") {
+        Some(target) => Some(target),
+        None => (arg == "--target").then(|| args.get(at + 1).map(String::as_str)).flatten(),
+    });
+    let mobile = args.first().is_some_and(|arg| arg == "ndk")
+        || targets
+            .into_iter()
+            .any(|target| target.contains("-ios") || target.contains("-android") || target.contains('$'));
+    let scoped = args
+        .iter()
+        .any(|arg| arg == "-p" || arg.starts_with("--package") || (arg.starts_with("-p") && !arg.starts_with("--")));
+    let wide = args.iter().any(|arg| matches!(arg.as_str(), "--workspace" | "--all") || arg.starts_with("--exclude"));
+    mobile && (!scoped || wide)
 }
 
 /// `cargo xtask host-graph`: the workspace's dependency graph on each supported target, and the workflows' builds for
@@ -172,11 +333,7 @@ pub fn unscoped_mobile_builds(text: &str) -> Vec<usize> {
 pub fn check() -> Result<()> {
     let mut errors = Vec::new();
     for target in TARGETS {
-        let metadata = Cmd::new("cargo")
-            .args(["metadata", "--format-version", "1", "--locked", "--filter-platform", target])
-            .dir(repo().join("desktop"))
-            .stdout()?;
-        let metadata: Value = serde_json::from_str(&metadata).map_err(|e| format!("cargo metadata: {e}"))?;
+        let metadata = resolve(&repo().join("desktop"), target, true)?;
         errors.extend(violations(&metadata)?.into_iter().map(|error| format!("{target}: {error}")));
     }
     let github = repo().join(".github");
@@ -186,10 +343,10 @@ pub fn check() -> Result<()> {
         files.sort();
         for file in files {
             let text = std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
-            for line in unscoped_mobile_builds(&text) {
-                let file = file.strip_prefix(repo()).unwrap_or(&file).display();
+            let file = file.strip_prefix(repo()).unwrap_or(&file).display();
+            for place in unscoped_mobile_builds(&text).map_err(|e| format!("{file}: {e}"))? {
                 errors.push(format!(
-                    "{file}:{line}: a build for a mobile target names its package (-p), never the workspace"
+                    "{file}: {place}: a build for a mobile target names its package (-p), never the workspace"
                 ));
             }
         }
@@ -201,13 +358,25 @@ pub fn check() -> Result<()> {
     }
 }
 
-/// Every `.yml` below `dir`.
+/// `cargo metadata` of the workspace around `dir` on `target`, with every feature on: a dependency behind a feature
+/// (`shell = ["dep:tauri"]`) is a dependency of the crate that has the feature, and it is what a build with that
+/// feature gets.
+fn resolve(dir: &Path, target: &str, locked: bool) -> Result<Value> {
+    let mut command = Cmd::new("cargo").args(["metadata", "--format-version", "1", "--all-features"]);
+    if locked {
+        command = command.arg("--locked");
+    }
+    let metadata = command.args(["--filter-platform", target]).dir(dir).stdout()?;
+    serde_json::from_str(&metadata).map_err(|e| format!("cargo metadata: {e}"))
+}
+
+/// Every `.yml` and `.yaml` below `dir`.
 fn collect_yaml(dir: &Path, found: &mut Vec<std::path::PathBuf>) {
     for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         let path = entry.path();
         if path.is_dir() {
             collect_yaml(&path, found);
-        } else if path.extension().is_some_and(|extension| extension == "yml") {
+        } else if path.extension().is_some_and(|extension| extension == "yml" || extension == "yaml") {
             found.push(path);
         }
     }
@@ -317,33 +486,146 @@ mod tests {
         assert!(violations(&json!({"workspace_root": "/ws"})).is_err());
     }
 
+    /// A cargo workspace on disk: `crates` are (directory, manifest) below its root.
+    fn workspace(crates: &[(&str, &str)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let members: Vec<String> = crates.iter().map(|(name, _)| format!("\"{name}\"")).collect();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            format!("[workspace]\nresolver = \"2\"\nmembers = [{}]\n", members.join(", ")),
+        )
+        .unwrap();
+        for (name, manifest) in crates {
+            std::fs::create_dir_all(dir.path().join(name).join("src")).unwrap();
+            std::fs::write(dir.path().join(name).join("Cargo.toml"), manifest).unwrap();
+            std::fs::write(dir.path().join(name).join("src/lib.rs"), "").unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn a_dependency_behind_a_feature_is_a_dependency() {
+        // The shell is optional, behind a feature of `app-core` that no default turns on.
+        let package = |name: &str, extra: &str| {
+            format!("[package]\nname = \"{name}\"\nversion = \"0.0.0\"\nedition = \"2021\"\n{extra}")
+        };
+        let core = package(
+            "sidevoice-app-core",
+            "[dependencies]\ntauri = { path = \"../tauri\", optional = true }\n[features]\nshell = [\"dep:tauri\"]\n",
+        );
+        let dir = workspace(&[("app-core", &core), ("tauri", &package("tauri", ""))]);
+        let metadata = resolve(dir.path(), "x86_64-unknown-linux-gnu", false).unwrap();
+        assert_eq!(
+            violations(&metadata).unwrap(),
+            ["app-core/ must not depend on a shell (Tauri, wry, tao): sidevoice-app-core -> tauri"]
+        );
+    }
+
     #[test]
     fn builds_for_a_mobile_target_name_their_package() {
+        let found = |text: &str| unscoped_mobile_builds(text).unwrap();
         let ok = "\
-steps:
-  - name: cargo build --workspace --target aarch64-apple-ios
-  - run: cargo build -p sidevoice-mobile --target aarch64-apple-ios-sim
-  - run: cargo test --workspace
-  - run: |
-      cargo check \\
-        --package sidevoice-app-core \\
-        --target aarch64-linux-android
-  # cargo build --workspace --target aarch64-apple-ios
-  - run: cargo ndk -t arm64-v8a build -p sidevoice-mobile
+jobs:
+  desktop:
+    steps:
+      - name: cargo build --workspace --target aarch64-apple-ios
+        run: cargo test --workspace
+      - run: cargo build -p sidevoice-mobile --target aarch64-apple-ios-sim
+      - run: |
+          # cargo build --workspace --target aarch64-apple-ios
+          cargo check \\
+            --package sidevoice-app-core \\
+            --target aarch64-linux-android
+          CC=zigcc cargo ndk -t arm64-v8a build -psidevoice-mobile
+      - run: echo 'cargo build --target aarch64-apple-ios'
+  desktop-matrix:
+    strategy:
+      matrix:
+        target: [x86_64-unknown-linux-gnu, aarch64-apple-darwin]
+    steps:
+      - run: cargo build --target ${{ matrix.target }}
+  mobile-matrix:
+    strategy:
+      matrix:
+        target: [aarch64-apple-ios]
+    steps:
+      - run: cargo build -p sidevoice-mobile --target ${{ matrix.target }}
 ";
-        assert_eq!(unscoped_mobile_builds(ok), Vec::<usize>::new());
+        assert_eq!(found(ok), Vec::<String>::new());
         let bad = "\
-steps:
-  - run: cargo build --target aarch64-apple-ios
-  - run: cargo build --workspace --target=aarch64-linux-android
-  - run: |
-      cargo build \\
-        --target aarch64-apple-ios-sim \\
-        --all
-  - run: cargo ndk -t arm64-v8a build
-  - run: cargo build -p sidevoice-mobile --exclude sidevoice-desktop --target aarch64-apple-ios
-  - run: cargo build -p sidevoice-app-core
+jobs:
+  plain:
+    steps:
+      - run: cargo build --target aarch64-apple-ios
+      - run: cargo build --workspace --target=aarch64-linux-android
+      - run: |
+          cargo build \\
+            --target aarch64-apple-ios-sim \\
+            --all
+      - run: cargo ndk -t arm64-v8a build
+      - run: cargo build -p sidevoice-mobile --exclude sidevoice-desktop --target aarch64-apple-ios
+      - run: cargo build -p sidevoice-app-core
+      - run: cd mobile && CC=zigcc cargo build --release --target aarch64-apple-ios
+  commented:
+    steps:
+      - run: cargo build --target aarch64-apple-ios # -p sidevoice-mobile
+      - run: |
+          cargo build --target aarch64-apple-ios # --package sidevoice-mobile
+  matrix-unknown:
+    steps:
+      - run: cargo build --target ${{ matrix.target }}
+      - run: cargo build --target \"$TARGET\"
+  matrix-mobile:
+    strategy:
+      matrix:
+        os: [macos-15]
+        include:
+          - target: x86_64-apple-ios
+    steps:
+      - run: cargo build --target ${{ matrix.target }}
+  matrix-expression:
+    strategy:
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - run: cargo build --target ${{ matrix.target }}
 ";
-        assert_eq!(unscoped_mobile_builds(bad), [2, 3, 5, 8, 9]);
+        let bad: Vec<String> = found(bad);
+        let steps = |job: &str| bad.iter().filter(|place| place.starts_with(&format!("job `{job}`"))).count();
+        assert_eq!(
+            bad[..7],
+            [
+                "job `plain`, step 1",
+                "job `plain`, step 2",
+                "job `plain`, step 3",
+                "job `plain`, step 4",
+                "job `plain`, step 5",
+                "job `plain`, step 7",
+                "job `commented`, step 1"
+            ]
+        );
+        assert_eq!(steps("commented"), 2, "{bad:?}");
+        assert_eq!(steps("matrix-unknown"), 2, "{bad:?}");
+        assert_eq!(steps("matrix-mobile"), 1, "{bad:?}");
+        assert_eq!(steps("matrix-expression"), 1, "{bad:?}");
+        // A composite action holds its steps under `runs`.
+        let action = "runs:\n  using: composite\n  steps:\n    - run: cargo build --target aarch64-linux-android\n";
+        assert_eq!(found(action), ["the action, step 1"]);
+        assert!(unscoped_mobile_builds("jobs: [").is_err(), "an unreadable workflow is an error, never a pass");
+    }
+
+    #[test]
+    fn workflows_are_found_whatever_their_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["a.yml", "b.yaml", "c.txt", "d/e.yaml"] {
+            let path = dir.path().join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "").unwrap();
+        }
+        let mut found = Vec::new();
+        collect_yaml(dir.path(), &mut found);
+        let mut names: Vec<String> =
+            found.iter().map(|path| path.strip_prefix(dir.path()).unwrap().display().to_string()).collect();
+        names.sort();
+        assert_eq!(names, ["a.yml", "b.yaml", "d/e.yaml"]);
     }
 }

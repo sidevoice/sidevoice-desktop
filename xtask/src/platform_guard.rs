@@ -24,18 +24,23 @@
 //!   An OS condition on the trait, on an inline module around it or on the whole file counts the same.
 //!
 //! Host kinds are not OS conditions, and have no place anywhere, `platform` included (D-RULE, AGENTS.md → "Host kind is
-//! a crate boundary"). What counts, in every Rust file:
+//! a crate boundary"). What counts, in every Rust file, and in every Cargo manifest:
 //! - `desktop` or `mobile` (the conditions tauri-build defines) in `cfg`, `cfg_attr` or `cfg!`, and
 //!   `feature = "desktop"` or `feature = "mobile"` there;
 //! - a `cfg_aliases!` entry named `desktop` or `mobile`, or built on one, and every use of such an alias;
-//! - a build script printing `cargo:rustc-cfg=desktop` or `=mobile`.
+//! - a host kind given to a `macro_rules!` that puts its argument in a `cfg` (`gate!(mobile)` for
+//!   `($c:meta) => { #[cfg($c)] .. }`), wherever the macro is defined;
+//! - a build script that prints `cargo:rustc-cfg=desktop` or `=mobile` (or declares one with `rustc-check-cfg`);
+//! - in a `Cargo.toml`: a feature named `desktop` or `mobile`, a `[target.'cfg(..)']` table whose predicate names one,
+//!   and a `check-cfg` lint that declares one.
 //!
 //! Code for one kind of host lives in the crate of that host; `host_graph` checks the crates' dependencies.
 //!
 //! Limits, by design of a token scan: a program name or OS variable reaching `Command::new` through a constant
 //! or a computed value, a bare function imported by glob (`use libc::*`) and the arms of `cfg_select!` are not
-//! followed, and an alias that groups OS values under a name of its own (`any(target_os = "ios", ..)` as `handheld`)
-//! is for review, not for this scan.
+//! followed; a host kind reaching a `cfg` through a macro that is not a `macro_rules!` of the repository, or through a
+//! second macro, is not either (a scan is not an expander); and an alias that groups OS values under a name of its
+//! own (`any(target_os = "ios", ..)` as `handheld`) is for review, not for this scan.
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     path::Path,
@@ -457,6 +462,8 @@ struct Shared {
     cfg_aliases: HashSet<String>,
     /// Host kinds defined the same way: entries named like one or built on one.
     host_aliases: HashSet<String>,
+    /// `macro_rules!` that put an argument in a `cfg` predicate (`gate!(mobile)` is `#[cfg(mobile)]`).
+    gate_macros: HashSet<String>,
     /// Types that wrap a process `Command` (`struct Cmd { command: Command }`, `type Run = Command`).
     command_types: HashSet<String>,
 }
@@ -875,10 +882,15 @@ fn scan_platform(source: &str, root: bool, shared: &Shared) -> Result<Report> {
 }
 
 /// Host-kind conditions of one file, wherever they stand: attributes (inside macros such as `cfg_if!` too), `cfg!`
-/// and `cfg_aliases!`, and the strings a build script prints to define one.
+/// and `cfg_aliases!`, a host kind handed to a macro that puts its argument in a `cfg`, and what a build script prints
+/// to define one.
 #[derive(Default)]
 struct Hosts {
     aliases: HashSet<String>,
+    /// The `macro_rules!` that put an argument in a `cfg` predicate: `gate!(mobile)` is `#[cfg(mobile)]`.
+    gates: HashSet<String>,
+    /// The file is a build script (or a module of one), where `println!` is how a `cfg` is defined.
+    build_script: bool,
     lines: BTreeSet<usize>,
     count: usize,
 }
@@ -905,17 +917,30 @@ impl Hosts {
                     }
                 }
                 TokenTree::Ident(id) if punct(trees.get(at + 1), '!') => {
+                    let name = id.to_string();
+                    if name == "macro_rules" {
+                        let defined = trees.get(at + 2).and_then(ident);
+                        if let (Some(defined), Some(body)) = (defined, any_group(trees.get(at + 3))) {
+                            if puts_a_variable_in_cfg(&flat(body)) {
+                                self.gates.insert(defined);
+                            }
+                        }
+                        continue;
+                    }
                     let Some(inner) = any_group(trees.get(at + 2)) else {
                         continue;
                     };
-                    match id.to_string().as_str() {
+                    match name.as_str() {
                         "cfg" if names_host(&inner, &self.aliases) => self.found(tree),
                         "cfg_aliases" => self.define(&flat(inner)),
+                        "println" | "print"
+                            if self.build_script && first_string(inner.clone()).is_some_and(defines_host_cfg) =>
+                        {
+                            self.found(tree);
+                        }
+                        gate if self.gates.contains(gate) && names_host(&inner, &self.aliases) => self.found(tree),
                         _ => {}
                     }
-                }
-                TokenTree::Literal(lit) if string_value(lit).is_some_and(|value| prints_host_cfg(&value)) => {
-                    self.found(tree);
                 }
                 _ => {}
             }
@@ -937,24 +962,81 @@ impl Hosts {
     }
 }
 
-/// Whether a string is what a build script prints to define a host-kind condition (`cargo:rustc-cfg=mobile`, or with
-/// the `cargo::` prefix).
-fn prints_host_cfg(value: &str) -> bool {
-    let rest = value.strip_prefix("cargo::").or_else(|| value.strip_prefix("cargo:"));
-    rest.and_then(|rest| rest.strip_prefix("rustc-cfg="))
-        .is_some_and(|name| HOST_KINDS.contains(&name.split('=').next().unwrap_or_default()))
+/// Whether a string is what a build script prints to define a host-kind condition: `cargo:rustc-cfg=mobile`, or
+/// `cargo::rustc-check-cfg=cfg(mobile)` which declares one.
+fn defines_host_cfg(value: String) -> bool {
+    let rest = value.strip_prefix("cargo::").or_else(|| value.strip_prefix("cargo:")).unwrap_or_default();
+    if let Some(name) = rest.strip_prefix("rustc-cfg=") {
+        return HOST_KINDS.contains(&name.split('=').next().unwrap_or_default());
+    }
+    rest.strip_prefix("rustc-check-cfg=")
+        .is_some_and(|check| TokenStream::from_str(check).is_ok_and(|check| names_host(&check, &HashSet::new())))
 }
 
-/// The host-kind conditions of one file, wherever it is (`platform` included), and the aliases it defines.
-fn scan_host(source: &str, shared: &Shared) -> Result<Report> {
+/// Whether the tokens of a `macro_rules!` body put a metavariable in a `cfg` predicate: `#[cfg($c)]`,
+/// `cfg_attr($c, ..)` or `cfg!($c)`. Such a macro passes whatever it is given to `cfg`.
+fn puts_a_variable_in_cfg(trees: &[TokenTree]) -> bool {
+    fn has_variable(trees: &[TokenTree]) -> bool {
+        trees.iter().enumerate().any(|(at, tree)| match tree {
+            TokenTree::Group(g) => has_variable(&flat(g.stream())),
+            TokenTree::Punct(p) if p.as_char() == '$' => trees.get(at + 1).and_then(ident).is_some(),
+            _ => false,
+        })
+    }
+    trees.iter().enumerate().any(|(at, tree)| match tree {
+        TokenTree::Group(g) => puts_a_variable_in_cfg(&flat(g.stream())),
+        TokenTree::Ident(id) if id == "cfg" || id == "cfg_attr" => {
+            let call = group(trees.get(at + 1), Delimiter::Parenthesis);
+            let bang = if punct(trees.get(at + 1), '!') { any_group(trees.get(at + 2)) } else { None };
+            call.or(bang).is_some_and(|args| has_variable(&flat(args)))
+        }
+        _ => false,
+    })
+}
+
+/// The host-kind conditions of one Rust file, wherever it is (`platform` included), and what it defines for the
+/// others: aliases and macros that gate. `build_script`: a build script, or a module of one.
+fn scan_host(source: &str, shared: &Shared, build_script: bool) -> Result<Report> {
     let trees = flat(TokenStream::from_str(source).map_err(|e| e.to_string())?);
-    let mut hosts = Hosts { aliases: shared.host_aliases.clone(), ..Hosts::default() };
-    // Twice: an alias counts where it is used even above the entry that defines it.
+    let mut hosts = Hosts {
+        aliases: shared.host_aliases.clone(),
+        gates: shared.gate_macros.clone(),
+        build_script,
+        ..Hosts::default()
+    };
+    // Twice: an alias or a macro counts where it is used even above the entry that defines it.
     hosts.walk(&trees);
     (hosts.count, hosts.lines) = (0, BTreeSet::new());
     hosts.walk(&trees);
-    let shared = Shared { host_aliases: hosts.aliases, ..shared.clone() };
+    let shared = Shared { host_aliases: hosts.aliases, gate_macros: hosts.gates, ..shared.clone() };
     Ok(Report { count: hosts.count, lines: hosts.lines, shared })
+}
+
+/// The host-kind conditions of a Cargo manifest, which has no tokens to walk: a feature named `desktop` or `mobile`,
+/// a `[target.'cfg(..)']` table whose predicate names one, and a `check-cfg` lint that declares one.
+fn scan_manifest(text: &str, shared: &Shared) -> Result<Report> {
+    let manifest: toml::Table = text.parse().map_err(|e| format!("{e}"))?;
+    let names = |predicate: &str| {
+        TokenStream::from_str(predicate).is_ok_and(|predicate| names_host(&predicate, &shared.host_aliases))
+    };
+    let mut found: Vec<String> = Vec::new();
+    let keys = |table: Option<&toml::Value>| -> Vec<String> {
+        table.and_then(toml::Value::as_table).map(|table| table.keys().cloned().collect()).unwrap_or_default()
+    };
+    found.extend(keys(manifest.get("features")).into_iter().filter(|name| HOST_KINDS.contains(&name.as_str())));
+    found.extend(keys(manifest.get("target")).into_iter().filter(|key| key.starts_with("cfg(") && names(key)));
+    // `[lints.rust]`, and `[workspace.lints.rust]` for the members that inherit it.
+    let lints = [manifest.get("lints"), manifest.get("workspace").and_then(|workspace| workspace.get("lints"))];
+    for lints in lints.into_iter().flatten() {
+        let declared =
+            lints.get("rust").and_then(|rust| rust.get("unexpected_cfgs")).and_then(|lint| lint.get("check-cfg"));
+        let declared = declared.and_then(toml::Value::as_array).into_iter().flatten().filter_map(toml::Value::as_str);
+        found.extend(declared.filter(|declared| names(declared)).map(str::to_owned));
+    }
+    // A table has no spans here: the line is where the text first holds the name.
+    let lines =
+        found.iter().map(|name| text.lines().position(|line| line.contains(name.as_str())).map_or(1, |at| at + 1));
+    Ok(Report { count: found.len(), lines: lines.collect(), shared: shared.clone() })
 }
 
 /// `platform/mod.rs`: the module root, which only declares and picks.
@@ -977,21 +1059,25 @@ pub fn check() -> Result<()> {
 fn inspect(root: &Path) -> Result<()> {
     // Git's inventory includes every crate and build script, without target/, vendored caches or worktrees.
     let output = std::process::Command::new("git")
-        .args(["ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "*.rs"])
+        .args(["ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "*.rs", "*Cargo.toml"])
         .current_dir(root)
         .output()
         .map_err(|e| e.to_string())?;
     if !output.status.success() {
         return Err("git ls-files failed".into());
     }
-    let mut files = Vec::new();
+    let (mut files, mut manifests) = (Vec::new(), Vec::new());
     for path in output.stdout.split(|b| *b == 0).filter(|p| !p.is_empty()) {
         let path = std::str::from_utf8(path).map_err(|e| e.to_string())?.to_string();
+        let manifest = Path::new(&path).file_name().is_some_and(|name| name == "Cargo.toml");
+        if !manifest && !path.ends_with(".rs") {
+            continue;
+        }
         let source = std::fs::read_to_string(root.join(&path)).map_err(|e| format!("{path}: {e}"))?;
-        files.push((path, source));
+        (if manifest { &mut manifests } else { &mut files }).push((path, source));
     }
-    // OS aliases, host-kind aliases and command wrappers are defined in one file and used in others, and may build on
-    // each other.
+    // OS aliases, host-kind aliases and macros, and command wrappers are defined in one file and used in others, and
+    // may build on each other.
     let mut shared = Shared::default();
     loop {
         let before = shared.clone();
@@ -1000,42 +1086,52 @@ fn inspect(root: &Path) -> Result<()> {
             let found = scan(source, &shared).map_err(|e| format!("{path}: {e}"))?.shared;
             shared.cfg_aliases.extend(found.cfg_aliases);
             shared.command_types.extend(found.command_types);
-            let hosts = scan_host(source, &shared).map_err(|e| format!("{path}: {e}"))?.shared;
+            let hosts = scan_host(source, &shared, build_script(path)).map_err(|e| format!("{path}: {e}"))?.shared;
             shared.host_aliases.extend(hosts.host_aliases);
+            shared.gate_macros.extend(hosts.gate_macros);
         }
         if shared == before {
             break;
         }
     }
-    let mut errors = Vec::new();
-    let mut total = 0;
-    let mut reported = BTreeSet::new();
+    // What each file holds: its OS occurrences, and its host-kind conditions (the host kinds are everyone's: `platform`
+    // files and the Cargo manifests are read for them too).
+    let mut reports = Vec::new();
     for (path, source) in &files {
-        let report = if exempt(Path::new(path)) {
+        let os = if exempt(Path::new(path)) {
             scan_platform(source, platform_root(Path::new(path)), &shared)
         } else {
             scan_file(source, &shared, binary_root(root, path))
-        }
-        .map_err(|e| format!("{path}: {e}"))?;
-        // The host kinds are everyone's: `platform` files are read for them too.
-        let hosts = scan_host(source, &shared).map_err(|e| format!("{path}: {e}"))?;
-        for (report, what, fix) in [
-            (report, "OS occurrences", "move OS code into platform"),
-            (hosts, "host-kind conditions", "host kind is a crate boundary: put the code in the crate that owns it"),
-        ] {
-            if report.count > 0 {
-                total += report.count;
-                reported.insert(path);
-                let lines: Vec<String> = report.lines.iter().map(usize::to_string).collect();
-                errors.push(format!("{path}: {} {what} (lines {}); {fix}", report.count, lines.join(", ")));
-            }
-        }
+        };
+        reports.push((path, os.map_err(|e| format!("{path}: {e}"))?, "OS occurrences", "move OS code into platform"));
+        let hosts = scan_host(source, &shared, build_script(path)).map_err(|e| format!("{path}: {e}"))?;
+        reports.push((path, hosts, "host-kind conditions", HOST_FIX));
+    }
+    for (path, source) in &manifests {
+        let hosts = scan_manifest(source, &shared).map_err(|e| format!("{path}: {e}"))?;
+        reports.push((path, hosts, "host-kind conditions", HOST_FIX));
+    }
+    let (mut errors, mut total, mut reported) = (Vec::new(), 0, BTreeSet::new());
+    for (path, report, what, fix) in reports.into_iter().filter(|(_, report, ..)| report.count > 0) {
+        total += report.count;
+        reported.insert(path);
+        let lines: Vec<String> = report.lines.iter().map(usize::to_string).collect();
+        errors.push(format!("{path}: {} {what} (lines {}); {fix}", report.count, lines.join(", ")));
     }
     if errors.is_empty() {
         Ok(())
     } else {
         Err(format!("{}\nPlatform boundary: {total} violations in {} files", errors.join("\n"), reported.len()))
     }
+}
+
+const HOST_FIX: &str = "host kind is a crate boundary: put the code in the crate that owns it";
+
+/// A build script, or a module of one: `build.rs`, and files in a `build/` directory.
+fn build_script(path: &str) -> bool {
+    let path = Path::new(path);
+    path.file_name().is_some_and(|name| name == "build.rs")
+        || path.parent().is_some_and(|dir| dir.components().any(|part| part.as_os_str() == "build"))
 }
 
 #[cfg(test)]
@@ -1384,7 +1480,15 @@ mod tests {
     }
 
     fn host(source: &str) -> usize {
-        scan_host(source, &Shared::default()).unwrap().count
+        scan_host(source, &Shared::default(), false).unwrap().count
+    }
+
+    fn host_in_build_script(source: &str) -> usize {
+        scan_host(source, &Shared::default(), true).unwrap().count
+    }
+
+    fn manifest(text: &str) -> usize {
+        scan_manifest(text, &Shared::default()).unwrap().count
     }
 
     #[test]
@@ -1402,8 +1506,6 @@ mod tests {
             "#[cfg(feature = \"desktop\")] fn a() {}",
             "#[cfg(not(feature = \"mobile\"))] fn a() {}",
             "mod m { #![cfg(desktop)] }",
-            "fn main() { println!(\"cargo:rustc-cfg=mobile\"); }",
-            "fn main() { println!(\"cargo::rustc-cfg=desktop\"); }",
         ] {
             assert_eq!(host(source), 1, "{source}");
         }
@@ -1417,7 +1519,8 @@ mod tests {
             "fn desktop() {} struct Mobile; let mobile = 1;",
             "/// Not for #[cfg(desktop)] or cfg!(mobile).\nfn f() { let _ = \"#[cfg(desktop)] cfg!(mobile)\"; }",
             "// #[cfg(mobile)]\nfn f() {}",
-            "fn main() { println!(\"cargo:rustc-cfg=tray\"); println!(\"cargo:rerun-if-changed=desktop\"); }",
+            // A variable named like a kind, handed to a macro that does not gate.
+            "fn f(mobile: bool) { assert!(mobile); let _ = vec![mobile]; println!(\"{}\", mobile); }",
             // Other conditions, the OS ones included: the other scan's.
             "#[cfg(feature = \"tray\")] #[cfg(test)] #[cfg(target_os = \"ios\")] #[cfg(any(unix, windows))] fn a() {}",
             "#[cfg(feature = \"x\")] #[cfg_attr(test, doc = stringify!(desktop))] fn a() {}",
@@ -1431,16 +1534,102 @@ mod tests {
     fn host_kind_aliases_count_where_they_are_defined_and_where_they_are_used() {
         let build = "fn main() { cfg_aliases::cfg_aliases! { handheld: { mobile }, tablet: { all(handheld, x) }, \
                      plain: { feature = \"x\" }, desktop: { target_os = \"macos\" }, os: { windows } } }";
-        let defined = scan_host(build, &Shared::default()).unwrap();
+        let defined = scan_host(build, &Shared::default(), true).unwrap();
         assert_eq!(defined.count, 3, "handheld, tablet, desktop");
         assert_eq!(
             defined.shared.host_aliases,
             HashSet::from(["handheld".to_string(), "tablet".to_string(), "desktop".to_string()])
         );
         let user = "#[cfg(handheld)] fn a() {} #[cfg(plain)] #[cfg(os)] fn b() {} fn c() { let _ = cfg!(tablet); }";
-        assert_eq!(scan_host(user, &defined.shared).unwrap().count, 2);
+        assert_eq!(scan_host(user, &defined.shared, false).unwrap().count, 2);
         // An alias above its definition in the same file counts too.
         assert_eq!(host(&format!("#[cfg(handheld)] fn a() {{}} {build}")), 4);
+    }
+
+    #[test]
+    fn a_macro_that_puts_its_argument_in_a_cfg_gates_what_it_is_given() {
+        let gate = "macro_rules! gate { ($c:meta) => { #[cfg($c)] fn f() {} }; }";
+        for source in [
+            format!("{gate} gate!(mobile);"),
+            format!("{gate} gate!(any(unix, desktop));"),
+            format!("{gate} gate! {{ feature = \"mobile\" }}"),
+            // Used above its definition.
+            format!("gate!(desktop); {gate}"),
+            "macro_rules! test { ($c:meta) => { if cfg!($c) { 1 } else { 0 } }; } test!(mobile);".to_owned(),
+            "macro_rules! attr { ($c:meta) => { #[cfg_attr($c, inline)] fn f() {} }; } attr!(desktop);".to_owned(),
+        ] {
+            assert_eq!(host(&source), 1, "{source}");
+        }
+        for source in [
+            // Not given a kind, or not putting what it is given in a `cfg`.
+            format!("{gate} gate!(test); gate!(feature = \"x\"); gate!(unix);"),
+            "macro_rules! twice { ($e:expr) => { $e + $e }; } fn f(mobile: u8) -> u8 { twice!(mobile) }".to_owned(),
+            "macro_rules! derive_it { ($c:meta) => { #[$c] struct S; }; } derive_it!(mobile);".to_owned(),
+            "macro_rules! cfgs { () => { #[cfg(test)] fn f() {} }; } cfgs!(); fn g(desktop: u8) { cfgs!(); let _ = desktop; }"
+                .to_owned(),
+        ] {
+            assert_eq!(host(&source), 0, "{source}");
+        }
+        // Defined in one file, used in another.
+        let defined = scan_host(gate, &Shared::default(), false).unwrap();
+        assert!(defined.count == 0 && defined.shared.gate_macros.contains("gate"));
+        assert_eq!(scan_host("gate!(mobile);", &defined.shared, false).unwrap().count, 1);
+    }
+
+    #[test]
+    fn a_build_script_defines_a_host_kind_by_printing_it_and_a_string_is_not_that() {
+        for source in [
+            "fn main() { println!(\"cargo:rustc-cfg=mobile\"); }",
+            "fn main() { println!(\"cargo::rustc-cfg=desktop\"); }",
+            "fn main() { print!(\"cargo::rustc-check-cfg=cfg(mobile)\"); }",
+        ] {
+            assert_eq!(host_in_build_script(source), 1, "{source}");
+            assert_eq!(host(source), 0, "not a build script: {source}");
+        }
+        for source in [
+            "fn main() { println!(\"cargo:rustc-cfg=tray\"); println!(\"cargo:rerun-if-changed=desktop\"); }",
+            "fn main() { println!(\"cargo::rustc-check-cfg=cfg(tray)\"); }",
+            "fn main() { let expected = \"cargo:rustc-cfg=mobile\"; assert_eq!(line, \"cargo::rustc-cfg=desktop\"); }",
+        ] {
+            assert_eq!(host_in_build_script(source), 0, "{source}");
+        }
+        for path in ["build.rs", "desktop/build.rs", "desktop/build/platform.rs", "desktop/build/platform/mac.rs"] {
+            assert!(build_script(path), "{path}");
+        }
+        for path in ["desktop/src/lib.rs", "desktop/core/src/build_info.rs", "xtask/src/platform/build_tools.rs"] {
+            assert!(!build_script(path), "{path}");
+        }
+    }
+
+    #[test]
+    fn a_cargo_manifest_names_a_host_kind_in_its_features_target_tables_and_lints() {
+        for text in [
+            "[features]\nmobile = []\n",
+            "[features]\ndefault = []\ndesktop = [\"dep:tauri\"]\n",
+            "[target.'cfg(mobile)'.dependencies]\ntauri = \"2\"\n",
+            "[target.'cfg(any(unix, desktop))'.dev-dependencies]\nx = \"1\"\n",
+            "[target.'cfg(feature = \"mobile\")'.build-dependencies]\nx = \"1\"\n",
+            "[lints.rust]\nunexpected_cfgs = { level = \"warn\", check-cfg = ['cfg(mobile)'] }\n",
+            "[workspace.lints.rust]\nunexpected_cfgs = { level = \"warn\", check-cfg = ['cfg(desktop)'] }\n",
+        ] {
+            assert_eq!(manifest(text), 1, "{text}");
+        }
+        for text in [
+            "[features]\nprobe = []\ntray = [\"dep:tray-icon\"]\n",
+            "[target.'cfg(target_os = \"ios\")'.dependencies]\nx = \"1\"\n[target.'cfg(windows)'.dependencies]\ny = \"1\"\n",
+            "[target.x86_64-unknown-linux-gnu.dependencies]\nx = \"1\"\n",
+            // A dependency's own feature is its business.
+            "[dependencies]\ntauri = { version = \"2\", features = [\"desktop\", \"mobile\"] }\n",
+            "[lints.rust]\nunexpected_cfgs = { level = \"warn\", check-cfg = ['cfg(tokio_unstable)'] }\n",
+        ] {
+            assert_eq!(manifest(text), 0, "{text}");
+        }
+        let aliases = Shared { host_aliases: HashSet::from(["handheld".to_string()]), ..Shared::default() };
+        assert_eq!(scan_manifest("[target.'cfg(handheld)'.dependencies]\nx = \"1\"\n", &aliases).unwrap().count, 1);
+        let lines =
+            scan_manifest("[package]\nname = \"a\"\n\n[features]\nmobile = []\n", &Shared::default()).unwrap().lines;
+        assert_eq!(lines, BTreeSet::from([5]));
+        assert!(scan_manifest("[features", &Shared::default()).is_err());
     }
 
     #[test]
@@ -1452,17 +1641,30 @@ mod tests {
             ("app/src/platform/mod.rs", "mod concern; #[cfg(feature = \"mobile\")] mod gated;"),
             ("app/build/platform.rs", "pub fn configure() { cfg_aliases::cfg_aliases! { handheld: { mobile } } }"),
             ("app/src/other.rs", "#[cfg(handheld)] pub fn by_alias() {}"),
+            // Through a macro defined in another file, in a manifest, and printed by a build script.
+            ("app/src/macros.rs", "macro_rules! gate { ($c:meta) => { #[cfg($c)] fn f() {} }; }"),
+            ("app/src/gated.rs", "gate!(mobile);"),
+            ("app/Cargo.toml", "[package]\nname = \"app\"\n[features]\nmobile = []\n"),
+            ("app/build.rs", "fn main() { println!(\"cargo:rustc-cfg=desktop\"); }"),
         ];
         let message = fixture_repo(&files).unwrap_err();
-        for path in
-            ["src/lib.rs", "src/platform/concern.rs", "src/platform/mod.rs", "build/platform.rs", "src/other.rs"]
-        {
-            let line = message.lines().find(|line| line.contains(path)).unwrap_or_default();
+        for path in [
+            "src/lib.rs",
+            "src/platform/concern.rs",
+            "src/platform/mod.rs",
+            "build/platform.rs",
+            "src/other.rs",
+            "src/gated.rs",
+            "Cargo.toml",
+            "build.rs",
+        ] {
+            let line = message.lines().find(|line| line.contains(&format!("app/{path}:"))).unwrap_or_default();
             assert!(line.contains("host-kind conditions"), "{path}: {message}");
         }
-        assert!(!message.contains("ios.rs"), "{message}");
-        assert!(message.contains("5 violations in 5 files"), "{message}");
-        // The rest of the tree passes.
+        assert!(!message.contains("ios.rs") && !message.contains("macros.rs"), "{message}");
+        assert!(message.contains("8 violations in 8 files"), "{message}");
+        // The rest of the tree passes: the OS in `platform`, a feature of another name, a string that only looks like
+        // what a build script prints.
         let clean = [
             ("app/src/lib.rs", "pub fn shared() {}"),
             ("app/src/platform/concern.rs", "pub trait Concern { fn f(&self); }"),
@@ -1470,6 +1672,11 @@ mod tests {
             (
                 "app/src/platform/concern/macos.rs",
                 "#[cfg(any(target_os = \"macos\", target_os = \"ios\"))] fn apple() {}",
+            ),
+            ("app/Cargo.toml", "[features]\nprobe = []\n[target.'cfg(target_os = \"ios\")'.dependencies]\nx = \"1\"\n"),
+            (
+                "app/build.rs",
+                "fn main() { let expected = \"cargo:rustc-cfg=mobile\"; println!(\"cargo:rustc-cfg=tray\"); }",
             ),
         ];
         fixture_repo(&clean).unwrap();

@@ -82,6 +82,7 @@ Operator decision (2026-10-30). Applies like the platform rule above: product co
 - **A build for iOS or Android names its package:** `-p`, never `--workspace`, `--all` or `--exclude`; the workspace
   holds the other kind of host too.
 - **Enforced in CI**, in the Platform boundary job: `cargo xtask platform-guard` (the conditions, in every Rust file,
-  `platform` included) and `cargo xtask host-graph` (the crates' dependencies on each supported target, from
-  `cargo metadata`, and the workflows' builds for mobile targets). They read tokens and resolution and build nothing;
+  `platform` included, and the features, target tables and lints of every `Cargo.toml`) and `cargo xtask host-graph`
+  (the crates' dependencies on each supported target with every feature on, from `cargo metadata`, and the steps of the
+  workflows that build for a mobile target). They read tokens, manifests, workflows and resolution and build nothing;
   their limits are in the head of `xtask/src/platform_guard.rs` and `xtask/src/host_graph.rs`.
