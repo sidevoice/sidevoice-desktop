@@ -30,7 +30,8 @@ is ready for it, so that adding it changes nothing of the desktop app's releases
   "extra-files": [ … ] }`. The tag takes the component by default (`include-component-in-tag` is `false` only on the
   desktop package).
 - **A commit that changes only a shared crate** (`app-core/`, `app-tauri/`) belongs to the `.` package, not to `mobile`:
-  release-please attributes a commit by the directories it touches, one package per directory.
+  release-please attributes a commit to a package by the files it touches, and a package is one directory. A mobile
+  release for such a change needs a commit that touches `mobile/` (`Release-As:`, below, if the version is chosen).
 
 ## What each act means
 
