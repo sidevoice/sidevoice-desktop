@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- S0 spike: what the holder needs, merged into the generated app manifest. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- The paired machine is reached over plain http on the LAN (G1): a network security config, which the
+         generated manifest does not set, takes precedence over its usesCleartextTraffic=false in release. -->
+    <application android:networkSecurityConfig="@xml/s0_network_security">
+        <service
+            android:name="ai.sidevoice.spike.holder.HolderService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+    </application>
+</manifest>

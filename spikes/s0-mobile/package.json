@@ -1,0 +1,14 @@
+{
+  "name": "s0-mobile-spike",
+  "private": true,
+  "version": "0.0.0",
+  "description": "S0 spike (sidevoice-desktop#290). Never merged.",
+  "type": "module",
+  "scripts": {
+    "web": "node scripts/fetch-web.mjs",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.4"
+  }
+}

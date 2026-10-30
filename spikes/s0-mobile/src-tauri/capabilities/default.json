@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "default",
+  "description": "The spike's own pages (launcher and the bundled room page); the app's commands are allowed by default.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

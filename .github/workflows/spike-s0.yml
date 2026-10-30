@@ -1,0 +1,102 @@
+# S0 spike (sidevoice-desktop#290, architecture-v3.md §F.1). Lives only on the never-merged branch spike/s0-mobile,
+# runs only on a push to it that touches the spike, and builds only spikes/s0-mobile/ (its own workspace and package).
+#
+# - ios-simulator: the spike app for the iOS simulator, unsigned, on every such push.
+# - testflight: the signed device build, uploaded to TestFlight. It runs only when the repository variable
+#   S0_TESTFLIGHT is "true", which is set once the App Store Connect key in APPLE_API_KEY / APPLE_API_ISSUER /
+#   APPLE_API_KEY_P8 has the Admin role (automatic provisioning creates the Apple Distribution certificate and the App
+#   Store profile for ai.sidevoice.spike). It reuses those secrets and APPLE_TEAM_ID as they are (§D.5).
+name: spike-s0
+
+on:
+  push:
+    branches: [spike/s0-mobile]
+    paths:
+      - "spikes/s0-mobile/**"
+      - ".github/workflows/spike-s0.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spike-s0-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: spikes/s0-mobile
+
+jobs:
+  ios-simulator:
+    name: iOS simulator build (unsigned)
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Rust with the iOS simulator target
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal --target aarch64-apple-ios-sim
+          rustup default 1.98.1
+      - name: XcodeGen
+        run: command -v xcodegen || brew install xcodegen
+      - run: npm ci
+      - name: Generate the Xcode project
+        run: npx tauri ios init --ci
+      - name: Build for the simulator
+        run: npx tauri ios build --target aarch64-sim --no-sign --ci
+      - name: Package the .app
+        run: |
+          app=$(find src-tauri/gen/apple/build -name '*.app' -maxdepth 3 -type d | head -1)
+          test -n "$app"
+          ditto -c -k --keepParent "$app" s0-ios-simulator.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: s0-ios-simulator
+          path: spikes/s0-mobile/s0-ios-simulator.zip
+          retention-days: 14
+
+  testflight:
+    name: Signed iOS build to TestFlight
+    if: vars.S0_TESTFLIGHT == 'true'
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Rust with the iOS device target
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal --target aarch64-apple-ios
+          rustup default 1.98.1
+      - name: XcodeGen
+        run: command -v xcodegen || brew install xcodegen
+      - name: The App Store Connect key, as the file xcodebuild and altool read
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          key=~/.appstoreconnect/private_keys/AuthKey_${APPLE_API_KEY}.p8
+          printf '%s\n' "$APPLE_API_KEY_P8" > "$key"
+          chmod 600 "$key"
+          echo "APPLE_API_KEY_PATH=$key" >> "$GITHUB_ENV"
+      - run: npm ci
+      - name: Generate the Xcode project
+        run: npx tauri ios init --ci
+      - name: Archive and export for App Store Connect (automatic provisioning)
+        run: npx tauri ios build --target aarch64 --export-method app-store-connect --build-number ${{ github.run_number }} --ci
+      - name: Upload to TestFlight
+        run: |
+          ipa=$(find src-tauri/gen/apple/build -name '*.ipa' | head -1)
+          test -n "$ipa"
+          xcrun altool --upload-app --type ios --file "$ipa" --apiKey "$APPLE_API_KEY" --apiIssuer "$APPLE_API_ISSUER"
+      - name: Remove the key
+        if: always()
+        run: rm -rf ~/.appstoreconnect/private_keys

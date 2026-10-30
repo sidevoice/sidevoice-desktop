@@ -1,0 +1,4 @@
+# S0 spike (sidevoice-desktop#290): its own workspace, apart from the desktop app's. Never merged.
+[workspace]
+members = ["src-tauri", "holder"]
+resolver = "2"

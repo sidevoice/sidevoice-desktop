@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="s0_channel">S0 audio holder</string>
+    <string name="s0_notification_title">S0 spike: native audio held</string>
+    <string name="s0_notification_text">Microphone and silent output are running for the experiment.</string>
+</resources>

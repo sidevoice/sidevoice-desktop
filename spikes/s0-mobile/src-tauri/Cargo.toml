@@ -1,0 +1,19 @@
+[package]
+name = "s0-spike"
+version = "0.0.0"
+description = "S0 spike (sidevoice-desktop#290): does the room page stay alive on a locked phone while the audio is native?"
+edition = "2021"
+rust-version = "1.98"
+publish = false
+
+[lib]
+name = "s0_spike_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7", features = [] }
+
+[dependencies]
+tauri = { version = "2.12", features = [] }
+tauri-plugin-s0-holder = { path = "../holder" }
+serde_json = "1"
