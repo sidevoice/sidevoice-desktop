@@ -27,7 +27,7 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
 test("does nothing on any origin but the app's own", () => {
   const { win, calls } = fakeWindow("https://evil.example.com");
   assert.equal(load()(win, APP), null);
-  assert.equal(win.__sidevoiceDesktop, undefined);
+  assert.equal(win.__sidevoiceHost, undefined);
   assert.equal(calls.length, 0);
 });
 
@@ -35,7 +35,7 @@ test("the card subscribes, asks for the state, and hears every change as a whole
   const { win, calls } = fakeWindow(APP);
   const api = load()(win, APP);
   const heard = [];
-  const stop = win.__sidevoiceDesktop.host.callControls.subscribe((state) => heard.push(state));
+  const stop = win.__sidevoiceHost.host.callControls.subscribe((state) => heard.push(state));
   await flush();
   assert.deepEqual(calls, [["call_controls_ready", undefined]]);
   api.receive({ level: 30 });
@@ -48,7 +48,7 @@ test("the card subscribes, asks for the state, and hears every change as a whole
   assert.equal(heard.length, 2);
   // A late subscriber gets the state at once, without asking.
   const late = [];
-  win.__sidevoiceDesktop.host.callControls.subscribe((state) => late.push(state.level));
+  win.__sidevoiceHost.host.callControls.subscribe((state) => late.push(state.level));
   assert.deepEqual(late, [60]);
 });
 
@@ -58,7 +58,7 @@ test("a device chosen shows the devices busy until the app next tells the call, 
   win.setTimeout = (fn, ms) => (timers.push({ fn, ms }), timers.length);
   win.clearTimeout = (id) => { timers[id - 1].cleared = true; };
   const api = load()(win, APP);
-  const host = win.__sidevoiceDesktop.host.callControls;
+  const host = win.__sidevoiceHost.host.callControls;
   const heard = [];
   host.subscribe((state) => heard.push(state.call.devices && state.call.devices.busy));
   host.run({ command: "select-audio-device", kind: "input", id: "mbp" });
@@ -83,7 +83,7 @@ test("a device chosen shows the devices busy until the app next tells the call, 
 test("commands, layout and drags reach the app, and only well-formed ones", async () => {
   const { win, calls } = fakeWindow(APP);
   load()(win, APP);
-  const host = win.__sidevoiceDesktop.host.callControls;
+  const host = win.__sidevoiceHost.host.callControls;
   host.run({ command: "toggle-mute" });
   host.layout({ width: 344, height: 82 });
   host.layout({ width: 0, height: 82 });
@@ -100,7 +100,7 @@ test("commands, layout and drags reach the app, and only well-formed ones", asyn
 test("the body box, the picture's least width and height and its resize reach the app; no resize where the app does not offer it", async () => {
   const { win, calls } = fakeWindow(APP);
   load()(win, APP, true);
-  const host = win.__sidevoiceDesktop.host.callControls;
+  const host = win.__sidevoiceHost.host.callControls;
   host.layout({ width: 444, height: 330, card: { x: 12, y: 12, width: 420, height: 306 }, resizable: { minWidth: 374, minHeight: 354 } });
   host.layout({ width: 414, height: 200, card: { x: 12, y: "a lot", width: 390, height: 76 } });
   host.resize("start", "sw");
@@ -115,7 +115,7 @@ test("the body box, the picture's least width and height and its resize reach th
   ]);
   const wayland = fakeWindow(APP);
   load()(wayland.win, APP, false);
-  assert.equal(wayland.win.__sidevoiceDesktop.host.callControls.resize, undefined);
+  assert.equal(wayland.win.__sidevoiceHost.host.callControls.resize, undefined);
 });
 
 test("installs once, and survives a missing Tauri runtime", async () => {

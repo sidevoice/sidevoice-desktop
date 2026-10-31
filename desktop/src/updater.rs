@@ -72,7 +72,7 @@ fn with<T>(app: &AppHandle, change: impl FnOnce(&mut Updates) -> T) -> T {
     let answer = change(&mut updates);
     if let Some(window) = (updates.status != before).then(|| crate::room_window(app)).flatten() {
         let status = json!(updates.status);
-        let _ = window.eval(format!("window.__sidevoiceDesktop && window.__sidevoiceDesktop.updaterEvent({status})"));
+        let _ = window.eval(format!("window.__sidevoiceHost && window.__sidevoiceHost.updaterEvent({status})"));
     }
     answer
 }

@@ -32,10 +32,10 @@ the room for the card's buttons too: it answers mute and hang-up as the room wou
   const call = () => invoke("bridge_state", { snapshot: Object.assign({
     version: 2, ready: true, joined: true, busy: false, micEnabled: mic, micDisabled: false, title: "Sidevoice: mini call",
     agent: "idle", youTalking: false, canSkip: false, since, participants, devices }, over) });
-  // The card's buttons arrive as the app's commands to the room (bridge::Command → window.__sidevoiceDesktop.run).
+  // The card's buttons arrive as the app's commands to the room (bridge::Command → window.__sidevoiceHost.run).
   let hangUp;
   const hungUp = new Promise((resolve) => { hangUp = resolve; });
-  window.__sidevoiceDesktop.run = (request) => {
+  window.__sidevoiceHost.run = (request) => {
     say("command " + request.command);
     if (request.command === "toggle-mute") {
       mic = !mic;

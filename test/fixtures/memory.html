@@ -19,7 +19,7 @@ card's settings, the audio devices, the voice settings) and has the app print it
     await log("probe-memory " + phase);
     await sleep(8000);
   };
-  const host = window.__sidevoiceDesktop && window.__sidevoiceDesktop.host;
+  const host = window.__sidevoiceHost && window.__sidevoiceHost.host;
   if (!host || !host.voice || !host.engine) { await log("probe-memory-failed no host.voice"); return; }
   const { voice, engine, callControls } = host;
   try {

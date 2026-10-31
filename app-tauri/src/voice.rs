@@ -1,4 +1,4 @@
-//! The voice call's commands (`window.__sidevoiceDesktop.host.voice`, docs/BRIDGE.md → "The voice call"): what the page
+//! The voice call's commands (`window.__sidevoiceHost.host.voice`, docs/BRIDGE.md → "The voice call"): what the page
 //! asks, handed to the application host, which runs the call. Each is the caller check, the arguments and one call. The
 //! call's events do not come back through here: the host hands them to the app's `EventSink`.
 //!

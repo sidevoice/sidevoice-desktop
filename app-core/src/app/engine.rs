@@ -1,4 +1,4 @@
-//! The engine's commands (`window.__sidevoiceDesktop.host.engine`, docs/BRIDGE.md → "The native engine"): the catalogues
+//! The engine's commands (`window.__sidevoiceHost.host.engine`, docs/BRIDGE.md → "The native engine"): the catalogues
 //! and what they list, the keys of remote providers (kept by the shell's [`ProviderKeys`], never handed back), what runs
 //! here, what is installed, installs and their cancel, removing a model, memory. Engine work runs on blocking threads,
 //! never on a worker. A refusal is the engine's keyed `Error` (docs/BRIDGE.md → "Refusals").

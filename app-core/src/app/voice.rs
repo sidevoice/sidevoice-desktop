@@ -1,4 +1,4 @@
-//! The voice call's commands (`window.__sidevoiceDesktop.host.voice`, docs/BRIDGE.md → "The voice call"): sidevoice-voice's
+//! The voice call's commands (`window.__sidevoiceHost.host.voice`, docs/BRIDGE.md → "The voice call"): sidevoice-voice's
 //! `VoiceCall` with the models the app picks on its engine, the device's own microphone and speaker, the system's
 //! default ones or those the page chooses, and Sonora's echo cancellation between them. A call has an input half, an
 //! output half or both, and loads and opens only what its halves use; the page changes it while it runs

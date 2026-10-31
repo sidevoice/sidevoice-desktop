@@ -1,4 +1,4 @@
-//! The developer options (`window.__sidevoiceDesktop.host.debug`, docs/BRIDGE.md → "The developer options"): in a
+//! The developer options (`window.__sidevoiceHost.host.debug`, docs/BRIDGE.md → "The developer options"): in a
 //! nightly or a dev build, switches the room's hidden "Developer options" section turns on the room's and the call
 //! controls card's webviews. Off by default; kept in the settings (core `debug_options`) and put on both webviews as
 //! they are created and when the page changes one, with no reload.

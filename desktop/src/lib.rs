@@ -320,8 +320,9 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             &debug_options,
             sidevoice_app_tauri::platform::microphone::settings_available(),
             &diagnostics::webview_switches(),
-            media_controls::support(),
+            media_controls::available(),
             platform::uninstall::available(),
+            host::system(),
             &bridge::Parts { transport: sidevoice_app_tauri::js::TRANSPORT, members: sidevoice_app_core::js::MEMBERS },
         ));
     #[cfg(feature = "probe")]
@@ -389,8 +390,7 @@ fn apply_shortcut(app: &AppHandle, accelerator: &str) {
     *app_state.shortcut.lock().unwrap() = status;
     if let Some(window) = room_window(app) {
         let status = json!(shortcut_status(&app_state));
-        let _ =
-            window.eval(format!("window.__sidevoiceDesktop && window.__sidevoiceDesktop.muteShortcutEvent({status})"));
+        let _ = window.eval(format!("window.__sidevoiceHost && window.__sidevoiceHost.muteShortcutEvent({status})"));
     }
 }
 
