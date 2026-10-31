@@ -6,6 +6,7 @@
 //! and no page captures anything: the app will own the microphone, as on the desktop.
 mod platform;
 
+pub use platform::entry::run;
 use platform::origin::APP_ORIGIN;
 use tauri::{webview::PermissionResponse, Url, WebviewUrl, WebviewWindowBuilder};
 
@@ -27,8 +28,8 @@ fn navigation_allowed(url: &Url, app_origin: &str) -> bool {
     origin_of(url) == app_origin || matches!(url.scheme(), "about" | "blob" | "data")
 }
 
-#[tauri::mobile_entry_point]
-pub fn run() {
+/// The app: one window, on the bundled interface.
+fn run_app() {
     tauri::Builder::default()
         .plugin(sidevoice_mobile_plugin::init())
         .setup(|app| {
