@@ -1,0 +1,65 @@
+name: Set up the Android build of the mobile app
+description: >-
+  JDK 21, the Android SDK platform and NDK the generated project asks for, the Rust toolchain and the mobile targets
+  (mobile/rust-toolchain.toml), the Rust and Gradle caches, Node with the repository's packages, and the web interface's
+  cache. Both caches are written only by a push to main; any other run only restores them (RELEASING.md → "CI caches").
+  The check-out comes first (this action is in the repository).
+
+inputs:
+  cache:
+    description: The Rust build cache, by name; its key starts with `mobile`.
+    required: false
+    default: android
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: 21
+    # The platform the generated project compiles against (mobile/gen/android: compileSdk) and the NDK (r28 or later
+    # links with 16 KB pages, which Google Play requires); pinned here, as the toolchain's version is in
+    # mobile/rust-toolchain.toml.
+    - name: Android SDK platform and NDK
+      shell: bash
+      env:
+        ANDROID_PLATFORM: android-37.0
+        ANDROID_NDK_VERSION: 29.0.14206865
+      run: |
+        set -euo pipefail
+        sdkmanager=$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager
+        # `yes` ends when sdkmanager stops reading: its SIGPIPE is not a failure.
+        (set +o pipefail; yes | "$sdkmanager" --licenses > /dev/null)
+        "$sdkmanager" "platforms;$ANDROID_PLATFORM" "ndk;$ANDROID_NDK_VERSION"
+        echo "NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
+        echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
+    - name: Rust, as mobile/rust-toolchain.toml says (the toolchain and the four mobile targets)
+      shell: bash
+      working-directory: mobile
+      run: |
+        set -euo pipefail
+        rustup toolchain install
+        rustc --version
+    - uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: |
+          .
+          xtask
+        prefix-key: v0-rust-mobile
+        shared-key: ${{ inputs.cache }}
+        save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    - uses: gradle/actions/setup-gradle@v4
+      with:
+        cache-read-only: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
+        gradle-home-cache-cleanup: true
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: npm
+    - run: npm ci
+      shell: bash
+    - uses: actions/cache@v4
+      with:
+        path: target/web
+        key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs', 'scripts/web-release.mjs') }}

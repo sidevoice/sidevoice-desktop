@@ -27,11 +27,6 @@ env:
   # fetched (`npm run web`, and every Tauri build through it), with gh and this run's token.
   SIDEVOICE_WEB_ATTESTATION: require
   GH_TOKEN: ${{ github.token }}
-  # The Android build tools the generated project asks for (mobile/gen/android: compileSdk) and the NDK (r28 or later
-  # links with 16 KB pages, which Google Play requires); pinned here, as the toolchain's version is in
-  # mobile/rust-toolchain.toml.
-  ANDROID_PLATFORM: android-37.0
-  ANDROID_NDK_VERSION: 29.0.14206865
 
 jobs:
   android:
@@ -39,44 +34,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 21
-      - name: Android SDK platform and NDK
-        run: |
-          sdkmanager=$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager
-          # `yes` ends when sdkmanager stops reading: its SIGPIPE is not a failure.
-          (set +o pipefail; yes | "$sdkmanager" --licenses > /dev/null)
-          "$sdkmanager" "platforms;$ANDROID_PLATFORM" "ndk;$ANDROID_NDK_VERSION"
-          echo "NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
-      - name: Rust, as mobile/rust-toolchain.toml says (the toolchain and the four mobile targets)
-        working-directory: mobile
-        run: |
-          rustup toolchain install
-          rustc --version
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            .
-            xtask
-          prefix-key: v0-rust-mobile
-          shared-key: android
-          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-      - uses: gradle/actions/setup-gradle@v4
-        with:
-          cache-read-only: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
-          gradle-home-cache-cleanup: true
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - uses: actions/cache@v4
-        with:
-          path: target/web
-          key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs', 'scripts/web-release.mjs') }}
+      - uses: ./.github/actions/setup-android
       - name: The committed Android project is what the Tauri CLI writes (cargo xtask mobile generate android)
         run: cargo xtask mobile generated android
       - name: The unsigned APK (arm64)

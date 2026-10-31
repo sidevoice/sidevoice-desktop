@@ -17,6 +17,8 @@ serde_json = "1"
 json-patch = { version = "4", default-features = false }
 # SHA256SUMS.
 sha2 = "0.10"
+# The upload keystore, which the signing secret holds as base64.
+base64 = "0.23"
 # The checks on what the app and its stand-ins log, as the YAML's grep patterns were.
 regex = "1"
 # The platform-boundary check reads Rust tokens (comments and string contents are not code) and `use` trees.
@@ -33,6 +35,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "process", "io-util", "t
 # Ctrl+C on every host, plus SIGTERM/SIGHUP on Unix CI runners.
 ctrlc = { version = "3.5", features = ["termination"] }
 getrandom = "0.3"
+zip = { version = "9.1.3", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [target.'cfg(unix)'.dependencies]
 # Preserve the bundler's inherited private creation mask without own FFI.

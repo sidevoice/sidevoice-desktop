@@ -74,10 +74,32 @@ installs as it is.
   simulator, unsigned, as the artifact `Sidevoice-ios-simulator-app`. When the committed project is not what the CLI
   wrote, the job uploads what it wrote (`mobile-gen-apple`) to commit as `mobile/gen/apple`.
 - **`generated`** is the regeneration diff: it runs `generate` and fails on any difference in `mobile/gen/<project>`.
-- The Rust and Gradle caches are written by a push to `main` only and their keys start with `mobile`. The Android SDK
-  platform and NDK versions are pinned in the workflow's `env`.
+- The Rust and Gradle caches are written by a push to `main` only and their keys start with `mobile`. The Android
+  jobs share their setup (`.github/actions/setup-android`: JDK, the SDK platform and NDK versions, pinned there, the
+  toolchain, the caches).
+
+## Signing
+
+`.github/workflows/mobile-android-signed.yml` signs the Android app with the upload key. It is run by hand
+(`workflow_dispatch`), and its job refuses any ref but `main`; no pull request runs it. It builds the same unsigned APK
+as above, then `cargo xtask mobile sign android` aligns it for 16 KB pages (`zipalign -P 16`), signs it (`apksigner`),
+verifies the signature and checks that every native library's loadable segments are 16 KB aligned, which Google Play
+requires (`cargo xtask mobile check-16kb [APK]` is that check alone). The result is the artifact
+`Sidevoice-android-arm64-signed-apk`.
+
+It reads three repository Actions secrets, which must exist:
+
+| Secret | Holds |
+|---|---|
+| `ANDROID_UPLOAD_KEYSTORE_B64` | the upload key's PKCS#12 keystore, base64 encoded |
+| `ANDROID_UPLOAD_KEYSTORE_PASSWORD` | its password |
+| `ANDROID_UPLOAD_KEY_ALIAS` | the key's alias (`upload`) |
+
+Only the signing step sees them. The keystore and the password go into files only the runner's user can read, removed
+when the step ends, and the password never reaches a command line. On a laptop, `ANDROID_UPLOAD_KEYSTORE_PATH` names
+the keystore file instead of `ANDROID_UPLOAD_KEYSTORE_B64`.
 
 ## Not here yet
 
 The bridge (`__sidevoiceHost`: voice, engine, microphone, pairings), the microphone permission, `UIBackgroundModes`
-(audio), the privacy manifest and export compliance, the Android foreground service, and the signing of both apps.
+(audio), the privacy manifest and export compliance, the Android foreground service, and the iOS signing.

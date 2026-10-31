@@ -11,6 +11,9 @@
 //!   request): a difference means an input or the CLI changed and the project was not regenerated and committed.
 //! - `mobile build android|ios`: the app as a pull request builds it, unsigned: Android's release APK for arm64, and
 //!   the iOS app for the simulator (no signing, so no secret), into dist/. Needs the SDK and NDK, or macOS with Xcode.
+//! - `mobile sign android`, `mobile check-16kb`: sign.rs.
+
+pub mod sign;
 
 use std::fs;
 use std::path::{Path, PathBuf};
