@@ -100,6 +100,18 @@ pub fn clear_all() -> Result<(), Error> {
     admit(|| Native::clear_namespace(namespace()))
 }
 
+/// Whether the namespace the public functions use holds a provider key (an account that is a valid provider id).
+pub fn holds_keys() -> Result<bool, Error> {
+    admit(|| holds_in(Native::store()?.as_ref(), namespace()))
+}
+
+fn holds_in(store: &CredentialStore, service: &str) -> Result<bool, Error> {
+    let entries = store.search(&HashMap::from([("service", service)]))?;
+    Ok(entries.iter().any(|entry| {
+        entry.get_specifiers().is_some_and(|(found, account)| found == service && Provider::new(&account).is_ok())
+    }))
+}
+
 /// What [`carry_over`] did with each provider key it found, by provider: `Ok(true)` the key was copied into the
 /// namespace the public functions use, `Ok(false)` that namespace already held one (left as it is); either way the old
 /// entry is gone. `Err` leaves the old entry where it was.
@@ -405,11 +417,14 @@ mod tests {
         let old = service_of(&identifier);
         let store = Native::store().unwrap();
         write_in(store.as_ref(), &old, &provider("openai"), Some("test-only")).unwrap();
+        assert_eq!(holds_keys(), Ok(false));
         assert_eq!(carry_over(&identifier), Ok(vec![("openai".to_owned(), Ok(true))]));
         assert_eq!(read("openai").unwrap().as_deref(), Some("test-only"));
+        assert_eq!(holds_keys(), Ok(true));
         assert_eq!(read_in(store.as_ref(), &old, &provider("openai")).unwrap(), None);
         assert_eq!(carry_over(&identifier), Ok(vec![]));
         clear_all().unwrap();
+        assert_eq!(holds_keys(), Ok(false));
     }
 
     /// The namespace of the builds before `ai.sidevoice.desktop` (`legacy_identifier`).
@@ -424,6 +439,19 @@ mod tests {
     fn a_namespace_is_its_identifier_plus_providers() {
         assert_eq!(service_of("ai.sidevoice.desktop"), SERVICE);
         assert_eq!(service_of("dev.sidevoice.desktop"), OLD);
+    }
+
+    #[test]
+    fn only_a_valid_provider_key_in_exactly_that_service_counts_as_held() {
+        let _serial = serial();
+        let store = memory();
+        assert_eq!(holds_in(&store, SERVICE), Ok(false));
+        // Not the app's: an account its validator refuses, and a valid one in another service.
+        store.build(SERVICE, "future_provider", None).unwrap().set_password("not a key").unwrap();
+        write_in(&store, OLD, &provider("openai"), Some("old")).unwrap();
+        assert_eq!(holds_in(&store, SERVICE), Ok(false));
+        write_in(&store, SERVICE, &provider("openai"), Some("new")).unwrap();
+        assert_eq!(holds_in(&store, SERVICE), Ok(true));
     }
 
     #[test]

@@ -111,8 +111,11 @@ pub fn shared_model_root() -> Option<PathBuf> {
     sidevoice_platform::data_dir::models_dir()
 }
 
+/// The remote pairings, in the app data folder (docs/PAIRING_STORAGE.md).
+pub(crate) const PAIRINGS_FILE: &str = "pairings.json";
+
 fn pairings_file(app: &AppHandle) -> Result<PathBuf, Value> {
-    Ok(desktop_dir(app)?.join("pairings.json"))
+    Ok(desktop_dir(app)?.join(PAIRINGS_FILE))
 }
 
 mod pairings;

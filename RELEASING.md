@@ -227,11 +227,12 @@ leaves the signed, notarized and stapled `dist/Sidevoice_X.Y.Z_aarch64.dmg` and 
 ## Legacy identifier carry-over
 
 Until `ai.sidevoice.desktop`, the app's identifier was `dev.sidevoice.desktop`. `desktop/src/legacy_identifier.rs` carries
-an install's folders, browser storage and provider keys over from it at launch (docs/APP_DATA.md, WEBVIEW_DATA.md,
-CREDENTIALS.md). **Remove it two desktop releases after the first release that contains it**: delete the module and its
-call in `run()`, then `platform::app_data::moves_from` and the `Os::extra_folders` method (macOS), `webview_data::locations_of`
-and `credentials::carry_over` with their tests, and the three doc sections called "From the previous identifier".
-By then nobody updates from a build with the old identifier.
+an install's folders, browser storage and provider keys over from it at launch, until it has left a marker in the new app
+data folder (docs/APP_DATA.md, WEBVIEW_DATA.md, CREDENTIALS.md). **Remove it two desktop releases after the first
+release that contains it**: delete the module and its call in `run()`, then `platform::app_data::{moves_from, Moves}`
+and the `Os::extra_folders` method (macOS), `webview_data::locations_of`, `credentials::{carry_over, holds_keys}` with
+their tests, `data::PAIRINGS_FILE` if nothing else uses it, and the three doc sections called "From the previous
+identifier". By then nobody updates from a build with the old identifier.
 
 ## When something fails
 

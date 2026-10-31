@@ -17,7 +17,7 @@ impl super::Os for Native {
 // the common requests cannot express.
 #[cfg(test)]
 mod tests {
-    use super::super::{carry_over, clear_all, read, tests::*, write, Error, Os};
+    use super::super::{carry_over, clear_all, holds_keys, read, tests::*, write, Error, Os};
     use super::Native;
 
     #[test]
@@ -40,6 +40,7 @@ mod tests {
             assert_eq!(write("openai", Some("test-only")), Err(Error::Unavailable));
             assert_eq!(clear_all(), Err(Error::Unavailable));
             assert_eq!(carry_over("dev.sidevoice.desktop"), Err(Error::Unavailable));
+            assert_eq!(holds_keys(), Err(Error::Unavailable));
             return;
         }
         // Isolate the bus environment from concurrent tests and any real user's keyring.

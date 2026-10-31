@@ -71,22 +71,36 @@ pub fn delete_data(home: &Path, browser: &io::Result<Released>, steps: Steps) ->
     Native::delete_extra_data(&home, steps)
 }
 
-/// Where the app's folders for the bundle identifier `previous` and for its own are, as `(previous, own)` pairs for the
-/// account `home`: the folders [`delete_data`] deletes (a folder inside another is left out, and so is the shared model
-/// store, which no identifier names) plus the OS's own extras that are folders. Resolved by the same rule for both, so
-/// the pairs line up. Only `legacy_identifier` asks, to carry an install's folders over from `previous`.
-pub fn moves_from(home: &Path, previous: &str) -> Result<Vec<(PathBuf, PathBuf)>, &'static str> {
-    Ok(identified(home, previous)?.into_iter().zip(identified(home, IDENTIFIER)?).collect())
+/// The folders of an install under the bundle identifier `previous` and under the app's own, paired for a carry-over.
+pub struct Moves {
+    /// The app's data folder, `(previous, own)`: its settings and pairings say whether the install was set up.
+    pub data: (PathBuf, PathBuf),
+    /// Every other folder the app keeps (browser storage, cache, on macOS the logs and saved window state), none inside
+    /// another nor inside `data`.
+    pub others: Vec<(PathBuf, PathBuf)>,
 }
 
-/// The folders the app keeps under `identifier` for `home`, in deletion order.
-fn identified(home: &Path, identifier: &str) -> Result<Vec<PathBuf>, &'static str> {
+/// Where the app's folders for the bundle identifier `previous` and for its own are, for the account `home`: the
+/// folders [`delete_data`] deletes (a folder inside another is left out, and so is the shared model store, which no
+/// identifier names) plus the OS's own extras that are folders. Resolved by the same rule for both, so the pairs line
+/// up. Only `legacy_identifier` asks, to carry an install's folders over from `previous`.
+pub fn moves_from(home: &Path, previous: &str) -> Result<Moves, &'static str> {
+    let ((old_data, old_others), (new_data, new_others)) = (identified(home, previous)?, identified(home, IDENTIFIER)?);
+    Ok(Moves { data: (old_data, new_data), others: old_others.into_iter().zip(new_others).collect() })
+}
+
+/// The app's data folder under `identifier` for `home`, and its other folders in deletion order.
+fn identified(home: &Path, identifier: &str) -> Result<(PathBuf, Vec<PathBuf>), &'static str> {
     let places = Places::native(home.to_path_buf(), identifier)?;
-    let models = places.models.clone();
-    let mut folders: Vec<PathBuf> =
-        Folders::from(places).list.into_iter().map(|folder| folder.path).filter(|path| *path != models).collect();
-    folders.extend(Native::extra_folders(home, identifier));
-    Ok(folders)
+    let (data, models) = (places.data.clone(), places.models.clone());
+    let mut others: Vec<PathBuf> = Folders::from(places)
+        .list
+        .into_iter()
+        .map(|folder| folder.path)
+        .filter(|path| *path != data && *path != models)
+        .collect();
+    others.extend(Native::extra_folders(home, identifier));
+    Ok((data, others))
 }
 
 /// Read-only: whether an existing protected directory under `home` (the connector's data and releases) and its
@@ -568,8 +582,9 @@ mod tests {
     fn each_old_folder_is_paired_with_the_same_one_under_the_apps_identifier() {
         let old = "dev.sidevoice.desktop";
         let Ok(home) = account::home() else { return };
-        let Ok(moves) = moves_from(&home, old) else { return };
-        assert!(!moves.is_empty());
+        let Ok(Moves { data, others }) = moves_from(&home, old) else { return };
+        assert_eq!(data.1, dirs::data_dir().unwrap().join(IDENTIFIER), "Tauri's app data folder");
+        let moves: Vec<_> = std::iter::once(data).chain(others).collect();
         for (index, (from, to)) in moves.iter().enumerate() {
             assert!(from.starts_with(&home) && to.starts_with(&home));
             assert_eq!(from.to_string_lossy().replace(old, IDENTIFIER), to.to_string_lossy());
