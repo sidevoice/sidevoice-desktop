@@ -340,16 +340,31 @@ fn a_reloaded_page_owns_none_of_the_lanes() {
     block_on(async {
         host.create_call(first, "a".into()).await.unwrap();
         let page = host.page_changed();
-        // The old lanes are released in the background.
+        // The new page owns none of the old page's lanes, whether or not they are released yet.
+        assert_eq!(key_of(&host.route_input(page, Some("a".into())).await.unwrap_err()), "bad_request");
+        // The old lanes are released in the background; the same key can be taken again by the new page once that is done.
         let mut tries = 0;
-        while host.route_input(page, Some("a".into())).await.is_ok() {
+        while let Err(refused) = host.create_call(page, "a".into()).await {
+            assert_eq!(key_of(&refused), "bad_request", "{refused:?}");
             tries += 1;
             assert!(tries < 100, "the lane was never released");
             std::thread::sleep(Duration::from_millis(20));
         }
-        assert_eq!(key_of(&host.route_input(page, Some("a".into())).await.unwrap_err()), "bad_request");
-        // The same key can be taken again by the new page.
-        host.create_call(page, "a".into()).await.unwrap();
+    });
+}
+
+#[test]
+fn a_new_page_cannot_start_or_update_a_lane_the_old_page_made() {
+    let shell = Shell::new("lane-owner");
+    let host = &shell.host;
+    let first = host.page();
+    block_on(async {
+        host.create_call(first, "a".into()).await.unwrap();
+        let page = host.page_changed();
+        // Whether or not the old lane has been cleared away yet, it is not the new page's to start or to change.
+        let call = settings(json!({"output": {"tts": {"catalog": "local", "model": "kokoro-82m-v1.0"}}}));
+        assert_eq!(key_of(&host.start(page, "a", call, false).await.unwrap_err()), "bad_request");
+        assert_eq!(key_of(&host.update(page, "a", SettingsChange::default()).await.unwrap_err()), "bad_request");
     });
 }
 

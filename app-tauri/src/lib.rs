@@ -154,13 +154,15 @@ mod tests {
 
     #[test]
     fn every_command_but_the_engines_asks_the_caller_first_and_no_engine_command_does() {
+        // A checkout on Windows may have CRLF line ends: the sources are read with LF.
+        let lf = |source: &str| source.replace("\r\n", "\n");
         let asking = [
-            include_str!("voice.rs"),
-            include_str!("microphone.rs"),
-            include_str!("observers.rs"),
-            include_str!("pairings.rs"),
+            lf(include_str!("voice.rs")),
+            lf(include_str!("microphone.rs")),
+            lf(include_str!("observers.rs")),
+            lf(include_str!("pairings.rs")),
         ];
-        let engine = include_str!("engine.rs");
+        let engine = lf(include_str!("engine.rs"));
         for command in COMMANDS {
             if !command.starts_with("engine_") {
                 let source = asking.iter().find(|source| source.contains(&format!("fn {command}<"))).expect(command);

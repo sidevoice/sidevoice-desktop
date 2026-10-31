@@ -4908,6 +4908,7 @@ dependencies = [
  "keyring-core",
  "libc",
  "log",
+ "regex",
  "security-framework",
  "serde",
  "serde_json",

@@ -116,13 +116,15 @@ impl<A: LaneAudio> AppHost<A> {
         take: bool,
     ) -> Result<(), Refusal> {
         let _lease = self.admit()?;
-        self.inner.voice.lane(key).await?;
+        // The page's own lane, carried through the awaits below: what is done at the end is done to it, whatever is made
+        // under its key meanwhile.
+        let lane = self.inner.voice.lane_of(page.0, key).await?;
         let engines = self.engines_for_call()?;
         let choice = self.choice_of(&engines, &settings).await?;
         self.loading_allowed()?;
         let loader = EngineLoader::shared(engines.engine(), Arc::clone(&self.inner.voice.model_cache));
         let applied = Applied { halves: Halves::new(&loader, &choice, None), settings };
-        self.inner.voice.open(key, applied, take, self.page_sink(page)).await
+        self.inner.voice.open(&lane, key, applied, take, self.page_sink(page)).await
     }
 
     /// Resolves once the call works: at its first state that is not idle (`off` for a call without an input half);
@@ -146,21 +148,21 @@ impl<A: LaneAudio> AppHost<A> {
     pub async fn update(&self, page: PageGeneration, key: &str, change: SettingsChange) -> Result<(), Refusal> {
         self.current(page)?;
         let (host, key) = (self.clone(), key.to_owned());
-        self.detached(async move { host.updated(&key, change).await }).await
+        self.detached(async move { host.updated(page, &key, change).await }).await
     }
 
-    async fn updated(&self, key: &str, change: SettingsChange) -> Result<(), Refusal> {
-        let lane = self.inner.voice.lane(key).await?;
+    async fn updated(&self, page: PageGeneration, key: &str, change: SettingsChange) -> Result<(), Refusal> {
+        let lane = self.inner.voice.lane_of(page.0, key).await?;
         let _turn = lane.changing.lock().await;
         let _lease = self.admit()?;
-        let current = self.inner.voice.applied(key).await?;
+        let current = self.inner.voice.applied(&lane).await?;
         let settings = current.settings.changed(change);
         let engines = self.engines_for_call()?;
         let choice = self.choice_of(&engines, &settings).await?;
         self.loading_allowed()?;
         let loader = EngineLoader::shared(engines.engine(), Arc::clone(&self.inner.voice.model_cache));
         let applied = Applied { halves: Halves::new(&loader, &choice, Some(&current.halves)), settings };
-        self.inner.voice.update(key, applied).await
+        self.inner.voice.update(&lane, applied).await
     }
 
     /// Loads the models `settings` use into the host, ahead of a call: the slots a [`AppHost::start`] of them would ask

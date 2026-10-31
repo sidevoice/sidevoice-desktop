@@ -307,7 +307,7 @@ async fn configure_with(
     choice: VoiceChoice,
     take: bool,
 ) {
-    state.open(key, applied(fake, &choice, None, 0), take, page).await.unwrap();
+    state.open(&state.lane(key).await.unwrap(), key, applied(fake, &choice, None, 0), take, page).await.unwrap();
 }
 
 /// A started call, working: the lane made, the call opened on both halves, ready.
@@ -520,17 +520,17 @@ fn an_update_keeps_what_the_halves_loaded_and_adds_a_half_without_restarting() {
         assert_eq!(fake.loads.lock().unwrap().clone(), ["tts:voice"]);
 
         // The same halves, another voice: nothing is loaded again.
-        let now = state.applied("a").await.unwrap();
+        let now = state.applied(&state.lane("a").await.unwrap()).await.unwrap();
         let mut voiced = chosen(None, Some("voice"), None);
         voiced.output.as_mut().unwrap().config = serde_json::json!({"voice": "af_heart", "speed": 0.9});
-        state.update("a", applied(&fake, &voiced, Some(&now), 0)).await.unwrap();
+        state.update(&state.lane("a").await.unwrap(), applied(&fake, &voiced, Some(&now), 0)).await.unwrap();
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert_eq!(fake.loaded("tts"), 1);
 
         // A microphone appears: the input half is added, loaded beside the running call, and the microphone opens.
-        let now = state.applied("a").await.unwrap();
+        let now = state.applied(&state.lane("a").await.unwrap()).await.unwrap();
         let both = chosen(Some("words"), Some("voice"), None);
-        state.update("a", applied(&fake, &both, Some(&now), 0)).await.unwrap();
+        state.update(&state.lane("a").await.unwrap(), applied(&fake, &both, Some(&now), 0)).await.unwrap();
         audio.until("the microphone opens", |d| d.set_input.contains(&true)).await;
         assert_eq!((fake.loaded("stt"), fake.loaded("vad"), fake.loaded("tts")), (1, 1, 1));
         state.route_input(Some("a".into())).await.unwrap();
@@ -540,11 +540,17 @@ fn an_update_keeps_what_the_halves_loaded_and_adds_a_half_without_restarting() {
         assert_eq!(audio.count(|d| d.running), 1);
 
         // An update of a call not started is refused; the half removed closes the microphone.
-        let now = state.applied("a").await.unwrap();
-        state.update("a", applied(&fake, &chosen(None, Some("voice"), None), Some(&now), 0)).await.unwrap();
+        let now = state.applied(&state.lane("a").await.unwrap()).await.unwrap();
+        state
+            .update(&state.lane("a").await.unwrap(), applied(&fake, &chosen(None, Some("voice"), None), Some(&now), 0))
+            .await
+            .unwrap();
         audio.until("the microphone closes", |d| d.set_input.last() == Some(&false)).await;
         state.create_call("b".into()).await.unwrap();
-        assert_eq!(state.applied("b").await.err().map(|r| r.params["code"].clone()), Some("not-started".into()));
+        assert_eq!(
+            state.applied(&state.lane("b").await.unwrap()).await.err().map(|r| r.params["code"].clone()),
+            Some("not-started".into())
+        );
         within(state.dispose_call("a")).await.unwrap();
     });
 }
@@ -560,7 +566,10 @@ fn a_disposed_call_keeps_its_models_for_its_idle_minutes() {
 
         for (minutes, key) in [(3, "a"), (0, "b")] {
             state.create_call(key.into()).await.unwrap();
-            state.open(key, applied(&fake, &both, None, minutes), false, seen.page()).await.unwrap();
+            state
+                .open(&state.lane(key).await.unwrap(), key, applied(&fake, &both, None, minutes), false, seen.page())
+                .await
+                .unwrap();
             within(state.ready(key)).await.unwrap();
             assert_eq!(fake.holders("words"), 1, "the running call holds its transcriber");
             within(state.dispose_call(key)).await.unwrap();
@@ -695,7 +704,10 @@ fn close_lets_go_of_every_model_before_its_idle_minutes() {
         let both = chosen(Some("words"), Some("voice"), None);
         started(&state, &fake, "running", seen.page(), false).await;
         state.create_call("stopped".into()).await.unwrap();
-        state.open("stopped", applied(&fake, &both, None, 30), false, seen.page()).await.unwrap();
+        state
+            .open(&state.lane("stopped").await.unwrap(), "stopped", applied(&fake, &both, None, 30), false, seen.page())
+            .await
+            .unwrap();
         within(state.ready("stopped")).await.unwrap();
         within(state.dispose_call("stopped")).await.unwrap();
         within(state.preload(other(), 30)).await.unwrap();
@@ -736,7 +748,13 @@ fn a_call_on_the_machines_own_devices_is_ready_or_fails_by_a_code_and_the_lane_i
         let (seen, fake) = (Seen::default(), fake());
         state.create_call("a".into()).await.unwrap();
         state
-            .open("a", applied(&fake, &chosen(Some("words"), Some("voice"), None), None, 0), false, seen.page())
+            .open(
+                &state.lane("a").await.unwrap(),
+                "a",
+                applied(&fake, &chosen(Some("words"), Some("voice"), None), None, 0),
+                false,
+                seen.page(),
+            )
             .await
             .unwrap();
         if let Err(refused) = within(state.ready("a")).await {
@@ -844,15 +862,150 @@ fn a_late_command_of_an_old_page_makes_no_lane_and_moves_no_route() {
 
         // A route being set when the page changes is refused, and the new page's route is as it was.
         state.create_call_in("mine".into(), 4).await.unwrap();
+        let mine = state.lane("mine").await.unwrap();
         let mut held = state.route.lock().await;
-        *held = Some("mine".into());
+        *held = Some(Arc::downgrade(&mine));
         let (silenced, _) = tokio::join!(state.route_input_in(4, None), async {
             tokio::time::sleep(Duration::from_millis(50)).await;
             state.page.store(5, Ordering::SeqCst);
             drop(held);
         });
         assert_eq!(silenced.unwrap_err().params["code"], "page-stale");
-        assert_eq!(state.route.lock().await.as_deref(), Some("mine"), "the route was not undone");
+        assert!(VoiceState::<FakeAudio>::routes_to(&*state.route.lock().await, &mine), "the route was not undone");
+    });
+}
+
+/// The route is to a lane, not to a key. The clearing of an older page takes its lanes out and then the route: in between,
+/// the newer page may make a lane under a key that went and route to it, and the clearing must not silence that one.
+#[test]
+fn the_clearing_of_an_older_page_leaves_a_route_to_a_new_lane_under_the_same_key() {
+    runtime().block_on(async {
+        let (state, audio) = host();
+        state.page.store(1, Ordering::SeqCst);
+        state.create_call_in("call".into(), 1).await.unwrap();
+        state.route_input_in(1, Some("call".into())).await.unwrap();
+        let old = state.lane("call").await.unwrap();
+        assert!(audio.devices.lock().unwrap().routed.is_some());
+
+        // The page changes, and the clearing runs as far as the lanes taken out; the route is held, so it waits there.
+        state.page.store(2, Ordering::SeqCst);
+        let held = state.route.lock().await;
+        let (_, (new, routed)) = tokio::join!(within(state.clear_older_than(2)), async {
+            let until = tokio::time::Instant::now() + Duration::from_secs(10);
+            while state.calls.lock().await.contains_key("call") {
+                assert!(tokio::time::Instant::now() < until, "the clearing never took the old lane out");
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            // The new page makes its lane under the same key and routes to it (what route_input_in does, with the route
+            // held here for the clearing to wait for).
+            state.create_call_in("call".into(), 2).await.unwrap();
+            let new = state.lane("call").await.unwrap();
+            assert!(!Arc::ptr_eq(&old, &new));
+            audio.route_input(Some(&new.input)).await.unwrap();
+            let mut held = held;
+            *held = Some(Arc::downgrade(&new));
+            let routed = audio.devices.lock().unwrap().routed;
+            drop(held);
+            (new, routed)
+        });
+
+        assert!(
+            VoiceState::<FakeAudio>::routes_to(&*state.route.lock().await, &new),
+            "the new lane is still routed to"
+        );
+        assert_eq!(audio.devices.lock().unwrap().routed, routed, "and the microphone still goes to it");
+        assert!(state.lane("call").await.is_ok(), "the new lane is not the old one's to take out");
+    });
+}
+
+/// Disposing a lane takes out that lane, not whatever is under its key by then.
+#[test]
+fn disposing_a_lane_does_not_take_out_a_newer_one_under_its_key() {
+    runtime().block_on(async {
+        let (state, _audio) = host();
+        state.page.store(1, Ordering::SeqCst);
+        state.create_call_in("call".into(), 1).await.unwrap();
+        let old = state.lane("call").await.unwrap();
+        state.page.store(2, Ordering::SeqCst);
+        state.clear_older_than(2).await;
+        state.create_call_in("call".into(), 2).await.unwrap();
+        let new = state.lane("call").await.unwrap();
+        state.remove("call", &old).await;
+        assert!(Arc::ptr_eq(&state.lane("call").await.unwrap(), &new), "only the lane it was given is taken out");
+        state.remove("call", &new).await;
+        assert!(state.lane("call").await.is_err());
+    });
+}
+
+/// A page routes to its own lanes only.
+#[test]
+fn a_page_routes_to_its_own_lanes_only() {
+    runtime().block_on(async {
+        let (state, audio) = host();
+        state.page.store(1, Ordering::SeqCst);
+        state.create_call_in("older".into(), 1).await.unwrap();
+        // The page changed and the older page's lane has not been cleared away yet.
+        state.page.store(2, Ordering::SeqCst);
+        let refused = state.route_input_in(2, Some("older".into())).await.unwrap_err();
+        assert_eq!(refused.params["code"], "bad-request");
+        assert_eq!(audio.devices.lock().unwrap().routed, None);
+    });
+}
+
+/// A command looks its lane up, then awaits (the catalogues, the models), then acts. It acts on the lane it looked up: one
+/// that was cleared away meanwhile is refused, and a lane made under the same key since is not touched.
+#[test]
+fn a_start_and_an_update_act_on_the_lane_they_looked_up_not_on_what_its_key_names_by_then() {
+    runtime().block_on(async {
+        let (state, _audio) = host();
+        let (seen, fake) = (Seen::default(), fake());
+        let both = chosen(Some("words"), Some("voice"), None);
+        state.page.store(1, Ordering::SeqCst);
+        state.create_call_in("call".into(), 1).await.unwrap();
+        let old = state.lane_of(1, "call").await.unwrap();
+
+        // The page goes during the await: its lane is cleared away, and the new page makes one under the same key.
+        state.page.store(2, Ordering::SeqCst);
+        state.clear_older_than(2).await;
+        state.create_call_in("call".into(), 2).await.unwrap();
+        let new = state.lane_of(2, "call").await.unwrap();
+        assert!(!Arc::ptr_eq(&old, &new));
+        assert_eq!(
+            state.lane_of(1, "call").await.err().map(|refused| refused.params["code"].clone()),
+            Some("bad-request".into()),
+            "the key names a lane that is not the old page's"
+        );
+
+        // The command resumes with the lane it had: refused, and nothing of the new lane is touched.
+        let started = state.open(&old, "call", applied(&fake, &both, None, 0), false, seen.page()).await;
+        assert_eq!(started.unwrap_err().params["code"], "bad-request");
+        let updated = state.update(&old, applied(&fake, &both, None, 0)).await;
+        assert_eq!(updated.unwrap_err().params["code"], "bad-request");
+        assert!(new.call.lock().await.is_none(), "no call was made on the new lane");
+        assert!(new.io.lock().unwrap().is_some(), "and its audio was not taken");
+
+        // The new page's own start and update work on its lane.
+        state.open(&new, "call", applied(&fake, &both, None, 0), false, seen.page()).await.unwrap();
+        let now = state.applied(&new).await.unwrap();
+        state.update(&new, applied(&fake, &both, Some(&now), 0)).await.unwrap();
+        state.dispose_call("call").await.unwrap();
+    });
+}
+
+/// A lane disposed while its start awaits is not started either: nothing would hold the call.
+#[test]
+fn a_lane_that_was_disposed_while_its_start_awaited_is_not_started() {
+    runtime().block_on(async {
+        let (state, audio) = host();
+        let (seen, fake) = (Seen::default(), fake());
+        state.page.store(1, Ordering::SeqCst);
+        state.create_call_in("call".into(), 1).await.unwrap();
+        let lane = state.lane_of(1, "call").await.unwrap();
+        state.dispose_call("call").await.unwrap();
+        let both = chosen(Some("words"), Some("voice"), None);
+        let started = state.open(&lane, "call", applied(&fake, &both, None, 0), false, seen.page()).await;
+        assert_eq!(started.unwrap_err().params["code"], "bad-request");
+        assert_eq!(audio.devices.lock().unwrap().running, 0, "no call was left running");
     });
 }
 
