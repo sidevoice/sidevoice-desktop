@@ -18,3 +18,10 @@ tauri-build = { version = "2.7", features = [] }
 # The app's native project inputs: the Android manifest and its network security config (plugin/).
 sidevoice-mobile-plugin = { path = "plugin" }
 tauri = { version = "2.12", features = [] }
+# The pairings file (src/pairings.rs): a temporary file in the same directory, synced, renamed over the old record, the
+# directory synced. Unix and Windows; the OS calls are the crate's.
+atomic-write-file = "0.3"
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
