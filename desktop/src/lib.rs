@@ -10,10 +10,12 @@
 //!   app keeps running.
 //! - `call-controls`: the call controls card (`src/call_controls.rs`), floating over other apps during a call.
 
+#[cfg(test)]
+mod acl;
+mod app_hooks;
 mod call_controls;
 mod data;
 mod debug_options;
-mod engine_ipc;
 mod local_host;
 /// A look at the process's own memory, for CI's measurements of it (#145). Never in a release.
 #[cfg(any(test, feature = "probe"))]
@@ -32,6 +34,7 @@ use crate::platform::host::{self, APP_ORIGIN};
 use crate::platform::media_controls;
 use crate::platform::shortcut_access;
 use serde_json::{json, Value};
+use sidevoice_app_core::app::{AppHost, Hooks, HostConfig};
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
 use sidevoice_desktop_core::build_info::BuildInfo;
 use sidevoice_desktop_core::settings::{MuteShortcut, Registration, Settings};
@@ -197,10 +200,16 @@ fn bridge_playback(app: AppHandle, webview: Webview, level: f64, thread_id: Opti
 /// one and its origin).
 pub(crate) fn room_page(app: &AppHandle, webview: &Webview) -> Result<(), String> {
     let current_label = app.state::<AppState>().room_label.lock().unwrap().clone();
-    if current_label.as_deref() != Some(webview.label()) {
+    let origin = webview.url().map(|u| settings::url_origin(&u)).ok();
+    is_room_page(current_label.as_deref(), webview.label(), origin.as_deref())
+}
+
+/// [`room_page`]'s answer for a webview called `label` showing a page of `origin`, when `current` is the room window's label.
+fn is_room_page(current: Option<&str>, label: &str, origin: Option<&str>) -> Result<(), String> {
+    if current != Some(label) {
         return Err("not the room window".into());
     }
-    if webview.url().map(|u| settings::url_origin(&u)).ok().as_deref() != Some(APP_ORIGIN) {
+    if origin != Some(APP_ORIGIN) {
         return Err("not the app's own page".into());
     }
     Ok(())
@@ -243,30 +252,11 @@ fn log_panics() {
     }));
 }
 
-fn debugging() -> bool {
-    std::env::var_os("SIDEVOICE_DEBUG").is_some_and(|v| v == "1")
-}
-
-/// Diagnostics on stderr, only with `SIDEVOICE_DEBUG=1` (CI's smoke tests read them).
-pub(crate) fn debug(message: &str) {
-    log::info!("{message}");
-    if debugging() {
-        eprintln!("sidevoice: {message}");
-    }
-}
-
-/// A line too frequent or too large for the log by default: in it at level `debug` (`SIDEVOICE_LOG_LEVEL`), and on stderr
-/// with `SIDEVOICE_DEBUG=1`.
-pub(crate) fn debug_detail(message: impl FnOnce() -> String) {
-    if !debugging() && !log::log_enabled!(log::Level::Debug) {
-        return;
-    }
-    let message = message();
-    log::debug!("{message}");
-    if debugging() {
-        eprintln!("sidevoice: {message}");
-    }
-}
+// Diagnostics on stderr with `SIDEVOICE_DEBUG=1` (CI's smoke tests read them): sidevoice-app-core's, shared with the
+// call host.
+#[cfg(feature = "probe")]
+use sidevoice_app_core::debug::enabled as debugging;
+pub(crate) use sidevoice_app_core::debug::{debug, debug_detail};
 
 /// A line from a page's diagnostics (the CI probe), printed only with `SIDEVOICE_DEBUG=1`.
 #[tauri::command]
@@ -425,18 +415,6 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
         call_controls::call_controls_resize,
         call_controls::call_controls_cursor,
         debug_log,
-        engine_ipc::engine_capabilities,
-        engine_ipc::engine_installed,
-        engine_ipc::engine_install,
-        engine_ipc::engine_progress,
-        engine_ipc::engine_cancel,
-        engine_ipc::engine_uninstall,
-        engine_ipc::engine_memory,
-        engine_ipc::engine_catalogs,
-        engine_ipc::engine_set_credential,
-        engine_ipc::engine_has_credential,
-        engine_ipc::engine_test_credential,
-        engine_ipc::engine_refresh,
         local_host::local_host_state,
         local_host::local_host_pairing,
         local_host::local_host_action,
@@ -453,22 +431,7 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
         call_controls::call_controls_settings,
         updater::updater,
         debug_options::debug_options,
-        microphone::microphone,
-        voice::voice_create_call,
-        voice::voice_route_input,
-        voice::voice_dispose_call,
-        voice::voice_ready,
-        voice::voice_update,
-        voice::voice_preload,
-        voice::voice_start,
-        voice::voice_stop,
-        voice::voice_say,
-        voice::voice_cancel_say,
-        voice::voice_mute,
-        voice::voice_cancel_input,
-        voice::voice_end_input,
-        voice::voice_audio_devices,
-        voice::voice_set_audio_devices
+        microphone::microphone
     ]
 }
 
@@ -493,17 +456,16 @@ pub fn run() {
     probe::watch_exit_handlers();
     log_panics();
     // First, so everything after it is logged.
+    // Where the call's events go: over the channel the room page opens (the shared plugin's `voice_events`).
+    let pages = sidevoice_app_tauri::Pages::default();
+    let events = pages.clone();
     let builder = tauri::Builder::default().plugin(log_plugin());
     // The call controls card is a non-activating panel on macOS (src/call_controls.rs).
     let builder = <platform::card_window::NativeCardWindow as platform::card_window::CardWindow>::configure(builder);
-    // The voice call the app runs (`host.voice`, src/voice.rs).
-    // Its shared audio starts its dispatcher on Tokio, so it is built inside the runtime the commands run on.
-    let builder = {
-        let _runtime = tauri::async_runtime::handle().inner().enter();
-        builder.manage(voice::VoiceState::default())
-    };
     application::configure(builder)
         .plugin(tauri_plugin_opener::Builder::new().open_js_links_on_click(false).build())
+        // The commands the apps share (`host.voice`, `host.engine`): who may call is this app's room page.
+        .plugin(sidevoice_app_tauri::init(room_page, pages))
         .manage(AppState::default())
         .invoke_handler(handler())
         .setup(move |app| {
@@ -518,17 +480,17 @@ pub fn run() {
             // Without it the app still runs; the page then finds no native engine to use.
             let engine_root =
                 data::shared_model_root().ok_or_else(|| std::io::Error::other("no home for the shared model store"))?;
-            let credentials = engine_ipc::ProviderKeys;
-            match sidevoice_desktop_engine::NativeEngines::new(
-                engine_root,
-                credentials,
+            // The application host: the voice call and the engine (`host.voice`, `host.engine`; src/voice.rs, src/engine_ipc.rs).
+            // The engine failing to start is logged by the host, and the app goes on without one.
+            app.manage(AppHost::new(
+                HostConfig { model_root: engine_root },
                 tauri::async_runtime::handle().inner().clone(),
-            ) {
-                Ok(engines) => {
-                    app.manage(engine_ipc::EngineState::new(engines));
-                }
-                Err(e) => log::error!("the native engine did not start: {} ({})", e.key, e.message),
-            }
+                Hooks {
+                    admission: Arc::new(app_hooks::ResetAdmission(handle.clone())),
+                    events: Arc::new(events),
+                    keys: Arc::new(app_hooks::Keys),
+                },
+            ));
             // This computer's own core, on every OS: found, paired, proxied for the page (docs/LOCAL_HOST.md).
             local_host::setup(&handle);
             let stored = data::desktop_dir(&handle).ok().and_then(|dir| settings::load(&dir));
