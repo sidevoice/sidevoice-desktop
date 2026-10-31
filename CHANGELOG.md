@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.0](https://github.com/sidevoice/sidevoice-desktop/compare/v0.3.0...v0.4.0) (2026-10-31)
+
+
+### ⚠ BREAKING CHANGES
+
+* **app:** identifier ai.sidevoice.desktop ([#316](https://github.com/sidevoice/sidevoice-desktop/issues/316))
+
+### Bug Fixes
+
+* **app:** carry an install's data over from dev.sidevoice.desktop ([#341](https://github.com/sidevoice/sidevoice-desktop/issues/341)) ([b1f85e3](https://github.com/sidevoice/sidevoice-desktop/commit/b1f85e394e2d7abba902bf7f7753bcb9c68077d7))
+
+
+### Miscellaneous Chores
+
+* **app:** identifier ai.sidevoice.desktop ([#316](https://github.com/sidevoice/sidevoice-desktop/issues/316)) ([ed18096](https://github.com/sidevoice/sidevoice-desktop/commit/ed180962079e954f997aec68337c8a15f1261d79))
+
 ## [0.3.0](https://github.com/sidevoice/sidevoice-desktop/compare/v0.2.1...v0.3.0) (2026-10-30)
 
 
