@@ -8,7 +8,10 @@
 //!
 //! - `web`: the web interface at the pin (web.pin.json), into ui/voice/ (`npm run web`). Reads
 //!   `SIDEVOICE_WEB_ATTESTATION` and `GH_TOKEN` (scripts/build-web.mjs).
-//! - `platform-guard`: reject OS-specific code outside platform (the separate Platform boundary CI job).
+//! - `platform-guard`: reject OS-specific code outside platform, and host-kind conditions (`desktop`, `mobile`) anywhere
+//!   (the separate Platform boundary CI job).
+//! - `host-graph`: the host kinds are crates: which crates of the workspace depend on which, on every supported target,
+//!   and that workflows build for a mobile target one package at a time (the same job).
 //! - `platform-clippy`: deny OS API lints in the independent Platform boundary job.
 //! - `lint`: rustfmt and Clippy (warnings denied) on the app's workspace and on this tooling.
 //! - `test`: the bridge script's tests (`npm test`) and the app's Rust tests (`cargo test --workspace`).
@@ -103,10 +106,10 @@
 use std::process::ExitCode;
 
 use xtask::util::Channel;
-use xtask::{checks, packaging, platform, platform_guard, publish, util};
+use xtask::{checks, host_graph, packaging, platform, platform_guard, publish, util};
 
 const USAGE: &str =
-    "usage: cargo xtask web | lint | platform-guard | platform-clippy | test | icons | permissions | two-users | bundle [--channel C] | engine-rev
+    "usage: cargo xtask web | lint | platform-guard | host-graph | platform-clippy | test | icons | permissions | two-users | bundle [--channel C] | engine-rev
   | sherpa-libs | release app [--signed] [--channel C] | release check-app [--signed] | release first-open
   | release package [--signed] | release sign-package | release checksums | release forget-secrets
   | release package-screens
@@ -128,6 +131,7 @@ fn main() -> ExitCode {
         ["web"] => checks::web(),
         ["lint"] => checks::lint(),
         ["platform-guard"] => platform_guard::check(),
+        ["host-graph"] => host_graph::check(),
         ["platform-clippy"] => checks::clippy(true),
         ["test"] => checks::test(),
         ["test-support"] => checks::test_support(),
