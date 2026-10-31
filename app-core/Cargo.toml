@@ -1,6 +1,6 @@
 [package]
 name = "sidevoice-app-core"
-version = "0.3.0"
+version = "0.4.0"
 description = "What every Sidevoice app shares and no shell is needed for: the voice call (its host, its models, the settings the page sends), and the app's side of sidevoice-engine (docs/ENGINES.md). No Tauri, so it is tested anywhere."
 edition = "2021"
 rust-version = "1.98"
