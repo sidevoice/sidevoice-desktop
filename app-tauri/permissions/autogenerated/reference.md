@@ -478,6 +478,32 @@ Denies the voice_end_input command without any pre-configured scope.
 <tr>
 <td>
 
+`sidevoice-app-tauri:allow-voice-events`
+
+</td>
+<td>
+
+Enables the voice_events command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`sidevoice-app-tauri:deny-voice-events`
+
+</td>
+<td>
+
+Denies the voice_events command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `sidevoice-app-tauri:allow-voice-mute`
 
 </td>

@@ -456,13 +456,16 @@ pub fn run() {
     probe::watch_exit_handlers();
     log_panics();
     // First, so everything after it is logged.
+    // Where the call's events go: over the channel the room page opens (the shared plugin's `voice_events`).
+    let pages = sidevoice_app_tauri::Pages::default();
+    let events = pages.clone();
     let builder = tauri::Builder::default().plugin(log_plugin());
     // The call controls card is a non-activating panel on macOS (src/call_controls.rs).
     let builder = <platform::card_window::NativeCardWindow as platform::card_window::CardWindow>::configure(builder);
     application::configure(builder)
         .plugin(tauri_plugin_opener::Builder::new().open_js_links_on_click(false).build())
         // The commands the apps share (`host.voice`, `host.engine`): who may call is this app's room page.
-        .plugin(sidevoice_app_tauri::init(room_page))
+        .plugin(sidevoice_app_tauri::init(room_page, pages))
         .manage(AppState::default())
         .invoke_handler(handler())
         .setup(move |app| {
@@ -484,7 +487,7 @@ pub fn run() {
                 tauri::async_runtime::handle().inner().clone(),
                 Hooks {
                     admission: Arc::new(app_hooks::ResetAdmission(handle.clone())),
-                    events: Arc::new(app_hooks::RoomEvents(handle.clone())),
+                    events: Arc::new(events),
                     keys: Arc::new(app_hooks::Keys),
                 },
             ));

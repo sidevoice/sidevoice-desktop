@@ -92,6 +92,8 @@ pub struct VoiceState<A: LaneAudio = SharedNativeAudio> {
 }
 
 pub struct CallLane<P> {
+    /// The generation of the page that made the lane (`VoiceState::create_call_in`): a page owns its lanes only.
+    page: u64,
     call: tokio::sync::Mutex<Option<Running>>,
     /// Held while a change of the call's settings is made, so that changes are made one after the other, in the order
     /// they were asked.
@@ -171,7 +173,13 @@ impl<A: LaneAudio> VoiceState<A> {
         self.calls.lock().await.get(key).cloned().ok_or_else(|| refusal("bad_request", "Unknown voice call."))
     }
 
+    /// A lane for a page that has no generation (a host with one page for good).
     pub async fn create_call(&self, key: String) -> Result<(), Refusal> {
+        self.create_call_in(key, 0).await
+    }
+
+    /// A lane made by the page of generation `page`: `clear_older_than` lets go of it once a newer page exists.
+    pub async fn create_call_in(&self, key: String, page: u64) -> Result<(), Refusal> {
         if !valid_key(&key) {
             return Err(refusal("bad_request", "Invalid voice call key."));
         }
@@ -180,7 +188,7 @@ impl<A: LaneAudio> VoiceState<A> {
             return Err(refusal("bad_request", "Voice call key already exists."));
         }
         let (io, input) = self.audio.attach();
-        calls.insert(key, Arc::new(CallLane::new(io, input)));
+        calls.insert(key, Arc::new(CallLane::new(io, input, page)));
         Ok(())
     }
 
@@ -432,6 +440,30 @@ impl<A: LaneAudio> VoiceState<A> {
         }
     }
 
+    /// The lanes of pages older than `page` are stopped and released, as `clear` does, and the route is let go if it led to
+    /// one of them; the lanes of `page` and of newer ones, and a route to them, are left alone. The newest page may have
+    /// made its lanes before this ran.
+    pub async fn clear_older_than(&self, page: u64) {
+        let old: Vec<(String, Arc<CallLane<A::Port>>)> = {
+            let mut calls = self.calls.lock().await;
+            let keys: Vec<String> =
+                calls.iter().filter(|(_, lane)| lane.page < page).map(|(key, _)| key.clone()).collect();
+            keys.into_iter().filter_map(|key| calls.remove(&key).map(|lane| (key, lane))).collect()
+        };
+        {
+            let mut route = self.route.lock().await;
+            if route.as_ref().is_some_and(|routed| old.iter().any(|(key, _)| key == routed)) {
+                let _ = self.audio.route_input(None).await;
+                *route = None;
+            }
+        }
+        for (_, lane) in old {
+            lane.stop().await;
+            lane.release();
+            self.retire(&lane).await;
+        }
+    }
+
     /// No route and no lanes: each old call is stopped and released, and keeps its models for its idle minutes.
     pub async fn clear(&self) {
         {
@@ -449,8 +481,9 @@ impl<A: LaneAudio> VoiceState<A> {
 }
 
 impl<P> CallLane<P> {
-    fn new(io: Box<dyn AudioIo>, input: P) -> Self {
+    fn new(io: Box<dyn AudioIo>, input: P, page: u64) -> Self {
         Self {
+            page,
             call: tokio::sync::Mutex::new(None),
             changing: tokio::sync::Mutex::new(()),
             io: Mutex::new(Some(io)),
@@ -468,6 +501,9 @@ impl<P> CallLane<P> {
     /// to no one. Waits for the event being handed over, if any.
     fn release(&self) {
         *self.released.lock().unwrap() = true;
+        // Whatever still waits on the call hears that it is over: a `ready` of a call that never worked, a stop whose idle
+        // state will not come.
+        self.lifecycle.lock().unwrap().end();
     }
 
     /// Stops listening and speaking; the models stay loaded. A `ready` still waiting rejects with `stopped`. Returns

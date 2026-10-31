@@ -32,19 +32,39 @@ function fakeStore(initial) {
 
 // The commands the apps share are a Tauri plugin's, invoked under its name (sidevoice-app-tauri/ACL.md). The tests name them
 // as the bridge does, without the plugin's prefix: whatever a test installs as `invoke` is handed the short name, and `wire`
-// keeps what was invoked.
+// keeps what was invoked. The app numbers the page that asks for its channel (`voice_events`, answered here with PAGE);
+// the voice commands carry the number back, which `pages` keeps and the tests do not see in the arguments. `deliver` is
+// the app sending over the page's channel.
 const PLUGIN = "plugin:sidevoice-app-tauri|";
+const PAGE = 7;
 
 function fakeWindow(origin) {
   const calls = [];
   const wire = [];
+  const pages = [];
+  const channels = [];
+  const refusals = []; // what the app refuses `voice_events` with, in turn
+  const callbacks = [];
   const timers = [];
   let handler = (cmd, args) => (calls.push([cmd, structuredClone(args)]), Promise.resolve());
-  const internals = {};
+  const internals = {
+    transformCallback: (callback) => callbacks.push(callback) - 1,
+    unregisterCallback: (id) => { callbacks[id] = null; },
+  };
   Object.defineProperty(internals, "invoke", {
-    get: () => (cmd, ...rest) => {
+    get: () => (cmd, args, ...rest) => {
       wire.push(cmd);
-      return handler(cmd.startsWith(PLUGIN) ? cmd.slice(PLUGIN.length) : cmd, ...rest);
+      const name = cmd.startsWith(PLUGIN) ? cmd.slice(PLUGIN.length) : cmd;
+      if (name === "voice_events") {
+        channels.push(args.events);
+        return refusals.length ? Promise.reject(refusals.shift()) : Promise.resolve(PAGE);
+      }
+      if (args && typeof args === "object" && "page" in args) {
+        const { page, ...others } = args;
+        pages.push(page);
+        args = others;
+      }
+      return handler(name, args, ...rest);
     },
     set: (replacement) => { handler = replacement; },
   });
@@ -55,7 +75,10 @@ function fakeWindow(origin) {
     clearInterval: (id) => (timers[id - 1] = null),
     setTimeout: (fn, ms) => setTimeout(fn, Math.min(ms, 5)),
   };
-  return { win, calls, wire, tick: () => timers.forEach((fn) => fn && fn()) };
+  // The app sends `message` as number `index` of the channel the page gave (the $n-th it opened).
+  const deliver = (index, message, n = 0) => callbacks[Number(channels[n].split(":")[1])]({ index, message });
+  const finish = (index, n = 0) => callbacks[Number(channels[n].split(":")[1])]?.({ index, end: true });
+  return { win, calls, wire, pages, channels, refusals, deliver, finish, callbacks, tick: () => timers.forEach((fn) => fn && fn()) };
 }
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
@@ -334,6 +357,55 @@ test("the shared commands are invoked under their plugin's name and the app's ow
   const own = wire.filter((cmd) => !cmd.startsWith(PLUGIN));
   assert.ok(own.includes("data_pairings_read") && own.includes("data_reset_report"), own.join());
   assert.ok(own.every((cmd) => !/^(voice|engine)_/.test(cmd)), "no shared command without its plugin's name");
+});
+
+test("the call's events come over the channel the page opened, in index order, and every command carries the page's number", async () => {
+  const { win, pages, channels, wire, deliver } = fakeWindow(ORIGIN);
+  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const call = api.host.voice.start(BOTH);
+  call.ready.catch(() => {});
+  const states = [];
+  call.onState((state) => states.push(state.listening));
+  await flush();
+  await flush();
+  assert.equal(channels.length, 1, "one channel for the page");
+  assert.match(channels[0], /^__CHANNEL__:\d+$/);
+  // The channel hands them over in the order the app made them, however they arrive.
+  const state = (listening) => ({ key: call.id, type: "state", data: { listening } });
+  deliver(2, state("speaking"));
+  deliver(1, state("listening"));
+  assert.deepEqual(states, [], "number 0 has not come");
+  deliver(0, state("idle"));
+  assert.deepEqual(states, ["idle", "listening", "speaking"]);
+  deliver(3, state("idle"));
+  assert.deepEqual(states, ["idle", "listening", "speaking", "idle"]);
+  // A message that was handed over already is not handed over again.
+  deliver(1, state("calling-it-twice"));
+  assert.equal(states.length, 4);
+
+  // The number came first, once, and then travels with every command.
+  const shared = wire.filter((cmd) => cmd.startsWith(PLUGIN)).map((cmd) => cmd.slice(PLUGIN.length));
+  assert.equal(shared[0], "voice_events");
+  assert.equal(shared.filter((cmd) => cmd === "voice_events").length, 1);
+  assert.ok(pages.length >= 2 && pages.every((page) => page === PAGE), pages.join());
+});
+
+test("a channel the app has ended is let go, and a refusal of the page's number is asked again", async () => {
+  const { win, channels, refusals, callbacks, deliver, finish } = fakeWindow(ORIGIN);
+  const voice = loadFactory()(win, ORIGIN, "native", true, true).host.voice;
+  // The app refuses the page's number: the command is refused with it, and the next one asks again.
+  refusals.push({ key: "bad_request", message: "not the room window" });
+  await assert.rejects(voice.audioDevices(), { key: "bad_request" });
+  await voice.audioDevices();
+  assert.equal(channels.length, 2, "asked again, with a channel of its own");
+  assert.notEqual(channels[0], channels[1]);
+  // Ended after the last message, the callback is unregistered.
+  const id = Number(channels[1].split(":")[1]);
+  voice.onAudioDevices(() => {});
+  deliver(0, { type: "devices", data: { inputs: [] } }, 1);
+  assert.equal(typeof callbacks[id], "function");
+  finish(1, 1);
+  assert.equal(callbacks[id], null);
 });
 
 test("the engine is exactly the contract: its catalogues and keys, what runs here, what is on disk, installs and memory", async () => {

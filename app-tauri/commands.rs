@@ -13,6 +13,7 @@ pub const COMMANDS: &[&str] = &[
     "engine_has_credential",
     "engine_test_credential",
     "engine_refresh",
+    "voice_events",
     "voice_create_call",
     "voice_route_input",
     "voice_dispose_call",

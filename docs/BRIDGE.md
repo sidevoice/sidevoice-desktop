@@ -648,7 +648,9 @@ What is this app's own:
 
 ### How it travels
 
-- Page → app (as `plugin:sidevoice-app-tauri|<command>`): `voice_create_call {key}` (the lane, so the microphone may be routed to the call before it works),
+- Page → app (as `plugin:sidevoice-app-tauri|<command>`): first `voice_events {events}` (once per page: it gives the app a
+  channel for the events below and answers the page's number, the `page` that every command below carries; one of a page
+  that was replaced is refused `page_stale`), then `voice_create_call {key}` (the lane, so the microphone may be routed to the call before it works),
   `voice_route_input {key?}`, then per-call `voice_start {key,settings,take?}` (the call, asked to start: it answers
   once made, or refuses the settings), `voice_ready {key}` (answers once the call works), `voice_update {key,change}`,
   `voice_stop {key}` (answers `true` once the page has what the stop ends, `false` at once when no call was made),
@@ -658,7 +660,9 @@ What is this app's own:
   `voice_dispose_call`.
   The shared commands are `voice_preload {settings}`, `voice_audio_devices` and `voice_set_audio_devices {choice}`.
   The room window capability grants only these fixed commands, and each checks the current page.
-- App → page: `window.__sidevoiceDesktop.voiceEvent(event)` receives `{key,type,data}`.
+- App → page: over the channel the page opened with `voice_events`, in the order the app made them (the bridge hands them to
+  `window.__sidevoiceDesktop.voiceEvent(event)`), `{key,type,data}`. Only the current page has one that is sent to: what the
+  app would tell a page it has replaced is not sent, and a call of the old page is stopped and released.
   `key` is the immutable call ID captured before asynchronous native forwarding. `type` is
   `turn`, `state`, `level`, `playback-level`, `error`, `take`, or `say`.
   The meters go only when the page would draw them differently (`app-core` `voice::meters`): `level` when its whole percent

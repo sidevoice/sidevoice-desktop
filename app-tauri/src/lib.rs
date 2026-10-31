@@ -5,7 +5,10 @@
 //!
 //! A command is the caller check, the arguments and one call of the host, which does the work; the host is the app's
 //! to build and manage (it brings the hooks only the app has), and the plugin only forwards to it. The events the host
-//! tells the page do not pass through here: the app's own `EventSink` delivers them.
+//! tells the page are not an answer of any command: they go to the host's `EventSink`, which for this plugin is [`Pages`],
+//! and over the channel the page opened for itself (`voice_events`), to that page and to no other. A page is numbered by
+//! the host ([`sidevoice_app_core::app::PageGeneration`]); `voice_events` tells it its number, every voice command carries
+//! it back, and the host refuses a number that is not the current page's.
 //!
 //! Who may call is the app's to say: it hands [`init`] a function that answers, for a webview, whether it is the page the
 //! app owns the calls for. The voice commands ask it before they do anything; the engine commands are held by the
@@ -13,6 +16,7 @@
 
 mod acl;
 mod engine;
+mod pages;
 mod voice;
 
 use std::sync::Arc;
@@ -21,6 +25,7 @@ use tauri::plugin::{Builder, TauriPlugin};
 use tauri::{AppHandle, Manager, Runtime, Webview};
 
 pub use acl::{inventory, Entry};
+pub use pages::Pages;
 
 include!("../commands.rs");
 
@@ -40,9 +45,11 @@ impl<R: Runtime> Callers<R> {
 }
 
 /// The plugin. `caller` answers whether a webview is the page the app owns the calls for (its current room window, on
-/// its own origin): the voice commands refuse any other with `bad_request`. The app manages its `AppHost` itself.
+/// its own origin): the voice commands refuse any other with `bad_request`. `pages` is where the page's channel is kept
+/// (`voice_events`); the app hands a clone of it to its `AppHost` as the `EventSink`. The app manages its `AppHost` itself.
 pub fn init<R: Runtime>(
     caller: impl Fn(&AppHandle<R>, &Webview<R>) -> Result<(), String> + Send + Sync + 'static,
+    pages: Pages,
 ) -> TauriPlugin<R> {
     Builder::new(PLUGIN)
         .invoke_handler(tauri::generate_handler![
@@ -58,6 +65,7 @@ pub fn init<R: Runtime>(
             engine::engine_has_credential,
             engine::engine_test_credential,
             engine::engine_refresh,
+            voice::voice_events,
             voice::voice_create_call,
             voice::voice_route_input,
             voice::voice_dispose_call,
@@ -76,6 +84,7 @@ pub fn init<R: Runtime>(
         ])
         .setup(move |app, _| {
             app.manage(Callers::<R>(Arc::new(caller)));
+            app.manage(pages);
             Ok(())
         })
         .build()

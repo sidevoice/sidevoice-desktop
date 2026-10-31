@@ -747,3 +747,69 @@ fn a_call_on_the_machines_own_devices_is_ready_or_fails_by_a_code_and_the_lane_i
         assert!(within(state.ready("a")).await.is_err(), "the lane is gone");
     });
 }
+
+/// A page owns its lanes: those of an older page are stopped and released, the lanes of the newest page (made before
+/// the clearing ran) and the route to them stay, and the route to one that went is let go.
+#[test]
+fn an_older_pages_lanes_go_and_the_newer_ones_stay_with_their_route() {
+    runtime().block_on(async {
+        let (state, audio) = host();
+        let (seen, fake) = (Seen::default(), fake());
+        for (key, page) in [("old", 1), ("new", 2)] {
+            state.create_call_in(key.into(), page).await.unwrap();
+            configure(&state, &fake, key, seen.page()).await;
+            within(state.ready(key)).await.unwrap();
+        }
+        state.route_input(Some("new".into())).await.unwrap();
+        let routed = audio.devices.lock().unwrap().routed;
+        assert!(routed.is_some());
+
+        state.clear_older_than(2).await;
+        assert!(state.lane("old").await.is_err(), "the older page's lane is gone");
+        assert!(state.lane("new").await.is_ok(), "the newer page's lane is not");
+        assert_eq!(audio.devices.lock().unwrap().routed, routed, "the route to the newer lane stays");
+        assert_eq!(audio.devices.lock().unwrap().running, 1, "the old lane's audio was stopped");
+
+        // The route to a lane that goes goes with it.
+        state.create_call_in("older".into(), 1).await.unwrap();
+        configure(&state, &fake, "older", seen.page()).await;
+        within(state.ready("older")).await.unwrap();
+        state.route_input(Some("older".into())).await.unwrap();
+        state.clear_older_than(2).await;
+        assert_eq!(audio.devices.lock().unwrap().routed, None);
+        within(state.dispose_call("new")).await.unwrap();
+    });
+}
+
+/// What waits on a call when its lane is released hears that it is over: a `ready` of a call that never worked, and a
+/// stop whose idle state will not come.
+#[test]
+fn a_ready_and_a_stop_waiting_when_the_lane_is_released_settle() {
+    runtime().block_on(async {
+        let (state, _audio) = host();
+        let (seen, slow) = (Seen::default(), FakeLoader::new(&["words", "voice", "slow"]));
+        // A lane with no call: nothing will ever make `ready` answer but the end of the lane.
+        state.create_call_in("empty".into(), 1).await.unwrap();
+        let (ready, _) = tokio::join!(within(state.ready("empty")), async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            state.clear_older_than(2).await;
+        });
+        assert_eq!(ready.unwrap_err().params["code"], "stopped");
+
+        // A call still loading its models: `ready` waits, and the page's going settles it and the stop alike.
+        state.create_call_in("loading".into(), 1).await.unwrap();
+        configure_with(&state, &slow, "loading", seen.page(), chosen(Some("slow"), Some("voice"), None), false).await;
+        let (ready, _) = tokio::join!(within(state.ready("loading")), async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let clearing = state.clear_older_than(2);
+            tokio::pin!(clearing);
+            // The stop inside the clearing waits for the idle state of a call that is still loading; opening the gate
+            // lets it come.
+            assert!(tokio::time::timeout(Duration::from_millis(100), &mut clearing).await.is_err());
+            slow.open_gate();
+            within(clearing).await;
+        });
+        assert_eq!(ready.unwrap_err().params["code"], "stopped");
+        assert!(state.lane("loading").await.is_err());
+    });
+}

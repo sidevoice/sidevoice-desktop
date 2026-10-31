@@ -1,9 +1,8 @@
 //! What this app gives sidevoice-app-core's application host (`AppHost`): its reset as the admission to work that uses
-//! the app's data, the room page as where the call's events go, and the OS credential store as where provider keys are
-//! kept.
+//! the app's data, and the OS credential store as where provider keys are kept. (Where the call's events go is the shared
+//! plugin's: the channel the room page opens.)
 
-use serde_json::Value;
-use sidevoice_app_core::app::{Admission, EventSink, KeyError, Lease, ProviderKeys};
+use sidevoice_app_core::app::{Admission, KeyError, Lease, ProviderKeys};
 use tauri::AppHandle;
 
 use crate::platform::credentials;
@@ -14,15 +13,6 @@ pub(crate) struct ResetAdmission(pub(crate) AppHandle);
 impl Admission for ResetAdmission {
     fn admit(&self) -> Option<Lease> {
         crate::data::admit(&self.0).map(Lease::new)
-    }
-}
-
-/// The call's events reach the room page (`voice::to_page`).
-pub(crate) struct RoomEvents(pub(crate) AppHandle);
-
-impl EventSink for RoomEvents {
-    fn event(&self, event: Value) {
-        crate::voice::to_page(&self.0, &event);
     }
 }
 
