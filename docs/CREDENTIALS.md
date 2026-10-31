@@ -34,13 +34,14 @@ operations can be retried. An indefinitely unanswered prompt may require dismiss
 ## From the previous identifier
 
 The service is the bundle identifier plus `.providers`, and the identifier was `dev.sidevoice.desktop` before
-`ai.sidevoice.desktop`. At launch, first (`legacy_identifier.rs`, until it has left its marker in the app data folder;
+`ai.sidevoice.desktop`. At launch, first (`legacy_identifier.rs`, until its journal says it has finished;
 APP_DATA.md), `carry_over(identifier)` lists the old service (the same exact-service search as `clear_all`) and, for
 each account that is a valid provider id: if the new namespace holds no key for it, copies it and reads it back equal;
 then deletes the old entry. A key the new namespace already holds wins (the old entry is just deleted). This also
 serves the builds that ran under the new identifier with no carry-over: their keys stay, the old ones are added.
-`holds_keys()` says whether the new namespace holds any key (one of the signals that an install was set up). A key that cannot be read, written or checked stays where it was, the
-others go on, and the next launch tries again; an old entry whose account is not a valid provider id is not the app's
+`holds_keys()` says whether the new namespace holds any key (one of the signals that an install was set up; a store
+that cannot answer is "unknown", not "no key": nothing is replaced and no key moves until it can). A key that cannot be
+read, written or checked stays where it was, the others go on, and the next launch tries again; an old entry whose account is not a valid provider id is not the app's
 and stays. It goes through the same admission as every other call (30-second deadline where a prompt can wait), and the
 log names the provider ids moved, never a key or a store message. On macOS the new build is a different code identity
 from the one that stored the keys, so the Keychain asks once per key whether it may use it; declining leaves the key in

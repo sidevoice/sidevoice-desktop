@@ -76,31 +76,39 @@ Caches, Logs, Saved Application State, then `preferences`.
 ## From the previous identifier
 
 The builds before `ai.sidevoice.desktop` were `dev.sidevoice.desktop`. At every launch, first (`legacy_identifier.rs`,
-under the launch lock), until it has left the marker `legacy-identifier.done` in the new `app-data` folder, each folder
-of the list above for the old identifier that exists is carried to the same folder of the new one. `moves_from(home,
-previous)` pairs them, resolved by the same code as the deletion (`Places::native` takes the identifier as a parameter;
-on macOS the trait's `extra_folders` adds `~/Library/Logs/<id>` and the saved window state); it names `app-data`
-apart from the others. The shared model store is not among them: no identifier names it. The local host's pairing lives
-in `app-data` (`local-host.json`), so it goes with it.
+under the launch lock), each folder of the list above for the old identifier that exists is carried to the same folder
+of the new one, until the carry-over has finished. `moves_from(home, previous)` pairs them, resolved by the same code
+as the deletion (`Places::native` takes the identifier as a parameter; on macOS the trait's `extra_folders` adds
+`~/Library/Logs/<id>` and the saved window state); it names `app-data` apart from the others. The shared model store is
+not among them: no identifier names it. The local host's pairing lives in `app-data` (`local-host.json`), so it goes
+with it.
 
 - The new folder does not exist: the old one is renamed to it (siblings, so a rename on one filesystem).
 - It exists and the install was never set up: the new `app-data` holds none of `settings.json`, `call-controls.json` and
   `pairings.json` (the files the app writes only when the person acts; a first start writes none, only its log, and
   the local host's `local-host.json`, which the app makes by itself when a core runs here) and the new namespace holds
-  no provider key. The new folder then holds only what a first start makes. It is set aside, the old one renamed into
-  place, and only then the first-start folder deleted; if the rename fails it is put back. The first start's
-  `local-host.json` is copied over the old one's before that: the core revoked the old install's token when the new
-  one paired. This is the case of the builds that ran under the new identifier before this carry-over.
+  no provider key. The first-start folder is renamed to `<folder>.first-start-backup` next to it, never deleted (the web
+  interface keeps preferences in its storage that no file shows), and the old one renamed into place. The backup's
+  `local-host.json` is copied over the old one's: the core revoked the old install's token when the new one paired.
+  This is the case of the builds that ran under the new identifier before this carry-over.
 - It exists and the install is set up: the new one stays, the old one is left where it is, and the log says so.
   Two installs are never merged.
+- It exists and the key store could not say whether the install was set up: nothing is replaced and no key moves; the
+  question is asked again at the next launch.
 
-The app data goes last, and only when the other folders went through. The marker is written when every step ended in a
-definite state, an install with nothing to carry included; a step that failed leaves it unwritten and the next launch
-tries again. A failure is logged and never stops the launch, and the old data is never deleted before it is somewhere
-else. Not carried: macOS's `defaults` domain and the reset's control directory (`<id>-reset`, which only holds an
-interrupted reset). The module is removed two desktop releases after the first that ships it (RELEASING.md, "Legacy
-identifier carry-over"). A reset deletes `app-data` and the marker with it; if an old folder was left behind (the set-up
-case, a failure), the next launch would carry it in again.
+**The journal** (`legacy-identifier.json`) is in the reset's control directory (`<id>-reset`), which no reset deletes.
+It holds whether the install was set up, decided once, before anything moves; how far each step got, written before
+the step acts (set aside, moved in, done); and whether the carry-over has finished. A launch resumes from it and never
+decides again, so a partial failure cannot change what the retry does, and every phase looks at what is there, so a
+crash at any point resumes where it was. The app data goes last, and only when the other folders are done. Finished
+means every step is done, nothing to carry included; a step that failed is retried at the next launch. A failure is
+logged and never stops the launch, and the old data is never deleted before it is somewhere else.
+
+**A reset** (the helper, before it deletes anything) marks the journal finished, started or not: what it deletes does
+not come back from the old folders. **The instance lock** (`instance.lock`, same directory) is held by every running
+instance for its life: a launch that cannot take it is a second instance, whose first may have its browser store open,
+and carries nothing. Not carried: macOS's `defaults` domain and the reset's control directory itself. The module stays
+until 1.0 (RELEASING.md, "Legacy identifier carry-over").
 
 ## Removal policy
 

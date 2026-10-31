@@ -557,6 +557,11 @@ fn clean_up_after_exit(
     if write_atomic_json(&journal, &json!({"stage":"cleanup", "completed":[], "failed":failed})).is_err() {
         return;
     }
+    // The carry-over from the previous identifier ends with this reset, whether it had finished or not: nothing the
+    // reset deletes may come back from the old identifier's folders. Not recorded, nothing is deleted.
+    if crate::legacy_identifier::stop(&control).is_err() {
+        return;
+    }
     let browser = browser
         .and_then(|owner| webview_data::wait_released(owner, std::time::Instant::now() + Duration::from_secs(10)));
     // A journal that cannot be written stops the deletion: an interruption could no longer be reported.
