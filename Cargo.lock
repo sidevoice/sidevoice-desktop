@@ -4916,6 +4916,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "sidevoice-app-tauri"
+version = "0.3.0"
+dependencies = [
+ "serde_json",
+ "sidevoice-app-core",
+ "tauri",
+ "tauri-plugin",
+ "tauri-utils",
+ "toml 1.1.6+spec-1.1.0",
+]
+
+[[package]]
 name = "sidevoice-desktop"
 version = "0.3.0"
 dependencies = [
@@ -4947,6 +4959,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sidevoice-app-core",
+ "sidevoice-app-tauri",
  "sidevoice-desktop-core",
  "sidevoice-desktop-test-support",
  "sidevoice-local-host",

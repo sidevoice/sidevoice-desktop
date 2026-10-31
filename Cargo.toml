@@ -4,7 +4,7 @@
 # desktop/rust-toolchain.toml only from desktop/ (`cargo xtask` runs cargo there).
 [workspace]
 resolver = "2"
-members = ["app-core", "desktop", "desktop/core", "desktop/local-host", "test-support"]
+members = ["app-core", "app-tauri", "desktop", "desktop/core", "desktop/local-host", "test-support"]
 
 # Profiles are read from the workspace root only.
 [profile.release]
