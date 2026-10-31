@@ -119,6 +119,7 @@ impl<A: LaneAudio> AppHost<A> {
         self.inner.voice.lane(key).await?;
         let engines = self.engines_for_call()?;
         let choice = self.choice_of(&engines, &settings).await?;
+        self.loading_allowed()?;
         let loader = EngineLoader::shared(engines.engine(), Arc::clone(&self.inner.voice.model_cache));
         let applied = Applied { halves: Halves::new(&loader, &choice, None), settings };
         self.inner.voice.open(key, applied, take, self.page_sink(page)).await
@@ -156,6 +157,7 @@ impl<A: LaneAudio> AppHost<A> {
         let settings = current.settings.changed(change);
         let engines = self.engines_for_call()?;
         let choice = self.choice_of(&engines, &settings).await?;
+        self.loading_allowed()?;
         let loader = EngineLoader::shared(engines.engine(), Arc::clone(&self.inner.voice.model_cache));
         let applied = Applied { halves: Halves::new(&loader, &choice, Some(&current.halves)), settings };
         self.inner.voice.update(key, applied).await
@@ -177,6 +179,7 @@ impl<A: LaneAudio> AppHost<A> {
         let _lease = self.admit()?;
         let engines = self.engines_for_call()?;
         let choice = self.choice_of(&engines, &settings).await?;
+        self.loading_allowed()?;
         let loader = EngineLoader::shared(engines.engine(), Arc::clone(&self.inner.voice.model_cache));
         let minutes = settings.idle_unload_minutes.unwrap_or(IDLE_UNLOAD_MINUTES);
         self.inner

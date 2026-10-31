@@ -90,6 +90,9 @@ pub fn init<R: Runtime>(
         .build()
 }
 
+#[cfg(all(test, debug_assertions))]
+mod ipc_tests;
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
