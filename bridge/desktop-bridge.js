@@ -41,19 +41,24 @@
     return picked;
   };
 
+  /** The commands the apps share (the voice call's and the engine's) are a Tauri plugin's, and are invoked under its name
+   *  (sidevoice-app-tauri/ACL.md); the app's own keep theirs. */
+  const PLUGIN = "plugin:sidevoice-app-tauri|";
+  const named = (command) => (/^(voice|engine)_/.test(command) ? PLUGIN + command : command);
+
   function invoke(command, args) {
     const internals = win.__TAURI_INTERNALS__;
     if (!internals || typeof internals.invoke !== "function") return;
     // The app may be mid-reload or the capability may not match yet: never break the page for it.
     Promise.resolve()
-      .then(() => internals.invoke(command, args))
+      .then(() => internals.invoke(named(command), args))
       .catch(() => {});
   }
 
   function call(command, args, options) {
     const internals = win.__TAURI_INTERNALS__;
     if (!internals || typeof internals.invoke !== "function") return Promise.reject(new Error("no desktop host"));
-    return Promise.resolve().then(() => internals.invoke(command, args, options));
+    return Promise.resolve().then(() => internals.invoke(named(command), args, options));
   }
 
   let installs = 0; // numbers each install call's job

@@ -30,17 +30,32 @@ function fakeStore(initial) {
   };
 }
 
+// The commands the apps share are a Tauri plugin's, invoked under its name (sidevoice-app-tauri/ACL.md). The tests name them
+// as the bridge does, without the plugin's prefix: whatever a test installs as `invoke` is handed the short name, and `wire`
+// keeps what was invoked.
+const PLUGIN = "plugin:sidevoice-app-tauri|";
+
 function fakeWindow(origin) {
   const calls = [];
+  const wire = [];
   const timers = [];
+  let handler = (cmd, args) => (calls.push([cmd, structuredClone(args)]), Promise.resolve());
+  const internals = {};
+  Object.defineProperty(internals, "invoke", {
+    get: () => (cmd, ...rest) => {
+      wire.push(cmd);
+      return handler(cmd.startsWith(PLUGIN) ? cmd.slice(PLUGIN.length) : cmd, ...rest);
+    },
+    set: (replacement) => { handler = replacement; },
+  });
   const win = {
     location: { protocol: new URL(origin).protocol, host: new URL(origin).host },
-    __TAURI_INTERNALS__: { invoke: (cmd, args) => (calls.push([cmd, structuredClone(args)]), Promise.resolve()) },
+    __TAURI_INTERNALS__: internals,
     setInterval: (fn) => (timers.push(fn), timers.length),
     clearInterval: (id) => (timers[id - 1] = null),
     setTimeout: (fn, ms) => setTimeout(fn, Math.min(ms, 5)),
   };
-  return { win, calls, tick: () => timers.forEach((fn) => fn && fn()) };
+  return { win, calls, wire, tick: () => timers.forEach((fn) => fn && fn()) };
 }
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
@@ -298,6 +313,27 @@ test("installs once per page and survives a missing Tauri runtime", async () => 
   const first = install(win, ORIGIN);
   assert.equal(install(win, ORIGIN), first);
   await flush();
+});
+
+test("the shared commands are invoked under their plugin's name and the app's own under theirs", async () => {
+  const install = loadFactory();
+  const { win, wire } = fakeWindow(ORIGIN);
+  const api = install(win, ORIGIN, "native", true, true);
+  await api.host.engine.catalogs();
+  await api.host.engine.memory();
+  const call = api.host.voice.start({ output: { tts: { catalog: "local", model: "m" } } });
+  call.ready.catch(() => {});
+  await flush();
+  await flush();
+  await api.host.data.pairings.read();
+  await api.host.data.resetReport();
+  const shared = wire.filter((cmd) => cmd.startsWith(PLUGIN)).map((cmd) => cmd.slice(PLUGIN.length));
+  assert.deepEqual(shared.slice(0, 2), ["engine_catalogs", "engine_memory"]);
+  assert.ok(shared.includes("voice_create_call") && shared.includes("voice_start"), shared.join());
+  assert.ok(shared.every((cmd) => /^(voice|engine)_/.test(cmd)), "nothing else is the plugin's");
+  const own = wire.filter((cmd) => !cmd.startsWith(PLUGIN));
+  assert.ok(own.includes("data_pairings_read") && own.includes("data_reset_report"), own.join());
+  assert.ok(own.every((cmd) => !/^(voice|engine)_/.test(cmd)), "no shared command without its plugin's name");
 });
 
 test("the engine is exactly the contract: its catalogues and keys, what runs here, what is on disk, installs and memory", async () => {

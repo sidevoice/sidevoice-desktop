@@ -25,6 +25,7 @@ keyring-core = "1.0.1"
 sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.16.1" }
 sidevoice-desktop-core = { path = "core" }
 sidevoice-app-core = { path = "../app-core" }
+sidevoice-app-tauri = { path = "../app-tauri" }
 tauri = { version = "2.12", features = ["tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-global-shortcut = "2.4"
 tauri-plugin-single-instance = "2.5"

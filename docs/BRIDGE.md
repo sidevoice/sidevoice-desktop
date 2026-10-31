@@ -11,8 +11,8 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 | `bridge/desktop-bridge.js` | Injected by the app into every page of the room window, before the page's own scripts. Bound to the app's own origin (the bundled interface). |
 | `desktop/core/src/bridge.rs` | The contract on the Rust side: `CallSnapshot`, `Command`, and how the tray renders a snapshot. Unit-tested. |
 | `desktop/src/lib.rs` | Wiring: the `bridge_state` command, `send(Command)`; `capabilities/room.json`. The mute shortcut, behind `muteShortcut`, and the one writer of the app's settings (below). |
-| `desktop/src/engine_ipc.rs`, `app-core/src/app/engine.rs` | The engine's commands, behind `engine` (below): its catalogues, provider keys and models on disk. The app's are the transport; `app-core`'s do the work. |
-| `desktop/src/voice.rs`, `desktop/src/platform/credentials.rs`, `app-core/src/app.rs`, `app-core/src/app/voice.rs`, `app-core/src/voice.rs`, `app-core/src/voice/` | The voice call the app runs, behind `voice` (below): the commands in the app, what they do and the hooks the app gives the host (admission, events, keys: `app-core`'s `AppHost`, `desktop/src/app_hooks.rs`), the call host, the models it picks from the catalogues and the settings the page sends in `app-core` (unit-tested), and the keychain the engine reads provider keys from. |
+| `app-tauri/src/engine.rs`, `app-core/src/app/engine.rs` | The engine's commands, behind `engine` (below): its catalogues, provider keys and models on disk. The plugin's are the transport (`app-tauri/ACL.md` says who may call each); `app-core`'s do the work. |
+| `app-tauri/src/voice.rs`, `desktop/src/voice.rs`, `desktop/src/platform/credentials.rs`, `app-core/src/app.rs`, `app-core/src/app/voice.rs`, `app-core/src/voice.rs`, `app-core/src/voice/` | The voice call the app runs, behind `voice` (below): the commands in the plugin, what they do and the hooks the app gives the host (admission, events, keys: `app-core`'s `AppHost`, `desktop/src/app_hooks.rs`), the call host, the models it picks from the catalogues and the settings the page sends in `app-core` (unit-tested), and the keychain the engine reads provider keys from. |
 | `desktop/src/local_host.rs`, `desktop/local-host/` | This computer's own core, behind `localHost` (below; docs/LOCAL_HOST.md). |
 | `desktop/src/tray.rs` | The menu-bar icon and its menu. |
 | `bridge/call-controls-bridge.js` | Injected into the call controls card's window (below). |
@@ -460,7 +460,7 @@ models is the voice call's (below), never the page's. `window.__sidevoiceDesktop
   rejects with `install_cancel_failed`), and a transport error that follows it (the connection it closed) is still
   `install_cancelled`, never `download_failed`. There is no overall download timeout: a slow line is not a failure,
   and the cancel is how a person stops one.
-- Commands behind it (`desktop/src/engine_ipc.rs`): `engine_catalogs`, `engine_set_credential {provider, key}`,
+- Commands behind it (`app-tauri/src/engine.rs`, invoked as `plugin:sidevoice-app-tauri|<command>`): `engine_catalogs`, `engine_set_credential {provider, key}`,
   `engine_has_credential {provider}`, `engine_test_credential {provider, key}` (the reason with its `detail?`, or
   `null`), `engine_refresh {provider}`, `engine_capabilities`, `engine_installed`,
   `engine_install {model, build, engine, job}` (`build` and `engine` each a string or `null`) with
@@ -648,7 +648,7 @@ What is this app's own:
 
 ### How it travels
 
-- Page → app: `voice_create_call {key}` (the lane, so the microphone may be routed to the call before it works),
+- Page → app (as `plugin:sidevoice-app-tauri|<command>`): `voice_create_call {key}` (the lane, so the microphone may be routed to the call before it works),
   `voice_route_input {key?}`, then per-call `voice_start {key,settings,take?}` (the call, asked to start: it answers
   once made, or refuses the settings), `voice_ready {key}` (answers once the call works), `voice_update {key,change}`,
   `voice_stop {key}` (answers `true` once the page has what the stop ends, `false` at once when no call was made),

@@ -10,11 +10,12 @@
 //!   app keeps running.
 //! - `call-controls`: the call controls card (`src/call_controls.rs`), floating over other apps during a call.
 
+#[cfg(test)]
+mod acl;
 mod app_hooks;
 mod call_controls;
 mod data;
 mod debug_options;
-mod engine_ipc;
 mod local_host;
 /// A look at the process's own memory, for CI's measurements of it (#145). Never in a release.
 #[cfg(any(test, feature = "probe"))]
@@ -199,10 +200,16 @@ fn bridge_playback(app: AppHandle, webview: Webview, level: f64, thread_id: Opti
 /// one and its origin).
 pub(crate) fn room_page(app: &AppHandle, webview: &Webview) -> Result<(), String> {
     let current_label = app.state::<AppState>().room_label.lock().unwrap().clone();
-    if current_label.as_deref() != Some(webview.label()) {
+    let origin = webview.url().map(|u| settings::url_origin(&u)).ok();
+    is_room_page(current_label.as_deref(), webview.label(), origin.as_deref())
+}
+
+/// [`room_page`]'s answer for a webview called `label` showing a page of `origin`, when `current` is the room window's label.
+fn is_room_page(current: Option<&str>, label: &str, origin: Option<&str>) -> Result<(), String> {
+    if current != Some(label) {
         return Err("not the room window".into());
     }
-    if webview.url().map(|u| settings::url_origin(&u)).ok().as_deref() != Some(APP_ORIGIN) {
+    if origin != Some(APP_ORIGIN) {
         return Err("not the app's own page".into());
     }
     Ok(())
@@ -408,18 +415,6 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
         call_controls::call_controls_resize,
         call_controls::call_controls_cursor,
         debug_log,
-        engine_ipc::engine_capabilities,
-        engine_ipc::engine_installed,
-        engine_ipc::engine_install,
-        engine_ipc::engine_progress,
-        engine_ipc::engine_cancel,
-        engine_ipc::engine_uninstall,
-        engine_ipc::engine_memory,
-        engine_ipc::engine_catalogs,
-        engine_ipc::engine_set_credential,
-        engine_ipc::engine_has_credential,
-        engine_ipc::engine_test_credential,
-        engine_ipc::engine_refresh,
         local_host::local_host_state,
         local_host::local_host_pairing,
         local_host::local_host_action,
@@ -436,22 +431,7 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
         call_controls::call_controls_settings,
         updater::updater,
         debug_options::debug_options,
-        microphone::microphone,
-        voice::voice_create_call,
-        voice::voice_route_input,
-        voice::voice_dispose_call,
-        voice::voice_ready,
-        voice::voice_update,
-        voice::voice_preload,
-        voice::voice_start,
-        voice::voice_stop,
-        voice::voice_say,
-        voice::voice_cancel_say,
-        voice::voice_mute,
-        voice::voice_cancel_input,
-        voice::voice_end_input,
-        voice::voice_audio_devices,
-        voice::voice_set_audio_devices
+        microphone::microphone
     ]
 }
 
@@ -481,6 +461,8 @@ pub fn run() {
     let builder = <platform::card_window::NativeCardWindow as platform::card_window::CardWindow>::configure(builder);
     application::configure(builder)
         .plugin(tauri_plugin_opener::Builder::new().open_js_links_on_click(false).build())
+        // The commands the apps share (`host.voice`, `host.engine`): who may call is this app's room page.
+        .plugin(sidevoice_app_tauri::init(room_page))
         .manage(AppState::default())
         .invoke_handler(handler())
         .setup(move |app| {

@@ -33,7 +33,8 @@ function page(mediaKeys, origin) {
   const calls = [], handlers = new Map(), audio = [];
   const window = {
     location: { protocol: new URL(origin).protocol, host: new URL(origin).host },
-    __TAURI_INTERNALS__: { invoke(command, args) { calls.push([command, args]); return Promise.resolve(); } },
+    // The commands the apps share are a Tauri plugin's, invoked under its name; the test names them as the bridge does.
+    __TAURI_INTERNALS__: { invoke(command, args) { calls.push([command.replace(/^plugin:sidevoice-app-tauri\|/, ""), args]); return Promise.resolve(); } },
     setInterval() {}, clearInterval() {}, setTimeout,
   };
   const module = { exports: {} };
