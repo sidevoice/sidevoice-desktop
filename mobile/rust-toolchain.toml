@@ -1,0 +1,8 @@
+# The Rust the mobile app is built with: desktop/rust-toolchain.toml's channel (sidevoice-engine's `rust-version`), so the two
+# apps never drift, and the four targets a phone or its emulator needs. Read only from mobile/, where every mobile
+# build runs (`-p sidevoice-mobile`).
+[toolchain]
+channel = "1.98.1"
+profile = "minimal"
+components = ["clippy", "rustfmt"]
+targets = ["aarch64-linux-android", "x86_64-linux-android", "aarch64-apple-ios", "aarch64-apple-ios-sim"]

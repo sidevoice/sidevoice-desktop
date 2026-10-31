@@ -1,0 +1,16 @@
+[package]
+name = "sidevoice-mobile-plugin"
+version = "0.1.0"
+description = "The mobile app's native project inputs: an Android library (and, later, a Swift package) Tauri generates into the app's projects"
+edition = "2021"
+rust-version = "1.98"
+license = "Apache-2.0"
+publish = false
+# Tauri hands a plugin's native library paths to the app's build script through this key.
+links = "sidevoice-mobile-plugin"
+
+[dependencies]
+tauri = "2.12"
+
+[build-dependencies]
+tauri-plugin = { version = "2.7", features = ["build"] }

@@ -5083,6 +5083,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "sidevoice-mobile"
+version = "0.1.0"
+dependencies = [
+ "sidevoice-mobile-plugin",
+ "tauri",
+ "tauri-build",
+]
+
+[[package]]
+name = "sidevoice-mobile-plugin"
+version = "0.1.0"
+dependencies = [
+ "tauri",
+ "tauri-plugin",
+]
+
+[[package]]
 name = "sidevoice-platform"
 version = "0.16.1"
 source = "git+https://github.com/sidevoice/sidevoice-core?tag=v0.16.1#31a81246a33db91aa8b8d1a563a42befde59b674"

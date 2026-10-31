@@ -18,3 +18,7 @@ dmg-screens/
 card-shots/
 /artifacts/
 /assets/
+# The mobile app: what `tauri icon` writes beside its sources (mobile/app-icon) besides the projects' own icons, and
+# nothing reads.
+mobile/icons/
+mobile/gen/schemas/
