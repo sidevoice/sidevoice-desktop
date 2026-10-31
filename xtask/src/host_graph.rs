@@ -224,6 +224,9 @@ fn matrix_rows(matrix: Option<&Yaml>) -> Vec<HashMap<String, String>> {
     }
     let excluded = entries("exclude");
     rows.retain(|row| !excluded.iter().any(|exclude| exclude.iter().all(|(key, value)| row.get(key) == Some(value))));
+    // An include is added to the original rows only, never to a row another include made: with no lists there are none,
+    // and each include is a row of its own.
+    let original = rows.len();
     for include in entries("include") {
         // The keys the lists give are the original ones: an include never changes them, and adds the rest to the rows
         // it agrees with.
@@ -231,7 +234,7 @@ fn matrix_rows(matrix: Option<&Yaml>) -> Vec<HashMap<String, String>> {
             lists.iter().all(|(key, _)| include.get(key).is_none_or(|value| row.get(key) == Some(value)))
         };
         let mut added = false;
-        for row in rows.iter_mut().filter(|row| agrees(row)) {
+        for row in rows[..original].iter_mut().filter(|row| agrees(row)) {
             row.extend(include.iter().map(|(key, value)| (key.clone(), value.clone())));
             added = true;
         }
@@ -331,6 +334,8 @@ fn commands(script: &str) -> Vec<Vec<String>> {
 /// Words that run what follows them: `env FOO=bar cargo …`, `flock lock cargo …`, `time`, `nice -n 5`, `sh -c '…'`. Their
 /// own arguments (options, a lock file, a duration) are not read: the command is the first `cargo` after them, or a
 /// quoted script.
+/// Known limit: a `cargo` word that is the argument of another command is taken for the command (`env echo cargo build
+/// --target aarch64-apple-ios` is flagged, though it builds nothing); say so with the package, or write it differently.
 const WRAPPERS: [&str; 21] = [
     "env", "time", "nice", "ionice", "nohup", "setsid", "stdbuf", "timeout", "flock", "exec", "command", "sudo", "sh",
     "bash", "zsh", "dash", "then", "do", "else", "if", "while",
@@ -643,6 +648,17 @@ jobs:
       - run: env FOO=bar cargo build -p sidevoice-mobile --target aarch64-apple-ios
       - run: flock /tmp/cargo-build.lock cargo test --workspace
       - run: time cargo build --target x86_64-unknown-linux-gnu
+  # No axes: each include is a row of its own, and none overwrites another.
+  matrix-includes:
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-ios
+            scope: -p sidevoice-mobile
+          - target: x86_64-unknown-linux-gnu
+            scope: --workspace
+    steps:
+      - run: cargo build ${{ matrix.scope }} --target ${{ matrix.target }}
 ";
         assert_eq!(found(ok), Vec::<String>::new());
         let bad = "\
@@ -700,6 +716,16 @@ jobs:
       - run: flock -w 600 /tmp/lock -c 'cargo build --target aarch64-apple-ios'
       - run: sudo -E env CC=zigcc cargo ndk -t arm64-v8a build
       - run: bash -c \"cargo build --target aarch64-apple-ios\"
+  matrix-includes:
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-ios
+            scope: --workspace
+          - target: x86_64-unknown-linux-gnu
+            scope: -p sidevoice-desktop
+    steps:
+      - run: cargo build ${{ matrix.scope }} --target ${{ matrix.target }}
 ";
         let bad: Vec<String> = found(bad);
         let steps = |job: &str| bad.iter().filter(|place| place.starts_with(&format!("job `{job}`"))).count();
@@ -723,6 +749,8 @@ jobs:
         assert_eq!(steps("matrix-row"), 1, "{bad:?}");
         // Behind a wrapper it is the same command.
         assert_eq!(steps("wrapped"), 7, "{bad:?}");
+        // With no axes, an include row is not overwritten by the next: the iOS one is still there.
+        assert_eq!(steps("matrix-includes"), 1, "{bad:?}");
         // A composite action holds its steps under `runs`.
         let action = "runs:\n  using: composite\n  steps:\n    - run: cargo build --target aarch64-linux-android\n";
         assert_eq!(found(action), ["the action, step 1"]);
