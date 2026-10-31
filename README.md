@@ -95,7 +95,7 @@ app-core/            what every app shares, with no shell: the voice call (host,
 app-tauri/           the commands every app shares, as one Tauri plugin over app-core (its ACL.md says who may call each)
 desktop/src/         the shell: windows, tray, shortcut, commands, the voice call's commands (voice.rs) and its keychain
 desktop/core/        pure logic (settings, bridge contract, media rules), testable without Tauri
-bridge/              the desktop's part of the script injected into the call page (the shared members are app-core/js, the Tauri transport app-tauri/js: docs/BRIDGE.md)
+desktop/core/js/     the desktop's part of the script injected into the call page (the shared members are app-core/js, the Tauri transport app-tauri/js: docs/BRIDGE.md)
 ui/                  ui/voice/ holds the web interface, the pinned release (not committed)
 brand/               the brand files the icons and installer art are generated from
 docs/                the bridge, the engines and models, targets, macOS notes, the brand

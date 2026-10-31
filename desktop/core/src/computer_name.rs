@@ -1,4 +1,4 @@
-//! `host.computerName` (docs/BRIDGE.md): the name the person gave this computer, which the page proposes as this
+//! `host.deviceName` (docs/BRIDGE.md): the name the person gave this computer, which the page proposes as this
 //! device's name. The shell asks the system (`src/platform/host.rs`); what it answers is read here.
 
 /// The name as the page gets it: trimmed, and none when nothing is left.

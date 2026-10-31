@@ -8,18 +8,18 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 
 | Where | What |
 |---|---|
-| `bridge/desktop-bridge.js`, `app-core/js/members.js`, `app-tauri/js/transport.js` | The page's script, injected by the app into every page of the room window, before the page's own scripts, bound to the app's own origin (the bundled interface). It is three parts, one per crate that owns them (below). |
+| `desktop/core/js/desktop-bridge.js`, `app-core/js/members.js`, `app-tauri/js/transport.js` | The page's script, injected by the app into every page of the room window, before the page's own scripts, bound to the app's own origin (the bundled interface). It is three parts, one per crate that owns them (below). |
 | `desktop/core/src/bridge.rs` | The contract on the Rust side: `CallSnapshot`, `Command`, and how the tray renders a snapshot. Unit-tested. |
 | `desktop/src/lib.rs` | Wiring: the `bridge_state` command, `send(Command)`; `capabilities/room.json`. The mute shortcut, behind `muteShortcut`, and the one writer of the app's settings (below). |
 | `app-tauri/src/engine.rs`, `app-core/src/app/engine.rs` | The engine's commands, behind `engine` (below): its catalogues, provider keys and models on disk. The plugin's are the transport (`app-tauri/ACL.md` says who may call each); `app-core`'s do the work. |
 | `app-tauri/src/voice.rs`, `desktop/src/voice.rs`, `app-core/src/platform/credentials.rs`, `app-core/src/app.rs`, `app-core/src/app/voice.rs`, `app-core/src/voice.rs`, `app-core/src/voice/` | The voice call the app runs, behind `voice` (below): the commands in the plugin, what they do and the hooks the app gives the host (admission, events, keys: `app-core`'s `AppHost`, `desktop/src/app_hooks.rs`), the call host, the models it picks from the catalogues and the settings the page sends in `app-core` (unit-tested), and the keychain the engine reads provider keys from. |
 | `desktop/src/local_host.rs`, `desktop/local-host/` | This computer's own core, behind `localHost` (below; docs/LOCAL_HOST.md). |
 | `desktop/src/tray.rs` | The menu-bar icon and its menu. |
-| `bridge/call-controls-bridge.js` | Injected into the call controls card's window (below). |
+| `desktop/core/js/call-controls-bridge.js` | Injected into the call controls card's window (below). |
 | `desktop/src/call_controls.rs`, `desktop/core/src/call_controls.rs` | The card's window, and when it shows, where it sits and how it moves (unit-tested). |
 | `desktop/src/updater.rs`, `desktop/core/src/updater.rs`, `desktop/core/src/build_info.rs` | The app's updates, behind `updater`, and what this build is, `build` (below). |
 | `desktop/src/debug_options.rs`, `desktop/core/src/debug_options.rs` | The developer options, behind `debug` in a nightly or a dev build (below). |
-| `desktop/src/platform/host.rs`, `desktop/core/src/computer_name.rs` | This computer's name, `computerName` (below; the Linux file's parsing unit-tested). |
+| `desktop/src/platform/host.rs`, `desktop/core/src/computer_name.rs` | This computer's name, `deviceName` (below; the Linux file's parsing unit-tested). |
 
 ## Parts
 
@@ -30,7 +30,7 @@ The page's script is three function expressions, each owned by the crate it belo
 |---|---|---|
 | Transport, `(win) => transport` | `app-tauri/js/transport.js`, as `sidevoice_app_tauri::js::TRANSPORT` | How the page reaches the plugin's commands (`call`, `send`, under the plugin's name), receives a channel's messages (`channel`, in index order) and reaches the app's own commands (`own.call`, `own.send`). All the page's code knows of Tauri. |
 | Members, `(win, transport) => members` | `app-core/js/members.js`, as `sidevoice_app_core::js::MEMBERS` | What every app shares, and nothing of any shell: `engine()`, `voice()`, `microphone(settingsPage)`, `pairings()` and `room(…)`, the call state the page reports (`snapshot`, `report`) and the commands it runs for the app (`toggle-mute`, `hang-up`, `skip-reply`, `keep-alive`, `cancel-input`). An app adds to the snapshot (`extend`), to the commands (`commands`) and to what it follows in the room (`attached`). The members are tested against a transport of the tests' own (`test/members.test.mjs`). |
-| Desktop, the file itself | `bridge/desktop-bridge.js` | What only the desktop has: the local host, the updater, the mute shortcut, the developer options, the call controls card's settings and its projection of the call (its participants and devices, the commands that select a conversation or a device, the levels sent to it), the reset, and the assembly of `host`. |
+| Desktop, the file itself | `desktop/core/js/desktop-bridge.js` | What only the desktop has: the local host, the updater, the mute shortcut, the developer options, the call controls card's settings and its projection of the call (its participants and devices, the commands that select a conversation or a device, the levels sent to it), the reset, and the assembly of `host`. |
 
 `script_for_origin` gives the desktop's part its placeholders and wraps it as `(function (transportOf, membersOf) { … })(transport, members);`:
 the desktop's part makes the transport for its window, hands it to the members, and keeps the app's own commands for itself.
@@ -60,15 +60,15 @@ Keeping these two names stable is the web UI's side of the contract.
 
 ## Page → app
 
-### Private data and reset (`host.data`)
+### Pairings and reset (`host.pairings`, `host.reset`)
 
-The bundled room page receives `host.data.pairings` on macOS, Windows and Linux. Its `read()` resolves
+The bundled room page receives `host.pairings` on macOS, Windows and Linux. Its `read()` resolves
 `{pairings: [...], pendingRevokes: [...]}` and `write({pairings, pendingRevokes})` resolves `undefined`
 after a bounded, private, atomic write under the app's Application Support directory. Both arrays contain
 remote pairing credentials; pending revocations remain native until the remote machine acknowledges them.
 Local-host pairing is derived from the verified socket and is never stored there. Neither call accepts a
-path. Browser pages keep their own browser storage. `deleteAll()` and `resetReport()` are present on every
-desktop host; `uninstall()` only where the app can also remove itself (macOS, `platform::uninstall::available`, which
+path. Browser pages keep their own browser storage. `host.reset` has `deleteAll()` and `resetReport()` on every
+desktop host, and `uninstall()` only where the app can also remove itself (macOS, `platform::uninstall::available`, which
 the app tells the bridge apart from the local host). Called directly where the bridge omits it, `data_uninstall`
 refuses `{key: "reset.app-unremovable"}` before anything is deleted.
 
@@ -223,15 +223,15 @@ The room window never shows a remote page, so no remote origin can call it.
 ## App → page
 
 ```js
-window.__sidevoiceDesktop.run({ command: "toggle-mute" })     // tray, global shortcut, headset, card
-window.__sidevoiceDesktop.run({ command: "hang-up" })         // tray, card
-window.__sidevoiceDesktop.run({ command: "skip-reply" })      // card
-window.__sidevoiceDesktop.run({ command: "select-participant", threadId: "…" })            // card
-window.__sidevoiceDesktop.run({ command: "select-audio-device", kind: "input", id: "…" })  // card
-window.__sidevoiceDesktop.run({ command: "open-settings" })    // card (the app brings the room in front first)
-window.__sidevoiceDesktop.run({ command: "show-settings" })    // tray (the app brings the room in front first)
-window.__sidevoiceDesktop.run({ command: "cancel-input" })     // card
-window.__sidevoiceDesktop.run({ command: "keep-alive" })       // card
+window.__sidevoiceHost.run({ command: "toggle-mute" })     // tray, global shortcut, headset, card
+window.__sidevoiceHost.run({ command: "hang-up" })         // tray, card
+window.__sidevoiceHost.run({ command: "skip-reply" })      // card
+window.__sidevoiceHost.run({ command: "select-participant", threadId: "…" })            // card
+window.__sidevoiceHost.run({ command: "select-audio-device", kind: "input", id: "…" })  // card
+window.__sidevoiceHost.run({ command: "open-settings" })    // card (the app brings the room in front first)
+window.__sidevoiceHost.run({ command: "show-settings" })    // tray (the app brings the room in front first)
+window.__sidevoiceHost.run({ command: "cancel-input" })     // card
+window.__sidevoiceHost.run({ command: "keep-alive" })       // card
 ```
 
 Evaluated by the app with `webview.eval` (works with the window hidden); the command travels as JSON (core
@@ -256,16 +256,37 @@ Evaluated by the app with `webview.eval` (works with the window hidden); the com
 Joining is deliberately **not** a tray command: joining unlocks audio output, which the webview
 only allows from a click in the page. "Mostrar Sidevoice" opens the window for that.
 
-`window.__sidevoiceDesktop.host` is `{ app: "sidevoice-desktop", version, engine, mediaKeys, build, muteShortcut, callControls, computerName?, localHost?, voice?, microphone, updater? }`: the
-web UI feature-detects the desktop app by it, and each capability by its presence. `localHost` and `voice` are present
-on every OS (core `bridge` tells the page a fixed `true`; the flags stay while web v0.11.0 reads them). `version` is the bridge's (2).
+## The host
 
-`mediaKeys` is supplied by `platform::media_controls::support()`: `"native"` on macOS and `null` on Windows/Linux.
-It is independent of `host.voice`: with native voice and unavailable native media controls, the page
-keeps its Media Session handlers and Now Playing element. See [MEDIA_CONTROLS.md](MEDIA_CONTROLS.md)
-for the test boundary and hardware verification still needed.
+`window.__sidevoiceHost` is `{ version, host, snapshot(), run(request) }`, the object an app injects
+(sidevoice-web's `apps/web/src/host/native.ts` reads it). `version` is the bridge's (2); `snapshot` and `run` are the
+presence protocol above, which the app reads and calls and the page does not touch. The web and the app ship together,
+so this is the only name, and `host` has no `app`, `version`, `mediaKeys`, `computerName` or `data` member.
 
-`computerName` is the name the person gave this computer, which the page proposes as the device's name: on macOS
+`host` is one optional member per thing the app offers, and a member that is there is offered. What is a fact of the
+app's composition is always there; what is a fact of one OS or one build is observed inside the member or left out:
+
+| Member | Offered | What it is |
+|---|---|---|
+| `os` | always | `macos`, `windows` or `linux` (`platform::host::system`), for copy that is true of that system alone; never a switch on what is offered. |
+| `deviceName` | when the system has one | The name the person gave this computer (below). |
+| `build` | always | What this build is (below). |
+| `microphone` | always | Native microphone access; `openSettings` only where the OS has a privacy page. |
+| `engine`, `voice` | always | The model engine and the voice call the app runs (below). |
+| `presence` | only where the app owns the system's media | `{ media: "app" }`, supplied by `platform::media_controls::available()`: macOS. |
+| `pairings` | always | The pairings the app keeps for the page (above). |
+| `reach` | always | `{ plainHttpPrivate: true }`: the webview, at the app's own origin, sends plain http to a private address; whom it may send a secret to, and with whose consent, stay the page's policy. |
+| `localHost` | always | This computer's own core (below). |
+| `reset` | always | `deleteAll`, `resetReport`, and `uninstall` only where the app can remove itself (macOS). |
+| `muteShortcut`, `callControls` | always | The app's own settings, set from the page's Settings. |
+| `updater` | a release or nightly that can update itself | Below. |
+| `debug` | a nightly or a dev build | The developer options (below). |
+
+`presence` is independent of `host.voice`: where the app does not own the media (Windows and Linux), it says nothing, and
+the page keeps its Media Session handlers and Now Playing element, with native voice too. See
+[MEDIA_CONTROLS.md](MEDIA_CONTROLS.md) for the test boundary and hardware verification still needed.
+
+`deviceName` is the name the person gave this computer, which the page proposes as the device's name: on macOS
 the Computer Name (System Settings → General → Sharing, «Mac de Ana»; SystemConfiguration's
 `SCDynamicStoreCopyComputerName`), not the `.local` hostname; on Windows the device name (the DNS host name, as typed);
 on Linux the pretty hostname (`PRETTY_HOSTNAME` in `/etc/machine-info`, `hostnamectl set-hostname --pretty`), else
@@ -274,8 +295,7 @@ itself. Read each time the room window opens (`desktop/src/platform/host.rs`, co
 
 ## The local host
 
-`host.localHost` is there on every OS: the app always offers this computer's own core (core `bridge`; the page
-still feature-detects it, and would hide what needs it without it). Nothing runs until the page calls it. Contract, states and actions:
+`host.localHost` is there on every OS: the app always offers this computer's own core (core `bridge`). Nothing runs until the page calls it. Contract, states and actions:
 docs/LOCAL_HOST.md.
 
 | Call | Returns / does |
@@ -390,8 +410,8 @@ controls" (the page's `host.callControls`, below) shows it during a call even wh
   at the preset sizes), the card's "Custom". Not on Wayland, where the bridge offers no `resize`. Settings' "Reset size
   and position" (`resetPlace`) forgets every place and size.
 
-The card's page talks to the app only through `window.__sidevoiceDesktop.host.callControls`, which
-`bridge/call-controls-bridge.js` defines (injected, bound to the app's own origin):
+The card's page talks to the app only through `window.__sidevoiceHost.host.callControls`, which
+`desktop/core/js/call-controls-bridge.js` defines (injected, bound to the app's own origin):
 
 | Card → app | |
 |---|---|
@@ -402,7 +422,7 @@ The card's page talks to the app only through `window.__sidevoiceDesktop.host.ca
 | (none: the bridge itself) | `call_controls_cursor`: `{hand}` when the pointer moves on or off something whose CSS cursor is `pointer`; on macOS the app then sets the hand itself at each look at the pointer, since an app in front that sets its own cursor (an I-beam) would otherwise keep it over the card (#166) |
 | `resize(phase, edge)` | `call_controls_resize`: `start`, `move`, `end` by the grip's corner (`nw`, `ne`, `sw`, `se`); only while `layout` says the card may be resized; absent on Wayland |
 
-App → card: `window.__sidevoiceDesktop.receive(patch)` (`webview.eval`), any subset of
+App → card: `window.__sidevoiceHost.receive(patch)` (`webview.eval`), any subset of
 `{call, level, playback, place, size, pointerInside, outsideClicks, alwaysExpanded, muteShortcut}` (web
 `call-controls/host.ts` `CallControlsState`) — `call` is the room's snapshot above, `playback` the voice's output
 level (`{level, threadId}`), `place` `{vertical: "upper"|"lower", horizontal: "left"|"right"}`, `size` the picture's
@@ -430,7 +450,7 @@ web repo), other displays and scales, and any platform but macOS.
 
 The app's engine (docs/ENGINES.md), for what the page knows and manages of its models: its catalogues and the keys of
 remote providers, what this device runs, which builds are on disk, and getting one there with its progress. Running
-models is the voice call's (below), never the page's. `window.__sidevoiceDesktop.host.engine` is the page's
+models is the voice call's (below), never the page's. `window.__sidevoiceHost.host.engine` is the page's
 `ModelCatalogs` seam in the app (sidevoice-web `apps/web/src/services/model-catalogs.js`), as that file types it —
 `install` included, with its options, progress and cancel — plus what this device is, runs and has on disk:
 
@@ -555,7 +575,7 @@ itself over `@sidevoice/voice` in the webview, the room window granting it the m
 
 ### The seam
 
-`window.__sidevoiceDesktop.host.voice` implements `VoiceHost`, the page's voice seam, defined once in sidevoice-voice:
+`window.__sidevoiceHost.host.voice` implements `VoiceHost`, the page's voice seam, defined once in sidevoice-voice:
 [`js/voice-host.d.ts`](https://github.com/sidevoice/sidevoice-voice/blob/main/js/voice-host.d.ts) in
 `@sidevoice/voice` (sidevoice/sidevoice-voice#6), with the types it carries (`VoiceSettings`, `VoiceHostError`,
 and `js/voice-events.d.ts`'s `VoiceTurnEvent`, `VoiceCallState`, `VoiceSaying`, `VoiceSayOutcome`, `VoiceTake`) and what every
@@ -676,7 +696,7 @@ What is this app's own:
   The shared commands are `voice_preload {settings}`, `voice_audio_devices` and `voice_set_audio_devices {choice}`.
   The room window capability grants only these fixed commands, and each checks the current page.
 - App → page: over the channel the page opened with `voice_events`, in the order the app made them (the bridge hands them to
-  `window.__sidevoiceDesktop.voiceEvent(event)`), `{key,type,data}`. Only the current page has one that is sent to: what the
+  `window.__sidevoiceHost.voiceEvent(event)`), `{key,type,data}`. Only the current page has one that is sent to: what the
   app would tell a page it has replaced is not sent, and a call of the old page is stopped and released.
   `key` is the immutable call ID captured before asynchronous native forwarding. `type` is
   `turn`, `state`, `level`, `playback-level`, `error`, `take`, or `say`.
@@ -709,7 +729,7 @@ What is this app's own:
 
 ## The microphone permission
 
-`window.__sidevoiceDesktop.host.microphone` is the app's own microphone access, on every OS (the system's answer, never
+`window.__sidevoiceHost.host.microphone` is the app's own microphone access, on every OS (the system's answer, never
 the webview's: no `getUserMedia` is opened to read it). The app runs the voice call (`host.voice`), so the room
 page is never granted `getUserMedia`: it can neither trigger the OS's microphone prompt (macOS: TCC) nor read its answer;
 the web's first-run setup asks early through this rather than at the first call.
@@ -792,7 +812,7 @@ interface MuteShortcut {
 - `unavailable` means no global shortcut backend in this session (including native Wayland). The saved
   accelerator and label remain present, with no alternatives and `voiceOver: false`; disabling still returns `off`.
 - Kept with the app's settings (`muteShortcut`), set only from the page.
-- App → page: `window.__sidevoiceDesktop.muteShortcutEvent(shortcut)` (`webview.eval`) whenever the app registers it
+- App → page: `window.__sidevoiceHost.muteShortcutEvent(shortcut)` (`webview.eval`) whenever the app registers it
   (set from the page), to `subscribe`'s listeners. `voiceOver` is read when asked: VoiceOver
   turned on or off tells no one.
 - Command behind it: `mute_shortcut {action, accelerator?}`, `action` `get` or `set`.
@@ -844,7 +864,7 @@ none loses another's.
 
 ## The build
 
-`window.__sidevoiceDesktop.host.build` is what this build of the app is, decided when it was built (RELEASING.md →
+`window.__sidevoiceHost.host.build` is what this build of the app is, decided when it was built (RELEASING.md →
 "Channels"; `desktop/build.rs`, core `build_info`), so the page can say it:
 
 ```ts
@@ -858,7 +878,7 @@ short `commit` and that commit's `date` (`YYYY-MM-DD`).
 
 ## The developer options
 
-`window.__sidevoiceDesktop.host.debug` is the app's side of the room's hidden "Developer options" section. **Only in a
+`window.__sidevoiceHost.host.debug` is the app's side of the room's hidden "Developer options" section. **Only in a
 nightly or a dev build** (core `debug_options::offered`, by `host.build.channel`); absent in a release. Its native code
 is compiled only into a nightly or a dev build (the `sidevoice_debug_options` cfg, build.rs): in a release the
 `debug_options` command exists but refuses `bad_request`, and nothing touches WebKit's private API.
@@ -943,7 +963,7 @@ interface UpdaterStatus {
   `error` says so, the state stays (a failed download stays `available`, and automatic mode tries it again at the
   next check).
 - The mode is kept with the app's settings (`updateMode`), set only through `setMode`.
-- App → page: `window.__sidevoiceDesktop.updaterEvent(status)` (`webview.eval`) on each change, to the listeners.
+- App → page: `window.__sidevoiceHost.updaterEvent(status)` (`webview.eval`) on each change, to the listeners.
 - Command behind it: `updater {action, mode?}`, `action` one of `settings`, `set-mode`, `status`, `check`,
   `download`, `cancel`, `restart`. Granted to the room window (`capabilities/room.json`); it re-checks that the caller is the
   current room window on the app's own page (else `bad_request`). The page is granted none of the plugin's own
@@ -976,7 +996,7 @@ interface UpdaterStatus {
 The app keeps a rotating log written by `tauri-plugin-log` in the platform's log directory: each launch starts a new file and the previous ones are kept (the last 5 files, 2 MB each; a long session rotates by size too), so a session that crashed can be read after the relaunch:
 macOS `~/Library/Logs/ai.sidevoice.desktop/sidevoice-desktop.log`, Linux `~/.local/share/ai.sidevoice.desktop/logs/`,
 Windows `%LOCALAPPDATA%\ai.sidevoice.desktop\logs\`. It holds the Rust side's lines (level `info` and above by default, panics
-included; `SIDEVOICE_LOG_LEVEL=error|warn|info|debug|trace|off` sets it, and that variable is the only way: there is no setting in the app). The call state is logged as the facts that changed, in a few words (`bridge_state: joined=true mic=false`), never as a whole snapshot per report; the whole snapshot is at level `debug`, and on stderr with `SIDEVOICE_DEBUG=1`. The log also holds what the room page reports through `bridge/webview-log.js`: `console.warn`, `console.error`, uncaught
+included; `SIDEVOICE_LOG_LEVEL=error|warn|info|debug|trace|off` sets it, and that variable is the only way: there is no setting in the app). The call state is logged as the facts that changed, in a few words (`bridge_state: joined=true mic=false`), never as a whole snapshot per report; the whole snapshot is at level `debug`, and on stderr with `SIDEVOICE_DEBUG=1`. The log also holds what the room page reports through `desktop/core/js/webview-log.js`: `console.warn`, `console.error`, uncaught
 errors and unhandled rejections, as lines with target `webview`. The page's lines carry only strings and numbers, an
 Error's name, message and first stack lines, and an object's `code`, `key`, `name` and `message`; credential-shaped
 text is masked and a flood is cut. Nothing else is logged: no keys, tokens, transcripts or message text.

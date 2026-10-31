@@ -84,10 +84,10 @@ fn only_the_current_room_window_on_the_apps_own_origin_is_the_page() {
     );
 }
 
-/// The bridge script is told what native media keys the host has, as the literal it reads.
+/// The bridge script is told whether the host owns the system's media controls, as the literal it reads.
 #[test]
 fn the_bridge_script_receives_the_hosts_media_support() {
-    let support = sidevoice_app_tauri::platform::media_controls::support();
+    let available = sidevoice_app_tauri::platform::media_controls::available();
     let script = sidevoice_desktop_core::bridge::script_for_origin(
         "tauri://localhost",
         false,
@@ -96,11 +96,12 @@ fn the_bridge_script_receives_the_hosts_media_support() {
         &Default::default(),
         false,
         &[],
-        support,
+        available,
         false,
+        "linux",
         &sidevoice_desktop_core::bridge::Parts { transport: "TRANSPORT", members: "MEMBERS" },
     );
-    let literal = serde_json::to_string(&support).unwrap();
+    let literal = serde_json::to_string(&available).unwrap();
     assert!(script.contains(&format!("factory(window, \"tauri://localhost\", {literal},")));
 }
 
@@ -120,8 +121,9 @@ fn the_rooms_script_is_made_of_the_real_parts_with_no_placeholder_left() {
         &Default::default(),
         true,
         &[],
-        Some("native"),
         true,
+        true,
+        "macos",
         &parts,
     );
     // (`win.__SIDEVOICE_TARGET__` is the web's own global; a placeholder is a string.)

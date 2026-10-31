@@ -198,7 +198,7 @@ fn is_room_page(current: Option<&str>, label: &str, origin: Option<&str>) -> Res
 
 /// The app log: `<LOG_FILE>.log` in the platform's log directory (macOS `~/Library/Logs/<identifier>/`, Linux
 /// `~/.local/share/<identifier>/logs/`, Windows `%LOCALAPPDATA%\<identifier>\logs\`), with the Rust side's lines and the
-/// room page's (bridge/webview-log.js). It is rotated at [`LOG_MAX_BYTES`], keeping [`LOG_KEPT`] files.
+/// room page's (desktop/core/js/webview-log.js). It is rotated at [`LOG_MAX_BYTES`], keeping [`LOG_KEPT`] files.
 pub(crate) const LOG_FILE: &str = "sidevoice-desktop";
 const LOG_MAX_BYTES: u128 = 2_000_000;
 const LOG_KEPT: usize = 5;
@@ -320,8 +320,9 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             &debug_options,
             sidevoice_app_tauri::platform::microphone::settings_available(),
             &diagnostics::webview_switches(),
-            media_controls::support(),
+            media_controls::available(),
             platform::uninstall::available(),
+            host::system(),
             &bridge::Parts { transport: sidevoice_app_tauri::js::TRANSPORT, members: sidevoice_app_core::js::MEMBERS },
         ));
     #[cfg(feature = "probe")]
@@ -389,8 +390,7 @@ fn apply_shortcut(app: &AppHandle, accelerator: &str) {
     *app_state.shortcut.lock().unwrap() = status;
     if let Some(window) = room_window(app) {
         let status = json!(shortcut_status(&app_state));
-        let _ =
-            window.eval(format!("window.__sidevoiceDesktop && window.__sidevoiceDesktop.muteShortcutEvent({status})"));
+        let _ = window.eval(format!("window.__sidevoiceHost && window.__sidevoiceHost.muteShortcutEvent({status})"));
     }
 }
 

@@ -67,7 +67,7 @@ Not verified on a Mac (no headset in CI), and what can go wrong:
 
 To see what really arrives: the app log lists every button event the app receives (`headset …` lines: source and what
 it did).
-The page's own Media Session handlers are switched off in the app (`host.mediaKeys = "native"`), so one click never
+The page's own Media Session handlers are switched off in the app (`host.presence.media = "app"`), so one click never
 toggles twice. CI simulates a call on a macOS runner and checks the app becomes Now Playing and lets go after.
 
 ## Background behaviour

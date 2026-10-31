@@ -1,4 +1,4 @@
-//! The engine's commands (`window.__sidevoiceDesktop.host.engine`, docs/BRIDGE.md → "The native engine"): the catalogues and
+//! The engine's commands (`window.__sidevoiceHost.host.engine`, docs/BRIDGE.md → "The native engine"): the catalogues and
 //! what they list, the keys of remote providers (kept by the app's store, never handed back), what runs here, what is
 //! installed, installs and their cancel, removing a model, memory. Each is one call of the application host, which does
 //! the work off the main thread and refuses with the engine's keyed `Error` (docs/BRIDGE.md → "Refusals").

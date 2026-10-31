@@ -32,9 +32,10 @@
 
   (async () => {
     const facts = [];
-    const host = window.__sidevoiceDesktop && window.__sidevoiceDesktop.host;
+    const injected = window.__sidevoiceHost;
+    const host = injected && injected.host;
     if (!host || !host.localHost) throw new Error("no host.localHost on this page");
-    facts.push("version=" + host.version);
+    facts.push("version=" + injected.version);
     const local = host.localHost;
     let state = null;
     for (let i = 0; i < 120 && (!state || state.state !== "running"); i++) {

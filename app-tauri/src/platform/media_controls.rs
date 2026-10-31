@@ -45,10 +45,10 @@ trait Os {
     fn update(_app: &AppHandle, _call: &CallState) {}
 }
 
-/// `Some("native")` when the app owns media keys; `None` means unavailable,
-/// so the page must keep its Media Session handlers and Now Playing element.
-pub fn support() -> Option<&'static str> {
-    Native::NATIVE.then_some("native")
+/// Whether the app owns the system's media controls here. Where it does not, the page keeps its Media Session handlers
+/// and its Now Playing element.
+pub fn available() -> bool {
+    Native::NATIVE
 }
 
 /// Installs process-lifetime callbacks once at startup. Unavailable hosts install nothing.
@@ -60,14 +60,4 @@ pub fn attach(app: &AppHandle, sink: CommandSink) {
 /// Native APIs run on the main thread; unavailable hosts leave the page in control.
 pub fn update(app: &AppHandle, call: &CallState) {
     Native::update(app, call)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_host_support_is_native_or_none() {
-        assert!(matches!(support(), None | Some("native")));
-    }
 }

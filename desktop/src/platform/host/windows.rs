@@ -5,6 +5,8 @@ use winreg::{enums::HKEY_CURRENT_USER, RegKey};
 pub(super) struct Native;
 
 impl Os for Native {
+    const SYSTEM: &'static str = "windows";
+
     fn host_name() -> Option<String> {
         whoami::hostname().ok()
     }
