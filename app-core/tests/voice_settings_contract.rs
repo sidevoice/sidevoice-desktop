@@ -7,9 +7,11 @@
 //! builds with (the web pins an older sidevoice-voice than the app does), and it asks of every shape the contract
 //! allows:
 //! - the same members, in Rust as in the contract, for each object (an unknown key is refused, and the refusal names
-//!   the members Rust knows);
+//!   the members Rust knows), and the same values for each union of literals and each `kind` (an unknown value is
+//!   refused the same way): Rust may neither lack a value the contract has nor keep one it dropped;
 //! - a document with every member set, once for each variant of each union, is read and written back as it was;
-//! - the same document without one optional member, or with a nullable one `null`, is read.
+//! - the same document without one optional member, or with a nullable one `null`, is read, and without a member the
+//!   contract requires is refused: Rust is no more lenient than the contract either.
 //!
 //! What a model choice holds (`VoiceModelChoice` is open in the contract) is the page's and the app's to agree: a
 //! `{catalog, model}` object stands for it here.
@@ -18,6 +20,8 @@
 
 #[path = "voice_settings_contract/typescript.rs"]
 mod typescript;
+
+use std::collections::BTreeSet;
 
 use serde::de::DeserializeOwned;
 use serde_json::{json, Map, Value};
@@ -43,12 +47,17 @@ fn rust_members<T: DeserializeOwned>() -> Vec<String> {
         Ok(_) => return vec!["(takes any key)".into()],
         Err(error) => error.to_string(),
     };
-    // "unknown field `\u{1}`, expected one of `a`, `b`", or "expected `a`", or "there are no fields".
+    expected(&message)
+}
+
+/// What serde names after the value it refused: "unknown field `\u{1}`, expected one of `a`, `b`", "unknown variant `\u{1}`,
+/// expected `a` or `b`", or "there are no fields".
+fn expected(message: &str) -> Vec<String> {
     let mut quoted = message.split('`').skip(1).step_by(2).map(str::to_owned);
     quoted.next();
-    let mut members: Vec<String> = quoted.collect();
-    members.sort();
-    members
+    let mut names: Vec<String> = quoted.collect();
+    names.sort();
+    names
 }
 
 fn contract_members(object: &Object) -> Vec<String> {
@@ -122,12 +131,65 @@ impl Contract {
             path.push(field.name.clone());
             if field.optional {
                 found.push(("absent".into(), path.clone()));
+            } else {
+                found.push(("required".into(), path.clone()));
             }
             if self.nullable(&field.ty)? {
                 found.push(("null".into(), path.clone()));
             }
             if matches!(self.pick(&field.ty, variant)?, Ty::Object(_)) {
                 self.variations(&field.ty, variant, path, found)?;
+            }
+            path.pop();
+        }
+        Ok(())
+    }
+
+    /// Every place where the contract names the values a member may take: a union of string literals, or a union of
+    /// objects each with a literal `kind`. Each is (path of the member, the values).
+    fn literals(
+        &self,
+        ty: &Ty,
+        variant: usize,
+        path: &mut Vec<String>,
+        found: &mut Vec<(Vec<String>, BTreeSet<String>)>,
+    ) -> Result<(), String> {
+        for field in &self.object(ty, variant)?.fields {
+            path.push(field.name.clone());
+            let alternatives: Vec<Ty> = match self.declarations.resolve(&field.ty)? {
+                Ty::Union(members) => members
+                    .iter()
+                    .filter(|member| **member != Ty::Null)
+                    .map(|member| self.declarations.resolve(member))
+                    .collect::<Result<_, _>>()?,
+                other => vec![other],
+            };
+            let kind = |ty: &Ty| match ty {
+                Ty::Object(object) => {
+                    object.fields.iter().find(|field| field.name == "kind").and_then(|field| match &field.ty {
+                        Ty::Literal(text) => Some(text.clone()),
+                        _ => None,
+                    })
+                }
+                _ => None,
+            };
+            if field.name != "kind"
+                && !alternatives.is_empty()
+                && alternatives.iter().all(|alternative| matches!(alternative, Ty::Literal(_)))
+            {
+                let values =
+                    alternatives
+                        .iter()
+                        .filter_map(|a| if let Ty::Literal(text) = a { Some(text.clone()) } else { None });
+                found.push((path.clone(), values.collect()));
+            } else if !alternatives.is_empty() && alternatives.iter().all(|alternative| kind(alternative).is_some()) {
+                found.push((
+                    [path.as_slice(), &["kind".to_owned()]].concat(),
+                    alternatives.iter().filter_map(kind).collect(),
+                ));
+            }
+            if matches!(self.pick(&field.ty, variant)?, Ty::Object(_)) {
+                self.literals(&field.ty, variant, path, found)?;
             }
             path.pop();
         }
@@ -143,9 +205,10 @@ fn vary(document: &Value, what: &str, path: &[String]) -> Value {
         at = &mut at[member];
     }
     match what {
-        "absent" => {
+        "absent" | "required" => {
             at.as_object_mut().expect("an object").remove(last);
         }
+        "unknown" => at[last] = json!("\u{1}"),
         _ => at[last] = Value::Null,
     }
     document
@@ -230,6 +293,16 @@ fn drift(source: &str) -> Result<Vec<String>, String> {
             for (what, path) in variations {
                 let deviation = KNOWN_DEVIATIONS.contains(&(what.as_str(), path.join(".").as_str()));
                 let outcome = read(&vary(&document, &what, &path));
+                if what == "required" {
+                    // The contract requires it, so a document without it is not one: Rust must refuse it too.
+                    if outcome.is_ok() {
+                        drift.push(format!(
+                            "{name} #{variant}: without {}, which the contract requires, is read",
+                            path.join(".")
+                        ));
+                    }
+                    continue;
+                }
                 match (outcome, deviation) {
                     (Err(error), false) => {
                         drift.push(format!("{name} #{variant}: with {} {what}, refused: {error}", path.join(".")))
@@ -239,6 +312,22 @@ fn drift(source: &str) -> Result<Vec<String>, String> {
                         path.join(".")
                     )),
                     _ => {}
+                }
+            }
+            // The values a member may take: the contract's, and what Rust says it knows when given one that is none.
+            let mut literals = Vec::new();
+            contract.literals(&ty, variant, &mut Vec::new(), &mut literals)?;
+            for (path, wanted) in literals {
+                let known = match read(&vary(&document, "unknown", &path)) {
+                    Err(message) => expected(&message),
+                    Ok(_) => vec!["(takes any value)".into()],
+                };
+                let wanted: Vec<String> = wanted.into_iter().collect();
+                if wanted != known {
+                    drift.push(format!(
+                        "{name}: {} takes {wanted:?} in the contract, Rust reads {known:?}",
+                        path.join(".")
+                    ));
                 }
             }
         }
@@ -329,6 +418,34 @@ fn a_variant_the_contract_adds_is_noticed() {
     let other_kind = MINIATURE
         .replace(r#"{ kind: "silence"; ms?: number }"#, r#"{ kind: "silence"; ms?: number } | { kind: "never" }"#);
     assert!(drift(&other_kind).unwrap().iter().any(|line| line.contains("never") && line.contains("refused")));
+}
+
+#[test]
+fn a_value_the_contract_drops_is_noticed() {
+    // The contract no longer has "calm"; Rust still reads it.
+    let narrowed = MINIATURE.replace(r#""fast" | "normal" | "calm""#, r#""fast" | "normal""#);
+    let found = drift(&narrowed).unwrap();
+    assert!(
+        found
+            .iter()
+            .any(|line| line.contains("input.patience") && line.contains("calm") && line.contains("Rust reads")),
+        "{found:?}"
+    );
+    // The same for what ends a turn: the contract has no "smart" any more.
+    let one_kind = MINIATURE.replace(r#" | { kind: "smart"; model?: VoiceModelChoice | null }"#, "");
+    let found = drift(&one_kind).unwrap();
+    assert!(found.iter().any(|line| line.contains("input.endOfTurn.kind") && line.contains("smart")), "{found:?}");
+}
+
+#[test]
+fn a_member_the_contract_makes_required_but_rust_leaves_optional_is_noticed() {
+    // `speed` is optional in Rust; made required in the contract, a document without it is not one.
+    let required = MINIATURE.replace("  speed?: number;", "  speed: number;");
+    let found = drift(&required).unwrap();
+    assert!(
+        found.iter().any(|line| line.contains("without output.speed") && line.contains("the contract requires")),
+        "{found:?}"
+    );
 }
 
 #[test]
