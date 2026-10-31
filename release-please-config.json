@@ -1,12 +1,13 @@
 {
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
   "bootstrap-sha": "d9f2cbadd94d9c51598bdf21d7059dfb2c25a5db",
-  "include-component-in-tag": false,
+  "separate-pull-requests": true,
   "draft": true,
   "force-tag-creation": true,
   "packages": {
     ".": {
       "release-type": "simple",
+      "include-component-in-tag": false,
       "bump-minor-pre-major": true,
       "extra-files": [
         { "type": "json", "path": "desktop/tauri.conf.json", "jsonpath": "$.version" },
