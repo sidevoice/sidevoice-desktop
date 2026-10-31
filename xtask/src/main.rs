@@ -36,6 +36,9 @@
 //!   wrote.
 //! - `mobile build android|ios` (CI, every pull request): the unsigned app, into dist/: the Android APK (arm64), checked
 //!   for 16 KB pages, and the iOS simulator app (.github/workflows/mobile.yml). `mobile check-16kb [APK]` is that check.
+//! - `mobile sign android` (CI, by hand from main): the unsigned APK aligned, signed with the upload key, verified and
+//!   checked for 16 KB pages, into dist/ (.github/workflows/mobile-android-signed.yml; mobile/sign.rs). Reads the
+//!   `ANDROID_UPLOAD_*` secrets.
 //!
 //! The Windows app, in the `windows` job after `bundle` (platform/release/windows.rs):
 //!
@@ -130,7 +133,7 @@ const USAGE: &str =
   | probe probe-app | probe local-host | probe probe | probe voice-models | probe card | probe exit
   | probe memory | probe voice-memory
   | mobile generate android | mobile generate ios | mobile generated android | mobile generated ios
-  | mobile build android | mobile build ios | mobile check-16kb [APK]
+  | mobile build android | mobile build ios | mobile sign android | mobile check-16kb [APK]
   | packaging compare BEFORE_REF | packaging files DIR OUTPUT
   | publish assets release TAG | publish assets nightly | publish release TAG | publish nightly
   | release-pr-title [BRANCH] | release-pr-checks
@@ -151,6 +154,7 @@ fn main() -> ExitCode {
         ["mobile", "generate", project] => mobile::generate(project),
         ["mobile", "generated", project] => mobile::generated(project),
         ["mobile", "build", project] => mobile::build(project),
+        ["mobile", "sign", "android"] => mobile::sign::sign_android(),
         ["mobile", "check-16kb"] => mobile::check::check_16kb(&mobile::unsigned_apk()),
         ["mobile", "check-16kb", apk] => mobile::check::check_16kb(std::path::Path::new(apk)),
         ["platform-clippy"] => checks::clippy(true),

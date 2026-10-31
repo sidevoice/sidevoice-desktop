@@ -12,8 +12,10 @@
 //! - `mobile build android|ios`: the app as a pull request builds it, unsigned: Android's release APK for arm64, and
 //!   the iOS app for the simulator (no signing, so no secret), into dist/. Needs the SDK and NDK, or macOS with Xcode. The
 //!   Android APK is also checked for 16 KB pages, which Google Play requires (`mobile check-16kb [APK]` is that check alone).
+//! - `mobile sign android`: sign.rs.
 
 pub mod check;
+pub mod sign;
 
 use std::fs;
 use std::path::{Path, PathBuf};
