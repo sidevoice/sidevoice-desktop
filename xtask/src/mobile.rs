@@ -10,13 +10,16 @@
 //! - `mobile generated android|ios`: `generate`, then the committed project must be what it wrote (CI, every pull
 //!   request): a difference means an input or the CLI changed and the project was not regenerated and committed.
 //! - `mobile build android|ios`: the app as a pull request builds it, unsigned: Android's release APK for arm64, and
-//!   the iOS app for the simulator (no signing, so no secret), into dist/. Needs the SDK and NDK, or macOS with Xcode.
+//!   the iOS app for the simulator (no signing, so no secret), into dist/. Needs the SDK and NDK, or macOS with Xcode. The
+//!   Android APK is also checked for 16 KB pages, which Google Play requires (`mobile check-16kb [APK]` is that check alone).
+
+pub mod check;
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::platform::host::npm;
-use crate::util::{ensure, mkdir, repo, Cmd};
+use crate::util::{self, ensure, mkdir, repo, write, Cmd};
 use crate::Result;
 
 /// A project of the mobile app: the Tauri CLI's name for it, and where it keeps it below mobile/.
@@ -45,6 +48,20 @@ fn tauri(args: &[&str]) -> Cmd {
         .env("TAURI_APP_PATH", repo().join("mobile"))
 }
 
+/// The Android `targetSdk` the app declares: 36, the plan's. The Tauri template writes its own (37 with the CLI package.json
+/// pins), and the CLI has no setting for it, so the generator writes this one over it. 37 asks apps to be allowed the
+/// local network (`ACCESS_LOCAL_NETWORK`) before they reach it, which the app does not yet request (docs/MOBILE.md).
+const ANDROID_TARGET_SDK: u32 = 36;
+
+/// The app module's Gradle script with the `targetSdk` line of the template set to [`ANDROID_TARGET_SDK`]. A template
+/// without exactly one such line is an error: the generator and the template must be looked at together.
+fn pin_target_sdk(gradle: &str) -> Result<String> {
+    let line = util::re(r"(?m)^(\s*)targetSdk = \d+$");
+    let found = line.find_iter(gradle).count();
+    ensure(found == 1, format!("the template's app/build.gradle.kts has {found} `targetSdk = N` lines, not one"))?;
+    Ok(line.replace(gradle, format!("${{1}}targetSdk = {ANDROID_TARGET_SDK}")).into_owned())
+}
+
 /// `mobile generate android|ios`.
 pub fn generate(name: &str) -> Result<()> {
     let project = project(name)?;
@@ -53,6 +70,11 @@ pub fn generate(name: &str) -> Result<()> {
         fs::remove_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
     tauri(&[project.cli, "init", "--ci", "--skip-targets-install"]).run()?;
+    if project.cli == "android" {
+        let gradle = dir.join("app/build.gradle.kts");
+        let text = fs::read_to_string(&gradle).map_err(|e| format!("{}: {e}", gradle.display()))?;
+        write(&gradle, pin_target_sdk(&text)?)?;
+    }
     // The icons: the CLI writes every size into the projects that exist, and a desktop set of its own into
     // mobile/icons/ (ignored by git, and nothing reads it).
     tauri(&["icon", "app-icon/app-icon.json"]).run()
@@ -76,6 +98,11 @@ pub fn generated(name: &str) -> Result<()> {
 /// What an unsigned Android build leaves, below mobile/gen/android.
 const UNSIGNED_APK: &str = "app/build/outputs/apk/universal/release/app-universal-release-unsigned.apk";
 
+/// The unsigned APK `mobile build android` puts in dist/.
+pub fn unsigned_apk() -> PathBuf {
+    repo().join("dist/Sidevoice-android-arm64-unsigned.apk")
+}
+
 /// `mobile build android|ios`: the app as a pull request builds it, unsigned, into dist/.
 pub fn build(name: &str) -> Result<()> {
     let dist = repo().join("dist");
@@ -84,9 +111,9 @@ pub fn build(name: &str) -> Result<()> {
         "android" => {
             tauri(&["android", "build", "--apk", "--target", "aarch64", "--ci"]).run()?;
             let apk = repo().join("mobile/gen/android").join(UNSIGNED_APK);
-            let to = dist.join("Sidevoice-android-arm64-unsigned.apk");
+            let to = unsigned_apk();
             fs::copy(&apk, &to).map_err(|e| format!("{}: {e}", apk.display()))?;
-            Ok(())
+            check::check_16kb(&to)
         }
         _ => {
             tauri(&["ios", "build", "--target", "aarch64-sim", "--no-sign", "--ci"]).run()?;
@@ -132,5 +159,13 @@ mod tests {
         fs::create_dir_all(dir.path().join("arm64-sim/other")).unwrap();
         assert_eq!(find_app(dir.path(), 3), Some(app));
         assert_eq!(find_app(dir.path(), 2), None, "deeper than asked");
+    }
+
+    #[test]
+    fn the_target_sdk_line_of_the_template_is_replaced() {
+        let template = "android {\n    defaultConfig {\n        minSdk = 26\n        targetSdk = 37\n    }\n}\n";
+        assert_eq!(pin_target_sdk(template).unwrap(), template.replace("targetSdk = 37", "targetSdk = 36"));
+        assert!(pin_target_sdk("android {}").unwrap_err().contains("0 `targetSdk"));
+        assert!(pin_target_sdk("targetSdk = 1\ntargetSdk = 2\n").unwrap_err().contains("2 `targetSdk"));
     }
 }

@@ -31,8 +31,8 @@
 //!   on macOS, with XcodeGen).
 //! - `mobile generated android|ios` (CI, every pull request): `generate`, then the committed project must be what it
 //!   wrote.
-//! - `mobile build android|ios` (CI, every pull request): the unsigned app, into dist/: the Android APK (arm64) and the
-//!   iOS simulator app (.github/workflows/mobile.yml).
+//! - `mobile build android|ios` (CI, every pull request): the unsigned app, into dist/: the Android APK (arm64), checked
+//!   for 16 KB pages, and the iOS simulator app (.github/workflows/mobile.yml). `mobile check-16kb [APK]` is that check.
 //!
 //! The Windows app, in the `windows` job after `bundle` (platform/release/windows.rs):
 //!
@@ -127,7 +127,7 @@ const USAGE: &str =
   | probe probe-app | probe local-host | probe probe | probe voice-models | probe card | probe exit
   | probe memory | probe voice-memory
   | mobile generate android | mobile generate ios | mobile generated android | mobile generated ios
-  | mobile build android | mobile build ios
+  | mobile build android | mobile build ios | mobile check-16kb [APK]
   | packaging compare BEFORE_REF | packaging files DIR OUTPUT
   | publish assets release TAG | publish assets nightly | publish release TAG | publish nightly
   | release-pr-title [BRANCH] | release-pr-checks
@@ -148,6 +148,8 @@ fn main() -> ExitCode {
         ["mobile", "generate", project] => mobile::generate(project),
         ["mobile", "generated", project] => mobile::generated(project),
         ["mobile", "build", project] => mobile::build(project),
+        ["mobile", "check-16kb"] => mobile::check::check_16kb(&mobile::unsigned_apk()),
+        ["mobile", "check-16kb", apk] => mobile::check::check_16kb(std::path::Path::new(apk)),
         ["platform-clippy"] => checks::clippy(true),
         ["test"] => checks::test(),
         ["test-support"] => checks::test_support(),
