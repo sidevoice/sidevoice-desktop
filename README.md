@@ -82,16 +82,19 @@ npm ci
 npm run web                                # fetch the pinned interface for the media-controls regression
 npm test                                   # the bridge script
 cd desktop
-cargo test -p sidevoice-desktop-core       # settings, bridge contract, media rules, the voice call's builds
+cargo test -p sidevoice-desktop-core       # settings, bridge contract, media rules
+cargo test -p sidevoice-app-core           # the voice call's host and builds, the engine's side
+cargo test -p sidevoice-app-tauri          # the plugin: its inventory of who may call what
 cargo clippy --workspace --all-targets -- -D warnings
 npx tauri dev                              # needs a desktop: macOS, Windows, or Linux with WebKitGTK 4.1
 ```
 
 ```
-Cargo.toml           the Rust workspace: desktop/ with its crates, and test-support/ (xtask/ is a workspace of its own)
-desktop/src/         the shell: windows, tray, shortcut, commands, the voice call (voice.rs) and its keychain
-desktop/core/        pure logic (settings, bridge contract, media rules, voice builds), testable without Tauri
-desktop/engine/      the app's side of sidevoice-engine (ids, install jobs, refusals)
+Cargo.toml           the Rust workspace: app-core/, desktop/ with its crates, and test-support/ (xtask/ is a workspace of its own)
+app-core/            what every app shares, with no shell: the voice call (host, models, settings) and the app's side of sidevoice-engine
+app-tauri/           the commands every app shares, as one Tauri plugin over app-core (its ACL.md says who may call each)
+desktop/src/         the shell: windows, tray, shortcut, commands, the voice call's commands (voice.rs) and its keychain
+desktop/core/        pure logic (settings, bridge contract, media rules), testable without Tauri
 bridge/              the script injected into the call page: the page side of the bridge
 ui/                  ui/voice/ holds the web interface, the pinned release (not committed)
 brand/               the brand files the icons and installer art are generated from

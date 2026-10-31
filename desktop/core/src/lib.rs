@@ -13,4 +13,3 @@ pub mod media;
 pub mod memory;
 pub mod settings;
 pub mod updater;
-pub mod voice;
