@@ -23,7 +23,7 @@ The window only ever navigates within the app's own pages; the microphone is gra
 ## No target
 
 The app never tells the interface where to look first: it injects `window.__SIDEVOICE_TARGET__ = null` (the web client
-contract) into the app's own pages (`bridge/desktop-bridge.js`), and keeps no address. Which machine the interface
+contract) into the app's own pages (`desktop/core/js/desktop-bridge.js`), and keeps no address. Which machine the interface
 talks to, and how to reach it, comes from pairing alone. A standalone static deployment may still set one by writing
 `/voice/target.js` (`SIDEVOICE_TARGET` in the nginx image).
 

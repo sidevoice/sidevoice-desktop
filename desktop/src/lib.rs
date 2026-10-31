@@ -198,7 +198,7 @@ fn is_room_page(current: Option<&str>, label: &str, origin: Option<&str>) -> Res
 
 /// The app log: `<LOG_FILE>.log` in the platform's log directory (macOS `~/Library/Logs/<identifier>/`, Linux
 /// `~/.local/share/<identifier>/logs/`, Windows `%LOCALAPPDATA%\<identifier>\logs\`), with the Rust side's lines and the
-/// room page's (bridge/webview-log.js). It is rotated at [`LOG_MAX_BYTES`], keeping [`LOG_KEPT`] files.
+/// room page's (desktop/core/js/webview-log.js). It is rotated at [`LOG_MAX_BYTES`], keeping [`LOG_KEPT`] files.
 pub(crate) const LOG_FILE: &str = "sidevoice-desktop";
 const LOG_MAX_BYTES: u128 = 2_000_000;
 const LOG_KEPT: usize = 5;

@@ -8,16 +8,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::build_info::BuildInfo;
 
-/// Removes the WebView's default context menu (bridge/no-context-menu.js); appended to the scripts of every window.
-pub const NO_CONTEXT_MENU_SCRIPT: &str = include_str!("../../../bridge/no-context-menu.js");
+/// Removes the WebView's default context menu (desktop/core/js/no-context-menu.js); appended to the scripts of every window.
+pub const NO_CONTEXT_MENU_SCRIPT: &str = include_str!("../js/no-context-menu.js");
 
 /// Forwards the room page's console warnings and errors, uncaught errors and unhandled rejections to the app log
-/// (bridge/webview-log.js); the room window only.
-pub const WEBVIEW_LOG_SCRIPT: &str = include_str!("../../../bridge/webview-log.js");
+/// (desktop/core/js/webview-log.js); the room window only.
+pub const WEBVIEW_LOG_SCRIPT: &str = include_str!("../js/webview-log.js");
 
 /// The desktop's part of the bridge script (what only this app has, and the assembly of `host`), with its placeholders
 /// still in place. The other two parts of the page's script are [`Parts`].
-pub const SCRIPT_TEMPLATE: &str = include_str!("../../../bridge/desktop-bridge.js");
+pub const SCRIPT_TEMPLATE: &str = include_str!("../js/desktop-bridge.js");
 const ORIGIN_PLACEHOLDER: &str = "\"__SIDEVOICE_ROOM_ORIGIN__\"";
 const MEDIA_KEYS_PLACEHOLDER: &str = "\"__SIDEVOICE_MEDIA_KEYS__\"";
 const LOCAL_HOST_PLACEHOLDER: &str = "\"__SIDEVOICE_LOCAL_HOST__\"";
@@ -36,7 +36,7 @@ const UNINSTALL_PLACEHOLDER: &str = "\"__SIDEVOICE_UNINSTALL__\"";
 const OFFERED: &str = "true";
 
 /// The call controls card's bridge script, with its origin placeholder still in place.
-pub const CALL_CONTROLS_SCRIPT_TEMPLATE: &str = include_str!("../../../bridge/call-controls-bridge.js");
+pub const CALL_CONTROLS_SCRIPT_TEMPLATE: &str = include_str!("../js/call-controls-bridge.js");
 const APP_ORIGIN_PLACEHOLDER: &str = "\"__SIDEVOICE_APP_ORIGIN__\"";
 const RESIZE_PLACEHOLDER: &str = "\"__SIDEVOICE_RESIZE__\"";
 
@@ -121,7 +121,7 @@ pub fn script_for_origin(
     compose(parts, &desktop)
 }
 
-/// The bridge's version: the room page sends it in every snapshot (bridge/desktop-bridge.js).
+/// The bridge's version: the room page sends it in every snapshot (desktop/core/js/desktop-bridge.js).
 pub const VERSION: u32 = 2;
 
 /// What the agent is doing, as the room's view model says (its `session`): the card's avatar shows it, and only it.

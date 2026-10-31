@@ -1,10 +1,10 @@
-// Unit tests of bridge/call-controls-bridge.js against a fake window: no browser, no Tauri.
+// Unit tests of desktop/core/js/call-controls-bridge.js against a fake window: no browser, no Tauri.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
-const source = readFileSync(new URL("../bridge/call-controls-bridge.js", import.meta.url), "utf8");
+const source = readFileSync(new URL("../desktop/core/js/call-controls-bridge.js", import.meta.url), "utf8");
 const APP = "tauri://localhost";
 
 function load() {

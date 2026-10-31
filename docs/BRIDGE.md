@@ -8,14 +8,14 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 
 | Where | What |
 |---|---|
-| `bridge/desktop-bridge.js`, `app-core/js/members.js`, `app-tauri/js/transport.js` | The page's script, injected by the app into every page of the room window, before the page's own scripts, bound to the app's own origin (the bundled interface). It is three parts, one per crate that owns them (below). |
+| `desktop/core/js/desktop-bridge.js`, `app-core/js/members.js`, `app-tauri/js/transport.js` | The page's script, injected by the app into every page of the room window, before the page's own scripts, bound to the app's own origin (the bundled interface). It is three parts, one per crate that owns them (below). |
 | `desktop/core/src/bridge.rs` | The contract on the Rust side: `CallSnapshot`, `Command`, and how the tray renders a snapshot. Unit-tested. |
 | `desktop/src/lib.rs` | Wiring: the `bridge_state` command, `send(Command)`; `capabilities/room.json`. The mute shortcut, behind `muteShortcut`, and the one writer of the app's settings (below). |
 | `app-tauri/src/engine.rs`, `app-core/src/app/engine.rs` | The engine's commands, behind `engine` (below): its catalogues, provider keys and models on disk. The plugin's are the transport (`app-tauri/ACL.md` says who may call each); `app-core`'s do the work. |
 | `app-tauri/src/voice.rs`, `desktop/src/voice.rs`, `app-core/src/platform/credentials.rs`, `app-core/src/app.rs`, `app-core/src/app/voice.rs`, `app-core/src/voice.rs`, `app-core/src/voice/` | The voice call the app runs, behind `voice` (below): the commands in the plugin, what they do and the hooks the app gives the host (admission, events, keys: `app-core`'s `AppHost`, `desktop/src/app_hooks.rs`), the call host, the models it picks from the catalogues and the settings the page sends in `app-core` (unit-tested), and the keychain the engine reads provider keys from. |
 | `desktop/src/local_host.rs`, `desktop/local-host/` | This computer's own core, behind `localHost` (below; docs/LOCAL_HOST.md). |
 | `desktop/src/tray.rs` | The menu-bar icon and its menu. |
-| `bridge/call-controls-bridge.js` | Injected into the call controls card's window (below). |
+| `desktop/core/js/call-controls-bridge.js` | Injected into the call controls card's window (below). |
 | `desktop/src/call_controls.rs`, `desktop/core/src/call_controls.rs` | The card's window, and when it shows, where it sits and how it moves (unit-tested). |
 | `desktop/src/updater.rs`, `desktop/core/src/updater.rs`, `desktop/core/src/build_info.rs` | The app's updates, behind `updater`, and what this build is, `build` (below). |
 | `desktop/src/debug_options.rs`, `desktop/core/src/debug_options.rs` | The developer options, behind `debug` in a nightly or a dev build (below). |
@@ -30,7 +30,7 @@ The page's script is three function expressions, each owned by the crate it belo
 |---|---|---|
 | Transport, `(win) => transport` | `app-tauri/js/transport.js`, as `sidevoice_app_tauri::js::TRANSPORT` | How the page reaches the plugin's commands (`call`, `send`, under the plugin's name), receives a channel's messages (`channel`, in index order) and reaches the app's own commands (`own.call`, `own.send`). All the page's code knows of Tauri. |
 | Members, `(win, transport) => members` | `app-core/js/members.js`, as `sidevoice_app_core::js::MEMBERS` | What every app shares, and nothing of any shell: `engine()`, `voice()`, `microphone(settingsPage)`, `pairings()` and `room(…)`, the call state the page reports (`snapshot`, `report`) and the commands it runs for the app (`toggle-mute`, `hang-up`, `skip-reply`, `keep-alive`, `cancel-input`). An app adds to the snapshot (`extend`), to the commands (`commands`) and to what it follows in the room (`attached`). The members are tested against a transport of the tests' own (`test/members.test.mjs`). |
-| Desktop, the file itself | `bridge/desktop-bridge.js` | What only the desktop has: the local host, the updater, the mute shortcut, the developer options, the call controls card's settings and its projection of the call (its participants and devices, the commands that select a conversation or a device, the levels sent to it), the reset, and the assembly of `host`. |
+| Desktop, the file itself | `desktop/core/js/desktop-bridge.js` | What only the desktop has: the local host, the updater, the mute shortcut, the developer options, the call controls card's settings and its projection of the call (its participants and devices, the commands that select a conversation or a device, the levels sent to it), the reset, and the assembly of `host`. |
 
 `script_for_origin` gives the desktop's part its placeholders and wraps it as `(function (transportOf, membersOf) { … })(transport, members);`:
 the desktop's part makes the transport for its window, hands it to the members, and keeps the app's own commands for itself.
@@ -391,7 +391,7 @@ controls" (the page's `host.callControls`, below) shows it during a call even wh
   and position" (`resetPlace`) forgets every place and size.
 
 The card's page talks to the app only through `window.__sidevoiceDesktop.host.callControls`, which
-`bridge/call-controls-bridge.js` defines (injected, bound to the app's own origin):
+`desktop/core/js/call-controls-bridge.js` defines (injected, bound to the app's own origin):
 
 | Card → app | |
 |---|---|
@@ -976,7 +976,7 @@ interface UpdaterStatus {
 The app keeps a rotating log written by `tauri-plugin-log` in the platform's log directory: each launch starts a new file and the previous ones are kept (the last 5 files, 2 MB each; a long session rotates by size too), so a session that crashed can be read after the relaunch:
 macOS `~/Library/Logs/ai.sidevoice.desktop/sidevoice-desktop.log`, Linux `~/.local/share/ai.sidevoice.desktop/logs/`,
 Windows `%LOCALAPPDATA%\ai.sidevoice.desktop\logs\`. It holds the Rust side's lines (level `info` and above by default, panics
-included; `SIDEVOICE_LOG_LEVEL=error|warn|info|debug|trace|off` sets it, and that variable is the only way: there is no setting in the app). The call state is logged as the facts that changed, in a few words (`bridge_state: joined=true mic=false`), never as a whole snapshot per report; the whole snapshot is at level `debug`, and on stderr with `SIDEVOICE_DEBUG=1`. The log also holds what the room page reports through `bridge/webview-log.js`: `console.warn`, `console.error`, uncaught
+included; `SIDEVOICE_LOG_LEVEL=error|warn|info|debug|trace|off` sets it, and that variable is the only way: there is no setting in the app). The call state is logged as the facts that changed, in a few words (`bridge_state: joined=true mic=false`), never as a whole snapshot per report; the whole snapshot is at level `debug`, and on stderr with `SIDEVOICE_DEBUG=1`. The log also holds what the room page reports through `desktop/core/js/webview-log.js`: `console.warn`, `console.error`, uncaught
 errors and unhandled rejections, as lines with target `webview`. The page's lines carry only strings and numbers, an
 Error's name, message and first stack lines, and an object's `code`, `key`, `name` and `message`; credential-shaped
 text is masked and a flood is cut. Nothing else is logged: no keys, tokens, transcripts or message text.
