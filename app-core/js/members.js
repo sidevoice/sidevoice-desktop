@@ -120,7 +120,11 @@
     let voiceApi;
     let numbered = null;
     const toApp = (command, args) => {
-      numbered ??= Promise.resolve().then(() => call("voice_events", { events: channel((event) => voiceApi?.receive(event)) }));
+      numbered ??= Promise.resolve().then(() => call("voice_events", {
+        // Which document asks: a request of a page that was replaced can reach the app after the new page's, and is told so.
+        document: win.performance.timeOrigin,
+        events: channel((event) => voiceApi?.receive(event)),
+      }));
       return numbered.then((page) => call(command, { page, ...args }), (error) => {
         numbered = null;
         throw error;

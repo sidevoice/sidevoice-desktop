@@ -9,6 +9,7 @@ const makeMembers = vm.runInNewContext(source, { Promise, JSON, Date });
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 const plain = (value) => (value === undefined ? undefined : JSON.parse(JSON.stringify(value))); // objects made by the members live in their own VM realm
 const PAGE = 5;
+const TIME_ORIGIN = 1700000000000.5; // when the fake page started: the document it says it is
 
 /** A transport that keeps what it is asked and answers as `answer` says (the page's number for `voice_events`). */
 function fakeTransport(answer = () => undefined) {
@@ -30,6 +31,7 @@ function fakeWindow(extra = {}) {
   const timers = [];
   const win = {
     atob: (text) => Buffer.from(text, "base64").toString("binary"),
+    performance: { timeOrigin: TIME_ORIGIN },
     setInterval: (fn) => (timers.push(fn), timers.length),
     clearInterval: (id) => { timers[id - 1] = null; },
     setTimeout: (fn, ms) => setTimeout(fn, Math.min(ms, 5)),
@@ -68,7 +70,7 @@ test("the voice call opens its channel through the transport once, and every com
   await flush();
   await flush();
   assert.equal(channels.length, 1, "one channel for the page");
-  assert.deepEqual(calls[0], ["voice_events", { events: "channel-0" }]);
+  assert.deepEqual(calls[0], ["voice_events", { document: TIME_ORIGIN, events: "channel-0" }], "it says which document asks");
   assert.deepEqual(calls.map(([command]) => command).slice(0, 3), ["voice_events", "voice_create_call", "voice_start"]);
   assert.ok(calls.slice(1).every(([, args]) => args.page === PAGE), "the page's number travels with each command");
   // What the transport hands over is a message of the app, in the order it was made.

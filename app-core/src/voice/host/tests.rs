@@ -844,15 +844,93 @@ fn a_late_command_of_an_old_page_makes_no_lane_and_moves_no_route() {
 
         // A route being set when the page changes is refused, and the new page's route is as it was.
         state.create_call_in("mine".into(), 4).await.unwrap();
+        let mine = state.lane("mine").await.unwrap();
         let mut held = state.route.lock().await;
-        *held = Some("mine".into());
+        *held = Some(Arc::downgrade(&mine));
         let (silenced, _) = tokio::join!(state.route_input_in(4, None), async {
             tokio::time::sleep(Duration::from_millis(50)).await;
             state.page.store(5, Ordering::SeqCst);
             drop(held);
         });
         assert_eq!(silenced.unwrap_err().params["code"], "page-stale");
-        assert_eq!(state.route.lock().await.as_deref(), Some("mine"), "the route was not undone");
+        assert!(VoiceState::<FakeAudio>::routes_to(&*state.route.lock().await, &mine), "the route was not undone");
+    });
+}
+
+/// The route is to a lane, not to a key. The clearing of an older page takes its lanes out and then the route: in between,
+/// the newer page may make a lane under a key that went and route to it, and the clearing must not silence that one.
+#[test]
+fn the_clearing_of_an_older_page_leaves_a_route_to_a_new_lane_under_the_same_key() {
+    runtime().block_on(async {
+        let (state, audio) = host();
+        state.page.store(1, Ordering::SeqCst);
+        state.create_call_in("call".into(), 1).await.unwrap();
+        state.route_input_in(1, Some("call".into())).await.unwrap();
+        let old = state.lane("call").await.unwrap();
+        assert!(audio.devices.lock().unwrap().routed.is_some());
+
+        // The page changes, and the clearing runs as far as the lanes taken out; the route is held, so it waits there.
+        state.page.store(2, Ordering::SeqCst);
+        let held = state.route.lock().await;
+        let (_, (new, routed)) = tokio::join!(within(state.clear_older_than(2)), async {
+            let until = tokio::time::Instant::now() + Duration::from_secs(10);
+            while state.calls.lock().await.contains_key("call") {
+                assert!(tokio::time::Instant::now() < until, "the clearing never took the old lane out");
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            // The new page makes its lane under the same key and routes to it (what route_input_in does, with the route
+            // held here for the clearing to wait for).
+            state.create_call_in("call".into(), 2).await.unwrap();
+            let new = state.lane("call").await.unwrap();
+            assert!(!Arc::ptr_eq(&old, &new));
+            audio.route_input(Some(&new.input)).await.unwrap();
+            let mut held = held;
+            *held = Some(Arc::downgrade(&new));
+            let routed = audio.devices.lock().unwrap().routed;
+            drop(held);
+            (new, routed)
+        });
+
+        assert!(
+            VoiceState::<FakeAudio>::routes_to(&*state.route.lock().await, &new),
+            "the new lane is still routed to"
+        );
+        assert_eq!(audio.devices.lock().unwrap().routed, routed, "and the microphone still goes to it");
+        assert!(state.lane("call").await.is_ok(), "the new lane is not the old one's to take out");
+    });
+}
+
+/// Disposing a lane takes out that lane, not whatever is under its key by then.
+#[test]
+fn disposing_a_lane_does_not_take_out_a_newer_one_under_its_key() {
+    runtime().block_on(async {
+        let (state, _audio) = host();
+        state.page.store(1, Ordering::SeqCst);
+        state.create_call_in("call".into(), 1).await.unwrap();
+        let old = state.lane("call").await.unwrap();
+        state.page.store(2, Ordering::SeqCst);
+        state.clear_older_than(2).await;
+        state.create_call_in("call".into(), 2).await.unwrap();
+        let new = state.lane("call").await.unwrap();
+        state.remove("call", &old).await;
+        assert!(Arc::ptr_eq(&state.lane("call").await.unwrap(), &new), "only the lane it was given is taken out");
+        state.remove("call", &new).await;
+        assert!(state.lane("call").await.is_err());
+    });
+}
+
+/// A page routes to its own lanes only.
+#[test]
+fn a_page_routes_to_its_own_lanes_only() {
+    runtime().block_on(async {
+        let (state, audio) = host();
+        state.page.store(1, Ordering::SeqCst);
+        state.create_call_in("older".into(), 1).await.unwrap();
+        // The page changed and the older page's lane has not been cleared away yet.
+        state.page.store(2, Ordering::SeqCst);
+        let refused = state.route_input_in(2, Some("older".into())).await.unwrap_err();
+        assert_eq!(refused.params["code"], "bad-request");
+        assert_eq!(audio.devices.lock().unwrap().routed, None);
     });
 }
 

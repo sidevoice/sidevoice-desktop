@@ -7,7 +7,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use super::meters::Meters;
@@ -80,7 +80,9 @@ pub struct VoiceState<A: LaneAudio = SharedNativeAudio> {
     calls: tokio::sync::Mutex<HashMap<String, Arc<CallLane<A::Port>>>>,
     audio: A,
     pub model_cache: Arc<ModelCache>,
-    route: tokio::sync::Mutex<Option<String>>,
+    /// The lane the microphone is routed to, by the lane itself and not by its key: once a lane has gone, a newer page can
+    /// make a lane under the same key, and what clears the route of the one that went must not clear the new one's.
+    route: tokio::sync::Mutex<Option<Weak<CallLane<A::Port>>>>,
     pub devices: NativeDevices,
     pub watching: AtomicBool,
     /// The generation of the current page: the one place that counts them (the host's sinks read it too). A lane or a
@@ -186,6 +188,20 @@ impl<A: LaneAudio> VoiceState<A> {
         self.calls.lock().await.get(key).cloned().ok_or_else(|| refusal("bad_request", "Unknown voice call."))
     }
 
+    /// Whether the microphone is routed to this very lane.
+    fn routes_to(route: &Option<Weak<CallLane<A::Port>>>, lane: &Arc<CallLane<A::Port>>) -> bool {
+        route.as_ref().is_some_and(|routed| std::ptr::eq(routed.as_ptr(), Arc::as_ptr(lane)))
+    }
+
+    /// Takes `lane` out of the lanes, if it is still the one under `key`: a lane a newer page has made under the same
+    /// key since is not this one's to take out.
+    async fn remove(&self, key: &str, lane: &Arc<CallLane<A::Port>>) {
+        let mut calls = self.calls.lock().await;
+        if calls.get(key).is_some_and(|held| Arc::ptr_eq(held, lane)) {
+            calls.remove(key);
+        }
+    }
+
     /// A lane for the current page.
     pub async fn create_call(&self, key: String) -> Result<(), Refusal> {
         self.create_call_in(key, self.page.load(Ordering::SeqCst)).await
@@ -222,11 +238,15 @@ impl<A: LaneAudio> VoiceState<A> {
             Some(key) => Some(self.lane(key).await?),
             None => None,
         };
+        // A page routes to its own lanes: an older page's lane that is still being cleared away is not one to route to.
+        if target.as_ref().is_some_and(|lane| lane.page != page) {
+            return Err(refusal("bad_request", "Unknown voice call."));
+        }
         self.audio
             .route_input(target.as_ref().map(|lane| &lane.input))
             .await
             .map_err(|code| failed("The microphone route failed", code))?;
-        *route = key;
+        *route = target.as_ref().map(Arc::downgrade);
         Ok(())
     }
 
@@ -268,16 +288,16 @@ impl<A: LaneAudio> VoiceState<A> {
     /// Stops the call, what it still had to tell handed to the page (its sayings' ends, the end of an open turn, its
     /// take), then releases its lane: the last lane closes the devices. The models it loaded stay for its idle minutes.
     pub async fn dispose_call(&self, key: &str) -> Result<(), Refusal> {
+        let Some(lane) = self.calls.lock().await.get(key).cloned() else { return Ok(()) };
         {
             let mut route = self.route.lock().await;
-            if route.as_deref() == Some(key) {
+            if Self::routes_to(&route, &lane) {
                 self.audio.route_input(None).await.map_err(|code| refusal("voice_failed", code))?;
                 *route = None;
             }
         }
-        let Some(lane) = self.calls.lock().await.get(key).cloned() else { return Ok(()) };
         lane.stop().await;
-        self.calls.lock().await.remove(key);
+        self.remove(key, &lane).await;
         lane.release();
         self.retire(&lane).await;
         Ok(())
@@ -466,7 +486,8 @@ impl<A: LaneAudio> VoiceState<A> {
 
     /// The lanes of pages older than `page` are stopped and released, as `clear` does, and the route is let go if it led to
     /// one of them; the lanes of `page` and of newer ones, and a route to them, are left alone. The newest page may have
-    /// made its lanes before this ran.
+    /// made its lanes before this ran, under the key of one that went too: the route is to a lane, not to a key, so a
+    /// route the newer page made to its own is not the old one's to clear.
     pub async fn clear_older_than(&self, page: u64) {
         let old: Vec<(String, Arc<CallLane<A::Port>>)> = {
             let mut calls = self.calls.lock().await;
@@ -481,7 +502,7 @@ impl<A: LaneAudio> VoiceState<A> {
         }
         {
             let mut route = self.route.lock().await;
-            if route.as_ref().is_some_and(|routed| old.iter().any(|(key, _)| key == routed)) {
+            if old.iter().any(|(_, lane)| Self::routes_to(&route, lane)) {
                 let _ = self.audio.route_input(None).await;
                 *route = None;
             }

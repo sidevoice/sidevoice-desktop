@@ -36,12 +36,14 @@ function fakeStore(initial) {
 // the app sending over the page's channel.
 const PLUGIN = "plugin:sidevoice-app-tauri|";
 const PAGE = 7;
+const TIME_ORIGIN = 1700000000000.5; // when the fake page started, which it tells the app as its document
 
 function fakeWindow(origin) {
   const calls = [];
   const wire = [];
   const pages = [];
   const channels = [];
+  const documents = []; // the document each `voice_events` says it is from
   const refusals = []; // what the app refuses `voice_events` with, in turn
   const callbacks = [];
   const timers = [];
@@ -56,6 +58,7 @@ function fakeWindow(origin) {
       const name = cmd.startsWith(PLUGIN) ? cmd.slice(PLUGIN.length) : cmd;
       if (name === "voice_events") {
         channels.push(args.events);
+        documents.push(args.document);
         return refusals.length ? Promise.reject(refusals.shift()) : Promise.resolve(PAGE);
       }
       if (args && typeof args === "object" && "page" in args) {
@@ -69,6 +72,7 @@ function fakeWindow(origin) {
   });
   const win = {
     location: { protocol: new URL(origin).protocol, host: new URL(origin).host },
+    performance: { timeOrigin: TIME_ORIGIN },
     __TAURI_INTERNALS__: internals,
     setInterval: (fn) => (timers.push(fn), timers.length),
     clearInterval: (id) => (timers[id - 1] = null),
@@ -77,7 +81,7 @@ function fakeWindow(origin) {
   // The app sends `message` as number `index` of the channel the page gave (the $n-th it opened).
   const deliver = (index, message, n = 0) => callbacks[Number(channels[n].split(":")[1])]({ index, message });
   const finish = (index, n = 0) => callbacks[Number(channels[n].split(":")[1])]?.({ index, end: true });
-  return { win, calls, wire, pages, channels, refusals, deliver, finish, callbacks, tick: () => timers.forEach((fn) => fn && fn()) };
+  return { win, calls, wire, pages, channels, documents, refusals, deliver, finish, callbacks, tick: () => timers.forEach((fn) => fn && fn()) };
 }
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
@@ -360,7 +364,7 @@ test("the shared commands are invoked under their plugin's name and the app's ow
 });
 
 test("the call's events come over the channel the page opened, in index order, and every command carries the page's number", async () => {
-  const { win, pages, channels, wire, deliver } = fakeWindow(ORIGIN);
+  const { win, pages, channels, documents, wire, deliver } = fakeWindow(ORIGIN);
   const api = loadFactory()(win, ORIGIN, "native", true, true);
   const call = api.host.voice.start(BOTH);
   call.ready.catch(() => {});
@@ -387,6 +391,7 @@ test("the call's events come over the channel the page opened, in index order, a
   const shared = wire.filter((cmd) => cmd.startsWith(PLUGIN)).map((cmd) => cmd.slice(PLUGIN.length));
   assert.equal(shared[0], "voice_events");
   assert.equal(shared.filter((cmd) => cmd === "voice_events").length, 1);
+  assert.deepEqual(documents, [TIME_ORIGIN], "it says which document asks, once");
   assert.ok(pages.length >= 2 && pages.every((page) => page === PAGE), pages.join());
 });
 

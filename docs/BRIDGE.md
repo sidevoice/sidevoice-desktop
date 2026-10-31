@@ -662,9 +662,10 @@ What is this app's own:
 
 ### How it travels
 
-- Page → app (as `plugin:sidevoice-app-tauri|<command>`): first `voice_events {events}` (once per page: it gives the app a
-  channel for the events below and answers the page's number, the `page` that every command below carries; one of a page
-  that was replaced is refused `page_stale`), then `voice_create_call {key}` (the lane, so the microphone may be routed to the call before it works),
+- Page → app (as `plugin:sidevoice-app-tauri|<command>`): first `voice_events {document,events}` (once per page: it gives the app a
+  channel for the events below and answers the page's number, the `page` that every command below carries; `document` is the
+  page's own start time, `performance.timeOrigin`, so that a request of a page that was replaced and reached the app after
+  the new page's is refused `page_stale` and takes nothing from it), then `voice_create_call {key}` (the lane, so the microphone may be routed to the call before it works),
   `voice_route_input {key?}`, then per-call `voice_start {key,settings,take?}` (the call, asked to start: it answers
   once made, or refuses the settings), `voice_ready {key}` (answers once the call works), `voice_update {key,change}`,
   `voice_stop {key}` (answers `true` once the page has what the stop ends, `false` at once when no call was made),
