@@ -21,3 +21,6 @@ serde_json = "1"
 [dev-dependencies]
 # The mock runtime the commands' authorization is tested on.
 tauri = { version = "2.12", features = ["test"] }
+# The ACL the plugin's own permission files and a capability make, which the mock runtime then enforces (src/ipc_tests.rs).
+tauri-utils = "2"
+toml = "1"
