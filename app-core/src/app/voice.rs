@@ -69,18 +69,18 @@ impl<A: LaneAudio> AppHost<A> {
 
     /// Attaches a lane now, so routing may be chosen before its start.
     pub async fn create_call(&self, key: String) -> Result<(), Refusal> {
-        self.inner.voice.create_call(key).await
+        self.entered(self.inner.voice.create_call(key)).await
     }
 
     /// The acknowledged next-frame microphone route; `None` sends silence to all running lanes.
     pub async fn route_input(&self, key: Option<String>) -> Result<(), Refusal> {
-        self.inner.voice.route_input(key).await
+        self.entered(self.inner.voice.route_input(key)).await
     }
 
     /// Stops the call, hands the page what it still had to tell, and releases its lane. The models it loaded stay for
     /// their idle minutes.
     pub async fn dispose_call(&self, key: &str) -> Result<(), Refusal> {
-        self.inner.voice.dispose_call(key).await
+        self.entered(self.inner.voice.dispose_call(key)).await
     }
 
     /// Starts the lane's call with the person's choices (`VoiceSettings`, the seam's: an `input` half, an `output` half
@@ -91,6 +91,11 @@ impl<A: LaneAudio> AppHost<A> {
     /// the microphone, and [`AppHost::ready`] says when it works. With `take`, the call keeps what the microphone gives
     /// from then until that listening ends, and hands it to the page then (`{type: "take", data}`).
     pub async fn start(&self, key: &str, settings: VoiceSettings, take: bool) -> Result<(), Refusal> {
+        let (host, key) = (self.clone(), key.to_owned());
+        self.detached(async move { host.started(&key, settings, take).await }).await
+    }
+
+    async fn started(&self, key: &str, settings: VoiceSettings, take: bool) -> Result<(), Refusal> {
         let _lease = self.admit()?;
         self.inner.voice.lane(key).await?;
         let engines = self.engines_for_call()?;
@@ -103,8 +108,11 @@ impl<A: LaneAudio> AppHost<A> {
     /// Resolves once the call works: at its first state that is not idle (`off` for a call without an input half);
     /// rejects with the call's error code, or `stopped` when [`AppHost::stop`] comes first.
     pub async fn ready(&self, key: &str) -> Result<(), Refusal> {
-        let _lease = self.admit()?;
-        self.inner.voice.ready(key).await
+        self.entered(async {
+            let _lease = self.admit()?;
+            self.inner.voice.ready(key).await
+        })
+        .await
     }
 
     /// Changes the call while it runs (`SettingsChange`: a half that is absent stays, `null` removes it, settings
@@ -115,6 +123,11 @@ impl<A: LaneAudio> AppHost<A> {
     /// cannot make, changing nothing. A model that cannot load is an error of the call with its code, and its half stays
     /// as it was.
     pub async fn update(&self, key: &str, change: SettingsChange) -> Result<(), Refusal> {
+        let (host, key) = (self.clone(), key.to_owned());
+        self.detached(async move { host.updated(&key, change).await }).await
+    }
+
+    async fn updated(&self, key: &str, change: SettingsChange) -> Result<(), Refusal> {
         let lane = self.inner.voice.lane(key).await?;
         let _turn = lane.changing.lock().await;
         let _lease = self.admit()?;
@@ -134,6 +147,11 @@ impl<A: LaneAudio> AppHost<A> {
     /// the load. Resolves once every slot is loaded; rejects `voice_failed` with the code of a slot that cannot load,
     /// what else loaded staying loaded.
     pub async fn preload(&self, settings: VoiceSettings) -> Result<(), Refusal> {
+        let host = self.clone();
+        self.detached(async move { host.preloaded(settings).await }).await
+    }
+
+    async fn preloaded(&self, settings: VoiceSettings) -> Result<(), Refusal> {
         let _lease = self.admit()?;
         let engines = self.engines_for_call()?;
         let choice = self.choice_of(&engines, &settings).await?;
@@ -150,36 +168,36 @@ impl<A: LaneAudio> AppHost<A> {
     /// rejects with `stopped`. Answers once the page has what the stop ends (`true`), or at once with `false` before the
     /// call starts.
     pub async fn stop(&self, key: &str) -> Result<bool, Refusal> {
-        self.inner.voice.stop(key).await
+        self.entered(self.inner.voice.stop(key)).await
     }
 
     /// Says text on one call; its keyed events return only to that call's handle.
     pub async fn say(&self, key: &str, say_key: String, text: String, language: Option<String>) -> Result<(), Refusal> {
-        self.inner.voice.say(key, say_key, text, language, self.page()).await
+        self.entered(self.inner.voice.say(key, say_key, text, language, self.page())).await
     }
 
     /// Cancels what is being said under `say_key`: the part not yet heard is dropped, and its outcome says `cancelled`.
     /// Once it has ended, nothing.
     pub async fn cancel_say(&self, key: &str, say_key: &str) -> Result<(), Refusal> {
-        self.inner.voice.cancel_say(key, say_key).await
+        self.entered(self.inner.voice.cancel_say(key, say_key)).await
     }
 
     /// Mutes or unmutes the microphone for this call: it hears silence, and an open turn ends only as silence ends it.
     /// Kept from the call's creation, before it starts too.
     pub async fn mute(&self, key: &str, muted: bool) -> Result<(), Refusal> {
-        self.inner.voice.mute(key, muted).await
+        self.entered(self.inner.voice.mute(key, muted)).await
     }
 
     /// Cancels what the person said that is not reported yet; nothing before the call starts.
     pub async fn cancel_input(&self, key: &str) -> Result<(), Refusal> {
-        self.inner.voice.cancel_input(key).await
+        self.entered(self.inner.voice.cancel_input(key)).await
     }
 
     /// Closes the open turn now with what was captured so far: it is transcribed and told like any turn. It neither
     /// mutes, nor touches the playback or how later turns end. Resolves once the turn is closed, also when there is
     /// nothing to close (the call not started, no open turn, the call stopped).
     pub async fn end_input(&self, key: &str) -> Result<(), Refusal> {
-        self.inner.voice.end_input(key).await
+        self.entered(self.inner.voice.end_input(key)).await
     }
 
     /// The system's microphones and speakers and the ones chosen (`null`: the system's default), as the seam's
