@@ -575,7 +575,8 @@ pub fn nightly_version(released: &str, run: &str) -> Result<String> {
     Ok(format!("{major}.{minor}.{}-nightly.{run}", patch + 1))
 }
 
-/// The version CI builds and publishes the nightly as: from .release-please-manifest.json and `GITHUB_RUN_NUMBER`.
+/// The version CI builds and publishes the desktop nightly as: from .release-please-manifest.json (the desktop app is
+/// its package `.`) and `GITHUB_RUN_NUMBER`.
 pub fn ci_nightly_version() -> Result<String> {
     let path = repo().join(".release-please-manifest.json");
     let manifest: serde_json::Value =

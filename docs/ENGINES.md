@@ -1,7 +1,7 @@
 # The native engine: sidevoice-engine, and the voice call on it
 
 The app's speech models run on **sidevoice-engine** (`sidevoice/sidevoice-engine`), a Rust crate this app depends on
-(`desktop/engine/Cargo.toml`, pinned to the v0.5.0 tag). The engine owns the catalogue of
+(`app-core/Cargo.toml`, pinned to the v0.5.0 tag). The engine owns the catalogue of
 models, local and remote, the downloads, which build of a model runs on this machine, and the models in memory.
 
 The app runs the voice call itself with **sidevoice-voice** (`sidevoice/sidevoice-voice`, `desktop/src/voice.rs`,
@@ -11,16 +11,17 @@ activity detector, speech to text, text to speech) stay loaded across calls, and
 stopped for `idle_unload_minutes` (10 by default; a setting of `host.voice`); the next start loads them again. A
 change of settings loads the new ones.
 
-This app keeps what is the app's, in `desktop/engine/` (`sidevoice-desktop-engine`):
+This app keeps what is the app's, in `app-core/src/engine.rs` and `app-core/src/engine/` (`sidevoice-app-core`, which
+no shell is in):
 
-- `lib.rs`: `NativeEngines`, the page's model management in the page's terms over `sidevoice_engine::Engine`, and the
+- `engine.rs`: `NativeEngines`, the page's model management in the page's terms over `sidevoice_engine::Engine`, and the
   engine itself for the voice call (`NativeEngines::engine`).
-- `jobs.rs`: each `install` call's progress and cancel (and whether one of a model is under way, which refuses its
+- `engine/jobs.rs`: each `install` call's progress and cancel (and whether one of a model is under way, which refuses its
   `uninstall`).
-- `Wanted` (`lib.rs`): which build an install is for, as the page names it — a catalogue build id, an engine, or
+- `Wanted` (`engine.rs`): which build an install is for, as the page names it — a catalogue build id, an engine, or
   neither for the recommended build.
-- `error.rs`: the keyed refusals, and how each of the engine's codes becomes one (with the code beside it as `code`).
-- `platform/memory.rs`: what is available of the machine's memory now.
+- `engine/error.rs`: the keyed refusals, and how each of the engine's codes becomes one (with the code beside it as `code`).
+- `platform/memory.rs` (`app-core/src/platform/`): what is available of the machine's memory now.
 
 ## The catalogue
 
@@ -31,7 +32,7 @@ catalogues: `local` first, then each provider), in the shape `/engine` gives the
 
 ## What runs, where
 
-- Backends, linked statically into the app through sidevoice-engine (the release `desktop/engine/Cargo.toml` pins: 0.5.0),
+- Backends, linked statically into the app through sidevoice-engine (the release `app-core/Cargo.toml` pins: 0.5.0),
   with no Cargo features to choose: **sherpa-onnx 1.13.8** (ONNX Runtime) on the CPU, **whisper.cpp** (through
   `whisper-rs`), compiled from source, on Metal on Apple Silicon, and the **remote** OpenAI and ElevenLabs backends.
   Nothing is loaded at run time with `dlopen`, so the macOS app keeps library validation on: its only entitlement is
@@ -91,12 +92,12 @@ engine, by the recommended build) with progress, refusals by key, a download can
 (one on disk, then put back; an unknown one refused by key and code); the catalogues (`local` first, a provider with no key listing nothing); and the voice call's
 seam, settings naming a catalogue's model, a preload, a call with an output half only, and a start that
 settles (listening, or refused with the call's code where the runner has no microphone or speaker): that start loads
-the engine's real models through the app's adapter (`desktop/src/voice/models.rs`). sidevoice-voice's own CI drives
+the engine's real models through the app's adapter (`app-core/src/voice/models.rs`). sidevoice-voice's own CI drives
 the call with fakes; the real models are the app's to test.
 
 ## Changing the engine
 
-The engine is pinned in `desktop/engine/Cargo.toml`, sidevoice-voice in `desktop/Cargo.toml`, each on its own:
+The engine and sidevoice-voice are pinned in `app-core/Cargo.toml`, each on its own:
 sidevoice-voice depends on no engine, and the app fills its interfaces with the engine's models
-(`desktop/src/voice/models.rs`). Move a pin, then `cargo update -p sidevoice-engine` (or `-p sidevoice-voice`).
+(`app-core/src/voice/models.rs`). Move a pin, then `cargo update -p sidevoice-engine` (or `-p sidevoice-voice`).
 A model or a voice is added in sidevoice-engine's catalogue, never here.
