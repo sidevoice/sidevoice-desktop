@@ -4937,7 +4937,9 @@ dependencies = [
  "tauri",
  "tauri-plugin",
  "tauri-plugin-opener",
+ "tauri-utils",
  "tokio",
+ "toml 1.1.6+spec-1.1.0",
  "windows-sys 0.61.2",
  "winreg",
 ]

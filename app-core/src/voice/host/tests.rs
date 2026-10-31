@@ -756,6 +756,7 @@ fn an_older_pages_lanes_go_and_the_newer_ones_stay_with_their_route() {
         let (state, audio) = host();
         let (seen, fake) = (Seen::default(), fake());
         for (key, page) in [("old", 1), ("new", 2)] {
+            state.page.store(page, Ordering::SeqCst);
             state.create_call_in(key.into(), page).await.unwrap();
             configure(&state, &fake, key, seen.page()).await;
             within(state.ready(key)).await.unwrap();
@@ -768,14 +769,21 @@ fn an_older_pages_lanes_go_and_the_newer_ones_stay_with_their_route() {
         assert!(state.lane("old").await.is_err(), "the older page's lane is gone");
         assert!(state.lane("new").await.is_ok(), "the newer page's lane is not");
         assert_eq!(audio.devices.lock().unwrap().routed, routed, "the route to the newer lane stays");
-        assert_eq!(audio.devices.lock().unwrap().running, 1, "the old lane's audio was stopped");
+        // The old call is told to stop (it ends at its own time, the page no longer waiting for it).
+        let until = tokio::time::Instant::now() + Duration::from_secs(10);
+        while audio.devices.lock().unwrap().running != 1 {
+            assert!(tokio::time::Instant::now() < until, "the old lane's audio was never stopped");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
 
         // The route to a lane that goes goes with it.
-        state.create_call_in("older".into(), 1).await.unwrap();
+        state.page.store(3, Ordering::SeqCst);
+        state.create_call_in("older".into(), 3).await.unwrap();
         configure(&state, &fake, "older", seen.page()).await;
         within(state.ready("older")).await.unwrap();
         state.route_input(Some("older".into())).await.unwrap();
-        state.clear_older_than(2).await;
+        state.page.store(4, Ordering::SeqCst);
+        state.clear_older_than(4).await;
         assert_eq!(audio.devices.lock().unwrap().routed, None);
         within(state.dispose_call("new")).await.unwrap();
     });
@@ -787,6 +795,7 @@ fn an_older_pages_lanes_go_and_the_newer_ones_stay_with_their_route() {
 fn a_ready_and_a_stop_waiting_when_the_lane_is_released_settle() {
     runtime().block_on(async {
         let (state, _audio) = host();
+        state.page.store(1, Ordering::SeqCst);
         let (seen, slow) = (Seen::default(), FakeLoader::new(&["words", "voice", "slow"]));
         // A lane with no call: nothing will ever make `ready` answer but the end of the lane.
         state.create_call_in("empty".into(), 1).await.unwrap();
@@ -796,20 +805,89 @@ fn a_ready_and_a_stop_waiting_when_the_lane_is_released_settle() {
         });
         assert_eq!(ready.unwrap_err().params["code"], "stopped");
 
-        // A call still loading its models: `ready` waits, and the page's going settles it and the stop alike.
+        // A call still loading its models: `ready` waits, and the page's going settles it, the gate still closed.
         state.create_call_in("loading".into(), 1).await.unwrap();
         configure_with(&state, &slow, "loading", seen.page(), chosen(Some("slow"), Some("voice"), None), false).await;
         let (ready, _) = tokio::join!(within(state.ready("loading")), async {
             tokio::time::sleep(Duration::from_millis(100)).await;
-            let clearing = state.clear_older_than(2);
-            tokio::pin!(clearing);
-            // The stop inside the clearing waits for the idle state of a call that is still loading; opening the gate
-            // lets it come.
-            assert!(tokio::time::timeout(Duration::from_millis(100), &mut clearing).await.is_err());
-            slow.open_gate();
-            within(clearing).await;
+            within(state.clear_older_than(2)).await;
         });
         assert_eq!(ready.unwrap_err().params["code"], "stopped");
         assert!(state.lane("loading").await.is_err());
+    });
+}
+
+/// A command of an old page that is late: its lane is not made, and its route does not silence the new page. Each is
+/// checked once the lock that does the work is held, so a page that changes between the façade's look and the work is
+/// still caught: the test holds the lock, lets the page change, and releases it.
+#[test]
+fn a_late_command_of_an_old_page_makes_no_lane_and_moves_no_route() {
+    runtime().block_on(async {
+        let (state, _audio) = host();
+        state.page.store(1, Ordering::SeqCst);
+
+        // A lane being made when the page changes is refused, and none is left behind.
+        let held = state.calls.lock().await;
+        let (made, _) = tokio::join!(state.create_call_in("late".into(), 1), async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            state.page.store(2, Ordering::SeqCst);
+            drop(held);
+        });
+        assert_eq!(made.unwrap_err().params["code"], "page-stale");
+        assert!(state.lane("late").await.is_err(), "no orphan");
+        // The same lane, made before the change, is let go by the clearing that follows it.
+        state.page.store(3, Ordering::SeqCst);
+        state.create_call_in("made".into(), 3).await.unwrap();
+        state.page.store(4, Ordering::SeqCst);
+        state.clear_older_than(4).await;
+        assert!(state.lane("made").await.is_err());
+
+        // A route being set when the page changes is refused, and the new page's route is as it was.
+        state.create_call_in("mine".into(), 4).await.unwrap();
+        let mut held = state.route.lock().await;
+        *held = Some("mine".into());
+        let (silenced, _) = tokio::join!(state.route_input_in(4, None), async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            state.page.store(5, Ordering::SeqCst);
+            drop(held);
+        });
+        assert_eq!(silenced.unwrap_err().params["code"], "page-stale");
+        assert_eq!(state.route.lock().await.as_deref(), Some("mine"), "the route was not undone");
+    });
+}
+
+/// Waiters settle when a page goes whatever its calls are doing: a lane whose models never finish loading (the loader's
+/// gate stays closed) must not hold up the waiters of the lanes after it, nor the clearing.
+#[test]
+fn a_page_going_settles_every_waiter_though_a_call_never_finishes_loading() {
+    runtime().block_on(async {
+        let (state, _audio) = host();
+        state.page.store(1, Ordering::SeqCst);
+        let (seen, stuck) = (Seen::default(), FakeLoader::new(&["words", "voice", "slow"]));
+        for n in 0..3 {
+            state.create_call_in(format!("loading-{n}"), 1).await.unwrap();
+            configure_with(
+                &state,
+                &stuck,
+                &format!("loading-{n}"),
+                seen.page(),
+                chosen(Some("slow"), Some("voice"), None),
+                false,
+            )
+            .await;
+            state.create_call_in(format!("empty-{n}"), 1).await.unwrap();
+        }
+        let keys: Vec<String> = (0..3).flat_map(|n| [format!("loading-{n}"), format!("empty-{n}")]).collect();
+        let waiting = async { futures_util::future::join_all(keys.iter().map(|key| state.ready(key))).await };
+        // The page goes; the gate is never opened.
+        let (settled, _) = tokio::join!(tokio::time::timeout(Duration::from_secs(10), waiting), async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            state.page.store(2, Ordering::SeqCst);
+            tokio::time::timeout(Duration::from_secs(10), state.clear_older_than(2)).await.expect("the clearing ends");
+        });
+        for answer in settled.expect("every waiter settled") {
+            assert_eq!(answer.unwrap_err().params["code"], "stopped");
+        }
+        assert!(state.lane("empty-2").await.is_err() && state.lane("loading-0").await.is_err());
     });
 }

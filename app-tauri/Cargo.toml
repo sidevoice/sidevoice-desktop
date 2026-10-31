@@ -50,3 +50,6 @@ cpal = { version = "0.18", default-features = false, features = ["pulseaudio"] }
 # The mock runtime the commands' authorization is tested on.
 tauri = { version = "2.12", features = ["test"] }
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
+# The ACL the plugin's own permission files and a capability make, which the mock runtime then enforces (src/ipc_tests.rs).
+tauri-utils = "2"
+toml = "1"

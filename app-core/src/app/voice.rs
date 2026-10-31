@@ -79,7 +79,7 @@ impl<A: LaneAudio> AppHost<A> {
     /// The acknowledged next-frame microphone route; `None` sends silence to all running lanes.
     pub async fn route_input(&self, page: PageGeneration, key: Option<String>) -> Result<(), Refusal> {
         self.current(page)?;
-        self.entered(self.inner.voice.route_input(key)).await
+        self.entered(self.inner.voice.route_input_in(page.0, key)).await
     }
 
     /// Stops the call, hands the page what it still had to tell, and releases its lane. The models it loaded stay for
@@ -119,6 +119,7 @@ impl<A: LaneAudio> AppHost<A> {
         self.inner.voice.lane(key).await?;
         let engines = self.engines_for_call()?;
         let choice = self.choice_of(&engines, &settings).await?;
+        self.loading_allowed()?;
         let loader = EngineLoader::shared(engines.engine(), Arc::clone(&self.inner.voice.model_cache));
         let applied = Applied { halves: Halves::new(&loader, &choice, None), settings };
         self.inner.voice.open(key, applied, take, self.page_sink(page)).await
@@ -156,6 +157,7 @@ impl<A: LaneAudio> AppHost<A> {
         let settings = current.settings.changed(change);
         let engines = self.engines_for_call()?;
         let choice = self.choice_of(&engines, &settings).await?;
+        self.loading_allowed()?;
         let loader = EngineLoader::shared(engines.engine(), Arc::clone(&self.inner.voice.model_cache));
         let applied = Applied { halves: Halves::new(&loader, &choice, Some(&current.halves)), settings };
         self.inner.voice.update(key, applied).await
@@ -177,6 +179,7 @@ impl<A: LaneAudio> AppHost<A> {
         let _lease = self.admit()?;
         let engines = self.engines_for_call()?;
         let choice = self.choice_of(&engines, &settings).await?;
+        self.loading_allowed()?;
         let loader = EngineLoader::shared(engines.engine(), Arc::clone(&self.inner.voice.model_cache));
         let minutes = settings.idle_unload_minutes.unwrap_or(IDLE_UNLOAD_MINUTES);
         self.inner

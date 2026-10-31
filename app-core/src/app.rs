@@ -29,7 +29,7 @@ mod voice;
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -143,8 +143,13 @@ struct Inner<A: LaneAudio> {
     /// `None` when the engine did not start; its commands, and the call's models, refuse then.
     engines: Option<Arc<NativeEngines>>,
     jobs: Arc<Jobs>,
-    /// The current page's generation (shared with the sinks of the calls, which drop what is for another).
+    /// The current page's generation (the call host's own counter, shared with the sinks of the calls, which drop what is
+    /// for another).
     generation: Arc<AtomicU64>,
+    /// Quitting: no load starts any more (see [`AppHost::close`]).
+    closing: AtomicBool,
+    /// The tasks that load models ([`AppHost::detached`]), until they end.
+    loads: Mutex<Vec<JoinHandle<()>>>,
     /// The task that tells the page when the devices change, from the first time the page asks for them.
     watcher: Mutex<Option<JoinHandle<()>>>,
 }
@@ -181,13 +186,16 @@ impl<A: LaneAudio> AppHost<A> {
                 None
             }
         };
+        let generation = Arc::clone(&voice.page);
         let inner = Inner {
             runtime,
             hooks,
             voice,
             engines,
             jobs: Arc::default(),
-            generation: Arc::default(),
+            generation,
+            closing: AtomicBool::new(false),
+            loads: Mutex::default(),
             watcher: Mutex::default(),
         };
         AppHost { inner: Arc::new(inner) }
@@ -210,15 +218,32 @@ impl<A: LaneAudio> AppHost<A> {
     }
 
     /// Quitting or restarting, before `exit()` runs the static destructors of the C++ libraries the models are made of:
-    /// every call is stopped and released, so the devices close, and every model is let go, those a stopped call or a
-    /// preload kept for their idle minutes too. One left loaded is still alive in those destructors, and whisper.cpp's
+    /// no load starts from now on (a load refused here ends `shutting_down`, and one that was waiting for the catalogues
+    /// finds it so before it hands anything to a blocking thread), the loads under way are waited for, and given up
+    /// when their half of `limit` is gone; every call is stopped and released, so the devices close, and every model is
+    /// let go, those a stopped call or a preload kept for their idle minutes too. One left loaded is still alive in those destructors, and whisper.cpp's
     /// Metal device aborts in its own when one is (#121). Bounded: it returns the models still held when `limit` passed
     /// (by their key), logged, and the quit goes on; none once every one was released.
     pub async fn close(&self, limit: Duration) -> Vec<String> {
         if let Some(watcher) = self.inner.watcher.lock().unwrap().take() {
             watcher.abort();
         }
-        let held = self.entered(self.inner.voice.close(limit, RELEASE_POLL)).await;
+        // No load starts from now on; the ones under way end (half the time is theirs), or are given up.
+        let loads = {
+            let mut loads = self.inner.loads.lock().unwrap();
+            self.inner.closing.store(true, Ordering::SeqCst);
+            std::mem::take(&mut *loads)
+        };
+        let draining = self.entered(async move {
+            let deadline = tokio::time::Instant::now() + limit / 2;
+            for mut load in loads {
+                if tokio::time::timeout_at(deadline, &mut load).await.is_err() {
+                    load.abort();
+                }
+            }
+        });
+        draining.await;
+        let held = self.entered(self.inner.voice.close(limit / 2, RELEASE_POLL)).await;
         if held.is_empty() {
             crate::debug::debug("voice: every model released");
         } else {
@@ -247,7 +272,30 @@ impl<A: LaneAudio> AppHost<A> {
         &self,
         work: impl Future<Output = Result<T, Refusal>> + Send + 'static,
     ) -> Result<T, Refusal> {
-        self.inner.runtime.spawn(work).await.map_err(|e| crate::voice::host::refusal("internal", e.to_string()))?
+        let (answer, answered) = tokio::sync::oneshot::channel();
+        {
+            // Under the lock `close` takes the tasks with, so that none is added after it did.
+            let mut loads = self.inner.loads.lock().unwrap();
+            if self.inner.closing.load(Ordering::SeqCst) {
+                return Err(shutting_down());
+            }
+            loads.retain(|load| !load.is_finished());
+            loads.push(self.inner.runtime.spawn(async move {
+                let _ = answer.send(work.await);
+            }));
+        }
+        answered.await.map_err(|_| crate::voice::host::refusal("internal", "The work ended without an answer."))?
+    }
+
+    /// Whether native loading may start: not once the app is quitting. Asked by work that was admitted before, at the
+    /// point where it would hand models to blocking threads, since it may have waited (for the catalogues, say) while
+    /// the app began to quit.
+    fn loading_allowed(&self) -> Result<(), Refusal> {
+        if self.inner.closing.load(Ordering::SeqCst) {
+            Err(shutting_down())
+        } else {
+            Ok(())
+        }
     }
 
     /// The events sink as the `Page` of a call of generation `page`: what it says reaches the sink while that is the current
@@ -320,4 +368,9 @@ impl<F: Future> Future for Entered<F> {
         let _inside = this.runtime.enter();
         this.work.as_mut().poll(cx)
     }
+}
+
+/// Quitting: nothing new is loaded.
+fn shutting_down() -> Refusal {
+    crate::voice::host::refusal("shutting_down", "The app is quitting.")
 }
