@@ -94,10 +94,10 @@ pub fn init<R: Runtime>(
             pairings::pairings_read,
             pairings::pairings_write,
         ])
-        .setup(move |app, _| {
+        .setup(move |app, api| {
             app.manage(Callers::<R>(Arc::new(caller)));
             app.manage(pages);
-            Ok(())
+            platform::microphone::setup(api)
         })
         .build()
 }

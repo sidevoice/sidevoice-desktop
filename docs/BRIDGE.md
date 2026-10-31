@@ -712,14 +712,15 @@ interface MicrophonePermission {
 - `state()`: never prompts, and reads the system afresh each time. A denial stands whatever is plugged in; otherwise
   no audio input device is `"missing"`. A system that does not answer (below) rejects with `internal`; the bridge has
   no extra state string for it, and it is never a grant.
-- `request()`: macOS only has a prompt: `AVCaptureDevice.requestAccess(for: .audio)` asks the first time (with
-  `NSMicrophoneUsageDescription`, `desktop/packaging/macos/Info.plist`), afterwards it answers at once with the stored
-  answer. On Windows and Linux it is `state()`: there is nothing to ask.
+- `request()`: macOS, iOS and Android have a prompt. On macOS and iOS `AVCaptureDevice.requestAccess(for: .audio)` asks the
+  first time (with `NSMicrophoneUsageDescription`, `desktop/packaging/macos/Info.plist`), afterwards it answers at once
+  with the stored answer. On Android it is the `RECORD_AUDIO` runtime permission (below). On Windows and Linux it is
+  `state()`: there is nothing to ask.
 - `onChange(listener)`: `listener()` whenever `state()` changes, so on a permission change and on a microphone plugged
   in or out; the page reads `state()` again. Polled every 2 s while anyone listens; returns `stop`.
-- `openSettings()`: only where the OS has a standard microphone privacy page (macOS and Windows; absent on Linux, which
-  has none). It opens a fixed URL through `tauri-plugin-opener` (Rust API) and accepts no URL or program from the page; no
-  generic opener permission is granted to JavaScript, and the plugin's automatic link interception is disabled.
+- `openSettings()`: only where the OS has a standard microphone privacy page (macOS, Windows and iOS; absent on Linux, which
+  has none, and on Android, whose app-details page is an intent the opener cannot send). It opens a fixed URL through
+  `tauri-plugin-opener` (Rust API) and accepts no URL or program from the page; no generic opener permission is granted to JavaScript, and the plugin's automatic link interception is disabled.
   Opening it says nothing about access. The page detects it by presence.
 - A refusal rejects `{key, message}`: `bad_request` for a malformed call or another caller, `internal` when the system
   does not answer or Settings does not open.
@@ -733,6 +734,13 @@ device, a missing device beats everything else, and a grant needs a readable dev
 - **macOS:** `AVCaptureDevice.authorizationStatus(for: .audio)`: not determined → `"prompt"`, authorized → `"granted"`,
   denied or restricted → `"denied"`; no `AVCaptureDevice.default(for: .audio)` → `"missing"`. Settings:
   `x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone`.
+- **iOS:** the same `AVCaptureDevice` calls as macOS (`platform/microphone/apple.rs`, shared by both), with the app's
+  `NSMicrophoneUsageDescription` (`mobile/Info.ios.plist`). Settings: `app-settings:` (the app's own page).
+- **Android:** the `RECORD_AUDIO` runtime permission, asked by a Kotlin class of the plugin (`app-tauri/android`,
+  `MicrophonePlugin`), through Tauri's `checkPermissions` and `requestPermissions` commands, which also remember a refusal
+  for good: not asked yet, or refused once → `"prompt"`, granted → `"granted"`, refused for good → `"denied"`. The class's
+  library manifest declares the permission, which the app's merged manifest then has; without that declaration the system
+  refuses without a prompt. The Rust side holds the loaded class from the plugin's setup on. No settings page is opened.
 - **Windows:** the registry privacy policy, read with `winreg` (no writes): the machine switch
   (`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone`) and this user's
   desktop-app switch (`HKCU\…\microphone\NonPackaged`), value `Value`. Sidevoice is an unpackaged NSIS executable, so
@@ -745,7 +753,8 @@ device, a missing device beats everything else, and a grant needs a readable dev
   `"missing"`.
 - **Device presence (Windows, Linux):** `cpal` (WASAPI active capture endpoints; ALSA PCM hints, which include the
   PipeWire/Pulse ALSA plugins where installed) lists the input devices; no stream is opened. A listing that fails is not
-  an empty one: it is unavailable.
+  an empty one: it is unavailable. On iOS cpal lists one `default` input (the route follows the audio session), and on
+  Android the devices `AudioManager` reports (through `ndk-context`, which Tauri initialises).
 
 ## The mute shortcut
 
