@@ -1,8 +1,46 @@
 # Releasing
 
-One version for the whole app, tagged `vX.Y.Z`. It lives in `desktop/tauri.conf.json`, `package.json`,
+One version for the whole desktop app, tagged `vX.Y.Z`. It lives in `desktop/tauri.conf.json`, `package.json`,
 `package-lock.json`, the three `Cargo.toml` and `Cargo.lock`; release-please moves them together
-(`release-please-config.json`). Never edit them by hand.
+(`release-please-config.json`). Never edit them by hand. This repository will release a second product, the mobile
+app, on its own: everything below is the desktop app's, and "Two products in one repository" says what keeps the
+two apart.
+
+## Two products in one repository
+
+The mobile app (`mobile/`, plan: sidevoice/sidevoice-desktop#289) does not exist yet and nothing here builds it. What
+is ready for it, so that adding it needs no change to the desktop app's tags, releases or nightly:
+
+| | Desktop app (today) | Mobile app (when it exists) |
+|---|---|---|
+| release-please package | `.` (every commit; with the mobile package, every commit except the ones that touch only `mobile/`) | `mobile` |
+| Tag | `vX.Y.Z` (unchanged) | `mobile-vX.Y.Z` |
+| Changelog | `CHANGELOG.md` | `mobile/CHANGELOG.md` |
+| Release PR | `chore(main): release X.Y.Z` | `chore(main): release mobile X.Y.Z` (its own PR and branch: `separate-pull-requests`) |
+| Nightly | the `nightly` tag and pre-release, replaced by `build.yml` on a push to `main` that is not only `mobile/` | its own tag, from jobs of its own, outside the `needs` of the desktop's `publish-nightly` |
+| CI cache keys | start with `desktop` (CI caches, below) | start with `mobile` |
+
+- **The latest release is the desktop app's.** The releases' updater feed is
+  `releases/latest/download/latest.json` (Updates, below): `latest` is one per repository. `xtask publish` therefore
+  accepts only a desktop tag (`vX.Y.Z`, `-rc.N` allowed) and publishes nothing else, and a release of another product
+  is never published as latest.
+- **Adding the mobile package** is two edits of `release-please-config.json`, made together:
+  - a block next to the `.` one, with its own `extra-files` (its `tauri.conf.json`, its `Cargo.toml` files, its
+    `Cargo.lock` entries):
+    `"mobile": { "release-type": "simple", "component": "mobile", "initial-version": "0.1.0", "bump-minor-pre-major": true,
+    "extra-files": [ … ] }`. The tag takes the component by default (`include-component-in-tag` is `false` only on the
+    desktop package);
+  - `"exclude-paths": ["mobile"]` on the `.` package. release-please gives the root package every commit, so without it
+    the mobile commits would land in the desktop's version and changelog.
+- **`Release-As` once the mobile package exists.** `exclude-paths` also drops a commit that touches no file, and
+  release-please gives such a commit to every package but the root. So the empty commit of "A release candidate, or any
+  explicit version" (below) then sets the **mobile** version only; for the desktop app the footer goes on a commit that
+  changes at least one file outside `mobile/` (the PR that needs the release does; with nothing else to merge, a
+  one-line fix in this file). Until the mobile package exists there is no exclusion and the empty commit works for the
+  desktop app as documented below.
+- **A commit that changes only a shared crate** (`app-core/`, `app-tauri/`) belongs to the `.` package, not to `mobile`:
+  release-please attributes a commit to a package by the files it touches, and a package is one directory. A mobile
+  release for such a change needs a commit that touches `mobile/`, or the empty `Release-As` commit above.
 
 ## What each act means
 
@@ -63,12 +101,19 @@ writing its own would evict `main`'s and leave the next nightly to build from co
 - The Rust build caches (`.github/actions/setup-rust`: `Swatinem/rust-cache` with `save-if`), one per job and keyed by
   `Cargo.lock`, except the one `macos` and `macos-native` share (`cache: macos`), which only `macos-native` writes
   (`save-cache: 'false'` on `macos`): it builds all of it. A pull request that changes `Cargo.lock` restores
-  `main`'s closest one and builds what changed.
+  `main`'s closest one and builds what changed. There is one `Cargo.lock` for the repository (the root workspace), so
+  a dependency of the mobile app changes the key of the desktop app's caches too: the next push to `main` writes them
+  anew.
 - sherpa-onnx's libraries (`setup-rust`, by the engine's commit) and the real call's models (`macos-call`, by the
   engine's commit and the test): `actions/cache/restore`, then `actions/cache/save` in a step that runs only on a
   push to `main`; the models' after the call passed.
 - `publish-*`'s xtask cache: those jobs run only from a push to `main`.
-- The npm and web-interface caches (a few tens of MB) are written by whichever run misses them.
+- The npm and web-interface caches (a few tens of MB) are written by whichever run misses them. The web interface is
+  one for both products (one `web.pin.json`), so its cache is too.
+- **The keys of each product start with its name**: `setup-rust` is the desktop app's, and writes `v0-rust-desktop-…`
+  and `sherpa-onnx-libs-desktop-…`; the mobile jobs will write `mobile`. A product's caches can then be listed, and
+  one can never be taken for the other's (the sherpa libraries of an iOS build are not a macOS build's). All the
+  products' caches share the same 10 GB: see the mobile jobs' PR for what they add.
 
 ## Channels
 
@@ -121,16 +166,19 @@ Release-As: 0.3.0-rc.1
 The release PR then proposes exactly that version. A version with a `-` suffix is published as a **pre-release
 and never as latest**. The next candidate is `Release-As: 0.3.0-rc.2`; the final one is `Release-As: 0.3.0`
 (say it: after a candidate, do not leave the next version to the computation). With nothing else to merge, a PR
-with one empty commit (`git commit --allow-empty`) carries the footer.
+with one empty commit (`git commit --allow-empty`) carries the footer. (Once the mobile package exists, an empty
+commit versions the mobile app and the desktop app needs a commit that changes a file: "Two products in one
+repository", above.)
 
 ## Nightly
 
-Every green `build` on `main` moves the tag `nightly` to that commit and replaces every asset of the one
-`nightly` pre-release: `Sidevoice_nightly_aarch64.dmg`, `Sidevoice_nightly_x64-setup.exe`,
+Every green `build` on `main` (a push that touches only `mobile/` runs none) moves the tag `nightly` to that commit
+and replaces every asset of the one `nightly` pre-release: `Sidevoice_nightly_aarch64.dmg`, `Sidevoice_nightly_x64-setup.exe`,
 `Sidevoice_nightly_amd64.deb`, `Sidevoice_nightly_amd64.AppImage`, `SHA256SUMS`. Fixed names, so a link keeps
 working, plus its updates and `latest.json`, the nightly's feed (Updates, below). Its notes give the commit and its
 date. It is a snapshot, not a release: the app inside reports its nightly version (Channels, above), it is never
-latest, and release-please ignores the tag (it is not `vX.Y.Z`).
+latest, and release-please ignores the tag (it is not `vX.Y.Z`). It is the desktop app's nightly; the mobile app's will
+be a tag and a pre-release of its own.
 
 Build artifacts on Actions runs are kept 7 days, for debugging only. Download from Releases.
 
