@@ -65,9 +65,13 @@ action, in the system's language (`res/values`, English, and `values-es`; the Sp
 
 - **Start while visible.** Android lets a microphone service start only from an app that is on screen and has the
   microphone allowed (since Android 14, and enforced strictly from 15), so `start_call_service` is called while the app is
-  visible and the call refuses by name (`not-visible`, `microphone-permission`, `already-running`, `not-allowed`) instead
+  visible. Visible is the hosting activity's own lifecycle (started), not the process's, which reports a stop some time
+  late. The call refuses by name (`not-visible`, `microphone-permission`, `already-running`, `not-allowed`) instead
   of by the system's exception. Once the service runs, it goes on in the background.
-- **A deterministic end.** One service at a time, and one `Stopped` report to the app for each start, whoever ends it:
+- **A deterministic end.** One service at a time, and one `Stopped` report to the app for each start, whoever ends it. Each
+  start is a session with a number, which the service carries in its intents; the system ends a service after the app may
+  have started the next call, so a service only acts on its own session (its end, its focus, its notification's Hang up
+  are nothing once that session is over). `cargo xtask mobile test android` runs the JVM tests of that rule. Whoever ends it:
   the app (`stop_call_service`: `requested`), the person (Hang up in the notification: `hang-up`; the app removed from
   the recents list: `task-removed`) or the system (`system`, also when it refused the start). The notification, the
   audio focus and the service go with it, and the system never restarts it: a call does not survive its process.

@@ -28,7 +28,8 @@ kotlin {
 
 dependencies {
     implementation("androidx.core:core-ktx:1.16.0")
-    // The template's own version (gen/android/app/build.gradle.kts): the app is visible or it is not.
-    implementation("androidx.lifecycle:lifecycle-process:2.10.0")
+    // The template's own version (gen/android/app/build.gradle.kts): the hosting activity's lifecycle is read from it.
+    implementation("androidx.appcompat:appcompat:1.7.1")
     implementation(project(":tauri-android"))
+    testImplementation("junit:junit:4.13.2")
 }

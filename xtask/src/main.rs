@@ -28,6 +28,8 @@
 //!
 //! - `mobile generate android|ios`: mobile/gen/<project> made anew by the Tauri CLI, with the icons derived from
 //!   mobile/app-icon. The committed projects are exactly this (the iOS one is made on macOS, with XcodeGen).
+//! - `mobile test android`: the Android library's JVM unit tests (the call service's sessions), in the generated project, after a
+//!   build has written its Gradle includes. Needs no device.
 //!
 //! The Windows app, in the `windows` job after `bundle` (platform/release/windows.rs):
 //!
@@ -121,7 +123,7 @@ const USAGE: &str =
   | release package-screens
   | probe probe-app | probe local-host | probe probe | probe voice-models | probe card | probe exit
   | probe memory | probe voice-memory
-  | mobile generate android | mobile generate ios
+  | mobile generate android | mobile generate ios | mobile test android
   | packaging compare BEFORE_REF | packaging files DIR OUTPUT
   | publish assets release TAG | publish assets nightly | publish release TAG | publish nightly
   | release-pr-title [BRANCH] | release-pr-checks
@@ -140,6 +142,7 @@ fn main() -> ExitCode {
         ["platform-guard"] => platform_guard::check(),
         ["host-graph"] => host_graph::check(),
         ["mobile", "generate", project] => mobile::generate(project),
+        ["mobile", "test", project] => mobile::test(project),
         ["platform-clippy"] => checks::clippy(true),
         ["test"] => checks::test(),
         ["test-support"] => checks::test_support(),
