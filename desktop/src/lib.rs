@@ -322,6 +322,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             &diagnostics::webview_switches(),
             media_controls::support(),
             platform::uninstall::available(),
+            &bridge::Parts { transport: sidevoice_app_tauri::js::TRANSPORT, members: sidevoice_app_core::js::MEMBERS },
         ));
     #[cfg(feature = "probe")]
     let builder = match probe::local_host_flow() {
