@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-voice-end-input"
+description = "Enables the voice_end_input command without any pre-configured scope."
+commands.allow = ["voice_end_input"]
+
+[[permission]]
+identifier = "deny-voice-end-input"
+description = "Denies the voice_end_input command without any pre-configured scope."
+commands.deny = ["voice_end_input"]

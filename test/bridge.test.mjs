@@ -30,17 +30,59 @@ function fakeStore(initial) {
   };
 }
 
+// The commands the apps share are a Tauri plugin's, invoked under its name (sidevoice-app-tauri/ACL.md). The tests name them
+// as the bridge does, without the plugin's prefix: whatever a test installs as `invoke` is handed the short name, and `wire`
+// keeps what was invoked. The app numbers the page that asks for its channel (`voice_events`, answered here with PAGE);
+// the voice commands carry the number back, which `pages` keeps and the tests do not see in the arguments. `deliver` is
+// the app sending over the page's channel.
+const PLUGIN = "plugin:sidevoice-app-tauri|";
+const PAGE = 7;
+const TIME_ORIGIN = 1700000000000.5; // when the fake page started, which it tells the app as its document
+
 function fakeWindow(origin) {
   const calls = [];
+  const wire = [];
+  const pages = [];
+  const channels = [];
+  const documents = []; // the document each `voice_events` says it is from
+  const refusals = []; // what the app refuses `voice_events` with, in turn
+  const callbacks = [];
   const timers = [];
+  let handler = (cmd, args) => (calls.push([cmd, structuredClone(args)]), Promise.resolve());
+  const internals = {
+    transformCallback: (callback) => callbacks.push(callback) - 1,
+    unregisterCallback: (id) => { callbacks[id] = null; },
+  };
+  Object.defineProperty(internals, "invoke", {
+    get: () => (cmd, args, ...rest) => {
+      wire.push(cmd);
+      const name = cmd.startsWith(PLUGIN) ? cmd.slice(PLUGIN.length) : cmd;
+      if (name === "voice_events") {
+        channels.push(args.events);
+        documents.push(args.document);
+        return refusals.length ? Promise.reject(refusals.shift()) : Promise.resolve(PAGE);
+      }
+      if (args && typeof args === "object" && "page" in args) {
+        const { page, ...others } = args;
+        pages.push(page);
+        args = others;
+      }
+      return handler(name, args, ...rest);
+    },
+    set: (replacement) => { handler = replacement; },
+  });
   const win = {
     location: { protocol: new URL(origin).protocol, host: new URL(origin).host },
-    __TAURI_INTERNALS__: { invoke: (cmd, args) => (calls.push([cmd, structuredClone(args)]), Promise.resolve()) },
+    performance: { timeOrigin: TIME_ORIGIN },
+    __TAURI_INTERNALS__: internals,
     setInterval: (fn) => (timers.push(fn), timers.length),
     clearInterval: (id) => (timers[id - 1] = null),
     setTimeout: (fn, ms) => setTimeout(fn, Math.min(ms, 5)),
   };
-  return { win, calls, tick: () => timers.forEach((fn) => fn && fn()) };
+  // The app sends `message` as number `index` of the channel the page gave (the $n-th it opened).
+  const deliver = (index, message, n = 0) => callbacks[Number(channels[n].split(":")[1])]({ index, message });
+  const finish = (index, n = 0) => callbacks[Number(channels[n].split(":")[1])]?.({ index, end: true });
+  return { win, calls, wire, pages, channels, documents, refusals, deliver, finish, callbacks, tick: () => timers.forEach((fn) => fn && fn()) };
 }
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
@@ -71,8 +113,8 @@ test("the data bridge uses fixed native commands and no page-supplied paths", as
   await api.host.data.uninstall();
   await api.host.data.resetReport();
   assert.deepEqual(calls.slice(-5), [
-    ["data_pairings_read", undefined],
-    ["data_pairings_write", { value: { pairings: [], pendingRevokes: [] } }],
+    ["pairings_read", undefined],
+    ["pairings_write", { value: { pairings: [], pendingRevokes: [] } }],
     ["data_delete_all", undefined],
     ["data_uninstall", undefined],
     ["data_reset_report", undefined],
@@ -298,6 +340,78 @@ test("installs once per page and survives a missing Tauri runtime", async () => 
   const first = install(win, ORIGIN);
   assert.equal(install(win, ORIGIN), first);
   await flush();
+});
+
+test("the shared commands are invoked under their plugin's name and the app's own under theirs", async () => {
+  const install = loadFactory();
+  const { win, wire } = fakeWindow(ORIGIN);
+  const api = install(win, ORIGIN, "native", true, true);
+  await api.host.engine.catalogs();
+  await api.host.engine.memory();
+  const call = api.host.voice.start({ output: { tts: { catalog: "local", model: "m" } } });
+  call.ready.catch(() => {});
+  await flush();
+  await flush();
+  await api.host.data.pairings.read();
+  await api.host.data.resetReport();
+  const shared = wire.filter((cmd) => cmd.startsWith(PLUGIN)).map((cmd) => cmd.slice(PLUGIN.length));
+  assert.deepEqual(shared.slice(0, 2), ["engine_catalogs", "engine_memory"]);
+  assert.ok(shared.includes("voice_create_call") && shared.includes("voice_start"), shared.join());
+  assert.ok(shared.includes("pairings_read"), shared.join());
+  assert.ok(shared.every((cmd) => /^(voice|engine)_|^(microphone|bridge_level|bridge_playback|pairings_read|pairings_write)$/.test(cmd)), "nothing else is the plugin's");
+  const own = wire.filter((cmd) => !cmd.startsWith(PLUGIN));
+  assert.ok(own.includes("data_reset_report"), own.join());
+  assert.ok(own.every((cmd) => !/^(voice|engine)_|^(microphone|bridge_level|bridge_playback|pairings_read|pairings_write)$/.test(cmd)), "no shared command without its plugin's name");
+});
+
+test("the call's events come over the channel the page opened, in index order, and every command carries the page's number", async () => {
+  const { win, pages, channels, documents, wire, deliver } = fakeWindow(ORIGIN);
+  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const call = api.host.voice.start(BOTH);
+  call.ready.catch(() => {});
+  const states = [];
+  call.onState((state) => states.push(state.listening));
+  await flush();
+  await flush();
+  assert.equal(channels.length, 1, "one channel for the page");
+  assert.match(channels[0], /^__CHANNEL__:\d+$/);
+  // The channel hands them over in the order the app made them, however they arrive.
+  const state = (listening) => ({ key: call.id, type: "state", data: { listening } });
+  deliver(2, state("speaking"));
+  deliver(1, state("listening"));
+  assert.deepEqual(states, [], "number 0 has not come");
+  deliver(0, state("idle"));
+  assert.deepEqual(states, ["idle", "listening", "speaking"]);
+  deliver(3, state("idle"));
+  assert.deepEqual(states, ["idle", "listening", "speaking", "idle"]);
+  // A message that was handed over already is not handed over again.
+  deliver(1, state("calling-it-twice"));
+  assert.equal(states.length, 4);
+
+  // The number came first, once, and then travels with every command.
+  const shared = wire.filter((cmd) => cmd.startsWith(PLUGIN)).map((cmd) => cmd.slice(PLUGIN.length));
+  assert.equal(shared[0], "voice_events");
+  assert.equal(shared.filter((cmd) => cmd === "voice_events").length, 1);
+  assert.deepEqual(documents, [TIME_ORIGIN], "it says which document asks, once");
+  assert.ok(pages.length >= 2 && pages.every((page) => page === PAGE), pages.join());
+});
+
+test("a channel the app has ended is let go, and a refusal of the page's number is asked again", async () => {
+  const { win, channels, refusals, callbacks, deliver, finish } = fakeWindow(ORIGIN);
+  const voice = loadFactory()(win, ORIGIN, "native", true, true).host.voice;
+  // The app refuses the page's number: the command is refused with it, and the next one asks again.
+  refusals.push({ key: "bad_request", message: "not the room window" });
+  await assert.rejects(voice.audioDevices(), { key: "bad_request" });
+  await voice.audioDevices();
+  assert.equal(channels.length, 2, "asked again, with a channel of its own");
+  assert.notEqual(channels[0], channels[1]);
+  // Ended after the last message, the callback is unregistered.
+  const id = Number(channels[1].split(":")[1]);
+  voice.onAudioDevices(() => {});
+  deliver(0, { type: "devices", data: { inputs: [] } }, 1);
+  assert.equal(typeof callbacks[id], "function");
+  finish(1, 1);
+  assert.equal(callbacks[id], null);
 });
 
 test("the engine is exactly the contract: its catalogues and keys, what runs here, what is on disk, installs and memory", async () => {

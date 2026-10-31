@@ -11,8 +11,8 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 | `bridge/desktop-bridge.js` | Injected by the app into every page of the room window, before the page's own scripts. Bound to the app's own origin (the bundled interface). |
 | `desktop/core/src/bridge.rs` | The contract on the Rust side: `CallSnapshot`, `Command`, and how the tray renders a snapshot. Unit-tested. |
 | `desktop/src/lib.rs` | Wiring: the `bridge_state` command, `send(Command)`; `capabilities/room.json`. The mute shortcut, behind `muteShortcut`, and the one writer of the app's settings (below). |
-| `desktop/src/engine_ipc.rs` | The engine's commands, behind `engine` (below): its catalogues, provider keys and models on disk. |
-| `desktop/src/voice.rs`, `desktop/src/platform/credentials.rs`, `desktop/core/src/voice.rs` | The voice call the app runs, behind `voice` (below), the keychain the engine reads provider keys from, and the models it picks from the catalogues (unit-tested). |
+| `app-tauri/src/engine.rs`, `app-core/src/app/engine.rs` | The engine's commands, behind `engine` (below): its catalogues, provider keys and models on disk. The plugin's are the transport (`app-tauri/ACL.md` says who may call each); `app-core`'s do the work. |
+| `app-tauri/src/voice.rs`, `desktop/src/voice.rs`, `app-core/src/platform/credentials.rs`, `app-core/src/app.rs`, `app-core/src/app/voice.rs`, `app-core/src/voice.rs`, `app-core/src/voice/` | The voice call the app runs, behind `voice` (below): the commands in the plugin, what they do and the hooks the app gives the host (admission, events, keys: `app-core`'s `AppHost`, `desktop/src/app_hooks.rs`), the call host, the models it picks from the catalogues and the settings the page sends in `app-core` (unit-tested), and the keychain the engine reads provider keys from. |
 | `desktop/src/local_host.rs`, `desktop/local-host/` | This computer's own core, behind `localHost` (below; docs/LOCAL_HOST.md). |
 | `desktop/src/tray.rs` | The menu-bar icon and its menu. |
 | `bridge/call-controls-bridge.js` | Injected into the call controls card's window (below). |
@@ -142,7 +142,7 @@ no report remains. Otherwise it keeps the app, adds `{step: "app", key: "reset.a
 `{step: "app", key: "reset.app-trash-failed"}` to `failed`, and relaunches it exactly as `deleteAll()` does, so
 `resetReport()` names what remains and the person can retry.
 
-Commands: `data_pairings_read`, `data_pairings_write {value}`, `data_delete_all`, `data_uninstall`,
+Commands: `pairings_read`, `pairings_write {value}` (the shared plugin's, over the app's `PairingStore`; the desktop's is in `desktop/src/data.rs`), `data_delete_all`, `data_uninstall`,
 `data_reset_report`; only the room capability grants them and each checks the room origin.
 
 ### Call state
@@ -187,13 +187,13 @@ ticks often; unchanged snapshots are not re-sent). The app also resets to `ready
 every navigation of the room window.
 
 ```js
-window.__TAURI_INTERNALS__.invoke("bridge_level", { level })   // 0–100, during a call, at most every 80 ms
+window.__TAURI_INTERNALS__.invoke("plugin:sidevoice-app-tauri|bridge_level", { level })   // 0–100, during a call, at most every 80 ms
 ```
 
 The microphone's level for the card's wave: only during a call, only when it changes (a drop to 0 always goes).
 
 ```js
-window.__TAURI_INTERNALS__.invoke("bridge_playback", { level, threadId })   // 0–1, during a call, at most every 40 ms
+window.__TAURI_INTERNALS__.invoke("plugin:sidevoice-app-tauri|bridge_playback", { level, threadId })   // 0–1, during a call, at most every 40 ms
 ```
 
 The voice's output level and whose reply it is, for the card's avatar's mouth: only during a call, only when it
@@ -460,7 +460,7 @@ models is the voice call's (below), never the page's. `window.__sidevoiceDesktop
   rejects with `install_cancel_failed`), and a transport error that follows it (the connection it closed) is still
   `install_cancelled`, never `download_failed`. There is no overall download timeout: a slow line is not a failure,
   and the cancel is how a person stops one.
-- Commands behind it (`desktop/src/engine_ipc.rs`): `engine_catalogs`, `engine_set_credential {provider, key}`,
+- Commands behind it (`app-tauri/src/engine.rs`, invoked as `plugin:sidevoice-app-tauri|<command>`): `engine_catalogs`, `engine_set_credential {provider, key}`,
   `engine_has_credential {provider}`, `engine_test_credential {provider, key}` (the reason with its `detail?`, or
   `null`), `engine_refresh {provider}`, `engine_capabilities`, `engine_installed`,
   `engine_install {model, build, engine, job}` (`build` and `engine` each a string or `null`) with
@@ -484,8 +484,8 @@ client that does not know the key:
 
 The page renders by `key` and falls back to `message`. `host.engine`'s catalogue, key and install calls also carry
 `code`, the code sidevoice-web's `ModelCatalogs` reads (`failureCode`): the refusal's own `code` (the engine's, below)
-when it has one, else its `key` with dashes (`model-needs-memory`, `install-cancelled`). The engine's keys are made in `desktop/engine/src/error.rs`,
-the voice call's in `desktop/src/voice.rs` and core `voice.rs`; a new one is added there and here. What
+when it has one, else its `key` with dashes (`model-needs-memory`, `install-cancelled`). The engine's keys are made in `app-core/src/engine/error.rs`,
+the voice call's in `desktop/src/voice.rs` and `app-core/src/voice.rs`; a new one is added there and here. What
 sidevoice-engine itself fails with is one of these keys, with the engine's own code beside it as `code`
 (`digest-mismatch`, `model-load-failed`…).
 
@@ -534,7 +534,7 @@ The app runs the voice host itself: sidevoice-voice (`sidevoice/sidevoice-voice`
 microphone and speaker (cpal) and Sonora's echo canceller (pure Rust) between them, so the shared output cancels its echo
 (`desktop/src/voice.rs`; sidevoice/sidevoice-core#89). sidevoice-voice names no model and depends on no engine:
 the app fills its interfaces (voice activity, transcriber, speaker, end of turn) with the engine's models
-(`desktop/src/voice/models.rs`). The room window's page is then never granted the microphone
+(`app-core/src/voice/models.rs`). The room window's page is then never granted the microphone
 (the room window's permission handler denies every request, `src/lib.rs`) and runs no model: it keeps the room. Each call knows nothing of the room: the page keeps one call per conversation, routes the shared microphone to one call, tags each call's events with its own destination, and has each call say what the room sends through a handle that tells how it went. Where the app does not run it, `host.voice` is absent and the page runs the call
 itself over `@sidevoice/voice` in the webview, the room window granting it the microphone: the page pinned now
 (`web.pin.json`) cannot load those modules until they are on npm, so on Windows and Linux there is no voice yet.
@@ -551,6 +551,13 @@ implements it over the call in the page, with the models the page's `source` loa
 engine); the page does `host.voice ?? createVoiceHost(source)` and uses nothing else of either. It is not restated
 here: a change is made there, and both sides follow.
 
+The app reads the settings again in Rust (`app-core/src/voice.rs`, strictly), so the schema exists twice until
+sidevoice-voice#38 is evaluated. `cargo xtask voice-contract` is what notices drift: it reads `VoiceSettings` and
+`VoiceSettingsChange` against `js/voice-host.d.ts` of the sidevoice-voice release the pinned web depends on
+(`apps/web/package.json` at the tag `web.pin.json` names; the app is built with another), member by member, value by value and variant
+by variant, both ways (`app-core/tests/voice_settings_contract.rs`). Where Rust is stricter than the contract, the
+test states it.
+
 What is this app's own:
 
 - `start(settings, {take?})` takes the seam's settings, each slot a model of a catalogue: `input` (absent or `null`: no
@@ -559,8 +566,8 @@ What is this app's own:
   `patience` and the turn's numbers (`listening_bar: {quiet, playing}`, `barge_in_min_speech`, `barge_in_window`,
   `vad_confidence`, `speech_start_ms`, `pre_roll_ms`); `output` (absent or `null`: no speaker model, nothing played)
   with `tts: {catalog, model, build?}`, `voice`, `speed`, `fade_ms` and `language`; and `audio_grace_ms` and
-  `idle_unload_minutes`; at least one half, else it throws a `TypeError`, and any other key is refused (core
-  `voice.rs`). The turn's numbers and `audio_grace_ms` reach sidevoice-voice's configuration as they are: it checks
+  `idle_unload_minutes`; at least one half, else it throws a `TypeError`, and any other key is refused
+  (`app-core/src/voice.rs`). The turn's numbers and `audio_grace_ms` reach sidevoice-voice's configuration as they are: it checks
   their ranges (`js/voice-host.d.ts`) and takes its own default for one absent. `fade_ms` (0 to 1000) is checked but
   not applied: the native speaker's fade is sidevoice-voice's fixed 30 ms. A slot is loaded as
   `engine.catalog(catalog).load(model)`, which picks the build, or, for a local model with a `build` (Settings, "How it
@@ -641,7 +648,10 @@ What is this app's own:
 
 ### How it travels
 
-- Page → app: `voice_create_call {key}` (the lane, so the microphone may be routed to the call before it works),
+- Page → app (as `plugin:sidevoice-app-tauri|<command>`): first `voice_events {document,events}` (once per page: it gives the app a
+  channel for the events below and answers the page's number, the `page` that every command below carries; `document` is the
+  page's own start time, `performance.timeOrigin`, so that a request of a page that was replaced and reached the app after
+  the new page's is refused `page_stale` and takes nothing from it), then `voice_create_call {key}` (the lane, so the microphone may be routed to the call before it works),
   `voice_route_input {key?}`, then per-call `voice_start {key,settings,take?}` (the call, asked to start: it answers
   once made, or refuses the settings), `voice_ready {key}` (answers once the call works), `voice_update {key,change}`,
   `voice_stop {key}` (answers `true` once the page has what the stop ends, `false` at once when no call was made),
@@ -651,10 +661,12 @@ What is this app's own:
   `voice_dispose_call`.
   The shared commands are `voice_preload {settings}`, `voice_audio_devices` and `voice_set_audio_devices {choice}`.
   The room window capability grants only these fixed commands, and each checks the current page.
-- App → page: `window.__sidevoiceDesktop.voiceEvent(event)` receives `{key,type,data}`.
+- App → page: over the channel the page opened with `voice_events`, in the order the app made them (the bridge hands them to
+  `window.__sidevoiceDesktop.voiceEvent(event)`), `{key,type,data}`. Only the current page has one that is sent to: what the
+  app would tell a page it has replaced is not sent, and a call of the old page is stopped and released.
   `key` is the immutable call ID captured before asynchronous native forwarding. `type` is
   `turn`, `state`, `level`, `playback-level`, `error`, `take`, or `say`.
-  The meters go only when the page would draw them differently (core `voice::meters`): `level` when its whole percent
+  The meters go only when the page would draw them differently (`app-core` `voice::meters`): `level` when its whole percent
   changes, `playback-level` every time it sounds and once for each silence (the first `0`, not the ones after it).
   The voice publishes both once per detector window, silence included, about 60 events a second (desktop#149).
   `say` uses `{key,type:"say",data:{key:sayKey,event}}`; its last event is `done` with the terminal outcome.
@@ -677,7 +689,7 @@ What is this app's own:
   The app mirrors a global user mute to all calls. Native output from every call is mixed once before
   the single AEC reference. Each call's playback level reflects only its own rendered samples; a device
   failure is sent to each affected call.
-- Keys: `host.engine.setCredential` writes the OS credential store (`desktop/src/platform/credentials.rs`), and the engine reads it
+- Keys: `host.engine.setCredential` writes the OS credential store (`app-core/src/platform/credentials.rs`, in the namespace the app passes), and the engine reads it
   when a provider is listed, or its model loaded or called. `host.engine.testCredential` writes nothing: its key goes
   only to a trial engine of its own.
 
@@ -711,11 +723,11 @@ interface MicrophonePermission {
   Opening it says nothing about access. The page detects it by presence.
 - A refusal rejects `{key, message}`: `bad_request` for a malformed call or another caller, `internal` when the system
   does not answer or Settings does not open.
-- Command behind it: `microphone {action}`, `action` `state`, `request` or `open-settings` (`desktop/src/microphone.rs`).
+- Command behind it: `microphone {action}`, `action` `state`, `request` or `open-settings` (`app-tauri/src/microphone.rs`, invoked as `plugin:sidevoice-app-tauri|microphone`).
   Granted to the room window (`capabilities/room.json`); it re-checks that the caller is the current room window on the
   app's own page.
 
-Per OS (`desktop/src/platform/microphone.rs`; the rule every OS shares is one function there: a denial beats a missing
+Per OS (`app-tauri/src/platform/microphone.rs`; the rule every OS shares is one function there: a denial beats a missing
 device, a missing device beats everything else, and a grant needs a readable device list):
 
 - **macOS:** `AVCaptureDevice.authorizationStatus(for: .audio)`: not determined → `"prompt"`, authorized → `"granted"`,
@@ -931,8 +943,8 @@ interface UpdaterStatus {
 - Add a field: `CallSnapshot` uses `#[serde(default)]`, so old and new scripts interoperate;
   bump `version` only for a breaking change.
 - Tests: `npm run web && npm test` (the pinned page's media controls and the script against a fake window, `host.voice`, `host.microphone`, `host.updater`, `host.build`, `host.muteShortcut`,
-  `host.callControls` and `host.localHost`'s install included), `cargo test -p sidevoice-desktop-core` (the voice call's builds, the media rule, the
-  updater's status and the mute shortcut's form and shape among the rest) and `cargo test -p sidevoice-desktop-engine` (the engine
+  `host.callControls` and `host.localHost`'s install included), `cargo test -p sidevoice-desktop-core` (the media rule, the
+  updater's status and the mute shortcut's form and shape among the rest) and `cargo test -p sidevoice-app-core` (the call host, the voice call's builds and the engine
   over a test host), `cargo test -p sidevoice-local-host` (the local host against a stand-in core, its install against a stand-in
   registry; docs/LOCAL_HOST.md → Tests). In the real app, CI's macOS job runs the probe page (`test/fixtures/probe.html`, probe build): the engine's
   capabilities, installs, refusals and a cancelled download (CI then checks nothing of it is on disk), and the voice

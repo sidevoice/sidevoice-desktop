@@ -1,0 +1,61 @@
+[package]
+name = "sidevoice-app-core"
+version = "0.3.0"
+description = "What every Sidevoice app shares and no shell is needed for: the voice call (its host, its models, the settings the page sends), and the app's side of sidevoice-engine (docs/ENGINES.md). No Tauri, so it is tested anywhere."
+edition = "2021"
+rust-version = "1.98"
+license = "Apache-2.0"
+publish = false
+
+[features]
+# CI only: what the memory measurement reads of the call host (`VoiceState::held`, a shorter idle minute) and the
+# recorded-speech fixture it runs the call on. Never in a release build.
+probe = []
+
+[dependencies]
+# The engine itself: catalogue, downloads, the build that runs here, the models, local and remote (whose keys the
+# app hands it, `Credentials`), through its catalogues (`local`, then each provider). The 0.5.0 release ranks GPU
+# builds first, uses flash attention, lists Supertonic's ten voices and classifies each build's accelerator. Its
+# sherpa-onnx backend links sherpa-onnx's static libraries
+# (SHERPA_ONNX_LIB_DIR), its whisper.cpp backend compiles whisper.cpp from source with CMake, with Metal on Apple
+# silicon (docs/ENGINES.md).
+sidevoice-engine = { git = "https://github.com/sidevoice/sidevoice-engine", tag = "v0.7.0" }
+# The voice call itself: sidevoice-voice with its native microphone and speaker (cpal) and Sonora's pure-Rust echo
+# cancellation between them (no C++ to build), on the models the engine gives it (src/voice/models.rs). It depends on
+# no engine. The candidate source: a try's take (StartOptions, VoiceEvent::Take), the pause in the person's speech,
+# and the rendered speaker's level (VoiceEvent::PlaybackLevel).
+sidevoice-voice = { git = "https://github.com/sidevoice/sidevoice-voice", tag = "v0.7.6" }
+# A voice call's take reaches the page with its samples in base64 (src/voice/take.rs).
+base64 = "0.22"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The engine's futures run on the app's Tokio runtime; installs race a cancel (src/engine.rs); the calls' lanes
+# and what a stopped call keeps loaded run on it too, and the models' native work goes to its blocking pool
+# (src/voice/models.rs).
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "sync", "macros"] }
+
+# Physical-memory observations (platform/memory); also used by the shared platform crate.
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
+# Provider keys in the OS credential store (platform/credentials; docs/CREDENTIALS.md).
+keyring-core = "1.0.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+apple-native-keyring-store = { version = "1.0.2", features = ["keychain"] }
+# Legacy keychain namespace deletion and compatibility tests (platform/credentials).
+security-framework = "3"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-native-keyring-store = "1.1"
+# The Credential Manager's target names are matched as a pattern (platform/credentials/windows.rs: the namespace, escaped).
+regex = "1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus-secret-service-keyring-store = { version = "1.0.1", features = ["crypto-rust"] }
+
+[dev-dependencies]
+keyring-core = { version = "1.0.1", features = ["sample"] }
+sha2 = "0.11"
+tokio = { version = "1", features = ["test-util"] }
