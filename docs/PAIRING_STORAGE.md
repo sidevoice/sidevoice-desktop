@@ -34,3 +34,29 @@ credentials, atomic replacement, hard links, unchanged existing directory access
 with a real decoy directory before the shared write. The parent and grandparent tests verify Windows denies a rename
 while the directory is held, then permits it once the handles close. The existing portable
 test-support job includes this actual source module on all three hosts; no extra CI job is required.
+
+## On the phone
+
+`mobile/src/pairings.rs` keeps the same record (`{pairings, pendingRevokes}`, at most 64 KiB, the same refusals
+`data.pairings-invalid`, `data.pairings-read` and `data.pairings-write`) as one file in the app's private data
+directory (the path is the app's to give). It has none of the desktop's held-directory machinery, because the
+sandbox is the boundary: no other app can open the app's data directory, and a link or a hard link there is the app's own.
+
+- **Atomic write.** `atomic-write-file` writes the new record to a temporary file in the same directory, syncs it, renames
+  it over the old one and syncs the directory (`openat`/`renameat` on the directory it opened first), so a crash or a power
+  loss leaves the old record or the new one. A read never creates a directory; the first write does.
+- **Shape.** What makes a record pairings is the room page's contract, not the file's: the app hands the store the check
+  it shares with the desktop. The check lives in `desktop/src/data/pairings.rs` today (`checked_pairings`) and has to move
+  next to the `PairingStore` trait in `app-tauri` before the mobile app can use it.
+- **iOS data protection.** The record has the system's default class, Complete Until First User Authentication
+  ([Apple Platform Security](https://support.apple.com/guide/security/secb010e978a/web)): readable from the first unlock
+  after a restart, as a call under a locked screen needs. The app's entitlements are empty (`mobile/gen/apple`). Adding the
+  Data Protection capability would raise the default to Complete, and the record would be unreadable while the phone is
+  locked. No code sets the class.
+- **Android.** Files under `files/` are private to the app's uid. The generated manifest says nothing about backup, so the
+  system default applies and the file is part of Auto Backup: a restore onto another phone brings the pairings (their
+  tokens) along. Whether that is wanted is undecided.
+- **Tests** run on every host (a temporary directory): round trip and replacement, the bound, refusals that change
+  nothing, no temporary file left behind, a path that is a directory or has a file where its directory should be. A
+  crash between the temporary file and the rename is `atomic-write-file`'s own test matter; nothing here fakes one.
+- **Not run on a phone yet.** The device flow (write, kill the app, read) is part of the first device run.
