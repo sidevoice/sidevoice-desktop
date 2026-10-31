@@ -41,8 +41,9 @@ is an input the CLI reads:
 | The Rust toolchain and the four mobile targets | `mobile/rust-toolchain.toml` |
 
 `cargo xtask mobile generate android|ios` makes a project anew (the old one removed) and derives the icons into it. The
-iOS project needs macOS and XcodeGen. Run it after changing an input or the Tauri CLI's version, and commit the result;
-CI regenerates the projects and fails on any difference.
+iOS project needs macOS and XcodeGen. Run it after changing an input or the Tauri CLI's version, and commit the result.
+An iOS build merges `Info.ios.plist` into
+`gen/apple/sidevoice-mobile_iOS/Info.plist`, so a local iOS build changes that one file; `generate` restores it.
 
 The template sets `compileSdk` and `targetSdk` (37 with the CLI pinned in package.json); they are the template's, not
 this repository's, and move with the CLI.
