@@ -112,7 +112,50 @@ installs as it is.
 - The Rust and Gradle caches are written by a push to `main` only and their keys start with `mobile`. The Android SDK
   platform and NDK versions are pinned in the workflow's `env`.
 
+## TestFlight
+
+`.github/workflows/mobile-testflight.yml` signs the iOS app and uploads it to TestFlight. It is run by hand (Actions →
+mobile-testflight → Run workflow, on `main`) and runs nothing else: no pull request, no push, and every other mobile build
+stays unsigned with no secret. Its one step is `cargo xtask mobile testflight --build-number <run number>`
+(`xtask/src/mobile/testflight.rs`):
+
+1. The Tauri CLI archives the committed project and exports it for App Store Connect. Signing is **Xcode's automatic
+   provisioning**: `xcodebuild -allowProvisioningUpdates` with the App Store Connect API key
+   (`-authenticationKeyPath`, `-authenticationKeyID`, `-authenticationKeyIssuerID`), which gets the Apple Distribution
+   certificate (managed by Apple, not imported into a keychain) and the App Store provisioning profile for
+   `ai.sidevoice.mobile`, and registers that identifier in the account if it is not there. No certificate or profile is
+   stored as a secret.
+2. The archive is read before anything leaves the runner: it is the app `ai.sidevoice.mobile` at the build number, it is
+   signed, and it passes the privacy and export-compliance check (above).
+3. `xcrun altool --upload-app` uploads it. App Store Connect processes it (minutes), and TestFlight offers it to the
+   internal testers.
+
+- **The build number** is the run number of the workflow, which only grows, as TestFlight requires of the builds of a
+  version, and it is the app's `CFBundleVersion` whole. (The CLI's own `--build-number` appends it to the version,
+  `0.1.0.7`: four numbers where Apple accepts three.) The version, `CFBundleShortVersionString`, is `tauri.conf.json`'s.
+  A re-run of a run that had already uploaded has the same number, and App Store Connect refuses the upload.
+- **Credentials.** The repository secrets `APPLE_API_KEY` (the key's id), `APPLE_API_ISSUER`, `APPLE_API_KEY_P8` (the
+  .p8's contents) and `APPLE_TEAM_ID`, the same the desktop notarization uses; the key needs the **Admin** role in App
+  Store Connect (the Developer role cannot create the certificate or the profile). Only the step that signs has them;
+  the .p8 is written to a file only the job's user can read, in a directory of its own, and removed when the command ends;
+  the build's child processes get its path and the key's id and issuer, never its contents. The checkout keeps no token.
+- **Main only.** The job refuses any other ref (`if`), so does the command, and the job runs in the environment
+  `testflight`. The gate that a workflow file on another branch cannot lift is the environment's: its deployment
+  branches are `main` only (Settings → Environments), and the key's secrets can be moved into it.
+- **Before the first dispatch**, in App Store Connect and the repository, once:
+  1. the key's role is Admin (a new key replaces `APPLE_API_KEY`, `APPLE_API_ISSUER` and `APPLE_API_KEY_P8`; the desktop
+     notarization keeps working with an Admin key);
+  2. any pending agreement is accepted (App Store Connect → Business → Agreements, by the account holder);
+  3. the app exists in App Store Connect (Apps → New App): platform iOS, bundle identifier `ai.sidevoice.mobile`, a name
+     and an SKU. Apple's API reference has no call that creates an app record (it can register a bundle identifier, not
+     this), so it is by hand. The identifier must be registered before the
+     form lists it: either by hand (Developer account → Identifiers → App IDs, explicit `ai.sidevoice.mobile`) or by a first
+     dispatch, whose export registers it and whose upload then fails for lack of the record;
+  4. the people who test are users of the team (Users and Access) and members of an internal testing group of the app
+     (TestFlight → Internal Testing); an internal build needs no beta review;
+  5. the environment `testflight` exists with the deployment-branch rule.
+
 ## Not here yet
 
 The bridge (`__sidevoiceHost`: voice, engine, microphone, pairings), the microphone permission, `UIBackgroundModes`
-(audio), the Android foreground service, and the signing of both apps.
+(audio), the Android foreground service, and the signing of the Android app.

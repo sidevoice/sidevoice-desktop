@@ -1,0 +1,73 @@
+name: mobile-testflight
+
+# The mobile app's iOS build, signed and uploaded to TestFlight (docs/MOBILE.md → "TestFlight"). It is run by hand
+# (`workflow_dispatch`) and only from main: it never runs on a pull request or a push, and no other workflow sees what it
+# sees. Every other mobile build is unsigned and has no secret (mobile.yml).
+# - The job's `if` is the first gate: from any other ref, no step runs and no secret is read. A workflow file on another
+#   branch carries its own `if`, so the gate that holds is the environment's: `testflight` is a protected environment
+#   (Settings → Environments) whose deployment branches are `main` only, and where the App Store Connect key's secrets
+#   live. Until it exists GitHub makes an empty one on the first run and the job reads the repository's secrets.
+# - The secrets are the step's alone (the one that signs), nothing is checked out with a token, and the key's file is
+#   removed when the command ends (`cargo xtask mobile testflight`, xtask/src/mobile/testflight.rs).
+# - The build number is this workflow's run number: it only grows, which TestFlight requires of a version's builds. A
+#   re-run of a run that had already uploaded gets the same number, and App Store Connect refuses it.
+# Every external action is pinned by its full commit SHA, with its version in a comment, as in mobile.yml.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# An upload that is running is never cut short by the next dispatch.
+concurrency:
+  group: mobile-testflight
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # The bundled web interface is a release of sidevoice-web (web.pin.json): its attestation is verified wherever it is
+  # fetched (`npm run web`, and every Tauri build through it), with gh and this run's token (contents: read).
+  SIDEVOICE_WEB_ATTESTATION: require
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  testflight:
+    name: iOS archive to TestFlight
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-26
+    timeout-minutes: 60
+    environment: testflight
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Rust, as mobile/rust-toolchain.toml says (the toolchain and the four mobile targets)
+        working-directory: mobile
+        run: |
+          rustup toolchain install
+          rustc --version
+      # Restored from the iOS job's cache, never written here.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: |
+            .
+            xtask
+          prefix-key: v0-rust-mobile
+          shared-key: ios
+          save-if: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: target/web
+          key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs', 'scripts/web-release.mjs') }}
+      - name: Archive, sign through automatic provisioning, and upload to TestFlight (cargo xtask mobile testflight)
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: cargo xtask mobile testflight --build-number ${{ github.run_number }}

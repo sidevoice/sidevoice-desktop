@@ -2,6 +2,7 @@
 
 pub mod file_mode;
 pub mod host;
+pub mod ios_upload;
 pub mod lifecycle;
 pub mod macos_app;
 pub mod private_files;
