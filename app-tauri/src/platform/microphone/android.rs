@@ -3,7 +3,7 @@
 //! `requestPermissions` commands: they hold the activity result and remember a "never ask again", which the system's
 //! `checkSelfPermission` alone cannot tell from "not asked yet".
 use super::{AccessState, Os};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::{error::Error, future::Future, pin::Pin, sync::OnceLock};
 use tauri::plugin::{PluginApi, PluginHandle};
 use tauri::Runtime;
@@ -43,12 +43,21 @@ trait Kotlin: Send + Sync {
 
 impl<R: Runtime> Kotlin for PluginHandle<R> {
     fn check(&self) -> Result<Value, &'static str> {
+        // `checkPermissions` reads no argument.
         self.run_mobile_plugin("checkPermissions", ()).map_err(|_| UNANSWERED)
     }
 
     fn request(&self) -> Pin<Box<dyn Future<Output = Result<Value, &'static str>> + Send + '_>> {
-        Box::pin(async { self.run_mobile_plugin_async("requestPermissions", ()).await.map_err(|_| UNANSWERED) })
+        Box::pin(async {
+            self.run_mobile_plugin_async("requestPermissions", request_arguments()).await.map_err(|_| UNANSWERED)
+        })
     }
+}
+
+/// What Tauri's `requestPermissions` reads: the aliases to ask for. It parses its argument and dereferences the result, so
+/// an argument that is not an object (`()` is `null`) throws before the system is asked, and the person is never prompted.
+fn request_arguments() -> Value {
+    json!({ "permissions": [ALIAS] })
 }
 
 static KOTLIN: OnceLock<Box<dyn Kotlin>> = OnceLock::new();
@@ -61,5 +70,22 @@ fn access(states: &Value) -> Result<AccessState, &'static str> {
         Some("denied") => Ok(AccessState::Denied),
         Some("prompt" | "prompt-with-rationale") => Ok(AccessState::NotDetermined),
         _ => Err(UNANSWERED),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_request_names_the_alias_in_an_object() {
+        assert_eq!(request_arguments().to_string(), r#"{"permissions":["microphone"]}"#);
+    }
+
+    #[test]
+    fn the_alias_is_the_one_the_kotlin_class_declares() {
+        let class = include_str!("../../../android/src/main/java/ai/sidevoice/app/MicrophonePlugin.kt");
+        assert!(class.contains(&format!("alias = \"{ALIAS}\"")), "MicrophonePlugin.kt declares no `{ALIAS}` alias");
+        assert!(class.contains(&format!("package {PACKAGE}\n")) && class.contains(&format!("class {CLASS}(")));
     }
 }
