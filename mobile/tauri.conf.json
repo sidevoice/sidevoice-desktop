@@ -21,7 +21,7 @@
     "longDescription": "Sidevoice: give your coding agent a voice. Keep the conversation.",
     "license": "Apache-2.0",
     "copyright": "Copyright 2026 Ruben Pahino",
-    "icon": ["app-icon/window.png"],
+    "icon": ["app-icon/window.png", "app-icon/window.ico"],
     "iOS": {
       "minimumSystemVersion": "15.0"
     },
