@@ -7,11 +7,16 @@
 //!   goes too), then the icons derived from the sources (`tauri icon` writes them into the projects that exist). Runs
 //!   in mobile/, where tauri.conf.json is. The iOS project needs macOS and XcodeGen. The CLI's targets are not
 //!   installed here (`--skip-targets-install`): mobile/rust-toolchain.toml names them.
+//! - `mobile generated android|ios`: `generate`, then the committed project must be what it wrote (CI, every pull
+//!   request): a difference means an input or the CLI changed and the project was not regenerated and committed.
+//! - `mobile build android|ios`: the app as a pull request builds it, unsigned: Android's release APK for arm64, and
+//!   the iOS app for the simulator (no signing, so no secret), into dist/. Needs the SDK and NDK, or macOS with Xcode.
 
 use std::fs;
+use std::path::{Path, PathBuf};
 
 use crate::platform::host::npm;
-use crate::util::{repo, Cmd};
+use crate::util::{ensure, mkdir, repo, Cmd};
 use crate::Result;
 
 /// A project of the mobile app: the Tauri CLI's name for it, and where it keeps it below mobile/.
@@ -53,6 +58,60 @@ pub fn generate(name: &str) -> Result<()> {
     tauri(&["icon", "app-icon/app-icon.json"]).run()
 }
 
+/// `mobile generated android|ios`: the committed project is what `generate` writes.
+pub fn generated(name: &str) -> Result<()> {
+    generate(name)?;
+    let dir = format!("mobile/{}", project(name)?.dir);
+    let changes = Cmd::new("git")
+        .args(["status", "--porcelain", "--untracked-files=all", "--"])
+        .arg(&dir)
+        .dir(repo())
+        .stdout()?;
+    ensure(
+        changes.trim().is_empty(),
+        format!("the committed {dir} is not what `cargo xtask mobile generate {name}` writes:\n{changes}\nrun it and commit {dir}"),
+    )
+}
+
+/// What an unsigned Android build leaves, below mobile/gen/android.
+const UNSIGNED_APK: &str = "app/build/outputs/apk/universal/release/app-universal-release-unsigned.apk";
+
+/// `mobile build android|ios`: the app as a pull request builds it, unsigned, into dist/.
+pub fn build(name: &str) -> Result<()> {
+    let dist = repo().join("dist");
+    mkdir(&dist)?;
+    match project(name)?.cli {
+        "android" => {
+            tauri(&["android", "build", "--apk", "--target", "aarch64", "--ci"]).run()?;
+            let apk = repo().join("mobile/gen/android").join(UNSIGNED_APK);
+            let to = dist.join("Sidevoice-android-arm64-unsigned.apk");
+            fs::copy(&apk, &to).map_err(|e| format!("{}: {e}", apk.display()))?;
+            Ok(())
+        }
+        _ => {
+            tauri(&["ios", "build", "--target", "aarch64-sim", "--no-sign", "--ci"]).run()?;
+            let build = repo().join("mobile/gen/apple/build");
+            let app = find_app(&build, 3).ok_or_else(|| format!("no .app below {}", build.display()))?;
+            // The app is a directory with symbolic links in it: zip keeps them (`-y`).
+            Cmd::new("zip")
+                .args(["-qry"])
+                .arg(dist.join("Sidevoice-ios-simulator.zip"))
+                .arg(app.file_name().ok_or("an .app has a name")?)
+                .dir(app.parent().ok_or("an .app has a parent")?)
+                .run()
+        }
+    }
+}
+
+/// The first `.app` directory below `dir`, at most `depth` levels down.
+fn find_app(dir: &Path, depth: usize) -> Option<PathBuf> {
+    let mut entries: Vec<PathBuf> = fs::read_dir(dir).ok()?.filter_map(|e| e.ok().map(|e| e.path())).collect();
+    entries.sort();
+    entries.iter().find(|p| p.is_dir() && p.extension().is_some_and(|e| e == "app")).cloned().or_else(|| {
+        (depth > 1).then(|| entries.iter().filter(|p| p.is_dir()).find_map(|p| find_app(p, depth - 1))).flatten()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -63,5 +122,15 @@ mod tests {
         let ios = project("ios").unwrap();
         assert_eq!((ios.cli, ios.dir), ("ios", "gen/apple"));
         assert!(project("windows").err().unwrap().contains("android or ios"));
+    }
+
+    #[test]
+    fn the_simulator_app_is_found_a_few_levels_down() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = dir.path().join("arm64-sim/Release-iphonesimulator/Sidevoice.app");
+        fs::create_dir_all(&app).unwrap();
+        fs::create_dir_all(dir.path().join("arm64-sim/other")).unwrap();
+        assert_eq!(find_app(dir.path(), 3), Some(app));
+        assert_eq!(find_app(dir.path(), 2), None, "deeper than asked");
     }
 }
