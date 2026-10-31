@@ -340,16 +340,16 @@ fn a_reloaded_page_owns_none_of_the_lanes() {
     block_on(async {
         host.create_call(first, "a".into()).await.unwrap();
         let page = host.page_changed();
-        // The old lanes are released in the background.
+        // The new page owns none of the old page's lanes, whether or not they are released yet.
+        assert_eq!(key_of(&host.route_input(page, Some("a".into())).await.unwrap_err()), "bad_request");
+        // The old lanes are released in the background; the same key can be taken again by the new page once that is done.
         let mut tries = 0;
-        while host.route_input(page, Some("a".into())).await.is_ok() {
+        while let Err(refused) = host.create_call(page, "a".into()).await {
+            assert_eq!(key_of(&refused), "bad_request", "{refused:?}");
             tries += 1;
             assert!(tries < 100, "the lane was never released");
             std::thread::sleep(Duration::from_millis(20));
         }
-        assert_eq!(key_of(&host.route_input(page, Some("a".into())).await.unwrap_err()), "bad_request");
-        // The same key can be taken again by the new page.
-        host.create_call(page, "a".into()).await.unwrap();
     });
 }
 
