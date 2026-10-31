@@ -133,11 +133,12 @@ mod tests {
 
     #[test]
     fn every_voice_command_asks_the_caller_first_and_no_engine_command_does() {
-        let voice = include_str!("voice.rs");
-        let engine = include_str!("engine.rs");
+        // A checkout on Windows may have CRLF line ends: the sources are read with LF.
+        let (voice, engine) =
+            (include_str!("voice.rs").replace("\r\n", "\n"), include_str!("engine.rs").replace("\r\n", "\n"));
         for command in COMMANDS {
             if command.starts_with("voice_") {
-                let first = body(voice, command).lines().nth(1).unwrap_or_default().trim();
+                let first = body(&voice, command).lines().nth(1).unwrap_or_default().trim();
                 assert_eq!(first, "allowed(&callers, &webview)?;", "{command} asks the caller before anything else");
             } else {
                 let at = engine.find(&format!("fn {command}(")).unwrap_or_else(|| panic!("no command {command}"));
