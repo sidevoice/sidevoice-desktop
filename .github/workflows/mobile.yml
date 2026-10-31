@@ -8,6 +8,8 @@ name: mobile
 # Every step is a `cargo xtask mobile …` command (xtask/src/mobile.rs): this file sets up the machine and calls them.
 # The Rust and Gradle caches are written only by a push to main, and their keys start with `mobile` (RELEASING.md →
 # "CI caches"); a pull request only restores them.
+# Every external action is pinned by its full commit SHA, with its version in a comment: a tag can be moved, and a moved one
+# would run new code beside the build.
 on:
   push:
     branches: [main]
@@ -33,14 +35,14 @@ jobs:
     name: Android (unsigned APK)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/setup-android
       - name: The committed Android project is what the Tauri CLI writes (cargo xtask mobile generate android)
         run: cargo xtask mobile generated android
       - name: The unsigned APK (arm64), and its native libraries' alignment to 16 KB pages (Google Play's rule)
         if: ${{ !cancelled() }}
         run: cargo xtask mobile build android
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: ${{ !cancelled() }}
         with:
           name: Sidevoice-android-arm64-unsigned-apk
@@ -52,13 +54,13 @@ jobs:
     name: iOS (simulator app)
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Rust, as mobile/rust-toolchain.toml says (the toolchain and the four mobile targets)
         working-directory: mobile
         run: |
           rustup toolchain install
           rustc --version
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: |
             .
@@ -69,12 +71,12 @@ jobs:
       # The Tauri CLI renders the Xcode project with XcodeGen.
       - name: XcodeGen
         run: command -v xcodegen || brew install xcodegen
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
       - run: npm ci
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: target/web
           key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs', 'scripts/web-release.mjs') }}
@@ -84,7 +86,7 @@ jobs:
       # What the CLI wrote, to commit when a change of an input or of the CLI meant it should have been regenerated.
       - name: The project the CLI wrote
         if: ${{ failure() && steps.generated.outcome == 'failure' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: mobile-gen-apple
           path: mobile/gen/apple
@@ -93,7 +95,7 @@ jobs:
       - name: The app for the simulator, unsigned
         if: ${{ !cancelled() }}
         run: cargo xtask mobile build ios
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: ${{ !cancelled() }}
         with:
           name: Sidevoice-ios-simulator-app

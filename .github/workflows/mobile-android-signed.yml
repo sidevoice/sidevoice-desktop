@@ -6,6 +6,10 @@ name: mobile-android-signed
 #
 # The repository's Actions secrets (the keystore is the PKCS#12 file of the upload key, base64 encoded):
 #   ANDROID_UPLOAD_KEYSTORE_B64, ANDROID_UPLOAD_KEYSTORE_PASSWORD, ANDROID_UPLOAD_KEY_ALIAS
+#
+# Every external action here, and in the composite action it uses, is pinned by its full commit SHA (the version in a
+# comment): a moved tag would run new code in the job that holds the keystore, and no step-scoped secret stops code that
+# ran before it from changing what the signing step runs.
 on:
   workflow_dispatch:
 
@@ -30,7 +34,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/setup-android
       - name: The unsigned APK (arm64)
         run: cargo xtask mobile build android
@@ -43,7 +47,7 @@ jobs:
           ANDROID_UPLOAD_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_PASSWORD }}
           ANDROID_UPLOAD_KEY_ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS }}
         run: cargo xtask mobile sign android
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: Sidevoice-android-arm64-signed-apk
           path: dist/Sidevoice-android-arm64.apk
