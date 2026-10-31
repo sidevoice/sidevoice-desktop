@@ -5,8 +5,6 @@
   "windows": ["room-*"],
   "permissions": [
     "allow-bridge-state",
-    "allow-bridge-level",
-    "allow-bridge-playback",
     "allow-debug-log",
     "log:allow-log",
     "sidevoice-app-tauri:allow-engine-capabilities",
@@ -37,6 +35,11 @@
     "sidevoice-app-tauri:allow-voice-end-input",
     "sidevoice-app-tauri:allow-voice-audio-devices",
     "sidevoice-app-tauri:allow-voice-set-audio-devices",
+    "sidevoice-app-tauri:allow-microphone",
+    "sidevoice-app-tauri:allow-bridge-level",
+    "sidevoice-app-tauri:allow-bridge-playback",
+    "sidevoice-app-tauri:allow-pairings-read",
+    "sidevoice-app-tauri:allow-pairings-write",
     "allow-local-host-state",
     "allow-local-host-pairing",
     "allow-local-host-action",
@@ -44,15 +47,12 @@
     "allow-local-host-install",
     "allow-local-host-install-progress",
     "allow-local-host-install-cancel",
-    "allow-data-pairings-read",
-    "allow-data-pairings-write",
     "allow-data-delete-all",
     "allow-data-uninstall",
     "allow-data-reset-report",
     "allow-mute-shortcut",
     "allow-call-controls-settings",
     "allow-updater",
-    "allow-microphone",
     "allow-debug-options"
   ]
 }

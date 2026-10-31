@@ -9,7 +9,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager, Webview};
 
 use crate::platform::reset_handoff::{self, Handoff};
-use crate::platform::{account, app_data, application, connector_service, credentials, uninstall};
+use crate::platform::{account, app_data, application, connector_service, uninstall};
 use crate::AppState;
 
 #[derive(Default)]
@@ -118,16 +118,18 @@ fn pairings_file(app: &AppHandle) -> Result<PathBuf, Value> {
 mod pairings;
 use pairings::{read_pairings, write_pairings};
 
-#[tauri::command]
-pub fn data_pairings_read(app: AppHandle, webview: Webview) -> Answer {
-    caller(&app, &webview)?;
-    read_pairings(&pairings_file(&app)?)
-}
+/// The pairings the room page keeps, in this app's private file (the shared plugin's `pairings_read` and `pairings_write`
+/// ask for them): the held-directory storage of `pairings`.
+pub(crate) struct Pairings(pub(crate) AppHandle);
 
-#[tauri::command]
-pub fn data_pairings_write(app: AppHandle, webview: Webview, value: Value) -> Answer {
-    caller(&app, &webview)?;
-    write_pairings(&pairings_file(&app)?, &value)
+impl sidevoice_app_tauri::PairingStore for Pairings {
+    fn read(&self) -> Answer {
+        read_pairings(&pairings_file(&self.0)?)
+    }
+
+    fn write(&self, value: &Value) -> Answer {
+        write_pairings(&pairings_file(&self.0)?, value)
+    }
 }
 
 #[tauri::command]
@@ -262,7 +264,7 @@ fn begin_reset(app: &AppHandle, uninstall: bool) -> Answer {
     let program = application::installed_program().ok_or_else(|| refused("reset.helper-failed"))?;
     let (mut failed, agents, service_outcome) = reset_before_exit()?;
     // The provider keys, on every host that runs the transaction, journalled as the last step before exit.
-    if credentials::clear_all().is_err() {
+    if crate::app_hooks::keychain().clear_all().is_err() {
         failed.push(json!({"step": "keychain", "key": "reset.keychain-failed"}));
     }
     let journal = control_dir().ok_or_else(|| refused("reset.helper-failed"))?.join(JOURNAL);

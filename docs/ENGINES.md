@@ -60,7 +60,7 @@ catalogues: `local` first, then each provider), in the shape `/engine` gives the
   app; the page reads it as the model's `lastUsedAt` in `host.engine.catalogs()` (milliseconds since the Unix epoch,
   absent while the engine does not know), to show it and to find models not used for a while.
 - **Remote models** need their provider's key, which the app keeps in the OS credential store
-  (`desktop/src/platform/credentials.rs`, service `ai.sidevoice.desktop.providers`): macOS Keychain,
+  (`app-core/src/platform/credentials.rs`, service `ai.sidevoice.desktop.providers`, which the app passes in): macOS Keychain,
   Windows Credential Manager, or Linux Secret Service. See [Credentials](CREDENTIALS.md) for availability and limits. The engine asks the app for it each time it needs it
   (`NativeHost::with_credentials`); the page sets and clears it (`host.engine.setCredential`) and never reads it back.
   A key the page tries before keeping it (`host.engine.testCredential`) is listed by an engine made for that trial

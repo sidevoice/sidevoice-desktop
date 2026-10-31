@@ -50,3 +50,8 @@ card's window none, no other window any).
 | `voice_end_input` | `sidevoice-app-tauri:allow-voice-end-input` | room | room page | `page`, `key` | the closed `turn`, as any turn | no |
 | `voice_audio_devices` | `sidevoice-app-tauri:allow-voice-audio-devices` | room | room page | `page` | from now on, `devices` when they change | no |
 | `voice_set_audio_devices` | `sidevoice-app-tauri:allow-voice-set-audio-devices` | room | room page | `page`, `choice` | `devices`, when the choice changes them | no |
+| `microphone` | `sidevoice-app-tauri:allow-microphone` | room | room page | `action` (`state`, `request`, `open-settings`) | nothing (the system's answer, or its privacy page opened) | no |
+| `bridge_level` | `sidevoice-app-tauri:allow-bridge-level` | room | room page | `level` | nothing (the app's `CallObserver` is told the microphone's level) | no |
+| `bridge_playback` | `sidevoice-app-tauri:allow-bridge-playback` | room | room page | `level`, `threadId?` | nothing (the app's `CallObserver` is told the voice's output level and whose reply it is) | no |
+| `pairings_read` | `sidevoice-app-tauri:allow-pairings-read` | room | room page | none | nothing (the pairings, from the app's `PairingStore`) | no |
+| `pairings_write` | `sidevoice-app-tauri:allow-pairings-write` | room | room page | `value` | nothing (the pairings, kept by the app's `PairingStore`) | no |
