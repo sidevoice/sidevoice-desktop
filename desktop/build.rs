@@ -12,10 +12,11 @@ fn main() {
     // tauri-build adds none of its own.
     let windows = tauri_build::WindowsAttributes::new_without_app_manifest();
     // The app's own commands, declared so capabilities can grant them per window/origin:
-    // the room window `bridge_state`, `bridge_level` and `bridge_playback` (+ `debug_log`), the native engine, the
-    // voice call (`voice_*`, macOS) and the local host (`local_host_*`), the mute shortcut and the call controls settings (`mute_shortcut`,
-    // `call_controls_settings`), the app's updates (`updater`), the microphone permission (`microphone`) and the
-    // developer options (`debug_options`), the call controls card its own six.
+    // the room window `bridge_state`, `bridge_level` and `bridge_playback` (+ `debug_log`), the local host
+    // (`local_host_*`), the mute shortcut and the call controls settings (`mute_shortcut`, `call_controls_settings`), the
+    // app's updates (`updater`), the microphone permission (`microphone`) and the developer options (`debug_options`), the
+    // call controls card its own six. The voice call's and the engine's commands are the plugin's (sidevoice-app-tauri):
+    // its permissions are `sidevoice-app-tauri:allow-<command>`.
     tauri_build::try_build(tauri_build::Attributes::new().windows_attributes(windows).app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "bridge_state",
@@ -28,33 +29,6 @@ fn main() {
             "call_controls_resize",
             "call_controls_cursor",
             "debug_log",
-            "engine_capabilities",
-            "engine_installed",
-            "engine_install",
-            "engine_progress",
-            "engine_cancel",
-            "engine_uninstall",
-            "engine_memory",
-            "engine_catalogs",
-            "engine_set_credential",
-            "engine_has_credential",
-            "engine_test_credential",
-            "engine_refresh",
-            "voice_create_call",
-            "voice_route_input",
-            "voice_dispose_call",
-            "voice_ready",
-            "voice_update",
-            "voice_preload",
-            "voice_start",
-            "voice_stop",
-            "voice_say",
-            "voice_cancel_say",
-            "voice_mute",
-            "voice_cancel_input",
-            "voice_end_input",
-            "voice_audio_devices",
-            "voice_set_audio_devices",
             "local_host_state",
             "local_host_pairing",
             "local_host_action",
