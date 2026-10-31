@@ -9,17 +9,17 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 | Where | What |
 |---|---|
 | `bridge/desktop-bridge.js` | Injected by the app into every page of the room window, before the page's own scripts. Bound to the app's own origin (the bundled interface). |
-| `src-tauri/core/src/bridge.rs` | The contract on the Rust side: `CallSnapshot`, `Command`, and how the tray renders a snapshot. Unit-tested. |
-| `src-tauri/src/lib.rs` | Wiring: the `bridge_state` command, `send(Command)`; `capabilities/room.json`. The mute shortcut, behind `muteShortcut`, and the one writer of the app's settings (below). |
-| `src-tauri/src/engine_ipc.rs` | The engine's commands, behind `engine` (below): its catalogues, provider keys and models on disk. |
-| `src-tauri/src/voice.rs`, `src-tauri/src/platform/credentials.rs`, `src-tauri/core/src/voice.rs` | The voice call the app runs, behind `voice` (below), the keychain the engine reads provider keys from, and the models it picks from the catalogues (unit-tested). |
-| `src-tauri/src/local_host.rs`, `src-tauri/local-host/` | This computer's own core, behind `localHost` (below; docs/LOCAL_HOST.md). |
-| `src-tauri/src/tray.rs` | The menu-bar icon and its menu. |
+| `desktop/core/src/bridge.rs` | The contract on the Rust side: `CallSnapshot`, `Command`, and how the tray renders a snapshot. Unit-tested. |
+| `desktop/src/lib.rs` | Wiring: the `bridge_state` command, `send(Command)`; `capabilities/room.json`. The mute shortcut, behind `muteShortcut`, and the one writer of the app's settings (below). |
+| `desktop/src/engine_ipc.rs` | The engine's commands, behind `engine` (below): its catalogues, provider keys and models on disk. |
+| `desktop/src/voice.rs`, `desktop/src/platform/credentials.rs`, `desktop/core/src/voice.rs` | The voice call the app runs, behind `voice` (below), the keychain the engine reads provider keys from, and the models it picks from the catalogues (unit-tested). |
+| `desktop/src/local_host.rs`, `desktop/local-host/` | This computer's own core, behind `localHost` (below; docs/LOCAL_HOST.md). |
+| `desktop/src/tray.rs` | The menu-bar icon and its menu. |
 | `bridge/call-controls-bridge.js` | Injected into the call controls card's window (below). |
-| `src-tauri/src/call_controls.rs`, `src-tauri/core/src/call_controls.rs` | The card's window, and when it shows, where it sits and how it moves (unit-tested). |
-| `src-tauri/src/updater.rs`, `src-tauri/core/src/updater.rs`, `src-tauri/core/src/build_info.rs` | The app's updates, behind `updater`, and what this build is, `build` (below). |
-| `src-tauri/src/debug_options.rs`, `src-tauri/core/src/debug_options.rs` | The developer options, behind `debug` in a nightly or a dev build (below). |
-| `src-tauri/src/platform/host.rs`, `src-tauri/core/src/computer_name.rs` | This computer's name, `computerName` (below; the Linux file's parsing unit-tested). |
+| `desktop/src/call_controls.rs`, `desktop/core/src/call_controls.rs` | The card's window, and when it shows, where it sits and how it moves (unit-tested). |
+| `desktop/src/updater.rs`, `desktop/core/src/updater.rs`, `desktop/core/src/build_info.rs` | The app's updates, behind `updater`, and what this build is, `build` (below). |
+| `desktop/src/debug_options.rs`, `desktop/core/src/debug_options.rs` | The developer options, behind `debug` in a nightly or a dev build (below). |
+| `desktop/src/platform/host.rs`, `desktop/core/src/computer_name.rs` | This computer's name, `computerName` (below; the Linux file's parsing unit-tested). |
 
 ## What the bridge reads and calls in the web UI
 
@@ -256,7 +256,7 @@ the Computer Name (System Settings → General → Sharing, «Mac de Ana»; Syst
 `SCDynamicStoreCopyComputerName`), not the `.local` hostname; on Windows the device name (the DNS host name, as typed);
 on Linux the pretty hostname (`PRETTY_HOSTNAME` in `/etc/machine-info`, `hostnamectl set-hostname --pretty`), else
 the hostname. A non-empty string, trimmed; absent when the system has none, and the page then names the device
-itself. Read each time the room window opens (`src-tauri/src/platform/host.rs`, core `computer_name`).
+itself. Read each time the room window opens (`desktop/src/platform/host.rs`, core `computer_name`).
 
 ## The local host
 
@@ -277,7 +277,7 @@ docs/LOCAL_HOST.md.
 | `install(onProgress?)` | «Prepare this computer»: installs Sidevoice from the npm registry, without Node (docs/LOCAL_HOST.md → Install). Answers at once a promise of the state after it — once the app is paired with the new core, `reachable` — that carries `job`, this call's id (sidevoice-web's `LocalHostInstallOperation`). `onProgress({step, done, total, cancellable})` about twice a second while it runs, when that changes (below). One at a time: another call meanwhile rejects `install.busy` |
 | `cancel(job)` | stops install `job` while that is honoured — `download`, `verification` and the unpacking in `staging`, never once the package's installer runs — and resolves whether it was (`true`: the install rejects `install.cancelled`); `false` too for a job not under way |
 
-Actions reject `{key, message}`. Commands behind it (`src-tauri/src/local_host.rs`): `local_host_state`,
+Actions reject `{key, message}`. Commands behind it (`desktop/src/local_host.rs`): `local_host_state`,
 `local_host_pairing`, `local_host_action {action}` (`start`, `stop`, `restart`, `service-install`,
 `service-uninstall`, `start-at-login-on`, `start-at-login-off`, `reconnect`, `reveal-log`), `local_host_pairing_code`,
 `local_host_install {job}`, `local_host_install_progress {job}` (the progress, or
@@ -460,7 +460,7 @@ models is the voice call's (below), never the page's. `window.__sidevoiceDesktop
   rejects with `install_cancel_failed`), and a transport error that follows it (the connection it closed) is still
   `install_cancelled`, never `download_failed`. There is no overall download timeout: a slow line is not a failure,
   and the cancel is how a person stops one.
-- Commands behind it (`src-tauri/src/engine_ipc.rs`): `engine_catalogs`, `engine_set_credential {provider, key}`,
+- Commands behind it (`desktop/src/engine_ipc.rs`): `engine_catalogs`, `engine_set_credential {provider, key}`,
   `engine_has_credential {provider}`, `engine_test_credential {provider, key}` (the reason with its `detail?`, or
   `null`), `engine_refresh {provider}`, `engine_capabilities`, `engine_installed`,
   `engine_install {model, build, engine, job}` (`build` and `engine` each a string or `null`) with
@@ -484,8 +484,8 @@ client that does not know the key:
 
 The page renders by `key` and falls back to `message`. `host.engine`'s catalogue, key and install calls also carry
 `code`, the code sidevoice-web's `ModelCatalogs` reads (`failureCode`): the refusal's own `code` (the engine's, below)
-when it has one, else its `key` with dashes (`model-needs-memory`, `install-cancelled`). The engine's keys are made in `src-tauri/engine/src/error.rs`,
-the voice call's in `src-tauri/src/voice.rs` and core `voice.rs`; a new one is added there and here. What
+when it has one, else its `key` with dashes (`model-needs-memory`, `install-cancelled`). The engine's keys are made in `desktop/engine/src/error.rs`,
+the voice call's in `desktop/src/voice.rs` and core `voice.rs`; a new one is added there and here. What
 sidevoice-engine itself fails with is one of these keys, with the engine's own code beside it as `code`
 (`digest-mismatch`, `model-load-failed`…).
 
@@ -532,9 +532,9 @@ sidevoice-engine itself fails with is one of these keys, with the engine's own c
 
 The app runs the voice host itself: sidevoice-voice (`sidevoice/sidevoice-voice`) with the device's own
 microphone and speaker (cpal) and Sonora's echo canceller (pure Rust) between them, so the shared output cancels its echo
-(`src-tauri/src/voice.rs`; sidevoice/sidevoice-core#89). sidevoice-voice names no model and depends on no engine:
+(`desktop/src/voice.rs`; sidevoice/sidevoice-core#89). sidevoice-voice names no model and depends on no engine:
 the app fills its interfaces (voice activity, transcriber, speaker, end of turn) with the engine's models
-(`src-tauri/src/voice/models.rs`). The room window's page is then never granted the microphone
+(`desktop/src/voice/models.rs`). The room window's page is then never granted the microphone
 (the room window's permission handler denies every request, `src/lib.rs`) and runs no model: it keeps the room. Each call knows nothing of the room: the page keeps one call per conversation, routes the shared microphone to one call, tags each call's events with its own destination, and has each call say what the room sends through a handle that tells how it went. Where the app does not run it, `host.voice` is absent and the page runs the call
 itself over `@sidevoice/voice` in the webview, the room window granting it the microphone: the page pinned now
 (`web.pin.json`) cannot load those modules until they are on npm, so on Windows and Linux there is no voice yet.
@@ -677,7 +677,7 @@ What is this app's own:
   The app mirrors a global user mute to all calls. Native output from every call is mixed once before
   the single AEC reference. Each call's playback level reflects only its own rendered samples; a device
   failure is sent to each affected call.
-- Keys: `host.engine.setCredential` writes the OS credential store (`src-tauri/src/platform/credentials.rs`), and the engine reads it
+- Keys: `host.engine.setCredential` writes the OS credential store (`desktop/src/platform/credentials.rs`), and the engine reads it
   when a provider is listed, or its model loaded or called. `host.engine.testCredential` writes nothing: its key goes
   only to a trial engine of its own.
 
@@ -701,7 +701,7 @@ interface MicrophonePermission {
   no audio input device is `"missing"`. A system that does not answer (below) rejects with `internal`; the bridge has
   no extra state string for it, and it is never a grant.
 - `request()`: macOS only has a prompt: `AVCaptureDevice.requestAccess(for: .audio)` asks the first time (with
-  `NSMicrophoneUsageDescription`, `src-tauri/packaging/macos/Info.plist`), afterwards it answers at once with the stored
+  `NSMicrophoneUsageDescription`, `desktop/packaging/macos/Info.plist`), afterwards it answers at once with the stored
   answer. On Windows and Linux it is `state()`: there is nothing to ask.
 - `onChange(listener)`: `listener()` whenever `state()` changes, so on a permission change and on a microphone plugged
   in or out; the page reads `state()` again. Polled every 2 s while anyone listens; returns `stop`.
@@ -711,11 +711,11 @@ interface MicrophonePermission {
   Opening it says nothing about access. The page detects it by presence.
 - A refusal rejects `{key, message}`: `bad_request` for a malformed call or another caller, `internal` when the system
   does not answer or Settings does not open.
-- Command behind it: `microphone {action}`, `action` `state`, `request` or `open-settings` (`src-tauri/src/microphone.rs`).
+- Command behind it: `microphone {action}`, `action` `state`, `request` or `open-settings` (`desktop/src/microphone.rs`).
   Granted to the room window (`capabilities/room.json`); it re-checks that the caller is the current room window on the
   app's own page.
 
-Per OS (`src-tauri/src/platform/microphone.rs`; the rule every OS shares is one function there: a denial beats a missing
+Per OS (`desktop/src/platform/microphone.rs`; the rule every OS shares is one function there: a denial beats a missing
 device, a missing device beats everything else, and a grant needs a readable device list):
 
 - **macOS:** `AVCaptureDevice.authorizationStatus(for: .audio)`: not determined → `"prompt"`, authorized → `"granted"`,
@@ -813,13 +813,13 @@ interface CallControlsBridge {
 
 Both commands are granted to the room window (`capabilities/room.json`) and re-check that the caller is the current
 room window on the app's own page (else `bad_request`). The app's settings (`settings.json`) have one writer
-(`change_settings`, `src-tauri/src/lib.rs`): every setter of the page changes only its own fields, under one lock, so
+(`change_settings`, `desktop/src/lib.rs`): every setter of the page changes only its own fields, under one lock, so
 none loses another's.
 
 ## The build
 
 `window.__sidevoiceDesktop.host.build` is what this build of the app is, decided when it was built (RELEASING.md →
-"Channels"; `src-tauri/build.rs`, core `build_info`), so the page can say it:
+"Channels"; `desktop/build.rs`, core `build_info`), so the page can say it:
 
 ```ts
 { channel: "release" | "nightly" | "dev"; version: string; commit?: string; date?: string }
@@ -921,7 +921,7 @@ interface UpdaterStatus {
 - Command behind it: `updater {action, mode?}`, `action` one of `settings`, `set-mode`, `status`, `check`,
   `download`, `cancel`, `restart`. Granted to the room window (`capabilities/room.json`); it re-checks that the caller is the
   current room window on the app's own page (else `bad_request`). The page is granted none of the plugin's own
-  commands. `src-tauri/src/updater.rs` drives tauri-plugin-updater (check, download with its progress, verify,
+  commands. `desktop/src/updater.rs` drives tauri-plugin-updater (check, download with its progress, verify,
   install); core `updater.rs` holds the status and the mode (unit-tested). CI's macOS job checks the
   probe app (a dev build) has `host.build.channel` `"dev"` and no `host.updater`.
 

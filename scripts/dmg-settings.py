@@ -1,9 +1,9 @@
-# dmgbuild settings for the Sidevoice .dmg: the window scripts/make-icons.mjs draws (src-tauri/packaging/macos/dmg/), with
+# dmgbuild settings for the Sidevoice .dmg: the window scripts/make-icons.mjs draws (desktop/packaging/macos/dmg/), with
 # the app and Applications where that drawing expects them. No Finder scripting: dmgbuild writes the
 # window's .DS_Store itself, so the image comes out the same on a headless CI runner.
 #
 #   dmgbuild -s scripts/dmg-settings.py -D app=<Sidevoice.app> -D background=<background.tiff> \
-#            -D layout=src-tauri/packaging/macos/dmg/layout.json -D icon=src-tauri/packaging/macos/icon.icns Sidevoice <out.dmg>
+#            -D layout=desktop/packaging/macos/dmg/layout.json -D icon=desktop/packaging/macos/icon.icns Sidevoice <out.dmg>
 import json
 import os.path
 

@@ -176,14 +176,14 @@ fn closing_an_older_call_keeps_the_newer_call_open() {
 
 // Exercise the shell's actual handoff protocol in the existing Windows/macOS fixture jobs,
 // without linking a webview. Tests remain colocated with the desktop platform interface.
-#[path = "../../src-tauri/src/platform/reset_handoff.rs"]
+#[path = "../../desktop/src/platform/reset_handoff.rs"]
 mod reset_handoff;
 
 // Exercise the actual shell pairing store without linking the native UI.
-#[path = "../../src-tauri/src/platform/pairing_storage.rs"]
+#[path = "../../desktop/src/platform/pairing_storage.rs"]
 mod pairing_storage;
 mod platform {
     pub(crate) use crate::pairing_storage;
 }
-#[path = "../../src-tauri/src/data/pairings.rs"]
+#[path = "../../desktop/src/data/pairings.rs"]
 mod pairings;

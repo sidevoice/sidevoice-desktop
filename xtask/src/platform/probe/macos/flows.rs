@@ -1,5 +1,5 @@
 //! The probe build and the native flows run on it (CI only, never shipped): the same app built with the `probe`
-//! feature (src-tauri/src/probe.rs), which adds the probe page and the switch that loads it into the room window. Each
+//! feature (desktop/src/probe.rs), which adds the probe page and the switch that loads it into the room window. Each
 //! flow starts that app with a page or script that drives it and checks what the app, the page and the stand-ins log
 //! (`SIDEVOICE_DEBUG=1` lines).
 
@@ -70,12 +70,12 @@ const LOCAL_HOST_FACTS: &[&str] = &[
 /// (`local-host-ci core`), pairing, the proxy, and what it refuses. A home of its own (/tmp/svhome), for the data
 /// directory (macOS: ~/Library/Application Support/Sidevoice) and the app's config.
 pub fn local_host() -> Result<()> {
-    let app_dir = repo().join("src-tauri");
+    let app_dir = repo().join("desktop");
     Cmd::new("cargo")
         .args(["build", "--release", "-p", "sidevoice-desktop-test-support", "--bin", "local-host-ci"])
         .dir(&app_dir)
         .run()?;
-    let tool = app_dir.join("target/release/local-host-ci");
+    let tool = repo().join("target/release/local-host-ci");
     let home = Path::new("/tmp/svhome");
     crate::util::fresh_dir(home)?;
     let logs = work("local-host")?;
@@ -232,9 +232,9 @@ pub fn probe() -> Result<()> {
 
 /// `probe exit`: quitting and restarting after a call (#121). The probe app runs the probe page, which ends with
 /// whisper-tiny's whisper.cpp build (Metal) loaded, then restarts as an installed update does
-/// (`SIDEVOICE_DEBUG_EXIT=restart`, src-tauri/src/probe.rs); the relaunched app runs the page again and quits as the
+/// (`SIDEVOICE_DEBUG_EXIT=restart`, desktop/src/probe.rs); the relaunched app runs the page again and quits as the
 /// tray's Quit does. Each process must release every model before `exit()`, then run the C++ static destructors to
-/// their end (the probe's handler that runs after them, src-tauri/src/probe.rs), and end with status 0 and no crash
+/// their end (the probe's handler that runs after them, desktop/src/probe.rs), and end with status 0 and no crash
 /// report.
 pub fn exit() -> Result<()> {
     let data = AppHome::new("exit")?;
@@ -302,7 +302,7 @@ fn crash_reports(dir: &Path) -> Vec<std::path::PathBuf> {
 }
 
 /// `probe voice-memory`: the host's calls on the engine's real models, the process's footprint and Metal allocation
-/// taken at each step (src-tauri/src/voice/host/memory.rs, the ignored test): idle, a call with the models loaded, the
+/// taken at each step (desktop/src/voice/host/memory.rs, the ignored test): idle, a call with the models loaded, the
 /// call ended and the idle keep run out, ten calls back to back, a call whose settings change twelve times. The table
 /// is printed; the run fails only on clear growth (the checks are `probe::memory`). Reads `SIDEVOICE_REAL_CALL_MODELS` as
 /// `voice-models` does.
@@ -311,7 +311,7 @@ pub fn voice_memory_log() -> Result<String> {
     let log = logs.join("voice-memory.log");
     let mut test = Cmd::new("cargo")
         .args(["test", "--release", "--lib", "voice::host::memory", "--", "--include-ignored", "--nocapture"])
-        .dir(repo().join("src-tauri"))
+        .dir(repo().join("desktop"))
         .spawn(&log)?;
     let status = test.ended(2400);
     let text = read(&log);

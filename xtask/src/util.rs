@@ -35,9 +35,9 @@ pub fn work(name: &str) -> Result<PathBuf> {
     Ok(dir)
 }
 
-/// The app's one version (src-tauri/tauri.conf.json; release-please moves it with the others).
+/// The app's one version (desktop/tauri.conf.json; release-please moves it with the others).
 pub fn version() -> Result<String> {
-    let path = repo().join("src-tauri/tauri.conf.json");
+    let path = repo().join("desktop/tauri.conf.json");
     let conf: serde_json::Value =
         serde_json::from_slice(&read_bytes(&path)?).map_err(|e| format!("{}: {e}", path.display()))?;
     conf["version"].as_str().map(str::to_owned).ok_or_else(|| format!("{} names no version", path.display()))
@@ -172,7 +172,7 @@ impl Cmd {
     /// `program`, run in the repository's root.
     ///
     /// `cargo xtask` runs under rustup's proxy, which sets `RUSTUP_TOOLCHAIN` to the toolchain that built the xtask:
-    /// passed on, it would override `src-tauri/rust-toolchain.toml` for every `cargo` below (the Tauri CLI's
+    /// passed on, it would override `desktop/rust-toolchain.toml` for every `cargo` below (the Tauri CLI's
     /// included). So it is dropped unless the person set it themselves (rustup says so in
     /// `RUSTUP_TOOLCHAIN_SOURCE=env`), and so is `CARGO`, the xtask's own cargo.
     pub fn new(program: impl AsRef<OsStr>) -> Cmd {

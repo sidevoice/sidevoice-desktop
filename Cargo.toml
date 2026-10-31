@@ -1,0 +1,14 @@
+# The Rust workspace of the app: the desktop app (desktop/) with the crates it is made of, and the local host's test
+# fixtures (test-support/). xtask/ is not a member: it is a package and workspace of its own, so it builds with no
+# webview, native engine or C toolchain. Cargo reads desktop/.cargo/config.toml and desktop/rust-toolchain.toml only
+# from desktop/ (`cargo xtask` runs cargo there).
+[workspace]
+resolver = "2"
+members = ["desktop", "desktop/core", "desktop/engine", "desktop/local-host", "test-support"]
+
+# Profiles are read from the workspace root only.
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

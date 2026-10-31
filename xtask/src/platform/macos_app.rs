@@ -16,7 +16,7 @@ pub const FAKE_NODE_PORT: &str = "8768";
 
 /// The bundle every `release` command works on, as `tauri build --target aarch64-apple-darwin` leaves it.
 pub fn app() -> PathBuf {
-    repo().join("src-tauri/target").join(release_target().triple).join("release/bundle/macos/Sidevoice.app")
+    repo().join("target").join(release_target().triple).join("release/bundle/macos/Sidevoice.app")
 }
 
 /// The app's binary in [`app`].
@@ -94,7 +94,7 @@ pub fn unsigned(cmd: Cmd) -> Cmd {
     SIGNING_ENV.iter().fold(cmd, |cmd, name| cmd.env_remove(name))
 }
 
-/// What only the probe build carries (src-tauri/src/probe.rs): never in a release app.
+/// What only the probe build carries (desktop/src/probe.rs): never in a release app.
 pub const PROBE_ONLY: &[&str] = &[
     "SIDEVOICE_DEBUG_PAGE",
     "probe-engine",

@@ -1,7 +1,7 @@
 # Releasing
 
-One version for the whole app, tagged `vX.Y.Z`. It lives in `src-tauri/tauri.conf.json`, `package.json`,
-`package-lock.json`, the three `Cargo.toml` and `src-tauri/Cargo.lock`; release-please moves them together
+One version for the whole app, tagged `vX.Y.Z`. It lives in `desktop/tauri.conf.json`, `package.json`,
+`package-lock.json`, the three `Cargo.toml` and `Cargo.lock`; release-please moves them together
 (`release-please-config.json`). Never edit them by hand.
 
 ## What each act means
@@ -74,7 +74,7 @@ writing its own would evict `main`'s and leave the next nightly to build from co
 
 What a build is, decided when it is built: `--channel` of `cargo xtask release app` and `bundle`, which the workflow
 sets from the run (`changes.channel`) and xtask hands to the app's build script (`SIDEVOICE_BUILD_CHANNEL`, with
-`SIDEVOICE_BUILD_COMMIT` and `SIDEVOICE_BUILD_DATE`; `src-tauri/build.rs` refuses anything else). The app says it to
+`SIDEVOICE_BUILD_COMMIT` and `SIDEVOICE_BUILD_DATE`; `desktop/build.rs` refuses anything else). The app says it to
 the page as `host.build` (docs/BRIDGE.md → "The build").
 
 - `release`: a run called with a release's tag. Has the updater (`host.updater`, its checks) on the releases' feed
@@ -138,7 +138,7 @@ Build artifacts on Actions runs are kept 7 days, for debugging only. Download fr
 
 Each channel updates itself from its own feed (docs/BRIDGE.md → "The updater"), read at launch and then every hour, a
 nightly's every 10 minutes, and only to a higher version than its own. The app chooses the feed and how often it reads
-it by the channel it was built for (`src-tauri/core/src/updater.rs`, `feed` and `check_every`), so a build of one
+it by the channel it was built for (`desktop/core/src/updater.rs`, `feed` and `check_every`), so a build of one
 channel is never offered the other's:
 
 - A release reads the releases' feed,
@@ -155,7 +155,7 @@ channel is never offered the other's:
   first.
 
 The app installs only what is signed with the updater's key, checked against the public key in
-`src-tauri/tauri.conf.json` (`plugins.updater.pubkey`, minisign key id `EA1BE9B3A4CF715A`). The nightly's assets are
+`desktop/tauri.conf.json` (`plugins.updater.pubkey`, minisign key id `EA1BE9B3A4CF715A`). The nightly's assets are
 replaced one by one, so a check while that happens may miss one or pair one nightly's `latest.json` with another's
 update, whose signature then does not match: nothing is installed, the check or the download fails
 (`update-check-failed`, `update-download-failed`), and a later check finds them whole.
@@ -190,7 +190,7 @@ steps are skipped, and every secret those steps name resolves to nothing unless 
 from a fork never has the repository's secrets.)
 
 - The app: Tauri's bundler imports `APPLE_CERTIFICATE` into a keychain of its own, signs every binary with
-  `APPLE_SIGNING_IDENTITY`, the hardened runtime and `src-tauri/packaging/macos/Entitlements.plist` (the microphone; the keychain
+  `APPLE_SIGNING_IDENTITY`, the hardened runtime and `desktop/packaging/macos/Entitlements.plist` (the microphone; the keychain
   items the app keeps need no entitlement outside the sandbox), notarizes it with the App Store Connect API key
   (`APPLE_API_KEY`, `APPLE_API_ISSUER`, and `APPLE_API_KEY_P8` written to a file only the job can read,
   `APPLE_API_KEY_PATH`) and staples the ticket.

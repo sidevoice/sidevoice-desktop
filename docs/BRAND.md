@@ -13,12 +13,12 @@ dark interfaces, and the one-ink variant "Tono" (the fourth bar at 45 % of the i
 
 | Thing | Drawn from | Where |
 |---|---|---|
-| macOS app icon, every `.icns` entry (16 → 1024, 1x and 2x) | `logo/tile/sidevoice-tile.svg`; bare `logo/mark/sidevoice-mark.svg` at 16 px @1x | `src-tauri/packaging/macos/icon.icns` |
-| Windows app icon (16, 20, 24, 32, 40, 48, 64, 256) | the tile; the bare mark (16 px box) at 16 and 20 px | `src-tauri/packaging/windows/icon.ico` |
-| Linux icons (32, 64, 128, 256, 512) | the tile | `src-tauri/packaging/linux/icons/*.png` |
-| macOS menu bar: idle, live, muted | `logo/mark/sidevoice-mark-black.svg` (Tono) | `src-tauri/packaging/shared/tray/{idle,live,muted}.png` |
-| Windows / Linux tray: idle, live, muted, for light and dark bars | `sidevoice-mark.svg`, `…-on-dark.svg`, and Tono in their inks | `src-tauri/packaging/shared/tray/{light,dark}-*.png` |
-| `.dmg` window background (1x, 2x) | `logo/lockup/sidevoice-lockup.svg` | `src-tauri/packaging/macos/dmg/`, laid out by `scripts/dmg-settings.py` |
+| macOS app icon, every `.icns` entry (16 → 1024, 1x and 2x) | `logo/tile/sidevoice-tile.svg`; bare `logo/mark/sidevoice-mark.svg` at 16 px @1x | `desktop/packaging/macos/icon.icns` |
+| Windows app icon (16, 20, 24, 32, 40, 48, 64, 256) | the tile; the bare mark (16 px box) at 16 and 20 px | `desktop/packaging/windows/icon.ico` |
+| Linux icons (32, 64, 128, 256, 512) | the tile | `desktop/packaging/linux/icons/*.png` |
+| macOS menu bar: idle, live, muted | `logo/mark/sidevoice-mark-black.svg` (Tono) | `desktop/packaging/shared/tray/{idle,live,muted}.png` |
+| Windows / Linux tray: idle, live, muted, for light and dark bars | `sidevoice-mark.svg`, `…-on-dark.svg`, and Tono in their inks | `desktop/packaging/shared/tray/{light,dark}-*.png` |
+| `.dmg` window background (1x, 2x) | `logo/lockup/sidevoice-lockup.svg` | `desktop/packaging/macos/dmg/`, laid out by `scripts/dmg-settings.py` |
 | `.dmg` volume icon | the `.icns` above | CI |
 
 The room window (pairing, calls, first open) is the web interface, bundled from sidevoice-web
@@ -106,7 +106,7 @@ The room window (pairing, calls, first open) is the web interface, bundled from 
 
 ## Tray platform boundary
 
-`src-tauri/src/platform/tray.rs` selects icon bytes and their template flag together. macOS uses the existing
+`desktop/src/platform/tray.rs` selects icon bytes and their template flag together. macOS uses the existing
 system-tinted templates. Windows reads `SystemUsesLightTheme` through `winreg` on each icon selection; a missing
 setting falls back to dark. Linux retains the dark-panel artwork: panel colours have no universal query.
 

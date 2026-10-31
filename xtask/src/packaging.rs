@@ -47,16 +47,17 @@ pub fn files(dir: &str, output: &str) -> Result<()> {
 }
 
 /// `packaging compare REF`: compare the pre-split config and every moved asset with this checkout. Only resource
-/// paths and fields ignored by the selected OS are normalized. Channel overrides are applied last, like the CLI.
+/// paths and fields ignored by the selected OS are normalized. Channel overrides are applied last, like the CLI. `REF`
+/// predates `desktop/`: its app lives in `src-tauri/`.
 pub fn compare(before: &str) -> Result<()> {
     let git = |args: &[&str]| Cmd::new("git").args(args).stdout();
     let original = git(&["show", &format!("{before}:src-tauri/tauri.conf.json")])?;
     let original = json(original.as_bytes())?;
-    let base = json(&read_bytes(&repo().join("src-tauri/tauri.conf.json"))?)?;
+    let base = json(&read_bytes(&repo().join("desktop/tauri.conf.json"))?)?;
     for (os, targets) in [("macos", vec!["app", "dmg"]), ("windows", vec!["nsis"]), ("linux", vec!["deb", "appimage"])]
     {
         let mut current = base.clone();
-        json_patch::merge(&mut current, &json(&read_bytes(&repo().join(format!("src-tauri/tauri.{os}.conf.json")))?)?);
+        json_patch::merge(&mut current, &json(&read_bytes(&repo().join(format!("desktop/tauri.{os}.conf.json")))?)?);
         let mut previous = original.clone();
         // Tauri filters the old combined list to the formats supported on the selected host.
         let supported: Vec<Value> = previous["bundle"]["targets"]
@@ -104,7 +105,7 @@ pub fn compare(before: &str) -> Result<()> {
     ])?;
     let mut count = 0;
     for old in files.lines() {
-        let new = format!("src-tauri/{}", moved(old.strip_prefix("src-tauri/").unwrap()));
+        let new = format!("desktop/{}", moved(old.strip_prefix("src-tauri/").unwrap()));
         let old_hash = git(&["rev-parse", &format!("{before}:{old}")])?;
         let new_hash = git(&["hash-object", &new])?;
         ensure(old_hash == new_hash, format!("asset bytes changed: {old} -> {new}"))?;

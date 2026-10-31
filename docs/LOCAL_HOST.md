@@ -11,8 +11,8 @@ package, without Node («Prepare this computer»; Install, below); either way th
 
 | Where | What |
 |---|---|
-| `src-tauri/local-host/` | The `sidevoice-local-host` crate: everything below, blocking IO, no Tauri, so it is tested anywhere Unix. |
-| `src-tauri/src/local_host.rs` | Starts it with the app's paths at launch, stops it at quit, answers the room page's `local_host_*` commands. |
+| `desktop/local-host/` | The `sidevoice-local-host` crate: everything below, blocking IO, no Tauri, so it is tested anywhere Unix. |
+| `desktop/src/local_host.rs` | Starts it with the app's paths at launch, stops it at quit, answers the room page's `local_host_*` commands. |
 | `bridge/desktop-bridge.js` | `window.__sidevoiceDesktop.host.localHost` (docs/BRIDGE.md). |
 
 ## Where things are
@@ -175,7 +175,7 @@ the state after it, as every action; anything but a boolean is refused (`bad_req
 
 **Depends on the connector's `service login on|off --json`** (in progress in sidevoice-connector, `service/mod.rs`):
 the same reply shape as the other `service … --json` verbs (`{ok: true, state, service, …}`, or `{ok: false, error:
-{key, params, message}}`). The verb is `LOGIN_VERB` in `src-tauri/local-host/src/host.rs`, the one place it is
+{key, params, message}}`). The verb is `LOGIN_VERB` in `desktop/local-host/src/host.rs`, the one place it is
 written. A connector that does not know it answers `--json` with `connector.usage`, and the app refuses the call with
 `service.login-unsupported`, at once; an older connector that answers no JSON at all is `cli.failed`.
 
@@ -187,7 +187,7 @@ report `start_at_login` leaves `installed` absent, and the page falls back to wh
 
 «Prepare this computer» (`install(onProgress)`, `cancel(job)`; docs/BRIDGE.md → The local host) does what
 `npx sidevoice@latest install` does, without Node: it fetches the npm package itself and runs the installer inside it
-(`src-tauri/local-host/src/{npm,tarball,install}.rs`; the steps in `host.rs`). On every OS; one install at a
+(`desktop/local-host/src/{npm,tarball,install}.rs`; the steps in `host.rs`). On every OS; one install at a
 time (`install.busy`), and while it runs the state is `installing`.
 
 | Step | What | Cancellable |
@@ -251,7 +251,7 @@ page's pairing for the local host is
   "urls": ["http://127.0.0.1:<port>"], "host": "…", "local": true }
 ```
 
-Each request is checked against design §4.1's table (`src-tauri/local-host/src/proxy.rs`):
+Each request is checked against design §4.1's table (`desktop/local-host/src/proxy.rs`):
 
 | Request | Rule |
 |---|---|
