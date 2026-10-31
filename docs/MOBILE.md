@@ -71,8 +71,26 @@ TAURI_APP_PATH=$PWD npx tauri ios build --target aarch64-sim --no-sign --ci
 An Android build without a signing key is an unsigned APK; a debug build (`--debug`) is signed with the debug key and
 installs as it is.
 
+## CI
+
+`.github/workflows/mobile.yml` runs on every pull request (and on a push to `main`), on its own, so the desktop app's
+`build.yml` neither waits for it nor is held up by it. No job signs anything or sees a secret.
+
+- **Android** (Ubuntu): `cargo xtask mobile generated android`, then `cargo xtask mobile build android`, the unsigned
+  release APK for arm64, as the artifact `Sidevoice-android-arm64-unsigned-apk`. The build ends with the 16 KB check Google
+  Play makes (`cargo xtask mobile check-16kb [APK]`): the APK's uncompressed libraries start on 16 KB boundaries
+  (`zipalign -c -P 16`) and every loadable segment of every library is aligned to 16 KB (the ELF program headers); it
+  fails on any other and when there is no library. The job's log lists each library with its alignment.
+- **iOS** (macOS, XcodeGen): `cargo xtask mobile generated ios`, then `cargo xtask mobile build ios`, the app for the
+  simulator, unsigned, as the artifact `Sidevoice-ios-simulator-app`. When the committed project is not what the CLI
+  wrote, the job uploads what it wrote (`mobile-gen-apple`) to commit as `mobile/gen/apple`.
+- **`generated`** is the regeneration diff: it runs `generate` and fails on any difference in `mobile/gen/<project>`.
+- Every external action is pinned by its full commit SHA, the version in a comment, so a moved tag cannot run new code
+  beside the build. (The desktop workflows still use tags.)
+- The Rust and Gradle caches are written by a push to `main` only and their keys start with `mobile`. The Android SDK
+  platform and NDK versions are pinned in the workflow's `env`.
+
 ## Not here yet
 
 The bridge (`__sidevoiceHost`: voice, engine, microphone, pairings), the microphone permission, `UIBackgroundModes`
-(audio), the privacy manifest and export compliance, the Android foreground service, and the CI and signing of both
-apps.
+(audio), the privacy manifest and export compliance, the Android foreground service, and the signing of both apps.

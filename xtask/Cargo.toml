@@ -33,6 +33,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "process", "io-util", "t
 # Ctrl+C on every host, plus SIGTERM/SIGHUP on Unix CI runners.
 ctrlc = { version = "3.5", features = ["termination"] }
 getrandom = "0.3"
+# The Android APK, read for its native libraries' alignment (mobile/check.rs).
+zip = { version = "9.1.3", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [target.'cfg(unix)'.dependencies]
 # Preserve the bundler's inherited private creation mask without own FFI.

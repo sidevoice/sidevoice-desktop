@@ -1,0 +1,146 @@
+name: mobile
+
+# The mobile app (mobile/, docs/MOBILE.md), built unsigned on every pull request: an Android APK and an iOS app for the
+# simulator, and the check that the committed native projects (mobile/gen) are what the Tauri CLI writes from the app's
+# inputs (generator model G-a). Nothing here signs or uploads anything and no job sees a secret: signing is its own
+# workflow, run by hand from main. It is a workflow of its own, so the desktop app's `build.yml` (its nightly and its
+# release) neither waits for it nor is held up by it.
+# Every step is a `cargo xtask mobile …` command (xtask/src/mobile.rs): this file sets up the machine and calls them.
+# The Rust and Gradle caches are written only by a push to main, and their keys start with `mobile` (RELEASING.md →
+# "CI caches"); a pull request only restores them.
+# Every external action is pinned by its full commit SHA, with its version in a comment: a tag can be moved, and a moved one
+# would run new code beside the build.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # The bundled web interface is a release of sidevoice-web (web.pin.json): its attestation is verified wherever it is
+  # fetched (`npm run web`, and every Tauri build through it), with gh and this run's token.
+  SIDEVOICE_WEB_ATTESTATION: require
+  GH_TOKEN: ${{ github.token }}
+  # The Android build tools the generated project asks for (mobile/gen/android: compileSdk) and the NDK (r28 or later
+  # links with 16 KB pages, which Google Play requires); pinned here, as the toolchain's version is in
+  # mobile/rust-toolchain.toml.
+  ANDROID_PLATFORM: android-37.0
+  ANDROID_NDK_VERSION: 29.0.14206865
+
+jobs:
+  android:
+    name: Android (unsigned APK)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Android SDK platform and NDK
+        run: |
+          sdkmanager=$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager
+          # `yes` ends when sdkmanager stops reading: its SIGPIPE is not a failure.
+          (set +o pipefail; yes | "$sdkmanager" --licenses > /dev/null)
+          "$sdkmanager" "platforms;$ANDROID_PLATFORM" "ndk;$ANDROID_NDK_VERSION"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
+      - name: Rust, as mobile/rust-toolchain.toml says (the toolchain and the four mobile targets)
+        working-directory: mobile
+        run: |
+          rustup toolchain install
+          rustc --version
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: |
+            .
+            xtask
+          prefix-key: v0-rust-mobile
+          shared-key: android
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4.4.3
+        with:
+          cache-read-only: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
+          gradle-home-cache-cleanup: true
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: target/web
+          key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs', 'scripts/web-release.mjs') }}
+      - name: The committed Android project is what the Tauri CLI writes (cargo xtask mobile generate android)
+        run: cargo xtask mobile generated android
+      - name: The unsigned APK (arm64), and its native libraries' alignment to 16 KB pages (Google Play's rule)
+        if: ${{ !cancelled() }}
+        run: cargo xtask mobile build android
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !cancelled() }}
+        with:
+          name: Sidevoice-android-arm64-unsigned-apk
+          path: dist/*.apk
+          retention-days: 7
+          if-no-files-found: error
+
+  ios:
+    name: iOS (simulator app)
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Rust, as mobile/rust-toolchain.toml says (the toolchain and the four mobile targets)
+        working-directory: mobile
+        run: |
+          rustup toolchain install
+          rustc --version
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: |
+            .
+            xtask
+          prefix-key: v0-rust-mobile
+          shared-key: ios
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      # The Tauri CLI renders the Xcode project with XcodeGen.
+      - name: XcodeGen
+        run: command -v xcodegen || brew install xcodegen
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: target/web
+          key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs', 'scripts/web-release.mjs') }}
+      - name: The committed iOS project is what the Tauri CLI writes (cargo xtask mobile generate ios)
+        id: generated
+        run: cargo xtask mobile generated ios
+      # What the CLI wrote, to commit when a change of an input or of the CLI meant it should have been regenerated.
+      - name: The project the CLI wrote
+        if: ${{ failure() && steps.generated.outcome == 'failure' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mobile-gen-apple
+          path: mobile/gen/apple
+          include-hidden-files: true
+          retention-days: 7
+      - name: The app for the simulator, unsigned
+        if: ${{ !cancelled() }}
+        run: cargo xtask mobile build ios
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !cancelled() }}
+        with:
+          name: Sidevoice-ios-simulator-app
+          path: dist/*.zip
+          retention-days: 7
+          if-no-files-found: error
