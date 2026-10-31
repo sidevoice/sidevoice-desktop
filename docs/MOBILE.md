@@ -19,10 +19,13 @@ of host is a crate, never a condition (AGENTS.md → "Host kind is a crate bound
   (`mobile/src/platform/origin.rs`). The node accepts both without configuration (docs/TARGETS.md). On Android the page
   is on http, so reaching a node's plain-http address on the local network is not mixed content.
 - **Plain http to the local network.** A node on the local network has an address no certificate can name, so the app
-  may speak plain http to it: on Android through a network security config (`mobile/plugin/android`, merged into the
-  app's manifest; the template's release build says `usesCleartextTraffic=false`, which a network security config
-  overrides), on iOS through `NSAllowsLocalNetworking` (`mobile/Info.ios.plist`), which allows local addresses and
-  leaves App Transport Security on for everything else.
+  may speak plain http to it. On Android that is a network security config in `mobile/plugin/android`, merged into the
+  app's manifest (the template's release build says `usesCleartextTraffic=false`, which a network security config
+  overrides). It permits cleartext for **every** destination: the config names hosts, not private address ranges, and a
+  pairing code carries whatever address the machine has. What keeps the app off public http is the page's own reach
+  policy (it refuses a public address over http) and that the only page is the bundled one. On iOS it is
+  `NSAllowsLocalNetworking` (`mobile/Info.ios.plist`), which allows local addresses and leaves App Transport Security on
+  for everything else.
 - **Permission texts.** `NSMicrophoneUsageDescription` and `NSLocalNetworkUsageDescription` are in
   `mobile/Info.ios.plist`, in English; their translations are a later, reviewed change.
 
@@ -41,11 +44,16 @@ is an input the CLI reads:
 | The Rust toolchain and the four mobile targets | `mobile/rust-toolchain.toml` |
 
 `cargo xtask mobile generate android|ios` makes a project anew (the old one removed) and derives the icons into it. The
-iOS project needs macOS and XcodeGen. Run it after changing an input or the Tauri CLI's version, and commit the result;
-CI regenerates the projects and fails on any difference.
+iOS project needs macOS and XcodeGen. Run it after changing an input or the Tauri CLI's version, and commit the result.
+An iOS build merges `Info.ios.plist` into
+`gen/apple/sidevoice-mobile_iOS/Info.plist`, so a local iOS build changes that one file; `generate` restores it.
 
-The template sets `compileSdk` and `targetSdk` (37 with the CLI pinned in package.json); they are the template's, not
-this repository's, and move with the CLI.
+`compileSdk` is the template's (37 with the CLI pinned in package.json) and moves with the CLI. **`targetSdk` is 36**, the
+plan's: the template writes 37 and the CLI has no setting for it, so `generate` writes 36 over that one line (and fails
+if the template stops having it). Android 17 (API 37) asks an app that targets it to be allowed the local network
+(`ACCESS_LOCAL_NETWORK`, a runtime permission) before it reaches a machine on it, and the app declares and requests
+nothing of the kind yet; moving `targetSdk` to 37 comes with that permission, in the manifest and as a request before the
+first connection to a paired machine.
 
 ## The call's service (Android)
 

@@ -11,7 +11,7 @@
 use std::fs;
 
 use crate::platform::host::npm;
-use crate::util::{repo, Cmd};
+use crate::util::{self, ensure, repo, write, Cmd};
 use crate::Result;
 
 /// A project of the mobile app: the Tauri CLI's name for it, and where it keeps it below mobile/.
@@ -40,6 +40,20 @@ fn tauri(args: &[&str]) -> Cmd {
         .env("TAURI_APP_PATH", repo().join("mobile"))
 }
 
+/// The Android `targetSdk` the app declares: 36, the plan's. The Tauri template writes its own (37 with the CLI package.json
+/// pins), and the CLI has no setting for it, so the generator writes this one over it. 37 asks apps to be allowed the
+/// local network (`ACCESS_LOCAL_NETWORK`) before they reach it, which the app does not yet request (docs/MOBILE.md).
+const ANDROID_TARGET_SDK: u32 = 36;
+
+/// The app module's Gradle script with the `targetSdk` line of the template set to [`ANDROID_TARGET_SDK`]. A template
+/// without exactly one such line is an error: the generator and the template must be looked at together.
+fn pin_target_sdk(gradle: &str) -> Result<String> {
+    let line = util::re(r"(?m)^(\s*)targetSdk = \d+$");
+    let found = line.find_iter(gradle).count();
+    ensure(found == 1, format!("the template's app/build.gradle.kts has {found} `targetSdk = N` lines, not one"))?;
+    Ok(line.replace(gradle, format!("${{1}}targetSdk = {ANDROID_TARGET_SDK}")).into_owned())
+}
+
 /// `mobile generate android|ios`.
 pub fn generate(name: &str) -> Result<()> {
     let project = project(name)?;
@@ -48,6 +62,11 @@ pub fn generate(name: &str) -> Result<()> {
         fs::remove_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
     tauri(&[project.cli, "init", "--ci", "--skip-targets-install"]).run()?;
+    if project.cli == "android" {
+        let gradle = dir.join("app/build.gradle.kts");
+        let text = fs::read_to_string(&gradle).map_err(|e| format!("{}: {e}", gradle.display()))?;
+        write(&gradle, pin_target_sdk(&text)?)?;
+    }
     // The icons: the CLI writes every size into the projects that exist, and a desktop set of its own into
     // mobile/icons/ (ignored by git, and nothing reads it).
     tauri(&["icon", "app-icon/app-icon.json"]).run()
@@ -63,5 +82,13 @@ mod tests {
         let ios = project("ios").unwrap();
         assert_eq!((ios.cli, ios.dir), ("ios", "gen/apple"));
         assert!(project("windows").err().unwrap().contains("android or ios"));
+    }
+
+    #[test]
+    fn the_target_sdk_line_of_the_template_is_replaced() {
+        let template = "android {\n    defaultConfig {\n        minSdk = 26\n        targetSdk = 37\n    }\n}\n";
+        assert_eq!(pin_target_sdk(template).unwrap(), template.replace("targetSdk = 37", "targetSdk = 36"));
+        assert!(pin_target_sdk("android {}").unwrap_err().contains("0 `targetSdk"));
+        assert!(pin_target_sdk("targetSdk = 1\ntargetSdk = 2\n").unwrap_err().contains("2 `targetSdk"));
     }
 }

@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The paired machine is reached over plain http on the local network (gate G1): the node's own address is a LAN
-     address, which no certificate can name. The app's pages load from the app, never from the network. -->
+<!-- The paired machine is reached over plain http on the local network (gate G1): its address is a LAN address, which no
+     certificate can name, and a pairing code carries whatever address the machine has. Android's network security config
+     says which host names may use cleartext, and cannot say "private ranges only", so this is for every destination;
+     what keeps the app off public http is the page's own reach policy (it refuses a public address over http) and that
+     the page is the app's own bundled one. The app's pages load from the app, never from the network. -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="true" />
 </network-security-config>
