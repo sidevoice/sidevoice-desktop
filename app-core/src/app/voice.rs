@@ -79,7 +79,7 @@ impl<A: LaneAudio> AppHost<A> {
     /// The acknowledged next-frame microphone route; `None` sends silence to all running lanes.
     pub async fn route_input(&self, page: PageGeneration, key: Option<String>) -> Result<(), Refusal> {
         self.current(page)?;
-        self.entered(self.inner.voice.route_input(key)).await
+        self.entered(self.inner.voice.route_input_in(page.0, key)).await
     }
 
     /// Stops the call, hands the page what it still had to tell, and releases its lane. The models it loaded stay for

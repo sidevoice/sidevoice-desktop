@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -83,6 +83,9 @@ pub struct VoiceState<A: LaneAudio = SharedNativeAudio> {
     route: tokio::sync::Mutex<Option<String>>,
     pub devices: NativeDevices,
     pub watching: AtomicBool,
+    /// The generation of the current page: the one place that counts them (the host's sinks read it too). A lane or a
+    /// route is made for a page only while it is the current one, checked under the lock that makes it.
+    pub page: Arc<AtomicU64>,
     /// How long an idle minute is: a minute.
     pub minute: Duration,
     /// The tasks keeping a stopped call's or a preload's models for their idle minutes.
@@ -162,6 +165,7 @@ impl<A: LaneAudio> VoiceState<A> {
             route: tokio::sync::Mutex::new(None),
             devices,
             watching: AtomicBool::new(false),
+            page: Arc::default(),
             // CI's memory run shortens the minute so that the models' release is waited for (`idle_minute`).
             minute: Self::idle_minute(),
             keeping: Mutex::new(Vec::new()),
@@ -169,21 +173,34 @@ impl<A: LaneAudio> VoiceState<A> {
         }
     }
 
+    /// Refuses what is for a page that is not the current one.
+    fn current(&self, page: u64) -> Result<(), Refusal> {
+        if self.page.load(Ordering::SeqCst) == page {
+            Ok(())
+        } else {
+            Err(refusal("page_stale", "That page has been replaced by a newer one."))
+        }
+    }
+
     pub async fn lane(&self, key: &str) -> Result<Arc<CallLane<A::Port>>, Refusal> {
         self.calls.lock().await.get(key).cloned().ok_or_else(|| refusal("bad_request", "Unknown voice call."))
     }
 
-    /// A lane for a page that has no generation (a host with one page for good).
+    /// A lane for the current page.
     pub async fn create_call(&self, key: String) -> Result<(), Refusal> {
-        self.create_call_in(key, 0).await
+        self.create_call_in(key, self.page.load(Ordering::SeqCst)).await
     }
 
-    /// A lane made by the page of generation `page`: `clear_older_than` lets go of it once a newer page exists.
+    /// A lane made by the page of generation `page`, if it is still the current one when the lane is inserted: the check
+    /// is under the lock the lane is inserted with, and `clear_older_than` (which comes after a page changed) takes the
+    /// same, so a lane of a page that has gone is neither made nor left behind. `clear_older_than` lets go of it once a
+    /// newer page exists.
     pub async fn create_call_in(&self, key: String, page: u64) -> Result<(), Refusal> {
         if !valid_key(&key) {
             return Err(refusal("bad_request", "Invalid voice call key."));
         }
         let mut calls = self.calls.lock().await;
+        self.current(page)?;
         if calls.contains_key(&key) {
             return Err(refusal("bad_request", "Voice call key already exists."));
         }
@@ -193,7 +210,14 @@ impl<A: LaneAudio> VoiceState<A> {
     }
 
     pub async fn route_input(&self, key: Option<String>) -> Result<(), Refusal> {
+        self.route_input_in(self.page.load(Ordering::SeqCst), key).await
+    }
+
+    /// The route, for the page of generation `page`, if it is still the current one once the route is held: an old page
+    /// that is late cannot silence the new one.
+    pub async fn route_input_in(&self, page: u64, key: Option<String>) -> Result<(), Refusal> {
         let mut route = self.route.lock().await;
+        self.current(page)?;
         let target = match key.as_deref() {
             Some(key) => Some(self.lane(key).await?),
             None => None,
@@ -450,6 +474,11 @@ impl<A: LaneAudio> VoiceState<A> {
                 calls.iter().filter(|(_, lane)| lane.page < page).map(|(key, _)| key.clone()).collect();
             keys.into_iter().filter_map(|key| calls.remove(&key).map(|lane| (key, lane))).collect()
         };
+        // What waits on these lanes hears first that they are over, whatever their calls are doing (one still loading its
+        // models may not answer a stop for as long as it loads), and nothing they say reaches the page any more.
+        for (_, lane) in &old {
+            lane.release();
+        }
         {
             let mut route = self.route.lock().await;
             if route.as_ref().is_some_and(|routed| old.iter().any(|(key, _)| key == routed)) {
@@ -459,7 +488,6 @@ impl<A: LaneAudio> VoiceState<A> {
         }
         for (_, lane) in old {
             lane.stop().await;
-            lane.release();
             self.retire(&lane).await;
         }
     }
@@ -472,9 +500,11 @@ impl<A: LaneAudio> VoiceState<A> {
             *route = None;
         }
         let old = std::mem::take(&mut *self.calls.lock().await);
+        for lane in old.values() {
+            lane.release();
+        }
         for lane in old.into_values() {
             lane.stop().await;
-            lane.release();
             self.retire(&lane).await;
         }
     }
@@ -517,8 +547,12 @@ impl<P> CallLane<P> {
             {
                 let mut lifecycle = self.lifecycle.lock().unwrap();
                 lifecycle.settle(Err("stopped".into()));
-                lifecycle.stopping += 1;
-                lifecycle.stopped.push_back(sender);
+                // A lane that was released has told its waiters it is over: this stop waits for nothing, since the idle state
+                // that would answer it may never come (a call still loading its models).
+                if !*self.released.lock().unwrap() {
+                    lifecycle.stopping += 1;
+                    lifecycle.stopped.push_back(sender);
+                }
             }
             call.stop();
             (answered, std::mem::take(&mut *self.telling.lock().unwrap()))

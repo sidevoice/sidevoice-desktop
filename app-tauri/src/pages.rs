@@ -18,9 +18,17 @@ type Registered = (PageGeneration, Channel<Value>);
 pub struct Pages(Arc<Mutex<Option<Registered>>>);
 
 impl Pages {
-    /// The page of generation `page` opened `channel`: it replaces the channel of any page before it, or its own.
-    pub(crate) fn register(&self, page: PageGeneration, channel: Channel<Value>) {
-        *self.0.lock().unwrap() = Some((page, channel));
+    /// A page opened `channel`. Which page it is, `current` says, read once the registry is held, so that the reading and
+    /// the registering are one step: a registration that is slow cannot have read a generation that went out of date
+    /// between the two. The channel replaces the page's own earlier one, or an older page's, and never a newer page's: a
+    /// late one cannot take the new page's events. Answers the generation it was registered for.
+    pub(crate) fn register(&self, current: impl FnOnce() -> PageGeneration, channel: Channel<Value>) -> PageGeneration {
+        let mut held = self.0.lock().unwrap();
+        let page = current();
+        if held.as_ref().is_none_or(|(registered, _)| *registered <= page) {
+            *held = Some((page, channel));
+        }
+        page
     }
 }
 
@@ -60,7 +68,7 @@ mod tests {
     fn events_arrive_over_the_pages_channel_in_the_order_they_were_made() {
         let pages = Pages::default();
         let (channel, arrived) = channel();
-        pages.register(PageGeneration(1), channel);
+        pages.register(|| PageGeneration(1), channel);
         for n in 0..200 {
             pages.event(PageGeneration(1), json!({"key": "a", "type": "level", "data": n}));
         }
@@ -75,7 +83,7 @@ mod tests {
     fn events_made_on_several_threads_keep_each_threads_order() {
         let pages = Pages::default();
         let (channel, arrived) = channel();
-        pages.register(PageGeneration(1), channel);
+        pages.register(|| PageGeneration(1), channel);
         let threads: Vec<_> = (0..4)
             .map(|thread| {
                 let pages = pages.clone();
@@ -105,12 +113,12 @@ mod tests {
         pages.event(PageGeneration(1), json!("lost"));
 
         let (old, old_arrived) = channel();
-        pages.register(PageGeneration(1), old);
+        pages.register(|| PageGeneration(1), old);
         pages.event(PageGeneration(1), json!("one"));
 
         // The next page opens its own: the old page's events, still on their way, go nowhere, not to the new channel.
         let (new, new_arrived) = channel();
-        pages.register(PageGeneration(2), new);
+        pages.register(|| PageGeneration(2), new);
         pages.event(PageGeneration(1), json!("late: the old page's stop"));
         pages.event(PageGeneration(2), json!("two"));
         pages.event(PageGeneration(1), json!("later still"));
@@ -126,10 +134,88 @@ mod tests {
         let pages = Pages::default();
         let (first, first_arrived) = channel();
         let (second, second_arrived) = channel();
-        pages.register(PageGeneration(5), first);
-        pages.register(PageGeneration(5), second);
+        pages.register(|| PageGeneration(5), first);
+        pages.register(|| PageGeneration(5), second);
         pages.event(PageGeneration(5), json!("x"));
         assert!(first_arrived.lock().unwrap().is_empty());
         assert_eq!(*second_arrived.lock().unwrap(), [json!("x")]);
+    }
+}
+
+#[cfg(test)]
+mod races {
+    use std::sync::mpsc;
+
+    use serde_json::json;
+    use tauri::ipc::InvokeResponseBody;
+
+    use super::*;
+
+    fn channel() -> (Channel<Value>, Arc<Mutex<Vec<Value>>>) {
+        let arrived = Arc::new(Mutex::new(Vec::new()));
+        let kept = Arc::clone(&arrived);
+        let channel = Channel::new(move |body| {
+            let InvokeResponseBody::Json(text) = body else { panic!("json") };
+            kept.lock().unwrap().push(serde_json::from_str(&text).unwrap());
+            Ok(())
+        });
+        (channel, arrived)
+    }
+
+    #[test]
+    fn a_late_registration_of_an_older_page_never_replaces_a_newer_ones_channel() {
+        let pages = Pages::default();
+        let (new, new_arrived) = channel();
+        let (old, old_arrived) = channel();
+        assert_eq!(pages.register(|| PageGeneration(2), new), PageGeneration(2));
+        // The old page's registration read its generation before the reload, and arrives after the new page's.
+        assert_eq!(pages.register(|| PageGeneration(1), old), PageGeneration(1));
+        pages.event(PageGeneration(2), json!("for the new page"));
+        pages.event(PageGeneration(1), json!("for the old one"));
+        assert_eq!(*new_arrived.lock().unwrap(), [json!("for the new page")]);
+        assert!(old_arrived.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn reading_the_generation_and_registering_are_one_step() {
+        // The old page's registration is paused after it read generation 1, holding the registry. The page changes and
+        // the new page registers: it must wait for the old one, and be the one that stays.
+        let pages = Pages::default();
+        let current = Arc::new(Mutex::new(PageGeneration(1)));
+        let (old, old_arrived) = channel();
+        let (new, new_arrived) = channel();
+        let (read, has_read) = mpsc::channel();
+        let (go, resume) = mpsc::channel::<()>();
+
+        let slow = {
+            let (pages, current) = (pages.clone(), Arc::clone(&current));
+            std::thread::spawn(move || {
+                pages.register(
+                    || {
+                        let page = *current.lock().unwrap();
+                        read.send(page).unwrap();
+                        resume.recv().unwrap();
+                        page
+                    },
+                    old,
+                )
+            })
+        };
+        assert_eq!(has_read.recv().unwrap(), PageGeneration(1));
+        *current.lock().unwrap() = PageGeneration(2);
+        let late = {
+            let (pages, current) = (pages.clone(), Arc::clone(&current));
+            std::thread::spawn(move || pages.register(move || *current.lock().unwrap(), new))
+        };
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(!late.is_finished(), "the new page\x27s registration waits for the old one\x27s");
+        go.send(()).unwrap();
+        assert_eq!(slow.join().unwrap(), PageGeneration(1));
+        assert_eq!(late.join().unwrap(), PageGeneration(2));
+
+        pages.event(PageGeneration(2), json!("new"));
+        pages.event(PageGeneration(1), json!("old"));
+        assert_eq!(*new_arrived.lock().unwrap(), [json!("new")]);
+        assert!(old_arrived.lock().unwrap().is_empty());
     }
 }

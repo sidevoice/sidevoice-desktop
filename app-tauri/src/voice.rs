@@ -29,9 +29,7 @@ pub async fn voice_events<R: Runtime>(
     events: Channel<Value>,
 ) -> Result<PageGeneration, Refusal> {
     allowed(&callers, &webview)?;
-    let page = host.page();
-    pages.register(page, events);
-    Ok(page)
+    Ok(pages.register(|| host.page(), events))
 }
 
 /// Attaches a lane now, so routing may be chosen before its start.

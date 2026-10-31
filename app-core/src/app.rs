@@ -141,7 +141,8 @@ struct Inner<A: LaneAudio> {
     /// `None` when the engine did not start; its commands, and the call's models, refuse then.
     engines: Option<Arc<NativeEngines>>,
     jobs: Arc<Jobs>,
-    /// The current page's generation (shared with the sinks of the calls, which drop what is for another).
+    /// The current page's generation (the call host's own counter, shared with the sinks of the calls, which drop what is
+    /// for another).
     generation: Arc<AtomicU64>,
     /// Quitting: no load starts any more (see [`AppHost::close`]).
     closing: AtomicBool,
@@ -183,13 +184,14 @@ impl<A: LaneAudio> AppHost<A> {
                 None
             }
         };
+        let generation = Arc::clone(&voice.page);
         let inner = Inner {
             runtime,
             hooks,
             voice,
             engines,
             jobs: Arc::default(),
-            generation: Arc::default(),
+            generation,
             closing: AtomicBool::new(false),
             loads: Mutex::default(),
             watcher: Mutex::default(),
