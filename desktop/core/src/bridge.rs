@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::build_info::BuildInfo;
+use crate::i18n;
 
 /// Removes the WebView's default context menu (desktop/core/js/no-context-menu.js); appended to the scripts of every window.
 pub const NO_CONTEXT_MENU_SCRIPT: &str = include_str!("../js/no-context-menu.js");
@@ -28,7 +29,8 @@ const DEVICE_NAME_PLACEHOLDER: &str = "\"__SIDEVOICE_DEVICE_NAME__\"";
 const MICROPHONE_SETTINGS_PLACEHOLDER: &str = "\"__SIDEVOICE_MICROPHONE_SETTINGS__\"";
 const DEBUG_PLACEHOLDER: &str = "\"__SIDEVOICE_DEBUG__\"";
 const UNINSTALL_PLACEHOLDER: &str = "\"__SIDEVOICE_UNINSTALL__\"";
-const SYSTEM_PLACEHOLDER: &str = "\"__SIDEVOICE_OS__\"";
+const SHORTCUT_MODIFIER_PLACEHOLDER: &str = "\"__SIDEVOICE_SHORTCUT_MODIFIER__\"";
+const MICROPHONE_HELP_PLACEHOLDER: &str = "\"__SIDEVOICE_MICROPHONE_HELP__\"";
 
 /// What the app tells the page it offers beyond the web, the same on every OS: this computer's own core, the local host
 /// (`window.__sidevoiceHost.host.localHost`, docs/LOCAL_HOST.md), and the voice call the app runs itself
@@ -87,7 +89,10 @@ fn compose(parts: &Parts<'_>, desktop: &str) -> String {
 /// `host.localHost` and `host.voice` are always offered ([`OFFERED`]).
 /// `uninstall`: whether the app can also remove itself after the reset (`host.reset.uninstall`); delete-all and its
 /// report (`host.reset.deleteAll`, `resetReport`) are on every host.
-/// `system`: the system the app runs on (`host.os`; `platform::host::system`).
+/// `shortcut_modifier`: the label of the modifier a shortcut is written with here, `⌘` or `Ctrl` (`host.shortcutModifier`;
+/// `platform::host::shortcut_modifier`).
+/// `microphone_help`: how to allow a blocked microphone here, in each language the app has words in (`host.microphone.help`;
+/// [`microphone_help], `platform::host::microphone_help`).
 /// `parts`: the transport and the members, composed with the desktop's part into the one script the page gets.
 #[allow(clippy::too_many_arguments)]
 pub fn script_for_origin(
@@ -100,7 +105,8 @@ pub fn script_for_origin(
     diagnostics: &[crate::debug_options::Switch],
     media: bool,
     uninstall: bool,
-    system: &str,
+    shortcut_modifier: &str,
+    microphone_help: &serde_json::Value,
     parts: &Parts<'_>,
 ) -> String {
     let literal = serde_json::to_string(origin).expect("a string serialises");
@@ -121,8 +127,28 @@ pub fn script_for_origin(
         .replacen(DEBUG_PLACEHOLDER, &debug, 1)
         .replacen(MICROPHONE_SETTINGS_PLACEHOLDER, flag(microphone_settings), 1)
         .replacen(UNINSTALL_PLACEHOLDER, flag(uninstall), 1)
-        .replacen(SYSTEM_PLACEHOLDER, &serde_json::to_string(system).expect("serialises"), 1);
+        .replacen(SHORTCUT_MODIFIER_PLACEHOLDER, &serde_json::to_string(shortcut_modifier).expect("serialises"), 1)
+        .replacen(MICROPHONE_HELP_PLACEHOLDER, &microphone_help.to_string(), 1);
     compose(parts, &desktop)
+}
+
+/// How to allow a blocked microphone, for `host.microphone.help(language)`: one entry per language the app has words in
+/// (`i18n::LANGUAGES`), `{ "steps": [text], "openSettings"?: label }`, the texts being the catalogue's `help` and
+/// `settings_label` keys in that language (English where it lacks one). The label is there only where the system has a
+/// settings page to open. The page's script picks the entry for the language it asks in, or English.
+pub fn microphone_help(help: &str, settings_label: Option<&str>) -> serde_json::Value {
+    let entry = |language: &str| {
+        let mut entry = serde_json::json!({ "steps": [i18n::t(language, help)] });
+        if let Some(label) = settings_label {
+            entry["openSettings"] = i18n::t(language, label).into();
+        }
+        entry
+    };
+    i18n::LANGUAGES
+        .iter()
+        .map(|&language| (language.to_owned(), entry(language)))
+        .collect::<serde_json::Map<_, _>>()
+        .into()
 }
 
 /// The bridge's version: the room page sends it in every snapshot (desktop/core/js/desktop-bridge.js).
@@ -403,10 +429,28 @@ mod tests {
         assert!(NO_CONTEXT_MENU_SCRIPT.contains("contextmenu"));
     }
 
+    /// The microphone's help as the macOS build tells the page.
+    fn macos_help() -> serde_json::Value {
+        microphone_help("microphone.help_macos", Some("microphone.open_settings"))
+    }
+
+    #[test]
+    fn the_microphone_help_is_in_each_language_and_names_the_settings_button_only_where_there_is_a_page() {
+        let with = macos_help();
+        assert_eq!(with["en"]["steps"][0], i18n::t("en", "microphone.help_macos"));
+        assert_eq!(with["es"]["steps"][0], i18n::t("es", "microphone.help_macos"));
+        assert_eq!(with["es"]["openSettings"], "Abrir Ajustes del Sistema");
+        assert_eq!(with.as_object().unwrap().len(), i18n::LANGUAGES.len());
+        let without = microphone_help("microphone.help_linux", None);
+        assert!(without["en"].get("openSettings").is_none() && without["es"].get("openSettings").is_none());
+        assert_eq!(without["en"]["steps"].as_array().unwrap().len(), 1);
+    }
+
     #[test]
     fn script_binds_the_origin_as_a_js_string() {
         let dev = BuildInfo::new("dev", "0.4.0", "", "");
         let off = crate::debug_options::DebugOptions::default();
+        let help = macos_help();
         let s = script_for_origin(
             "https://voice.example.com",
             false,
@@ -417,7 +461,8 @@ mod tests {
             &crate::debug_options::Switch::ALL,
             true,
             false,
-            "macos",
+            "⌘",
+            &help,
             &PARTS,
         );
         assert!(!s.contains("__SIDEVOICE_ROOM_ORIGIN__"));
@@ -430,13 +475,15 @@ mod tests {
         assert!(!s.contains("__SIDEVOICE_DEBUG__"));
         assert!(!s.contains("__SIDEVOICE_MICROPHONE_SETTINGS__"));
         assert!(!s.contains("__SIDEVOICE_UNINSTALL__"));
-        assert!(!s.contains("__SIDEVOICE_OS__"));
+        assert!(!s.contains("__SIDEVOICE_SHORTCUT_MODIFIER__"));
+        assert!(!s.contains("__SIDEVOICE_MICROPHONE_HELP__"));
         let platform = "true, true, true";
         let dev_build = r#"{"channel":"dev","version":"0.4.0"}"#;
         // A dev build has the developer options: what the settings keep, and the switches this platform has.
         let debug = off.state(&crate::debug_options::Switch::ALL);
+        let told = help.to_string();
         let expected = format!(
-            r#"factory(window, "https://voice.example.com", {platform}, false, {dev_build}, null, {debug}, false, false, "macos")"#
+            r#"factory(window, "https://voice.example.com", {platform}, false, {dev_build}, null, {debug}, false, false, "⌘", {told})"#
         );
         assert!(s.contains(&expected), "{expected}");
         let no_diagnostics = script_for_origin(
@@ -449,7 +496,8 @@ mod tests {
             &[],
             false,
             false,
-            "linux",
+            "Ctrl",
+            &help,
             &PARTS,
         );
         assert!(no_diagnostics.contains(&off.state(&[]).to_string()));
@@ -466,11 +514,12 @@ mod tests {
             &crate::debug_options::Switch::ALL,
             true,
             true,
-            "macos",
+            "⌘",
+            &help,
             &PARTS,
         );
         let expected = format!(
-            r#"factory(window, "https://voice.example.com", {platform}, true, {{"channel":"release","version":"0.4.0"}}, "Mac de Ana", null, true, true, "macos")"#
+            r#"factory(window, "https://voice.example.com", {platform}, true, {{"channel":"release","version":"0.4.0"}}, "Mac de Ana", null, true, true, "⌘", {told})"#
         );
         assert!(offered.contains(&expected), "{expected}");
         // A hostile value cannot break out of the string literal.
@@ -485,11 +534,29 @@ mod tests {
             true,
             false,
             "\"); alert(1); (\"",
+            &help,
             &PARTS,
         );
         assert!(evil.contains(r#"factory(window, "\"); alert(1); (\"""#));
         assert!(evil.contains(r#"{"channel":"dev","version":"0.4.0"}, "\"); alert(1); (\"", "#));
-        assert!(evil.contains(r#", false, "\"); alert(1); (\"")"#));
+        assert!(evil.contains(&format!(r#", false, "\"); alert(1); (\"", {told})"#)));
+        // The help is JSON the catalogue wrote: whatever its texts hold stays inside the literal, as the other values do.
+        let quoting = microphone_help("quote\"); alert(1); (\"", None);
+        let hostile = script_for_origin(
+            "https://voice.example.com",
+            false,
+            &dev,
+            None,
+            &off,
+            false,
+            &[],
+            false,
+            false,
+            "Ctrl",
+            &quoting,
+            &PARTS,
+        );
+        assert!(hostile.contains(&quoting.to_string()));
     }
 
     /// The page's script is the desktop's part in a scope where the transport and the members are `transportOf` and
@@ -498,6 +565,7 @@ mod tests {
     fn the_script_is_the_desktops_part_with_the_other_two_in_scope() {
         let dev = BuildInfo::new("dev", "0.4.0", "", "");
         let off = crate::debug_options::DebugOptions::default();
+        let help = macos_help();
         let script = script_for_origin(
             "https://voice.example.com",
             false,
@@ -508,7 +576,8 @@ mod tests {
             &[],
             false,
             false,
-            "linux",
+            "Ctrl",
+            &help,
             &PARTS,
         );
         assert!(
@@ -528,6 +597,7 @@ mod tests {
     fn the_local_host_and_the_voice_call_are_offered_on_every_os() {
         let dev = BuildInfo::new("dev", "0.4.0", "", "");
         let off = crate::debug_options::DebugOptions::default();
+        let help = macos_help();
         let told = script_for_origin(
             "https://voice.example.com",
             false,
@@ -538,7 +608,8 @@ mod tests {
             &[],
             true,
             false,
-            "linux",
+            "Ctrl",
+            &help,
             &PARTS,
         );
         let line = r#"factory(window, "https://voice.example.com", true, true, true, false, {"channel":"dev","version":"0.4.0"}, null, "#;
@@ -550,6 +621,7 @@ mod tests {
     fn the_uninstall_offer_is_told_to_the_page_and_changes_nothing_else() {
         let dev = BuildInfo::new("dev", "0.4.0", "", "");
         let off = crate::debug_options::DebugOptions::default();
+        let help = macos_help();
         let script = |uninstall| {
             script_for_origin(
                 "https://voice.example.com",
@@ -561,12 +633,13 @@ mod tests {
                 &[],
                 false,
                 uninstall,
-                "linux",
+                "Ctrl",
+                &help,
                 &PARTS,
             )
         };
-        // The factory's last arguments: the microphone settings (false here), the uninstall, then the system.
-        let call = |told: &str| format!("false, {told}, \"linux\");\n}})(function installDesktopBridge(");
+        // The factory's last arguments: the microphone settings (false here), the uninstall, the shortcut modifier, then the help.
+        let call = |told: &str| format!("false, {told}, \"Ctrl\", {help});\n}})(function installDesktopBridge(");
         let (without, with) = (script(false), script(true));
         assert!(without.contains(&call("false")) && with.contains(&call("true")));
         assert_eq!(with.replacen(&call("true"), &call("false"), 1), without);
