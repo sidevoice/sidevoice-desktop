@@ -106,7 +106,7 @@ async fn call(
     let settings = settings(0, build);
     let choice = choose(&settings, catalogs).unwrap();
     let applied = Applied { halves: Halves::new(loader, &choice, None), settings };
-    state.open(key, applied, false, seen.page()).await.unwrap();
+    state.open(&state.lane(key).await.unwrap(), key, applied, false, seen.page()).await.unwrap();
     seen.until("a heard turn", |seen| seen.has("turn", |turn| turn["phase"] == "finished")).await;
     state
         .say(key, "reply".into(), "The tests pass on every platform.".into(), Some("en".into()), seen.page())
@@ -171,13 +171,16 @@ fn the_footprint_stays_flat_over_calls_and_changes() {
         let first = settings(0, &build);
         let choice = choose(&first, &catalogs).unwrap();
         let mut applied = Applied { halves: Halves::new(&loader, &choice, None), settings: first };
-        state.open("changing", applied.clone(), false, seen.page()).await.unwrap();
+        state
+            .open(&state.lane("changing").await.unwrap(), "changing", applied.clone(), false, seen.page())
+            .await
+            .unwrap();
         seen.until("a heard turn", |seen| seen.has("turn", |turn| turn["phase"] == "finished")).await;
         for n in 1..=CHANGES {
             let next = settings(n % 4, &build);
             let choice = choose(&next, &catalogs).unwrap();
             applied = Applied { halves: Halves::new(&loader, &choice, Some(&applied.halves)), settings: next };
-            state.update("changing", applied.clone()).await.unwrap();
+            state.update(&state.lane("changing").await.unwrap(), applied.clone()).await.unwrap();
             // The change takes effect at its safe point, models loading while the call goes on.
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
