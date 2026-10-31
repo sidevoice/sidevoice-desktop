@@ -22,6 +22,10 @@ name: build
 on:
   push:
     branches: [main]
+    # This workflow is the desktop product's (RELEASING.md → "Two products"): a push that touches only the mobile
+    # product's directory neither rebuilds nor replaces the desktop nightly. A pull request always runs everything:
+    # its checks are required.
+    paths-ignore: ["mobile/**"]
   pull_request:
   workflow_dispatch:
     inputs:
@@ -114,6 +118,8 @@ jobs:
         run: cargo xtask permissions
       - name: Bridge script and Rust unit tests
         run: cargo xtask test
+      - name: The voice settings against the voice contract the pinned web bundles (its sidevoice-voice's voice-host.d.ts)
+        run: cargo xtask voice-contract
       - name: The local host with two users (a second uid cannot open the core socket, link as a connector, or use the proxy)
         run: cargo xtask two-users
 
@@ -321,7 +327,7 @@ jobs:
         id: models
         with:
           path: ${{ runner.temp }}/real-call-models
-          key: real-call-models-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.engine-rev }}-${{ hashFiles('desktop/src/voice/models/tests.rs') }}
+          key: real-call-models-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.engine-rev }}-${{ hashFiles('app-core/src/voice/models/tests.rs') }}
           restore-keys: real-call-models-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.engine-rev }}-
       - name: A call on the engine's real models through the app's adapter (recorded speech in, a reply out)
         env:
@@ -443,7 +449,7 @@ jobs:
         id: models
         with:
           path: ${{ runner.temp }}/real-call-models
-          key: real-call-models-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.engine-rev }}-${{ hashFiles('desktop/src/voice/models/engine/tests.rs') }}
+          key: real-call-models-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.engine-rev }}-${{ hashFiles('app-core/src/voice/models/engine/tests.rs') }}
           restore-keys: real-call-models-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.engine-rev }}-
       - name: A call on the engine's real models (injected audio) and on the runner's own devices
         if: ${{ !cancelled() }}
@@ -457,6 +463,7 @@ jobs:
           key: ${{ steps.models.outputs.cache-primary-key }}
 
   # Publish: the installers of this run go to the release that called it, or replace the rolling `nightly` pre-release
+  # (the desktop's: another product's nightly is a chain of jobs of its own, outside the `needs` below)
   # (RELEASING.md). Pull requests never get here. Two jobs with the same steps (a YAML anchor) because a job's `needs`
   # cannot depend on the run: the nightly waits for the installers' jobs and the lint only, while the native flows
   # (`macos-native`, `macos-call`) run on beside it; a release waits for every job, so it never ships with a native

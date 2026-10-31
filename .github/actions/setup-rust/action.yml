@@ -1,6 +1,7 @@
 name: Set up Rust and the native engine's libraries
 description: >-
-  Installs the Rust toolchain desktop/rust-toolchain.toml pins, restores the Rust build cache (the app's workspace
+  The desktop app's Rust setup (the mobile product's jobs have their own). Installs the Rust toolchain
+  desktop/rust-toolchain.toml pins, restores the Rust build cache (the repository's workspace
   and xtask/), and fetches the sherpa-onnx static libraries that sidevoice-engine links with `cargo xtask sherpa-libs`
   (that engine's own command, at the
   commit Cargo.lock pins): checked against the digests it pins, kept outside target/ and linked through
@@ -42,7 +43,10 @@ runs:
         workspaces: |
           .
           xtask
-        shared-key: ${{ inputs.cache }}
+        # Every cache of this action starts with `desktop`, so no other product's can be taken for one of these (RELEASING.md →
+        # "CI caches"). `key` is read only when there is no `shared-key`, which then carries the name itself.
+        key: desktop
+        shared-key: ${{ inputs.cache && format('desktop-{0}', inputs.cache) || '' }}
         save-if: ${{ inputs.save-cache == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     - name: The engine at the commit Cargo.lock pins
       id: engine
@@ -56,7 +60,7 @@ runs:
       with:
         path: ~/.cache/sidevoice-engine/sherpa-onnx
         # By the engine's commit: its xtask/sherpa-onnx-libs.json is outside the workspace, where hashFiles cannot see.
-        key: sherpa-onnx-libs-${{ runner.os }}-${{ runner.arch }}-${{ steps.engine.outputs.rev }}
+        key: sherpa-onnx-libs-desktop-${{ runner.os }}-${{ runner.arch }}-${{ steps.engine.outputs.rev }}
     - name: sherpa-onnx's libraries (cargo xtask sherpa-libs)
       shell: bash
       run: cargo xtask sherpa-libs
