@@ -554,8 +554,8 @@ here: a change is made there, and both sides follow.
 The app reads the settings again in Rust (`app-core/src/voice.rs`, strictly), so the schema exists twice until
 sidevoice-voice#38 is evaluated. `cargo xtask voice-contract` is what notices drift: it reads `VoiceSettings` and
 `VoiceSettingsChange` against `js/voice-host.d.ts` of the sidevoice-voice release the pinned web depends on
-(`apps/web/package.json` at the tag `web.pin.json` names; the app is built with another), member by member and variant
-by variant (`app-core/tests/voice_settings_contract.rs`). Where Rust is stricter than the contract, the
+(`apps/web/package.json` at the tag `web.pin.json` names; the app is built with another), member by member, value by value and variant
+by variant, both ways (`app-core/tests/voice_settings_contract.rs`). Where Rust is stricter than the contract, the
 test states it.
 
 What is this app's own:
