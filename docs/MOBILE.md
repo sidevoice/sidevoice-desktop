@@ -85,6 +85,8 @@ installs as it is.
   simulator, unsigned, as the artifact `Sidevoice-ios-simulator-app`. When the committed project is not what the CLI
   wrote, the job uploads what it wrote (`mobile-gen-apple`) to commit as `mobile/gen/apple`.
 - **`generated`** is the regeneration diff: it runs `generate` and fails on any difference in `mobile/gen/<project>`.
+- Every external action is pinned by its full commit SHA, the version in a comment, so a moved tag cannot run new code
+  beside the build. (The desktop workflows still use tags.)
 - The Rust and Gradle caches are written by a push to `main` only and their keys start with `mobile`. The Android SDK
   platform and NDK versions are pinned in the workflow's `env`.
 
