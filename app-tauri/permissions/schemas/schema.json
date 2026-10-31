@@ -295,6 +295,30 @@
       "type": "string",
       "oneOf": [
         {
+          "description": "Enables the bridge_level command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-bridge-level",
+          "markdownDescription": "Enables the bridge_level command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the bridge_level command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-bridge-level",
+          "markdownDescription": "Denies the bridge_level command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the bridge_playback command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-bridge-playback",
+          "markdownDescription": "Enables the bridge_playback command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the bridge_playback command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-bridge-playback",
+          "markdownDescription": "Denies the bridge_playback command without any pre-configured scope."
+        },
+        {
           "description": "Enables the engine_cancel command without any pre-configured scope.",
           "type": "string",
           "const": "allow-engine-cancel",
@@ -437,6 +461,42 @@
           "type": "string",
           "const": "deny-engine-uninstall",
           "markdownDescription": "Denies the engine_uninstall command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the microphone command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-microphone",
+          "markdownDescription": "Enables the microphone command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the microphone command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-microphone",
+          "markdownDescription": "Denies the microphone command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the pairings_read command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-pairings-read",
+          "markdownDescription": "Enables the pairings_read command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the pairings_read command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-pairings-read",
+          "markdownDescription": "Denies the pairings_read command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the pairings_write command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-pairings-write",
+          "markdownDescription": "Enables the pairings_write command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the pairings_write command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-pairings-write",
+          "markdownDescription": "Denies the pairings_write command without any pre-configured scope."
         },
         {
           "description": "Enables the voice_audio_devices command without any pre-configured scope.",

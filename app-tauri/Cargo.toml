@@ -17,7 +17,36 @@ tauri-plugin = { version = "2", features = ["build"] }
 sidevoice-app-core = { path = "../app-core" }
 tauri = { version = "2.12" }
 serde_json = "1"
+log = "0.4"
+# The system microphone privacy page, from Rust only (platform/microphone.rs).
+tauri-plugin-opener = "2"
+# Whether an audio input device exists (platform/microphone): enumeration only, no stream, no prompt. WASAPI on Windows,
+# CoreAudio on macOS; no feature is needed for either. Already in the tree through sidevoice-voice.
+cpal = { version = "0.18", default-features = false }
+# The microphone device worker's answers (platform/microphone.rs).
+tokio = { version = "1", features = ["sync", "time", "rt"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Headset buttons and the AirPods mute gesture, and Now Playing (platform/media_controls/macos.rs).
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSDictionary", "NSValue", "NSError", "NSObject", "NSArray", "NSRunLoop", "block2"] }
+objc2-media-player = { version = "0.3", features = ["MPRemoteCommandCenter", "MPRemoteCommand", "MPRemoteCommandEvent", "MPNowPlayingInfoCenter", "MPMediaItem", "block2"] }
+objc2-avf-audio = { version = "0.3", features = ["AVAudioApplication", "block2"] }
+# The microphone permission the room page asks for in its first-run setup (platform/microphone/macos.rs).
+objc2-av-foundation = { version = "0.3", default-features = false, features = ["std", "AVCaptureDevice", "AVMediaFormat", "block2"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# The unpackaged app's privacy gate in the registry, and the device worker's COM apartment (platform/microphone/windows.rs).
+winreg = "0.55"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_WindowsAndMessaging"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The microphone check reads the sound server, not ALSA hints: cpal's pure-Rust PulseAudio host (it also serves PipeWire,
+# through pipewire-pulse). No libpulse, libpipewire or libclang: see platform/microphone/linux.rs.
+cpal = { version = "0.18", default-features = false, features = ["pulseaudio"] }
 
 [dev-dependencies]
 # The mock runtime the commands' authorization is tested on.
 tauri = { version = "2.12", features = ["test"] }
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }

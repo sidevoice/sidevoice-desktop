@@ -3,7 +3,6 @@
 //! macOS retains Now Playing and the AirPods mute gesture. Other hosts leave
 //! ownership with the page's Media Session, including while native voice runs.
 
-use sidevoice_desktop_core::bridge::{CallSnapshot, Command};
 use std::sync::Arc;
 use tauri::AppHandle;
 
@@ -13,8 +12,26 @@ use tauri::AppHandle;
 mod imp;
 use imp::Native;
 
+/// What the headset buttons and Now Playing need to know of the call, as the app reports it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CallState {
+    /// The room's controller is up.
+    pub ready: bool,
+    /// In a call, or joining one.
+    pub joined: bool,
+    pub mic_enabled: bool,
+    /// The conversation being looked at: Now Playing's title.
+    pub title: String,
+}
+
+/// What a media action asks of the call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaCommand {
+    ToggleMute,
+}
+
 /// Delivers a media action to the call. Implementations preserve main-thread dispatch.
-pub type CommandSink = Arc<dyn Fn(Command) + Send + Sync>;
+pub type CommandSink = Arc<dyn Fn(MediaCommand) + Send + Sync>;
 
 /// What differs per OS: whether the app owns media keys, and its native wiring when it does.
 trait Os {
@@ -25,7 +42,7 @@ trait Os {
     fn attach(_app: &AppHandle, _sink: CommandSink) {}
 
     /// Follow call and microphone state. Unavailable hosts leave the page in control.
-    fn update(_app: &AppHandle, _call: &CallSnapshot) {}
+    fn update(_app: &AppHandle, _call: &CallState) {}
 }
 
 /// `Some("native")` when the app owns media keys; `None` means unavailable,
@@ -41,7 +58,7 @@ pub fn attach(app: &AppHandle, sink: CommandSink) {
 
 /// Follows call and microphone state, including navigation and hang-up resets.
 /// Native APIs run on the main thread; unavailable hosts leave the page in control.
-pub fn update(app: &AppHandle, call: &CallSnapshot) {
+pub fn update(app: &AppHandle, call: &CallState) {
     Native::update(app, call)
 }
 
@@ -50,20 +67,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bridge_receives_the_host_support() {
+    fn the_host_support_is_native_or_none() {
         assert!(matches!(support(), None | Some("native")));
-        let script = sidevoice_desktop_core::bridge::script_for_origin(
-            "tauri://localhost",
-            false,
-            &sidevoice_desktop_core::build_info::BuildInfo::new("dev", "0.0.0", "", ""),
-            None,
-            &Default::default(),
-            false,
-            &[],
-            support(),
-            false,
-        );
-        let literal = serde_json::to_string(&support()).unwrap();
-        assert!(script.contains(&format!("factory(window, \"tauri://localhost\", {literal},")));
     }
 }

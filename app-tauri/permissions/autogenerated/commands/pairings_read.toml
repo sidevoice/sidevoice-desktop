@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-pairings-read"
+description = "Enables the pairings_read command without any pre-configured scope."
+commands.allow = ["pairings_read"]
+
+[[permission]]
+identifier = "deny-pairings-read"
+description = "Denies the pairings_read command without any pre-configured scope."
+commands.deny = ["pairings_read"]

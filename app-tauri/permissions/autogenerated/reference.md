@@ -10,6 +10,58 @@
 <tr>
 <td>
 
+`sidevoice-app-tauri:allow-bridge-level`
+
+</td>
+<td>
+
+Enables the bridge_level command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`sidevoice-app-tauri:deny-bridge-level`
+
+</td>
+<td>
+
+Denies the bridge_level command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`sidevoice-app-tauri:allow-bridge-playback`
+
+</td>
+<td>
+
+Enables the bridge_playback command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`sidevoice-app-tauri:deny-bridge-playback`
+
+</td>
+<td>
+
+Denies the bridge_playback command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `sidevoice-app-tauri:allow-engine-cancel`
 
 </td>
@@ -315,6 +367,84 @@ Enables the engine_uninstall command without any pre-configured scope.
 <td>
 
 Denies the engine_uninstall command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`sidevoice-app-tauri:allow-microphone`
+
+</td>
+<td>
+
+Enables the microphone command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`sidevoice-app-tauri:deny-microphone`
+
+</td>
+<td>
+
+Denies the microphone command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`sidevoice-app-tauri:allow-pairings-read`
+
+</td>
+<td>
+
+Enables the pairings_read command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`sidevoice-app-tauri:deny-pairings-read`
+
+</td>
+<td>
+
+Denies the pairings_read command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`sidevoice-app-tauri:allow-pairings-write`
+
+</td>
+<td>
+
+Enables the pairings_write command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`sidevoice-app-tauri:deny-pairings-write`
+
+</td>
+<td>
+
+Denies the pairings_write command without any pre-configured scope.
 
 </td>
 </tr>

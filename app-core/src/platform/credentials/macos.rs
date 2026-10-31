@@ -52,11 +52,12 @@ mod tests {
 
     #[test]
     fn public_functions_round_trip_in_the_test_namespace() {
-        // Test builds give the public functions a per-process namespace (`namespace`): no person's keys are touched.
-        assert_eq!(read("openai"), Ok(None));
-        write("openai", Some("test-only")).unwrap();
-        assert_eq!(read("openai").unwrap().as_deref(), Some("test-only"));
-        clear_all().unwrap();
-        assert_eq!(read("openai"), Ok(None));
+        // A per-process namespace of the test's own: no person's keys are touched.
+        let service = test_service();
+        assert_eq!(read(&service, "openai"), Ok(None));
+        write(&service, "openai", Some("test-only")).unwrap();
+        assert_eq!(read(&service, "openai").unwrap().as_deref(), Some("test-only"));
+        clear_all(&service).unwrap();
+        assert_eq!(read(&service, "openai"), Ok(None));
     }
 }

@@ -42,10 +42,11 @@
     return picked;
   };
 
-  /** The commands the apps share (the voice call's and the engine's) are a Tauri plugin's, and are invoked under its name
-   *  (sidevoice-app-tauri/ACL.md); the app's own keep theirs. */
+  /** The commands the apps share (the voice call's and the engine's, the microphone permission, the levels of the call, the
+   *  pairings) are a Tauri plugin's, and are invoked under its name (sidevoice-app-tauri/ACL.md); the app's own keep theirs. */
   const PLUGIN = "plugin:sidevoice-app-tauri|";
-  const named = (command) => (/^(voice|engine)_/.test(command) ? PLUGIN + command : command);
+  const SHARED = new Set(["microphone", "bridge_level", "bridge_playback", "pairings_read", "pairings_write"]);
+  const named = (command) => (/^(voice|engine)_/.test(command) || SHARED.has(command) ? PLUGIN + command : command);
 
   function invoke(command, args) {
     const internals = win.__TAURI_INTERNALS__;
@@ -843,8 +844,8 @@
       // also remove itself (macOS).
       data: Object.freeze({
         pairings: Object.freeze({
-          read: () => call("data_pairings_read"),
-          write: (value) => call("data_pairings_write", { value }).then(() => undefined),
+          read: () => call("pairings_read"),
+          write: (value) => call("pairings_write", { value }).then(() => undefined),
         }),
         deleteAll: () => call("data_delete_all"),
         resetReport: () => call("data_reset_report"),

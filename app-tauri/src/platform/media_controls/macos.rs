@@ -23,21 +23,20 @@ use objc2_media_player::{
 use std::ptr::NonNull;
 use std::time::{Duration, Instant};
 
-use super::{CommandSink, Os};
-use sidevoice_desktop_core::bridge::CallSnapshot;
-use sidevoice_desktop_core::headset::{media_command_action, mute_gesture_action};
+use super::{CallState, CommandSink, MediaCommand, Os};
+use crate::headset::{media_command_action, mute_gesture_action};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 
 struct Headset {
-    call: Mutex<CallSnapshot>,
+    call: Mutex<CallState>,
     sink: CommandSink,
 }
 
 impl Headset {
     /// One event that arrived and what the app did with it, for the app log.
     fn record(&self, source: &str, action: &str) {
-        crate::debug(&format!("headset {source} → {action}"));
+        sidevoice_app_core::debug::debug(&format!("headset {source} → {action}"));
     }
 
     fn active(&self) -> bool {
@@ -54,7 +53,7 @@ fn on_media_command(app: &AppHandle, command: &str) {
     let action = if in_call { media_command_action(command, snapshot.mic_enabled) } else { None };
     match action {
         Some(what) => {
-            (headset.sink)(sidevoice_desktop_core::bridge::Command::ToggleMute);
+            (headset.sink)(MediaCommand::ToggleMute);
             headset.record(&format!("remote:{command}"), what);
         }
         None if in_call => headset.record(&format!("remote:{command}"), "ya estaba así"),
@@ -75,9 +74,7 @@ fn on_mute_gesture(app: &AppHandle, muted: bool) -> bool {
     match mute_gesture_action(muted, snapshot.mic_enabled) {
         Some(what) => {
             let app = app.clone();
-            let _ = app.clone().run_on_main_thread(move || {
-                (app.state::<Headset>().sink)(sidevoice_desktop_core::bridge::Command::ToggleMute)
-            });
+            let _ = app.clone().run_on_main_thread(move || (app.state::<Headset>().sink)(MediaCommand::ToggleMute));
             headset.record(source, what);
         }
         None => headset.record(source, "ya estaba así"),
@@ -96,7 +93,7 @@ impl Os for Native {
         let _ = app.run_on_main_thread(move || setup(&app2));
     }
 
-    fn update(app: &AppHandle, snapshot: &CallSnapshot) {
+    fn update(app: &AppHandle, snapshot: &CallState) {
         let Some(headset) = app.try_state::<Headset>() else { return };
         *headset.call.lock().unwrap() = snapshot.clone();
         let active = headset.active();
@@ -186,7 +183,7 @@ fn apply(app: &AppHandle, active: bool, in_call: bool, mic_enabled: bool, title:
         }
     }
     gesture(app, active, in_call, mic_enabled);
-    crate::debug(&format!(
+    sidevoice_app_core::debug::debug(&format!(
         "headset apply active={active} in_call={in_call} mic={mic_enabled} gesture_api={} gesture_on={}",
         gesture_api(),
         *GESTURE_ON.lock().unwrap()

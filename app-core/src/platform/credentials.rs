@@ -1,5 +1,6 @@
 //! Provider secrets in the OS credential store (docs/CREDENTIALS.md). No store error or secret is formatted or logged.
-//! The service/account pair is the original macOS namespace, not a catalog-dependent list.
+//! The service/account pair is the app's namespace (the `service`, which the app passes in exactly), not a
+//! catalog-dependent list.
 //!
 //! The common code here owns the naming, validation, requests, namespace clearing, admission and error categories.
 //! What differs per OS is the store itself (`Os::store`), how a whole namespace is deleted (`Os::clear_namespace`) and
@@ -20,20 +21,6 @@ use std::{
 #[cfg_attr(target_os = "linux", path = "credentials/linux.rs")]
 mod imp;
 use imp::Native;
-
-const SERVICE: &str = "ai.sidevoice.desktop.providers";
-
-/// The namespace the public functions use: `SERVICE`. Test builds give them a per-process namespace of their own, so
-/// fixtures of the public functions on a native store never read or clear a person's keys.
-fn namespace() -> &'static str {
-    #[cfg(not(test))]
-    return SERVICE;
-    #[cfg(test)]
-    {
-        static TEST: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-        TEST.get_or_init(tests::test_service)
-    }
-}
 
 /// How long a caller waits for a store that can prompt (`Os::PROMPTS`) before answering `Unavailable`.
 const WAIT: Duration = Duration::from_secs(30);
@@ -80,24 +67,26 @@ pub fn valid(provider: &str) -> bool {
         && provider.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-/// A provider's key. Missing is `None`; inaccessible storage is `Unavailable`.
-pub fn read(provider: &str) -> Result<Option<String>, Error> {
+/// A provider's key in the namespace `service`. Missing is `None`; inaccessible storage is `Unavailable`.
+pub fn read(service: &str, provider: &str) -> Result<Option<String>, Error> {
     let provider = Provider::new(provider)?;
-    admit(move || read_in(Native::store()?.as_ref(), namespace(), &provider))
+    let service = service.to_owned();
+    admit(move || read_in(Native::store()?.as_ref(), &service, &provider))
 }
 
 /// Replace a key, or remove it for `None`. Removing a missing key succeeds.
 /// Oversized credentials are refused before replacing the stored value; never truncated.
-pub fn write(provider: &str, secret: Option<&str>) -> Result<(), Error> {
+pub fn write(service: &str, provider: &str, secret: Option<&str>) -> Result<(), Error> {
     let provider = Provider::new(provider)?;
-    let secret = secret.map(str::to_owned);
-    admit(move || write_in(Native::store()?.as_ref(), namespace(), &provider, secret.as_deref()))
+    let (service, secret) = (service.to_owned(), secret.map(str::to_owned));
+    admit(move || write_in(Native::store()?.as_ref(), &service, &provider, secret.as_deref()))
 }
 
-/// Delete the exact service namespace, including unknown or obsolete accounts.
+/// Delete the exact service namespace `service`, including unknown or obsolete accounts.
 /// An unrelated service is never removed; partial cleanup is an error.
-pub fn clear_all() -> Result<(), Error> {
-    admit(|| Native::clear_namespace(namespace()))
+pub fn clear_all(service: &str) -> Result<(), Error> {
+    let service = service.to_owned();
+    admit(move || Native::clear_namespace(&service))
 }
 
 /// A validated provider id, owned so it can cross to a blocking worker.
@@ -197,6 +186,9 @@ mod tests {
     use super::*;
     use keyring_core::api::CredentialStoreApi;
 
+    /// The service the memory store's fixtures use.
+    const SERVICE: &str = "ai.sidevoice.test.providers";
+
     pub(super) fn provider(id: &str) -> Provider {
         Provider::new(id).unwrap()
     }
@@ -251,7 +243,7 @@ mod tests {
     /// machine.
     pub(super) fn test_service() -> String {
         format!(
-            "ai.sidevoice.desktop.test-{}-{}",
+            "ai.sidevoice.test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         )
@@ -304,9 +296,9 @@ mod tests {
     fn malformed_ids_cannot_address_credentials() {
         for id in ["", "OpenAI", "with.dot", "with/slash", "with space", "é", &"a".repeat(33)] {
             assert!(!valid(id));
-            assert_eq!(read(id), Err(Error::InvalidProvider));
-            assert_eq!(write(id, Some("test-only")), Err(Error::InvalidProvider));
-            assert_eq!(write(id, None), Err(Error::InvalidProvider));
+            assert_eq!(read(SERVICE, id), Err(Error::InvalidProvider));
+            assert_eq!(write(SERVICE, id, Some("test-only")), Err(Error::InvalidProvider));
+            assert_eq!(write(SERVICE, id, None), Err(Error::InvalidProvider));
         }
         assert!(valid(&"a".repeat(32)));
         let store = memory();
