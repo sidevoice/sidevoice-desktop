@@ -76,39 +76,46 @@ Caches, Logs, Saved Application State, then `preferences`.
 ## From the previous identifier
 
 The builds before `ai.sidevoice.desktop` were `dev.sidevoice.desktop`. At every launch, first (`legacy_identifier.rs`,
-under the launch lock), each folder of the list above for the old identifier that exists is carried to the same folder
-of the new one, until the carry-over has finished. `moves_from(home, previous)` pairs them, resolved by the same code
-as the deletion (`Places::native` takes the identifier as a parameter; on macOS the trait's `extra_folders` adds
-`~/Library/Logs/<id>` and the saved window state); it names `app-data` apart from the others. The shared model store is
-not among them: no identifier names it. The local host's pairing lives in `app-data` (`local-host.json`), so it goes
-with it.
+under the launch lock and the instance lock), the old install is **copied** over, until the carry-over's journal
+(`legacy-identifier.json`, in the reset's control directory, which no reset deletes) says it has finished. **Nothing
+of the old identifier is ever moved, changed or deleted**: whatever fails, crashes or is retried, the old install is
+intact. The folders are the app data and the browser storage (`carried_from(home, previous)`, which pairs them for
+both identifiers by the same code as the deletion; the app data, with the local host's pairing in it, comes first).
 
-- The new folder does not exist: the old one is renamed to it (siblings, so a rename on one filesystem).
-- It exists and the install was never set up: the new `app-data` holds none of `settings.json`, `call-controls.json` and
-  `pairings.json` (the files the app writes only when the person acts; a first start writes none, only its log, and
-  the local host's `local-host.json`, which the app makes by itself when a core runs here) and the new namespace holds
-  no provider key. The first-start folder is renamed to `<folder>.first-start-backup` next to it, never deleted (the web
-  interface keeps preferences in its storage that no file shows), and the old one renamed into place. The backup's
-  `local-host.json` is copied over the old one's: the core revoked the old install's token when the new one paired.
-  This is the case of the builds that ran under the new identifier before this carry-over.
-- It exists and the install is set up: the new one stays, the old one is left where it is, and the log says so.
-  Two installs are never merged.
-- It exists and the key store could not say whether the install was set up: nothing is replaced and no key moves; the
-  question is asked again at the next launch.
+- **Decided once**, before anything is copied, and written to the journal: whether the install here was set up (any
+  of `settings.json`, `call-controls.json`, `pairings.json` in the new app data: the files the app writes only when
+  the person acts; a first start writes its log and `local-host.json` only). Set up: no folder is touched, and the
+  log names the old ones left.
+- **Each old folder that exists** is copied to `<new>.migrating` (a leftover of an earlier attempt is removed first;
+  links are not copied). The new folder's `local-host.json` is copied over the copy's: the local core revoked the
+  old install's token when the first start paired. A marker (`.carried-from-dev.sidevoice.desktop`) is written into
+  the copy. Then the swap: the new folder, if there is one, is renamed to the first free
+  `<new>.first-start-backup`, `-2`, … (never deleted, never replaced), and the copy renamed to `<new>`.
+- **The marker in place is the commit.** A folder with it is carried, whatever the journal managed to say, so a retry
+  never copies over what the app wrote since. A crash leaves the old state or the new one, plus at most a
+  `.migrating` copy; a copy with its marker and nothing at `<new>` is a swap stopped between its two renames, and only
+  the second rename is left.
+- **Finished** when every folder is settled and every provider key too (CREDENTIALS.md). A failure is logged and
+  never stops the launch; what is not settled is retried at the next launch, with the first decision.
 
-**The journal** (`legacy-identifier.json`) is in the reset's control directory (`<id>-reset`), which no reset deletes.
-It holds whether the install was set up, decided once, before anything moves; how far each step got, written before
-the step acts (set aside, moved in, done); and whether the carry-over has finished. A launch resumes from it and never
-decides again, so a partial failure cannot change what the retry does, and every phase looks at what is there, so a
-crash at any point resumes where it was. The app data goes last, and only when the other folders are done. Finished
-means every step is done, nothing to carry included; a step that failed is retried at the next launch. A failure is
-logged and never stops the launch, and the old data is never deleted before it is somewhere else.
+**A reset** ends the carry-over before it clears anything: `begin_reset` marks the journal finished first, so nothing
+it deletes comes back. **A running build** of the old identifier is unaffected. A running build of the new one from
+before the carry-over (the nightly of #316) takes no instance lock and is not detected: the updater quits the app
+before it installs, and a second copy started by hand in the meantime could see the folders swapped under it (its
+later writes go to the carried folder; the old install still holds the originals).
 
-**A reset** (the helper, before it deletes anything) marks the journal finished, started or not: what it deletes does
-not come back from the old folders. **The instance lock** (`instance.lock`, same directory) is held by every running
-instance for its life: a launch that cannot take it is a second instance, whose first may have its browser store open,
-and carries nothing. Not carried: macOS's `defaults` domain and the reset's control directory itself. The module stays
-until 1.0 (RELEASING.md, "Legacy identifier carry-over").
+**Left behind, to remove by hand** (nothing removes them; the app no longer reads them):
+
+| OS | Old install | From the carry-over |
+| --- | --- | --- |
+| macOS | `~/Library/Application Support/dev.sidevoice.desktop`, `~/Library/WebKit/dev.sidevoice.desktop`, `~/Library/Caches/dev.sidevoice.desktop`, `~/Library/Logs/dev.sidevoice.desktop`, `~/Library/Saved Application State/dev.sidevoice.desktop.savedState`, `defaults delete dev.sidevoice.desktop`, the Keychain items of service `dev.sidevoice.desktop.providers` | next to each new folder: `*.first-start-backup*`, and a `*.migrating` left by a carry-over that never finished |
+| Windows | `%APPDATA%\dev.sidevoice.desktop`, `%LOCALAPPDATA%\dev.sidevoice.desktop`, the Credential Manager entries `<provider>/dev.sidevoice.desktop.providers` | the same |
+| Linux | `~/.local/share/dev.sidevoice.desktop`, `~/.cache/dev.sidevoice.desktop`, the Secret Service items of service `dev.sidevoice.desktop.providers` | the same |
+
+On every OS also the old reset control directory, `dev.sidevoice.desktop-reset`, next to the new one. Not carried: the
+macOS logs, saved window state and `defaults` domain, the Linux cache and the macOS microphone grant (the system keys
+it by bundle id: the person is asked again). The module stays until 1.0 (RELEASING.md, "Legacy identifier
+carry-over").
 
 ## Removal policy
 

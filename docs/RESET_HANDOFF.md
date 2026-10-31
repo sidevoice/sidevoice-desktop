@@ -26,7 +26,7 @@ policy or elevate any process.
    control storage. Startup must acquire both, and keeps them until setup and its journal acknowledgement
    finish. Failed setup releases them. A second reset returns busy. The same directory also holds the temporary
    carry-over from the previous identifier's journal and instance lock (APP_DATA.md, "From the previous identifier"):
-   before it deletes anything, the helper marks that journal finished, so nothing it deletes comes back.
+   `begin_reset` marks that journal finished before it clears anything, so nothing the reset deletes comes back.
 2. The parent listens through `sidevoice-platform` v0.12.2, starts its own executable with the shared
    detached-child API, and sends a random 32-byte capability through the inherited stdin pipe. No secret
    goes in argv, the environment, logs or a file. No raw lock descriptor is inherited.

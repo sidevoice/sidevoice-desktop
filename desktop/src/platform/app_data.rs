@@ -71,36 +71,20 @@ pub fn delete_data(home: &Path, browser: &io::Result<Released>, steps: Steps) ->
     Native::delete_extra_data(&home, steps)
 }
 
-/// The folders of an install under the bundle identifier `previous` and under the app's own, paired for a carry-over.
-pub struct Moves {
-    /// The app's data folder, `(previous, own)`: its settings and pairings say whether the install was set up.
-    pub data: (PathBuf, PathBuf),
-    /// Every other folder the app keeps (browser storage, cache, on macOS the logs and saved window state), none inside
-    /// another nor inside `data`.
-    pub others: Vec<(PathBuf, PathBuf)>,
+/// The folders that hold an install's data under the bundle identifier `previous` and under the app's own, paired: the
+/// app data folder first, then each browser storage root that is not inside it (`webview_data`), resolved by the same
+/// rule for both so the pairs line up. Only `legacy_identifier` asks, to carry an install over from `previous`.
+pub fn carried_from(home: &Path, previous: &str) -> Result<Vec<(PathBuf, PathBuf)>, &'static str> {
+    let (old, new) = (install_folders(home, previous)?, install_folders(home, IDENTIFIER)?);
+    Ok(old.into_iter().zip(new).collect())
 }
 
-/// Where the app's folders for the bundle identifier `previous` and for its own are, for the account `home`: the
-/// folders [`delete_data`] deletes (a folder inside another is left out, and so is the shared model store, which no
-/// identifier names) plus the OS's own extras that are folders. Resolved by the same rule for both, so the pairs line
-/// up. Only `legacy_identifier` asks, to carry an install's folders over from `previous`.
-pub fn moves_from(home: &Path, previous: &str) -> Result<Moves, &'static str> {
-    let ((old_data, old_others), (new_data, new_others)) = (identified(home, previous)?, identified(home, IDENTIFIER)?);
-    Ok(Moves { data: (old_data, new_data), others: old_others.into_iter().zip(new_others).collect() })
-}
-
-/// The app's data folder under `identifier` for `home`, and its other folders in deletion order.
-fn identified(home: &Path, identifier: &str) -> Result<(PathBuf, Vec<PathBuf>), &'static str> {
-    let places = Places::native(home.to_path_buf(), identifier)?;
-    let (data, models) = (places.data.clone(), places.models.clone());
-    let mut others: Vec<PathBuf> = Folders::from(places)
-        .list
-        .into_iter()
-        .map(|folder| folder.path)
-        .filter(|path| *path != data && *path != models)
-        .collect();
-    others.extend(Native::extra_folders(home, identifier));
-    Ok((data, others))
+/// The app data folder under `identifier` for `home`, then the browser storage roots that are not inside it.
+fn install_folders(home: &Path, identifier: &str) -> Result<Vec<PathBuf>, &'static str> {
+    let Places { data, webview, .. } = Places::native(home.to_path_buf(), identifier)?;
+    let mut folders: Vec<PathBuf> = webview.into_iter().filter(|root| !root.starts_with(&data)).collect();
+    folders.insert(0, data);
+    Ok(folders)
 }
 
 /// Read-only: whether an existing protected directory under `home` (the connector's data and releases) and its
@@ -115,11 +99,6 @@ trait Os {
     /// Delete it inside the account home `home`, reporting each step to `steps`.
     fn delete_extra_data(_home: &Home, _steps: Steps) -> Result<(), Error> {
         Ok(())
-    }
-
-    /// The folders inside `home` that `delete_extra_data` deletes, under the bundle identifier `identifier`.
-    fn extra_folders(_home: &Path, _identifier: &str) -> Vec<PathBuf> {
-        Vec::new()
     }
 }
 
@@ -187,7 +166,7 @@ struct Folders {
 
 impl Places {
     /// For the account `home` (`account::home`), under the bundle identifier `identifier` (the app's own, except for
-    /// [`moves_from`]).
+    /// [`carried_from`]).
     fn native(home: PathBuf, identifier: &str) -> Result<Self, &'static str> {
         let unavailable = "reset.unavailable";
         let webview = webview_data::locations_of(&home, identifier).map_err(|_| unavailable)?.paths().to_vec();
@@ -579,24 +558,20 @@ mod tests {
     }
 
     #[test]
-    fn each_old_folder_is_paired_with_the_same_one_under_the_apps_identifier() {
+    fn each_carried_folder_is_paired_with_the_same_one_under_the_apps_identifier() {
         let old = "dev.sidevoice.desktop";
         let Ok(home) = account::home() else { return };
-        let Ok(Moves { data, others }) = moves_from(&home, old) else { return };
-        assert_eq!(data.1, dirs::data_dir().unwrap().join(IDENTIFIER), "Tauri's app data folder");
-        let moves: Vec<_> = std::iter::once(data).chain(others).collect();
-        for (index, (from, to)) in moves.iter().enumerate() {
+        let Ok(pairs) = carried_from(&home, old) else { return };
+        assert_eq!(pairs[0].1, dirs::data_dir().unwrap().join(IDENTIFIER), "Tauri's app data folder, first");
+        for (index, (from, to)) in pairs.iter().enumerate() {
             assert!(from.starts_with(&home) && to.starts_with(&home));
             assert_eq!(from.to_string_lossy().replace(old, IDENTIFIER), to.to_string_lossy());
-            // Distinct and unnested, so no pair needs another one's folder to have moved first.
-            assert!(moves[index + 1..].iter().all(|(other, _)| !other.starts_with(from) && !from.starts_with(other)));
+            // Distinct and unnested: each one is copied on its own.
+            assert!(pairs[index + 1..].iter().all(|(other, _)| !other.starts_with(from) && !from.starts_with(other)));
         }
-        // The shared model store is no identifier's.
-        let models = sidevoice_platform::data_dir::models_dir().unwrap();
-        assert!(moves.iter().all(|(from, to)| *from != models && *to != models));
-        // Everything the reset deletes under the app's identifier (but the models) is a destination.
-        let own = Folders::from(Places::native(home.clone(), IDENTIFIER).unwrap());
-        assert!(own.list.iter().all(|folder| folder.path == models || moves.iter().any(|(_, to)| *to == folder.path)));
+        // All of the browser storage is carried.
+        let webview = webview_data::locations(&home).unwrap();
+        assert!(webview.paths().iter().all(|root| pairs.iter().any(|(_, to)| root.starts_with(to))));
     }
 
     #[test]

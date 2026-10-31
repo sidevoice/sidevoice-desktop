@@ -51,8 +51,8 @@ mod tests {
     }
 
     #[test]
-    fn legacy_keys_are_carried_over_in_the_real_keychain() {
-        carry_over_native();
+    fn legacy_keys_are_copied_in_the_real_keychain() {
+        copy_from_native();
     }
 
     #[test]

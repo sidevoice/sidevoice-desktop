@@ -10,7 +10,7 @@ There is no global keyring default, plaintext fallback, or production in-memory 
 
 | OS | Store and naming | Limits / availability |
 |---|---|---|
-| macOS | `apple-native-keyring-store` as it is: generic passwords in the user's login keychain; service `ai.sidevoice.desktop.providers`, account = provider | Keys kept under the previous service `dev.sidevoice.desktop.providers` are carried over once (below). Other keychains in the search list are not read or written. OS access control and Keychain prompts apply. |
+| macOS | `apple-native-keyring-store` as it is: generic passwords in the user's login keychain; service `ai.sidevoice.desktop.providers`, account = provider | Keys kept under the previous service `dev.sidevoice.desktop.providers` are copied once (below). Other keychains in the search list are not read or written. OS access control and Keychain prompts apply. |
 | Windows | `windows-native-keyring-store`, Credential Manager generic passwords; target `<provider>/ai.sidevoice.desktop.providers` | Keyring validates its UTF-16 password blob against `CRED_MAX_CREDENTIAL_BLOB_SIZE` (2,560 bytes) before calling `CredWriteW`. At most 1,280 UTF-16 code units (640 supplementary-plane characters). Oversized writes fail without truncation or replacing the old key. Names fit the native limits. Entries explicitly use local-machine persistence (`Local` / `CRED_PERSIST_LOCAL_MACHINE`), so they survive logoff without roaming to other computers. Updating a formerly roaming entry changes it to local persistence. |
 | Linux | `zbus-secret-service-keyring-store`, encrypted D-Bus session with the user's Secret Service; exact `service` and `username` attributes | Requires a reachable session bus and accessible Secret Service. Missing/inaccessible/locked stores return `credentials_unavailable`, never absence or a successful fallback. A store may use its normal unlock prompt; callers wait at most 30 seconds, then receive `credentials_unavailable`. |
 
@@ -35,17 +35,18 @@ operations can be retried. An indefinitely unanswered prompt may require dismiss
 
 The service is the bundle identifier plus `.providers`, and the identifier was `dev.sidevoice.desktop` before
 `ai.sidevoice.desktop`. At launch, first (`legacy_identifier.rs`, until its journal says it has finished;
-APP_DATA.md), `carry_over(identifier)` lists the old service (the same exact-service search as `clear_all`) and, for
-each account that is a valid provider id: if the new namespace holds no key for it, copies it and reads it back equal;
-then deletes the old entry. A key the new namespace already holds wins (the old entry is just deleted). This also
-serves the builds that ran under the new identifier with no carry-over: their keys stay, the old ones are added.
-`holds_keys()` says whether the new namespace holds any key (one of the signals that an install was set up; a store
-that cannot answer is "unknown", not "no key": nothing is replaced and no key moves until it can). A key that cannot be
-read, written or checked stays where it was, the others go on, and the next launch tries again; an old entry whose account is not a valid provider id is not the app's
-and stays. It goes through the same admission as every other call (30-second deadline where a prompt can wait), and the
-log names the provider ids moved, never a key or a store message. On macOS the new build is a different code identity
-from the one that stored the keys, so the Keychain asks once per key whether it may use it; declining leaves the key in
-the old namespace. Removed with `legacy_identifier.rs` (RELEASING.md, "Legacy identifier carry-over").
+APP_DATA.md), `copy_from(identifier, settled)` lists the old service (the same exact-service search as `clear_all`)
+and, for each account that is a valid provider id and not among the providers already settled, copies the key if the
+new namespace holds none for it, and reads it back equal. **Nothing is overwritten or deleted**: a new key wins and
+the old one stays, so an old key and a different new one are both kept. The journal records each provider settled
+(copied, or the new namespace held one), so a key the person removes later is never copied again. A key that cannot
+be read, written or checked is reported and tried again at the next launch; the others go on. An old store that
+cannot be listed (`Unavailable`, e.g. no Secret Service) is asked again at every launch. It goes through the same
+admission as every other call (30-second deadline where a prompt can wait), and the log names the provider ids, never
+a key or a store message. On macOS the new build is a different code identity from the one that stored the keys, so
+the Keychain asks once per key whether it may use it. The old entries stay in the store until removed by hand
+(APP_DATA.md, "From the previous identifier"). Removed with `legacy_identifier.rs` (RELEASING.md, "Legacy identifier
+carry-over").
 
 ## Reset
 

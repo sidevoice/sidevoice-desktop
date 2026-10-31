@@ -263,12 +263,16 @@ fn begin_reset(app: &AppHandle, uninstall: bool) -> Answer {
     })?;
     // The program the helper runs and the relaunch starts, resolved and checked before anything is touched.
     let program = application::installed_program().ok_or_else(|| refused("reset.helper-failed"))?;
+    // The carry-over from the previous identifier ends before anything is cleared, finished or not: nothing the reset
+    // deletes (here or in the helper) may come back from the old identifier's data.
+    let control = control_dir().ok_or_else(|| refused("reset.helper-failed"))?;
+    crate::legacy_identifier::stop(&control).map_err(|_| refused("reset.helper-failed"))?;
     let (mut failed, agents, service_outcome) = reset_before_exit()?;
     // The provider keys, on every host that runs the transaction, journalled as the last step before exit.
     if credentials::clear_all().is_err() {
         failed.push(json!({"step": "keychain", "key": "reset.keychain-failed"}));
     }
-    let journal = control_dir().ok_or_else(|| refused("reset.helper-failed"))?.join(JOURNAL);
+    let journal = control.join(JOURNAL);
     write_atomic_json(
         &journal,
         &json!({"stage":"keychain", "completed":["service", "keychain"], "failed":failed.clone()}),
@@ -555,11 +559,6 @@ fn clean_up_after_exit(
     // a crash of the helper; whether the record also survives a power loss is the shared writer's guarantee (Unix
     // syncs the file and the directory; Windows does not yet make the rename durable: docs/RESET_HANDOFF.md).
     if write_atomic_json(&journal, &json!({"stage":"cleanup", "completed":[], "failed":failed})).is_err() {
-        return;
-    }
-    // The carry-over from the previous identifier ends with this reset, whether it had finished or not: nothing the
-    // reset deletes may come back from the old identifier's folders. Not recorded, nothing is deleted.
-    if crate::legacy_identifier::stop(&control).is_err() {
         return;
     }
     let browser = browser

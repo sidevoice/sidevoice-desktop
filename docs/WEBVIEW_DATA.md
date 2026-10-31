@@ -38,13 +38,12 @@ reuses another application's browser cannot make an unobserved default store loo
 ## From the previous identifier
 
 Every root above is keyed by the bundle identifier, which was `dev.sidevoice.desktop` before `ai.sidevoice.desktop`.
-At launch, first, each root of the old identifier (`locations_of`) that exists is carried to the new one's
-(`legacy_identifier.rs`, driven through `app_data::moves_from`, which also names the app's other folders): renamed when
-the new root does not exist, put in place of it when it holds only what a first start made, and left where it is when
-the install was set up under the new identifier (APP_DATA.md has the rule; the first-start root is kept as `<root>.first-start-backup`, not
-deleted). The page's local storage and the rest of the store go with it. The launch lock is held and no browser process of this app runs yet, so nothing writes to either root
-meanwhile. A rename that fails (on Windows, an old instance still holding the folder) is logged and retried at the
-next launch.
+At launch, first, each root of the old identifier (`locations_of`) that exists is copied to the new one's and swapped
+in, with the app data folder (`legacy_identifier.rs`, through `app_data::carried_from`; a root that is the app data
+folder goes as it; APP_DATA.md has the rule): the page's local storage and the rest of the store come with it, the old
+root is left as it is, and a new root that a first start made is kept as `<root>.first-start-backup`. The launch lock
+is held and no browser process of this app runs yet, so nothing writes to either root meanwhile. A copy or rename that
+fails is logged and retried at the next launch.
 
 ## Lifetime and integration contract
 

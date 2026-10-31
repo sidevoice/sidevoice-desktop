@@ -7,7 +7,7 @@
 
 use keyring_core::{CredentialStore, Entry};
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc, Arc, Mutex,
@@ -100,31 +100,19 @@ pub fn clear_all() -> Result<(), Error> {
     admit(|| Native::clear_namespace(namespace()))
 }
 
-/// Whether the namespace the public functions use holds a provider key (an account that is a valid provider id).
-pub fn holds_keys() -> Result<bool, Error> {
-    admit(|| holds_in(Native::store()?.as_ref(), namespace()))
-}
+/// What [`copy_from`] did with each provider key it found, by provider: `Ok(true)` the key was copied into the
+/// namespace the public functions use, `Ok(false)` that namespace held one already (left as it is). The old entry is
+/// never changed.
+pub type Copied = Vec<(String, Result<bool, Error>)>;
 
-fn holds_in(store: &CredentialStore, service: &str) -> Result<bool, Error> {
-    let entries = store.search(&HashMap::from([("service", service)]))?;
-    Ok(entries.iter().any(|entry| {
-        entry.get_specifiers().is_some_and(|(found, account)| found == service && Provider::new(&account).is_ok())
-    }))
-}
-
-/// What [`carry_over`] did with each provider key it found, by provider: `Ok(true)` the key was copied into the
-/// namespace the public functions use, `Ok(false)` that namespace already held one (left as it is); either way the old
-/// entry is gone. `Err` leaves the old entry where it was.
-pub type Carried = Vec<(String, Result<bool, Error>)>;
-
-/// Carry the provider keys the app kept under the bundle identifier `identifier` (its `<identifier>.providers`
-/// namespace) over to the namespace the public functions use, once: for the first run of a build whose identifier
-/// changed. Each key found is copied unless the new namespace already holds one, read back, and only then deleted from
-/// the old one; a key that cannot be carried stays where it was. An old entry whose account is not a valid provider id
-/// is not the app's and stays. `Err` when the old namespace cannot be listed.
-pub fn carry_over(identifier: &str) -> Result<Carried, Error> {
+/// Copy the provider keys the app kept under the bundle identifier `identifier` (its `<identifier>.providers`
+/// namespace) to the namespace the public functions use, for the first runs of a build whose identifier changed. Each
+/// key found whose provider is not in `settled` is copied if the new namespace holds none for it, and read back.
+/// Nothing is overwritten and nothing is deleted. An old entry whose account is not a valid provider id is not the
+/// app's and is skipped. `Err` when the old namespace cannot be listed.
+pub fn copy_from(identifier: &str, settled: BTreeSet<String>) -> Result<Copied, Error> {
     let from = service_of(identifier);
-    admit(move || carry_in(Native::store()?.as_ref(), &from, namespace()))
+    admit(move || copy_in(Native::store()?.as_ref(), &from, namespace(), &settled))
 }
 
 /// The service of the namespace that a build with the bundle identifier `identifier` kept its provider keys in.
@@ -132,39 +120,36 @@ fn service_of(identifier: &str) -> String {
     format!("{identifier}.providers")
 }
 
-/// [`carry_over`] from the service `from` to the service `to` in `store`.
-fn carry_in(store: &CredentialStore, from: &str, to: &str) -> Result<Carried, Error> {
-    let mut carried = Vec::new();
+/// [`copy_from`] the service `from` to the service `to` in `store`.
+fn copy_in(store: &CredentialStore, from: &str, to: &str, settled: &BTreeSet<String>) -> Result<Copied, Error> {
+    let mut copied = Vec::new();
     for entry in store.search(&HashMap::from([("service", from)]))? {
         let Some((service, account)) = entry.get_specifiers() else { continue };
         let Ok(provider) = Provider::new(&account) else { continue };
-        if service != from {
+        if service != from || settled.contains(&account) {
             continue;
         }
-        match carry_key(store, from, to, &provider) {
+        match copy_key(store, from, to, &provider) {
             Ok(None) => (),
-            Ok(Some(copied)) => carried.push((account, Ok(copied))),
-            Err(error) => carried.push((account, Err(error))),
+            Ok(Some(done)) => copied.push((account, Ok(done))),
+            Err(error) => copied.push((account, Err(error))),
         }
     }
-    Ok(carried)
+    Ok(copied)
 }
 
-/// One key: `None` when the old entry is already gone, else whether it was copied. The old entry is deleted only
-/// after the new one is read back equal.
-fn carry_key(store: &CredentialStore, from: &str, to: &str, provider: &Provider) -> Result<Option<bool>, Error> {
-    let copied = if read_in(store, to, provider)?.is_none() {
-        let Some(secret) = read_in(store, from, provider)? else { return Ok(None) };
-        write_in(store, to, provider, Some(&secret))?;
-        if read_in(store, to, provider)?.as_deref() != Some(secret.as_str()) {
-            return Err(Error::Failed);
-        }
-        true
-    } else {
-        false
-    };
-    write_in(store, from, provider, None)?;
-    Ok(Some(copied))
+/// One key: `None` when the old entry is gone, else whether it was copied: written only where the new namespace holds
+/// none, then read back equal.
+fn copy_key(store: &CredentialStore, from: &str, to: &str, provider: &Provider) -> Result<Option<bool>, Error> {
+    if read_in(store, to, provider)?.is_some() {
+        return Ok(Some(false));
+    }
+    let Some(secret) = read_in(store, from, provider)? else { return Ok(None) };
+    write_in(store, to, provider, Some(&secret))?;
+    match read_in(store, to, provider)? {
+        Some(read) if read == secret => Ok(Some(true)),
+        _ => Err(Error::Failed),
+    }
 }
 
 /// A validated provider id, owned so it can cross to a blocking worker.
@@ -408,31 +393,35 @@ mod tests {
         clear_in(&store, SERVICE).unwrap();
     }
 
-    /// [`carry_over`] through the real store (macOS and Windows run it; Linux has no store on headless CI): a key under
-    /// the namespace of another identifier, unique to this test, ends up in the namespace the public functions use in
-    /// test builds, and is gone from the old one.
-    pub(super) fn carry_over_native() {
+    /// [`copy_from`] through the real store (macOS and Windows run it; Linux has no store on headless CI): a key under
+    /// the namespace of another identifier, unique to this test, is copied to the namespace the public functions use in
+    /// test builds, and stays in the old one.
+    pub(super) fn copy_from_native() {
         let _serial = serial();
         let identifier = test_service();
         let old = service_of(&identifier);
         let store = Native::store().unwrap();
         write_in(store.as_ref(), &old, &provider("openai"), Some("test-only")).unwrap();
-        assert_eq!(holds_keys(), Ok(false));
-        assert_eq!(carry_over(&identifier), Ok(vec![("openai".to_owned(), Ok(true))]));
+        assert_eq!(copy_from(&identifier, BTreeSet::new()), Ok(vec![("openai".to_owned(), Ok(true))]));
         assert_eq!(read("openai").unwrap().as_deref(), Some("test-only"));
-        assert_eq!(holds_keys(), Ok(true));
-        assert_eq!(read_in(store.as_ref(), &old, &provider("openai")).unwrap(), None);
-        assert_eq!(carry_over(&identifier), Ok(vec![]));
+        assert_eq!(read_in(store.as_ref(), &old, &provider("openai")).unwrap().as_deref(), Some("test-only"));
+        assert_eq!(copy_from(&identifier, BTreeSet::from(["openai".to_owned()])), Ok(vec![]));
         clear_all().unwrap();
-        assert_eq!(holds_keys(), Ok(false));
+        clear_in(store.as_ref(), &old).unwrap();
     }
 
     /// The namespace of the builds before `ai.sidevoice.desktop` (`legacy_identifier`).
     const OLD: &str = "dev.sidevoice.desktop.providers";
 
-    fn by_provider(mut carried: Carried) -> Carried {
-        carried.sort_by(|a, b| a.0.cmp(&b.0));
-        carried
+    fn copy(store: &CredentialStore, settled: &[&str]) -> Copied {
+        let settled = settled.iter().map(|provider| provider.to_string()).collect();
+        let mut copied = copy_in(store, OLD, SERVICE, &settled).unwrap();
+        copied.sort_by(|a, b| a.0.cmp(&b.0));
+        copied
+    }
+
+    fn key(store: &CredentialStore, service: &str, id: &str) -> Option<String> {
+        read_in(store, service, &provider(id)).unwrap()
     }
 
     #[test]
@@ -442,20 +431,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_valid_provider_key_in_exactly_that_service_counts_as_held() {
-        let _serial = serial();
-        let store = memory();
-        assert_eq!(holds_in(&store, SERVICE), Ok(false));
-        // Not the app's: an account its validator refuses, and a valid one in another service.
-        store.build(SERVICE, "future_provider", None).unwrap().set_password("not a key").unwrap();
-        write_in(&store, OLD, &provider("openai"), Some("old")).unwrap();
-        assert_eq!(holds_in(&store, SERVICE), Ok(false));
-        write_in(&store, SERVICE, &provider("openai"), Some("new")).unwrap();
-        assert_eq!(holds_in(&store, SERVICE), Ok(true));
-    }
-
-    #[test]
-    fn keys_move_to_the_new_namespace_and_leave_the_old_one() {
+    fn keys_are_copied_to_the_new_namespace_and_stay_in_the_old_one() {
         let _serial = serial();
         let store = memory();
         write_in(&store, OLD, &provider("openai"), Some("old-openai")).unwrap();
@@ -465,53 +441,48 @@ mod tests {
         foreign.set_password("keep").unwrap();
         write_in(&store, "unrelated.service", &provider("openai"), Some("keep")).unwrap();
 
-        let carried = by_provider(carry_in(&store, OLD, SERVICE).unwrap());
-        assert_eq!(carried, vec![("future-provider-42".into(), Ok(true)), ("openai".into(), Ok(true))]);
-        assert_eq!(read_in(&store, SERVICE, &provider("openai")).unwrap().as_deref(), Some("old-openai"));
-        assert_eq!(read_in(&store, SERVICE, &provider("future-provider-42")).unwrap().as_deref(), Some("old-future"));
-        assert_eq!(read_in(&store, OLD, &provider("openai")).unwrap(), None);
-        assert_eq!(read_in(&store, OLD, &provider("future-provider-42")).unwrap(), None);
+        assert_eq!(copy(&store, &[]), vec![("future-provider-42".into(), Ok(true)), ("openai".into(), Ok(true))]);
+        assert_eq!(key(&store, SERVICE, "openai").as_deref(), Some("old-openai"));
+        assert_eq!(key(&store, SERVICE, "future-provider-42").as_deref(), Some("old-future"));
+        assert_eq!(key(&store, OLD, "openai").as_deref(), Some("old-openai"));
+        assert_eq!(key(&store, OLD, "future-provider-42").as_deref(), Some("old-future"));
         assert_eq!(foreign.get_password().unwrap(), "keep");
-        assert_eq!(read_in(&store, "unrelated.service", &provider("openai")).unwrap().as_deref(), Some("keep"));
-
-        // Run again, as the next launch does: nothing is left to carry.
-        assert_eq!(carry_in(&store, OLD, SERVICE).unwrap(), vec![]);
-        assert_eq!(read_in(&store, SERVICE, &provider("openai")).unwrap().as_deref(), Some("old-openai"));
+        assert_eq!(key(&store, "unrelated.service", "openai").as_deref(), Some("keep"));
     }
 
     #[test]
-    fn a_key_the_new_namespace_already_holds_is_kept_and_the_old_one_dropped() {
+    fn an_old_key_and_a_different_new_one_are_both_kept() {
         let _serial = serial();
         let store = memory();
         write_in(&store, OLD, &provider("openai"), Some("old")).unwrap();
         write_in(&store, SERVICE, &provider("openai"), Some("new")).unwrap();
-        assert_eq!(carry_in(&store, OLD, SERVICE).unwrap(), vec![("openai".into(), Ok(false))]);
-        assert_eq!(read_in(&store, SERVICE, &provider("openai")).unwrap().as_deref(), Some("new"));
-        assert_eq!(read_in(&store, OLD, &provider("openai")).unwrap(), None);
+        assert_eq!(copy(&store, &[]), vec![("openai".into(), Ok(false))]);
+        assert_eq!(key(&store, SERVICE, "openai").as_deref(), Some("new"));
+        assert_eq!(key(&store, OLD, "openai").as_deref(), Some("old"));
     }
 
     #[test]
-    fn nothing_to_carry_changes_nothing() {
+    fn a_settled_provider_is_not_copied_again_after_its_key_was_removed() {
         let _serial = serial();
         let store = memory();
-        write_in(&store, SERVICE, &provider("openai"), Some("new")).unwrap();
-        assert_eq!(carry_in(&store, OLD, SERVICE).unwrap(), vec![]);
-        assert_eq!(read_in(&store, SERVICE, &provider("openai")).unwrap().as_deref(), Some("new"));
+        write_in(&store, OLD, &provider("openai"), Some("old")).unwrap();
+        write_in(&store, OLD, &provider("other"), Some("old-other")).unwrap();
+        assert_eq!(copy(&store, &["openai"]), vec![("other".into(), Ok(true))]);
+        assert_eq!(key(&store, SERVICE, "openai"), None);
+        assert_eq!(key(&store, OLD, "openai").as_deref(), Some("old"));
     }
 
     #[test]
-    fn a_key_that_cannot_be_carried_stays_in_the_old_namespace() {
+    fn a_key_that_cannot_be_copied_is_reported_and_the_others_go_on() {
         let _serial = serial();
         let store = memory();
-        // Stored text that is not text: reading it fails, so it is neither copied nor deleted.
+        // Stored text that is not text: reading it fails, so it is not copied.
         store.build(OLD, "openai", None).unwrap().set_secret(&[0xff]).unwrap();
         write_in(&store, OLD, &provider("other"), Some("old-other")).unwrap();
-        let carried = by_provider(carry_in(&store, OLD, SERVICE).unwrap());
-        assert_eq!(carried, vec![("openai".into(), Err(Error::Failed)), ("other".into(), Ok(true))]);
+        assert_eq!(copy(&store, &[]), vec![("openai".into(), Err(Error::Failed)), ("other".into(), Ok(true))]);
         assert_eq!(store.build(OLD, "openai", None).unwrap().get_secret().unwrap(), vec![0xff]);
-        assert_eq!(read_in(&store, SERVICE, &provider("openai")).unwrap(), None);
-        assert_eq!(read_in(&store, SERVICE, &provider("other")).unwrap().as_deref(), Some("old-other"));
-        assert_eq!(read_in(&store, OLD, &provider("other")).unwrap(), None);
+        assert_eq!(key(&store, SERVICE, "openai"), None);
+        assert_eq!(key(&store, SERVICE, "other").as_deref(), Some("old-other"));
     }
 
     #[test]

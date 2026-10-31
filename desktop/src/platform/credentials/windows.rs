@@ -71,8 +71,8 @@ mod tests {
     }
 
     #[test]
-    fn legacy_keys_are_carried_over_in_credential_manager() {
-        carry_over_native();
+    fn legacy_keys_are_copied_in_credential_manager() {
+        copy_from_native();
     }
 
     #[test]
