@@ -7,7 +7,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tauri::{AppHandle, Runtime};
+use tauri::{plugin::PluginApi, AppHandle, Runtime};
 use tauri_plugin_opener::OpenerExt;
 use tokio::sync::watch;
 
@@ -20,12 +20,22 @@ mod imp;
 #[cfg(target_os = "linux")]
 #[path = "microphone/linux.rs"]
 mod imp;
+#[cfg(target_os = "ios")]
+#[path = "microphone/ios.rs"]
+mod imp;
+#[cfg(target_os = "android")]
+#[path = "microphone/android.rs"]
+mod imp;
+// AVFoundation's permission, which macOS and iOS share.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[path = "microphone/apple.rs"]
+mod apple;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccessState {
     Granted,
     Denied,
-    /// The OS has not asked the person yet (macOS only).
+    /// The OS has not asked the person yet (macOS, iOS and Android).
     NotDetermined,
     NoDevice,
     /// The OS did not answer: never a grant, never a denial, never an absent device.
@@ -241,6 +251,12 @@ trait Os {
         Some(cpal::default_host())
     }
 
+    /// Prepare what this OS needs of the plugin itself, once, when the plugin is set up (Android loads the Kotlin class
+    /// that asks the person). Nothing by default.
+    fn setup<R: Runtime>(_api: PluginApi<R, ()>) -> Result<(), Box<dyn std::error::Error>> {
+        Ok(())
+    }
+
     /// Run `work`, the device worker thread's whole life, after preparing that thread for the audio host's first call
     /// as this OS needs. Nothing to prepare by default.
     fn on_worker_thread(work: impl FnOnce()) {
@@ -257,9 +273,10 @@ trait Os {
         true
     }
 
-    /// Ask for access. Only macOS has a prompt (AVFoundation, the first time; afterwards the stored answer). Elsewhere
-    /// there is nothing to ask — Windows' unpackaged desktop apps and Linux have no consent prompt — so this is
-    /// `permission`. It never edits privacy settings.
+    /// Ask for access. macOS and iOS have a prompt (AVFoundation, the first time; afterwards the stored answer), and so
+    /// does Android (the runtime permission, until the person refuses for good). Elsewhere there is nothing to ask —
+    /// Windows' unpackaged desktop apps and Linux have no consent prompt — so this is `permission`. It never edits
+    /// privacy settings.
     fn ask() -> impl Future<Output = Result<AccessState, &'static str>> + Send {
         async { Self::permission() }
     }
@@ -271,6 +288,11 @@ fn state_of<O: Os>(devices: Devices) -> Result<AccessState, &'static str> {
 
 async fn request_of<O: Os>(devices: Devices) -> Result<AccessState, &'static str> {
     Ok(resolve(O::ask().await?, devices))
+}
+
+/// The plugin's setup, for what this OS needs of it (`Os::setup`).
+pub fn setup<R: Runtime>(api: PluginApi<R, ()>) -> Result<(), Box<dyn std::error::Error>> {
+    imp::Native::setup(api)
 }
 
 /// Inspect without prompting. Re-reads the OS every time. Denial takes precedence over a missing device, and an OS
@@ -458,12 +480,12 @@ mod tests {
         assert_eq!(enumerator.devices(LONG).await, Devices::Unknown);
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
     #[tokio::test]
     async fn state_and_request_answer_without_a_prompt_whatever_the_machine_has() {
         // CI machines have no audio hardware: any answer is fine, a failure or a hang is not.
         let answer = state().await.unwrap();
         assert_eq!(request().await.unwrap(), answer);
-        assert_ne!(answer, AccessState::NotDetermined, "only macOS has a prompt to wait for");
+        assert_ne!(answer, AccessState::NotDetermined, "only macOS, iOS and Android have a prompt to wait for");
     }
 }
