@@ -114,8 +114,6 @@ jobs:
         run: cargo xtask permissions
       - name: Bridge script and Rust unit tests
         run: cargo xtask test
-      - name: The voice settings against the voice contract the pinned web bundles (its sidevoice-voice's voice-host.d.ts)
-        run: cargo xtask voice-contract
       - name: The local host with two users (a second uid cannot open the core socket, link as a connector, or use the proxy)
         run: cargo xtask two-users
 
@@ -323,7 +321,7 @@ jobs:
         id: models
         with:
           path: ${{ runner.temp }}/real-call-models
-          key: real-call-models-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.engine-rev }}-${{ hashFiles('app-core/src/voice/models/tests.rs') }}
+          key: real-call-models-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.engine-rev }}-${{ hashFiles('desktop/src/voice/models/tests.rs') }}
           restore-keys: real-call-models-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.engine-rev }}-
       - name: A call on the engine's real models through the app's adapter (recorded speech in, a reply out)
         env:
@@ -445,7 +443,7 @@ jobs:
         id: models
         with:
           path: ${{ runner.temp }}/real-call-models
-          key: real-call-models-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.engine-rev }}-${{ hashFiles('app-core/src/voice/models/engine/tests.rs') }}
+          key: real-call-models-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.engine-rev }}-${{ hashFiles('desktop/src/voice/models/engine/tests.rs') }}
           restore-keys: real-call-models-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.engine-rev }}-
       - name: A call on the engine's real models (injected audio) and on the runner's own devices
         if: ${{ !cancelled() }}

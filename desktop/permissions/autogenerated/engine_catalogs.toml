@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-engine-catalogs"
+description = "Enables the engine_catalogs command without any pre-configured scope."
+commands.allow = ["engine_catalogs"]
+
+[[permission]]
+identifier = "deny-engine-catalogs"
+description = "Denies the engine_catalogs command without any pre-configured scope."
+commands.deny = ["engine_catalogs"]

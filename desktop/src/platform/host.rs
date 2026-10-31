@@ -9,6 +9,10 @@ use tauri::utils::{config::BundleType, platform::bundle_type};
 mod imp;
 use imp::Native;
 
+/// The origin Tauri serves the app's own pages from: what a node sees as the interface's `Origin`. Only this value
+/// differs by OS, so there is no per-OS code.
+pub const APP_ORIGIN: &str = if cfg!(windows) { "http://tauri.localhost" } else { "tauri://localhost" };
+
 /// What differs per OS.
 trait Os {
     /// The name the person gave the device, kept apart from the network name (macOS Sharing's Computer Name,

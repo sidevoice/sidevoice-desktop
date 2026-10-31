@@ -98,7 +98,7 @@ fn resident_bytes(bytes: u64) -> Option<u64> {
 #[cfg(feature = "probe")]
 pub fn voice_holds<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
     use tauri::Manager;
-    app.try_state::<sidevoice_app_core::app::AppHost>().map(|host| host.held())
+    app.try_state::<crate::voice::VoiceState>().map(|state| state.held())
 }
 
 /// Only switches with native setters in this build/runtime. Empty in releases and on Windows/Linux,

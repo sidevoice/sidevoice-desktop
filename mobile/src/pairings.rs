@@ -1,34 +1,24 @@
 //! The pairings the room page keeps (the machines it is paired with and the revocations still to tell them), as one JSON
 //! file in the app's private storage: read and written whole, as the page's JSON, with the refusals the page already
-//! knows from the desktop (`data.pairings-invalid`, `-read`, `-write`; docs/BRIDGE.md). The shape of the same
-//! `read`/`write` pair as the shared plugin's `PairingStore`, which this app implements when the plugin joins it
-//! (docs/PAIRING_STORAGE.md → "On the phone").
+//! knows from the desktop (`data.pairings-invalid`, `-read`, `-write`; docs/BRIDGE.md). `read` and `write` are the pair
+//! of the shared plugin's `PairingStore`, which the app implements for this file when the plugin joins the app (row 49:
+//! the mobile crate does not depend on `sidevoice-app-tauri` before its engine and voice build for the phone).
+//! `PairingFile::of_app(app)` is the constructor that picks the file.
 //!
 //! A write is atomic: the new record is written to a temporary file in the same directory, synced, renamed over the old
 //! one and the directory synced (`atomic-write-file`), so a crash or a power loss leaves the old record or the new one,
-//! never half of either.
-//!
-//! Nothing here defends against another process of the same user, as the desktop's held directory does: on a phone the
-//! file is in the app's own sandbox (the data directory only this app can open), and no other app can reach it.
-//! The pairings the room page keeps (the machines it is paired with and the revocations still to tell them), as one JSON
-//! file in the app's private storage: the mobile app's `PairingStore` (sidevoice-app-tauri), read and written whole, as the
-//! page's JSON, with the refusals the page already knows from the desktop (`data.pairings-invalid`, `-read`, `-write`;
-//! docs/BRIDGE.md). The app manages one for the plugin: `Pairings(Arc::new(PairingFile::of_app(app)?))`.
-//!
-//! A write is atomic: the new record is written to a temporary file in the same directory, synced, renamed over the old
-//! one and the directory synced (`atomic-write-file`), so a crash or a power loss leaves the old record or the new one,
-//! never half of either.
+//! never half of either. The crate renames before it syncs the directory, so an error can come after the new record is
+//! already in place: the result of a write is therefore what a read would return (`reported`), not the crate's error.
 //!
 //! Nothing here defends against another process of the same user, as the desktop's held directory does: on a phone the
 //! file is in the app's own sandbox (the data directory only this app can open), and no other app can reach it.
 use crate::platform::app_files;
 use atomic_write_file::AtomicWriteFile;
 use serde_json::{json, Value};
-use sidevoice_app_tauri::PairingStore;
 use std::{
     fs::{self, File},
-    io::{ErrorKind, Read, Write},
-    path::PathBuf,
+    io::{self, ErrorKind, Read, Write},
+    path::{Path, PathBuf},
 };
 use tauri::{AppHandle, Manager, Runtime};
 
@@ -100,12 +90,10 @@ impl PairingFile {
     fn new(path: PathBuf) -> Self {
         Self { path }
     }
-}
 
-impl PairingStore for PairingFile {
     /// The pairings as the page wrote them last, or the empty set when none were. A record that is too big, not JSON or
     /// not pairings is refused `data.pairings-invalid`, and is left as it is.
-    fn read(&self) -> Answer {
+    pub fn read(&self) -> Answer {
         let file = match File::open(&self.path) {
             Ok(file) => file,
             Err(error) if error.kind() == ErrorKind::NotFound => {
@@ -127,21 +115,38 @@ impl PairingStore for PairingFile {
             .ok_or_else(|| refused("data.pairings-invalid"))
     }
 
-    /// Keeps `value` after checking its shape and its size; refuses what is not pairings (`data.pairings-invalid`) and
-    /// what could not be kept (`data.pairings-write`), changing nothing.
-    fn write(&self, value: &Value) -> Answer {
+    /// Keeps `value` after checking its shape and its size; refuses what is not pairings (`data.pairings-invalid`), changing
+    /// nothing, and what could not be kept (`data.pairings-write`), when a read still returns the old record.
+    pub fn write(&self, value: &Value) -> Answer {
         let bytes = serde_json::to_vec(value).map_err(|_| refused("data.pairings-invalid"))?;
         if !checked_pairings(value) || bytes.len() as u64 > LIMIT {
             return Err(refused("data.pairings-invalid"));
         }
-        let failed = |_| refused("data.pairings-write");
         if let Some(directory) = self.path.parent() {
-            fs::create_dir_all(directory).map_err(failed)?;
+            if fs::create_dir_all(directory).is_err() {
+                return Err(refused("data.pairings-write"));
+            }
         }
-        let mut file = AtomicWriteFile::open(&self.path).map_err(failed)?;
-        file.write_all(&bytes).map_err(failed)?;
-        file.commit().map_err(failed)?;
-        Ok(Value::Null)
+        reported(write_atomically(&self.path, &bytes), &self.path, &bytes)
+    }
+}
+
+/// Writes `bytes` to `path` all or nothing.
+fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut file = AtomicWriteFile::open(path)?;
+    file.write_all(bytes)?;
+    file.commit()
+}
+
+/// What a write that ended in `result` did, as the page is told: the record on disk is `bytes` or it is not. `atomic-write-file`
+/// renames the new record into place and then syncs the directory, so an error can leave the new record already visible;
+/// that write is done, as far as a read can tell (whether the rename survives a power loss at that very moment is not known).
+/// An error before the rename leaves the old record, which is `bytes` only if the page wrote the same record again.
+fn reported(result: io::Result<()>, path: &Path, bytes: &[u8]) -> Answer {
+    match result {
+        Ok(()) => Ok(Value::Null),
+        Err(_) if fs::read(path).is_ok_and(|on_disk| on_disk == bytes) => Ok(Value::Null),
+        Err(_) => Err(refused("data.pairings-write")),
     }
 }
 
@@ -268,6 +273,36 @@ mod tests {
         assert_eq!(store.read(), Err(refused("data.pairings-read")));
         assert_eq!(
             store.write(&json!({ "pairings": [] })),
+            Err(refused("data.pairings-write"))
+        );
+    }
+
+    #[test]
+    fn an_error_after_the_rename_is_reported_by_what_is_on_disk() {
+        let home = tempfile::tempdir().unwrap();
+        let store = file_in(&home);
+        let old = json!({ "pairings": [row("old")] });
+        let new = json!({ "pairings": [row("new")] });
+        let bytes = serde_json::to_vec(&new).unwrap();
+        let path = home.path().join("app").join(FILE);
+        let sync_failed = || Err(io::Error::other("the directory could not be synced"));
+        store.write(&old).unwrap();
+        assert_eq!(reported(Ok(()), &path, &bytes), Ok(Value::Null));
+        // The new record is in place already: the error is the sync after the rename, and the write is done.
+        fs::write(&path, &bytes).unwrap();
+        assert_eq!(reported(sync_failed(), &path, &bytes), Ok(Value::Null));
+        assert_eq!(store.read(), Ok(new));
+        // The old record is still there: the write failed, and a read says so.
+        store.write(&old).unwrap();
+        assert_eq!(
+            reported(sync_failed(), &path, &bytes),
+            Err(refused("data.pairings-write"))
+        );
+        assert_eq!(store.read(), Ok(old));
+        // Nothing is there at all.
+        fs::remove_file(&path).unwrap();
+        assert_eq!(
+            reported(sync_failed(), &path, &bytes),
             Err(refused("data.pairings-write"))
         );
     }

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-engine-progress"
+description = "Enables the engine_progress command without any pre-configured scope."
+commands.allow = ["engine_progress"]
+
+[[permission]]
+identifier = "deny-engine-progress"
+description = "Denies the engine_progress command without any pre-configured scope."
+commands.deny = ["engine_progress"]

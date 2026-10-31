@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-voice-create-call"
+description = "Enables the voice_create_call command without any pre-configured scope."
+commands.allow = ["voice_create_call"]
+
+[[permission]]
+identifier = "deny-voice-create-call"
+description = "Denies the voice_create_call command without any pre-configured scope."
+commands.deny = ["voice_create_call"]

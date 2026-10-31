@@ -5,8 +5,7 @@
 //                invoke('bridge_level', { level })     the microphone's level during a call, for the card's wave
 //                invoke('bridge_playback', { level, threadId })  the voice's output level, for the card's avatar
 //   app → page : window.__sidevoiceDesktop.run({ command: 'toggle-mute' | 'hang-up' | 'skip-reply' | … })
-//                the voice call's events (host.voice) come over a channel the page opens when it loads (voice_events);
-//                window.__sidevoiceDesktop.voiceEvent(event) is where each one is handed to the page
+//                window.__sidevoiceDesktop.voiceEvent(event)  each event of the voice call the app runs (host.voice)
 //                window.__sidevoiceDesktop.updaterEvent(status)  the updates' status changed (host.updater)
 //                window.__sidevoiceDesktop.muteShortcutEvent(status)  the mute shortcut changed (host.muteShortcut)
 // It only reads the web UI's public seams (window.sidevoiceUI.store, .micLevel, .playbackLevel and .openSettings,
@@ -42,47 +41,19 @@
     return picked;
   };
 
-  /** The commands the apps share (the voice call's and the engine's, the microphone permission, the levels of the call, the
-   *  pairings) are a Tauri plugin's, and are invoked under its name (sidevoice-app-tauri/ACL.md); the app's own keep theirs. */
-  const PLUGIN = "plugin:sidevoice-app-tauri|";
-  const SHARED = new Set(["microphone", "bridge_level", "bridge_playback", "pairings_read", "pairings_write"]);
-  const named = (command) => (/^(voice|engine)_/.test(command) || SHARED.has(command) ? PLUGIN + command : command);
-
   function invoke(command, args) {
     const internals = win.__TAURI_INTERNALS__;
     if (!internals || typeof internals.invoke !== "function") return;
     // The app may be mid-reload or the capability may not match yet: never break the page for it.
     Promise.resolve()
-      .then(() => internals.invoke(named(command), args))
+      .then(() => internals.invoke(command, args))
       .catch(() => {});
   }
 
   function call(command, args, options) {
     const internals = win.__TAURI_INTERNALS__;
     if (!internals || typeof internals.invoke !== "function") return Promise.reject(new Error("no desktop host"));
-    return Promise.resolve().then(() => internals.invoke(named(command), args, options));
-  }
-
-  /** A Tauri channel without the API's module: the app sends over it `{index, message}` (and `{index, end}` last), and the
-   *  messages are handed to `onmessage` in index order, as the API's `Channel` does. What this returns is what a command
-   *  that takes a channel is given in its place. */
-  function channel(onmessage) {
-    const internals = win.__TAURI_INTERNALS__;
-    const waiting = new Map();
-    let next = 0;
-    let end = null;
-    const id = internals.transformCallback((event) => {
-      if (event && "end" in event) end = event.index;
-      else if (event && event.index >= next) waiting.set(event.index, event.message);
-      while (waiting.has(next)) {
-        const message = waiting.get(next);
-        waiting.delete(next);
-        next++;
-        try { onmessage(message); } catch (_) { /* a listener's error is the page's own */ }
-      }
-      if (end !== null && next >= end && typeof internals.unregisterCallback === "function") internals.unregisterCallback(id);
-    });
-    return `__CHANNEL__:${id}`;
+    return Promise.resolve().then(() => internals.invoke(command, args, options));
   }
 
   let installs = 0; // numbers each install call's job
@@ -183,22 +154,6 @@
    *  recognition state, and `preload(settings)` loads the models a call of them would use. */
   function voice() {
     const calls = new Map();
-    // The app numbers the pages that own its calls and sends a page's events over the channel it opens when it loads, to that
-    // page only. Every command carries the number back, so that a page that was replaced moves nothing of the one that
-    // replaced it. Asked once, with the first command; asked again if the app refused it.
-    let voiceApi;
-    let numbered = null;
-    const toApp = (command, args) => {
-      numbered ??= Promise.resolve().then(() => call("voice_events", {
-        // Which document asks: a request of a page that was replaced can reach the app after the new page's, and is told so.
-        document: win.performance.timeOrigin,
-        events: channel((event) => voiceApi?.receive(event)),
-      }));
-      return numbered.then((page) => call(command, { page, ...args }), (error) => {
-        numbered = null;
-        throw error;
-      });
-    };
     const deviceListeners = new Set();
     const epoch = Math.random().toString(36).slice(2, 10);
     let nextCall = 0;
@@ -247,20 +202,20 @@
       const closed = () => Object.assign(new Error("call stopped"), { code: "stopped", closed: true });
       // The lane is made at once, so that the microphone may be routed to the call before it works; the call is made on
       // it (the app refuses here what its catalogues cannot fill); `ready` is when it works.
-      const created = toApp("voice_create_call", { key: id });
-      const installed = created.then(() => toApp("voice_start", { key: id, settings, take: options?.take === true }));
+      const created = call("voice_create_call", { key: id });
+      const installed = created.then(() => call("voice_start", { key: id, settings, take: options?.take === true }));
       // It works when the app says so and the page has the state that says it (the app's events and its answers reach the
       // page by different ways, and a page that hears `ready` must find the state it comes with).
       let sawWorking;
       let failWorking;
       const working = new Promise((resolve, reject) => { sawWorking = resolve; failWorking = reject; });
       working.catch(() => {});
-      const ready = installed.then(() => toApp("voice_ready", { key: id })).then(() => working);
+      const ready = installed.then(() => call("voice_ready", { key: id })).then(() => working);
       // The page reads `ready`; one it never reads is no unhandled rejection of the bridge's.
       ready.catch(() => {});
       const asked = (after) => (command, args) => after.then(() => {
         if (closing) throw closed();
-        return toApp(command, { key: id, ...args });
+        return call(command, { key: id, ...args });
       });
       // What needs the lane only (the app keeps a mute from the lane's creation), and what needs the call.
       const onLane = asked(created);
@@ -282,7 +237,7 @@
             : { status: "not-played", reason: "failed", code: error?.code || error?.key || "voice-failed" } }));
         return Object.freeze({
           id: key,
-          cancel: () => { asking.then(() => sayings.has(key) && toApp("voice_cancel_say", { key: id, sayKey: key })).catch(() => {}); },
+          cancel: () => { asking.then(() => sayings.has(key) && call("voice_cancel_say", { key: id, sayKey: key })).catch(() => {}); },
           onEvent(listener) { if (typeof listener !== "function") throw new TypeError("a listener"); heard.add(listener); },
           outcome,
         });
@@ -298,7 +253,7 @@
           if (at >= 0) { answers.splice(at, 1); stopping--; }
         };
         // Native answers true once it stopped a call; where none was made, no idle comes.
-        return toApp("voice_stop", { key: id }).then((ran) => {
+        return call("voice_stop", { key: id }).then((ran) => {
           if (ran === true) return answered;
           forget();
           return undefined;
@@ -315,7 +270,7 @@
           await halt().catch(() => {});
           // Stopped, each saying under way ends as the call says it did.
           await Promise.all([...sayings.values()].map((pending) => pending.outcome));
-          await toApp("voice_dispose_call", { key: id });
+          await call("voice_dispose_call", { key: id });
         })().finally(() => {
           disposed = true;
           failWorking(closed());
@@ -375,7 +330,7 @@
         if (!settings || typeof settings !== "object" || (!settings.input && !settings.output)) {
           return Promise.reject(needsAHalf());
         }
-        return toApp("voice_preload", { settings });
+        return call("voice_preload", { settings });
       },
       routeInput(target) {
         if (target !== null && (!target || calls.get(target.id)?.host !== target)) {
@@ -383,27 +338,26 @@
         }
         route = route.catch(() => {}).then(async () => {
           if (target) await calls.get(target.id).created;
-          return toApp("voice_route_input", { key: target?.id ?? null });
+          return call("voice_route_input", { key: target?.id ?? null });
         });
         return route;
       },
-      audioDevices: () => toApp("voice_audio_devices"),
+      audioDevices: () => call("voice_audio_devices"),
       setAudioDevices: (choice) => {
         const chosen = {};
         for (const kind of ["input", "output"]) {
           const id = choice && choice[kind];
           if (id !== undefined) chosen[kind] = id === null ? null : String(id);
         }
-        return toApp("voice_set_audio_devices", { choice: chosen });
+        return call("voice_set_audio_devices", { choice: chosen });
       },
       onAudioDevices: on(deviceListeners),
     });
-    voiceApi = { host, receive(event) {
+    return { host, receive(event) {
       if (!event || typeof event !== "object") return;
       if (event.type === "devices") dispatch(deviceListeners, event.data);
       else calls.get(event.key)?.receive(event);
     } };
-    return voiceApi;
   }
 
   /** The app's microphone access (docs/BRIDGE.md → "The microphone permission"), onto the `microphone` command, on every
@@ -848,8 +802,8 @@
       // also remove itself (macOS).
       data: Object.freeze({
         pairings: Object.freeze({
-          read: () => call("pairings_read"),
-          write: (value) => call("pairings_write", { value }).then(() => undefined),
+          read: () => call("data_pairings_read"),
+          write: (value) => call("data_pairings_write", { value }).then(() => undefined),
         }),
         deleteAll: () => call("data_delete_all"),
         resetReport: () => call("data_reset_report"),

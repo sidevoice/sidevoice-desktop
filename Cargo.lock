@@ -4909,82 +4909,43 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
-name = "sidevoice-app-core"
-version = "0.3.0"
-dependencies = [
- "apple-native-keyring-store",
- "base64 0.22.1",
- "futures-util",
- "keyring-core",
- "libc",
- "log",
- "regex",
- "security-framework",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "sidevoice-engine",
- "sidevoice-voice",
- "sysinfo",
- "tokio",
- "windows-native-keyring-store",
- "zbus-secret-service-keyring-store",
-]
-
-[[package]]
-name = "sidevoice-app-tauri"
-version = "0.3.0"
-dependencies = [
- "block2",
- "cpal",
- "log",
- "objc2",
- "objc2-av-foundation",
- "objc2-avf-audio",
- "objc2-foundation",
- "objc2-media-player",
- "serde_json",
- "sidevoice-app-core",
- "tauri",
- "tauri-plugin",
- "tauri-plugin-opener",
- "tauri-utils",
- "tokio",
- "toml 1.1.6+spec-1.1.0",
- "windows-sys 0.61.2",
- "winreg",
-]
-
-[[package]]
 name = "sidevoice-desktop"
 version = "0.3.0"
 dependencies = [
+ "apple-native-keyring-store",
  "block2",
  "core-foundation 0.10.1",
  "core-graphics",
+ "cpal",
  "csv",
  "dirs",
  "dunce",
  "file-id",
+ "futures-util",
  "getrandom 0.3.4",
  "gtk",
+ "keyring-core",
  "libc",
  "log",
  "mach2",
  "nix",
  "objc2",
  "objc2-app-kit",
+ "objc2-av-foundation",
+ "objc2-avf-audio",
  "objc2-foundation",
+ "objc2-media-player",
  "regex",
  "same-file",
+ "security-framework",
  "serde",
  "serde_json",
- "sidevoice-app-core",
- "sidevoice-app-tauri",
  "sidevoice-desktop-core",
+ "sidevoice-desktop-engine",
  "sidevoice-desktop-test-support",
  "sidevoice-local-host",
  "sidevoice-platform",
+ "sidevoice-voice",
  "sys-locale",
  "sysinfo",
  "tauri",
@@ -4999,19 +4960,35 @@ dependencies = [
  "tokio",
  "url",
  "whoami",
+ "windows-native-keyring-store",
  "windows-sys 0.61.2",
  "winreg",
+ "zbus-secret-service-keyring-store",
 ]
 
 [[package]]
 name = "sidevoice-desktop-core"
 version = "0.3.0"
 dependencies = [
+ "base64 0.22.1",
  "global-hotkey",
  "log",
  "serde",
  "serde_json",
  "url",
+]
+
+[[package]]
+name = "sidevoice-desktop-engine"
+version = "0.3.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "sidevoice-engine",
+ "sysinfo",
+ "tokio",
 ]
 
 [[package]]
@@ -5107,7 +5084,6 @@ version = "0.1.0"
 dependencies = [
  "atomic-write-file",
  "serde_json",
- "sidevoice-app-tauri",
  "sidevoice-mobile-plugin",
  "tauri",
  "tauri-build",

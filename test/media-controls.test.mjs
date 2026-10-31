@@ -33,19 +33,7 @@ function page(mediaKeys, origin) {
   const calls = [], handlers = new Map(), audio = [];
   const window = {
     location: { protocol: new URL(origin).protocol, host: new URL(origin).host },
-    performance: { timeOrigin: 1 },
-    // The commands the apps share are a Tauri plugin's, invoked under its name; the test names them as the bridge does. The
-    // app numbers the page that opens its channel, and the voice commands carry the number, which the test leaves out.
-    __TAURI_INTERNALS__: {
-      transformCallback: () => 1,
-      invoke(command, args) {
-        const name = command.replace(/^plugin:sidevoice-app-tauri\|/, "");
-        if (name === "voice_events") return Promise.resolve(1);
-        const { page, ...others } = args ?? {};
-        calls.push([name, args && "page" in args ? others : args]);
-        return Promise.resolve();
-      },
-    },
+    __TAURI_INTERNALS__: { invoke(command, args) { calls.push([command, args]); return Promise.resolve(); } },
     setInterval() {}, clearInterval() {}, setTimeout,
   };
   const module = { exports: {} };

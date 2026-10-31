@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-voice-preload"
+description = "Enables the voice_preload command without any pre-configured scope."
+commands.allow = ["voice_preload"]
+
+[[permission]]
+identifier = "deny-voice-preload"
+description = "Denies the voice_preload command without any pre-configured scope."
+commands.deny = ["voice_preload"]

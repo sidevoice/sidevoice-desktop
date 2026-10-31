@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-engine-memory"
+description = "Enables the engine_memory command without any pre-configured scope."
+commands.allow = ["engine_memory"]
+
+[[permission]]
+identifier = "deny-engine-memory"
+description = "Denies the engine_memory command without any pre-configured scope."
+commands.deny = ["engine_memory"]

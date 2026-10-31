@@ -4,6 +4,8 @@ pub mod application;
 pub mod diagnostics;
 pub mod host;
 pub mod locale;
+pub mod media_controls;
+pub mod microphone;
 #[cfg(test)]
 pub mod pairing_storage;
 pub mod reveal;
@@ -15,6 +17,7 @@ pub mod app_data;
 pub mod card_window;
 pub mod confirmation;
 pub mod connector_service;
+pub mod credentials;
 pub mod desktop_geometry;
 pub mod pointer_events;
 pub mod reset_handoff;

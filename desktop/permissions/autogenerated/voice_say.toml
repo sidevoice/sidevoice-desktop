@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-voice-say"
+description = "Enables the voice_say command without any pre-configured scope."
+commands.allow = ["voice_say"]
+
+[[permission]]
+identifier = "deny-voice-say"
+description = "Denies the voice_say command without any pre-configured scope."
+commands.deny = ["voice_say"]

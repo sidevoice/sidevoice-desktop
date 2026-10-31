@@ -182,7 +182,7 @@ pub fn report(text: &str, rules: &[Rule]) -> Result<()> {
     }
 }
 
-/// The host's calls on the real models (desktop/src/voice/memory.rs).
+/// The host's calls on the real models (desktop/src/voice/host/memory.rs).
 pub const VOICE_RULES: &[Rule] = &[
     Rule::Release { idle: "idle", live: "call-live", ended: "call-ended" },
     Rule::Flat { from: "call-ended", to: "calls-many", footprint: FOOTPRINT_MIB },

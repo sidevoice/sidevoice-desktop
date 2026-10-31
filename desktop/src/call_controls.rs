@@ -13,11 +13,11 @@
 
 use crate::platform::card_window::{CardSpec, CardWindow, NativeCardWindow};
 use crate::platform::desktop_geometry;
+use crate::platform::host::APP_ORIGIN;
 use crate::platform::pointer_events::{self, PointerEvent, PointerState, Subscription};
 use crate::platform::window_visibility::{self, Visibility};
 use crate::{debug, AppState};
 use serde::Deserialize;
-use sidevoice_app_tauri::platform::origin::APP_ORIGIN;
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
 use sidevoice_desktop_core::call_controls::{
     self as logic, Corner, Display, Edge, Placements, Point, Rect, Size, Spot,

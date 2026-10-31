@@ -1,0 +1,31 @@
+[package]
+name = "sidevoice-desktop-engine"
+version = "0.3.0"
+description = "The app's side of sidevoice-engine (docs/ENGINES.md): the page's ids, install jobs and refusals, and the engine the voice call runs on."
+edition = "2021"
+rust-version = "1.98"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+# The engine itself: catalogue, downloads, the build that runs here, the models, local and remote (whose keys the
+# app hands it, `Credentials`), through its catalogues (`local`, then each provider). The 0.5.0 release ranks GPU
+# builds first, uses flash attention, lists Supertonic's ten voices and classifies each build's accelerator. Its
+# sherpa-onnx backend links sherpa-onnx's static libraries
+# (SHERPA_ONNX_LIB_DIR), its whisper.cpp backend compiles whisper.cpp from source with CMake, with Metal on Apple
+# silicon (docs/ENGINES.md).
+sidevoice-engine = { git = "https://github.com/sidevoice/sidevoice-engine", tag = "v0.7.0" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The engine's futures run on the app's Tokio runtime; installs race a cancel (src/lib.rs).
+tokio = { version = "1", features = ["rt", "time", "macros"] }
+
+# Physical-memory observations (platform/memory); also used by the shared platform crate.
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+sha2 = "0.11"
+tokio = { version = "1", features = ["rt-multi-thread"] }

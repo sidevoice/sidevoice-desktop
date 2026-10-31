@@ -17,8 +17,6 @@ tauri-build = { version = "2.7", features = [] }
 [dependencies]
 # The app's native project inputs: the Android manifest and its network security config (plugin/).
 sidevoice-mobile-plugin = { path = "plugin" }
-# The shared plugin's `PairingStore`, which the pairings file implements (src/pairings.rs).
-sidevoice-app-tauri = { path = "../app-tauri" }
 tauri = { version = "2.12", features = [] }
 # The pairings file (src/pairings.rs): a temporary file in the same directory, synced, renamed over the old record, the
 # directory synced. Unix and Windows; the OS calls are the crate's.
