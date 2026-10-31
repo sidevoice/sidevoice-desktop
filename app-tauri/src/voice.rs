@@ -11,6 +11,7 @@ use sidevoice_app_core::voice::{SettingsChange, VoiceSettings};
 use tauri::ipc::Channel;
 use tauri::{Runtime, State, Webview};
 
+use crate::pages::Document;
 use crate::{Callers, Pages};
 
 fn allowed<R: Runtime>(callers: &Callers<R>, webview: &Webview<R>) -> Result<(), Refusal> {
@@ -18,7 +19,8 @@ fn allowed<R: Runtime>(callers: &Callers<R>, webview: &Webview<R>) -> Result<(),
 }
 
 /// The page opens the channel its events come on, and learns its number: the generation it sends back with every command
-/// below. A page asks once, when it loads. The events of the calls its lanes make are sent over the channel, in order,
+/// below. A page asks once, when it loads, and says which document it is (`document`, its own start time), so that a
+/// request of a page that was replaced meanwhile, and reached the app late, is refused `page_stale`. The events of the calls its lanes make are sent over the channel, in order,
 /// while it is the current page; a page that is replaced hears nothing more, and the next one opens its own.
 #[tauri::command]
 pub async fn voice_events<R: Runtime>(
@@ -26,10 +28,11 @@ pub async fn voice_events<R: Runtime>(
     callers: State<'_, Callers<R>>,
     host: State<'_, AppHost>,
     pages: State<'_, Pages>,
+    document: f64,
     events: Channel<Value>,
 ) -> Result<PageGeneration, Refusal> {
     allowed(&callers, &webview)?;
-    Ok(pages.register(|| host.page(), events))
+    pages.register(Document(document), || host.page(), events)
 }
 
 /// Attaches a lane now, so routing may be chosen before its start.
