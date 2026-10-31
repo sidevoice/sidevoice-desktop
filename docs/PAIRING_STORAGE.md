@@ -37,26 +37,33 @@ test-support job includes this actual source module on all three hosts; no extra
 
 ## On the phone
 
-`mobile/src/pairings.rs` keeps the same record (`{pairings, pendingRevokes}`, at most 64 KiB, the same refusals
-`data.pairings-invalid`, `data.pairings-read` and `data.pairings-write`) as one file in the app's private data
-directory (the path is the app's to give). It has none of the desktop's held-directory machinery, because the
-sandbox is the boundary: no other app can open the app's data directory, and a link or a hard link there is the app's own.
+`mobile/src/pairings.rs` is the mobile app's `PairingStore` (the shared plugin's trait, `sidevoice-app-tauri`). It keeps the
+same record (`{pairings, pendingRevokes}`, at most 64 KiB, the same refusals `data.pairings-invalid`, `data.pairings-read` and
+`data.pairings-write`) as one file in the app's private files. It has none of the desktop's held-directory machinery,
+because the sandbox is the boundary: no other app can open the app's data directory, and a link or a hard link there is
+the app's own.
 
+- **Where.** `PairingFile::of_app(app)` takes Tauri's app data directory: the app's folder in Application Support on iOS;
+  on Android the app's whole data directory, so the file goes in its `files` folder (`Context.getFilesDir()`,
+  `platform/app_files.rs`). The app manages `Pairings(Arc::new(PairingFile::of_app(app)?))` for the plugin. Nothing is
+  created until the first write.
 - **Atomic write.** `atomic-write-file` writes the new record to a temporary file in the same directory, syncs it, renames
   it over the old one and syncs the directory (`openat`/`renameat` on the directory it opened first), so a crash or a power
-  loss leaves the old record or the new one. A read never creates a directory; the first write does.
-- **Shape.** What makes a record pairings is the room page's contract, not the file's: the app hands the store the check
-  it shares with the desktop. The check lives in `desktop/src/data/pairings.rs` today (`checked_pairings`) and has to move
-  next to the `PairingStore` trait in `app-tauri` before the mobile app can use it.
+  loss leaves the old record or the new one.
+- **Shape.** The same check as the desktop's (`checked_pairings`, `desktop/src/data/pairings.rs`), copied: the desktop's file
+  is also built without Tauri by `test-support` for the Windows and macOS fixture jobs, which cannot reach a copy in
+  `app-tauri` without linking a webview. The two stay copies of each other until the shape has a home both can reach.
 - **iOS data protection.** The record has the system's default class, Complete Until First User Authentication
   ([Apple Platform Security](https://support.apple.com/guide/security/secb010e978a/web)): readable from the first unlock
   after a restart, as a call under a locked screen needs. The app's entitlements are empty (`mobile/gen/apple`). Adding the
   Data Protection capability would raise the default to Complete, and the record would be unreadable while the phone is
   locked. No code sets the class.
-- **Android.** Files under `files/` are private to the app's uid. The generated manifest says nothing about backup, so the
-  system default applies and the file is part of Auto Backup: a restore onto another phone brings the pairings (their
-  tokens) along. Whether that is wanted is undecided.
-- **Tests** run on every host (a temporary directory): round trip and replacement, the bound, refusals that change
-  nothing, no temporary file left behind, a path that is a directory or has a file where its directory should be. A
-  crash between the temporary file and the rename is `atomic-write-file`'s own test matter; nothing here fakes one.
+- **Backups.** Undecided; the record is in them today. iOS: the file is in the app's container, so in a device backup (an
+  encrypted one carries it to a new phone); `isExcludedFromBackup` on the folder would keep it out (the attribute is on the
+  folder, because a rewrite makes a new file that has lost it). Android: the generated manifest says nothing about backup,
+  so the system default applies and `files/` is part of Auto Backup, and a restore brings the pairings (their tokens) to
+  another phone.
+- **Tests** run on every host (a temporary directory): round trip and replacement, the shape, the bound, refusals that
+  change nothing, no temporary file left behind, a path that is a directory or has a file where its directory should be.
+  A crash between the temporary file and the rename is `atomic-write-file`'s own test matter; nothing here fakes one.
 - **Not run on a phone yet.** The device flow (write, kill the app, read) is part of the first device run.

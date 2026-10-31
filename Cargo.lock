@@ -5107,6 +5107,7 @@ version = "0.1.0"
 dependencies = [
  "atomic-write-file",
  "serde_json",
+ "sidevoice-app-tauri",
  "sidevoice-mobile-plugin",
  "tauri",
  "tauri-build",
