@@ -47,6 +47,17 @@ apple-native-keyring-store = { version = "1.0.2", features = ["keychain"] }
 # Legacy keychain namespace deletion and compatibility tests (platform/credentials).
 security-framework = "3"
 
+[target.'cfg(target_os = "ios")'.dependencies]
+# The app's Data Protection keychain (platform/credentials/ios.rs). iOS has no other keychain.
+apple-native-keyring-store = { version = "1.0.2", features = ["protected"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+# SharedPreferences encrypted by an Android Keystore key, through JNI on the context Tauri initialises
+# (platform/credentials/android.rs).
+android-native-keyring-store = "1"
+# The exact namespace search: the store matches a regular expression anywhere in the service.
+regex = "1"
+
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-native-keyring-store = "1.1"
 
