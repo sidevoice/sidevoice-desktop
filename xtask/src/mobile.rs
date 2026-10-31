@@ -6,14 +6,19 @@
 //! - `mobile generate android|ios`: the project made anew (the old one removed, so a file the template no longer has
 //!   goes too), then the icons derived from the sources (`tauri icon` writes them into the projects that exist). Runs
 //!   in mobile/, where tauri.conf.json is. The iOS project needs macOS and XcodeGen. The CLI's targets are not
-//!   installed here (`--skip-targets-install`): mobile/rust-toolchain.toml names them.
+//!   installed here (`--skip-targets-install`): mobile/rust-toolchain.toml names them. The iOS project also gets the
+//!   privacy manifest (mobile/PrivacyInfo.xcprivacy), which the CLI has no setting for: it is put where the project
+//!   reads its sources before the CLI makes the project, so that the project the CLI writes holds it.
 //! - `mobile generated android|ios`: `generate`, then the committed project must be what it wrote (CI, every pull
 //!   request): a difference means an input or the CLI changed and the project was not regenerated and committed.
 //! - `mobile build android|ios`: the app as a pull request builds it, unsigned: Android's release APK for arm64, and
 //!   the iOS app for the simulator (no signing, so no secret), into dist/. Needs the SDK and NDK, or macOS with Xcode. The
-//!   Android APK is also checked for 16 KB pages, which Google Play requires (`mobile check-16kb [APK]` is that check alone).
+//!   Android APK is also checked for 16 KB pages, which Google Play requires (`mobile check-16kb [APK]` is that check alone),
+//!   and the iOS app for what it declares to Apple: the privacy manifest and the export compliance (`mobile check-ios [APP]`
+//!   is that check alone, ios.rs).
 
 pub mod check;
+pub mod ios;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -62,6 +67,37 @@ fn pin_target_sdk(gradle: &str) -> Result<String> {
     Ok(line.replace(gradle, format!("${{1}}targetSdk = {ANDROID_TARGET_SDK}")).into_owned())
 }
 
+/// The directory of the iOS project that holds the app's own files (the Tauri template's `<app>_iOS`), which the Xcode
+/// project reads whole as sources of the app target: its Info.plist and entitlements are there, and so is what is put
+/// there before the project is made.
+const IOS_APP_DIR: &str = "sidevoice-mobile_iOS";
+
+/// The Xcode project's file, where a resource of the app target is listed.
+const IOS_PBXPROJ: &str = "sidevoice-mobile.xcodeproj/project.pbxproj";
+
+/// The privacy manifest where the iOS project reads it: put in `<project>/<app>_iOS/` before `tauri ios init`, which
+/// writes the template around what is there and leaves it, and XcodeGen lists it as a resource of the app, so it
+/// lands at the root of the bundle. A XcodeGen that stopped listing it as a resource (it has changed that once) would
+/// ship an app without a manifest, so the project is read for it.
+fn add_privacy_manifest(project: &Path) -> Result<()> {
+    let app = project.join(IOS_APP_DIR);
+    mkdir(&app)?;
+    let from = repo().join("mobile").join(ios::MANIFEST);
+    let to = app.join(ios::MANIFEST);
+    fs::copy(&from, &to).map_err(|e| format!("{}: {e}", from.display()))?;
+    Ok(())
+}
+
+/// The project lists the privacy manifest as a resource of the app (`… in Resources`).
+fn check_privacy_manifest_listed(project: &Path) -> Result<()> {
+    let pbxproj = project.join(IOS_PBXPROJ);
+    let text = fs::read_to_string(&pbxproj).map_err(|e| format!("{}: {e}", pbxproj.display()))?;
+    ensure(
+        text.contains(&format!("{} in Resources", ios::MANIFEST)),
+        format!("{}: {} is not a resource of the app: the app would ship without it", pbxproj.display(), ios::MANIFEST),
+    )
+}
+
 /// `mobile generate android|ios`.
 pub fn generate(name: &str) -> Result<()> {
     let project = project(name)?;
@@ -69,7 +105,13 @@ pub fn generate(name: &str) -> Result<()> {
     if dir.exists() {
         fs::remove_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
+    if project.cli == "ios" {
+        add_privacy_manifest(&dir)?;
+    }
     tauri(&[project.cli, "init", "--ci", "--skip-targets-install"]).run()?;
+    if project.cli == "ios" {
+        check_privacy_manifest_listed(&dir)?;
+    }
     if project.cli == "android" {
         let gradle = dir.join("app/build.gradle.kts");
         let text = fs::read_to_string(&gradle).map_err(|e| format!("{}: {e}", gradle.display()))?;
@@ -119,6 +161,7 @@ pub fn build(name: &str) -> Result<()> {
             tauri(&["ios", "build", "--target", "aarch64-sim", "--no-sign", "--ci"]).run()?;
             let build = repo().join("mobile/gen/apple/build");
             let app = find_app(&build, 3).ok_or_else(|| format!("no .app below {}", build.display()))?;
+            ios::check_app(&app)?;
             // The app is a directory with symbolic links in it: zip keeps them (`-y`).
             Cmd::new("zip")
                 .args(["-qry"])

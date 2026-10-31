@@ -12,5 +12,10 @@
     <key>NSAllowsLocalNetworking</key>
     <true/>
   </dict>
+  <!-- Export compliance: the app uses no encryption beyond the system's (TLS in the web view is the system's) and
+       hashing, so App Store Connect need not ask about it for each build. Revisit when native code brings its own
+       (docs/MOBILE.md). -->
+  <key>ITSAppUsesNonExemptEncryption</key>
+  <false/>
 </dict>
 </plist>
