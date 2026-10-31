@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="call_channel_name">Calls</string>
+    <string name="call_notification_title" translatable="false">Sidevoice</string>
+    <string name="call_notification_text">In a call</string>
+    <string name="call_notification_hang_up">Hang up</string>
+</resources>
