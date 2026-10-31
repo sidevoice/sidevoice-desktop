@@ -5,8 +5,11 @@
 //! - **Admission.** A change of the app's data (the desktop's reset) must not overlap work that uses it. Work that
 //!   does asks [`Admission`] for a [`Lease`] and holds it, as an RAII value, across everything it awaits and every
 //!   blocking thread it hands work to; the app that never resets admits every time ([`AlwaysAdmit`]).
-//! - **Runtime.** The Tokio runtime is a handle the shell passes in, never an ambient one: the call's lanes, the
-//!   device watch and the engine's futures run on it, and its blocking pool takes the models' native work.
+//! - **Runtime.** The Tokio runtime is a handle the shell passes in, never an ambient one: every command runs with it
+//!   entered, so whatever the call's lanes, the device watch and the engine's futures spawn lands on it, whichever executor
+//!   the caller polls the command on, and its blocking pool takes the models' native work. What loads models
+//!   ([`AppHost::start`], [`AppHost::update`], [`AppHost::preload`]) is a task of that runtime, lease and all: it releases
+//!   its admission when the load ends, not when the caller stops waiting.
 //! - **Events.** What the call tells the page (its turns, its states, what was said, the devices when they change) is
 //!   handed to [`EventSink`] as JSON, in the order the call made it.
 //! - **Lifecycle.** [`AppHost::page_changed`] when the page that owns the calls is gone, and [`AppHost::close`] before the
@@ -16,11 +19,16 @@
 //! (docs/BRIDGE.md → "Refusals").
 
 mod engine;
+#[cfg(test)]
+mod tests;
 mod voice;
 
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -29,7 +37,7 @@ use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 
 use crate::engine::{Jobs, NativeEngines};
-use crate::voice::host::{LaneAudio, VoiceState};
+use crate::voice::host::{LaneAudio, Refusal, VoiceState};
 
 pub use voice::AudioChoice;
 
@@ -177,7 +185,7 @@ impl<A: LaneAudio> AppHost<A> {
         if let Some(watcher) = self.inner.watcher.lock().unwrap().take() {
             watcher.abort();
         }
-        let held = self.inner.voice.close(limit, RELEASE_POLL).await;
+        let held = self.entered(self.inner.voice.close(limit, RELEASE_POLL)).await;
         if held.is_empty() {
             crate::debug::debug("voice: every model released");
         } else {
@@ -191,6 +199,22 @@ impl<A: LaneAudio> AppHost<A> {
     #[cfg(feature = "probe")]
     pub fn held(&self) -> String {
         self.inner.voice.held()
+    }
+
+    /// `work` polled with the host's runtime entered: whatever it spawns, times or asks the current runtime for is the
+    /// host's, whichever executor the caller polls it on. (The runtime handle the shell passed in is the only one the host
+    /// uses; the ambient one, if any, is not.)
+    fn entered<F: Future>(&self, work: F) -> Entered<F> {
+        Entered { runtime: self.inner.runtime.clone(), work: Box::pin(work) }
+    }
+
+    /// `work` run as a task of the host's runtime, and its answer: the work goes on, lease and all, if the caller gives up
+    /// waiting for it. For work that loads models on blocking threads, which an admission must outlast.
+    async fn detached<T: Send + 'static>(
+        &self,
+        work: impl Future<Output = Result<T, Refusal>> + Send + 'static,
+    ) -> Result<T, Refusal> {
+        self.inner.runtime.spawn(work).await.map_err(|e| crate::voice::host::refusal("internal", e.to_string()))?
     }
 
     /// The events sink as the call's `Page`.
@@ -228,5 +252,21 @@ impl<A: LaneAudio> AppHost<A> {
             }
         });
         *self.inner.watcher.lock().unwrap() = Some(watcher);
+    }
+}
+
+/// A future polled with a runtime entered (`AppHost::entered`).
+struct Entered<F: Future> {
+    runtime: Handle,
+    work: Pin<Box<F>>,
+}
+
+impl<F: Future> Future for Entered<F> {
+    type Output = F::Output;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
+        let this = &mut *self;
+        let _inside = this.runtime.enter();
+        this.work.as_mut().poll(cx)
     }
 }

@@ -1,6 +1,8 @@
 //! The application host as a shell that is not Tauri uses it: the three hooks are fakes, the audio is a stand-in, the
-//! runtime is a handle this test owns. Nothing of a webview is in this crate's closure, so a test that drives `AppHost`
-//! through its public API is the proof that a shell is only transport. (What starting a call does with the real models
+//! runtime is a handle this test owns and the test drives the host from a thread with no Tokio context at all (`block_on`
+//! below), as a shell with an executor of its own would: what the host spawns or times must come from the handle it was
+//! given. Nothing of a webview is in this crate's closure, so a test that drives `AppHost` through its public API is the
+//! proof that a shell is only transport. (What starting a call does with the real models
 //! is `voice::host`'s and `voice::models`' own tests, and CI's real-model call.)
 
 use std::collections::HashMap;
@@ -118,8 +120,31 @@ impl LaneAudio for Silent {
     }
 }
 
+/// Drives `future` on this thread with no Tokio context at all: the shell that calls the host from an executor of its
+/// own. Whatever the host spawns, times or asks the current runtime for must come from the handle it was given, or this
+/// panics (there is no reactor running).
+fn block_on<F: Future>(future: F) -> F::Output {
+    struct Wake(std::thread::Thread);
+
+    impl std::task::Wake for Wake {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+
+    let waker = std::task::Waker::from(Arc::new(Wake(std::thread::current())));
+    let mut context = std::task::Context::from_waker(&waker);
+    let mut future = std::pin::pin!(future);
+    loop {
+        match future.as_mut().poll(&mut context) {
+            std::task::Poll::Ready(output) => return output,
+            std::task::Poll::Pending => std::thread::park(),
+        }
+    }
+}
+
 struct Shell {
-    runtime: tokio::runtime::Runtime,
+    _runtime: tokio::runtime::Runtime,
     host: AppHost<Silent>,
     gate: Arc<Gate>,
     page: Arc<Page>,
@@ -155,7 +180,7 @@ impl Shell {
             Silent,
             NativeDevices::default(),
         );
-        Shell { runtime, host, gate, page, store, root }
+        Shell { _runtime: runtime, host, gate, page, store, root }
     }
 }
 
@@ -178,7 +203,7 @@ fn settings(value: Value) -> VoiceSettings {
 fn a_reset_under_way_refuses_what_uses_the_data() {
     let shell = Shell::new("reset");
     let host = &shell.host;
-    shell.runtime.block_on(async {
+    block_on(async {
         host.create_call("a".into()).await.unwrap();
         shell.gate.resetting.store(true, Ordering::SeqCst);
 
@@ -204,7 +229,7 @@ fn a_reset_under_way_refuses_what_uses_the_data() {
 #[test]
 fn a_lease_is_held_on_the_blocking_thread_until_the_work_ends() {
     let shell = Shell::new("lease");
-    shell.runtime.block_on(async {
+    block_on(async {
         // The store is written on a blocking thread, with the lease the command took still live; the key is trimmed. The
         // engine then has no such provider, which is the answer here: the write came first, in order.
         let answer = shell.host.set_credential("not-a-provider".into(), Some("  sk-secret  ".into())).await;
@@ -219,7 +244,7 @@ fn a_lease_is_held_on_the_blocking_thread_until_the_work_ends() {
 fn provider_keys_go_through_the_shells_store_and_nothing_of_a_failure_is_told() {
     let shell = Shell::new("keys");
     let host = &shell.host;
-    shell.runtime.block_on(async {
+    block_on(async {
         // Blank removes; an id the store does not take is refused as such, before the store is asked.
         shell.store.keys.lock().unwrap().insert("not-a-provider".into(), "sk-secret".into());
         assert!(host.has_credential("not-a-provider".into()).await.unwrap());
@@ -251,7 +276,7 @@ fn provider_keys_go_through_the_shells_store_and_nothing_of_a_failure_is_told() 
 fn a_call_is_refused_what_the_engine_cannot_name_and_its_events_reach_the_sink() {
     let shell = Shell::new("call");
     let host = &shell.host;
-    shell.runtime.block_on(async {
+    block_on(async {
         host.create_call("a".into()).await.unwrap();
         assert_eq!(key_of(&host.create_call("a".into()).await.unwrap_err()), "bad_request", "one lane per key");
         assert_eq!(key_of(&host.stop("nobody").await.unwrap_err()), "bad_request");
@@ -283,7 +308,7 @@ fn a_call_is_refused_what_the_engine_cannot_name_and_its_events_reach_the_sink()
 fn the_engine_answers_through_the_host() {
     let shell = Shell::new("engine");
     let host = &shell.host;
-    shell.runtime.block_on(async {
+    block_on(async {
         let device = host.capabilities().unwrap();
         assert_eq!(device.runs, "native");
         let catalogs = host.catalogs().await.unwrap();
@@ -305,7 +330,7 @@ fn the_engine_answers_through_the_host() {
 fn a_reloaded_page_owns_none_of_the_lanes() {
     let shell = Shell::new("reload");
     let host = &shell.host;
-    shell.runtime.block_on(async {
+    block_on(async {
         host.create_call("a".into()).await.unwrap();
         host.page_changed();
         // The old lanes are released in the background.
@@ -313,7 +338,7 @@ fn a_reloaded_page_owns_none_of_the_lanes() {
         while host.route_input(Some("a".into())).await.is_ok() {
             tries += 1;
             assert!(tries < 100, "the lane was never released");
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            std::thread::sleep(Duration::from_millis(20));
         }
         assert_eq!(key_of(&host.route_input(Some("a".into())).await.unwrap_err()), "bad_request");
         // The same key can be taken again by the new page.
@@ -328,7 +353,7 @@ fn a_host_without_an_engine_refuses_what_needs_one_and_still_runs_lanes() {
     std::fs::write(&root, "not a folder").unwrap();
     let shell = Shell::on("noengine", root);
     let host = &shell.host;
-    shell.runtime.block_on(async {
+    block_on(async {
         assert_eq!(key_of(&host.capabilities().unwrap_err()), "engine_unavailable");
         assert_eq!(key_of(&host.catalogs().await.unwrap_err()), "engine_unavailable");
         assert_eq!(key_of(&host.install("m".into(), None, None, "j".into()).await.unwrap_err()), "engine_unavailable");
@@ -344,7 +369,7 @@ fn a_host_without_an_engine_refuses_what_needs_one_and_still_runs_lanes() {
 fn closing_releases_every_lane_and_answers_none_held() {
     let shell = Shell::new("close");
     let host = &shell.host;
-    shell.runtime.block_on(async {
+    block_on(async {
         host.create_call("a".into()).await.unwrap();
         host.create_call("b".into()).await.unwrap();
         assert_eq!(host.close(Duration::from_secs(5)).await, Vec::<String>::new());
