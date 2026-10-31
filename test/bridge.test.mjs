@@ -1116,7 +1116,9 @@ test("the placeholders the app replaces are present exactly once", () => {
   assert.equal(source.split("__SIDEVOICE_LOCAL_HOST__").length, 2);
   assert.equal(source.split("__SIDEVOICE_VOICE__").length, 2);
   assert.equal(source.split("__SIDEVOICE_DEVICE_NAME__").length, 2);
-  assert.equal(source.split("__SIDEVOICE_OS__").length, 2);
+  assert.equal(source.split("__SIDEVOICE_SHORTCUT_MODIFIER__").length, 2);
+  assert.equal(source.split("__SIDEVOICE_MICROPHONE_HELP__").length, 2);
+  assert.equal(source.includes("__SIDEVOICE_OS__"), false, "the page is never told which system it runs on");
 });
 
 // The app owns the system's media controls on some OSes only: there it offers `presence`, elsewhere nothing, and the page
@@ -1138,12 +1140,13 @@ test("the webview sends plain http to a private address, and says so on every OS
   }
 });
 
-test("host.os is the system the app passed, and absent without one", () => {
+test("host.shortcutModifier is the label the app passed, and absent without one; there is no host.os", () => {
   const install = loadFactory();
-  const host = (system) => install(fakeWindow(ORIGIN).win, ORIGIN, false, false, false, false, { channel: "dev", version: "0.4.0" },
-    undefined, undefined, false, false, system).host;
-  for (const system of ["macos", "windows", "linux"]) assert.equal(host(system).os, system);
-  for (const none of [undefined, null, "", 42]) assert.ok(!("os" in host(none)), String(none));
+  const host = (modifier) => install(fakeWindow(ORIGIN).win, ORIGIN, false, false, false, false, { channel: "dev", version: "0.4.0" },
+    undefined, undefined, false, false, modifier).host;
+  for (const modifier of ["⌘", "Ctrl"]) assert.equal(host(modifier).shortcutModifier, modifier);
+  for (const none of [undefined, null, "", 42]) assert.ok(!("shortcutModifier" in host(none)), String(none));
+  for (const modifier of ["⌘", "Ctrl", undefined]) assert.ok(!("os" in host(modifier)), "the page is never told which system it runs on");
 });
 
 // ---- host.localHost: this computer's own core (docs/LOCAL_HOST.md) ----
@@ -1460,12 +1463,27 @@ test("the app's updaterEvent hands each listener the status, until it stops", ()
 
 // ---- host.microphone: the app's microphone permission, for the page's first-run setup (docs/BRIDGE.md) ----
 
+test("host.microphone.help is the app's words for a blocked microphone, asked in the page's language", () => {
+  const install = loadFactory();
+  const words = { en: { steps: ["Open Settings."], openSettings: "Open Windows Settings" }, es: { steps: ["Abre Configuración."], openSettings: "Abrir Configuración de Windows" } };
+  const microphone = install(fakeWindow(ORIGIN).win, ORIGIN, false, false, false, false, undefined, undefined, undefined, true, false, "Ctrl", words).host.microphone;
+  assert.deepEqual(Object.keys(microphone).sort(), ["help", "onChange", "openSettings", "request", "state"]);
+  assert.ok(Object.isFrozen(microphone));
+  assert.deepEqual(plain(microphone.help("es-ES")), words.es);
+  assert.deepEqual(plain(microphone.help("fr")), words.en, "English where the app has no words");
+  // A system with no settings page names no button.
+  const linux = { en: { steps: ["Check your settings."] } };
+  const without = install(fakeWindow(ORIGIN).win, ORIGIN, false, false, false, false, undefined, undefined, undefined, false, false, "Ctrl", linux).host.microphone;
+  assert.deepEqual(plain(without.help("en")), linux.en);
+  assert.equal(without.openSettings, undefined);
+});
+
 test("host.microphone is on every OS, with or without native voice; openSettings only where the OS has a page", async () => {
   const install = loadFactory();
   for (const voice of [false, true]) {
     const withSettings = install(fakeWindow(ORIGIN).win, ORIGIN, null, false, voice, false, undefined, undefined, undefined, true);
     assert.equal("voice" in withSettings.host, voice);
-    assert.deepEqual(Object.keys(withSettings.host.microphone).sort(), ["onChange", "openSettings", "request", "state"]);
+    assert.deepEqual(Object.keys(withSettings.host.microphone).sort(), ["onChange", "openSettings", "request", "state"], "no words to give, no help");
     assert.ok(Object.isFrozen(withSettings.host.microphone));
     for (const offered of [undefined, false, "true", "__SIDEVOICE_MICROPHONE_SETTINGS__"]) {
       const api = install(fakeWindow(ORIGIN).win, ORIGIN, null, false, voice, false, undefined, undefined, undefined, offered);

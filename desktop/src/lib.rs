@@ -322,7 +322,8 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             &diagnostics::webview_switches(),
             media_controls::available(),
             platform::uninstall::available(),
-            host::system(),
+            host::shortcut_modifier(),
+            &host::microphone_help(),
             &bridge::Parts { transport: sidevoice_app_tauri::js::TRANSPORT, members: sidevoice_app_core::js::MEMBERS },
         ));
     #[cfg(feature = "probe")]

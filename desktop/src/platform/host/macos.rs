@@ -5,7 +5,9 @@ use tauri::utils::config::BundleType;
 pub(super) struct Native;
 
 impl Os for Native {
-    const SYSTEM: &'static str = "macos";
+    const SHORTCUT_MODIFIER: &'static str = "⌘";
+    const MICROPHONE_HELP: &'static str = "microphone.help_macos";
+    const MICROPHONE_SETTINGS_LABEL: Option<&'static str> = Some("microphone.open_settings");
 
     fn device_name() -> Option<String> {
         whoami::devicename().ok()

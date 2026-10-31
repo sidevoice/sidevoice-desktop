@@ -19,7 +19,7 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 | `desktop/src/call_controls.rs`, `desktop/core/src/call_controls.rs` | The card's window, and when it shows, where it sits and how it moves (unit-tested). |
 | `desktop/src/updater.rs`, `desktop/core/src/updater.rs`, `desktop/core/src/build_info.rs` | The app's updates, behind `updater`, and what this build is, `build` (below). |
 | `desktop/src/debug_options.rs`, `desktop/core/src/debug_options.rs` | The developer options, behind `debug` in a nightly or a dev build (below). |
-| `desktop/src/platform/host.rs`, `desktop/core/src/computer_name.rs` | This computer's name, `deviceName` (below; the Linux file's parsing unit-tested). |
+| `desktop/src/platform/host.rs`, `desktop/core/src/computer_name.rs`, `desktop/core/src/i18n.rs` | This computer's name, `deviceName` (below; the Linux file's parsing unit-tested), the shortcut modifier's label, `shortcutModifier`, and the microphone's help, `microphone.help` (below; its words are the native catalogue's). |
 
 ## Parts
 
@@ -261,17 +261,22 @@ only allows from a click in the page. "Mostrar Sidevoice" opens the window for t
 `window.__sidevoiceHost` is `{ version, host, snapshot(), run(request) }`, the object an app injects
 (sidevoice-web's `apps/web/src/host/native.ts` reads it). `version` is the bridge's (2); `snapshot` and `run` are the
 presence protocol above, which the app reads and calls and the page does not touch. The web and the app ship together,
-so this is the only name, and `host` has no `app`, `version`, `mediaKeys`, `computerName` or `data` member.
+so this is the only name, and `host` has no `app`, `version`, `mediaKeys`, `computerName`, `data` or `os` member.
+
+**The page never asks which system it runs on.** What a system decides about the page's words is told by the app already
+resolved: the shortcut modifier's label (`shortcutModifier`), the device's name (`deviceName`) and the microphone's help
+(`microphone.help`, below). A new platform adds its own values to its own app and changes nothing in the web. The web's
+side is sidevoice-web's `apps/web/src/host/types.ts`.
 
 `host` is one optional member per thing the app offers, and a member that is there is offered. What is a fact of the
 app's composition is always there; what is a fact of one OS or one build is observed inside the member or left out:
 
 | Member | Offered | What it is |
 |---|---|---|
-| `os` | always | `macos`, `windows` or `linux` (`platform::host::system`), for copy that is true of that system alone; never a switch on what is offered. |
+| `shortcutModifier` | always | The label of the modifier a shortcut is written with here, `⌘` on macOS and `Ctrl` on Windows and Linux (`platform::host::shortcut_modifier`), for the page's key caps. |
 | `deviceName` | when the system has one | The name the person gave this computer (below). |
 | `build` | always | What this build is (below). |
-| `microphone` | always | Native microphone access; `openSettings` only where the OS has a privacy page. |
+| `microphone` | always | Native microphone access; `openSettings` only where the OS has a privacy page; `help(language)`, the app's words for a blocked one. |
 | `engine`, `voice` | always | The model engine and the voice call the app runs (below). |
 | `presence` | only where the app owns the system's media | `{ media: "app" }`, supplied by `platform::media_controls::available()`: macOS. |
 | `pairings` | always | The pairings the app keeps for the page (above). |
@@ -291,7 +296,8 @@ the Computer Name (System Settings → General → Sharing, «Mac de Ana»; Syst
 `SCDynamicStoreCopyComputerName`), not the `.local` hostname; on Windows the device name (the DNS host name, as typed);
 on Linux the pretty hostname (`PRETTY_HOSTNAME` in `/etc/machine-info`, `hostnamectl set-hostname --pretty`), else
 the hostname. A non-empty string, trimmed; absent when the system has none, and the page then names the device
-itself. Read each time the room window opens (`desktop/src/platform/host.rs`, core `computer_name`).
+itself (the page's, in a browser's words: "Chrome on Mac"). Read each time the room window opens (`desktop/src/platform/host.rs`,
+core `computer_name`).
 
 ## The local host
 
@@ -740,6 +746,7 @@ interface MicrophonePermission {
   request(): Promise<"granted" | "denied" | "missing">;
   openSettings?(): Promise<void>;
   onChange(listener: () => void): () => void;
+  help(language: string): { steps: string[]; openSettings?: string };
 }
 ```
 
@@ -755,6 +762,14 @@ interface MicrophonePermission {
   has none). It opens a fixed URL through `tauri-plugin-opener` (Rust API) and accepts no URL or program from the page; no
   generic opener permission is granted to JavaScript, and the plugin's automatic link interception is disabled.
   Opening it says nothing about access. The page detects it by presence.
+- `help(language)`: how to allow a blocked microphone on this system, in the page's language (a BCP 47 tag; the app
+  answers in its primary language, `es` for `es-419`, and in English where it has no words), which the page shows as it
+  is: `steps` is one line (the first is the answer, a second would come beneath it), and `openSettings` is the label of
+  the button that opens the system's settings, named as that system names them ("Open Windows Settings"), present
+  exactly where `openSettings()` is. It answers at once: the script holds the words of every language the app has,
+  worded by Rust from the native catalogue (`desktop/core/src/i18n.rs`, `microphone.help_<os>` and
+  `microphone.open_settings*`; which keys this OS uses is `platform::host`'s). The catalogue is English and Spanish, so a
+  page in another language shows these texts in English: the app translates its own help, the web no longer does.
 - A refusal rejects `{key, message}`: `bad_request` for a malformed call or another caller, `internal` when the system
   does not answer or Settings does not open.
 - Command behind it: `microphone {action}`, `action` `state`, `request` or `open-settings` (`app-tauri/src/microphone.rs`, invoked as `plugin:sidevoice-app-tauri|microphone`).
