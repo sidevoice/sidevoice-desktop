@@ -9,6 +9,9 @@
 //!   required-reason API the executable calls. Apple refuses an upload that calls one without a declared reason
 //!   (<https://developer.apple.com/documentation/bundleresources/describing-use-of-required-reason-api>).
 //!
+//! `check_ipa` is the same check on the archive `mobile testflight` is about to upload, and what only an archive can
+//! show: that it is signed, and that it is the app and the build number it was asked to be.
+//!
 //! The calls are found in the executable's strings. A C function the app imports is a symbol (`_stat`); a Foundation
 //! API a Swift or Objective-C file uses leaves its name in a symbol or a selector (`…FileAttributeKeyV12creationDate…`,
 //! `systemUptime`). The first is matched whole, the second as a part of a string, without regard to case. This sees what
@@ -17,6 +20,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 
 use crate::util::ensure;
@@ -108,19 +112,24 @@ fn dictionary(bytes: &[u8], what: &str) -> Result<plist::Dictionary> {
 }
 
 impl Bundle {
+    /// A bundle whose files `read` gives by their path in it (`None` for a file that is not there).
+    fn read(mut read: impl FnMut(&str) -> Result<Option<Vec<u8>>>) -> Result<Bundle> {
+        let info = read("Info.plist")?.ok_or("no Info.plist")?;
+        let info = dictionary(&info, "Info.plist")?;
+        let manifest = read(MANIFEST)?.map(|bytes| dictionary(&bytes, MANIFEST)).transpose()?;
+        let name = info.get("CFBundleExecutable").and_then(plist::Value::as_string);
+        let name = name.ok_or("Info.plist: no CFBundleExecutable")?;
+        let executable = read(name)?.ok_or_else(|| format!("no executable {name}"))?;
+        Ok(Bundle { info, manifest, executable })
+    }
+
     /// An app directory (`Sidevoice.app`).
     pub fn from_app(app: &Path) -> Result<Bundle> {
-        let read = |name: &str| fs::read(app.join(name)).map_err(|e| format!("{}: {e}", app.join(name).display()));
-        let info = dictionary(&read("Info.plist")?, "Info.plist")?;
-        let manifest = match app.join(MANIFEST).is_file() {
-            true => Some(dictionary(&read(MANIFEST)?, MANIFEST)?),
-            false => None,
-        };
-        let executable = info
-            .get("CFBundleExecutable")
-            .and_then(plist::Value::as_string)
-            .ok_or("Info.plist: no CFBundleExecutable")?;
-        Ok(Bundle { executable: read(executable)?, info, manifest })
+        Bundle::read(|name| match fs::read(app.join(name)) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(format!("{}: {e}", app.join(name).display())),
+        })
     }
 }
 
@@ -182,10 +191,47 @@ pub fn check_bundle(bundle: &Bundle) -> Result<()> {
     Ok(())
 }
 
-/// `mobile check-ios [APP]`.
+/// `mobile check-ios APP`.
 pub fn check_app(app: &Path) -> Result<()> {
     ensure(app.is_dir(), format!("{}: no such app", app.display()))?;
     check_bundle(&Bundle::from_app(app)?)
+}
+
+/// An archive for App Store Connect (`.ipa`): its app is the bundle `identifier` at `build_number`, it is signed
+/// (a provisioning profile embedded, a code signature sealed), and the app passes [`check_bundle`].
+pub fn check_ipa(ipa: &Path, identifier: &str, build_number: u32) -> Result<()> {
+    let file = fs::File::open(ipa).map_err(|e| format!("{}: {e}", ipa.display()))?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("{}: {e}", ipa.display()))?;
+    let names: Vec<String> =
+        archive.file_names().filter_map(|name| name.ok().map(std::borrow::Cow::into_owned)).collect();
+    let root = names
+        .iter()
+        .filter_map(|name| name.strip_prefix("Payload/")?.split('/').next())
+        .find(|app| app.ends_with(".app"))
+        .map(|app| format!("Payload/{app}/"))
+        .ok_or_else(|| format!("{}: no Payload/<name>.app", ipa.display()))?;
+    let bundle = Bundle::read(|name| {
+        let path = format!("{root}{name}");
+        let Ok(mut entry) = archive.by_name(&path) else { return Ok(None) };
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).map_err(|e| format!("{path}: {e}"))?;
+        Ok(Some(bytes))
+    })?;
+    let text = |key: &str| bundle.info.get(key).and_then(plist::Value::as_string).unwrap_or_default().to_owned();
+    ensure(
+        text("CFBundleIdentifier") == identifier,
+        format!("the app is {}, not {identifier}", text("CFBundleIdentifier")),
+    )?;
+    ensure(
+        text("CFBundleVersion") == build_number.to_string(),
+        format!("the build number is {}, not {build_number}", text("CFBundleVersion")),
+    )?;
+    for sealed in ["embedded.mobileprovision", "_CodeSignature/CodeResources"] {
+        ensure(names.contains(&format!("{root}{sealed}")), format!("{}: not signed: no {sealed}", ipa.display()))?;
+    }
+    check_bundle(&bundle)?;
+    println!("{}: {identifier} build {build_number}, signed", ipa.display());
+    Ok(())
 }
 
 #[cfg(test)]
@@ -283,6 +329,63 @@ mod tests {
         assert!(check_bundle(&app).unwrap_err().contains("not at the root"));
         app.manifest = Some(dict("<dict><key>NSPrivacyAccessedAPITypes</key><array/></dict>"));
         assert!(check_bundle(&app).unwrap_err().contains("NSPrivacyTracking"));
+    }
+
+    /// An archive with the files of an app below `Payload/Sidevoice.app/`.
+    fn ipa(dir: &Path, files: &[(&str, Vec<u8>)]) -> std::path::PathBuf {
+        use std::io::Write;
+        let path = dir.join("Sidevoice.ipa");
+        let mut zip = zip::ZipWriter::new(fs::File::create(&path).unwrap());
+        for (name, bytes) in files {
+            zip.start_file(format!("Payload/Sidevoice.app/{name}"), zip::write::SimpleFileOptions::default()).unwrap();
+            zip.write_all(bytes).unwrap();
+        }
+        zip.finish().unwrap();
+        path
+    }
+
+    fn app_files(identifier: &str, version: &str) -> Vec<(&'static str, Vec<u8>)> {
+        let info = format!(
+            "<plist version=\"1.0\"><dict><key>CFBundleExecutable</key><string>Sidevoice</string>\
+             <key>CFBundleIdentifier</key><string>{identifier}</string>\
+             <key>CFBundleVersion</key><string>{version}</string>\
+             <key>ITSAppUsesNonExemptEncryption</key><false/></dict></plist>"
+        );
+        let manifest = "<plist version=\"1.0\"><dict><key>NSPrivacyTracking</key><false/>\
+             <key>NSPrivacyAccessedAPITypes</key><array/></dict></plist>";
+        vec![
+            ("Info.plist", info.into_bytes()),
+            (MANIFEST, manifest.as_bytes().to_vec()),
+            ("Sidevoice", executable(&["main", "_malloc"])),
+            ("embedded.mobileprovision", b"profile".to_vec()),
+            ("_CodeSignature/CodeResources", b"seal".to_vec()),
+        ]
+    }
+
+    fn check(files: &[(&str, Vec<u8>)], identifier: &str, build: u32) -> Result<()> {
+        let dir = tempfile::tempdir().unwrap();
+        check_ipa(&ipa(dir.path(), files), identifier, build)
+    }
+
+    fn without<'a>(files: &[(&'a str, Vec<u8>)], name: &str) -> Vec<(&'a str, Vec<u8>)> {
+        files.iter().filter(|(n, _)| *n != name).cloned().collect()
+    }
+
+    #[test]
+    fn a_signed_archive_of_the_app_at_the_build_passes() {
+        check(&app_files("ai.sidevoice.mobile", "42"), "ai.sidevoice.mobile", 42).unwrap();
+    }
+
+    #[test]
+    fn an_archive_of_another_app_or_build_or_unsigned_is_refused() {
+        let files = app_files("ai.sidevoice.mobile", "42");
+        assert!(check(&files, "ai.sidevoice.other", 42).unwrap_err().contains("not ai.sidevoice.other"));
+        assert!(check(&files, "ai.sidevoice.mobile", 43).unwrap_err().contains("build number is 42, not 43"));
+        let unsigned = without(&files, "embedded.mobileprovision");
+        assert!(check(&unsigned, "ai.sidevoice.mobile", 42).unwrap_err().contains("not signed"));
+        let no_manifest = without(&files, MANIFEST);
+        assert!(check(&no_manifest, "ai.sidevoice.mobile", 42).unwrap_err().contains("not at the root"));
+        assert!(check(&[], "ai.sidevoice.mobile", 42).unwrap_err().contains("no Payload"));
     }
 
     #[test]

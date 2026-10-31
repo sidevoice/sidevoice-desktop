@@ -288,6 +288,10 @@ leaves the signed, notarized and stapled `dist/Sidevoice_X.Y.Z_aarch64.dmg` and 
   ("Developer ID Application: … (TEAMID)"), `APPLE_TEAM_ID`, and the notary's App Store Connect API key:
   `APPLE_API_KEY` (its id), `APPLE_API_ISSUER`, `APPLE_API_KEY_P8` (the .p8's contents). release-please.yml
   hands them to `build` (`secrets: inherit`).
+- The mobile app's TestFlight upload (`.github/workflows/mobile-testflight.yml`, by hand from `main`) reads the App Store
+  Connect key's four secrets above (`APPLE_API_KEY`, `APPLE_API_ISSUER`, `APPLE_API_KEY_P8`, `APPLE_TEAM_ID`) and needs the
+  key to have the **Admin** role; the desktop notarization works with it too. Its job runs in the environment
+  `testflight`, whose deployment branches should be `main` only (docs/MOBILE.md → "TestFlight").
 - Repository secrets for the updates (a release): `TAURI_SIGNING_PRIVATE_KEY` (the minisign private key
   `tauri signer generate` wrote) and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (Updates, above).
 - Required check **PR title is a conventional commit**. release-please's own PR gets it through a dispatched run

@@ -36,7 +36,11 @@
 //!   wrote.
 //! - `mobile build android|ios` (CI, every pull request): the unsigned app, into dist/: the Android APK (arm64), checked
 //!   for 16 KB pages, and the iOS simulator app, checked for its privacy manifest and export compliance
-//!   (.github/workflows/mobile.yml). `mobile check-16kb [APK]` and `mobile check-ios [APP]` are those checks.
+//!   (.github/workflows/mobile.yml). `mobile check-16kb [APK]` and `mobile check-ios APP` are those checks.
+//! - `mobile testflight --build-number N` (by hand, from main: .github/workflows/mobile-testflight.yml): the iOS app archived
+//!   and signed through automatic provisioning with the App Store Connect API key, read, and uploaded to TestFlight. Reads
+//!   `APPLE_API_KEY`, `APPLE_API_ISSUER`, `APPLE_API_KEY_P8` (the .p8's contents, written to a 0600 file removed when it ends) and
+//!   `APPLE_TEAM_ID`.
 //!
 //! The Windows app, in the `windows` job after `bundle` (platform/release/windows.rs):
 //!
@@ -131,7 +135,7 @@ const USAGE: &str =
   | probe probe-app | probe local-host | probe probe | probe voice-models | probe card | probe exit
   | probe memory | probe voice-memory
   | mobile generate android | mobile generate ios | mobile generated android | mobile generated ios
-  | mobile build android | mobile build ios | mobile check-16kb [APK] | mobile check-ios [APP]
+  | mobile build android | mobile build ios | mobile check-16kb [APK] | mobile check-ios APP | mobile testflight --build-number N
   | packaging compare BEFORE_REF | packaging files DIR OUTPUT
   | publish assets release TAG | publish assets nightly | publish release TAG | publish nightly
   | release-pr-title [BRANCH] | release-pr-checks
@@ -155,6 +159,7 @@ fn main() -> ExitCode {
         ["mobile", "check-16kb"] => mobile::check::check_16kb(&mobile::unsigned_apk()),
         ["mobile", "check-16kb", apk] => mobile::check::check_16kb(std::path::Path::new(apk)),
         ["mobile", "check-ios", app] => mobile::ios::check_app(std::path::Path::new(app)),
+        ["mobile", "testflight", "--build-number", number] => mobile::testflight::testflight(number),
         ["platform-clippy"] => checks::clippy(true),
         ["test"] => checks::test(),
         ["test-support"] => checks::test_support(),
