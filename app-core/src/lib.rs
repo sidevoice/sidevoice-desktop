@@ -2,6 +2,7 @@
 //! takes from the engine, the settings the page sends), and the app's side of sidevoice-engine. No Tauri, no window
 //! and no webview: it is tested anywhere, and the apps put a shell on it.
 
+pub mod app;
 pub mod debug;
 pub mod engine;
 pub mod platform;

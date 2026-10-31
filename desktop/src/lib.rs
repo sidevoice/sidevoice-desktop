@@ -10,6 +10,7 @@
 //!   app keeps running.
 //! - `call-controls`: the call controls card (`src/call_controls.rs`), floating over other apps during a call.
 
+mod app_hooks;
 mod call_controls;
 mod data;
 mod debug_options;
@@ -32,6 +33,7 @@ use crate::platform::host::{self, APP_ORIGIN};
 use crate::platform::media_controls;
 use crate::platform::shortcut_access;
 use serde_json::{json, Value};
+use sidevoice_app_core::app::{AppHost, Hooks, HostConfig};
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
 use sidevoice_desktop_core::build_info::BuildInfo;
 use sidevoice_desktop_core::settings::{MuteShortcut, Registration, Settings};
@@ -477,12 +479,6 @@ pub fn run() {
     let builder = tauri::Builder::default().plugin(log_plugin());
     // The call controls card is a non-activating panel on macOS (src/call_controls.rs).
     let builder = <platform::card_window::NativeCardWindow as platform::card_window::CardWindow>::configure(builder);
-    // The voice call the app runs (`host.voice`, src/voice.rs).
-    // Its shared audio starts its dispatcher on Tokio, so it is built inside the runtime the commands run on.
-    let builder = {
-        let _runtime = tauri::async_runtime::handle().inner().enter();
-        builder.manage(voice::VoiceState::default())
-    };
     application::configure(builder)
         .plugin(tauri_plugin_opener::Builder::new().open_js_links_on_click(false).build())
         .manage(AppState::default())
@@ -499,17 +495,17 @@ pub fn run() {
             // Without it the app still runs; the page then finds no native engine to use.
             let engine_root =
                 data::shared_model_root().ok_or_else(|| std::io::Error::other("no home for the shared model store"))?;
-            let credentials = engine_ipc::ProviderKeys;
-            match sidevoice_app_core::engine::NativeEngines::new(
-                engine_root,
-                credentials,
+            // The application host: the voice call and the engine (`host.voice`, `host.engine`; src/voice.rs, src/engine_ipc.rs).
+            // The engine failing to start is logged by the host, and the app goes on without one.
+            app.manage(AppHost::new(
+                HostConfig { model_root: engine_root },
                 tauri::async_runtime::handle().inner().clone(),
-            ) {
-                Ok(engines) => {
-                    app.manage(engine_ipc::EngineState::new(engines));
-                }
-                Err(e) => log::error!("the native engine did not start: {} ({})", e.key, e.message),
-            }
+                Hooks {
+                    admission: Arc::new(app_hooks::ResetAdmission(handle.clone())),
+                    events: Arc::new(app_hooks::RoomEvents(handle.clone())),
+                    keys: Arc::new(app_hooks::Keys),
+                },
+            ));
             // This computer's own core, on every OS: found, paired, proxied for the page (docs/LOCAL_HOST.md).
             local_host::setup(&handle);
             let stored = data::desktop_dir(&handle).ok().and_then(|dir| settings::load(&dir));
