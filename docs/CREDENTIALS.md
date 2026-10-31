@@ -36,16 +36,19 @@ operations can be retried. An indefinitely unanswered prompt may require dismiss
 The service is the bundle identifier plus `.providers`, and the identifier was `dev.sidevoice.desktop` before
 `ai.sidevoice.desktop`. At launch, first (`legacy_identifier.rs`, until its journal says it has finished;
 APP_DATA.md), `providers_in(identifier)` lists the old service (the same exact-service search as `clear_all`), and
-`copy_key_from(identifier, provider, settle)` handles one provider whose account is a valid provider id at a time,
+`copy_key_from(identifier, provider, may_write, settled)` handles one provider whose account is a valid provider id
+at a time,
 **each call with its own admission and 30-second deadline**: it copies the key if the new namespace holds none for it,
 and reads it back equal. **Nothing is overwritten or deleted**: a new key wins and the old one stays, so an old key
 and a different new one are both kept.
 
-`settle` runs on the store's worker once both namespaces are read and before anything is written, and nothing is
-written unless it returns true. The carry-over passes one that records the provider as settled
-(`legacy-identifier.key-<provider>`, beside its journal), and refuses once a reset has ended the carry-over. A copy
-that completes after its caller stopped waiting (a Keychain prompt answered late) is therefore recorded all the same,
-a key is never copied twice (one the person removes later never comes back), and no key is copied after a reset.
+Both hooks run on the store's worker. `may_write` runs right before the key is written, which happens only if it
+returns true: the carry-over refuses once a reset has ended it, so no key is copied after a reset. `settled` runs once
+the key is settled (written and read back equal, or nothing to copy): the carry-over records the provider there
+(`legacy-identifier.key-<provider>`, beside its journal). A copy that completes after its caller stopped waiting (a
+Keychain prompt answered late) is therefore recorded all the same, after its own write, and a key is never copied
+twice (one the person removes later never comes back). A write that fails, or a crash before the record, leaves the
+provider unrecorded: the next launch tries it again, and copying only where no key is makes that harmless.
 While such a copy is pending, the next provider finds the admission busy and is tried at the next launch. A key that
 cannot be read is reported and tried again at the next launch; the others go on. An old store that cannot be listed
 (`Unavailable`, e.g. no Secret Service) is asked again at every launch. The log names the provider ids, never a key

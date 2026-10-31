@@ -40,7 +40,7 @@ mod tests {
             assert_eq!(write("openai", Some("test-only")), Err(Error::Unavailable));
             assert_eq!(clear_all(), Err(Error::Unavailable));
             assert_eq!(providers_in("dev.sidevoice.desktop"), Err(Error::Unavailable));
-            assert_eq!(copy_key_from("dev.sidevoice.desktop", "openai", || true), Err(Error::Unavailable));
+            assert_eq!(copy_key_from("dev.sidevoice.desktop", "openai", || true, || true), Err(Error::Unavailable));
             return;
         }
         // Isolate the bus environment from concurrent tests and any real user's keyring.

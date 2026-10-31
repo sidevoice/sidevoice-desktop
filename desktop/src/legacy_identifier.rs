@@ -39,10 +39,12 @@
 //!   the journal managed to say, so a retry never copies over what the app wrote since. A copy with its marker and
 //!   nothing at `<new>` is a swap stopped between its two renames: only the second is left.
 //! - **Provider keys** (`credentials::copy_key_from`): each old key the new namespace lacks is copied and read back,
-//!   one at a time, each with its own admission and deadline; nothing is overwritten or deleted. Each provider is
-//!   settled by a record beside the journal (`legacy-identifier.key-<provider>`), written by the store's worker before
-//!   it writes, even after the launch stopped waiting for it, and refused once a reset ended the carry-over: a key is
-//!   never copied twice, so one removed later never comes back.
+//!   one at a time, each with its own admission and deadline; nothing is overwritten or deleted, and nothing is written
+//!   once a reset ended the carry-over. Each provider is settled by a record beside the journal
+//!   (`legacy-identifier.key-<provider>`), written by the store's worker once its key is written and read back (or
+//!   there was nothing to copy), even after the launch stopped waiting for it: a key is never copied twice, so one
+//!   removed later never comes back; a failed write or a crash before the record leaves it for the next launch, where
+//!   copying only where no key is makes the retry harmless.
 //! - **Finished** when the folders and every key are settled. A failure is logged, never fatal, and retried at the
 //!   next launch. A reset finishes it before it clears anything (`stop`, from `data::begin_reset`).
 //!
@@ -209,8 +211,9 @@ impl Report {
     }
 }
 
-/// What settles one provider's key: run by the store's worker before it writes (`credentials::copy_key_from`).
-type Settle = Box<dyn FnOnce() -> bool + Send>;
+/// A hook `credentials::copy_key_from` runs on the store's worker: whether it may write a provider's key, then the
+/// record that the key is settled.
+type Hook = Box<dyn FnOnce() -> bool + Send>;
 
 /// Carry the old identifier's folders and provider keys over to the app's own. See the module.
 pub fn carry_over() -> Report {
@@ -225,7 +228,7 @@ pub fn carry_over() -> Report {
             &control,
             &Io::default(),
             || credentials::providers_in(LEGACY),
-            |provider, settle| credentials::copy_key_from(LEGACY, provider, settle),
+            |provider, may_write, settled| credentials::copy_key_from(LEGACY, provider, may_write, settled),
         ),
         Err(key) => said(&format!("not looked at ({key})")),
     }
@@ -246,13 +249,13 @@ fn lock(control: &Path) -> Option<fs::File> {
 }
 
 /// [`carry_over`] for these `(old, new)` folders (the app data folder first), with the journal in `control`. `list`
-/// names the providers with an old key; `copy` copies one, settling it as [`Settle`] says.
+/// names the providers with an old key; `copy` copies one, with the two [`Hook`]s of `credentials::copy_key_from`.
 fn run(
     folders: &[(PathBuf, PathBuf)],
     control: &Path,
     io: &Io,
     list: impl FnOnce() -> Result<Vec<String>, credentials::Error>,
-    copy: impl FnMut(&str, Settle) -> Result<bool, credentials::Error>,
+    copy: impl FnMut(&str, Hook, Hook) -> Result<bool, credentials::Error>,
 ) -> Report {
     let mut report = Report(Vec::new());
     let mut state = match read_state(control) {
@@ -436,12 +439,12 @@ fn sibling(path: &Path, suffix: &str) -> PathBuf {
     path.with_file_name(name)
 }
 
-/// The provider keys: each listed provider not yet settled is copied by `copy`, with a [`Settle`] that writes its
-/// record; whether all are settled.
+/// The provider keys: each listed provider not yet settled is copied by `copy`, which may write while the carry-over
+/// runs and writes the provider's record once its key is settled; whether all are settled.
 fn keys(
     control: &Path,
     list: impl FnOnce() -> Result<Vec<String>, credentials::Error>,
-    mut copy: impl FnMut(&str, Settle) -> Result<bool, credentials::Error>,
+    mut copy: impl FnMut(&str, Hook, Hook) -> Result<bool, credentials::Error>,
     report: &mut Report,
 ) -> bool {
     let providers = match list() {
@@ -463,7 +466,9 @@ fn keys(
             }
         }
         let control = control.to_owned();
-        match copy(&provider, Box::new(move || settle(&control, &record))) {
+        let may_write: Hook = Box::new(move || running(&control));
+        let settled: Hook = Box::new(move || Files::write_private(&record, b"").is_ok());
+        match copy(&provider, may_write, settled) {
             Ok(true) => report.say(Level::Info, format!("copied the {provider} key to the new namespace")),
             Ok(false) => {
                 report.say(Level::Info, format!("nothing to copy for {provider}: the new namespace holds a key"))
@@ -477,10 +482,9 @@ fn keys(
     all
 }
 
-/// Settle a provider's key by writing its `record` in `control`, unless a reset ended the carry-over: then nothing is
-/// written, and no key is copied after a reset. Whether it is settled.
-fn settle(control: &Path, record: &Path) -> bool {
-    matches!(read_state(control), Ok(state) if !state.finished) && Files::write_private(record, b"").is_ok()
+/// Whether the carry-over with its journal in `control` still runs: a reset ends it, and no key is written after one.
+fn running(control: &Path) -> bool {
+    matches!(read_state(control), Ok(state) if !state.finished)
 }
 
 /// Whether the app's data folder `data` holds anything the person did: the files the app writes only on their action
@@ -528,8 +532,13 @@ mod tests {
         Ok(Vec::new())
     }
 
-    fn no_copy(_: &str, _: Settle) -> Result<bool, Error> {
+    fn no_copy(_: &str, _: Hook, _: Hook) -> Result<bool, Error> {
         unreachable!("no key to copy")
+    }
+
+    /// A copy as `credentials::copy_key_from` makes it when its write goes through: allowed, written, then recorded.
+    fn copied(_: &str, may_write: Hook, settled: Hook) -> Result<bool, Error> {
+        Ok(may_write() && settled())
     }
 
     type Folders = Vec<(PathBuf, PathBuf)>;
@@ -816,9 +825,8 @@ mod tests {
             assert!(report.0.is_empty(), "at {at}");
             assert!(folders.iter().all(|(_, new)| !new.exists()), "at {at}");
             assert_old_intact(folders);
-            // A key copy that completes after the reset is refused, and records nothing.
-            let record = control.join(format!("{KEY_RECORD}openai"));
-            assert!(!settle(control, &record) && !record.exists(), "at {at}");
+            // A key copy that completes after the reset may not write.
+            assert!(!running(control), "at {at}");
         };
 
         // Before.
@@ -855,7 +863,6 @@ mod tests {
 
         // Deleted by hand meanwhile: the folders are settled, so it does not come back.
         fs::remove_dir_all(&folders[1].1).unwrap();
-        let copied = |_: &str, settle: Settle| Ok(settle());
         run(&folders, &control, &Io::default(), || Ok(vec!["openai".into()]), copied);
         assert!(read_state(&control).unwrap().finished);
         assert!(!folders[1].1.exists());
@@ -875,12 +882,12 @@ mod tests {
         let late = std::cell::RefCell::new(None);
         // The first copies; the second's prompt outlasts its deadline and completes later on the store's worker; the
         // third finds that worker busy and does not run.
-        let copy = |provider: &str, settle: Settle| match provider {
-            "first" => Ok(settle()),
+        let copy = |provider: &str, may_write: Hook, settled: Hook| match provider {
+            "first" => copied(provider, may_write, settled),
             "second" => {
                 *late.borrow_mut() = Some(std::thread::spawn(move || {
                     std::thread::sleep(std::time::Duration::from_millis(50));
-                    settle()
+                    may_write() && settled()
                 }));
                 Err(Error::Unavailable)
             }
@@ -892,13 +899,51 @@ mod tests {
 
         // The next launch: only the third is asked for.
         let asked = std::cell::RefCell::new(Vec::new());
-        let copy = |provider: &str, settle: Settle| {
+        let copy = |provider: &str, may_write: Hook, settled: Hook| {
             asked.borrow_mut().push(provider.to_owned());
-            Ok(settle())
+            copied(provider, may_write, settled)
         };
         run(&folders, &control, &Io::default(), list, copy);
         assert_eq!(asked.take(), ["third"]);
         assert!(read_state(&control).unwrap().finished);
+    }
+
+    #[test]
+    fn a_key_copy_that_completes_after_a_reset_writes_nothing() {
+        let (_temp, root) = scratch();
+        let (folders, control) = (nightly(&root), root.join("control"));
+        let pending = std::cell::RefCell::new(None);
+        let waiting = |_: &str, may_write: Hook, _: Hook| {
+            *pending.borrow_mut() = Some(may_write);
+            Err(Error::Unavailable)
+        };
+        run(&folders, &control, &Io::default(), || Ok(vec!["openai".into()]), waiting);
+        stop(&control).unwrap();
+        assert!(!pending.take().unwrap()(), "the prompt is answered after the reset");
+    }
+
+    #[test]
+    fn a_key_whose_write_fails_is_not_recorded_and_the_next_launch_copies_it() {
+        let (_temp, root) = scratch();
+        let (folders, control) = (nightly(&root), root.join("control"));
+        let (list, record) = (|| Ok(vec!["openai".into()]), control.join(format!("{KEY_RECORD}openai")));
+        // Allowed to write, and the write fails (or the process ends before the record): it is never settled.
+        let failing = |_: &str, may_write: Hook, _: Hook| {
+            assert!(may_write());
+            Err(Error::Failed)
+        };
+        run(&folders, &control, &Io::default(), list, failing);
+        assert!(!record.exists());
+        assert_carried_but_open(&folders, &control);
+
+        let asked = Cell::new(0);
+        let copy = |provider: &str, may_write: Hook, settled: Hook| {
+            asked.set(asked.get() + 1);
+            copied(provider, may_write, settled)
+        };
+        run(&folders, &control, &Io::default(), list, copy);
+        assert_eq!(asked.get(), 1, "copied at the next launch");
+        assert!(record.exists() && read_state(&control).unwrap().finished);
     }
 
     #[test]

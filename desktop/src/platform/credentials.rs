@@ -109,17 +109,20 @@ pub fn providers_in(identifier: &str) -> Result<Vec<String>, Error> {
 
 /// Copy `provider`'s key from the namespace of the bundle identifier `identifier` to the one the public functions use,
 /// unless that one holds a key for it: `Ok(true)` copied and read back, `Ok(false)` nothing to copy. Nothing is
-/// overwritten or deleted. One key per call, each with its own admission and deadline. `settle` runs on the store's
-/// worker once both namespaces were read and before anything is written, and nothing is written unless it returns
-/// true: it runs even for a copy that completes after this call stopped waiting (`Unavailable` at the deadline), so
-/// the caller can record that copy there.
+/// overwritten or deleted. One key per call, each with its own admission and deadline. Both hooks run on the store's
+/// worker, even for a copy that completes after this call stopped waiting (`Unavailable` at the deadline):
+/// `may_write` right before the key is written, which happens only if it returns true; `settled` once the key is
+/// settled (written and read back equal, or nothing to copy), and the call fails unless it returns true. So the caller
+/// records a key there after its write: a write that fails, or a crash before the record, leaves it to be tried again,
+/// and copying only where no key is makes that harmless.
 pub fn copy_key_from(
     identifier: &str,
     provider: &str,
-    settle: impl FnOnce() -> bool + Send + 'static,
+    may_write: impl FnOnce() -> bool + Send + 'static,
+    settled: impl FnOnce() -> bool + Send + 'static,
 ) -> Result<bool, Error> {
     let (from, provider) = (service_of(identifier), Provider::new(provider)?);
-    admit(move || copy_key(Native::store()?.as_ref(), &from, namespace(), &provider, settle))
+    admit(move || copy_key(Native::store()?.as_ref(), &from, namespace(), &provider, may_write, settled))
 }
 
 /// The service of the namespace that a build with the bundle identifier `identifier` kept its provider keys in.
@@ -139,20 +142,26 @@ fn copy_key(
     from: &str,
     to: &str,
     provider: &Provider,
-    settle: impl FnOnce() -> bool,
+    may_write: impl FnOnce() -> bool,
+    settled: impl FnOnce() -> bool,
 ) -> Result<bool, Error> {
     let secret = match read_in(store, to, provider)? {
         Some(_) => None,
         None => read_in(store, from, provider)?,
     };
-    if !settle() {
-        return Err(Error::Failed);
+    if let Some(secret) = &secret {
+        if !may_write() {
+            return Err(Error::Failed);
+        }
+        write_in(store, to, provider, Some(secret))?;
+        if read_in(store, to, provider)?.as_ref() != Some(secret) {
+            return Err(Error::Failed);
+        }
     }
-    let Some(secret) = secret else { return Ok(false) };
-    write_in(store, to, provider, Some(&secret))?;
-    match read_in(store, to, provider)? {
-        Some(read) if read == secret => Ok(true),
-        _ => Err(Error::Failed),
+    if settled() {
+        Ok(secret.is_some())
+    } else {
+        Err(Error::Failed)
     }
 }
 
@@ -407,10 +416,10 @@ mod tests {
         let store = Native::store().unwrap();
         write_in(store.as_ref(), &old, &provider("openai"), Some("test-only")).unwrap();
         assert_eq!(providers_in(&identifier), Ok(vec!["openai".to_owned()]));
-        assert_eq!(copy_key_from(&identifier, "openai", || true), Ok(true));
+        assert_eq!(copy_key_from(&identifier, "openai", || true, || true), Ok(true));
         assert_eq!(read("openai").unwrap().as_deref(), Some("test-only"));
         assert_eq!(read_in(store.as_ref(), &old, &provider("openai")).unwrap().as_deref(), Some("test-only"));
-        assert_eq!(copy_key_from(&identifier, "openai", || true), Ok(false));
+        assert_eq!(copy_key_from(&identifier, "openai", || true, || true), Ok(false));
         clear_all().unwrap();
         clear_in(store.as_ref(), &old).unwrap();
     }
@@ -419,7 +428,7 @@ mod tests {
     const OLD: &str = "dev.sidevoice.desktop.providers";
 
     fn copy(store: &CredentialStore, id: &str) -> Result<bool, Error> {
-        copy_key(store, OLD, SERVICE, &provider(id), || true)
+        copy_key(store, OLD, SERVICE, &provider(id), || true, || true)
     }
 
     fn key(store: &CredentialStore, service: &str, id: &str) -> Option<String> {
@@ -467,16 +476,26 @@ mod tests {
     }
 
     #[test]
-    fn nothing_is_written_unless_it_is_settled_and_an_unreadable_key_is_not_settled() {
+    fn a_key_is_settled_only_once_written_and_read_back_and_written_only_when_allowed() {
         let _serial = serial();
         let store = memory();
         write_in(&store, OLD, &provider("openai"), Some("old")).unwrap();
-        assert_eq!(copy_key(&store, OLD, SERVICE, &provider("openai"), || false), Err(Error::Failed));
+        let unsettled = || unreachable!("not settled");
+        assert_eq!(copy_key(&store, OLD, SERVICE, &provider("openai"), || false, unsettled), Err(Error::Failed));
         assert_eq!(key(&store, SERVICE, "openai"), None);
-        // Stored text that is not text: reading it fails before anything is settled.
+        // The record comes after the write: the key is already there when it is settled.
+        let written = Memory(store.0.clone());
+        let settled = move || key(&written, SERVICE, "openai").as_deref() == Some("old");
+        assert_eq!(copy_key(&store, OLD, SERVICE, &provider("openai"), || true, settled), Ok(true));
+        // A record that cannot be written fails the call: the key is tried again, and finds it there.
+        assert_eq!(
+            copy_key(&store, OLD, SERVICE, &provider("openai"), || unreachable!(), || false),
+            Err(Error::Failed)
+        );
+        // Stored text that is not text: reading it fails before anything else.
         store.build(OLD, "other", None).unwrap().set_secret(&[0xff]).unwrap();
-        let settled = || unreachable!("not settled");
-        assert_eq!(copy_key(&store, OLD, SERVICE, &provider("other"), settled), Err(Error::Failed));
+        let other = copy_key(&store, OLD, SERVICE, &provider("other"), || unreachable!(), unsettled);
+        assert_eq!(other, Err(Error::Failed));
         assert_eq!(store.build(OLD, "other", None).unwrap().get_secret().unwrap(), vec![0xff]);
     }
 
@@ -491,15 +510,13 @@ mod tests {
         let (worker, (settled, recorded)) = (Memory(store.0.clone()), mpsc::channel());
         let late = bounded(&BUSY, Duration::from_millis(20), move || {
             std::thread::sleep(Duration::from_millis(200));
-            copy_key(&worker, OLD, SERVICE, &provider("openai"), move || settled.send(()).is_ok())
+            copy_key(&worker, OLD, SERVICE, &provider("openai"), || true, move || settled.send(()).is_ok())
         });
         assert_eq!(late, Err(Error::Unavailable));
         let next = bounded(&BUSY, Duration::from_millis(20), || -> Result<bool, Error> { unreachable!("busy") });
         assert_eq!(next, Err(Error::Unavailable));
+        // Recorded after its write: the key is there once the record is.
         recorded.recv_timeout(Duration::from_secs(10)).unwrap();
-        while BUSY.load(Ordering::Acquire) {
-            std::thread::sleep(Duration::from_millis(5));
-        }
         assert_eq!(key(&store, SERVICE, "openai").as_deref(), Some("old"));
     }
 
