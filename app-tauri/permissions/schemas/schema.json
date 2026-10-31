@@ -511,6 +511,18 @@
           "markdownDescription": "Denies the voice_end_input command without any pre-configured scope."
         },
         {
+          "description": "Enables the voice_events command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-voice-events",
+          "markdownDescription": "Enables the voice_events command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the voice_events command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-voice-events",
+          "markdownDescription": "Denies the voice_events command without any pre-configured scope."
+        },
+        {
           "description": "Enables the voice_mute command without any pre-configured scope.",
           "type": "string",
           "const": "allow-voice-mute",

@@ -11,9 +11,13 @@ card's window none, no other window any).
   whether the webview is the page it owns the calls for (the desktop: the current room window, showing its own origin);
   refused as `bad_request`. `capability`: nothing beyond the window the permission was granted to.
 - **Arguments.** What the page sends, as it names them (`snake_case` in Rust, `camelCase` on the wire).
-- **Tells the page.** What the command makes the app's `EventSink` hand to the page, besides its answer. The events are
-  evaluated in the room page as `window.__sidevoiceDesktop.voiceEvent(event)`, `{key, type, data?}`; the call's are
-  `turn`, `state`, `level`, `playback-level`, `error` and `take`, the host's `say` and `devices`.
+- **Tells the page.** What the command makes the host hand to the app's `EventSink`, besides its answer. The plugin's sink
+  sends them over the channel the page opened (`voice_events`), `{key, type, data?}`, in the order the host made them, to
+  the page they are for and to no other; the call's are `turn`, `state`, `level`, `playback-level`, `error` and `take`,
+  the host's `say` and `devices`.
+- **Page.** The host numbers the pages that own its calls. `voice_events` answers the current page's number (and tells which document it is from, so that a late request of a replaced page cannot take the new page's channel), and every
+  other voice command sends it back as `page`: a command of a page that is not the current one is refused as
+  `page_stale` and changes nothing, and what the host would tell an old page is not sent.
 - **Card.** Whether the call controls card's window may invoke it: never.
 
 | Command | Permission | Window | Caller | Arguments | Tells the page | Card |
@@ -30,18 +34,19 @@ card's window none, no other window any).
 | `engine_has_credential` | `sidevoice-app-tauri:allow-engine-has-credential` | room | capability | `provider` | nothing | no |
 | `engine_test_credential` | `sidevoice-app-tauri:allow-engine-test-credential` | room | capability | `provider`, `key` | nothing (the key is never kept or logged) | no |
 | `engine_refresh` | `sidevoice-app-tauri:allow-engine-refresh` | room | capability | `provider` | nothing | no |
-| `voice_create_call` | `sidevoice-app-tauri:allow-voice-create-call` | room | room page | `key` | nothing | no |
-| `voice_route_input` | `sidevoice-app-tauri:allow-voice-route-input` | room | room page | `key?` | nothing | no |
-| `voice_dispose_call` | `sidevoice-app-tauri:allow-voice-dispose-call` | room | room page | `key` | what the call still had to tell: its sayings' ends, an open turn, its take | no |
-| `voice_ready` | `sidevoice-app-tauri:allow-voice-ready` | room | room page | `key` | nothing | no |
-| `voice_update` | `sidevoice-app-tauri:allow-voice-update` | room | room page | `key`, `change` | the call's events from the change on | no |
-| `voice_preload` | `sidevoice-app-tauri:allow-voice-preload` | room | room page | `settings` | nothing | no |
-| `voice_start` | `sidevoice-app-tauri:allow-voice-start` | room | room page | `key`, `settings`, `take?` | the call's events: `state`, `turn`, `level`, `playback-level`, `error`, and `take` when asked | no |
-| `voice_stop` | `sidevoice-app-tauri:allow-voice-stop` | room | room page | `key` | the idle `state` that answers it, the open turn's end, the take, the sayings' ends | no |
-| `voice_say` | `sidevoice-app-tauri:allow-voice-say` | room | room page | `key`, `sayKey`, `text`, `language?` | `say` steps under `sayKey`, up to `done` | no |
-| `voice_cancel_say` | `sidevoice-app-tauri:allow-voice-cancel-say` | room | room page | `key`, `sayKey` | the `say` `done` with outcome `cancelled` | no |
-| `voice_mute` | `sidevoice-app-tauri:allow-voice-mute` | room | room page | `key`, `muted` | the call's `state` when it changes | no |
-| `voice_cancel_input` | `sidevoice-app-tauri:allow-voice-cancel-input` | room | room page | `key` | the cancelled `turn` | no |
-| `voice_end_input` | `sidevoice-app-tauri:allow-voice-end-input` | room | room page | `key` | the closed `turn`, as any turn | no |
-| `voice_audio_devices` | `sidevoice-app-tauri:allow-voice-audio-devices` | room | room page | none | from now on, `devices` when they change | no |
-| `voice_set_audio_devices` | `sidevoice-app-tauri:allow-voice-set-audio-devices` | room | room page | `choice` | `devices`, when the choice changes them | no |
+| `voice_events` | `sidevoice-app-tauri:allow-voice-events` | room | room page | `document` (the page's own start time), `events` (a channel) | from now on, every event of the calls and the devices, over that channel, while this is the current page; it answers the page's number, or refuses `page_stale` a request of a document that was replaced and reached the app late | no |
+| `voice_create_call` | `sidevoice-app-tauri:allow-voice-create-call` | room | room page | `page`, `key` | nothing | no |
+| `voice_route_input` | `sidevoice-app-tauri:allow-voice-route-input` | room | room page | `page`, `key?` | nothing | no |
+| `voice_dispose_call` | `sidevoice-app-tauri:allow-voice-dispose-call` | room | room page | `page`, `key` | what the call still had to tell: its sayings' ends, an open turn, its take | no |
+| `voice_ready` | `sidevoice-app-tauri:allow-voice-ready` | room | room page | `page`, `key` | nothing | no |
+| `voice_update` | `sidevoice-app-tauri:allow-voice-update` | room | room page | `page`, `key`, `change` | the call's events from the change on | no |
+| `voice_preload` | `sidevoice-app-tauri:allow-voice-preload` | room | room page | `page`, `settings` | nothing | no |
+| `voice_start` | `sidevoice-app-tauri:allow-voice-start` | room | room page | `page`, `key`, `settings`, `take?` | the call's events: `state`, `turn`, `level`, `playback-level`, `error`, and `take` when asked | no |
+| `voice_stop` | `sidevoice-app-tauri:allow-voice-stop` | room | room page | `page`, `key` | the idle `state` that answers it, the open turn's end, the take, the sayings' ends | no |
+| `voice_say` | `sidevoice-app-tauri:allow-voice-say` | room | room page | `page`, `key`, `sayKey`, `text`, `language?` | `say` steps under `sayKey`, up to `done` | no |
+| `voice_cancel_say` | `sidevoice-app-tauri:allow-voice-cancel-say` | room | room page | `page`, `key`, `sayKey` | the `say` `done` with outcome `cancelled` | no |
+| `voice_mute` | `sidevoice-app-tauri:allow-voice-mute` | room | room page | `page`, `key`, `muted` | the call's `state` when it changes | no |
+| `voice_cancel_input` | `sidevoice-app-tauri:allow-voice-cancel-input` | room | room page | `page`, `key` | the cancelled `turn` | no |
+| `voice_end_input` | `sidevoice-app-tauri:allow-voice-end-input` | room | room page | `page`, `key` | the closed `turn`, as any turn | no |
+| `voice_audio_devices` | `sidevoice-app-tauri:allow-voice-audio-devices` | room | room page | `page` | from now on, `devices` when they change | no |
+| `voice_set_audio_devices` | `sidevoice-app-tauri:allow-voice-set-audio-devices` | room | room page | `page`, `choice` | `devices`, when the choice changes them | no |

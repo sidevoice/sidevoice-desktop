@@ -21,6 +21,7 @@
     "sidevoice-app-tauri:allow-engine-has-credential",
     "sidevoice-app-tauri:allow-engine-test-credential",
     "sidevoice-app-tauri:allow-engine-refresh",
+    "sidevoice-app-tauri:allow-voice-events",
     "sidevoice-app-tauri:allow-voice-create-call",
     "sidevoice-app-tauri:allow-voice-route-input",
     "sidevoice-app-tauri:allow-voice-dispose-call",

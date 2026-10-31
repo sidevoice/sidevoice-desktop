@@ -6,7 +6,9 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use serde_json::{json, Value};
-use sidevoice_app_core::app::{AlwaysAdmit, AppHost, EventSink, Hooks, HostConfig, KeyError, ProviderKeys};
+use sidevoice_app_core::app::{
+    AlwaysAdmit, AppHost, EventSink, Hooks, HostConfig, KeyError, PageGeneration, ProviderKeys,
+};
 use tauri::ipc::{CallbackFn, InvokeBody, RuntimeAuthority};
 use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, MockRuntime, INVOKE_KEY};
 use tauri::webview::InvokeRequest;
@@ -17,12 +19,12 @@ use tauri_utils::acl::manifest::PermissionFile;
 use tauri_utils::acl::resolved::Resolved;
 use tauri_utils::platform::Target;
 
-use crate::{inventory, PLUGIN};
+use crate::{inventory, Pages, PLUGIN};
 
 struct Nowhere;
 
 impl EventSink for Nowhere {
-    fn event(&self, _event: Value) {}
+    fn event(&self, _page: PageGeneration, _event: Value) {}
 }
 
 impl ProviderKeys for Nowhere {
@@ -82,8 +84,9 @@ fn fixture(name: &str) -> Fixture {
     let root = std::env::temp_dir().join(format!("sidevoice-app-tauri-{name}-{}", std::process::id()));
     let mut context = mock_context(noop_assets());
     *context.runtime_authority_mut() = authority();
-    let app = mock_builder().plugin(crate::init(|_app, _webview| Ok(()))).build(context).unwrap();
-    let hooks = Hooks { admission: Arc::new(AlwaysAdmit), events: Arc::new(Nowhere), keys: Arc::new(Nowhere) };
+    let pages = Pages::default();
+    let app = mock_builder().plugin(crate::init(|_app, _webview| Ok(()), pages.clone())).build(context).unwrap();
+    let hooks = Hooks { admission: Arc::new(AlwaysAdmit), events: Arc::new(pages), keys: Arc::new(Nowhere) };
     app.manage(AppHost::new(
         HostConfig { model_root: root.clone() },
         tauri::async_runtime::handle().inner().clone(),

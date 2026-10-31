@@ -11,8 +11,10 @@
 //!   ([`AppHost::start`], [`AppHost::update`], [`AppHost::preload`]) is a task of that runtime, lease and all: it releases
 //!   its admission when the load ends, not when the caller stops waiting.
 //! - **Events.** What the call tells the page (its turns, its states, what was said, the devices when they change) is
-//!   handed to [`EventSink`] as JSON, in the order the call made it.
-//! - **Lifecycle.** [`AppHost::page_changed`] when the page that owns the calls is gone, and [`AppHost::close`] before the
+//!   handed to [`EventSink`] as JSON, in the order the call made it, with the generation of the page it is for
+//!   ([`PageGeneration`]). A page owns its lanes, its commands and its events: once the next page is the current one,
+//!   the old one's commands are refused (`page_stale`), its lanes are released, and nothing they still say reaches the sink.
+//! - **Lifecycle.** [`AppHost::page_changed`] when the page that owns the calls is gone (it answers the next page's number), and [`AppHost::close`] before the
 //!   process exits, bounded, so every model and device is released before the C++ libraries' static destructors run.
 //!
 //! The commands of each concern are in `app/voice.rs` and `app/engine.rs`; they refuse as the bridge does
@@ -26,11 +28,12 @@ mod voice;
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sidevoice_voice::{AudioDevices, NativeDevices, SharedNativeAudio};
 use tokio::runtime::Handle;
@@ -86,10 +89,19 @@ impl Admission for AlwaysAdmit {
     }
 }
 
-/// Where the call's events go: the page that owns the calls, as JSON (`{key, type, data?}`, docs/BRIDGE.md → "The
-/// voice call").
+/// Which page, of those that came and went, something is for or from. The host counts them: the first page is 1 (0 is the
+/// time before any), each [`AppHost::page_changed`] makes the next, and only the current one has lanes, events and
+/// commands that are heard. A shell hands each page its number ([`AppHost::page`]) and takes it back on every command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct PageGeneration(pub u64);
+
+/// Where the call's events go: the page that owns the calls, as JSON (`{key, type, data?}`, docs/BRIDGE.md → "The voice
+/// call"). `page` is the generation they were made for: the host sends none for a page that is no longer the current one,
+/// and a sink that keeps a channel per page should check it too, since the current page can change as an event is on
+/// its way.
 pub trait EventSink: Send + Sync + 'static {
-    fn event(&self, event: Value);
+    fn event(&self, page: PageGeneration, event: Value);
 }
 
 /// Where provider keys are kept (docs/CREDENTIALS.md). Never the store's own error text: it can hold secret bytes.
@@ -129,6 +141,9 @@ struct Inner<A: LaneAudio> {
     /// `None` when the engine did not start; its commands, and the call's models, refuse then.
     engines: Option<Arc<NativeEngines>>,
     jobs: Arc<Jobs>,
+    /// The current page's generation (the call host's own counter, shared with the sinks of the calls, which drop what is
+    /// for another).
+    generation: Arc<AtomicU64>,
     /// Quitting: no load starts any more (see [`AppHost::close`]).
     closing: AtomicBool,
     /// The tasks that load models ([`AppHost::detached`]), until they end.
@@ -169,12 +184,14 @@ impl<A: LaneAudio> AppHost<A> {
                 None
             }
         };
+        let generation = Arc::clone(&voice.page);
         let inner = Inner {
             runtime,
             hooks,
             voice,
             engines,
             jobs: Arc::default(),
+            generation,
             closing: AtomicBool::new(false),
             loads: Mutex::default(),
             watcher: Mutex::default(),
@@ -182,11 +199,20 @@ impl<A: LaneAudio> AppHost<A> {
         AppHost { inner: Arc::new(inner) }
     }
 
-    /// The page that owned the calls is gone (it reloaded): a new page owns none of its previous lanes. The old calls
-    /// are stopped and released in the background, and keep their models for their idle minutes.
-    pub fn page_changed(&self) {
+    /// The current page's generation: what a page is given to send back with its commands.
+    pub fn page(&self) -> PageGeneration {
+        PageGeneration(self.inner.generation.load(Ordering::SeqCst))
+    }
+
+    /// The page that owned the calls is gone (it reloaded): a new page owns none of its previous lanes, and is the current
+    /// one from now on. The old lanes (only those: a lane the new page has made already stays) are stopped and released in
+    /// the background, and keep their models for their idle minutes; nothing they still say reaches the sink, and commands
+    /// of the old page are refused (`page_stale`).
+    pub fn page_changed(&self) -> PageGeneration {
+        let next = self.inner.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let inner = Arc::clone(&self.inner);
-        self.inner.runtime.spawn(async move { inner.voice.clear().await });
+        self.inner.runtime.spawn(async move { inner.voice.clear_older_than(next).await });
+        PageGeneration(next)
     }
 
     /// Quitting or restarting, before `exit()` runs the static destructors of the C++ libraries the models are made of:
@@ -270,10 +296,24 @@ impl<A: LaneAudio> AppHost<A> {
         }
     }
 
-    /// The events sink as the call's `Page`.
-    fn page(&self) -> crate::voice::host::Page {
-        let events = Arc::clone(&self.inner.hooks.events);
-        Arc::new(move |event| events.event(event))
+    /// The events sink as the `Page` of a call of generation `page`: what it says reaches the sink while that is the current
+    /// page, and never after.
+    fn page_sink(&self, page: PageGeneration) -> crate::voice::host::Page {
+        let (events, current) = (Arc::clone(&self.inner.hooks.events), Arc::clone(&self.inner.generation));
+        Arc::new(move |event| {
+            if current.load(Ordering::SeqCst) == page.0 {
+                events.event(page, event);
+            }
+        })
+    }
+
+    /// Refuses a command of a page that is not the current one.
+    fn current(&self, page: PageGeneration) -> Result<(), Refusal> {
+        if page == self.page() {
+            Ok(())
+        } else {
+            Err(crate::voice::host::refusal("page_stale", "That page has been replaced by a newer one."))
+        }
     }
 
     /// Lists the devices every `DEVICES_EVERY` from the first call on, and tells the page each change: other devices,
@@ -284,6 +324,7 @@ impl<A: LaneAudio> AppHost<A> {
             return;
         }
         let (events, devices) = (Arc::clone(&self.inner.hooks.events), state.devices.clone());
+        let current = Arc::clone(&self.inner.generation);
         let watcher = self.inner.runtime.spawn(async move {
             let mut last: Option<AudioDevices> = None;
             loop {
@@ -298,7 +339,10 @@ impl<A: LaneAudio> AppHost<A> {
                             != (&now.inputs, &now.outputs, &now.input, &now.output)
                     });
                 if changed {
-                    events.event(json!({"type": "devices", "data": voice::seam_devices(&now)}));
+                    events.event(
+                        PageGeneration(current.load(Ordering::SeqCst)),
+                        json!({"type": "devices", "data": voice::seam_devices(&now)}),
+                    );
                 }
                 last = Some(now);
                 tokio::time::sleep(DEVICES_EVERY).await;

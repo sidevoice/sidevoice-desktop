@@ -62,7 +62,7 @@ impl Admission for Counted {
 struct Nowhere;
 
 impl EventSink for Nowhere {
-    fn event(&self, _event: Value) {}
+    fn event(&self, _page: PageGeneration, _event: Value) {}
 }
 
 impl ProviderKeys for Nowhere {
@@ -233,5 +233,48 @@ fn a_load_after_close_is_refused_and_one_that_will_not_end_is_given_up() {
     };
     assert_eq!(serde_json::to_value(&refused).unwrap()["key"], "shutting_down");
     assert!(host.loading_allowed().is_err());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// What the sink was given, and for which page.
+#[derive(Default)]
+struct Recording(std::sync::Mutex<Vec<(PageGeneration, Value)>>);
+
+impl EventSink for Recording {
+    fn event(&self, page: PageGeneration, event: Value) {
+        self.0.lock().unwrap().push((page, event));
+    }
+}
+
+#[test]
+fn what_a_call_of_an_old_page_says_is_dropped_once_the_next_page_is_current() {
+    let root = std::env::temp_dir().join(format!("sidevoice-app-sink-{}", std::process::id()));
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+    let recording = Arc::new(Recording::default());
+    let hooks = Hooks {
+        admission: Arc::new(AlwaysAdmit),
+        events: Arc::clone(&recording) as Arc<dyn EventSink>,
+        keys: Arc::new(Nowhere),
+    };
+    let host = AppHost::with_audio(
+        HostConfig { model_root: root.clone() },
+        runtime.handle().clone(),
+        hooks,
+        Silent,
+        NativeDevices::default(),
+    );
+
+    let old = host.page();
+    let from_old = host.page_sink(old);
+    from_old(serde_json::json!({"n": 1}));
+    let new = host.page_changed();
+    // The idle state that answers a stop, a take: they can still be on their way when the next page comes.
+    from_old(serde_json::json!({"n": 2}));
+    host.page_sink(new)(serde_json::json!({"n": 3}));
+    from_old(serde_json::json!({"n": 4}));
+
+    let told: Vec<(u64, i64)> =
+        recording.0.lock().unwrap().iter().map(|(page, event)| (page.0, event["n"].as_i64().unwrap())).collect();
+    assert_eq!(told, [(old.0, 1), (new.0, 3)], "in order, each under its own page, and none of the old page's after");
     let _ = std::fs::remove_dir_all(&root);
 }
