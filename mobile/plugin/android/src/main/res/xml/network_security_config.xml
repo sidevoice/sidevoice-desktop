@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The paired machine is reached over plain http on the local network (gate G1): the node's own address is a LAN
+     address, which no certificate can name. The app's pages load from the app, never from the network. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
