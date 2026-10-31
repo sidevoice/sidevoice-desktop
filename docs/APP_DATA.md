@@ -73,6 +73,18 @@ storage, and `app_config_dir` is not written by the app. On macOS the common fol
 exactly the previous list, in the same order, and tests pin it: Application Support, the model children, WebKit,
 Caches, Logs, Saved Application State, then `preferences`.
 
+## From the previous identifier
+
+The builds before `ai.sidevoice.desktop` were `dev.sidevoice.desktop`. At every launch, first (`legacy_identifier.rs`,
+under the launch lock), each folder of the list above for the old identifier is renamed to the same folder of the new
+one, only when it exists and the new one does not. `moves_from(home, previous)` pairs them, resolved by the same
+code as the deletion (`Places::native` takes the identifier as a parameter; on macOS the trait's `extra_folders` adds
+`~/Library/Logs/<id>` and the saved window state). The shared model store is not among them: no identifier names it. The
+local host's pairing lives in `app-data` (`pairings.json`), so it goes with it. Not carried: macOS's `defaults` domain
+and the reset's control directory (`<id>-reset`, which only holds an interrupted reset). Both folders are siblings, so it
+is a rename on one filesystem; a failure is logged and the old folder stays for the next launch. The module is removed
+two desktop releases after the first that ships it (RELEASING.md, "Legacy identifier carry-over").
+
 ## Removal policy
 
 Every folder removal goes through the shared held-root capability (`HeldDirectory` + `Removal`): a selected entry and

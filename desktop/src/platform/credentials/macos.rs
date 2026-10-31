@@ -51,6 +51,11 @@ mod tests {
     }
 
     #[test]
+    fn legacy_keys_are_carried_over_in_the_real_keychain() {
+        carry_over_native();
+    }
+
+    #[test]
     fn public_functions_round_trip_in_the_test_namespace() {
         // Test builds give the public functions a per-process namespace (`namespace`): no person's keys are touched.
         assert_eq!(read("openai"), Ok(None));

@@ -10,7 +10,7 @@ There is no global keyring default, plaintext fallback, or production in-memory 
 
 | OS | Store and naming | Limits / availability |
 |---|---|---|
-| macOS | `apple-native-keyring-store` as it is: generic passwords in the user's login keychain; service `ai.sidevoice.desktop.providers`, account = provider | No compatibility with keys kept by earlier app versions (there are no users yet). Other keychains in the search list are not read or written. OS access control and Keychain prompts apply. |
+| macOS | `apple-native-keyring-store` as it is: generic passwords in the user's login keychain; service `ai.sidevoice.desktop.providers`, account = provider | Keys kept under the previous service `dev.sidevoice.desktop.providers` are carried over once (below). Other keychains in the search list are not read or written. OS access control and Keychain prompts apply. |
 | Windows | `windows-native-keyring-store`, Credential Manager generic passwords; target `<provider>/ai.sidevoice.desktop.providers` | Keyring validates its UTF-16 password blob against `CRED_MAX_CREDENTIAL_BLOB_SIZE` (2,560 bytes) before calling `CredWriteW`. At most 1,280 UTF-16 code units (640 supplementary-plane characters). Oversized writes fail without truncation or replacing the old key. Names fit the native limits. Entries explicitly use local-machine persistence (`Local` / `CRED_PERSIST_LOCAL_MACHINE`), so they survive logoff without roaming to other computers. Updating a formerly roaming entry changes it to local persistence. |
 | Linux | `zbus-secret-service-keyring-store`, encrypted D-Bus session with the user's Secret Service; exact `service` and `username` attributes | Requires a reachable session bus and accessible Secret Service. Missing/inaccessible/locked stores return `credentials_unavailable`, never absence or a successful fallback. A store may use its normal unlock prompt; callers wait at most 30 seconds, then receive `credentials_unavailable`. |
 
@@ -30,6 +30,19 @@ keyring backend cannot cancel a pending call: after a timeout the outcome remain
 calls return unavailable immediately until that operation ends. Only one worker can remain pending;
 retries never accumulate threads or race a late write against a subsequent write/clear. Once it ends,
 operations can be retried. An indefinitely unanswered prompt may require dismissal or app restart.
+
+## From the previous identifier
+
+The service is the bundle identifier plus `.providers`, and the identifier was `dev.sidevoice.desktop` before
+`ai.sidevoice.desktop`. At launch, first (`legacy_identifier.rs`), `carry_over(identifier)` lists the old service
+(the same exact-service search as `clear_all`) and, for each account that is a valid provider id: if the new
+namespace holds no key, copies it and reads it back equal; then deletes the old entry. A key the new namespace already
+holds wins (the old entry is just deleted). A key that cannot be read, written or checked stays where it was, the
+others go on, and the next launch tries again; an old entry whose account is not a valid provider id is not the app's
+and stays. It goes through the same admission as every other call (30-second deadline where a prompt can wait), and the
+log names the provider ids moved, never a key or a store message. On macOS the new build is a different code identity
+from the one that stored the keys, so the Keychain asks once per key whether it may use it; declining leaves the key in
+the old namespace. Removed with `legacy_identifier.rs` (RELEASING.md, "Legacy identifier carry-over").
 
 ## Reset
 

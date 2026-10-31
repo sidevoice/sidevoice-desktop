@@ -17,7 +17,7 @@ impl super::Os for Native {
 // the common requests cannot express.
 #[cfg(test)]
 mod tests {
-    use super::super::{clear_all, read, tests::*, write, Error, Os};
+    use super::super::{carry_over, clear_all, read, tests::*, write, Error, Os};
     use super::Native;
 
     #[test]
@@ -27,12 +27,19 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires an unlocked desktop Secret Service; unverified on headless CI"]
+    fn legacy_keys_are_carried_over() {
+        carry_over_native();
+    }
+
+    #[test]
     fn missing_secret_service_is_explicitly_unavailable() {
         const CHILD: &str = "SIDEVOICE_CREDENTIAL_UNAVAILABLE_TEST";
         if std::env::var_os(CHILD).is_some() {
             assert_eq!(read("openai"), Err(Error::Unavailable));
             assert_eq!(write("openai", Some("test-only")), Err(Error::Unavailable));
             assert_eq!(clear_all(), Err(Error::Unavailable));
+            assert_eq!(carry_over("dev.sidevoice.desktop"), Err(Error::Unavailable));
             return;
         }
         // Isolate the bus environment from concurrent tests and any real user's keyring.

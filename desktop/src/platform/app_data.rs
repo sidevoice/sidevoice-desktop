@@ -71,6 +71,24 @@ pub fn delete_data(home: &Path, browser: &io::Result<Released>, steps: Steps) ->
     Native::delete_extra_data(&home, steps)
 }
 
+/// Where the app's folders for the bundle identifier `previous` and for its own are, as `(previous, own)` pairs for the
+/// account `home`: the folders [`delete_data`] deletes (a folder inside another is left out, and so is the shared model
+/// store, which no identifier names) plus the OS's own extras that are folders. Resolved by the same rule for both, so
+/// the pairs line up. Only `legacy_identifier` asks, to carry an install's folders over from `previous`.
+pub fn moves_from(home: &Path, previous: &str) -> Result<Vec<(PathBuf, PathBuf)>, &'static str> {
+    Ok(identified(home, previous)?.into_iter().zip(identified(home, IDENTIFIER)?).collect())
+}
+
+/// The folders the app keeps under `identifier` for `home`, in deletion order.
+fn identified(home: &Path, identifier: &str) -> Result<Vec<PathBuf>, &'static str> {
+    let places = Places::native(home.to_path_buf(), identifier)?;
+    let models = places.models.clone();
+    let mut folders: Vec<PathBuf> =
+        Folders::from(places).list.into_iter().map(|folder| folder.path).filter(|path| *path != models).collect();
+    folders.extend(Native::extra_folders(home, identifier));
+    Ok(folders)
+}
+
 /// Read-only: whether an existing protected directory under `home` (the connector's data and releases) and its
 /// whole tree could be removed. It must be an ordinary directory, reached from `home` with no link or volume
 /// change. A missing directory passes. The `Err` is a short reason.
@@ -84,12 +102,17 @@ trait Os {
     fn delete_extra_data(_home: &Home, _steps: Steps) -> Result<(), Error> {
         Ok(())
     }
+
+    /// The folders inside `home` that `delete_extra_data` deletes, under the bundle identifier `identifier`.
+    fn extra_folders(_home: &Path, _identifier: &str) -> Vec<PathBuf> {
+        Vec::new()
+    }
 }
 
 /// The app folders every OS has, once `home` is checked to still be the account home.
 fn delete_app_folders(home: &Home, browser: &io::Result<Released>, steps: Steps) -> Result<(), Error> {
     let places = match account::home() {
-        Ok(account) if account == home.path => Places::native(account),
+        Ok(account) if account == home.path => Places::native(account, IDENTIFIER),
         _ => Err("unsafe-home"),
     };
     delete_folders(home, places, browser, steps)
@@ -149,14 +172,15 @@ struct Folders {
 }
 
 impl Places {
-    /// For the account `home` (`account::home`).
-    fn native(home: PathBuf) -> Result<Self, &'static str> {
+    /// For the account `home` (`account::home`), under the bundle identifier `identifier` (the app's own, except for
+    /// [`moves_from`]).
+    fn native(home: PathBuf, identifier: &str) -> Result<Self, &'static str> {
         let unavailable = "reset.unavailable";
-        let webview = webview_data::locations(&home).map_err(|_| unavailable)?.paths().to_vec();
+        let webview = webview_data::locations_of(&home, identifier).map_err(|_| unavailable)?.paths().to_vec();
         Ok(Self {
-            data: dirs::data_dir().ok_or(unavailable)?.join(IDENTIFIER),
-            cache: dirs::cache_dir().ok_or(unavailable)?.join(IDENTIFIER),
-            logs: dirs::data_local_dir().ok_or(unavailable)?.join(IDENTIFIER).join("logs"),
+            data: dirs::data_dir().ok_or(unavailable)?.join(identifier),
+            cache: dirs::cache_dir().ok_or(unavailable)?.join(identifier),
+            logs: dirs::data_local_dir().ok_or(unavailable)?.join(identifier).join("logs"),
             models: sidevoice_platform::data_dir::models_dir().ok_or(unavailable)?,
             webview,
         })
@@ -530,7 +554,7 @@ mod tests {
     #[test]
     fn native_folders_are_inside_home_distinct_and_unnested() {
         let Ok(home) = account::home() else { return };
-        let Ok(folders) = Places::native(home.clone()).map(Folders::from) else { return };
+        let Ok(folders) = Places::native(home.clone(), IDENTIFIER).map(Folders::from) else { return };
         for (index, folder) in folders.list.iter().enumerate() {
             assert!(folder.path.starts_with(&home) && folder.path != home);
             assert!(folders.list[index + 1..]
@@ -538,6 +562,26 @@ mod tests {
                 .all(|other| !other.path.starts_with(&folder.path) && !folder.path.starts_with(&other.path)));
         }
         assert!(folders.list.iter().any(|folder| folder.name == "models" && folder.path == folders.models));
+    }
+
+    #[test]
+    fn each_old_folder_is_paired_with_the_same_one_under_the_apps_identifier() {
+        let old = "dev.sidevoice.desktop";
+        let Ok(home) = account::home() else { return };
+        let Ok(moves) = moves_from(&home, old) else { return };
+        assert!(!moves.is_empty());
+        for (index, (from, to)) in moves.iter().enumerate() {
+            assert!(from.starts_with(&home) && to.starts_with(&home));
+            assert_eq!(from.to_string_lossy().replace(old, IDENTIFIER), to.to_string_lossy());
+            // Distinct and unnested, so no pair needs another one's folder to have moved first.
+            assert!(moves[index + 1..].iter().all(|(other, _)| !other.starts_with(from) && !from.starts_with(other)));
+        }
+        // The shared model store is no identifier's.
+        let models = sidevoice_platform::data_dir::models_dir().unwrap();
+        assert!(moves.iter().all(|(from, to)| *from != models && *to != models));
+        // Everything the reset deletes under the app's identifier (but the models) is a destination.
+        let own = Folders::from(Places::native(home.clone(), IDENTIFIER).unwrap());
+        assert!(own.list.iter().all(|folder| folder.path == models || moves.iter().any(|(_, to)| *to == folder.path)));
     }
 
     #[test]

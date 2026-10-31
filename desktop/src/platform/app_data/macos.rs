@@ -10,7 +10,7 @@ pub(super) struct Native;
 impl Os for Native {
     /// The logs, then the saved window state, then the `defaults` domain (only for a held home).
     fn delete_extra_data(home: &Home, steps: Steps) -> Result<(), Error> {
-        for (name, path) in places(&home.path) {
+        for (name, path) in places(&home.path, IDENTIFIER) {
             if !steps(name, home.remove_entry(&path)) {
                 return Err(Error::Stopped);
             }
@@ -21,13 +21,18 @@ impl Os for Native {
         }
         Ok(())
     }
+
+    /// The logs and the saved window state: the `defaults` domain is not a folder.
+    fn extra_folders(home: &Path, identifier: &str) -> Vec<PathBuf> {
+        places(home, identifier).into_iter().map(|(_, path)| path).collect()
+    }
 }
 
-/// The extra folders inside `home`, in deletion order, under the report's names.
-fn places(home: &Path) -> [(&'static str, PathBuf); 2] {
+/// The extra folders inside `home` for the bundle identifier `identifier`, in deletion order, under the report's names.
+fn places(home: &Path, identifier: &str) -> [(&'static str, PathBuf); 2] {
     [
-        ("logs", home.join("Library/Logs").join(IDENTIFIER)),
-        ("saved-state", home.join("Library/Saved Application State").join(format!("{IDENTIFIER}.savedState"))),
+        ("logs", home.join("Library/Logs").join(identifier)),
+        ("saved-state", home.join("Library/Saved Application State").join(format!("{identifier}.savedState"))),
     ]
 }
 
@@ -56,7 +61,7 @@ mod tests {
     fn the_macos_deletion_is_exactly_the_previous_list() {
         let home = Path::new("/Users/ana");
         let mut all = named(&Folders::from(macos(home)));
-        all.extend(places(home));
+        all.extend(places(home, IDENTIFIER));
         let support = home.join("Library/Application Support");
         assert_eq!(
             all,
@@ -67,6 +72,18 @@ mod tests {
                 ("cache", home.join("Library/Caches/ai.sidevoice.desktop")),
                 ("logs", home.join("Library/Logs/ai.sidevoice.desktop")),
                 ("saved-state", home.join("Library/Saved Application State/ai.sidevoice.desktop.savedState")),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_extra_folders_follow_the_identifier_asked_for() {
+        let home = Path::new("/Users/ana");
+        assert_eq!(
+            Native::extra_folders(home, "dev.sidevoice.desktop"),
+            vec![
+                home.join("Library/Logs/dev.sidevoice.desktop"),
+                home.join("Library/Saved Application State/dev.sidevoice.desktop.savedState"),
             ]
         );
     }

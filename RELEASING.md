@@ -224,6 +224,15 @@ cargo xtask release checksums
 
 leaves the signed, notarized and stapled `dist/Sidevoice_X.Y.Z_aarch64.dmg` and its `dist/SHA256SUMS.txt`.
 
+## Legacy identifier carry-over
+
+Until `ai.sidevoice.desktop`, the app's identifier was `dev.sidevoice.desktop`. `desktop/src/legacy_identifier.rs` carries
+an install's folders, browser storage and provider keys over from it at launch (docs/APP_DATA.md, WEBVIEW_DATA.md,
+CREDENTIALS.md). **Remove it two desktop releases after the first release that contains it**: delete the module and its
+call in `run()`, then `platform::app_data::moves_from` and the `Os::extra_folders` method (macOS), `webview_data::locations_of`
+and `credentials::carry_over` with their tests, and the three doc sections called "From the previous identifier".
+By then nobody updates from a build with the old identifier.
+
 ## When something fails
 
 - The build of a release fails: the Release stays a draft, its tag in place. Fix forward if needed, then re-run

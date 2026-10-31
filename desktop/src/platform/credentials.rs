@@ -100,6 +100,61 @@ pub fn clear_all() -> Result<(), Error> {
     admit(|| Native::clear_namespace(namespace()))
 }
 
+/// What [`carry_over`] did with each provider key it found, by provider: `Ok(true)` the key was copied into the
+/// namespace the public functions use, `Ok(false)` that namespace already held one (left as it is); either way the old
+/// entry is gone. `Err` leaves the old entry where it was.
+pub type Carried = Vec<(String, Result<bool, Error>)>;
+
+/// Carry the provider keys the app kept under the bundle identifier `identifier` (its `<identifier>.providers`
+/// namespace) over to the namespace the public functions use, once: for the first run of a build whose identifier
+/// changed. Each key found is copied unless the new namespace already holds one, read back, and only then deleted from
+/// the old one; a key that cannot be carried stays where it was. An old entry whose account is not a valid provider id
+/// is not the app's and stays. `Err` when the old namespace cannot be listed.
+pub fn carry_over(identifier: &str) -> Result<Carried, Error> {
+    let from = service_of(identifier);
+    admit(move || carry_in(Native::store()?.as_ref(), &from, namespace()))
+}
+
+/// The service of the namespace that a build with the bundle identifier `identifier` kept its provider keys in.
+fn service_of(identifier: &str) -> String {
+    format!("{identifier}.providers")
+}
+
+/// [`carry_over`] from the service `from` to the service `to` in `store`.
+fn carry_in(store: &CredentialStore, from: &str, to: &str) -> Result<Carried, Error> {
+    let mut carried = Vec::new();
+    for entry in store.search(&HashMap::from([("service", from)]))? {
+        let Some((service, account)) = entry.get_specifiers() else { continue };
+        let Ok(provider) = Provider::new(&account) else { continue };
+        if service != from {
+            continue;
+        }
+        match carry_key(store, from, to, &provider) {
+            Ok(None) => (),
+            Ok(Some(copied)) => carried.push((account, Ok(copied))),
+            Err(error) => carried.push((account, Err(error))),
+        }
+    }
+    Ok(carried)
+}
+
+/// One key: `None` when the old entry is already gone, else whether it was copied. The old entry is deleted only
+/// after the new one is read back equal.
+fn carry_key(store: &CredentialStore, from: &str, to: &str, provider: &Provider) -> Result<Option<bool>, Error> {
+    let copied = if read_in(store, to, provider)?.is_none() {
+        let Some(secret) = read_in(store, from, provider)? else { return Ok(None) };
+        write_in(store, to, provider, Some(&secret))?;
+        if read_in(store, to, provider)?.as_deref() != Some(secret.as_str()) {
+            return Err(Error::Failed);
+        }
+        true
+    } else {
+        false
+    };
+    write_in(store, from, provider, None)?;
+    Ok(Some(copied))
+}
+
 /// A validated provider id, owned so it can cross to a blocking worker.
 struct Provider(String);
 
@@ -339,6 +394,96 @@ mod tests {
         store.build(SERVICE, "openai", None).unwrap().set_secret(&[0xff]).unwrap();
         assert_eq!(read_in(&store, SERVICE, &provider("openai")), Err(Error::Failed));
         clear_in(&store, SERVICE).unwrap();
+    }
+
+    /// [`carry_over`] through the real store (macOS and Windows run it; Linux has no store on headless CI): a key under
+    /// the namespace of another identifier, unique to this test, ends up in the namespace the public functions use in
+    /// test builds, and is gone from the old one.
+    pub(super) fn carry_over_native() {
+        let _serial = serial();
+        let identifier = test_service();
+        let old = service_of(&identifier);
+        let store = Native::store().unwrap();
+        write_in(store.as_ref(), &old, &provider("openai"), Some("test-only")).unwrap();
+        assert_eq!(carry_over(&identifier), Ok(vec![("openai".to_owned(), Ok(true))]));
+        assert_eq!(read("openai").unwrap().as_deref(), Some("test-only"));
+        assert_eq!(read_in(store.as_ref(), &old, &provider("openai")).unwrap(), None);
+        assert_eq!(carry_over(&identifier), Ok(vec![]));
+        clear_all().unwrap();
+    }
+
+    /// The namespace of the builds before `ai.sidevoice.desktop` (`legacy_identifier`).
+    const OLD: &str = "dev.sidevoice.desktop.providers";
+
+    fn by_provider(mut carried: Carried) -> Carried {
+        carried.sort_by(|a, b| a.0.cmp(&b.0));
+        carried
+    }
+
+    #[test]
+    fn a_namespace_is_its_identifier_plus_providers() {
+        assert_eq!(service_of("ai.sidevoice.desktop"), SERVICE);
+        assert_eq!(service_of("dev.sidevoice.desktop"), OLD);
+    }
+
+    #[test]
+    fn keys_move_to_the_new_namespace_and_leave_the_old_one() {
+        let _serial = serial();
+        let store = memory();
+        write_in(&store, OLD, &provider("openai"), Some("old-openai")).unwrap();
+        write_in(&store, OLD, &provider("future-provider-42"), Some("old-future")).unwrap();
+        // Not the app's: an account its validator refuses, and another service with a valid one.
+        let foreign = store.build(OLD, "future_provider", None).unwrap();
+        foreign.set_password("keep").unwrap();
+        write_in(&store, "unrelated.service", &provider("openai"), Some("keep")).unwrap();
+
+        let carried = by_provider(carry_in(&store, OLD, SERVICE).unwrap());
+        assert_eq!(carried, vec![("future-provider-42".into(), Ok(true)), ("openai".into(), Ok(true))]);
+        assert_eq!(read_in(&store, SERVICE, &provider("openai")).unwrap().as_deref(), Some("old-openai"));
+        assert_eq!(read_in(&store, SERVICE, &provider("future-provider-42")).unwrap().as_deref(), Some("old-future"));
+        assert_eq!(read_in(&store, OLD, &provider("openai")).unwrap(), None);
+        assert_eq!(read_in(&store, OLD, &provider("future-provider-42")).unwrap(), None);
+        assert_eq!(foreign.get_password().unwrap(), "keep");
+        assert_eq!(read_in(&store, "unrelated.service", &provider("openai")).unwrap().as_deref(), Some("keep"));
+
+        // Run again, as the next launch does: nothing is left to carry.
+        assert_eq!(carry_in(&store, OLD, SERVICE).unwrap(), vec![]);
+        assert_eq!(read_in(&store, SERVICE, &provider("openai")).unwrap().as_deref(), Some("old-openai"));
+    }
+
+    #[test]
+    fn a_key_the_new_namespace_already_holds_is_kept_and_the_old_one_dropped() {
+        let _serial = serial();
+        let store = memory();
+        write_in(&store, OLD, &provider("openai"), Some("old")).unwrap();
+        write_in(&store, SERVICE, &provider("openai"), Some("new")).unwrap();
+        assert_eq!(carry_in(&store, OLD, SERVICE).unwrap(), vec![("openai".into(), Ok(false))]);
+        assert_eq!(read_in(&store, SERVICE, &provider("openai")).unwrap().as_deref(), Some("new"));
+        assert_eq!(read_in(&store, OLD, &provider("openai")).unwrap(), None);
+    }
+
+    #[test]
+    fn nothing_to_carry_changes_nothing() {
+        let _serial = serial();
+        let store = memory();
+        write_in(&store, SERVICE, &provider("openai"), Some("new")).unwrap();
+        assert_eq!(carry_in(&store, OLD, SERVICE).unwrap(), vec![]);
+        assert_eq!(read_in(&store, SERVICE, &provider("openai")).unwrap().as_deref(), Some("new"));
+    }
+
+    #[test]
+    fn a_key_that_cannot_be_carried_stays_in_the_old_namespace() {
+        let _serial = serial();
+        let store = memory();
+        // Stored text that is not text: reading it fails, so it is neither copied nor deleted.
+        store.build(OLD, "openai", None).unwrap().set_secret(&[0xff]).unwrap();
+        write_in(&store, OLD, &provider("other"), Some("old-other")).unwrap();
+        let carried = by_provider(carry_in(&store, OLD, SERVICE).unwrap());
+        assert_eq!(carried, vec![("openai".into(), Err(Error::Failed)), ("other".into(), Ok(true))]);
+        assert_eq!(store.build(OLD, "openai", None).unwrap().get_secret().unwrap(), vec![0xff]);
+        assert_eq!(read_in(&store, SERVICE, &provider("openai")).unwrap(), None);
+        assert_eq!(read_in(&store, SERVICE, &provider("other")).unwrap().as_deref(), Some("old-other"));
+        assert_eq!(read_in(&store, OLD, &provider("other")).unwrap(), None);
     }
 
     #[test]

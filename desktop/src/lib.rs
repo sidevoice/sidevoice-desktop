@@ -14,6 +14,7 @@ mod call_controls;
 mod data;
 mod debug_options;
 mod engine_ipc;
+mod legacy_identifier;
 mod local_host;
 /// A look at the process's own memory, for CI's measurements of it (#145). Never in a release.
 #[cfg(any(test, feature = "probe"))]
@@ -486,6 +487,9 @@ pub fn run() {
             return;
         }
     };
+    // First thing under the launch lock: before the log, and before anything reads the app's data, credentials or
+    // webview store. It logs once the log exists (`setup`).
+    let carried = legacy_identifier::carry_over();
     let context = tauri::generate_context!();
     #[cfg(feature = "probe")]
     let context = probe::with_page(context);
@@ -508,6 +512,7 @@ pub fn run() {
         .invoke_handler(handler())
         .setup(move |app| {
             let handle = app.handle().clone();
+            carried.log();
             application::prepare(&handle)?;
             shortcut_access::configure(&handle);
             debug(&format!("launch {}", app_report(&handle)));
