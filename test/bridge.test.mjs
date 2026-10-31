@@ -1,11 +1,10 @@
-// Unit tests of bridge/desktop-bridge.js against a fake window: no browser, no Tauri.
+// Unit tests of the page's bridge script (the desktop's part with the members and the transport it is composed of,
+// test/bridge-source.mjs) against a fake window: no browser, no Tauri.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
-
-const source = readFileSync(new URL("../bridge/desktop-bridge.js", import.meta.url), "utf8");
+import { composed as source } from "./bridge-source.mjs";
 
 function loadFactory() {
   const module = { exports: {} };
