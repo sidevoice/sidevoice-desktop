@@ -551,6 +551,13 @@ implements it over the call in the page, with the models the page's `source` loa
 engine); the page does `host.voice ?? createVoiceHost(source)` and uses nothing else of either. It is not restated
 here: a change is made there, and both sides follow.
 
+The app reads the settings again in Rust (`app-core/src/voice.rs`, strictly), so the schema exists twice until
+sidevoice-voice#38 is evaluated. `cargo xtask voice-contract` is what notices drift: it reads `VoiceSettings` and
+`VoiceSettingsChange` against `js/voice-host.d.ts` of the sidevoice-voice release the pinned web depends on
+(`apps/web/package.json` at the tag `web.pin.json` names; the app is built with another), member by member, value by value and variant
+by variant, both ways (`app-core/tests/voice_settings_contract.rs`). Where Rust is stricter than the contract, the
+test states it.
+
 What is this app's own:
 
 - `start(settings, {take?})` takes the seam's settings, each slot a model of a catalogue: `input` (absent or `null`: no
@@ -559,8 +566,8 @@ What is this app's own:
   `patience` and the turn's numbers (`listening_bar: {quiet, playing}`, `barge_in_min_speech`, `barge_in_window`,
   `vad_confidence`, `speech_start_ms`, `pre_roll_ms`); `output` (absent or `null`: no speaker model, nothing played)
   with `tts: {catalog, model, build?}`, `voice`, `speed`, `fade_ms` and `language`; and `audio_grace_ms` and
-  `idle_unload_minutes`; at least one half, else it throws a `TypeError`, and any other key is refused (core
-  `voice.rs`). The turn's numbers and `audio_grace_ms` reach sidevoice-voice's configuration as they are: it checks
+  `idle_unload_minutes`; at least one half, else it throws a `TypeError`, and any other key is refused
+  (`app-core/src/voice.rs`). The turn's numbers and `audio_grace_ms` reach sidevoice-voice's configuration as they are: it checks
   their ranges (`js/voice-host.d.ts`) and takes its own default for one absent. `fade_ms` (0 to 1000) is checked but
   not applied: the native speaker's fade is sidevoice-voice's fixed 30 ms. A slot is loaded as
   `engine.catalog(catalog).load(model)`, which picks the build, or, for a local model with a `build` (Settings, "How it
