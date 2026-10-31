@@ -69,11 +69,11 @@ pub struct ResetPlan {
 }
 
 /// Private control state outside every reset deletion root, the same on every host: a sibling of the standard
-/// data root (`…/dev.sidevoice.desktop-reset`), so no cleanup of that root can remove it. Never follows
+/// data root (`…/ai.sidevoice.desktop-reset`), so no cleanup of that root can remove it. Never follows
 /// SIDEVOICE_DATA_DIR.
 pub fn state_dir() -> io::Result<PathBuf> {
     sidevoice_platform::data_dir::standard()
-        .and_then(|path| path.parent().map(|parent| parent.join("dev.sidevoice.desktop-reset")))
+        .and_then(|path| path.parent().map(|parent| parent.join("ai.sidevoice.desktop-reset")))
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "reset state directory unavailable"))
 }
 

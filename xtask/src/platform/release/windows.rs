@@ -8,7 +8,7 @@ use crate::util::repo;
 use crate::Result;
 
 /// The app's identifier: the folder Tauri creates under each Known Folder.
-const IDENTIFIER: &str = "dev.sidevoice.desktop";
+const IDENTIFIER: &str = "ai.sidevoice.desktop";
 
 pub struct Native;
 

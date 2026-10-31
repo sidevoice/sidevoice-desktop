@@ -86,7 +86,7 @@ job does not escape that job; an early helper death prevents cleanup and leaves 
 ## Platform boundary
 
 `reset_handoff.rs` holds everything common: the protocol functions, `Handoff`, the shared types, `launch` and
-`relaunch`, and `state_dir()`, a sibling of the standard data root (`…/dev.sidevoice.desktop-reset`) on every host.
+`relaunch`, and `state_dir()`, a sibling of the standard data root (`…/ai.sidevoice.desktop-reset`) on every host.
 The shared checked filesystem, channel and child libraries supply most of what differs per OS. The rest is a private
 `trait Os` in `reset_handoff/{macos,linux,windows}.rs`: `OPEN_FILES_BLOCK_REMOVAL` (default `false`; Windows `true`)
 and the hold that observes the parent's termination (`hold`, `terminated`; honest defaults: nothing can be held). The program check is not part of it:

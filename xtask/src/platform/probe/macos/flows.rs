@@ -515,7 +515,7 @@ pub fn card() -> Result<()> {
         .run()?;
     crate::util::write(
         &editor_app.join("Contents/Info.plist"),
-        r#"<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>Editor</string><key>CFBundleIdentifier</key><string>dev.sidevoice.ci-editor</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleName</key><string>Editor</string></dict></plist>"#,
+        r#"<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>Editor</string><key>CFBundleIdentifier</key><string>ai.sidevoice.ci-editor</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleName</key><string>Editor</string></dict></plist>"#,
     )?;
     Cmd::new(&tool).arg("trusted").run()?;
     let mut card = Card {

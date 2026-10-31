@@ -57,7 +57,7 @@ trusted-handle journal) and the containment-checked open beneath the held home (
 ## Which folders
 
 The helper runs before Tauri and has no `AppHandle`, so the folders are resolved with `dirs` by the rule Tauri
-documents for its `PathResolver`, with the bundle identifier `dev.sidevoice.desktop`:
+documents for its `PathResolver`, with the bundle identifier `ai.sidevoice.desktop`:
 
 | Step | Folder |
 |---|---|

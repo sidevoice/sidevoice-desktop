@@ -10,7 +10,7 @@ pub fn release_target() -> &'static sidevoice_platform::target::ReleaseTarget {
     sidevoice_platform::target::for_platform("macos", "aarch64").expect("published macOS target")
 }
 /// The app's identifier (tauri.conf.json): its directory under Application Support.
-pub const IDENTIFIER: &str = "dev.sidevoice.desktop";
+pub const IDENTIFIER: &str = "ai.sidevoice.desktop";
 /// Where the stand-in node (test/fixtures/fake-node.py) listens.
 pub const FAKE_NODE_PORT: &str = "8768";
 
@@ -24,7 +24,7 @@ pub fn binary() -> PathBuf {
     app().join("Contents/MacOS/sidevoice-desktop")
 }
 
-/// The app's settings and data under the person's home (`~/Library/Application Support/dev.sidevoice.desktop`).
+/// The app's settings and data under the person's home (`~/Library/Application Support/ai.sidevoice.desktop`).
 pub fn app_data(home: &Path) -> PathBuf {
     home.join("Library/Application Support").join(IDENTIFIER)
 }
@@ -250,7 +250,7 @@ mod tests {
     use crate::platform::macos_app::SIGNING_ENV;
 
     const ADHOC: &str = "Executable=/x/Sidevoice.app/Contents/MacOS/sidevoice-desktop
-Identifier=dev.sidevoice.desktop
+Identifier=ai.sidevoice.desktop
 Format=app bundle with Mach-O thin (arm64)
 CodeDirectory v=20500 size=1 flags=0x10002(adhoc,runtime) hashes=1+7 location=embedded
 Signature=adhoc
