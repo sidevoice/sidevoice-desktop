@@ -1131,10 +1131,10 @@ mod tests {
     #[test]
     fn root_rules_apply_to_mod_rs_only() {
         assert_eq!(other("#[cfg(target_os = \"macos\")] mod mac; #[allow(dead_code)] fn f() {}"), 0);
-        assert!(platform_root(Path::new("src-tauri/src/platform/mod.rs")));
-        assert!(!platform_root(Path::new("src-tauri/src/platform/tray.rs")));
-        assert!(!platform_root(Path::new("src-tauri/src/platform/tray/mod.rs")));
-        assert!(!platform_root(Path::new("src-tauri/src/other/mod.rs")));
+        assert!(platform_root(Path::new("desktop/src/platform/mod.rs")));
+        assert!(!platform_root(Path::new("desktop/src/platform/tray.rs")));
+        assert!(!platform_root(Path::new("desktop/src/platform/tray/mod.rs")));
+        assert!(!platform_root(Path::new("desktop/src/other/mod.rs")));
     }
 
     #[test]

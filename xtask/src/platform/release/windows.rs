@@ -14,7 +14,7 @@ pub struct Native;
 
 impl Os for Native {
     fn app_binary() -> Option<PathBuf> {
-        Some(repo().join("src-tauri/target/release/sidevoice-desktop.exe"))
+        Some(repo().join("target/release/sidevoice-desktop.exe"))
     }
 
     /// Tauri resolves settings and webview data from the Known Folders, not from environment overrides, and a person's

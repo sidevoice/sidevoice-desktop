@@ -10,7 +10,7 @@ them, as listed.
   dependencies: React (MIT), Radix UI (MIT), zustand (MIT), lucide-react (ISC), the OpenTelemetry JavaScript SDK
   (Apache-2.0) and the components listed in sidevoice-web's `THIRD_PARTY_NOTICES.md`.
 - **Tauri** and its plugins (`tauri`, `tauri-plugin-global-shortcut`, `tauri-plugin-single-instance`), MIT or
-  Apache-2.0, and the Rust crates in `src-tauri/Cargo.lock` under their own licenses (mostly MIT or Apache-2.0).
+  Apache-2.0, and the Rust crates in `Cargo.lock` under their own licenses (mostly MIT or Apache-2.0).
 - **DM Sans**, the brand typeface (`brand/fonts/`, `ui/brand/`), SIL Open Font License 1.1 (`OFL.txt` beside it).
 
 ### The native speech engine, linked into the app binary (every platform)
@@ -22,7 +22,7 @@ them, as listed.
     statically into the app's binary for the text-to-speech models that need phonemes (Kokoro, Piper):
     redistributing the installers redistributes it under the GPL. Its license text and source are at
     https://github.com/espeak-ng/espeak-ng, and sherpa-onnx's build of it is at
-    https://github.com/k2-fsa/sherpa-onnx (the release `src-tauri/Cargo.lock` pins, 1.13.8).
+    https://github.com/k2-fsa/sherpa-onnx (the release `Cargo.lock` pins, 1.13.8).
   - **whisper.cpp** and **ggml** (MIT), compiled from source through **whisper-rs** (Unlicense).
 
 ### The voice call, linked into the app binary
@@ -36,7 +36,7 @@ them, as listed.
 
 - **Silero VAD** (MIT), **Whisper** models (MIT) and **Kokoro-82M** (Apache-2.0), with **eSpeak NG's data**
   (`espeak-ng-data`, GPL-3.0-or-later) for Kokoro and Piper, from the URLs and with the licenses named in
-  sidevoice-engine's catalogue (`catalog/families/` in that repository, at the version `src-tauri/Cargo.lock` pins).
+  sidevoice-engine's catalogue (`catalog/families/` in that repository, at the version `Cargo.lock` pins).
 - Remote models (OpenAI, ElevenLabs) are services under their providers' terms, used with the person's own key.
 
 Review the upstream licenses and model cards before redistributing compiled assets or weights; this repository's

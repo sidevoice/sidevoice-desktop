@@ -1,4 +1,4 @@
-Recorded speech the app's real-call test hears (`src-tauri/src/voice/models/tests.rs`), 16 kHz mono 16-bit PCM WAV.
+Recorded speech the app's real-call test hears (`desktop/src/voice/models/tests.rs`), 16 kHz mono 16-bit PCM WAV.
 
 | File | What it is | Source | Licence | SHA-256 |
 |---|---|---|---|---|

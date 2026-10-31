@@ -2,7 +2,6 @@
 name = "sidevoice-desktop-test-support"
 version = "0.1.0"
 edition = "2021"
-workspace = "../src-tauri"
 rust-version = "1.98"
 publish = false
 license = "Apache-2.0"
@@ -26,7 +25,7 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "io-util", 
 tokio-tungstenite = { version = "0.30", default-features = false }
 futures-util = { version = "0.3", features = ["sink"] }
 # The local host the fixtures drive (`fake_registry`'s `Fetch`, `local-host-ci`'s serve mode) and the tests exercise.
-sidevoice-local-host = { path = "../src-tauri/local-host" }
+sidevoice-local-host = { path = "../desktop/local-host" }
 
 [target.'cfg(unix)'.dependencies]
 # The core's socket opened raw, without the peer check `sidevoice_platform::ipc` adds (local_host's attack); already
@@ -36,7 +35,7 @@ interprocess = "2.4"
 [target.'cfg(windows)'.dependencies]
 # The process flags `process-wrap`'s `CreationFlags` takes.
 windows = { version = "0.62", features = ["Win32_System_Threading"] }
-# The reset handoff (`src-tauri`'s `platform/reset_handoff/windows.rs`, included by `tests/portable.rs`) holds the
+# The reset handoff (`desktop`'s `platform/reset_handoff/windows.rs`, included by `tests/portable.rs`) holds the
 # parent process with it, as the app does.
 windows-sys = { version = "0.61", features = ["Win32_System_Threading"] }
 

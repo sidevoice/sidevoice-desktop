@@ -1,6 +1,6 @@
 # Packaging layout
 
-`src-tauri/tauri.conf.json` owns common product metadata, version, build, security and the updater public key.
+`desktop/tauri.conf.json` owns common product metadata, version, build, security and the updater public key.
 Tauri automatically applies `tauri.macos.conf.json`, `tauri.windows.conf.json` or `tauri.linux.conf.json`, then
 xtask's dev/release/nightly overrides. [Tauri uses JSON Merge Patch](https://v2.tauri.app/develop/configuration-files/#platform-specific-configuration):
 objects merge and arrays replace, so each OS overlay contains the complete target and icon arrays.
@@ -12,7 +12,7 @@ objects merge and arrays replace, so each OS overlay contains the complete targe
 | Linux | `deb`, `appimage` | `packaging/linux/icons/`: PNGs |
 | Shared runtime | — | `packaging/shared/tray/`: tray PNGs included by Rust |
 
-Paths are relative to `src-tauri/`. The full original icon order is retained in every overlay, including the PNG
+Paths are relative to `desktop/`. The full original icon order is retained in every overlay, including the PNG
 fallbacks used for the default window icon; relocating an icon does not change which icon Tauri selects.
 `npm run icons` regenerates the same bytes at the new paths. `cargo xtask icons` checks those directories.
 The generator, brand previews, Rust `include_bytes!`, xtask's custom DMG build and documentation use this layout.

@@ -77,12 +77,12 @@ function classicToPng(rgb, mask, width) {
   for (let i = 0; i < n; i++) pixels.set([planes[i], planes[n + i], planes[2 * n + i], mask[i]], 4 * i);
   return encodePng({ width, height: width, pixels });
 }
-const rawIcns = new Map(readIcns(readFileSync(path.join(root, "src-tauri/packaging/macos/icon.icns"))));
+const rawIcns = new Map(readIcns(readFileSync(path.join(root, "desktop/packaging/macos/icon.icns"))));
 const icns = [...rawIcns].filter(([type]) => !["s8mk", "l8mk"].includes(type)).map(([type, data]) =>
   type === "is32" ? [type, classicToPng(data, rawIcns.get("s8mk"), 16)]
   : type === "il32" ? [type, classicToPng(data, rawIcns.get("l8mk"), 32)]
   : [type, data]);
-const ico = readIco(readFileSync(path.join(root, "src-tauri/packaging/windows/icon.ico")));
+const ico = readIco(readFileSync(path.join(root, "desktop/packaging/windows/icon.ico")));
 const img = (name, data) => {
   writeFileSync(path.join(work, name), data);
   return name;
@@ -103,11 +103,11 @@ const small = icns.filter(([, d]) => pngSize(d)[0] <= 64).map(([type, data]) => 
 }).join("");
 
 for (const f of ["idle", "live", "muted", "light-idle", "light-live", "light-muted", "dark-idle", "dark-live", "dark-muted"]) {
-  cpSync(path.join(root, `src-tauri/packaging/shared/tray/${f}.png`), path.join(work, `tray-${f}.png`));
+  cpSync(path.join(root, `desktop/packaging/shared/tray/${f}.png`), path.join(work, `tray-${f}.png`));
 }
-cpSync(path.join(root, "src-tauri/packaging/macos/dmg/background@2x.png"), path.join(work, "dmg@2x.png"));
-cpSync(path.join(root, "src-tauri/packaging/macos/macos-1024.png"), path.join(work, "macos-1024.png"));
-const layout = JSON.parse(readFileSync(path.join(root, "src-tauri/packaging/macos/dmg/layout.json"), "utf8"));
+cpSync(path.join(root, "desktop/packaging/macos/dmg/background@2x.png"), path.join(work, "dmg@2x.png"));
+cpSync(path.join(root, "desktop/packaging/macos/macos-1024.png"), path.join(work, "macos-1024.png"));
+const layout = JSON.parse(readFileSync(path.join(root, "desktop/packaging/macos/dmg/layout.json"), "utf8"));
 
 // A menu bar: template images are drawn in the bar's text colour (macOS does the same with their alpha).
 const bar = (dark, heightPt) => {

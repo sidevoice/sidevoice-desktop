@@ -17,7 +17,7 @@ Rules for any coding agent (and person) working in this repository.
 
 Read `README.md` and `docs/`. The bundled web interface is the sidevoice-web release `web.pin.json` names (`scripts/build-web.mjs`): its texts
 are fixed in sidevoice-web, not here. The app's own texts are the native ones (tray, …), in
-`src-tauri/core/src/i18n.rs`.
+`desktop/core/src/i18n.rs`.
 
 ## CI
 

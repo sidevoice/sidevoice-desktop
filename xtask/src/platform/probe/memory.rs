@@ -1,6 +1,6 @@
 //! The memory measurements (#145): `probe memory` (the probe app through a long session) and `probe voice-memory` (the
 //! host's calls on the engine's real models). Both print `memory phase=NAME footprint=N resident=N metal=N|na
-//! accelerator=N|na` lines (src-tauri/core/src/memory.rs); this reads them back, prints a compact table and fails only
+//! accelerator=N|na` lines (desktop/core/src/memory.rs); this reads them back, prints a compact table and fails only
 //! on growth that is clear.
 //!
 //! What fails, and why these numbers:
@@ -182,7 +182,7 @@ pub fn report(text: &str, rules: &[Rule]) -> Result<()> {
     }
 }
 
-/// The host's calls on the real models (src-tauri/src/voice/host/memory.rs).
+/// The host's calls on the real models (desktop/src/voice/host/memory.rs).
 pub const VOICE_RULES: &[Rule] = &[
     Rule::Release { idle: "idle", live: "call-live", ended: "call-ended" },
     Rule::Flat { from: "call-ended", to: "calls-many", footprint: FOOTPRINT_MIB },

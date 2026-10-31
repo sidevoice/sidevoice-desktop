@@ -38,7 +38,7 @@ fn dmg_path() -> Result<PathBuf> {
 }
 
 /// `release app [--signed] [--channel release|nightly|dev]`: the app bundle (hardened runtime,
-/// src-tauri/packaging/macos/Entitlements.plist), built for its channel (default `dev`). Ad-hoc signed; or, with `--signed`, signed by
+/// desktop/packaging/macos/Entitlements.plist), built for its channel (default `dev`). Ad-hoc signed; or, with `--signed`, signed by
 /// Tauri's bundler with the Developer ID (`APPLE_SIGNING_IDENTITY`; `APPLE_CERTIFICATE` and
 /// `APPLE_CERTIFICATE_PASSWORD`, imported into a keychain of the bundler's own, or else the login keychain's),
 /// notarized with the API key (`APPLE_API_KEY`, `APPLE_API_ISSUER`, and the key file, see [`notary_key`]) and
@@ -208,7 +208,7 @@ pub fn check_app(signed: bool) -> Result<()> {
     eprintln!("{archs}");
     ensure(archs.contains("arm64"), "the binary is not arm64")?;
 
-    eprintln!("--- no CI probe in a release (src-tauri/src/probe.rs is behind the probe feature)");
+    eprintln!("--- no CI probe in a release (desktop/src/probe.rs is behind the probe feature)");
     let bytes = read_bytes(&binary())?;
     for marker in PROBE_ONLY {
         ensure(!contains(&bytes, marker), format!("the release app carries {marker}: a CI probe is in it"))?;
@@ -246,11 +246,11 @@ pub fn dmg(signed: bool) -> Result<()> {
         &work,
         &app(),
         [
-            Path::new("src-tauri/packaging/macos/dmg/background.png"),
-            Path::new("src-tauri/packaging/macos/dmg/background@2x.png"),
+            Path::new("desktop/packaging/macos/dmg/background.png"),
+            Path::new("desktop/packaging/macos/dmg/background@2x.png"),
         ],
-        Path::new("src-tauri/packaging/macos/dmg/layout.json"),
-        Path::new("src-tauri/packaging/macos/icon.icns"),
+        Path::new("desktop/packaging/macos/dmg/layout.json"),
+        Path::new("desktop/packaging/macos/icon.icns"),
         &dmg,
     )?;
     Cmd::new("hdiutil").arg("verify").arg(&dmg).run()?;
