@@ -5,8 +5,8 @@
 //! of remote providers (kept in the keychain, never handed back), what runs here, what is installed, installs and their cancel, removing a model, memory. Engine work runs on blocking threads, never the main one. A refusal is
 //! the engine's keyed `Error` (docs/BRIDGE.md → "Refusals").
 
-use sidevoice_desktop_engine::error::{self, internal};
-use sidevoice_desktop_engine::{
+use sidevoice_app_core::engine::error::{self, internal};
+use sidevoice_app_core::engine::{
     CatalogView, CredentialRefusal, Device, Error, Installed, Jobs, Memory, NativeEngines, Progress, Wanted,
 };
 use std::sync::atomic::Ordering;
@@ -160,16 +160,16 @@ pub async fn engine_has_credential(provider: String) -> Result<bool, Error> {
 /// The engine reads the same native store as the bridge; no OS-specific host adapters.
 pub struct ProviderKeys;
 
-#[sidevoice_desktop_engine::sidevoice_engine::async_trait]
-impl sidevoice_desktop_engine::sidevoice_engine::Credentials for ProviderKeys {
-    async fn credential(&self, provider: &str) -> sidevoice_desktop_engine::sidevoice_engine::Result<Option<String>> {
+#[sidevoice_app_core::engine::sidevoice_engine::async_trait]
+impl sidevoice_app_core::engine::sidevoice_engine::Credentials for ProviderKeys {
+    async fn credential(&self, provider: &str) -> sidevoice_app_core::engine::sidevoice_engine::Result<Option<String>> {
         use crate::platform::credentials;
         let provider = provider.to_owned();
         let result = tauri::async_runtime::spawn_blocking(move || credentials::read(&provider))
             .await
-            .map_err(|_| sidevoice_desktop_engine::sidevoice_engine::Error::new("credentials-failed"))?;
+            .map_err(|_| sidevoice_app_core::engine::sidevoice_engine::Error::new("credentials-failed"))?;
         result.map_err(|error| {
-            sidevoice_desktop_engine::sidevoice_engine::Error::new(match error {
+            sidevoice_app_core::engine::sidevoice_engine::Error::new(match error {
                 credentials::Error::Unavailable => "credentials-unavailable",
                 _ => "credentials-failed",
             })

@@ -4899,6 +4899,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
+name = "sidevoice-app-core"
+version = "0.3.0"
+dependencies = [
+ "base64 0.22.1",
+ "futures-util",
+ "libc",
+ "log",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "sidevoice-engine",
+ "sidevoice-voice",
+ "sysinfo",
+ "tokio",
+]
+
+[[package]]
 name = "sidevoice-desktop"
 version = "0.3.0"
 dependencies = [
@@ -4911,7 +4928,6 @@ dependencies = [
  "dirs",
  "dunce",
  "file-id",
- "futures-util",
  "getrandom 0.3.4",
  "gtk",
  "keyring-core",
@@ -4930,12 +4946,11 @@ dependencies = [
  "security-framework",
  "serde",
  "serde_json",
+ "sidevoice-app-core",
  "sidevoice-desktop-core",
- "sidevoice-desktop-engine",
  "sidevoice-desktop-test-support",
  "sidevoice-local-host",
  "sidevoice-platform",
- "sidevoice-voice",
  "sys-locale",
  "sysinfo",
  "tauri",
@@ -4960,25 +4975,11 @@ dependencies = [
 name = "sidevoice-desktop-core"
 version = "0.3.0"
 dependencies = [
- "base64 0.22.1",
  "global-hotkey",
  "log",
  "serde",
  "serde_json",
  "url",
-]
-
-[[package]]
-name = "sidevoice-desktop-engine"
-version = "0.3.0"
-dependencies = [
- "libc",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "sidevoice-engine",
- "sysinfo",
- "tokio",
 ]
 
 [[package]]

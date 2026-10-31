@@ -321,7 +321,7 @@ jobs:
         id: models
         with:
           path: ${{ runner.temp }}/real-call-models
-          key: real-call-models-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.engine-rev }}-${{ hashFiles('desktop/src/voice/models/tests.rs') }}
+          key: real-call-models-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.engine-rev }}-${{ hashFiles('app-core/src/voice/models/tests.rs') }}
           restore-keys: real-call-models-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.engine-rev }}-
       - name: A call on the engine's real models through the app's adapter (recorded speech in, a reply out)
         env:
@@ -443,7 +443,7 @@ jobs:
         id: models
         with:
           path: ${{ runner.temp }}/real-call-models
-          key: real-call-models-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.engine-rev }}-${{ hashFiles('desktop/src/voice/models/engine/tests.rs') }}
+          key: real-call-models-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.engine-rev }}-${{ hashFiles('app-core/src/voice/models/engine/tests.rs') }}
           restore-keys: real-call-models-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.engine-rev }}-
       - name: A call on the engine's real models (injected audio) and on the runner's own devices
         if: ${{ !cancelled() }}

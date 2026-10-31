@@ -12,7 +12,7 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 | `desktop/core/src/bridge.rs` | The contract on the Rust side: `CallSnapshot`, `Command`, and how the tray renders a snapshot. Unit-tested. |
 | `desktop/src/lib.rs` | Wiring: the `bridge_state` command, `send(Command)`; `capabilities/room.json`. The mute shortcut, behind `muteShortcut`, and the one writer of the app's settings (below). |
 | `desktop/src/engine_ipc.rs` | The engine's commands, behind `engine` (below): its catalogues, provider keys and models on disk. |
-| `desktop/src/voice.rs`, `desktop/src/platform/credentials.rs`, `desktop/core/src/voice.rs` | The voice call the app runs, behind `voice` (below), the keychain the engine reads provider keys from, and the models it picks from the catalogues (unit-tested). |
+| `desktop/src/voice.rs`, `desktop/src/platform/credentials.rs`, `app-core/src/voice.rs`, `app-core/src/voice/` | The voice call the app runs, behind `voice` (below): the commands in the app, the call host, the models it picks from the catalogues and the settings the page sends in `app-core` (unit-tested), and the keychain the engine reads provider keys from. |
 | `desktop/src/local_host.rs`, `desktop/local-host/` | This computer's own core, behind `localHost` (below; docs/LOCAL_HOST.md). |
 | `desktop/src/tray.rs` | The menu-bar icon and its menu. |
 | `bridge/call-controls-bridge.js` | Injected into the call controls card's window (below). |
@@ -484,8 +484,8 @@ client that does not know the key:
 
 The page renders by `key` and falls back to `message`. `host.engine`'s catalogue, key and install calls also carry
 `code`, the code sidevoice-web's `ModelCatalogs` reads (`failureCode`): the refusal's own `code` (the engine's, below)
-when it has one, else its `key` with dashes (`model-needs-memory`, `install-cancelled`). The engine's keys are made in `desktop/engine/src/error.rs`,
-the voice call's in `desktop/src/voice.rs` and core `voice.rs`; a new one is added there and here. What
+when it has one, else its `key` with dashes (`model-needs-memory`, `install-cancelled`). The engine's keys are made in `app-core/src/engine/error.rs`,
+the voice call's in `desktop/src/voice.rs` and `app-core/src/voice.rs`; a new one is added there and here. What
 sidevoice-engine itself fails with is one of these keys, with the engine's own code beside it as `code`
 (`digest-mismatch`, `model-load-failed`…).
 
@@ -534,7 +534,7 @@ The app runs the voice host itself: sidevoice-voice (`sidevoice/sidevoice-voice`
 microphone and speaker (cpal) and Sonora's echo canceller (pure Rust) between them, so the shared output cancels its echo
 (`desktop/src/voice.rs`; sidevoice/sidevoice-core#89). sidevoice-voice names no model and depends on no engine:
 the app fills its interfaces (voice activity, transcriber, speaker, end of turn) with the engine's models
-(`desktop/src/voice/models.rs`). The room window's page is then never granted the microphone
+(`app-core/src/voice/models.rs`). The room window's page is then never granted the microphone
 (the room window's permission handler denies every request, `src/lib.rs`) and runs no model: it keeps the room. Each call knows nothing of the room: the page keeps one call per conversation, routes the shared microphone to one call, tags each call's events with its own destination, and has each call say what the room sends through a handle that tells how it went. Where the app does not run it, `host.voice` is absent and the page runs the call
 itself over `@sidevoice/voice` in the webview, the room window granting it the microphone: the page pinned now
 (`web.pin.json`) cannot load those modules until they are on npm, so on Windows and Linux there is no voice yet.
@@ -654,7 +654,7 @@ What is this app's own:
 - App → page: `window.__sidevoiceDesktop.voiceEvent(event)` receives `{key,type,data}`.
   `key` is the immutable call ID captured before asynchronous native forwarding. `type` is
   `turn`, `state`, `level`, `playback-level`, `error`, `take`, or `say`.
-  The meters go only when the page would draw them differently (core `voice::meters`): `level` when its whole percent
+  The meters go only when the page would draw them differently (`app-core` `voice::meters`): `level` when its whole percent
   changes, `playback-level` every time it sounds and once for each silence (the first `0`, not the ones after it).
   The voice publishes both once per detector window, silence included, about 60 events a second (desktop#149).
   `say` uses `{key,type:"say",data:{key:sayKey,event}}`; its last event is `done` with the terminal outcome.
@@ -931,8 +931,8 @@ interface UpdaterStatus {
 - Add a field: `CallSnapshot` uses `#[serde(default)]`, so old and new scripts interoperate;
   bump `version` only for a breaking change.
 - Tests: `npm run web && npm test` (the pinned page's media controls and the script against a fake window, `host.voice`, `host.microphone`, `host.updater`, `host.build`, `host.muteShortcut`,
-  `host.callControls` and `host.localHost`'s install included), `cargo test -p sidevoice-desktop-core` (the voice call's builds, the media rule, the
-  updater's status and the mute shortcut's form and shape among the rest) and `cargo test -p sidevoice-desktop-engine` (the engine
+  `host.callControls` and `host.localHost`'s install included), `cargo test -p sidevoice-desktop-core` (the media rule, the
+  updater's status and the mute shortcut's form and shape among the rest) and `cargo test -p sidevoice-app-core` (the call host, the voice call's builds and the engine
   over a test host), `cargo test -p sidevoice-local-host` (the local host against a stand-in core, its install against a stand-in
   registry; docs/LOCAL_HOST.md → Tests). In the real app, CI's macOS job runs the probe page (`test/fixtures/probe.html`, probe build): the engine's
   capabilities, installs, refusals and a cancelled download (CI then checks nothing of it is on disk), and the voice

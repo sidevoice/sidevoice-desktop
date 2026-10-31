@@ -3,8 +3,8 @@
 
 use std::sync::Mutex;
 
+use crate::voice::ModelChoice;
 use serde_json::json;
-use sidevoice_desktop_core::voice::ModelChoice;
 use sidevoice_voice::{EndOfTurnModel, Speaker, Transcriber, Vad, VadFrame};
 
 use super::*;
@@ -244,7 +244,7 @@ fn a_half_with_the_same_slots_keeps_its_models_and_one_with_other_slots_gets_its
 
 #[test]
 fn the_webs_turn_numbers_reach_sidevoice_voices_configuration() {
-    use sidevoice_desktop_core::voice::{choose, Candidate, CatalogCandidates, VoiceSettings, LOCAL_CATALOG};
+    use crate::voice::{choose, Candidate, CatalogCandidates, VoiceSettings, LOCAL_CATALOG};
 
     let candidate = |id: &str, capability: &str| Candidate {
         id: id.into(),

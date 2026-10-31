@@ -2,7 +2,7 @@
 //! in the page's terms, answered by the engine (docs/ENGINES.md), and the engine itself, to load and run its models.
 //!
 //! The engine owns the catalogue it runs, the downloads (checked against their SHA-256), the build that runs here and
-//! the models themselves. This crate keeps what is the app's: the page's names for a build (catalogue model id +
+//! the models themselves. This module keeps what is the app's: the page's names for a build (catalogue model id +
 //! engine id, which are the engine's model id and backend id), its install jobs (progress per job, cancel) and its
 //! refusals (keyed, `error.rs`). Loading and running the models goes through the
 //! engine itself (`NativeEngines::engine`): what is in memory is what its `LoadedModel`s hold.
@@ -18,10 +18,9 @@
 pub mod catalogs;
 pub mod error;
 mod jobs;
-pub mod platform;
 mod trial;
 
-use platform::memory::{Memory as _, SystemMemory};
+use crate::platform::memory::{Memory as _, SystemMemory};
 
 pub use catalogs::{CatalogView, CredentialRefusal, ReasonView};
 pub use error::Error;

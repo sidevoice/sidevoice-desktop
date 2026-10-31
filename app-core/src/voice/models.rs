@@ -14,23 +14,22 @@
 pub(crate) mod tests;
 
 mod engine;
+#[cfg(any(test, feature = "probe"))]
+pub mod fixture;
 
 use std::sync::Arc;
 
-use sidevoice_desktop_core::voice::{InputChoice, ModelChoice, OutputChoice, VoiceChoice};
+use super::{InputChoice, ModelChoice, OutputChoice, VoiceChoice};
 use sidevoice_voice::{
     async_trait, EndOfTurnModel, InputConfig, InputModels, OutputConfig, OutputModels, Speaker, Transcriber, Vad,
     VoiceConfig, VoiceInput, VoiceOutput, VoiceSetup,
 };
 
-/// The real-model call's fixtures, for the memory measurement (`host::memory`).
-#[cfg(test)]
-pub(crate) use engine::tests as real_call;
-pub(crate) use engine::{EngineLoader, ModelCache};
+pub use engine::{EngineLoader, ModelCache};
 
 /// Loads each model the call's slots take: the engine's ([`EngineLoader`]), or a test's.
 #[async_trait]
-pub(crate) trait Loader: Send + Sync {
+pub trait Loader: Send + Sync {
     async fn vad(&self, chosen: &ModelChoice) -> Result<Box<dyn Vad>, String>;
     async fn transcriber(&self, chosen: &ModelChoice) -> Result<Arc<dyn Transcriber>, String>;
     async fn speaker(&self, chosen: &ModelChoice) -> Result<Arc<dyn Speaker>, String>;
@@ -39,7 +38,7 @@ pub(crate) trait Loader: Send + Sync {
 
 /// The input half's models: the detector, the transcriber and, for `smart`, the end-of-turn model, each loaded when
 /// the call asks for it.
-pub(crate) struct EngineInput {
+pub struct EngineInput {
     loader: Arc<dyn Loader>,
     choice: InputChoice,
 }
@@ -63,7 +62,7 @@ impl InputModels for EngineInput {
 }
 
 /// The output half's model: the speaker.
-pub(crate) struct EngineOutput {
+pub struct EngineOutput {
     loader: Arc<dyn Loader>,
     choice: ModelChoice,
 }
@@ -79,7 +78,7 @@ impl OutputModels for EngineOutput {
 /// models (one `Arc`) come back from [`Halves::new`] for a half whose slots did not change, so that
 /// `VoiceCall::update` keeps what that half loaded.
 #[derive(Clone)]
-pub(crate) struct Halves {
+pub struct Halves {
     input: Option<(InputChoice, Arc<EngineInput>)>,
     output: Option<(OutputChoice, Arc<EngineOutput>)>,
     /// `VoiceConfig`: what holds for the whole call.
@@ -88,7 +87,7 @@ pub(crate) struct Halves {
 
 /// What a load holds: the models of every slot the halves use, kept for as long as this is.
 #[derive(Default)]
-pub(crate) struct Loaded {
+pub struct Loaded {
     _vad: Option<Box<dyn Vad>>,
     _transcriber: Option<Arc<dyn Transcriber>>,
     _end_of_turn: Option<Arc<dyn EndOfTurnModel>>,
@@ -97,7 +96,7 @@ pub(crate) struct Loaded {
 
 impl Halves {
     /// The halves of `choice`, over `loader`; a half that has the same models as `previous`' keeps them.
-    pub(crate) fn new(loader: &Arc<dyn Loader>, choice: &VoiceChoice, previous: Option<&Halves>) -> Halves {
+    pub fn new(loader: &Arc<dyn Loader>, choice: &VoiceChoice, previous: Option<&Halves>) -> Halves {
         let input = choice.input.as_ref().map(|input| {
             let same = previous.and_then(|p| p.input.as_ref()).filter(|(old, _)| old.same_models(input));
             let models = same.map_or_else(
@@ -118,7 +117,7 @@ impl Halves {
     }
 
     /// What `VoiceCall::new` and `update` take: the halves with their configuration, and the call's own.
-    pub(crate) fn setup(&self) -> Result<VoiceSetup, String> {
+    pub fn setup(&self) -> Result<VoiceSetup, String> {
         let invalid = |what: &str, error: serde_json::Error| format!("invalid-{what}-config: {error}");
         let input = match &self.input {
             Some((choice, models)) => Some(VoiceInput {
@@ -142,7 +141,7 @@ impl Halves {
 
     /// Loads every slot the halves use, all at once, as a call starting on them would. What loaded is held by the
     /// answer even when a slot did not (its code is the second): the others stay loaded for the next ask.
-    pub(crate) async fn load(&self) -> (Loaded, Option<String>) {
+    pub async fn load(&self) -> (Loaded, Option<String>) {
         let input = async {
             match &self.input {
                 None => (None, None, None),

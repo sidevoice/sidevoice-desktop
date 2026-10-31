@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::voice::{InputSettings, OutputSettings, VoiceChoice};
 use serde_json::Value;
-use sidevoice_desktop_core::voice::{InputSettings, OutputSettings, VoiceChoice};
 use sidevoice_voice::{AudioIo, IoEvent, IoSink, NativeDevices};
 
 use super::super::models::tests::{chosen, loader, FakeLoader, TURN_FRAMES};

@@ -8,7 +8,7 @@ use sidevoice_engine::{
     Voice,
 };
 
-use crate::accelerator_name;
+use super::accelerator_name;
 
 /// One catalogue: its id (`local`, or the provider's), its name (`None` for the local one), how it stands, its models.
 #[derive(Debug, Clone, PartialEq, Serialize)]

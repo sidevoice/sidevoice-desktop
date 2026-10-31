@@ -1,23 +1,23 @@
 //! The voice call, run by the app itself (`window.__sidevoiceDesktop.host.voice`, docs/BRIDGE.md → "The voice call"):
-//! sidevoice-voice's `VoiceCall` with the models the app picks on its engine (`models`), the device's own
-//! microphone and speaker, the system's default ones or those the page chooses (`NativeDevices`), and Sonora's echo
-//! cancellation between them (`NativeIo`). A call has an input half, an output half or both, and loads and opens only
-//! what its halves use; the page changes it while it runs (`voice_update`) and loads models ahead of it
+//! sidevoice-voice's `VoiceCall` with the models the app picks on its engine (sidevoice-app-core's `voice::models`), the
+//! device's own microphone and speaker, the system's default ones or those the page chooses (`NativeDevices`), and
+//! Sonora's echo cancellation between them (`NativeIo`). A call has an input half, an output half or both, and loads and
+//! opens only what its halves use; the page changes it while it runs (`voice_update`) and loads models ahead of it
 //! (`voice_preload`). The page keeps the room, which the call knows nothing of: it tells the room the call's turns, and
 //! has the call say what the room sends (`voice_say`), each through a handle in the page that tells how it went.
 //!
 //! The calls themselves (the lanes of the shared devices, their lifecycle, what a stopped call or a preload keeps
-//! loaded) are `host`'s, and run without the app; this file is the commands that reach them from the page, and the
-//! engine they take their models from.
+//! loaded) are sidevoice-app-core's (`voice::host`), and run without the app; this file is the commands that reach them
+//! from the page, and the engine they take their models from.
 //!
 //! Only the room window's own page may call these (capabilities/room.json, and `room_page`). The call's events reach
 //! that page as `window.__sidevoiceDesktop.voiceEvent(event)`, each sidevoice-voice's `VoiceEvent` as JSON (a take's
-//! samples in base64, core `voice::take`), and each step of something said as `{type: "say", data: {key, event}}`, and
+//! samples in base64, `voice::take` in sidevoice-app-core), and each step of something said as `{type: "say", data: {key, event}}`, and
 //! the audio devices when they change as `{type: "devices", data}`. A page that loads anew finds the call stopped, its
 //! models still loaded.
 
-mod host;
-mod models;
+#[cfg(test)]
+mod memory;
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -25,18 +25,15 @@ use std::time::Duration;
 
 use serde::{Deserialize, Deserializer};
 use serde_json::{json, Value};
-use sidevoice_desktop_core::voice::{
-    choose, BuildCandidate, Candidate, CatalogCandidates, SettingsChange, VoiceChoice, VoiceSettings,
-};
-use sidevoice_desktop_engine::{CatalogView, NativeEngines};
-use sidevoice_voice::AudioDevices;
+use sidevoice_app_core::engine::NativeEngines;
+use sidevoice_app_core::sidevoice_voice::AudioDevices;
+use sidevoice_app_core::voice::host::{failed, refusal, refused, Applied, Page, Refusal, IDLE_UNLOAD_MINUTES};
+use sidevoice_app_core::voice::models::{EngineLoader, Halves};
+use sidevoice_app_core::voice::{candidates, choose, CatalogCandidates, SettingsChange, VoiceChoice, VoiceSettings};
 use tauri::{AppHandle, Manager, State, Webview};
 
 use crate::engine_ipc::EngineState;
-use host::{failed, refusal, refused, Applied, Page, Refusal, IDLE_UNLOAD_MINUTES};
-use models::{EngineLoader, Halves};
-
-pub use host::VoiceState;
+pub use sidevoice_app_core::voice::host::VoiceState;
 
 /// How often the devices are listed to tell the page when they change: the system tells cpal of no change.
 const DEVICES_EVERY: Duration = Duration::from_secs(2);
@@ -414,37 +411,5 @@ pub fn page_changed(app: &AppHandle) {
 fn to_page(app: &AppHandle, event: &Value) {
     if let Some(window) = crate::room_window(app) {
         let _ = window.eval(format!("window.__sidevoiceDesktop && window.__sidevoiceDesktop.voiceEvent({event})"));
-    }
-}
-
-/// A catalogue of the engine, as choosing from it needs: a local model runs here when one of its builds does; a
-/// provider's always does. A build that does not run says why by its first reason's code.
-pub(crate) fn candidates(view: &CatalogView) -> CatalogCandidates {
-    CatalogCandidates {
-        id: view.id.clone(),
-        reason: view.status.reason.as_ref().map(|reason| reason.code.clone()),
-        detail: view.status.detail.clone(),
-        models: view
-            .models
-            .iter()
-            .map(|model| Candidate {
-                id: model.id.clone(),
-                family: model.local.as_ref().map(|local| local.family.clone()),
-                capabilities: model.capabilities.iter().map(|c| c.to_string()).collect(),
-                runs: model.local.as_ref().is_none_or(|local| local.builds.iter().any(|build| build.available)),
-                builds: model.local.as_ref().map_or_else(Vec::new, |local| {
-                    local
-                        .builds
-                        .iter()
-                        .map(|build| BuildCandidate {
-                            id: build.id.clone(),
-                            unfit: (!build.available).then(|| {
-                                build.reasons.first().map_or("no-build-available".into(), |reason| reason.code.clone())
-                            }),
-                        })
-                        .collect()
-                }),
-            })
-            .collect(),
     }
 }

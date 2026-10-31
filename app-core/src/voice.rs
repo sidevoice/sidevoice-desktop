@@ -14,7 +14,9 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 
+pub mod host;
 pub mod meters;
+pub mod models;
 pub mod take;
 #[cfg(test)]
 mod tests;
@@ -444,4 +446,36 @@ fn slot(
         _ => None,
     };
     Ok(ModelChoice { catalog: catalog.to_string(), model: model.to_string(), build })
+}
+
+/// A catalogue of the engine, as choosing from it needs: a local model runs here when one of its builds does; a
+/// provider's always does. A build that does not run says why by its first reason's code.
+pub fn candidates(view: &crate::engine::CatalogView) -> CatalogCandidates {
+    CatalogCandidates {
+        id: view.id.clone(),
+        reason: view.status.reason.as_ref().map(|reason| reason.code.clone()),
+        detail: view.status.detail.clone(),
+        models: view
+            .models
+            .iter()
+            .map(|model| Candidate {
+                id: model.id.clone(),
+                family: model.local.as_ref().map(|local| local.family.clone()),
+                capabilities: model.capabilities.iter().map(|c| c.to_string()).collect(),
+                runs: model.local.as_ref().is_none_or(|local| local.builds.iter().any(|build| build.available)),
+                builds: model.local.as_ref().map_or_else(Vec::new, |local| {
+                    local
+                        .builds
+                        .iter()
+                        .map(|build| BuildCandidate {
+                            id: build.id.clone(),
+                            unfit: (!build.available).then(|| {
+                                build.reasons.first().map_or("no-build-available".into(), |reason| reason.code.clone())
+                            }),
+                        })
+                        .collect()
+                }),
+            })
+            .collect(),
+    }
 }
