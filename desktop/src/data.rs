@@ -206,7 +206,7 @@ async fn confirmed_reset(app: AppHandle, uninstall: bool) -> Answer {
     }
     if state.call.lock().unwrap().joined
         || crate::updater::installing(&app)
-        || app.try_state::<crate::engine_ipc::EngineState>().is_some_and(|engine| engine.jobs.busy())
+        || app.try_state::<sidevoice_app_core::app::AppHost>().is_some_and(|host| host.installing())
     {
         end_exclusive(&app);
         return Err(refused("reset.busy"));
