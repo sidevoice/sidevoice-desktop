@@ -9,8 +9,8 @@
 //   desktop/packaging/macos/dmg/background.png, background@2x.png      the .dmg window
 //   mobile/app-icon/{icon.png,android-foreground.png,app-icon.json}   the mobile app's icon sources: `cargo xtask mobile generate`
 //                                                                    derives every size from them (`tauri icon`)
-//   mobile/app-icon/window.png                                         the window icon its build embeds (never shown on a phone)
 //   mobile/plugin/android/src/main/res/drawable/ic_call_notification.xml   the Android call notification's small icon
+//   mobile/app-icon/window.{png,ico}                                   the window icon its build embeds (never shown on a phone)
 //
 //   npm run icons
 //
@@ -176,6 +176,8 @@ const capsule = ([x, y, w, h]) => {
 };
 out("mobile/plugin/android/src/main/res/drawable/ic_call_notification.xml",
   `<?xml version="1.0" encoding="utf-8"?>\n<!-- The brand mark in one ink (npm run icons). -->\n<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp"\n    android:viewportWidth="24" android:viewportHeight="24">\n    <path android:fillColor="#FFFFFFFF" android:pathData="${BARS.map(capsule).join("")}" />\n</vector>\n`);
+// tauri-build wants an .ico too where it builds the crate for a Windows host (the desktop workflows do, to check it).
+out("mobile/app-icon/window.ico", ico([[32, png(svg(24, 24, inner(TILE)), 32)]]));
 
 // ------------------------------------------------------------------ tray
 
