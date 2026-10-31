@@ -341,10 +341,8 @@ impl<A: LaneAudio> AppHost<A> {
                             != (&now.inputs, &now.outputs, &now.input, &now.output)
                     });
                 if changed {
-                    events.event(
-                        PageGeneration(current.load(Ordering::SeqCst)),
-                        json!({"type": "devices", "data": voice::seam_devices(&now)}),
-                    );
+                    events
+                        .event(PageGeneration(current.load(Ordering::SeqCst)), json!({"type": "devices", "data": now}));
                 }
                 last = Some(now);
                 tokio::time::sleep(DEVICES_EVERY).await;

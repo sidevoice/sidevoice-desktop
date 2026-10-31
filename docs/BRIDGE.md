@@ -638,11 +638,12 @@ What is this app's own:
   listening, and `stop()` after such a start resolves only once it was handed over (at the idle state that answers
   the stop, which the take comes before). A start with no take records nothing. The app keeps no copy.
 - The audio devices are the system's (cpal's, each id cpal's device id), chosen through sidevoice-voice's
-  `NativeDevices`; `outputSelectable` is always `true`. A call that runs switches its microphone at once and its
-  speaker once what it is playing has ended. `setAudioDevices` rejects `{key: "voice_audio_device_unknown", code:
-  "audio-device-unknown"}` for an id the system does not list. The system tells of no change, so from the first
-  `audioDevices` or `setAudioDevices` the app lists the devices every 2 s and tells `onAudioDevices` each change
-  (other devices, another choice, or a chosen one that went away, said once as `lost` and replaced by the default).
+  `NativeDevices`; `outputSelectable` is what sidevoice-voice reports for the OS (`true` on every desktop one). A call
+  that runs switches its microphone at once and its speaker once what it is playing has ended. `setAudioDevices`
+  rejects `{key: "voice_audio_device_unknown", code: "audio-device-unknown"}` for an id the system does not list. The
+  system tells of no change, so from the first `audioDevices` or `setAudioDevices` the app lists the devices every 2 s
+  and tells `onAudioDevices` each change (other devices, another choice, or a chosen one that went away, said once as
+  `lost` and replaced by the default).
 - A page that loads anew has no old calls or lanes: each is stopped and, like any stopped call, keeps its models for its
   idle period.
 
