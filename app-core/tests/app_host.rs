@@ -354,6 +354,21 @@ fn a_reloaded_page_owns_none_of_the_lanes() {
 }
 
 #[test]
+fn a_new_page_cannot_start_or_update_a_lane_the_old_page_made() {
+    let shell = Shell::new("lane-owner");
+    let host = &shell.host;
+    let first = host.page();
+    block_on(async {
+        host.create_call(first, "a".into()).await.unwrap();
+        let page = host.page_changed();
+        // Whether or not the old lane has been cleared away yet, it is not the new page's to start or to change.
+        let call = settings(json!({"output": {"tts": {"catalog": "local", "model": "kokoro-82m-v1.0"}}}));
+        assert_eq!(key_of(&host.start(page, "a", call, false).await.unwrap_err()), "bad_request");
+        assert_eq!(key_of(&host.update(page, "a", SettingsChange::default()).await.unwrap_err()), "bad_request");
+    });
+}
+
+#[test]
 fn a_host_without_an_engine_refuses_what_needs_one_and_still_runs_lanes() {
     // A file where the model root should be: the engine cannot start.
     let root = std::env::temp_dir().join(format!("sidevoice-app-host-noengine-{}", std::process::id()));

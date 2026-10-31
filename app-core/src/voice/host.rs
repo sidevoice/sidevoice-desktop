@@ -188,6 +188,17 @@ impl<A: LaneAudio> VoiceState<A> {
         self.calls.lock().await.get(key).cloned().ok_or_else(|| refusal("bad_request", "Unknown voice call."))
     }
 
+    /// The lane `key` names, if the page of generation `page` made it: the lane itself, to carry through whatever the
+    /// command awaits next (the catalogues, the models), so that what the command does at the end is done to this lane and
+    /// to no lane that is made under the same key meanwhile.
+    pub async fn lane_of(&self, page: u64, key: &str) -> Result<Arc<CallLane<A::Port>>, Refusal> {
+        let lane = self.lane(key).await?;
+        if lane.page != page {
+            return Err(refusal("bad_request", "Unknown voice call."));
+        }
+        Ok(lane)
+    }
+
     /// Whether the microphone is routed to this very lane.
     fn routes_to(route: &Option<Weak<CallLane<A::Port>>>, lane: &Arc<CallLane<A::Port>>) -> bool {
         route.as_ref().is_some_and(|routed| std::ptr::eq(routed.as_ptr(), Arc::as_ptr(lane)))
@@ -307,9 +318,22 @@ impl<A: LaneAudio> VoiceState<A> {
     /// starts it: it loads the models its halves use, opens the speaker and, with an input half, the microphone, and
     /// listens (`ready` says when). With `take`, the call keeps what the microphone gives from then until that
     /// listening ends, and hands it to the page then.
-    pub async fn open(&self, key: &str, applied: Applied, take: bool, page: Page) -> Result<(), Refusal> {
-        let lane = self.lane(key).await?;
+    ///
+    /// On `lane` itself and not on what `key` names by now: a lane that was released since the command looked it up (its
+    /// page went, it was disposed) is refused here, under the lock that sets the call, so that a call is never started on
+    /// a lane nothing tracks any more.
+    pub async fn open(
+        &self,
+        lane: &Arc<CallLane<A::Port>>,
+        key: &str,
+        applied: Applied,
+        take: bool,
+        page: Page,
+    ) -> Result<(), Refusal> {
         let mut running = lane.call.lock().await;
+        if lane.is_released() {
+            return Err(refusal("bad_request", "Unknown voice call."));
+        }
         if running.is_some() {
             return Err(refusal("bad_request", "The voice call has started already."));
         }
@@ -325,8 +349,7 @@ impl<A: LaneAudio> VoiceState<A> {
     }
 
     /// What the lane's call runs now.
-    pub async fn applied(&self, key: &str) -> Result<Applied, Refusal> {
-        let lane = self.lane(key).await?;
+    pub async fn applied(&self, lane: &Arc<CallLane<A::Port>>) -> Result<Applied, Refusal> {
         let running = lane.call.lock().await;
         running.as_ref().map(|running| running.applied.clone()).ok_or_else(not_started)
     }
@@ -334,9 +357,11 @@ impl<A: LaneAudio> VoiceState<A> {
     /// Changes the lane's call to `applied` without restarting it (sidevoice-voice's `update`): a half whose models
     /// are the same keeps what it loaded, a change of models loads them while the call goes on as it was, and each
     /// half's change takes effect at its safe point. Resolves once the change is accepted.
-    pub async fn update(&self, key: &str, applied: Applied) -> Result<(), Refusal> {
-        let lane = self.lane(key).await?;
+    pub async fn update(&self, lane: &Arc<CallLane<A::Port>>, applied: Applied) -> Result<(), Refusal> {
         let mut running = lane.call.lock().await;
+        if lane.is_released() {
+            return Err(refusal("bad_request", "Unknown voice call."));
+        }
         let running = running.as_mut().ok_or_else(not_started)?;
         let setup = applied.halves.setup().map_err(|code| refusal("internal", code))?;
         running.call.update(setup);
@@ -545,6 +570,11 @@ impl<P> CallLane<P> {
             sayings: Arc::new(Mutex::new(HashMap::new())),
             telling: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Whether the lane was released: it is out of the host's lanes, and nothing is to be started on it.
+    fn is_released(&self) -> bool {
+        *self.released.lock().unwrap()
     }
 
     /// The lane is gone: nothing more reaches the page from it. Dropping the call makes its task close the call once
