@@ -14,6 +14,7 @@
 		5F7C985DA86F97E397CC522E /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = DEBD9545CF90786BDDD5D639 /* main.mm */; };
 		80A03190BFECEF57B6FF0F92 /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 46B600F3D87A8B86B45A62C9 /* MetalKit.framework */; };
 		8A4474978DCA719C4F11E7AE /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EF7D695C7A6ACAD12DA94258 /* UIKit.framework */; };
+		96B7456F28698AC3D7BA5A0D /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = B5E6137564CC46CBF5FDCAF7 /* PrivacyInfo.xcprivacy */; };
 		9C2DFA35B78BDAD31399A365 /* assets in Resources */ = {isa = PBXBuildFile; fileRef = FBE97951AA487058954DF9BE /* assets */; };
 		9E6F9ACB042B66F798582895 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 180609C9C60033406A6A7F17 /* LaunchScreen.storyboard */; };
 		AC33FD4D84BBAB8E32E65AAF /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 438F566187470C3B8979F853 /* Security.framework */; };
@@ -34,6 +35,7 @@
 		8CEBA3D0D0988EFC5779F1E0 /* origin.rs */ = {isa = PBXFileReference; path = origin.rs; sourceTree = "<group>"; };
 		A13AEA8AD965C33B4A462A4E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		AC7B192F6F772B984C2013E8 /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
+		B5E6137564CC46CBF5FDCAF7 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		BE293A96151AB5D44D76E3EC /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 		C5232FA644011E76A9B33911 /* sidevoice-mobile_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "sidevoice-mobile_iOS.entitlements"; sourceTree = "<group>"; };
 		D6067A41257B6008E8BE4CA5 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
@@ -125,6 +127,7 @@
 			isa = PBXGroup;
 			children = (
 				DD941F079E3C0751703CE1EC /* Info.plist */,
+				B5E6137564CC46CBF5FDCAF7 /* PrivacyInfo.xcprivacy */,
 				C5232FA644011E76A9B33911 /* sidevoice-mobile_iOS.entitlements */,
 			);
 			path = "sidevoice-mobile_iOS";
@@ -222,6 +225,7 @@
 			files = (
 				06AEF62B7E54BF34FE611772 /* Assets.xcassets in Resources */,
 				9E6F9ACB042B66F798582895 /* LaunchScreen.storyboard in Resources */,
+				96B7456F28698AC3D7BA5A0D /* PrivacyInfo.xcprivacy in Resources */,
 				9C2DFA35B78BDAD31399A365 /* assets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
