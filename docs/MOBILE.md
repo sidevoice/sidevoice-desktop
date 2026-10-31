@@ -55,6 +55,36 @@ if the template stops having it). Android 17 (API 37) asks an app that targets i
 nothing of the kind yet; moving `targetSdk` to 37 comes with that permission, in the manifest and as a request before the
 first connection to a paired machine.
 
+## The call's service (Android)
+
+A call must outlive the screen: with it off, or another app in front, Android stops a process that holds the microphone
+unless a foreground service says it is in use. `mobile/plugin` carries that service (`CallService.kt`, `MobilePlugin.kt`
+and the manifest entry, all merged into the app by Gradle). It has the foreground service types **microphone** (the call
+listens) and **media playback** (the agent speaks), and a notification with the app's name, "In a call" and a **Hang up**
+action, in the system's language (`res/values`, English, and `values-es`; the Spanish is the desktop app's wording).
+
+- **Start while visible.** Android lets a microphone service start only from an app that is on screen and has the
+  microphone allowed (since Android 14, and enforced strictly from 15), so `start_call_service` is called while the app is
+  visible. Visible is the hosting activity's own lifecycle (started), not the process's, which reports a stop some time
+  late. The call refuses by name (`not-visible`, `microphone-permission`, `already-running`, `not-allowed`) instead
+  of by the system's exception. Once the service runs, it goes on in the background.
+- **A deterministic end.** One service at a time, and one `Stopped` report to the app for each start, whoever ends it. Each
+  start is a session with a number, which the service carries in its intents; the system ends a service after the app may
+  have started the next call, so a service only acts on its own session (its end, its focus, its notification's Hang up
+  are nothing once that session is over). `cargo xtask mobile test android` runs the JVM tests of that rule. Whoever ends it:
+  the app (`stop_call_service`: `requested`), the person (Hang up in the notification: `hang-up`; the app removed from
+  the recents list: `task-removed`) or the system (`system`, also when it refused the start). The notification, the
+  audio focus and the service go with it, and the system never restarts it: a call does not survive its process.
+- **Audio focus.** The service holds the call's focus (transient: other media pauses and comes back after) from the start
+  to the end, and reports `Focus` changes (`gained`, `lost`, `lost-transient`, `duck`). What to do about them (mute,
+  pause, hang up) is the call's decision, not the service's.
+- The Rust side is `start_call_service(app, on_event)` and `stop_call_service(app)` of `sidevoice-mobile-plugin`
+  (`call_service.rs`); the shared call code reaches the service through them. iOS has no service to start: a call stays
+  alive there through the `audio` background mode, which is configuration.
+- The manifest declares `RECORD_AUDIO`, the two foreground-service permissions and `POST_NOTIFICATIONS`; asking the
+  person for the microphone and for notifications is the microphone permission's row. Without notifications allowed
+  (Android 13 and later) the service runs and the system lists it, but shows no notification.
+
 ## Building
 
 Always one package, never the workspace: it holds the desktop app too. The Tauri CLI is told which app is the one
@@ -74,5 +104,4 @@ installs as it is.
 ## Not here yet
 
 The bridge (`__sidevoiceHost`: voice, engine, microphone, pairings), the microphone permission, `UIBackgroundModes`
-(audio), the privacy manifest and export compliance, the Android foreground service, and the CI and signing of both
-apps.
+(audio), the privacy manifest and export compliance, and the CI and signing of both apps.

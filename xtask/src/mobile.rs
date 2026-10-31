@@ -7,6 +7,7 @@
 //!   goes too), then the icons derived from the sources (`tauri icon` writes them into the projects that exist). Runs
 //!   in mobile/, where tauri.conf.json is. The iOS project needs macOS and XcodeGen. The CLI's targets are not
 //!   installed here (`--skip-targets-install`): mobile/rust-toolchain.toml names them.
+//! - `mobile test android`: the Kotlin library's JVM unit tests, in the generated project (after a build).
 
 use std::fs;
 
@@ -70,6 +71,14 @@ pub fn generate(name: &str) -> Result<()> {
     // The icons: the CLI writes every size into the projects that exist, and a desktop set of its own into
     // mobile/icons/ (ignored by git, and nothing reads it).
     tauri(&["icon", "app-icon/app-icon.json"]).run()
+}
+
+/// `mobile test android`: the JVM unit tests of the Android library's Kotlin (`CallSession`), which need no device. They
+/// run in the generated project, so after a build has written its Gradle includes (`cargo xtask mobile build android`).
+pub fn test(name: &str) -> Result<()> {
+    ensure(project(name)?.cli == "android", "mobile test: android, the one with Kotlin of its own")?;
+    let gradle = repo().join("mobile/gen/android");
+    Cmd::new(gradle.join("gradlew")).arg(":sidevoice-mobile-plugin:testDebugUnitTest").dir(&gradle).run()
 }
 
 #[cfg(test)]
