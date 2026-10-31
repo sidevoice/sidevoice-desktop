@@ -24,7 +24,10 @@ policy or elevate any process.
 
 1. Before transaction side effects, the app acquires `admission.lock` and `reset.lock` in checked private
    control storage. Startup must acquire both, and keeps them until setup and its journal acknowledgement
-   finish. Failed setup releases them. A second reset returns busy.
+   finish. Failed setup releases them. A second reset returns busy. The same directory also holds the temporary
+   carry-over from the previous identifier's journal, key records and instance lock (APP_DATA.md, "From the previous
+   identifier"): `begin_reset` marks that journal finished before it clears anything, so nothing the reset deletes
+   comes back.
 2. The parent listens through `sidevoice-platform` v0.12.2, starts its own executable with the shared
    detached-child API, and sends a random 32-byte capability through the inherited stdin pipe. No secret
    goes in argv, the environment, logs or a file. No raw lock descriptor is inherited.

@@ -51,7 +51,14 @@ mod tests {
     }
 
     #[test]
+    fn legacy_keys_are_copied_in_the_real_keychain() {
+        copy_native();
+    }
+
+    #[test]
     fn public_functions_round_trip_in_the_test_namespace() {
+        // Serialised with the other tests that use the per-process namespace.
+        let _serial = serial();
         // Test builds give the public functions a per-process namespace (`namespace`): no person's keys are touched.
         assert_eq!(read("openai"), Ok(None));
         write("openai", Some("test-only")).unwrap();

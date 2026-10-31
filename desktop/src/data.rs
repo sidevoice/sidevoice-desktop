@@ -111,8 +111,11 @@ pub fn shared_model_root() -> Option<PathBuf> {
     sidevoice_platform::data_dir::models_dir()
 }
 
+/// The remote pairings, in the app data folder (docs/PAIRING_STORAGE.md).
+pub(crate) const PAIRINGS_FILE: &str = "pairings.json";
+
 fn pairings_file(app: &AppHandle) -> Result<PathBuf, Value> {
-    Ok(desktop_dir(app)?.join("pairings.json"))
+    Ok(desktop_dir(app)?.join(PAIRINGS_FILE))
 }
 
 mod pairings;
@@ -260,12 +263,16 @@ fn begin_reset(app: &AppHandle, uninstall: bool) -> Answer {
     })?;
     // The program the helper runs and the relaunch starts, resolved and checked before anything is touched.
     let program = application::installed_program().ok_or_else(|| refused("reset.helper-failed"))?;
+    // The carry-over from the previous identifier ends before anything is cleared, finished or not: nothing the reset
+    // deletes (here or in the helper) may come back from the old identifier's data.
+    let control = control_dir().ok_or_else(|| refused("reset.helper-failed"))?;
+    crate::legacy_identifier::stop(&control).map_err(|_| refused("reset.helper-failed"))?;
     let (mut failed, agents, service_outcome) = reset_before_exit()?;
     // The provider keys, on every host that runs the transaction, journalled as the last step before exit.
     if credentials::clear_all().is_err() {
         failed.push(json!({"step": "keychain", "key": "reset.keychain-failed"}));
     }
-    let journal = control_dir().ok_or_else(|| refused("reset.helper-failed"))?.join(JOURNAL);
+    let journal = control.join(JOURNAL);
     write_atomic_json(
         &journal,
         &json!({"stage":"keychain", "completed":["service", "keychain"], "failed":failed.clone()}),

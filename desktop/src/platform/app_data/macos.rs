@@ -2,6 +2,8 @@
 //! app's `defaults` domain.
 
 use super::{Error, Home, Os, Steps, IDENTIFIER};
+use sidevoice_platform::fs::{Files, Fs};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -20,6 +22,11 @@ impl Os for Native {
             return Err(Error::Stopped);
         }
         Ok(())
+    }
+
+    /// Private (0700) from its creation.
+    fn create_folder(path: &Path) -> io::Result<()> {
+        Files::create_private_dir(path)
     }
 }
 

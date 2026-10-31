@@ -272,6 +272,18 @@ cargo xtask release checksums
 
 leaves the signed, notarized and stapled `dist/Sidevoice_X.Y.Z_aarch64.dmg` and its `dist/SHA256SUMS.txt`.
 
+## Legacy identifier carry-over
+
+Until `ai.sidevoice.desktop`, the app's identifier was `dev.sidevoice.desktop`. `desktop/src/legacy_identifier.rs` copies
+an install's app data, browser storage and provider keys over from it at launch, until its journal (in the reset's
+control directory) says it has finished, and never changes the old ones (docs/APP_DATA.md, WEBVIEW_DATA.md,
+CREDENTIALS.md). **It stays until 1.0.** Someone can skip releases, so a fixed number of them is no boundary. Removing
+it needs a release note that says "update through vX.Y first" (X.Y: the first release that contains it) and how to
+remove the old identifier's data by hand (APP_DATA.md has the list). To remove it: the module and its call in `run()`,
+the `stop` call in `data::begin_reset`, `platform::app_data::{carried_from, create_folder}` (and its `Os` method),
+`webview_data::locations_of`, `credentials::{providers_in, copy_key_from}` with their tests, `data::PAIRINGS_FILE` if
+nothing else uses it, and the three doc sections called "From the previous identifier".
+
 ## When something fails
 
 - The build of a release fails: the Release stays a draft, its tag in place. Fix forward if needed, then re-run

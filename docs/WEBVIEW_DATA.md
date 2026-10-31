@@ -5,7 +5,8 @@ The macOS reset helper uses it. Windows/Linux reset remains unavailable until th
 transaction is assembled; this interface does not enable that UI or remove an installed app.
 
 The module's interface is five plain functions — `preflight`, `locations`, `capture`, `wait_released` and
-`remove` — plus the `Locations`, `Owner` and `Released` values they pass along. They hold the common code once:
+`remove` — plus the `Locations`, `Owner` and `Released` values they pass along, and `locations_of`, `locations` for
+another bundle identifier, which only the carry-over from the previous one asks (below). They hold the common code once:
 capture, waiting, held-parent deletion, path validation and descendant tracking. What varies per OS is declared
 by one private trait (not exported): `preflight` and `locations` have common defaults (admit every launch; the
 Windows/Linux storage root), which macOS overrides; every OS implements `exited` and `observe`. Each of
@@ -23,7 +24,7 @@ accepted from the room page. `SIDEVOICE_DATA_DIR` does not change browser storag
 
 | OS | Roots authorized by this interface | Evidence |
 | --- | --- | --- |
-| macOS | `~/Library/Application Support/ai.sidevoice.desktop`, `~/Library/WebKit/ai.sidevoice.desktop`, `~/Library/Caches/ai.sidevoice.desktop` | The existing reset allowlist in `data.rs`; Wry's default WKWebsiteDataStore remains in use. No migration or new store identifier. |
+| macOS | `~/Library/Application Support/ai.sidevoice.desktop`, `~/Library/WebKit/ai.sidevoice.desktop`, `~/Library/Caches/ai.sidevoice.desktop` | The existing reset allowlist in `data.rs`; Wry's default WKWebsiteDataStore remains in use, so WebKit keys its store by the bundle identifier. No new store identifier. |
 | Windows | Tauri `app_local_data_dir()`, normally `%LOCALAPPDATA%\ai.sidevoice.desktop` (the WebView2 user data folder, including its profiles/cache) | [Tauri 2.12.0 manager](https://docs.rs/crate/tauri/2.12.0/source/src/manager/webview.rs), [path resolver](https://docs.rs/crate/tauri/2.12.0/source/src/path/desktop.rs), [Wry 0.57.0 WebView2 environment](https://docs.rs/crate/wry/0.57.0/source/src/webview2/mod.rs). |
 | Linux | Tauri `app_local_data_dir()`, normally `$XDG_DATA_HOME/ai.sidevoice.desktop` or `~/.local/share/ai.sidevoice.desktop`; **both data and cache are here**, including `cookies` | The same Tauri manager and resolver; [Wry 0.57.0 WebContext](https://docs.rs/crate/wry/0.57.0/source/src/webkitgtk/web_context.rs) sets both `base_data_directory` and `base_cache_directory` to this path and the cookie file to `<path>/cookies`. There is no additional default `~/.cache/webkitgtk` deletion. |
 
@@ -33,6 +34,16 @@ current app has no custom data-directory override on either webview builder. A W
 an app child at a different user data folder is refused, not silently added to the deletion allowlist.
 Windows capture also requires positive evidence of a runtime using the allowlisted folder; an override that
 reuses another application's browser cannot make an unobserved default store look safe to remove.
+
+## From the previous identifier
+
+Every root above is keyed by the bundle identifier, which was `dev.sidevoice.desktop` before `ai.sidevoice.desktop`.
+At launch, first, each root of the old identifier (`locations_of`) that exists is copied to the new one's and swapped
+in, with the app data folder (`legacy_identifier.rs`, through `app_data::carried_from`; a root that is the app data
+folder goes as it; APP_DATA.md has the rule): the page's local storage and the rest of the store come with it, the old
+root is left as it is, and a new root that a first start made is kept as `<root>.first-start-backup`. The launch lock
+is held and no browser process of this app runs yet, so nothing writes to either root meanwhile. A copy or rename that
+fails is logged and retried at the next launch.
 
 ## Lifetime and integration contract
 
