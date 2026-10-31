@@ -11,8 +11,8 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 | `bridge/desktop-bridge.js` | Injected by the app into every page of the room window, before the page's own scripts. Bound to the app's own origin (the bundled interface). |
 | `desktop/core/src/bridge.rs` | The contract on the Rust side: `CallSnapshot`, `Command`, and how the tray renders a snapshot. Unit-tested. |
 | `desktop/src/lib.rs` | Wiring: the `bridge_state` command, `send(Command)`; `capabilities/room.json`. The mute shortcut, behind `muteShortcut`, and the one writer of the app's settings (below). |
-| `desktop/src/engine_ipc.rs` | The engine's commands, behind `engine` (below): its catalogues, provider keys and models on disk. |
-| `desktop/src/voice.rs`, `desktop/src/platform/credentials.rs`, `app-core/src/voice.rs`, `app-core/src/voice/` | The voice call the app runs, behind `voice` (below): the commands in the app, the call host, the models it picks from the catalogues and the settings the page sends in `app-core` (unit-tested), and the keychain the engine reads provider keys from. |
+| `desktop/src/engine_ipc.rs`, `app-core/src/app/engine.rs` | The engine's commands, behind `engine` (below): its catalogues, provider keys and models on disk. The app's are the transport; `app-core`'s do the work. |
+| `desktop/src/voice.rs`, `desktop/src/platform/credentials.rs`, `app-core/src/app.rs`, `app-core/src/app/voice.rs`, `app-core/src/voice.rs`, `app-core/src/voice/` | The voice call the app runs, behind `voice` (below): the commands in the app, what they do and the hooks the app gives the host (admission, events, keys: `app-core`'s `AppHost`, `desktop/src/app_hooks.rs`), the call host, the models it picks from the catalogues and the settings the page sends in `app-core` (unit-tested), and the keychain the engine reads provider keys from. |
 | `desktop/src/local_host.rs`, `desktop/local-host/` | This computer's own core, behind `localHost` (below; docs/LOCAL_HOST.md). |
 | `desktop/src/tray.rs` | The menu-bar icon and its menu. |
 | `bridge/call-controls-bridge.js` | Injected into the call controls card's window (below). |

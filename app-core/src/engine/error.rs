@@ -37,6 +37,11 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+/// The engine did not start (the app runs without one): nothing that needs it can be answered.
+pub fn engine_unavailable() -> Error {
+    Error::new("engine_unavailable", "The engine did not start.")
+}
+
 /// The call itself is malformed (a missing header, audio not sent as bytes). A bug in the caller, not the person's.
 pub fn bad_request(detail: impl Into<String>) -> Error {
     Error::new("bad_request", detail)
