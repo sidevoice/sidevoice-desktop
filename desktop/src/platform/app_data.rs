@@ -87,6 +87,12 @@ fn install_folders(home: &Path, identifier: &str) -> Result<Vec<PathBuf>, &'stat
     Ok(folders)
 }
 
+/// Make the folder `path`, failing when anything is there already, so that no other user can enter it until the caller
+/// gives it its final permissions: the copies `legacy_identifier` makes of an install.
+pub fn create_folder(path: &Path) -> io::Result<()> {
+    Native::create_folder(path)
+}
+
 /// Read-only: whether an existing protected directory under `home` (the connector's data and releases) and its
 /// whole tree could be removed. It must be an ordinary directory, reached from `home` with no link or volume
 /// change. A missing directory passes. The `Err` is a short reason.
@@ -100,6 +106,9 @@ trait Os {
     fn delete_extra_data(_home: &Home, _steps: Steps) -> Result<(), Error> {
         Ok(())
     }
+
+    /// [`create_folder`].
+    fn create_folder(path: &Path) -> io::Result<()>;
 }
 
 /// The app folders every OS has, once `home` is checked to still be the account home.
@@ -555,6 +564,16 @@ mod tests {
                 .all(|other| !other.path.starts_with(&folder.path) && !folder.path.starts_with(&other.path)));
         }
         assert!(folders.list.iter().any(|folder| folder.name == "models" && folder.path == folders.models));
+    }
+
+    #[test]
+    fn a_new_folder_is_made_once_and_lets_no_one_else_in() {
+        let (_temp, home) = fixture();
+        let folder = home.join("copy");
+        create_folder(&folder).unwrap();
+        assert_eq!(create_folder(&folder).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+        // As private as a private directory: the same mode on Unix; on Windows both are left to their ACL.
+        assert_eq!(fs::metadata(&folder).unwrap().permissions(), fs::metadata(&home).unwrap().permissions());
     }
 
     #[test]

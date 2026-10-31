@@ -86,33 +86,49 @@ both identifiers by the same code as the deletion; the app data, with the local 
   of `settings.json`, `call-controls.json`, `pairings.json` in the new app data: the files the app writes only when
   the person acts; a first start writes its log and `local-host.json` only). Set up: no folder is touched, and the
   log names the old ones left.
-- **Each old folder that exists** is copied to `<new>.migrating` (a leftover of an earlier attempt is removed first;
-  links are not copied). The new folder's `local-host.json` is copied over the copy's: the local core revoked the
-  old install's token when the first start paired. A marker (`.carried-from-dev.sidevoice.desktop`) is written into
-  the copy. Then the swap: the new folder, if there is one, is renamed to the first free
-  `<new>.first-start-backup`, `-2`, … (never deleted, never replaced), and the copy renamed to `<new>`.
+- **Each old folder that exists** is copied into a copy of the carry-over's own, beside the new folder:
+  `<new>.migrating-<random>`, made with `create_dir` (it never takes a folder that was there) through
+  `app_data::create_folder` (Unix: 0700 from its creation; Windows: a plain folder, inheriting the profile's ACL,
+  which keeps other users out), with an owner file (`.carry-over-copy`) written into it first.
+  - Every folder in the copy is made the same way and gets its source's permissions once its contents are in; every
+    file is created with its source's mode (`fs::copy`). Links are neither followed nor copied. The copy's own
+    permissions come last, so nothing in it is open to others before it is complete.
+  - The old folder is compared before and after (every entry's path, size and modification time). If it changed, a
+    running old build wrote to it: the copy is thrown away and the folder tried again at the next launch.
+  - The new folder's `local-host.json` is copied over the copy's: the local core revoked the old install's token when
+    the first start paired. Then a marker (`.carried-from-dev.sidevoice.desktop`) is written into the copy.
+  - Then the swap: the new folder, if there is one, is renamed to the first free `<new>.first-start-backup`, `-2`, …
+    (never deleted, never replaced), and the copy renamed to `<new>`.
+- **Only the carry-over's own copies are ever removed**: a folder named `<new>.migrating-…` with the owner file in it
+  (or empty), through the shared held removal (`Removal::remove_contents`), which removes a link without following it
+  and refuses a mount below, or a folder others may write. `std::fs::remove_dir_all` is not used: it would descend
+  into a mount on Unix. Any other folder there, the `<new>.migrating` of earlier builds of this PR included, is left as
+  it is.
 - **The marker in place is the commit.** A folder with it is carried, whatever the journal managed to say, so a retry
-  never copies over what the app wrote since. A crash leaves the old state or the new one, plus at most a
-  `.migrating` copy; a copy with its marker and nothing at `<new>` is a swap stopped between its two renames, and only
-  the second rename is left.
+  never copies over what the app wrote since. A crash leaves the old state or the new one, plus at most a copy of the
+  carry-over's own, removed at the next launch. A copy with its marker and nothing at `<new>` is a swap stopped between
+  its two renames, and only the second rename is left.
 - **Finished** when every folder is settled and every provider key too (CREDENTIALS.md). A failure is logged and
   never stops the launch; what is not settled is retried at the next launch, with the first decision.
 
 **A reset** ends the carry-over before it clears anything: `begin_reset` marks the journal finished first, so nothing
-it deletes comes back. **A running build** of the old identifier is unaffected. A running build of the new one from
-before the carry-over (the nightly of #316) takes no instance lock and is not detected: the updater quits the app
-before it installs, and a second copy started by hand in the meantime could see the folders swapped under it (its
-later writes go to the carried folder; the old install still holds the originals).
+it deletes comes back. **A running build** of the old identifier is not detected: its single-instance lock is
+`tauri-plugin-single-instance`'s private socket, mutex or D-Bus name, a different one on each OS. Nothing of it
+changes, and a copy made while it wrote is thrown away (above). A running build of the new one from before the
+carry-over (the nightly of #316) takes no instance lock and is not detected either: the updater quits the app before
+it installs, and a second copy started by hand in the meantime could see the folders swapped under it (its later
+writes go to the carried folder; the old install still holds the originals).
 
 **Left behind, to remove by hand** (nothing removes them; the app no longer reads them):
 
 | OS | Old install | From the carry-over |
 | --- | --- | --- |
-| macOS | `~/Library/Application Support/dev.sidevoice.desktop`, `~/Library/WebKit/dev.sidevoice.desktop`, `~/Library/Caches/dev.sidevoice.desktop`, `~/Library/Logs/dev.sidevoice.desktop`, `~/Library/Saved Application State/dev.sidevoice.desktop.savedState`, `defaults delete dev.sidevoice.desktop`, the Keychain items of service `dev.sidevoice.desktop.providers` | next to each new folder: `*.first-start-backup*`, and a `*.migrating` left by a carry-over that never finished |
+| macOS | `~/Library/Application Support/dev.sidevoice.desktop`, `~/Library/WebKit/dev.sidevoice.desktop`, `~/Library/Caches/dev.sidevoice.desktop`, `~/Library/Logs/dev.sidevoice.desktop`, `~/Library/Saved Application State/dev.sidevoice.desktop.savedState`, `defaults delete dev.sidevoice.desktop`, the Keychain items of service `dev.sidevoice.desktop.providers` | next to each new folder: `*.first-start-backup*`, and a `*.migrating-*` left by a carry-over that never finished |
 | Windows | `%APPDATA%\dev.sidevoice.desktop`, `%LOCALAPPDATA%\dev.sidevoice.desktop`, the Credential Manager entries `<provider>/dev.sidevoice.desktop.providers` | the same |
 | Linux | `~/.local/share/dev.sidevoice.desktop`, `~/.cache/dev.sidevoice.desktop`, the Secret Service items of service `dev.sidevoice.desktop.providers` | the same |
 
-On every OS also the old reset control directory, `dev.sidevoice.desktop-reset`, next to the new one. Not carried: the
+On every OS also the old reset control directory, `dev.sidevoice.desktop-reset`, next to the new one, and in the new one
+the carry-over's own records (`legacy-identifier.json`, `legacy-identifier.key-*`). Not carried: the
 macOS logs, saved window state and `defaults` domain, the Linux cache and the macOS microphone grant (the system keys
 it by bundle id: the person is asked again). The module stays until 1.0 (RELEASING.md, "Legacy identifier
 carry-over").

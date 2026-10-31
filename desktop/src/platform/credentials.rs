@@ -7,7 +7,7 @@
 
 use keyring_core::{CredentialStore, Entry};
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::HashMap,
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc, Arc, Mutex,
@@ -100,19 +100,26 @@ pub fn clear_all() -> Result<(), Error> {
     admit(|| Native::clear_namespace(namespace()))
 }
 
-/// What [`copy_from`] did with each provider key it found, by provider: `Ok(true)` the key was copied into the
-/// namespace the public functions use, `Ok(false)` that namespace held one already (left as it is). The old entry is
-/// never changed.
-pub type Copied = Vec<(String, Result<bool, Error>)>;
+/// The providers with a key in the namespace the app kept under the bundle identifier `identifier` (its
+/// `<identifier>.providers` service): the accounts there that are valid provider ids. `Err` when it cannot be listed.
+pub fn providers_in(identifier: &str) -> Result<Vec<String>, Error> {
+    let service = service_of(identifier);
+    admit(move || providers_of(Native::store()?.as_ref(), &service))
+}
 
-/// Copy the provider keys the app kept under the bundle identifier `identifier` (its `<identifier>.providers`
-/// namespace) to the namespace the public functions use, for the first runs of a build whose identifier changed. Each
-/// key found whose provider is not in `settled` is copied if the new namespace holds none for it, and read back.
-/// Nothing is overwritten and nothing is deleted. An old entry whose account is not a valid provider id is not the
-/// app's and is skipped. `Err` when the old namespace cannot be listed.
-pub fn copy_from(identifier: &str, settled: BTreeSet<String>) -> Result<Copied, Error> {
-    let from = service_of(identifier);
-    admit(move || copy_in(Native::store()?.as_ref(), &from, namespace(), &settled))
+/// Copy `provider`'s key from the namespace of the bundle identifier `identifier` to the one the public functions use,
+/// unless that one holds a key for it: `Ok(true)` copied and read back, `Ok(false)` nothing to copy. Nothing is
+/// overwritten or deleted. One key per call, each with its own admission and deadline. `settle` runs on the store's
+/// worker once both namespaces were read and before anything is written, and nothing is written unless it returns
+/// true: it runs even for a copy that completes after this call stopped waiting (`Unavailable` at the deadline), so
+/// the caller can record that copy there.
+pub fn copy_key_from(
+    identifier: &str,
+    provider: &str,
+    settle: impl FnOnce() -> bool + Send + 'static,
+) -> Result<bool, Error> {
+    let (from, provider) = (service_of(identifier), Provider::new(provider)?);
+    admit(move || copy_key(Native::store()?.as_ref(), &from, namespace(), &provider, settle))
 }
 
 /// The service of the namespace that a build with the bundle identifier `identifier` kept its provider keys in.
@@ -120,34 +127,31 @@ fn service_of(identifier: &str) -> String {
     format!("{identifier}.providers")
 }
 
-/// [`copy_from`] the service `from` to the service `to` in `store`.
-fn copy_in(store: &CredentialStore, from: &str, to: &str, settled: &BTreeSet<String>) -> Result<Copied, Error> {
-    let mut copied = Vec::new();
-    for entry in store.search(&HashMap::from([("service", from)]))? {
-        let Some((service, account)) = entry.get_specifiers() else { continue };
-        let Ok(provider) = Provider::new(&account) else { continue };
-        if service != from || settled.contains(&account) {
-            continue;
-        }
-        match copy_key(store, from, to, &provider) {
-            Ok(None) => (),
-            Ok(Some(done)) => copied.push((account, Ok(done))),
-            Err(error) => copied.push((account, Err(error))),
-        }
-    }
-    Ok(copied)
+fn providers_of(store: &CredentialStore, service: &str) -> Result<Vec<String>, Error> {
+    let entries = store.search(&HashMap::from([("service", service)]))?;
+    let accounts = entries.iter().filter_map(Entry::get_specifiers);
+    Ok(accounts.filter(|(found, account)| found == service && valid(account)).map(|(_, account)| account).collect())
 }
 
-/// One key: `None` when the old entry is gone, else whether it was copied: written only where the new namespace holds
-/// none, then read back equal.
-fn copy_key(store: &CredentialStore, from: &str, to: &str, provider: &Provider) -> Result<Option<bool>, Error> {
-    if read_in(store, to, provider)?.is_some() {
-        return Ok(Some(false));
+/// [`copy_key_from`] the service `from` to the service `to` in `store`.
+fn copy_key(
+    store: &CredentialStore,
+    from: &str,
+    to: &str,
+    provider: &Provider,
+    settle: impl FnOnce() -> bool,
+) -> Result<bool, Error> {
+    let secret = match read_in(store, to, provider)? {
+        Some(_) => None,
+        None => read_in(store, from, provider)?,
+    };
+    if !settle() {
+        return Err(Error::Failed);
     }
-    let Some(secret) = read_in(store, from, provider)? else { return Ok(None) };
+    let Some(secret) = secret else { return Ok(false) };
     write_in(store, to, provider, Some(&secret))?;
     match read_in(store, to, provider)? {
-        Some(read) if read == secret => Ok(Some(true)),
+        Some(read) if read == secret => Ok(true),
         _ => Err(Error::Failed),
     }
 }
@@ -393,19 +397,20 @@ mod tests {
         clear_in(&store, SERVICE).unwrap();
     }
 
-    /// [`copy_from`] through the real store (macOS and Windows run it; Linux has no store on headless CI): a key under
-    /// the namespace of another identifier, unique to this test, is copied to the namespace the public functions use in
-    /// test builds, and stays in the old one.
-    pub(super) fn copy_from_native() {
+    /// [`copy_key_from`] through the real store (macOS and Windows run it; Linux has no store on headless CI): a key
+    /// under the namespace of another identifier, unique to this test, is copied to the namespace the public functions
+    /// use in test builds, and stays in the old one.
+    pub(super) fn copy_native() {
         let _serial = serial();
         let identifier = test_service();
         let old = service_of(&identifier);
         let store = Native::store().unwrap();
         write_in(store.as_ref(), &old, &provider("openai"), Some("test-only")).unwrap();
-        assert_eq!(copy_from(&identifier, BTreeSet::new()), Ok(vec![("openai".to_owned(), Ok(true))]));
+        assert_eq!(providers_in(&identifier), Ok(vec!["openai".to_owned()]));
+        assert_eq!(copy_key_from(&identifier, "openai", || true), Ok(true));
         assert_eq!(read("openai").unwrap().as_deref(), Some("test-only"));
         assert_eq!(read_in(store.as_ref(), &old, &provider("openai")).unwrap().as_deref(), Some("test-only"));
-        assert_eq!(copy_from(&identifier, BTreeSet::from(["openai".to_owned()])), Ok(vec![]));
+        assert_eq!(copy_key_from(&identifier, "openai", || true), Ok(false));
         clear_all().unwrap();
         clear_in(store.as_ref(), &old).unwrap();
     }
@@ -413,11 +418,8 @@ mod tests {
     /// The namespace of the builds before `ai.sidevoice.desktop` (`legacy_identifier`).
     const OLD: &str = "dev.sidevoice.desktop.providers";
 
-    fn copy(store: &CredentialStore, settled: &[&str]) -> Copied {
-        let settled = settled.iter().map(|provider| provider.to_string()).collect();
-        let mut copied = copy_in(store, OLD, SERVICE, &settled).unwrap();
-        copied.sort_by(|a, b| a.0.cmp(&b.0));
-        copied
+    fn copy(store: &CredentialStore, id: &str) -> Result<bool, Error> {
+        copy_key(store, OLD, SERVICE, &provider(id), || true)
     }
 
     fn key(store: &CredentialStore, service: &str, id: &str) -> Option<String> {
@@ -441,7 +443,10 @@ mod tests {
         foreign.set_password("keep").unwrap();
         write_in(&store, "unrelated.service", &provider("openai"), Some("keep")).unwrap();
 
-        assert_eq!(copy(&store, &[]), vec![("future-provider-42".into(), Ok(true)), ("openai".into(), Ok(true))]);
+        let mut providers = providers_of(&store, OLD).unwrap();
+        providers.sort();
+        assert_eq!(providers, ["future-provider-42", "openai"]);
+        assert_eq!((copy(&store, "openai"), copy(&store, "future-provider-42")), (Ok(true), Ok(true)));
         assert_eq!(key(&store, SERVICE, "openai").as_deref(), Some("old-openai"));
         assert_eq!(key(&store, SERVICE, "future-provider-42").as_deref(), Some("old-future"));
         assert_eq!(key(&store, OLD, "openai").as_deref(), Some("old-openai"));
@@ -456,33 +461,46 @@ mod tests {
         let store = memory();
         write_in(&store, OLD, &provider("openai"), Some("old")).unwrap();
         write_in(&store, SERVICE, &provider("openai"), Some("new")).unwrap();
-        assert_eq!(copy(&store, &[]), vec![("openai".into(), Ok(false))]);
+        assert_eq!(copy(&store, "openai"), Ok(false));
         assert_eq!(key(&store, SERVICE, "openai").as_deref(), Some("new"));
         assert_eq!(key(&store, OLD, "openai").as_deref(), Some("old"));
     }
 
     #[test]
-    fn a_settled_provider_is_not_copied_again_after_its_key_was_removed() {
+    fn nothing_is_written_unless_it_is_settled_and_an_unreadable_key_is_not_settled() {
         let _serial = serial();
         let store = memory();
         write_in(&store, OLD, &provider("openai"), Some("old")).unwrap();
-        write_in(&store, OLD, &provider("other"), Some("old-other")).unwrap();
-        assert_eq!(copy(&store, &["openai"]), vec![("other".into(), Ok(true))]);
+        assert_eq!(copy_key(&store, OLD, SERVICE, &provider("openai"), || false), Err(Error::Failed));
         assert_eq!(key(&store, SERVICE, "openai"), None);
-        assert_eq!(key(&store, OLD, "openai").as_deref(), Some("old"));
+        // Stored text that is not text: reading it fails before anything is settled.
+        store.build(OLD, "other", None).unwrap().set_secret(&[0xff]).unwrap();
+        let settled = || unreachable!("not settled");
+        assert_eq!(copy_key(&store, OLD, SERVICE, &provider("other"), settled), Err(Error::Failed));
+        assert_eq!(store.build(OLD, "other", None).unwrap().get_secret().unwrap(), vec![0xff]);
     }
 
+    /// A copy whose admission stopped waiting for it (a Keychain prompt answered late) still completes, and is settled
+    /// where it does: the caller records it. The next key meanwhile is refused at once, without running.
     #[test]
-    fn a_key_that_cannot_be_copied_is_reported_and_the_others_go_on() {
+    fn a_copy_that_completes_after_its_deadline_is_settled_all_the_same() {
+        static BUSY: AtomicBool = AtomicBool::new(false);
         let _serial = serial();
         let store = memory();
-        // Stored text that is not text: reading it fails, so it is not copied.
-        store.build(OLD, "openai", None).unwrap().set_secret(&[0xff]).unwrap();
-        write_in(&store, OLD, &provider("other"), Some("old-other")).unwrap();
-        assert_eq!(copy(&store, &[]), vec![("openai".into(), Err(Error::Failed)), ("other".into(), Ok(true))]);
-        assert_eq!(store.build(OLD, "openai", None).unwrap().get_secret().unwrap(), vec![0xff]);
-        assert_eq!(key(&store, SERVICE, "openai"), None);
-        assert_eq!(key(&store, SERVICE, "other").as_deref(), Some("old-other"));
+        write_in(&store, OLD, &provider("openai"), Some("old")).unwrap();
+        let (worker, (settled, recorded)) = (Memory(store.0.clone()), mpsc::channel());
+        let late = bounded(&BUSY, Duration::from_millis(20), move || {
+            std::thread::sleep(Duration::from_millis(200));
+            copy_key(&worker, OLD, SERVICE, &provider("openai"), move || settled.send(()).is_ok())
+        });
+        assert_eq!(late, Err(Error::Unavailable));
+        let next = bounded(&BUSY, Duration::from_millis(20), || -> Result<bool, Error> { unreachable!("busy") });
+        assert_eq!(next, Err(Error::Unavailable));
+        recorded.recv_timeout(Duration::from_secs(10)).unwrap();
+        while BUSY.load(Ordering::Acquire) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(key(&store, SERVICE, "openai").as_deref(), Some("old"));
     }
 
     #[test]

@@ -35,16 +35,22 @@ operations can be retried. An indefinitely unanswered prompt may require dismiss
 
 The service is the bundle identifier plus `.providers`, and the identifier was `dev.sidevoice.desktop` before
 `ai.sidevoice.desktop`. At launch, first (`legacy_identifier.rs`, until its journal says it has finished;
-APP_DATA.md), `copy_from(identifier, settled)` lists the old service (the same exact-service search as `clear_all`)
-and, for each account that is a valid provider id and not among the providers already settled, copies the key if the
-new namespace holds none for it, and reads it back equal. **Nothing is overwritten or deleted**: a new key wins and
-the old one stays, so an old key and a different new one are both kept. The journal records each provider settled
-(copied, or the new namespace held one), so a key the person removes later is never copied again. A key that cannot
-be read, written or checked is reported and tried again at the next launch; the others go on. An old store that
-cannot be listed (`Unavailable`, e.g. no Secret Service) is asked again at every launch. It goes through the same
-admission as every other call (30-second deadline where a prompt can wait), and the log names the provider ids, never
-a key or a store message. On macOS the new build is a different code identity from the one that stored the keys, so
-the Keychain asks once per key whether it may use it. The old entries stay in the store until removed by hand
+APP_DATA.md), `providers_in(identifier)` lists the old service (the same exact-service search as `clear_all`), and
+`copy_key_from(identifier, provider, settle)` handles one provider whose account is a valid provider id at a time,
+**each call with its own admission and 30-second deadline**: it copies the key if the new namespace holds none for it,
+and reads it back equal. **Nothing is overwritten or deleted**: a new key wins and the old one stays, so an old key
+and a different new one are both kept.
+
+`settle` runs on the store's worker once both namespaces are read and before anything is written, and nothing is
+written unless it returns true. The carry-over passes one that records the provider as settled
+(`legacy-identifier.key-<provider>`, beside its journal), and refuses once a reset has ended the carry-over. A copy
+that completes after its caller stopped waiting (a Keychain prompt answered late) is therefore recorded all the same,
+a key is never copied twice (one the person removes later never comes back), and no key is copied after a reset.
+While such a copy is pending, the next provider finds the admission busy and is tried at the next launch. A key that
+cannot be read is reported and tried again at the next launch; the others go on. An old store that cannot be listed
+(`Unavailable`, e.g. no Secret Service) is asked again at every launch. The log names the provider ids, never a key
+or a store message. On macOS the new build is a different code identity from the one that stored the keys, so the
+Keychain asks once per key whether it may use it. The old entries stay in the store until removed by hand
 (APP_DATA.md, "From the previous identifier"). Removed with `legacy_identifier.rs` (RELEASING.md, "Legacy identifier
 carry-over").
 

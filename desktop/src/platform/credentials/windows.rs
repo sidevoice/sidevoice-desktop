@@ -72,7 +72,7 @@ mod tests {
 
     #[test]
     fn legacy_keys_are_copied_in_credential_manager() {
-        copy_from_native();
+        copy_native();
     }
 
     #[test]

@@ -17,7 +17,7 @@ impl super::Os for Native {
 // the common requests cannot express.
 #[cfg(test)]
 mod tests {
-    use super::super::{clear_all, copy_from, read, tests::*, write, Error, Os};
+    use super::super::{clear_all, copy_key_from, providers_in, read, tests::*, write, Error, Os};
     use super::Native;
 
     #[test]
@@ -29,7 +29,7 @@ mod tests {
     #[test]
     #[ignore = "requires an unlocked desktop Secret Service; unverified on headless CI"]
     fn legacy_keys_are_copied() {
-        copy_from_native();
+        copy_native();
     }
 
     #[test]
@@ -39,7 +39,8 @@ mod tests {
             assert_eq!(read("openai"), Err(Error::Unavailable));
             assert_eq!(write("openai", Some("test-only")), Err(Error::Unavailable));
             assert_eq!(clear_all(), Err(Error::Unavailable));
-            assert_eq!(copy_from("dev.sidevoice.desktop", Default::default()), Err(Error::Unavailable));
+            assert_eq!(providers_in("dev.sidevoice.desktop"), Err(Error::Unavailable));
+            assert_eq!(copy_key_from("dev.sidevoice.desktop", "openai", || true), Err(Error::Unavailable));
             return;
         }
         // Isolate the bus environment from concurrent tests and any real user's keyring.

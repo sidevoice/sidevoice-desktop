@@ -280,9 +280,9 @@ control directory) says it has finished, and never changes the old ones (docs/AP
 CREDENTIALS.md). **It stays until 1.0.** Someone can skip releases, so a fixed number of them is no boundary. Removing
 it needs a release note that says "update through vX.Y first" (X.Y: the first release that contains it) and how to
 remove the old identifier's data by hand (APP_DATA.md has the list). To remove it: the module and its call in `run()`,
-the `stop` call in `data::begin_reset`, `platform::app_data::carried_from`, `webview_data::locations_of`,
-`credentials::copy_from` with their tests, `data::PAIRINGS_FILE` if nothing else uses it, and the three doc sections
-called "From the previous identifier".
+the `stop` call in `data::begin_reset`, `platform::app_data::{carried_from, create_folder}` (and its `Os` method),
+`webview_data::locations_of`, `credentials::{providers_in, copy_key_from}` with their tests, `data::PAIRINGS_FILE` if
+nothing else uses it, and the three doc sections called "From the previous identifier".
 
 ## When something fails
 
