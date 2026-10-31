@@ -83,6 +83,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: cargo xtask mobile build android
       - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
         with:
           name: Sidevoice-android-arm64-unsigned-apk
           path: dist/*.apk
@@ -135,6 +136,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: cargo xtask mobile build ios
       - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
         with:
           name: Sidevoice-ios-simulator-app
           path: dist/*.zip
