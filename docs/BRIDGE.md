@@ -261,8 +261,7 @@ only allows from a click in the page. "Mostrar Sidevoice" opens the window for t
 `window.__sidevoiceHost` is `{ version, host, snapshot(), run(request) }`, the object an app injects
 (sidevoice-web's `apps/web/src/host/native.ts` reads it). `version` is the bridge's (2); `snapshot` and `run` are the
 presence protocol above, which the app reads and calls and the page does not touch. The web and the app ship together,
-so this is the only name: the global the app injected before, `__sidevoiceDesktop`, is gone, and with it `host.app`,
-`host.version`, `host.mediaKeys`, `host.computerName` and `host.data`.
+so this is the only name, and `host` has no `app`, `version`, `mediaKeys`, `computerName` or `data` member.
 
 `host` is one optional member per thing the app offers, and a member that is there is offered. What is a fact of the
 app's composition is always there; what is a fact of one OS or one build is observed inside the member or left out:
