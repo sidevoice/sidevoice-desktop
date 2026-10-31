@@ -5,12 +5,13 @@ name: mobile-testflight
 # sees. Every other mobile build is unsigned and has no secret (mobile.yml).
 # - The job's `if` is the first gate: from any other ref, no step runs and no secret is read. A workflow file on another
 #   branch carries its own `if`, so the gate that holds is the environment's: `testflight` is a protected environment
-#   (Settings → Environments) whose deployment branches are `main` only, and where the App Store Connect key's secrets
-#   live. Until it exists GitHub makes an empty one on the first run and the job reads the repository's secrets.
+#   (Settings → Environments) whose deployment branches are `main` only. The App Store Connect key's secrets are the
+#   environment's when they are in it, and the repository's otherwise; in the repository they can be read from any branch
+#   that carries a workflow for them, so they belong in the environment.
 # - The secrets are the step's alone (the one that signs), nothing is checked out with a token, and the key's file is
 #   removed when the command ends (`cargo xtask mobile testflight`, xtask/src/mobile/testflight.rs).
 # - The build number is this workflow's run number: it only grows, which TestFlight requires of a version's builds. A
-#   re-run of a run that had already uploaded gets the same number, and App Store Connect refuses it.
+#   re-run of a run whose upload was accepted has the same number and fails: dispatch again instead of re-running.
 # Every external action is pinned by its full commit SHA, with its version in a comment, as in mobile.yml.
 on:
   workflow_dispatch:

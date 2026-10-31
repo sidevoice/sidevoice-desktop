@@ -12,8 +12,10 @@
 //! - **The archive is read before it is sent** ([`ios::check_ipa`]): the app, the build number, signed, the privacy
 //!   manifest and the encryption declaration.
 //! - **The key** (`APPLE_API_KEY_P8`, the .p8's contents) is written to a file only this user can read, in a directory
-//!   of its own, and removed when the command ends, however it ends. The child processes get the key's id, its issuer
-//!   and the file's path, and never the contents. Nothing here prints one of the three.
+//!   of its own, and removed when the command ends, however it ends. The contents are taken out of this process's
+//!   environment as they are read, before any child is started, so no child (the Tauri CLI, `xcodebuild`, `agvtool`,
+//!   `altool`, and what they start) can see them; they get the key's id, its issuer and the file's path. Nothing here
+//!   prints one of the three.
 //!
 //! Reads `APPLE_API_KEY` (the key's id), `APPLE_API_ISSUER`, `APPLE_API_KEY_P8` and `APPLE_TEAM_ID`.
 
@@ -64,6 +66,14 @@ fn find_ipa(dir: &Path, depth: usize) -> Result<Vec<PathBuf>> {
     Ok(found)
 }
 
+/// The variable `name`, which must be set and not empty, taken out of this process's environment: every child started
+/// after this inherits the environment as it is, so none gets the value. It is never printed.
+fn take_secret(name: &str) -> Result<String> {
+    let value = required_env(name)?;
+    std::env::remove_var(name);
+    Ok(value)
+}
+
 /// `mobile testflight --build-number N`.
 pub fn testflight(build_number_text: &str) -> Result<()> {
     let build = build_number(build_number_text)?;
@@ -74,7 +84,7 @@ pub fn testflight(build_number_text: &str) -> Result<()> {
     let key_id = required_env("APPLE_API_KEY")?;
     let issuer = required_env("APPLE_API_ISSUER")?;
     let team = required_env("APPLE_TEAM_ID")?;
-    let p8 = required_env("APPLE_API_KEY_P8")?;
+    let p8 = take_secret("APPLE_API_KEY_P8")?;
     let identifier = identifier()?;
 
     // `private_keys/AuthKey_<id>.p8` is where altool looks, beside the directory it runs in; the CLI takes the path.
@@ -102,7 +112,6 @@ pub fn testflight(build_number_text: &str) -> Result<()> {
     .env("APPLE_API_ISSUER", &issuer)
     .env("APPLE_API_KEY_PATH", &key)
     .env("APPLE_DEVELOPMENT_TEAM", &team)
-    .env_remove("APPLE_API_KEY_P8")
     .run()?;
 
     let ipas = find_ipa(&out, 3)?;
@@ -124,6 +133,19 @@ mod tests {
         for bad in ["0", "-1", "1.2", "0.1.0.7", "", "x", "99999999999"] {
             assert!(build_number(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_secret_is_taken_out_of_the_environment_for_every_child_after_it() {
+        let name = "SIDEVOICE_XTASK_TEST_TAKEN_SECRET";
+        std::env::set_var(name, "fixture-secret");
+        assert_eq!(take_secret(name).unwrap(), "fixture-secret");
+        assert!(std::env::var_os(name).is_none(), "a child would inherit it");
+        assert!(take_secret(name).unwrap_err().contains("is not set"));
+        std::env::set_var(name, "");
+        assert!(take_secret(name).is_err(), "an empty secret is none");
+        assert!(std::env::var_os(name).is_some(), "nothing taken, nothing removed");
+        std::env::remove_var(name);
     }
 
     #[test]

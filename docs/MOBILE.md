@@ -133,12 +133,14 @@ stays unsigned with no secret. Its one step is `cargo xtask mobile testflight --
 - **The build number** is the run number of the workflow, which only grows, as TestFlight requires of the builds of a
   version, and it is the app's `CFBundleVersion` whole. (The CLI's own `--build-number` appends it to the version,
   `0.1.0.7`: four numbers where Apple accepts three.) The version, `CFBundleShortVersionString`, is `tauri.conf.json`'s.
-  A re-run of a run that had already uploaded has the same number, and App Store Connect refuses the upload.
+  A re-run of a run whose upload App Store Connect accepted has the same number and fails: dispatch again (a new run, a
+  new number) rather than re-running.
 - **Credentials.** The repository secrets `APPLE_API_KEY` (the key's id), `APPLE_API_ISSUER`, `APPLE_API_KEY_P8` (the
   .p8's contents) and `APPLE_TEAM_ID`, the same the desktop notarization uses; the key needs the **Admin** role in App
   Store Connect (the Developer role cannot create the certificate or the profile). Only the step that signs has them;
   the .p8 is written to a file only the job's user can read, in a directory of its own, and removed when the command ends;
-  the build's child processes get its path and the key's id and issuer, never its contents. The checkout keeps no token.
+  the contents are taken out of the command's environment as they are read, so no process it starts (the Tauri CLI,
+  `xcodebuild`, `altool`) gets them, only the file's path and the key's id and issuer. The checkout keeps no token.
 - **Main only.** The job refuses any other ref (`if`), so does the command, and the job runs in the environment
   `testflight`. The gate that a workflow file on another branch cannot lift is the environment's: its deployment
   branches are `main` only (Settings → Environments), and the key's secrets can be moved into it.
