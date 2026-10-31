@@ -31,11 +31,11 @@
 //!   on macOS, with XcodeGen).
 //! - `mobile generated android|ios` (CI, every pull request): `generate`, then the committed project must be what it
 //!   wrote.
-//! - `mobile build android|ios` (CI, every pull request): the unsigned app, into dist/: the Android APK (arm64) and the
-//!   iOS simulator app (.github/workflows/mobile.yml).
+//! - `mobile build android|ios` (CI, every pull request): the unsigned app, into dist/: the Android APK (arm64), checked
+//!   for 16 KB pages, and the iOS simulator app (.github/workflows/mobile.yml). `mobile check-16kb [APK]` is that check.
 //! - `mobile sign android` (CI, by hand from main): the unsigned APK aligned, signed with the upload key, verified and
 //!   checked for 16 KB pages, into dist/ (.github/workflows/mobile-android-signed.yml; mobile/sign.rs). Reads the
-//!   `ANDROID_UPLOAD_*` secrets, and `mobile check-16kb [APK]` is that check alone.
+//!   `ANDROID_UPLOAD_*` secrets.
 //!
 //! The Windows app, in the `windows` job after `bundle` (platform/release/windows.rs):
 //!
@@ -152,8 +152,8 @@ fn main() -> ExitCode {
         ["mobile", "generated", project] => mobile::generated(project),
         ["mobile", "build", project] => mobile::build(project),
         ["mobile", "sign", "android"] => mobile::sign::sign_android(),
-        ["mobile", "check-16kb"] => mobile::sign::check_16kb(None),
-        ["mobile", "check-16kb", apk] => mobile::sign::check_16kb(Some(std::path::Path::new(apk))),
+        ["mobile", "check-16kb"] => mobile::check::check_16kb(&mobile::unsigned_apk()),
+        ["mobile", "check-16kb", apk] => mobile::check::check_16kb(std::path::Path::new(apk)),
         ["platform-clippy"] => checks::clippy(true),
         ["test"] => checks::test(),
         ["test-support"] => checks::test_support(),

@@ -37,7 +37,7 @@ jobs:
       - uses: ./.github/actions/setup-android
       - name: The committed Android project is what the Tauri CLI writes (cargo xtask mobile generate android)
         run: cargo xtask mobile generated android
-      - name: The unsigned APK (arm64)
+      - name: The unsigned APK (arm64), and its native libraries' alignment to 16 KB pages (Google Play's rule)
         if: ${{ !cancelled() }}
         run: cargo xtask mobile build android
       - uses: actions/upload-artifact@v4
