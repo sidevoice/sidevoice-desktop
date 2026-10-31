@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.Uri
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
@@ -112,7 +113,12 @@ class CallService : Service() {
         val hangUp = PendingIntent.getService(
             this,
             0,
-            Intent(this, CallService::class.java).setAction(ACTION_HANG_UP).putExtra(EXTRA_SESSION, id),
+            // The session is in the data too: PendingIntents are told apart by action, component and data, not by extras,
+            // so one with only the extra would be this session's Hang up overwritten by the next session's.
+            Intent(this, CallService::class.java)
+                .setAction(ACTION_HANG_UP)
+                .setData(Uri.parse(CallSession.hangUpAddress(id)))
+                .putExtra(EXTRA_SESSION, id),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)

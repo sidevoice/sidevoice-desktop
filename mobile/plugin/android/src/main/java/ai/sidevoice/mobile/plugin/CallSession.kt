@@ -42,6 +42,13 @@ internal object CallSession {
         return true
     }
 
+    /**
+     * What names one session's Hang up: the data of its PendingIntent. Android tells PendingIntents apart by action,
+     * component and data and not by extras, so the sessions' must differ in the data, or the notification a session left
+     * behind would carry the next one's number.
+     */
+    fun hangUpAddress(id: Long): String = "sidevoice-call://hang-up/$id"
+
     /** Reports that the audio focus of [session] changed (`gained`, `lost`, `lost-transient`, `duck`), if it is running. */
     fun focus(session: Session, state: String) {
         if (get(session.id) != null) session.report(mapOf("type" to "focus", "state" to state))

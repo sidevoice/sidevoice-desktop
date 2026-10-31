@@ -61,6 +61,15 @@ class CallSessionTest {
     }
 
     @Test
+    fun eachSessionsHangUpHasItsOwnAddress() {
+        val old = begin()
+        CallSession.end(old, "requested", report = false)
+        val new = begin()
+        assertNotEquals(CallSession.hangUpAddress(old.id), CallSession.hangUpAddress(new.id))
+        assertEquals("sidevoice-call://hang-up/${new.id}", CallSession.hangUpAddress(new.id))
+    }
+
+    @Test
     fun theFocusIsReportedOnlyWhileTheSessionRuns() {
         val session = begin()
         CallSession.focus(session, "lost-transient")
