@@ -20,16 +20,14 @@ pub mod error;
 mod jobs;
 mod trial;
 
-use crate::platform::memory::{Memory as _, SystemMemory};
-
 pub use catalogs::{CatalogView, CredentialRefusal, ReasonView};
 pub use error::Error;
 pub use jobs::{Jobs, Progress};
 /// The engine crate itself, for what the app hands it (`Credentials`) and the models it loads.
 pub use sidevoice_engine;
 use sidevoice_engine::{
-    Accelerator, BundledCatalog, Cancel, CatalogSource, Credentials, Engine, Host, LocalModelInfo, ModelBuild,
-    NativeHost, LOCAL_CATALOG,
+    Accelerator, BundledCatalog, Cancel, CatalogSource, Credentials, Engine, Host, LocalModelInfo, MemoryObservation,
+    ModelBuild, NativeHost, LOCAL_CATALOG,
 };
 use std::future::Future;
 use std::path::PathBuf;
@@ -99,7 +97,10 @@ pub struct BuildOnDisk {
     pub bytes: u64,
 }
 
-/// What `memory()` answers: the machine's memory and what is available of it now, in MiB, `None` when unknown.
+/// What `memory()` answers, both in MiB (2^20 bytes) and `None` when the OS does not say: the machine's memory (or its
+/// cgroup's limit, if lower) and what the process may still allocate of it, as the engine's `MemoryObservation` gives
+/// them. Zero is an answer, not a gap: where the OS keeps a budget for the process (iOS) it means that budget is spent,
+/// and the machine's free memory is never put in its place.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct Memory {
     pub total_mb: Option<u64>,
@@ -202,7 +203,7 @@ impl NativeEngines {
             os: capabilities.os,
             arch: capabilities.arch,
             has,
-            memory_mb: capabilities.memory_mb.map(u64::from).or_else(|| SystemMemory::snapshot().total_mb()),
+            memory_mb: capabilities.memory_mb.map(u64::from),
         };
         Ok(NativeEngines { engine: Arc::new(engine), host, runtime, device, installing: Mutex::default() })
     }
@@ -539,9 +540,9 @@ impl NativeEngines {
         self.block_on(self.engine.uninstall(model_id, None)).map_err(|e| error::uninstall_refused(e, model_id))
     }
 
-    /// This machine's memory and what is available of it now.
+    /// This machine's memory and what is available of it now: the engine's `MemoryObservation`, as it gives it.
     pub fn memory(&self) -> Memory {
-        Memory { total_mb: self.device.memory_mb, available_mb: SystemMemory::snapshot().available_mb() }
+        Memory { total_mb: self.device.memory_mb, available_mb: MemoryObservation::now().available_mb.map(u64::from) }
     }
 }
 
