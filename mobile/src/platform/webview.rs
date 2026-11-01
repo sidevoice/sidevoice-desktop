@@ -13,11 +13,11 @@ use tauri::webview::PlatformWebview;
 mod imp;
 use imp::Native;
 
-/// What differs per OS: how the web view is made to fill the screen, and what it can say of where it is.
+/// What differs per OS: how the web view is made to fill the screen and keep its scale, and what it can say of where it is.
 trait Os {
-    /// Makes the web view fill the screen and gives everything behind it the system's background (light or dark with
-    /// the device) instead of an unset colour. Idempotent: it runs again once the window is on screen. Runs on the main
-    /// thread (`WebviewWindow::with_webview`).
+    /// Makes the web view fill the screen, locks its zoom (an app is not a document), and gives everything behind it the
+    /// system's background (light or dark with the device) instead of an unset colour. Idempotent: it runs again once the
+    /// window is on screen. Runs on the main thread (`WebviewWindow::with_webview`).
     fn fill_screen(webview: &PlatformWebview);
 
     /// Where the window, its view and the web view are, and the safe-area insets, in points: `None` where there is no
