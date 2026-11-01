@@ -103,15 +103,16 @@ impl RoomCall {
     pub fn page_changed(&self, page: u64) {
         self.then(move |room| {
             room.page = page;
-            room.hold(false);
+            room.hold(false, None);
         });
     }
 
-    /// The page `page` says whether its call is joined (the green and the red button).
-    pub fn report(&self, page: u64, joined: bool) {
+    /// The page `page` says whether its call is joined (the green and the red button), and since when (`since`, the
+    /// page's own mark of that call: a join of the same page later is another call).
+    pub fn report(&self, page: u64, joined: bool, since: Option<f64>) {
         self.then(move |room| {
             if room.page == page {
-                room.hold(joined);
+                room.hold(joined, since);
             }
         });
     }
@@ -120,7 +121,7 @@ impl RoomCall {
     pub fn end(&self, limit: std::time::Duration) {
         let (done, finished) = mpsc::channel();
         self.then(move |room| {
-            room.hold(false);
+            room.hold(false, None);
             let _ = done.send(());
         });
         let _ = finished.recv_timeout(limit);
@@ -128,8 +129,8 @@ impl RoomCall {
 }
 
 impl Room {
-    /// Starts or stops the call's service, as `joined` says.
-    fn hold(&mut self, joined: bool) {
+    /// Starts or stops the call's service, as `joined` says, for the call joined at `since`.
+    fn hold(&mut self, joined: bool, since: Option<f64>) {
         if joined == self.holding.is_some() {
             return;
         }
@@ -137,7 +138,7 @@ impl Room {
             self.starts += 1;
             let (app, start, page) = (self.app.clone(), self.starts, self.page);
             match start_call_service(&self.app, move |event| {
-                on_service_event(&app, start, page, event)
+                on_service_event(&app, start, page, since, event)
             }) {
                 Ok(()) => {
                     self.holding = Some(start);
@@ -157,10 +158,12 @@ impl Room {
     }
 }
 
-/// What the service of start `start`, made for the call of page `page`, reports, as it reports it (it must not wait): an
-/// end the app did not ask for hangs that call up, on the room's thread and only while that service is still the one
-/// that runs for that page; a change of the audio focus is recorded (what to do about it is a decision of its own).
-fn on_service_event(app: &AppHandle, start: u64, page: u64, event: CallEvent) {
+/// What the service of start `start`, made for the call of page `page` joined at `since`, reports, as it reports it (it
+/// must not wait): an end the app did not ask for hangs that call up, on the room's thread and only while that service
+/// is still the one that runs for that page, and on the page only if that call is still the one it has (the page checks
+/// `page` and `since` when the command reaches it, which can be after another page or call has taken its place); a
+/// change of the audio focus is recorded (what to do about it is a decision of its own).
+fn on_service_event(app: &AppHandle, start: u64, page: u64, since: Option<f64>, event: CallEvent) {
     log::info!("call service: {event:?}");
     if let Some(reason) = hang_up_for(&event) {
         let Some(room) = app.try_state::<RoomCall>() else {
@@ -173,7 +176,10 @@ fn on_service_event(app: &AppHandle, start: u64, page: u64, event: CallEvent) {
             log::info!("call: hung up by the service ({reason:?})");
             // The service is gone: the next join starts another.
             room.holding = None;
-            run_on_page(&room.app, "hang-up");
+            run_on_page(
+                &room.app,
+                serde_json::json!({ "command": "hang-up", "page": page, "since": since }),
+            );
         });
     }
 }
@@ -189,10 +195,10 @@ fn hang_up_for(event: &CallEvent) -> Option<StopReason> {
     }
 }
 
-/// Runs one of the shared commands on the room (`hang-up`, `toggle-mute`, …) through the page's `run`.
-pub fn run_on_page(app: &AppHandle, command: &str) {
+/// Runs one of the shared commands on the room through the page's `run`: `request` is `{command, …}` (`hang-up`,
+/// `toggle-mute`, …), and with `page` and `since` it runs only on that page's call joined then (mobile/js/mobile-bridge.js).
+pub fn run_on_page(app: &AppHandle, request: serde_json::Value) {
     if let Some(window) = app.get_webview_window(crate::WINDOW) {
-        let request = serde_json::json!({ "command": command });
         let _ = window.eval(format!(
             "window.__sidevoiceHost && window.__sidevoiceHost.run({request});"
         ));

@@ -32,14 +32,15 @@
   // a newer page has loaded changes nothing of the newer page's call. Reports keep their order: each waits on the same
   // answer.
   let pageNumber = null;
-  const numbered = () => (pageNumber ??= transport.own.call("call_page").catch((error) => {
+  let page = null; // the number, once known
+  const numbered = () => (pageNumber ??= transport.own.call("call_page").then((number) => (page = number), (error) => {
     pageNumber = null;
     throw error;
   }));
   const reporting = members.room({
     version: 2,
     publish: (snapshot) => {
-      numbered().then((page) => transport.own.send("call_state", { page, snapshot }), () => {});
+      numbered().then((number) => transport.own.send("call_state", { page: number, snapshot }), () => {});
     },
     extend: () => ({}),
   });
@@ -69,7 +70,15 @@
     snapshot: reporting.snapshot,
     /** Runs one command from the app (the call's notification, a headset) through the web UI's own actions:
      *  `{command, …}`. Returns whether it ran. */
-    run: reporting.run,
+    run(request) {
+      // A command for a given page's call (`page`, `since`: the call's service hanging up the call it was started for)
+      // runs only on that call: the app's command can reach the page after another page or another call took its place.
+      if (request && typeof request === "object") {
+        if ("page" in request && request.page !== page) return false;
+        if ("since" in request && reporting.snapshot().since !== request.since) return false;
+      }
+      return reporting.run(request);
+    },
   };
   win.__sidevoiceHost = api;
   reporting.start();
