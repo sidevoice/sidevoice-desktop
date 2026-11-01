@@ -7,7 +7,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tauri::{AppHandle, Runtime};
+use tauri::{plugin::PluginApi, AppHandle, Runtime};
 use tauri_plugin_opener::OpenerExt;
 use tokio::sync::watch;
 
@@ -20,12 +20,18 @@ mod imp;
 #[cfg(target_os = "linux")]
 #[path = "microphone/linux.rs"]
 mod imp;
+#[cfg(target_os = "ios")]
+#[path = "microphone/ios.rs"]
+mod imp;
+#[cfg(target_os = "android")]
+#[path = "microphone/android.rs"]
+mod imp;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccessState {
     Granted,
     Denied,
-    /// The OS has not asked the person yet (macOS only).
+    /// The OS has not asked the person yet (macOS, iOS and Android).
     NotDetermined,
     NoDevice,
     /// The OS did not answer: never a grant, never a denial, never an absent device.
@@ -50,6 +56,9 @@ impl From<bool> for Devices {
         }
     }
 }
+
+/// Why the privacy page did not open: the OS has none, or it refused to show it.
+const SETTINGS_NOT_OPENED: &str = "System Settings could not be opened.";
 
 /// How long a caller waits for the device list before answering `Devices::Unknown`.
 const DEADLINE: Duration = Duration::from_secs(2);
@@ -231,6 +240,19 @@ trait Os {
     /// The fixed system microphone privacy page, where the OS has a standard URI for it.
     const SETTINGS_URL: Option<&'static str> = None;
 
+    /// Whether this OS has a page of the app's microphone switch to open: by default, whether it has a fixed URI for
+    /// it. An OS whose page is not a URI (Android's is an intent) says so here and in `open_settings`.
+    fn settings_available() -> bool {
+        Self::SETTINGS_URL.is_some()
+    }
+
+    /// Open that page: by default the fixed URI, through the registered opener plugin. Opening it proves nothing about
+    /// access.
+    fn open_settings<R: Runtime>(app: &AppHandle<R>) -> Result<(), &'static str> {
+        let url = Self::SETTINGS_URL.ok_or(SETTINGS_NOT_OPENED)?;
+        app.opener().open_url(url, None::<&str>).map_err(|_| SETTINGS_NOT_OPENED)
+    }
+
     /// The OS's permission alone, re-read every time and without prompting. An OS that cannot be read is
     /// `Unavailable`, never a grant.
     fn permission() -> Result<AccessState, &'static str>;
@@ -239,6 +261,12 @@ trait Os {
     /// about the hardware (`Devices::Unknown`). The platform default wherever that is trustworthy.
     fn audio_host() -> Option<cpal::Host> {
         Some(cpal::default_host())
+    }
+
+    /// Prepare what this OS needs of the plugin itself, once, when the plugin is set up (Android loads the Kotlin class
+    /// that asks the person). Nothing by default.
+    fn setup<R: Runtime>(_api: PluginApi<R, ()>) -> Result<(), Box<dyn std::error::Error>> {
+        Ok(())
     }
 
     /// Run `work`, the device worker thread's whole life, after preparing that thread for the audio host's first call
@@ -257,9 +285,10 @@ trait Os {
         true
     }
 
-    /// Ask for access. Only macOS has a prompt (AVFoundation, the first time; afterwards the stored answer). Elsewhere
-    /// there is nothing to ask — Windows' unpackaged desktop apps and Linux have no consent prompt — so this is
-    /// `permission`. It never edits privacy settings.
+    /// Ask for access. macOS and iOS have a prompt (AVFoundation, the first time; afterwards the stored answer), and so
+    /// does Android (the runtime permission, until the person refuses for good). Elsewhere there is nothing to ask —
+    /// Windows' unpackaged desktop apps and Linux have no consent prompt — so this is `permission`. It never edits
+    /// privacy settings.
     fn ask() -> impl Future<Output = Result<AccessState, &'static str>> + Send {
         async { Self::permission() }
     }
@@ -273,6 +302,11 @@ async fn request_of<O: Os>(devices: Devices) -> Result<AccessState, &'static str
     Ok(resolve(O::ask().await?, devices))
 }
 
+/// The plugin's setup, for what this OS needs of it (`Os::setup`).
+pub fn setup<R: Runtime>(api: PluginApi<R, ()>) -> Result<(), Box<dyn std::error::Error>> {
+    imp::Native::setup(api)
+}
+
 /// Inspect without prompting. Re-reads the OS every time. Denial takes precedence over a missing device, and an OS
 /// that cannot be read is `Unavailable`, never a grant.
 pub async fn state() -> Result<AccessState, &'static str> {
@@ -284,16 +318,15 @@ pub async fn request() -> Result<AccessState, &'static str> {
     request_of::<imp::Native>(input_devices().await).await
 }
 
-/// Whether this OS has a fixed microphone privacy page to open.
+/// Whether this OS has a microphone privacy page to open (`Os::settings_available`).
 pub fn settings_available() -> bool {
-    imp::Native::SETTINGS_URL.is_some()
+    imp::Native::settings_available()
 }
 
-/// Open the fixed system microphone privacy page through the registered opener plugin. Opening it proves nothing
-/// about access. UnsupportedPlatform on hosts without a standard settings URI (Linux).
-pub fn open_settings<R: Runtime>(app: &AppHandle<R>) -> Result<(), tauri_plugin_opener::Error> {
-    let url = imp::Native::SETTINGS_URL.ok_or(tauri_plugin_opener::Error::UnsupportedPlatform)?;
-    app.opener().open_url(url, None::<&str>)
+/// Open the system microphone privacy page (`Os::open_settings`). Opening it proves nothing about access. An error on
+/// an OS without one (Linux).
+pub fn open_settings<R: Runtime>(app: &AppHandle<R>) -> Result<(), &'static str> {
+    imp::Native::open_settings(app)
 }
 
 #[cfg(test)]
@@ -378,6 +411,8 @@ mod tests {
         assert_eq!(request_of::<Broken>(Devices::Present).await, Err("unreadable"));
         assert_eq!(Allowed::SETTINGS_URL, None);
         assert!(Refused::SETTINGS_URL.is_some());
+        assert!(!Allowed::settings_available());
+        assert!(Refused::settings_available());
     }
 
     /// An enumerator whose fake enumeration answers `Present` only when the test releases it, counting its runs.
@@ -458,12 +493,12 @@ mod tests {
         assert_eq!(enumerator.devices(LONG).await, Devices::Unknown);
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
     #[tokio::test]
     async fn state_and_request_answer_without_a_prompt_whatever_the_machine_has() {
         // CI machines have no audio hardware: any answer is fine, a failure or a hang is not.
         let answer = state().await.unwrap();
         assert_eq!(request().await.unwrap(), answer);
-        assert_ne!(answer, AccessState::NotDetermined, "only macOS has a prompt to wait for");
+        assert_ne!(answer, AccessState::NotDetermined, "only macOS, iOS and Android have a prompt to wait for");
     }
 }
