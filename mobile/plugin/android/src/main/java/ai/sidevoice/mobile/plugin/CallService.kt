@@ -138,7 +138,7 @@ class CallService : Service() {
      * A call takes the audio focus for its length (other media pauses and comes back after), as the voice it is, and says
      * when it changes hands; the app pauses the call while it is lost and resumes it when it is gained (D-AUDIO-FOCUS).
      * Asked while a phone call is on, the system delays the grant (the app is told it is lost now, and gained when the call
-     * ends); a refusal is not an interruption that will end, so it is not reported as one.
+     * ends); a refusal is reported as such (`refused`): there is no end to wait for, so the call stays paused until the person unmutes.
      */
     private fun requestFocus(mine: CallSession.Session) {
         val audio = getSystemService(AudioManager::class.java)
@@ -153,8 +153,12 @@ class CallService : Service() {
             .setOnAudioFocusChangeListener({ change -> CallSession.focus(mine, focusState(change)) }, Handler(Looper.getMainLooper()))
             .build()
         focusRequest = request
-        if (audio.requestAudioFocus(request) == AudioManager.AUDIOFOCUS_REQUEST_DELAYED) {
-            CallSession.focus(mine, "lost-transient")
+        when (audio.requestAudioFocus(request)) {
+            AudioManager.AUDIOFOCUS_REQUEST_GRANTED -> {}
+            // A phone call is on: the grant comes when it ends, as a gain.
+            AudioManager.AUDIOFOCUS_REQUEST_DELAYED -> CallSession.focus(mine, "lost-transient")
+            // Nothing will be given later.
+            else -> CallSession.focus(mine, "refused")
         }
     }
 

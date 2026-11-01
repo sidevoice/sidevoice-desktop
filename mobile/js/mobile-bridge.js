@@ -37,14 +37,30 @@
     pageNumber = null;
     throw error;
   }));
-  // Whether the page's mute is ours: the system took the audio away (a phone call, an alarm) and the person was not muted.
-  let mutedBySystem = false;
+  // The mute the system took for an interruption (a phone call, an alarm) when the person was not muted: `{since, seen}`, for
+  // the call it was taken in; `seen` once the page has been seen muted. It is the system's only while nobody has touched the
+  // mute since: a person who unmutes (and perhaps mutes again) has taken it over, and nothing is given back.
+  let owned = null;
+  /** Whatever happens to the mute while it is ours: the person taking it over, or the call ending. */
+  const follow = (ui) => {
+    if (!owned) return;
+    const view = (ui.store && ui.store.getState()) || {};
+    const enabled = (view.mic || {}).enabled !== false;
+    if (!(view.call || {}).joined) {
+      // The call ended while interrupted: the mute goes back as it was, for the next one.
+      const mine = owned;
+      owned = null;
+      if (mine.seen && !enabled && !(view.mic || {}).disabled && win.sidevoiceActions) win.sidevoiceActions.toggleMic();
+    } else if (!enabled) owned.seen = true;
+    else if (owned.seen) owned = null; // unmuted by the person
+  };
   const reporting = members.room({
     version: 2,
     publish: (snapshot) => {
       numbered().then((number) => transport.own.send("call_state", { page: number, snapshot }), () => {});
     },
     extend: () => ({}),
+    attached: (ui) => ui.store.subscribe(() => follow(ui)),
     commands: {
       // The system took the audio away: the call pauses as the page's own mute does (the page shows it muted). A person who
       // had muted themselves stays as they were, and is not unmuted when it ends.
@@ -52,16 +68,18 @@
         if (!state.joined) return false;
         if (state.micEnabled && !state.micDisabled) {
           actions.toggleMic();
-          mutedBySystem = true;
+          owned = { since: state.since, seen: false };
         }
         return true;
       },
-      // The system gave it back (or the call ended meanwhile): the mute goes back as it was, unless the person has changed it
-      // since, or the system advises not to resume (`restoreMic` false: another app goes on playing; they unmute when they like).
+      // The system gave it back: the mute goes back as it was, if it is still the system's (the person has not taken it over),
+      // unless the system advises not to resume (`restoreMic` false: the mute stays, the person's from now on).
       resume: (request, state, actions) => {
-        const ours = mutedBySystem;
-        mutedBySystem = false;
-        if (ours && request.restoreMic !== false && !state.micEnabled && !state.micDisabled) actions.toggleMic();
+        const mine = owned;
+        owned = null;
+        if (mine && mine.since === state.since && request.restoreMic !== false && !state.micEnabled && !state.micDisabled) {
+          actions.toggleMic();
+        }
         return true;
       },
     },

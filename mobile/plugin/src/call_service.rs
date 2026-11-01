@@ -45,6 +45,8 @@ pub enum FocusState {
     LostTransient,
     /// Another app may play quietly over the call.
     Duck,
+    /// The system refused the call's request outright: no focus is held and none will be given later.
+    Refused,
 }
 
 /// Why the service did not start, or could not be asked.
@@ -150,6 +152,7 @@ mod tests {
             ("gained", FocusState::Gained),
             ("lost", FocusState::Lost),
             ("duck", FocusState::Duck),
+            ("refused", FocusState::Refused),
         ] {
             assert_eq!(
                 event(&format!(r#"{{"type":"focus","state":"{text}"}}"#)),

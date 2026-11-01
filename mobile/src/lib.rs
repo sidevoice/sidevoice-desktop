@@ -99,6 +99,8 @@ struct CallReport {
     ready: bool,
     joined: bool,
     mic_enabled: bool,
+    /// The mute cannot be used (no conversation is selected).
+    mic_disabled: bool,
     title: String,
     /// When the call was joined, as the page marks it (ms since the epoch): a later join is another call.
     since: Option<f64>,
@@ -133,8 +135,12 @@ fn call_state(
     }
     // The green and the red button: the call's service follows the room's call (`call::RoomCall` checks the page again,
     // in order with the page's changes).
-    app.state::<call::RoomCall>()
-        .report(page, snapshot.joined, snapshot.since);
+    app.state::<call::RoomCall>().report(
+        page,
+        snapshot.joined,
+        snapshot.since,
+        (snapshot.mic_enabled, snapshot.mic_disabled),
+    );
     let previous = std::mem::replace(&mut *last.0.lock().unwrap(), snapshot.clone());
     if (previous.ready, previous.joined, previous.mic_enabled)
         != (snapshot.ready, snapshot.joined, snapshot.mic_enabled)
