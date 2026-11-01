@@ -88,6 +88,7 @@ fn work_that_loads_models_keeps_its_lease_when_the_caller_gives_up_waiting() {
         admission: Arc::clone(&gate) as Arc<dyn Admission>,
         events: Arc::new(Nowhere),
         keys: Arc::new(Nowhere),
+        calls: Arc::new(NoCallActivity),
     };
     let host = AppHost::with_audio(
         HostConfig { model_root: root.clone() },
@@ -132,6 +133,7 @@ fn host_on(runtime: &tokio::runtime::Runtime, name: &str) -> (AppHost<Silent>, A
         admission: Arc::clone(&gate) as Arc<dyn Admission>,
         events: Arc::new(Nowhere),
         keys: Arc::new(Nowhere),
+        calls: Arc::new(NoCallActivity),
     };
     let host = AppHost::with_audio(
         HostConfig { model_root: root.clone() },
@@ -255,6 +257,7 @@ fn what_a_call_of_an_old_page_says_is_dropped_once_the_next_page_is_current() {
         admission: Arc::new(AlwaysAdmit),
         events: Arc::clone(&recording) as Arc<dyn EventSink>,
         keys: Arc::new(Nowhere),
+        calls: Arc::new(NoCallActivity),
     };
     let host = AppHost::with_audio(
         HostConfig { model_root: root.clone() },

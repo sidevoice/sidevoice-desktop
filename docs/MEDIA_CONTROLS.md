@@ -9,6 +9,7 @@ process-lifetime command sink; call reports and navigation resets update it.
 | macOS | Existing MediaPlayer Now Playing and AVAudioApplication mute gesture | Suppressed by `presence: { media: "app" }`, avoiding duplicate actions | Unverified on hardware |
 | Windows | Unavailable (no `presence`) | Page Media Session and its Now Playing audio element | Unverified in WebView2/on hardware |
 | Linux | Unavailable (no `presence`) | Page Media Session and its Now Playing audio element | Unverified in WebKitGTK/X11/Wayland/on hardware |
+| iOS, Android (mobile app) | None yet: the module is not in a phone's build (sidevoice-desktop#349) | Suppressed: the mobile app offers `presence: { media: "app" }` (it owns the call's audio) | None to verify yet |
 
 The page maps play to unmute, pause to toggle mute (including a pause delivered while muted),
 and `togglemicrophone`, where the webview supports it, to the requested microphone state.

@@ -33,7 +33,7 @@ use crate::platform::diagnostics;
 use crate::platform::host;
 use crate::platform::shortcut_access;
 use serde_json::{json, Value};
-use sidevoice_app_core::app::{AppHost, Hooks, HostConfig};
+use sidevoice_app_core::app::{AppHost, Hooks, HostConfig, NoCallActivity};
 use sidevoice_app_tauri::platform::media_controls::{self, CallState, MediaCommand};
 use sidevoice_app_tauri::platform::origin::APP_ORIGIN;
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
@@ -487,6 +487,7 @@ pub fn run() {
                     admission: Arc::new(app_hooks::ResetAdmission(handle.clone())),
                     events: Arc::new(events),
                     keys: Arc::new(app_hooks::keychain()),
+                    calls: Arc::new(NoCallActivity),
                 },
             ));
             // What the shared plugin's commands hand to the app: the levels to the card, the pairings to the private file.

@@ -249,6 +249,11 @@ pub fn generate(name: &str) -> Result<()> {
     if project.cli == "ios" {
         add_localized_texts(&dir)?;
         add_privacy_manifest(&dir)?;
+        // The project embeds the engine's xcframework (`bundle.iOS.frameworks`): it is made first, so that the CLI and
+        // XcodeGen find what the project references.
+        if !repo().join(IOS_FRAMEWORKS).join("SherpaOnnxC.xcframework").is_dir() {
+            engine_libs(name, "aarch64-apple-ios-sim")?;
+        }
     }
     tauri(&[project.cli, "init", "--ci", "--skip-targets-install"]).run()?;
     if project.cli == "ios" {
@@ -288,20 +293,60 @@ pub fn unsigned_apk() -> PathBuf {
     repo().join("dist/Sidevoice-android-arm64-unsigned.apk")
 }
 
+/// Where the Android project takes the native libraries it packages beside the app's own (`jniLibs/<abi>/`; git ignores
+/// the `.so` files there).
+const ANDROID_LIBS: &str = "mobile/gen/android/app/src/main/jniLibs";
+
+/// Where the iOS project takes the frameworks it embeds (`bundle.iOS.frameworks` in mobile/tauri.conf.json; ignored by
+/// git).
+const IOS_FRAMEWORKS: &str = "mobile/frameworks";
+
+/// The native libraries of the engine (sherpa-onnx's, which it links at run time) that the app packages, made by the
+/// engine's own `cargo xtask android-build` or `ios-build` at the commit Cargo.lock pins: the archive its pins name,
+/// checked against its digest, and the engine built and linked against it for every ABI or target (sidevoice-engine's
+/// README, "Android" and "iOS"). Android's go to the project's `jniLibs/<abi>/`; iOS's xcframework to mobile/frameworks/,
+/// with each target's binary beside it. Answers the directory `target` (the Rust triple an app build is for) links
+/// against: the app's own build is handed it as `SHERPA_ONNX_LIB_DIR`, so `sherpa-onnx-sys`'s build script links what
+/// was checked and downloads nothing.
+pub fn engine_libs(name: &str, target: &str) -> Result<PathBuf> {
+    let android = project(name)?.cli == "android";
+    let dir = repo().join(if android { ANDROID_LIBS } else { IOS_FRAMEWORKS });
+    let dir_text = dir.to_string_lossy().into_owned();
+    crate::checks::engine_xtask(&[if android { "android-build" } else { "ios-build" }, &dir_text])?.run()?;
+    let linked = if android {
+        let abi = match target {
+            "aarch64-linux-android" => "arm64-v8a",
+            "x86_64-linux-android" => "x86_64",
+            other => return Err(format!("no Android ABI for {other}")),
+        };
+        dir.join(abi)
+    } else {
+        dir.join(format!("lib-{target}"))
+    };
+    ensure(linked.is_dir(), format!("{}: the engine's build left nothing for {target}", linked.display()))?;
+    Ok(linked)
+}
+
 /// `mobile build android|ios`: the app as a pull request builds it, unsigned, into dist/.
 pub fn build(name: &str) -> Result<()> {
     let dist = repo().join("dist");
     mkdir(&dist)?;
     match project(name)?.cli {
         "android" => {
-            tauri(&["android", "build", "--apk", "--target", "aarch64", "--ci"]).run()?;
+            let libs = engine_libs(name, "aarch64-linux-android")?;
+            tauri(&["android", "build", "--apk", "--target", "aarch64", "--ci"])
+                .env("SHERPA_ONNX_LIB_DIR", libs)
+                .run()?;
             let apk = repo().join("mobile/gen/android").join(UNSIGNED_APK);
             let to = unsigned_apk();
             fs::copy(&apk, &to).map_err(|e| format!("{}: {e}", apk.display()))?;
             check::check_16kb(&to)
         }
         _ => {
-            tauri(&["ios", "build", "--target", "aarch64-sim", "--no-sign", "--ci"]).run()?;
+            let libs = engine_libs(name, "aarch64-apple-ios-sim")?;
+            tauri(&["ios", "build", "--target", "aarch64-sim", "--no-sign", "--ci"])
+                .env("SHERPA_ONNX_LIB_DIR", libs)
+                .run()?;
             let build = repo().join("mobile/gen/apple/build");
             let app = find_app(&build, 3).ok_or_else(|| format!("no .app below {}", build.display()))?;
             ios::check_app(&app)?;
