@@ -17,13 +17,19 @@ impl super::Os for Native {
 // the common requests cannot express.
 #[cfg(test)]
 mod tests {
-    use super::super::{clear_all, read, tests::*, write, Error, Os};
+    use super::super::{clear_all, copy_key_from, providers_in, read, tests::*, write, Error, Os};
     use super::Native;
 
     #[test]
     #[ignore = "requires an unlocked desktop Secret Service; unverified on headless CI"]
     fn native_contract() {
         contract(Native::store().unwrap().as_ref(), &test_service(), &Native::clear_namespace);
+    }
+
+    #[test]
+    #[ignore = "requires an unlocked desktop Secret Service; unverified on headless CI"]
+    fn legacy_keys_are_copied() {
+        copy_native();
     }
 
     #[test]
@@ -34,6 +40,8 @@ mod tests {
             assert_eq!(read(&service, "openai"), Err(Error::Unavailable));
             assert_eq!(write(&service, "openai", Some("test-only")), Err(Error::Unavailable));
             assert_eq!(clear_all(&service), Err(Error::Unavailable));
+            assert_eq!(providers_in(&service), Err(Error::Unavailable));
+            assert_eq!(copy_key_from(&service, &service, "openai", || true, || true), Err(Error::Unavailable));
             return;
         }
         // Isolate the bus environment from concurrent tests and any real user's keyring.
