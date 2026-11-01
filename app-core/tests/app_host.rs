@@ -320,7 +320,9 @@ fn the_engine_answers_through_the_host() {
         let catalogs = host.catalogs().await.unwrap();
         assert_eq!(catalogs[0].id, "local", "the local catalogue first");
         assert!(host.installed().await.unwrap().is_empty(), "a fresh model root holds nothing");
-        assert!(host.memory().unwrap().total_mb.is_some());
+        let memory = host.memory().unwrap();
+        assert!(memory.total_mb.is_some());
+        assert!(memory.available_mb.is_some(), "the OS says what is available of it");
         assert_eq!(host.progress("nothing"), None);
         host.cancel("nothing");
         assert!(!host.installing());

@@ -36,13 +36,10 @@ serde_json = "1"
 # (src/voice/models.rs).
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "sync", "macros"] }
 
-# Physical-memory observations (platform/memory); also used by the shared platform crate.
-sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 # Provider keys in the OS credential store (platform/credentials; docs/CREDENTIALS.md).
 keyring-core = "1.0.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-libc = "0.2"
 apple-native-keyring-store = { version = "1.0.2", features = ["keychain"] }
 # Legacy keychain namespace deletion and compatibility tests (platform/credentials).
 security-framework = "3"

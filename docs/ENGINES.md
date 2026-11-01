@@ -21,7 +21,6 @@ no shell is in):
 - `Wanted` (`engine.rs`): which build an install is for, as the page names it — a catalogue build id, an engine, or
   neither for the recommended build.
 - `engine/error.rs`: the keyed refusals, and how each of the engine's codes becomes one (with the code beside it as `code`).
-- `platform/memory.rs` (`app-core/src/platform/`): what is available of the machine's memory now.
 
 ## The catalogue
 
