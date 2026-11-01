@@ -173,6 +173,7 @@ fn run_app() {
             if let Err(error) = call::configure() {
                 log::error!("audio session: {error}");
             }
+            let phone = Arc::new(call::PhoneCall::default());
             app.manage(Pairings(Arc::new(pairings::PairingFile::of_app(&handle)?)));
             // The application host: the voice call and the engine. A phone never resets its data under the call, so
             // every request is admitted.
@@ -186,12 +187,15 @@ fn run_app() {
                     events: Arc::new(events.clone()),
                     keys: Arc::new(Keychain::new(PROVIDER_KEYS)),
                     // The voice calls' audio holds the audio session (iOS).
-                    calls: Arc::new(call::PhoneCall),
+                    calls: phone.clone(),
                 },
             ));
             // The room's call holds the call's service (Android), for the host's current page.
             let page = app.state::<AppHost>().page().0;
             app.manage(call::RoomCall::new(handle.clone(), page));
+            // The system taking the audio away (a phone call, an alarm) pauses it; iOS tells the app here, Android through the
+            // call's service.
+            call::watch_interruptions(&handle, phone);
             let page_app = handle.clone();
             WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App(BUNDLED_INTERFACE.into()))
                 .initialization_script(bridge::script(

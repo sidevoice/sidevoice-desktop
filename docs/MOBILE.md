@@ -299,7 +299,25 @@ stays unsigned with no secret. Its one step is `cargo xtask mobile testflight --
      (TestFlight → Internal Testing); an internal build needs no beta review;
   5. the environment `testflight` exists with the deployment-branch rule.
 
+## Audio interruptions (D-AUDIO-FOCUS)
+
+A phone call, an alarm or another app taking the audio **pauses the conversation while it lasts and resumes it when it
+ends**; it never hangs up on its own (`mobile/src/call.rs`). Only while the room's call is held (a try in Settings is not
+paused).
+
+- **Where it comes from.** iOS: `AVAudioSessionInterruptionNotification` (`platform/interruption`), `began` and `ended`
+  with `shouldResume`. Android: the call's service reports its audio focus (`Focus`): `lost` and `lost-transient` begin an
+  interruption, `gained` ends it, `duck` (another app quietly over the call) is none. The call pauses at the first
+  interruption and resumes at the last end, whichever source.
+- **Pause** is the page's own mute (the `interrupt` command of `mobile/js/mobile-bridge.js`, so the page shows the call muted)
+  and the agent's playback held (`AppHost::pause_playback`: the chunks not yet handed to the speaker are kept, in order, and
+  played on resuming; what the speaker already has queued is the device's).
+- **Resume** gives the mute back as it was: a person who had muted themselves stays muted, one who unmuted meanwhile is
+  not touched. On iOS the audio session is activated again first (if a voice call has audio open). `shouldResume` false
+  (another app goes on playing): the audio comes back, the microphone stays muted until the person unmutes.
+- The call ending meanwhile (hang up, the page reloading) gives back what the pause took, so the next call starts as usual.
+
 ## Not here yet
 
-Headset buttons and lock-screen controls (sidevoice-desktop#349); acting on the call's audio focus (Android); the build
+Headset buttons and lock-screen controls (sidevoice-desktop#349); the build
 kinds (nightly with Developer options, release).

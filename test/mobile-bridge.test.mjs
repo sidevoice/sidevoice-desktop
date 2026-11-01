@@ -120,3 +120,48 @@ test("a command for a given page's call runs only on that call", async () => {
   assert.equal(api.run({ command: "hang-up", page: 7, since }), true);
   assert.equal(hungUp, 1);
 });
+
+test("the system taking the audio away mutes the call and gives the mute back as it was", async () => {
+  const { api, win } = install("tauri://localhost");
+  await new Promise((resolve) => setTimeout(resolve, 0)); // the page's number (7) is known
+  const mic = { enabled: true, disabled: false };
+  let toggles = 0;
+  win.sidevoiceActions = { toggleMic: () => { toggles++; mic.enabled = !mic.enabled; } };
+  win.sidevoiceUI = { store: { getState: () => ({ call: { joined: true }, mic, callCard: {} }), subscribe: () => () => {} } };
+  const interrupt = { command: "interrupt", page: 7 };
+  const resume = { command: "resume", page: 7, restoreMic: true };
+
+  // An open microphone: muted for the interruption, open again after.
+  assert.equal(api.run(interrupt), true);
+  assert.equal(mic.enabled, false);
+  assert.equal(api.run(resume), true);
+  assert.equal(mic.enabled, true);
+  assert.equal(toggles, 2);
+
+  // A person who had muted themselves stays muted.
+  mic.enabled = false;
+  toggles = 0;
+  assert.equal(api.run(interrupt), true);
+  assert.equal(api.run(resume), true);
+  assert.equal(mic.enabled, false);
+  assert.equal(toggles, 0);
+
+  // A person who unmuted during the interruption is not touched.
+  mic.enabled = true;
+  assert.equal(api.run(interrupt), true);
+  mic.enabled = true; // muted by the interruption, unmuted by the person
+  assert.equal(api.run(resume), true);
+  assert.equal(mic.enabled, true);
+
+  // The system advises against resuming: the mute stays until the person lifts it, and is not remembered.
+  assert.equal(api.run(interrupt), true);
+  assert.equal(mic.enabled, false);
+  assert.equal(api.run({ ...resume, restoreMic: false }), true);
+  assert.equal(mic.enabled, false);
+  mic.enabled = true;
+  assert.equal(api.run(resume), true, "a later resume does not mute or unmute anyone");
+  assert.equal(mic.enabled, true);
+
+  // Another page's command does nothing.
+  assert.equal(api.run({ command: "interrupt", page: 6 }), false);
+});

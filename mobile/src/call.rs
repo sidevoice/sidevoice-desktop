@@ -11,11 +11,20 @@
 //!   the first voice call's audio opens and deactivated once the last one's has stopped (iOS; declared at the app's start,
 //!   so that opening the app interrupts no other app's audio). Every voice call counts here, a try in Settings too: it plays
 //!   and records as well.
-use std::sync::{mpsc, Mutex};
+//! - **The system taking the audio away** (D-AUDIO-FOCUS: a phone call, an alarm, another app that plays; iOS: the audio
+//!   session is interrupted, Android: the call's audio focus is lost): the conversation pauses while it lasts and resumes
+//!   when it ends; it never hangs up on its own. Pausing is the page's mute, so that the page shows the call muted, and
+//!   the agent's playback held ([`AppHost::pause_playback`]); resuming gives the mute back as it was (a person who had
+//!   muted themselves stays muted).
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
 
-use sidevoice_app_core::app::CallActivity;
+use crate::platform::interruption::{self, Interruption};
+use sidevoice_app_core::app::{AppHost, CallActivity};
 use sidevoice_app_core::sidevoice_voice::{AudioSession, Session, SessionConfig, SessionMode};
-use sidevoice_mobile_plugin::{start_call_service, stop_call_service, CallEvent, StopReason};
+use sidevoice_mobile_plugin::{
+    start_call_service, stop_call_service, CallEvent, FocusState, StopReason,
+};
 use tauri::{AppHandle, Manager};
 
 /// How the call uses the audio session (iOS; D-AUDIO-SESSION, sidevoice-voice's `SessionConfig`): play-and-record, the
@@ -33,17 +42,59 @@ pub fn configure() -> Result<(), String> {
 }
 
 /// The phone's side of the host's voice calls: the audio session while any of them has audio open.
-pub struct PhoneCall;
+#[derive(Default)]
+pub struct PhoneCall {
+    /// Whether a voice call has audio open: the session is active.
+    audio: AtomicBool,
+}
+
+impl PhoneCall {
+    /// The system gave the audio back after an interruption (iOS deactivated the session): activates it again if a voice
+    /// call has audio open, so that it can record and play on. A session nothing uses stays inactive.
+    fn reactivate(&self) {
+        if self.audio.load(Ordering::SeqCst) {
+            if let Err(error) = Session::activate() {
+                log::warn!("call: the audio session was not activated again: {error}");
+            }
+        }
+    }
+}
 
 impl CallActivity for PhoneCall {
     fn starting(&self) -> Result<(), String> {
-        Session::activate()
+        Session::activate()?;
+        self.audio.store(true, Ordering::SeqCst);
+        Ok(())
     }
 
     fn ended(&self) {
+        self.audio.store(false, Ordering::SeqCst);
         if let Err(error) = Session::deactivate() {
             log::warn!("call: the audio session was not given back: {error}");
         }
+    }
+}
+
+/// Pauses the room's call while the system has the audio session interrupted (iOS) and resumes it when that ends, and
+/// gives `phone` the session back first so that the call's audio can go on (D-AUDIO-FOCUS). Android needs none of this
+/// (the call's service reports its audio focus: [`on_service_event`]).
+pub fn watch_interruptions(app: &AppHandle, phone: Arc<PhoneCall>) {
+    let app = app.clone();
+    let listener = Arc::new(move |event: Interruption| {
+        log::info!("audio session: {event:?}");
+        let (on, restore) = match event {
+            Interruption::Began => (true, true),
+            Interruption::Ended { resume } => {
+                phone.reactivate();
+                (false, resume)
+            }
+        };
+        if let Some(room) = app.try_state::<RoomCall>() {
+            room.then(move |room| room.interrupt(Source::Session, on, restore));
+        }
+    });
+    if let Err(error) = interruption::observe(listener) {
+        log::error!("audio session: {error}");
     }
 }
 
@@ -68,6 +119,62 @@ pub struct Room {
     holding: Option<u64>,
     /// The number of the last start.
     starts: u64,
+    /// Which of the system's interruptions are on now (only while the room's call is held).
+    interrupted: Interrupted,
+}
+
+/// Where an interruption comes from: the call can be taken away by both at once (an alarm on an audio focus that is
+/// also lost), and resumes only when neither holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Source {
+    /// iOS: the audio session was interrupted.
+    Session,
+    /// Android: the call's audio focus was lost.
+    Focus,
+}
+
+/// What an interruption changes of the call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Change {
+    Pause,
+    Resume,
+}
+
+/// Which interruptions are on.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Interrupted {
+    session: bool,
+    focus: bool,
+}
+
+impl Interrupted {
+    fn any(self) -> bool {
+        self.session || self.focus
+    }
+
+    /// `source` is on or off now: what that changes of the call, if anything.
+    fn set(&mut self, source: Source, on: bool) -> Option<Change> {
+        let was = self.any();
+        match source {
+            Source::Session => self.session = on,
+            Source::Focus => self.focus = on,
+        }
+        match (was, self.any()) {
+            (false, true) => Some(Change::Pause),
+            (true, false) => Some(Change::Resume),
+            _ => None,
+        }
+    }
+}
+
+/// Whether a change of the audio focus takes the call's audio away (`Some(true)`), gives it back (`Some(false)`) or
+/// leaves it (`None`): another app playing quietly over the call (`Duck`) is no interruption.
+fn focus_interrupts(state: FocusState) -> Option<bool> {
+    match state {
+        FocusState::Lost | FocusState::LostTransient => Some(true),
+        FocusState::Gained => Some(false),
+        FocusState::Duck => None,
+    }
 }
 
 impl RoomCall {
@@ -79,6 +186,7 @@ impl RoomCall {
             page,
             holding: None,
             starts: 0,
+            interrupted: Interrupted::default(),
         };
         std::thread::Builder::new()
             .name("room-call".into())
@@ -150,10 +258,58 @@ impl Room {
             }
         } else {
             self.holding = None;
+            self.clear_interruption();
             if let Err(error) = stop_call_service(&self.app) {
                 log::warn!("call: the call's service did not stop: {error}");
             }
             log::info!("call: ended");
+        }
+    }
+
+    /// `source` is on or off: the call pauses when the first interruption begins and resumes when the last one ends. Nothing
+    /// of it while no room call is held (a try in Settings is not paused). `restore_mic`: whether the person's mute is given
+    /// back as it was; the system advises against resuming (iOS `shouldResume` false) when another app goes on playing.
+    fn interrupt(&mut self, source: Source, on: bool, restore_mic: bool) {
+        if self.holding.is_none() {
+            return;
+        }
+        match self.interrupted.set(source, on) {
+            Some(Change::Pause) => self.pause(),
+            Some(Change::Resume) => self.resume(restore_mic),
+            None => {}
+        }
+    }
+
+    /// The call ends (or its page goes) while interrupted: what the interruption did is given back, so that the next call
+    /// does not start muted or silent.
+    fn clear_interruption(&mut self) {
+        if self.interrupted.any() {
+            self.interrupted = Interrupted::default();
+            self.resume(true);
+        }
+    }
+
+    /// The page mutes (its own mute, remembered by the page as ours) and the agent's playback is held.
+    fn pause(&self) {
+        log::info!("call: paused, the system took the audio");
+        if let Some(host) = self.app.try_state::<AppHost>() {
+            host.pause_playback(true);
+        }
+        run_on_page(
+            &self.app,
+            serde_json::json!({ "command": "interrupt", "page": self.page }),
+        );
+    }
+
+    /// The page gives back the mute it took (only if the person has not changed it since) and the playback goes on.
+    fn resume(&self, restore_mic: bool) {
+        log::info!("call: resumed, the system gave the audio back");
+        run_on_page(
+            &self.app,
+            serde_json::json!({ "command": "resume", "page": self.page, "restoreMic": restore_mic }),
+        );
+        if let Some(host) = self.app.try_state::<AppHost>() {
+            host.pause_playback(false);
         }
     }
 }
@@ -162,9 +318,19 @@ impl Room {
 /// must not wait): an end the app did not ask for hangs that call up, on the room's thread and only while that service
 /// is still the one that runs for that page, and on the page only if that call is still the one it has (the page checks
 /// `page` and `since` when the command reaches it, which can be after another page or call has taken its place); a
-/// change of the audio focus is recorded (what to do about it is a decision of its own).
+/// change of the audio focus pauses the call or resumes it (an interruption never hangs up).
 fn on_service_event(app: &AppHandle, start: u64, page: u64, since: Option<f64>, event: CallEvent) {
     log::info!("call service: {event:?}");
+    if let CallEvent::Focus { state } = event {
+        if let (Some(on), Some(room)) = (focus_interrupts(state), app.try_state::<RoomCall>()) {
+            room.then(move |room| {
+                if room.holding == Some(start) && room.page == page {
+                    room.interrupt(Source::Focus, on, true);
+                }
+            });
+        }
+        return;
+    }
     if let Some(reason) = hang_up_for(&event) {
         let Some(room) = app.try_state::<RoomCall>() else {
             return;
@@ -176,6 +342,7 @@ fn on_service_event(app: &AppHandle, start: u64, page: u64, since: Option<f64>, 
             log::info!("call: hung up by the service ({reason:?})");
             // The service is gone: the next join starts another.
             room.holding = None;
+            room.clear_interruption();
             run_on_page(
                 &room.app,
                 serde_json::json!({ "command": "hang-up", "page": page, "since": since }),
@@ -231,6 +398,34 @@ mod tests {
             }),
             None
         );
+    }
+
+    #[test]
+    fn the_focus_pauses_the_call_and_gives_it_back_and_never_hangs_up() {
+        assert_eq!(focus_interrupts(FocusState::Lost), Some(true));
+        assert_eq!(focus_interrupts(FocusState::LostTransient), Some(true));
+        assert_eq!(focus_interrupts(FocusState::Gained), Some(false));
+        assert_eq!(focus_interrupts(FocusState::Duck), None);
+    }
+
+    #[test]
+    fn the_call_pauses_at_the_first_interruption_and_resumes_at_the_last_end() {
+        let mut now = Interrupted::default();
+        assert_eq!(now.set(Source::Focus, false), None, "nothing was on");
+        assert_eq!(now.set(Source::Focus, true), Some(Change::Pause));
+        assert_eq!(now.set(Source::Focus, true), None, "already paused");
+        assert_eq!(
+            now.set(Source::Session, true),
+            None,
+            "paused by the other already"
+        );
+        assert_eq!(
+            now.set(Source::Focus, false),
+            None,
+            "the session still holds it"
+        );
+        assert_eq!(now.set(Source::Session, false), Some(Change::Resume));
+        assert_eq!(now, Interrupted::default());
     }
 
     #[test]

@@ -5124,9 +5124,12 @@ name = "sidevoice-mobile"
 version = "0.1.0"
 dependencies = [
  "atomic-write-file",
+ "block2",
  "jni 0.21.1",
  "log",
  "ndk-context",
+ "objc2",
+ "objc2-avf-audio",
  "objc2-foundation",
  "rustls-platform-verifier",
  "serde",

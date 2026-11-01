@@ -24,6 +24,7 @@ use tokio::task::JoinHandle;
 
 use super::models::{Halves, ModelCache};
 
+mod pause;
 #[cfg(test)]
 mod tests;
 
@@ -156,6 +157,8 @@ pub struct VoiceState<A: LaneAudio = SharedNativeAudio> {
     closing: AtomicBool,
     /// The calls that run, for the app's [`CallActivity`].
     pub active: Arc<ActiveCalls>,
+    /// What the calls play, held back while the system has the audio taken away (`pause_playback`).
+    pause: pause::PlaybackPause,
 }
 
 pub struct CallLane<P> {
@@ -240,6 +243,7 @@ impl<A: LaneAudio> VoiceState<A> {
             keeping: Mutex::new(Vec::new()),
             closing: AtomicBool::new(false),
             active: Arc::default(),
+            pause: pause::PlaybackPause::default(),
         }
     }
 
@@ -300,6 +304,7 @@ impl<A: LaneAudio> VoiceState<A> {
             return Err(refusal("bad_request", "Voice call key already exists."));
         }
         let (io, input) = self.audio.attach();
+        let io = self.pause.wrap(io);
         calls.insert(key, Arc::new(CallLane::new(io, input, page, Arc::clone(&self.active))));
         Ok(())
     }
@@ -527,6 +532,12 @@ impl<A: LaneAudio> VoiceState<A> {
             cancel.cancel();
         }
         Ok(())
+    }
+
+    /// Pauses (`true`) or resumes what every call plays: the chunks not yet handed to the speaker are held, in order, and
+    /// played on resuming. The calls themselves go on; the microphone is the page's mute, not this.
+    pub fn pause_playback(&self, paused: bool) {
+        self.pause.set(paused);
     }
 
     /// Kept for the call from the lane's creation on, and applied to it once it exists.

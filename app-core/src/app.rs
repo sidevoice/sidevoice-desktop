@@ -211,6 +211,13 @@ impl<A: LaneAudio> AppHost<A> {
         PageGeneration(self.inner.generation.load(Ordering::SeqCst))
     }
 
+    /// Pauses (`true`) or resumes what the calls play, for as long as the system has the audio taken away (a phone call, an
+    /// alarm): what is not yet with the speaker is held, in order, and played on resuming. The microphone is not touched
+    /// (the page's mute is).
+    pub fn pause_playback(&self, paused: bool) {
+        self.inner.voice.pause_playback(paused);
+    }
+
     /// The page that owned the calls is gone (it reloaded): a new page owns none of its previous lanes, and is the current
     /// one from now on. The old lanes (only those: a lane the new page has made already stays) are stopped and released in
     /// the background, and keep their models for their idle minutes; nothing they still say reaches the sink, and commands

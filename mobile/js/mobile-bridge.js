@@ -37,12 +37,34 @@
     pageNumber = null;
     throw error;
   }));
+  // Whether the page's mute is ours: the system took the audio away (a phone call, an alarm) and the person was not muted.
+  let mutedBySystem = false;
   const reporting = members.room({
     version: 2,
     publish: (snapshot) => {
       numbered().then((number) => transport.own.send("call_state", { page: number, snapshot }), () => {});
     },
     extend: () => ({}),
+    commands: {
+      // The system took the audio away: the call pauses as the page's own mute does (the page shows it muted). A person who
+      // had muted themselves stays as they were, and is not unmuted when it ends.
+      interrupt: (_request, state, actions) => {
+        if (!state.joined) return false;
+        if (state.micEnabled && !state.micDisabled) {
+          actions.toggleMic();
+          mutedBySystem = true;
+        }
+        return true;
+      },
+      // The system gave it back (or the call ended meanwhile): the mute goes back as it was, unless the person has changed it
+      // since, or the system advises not to resume (`restoreMic` false: another app goes on playing; they unmute when they like).
+      resume: (request, state, actions) => {
+        const ours = mutedBySystem;
+        mutedBySystem = false;
+        if (ours && request.restoreMic !== false && !state.micEnabled && !state.micDisabled) actions.toggleMic();
+        return true;
+      },
+    },
   });
 
   const api = {
