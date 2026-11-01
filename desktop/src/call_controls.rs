@@ -1,7 +1,7 @@
 //! The call controls card (sidevoice/sidevoice-desktop#4): a small window that floats over the person's other apps
 //! during a call, while the room's stage is out of view (#165: the room hidden, minimised, covered or on another
 //! Space, or the page on Settings), and never takes focus from them. It shows the web build's `call-controls.html`,
-//! which talks only to `bridge/call-controls-bridge.js` (docs/BRIDGE.md → "The call controls card"); the app relays the
+//! which talks only to `desktop/core/js/call-controls-bridge.js` (docs/BRIDGE.md → "The call controls card"); the app relays the
 //! call to it from the room window and carries its buttons back.
 //!
 //! - macOS: a non-activating `NSPanel` (tauri-nspanel) at the status level, on every Space and over full-screen apps.

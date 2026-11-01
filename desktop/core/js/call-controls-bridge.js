@@ -1,12 +1,12 @@
 // Sidevoice call controls bridge — injected by the desktop app into its call controls card window, before the page's
 // own scripts (docs/BRIDGE.md → "The call controls card").
 //
-//   app → card : window.__sidevoiceDesktop.receive({ call, level, playback, place, size, pointerInside, outsideClicks,
+//   app → card : window.__sidevoiceHost.receive({ call, level, playback, place, size, pointerInside, outsideClicks,
 //                alwaysExpanded, muteShortcut }) (any subset: what changed), evaluated by the app
 //   card → app : invoke('call_controls_run' | 'call_controls_layout' | 'call_controls_drag' | 'call_controls_resize' | 'call_controls_cursor' |
 //                'call_controls_ready')
 //
-// The card's page (the web build's call-controls.html) finds it at window.__sidevoiceDesktop.host.callControls. On any
+// The card's page (the web build's call-controls.html) finds it at window.__sidevoiceHost.host.callControls. On any
 // origin but the app's own it does nothing at all.
 (function (factory) {
   if (typeof module === "object" && module.exports) module.exports = factory; // unit tests
@@ -15,7 +15,7 @@
   "use strict";
   // scheme://host rather than location.origin: the app's own pages (tauri://localhost) may have an opaque origin.
   if (win.location.protocol + "//" + win.location.host !== appOrigin) return null;
-  if (win.__sidevoiceDesktop) return win.__sidevoiceDesktop;
+  if (win.__sidevoiceHost) return win.__sidevoiceHost;
 
   let state = null;
   const listeners = new Set();
@@ -102,7 +102,7 @@
   });
 
   const api = {
-    host: Object.freeze({ app: "sidevoice-desktop", callControls }),
+    host: Object.freeze({ callControls }),
     /** The app pushes what changed; the card hears the whole state. */
     receive(patch) {
       if (!patch || typeof patch !== "object") return;
@@ -126,6 +126,6 @@
     }, true);
     win.addEventListener("mouseout", (event) => { if (!event.relatedTarget) tell(false); }, true);
   }
-  win.__sidevoiceDesktop = api;
+  win.__sidevoiceHost = api;
   return api;
 });

@@ -1,4 +1,4 @@
-//! What the host computer is and offers: its name, and whether this run can update itself. Per-OS differences live in `host/{macos,windows,linux}.rs`.
+//! What the host computer is and offers: its system, its name, and whether this run can update itself. Per-OS differences live in `host/{macos,windows,linux}.rs`.
 
 use sidevoice_desktop_core::{computer_name, updater};
 use tauri::utils::{config::BundleType, platform::bundle_type};
@@ -11,6 +11,10 @@ use imp::Native;
 
 /// What differs per OS.
 trait Os {
+    /// The system as the page names it (`host.os`: `macos`, `windows`, `linux`, `ios`, `android`); `other` for one it
+    /// does not know.
+    const SYSTEM: &'static str = "other";
+
     /// The name the person gave the device, kept apart from the network name (macOS Sharing's Computer Name,
     /// Linux's pretty hostname); `None` where the OS keeps none.
     fn device_name() -> Option<String> {
@@ -32,7 +36,12 @@ trait Os {
     }
 }
 
-/// The name the person gave this computer (`host.computerName`, docs/BRIDGE.md), not an account or network name.
+/// The system this run is on, for the page's copy that is true of it alone (`host.os`, docs/BRIDGE.md).
+pub fn system() -> &'static str {
+    Native::SYSTEM
+}
+
+/// The name the person gave this computer (`host.deviceName`, docs/BRIDGE.md), not an account or network name.
 /// Read on every room open so a rename appears on the next one: the device name, else the host name. Trim
 /// surrounding whitespace; return None for absent/blank names so the page can name the device.
 pub fn name() -> Option<String> {
@@ -53,6 +62,11 @@ pub fn updates_available(channel: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_system_is_one_the_page_knows() {
+        assert!(["macos", "windows", "linux"].contains(&system()));
+    }
 
     #[test]
     fn a_system_name_is_nonblank_and_preserves_its_given_spelling() {

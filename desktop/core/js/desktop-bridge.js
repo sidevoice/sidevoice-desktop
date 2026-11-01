@@ -4,11 +4,11 @@
 //   page → app : invoke('bridge_state', { snapshot })  whenever the call state the app shows changes (tray, card)
 //                invoke('bridge_level', { level })     the microphone's level during a call, for the card's wave
 //                invoke('bridge_playback', { level, threadId })  the voice's output level, for the card's avatar
-//   app → page : window.__sidevoiceDesktop.run({ command: 'toggle-mute' | 'hang-up' | 'skip-reply' | … })
+//   app → page : window.__sidevoiceHost.run({ command: 'toggle-mute' | 'hang-up' | 'skip-reply' | … })
 //                the voice call's events (host.voice) come over a channel the page opens when it loads (voice_events);
-//                window.__sidevoiceDesktop.voiceEvent(event) is where each one is handed to the page
-//                window.__sidevoiceDesktop.updaterEvent(status)  the updates' status changed (host.updater)
-//                window.__sidevoiceDesktop.muteShortcutEvent(status)  the mute shortcut changed (host.muteShortcut)
+//                window.__sidevoiceHost.voiceEvent(event) is where each one is handed to the page
+//                window.__sidevoiceHost.updaterEvent(status)  the updates' status changed (host.updater)
+//                window.__sidevoiceHost.muteShortcutEvent(status)  the mute shortcut changed (host.muteShortcut)
 // It only reads the web UI's public seams (window.sidevoiceUI.store, .micLevel, .playbackLevel and .openSettings,
 // window.sidevoiceActions) and
 // never touches the DOM. On any origin other than the window's page (the room's, or the app's own for the
@@ -21,14 +21,14 @@
 // part is evaluated where `transportOf` and `membersOf`, the other two, are in scope.
 (function (factory) {
   if (typeof module === "object" && module.exports) module.exports = factory; // unit tests
-  else factory(window, "__SIDEVOICE_ROOM_ORIGIN__", "__SIDEVOICE_MEDIA_KEYS__", "__SIDEVOICE_LOCAL_HOST__", "__SIDEVOICE_VOICE__", "__SIDEVOICE_UPDATER__", "__SIDEVOICE_BUILD__", "__SIDEVOICE_COMPUTER_NAME__", "__SIDEVOICE_DEBUG__", "__SIDEVOICE_MICROPHONE_SETTINGS__", "__SIDEVOICE_UNINSTALL__");
-})(function installDesktopBridge(win, roomOrigin, mediaKeys, localHostOffered, voiceOffered, updaterOffered, build, computerName, debugState, microphoneSettingsOffered, uninstallOffered) {
+  else factory(window, "__SIDEVOICE_ROOM_ORIGIN__", "__SIDEVOICE_MEDIA__", "__SIDEVOICE_LOCAL_HOST__", "__SIDEVOICE_VOICE__", "__SIDEVOICE_UPDATER__", "__SIDEVOICE_BUILD__", "__SIDEVOICE_DEVICE_NAME__", "__SIDEVOICE_DEBUG__", "__SIDEVOICE_MICROPHONE_SETTINGS__", "__SIDEVOICE_UNINSTALL__", "__SIDEVOICE_OS__");
+})(function installDesktopBridge(win, roomOrigin, mediaOwned, localHostOffered, voiceOffered, updaterOffered, build, deviceName, debugState, microphoneSettingsOffered, uninstallOffered, system) {
   "use strict";
   // scheme://host rather than location.origin: the app's own pages (tauri://localhost) may have an opaque origin.
   if (win.location.protocol + "//" + win.location.host !== roomOrigin) return null;
   // The app never tells the interface where to look first (sidevoice-web's `__SIDEVOICE_TARGET__`): pairing does.
   win.__SIDEVOICE_TARGET__ = null;
-  if (win.__sidevoiceDesktop) return win.__sidevoiceDesktop;
+  if (win.__sidevoiceHost) return win.__sidevoiceHost;
 
   const BRIDGE_VERSION = 2;
   const transport = transportOf(win);
@@ -426,23 +426,26 @@
 
   const api = {
     version: BRIDGE_VERSION,
-    /** What this host offers the page besides the webview itself. The web UI feature-detects it.
-     *  `engine`: the app's engine, its catalogues, keys and models on disk (docs/ENGINES.md); `voice`: the call the
-     *  app runs; `microphone`: native permission with `voice`, or just the system settings link. */
+    /** What this app offers the page besides the webview itself, one optional member per thing; a member that is there is
+     *  offered (docs/BRIDGE.md → "The host"). `engine`: the app's engine, its catalogues, keys and models on disk
+     *  (docs/ENGINES.md); `voice`: the call the app runs; `microphone`: native permission with `voice`, or just the
+     *  system settings link. */
     host: Object.freeze({
-      app: "sidevoice-desktop",
-      /** The bridge's version: what the page may rely on (docs/BRIDGE.md). */
-      version: BRIDGE_VERSION,
+      /** The system the app runs on, for copy that is true of it alone; never a switch on what is offered. */
+      ...(typeof system === "string" && system ? { os: system } : {}),
       engine: Object.freeze(members.engine()),
-      /** `"native"`: the app answers headset buttons / media keys in a call, so the page must not register its
-       *  own Media Session handlers (both would toggle the microphone on one click). `null`: the page does. */
-      mediaKeys: mediaKeys === "native" ? "native" : null,
+      /** Only where the app owns the system's media: it answers headset buttons / media keys in a call, so the page must
+       *  not register its own Media Session handlers (both would toggle the microphone on one click). Elsewhere the page
+       *  does. */
+      ...(mediaOwned === true ? { presence: Object.freeze({ media: "app" }) } : {}),
+      /** The webview sends plain http to a private address; to whom, and with whose consent, is the page's policy. */
+      reach: Object.freeze({ plainHttpPrivate: true }),
       // This computer's own core, on every OS (core `bridge` always says so).
       ...(localHostOffered === true ? { localHost: Object.freeze(localHost()) } : {}),
       // Private pairings and the reset are available on every desktop platform; the uninstall only where the app can
       // also remove itself (macOS).
-      data: Object.freeze({
-        pairings: members.pairings(),
+      pairings: members.pairings(),
+      reset: Object.freeze({
         deleteAll: () => call("data_delete_all"),
         resetReport: () => call("data_reset_report"),
         ...(uninstallOffered === true ? {
@@ -457,7 +460,7 @@
       build: Object.freeze({ ...build }),
       // The name the person gave this computer ("Mac de Ana"): the page proposes it as the device's name. Only
       // where the system has one.
-      ...(typeof computerName === "string" && computerName ? { computerName } : {}),
+      ...(typeof deviceName === "string" && deviceName ? { deviceName } : {}),
       /** The global mute shortcut, and whether the call controls card shows always in a call: the app's, set from
        *  the page's Settings. */
       muteShortcut: shortcut.host,
@@ -484,7 +487,7 @@
      *  `{command, …arguments}`. Returns whether it ran. */
     run: reporting.run,
   };
-  win.__sidevoiceDesktop = api;
+  win.__sidevoiceHost = api;
 
   reporting.start();
   return api;

@@ -1,14 +1,14 @@
 # Headset and media controls
 
-The shared plugin's `app-tauri/src/platform/media_controls.rs` exposes `support`, `attach` and `update`.
-Its support value supplies `host.mediaKeys` independently of native voice. Startup attaches one
+The shared plugin's `app-tauri/src/platform/media_controls.rs` exposes `available`, `attach` and `update`.
+Where `available` is true the app offers `host.presence` (`{ media: "app" }`), independently of native voice. Startup attaches one
 process-lifetime command sink; call reports and navigation resets update it.
 
 | Host | Native controls | Page fallback during native voice | Physical buttons |
 |---|---|---|---|
-| macOS | Existing MediaPlayer Now Playing and AVAudioApplication mute gesture | Suppressed by `mediaKeys: "native"`, avoiding duplicate actions | Unverified on hardware |
-| Windows | Unavailable (`mediaKeys: null`) | Page Media Session and its Now Playing audio element | Unverified in WebView2/on hardware |
-| Linux | Unavailable (`mediaKeys: null`) | Page Media Session and its Now Playing audio element | Unverified in WebKitGTK/X11/Wayland/on hardware |
+| macOS | Existing MediaPlayer Now Playing and AVAudioApplication mute gesture | Suppressed by `presence: { media: "app" }`, avoiding duplicate actions | Unverified on hardware |
+| Windows | Unavailable (no `presence`) | Page Media Session and its Now Playing audio element | Unverified in WebView2/on hardware |
+| Linux | Unavailable (no `presence`) | Page Media Session and its Now Playing audio element | Unverified in WebKitGTK/X11/Wayland/on hardware |
 
 The page maps play to unmute, pause to toggle mute (including a pause delivered while muted),
 and `togglemicrophone`, where the webview supports it, to the requested microphone state.
