@@ -1,12 +1,13 @@
 {
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
   "bootstrap-sha": "d9f2cbadd94d9c51598bdf21d7059dfb2c25a5db",
-  "include-component-in-tag": false,
+  "separate-pull-requests": true,
   "draft": true,
   "force-tag-creation": true,
   "packages": {
     ".": {
       "release-type": "simple",
+      "include-component-in-tag": false,
       "bump-minor-pre-major": true,
       "extra-files": [
         { "type": "json", "path": "desktop/tauri.conf.json", "jsonpath": "$.version" },
@@ -14,12 +15,12 @@
         { "type": "json", "path": "package-lock.json", "jsonpath": "$.version" },
         { "type": "json", "path": "package-lock.json", "jsonpath": "$.packages[''].version" },
         { "type": "toml", "path": "desktop/Cargo.toml", "jsonpath": "$.package.version" },
+        { "type": "toml", "path": "app-core/Cargo.toml", "jsonpath": "$.package.version" },
         { "type": "toml", "path": "desktop/core/Cargo.toml", "jsonpath": "$.package.version" },
-        { "type": "toml", "path": "desktop/engine/Cargo.toml", "jsonpath": "$.package.version" },
         {
           "type": "toml",
           "path": "Cargo.lock",
-          "jsonpath": "$.package[?(@.name.value=='sidevoice-desktop' || @.name.value=='sidevoice-desktop-core' || @.name.value=='sidevoice-desktop-engine')].version"
+          "jsonpath": "$.package[?(@.name.value=='sidevoice-desktop' || @.name.value=='sidevoice-app-core' || @.name.value=='sidevoice-desktop-core')].version"
         }
       ]
     }

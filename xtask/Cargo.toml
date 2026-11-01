@@ -22,6 +22,10 @@ regex = "1"
 # The platform-boundary check reads Rust tokens (comments and string contents are not code) and `use` trees.
 proc-macro2 = { version = "1", features = ["span-locations"] }
 syn = { version = "2", default-features = false, features = ["full", "parsing", "proc-macro", "visit"] }
+# The host-kind checks read the Cargo manifests (features, target tables, lints) and the workflows (the commands of
+# their steps) as data, not as text.
+toml = "1"
+serde_yaml_ng = "0.10"
 
 # Shared child lifetime, private files and release-target facts; no core application dependency.
 sidevoice-platform = { git = "https://github.com/sidevoice/sidevoice-core", tag = "v0.16.1" }
@@ -29,6 +33,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "process", "io-util", "t
 # Ctrl+C on every host, plus SIGTERM/SIGHUP on Unix CI runners.
 ctrlc = { version = "3.5", features = ["termination"] }
 getrandom = "0.3"
+# The generated Xcode project file, an old-style (ASCII) property list, read as data rather than searched as text
+# (mobile.rs).
+plist = "1"
 
 [target.'cfg(unix)'.dependencies]
 # Preserve the bundler's inherited private creation mask without own FFI.

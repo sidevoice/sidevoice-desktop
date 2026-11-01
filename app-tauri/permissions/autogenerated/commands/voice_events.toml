@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-voice-events"
+description = "Enables the voice_events command without any pre-configured scope."
+commands.allow = ["voice_events"]
+
+[[permission]]
+identifier = "deny-voice-events"
+description = "Denies the voice_events command without any pre-configured scope."
+commands.deny = ["voice_events"]

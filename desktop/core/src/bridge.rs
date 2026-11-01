@@ -15,7 +15,8 @@ pub const NO_CONTEXT_MENU_SCRIPT: &str = include_str!("../../../bridge/no-contex
 /// (bridge/webview-log.js); the room window only.
 pub const WEBVIEW_LOG_SCRIPT: &str = include_str!("../../../bridge/webview-log.js");
 
-/// The bridge script, with its room-origin placeholder still in place.
+/// The desktop's part of the bridge script (what only this app has, and the assembly of `host`), with its placeholders
+/// still in place. The other two parts of the page's script are [`Parts`].
 pub const SCRIPT_TEMPLATE: &str = include_str!("../../../bridge/desktop-bridge.js");
 const ORIGIN_PLACEHOLDER: &str = "\"__SIDEVOICE_ROOM_ORIGIN__\"";
 const MEDIA_KEYS_PLACEHOLDER: &str = "\"__SIDEVOICE_MEDIA_KEYS__\"";
@@ -57,6 +58,22 @@ pub fn call_controls_push(patch: &serde_json::Value) -> String {
     format!("window.__sidevoiceDesktop && window.__sidevoiceDesktop.receive({patch});")
 }
 
+/// The parts of the page's script that other crates own, as the code they ship: `transport` is the shell binding's
+/// (`sidevoice-app-tauri`: how the page reaches the shared commands) and `members` the apps' (`sidevoice-app-core`: the
+/// engine, the voice call, the microphone, the pairings and the call state). Each is one function expression
+/// (docs/BRIDGE.md -> "Parts"). This crate names neither crate, so the app that has them hands them over.
+#[derive(Debug, Clone, Copy)]
+pub struct Parts<'a> {
+    pub transport: &'a str,
+    pub members: &'a str,
+}
+
+/// The page's script: the desktop's part, in a scope where the other two are `transportOf` and `membersOf`. The tests
+/// that run the script in node (test/bridge-source.mjs) compose it the same way.
+fn compose(parts: &Parts<'_>, desktop: &str) -> String {
+    format!("(function (transportOf, membersOf) {{\n{desktop}\n}})({}, {});", parts.transport, parts.members)
+}
+
 /// The script injected into the main window, bound to one page origin. `updater`: whether this copy of the app updates
 /// itself (`window.__sidevoiceDesktop.host.updater`; core `updater::offered`), which the shell finds at start; `build`:
 /// what this build is (`host.build`; core `build_info`); `computer_name`: the name the person gave this computer
@@ -68,6 +85,7 @@ pub fn call_controls_push(patch: &serde_json::Value) -> String {
 /// `host.localHost` and `host.voice` are always offered ([`OFFERED`]).
 /// `uninstall`: whether the app can also remove itself after the reset (`host.data.uninstall`); delete-all and its
 /// report (`host.data.deleteAll`, `resetReport`) are on every host.
+/// `parts`: the transport and the members, composed with the desktop's part into the one script the page gets.
 #[allow(clippy::too_many_arguments)]
 pub fn script_for_origin(
     origin: &str,
@@ -79,6 +97,7 @@ pub fn script_for_origin(
     diagnostics: &[crate::debug_options::Switch],
     media_keys: Option<&str>,
     uninstall: bool,
+    parts: &Parts<'_>,
 ) -> String {
     let literal = serde_json::to_string(origin).expect("a string serialises");
     let keys = serde_json::to_string(&media_keys).expect("serialises");
@@ -88,7 +107,7 @@ pub fn script_for_origin(
     } else {
         "null".to_owned()
     };
-    SCRIPT_TEMPLATE
+    let desktop = SCRIPT_TEMPLATE
         .replacen(ORIGIN_PLACEHOLDER, &literal, 1)
         .replacen(MEDIA_KEYS_PLACEHOLDER, &keys, 1)
         .replacen(LOCAL_HOST_PLACEHOLDER, OFFERED, 1)
@@ -98,7 +117,8 @@ pub fn script_for_origin(
         .replacen(COMPUTER_NAME_PLACEHOLDER, &serde_json::to_string(&computer_name).expect("serialises"), 1)
         .replacen(DEBUG_PLACEHOLDER, &debug, 1)
         .replacen(MICROPHONE_SETTINGS_PLACEHOLDER, flag(microphone_settings), 1)
-        .replacen(UNINSTALL_PLACEHOLDER, flag(uninstall), 1)
+        .replacen(UNINSTALL_PLACEHOLDER, flag(uninstall), 1);
+    compose(parts, &desktop)
 }
 
 /// The bridge's version: the room page sends it in every snapshot (bridge/desktop-bridge.js).
@@ -323,6 +343,9 @@ fn with_title(status: &str, title: &str) -> String {
 mod tests {
     use super::*;
 
+    /// Stand-ins for the transport and the members, which other crates own.
+    const PARTS: Parts<'static> = Parts { transport: "TRANSPORT", members: "MEMBERS" };
+
     #[test]
     fn tray_icon_slot_applies_only_changes_and_only_the_latest() {
         use TrayIcon::*;
@@ -390,6 +413,7 @@ mod tests {
             &crate::debug_options::Switch::ALL,
             Some("native"),
             false,
+            &PARTS,
         );
         assert!(!s.contains("__SIDEVOICE_ROOM_ORIGIN__"));
         assert!(!s.contains("__SIDEVOICE_MEDIA_KEYS__"));
@@ -410,7 +434,7 @@ mod tests {
         );
         assert!(s.contains(&expected), "{expected}");
         let no_diagnostics =
-            script_for_origin("https://voice.example.com", false, &dev, None, &off, false, &[], None, false);
+            script_for_origin("https://voice.example.com", false, &dev, None, &off, false, &[], None, false, &PARTS);
         assert!(no_diagnostics.contains(&off.state(&[]).to_string()));
         assert!(no_diagnostics.contains(r#"factory(window, "https://voice.example.com", null,"#));
         // A release that can update itself: the page gets `host.updater`, and `host.build` says it is a release.
@@ -425,6 +449,7 @@ mod tests {
             &crate::debug_options::Switch::ALL,
             Some("native"),
             true,
+            &PARTS,
         );
         let expected = format!(
             r#"factory(window, "https://voice.example.com", {platform}, true, {{"channel":"release","version":"0.4.0"}}, "Mac de Ana", null, true, true)"#
@@ -441,17 +466,49 @@ mod tests {
             &crate::debug_options::Switch::ALL,
             Some("native"),
             false,
+            &PARTS,
         );
         assert!(evil.contains(r#"factory(window, "\"); alert(1); (\"""#));
         assert!(evil.contains(r#"{"channel":"dev","version":"0.4.0"}, "\"); alert(1); (\"", "#));
+    }
+
+    /// The page's script is the desktop's part in a scope where the transport and the members are `transportOf` and
+    /// `membersOf`, the shape test/bridge-source.mjs composes to run the same script in node.
+    #[test]
+    fn the_script_is_the_desktops_part_with_the_other_two_in_scope() {
+        let dev = BuildInfo::new("dev", "0.4.0", "", "");
+        let off = crate::debug_options::DebugOptions::default();
+        let script =
+            script_for_origin("https://voice.example.com", false, &dev, None, &off, false, &[], None, false, &PARTS);
+        assert!(
+            script.starts_with("(function (transportOf, membersOf) {\n// Sidevoice desktop bridge"),
+            "{script:.120}"
+        );
+        assert!(script.ends_with("\n})(TRANSPORT, MEMBERS);"));
+        assert_eq!(
+            script.matches("TRANSPORT").count(),
+            1,
+            "the parts are handed over once, and not read by the desktop's"
+        );
+        assert_eq!(script.matches("MEMBERS").count(), 1);
     }
 
     #[test]
     fn the_local_host_and_the_voice_call_are_offered_on_every_os() {
         let dev = BuildInfo::new("dev", "0.4.0", "", "");
         let off = crate::debug_options::DebugOptions::default();
-        let told =
-            script_for_origin("https://voice.example.com", false, &dev, None, &off, false, &[], Some("native"), false);
+        let told = script_for_origin(
+            "https://voice.example.com",
+            false,
+            &dev,
+            None,
+            &off,
+            false,
+            &[],
+            Some("native"),
+            false,
+            &PARTS,
+        );
         let line = r#"factory(window, "https://voice.example.com", "native", true, true, false, {"channel":"dev","version":"0.4.0"}, null, "#;
         assert!(told.contains(line), "{line}");
     }
@@ -462,7 +519,7 @@ mod tests {
         let dev = BuildInfo::new("dev", "0.4.0", "", "");
         let off = crate::debug_options::DebugOptions::default();
         let script = |uninstall| {
-            script_for_origin("https://voice.example.com", false, &dev, None, &off, false, &[], None, uninstall)
+            script_for_origin("https://voice.example.com", false, &dev, None, &off, false, &[], None, uninstall, &PARTS)
         };
         // The factory's last arguments: the microphone settings (false here), then the uninstall.
         let call = |told: &str| format!("false, {told});\n}})(function installDesktopBridge(");

@@ -1,0 +1,5 @@
+/* The microphone permission prompt. */
+"NSMicrophoneUsageDescription" = "エージェントと話せるように、Sidevoice はマイクで音声を聞き取ります。";
+
+/* The local network permission prompt. */
+"NSLocalNetworkUsageDescription" = "Sidevoice は、ペアリング済みのコンピュータにローカルネットワーク経由で接続します。";

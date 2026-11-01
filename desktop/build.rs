@@ -11,16 +11,15 @@ fn main() {
     // The application manifest is linked into every executable, test binaries included (platform::app_manifest), so
     // tauri-build adds none of its own.
     let windows = tauri_build::WindowsAttributes::new_without_app_manifest();
-    // The app's own commands, declared so capabilities can grant them per window/origin:
-    // the room window `bridge_state`, `bridge_level` and `bridge_playback` (+ `debug_log`), the native engine, the
-    // voice call (`voice_*`, macOS) and the local host (`local_host_*`), the mute shortcut and the call controls settings (`mute_shortcut`,
-    // `call_controls_settings`), the app's updates (`updater`), the microphone permission (`microphone`) and the
-    // developer options (`debug_options`), the call controls card its own six.
+    // The app's own commands, declared so capabilities can grant them per window/origin: the room window's `bridge_state`
+    // (+ `debug_log`), the local host (`local_host_*`), the data reset (`data_*`), the mute shortcut and the call controls
+    // settings (`mute_shortcut`, `call_controls_settings`), the app's updates (`updater`) and the developer options
+    // (`debug_options`); the call controls card its own six. What the apps share is the plugin's (sidevoice-app-tauri;
+    // its permissions are `sidevoice-app-tauri:allow-<command>`): the voice call, the engine, the microphone permission,
+    // the levels of the call and the pairings.
     tauri_build::try_build(tauri_build::Attributes::new().windows_attributes(windows).app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "bridge_state",
-            "bridge_level",
-            "bridge_playback",
             "call_controls_ready",
             "call_controls_run",
             "call_controls_layout",
@@ -28,33 +27,6 @@ fn main() {
             "call_controls_resize",
             "call_controls_cursor",
             "debug_log",
-            "engine_capabilities",
-            "engine_installed",
-            "engine_install",
-            "engine_progress",
-            "engine_cancel",
-            "engine_uninstall",
-            "engine_memory",
-            "engine_catalogs",
-            "engine_set_credential",
-            "engine_has_credential",
-            "engine_test_credential",
-            "engine_refresh",
-            "voice_create_call",
-            "voice_route_input",
-            "voice_dispose_call",
-            "voice_ready",
-            "voice_update",
-            "voice_preload",
-            "voice_start",
-            "voice_stop",
-            "voice_say",
-            "voice_cancel_say",
-            "voice_mute",
-            "voice_cancel_input",
-            "voice_end_input",
-            "voice_audio_devices",
-            "voice_set_audio_devices",
             "local_host_state",
             "local_host_pairing",
             "local_host_action",
@@ -62,15 +34,12 @@ fn main() {
             "local_host_install",
             "local_host_install_progress",
             "local_host_install_cancel",
-            "data_pairings_read",
-            "data_pairings_write",
             "data_delete_all",
             "data_uninstall",
             "data_reset_report",
             "mute_shortcut",
             "call_controls_settings",
             "updater",
-            "microphone",
             "debug_options",
         ]),
     ))

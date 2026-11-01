@@ -302,7 +302,7 @@ fn crash_reports(dir: &Path) -> Vec<std::path::PathBuf> {
 }
 
 /// `probe voice-memory`: the host's calls on the engine's real models, the process's footprint and Metal allocation
-/// taken at each step (desktop/src/voice/host/memory.rs, the ignored test): idle, a call with the models loaded, the
+/// taken at each step (desktop/src/voice/memory.rs, the ignored test): idle, a call with the models loaded, the
 /// call ended and the idle keep run out, ten calls back to back, a call whose settings change twelve times. The table
 /// is printed; the run fails only on clear growth (the checks are `probe::memory`). Reads `SIDEVOICE_REAL_CALL_MODELS` as
 /// `voice-models` does.
@@ -310,7 +310,7 @@ pub fn voice_memory_log() -> Result<String> {
     let logs = work("voice-memory")?;
     let log = logs.join("voice-memory.log");
     let mut test = Cmd::new("cargo")
-        .args(["test", "--release", "--lib", "voice::host::memory", "--", "--include-ignored", "--nocapture"])
+        .args(["test", "--release", "--lib", "voice::memory", "--", "--include-ignored", "--nocapture"])
         .dir(repo().join("desktop"))
         .spawn(&log)?;
     let status = test.ended(2400);

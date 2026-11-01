@@ -9,7 +9,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager, Webview};
 
 use crate::platform::reset_handoff::{self, Handoff};
-use crate::platform::{account, app_data, application, connector_service, credentials, uninstall};
+use crate::platform::{account, app_data, application, connector_service, uninstall};
 use crate::AppState;
 
 #[derive(Default)]
@@ -111,23 +111,28 @@ pub fn shared_model_root() -> Option<PathBuf> {
     sidevoice_platform::data_dir::models_dir()
 }
 
+/// The remote pairings, in the app data folder (docs/PAIRING_STORAGE.md).
+pub(crate) const PAIRINGS_FILE: &str = "pairings.json";
+
 fn pairings_file(app: &AppHandle) -> Result<PathBuf, Value> {
-    Ok(desktop_dir(app)?.join("pairings.json"))
+    Ok(desktop_dir(app)?.join(PAIRINGS_FILE))
 }
 
 mod pairings;
 use pairings::{read_pairings, write_pairings};
 
-#[tauri::command]
-pub fn data_pairings_read(app: AppHandle, webview: Webview) -> Answer {
-    caller(&app, &webview)?;
-    read_pairings(&pairings_file(&app)?)
-}
+/// The pairings the room page keeps, in this app's private file (the shared plugin's `pairings_read` and `pairings_write`
+/// ask for them): the held-directory storage of `pairings`.
+pub(crate) struct Pairings(pub(crate) AppHandle);
 
-#[tauri::command]
-pub fn data_pairings_write(app: AppHandle, webview: Webview, value: Value) -> Answer {
-    caller(&app, &webview)?;
-    write_pairings(&pairings_file(&app)?, &value)
+impl sidevoice_app_tauri::PairingStore for Pairings {
+    fn read(&self) -> Answer {
+        read_pairings(&pairings_file(&self.0)?)
+    }
+
+    fn write(&self, value: &Value) -> Answer {
+        write_pairings(&pairings_file(&self.0)?, value)
+    }
 }
 
 #[tauri::command]
@@ -206,7 +211,7 @@ async fn confirmed_reset(app: AppHandle, uninstall: bool) -> Answer {
     }
     if state.call.lock().unwrap().joined
         || crate::updater::installing(&app)
-        || app.try_state::<crate::engine_ipc::EngineState>().is_some_and(|engine| engine.jobs.busy())
+        || app.try_state::<sidevoice_app_core::app::AppHost>().is_some_and(|host| host.installing())
     {
         end_exclusive(&app);
         return Err(refused("reset.busy"));
@@ -260,12 +265,16 @@ fn begin_reset(app: &AppHandle, uninstall: bool) -> Answer {
     })?;
     // The program the helper runs and the relaunch starts, resolved and checked before anything is touched.
     let program = application::installed_program().ok_or_else(|| refused("reset.helper-failed"))?;
+    // The carry-over from the previous identifier ends before anything is cleared, finished or not: nothing the reset
+    // deletes (here or in the helper) may come back from the old identifier's data.
+    let control = control_dir().ok_or_else(|| refused("reset.helper-failed"))?;
+    crate::legacy_identifier::stop(&control).map_err(|_| refused("reset.helper-failed"))?;
     let (mut failed, agents, service_outcome) = reset_before_exit()?;
     // The provider keys, on every host that runs the transaction, journalled as the last step before exit.
-    if credentials::clear_all().is_err() {
+    if crate::app_hooks::keychain().clear_all().is_err() {
         failed.push(json!({"step": "keychain", "key": "reset.keychain-failed"}));
     }
-    let journal = control_dir().ok_or_else(|| refused("reset.helper-failed"))?.join(JOURNAL);
+    let journal = control.join(JOURNAL);
     write_atomic_json(
         &journal,
         &json!({"stage":"keychain", "completed":["service", "keychain"], "failed":failed.clone()}),

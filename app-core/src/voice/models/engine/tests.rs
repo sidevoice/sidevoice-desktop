@@ -1,0 +1,137 @@
+//! The engine's adapter on runtimes of its own: its native work leaves the async workers free, and a whole call through
+//! it, on the engine's real models, hears recorded speech and plays a reply. The real call downloads its models: it is
+//! ignored unless asked for (`--ignored`), which the macOS and Windows CI jobs do.
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+
+use crate::engine::NativeEngines;
+use crate::voice::models::fixture::Fixture;
+use crate::voice::{choose, CatalogCandidates, ModelChoice, VoiceSettings};
+use futures_util::StreamExt;
+use serde_json::json;
+use sidevoice_engine::NoCredentials;
+use sidevoice_voice::{Events, SayEvent, SayOptions, SayOutcome, StartOptions, TurnEvent, VoiceCall, VoiceEvent};
+
+use super::super::Halves;
+use super::*;
+
+#[test]
+fn native_work_leaves_the_async_workers_free() {
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().unwrap();
+    runtime.block_on(async {
+        let ticks = Arc::new(AtomicUsize::new(0));
+        let ticker = {
+            let ticks = Arc::clone(&ticks);
+            tokio::spawn(async move {
+                loop {
+                    ticks.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+        };
+        // Half a second of native work, from a task on the only worker: the ticker on that worker keeps ticking.
+        let work = tokio::spawn(blocking(async {
+            std::thread::sleep(Duration::from_millis(500));
+            Ok::<_, Error>(7)
+        }));
+        let before = ticks.load(Ordering::SeqCst);
+        assert_eq!(work.await.unwrap(), Ok(7));
+        let during = ticks.load(Ordering::SeqCst) - before;
+        assert!(during >= 20, "the worker ticked {during} times in 500 ms");
+        ticker.abort();
+    });
+}
+
+/// The next event `want` keeps, within ten minutes (the first run downloads the models); an error fails the test.
+async fn next<T>(events: &mut Events, want: impl Fn(VoiceEvent) -> Option<T>) -> T {
+    tokio::time::timeout(Duration::from_secs(600), async {
+        loop {
+            match events.next().await.expect("the call is alive") {
+                VoiceEvent::Error(error) => panic!("the call failed: {}", error.code),
+                event => {
+                    if let Some(found) = want(event) {
+                        return found;
+                    }
+                }
+            }
+        }
+    })
+    .await
+    .expect("in time")
+}
+
+#[test]
+#[ignore = "downloads real models; the macOS and Windows CI jobs run it"]
+fn a_call_on_the_engines_real_models_hears_speech_and_plays_a_reply() {
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build().unwrap();
+    // The engine's storage: a scratch folder of this run's, removed at the end; or SIDEVOICE_REAL_CALL_MODELS, kept (CI
+    // caches it by the engine's commit, so a model it already holds is not downloaded again).
+    let kept = std::env::var_os("SIDEVOICE_REAL_CALL_MODELS").map(std::path::PathBuf::from);
+    let root = kept
+        .clone()
+        .unwrap_or_else(|| std::env::temp_dir().join(format!("sidevoice-real-call-{}", std::process::id())));
+    let engines = NativeEngines::new(&root, NoCredentials, runtime.handle().clone()).unwrap();
+    let views = engines.catalogs().unwrap();
+    let catalogs: Vec<CatalogCandidates> = views.iter().map(crate::voice::candidates).collect();
+    // Transcribing with the recommended build chosen explicitly, as the web's "How it runs" setting names one.
+    let local = views[0]
+        .models
+        .iter()
+        .find(|m| m.id == "whisper-tiny")
+        .and_then(|m| m.local.as_ref())
+        .expect("whisper-tiny is a local model");
+    let build = local.recommended_build.clone().expect("a whisper-tiny build runs here");
+    let recommended = local.builds.iter().find(|candidate| candidate.id == build).unwrap();
+    assert!(recommended.available, "the recommended Whisper build runs here");
+    // Whatever accelerator the engine recommends, a Metal one is Whisper.cpp on the GPU.
+    if recommended.accelerator.as_deref() == Some("metal") {
+        assert_eq!(recommended.backend, "whisper-cpp");
+        assert_eq!(recommended.accelerator_class, Some("gpu"));
+    }
+    let settings: VoiceSettings = serde_json::from_value(json!({
+        "input": {
+            "stt": {"catalog": "local", "model": "whisper-tiny", "language": "en", "build": build},
+            "patience": "fast",
+        },
+        "output": {"tts": {"catalog": "local", "model": "kokoro-82m-v1.0"}},
+    }))
+    .unwrap();
+    let choice = choose(&settings, &catalogs).unwrap();
+    let input = choice.input.as_ref().unwrap();
+    assert_eq!(input.stt, ModelChoice { build: Some(build), ..ModelChoice::local("whisper-tiny") });
+    assert_eq!(input.vad, ModelChoice::local("silero-vad"));
+    let played = Arc::new(Mutex::new(Vec::new()));
+    let io = Fixture { sink: None, stop: Arc::default(), played: Arc::clone(&played) };
+    runtime.block_on(async {
+        let loader = EngineLoader::shared(engines.engine(), Arc::new(ModelCache::default()));
+        let setup = Halves::new(&loader, &choice, None).setup().unwrap();
+        let (call, mut events) = VoiceCall::new(Box::new(io), setup);
+        call.start(StartOptions::default());
+        let said = next(&mut events, |event| match event {
+            VoiceEvent::Turn(TurnEvent::Finished { text, .. }) => Some(text),
+            _ => None,
+        })
+        .await;
+        assert!(said.to_lowercase().contains("quilter"), "heard {said:?}");
+
+        let text = "The tests pass on every platform.";
+        let mut saying = call.say(text, SayOptions { language: Some("en".into()) });
+        let mut steps = Vec::new();
+        while let Some(step) = tokio::time::timeout(Duration::from_secs(600), saying.next()).await.expect("in time") {
+            steps.push(step);
+        }
+        assert_eq!(steps.last(), Some(&SayEvent::Done { outcome: SayOutcome::Heard }), "{steps:?}");
+        assert!(
+            steps.contains(&SayEvent::Progress { sounding: None, heard_chars: text.chars().count() }),
+            "heard to its end: {steps:?}"
+        );
+        let samples: usize = played.lock().unwrap().iter().sum();
+        assert!(samples > 12_000, "Kokoro spoke {samples} samples");
+        call.stop();
+    });
+    drop(engines);
+    if kept.is_none() {
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
