@@ -30,7 +30,14 @@ fn the_window_is_granted_every_shared_command_it_uses_once_and_nothing_else() {
     let capability: Value =
         serde_json::from_str(&std::fs::read_to_string(&files[0]).unwrap()).unwrap();
     assert_eq!(strings(&capability["windows"]), [crate::WINDOW]);
-    let granted = strings(&capability["permissions"]);
+    let (granted, own): (Vec<String>, Vec<String>) = strings(&capability["permissions"])
+        .into_iter()
+        .partition(|permission| permission.starts_with("sidevoice-app-tauri:"));
+    assert_eq!(
+        own,
+        ["allow-call-state"],
+        "the app's own: its report of the call"
+    );
     let unique: BTreeSet<&String> = granted.iter().collect();
     assert_eq!(
         unique.len(),

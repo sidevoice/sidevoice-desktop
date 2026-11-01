@@ -37,6 +37,8 @@ for (const origin of ["tauri://localhost", "http://tauri.localhost"]) {
     assert.equal(win.__sidevoiceHost, api);
     assert.equal(win.__SIDEVOICE_TARGET__, null);
     assert.equal(api.version, 2);
+    assert.equal(typeof api.snapshot, "function");
+    assert.equal(typeof api.run, "function");
     const host = api.host;
     assert.deepEqual(Object.keys(host).sort(), ["engine", "microphone", "pairings", "presence", "reach", "voice"]);
     assert.equal(JSON.stringify(host.presence), JSON.stringify({ media: "app" }));
@@ -58,7 +60,8 @@ test("the shared commands go to the plugin", async () => {
   const { api, invoked } = install("tauri://localhost");
   await api.host.pairings.read();
   await api.host.engine.installed();
-  assert.deepEqual(invoked.map(([command]) => command), [`${PLUGIN}pairings_read`, `${PLUGIN}engine_installed`]);
+  const plugin = invoked.map(([command]) => command).filter((command) => command.startsWith(PLUGIN));
+  assert.deepEqual(plugin, [`${PLUGIN}pairings_read`, `${PLUGIN}engine_installed`]);
 });
 
 test("the microphone's settings page is offered only where the system has one", () => {
@@ -66,4 +69,23 @@ test("the microphone's settings page is offered only where the system has one", 
   const without = install("tauri://localhost", "tauri://localhost", false).api.host.microphone;
   assert.equal(typeof withPage.openSettings, "function");
   assert.equal(without.openSettings, undefined);
+});
+
+test("the call is reported to the app, and the app's commands run on the room", async () => {
+  const { api, win, invoked } = install("tauri://localhost");
+  const settled = () => new Promise((resolve) => setTimeout(resolve, 0));
+  await settled();
+  // Before the room is up: reported once, not ready.
+  assert.deepEqual(invoked.map(([command]) => command), ["call_state"]);
+  assert.equal(invoked[0][1].snapshot.ready, false);
+  let toggled = 0;
+  win.sidevoiceActions = { toggleMic: () => { toggled++; } };
+  win.sidevoiceUI = { store: { getState: () => ({ call: { joined: true }, mic: { enabled: true }, callCard: { title: "Repo" } }), subscribe: () => () => {} } };
+  assert.equal(api.run({ command: "toggle-mute" }), true);
+  assert.equal(toggled, 1);
+  await settled();
+  const last = invoked.at(-1);
+  assert.equal(last[0], "call_state");
+  assert.equal(JSON.stringify([last[1].snapshot.ready, last[1].snapshot.joined, last[1].snapshot.micEnabled, last[1].snapshot.title]),
+    JSON.stringify([true, true, true, "Repo"]));
 });

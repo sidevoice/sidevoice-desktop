@@ -17,8 +17,14 @@ impl Os for Native {
         let mut env = vm
             .attach_current_thread()
             .map_err(|e| format!("attaching to the JVM: {e}"))?;
-        // SAFETY: as above; `init_with_env` takes its own global references and does not keep this local one.
-        let context = unsafe { JObject::from_raw(android.context().cast()) };
+        // SAFETY: the pointer is tao's global reference to the application (above), valid for the process's life. It is
+        // only borrowed here, to make a local reference of this thread's own from it: `JObject` deletes nothing when
+        // dropped, so tao's global stays as it is.
+        let application = unsafe { JObject::from_raw(android.context().cast()) };
+        let context = env
+            .new_local_ref(&application)
+            .map_err(|e| format!("the application context: {e}"))?;
+        // `init_with_env` takes global references of its own (the context and its class loader) and keeps no local one.
         rustls_platform_verifier::android::init_with_env(&mut env, context)
             .map_err(|e| format!("the verifier: {e}"))
     }

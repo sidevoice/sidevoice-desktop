@@ -7,7 +7,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
 use super::meters::Meters;
@@ -57,6 +57,65 @@ impl LaneAudio for SharedNativeAudio {
     }
 }
 
+/// What the app does around its calls' audio (D-CALL-LIFECYCLE): before the first call of the host starts, and after the
+/// last one ends. A phone uses it to hold the audio for the call (iOS activates its audio session, Android starts the
+/// call's foreground service) and to give it back.
+pub trait CallActivity: Send + Sync + 'static {
+    /// The first call is about to start (its audio opens next). `Err` with why refuses that start: the call is not made.
+    fn starting(&self) -> Result<(), String>;
+    /// The last call has stopped.
+    fn ended(&self);
+}
+
+/// An app with nothing to do around its calls (the desktop: its audio is the system's to share).
+pub struct NoCallActivity;
+
+impl CallActivity for NoCallActivity {
+    fn starting(&self) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn ended(&self) {}
+}
+
+/// How many lanes have a call that started and has not stopped, and the app's [`CallActivity`], told the first start and
+/// the last end.
+#[derive(Default)]
+pub struct ActiveCalls {
+    running: Mutex<usize>,
+    activity: OnceLock<Arc<dyn CallActivity>>,
+}
+
+impl ActiveCalls {
+    /// The app's observer, once.
+    pub fn observe(&self, activity: Arc<dyn CallActivity>) {
+        let _ = self.activity.set(activity);
+    }
+
+    /// A call starts: the first one asks the app first, which may refuse it.
+    fn begin(&self) -> Result<(), String> {
+        let mut running = self.running.lock().unwrap();
+        if *running == 0 {
+            if let Some(activity) = self.activity.get() {
+                activity.starting()?;
+            }
+        }
+        *running += 1;
+        Ok(())
+    }
+
+    /// A call that started has stopped: the last one tells the app.
+    fn end(&self) {
+        let mut running = self.running.lock().unwrap();
+        *running = running.saturating_sub(1);
+        if *running == 0 {
+            if let Some(activity) = self.activity.get() {
+                activity.ended();
+            }
+        }
+    }
+}
+
 /// Where the call's events go: the room page (`to_page`), as JSON.
 pub type Page = Arc<dyn Fn(Value) + Send + Sync>;
 
@@ -94,6 +153,8 @@ pub struct VoiceState<A: LaneAudio = SharedNativeAudio> {
     keeping: Mutex<Vec<JoinHandle<()>>>,
     /// Quitting: nothing is kept any more; what would be is let go at once.
     closing: AtomicBool,
+    /// The calls that run, for the app's [`CallActivity`].
+    pub active: Arc<ActiveCalls>,
 }
 
 pub struct CallLane<P> {
@@ -107,6 +168,9 @@ pub struct CallLane<P> {
     input: P,
     /// What the page last asked of `mute`, kept from the lane's creation: the call is made with it.
     muted: AtomicBool,
+    /// Whether the lane's call started and is counted in `active` (until it stops).
+    counted: AtomicBool,
+    active: Arc<ActiveCalls>,
     lifecycle: Arc<Mutex<Lifecycle>>,
     /// Whether the lane was released; held while an event is handed to the page, so that once it is set nothing
     /// reaches the page again (see `CallLane::release`).
@@ -172,6 +236,7 @@ impl<A: LaneAudio> VoiceState<A> {
             minute: Self::idle_minute(),
             keeping: Mutex::new(Vec::new()),
             closing: AtomicBool::new(false),
+            active: Arc::default(),
         }
     }
 
@@ -232,7 +297,7 @@ impl<A: LaneAudio> VoiceState<A> {
             return Err(refusal("bad_request", "Voice call key already exists."));
         }
         let (io, input) = self.audio.attach();
-        calls.insert(key, Arc::new(CallLane::new(io, input, page)));
+        calls.insert(key, Arc::new(CallLane::new(io, input, page, Arc::clone(&self.active))));
         Ok(())
     }
 
@@ -338,8 +403,13 @@ impl<A: LaneAudio> VoiceState<A> {
             return Err(refusal("bad_request", "The voice call has started already."));
         }
         let setup = applied.halves.setup().map_err(|code| refusal("internal", code))?;
-        let io =
-            lane.io.lock().unwrap().take().ok_or_else(|| refusal("internal", "Voice lane audio was already taken."))?;
+        // The app holds the audio for the call before it opens (the first call only), or refuses it.
+        lane.active.begin().map_err(|why| failed("The call could not start", why))?;
+        let Some(io) = lane.io.lock().unwrap().take() else {
+            lane.active.end();
+            return Err(refusal("internal", "Voice lane audio was already taken."));
+        };
+        lane.counted.store(true, Ordering::SeqCst);
         let (call, events) = VoiceCall::new(io, setup);
         call.mute(lane.muted.load(Ordering::SeqCst));
         forward(page, key.to_owned(), events, Arc::clone(&lane.lifecycle), Arc::clone(&lane.released));
@@ -557,7 +627,7 @@ impl<A: LaneAudio> VoiceState<A> {
 }
 
 impl<P> CallLane<P> {
-    fn new(io: Box<dyn AudioIo>, input: P, page: u64) -> Self {
+    fn new(io: Box<dyn AudioIo>, input: P, page: u64, active: Arc<ActiveCalls>) -> Self {
         Self {
             page,
             call: tokio::sync::Mutex::new(None),
@@ -565,6 +635,8 @@ impl<P> CallLane<P> {
             io: Mutex::new(Some(io)),
             input,
             muted: AtomicBool::new(false),
+            counted: AtomicBool::new(false),
+            active,
             lifecycle: Arc::new(Mutex::new(Lifecycle::default())),
             released: Arc::new(Mutex::new(false)),
             sayings: Arc::new(Mutex::new(HashMap::new())),
@@ -611,6 +683,10 @@ impl<P> CallLane<P> {
         let _ = answered.await;
         for task in telling {
             let _ = task.await;
+        }
+        // Its audio is closed: the app may give it back if it was the last call.
+        if self.counted.swap(false, Ordering::SeqCst) {
+            self.active.end();
         }
         true
     }

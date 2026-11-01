@@ -8,6 +8,7 @@
 #[cfg(test)]
 mod acl_tests;
 mod bridge;
+mod call;
 pub mod pairings;
 mod platform;
 
@@ -15,7 +16,6 @@ use std::{path::PathBuf, sync::Arc};
 
 pub use platform::entry::run;
 use sidevoice_app_core::app::{AlwaysAdmit, AppHost, Hooks, HostConfig, Keychain};
-use sidevoice_app_core::sidevoice_voice::{AudioSession, Session, SessionConfig, SessionMode};
 use sidevoice_app_tauri::platform::origin::APP_ORIGIN;
 use sidevoice_app_tauri::{Pages, Pairings};
 use tauri::{
@@ -32,15 +32,6 @@ const PROVIDER_KEYS: &str = "ai.sidevoice.mobile.providers";
 /// The folder of the engine's models in the app's own files: the app's alone (a phone has one app of ours), kept out of
 /// the device backup (they are downloaded again).
 const MODELS: &str = "models";
-
-/// How the call uses the audio session (iOS; D-AUDIO-SESSION, sidevoice-voice's `SessionConfig`): play-and-record, the
-/// system's own processing (`Default`: the voice's echo cancellation is the app's), the loudspeaker rather than the
-/// receiver when nothing else is plugged in, and a Bluetooth hands-free headset allowed.
-const CALL_AUDIO: SessionConfig = SessionConfig {
-    mode: SessionMode::Default,
-    speaker: true,
-    bluetooth: true,
-};
 
 /// How long quitting waits for the calls to stop and the models to be released (as the desktop).
 const RELEASE_LIMIT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -99,11 +90,43 @@ fn model_root<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, Box<dyn std::er
     Ok(models)
 }
 
-/// The call's audio session, declared and activated while the app is in front (iOS refuses to start recording from the
-/// background; every other OS has no session and succeeds). The voice's streams then open on it.
-fn audio_session() -> Result<(), String> {
-    Session::configure(&CALL_AUDIO)?;
-    Session::activate()
+/// The call as the page reports it (`window.__sidevoiceHost`'s room, mobile/js/mobile-bridge.js): what the app reads of
+/// it. The rest of the snapshot is the page's and is not read.
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct CallReport {
+    ready: bool,
+    joined: bool,
+    mic_enabled: bool,
+    title: String,
+}
+
+/// The last report, to log what changed.
+#[derive(Default)]
+struct LastReport(std::sync::Mutex<CallReport>);
+
+/// The page reports the call (the app's own command, capabilities/main.json). Logged when it joins or leaves a call, or
+/// mutes; never the conversation's title.
+#[tauri::command]
+fn call_state(
+    app: AppHandle,
+    webview: Webview,
+    last: tauri::State<'_, LastReport>,
+    snapshot: CallReport,
+) -> Result<(), String> {
+    the_page(&app, &webview)?;
+    let previous = std::mem::replace(&mut *last.0.lock().unwrap(), snapshot.clone());
+    if (previous.ready, previous.joined, previous.mic_enabled)
+        != (snapshot.ready, snapshot.joined, snapshot.mic_enabled)
+    {
+        log::info!(
+            "call_state: ready={} joined={} mic={}",
+            snapshot.ready,
+            snapshot.joined,
+            snapshot.mic_enabled
+        );
+    }
+    Ok(())
 }
 
 /// The app: one window, on the bundled interface, with the members the apps share.
@@ -118,13 +141,16 @@ fn run_app() {
         // The commands the apps share (`host.voice`, `host.engine`, `host.microphone`, `host.pairings`): who may call is
         // the app's one window, on its own page.
         .plugin(sidevoice_app_tauri::init(the_page, pages))
+        .manage(LastReport::default())
+        .invoke_handler(tauri::generate_handler![call_state])
         .setup(move |app| {
             let handle = app.handle().clone();
             // Before the engine's first HTTPS request. Without it, remote providers and downloads fail; the rest runs.
             if let Err(error) = platform::tls::init() {
                 log::error!("tls: {error}");
             }
-            if let Err(error) = audio_session() {
+            // Declared now, activated only when a call starts (`call::PhoneCall`).
+            if let Err(error) = call::configure() {
                 log::error!("audio session: {error}");
             }
             app.manage(Pairings(Arc::new(pairings::PairingFile::of_app(&handle)?)));
@@ -139,6 +165,8 @@ fn run_app() {
                     admission: Arc::new(AlwaysAdmit),
                     events: Arc::new(events.clone()),
                     keys: Arc::new(Keychain::new(PROVIDER_KEYS)),
+                    // The call holds the audio session (iOS) and its foreground service (Android) while it runs.
+                    calls: Arc::new(call::PhoneCall(handle.clone())),
                 },
             ));
             let page_app = handle.clone();

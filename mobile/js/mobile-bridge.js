@@ -25,6 +25,15 @@
   // Its events come over the channel the members open for it (`voice_events`), not through the global.
   const voiceCall = members.voice();
 
+  /** The call as the room reports it (the members' `room`), sent to the app's own `call_state` whenever it changes; the
+   *  app runs the shared commands (`hang-up`, `toggle-mute`, …) on the room through `run`: the call's service hangs up
+   *  through it when the person ends the call from its notification. */
+  const reporting = members.room({
+    version: 2,
+    publish: (snapshot) => transport.own.send("call_state", { snapshot }),
+    extend: () => ({}),
+  });
+
   const api = {
     /** The contract this app speaks: the desktop's (docs/BRIDGE.md). */
     version: 2,
@@ -45,7 +54,12 @@
       /** The webview sends plain http to a private address; to whom, and with whose consent, is the page's policy. */
       reach: Object.freeze({ plainHttpPrivate: true }),
     }),
+    snapshot: reporting.snapshot,
+    /** Runs one command from the app (the call's notification, a headset) through the web UI's own actions:
+     *  `{command, …}`. Returns whether it ran. */
+    run: reporting.run,
   };
   win.__sidevoiceHost = api;
+  reporting.start();
   return api;
 });
