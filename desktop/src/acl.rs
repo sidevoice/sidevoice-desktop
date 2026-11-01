@@ -84,10 +84,10 @@ fn only_the_current_room_window_on_the_apps_own_origin_is_the_page() {
     );
 }
 
-/// The bridge script is told what native media keys the host has, as the literal it reads.
+/// The bridge script is told whether the host owns the system's media controls, as the literal it reads.
 #[test]
 fn the_bridge_script_receives_the_hosts_media_support() {
-    let support = sidevoice_app_tauri::platform::media_controls::support();
+    let available = sidevoice_app_tauri::platform::media_controls::available();
     let script = sidevoice_desktop_core::bridge::script_for_origin(
         "tauri://localhost",
         false,
@@ -96,9 +96,45 @@ fn the_bridge_script_receives_the_hosts_media_support() {
         &Default::default(),
         false,
         &[],
-        support,
+        available,
         false,
+        "Ctrl",
+        &Default::default(),
+        &sidevoice_desktop_core::bridge::Parts { transport: "TRANSPORT", members: "MEMBERS" },
     );
-    let literal = serde_json::to_string(&support).unwrap();
+    let literal = serde_json::to_string(&available).unwrap();
     assert!(script.contains(&format!("factory(window, \"tauri://localhost\", {literal},")));
+}
+
+/// The room's script is made of the real parts, the transport the plugin ships, the members the apps share and the
+/// desktop's own, and nothing of it is left to fill in.
+#[test]
+fn the_rooms_script_is_made_of_the_real_parts_with_no_placeholder_left() {
+    let parts = sidevoice_desktop_core::bridge::Parts {
+        transport: sidevoice_app_tauri::js::TRANSPORT,
+        members: sidevoice_app_core::js::MEMBERS,
+    };
+    let script = sidevoice_desktop_core::bridge::script_for_origin(
+        "tauri://localhost",
+        true,
+        &sidevoice_desktop_core::build_info::BuildInfo::new("nightly", "0.0.0", "", ""),
+        Some("Mac de Ana"),
+        &Default::default(),
+        true,
+        &[],
+        true,
+        true,
+        "⌘",
+        &crate::platform::host::microphone_help(),
+        &parts,
+    );
+    // (`win.__SIDEVOICE_TARGET__` is the web's own global; a placeholder is a string.)
+    assert!(!script.contains("\"__SIDEVOICE_"), "a placeholder is left in the script");
+    for (part, mark) in [
+        ("transport", "plugin:sidevoice-app-tauri|"),
+        ("members", "function room("),
+        ("desktop", "installDesktopBridge"),
+    ] {
+        assert_eq!(script.matches(mark).count(), 1, "the {part} part is in the script once");
+    }
 }

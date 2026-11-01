@@ -1,0 +1,5 @@
+/* The microphone permission prompt. */
+"NSMicrophoneUsageDescription" = "Sidevoice słucha przez mikrofon, aby umożliwić ci rozmowę z twoim agentem.";
+
+/* The local network permission prompt. */
+"NSLocalNetworkUsageDescription" = "Sidevoice łączy się z twoim sparowanym komputerem w sieci lokalnej.";

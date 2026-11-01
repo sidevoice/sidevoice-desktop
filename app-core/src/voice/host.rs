@@ -1,4 +1,4 @@
-//! The native voice host's calls (`window.__sidevoiceDesktop.host.voice`, docs/BRIDGE.md → "The voice call"), apart from
+//! The native voice host's calls (`window.__sidevoiceHost.host.voice`, docs/BRIDGE.md → "The voice call"), apart from
 //! the app: one lane of the shared microphone and speaker per call, the call on it (sidevoice-voice's `VoiceCall`,
 //! which loads only the halves it has), what it tells the page, and what a stopped call or a preload keeps loaded for
 //! its idle minutes. The commands that reach it from the page, and the engine it takes its models from, are in

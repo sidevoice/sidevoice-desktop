@@ -1,4 +1,4 @@
-//! The local host (docs/LOCAL_HOST.md) as the room page reaches it: `window.__sidevoiceDesktop.host.localHost`.
+//! The local host (docs/LOCAL_HOST.md) as the room page reaches it: `window.__sidevoiceHost.host.localHost`.
 //!
 //! The work is the `sidevoice-local-host` crate's (the checks, the pairing over the core's local channel, the proxy,
 //! the poll); this module starts it with the app's own paths, answers the page's commands, and stops it as the app

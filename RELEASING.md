@@ -8,10 +8,11 @@ two apart.
 
 ## Two products in one repository
 
-The mobile app (`mobile/`, plan: sidevoice/sidevoice-desktop#289) does not exist yet and nothing here builds it. What
-is ready for it, so that adding it needs no change to the desktop app's tags, releases or nightly:
+The mobile app lives in `mobile/` (plan: sidevoice/sidevoice-desktop#289) and has no release package yet: per
+sidevoice/sidevoice-desktop#320 the package is added at the first store submission. What is ready for it, so that adding
+the package needs no change to the desktop app's tags, releases or nightly:
 
-| | Desktop app (today) | Mobile app (when it exists) |
+| | Desktop app (today) | Mobile app (once its package exists) |
 |---|---|---|
 | release-please package | `.` (every commit; with the mobile package, every commit except the ones that touch only `mobile/`) | `mobile` |
 | Tag | `vX.Y.Z` (unchanged) | `mobile-vX.Y.Z` |
@@ -301,6 +302,10 @@ previous identifier".
   ("Developer ID Application: … (TEAMID)"), `APPLE_TEAM_ID`, and the notary's App Store Connect API key:
   `APPLE_API_KEY` (its id), `APPLE_API_ISSUER`, `APPLE_API_KEY_P8` (the .p8's contents). release-please.yml
   hands them to `build` (`secrets: inherit`).
+- The mobile app's TestFlight upload (`.github/workflows/mobile-testflight.yml`, by hand from `main`) reads the App Store
+  Connect key's four secrets above (`APPLE_API_KEY`, `APPLE_API_ISSUER`, `APPLE_API_KEY_P8`, `APPLE_TEAM_ID`) and needs the
+  key to have the **Admin** role; the desktop notarization works with it too. Its job runs in the environment
+  `testflight`, whose deployment branches should be `main` only (docs/MOBILE.md → "TestFlight").
 - Repository secrets for the updates (a release): `TAURI_SIGNING_PRIVATE_KEY` (the minisign private key
   `tauri signer generate` wrote) and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (Updates, above).
 - Required check **PR title is a conventional commit**. release-please's own PR gets it through a dispatched run
