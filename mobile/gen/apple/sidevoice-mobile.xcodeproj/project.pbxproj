@@ -78,8 +78,10 @@
 		A113CAD3D1FD380DEEE3CE26 /* es */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = es; path = es.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		A13AEA8AD965C33B4A462A4E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A3D98CD41CC1FB03FA370222 /* fr */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = fr; path = fr.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A6C8CD431FED33808E2B7AC8 /* webview.rs */ = {isa = PBXFileReference; path = webview.rs; sourceTree = "<group>"; };
 		AC7B192F6F772B984C2013E8 /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
 		AE2D024A132682092607EB7C /* host.rs */ = {isa = PBXFileReference; path = host.rs; sourceTree = "<group>"; };
+		AED522E47066BFF089D0DD8A /* other.rs */ = {isa = PBXFileReference; path = other.rs; sourceTree = "<group>"; };
 		B5E6137564CC46CBF5FDCAF7 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		B7E57CBB3A47BDAD3039528B /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		BE293A96151AB5D44D76E3EC /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
@@ -89,6 +91,7 @@
 		CDF4E02D7E5B1C22C68978F8 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
 		D53EC9AD147484E515EBA7F0 /* ja */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ja; path = ja.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		D6067A41257B6008E8BE4CA5 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
+		DA1A087B3D35A1E037C07349 /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		DBCA0DED9DAF11927A94CD98 /* host.rs */ = {isa = PBXFileReference; path = host.rs; sourceTree = "<group>"; };
 		DD941F079E3C0751703CE1EC /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		DEBD9545CF90786BDDD5D639 /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
@@ -124,6 +127,15 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		0AEE8EC07FFF92C7DC06F2CE /* webview */ = {
+			isa = PBXGroup;
+			children = (
+				DA1A087B3D35A1E037C07349 /* ios.rs */,
+				AED522E47066BFF089D0DD8A /* other.rs */,
+			);
+			path = webview;
+			sourceTree = "<group>";
+		};
 		176867480F70539CE1CC6ADA /* sidevoice-mobile */ = {
 			isa = PBXGroup;
 			children = (
@@ -276,10 +288,12 @@
 				035C90F560637AC4EE9E2858 /* microphone_help.rs */,
 				9F8D209D8F7F183F8C5BF60D /* private_dir.rs */,
 				C1188ECF695A1AC9631488B1 /* tls.rs */,
+				A6C8CD431FED33808E2B7AC8 /* webview.rs */,
 				7A9D2BCC197B63250747232C /* backup */,
 				63D94CE980AE1EF2EBB0FFBE /* microphone_help */,
 				6C86A9A2C43172A90C0FA47A /* private_dir */,
 				A4F4ADFF1EE4A1E8FEA820B9 /* tls */,
+				0AEE8EC07FFF92C7DC06F2CE /* webview */,
 			);
 			path = platform;
 			sourceTree = "<group>";
