@@ -90,7 +90,9 @@ through `run` (the call's service hangs up through it).
 - **The call's lifecycle** (D-CALL-LIFECYCLE, `mobile/src/call.rs`), the same on both phones: the green call button
   starts the call, the red one ends it.
   - **The room's call** holds the call's foreground service (Android): the page reports the call to the app's own
-    `call_state`, and the service starts when the report says joined (a press of the green button, with the app in
+    `call_state`, with its page's number (asked once from `call_page`, so a report of a replaced page that reaches the
+    app late changes nothing), and one thread of the app (`RoomCall`) takes the reports, the page changes and the
+    service's own end in order. The service starts when the report says joined (a press of the green button, with the app in
     front, as Android requires) and stops when it says not (the red button, a page that loads anew, the app quitting).
     A start the system refuses is logged by its code (`not-visible`, `microphone-permission`, …), and the call goes on in
     front. The service ending on its own (Hang up in its notification, the app removed from the recents list, the

@@ -28,9 +28,19 @@
   /** The call as the room reports it (the members' `room`), sent to the app's own `call_state` whenever it changes; the
    *  app runs the shared commands (`hang-up`, `toggle-mute`, …) on the room through `run`: the call's service hangs up
    *  through it when the person ends the call from its notification. */
+  // The page's number, asked once (`call_page`): every report carries it, so that one of this page reaching the app after
+  // a newer page has loaded changes nothing of the newer page's call. Reports keep their order: each waits on the same
+  // answer.
+  let pageNumber = null;
+  const numbered = () => (pageNumber ??= transport.own.call("call_page").catch((error) => {
+    pageNumber = null;
+    throw error;
+  }));
   const reporting = members.room({
     version: 2,
-    publish: (snapshot) => transport.own.send("call_state", { snapshot }),
+    publish: (snapshot) => {
+      numbered().then((page) => transport.own.send("call_state", { page, snapshot }), () => {});
+    },
     extend: () => ({}),
   });
 

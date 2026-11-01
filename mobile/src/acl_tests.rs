@@ -35,8 +35,8 @@ fn the_window_is_granted_every_shared_command_it_uses_once_and_nothing_else() {
         .partition(|permission| permission.starts_with("sidevoice-app-tauri:"));
     assert_eq!(
         own,
-        ["allow-call-state"],
-        "the app's own: its report of the call"
+        ["allow-call-page", "allow-call-state"],
+        "the app's own: its page's number and its report of the call"
     );
     let unique: BTreeSet<&String> = granted.iter().collect();
     assert_eq!(
