@@ -54,7 +54,6 @@
 		2F7FFFBA485380A406EB4250 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
 		342E293471DA6E0AD449A563 /* es.rs */ = {isa = PBXFileReference; path = es.rs; sourceTree = "<group>"; };
 		3AF49EB321D75CDC67E166DB /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
-		3CF4A4730CCA2ED1D581B4CD /* host.rs */ = {isa = PBXFileReference; path = host.rs; sourceTree = "<group>"; };
 		3ED59F09A85CF8FF41D62009 /* pairings.rs */ = {isa = PBXFileReference; path = pairings.rs; sourceTree = "<group>"; };
 		438F566187470C3B8979F853 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 		46B600F3D87A8B86B45A62C9 /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
@@ -72,14 +71,12 @@
 		7717DC1AC675EE5C22703A85 /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		7D0D2F377196B00F1647880E /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		86D727D8E9CA54F3F9AF1E0A /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
-		8C7C54E881AB0C4ECFE9A136 /* host.rs */ = {isa = PBXFileReference; path = host.rs; sourceTree = "<group>"; };
 		9B99011EAA107BB9AD2AA47E /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		9F8D209D8F7F183F8C5BF60D /* private_dir.rs */ = {isa = PBXFileReference; path = private_dir.rs; sourceTree = "<group>"; };
 		A113CAD3D1FD380DEEE3CE26 /* es */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = es; path = es.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		A13AEA8AD965C33B4A462A4E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A3D98CD41CC1FB03FA370222 /* fr */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = fr; path = fr.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		AC7B192F6F772B984C2013E8 /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
-		AE2D024A132682092607EB7C /* host.rs */ = {isa = PBXFileReference; path = host.rs; sourceTree = "<group>"; };
 		B5E6137564CC46CBF5FDCAF7 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		B7E57CBB3A47BDAD3039528B /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		BE293A96151AB5D44D76E3EC /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
@@ -89,7 +86,6 @@
 		CDF4E02D7E5B1C22C68978F8 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
 		D53EC9AD147484E515EBA7F0 /* ja */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ja; path = ja.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		D6067A41257B6008E8BE4CA5 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
-		DBCA0DED9DAF11927A94CD98 /* host.rs */ = {isa = PBXFileReference; path = host.rs; sourceTree = "<group>"; };
 		DD941F079E3C0751703CE1EC /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		DEBD9545CF90786BDDD5D639 /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
 		E1D2AC4499397F9500F40456 /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = System/Library/Frameworks/AudioToolbox.framework; sourceTree = SDKROOT; };
@@ -164,7 +160,6 @@
 			isa = PBXGroup;
 			children = (
 				04B561B0C6069C039FFEED09 /* android.rs */,
-				DBCA0DED9DAF11927A94CD98 /* host.rs */,
 				2CA4698307C9928A0B5866DB /* ios.rs */,
 			);
 			path = microphone_help;
@@ -182,7 +177,6 @@
 			isa = PBXGroup;
 			children = (
 				084491628E8D53FF0885F833 /* android.rs */,
-				3CF4A4730CCA2ED1D581B4CD /* host.rs */,
 				7717DC1AC675EE5C22703A85 /* ios.rs */,
 			);
 			path = private_dir;
@@ -192,7 +186,6 @@
 			isa = PBXGroup;
 			children = (
 				60477C1251FDD0FCF53CB04B /* android.rs */,
-				8C7C54E881AB0C4ECFE9A136 /* host.rs */,
 				3AF49EB321D75CDC67E166DB /* ios.rs */,
 			);
 			path = backup;
@@ -226,7 +219,6 @@
 			isa = PBXGroup;
 			children = (
 				2F7FFFBA485380A406EB4250 /* android.rs */,
-				AE2D024A132682092607EB7C /* host.rs */,
 				B7E57CBB3A47BDAD3039528B /* ios.rs */,
 			);
 			path = tls;

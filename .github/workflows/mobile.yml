@@ -94,12 +94,12 @@ jobs:
           path: mobile/gen/apple
           include-hidden-files: true
           retention-days: 7
-      - name: Clippy over the mobile crates, warnings denied (empty on a computer, so cargo xtask lint cannot reach them)
-        if: ${{ !cancelled() }}
-        run: cargo xtask mobile lint ios
       - name: The app for the simulator, unsigned
         if: ${{ !cancelled() }}
         run: cargo xtask mobile build ios
+      - name: Clippy over the mobile crates, warnings denied (empty on a computer, so cargo xtask lint cannot reach them)
+        if: ${{ !cancelled() }}
+        run: cargo xtask mobile lint ios
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: ${{ !cancelled() }}
         with:
