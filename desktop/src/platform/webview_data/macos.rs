@@ -23,11 +23,11 @@ impl Os for Native {
         }
     }
 
-    fn locations(home: &Path) -> io::Result<Locations> {
+    fn locations(home: &Path, identifier: &str) -> io::Result<Locations> {
         Locations::new(vec![
-            home.join("Library/Application Support").join(IDENTIFIER),
-            home.join("Library/WebKit").join(IDENTIFIER),
-            home.join("Library/Caches").join(IDENTIFIER),
+            home.join("Library/Application Support").join(identifier),
+            home.join("Library/WebKit").join(identifier),
+            home.join("Library/Caches").join(identifier),
         ])
     }
 
