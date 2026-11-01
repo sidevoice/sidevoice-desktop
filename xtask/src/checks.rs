@@ -71,10 +71,10 @@ pub fn test_support() -> Result<()> {
 }
 
 /// Everything `npm run icons` writes.
-const DRAWN: &[&str] = &["desktop/packaging"];
+const DRAWN: &[&str] = &["desktop/packaging", "mobile/app-icon"];
 
-/// `icons`: the icons, tray marks and .dmg window are what the brand files draw: `npm run icons`, then nothing it
-/// writes differs from what is committed.
+/// `icons`: the icons, tray marks, .dmg window and the mobile app's icon sources are what the brand files draw:
+/// `npm run icons`, then nothing it writes differs from what is committed.
 pub fn icons() -> Result<()> {
     Cmd::new(npm()).args(["run", "icons"]).run()?;
     Cmd::new("git").args(["status", "--porcelain", "--"]).args(DRAWN).run()?;

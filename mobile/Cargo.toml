@@ -1,0 +1,20 @@
+[package]
+name = "sidevoice-mobile"
+version = "0.1.0"
+description = "Sidevoice mobile app: a native shell around the Sidevoice web UI"
+edition = "2021"
+rust-version = "1.98"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+name = "sidevoice_mobile_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7", features = [] }
+
+[dependencies]
+# The app's native project inputs: the Android manifest and its network security config (plugin/).
+sidevoice-mobile-plugin = { path = "plugin" }
+tauri = { version = "2.12", features = [] }
