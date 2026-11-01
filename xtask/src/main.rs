@@ -37,6 +37,8 @@
 //! - `mobile build android|ios` (CI, every pull request): the unsigned app, into dist/: the Android APK (arm64), checked
 //!   for 16 KB pages, and the iOS simulator app, checked for its privacy manifest and export compliance
 //!   (.github/workflows/mobile.yml). `mobile check-16kb [APK]` and `mobile check-ios [APP]` are those checks.
+//! - `mobile lint android|ios` (CI, every pull request): Clippy with warnings denied over the mobile crates for their target;
+//!   they are empty on a computer (`#![cfg(mobile)]`), so `lint` does not reach them (.github/workflows/mobile.yml).
 //! - `mobile sign android` (CI, by hand from main): the unsigned APK aligned, signed with the upload key, verified and
 //!   checked for 16 KB pages, into dist/ (.github/workflows/mobile-android-signed.yml; mobile/sign.rs). Reads the
 //!   `ANDROID_UPLOAD_*` secrets.
@@ -140,7 +142,7 @@ const USAGE: &str =
   | probe probe-app | probe local-host | probe probe | probe voice-models | probe card | probe exit
   | probe memory | probe voice-memory
   | mobile generate android | mobile generate ios | mobile generated android | mobile generated ios
-  | mobile build android | mobile build ios | mobile sign android | mobile check-16kb [APK] | mobile check-ios [APP] | mobile test android | mobile testflight --build-number N
+  | mobile build android | mobile build ios | mobile lint android | mobile lint ios | mobile sign android | mobile check-16kb [APK] | mobile check-ios [APP] | mobile test android | mobile testflight --build-number N
   | packaging compare BEFORE_REF | packaging files DIR OUTPUT
   | publish assets release TAG | publish assets nightly | publish release TAG | publish nightly
   | release-pr-title [BRANCH] | release-pr-checks
@@ -161,6 +163,7 @@ fn main() -> ExitCode {
         ["mobile", "generate", project] => mobile::generate(project),
         ["mobile", "generated", project] => mobile::generated(project),
         ["mobile", "build", project] => mobile::build(project),
+        ["mobile", "lint", project] => mobile::lint(project),
         ["mobile", "sign", "android"] => mobile::sign::sign_android(),
         ["mobile", "test", project] => mobile::test(project),
         ["mobile", "check-16kb"] => mobile::check::check_16kb(&mobile::unsigned_apk()),

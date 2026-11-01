@@ -1,13 +1,9 @@
 //! The certificate verifier of the engine's HTTPS (remote providers, model downloads): `reqwest` verifies with the system's
 //! own verifier (`rustls-platform-verifier`). On Android that verifier is Kotlin, reached through the JVM, and has to be
-//! handed the app's context once, before the first request; the engine cannot do it (it has no JNI environment). iOS and
-//! a computer verify through their own libraries and need nothing.
+//! handed the app's context once, before the first request; the engine cannot do it (it has no JNI environment). iOS verifies
+//! through its own library and needs nothing.
 #[cfg_attr(target_os = "android", path = "tls/android.rs")]
 #[cfg_attr(target_os = "ios", path = "tls/ios.rs")]
-#[cfg_attr(
-    not(any(target_os = "android", target_os = "ios")),
-    path = "tls/host.rs"
-)]
 mod imp;
 use imp::Native;
 

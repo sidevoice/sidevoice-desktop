@@ -1,10 +1,13 @@
 //! Host kind is a crate boundary (D-RULE; AGENTS.md → "Host kind is a crate boundary"): what the Cargo workspace may
 //! depend on, and how a mobile target is built. `platform_guard` rejects the conditions; this is the crates.
 //!
-//! The crates sit at the workspace root and each app composes the ones it uses:
+//! The crates sit at the workspace root and each app composes the ones it uses (D-RULE-ROOT: a host crate exists only for its
+//! kind, `#![cfg(desktop)]` or `#![cfg(mobile)]` at its root, which `platform_guard` accepts nowhere else):
 //! - the host crates, `desktop/` and `mobile/`, depend on neither each other nor anything that depends on the other;
 //! - the shared crates, `app-core/` and `app-tauri/`, depend on neither host crate;
 //! - `app-core/` has no shell in its closure: no Tauri, no webview and no window crate, in any kind of dependency.
+//! - each host crate (`desktop`, `mobile`, `mobile/plugin`) carries the attribute of its kind at its root, and the
+//!   workspace's `default-members`, which a plain `cargo build` or `cargo test` takes, hold no mobile crate.
 //!
 //! They are read from `cargo metadata` with every feature on, once for each supported target: a dependency behind a
 //! feature (`shell = ["dep:tauri"]`) is a dependency of the crate that has the feature, and one under a
@@ -39,6 +42,9 @@ const HOSTS: [&str; 2] = ["desktop", "mobile"];
 const SHARED: [&str; 2] = ["app-core", "app-tauri"];
 /// The shared crate that has no shell.
 const CORE: &str = "app-core";
+/// The host crates that exist only for their kind: the directory below the workspace root, and the kind whose attribute
+/// `#![cfg(..)]` its `src/lib.rs` carries.
+const ROOT_ATTRIBUTES: [(&str, &str); 3] = [("desktop", "desktop"), ("mobile", "mobile"), ("mobile/plugin", "mobile")];
 
 /// Whether a crate is the shell: Tauri, with its plugins and runtime, and the webview and window crates under it.
 fn is_shell(name: &str) -> bool {
@@ -137,6 +143,12 @@ pub fn violations(metadata: &Value) -> Result<Vec<String>> {
         }
     }
     forbid(CORE, "a shell (Tauri, wry, tao)", &is_shell);
+    for id in metadata["workspace_default_members"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+        let dir = graph.members.iter().find(|(_, member)| member.as_str() == id).map(|(dir, _)| dir.as_str());
+        if let Some(dir) = dir.filter(|dir| *dir == "mobile" || dir.starts_with("mobile/")) {
+            found.push(format!("default-members must not hold the mobile crate {dir}/: a plain cargo command on a computer does not enter it"));
+        }
+    }
     Ok(found)
 }
 
@@ -387,6 +399,30 @@ fn unscoped_mobile_build(words: &[String]) -> bool {
     mobile && (!scoped || wide)
 }
 
+/// The host crates of `metadata` whose `src/lib.rs` does not carry the attribute of their kind as an inner attribute.
+fn missing_root_attributes(metadata: &Value) -> Result<Vec<String>> {
+    let graph = Graph::read(metadata)?;
+    let root = Path::new(metadata["workspace_root"].as_str().ok_or("cargo metadata: no workspace_root")?);
+    let mut found = Vec::new();
+    for (dir, kind) in ROOT_ATTRIBUTES {
+        if !graph.members.contains_key(dir) {
+            continue;
+        }
+        let file = root.join(dir).join("src/lib.rs");
+        let source = std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+        // The header of the file: inner attributes, comments and blank lines, up to the first item.
+        let header = source.lines().map(str::trim).take_while(|line| {
+            line.is_empty() || line.starts_with("//") || (line.starts_with("#![") && line.ends_with(']'))
+        });
+        let attribute = format!("#![cfg({kind})]");
+        if !header.into_iter().any(|line| line == attribute) {
+            found
+                .push(format!("{dir}/src/lib.rs: a host crate exists only for its kind: it starts with `{attribute}`"));
+        }
+    }
+    Ok(found)
+}
+
 /// `cargo xtask host-graph`: the workspace's dependency graph on each supported target, and the workflows' builds for
 /// mobile targets.
 pub fn check() -> Result<()> {
@@ -394,6 +430,10 @@ pub fn check() -> Result<()> {
     for target in TARGETS {
         let metadata = resolve(&repo().join("desktop"), target, true)?;
         errors.extend(violations(&metadata)?.into_iter().map(|error| format!("{target}: {error}")));
+        // The same on every target.
+        if target == TARGETS[0] {
+            errors.extend(missing_root_attributes(&metadata)?);
+        }
     }
     let github = repo().join(".github");
     for dir in ["workflows", "actions"] {
@@ -494,6 +534,36 @@ mod tests {
             ("sidevoice-desktop", "tauri-plugin-opener"),
         ];
         assert_eq!(found(&edges), Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_default_members_hold_no_mobile_crate() {
+        let mut answer = metadata(&WORKSPACE, &[], &[]);
+        answer["workspace_default_members"] =
+            json!(["sidevoice-desktop", "sidevoice-app-core", "sidevoice-local-host"]);
+        assert_eq!(violations(&answer).unwrap(), Vec::<String>::new());
+        answer["workspace_default_members"] = json!(["sidevoice-desktop", "sidevoice-mobile"]);
+        assert_eq!(violations(&answer).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_host_crate_starts_with_the_attribute_of_its_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let write = |crate_dir: &str, source: &str| {
+            let file = dir.path().join(crate_dir).join("src/lib.rs");
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, source).unwrap();
+        };
+        // The workspace at `/ws` of `metadata`, moved to the temporary directory.
+        let moved = metadata(&WORKSPACE, &[], &[]).to_string().replace("/ws", dir.path().to_str().unwrap());
+        let answer: Value = serde_json::from_str(&moved).unwrap();
+        write("desktop", "#![cfg(desktop)]\n//! Docs.\nmod a;");
+        write("mobile", "//! Docs.\n#![allow(dead_code)]\n#![cfg(desktop)]\nmod a;");
+        assert_eq!(missing_root_attributes(&answer).unwrap().len(), 1, "mobile carries the other kind's");
+        write("mobile", "// A comment.\n\n#![cfg(mobile)]\nmod a;");
+        assert_eq!(missing_root_attributes(&answer).unwrap(), Vec::<String>::new());
+        write("mobile", "mod a;\n#![cfg(mobile)]");
+        assert_eq!(missing_root_attributes(&answer).unwrap().len(), 1, "not in the header");
     }
 
     #[test]

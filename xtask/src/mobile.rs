@@ -17,6 +17,8 @@
 //!   Android APK is also checked for 16 KB pages, which Google Play requires (`mobile check-16kb [APK]` is that check alone),
 //!   and the iOS app for what it declares to Apple: the privacy manifest and the export compliance (`mobile check-ios [APP]`
 //!   is that check alone, ios.rs).
+//! - `mobile lint android|ios`: Clippy, warnings denied, over the mobile crates for their target (they are empty on a
+//!   computer: `#![cfg(mobile)]`).
 //! - `mobile sign android`: sign.rs.
 //! - `mobile test android`: the Kotlin library's JVM unit tests, in the generated project (after a build).
 //! - `mobile testflight --build-number N`: the signed iOS archive uploaded to TestFlight, by hand from main (testflight.rs).
@@ -368,6 +370,39 @@ fn find_app(dir: &Path, depth: usize) -> Option<PathBuf> {
     entries.iter().find(|p| p.is_dir() && p.extension().is_some_and(|e| e == "app")).cloned().or_else(|| {
         (depth > 1).then(|| entries.iter().filter(|p| p.is_dir()).find_map(|p| find_app(p, depth - 1))).flatten()
     })
+}
+
+/// `mobile lint android|ios`: Clippy over the mobile crates for the target they exist for, warnings denied (the crates are
+/// empty on a computer, so `cargo xtask lint` does not see them: D-RULE-ROOT). Android through `cargo ndk`, which hands the
+/// NDK's compilers to the build scripts. Needs the web interface (`mobile/tauri.conf.json`'s `frontendDist`) and the
+/// engine's libraries, as a build does.
+pub fn lint(name: &str) -> Result<()> {
+    crate::checks::web()?;
+    let flags = ["--", "-D", "warnings", "-A", "clippy::disallowed_methods", "-A", "clippy::disallowed_types"];
+    let packages = ["-p", "sidevoice-mobile", "-p", "sidevoice-mobile-plugin", "--all-targets"];
+    let mobile = repo().join("mobile");
+    match project(name)?.cli {
+        "android" => {
+            let libs = engine_libs(name, "aarch64-linux-android")?;
+            Cmd::new("cargo")
+                .args(["ndk", "--target", "arm64-v8a", "clippy"])
+                .args(packages)
+                .args(flags)
+                .env("SHERPA_ONNX_LIB_DIR", libs)
+                .dir(&mobile)
+                .run()
+        }
+        _ => {
+            let libs = engine_libs(name, "aarch64-apple-ios-sim")?;
+            Cmd::new("cargo")
+                .args(["clippy", "--target", "aarch64-apple-ios-sim"])
+                .args(packages)
+                .args(flags)
+                .env("SHERPA_ONNX_LIB_DIR", libs)
+                .dir(&mobile)
+                .run()
+        }
+    }
 }
 
 /// `mobile test android`: the JVM unit tests of the Android library's Kotlin (`CallSession`), which need no device. They

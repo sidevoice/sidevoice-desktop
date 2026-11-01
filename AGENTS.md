@@ -66,23 +66,31 @@ shape; do not copy it here.)
 
 ## Host kind is a crate boundary
 
-Operator decision (2026-10-30). Applies like the platform rule above: product code, tests, xtask and build scripts.
+Operator decision (2026-10-30), amended 2026-11-01 (D-RULE-ROOT). Applies like the platform rule above: product code, tests, xtask and build scripts.
 
 - **A kind of host is a crate, never a condition.** The desktop app (`desktop/`) and the mobile app (`mobile/`) are
   separate crates at the workspace root, each composing the crates it uses. What both use lives in a shared crate
   (`app-core/`, `app-tauri/`) that takes whatever differs through a trait the app implements or a value it passes in,
   and never names an app. Not every crate exists yet: the checks look for each by its directory.
-- **No `cfg(desktop)` or `cfg(mobile)`** (the conditions tauri-build defines), no `feature = "desktop"` or
-  `feature = "mobile"`, and no `cfg_aliases!` entry named like one or built on one. Not outside `platform`, and not
-  inside it. Where the OS is what differs, say which one: `target_os` in `platform`, one file per OS (`ios` and
-  `android` are OSes like `macos`).
+- **A host crate exists only for its kind, decided at its crate root.** `desktop/src/lib.rs` and `desktop/src/main.rs`
+  carry `#![cfg(desktop)]`; `mobile/src/lib.rs` and `mobile/plugin/src/lib.rs` carry `#![cfg(mobile)]` (the conditions
+  tauri-build and tauri-plugin define through the crate's build script). Nothing else of the sort is allowed anywhere:
+  `cfg(desktop)` or `cfg(mobile)` on an item, a module, inside `cfg_attr`, `cfg!` or a macro, in a shared crate or in
+  `platform`; `feature = "desktop"` or `feature = "mobile"`; a `cfg_aliases!` entry named like one or built on one; a build
+  script that defines one. So a host crate has no filler for the other kind (no `other.rs`, no "unsupported" body that only
+  lets it compile on a computer or a phone it never runs on): where the OS is what differs, say which one - `target_os` in
+  `platform`, one file per OS (`ios` and `android` are OSes like `macos`). Cargo cannot make a workspace member depend on
+  the target, so the root `Cargo.toml` lists in `default-members` the crates a computer builds, and the mobile crates are
+  linted and built by the mobile jobs (`cargo xtask mobile lint android|ios`, `-D warnings`), where they are not empty.
 - **Dependencies point one way:** the apps name `app-tauri`, which names Tauri and `app-core`, which names voice and
   engine. `desktop/` and `mobile/` depend on neither each other nor anything that depends on the other, the shared
   crates on neither app, and `app-core` has no shell (Tauri, wry, tao) in its closure.
 - **A build for iOS or Android names its package:** `-p`, never `--workspace`, `--all` or `--exclude`; the workspace
   holds the other kind of host too.
 - **Enforced in CI**, in the Platform boundary job: `cargo xtask platform-guard` (the conditions, in every Rust file,
-  `platform` included, and the features, target tables and lints of every `Cargo.toml`) and `cargo xtask host-graph`
-  (the crates' dependencies on each supported target with every feature on, from `cargo metadata`, and the steps of the
-  workflows that build for a mobile target). They read tokens, manifests, workflows and resolution and build nothing;
+  `platform` included, and the features, target tables and lints of every `Cargo.toml`; the one accepted form is the
+  crate-root attribute above, in a crate under the directory of its kind) and `cargo xtask host-graph` (the crates'
+  dependencies on each supported target with every feature on, from `cargo metadata`; that each host crate carries its
+  root attribute and the root `default-members` hold no mobile crate; and the steps of the workflows that build for a
+  mobile target). They read tokens, manifests, workflows and resolution and build nothing;
   their limits are in the head of `xtask/src/platform_guard.rs` and `xtask/src/host_graph.rs`.

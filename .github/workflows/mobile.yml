@@ -39,6 +39,8 @@ jobs:
       - uses: ./.github/actions/setup-android
       - name: The committed Android project is what the Tauri CLI writes (cargo xtask mobile generate android)
         run: cargo xtask mobile generated android
+      - name: Clippy over the mobile crates, warnings denied (empty on a computer, so cargo xtask lint cannot reach them)
+        run: cargo xtask mobile lint android
       - name: The unsigned APK (arm64), and its native libraries' alignment to 16 KB pages (Google Play's rule)
         if: ${{ !cancelled() }}
         run: cargo xtask mobile build android
@@ -92,6 +94,9 @@ jobs:
           path: mobile/gen/apple
           include-hidden-files: true
           retention-days: 7
+      - name: Clippy over the mobile crates, warnings denied (empty on a computer, so cargo xtask lint cannot reach them)
+        if: ${{ !cancelled() }}
+        run: cargo xtask mobile lint ios
       - name: The app for the simulator, unsigned
         if: ${{ !cancelled() }}
         run: cargo xtask mobile build ios

@@ -1,15 +1,10 @@
 //! Creating a directory for the app's own files that only the app can open. The sandbox already keeps other apps out of
 //! the app's data; this is the directory's own mode, so a record in it is not readable by any other user of the file
-//! system either (Unix: `0700`, whatever the process's umask; a computer's per-user profile directory is private already
-//! on Windows, and the crate's tests are the only code that runs there).
+//! system either (`0700`, whatever the process's umask).
 use std::{io, path::Path};
 
 #[cfg_attr(target_os = "android", path = "private_dir/android.rs")]
 #[cfg_attr(target_os = "ios", path = "private_dir/ios.rs")]
-#[cfg_attr(
-    not(any(target_os = "android", target_os = "ios")),
-    path = "private_dir/host.rs"
-)]
 mod imp;
 use imp::Native;
 
@@ -28,15 +23,8 @@ pub fn create_private_dir(path: &Path) -> io::Result<()> {
 /// Whether only the owner can open the directory at `path`: its mode, where the OS has one (the tests of this crate ask).
 #[cfg(test)]
 pub fn only_the_owner_can_open(path: &Path) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::metadata(path).unwrap().permissions().mode() & 0o777 == 0o700
-    }
-    #[cfg(not(unix))]
-    {
-        path.is_dir()
-    }
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).unwrap().permissions().mode() & 0o777 == 0o700
 }
 
 #[cfg(test)]
