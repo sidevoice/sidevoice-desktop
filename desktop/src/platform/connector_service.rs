@@ -2,8 +2,8 @@
 //! this user and the programs running now. The reset (`data.rs`) asks this when the connector's install record is
 //! missing: a missing record alone is never proof that the service is gone.
 //!
-//! The connector defines two jobs (sidevoice-connector `service/jobs.rs`: `dev.sidevoice.core` /
-//! `sidevoice-core` and `dev.sidevoice.connector` / `sidevoice-connector`) with this user's service manager:
+//! The connector defines two jobs (sidevoice-connector `service/jobs.rs`: `ai.sidevoice.core` /
+//! `sidevoice-core` and `ai.sidevoice.connector` / `sidevoice-connector`) with this user's service manager:
 //! launchd on macOS, systemd's user manager on Linux, Task Scheduler on Windows. Each OS file reports what its
 //! manager says of one job and which programs run; the decision is here, and it is fail-closed: the service is
 //! absent only when every job is reported absent and no managed program runs. A manager that cannot be asked, an
@@ -30,7 +30,7 @@ const OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
 /// calls them from: the reverse-DNS label (launchd) and the short name (the systemd unit `<name>.service`, the Windows
 /// task `<name>-<user>`).
 const JOBS: [(&str, &str); 2] =
-    [("dev.sidevoice.core", "sidevoice-core"), ("dev.sidevoice.connector", "sidevoice-connector")];
+    [("ai.sidevoice.core", "sidevoice-core"), ("ai.sidevoice.connector", "sidevoice-connector")];
 
 /// The programs the connector's service runs (the core's `sidevoice-core`, the connector, and on Windows the
 /// windowless starter `sidevoice-background`).

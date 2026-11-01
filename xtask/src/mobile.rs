@@ -15,6 +15,7 @@
 //! - `mobile build android|ios`: the app as a pull request builds it, unsigned: Android's release APK for arm64, and
 //!   the iOS app for the simulator (no signing, so no secret), into dist/. Needs the SDK and NDK, or macOS with Xcode. The
 //!   Android APK is also checked for 16 KB pages, which Google Play requires (`mobile check-16kb [APK]` is that check alone).
+//! - `mobile test android`: the Kotlin library's JVM unit tests, in the generated project (after a build).
 
 pub mod check;
 
@@ -289,6 +290,14 @@ fn find_app(dir: &Path, depth: usize) -> Option<PathBuf> {
     entries.iter().find(|p| p.is_dir() && p.extension().is_some_and(|e| e == "app")).cloned().or_else(|| {
         (depth > 1).then(|| entries.iter().filter(|p| p.is_dir()).find_map(|p| find_app(p, depth - 1))).flatten()
     })
+}
+
+/// `mobile test android`: the JVM unit tests of the Android library's Kotlin (`CallSession`), which need no device. They
+/// run in the generated project, so after a build has written its Gradle includes (`cargo xtask mobile build android`).
+pub fn test(name: &str) -> Result<()> {
+    ensure(project(name)?.cli == "android", "mobile test: android, the one with Kotlin of its own")?;
+    let gradle = repo().join("mobile/gen/android");
+    Cmd::new(gradle.join("gradlew")).arg(":sidevoice-mobile-plugin:testDebugUnitTest").dir(&gradle).run()
 }
 
 #[cfg(test)]

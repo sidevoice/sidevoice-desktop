@@ -18,3 +18,15 @@ tauri-build = { version = "2.7", features = [] }
 # The app's native project inputs: the Android manifest and its network security config (plugin/).
 sidevoice-mobile-plugin = { path = "plugin" }
 tauri = { version = "2.12", features = [] }
+# The pairings file (src/pairings.rs): a temporary file in the same directory, synced, renamed over the old record, the
+# directory synced. Unix and Windows; the OS calls are the crate's.
+atomic-write-file = "0.3"
+serde_json = "1"
+
+[target.'cfg(target_os = "ios")'.dependencies]
+# The pairings file out of the device backup (src/platform/backup/ios.rs): NSURL's `NSURLIsExcludedFromBackupKey`. Already
+# in the iOS build through Tauri; only the types the call names.
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSError", "NSString", "NSURL", "NSValue"] }
+
+[dev-dependencies]
+tempfile = "3"

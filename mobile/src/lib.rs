@@ -4,6 +4,7 @@
 //! The window shows only the app's own pages. It has **no bridge**: nothing is injected, so the interface runs as it
 //! does in a browser (it pairs with a machine on the local network and keeps its pairings in the webview's storage),
 //! and no page captures anything: the app will own the microphone, as on the desktop.
+pub mod pairings;
 mod platform;
 
 pub use platform::entry::run;
