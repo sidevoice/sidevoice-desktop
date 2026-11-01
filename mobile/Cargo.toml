@@ -32,9 +32,13 @@ tauri-plugin-log = "2"
 log = "0.4"
 
 [target.'cfg(target_os = "ios")'.dependencies]
-# The pairings file out of the device backup (src/platform/backup/ios.rs): NSURL's `NSURLIsExcludedFromBackupKey`. Already
-# in the iOS build through Tauri; only the types the call names.
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSError", "NSString", "NSURL", "NSValue"] }
+# The session's interruptions (src/platform/interruption/ios.rs): the notification a phone call or an alarm makes the system post.
+objc2 = "0.6"
+block2 = "0.6"
+objc2-avf-audio = { version = "0.3", default-features = false, features = ["std", "AVAudioSessionTypes"] }
+# The pairings file out of the device backup (src/platform/backup/ios.rs): NSURL's `NSURLIsExcludedFromBackupKey`; and the
+# interruptions' notification and its `userInfo`. Already in the iOS build through Tauri; only the types the call names.
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSError", "NSString", "NSURL", "NSValue", "NSNotification", "NSOperation", "NSDictionary", "block2"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 # The engine's HTTPS (remote providers, model downloads) verifies certificates with Android's own verifier, which calls into

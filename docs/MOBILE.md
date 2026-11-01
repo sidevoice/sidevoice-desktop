@@ -180,7 +180,7 @@ action, in the system's language (`res/values`, English, and `values-es`; the Sp
   the recents list: `task-removed`) or the system (`system`, also when it refused the start). The notification, the
   audio focus and the service go with it, and the system never restarts it: a call does not survive its process.
 - **Audio focus.** The service holds the call's focus (transient: other media pauses and comes back after) from the start
-  to the end, and reports `Focus` changes (`gained`, `lost`, `lost-transient`, `duck`). What to do about them (mute,
+  to the end, and reports `Focus` changes (`gained`, `lost`, `lost-transient`, `duck`, `refused`). What to do about them (mute,
   pause, hang up) is the call's decision, not the service's.
 - The Rust side is `start_call_service(app, on_event)` and `stop_call_service(app)` of `sidevoice-mobile-plugin`
   (`call_service.rs`); the shared call code reaches the service through them. iOS has no service to start: a call stays
@@ -299,7 +299,36 @@ stays unsigned with no secret. Its one step is `cargo xtask mobile testflight --
      (TestFlight → Internal Testing); an internal build needs no beta review;
   5. the environment `testflight` exists with the deployment-branch rule.
 
+## Audio interruptions (D-AUDIO-FOCUS)
+
+A phone call, an alarm or another app taking the audio **pauses the conversation while it lasts and resumes it when it
+ends**; it never hangs up on its own (`mobile/src/call.rs`). Only while the room's call is held (a try in Settings is not
+paused).
+
+- **Where it comes from.** iOS: `AVAudioSessionInterruptionNotification` (`platform/interruption`), `began` and `ended`
+  with `shouldResume`. Android: the call's service reports its audio focus (`Focus`): `lost` and `lost-transient` begin an
+  interruption that ends with `gained`; `lost` (for good: another app plays) and `refused` (the system refused the request
+  outright) pause with no end to wait for; `duck` (another app quietly over the call) is none. A request made while a phone call is on is delayed by the system:
+  `lost-transient` now, `gained` when the call ends. The call pauses at the first interruption and resumes at the last end,
+  whichever source.
+- **Pause** is the page's own mute (the `interrupt` command of `mobile/js/mobile-bridge.js`, so the page shows the call
+  muted) and the agent's playback held (`AppHost::pause_playback`: the chunks not yet handed to the speaker are kept, in
+  order, and played on resuming). **Known limit:** what the speaker already has queued is the device's and keeps playing
+  (iOS stops it with the session; on Android the system silences the media while a call is on); a lossless pause of that
+  needs a pause in `sidevoice-voice`'s `AudioIo` (sidevoice-voice#94).
+- **Resume** gives the mute back as it was, but only while it is still the system's: the page watches its mute, and a
+  person who muted themselves before stays muted, one who unmuted (and perhaps muted again) has taken it over and is not
+  touched. The commands carry the call they are for (`since`), so they never reach a later call of the same page; a call
+  that ends while interrupted gives the mute back for the next one.
+- **No end by itself**: `shouldResume` false (another app goes on playing), the audio session that could not be activated
+  again, or a focus lost for good or refused (Android). The microphone stays muted and the playback held until the person
+  unmutes: the session is asked for again first (refused again: the wait goes on), and on Android the service requests the audio
+  focus again (`request_call_focus`), the playback is released only when it is granted; a delayed grant is a pause that ends
+  with the gain, a refusal pauses again and the person must mute and unmute once more. The state machine is `mobile/src/hold.rs`.
+- On iOS the audio session is activated again first (if a voice call has audio open), under the same lock as the session's
+  activation and deactivation by the calls, so it is never active after the last call's audio has stopped.
+
 ## Not here yet
 
-Headset buttons and lock-screen controls (sidevoice-desktop#349); acting on the call's audio focus (Android); the build
+Headset buttons and lock-screen controls (sidevoice-desktop#349); the build
 kinds (nightly with Developer options, release).

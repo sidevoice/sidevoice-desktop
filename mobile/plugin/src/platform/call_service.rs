@@ -27,6 +27,9 @@ trait Os {
     ) -> Result<(), CallServiceError>;
 
     fn stop<R: Runtime>(app: &AppHandle<R>) -> Result<(), CallServiceError>;
+
+    /// Asks the service to request the audio focus again; the answer comes as a focus event.
+    fn refocus<R: Runtime>(app: &AppHandle<R>) -> Result<(), CallServiceError>;
 }
 
 pub fn register<R: Runtime, C: DeserializeOwned>(
@@ -44,4 +47,8 @@ pub fn start<R: Runtime>(
 
 pub fn stop<R: Runtime>(app: &AppHandle<R>) -> Result<(), CallServiceError> {
     Native::stop(app)
+}
+
+pub fn refocus<R: Runtime>(app: &AppHandle<R>) -> Result<(), CallServiceError> {
+    Native::refocus(app)
 }

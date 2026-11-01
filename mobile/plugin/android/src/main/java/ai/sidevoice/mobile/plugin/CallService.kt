@@ -41,6 +41,8 @@ class CallService : Service() {
             ACTION_START -> begin(id)
             // Hang up, from the notification of the session this instance serves; one of an older call's means nothing.
             ACTION_HANG_UP -> session?.takeIf { it.id == id }?.let { finish("hang-up") } ?: leaveIfIdle(startId)
+            // Ask for the audio focus again (it was lost for good, or refused), for the session this instance serves.
+            ACTION_REFOCUS -> session?.takeIf { it.id == id }?.let { refocus(it) } ?: leaveIfIdle(startId)
             // Not asked by this app.
             else -> leaveIfIdle(startId)
         }
@@ -136,9 +138,11 @@ class CallService : Service() {
 
     /**
      * A call takes the audio focus for its length (other media pauses and comes back after), as the voice it is, and says
-     * when it changes hands. Refused (a phone call is on), it is as if it had been taken at once.
+     * when it changes hands; the app pauses the call while it is lost and resumes it when it is gained (D-AUDIO-FOCUS).
+     * Asked while a phone call is on, the system delays the grant (the app is told it is lost now, and gained when the call
+     * ends); a refusal is reported as such (`refused`): there is no end to wait for, so the call stays paused until the person unmutes.
      */
-    private fun requestFocus(mine: CallSession.Session) {
+    private fun requestFocus(mine: CallSession.Session, reportGranted: Boolean = false) {
         val audio = getSystemService(AudioManager::class.java)
         val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
             .setAudioAttributes(
@@ -147,12 +151,24 @@ class CallService : Service() {
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                     .build()
             )
+            .setAcceptsDelayedFocusGain(true)
             .setOnAudioFocusChangeListener({ change -> CallSession.focus(mine, focusState(change)) }, Handler(Looper.getMainLooper()))
             .build()
         focusRequest = request
-        if (audio.requestAudioFocus(request) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
-            CallSession.focus(mine, "lost-transient")
+        when (audio.requestAudioFocus(request)) {
+            // Asked again by the person: the listener only hears of changes, so a grant is reported as the gain it is.
+            AudioManager.AUDIOFOCUS_REQUEST_GRANTED -> if (reportGranted) CallSession.focus(mine, "gained")
+            // A phone call is on: the grant comes when it ends, as a gain.
+            AudioManager.AUDIOFOCUS_REQUEST_DELAYED -> CallSession.focus(mine, "lost-transient")
+            // Nothing will be given later.
+            else -> CallSession.focus(mine, "refused")
         }
+    }
+
+    /** The person asks to go on after a focus that was lost for good or refused: asked again, the answer reported. */
+    private fun refocus(mine: CallSession.Session) {
+        abandonFocus()
+        requestFocus(mine, reportGranted = true)
     }
 
     private fun abandonFocus() {
@@ -171,6 +187,7 @@ class CallService : Service() {
     companion object {
         const val ACTION_START = "ai.sidevoice.mobile.plugin.CALL_START"
         const val ACTION_HANG_UP = "ai.sidevoice.mobile.plugin.CALL_HANG_UP"
+        const val ACTION_REFOCUS = "ai.sidevoice.mobile.plugin.CALL_REFOCUS"
         /** The session (a number) an intent is for. */
         const val EXTRA_SESSION = "ai.sidevoice.mobile.plugin.SESSION"
         private const val NO_SESSION = -1L
