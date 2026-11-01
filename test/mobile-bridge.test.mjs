@@ -106,3 +106,17 @@ test("the microphone is the app's, with its own words for a blocked one (iOS: AV
   assert.equal(microphone.help("de").steps[0], help.en.steps[0]);
   assert.equal(install("tauri://localhost").api.host.microphone.help, undefined, "no words, no help");
 });
+
+test("a command for a given page's call runs only on that call", async () => {
+  const { api, win } = install("tauri://localhost");
+  await new Promise((resolve) => setTimeout(resolve, 0)); // the page's number (7) is known
+  let hungUp = 0;
+  win.sidevoiceActions = { toggleCall: () => { hungUp++; } };
+  win.sidevoiceUI = { store: { getState: () => ({ call: { joined: true }, mic: { enabled: true }, callCard: {} }), subscribe: () => () => {} } };
+  const since = api.snapshot().since;
+  assert.equal(api.run({ command: "hang-up", page: 6, since }), false, "another page's");
+  assert.equal(api.run({ command: "hang-up", page: 7, since: since - 1 }), false, "another call of this page");
+  assert.equal(hungUp, 0);
+  assert.equal(api.run({ command: "hang-up", page: 7, since }), true);
+  assert.equal(hungUp, 1);
+});

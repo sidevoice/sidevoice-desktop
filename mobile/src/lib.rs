@@ -95,13 +95,15 @@ fn model_root<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, Box<dyn std::er
 
 /// The call as the page reports it (`window.__sidevoiceHost`'s room, mobile/js/mobile-bridge.js): what the app reads of
 /// it. The rest of the snapshot is the page's and is not read.
-#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, serde::Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct CallReport {
     ready: bool,
     joined: bool,
     mic_enabled: bool,
     title: String,
+    /// When the call was joined, as the page marks it (ms since the epoch): a later join is another call.
+    since: Option<f64>,
 }
 
 /// The last report, to log what changed.
@@ -133,7 +135,8 @@ fn call_state(
     }
     // The green and the red button: the call's service follows the room's call (`call::RoomCall` checks the page again,
     // in order with the page's changes).
-    app.state::<call::RoomCall>().report(page, snapshot.joined);
+    app.state::<call::RoomCall>()
+        .report(page, snapshot.joined, snapshot.since);
     let previous = std::mem::replace(&mut *last.0.lock().unwrap(), snapshot.clone());
     if (previous.ready, previous.joined, previous.mic_enabled)
         != (snapshot.ready, snapshot.joined, snapshot.mic_enabled)
