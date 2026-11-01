@@ -87,6 +87,7 @@ targets:
       - sdk: AVFoundation.framework
       - sdk: AVFAudio.framework
       - sdk: AudioToolbox.framework
+      - sdk: MediaPlayer.framework
       - sdk: WebKit.framework
     preBuildScripts:
       - script: |
