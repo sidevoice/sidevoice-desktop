@@ -8,7 +8,7 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 
 | Where | What |
 |---|---|
-| `bridge/desktop-bridge.js` | Injected by the app into every page of the room window, before the page's own scripts. Bound to the app's own origin (the bundled interface). |
+| `bridge/desktop-bridge.js`, `app-core/js/members.js`, `app-tauri/js/transport.js` | The page's script, injected by the app into every page of the room window, before the page's own scripts, bound to the app's own origin (the bundled interface). It is three parts, one per crate that owns them (below). |
 | `desktop/core/src/bridge.rs` | The contract on the Rust side: `CallSnapshot`, `Command`, and how the tray renders a snapshot. Unit-tested. |
 | `desktop/src/lib.rs` | Wiring: the `bridge_state` command, `send(Command)`; `capabilities/room.json`. The mute shortcut, behind `muteShortcut`, and the one writer of the app's settings (below). |
 | `app-tauri/src/engine.rs`, `app-core/src/app/engine.rs` | The engine's commands, behind `engine` (below): its catalogues, provider keys and models on disk. The plugin's are the transport (`app-tauri/ACL.md` says who may call each); `app-core`'s do the work. |
@@ -20,6 +20,20 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 | `desktop/src/updater.rs`, `desktop/core/src/updater.rs`, `desktop/core/src/build_info.rs` | The app's updates, behind `updater`, and what this build is, `build` (below). |
 | `desktop/src/debug_options.rs`, `desktop/core/src/debug_options.rs` | The developer options, behind `debug` in a nightly or a dev build (below). |
 | `desktop/src/platform/host.rs`, `desktop/core/src/computer_name.rs` | This computer's name, `computerName` (below; the Linux file's parsing unit-tested). |
+
+## Parts
+
+The page's script is three function expressions, each owned by the crate it belongs to, and the desktop composes them
+(`desktop/core/src/bridge.rs`, `Parts`; `test/bridge-source.mjs` composes the same for the tests):
+
+| Part | Crate | What it is |
+|---|---|---|
+| Transport, `(win) => transport` | `app-tauri/js/transport.js`, as `sidevoice_app_tauri::js::TRANSPORT` | How the page reaches the plugin's commands (`call`, `send`, under the plugin's name), receives a channel's messages (`channel`, in index order) and reaches the app's own commands (`own.call`, `own.send`). All the page's code knows of Tauri. |
+| Members, `(win, transport) => members` | `app-core/js/members.js`, as `sidevoice_app_core::js::MEMBERS` | What every app shares, and nothing of any shell: `engine()`, `voice()`, `microphone(settingsPage)`, `pairings()` and `room(…)`, the call state the page reports (`snapshot`, `report`) and the commands it runs for the app (`toggle-mute`, `hang-up`, `skip-reply`, `keep-alive`, `cancel-input`). An app adds to the snapshot (`extend`), to the commands (`commands`) and to what it follows in the room (`attached`). The members are tested against a transport of the tests' own (`test/members.test.mjs`). |
+| Desktop, the file itself | `bridge/desktop-bridge.js` | What only the desktop has: the local host, the updater, the mute shortcut, the developer options, the call controls card's settings and its projection of the call (its participants and devices, the commands that select a conversation or a device, the levels sent to it), the reset, and the assembly of `host`. |
+
+`script_for_origin` gives the desktop's part its placeholders and wraps it as `(function (transportOf, membersOf) { … })(transport, members);`:
+the desktop's part makes the transport for its window, hands it to the members, and keeps the app's own commands for itself.
 
 ## What the bridge reads and calls in the web UI
 

@@ -98,7 +98,39 @@ fn the_bridge_script_receives_the_hosts_media_support() {
         &[],
         support,
         false,
+        &sidevoice_desktop_core::bridge::Parts { transport: "TRANSPORT", members: "MEMBERS" },
     );
     let literal = serde_json::to_string(&support).unwrap();
     assert!(script.contains(&format!("factory(window, \"tauri://localhost\", {literal},")));
+}
+
+/// The room's script is made of the real parts, the transport the plugin ships, the members the apps share and the
+/// desktop's own, and nothing of it is left to fill in.
+#[test]
+fn the_rooms_script_is_made_of_the_real_parts_with_no_placeholder_left() {
+    let parts = sidevoice_desktop_core::bridge::Parts {
+        transport: sidevoice_app_tauri::js::TRANSPORT,
+        members: sidevoice_app_core::js::MEMBERS,
+    };
+    let script = sidevoice_desktop_core::bridge::script_for_origin(
+        "tauri://localhost",
+        true,
+        &sidevoice_desktop_core::build_info::BuildInfo::new("nightly", "0.0.0", "", ""),
+        Some("Mac de Ana"),
+        &Default::default(),
+        true,
+        &[],
+        Some("native"),
+        true,
+        &parts,
+    );
+    // (`win.__SIDEVOICE_TARGET__` is the web's own global; a placeholder is a string.)
+    assert!(!script.contains("\"__SIDEVOICE_"), "a placeholder is left in the script");
+    for (part, mark) in [
+        ("transport", "plugin:sidevoice-app-tauri|"),
+        ("members", "function room("),
+        ("desktop", "installDesktopBridge"),
+    ] {
+        assert_eq!(script.matches(mark).count(), 1, "the {part} part is in the script once");
+    }
 }
