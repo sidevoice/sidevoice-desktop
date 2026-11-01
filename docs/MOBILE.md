@@ -328,6 +328,16 @@ paused).
 - On iOS the audio session is activated again first (if a voice call has audio open), under the same lock as the session's
   activation and deactivation by the calls, so it is never active after the last call's audio has stopped.
 
+## Downloads keep the screen on
+
+The system suspends the app soon after the screen turns off, and a model download (the engine, inside the app's process) stops with it.
+While any install job runs, the screen is kept on: the host tells the app when the first download starts and the last one ends
+(`DownloadActivity`, one of `Hooks`), `mobile/src/downloads.rs` passes that to the plugin's `keep_screen_on`, which sets iOS
+`UIApplication.isIdleTimerDisabled` (on the main thread) or Android's `FLAG_KEEP_SCREEN_ON` on the activity's window
+(`MobilePlugin.keepScreenOn`). The engine resumes a partial file with an HTTP range request, so a download that the system
+interrupts anyway (the person left the app) goes on where it stopped. Native background downloads are not here
+(sidevoice-desktop#361, option 2).
+
 ## Not here yet
 
 Headset buttons and lock-screen controls (sidevoice-desktop#349); the build

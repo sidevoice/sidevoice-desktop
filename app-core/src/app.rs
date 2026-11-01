@@ -20,6 +20,7 @@
 //! The commands of each concern are in `app/voice.rs` and `app/engine.rs`; they refuse as the bridge does
 //! (docs/BRIDGE.md → "Refusals").
 
+mod downloads;
 mod engine;
 mod keychain;
 #[cfg(test)]
@@ -65,9 +66,12 @@ pub struct Hooks {
     pub keys: Arc<dyn ProviderKeys>,
     /// What the app does when its first call starts and its last ends (D-CALL-LIFECYCLE); [`NoCallActivity`] for nothing.
     pub calls: Arc<dyn CallActivity>,
+    /// What the app does while a model download runs; [`NoDownloadActivity`] for nothing.
+    pub downloads: Arc<dyn DownloadActivity>,
 }
 
 pub use crate::voice::host::{CallActivity, NoCallActivity};
+pub use downloads::{DownloadActivity, NoDownloadActivity};
 
 /// Lets work use the app's data, or refuses it while the data is being changed.
 pub trait Admission: Send + Sync + 'static {
@@ -147,6 +151,8 @@ struct Inner<A: LaneAudio> {
     /// `None` when the engine did not start; its commands, and the call's models, refuse then.
     engines: Option<Arc<NativeEngines>>,
     jobs: Arc<Jobs>,
+    /// The model downloads that run, for the app's [`DownloadActivity`].
+    downloads: Arc<downloads::Downloads>,
     /// The current page's generation (the call host's own counter, shared with the sinks of the calls, which drop what is
     /// for another).
     generation: Arc<AtomicU64>,
@@ -192,12 +198,14 @@ impl<A: LaneAudio> AppHost<A> {
         };
         let generation = Arc::clone(&voice.page);
         voice.active.observe(Arc::clone(&hooks.calls));
+        let downloads = downloads::Downloads::new(Arc::clone(&hooks.downloads));
         let inner = Inner {
             runtime,
             hooks,
             voice,
             engines,
             jobs: Arc::default(),
+            downloads,
             generation,
             closing: AtomicBool::new(false),
             loads: Mutex::default(),
