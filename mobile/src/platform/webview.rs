@@ -1,8 +1,9 @@
 //! How the app's web view sits on the screen. The page owns the safe areas (the interface declares `viewport-fit=cover`
 //! and pads its own edges with `env(safe-area-inset-*)`), so the web view has to fill the screen under the system bars,
-//! and nothing behind it may show a colour of its own where it does not reach.
+//! and what is behind it where it does not reach
+//! must be the system's background (light or dark with the device, as the page is), not an unset colour.
 //!
-//! Only iOS asks the app to do it: its window has no background of its own (black wherever nothing is drawn), and
+//! Only iOS asks the app to do it: its window has no background colour set (nothing is drawn there but black), and
 //! the web view takes the frame it was created with. Android's edge-to-edge window is the Android library's
 //! (`mobile/plugin`), and a computer has no safe area.
 use tauri::webview::PlatformWebview;
@@ -14,8 +15,9 @@ use imp::Native;
 
 /// What differs per OS: how the web view is made to fill the screen, and what it can say of where it is.
 trait Os {
-    /// Makes the web view fill the screen and gives everything behind it the system's background, so a part the page does
-    /// not cover is never black. Runs on the main thread (`WebviewWindow::with_webview`).
+    /// Makes the web view fill the screen and gives everything behind it the system's background (light or dark with
+    /// the device) instead of an unset colour. Idempotent: it runs again once the window is on screen. Runs on the main
+    /// thread (`WebviewWindow::with_webview`).
     fn fill_screen(webview: &PlatformWebview);
 
     /// Where the window, its view and the web view are, and the safe-area insets, in points: `None` where there is no

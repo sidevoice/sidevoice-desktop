@@ -209,6 +209,7 @@ fn run_app() {
                     if payload.event() == PageLoadEvent::Finished {
                         // The window is on screen by now: where the web view really is (the insets are 0 before).
                         let _ = webview.with_webview(|webview| {
+                            platform::webview::fill_screen(&webview);
                             platform::webview::log_layout("page loaded", &webview)
                         });
                     }
@@ -223,7 +224,7 @@ fn run_app() {
                     }
                 })
                 .build()?
-                // The page owns the safe areas: the web view fills the screen, on the system's ground (`platform::webview`).
+                // The page owns the safe areas: the web view fills the screen, on the system's background (`platform::webview`).
                 .with_webview(|webview| {
                     platform::webview::fill_screen(&webview);
                     platform::webview::log_layout("at start", &webview);

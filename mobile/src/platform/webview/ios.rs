@@ -1,6 +1,7 @@
 //! iOS: the web view is made to fill its parent view's bounds (wry creates it with the parent's `frame`, which is in
 //! the parent's parent's coordinates), and the window and the view controller's view get the system background, so what
-//! the page does not cover is the app's ground and never the window's default black.
+//! the page does not cover shows the system's background (light or dark with the device) instead of the window's unset
+//! colour. The window is only there once the view is on screen, so this runs again after the page loads.
 use super::Os;
 use objc2_ui_kit::{UIColor, UIView, UIViewController};
 use tauri::webview::PlatformWebview;
