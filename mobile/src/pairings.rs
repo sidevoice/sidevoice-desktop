@@ -10,9 +10,16 @@
 //! never half of either. The crate renames before it syncs the directory, so an error can come after the new record is
 //! already in place: the result of a write is therefore what a read would return (`reported`), not the crate's error.
 //!
+//! The record holds the access token to the person's computer, so it stays out of the OS backups (decided by the operator,
+//! 2026-11-01): after a restore the person pairs again, as with the provider keys. On iOS every write marks the new file
+//! `NSURLIsExcludedFromBackupKey` (`platform::backup`), after the rename, because the mark belongs to the file the rename
+//! replaced. A mark that fails is a failed write (`data.pairings-write`), so the page tries again, which marks it again;
+//! the record is already in place by then, so a read returns it. On Android the rules in the Android library of
+//! `mobile/plugin` keep it out.
+//!
 //! Nothing here defends against another process of the same user, as the desktop's held directory does: on a phone the
 //! file is in the app's own sandbox (the data directory only this app can open), and no other app can reach it.
-use crate::platform::app_files;
+use crate::platform::{app_files, backup};
 use atomic_write_file::AtomicWriteFile;
 use serde_json::{json, Value};
 use std::{
@@ -25,7 +32,7 @@ use tauri::{AppHandle, Manager, Runtime};
 /// The most a record may hold, read or written (the desktop's bound).
 const LIMIT: u64 = 64 * 1024;
 
-/// The record's file name, in the app's own files.
+/// The record's file name, in the app's own files. The Android backup rules (`mobile/plugin/android`) name it too.
 const FILE: &str = "pairings.json";
 
 type Answer = Result<Value, Value>;
@@ -115,9 +122,19 @@ impl PairingFile {
             .ok_or_else(|| refused("data.pairings-invalid"))
     }
 
-    /// Keeps `value` after checking its shape and its size; refuses what is not pairings (`data.pairings-invalid`), changing
-    /// nothing, and what could not be kept (`data.pairings-write`), when a read still returns the old record.
+    /// Keeps `value` after checking its shape and its size, and keeps the file out of the device backup; refuses what is
+    /// not pairings (`data.pairings-invalid`), changing nothing, and what could not be kept (`data.pairings-write`), when
+    /// a read still returns the old record (or, if only the exclusion from the backup failed, the new one).
     pub fn write(&self, value: &Value) -> Answer {
+        self.write_excluding(value, backup::exclude_from_backup)
+    }
+
+    /// `write`, with the exclusion from the backup as a parameter: the tests watch it, as no host has a backup.
+    fn write_excluding(
+        &self,
+        value: &Value,
+        exclude: impl FnOnce(&Path) -> io::Result<()>,
+    ) -> Answer {
         let bytes = serde_json::to_vec(value).map_err(|_| refused("data.pairings-invalid"))?;
         if !checked_pairings(value) || bytes.len() as u64 > LIMIT {
             return Err(refused("data.pairings-invalid"));
@@ -127,7 +144,11 @@ impl PairingFile {
                 return Err(refused("data.pairings-write"));
             }
         }
-        reported(write_atomically(&self.path, &bytes), &self.path, &bytes)
+        reported(write_atomically(&self.path, &bytes), &self.path, &bytes)?;
+        // On the final path, after the rename: the file the rename put there is the one to mark.
+        exclude(&self.path)
+            .map(|()| Value::Null)
+            .map_err(|_| refused("data.pairings-write"))
     }
 }
 
@@ -153,6 +174,7 @@ fn reported(result: io::Result<()>, path: &Path, bytes: &[u8]) -> Answer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::{Cell, RefCell};
 
     fn row(token: &str) -> Value {
         json!({ "fp": "fp", "public_key": "pk", "device_id": "id", "token": token, "urls": ["https://example.test"] })
@@ -305,6 +327,62 @@ mod tests {
             reported(sync_failed(), &path, &bytes),
             Err(refused("data.pairings-write"))
         );
+    }
+
+    #[test]
+    fn every_write_excludes_the_file_the_rename_put_in_place() {
+        let home = tempfile::tempdir().unwrap();
+        let store = file_in(&home);
+        let path = home.path().join("app").join(FILE);
+        let seen = RefCell::new(Vec::new());
+        let watch = |at: &Path| -> io::Result<()> {
+            seen.borrow_mut().push((at.to_owned(), fs::read(at)?));
+            Ok(())
+        };
+        let first = json!({ "pairings": [row("a")] });
+        let next = json!({ "pairings": [] });
+        assert_eq!(store.write_excluding(&first, watch), Ok(Value::Null));
+        assert_eq!(store.write_excluding(&next, watch), Ok(Value::Null));
+        // Each time on the final path, which already holds the record just written: the rename was done.
+        let record = |value: &Value| (path.clone(), serde_json::to_vec(value).unwrap());
+        assert_eq!(*seen.borrow(), [record(&first), record(&next)]);
+    }
+
+    #[test]
+    fn a_write_that_changes_nothing_excludes_nothing() {
+        let home = tempfile::tempdir().unwrap();
+        let store = file_in(&home);
+        let never = |_: &Path| -> io::Result<()> { panic!("nothing was written") };
+        assert_eq!(
+            store.write_excluding(&json!({}), never),
+            Err(refused("data.pairings-invalid"))
+        );
+        fs::create_dir_all(home.path().join("app").join(FILE)).unwrap();
+        assert_eq!(
+            store.write_excluding(&json!({ "pairings": [] }), never),
+            Err(refused("data.pairings-write"))
+        );
+    }
+
+    #[test]
+    fn an_exclusion_that_fails_fails_the_write_and_the_next_write_marks_the_file_again() {
+        let home = tempfile::tempdir().unwrap();
+        let store = file_in(&home);
+        let record = json!({ "pairings": [row("kept")] });
+        let failing = |_: &Path| -> io::Result<()> { Err(io::Error::other("no mark")) };
+        assert_eq!(
+            store.write_excluding(&record, failing),
+            Err(refused("data.pairings-write"))
+        );
+        // The rename was done before the mark: a read returns the record.
+        assert_eq!(store.read(), Ok(record.clone()));
+        let marked = Cell::new(0);
+        let count = |_: &Path| -> io::Result<()> {
+            marked.set(marked.get() + 1);
+            Ok(())
+        };
+        assert_eq!(store.write_excluding(&record, count), Ok(Value::Null));
+        assert_eq!(marked.get(), 1);
     }
 
     #[test]

@@ -26,6 +26,13 @@ of host is a crate, never a condition (AGENTS.md → "Host kind is a crate bound
   policy (it refuses a public address over http) and that the only page is the bundled one. On iOS it is
   `NSAllowsLocalNetworking` (`mobile/Info.ios.plist`), which allows local addresses and leaves App Transport Security on
   for everything else.
+- **No pairings in backups.** The pairings hold the access token to the person's computer, so they are excluded from
+  every OS backup and device transfer (operator decision, 2026-11-01), like the provider keys: after a restore the person
+  pairs again. iOS marks `pairings.json` `isExcludedFromBackup` after each write (`mobile/src/platform/backup/ios.rs`).
+  Android excludes it, and the SharedPreferences file of the provider keys (`keyring-sidevoice-providers.xml`, which
+  another phone could not decrypt anyway), in the plugin's `res/xml/data_extraction_rules.xml` (Android 12 and newer: cloud
+  backup and device transfer) and `res/xml/backup_rules.xml` (Android 11 and older), which its manifest points to. The
+  details, and the one leftover that no rule can name, are in docs/PAIRING_STORAGE.md ("On the phone" → Backups).
 - **Permission texts.** `NSMicrophoneUsageDescription` and `NSLocalNetworkUsageDescription` are in
   `mobile/Info.ios.plist`, in English; their translations are a later, reviewed change.
 

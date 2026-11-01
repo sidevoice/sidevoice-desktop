@@ -5097,6 +5097,7 @@ name = "sidevoice-mobile"
 version = "0.1.0"
 dependencies = [
  "atomic-write-file",
+ "objc2-foundation",
  "serde_json",
  "sidevoice-mobile-plugin",
  "tauri",

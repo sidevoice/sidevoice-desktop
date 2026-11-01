@@ -63,13 +63,33 @@ directory, and a link or a hard link there is the app's own. Its `read` and `wri
   after a restart, as a call under a locked screen needs. The app's entitlements are empty (`mobile/gen/apple`). Adding the
   Data Protection capability would raise the default to Complete, and the record would be unreadable while the phone is
   locked. No code sets the class.
-- **Backups.** Undecided; the record is in them today. iOS: the file is in the app's container, so in a device backup (an
-  encrypted one carries it to a new phone); `isExcludedFromBackup` on the folder would keep it out (the attribute is on the
-  folder, because a rewrite makes a new file that has lost it). Android: the generated manifest says nothing about backup,
-  so the system default applies and `files/` is part of Auto Backup, and a restore brings the pairings (their tokens) to
-  another phone.
+- **Backups.** The record holds the access token to the person's computer, so it stays out of every OS backup (operator
+  decision, 2026-11-01); after a restore or a move to a new phone the person pairs again, as with the provider keys
+  (`docs/CREDENTIALS.md`: `ThisDeviceOnly` on iOS, a Keystore key that does not migrate on Android).
+  - *iOS.* Every write ends by marking the file `NSURLIsExcludedFromBackupKey` (`isExcludedFromBackup`;
+    `platform/backup/ios.rs`, through `objc2-foundation`, which Tauri already brings into the iOS build). The mark belongs
+    to the file, and the atomic write renames a new file over the old one, so it is set on the final path after the rename,
+    each time. If setting it fails, the write is reported failed (`data.pairings-write`), though the record is already in
+    place and a read returns it: the page's next write marks it again. That is the only case where a failed write leaves
+    the new record behind. The mark keeps the file out of iCloud and computer backups, an encrypted one included.
+  - *Android.* `files/pairings.json` is excluded by the backup rules of the Android library in `mobile/plugin`, which
+    Gradle merges into the app's manifest (`gen/android` is not edited): `res/xml/data_extraction_rules.xml`
+    (`android:dataExtractionRules`, Android 12 and newer) excludes it from both `cloud-backup` and `device-transfer`, and
+    `res/xml/backup_rules.xml` (`android:fullBackupContent`, Android 11 and older) from the backup. Both also exclude the
+    SharedPreferences file of the provider keys, `shared_prefs/keyring-sidevoice-providers.xml`: `android-native-keyring-store`
+    1.0.0 names the file `keyring-<store name>` and the app's store is `sidevoice-providers`
+    (`app-core/src/platform/credentials/android.rs`). It holds values only that phone's Keystore key can decrypt, so a
+    restored copy would be dead weight. The template's manifest sets neither `allowBackup` (default true) nor any rules, so
+    the merge has no conflict and needs no `tools:replace`.
+  - *Not covered.* The atomic write names its temporary file `.pairings.json.<six letters>` in the same folder and removes it
+    at once, but a kill between the two leaves it there with the record's bytes. The name is random, so neither the iOS mark
+    nor an Android path can name it, and it can reach a backup. The next write does not remove it.
 - **Tests** run on every host (a temporary directory): round trip and replacement, the shape, the bound, refusals that
   change nothing, no temporary file left behind, the outcome of a write that errs after the rename, a path that is a
-  directory or has a file where its directory should be. A crash between the temporary file and the rename is
-  `atomic-write-file`'s own test matter; nothing here fakes one.
-- **Not run on a phone yet.** The device flow (write, kill the app, read) is part of the first device run.
+  directory or has a file where its directory should be, and the backup exclusion: it runs after the rename on the final
+  path with the new record in place (the platform call is a parameter, as no host has a backup), never after a write
+  that changed nothing, and a mark that fails fails the write. The plugin's tests read the Android manifest and both rule
+  files and check that each channel excludes `pairings.json` and the provider keys' preferences file. A crash between the
+  temporary file and the rename is `atomic-write-file`'s own test matter; nothing here fakes one.
+- **Not run on a phone yet.** The device flow (write, kill the app, read) is part of the first device run, with what no host can
+  see: that iOS reports the file excluded after a write, and that an Android backup and a transfer leave both files out.
