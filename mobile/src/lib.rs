@@ -9,6 +9,7 @@
 mod acl_tests;
 mod bridge;
 mod call;
+mod hold;
 mod i18n;
 pub mod pairings;
 mod platform;

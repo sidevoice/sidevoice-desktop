@@ -307,8 +307,8 @@ paused).
 
 - **Where it comes from.** iOS: `AVAudioSessionInterruptionNotification` (`platform/interruption`), `began` and `ended`
   with `shouldResume`. Android: the call's service reports its audio focus (`Focus`): `lost` and `lost-transient` begin an
-  interruption, `gained` ends it, `duck` (another app quietly over the call) is none, and `refused` (the system refused the
-  request outright) pauses with no end to wait for. A request made while a phone call is on is delayed by the system:
+  interruption that ends with `gained`; `lost` (for good: another app plays) and `refused` (the system refused the request
+  outright) pause with no end to wait for; `duck` (another app quietly over the call) is none. A request made while a phone call is on is delayed by the system:
   `lost-transient` now, `gained` when the call ends. The call pauses at the first interruption and resumes at the last end,
   whichever source.
 - **Pause** is the page's own mute (the `interrupt` command of `mobile/js/mobile-bridge.js`, so the page shows the call
@@ -321,7 +321,10 @@ paused).
   touched. The commands carry the call they are for (`since`), so they never reach a later call of the same page; a call
   that ends while interrupted gives the mute back for the next one.
 - **No end by itself**: `shouldResume` false (another app goes on playing), the audio session that could not be activated
-  again, or a focus the system refused. The microphone stays muted and the playback held until the person unmutes (the session is asked for again first; if it is refused again the wait goes on).
+  again, or a focus lost for good or refused (Android). The microphone stays muted and the playback held until the person
+  unmutes: the session is asked for again first (refused again: the wait goes on), and on Android the service requests the audio
+  focus again (`request_call_focus`), the playback is released only when it is granted; a delayed grant is a pause that ends
+  with the gain, a refusal pauses again and the person must mute and unmute once more. The state machine is `mobile/src/hold.rs`.
 - On iOS the audio session is activated again first (if a voice call has audio open), under the same lock as the session's
   activation and deactivation by the calls, so it is never active after the last call's audio has stopped.
 

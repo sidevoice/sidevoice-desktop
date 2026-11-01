@@ -18,11 +18,12 @@
 //!   muted themselves stays muted).
 use std::sync::{mpsc, Arc, Mutex};
 
+use crate::hold::{focus_signal, Effect, Hold, Signal, Source};
 use crate::platform::interruption::{self, Interruption};
 use sidevoice_app_core::app::{AppHost, CallActivity};
 use sidevoice_app_core::sidevoice_voice::{AudioSession, Session, SessionConfig, SessionMode};
 use sidevoice_mobile_plugin::{
-    start_call_service, stop_call_service, CallEvent, FocusState, StopReason,
+    request_call_focus, start_call_service, stop_call_service, CallEvent, StopReason,
 };
 use tauri::{AppHandle, Manager};
 
@@ -129,113 +130,12 @@ pub struct Room {
     holding: Option<u64>,
     /// The number of the last start.
     starts: u64,
-    /// Which of the system's interruptions are on now (only while the room's call is held).
-    interrupted: Interrupted,
     /// The call being held, by the page's mark of when it was joined: what the interruption commands are for.
     since: Option<f64>,
-    /// After an interruption that does not end by itself (the system advised against resuming, the audio could not be taken
-    /// back, or the focus was refused) the microphone stays muted and the playback held until the person unmutes. See
-    /// [`Wait`].
-    waiting: Option<Wait>,
-    /// Whether the playback is held.
-    paused: bool,
-    /// The microphone as the page last reported it (`enabled`, `disabled`).
-    mic: (bool, bool),
+    /// What the system's interruptions have done to the call (`hold.rs`).
+    interruptions: Hold,
     /// The audio session, given back before the playback goes on after an interruption that did not end by itself.
     phone: Arc<PhoneCall>,
-}
-
-/// Where an interruption comes from: the call can be taken away by both at once (an alarm on an audio focus that is
-/// also lost), and resumes only when neither holds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Source {
-    /// iOS: the audio session was interrupted.
-    Session,
-    /// Android: the call's audio focus was lost.
-    Focus,
-}
-
-/// What an interruption changes of the call.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Change {
-    Pause,
-    Resume,
-}
-
-/// Which interruptions are on.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct Interrupted {
-    session: bool,
-    focus: bool,
-}
-
-impl Interrupted {
-    fn any(self) -> bool {
-        self.session || self.focus
-    }
-
-    /// `source` is on or off now: what that changes of the call, if anything.
-    fn set(&mut self, source: Source, on: bool) -> Option<Change> {
-        let was = self.any();
-        match source {
-            Source::Session => self.session = on,
-            Source::Focus => self.focus = on,
-        }
-        match (was, self.any()) {
-            (false, true) => Some(Change::Pause),
-            (true, false) => Some(Change::Resume),
-            _ => None,
-        }
-    }
-}
-
-/// What the system said, as the call takes it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Signal {
-    /// The audio was taken away.
-    Began,
-    /// It is back. `resume`: the call goes on by itself (the system advises it, and the audio could be taken back).
-    Ended { resume: bool },
-    /// The audio focus was refused outright: there is no end to wait for.
-    Refused,
-}
-
-/// What a change of the audio focus says of the call: another app playing quietly over it (`Duck`) says nothing.
-fn focus_signal(state: FocusState) -> Option<Signal> {
-    match state {
-        FocusState::Lost | FocusState::LostTransient => Some(Signal::Began),
-        FocusState::Gained => Some(Signal::Ended { resume: true }),
-        FocusState::Refused => Some(Signal::Refused),
-        FocusState::Duck => None,
-    }
-}
-
-/// Where the person's unmute is waited for after an interruption that does not end by itself.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Wait {
-    /// Whether the microphone has been seen muted: a report of the page from before the mute reached it is not an unmute.
-    muted: bool,
-}
-
-impl Wait {
-    /// The wait that begins with the microphone as the page last reported it (`enabled`, `disabled`): muted already if the
-    /// page said so, whether before the interruption (the person's own mute) or since it began.
-    fn of(mic: (bool, bool)) -> Wait {
-        Wait { muted: !mic.0 }
-    }
-}
-
-/// The page reports the microphone (`enabled`, `disabled`: the mute cannot be used): the wait after it, and whether the
-/// person has lifted the pause. A microphone that cannot be muted has nothing to wait for.
-fn wait_after(wait: Wait, enabled: bool, disabled: bool) -> (Option<Wait>, bool) {
-    if disabled {
-        return (None, true);
-    }
-    match (wait.muted, enabled) {
-        (false, true) => (Some(wait), false),
-        (false, false) | (true, false) => (Some(Wait { muted: true }), false),
-        (true, true) => (None, true),
-    }
 }
 
 impl RoomCall {
@@ -247,11 +147,8 @@ impl RoomCall {
             page,
             holding: None,
             starts: 0,
-            interrupted: Interrupted::default(),
             since: None,
-            waiting: None,
-            paused: false,
-            mic: (true, false),
+            interruptions: Hold::new(),
             phone,
         };
         std::thread::Builder::new()
@@ -277,7 +174,7 @@ impl RoomCall {
     pub fn page_changed(&self, page: u64) {
         self.then(move |room| {
             room.page = page;
-            room.mic = (true, false);
+            room.interruptions = Hold::new();
             room.hold(false, None);
         });
     }
@@ -337,95 +234,67 @@ impl Room {
         }
     }
 
-    /// What the system said, from `source`: the call pauses when the first interruption begins and resumes when the last
-    /// one ends. Nothing of it while no room call is held (a try in Settings is not paused).
+    /// What the system said, from `source`. Nothing of it while no room call is held (a try in Settings is not paused).
     fn signal(&mut self, source: Source, signal: Signal) {
         if self.holding.is_none() {
             return;
         }
-        match signal {
-            Signal::Began => {
-                if self.interrupted.set(source, true) == Some(Change::Pause) {
-                    self.waiting = None;
-                    self.pause();
-                }
-            }
-            Signal::Ended { resume } => {
-                if self.interrupted.set(source, false) == Some(Change::Resume) {
-                    self.resume(resume);
-                }
-            }
-            Signal::Refused => {
-                // Nothing will end it: paused, until the person unmutes.
-                if !self.interrupted.any() {
-                    self.pause();
-                    self.waiting = Some(Wait::of(self.mic));
-                }
-            }
-        }
+        let effects = self.interruptions.signal(source, signal);
+        self.apply(effects);
     }
 
     /// The page reports the microphone: after an interruption that does not end by itself, the person's unmute lifts the
-    /// pause (the playback goes on).
+    /// pause.
     fn microphone(&mut self, enabled: bool, disabled: bool) {
-        // Always kept, interrupted or not: a mute reported before the wait begins is the evidence the wait needs (the page
-        // reports a change only once).
-        self.mic = (enabled, disabled);
-        let Some(wait) = self.waiting else { return };
-        let (waiting, lifted) = wait_after(wait, enabled, disabled);
-        self.waiting = waiting;
-        if !lifted {
-            return;
-        }
-        // The audio session may have been refused when the interruption ended: it is asked for again before the playback
-        // goes on, and the wait goes on if it is refused again.
-        if self.phone.reactivate() {
-            log::info!("call: resumed by the person");
-            self.hold_playback(false);
-        } else {
-            self.waiting = Some(Wait { muted: false });
-        }
+        let (app, phone) = (self.app.clone(), self.phone.clone());
+        let effects = self.interruptions.microphone(
+            enabled,
+            disabled,
+            || phone.reactivate(),
+            || match request_call_focus(&app) {
+                Ok(()) => true,
+                Err(error) => {
+                    log::warn!("call: the audio focus was not asked for again: {error}");
+                    false
+                }
+            },
+        );
+        self.apply(effects);
     }
 
     /// The call ends (or its page goes) while interrupted: the playback is let go, so that the next call is not held. The
     /// page gives the mute back itself when its call ends.
     fn clear_interruption(&mut self) {
-        self.interrupted = Interrupted::default();
-        if self.waiting.take().is_some() || self.paused {
-            self.hold_playback(false);
-        }
+        let effects = self.interruptions.clear();
+        self.apply(effects);
     }
 
-    fn hold_playback(&mut self, held: bool) {
-        self.paused = held;
-        if let Some(host) = self.app.try_state::<AppHost>() {
-            host.pause_playback(held);
-        }
-    }
-
-    /// The page mutes (its own mute, remembered by the page as ours) and the agent's playback is held.
-    fn pause(&mut self) {
-        log::info!("call: paused, the system took the audio");
-        self.hold_playback(true);
-        run_on_page(
-            &self.app,
-            serde_json::json!({ "command": "interrupt", "page": self.page, "since": self.since }),
-        );
-    }
-
-    /// The audio is back. With `resume` the page gives back the mute it took (only if the person has not changed it since)
-    /// and the playback goes on; without it (the system advises against, or the audio could not be taken back) both stay
-    /// until the person unmutes.
-    fn resume(&mut self, resume: bool) {
-        log::info!("call: the system gave the audio back (resume: {resume})");
-        run_on_page(
-            &self.app,
-            serde_json::json!({ "command": "resume", "page": self.page, "since": self.since, "restoreMic": resume }),
-        );
-        if resume {
-            self.hold_playback(false);
-        } else {
-            self.waiting = Some(Wait::of(self.mic));
+    fn apply(&self, effects: Vec<Effect>) {
+        for effect in effects {
+            match effect {
+                // The page mutes (its own mute, remembered by the page as ours).
+                Effect::Interrupt => {
+                    log::info!("call: paused, the system took the audio");
+                    run_on_page(
+                        &self.app,
+                        serde_json::json!({ "command": "interrupt", "page": self.page, "since": self.since }),
+                    );
+                }
+                // The page gives back the mute it took, if it is still the system's.
+                Effect::Resume { restore_mic } => run_on_page(
+                    &self.app,
+                    serde_json::json!({ "command": "resume", "page": self.page, "since": self.since, "restoreMic": restore_mic }),
+                ),
+                Effect::Playback(held) => {
+                    log::info!(
+                        "call: the playback is {}",
+                        if held { "held" } else { "released" }
+                    );
+                    if let Some(host) = self.app.try_state::<AppHost>() {
+                        host.pause_playback(held);
+                    }
+                }
+            }
         }
     }
 }
@@ -514,65 +383,6 @@ mod tests {
             }),
             None
         );
-    }
-
-    #[test]
-    fn the_focus_pauses_the_call_and_gives_it_back_and_never_hangs_up() {
-        assert_eq!(focus_signal(FocusState::Lost), Some(Signal::Began));
-        assert_eq!(focus_signal(FocusState::LostTransient), Some(Signal::Began));
-        assert_eq!(
-            focus_signal(FocusState::Gained),
-            Some(Signal::Ended { resume: true })
-        );
-        assert_eq!(focus_signal(FocusState::Refused), Some(Signal::Refused));
-        assert_eq!(focus_signal(FocusState::Duck), None);
-    }
-
-    #[test]
-    fn a_pause_without_an_end_waits_for_the_person_to_unmute() {
-        let waiting = Wait { muted: false };
-        let muted = Wait { muted: true };
-        // A report from before the mute reached the page is not an unmute.
-        assert_eq!(wait_after(waiting, true, false), (Some(waiting), false));
-        assert_eq!(wait_after(waiting, false, false), (Some(muted), false));
-        assert_eq!(wait_after(muted, false, false), (Some(muted), false));
-        assert_eq!(wait_after(muted, true, false), (None, true));
-        // A microphone that cannot be muted has nothing to wait for.
-        assert_eq!(wait_after(waiting, true, true), (None, true));
-    }
-
-    #[test]
-    fn a_mute_reported_before_the_wait_begins_counts() {
-        // Muted (by the interruption, or by the person before it), reported once; then the wait begins; then they unmute.
-        let wait = Wait::of((false, false));
-        assert_eq!(wait, Wait { muted: true });
-        assert_eq!(wait_after(wait, true, false), (None, true));
-        // Not yet muted when it begins: the unmute must come after the mute.
-        let wait = Wait::of((true, false));
-        assert_eq!(wait_after(wait, true, false), (Some(wait), false));
-        let (wait, lifted) = wait_after(wait, false, false);
-        assert!(!lifted);
-        assert_eq!(wait_after(wait.unwrap(), true, false), (None, true));
-    }
-
-    #[test]
-    fn the_call_pauses_at_the_first_interruption_and_resumes_at_the_last_end() {
-        let mut now = Interrupted::default();
-        assert_eq!(now.set(Source::Focus, false), None, "nothing was on");
-        assert_eq!(now.set(Source::Focus, true), Some(Change::Pause));
-        assert_eq!(now.set(Source::Focus, true), None, "already paused");
-        assert_eq!(
-            now.set(Source::Session, true),
-            None,
-            "paused by the other already"
-        );
-        assert_eq!(
-            now.set(Source::Focus, false),
-            None,
-            "the session still holds it"
-        );
-        assert_eq!(now.set(Source::Session, false), Some(Change::Resume));
-        assert_eq!(now, Interrupted::default());
     }
 
     #[test]

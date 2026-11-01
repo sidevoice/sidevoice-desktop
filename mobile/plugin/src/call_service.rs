@@ -108,6 +108,12 @@ pub fn stop_call_service<R: Runtime>(app: &AppHandle<R>) -> Result<(), CallServi
     platform::stop(app)
 }
 
+/// Asks the service to request the audio focus again, after it was lost for good (`FocusState::Lost`) or refused
+/// (`FocusState::Refused`). Its answer is a `Focus` event: `Gained`, `LostTransient` (the grant is delayed) or `Refused`.
+pub fn request_call_focus<R: Runtime>(app: &AppHandle<R>) -> Result<(), CallServiceError> {
+    platform::refocus(app)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
