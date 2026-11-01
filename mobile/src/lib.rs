@@ -3,7 +3,8 @@
 //!
 //! The window shows only the app's own pages, and gives the page the app's members (`window.__sidevoiceHost`,
 //! src/bridge.rs): the voice call the app runs, its engine, the microphone's permission and the pairings, through the
-//! commands every app shares (`sidevoice-app-tauri`, over `sidevoice-app-core`'s application host). No page captures
+//! commands every app shares (`sidevoice-app-tauri`, over `sidevoice-app-core`'s application host). The page reports
+//! the call back (`call_state`), which the headset's buttons and the lock screen's controls follow. No page captures
 //! anything: the app owns the microphone and the speaker, as on the desktop (docs/MOBILE.md).
 #[cfg(test)]
 mod acl_tests;
@@ -16,6 +17,7 @@ use std::{path::PathBuf, sync::Arc};
 pub use platform::entry::run;
 use sidevoice_app_core::app::{AlwaysAdmit, AppHost, Hooks, HostConfig, Keychain};
 use sidevoice_app_core::sidevoice_voice::{AudioSession, Session, SessionConfig, SessionMode};
+use sidevoice_app_tauri::platform::media_controls::{self, CallState, MediaCommand};
 use sidevoice_app_tauri::platform::origin::APP_ORIGIN;
 use sidevoice_app_tauri::{Pages, Pairings};
 use tauri::{
@@ -106,6 +108,46 @@ fn audio_session() -> Result<(), String> {
     Session::activate()
 }
 
+/// The call as the page reports it (`window.__sidevoiceHost`'s room, mobile/js/mobile-bridge.js): what the headset
+/// buttons and the lock screen need of it. The rest of the snapshot is the page's and is not read.
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct CallReport {
+    ready: bool,
+    joined: bool,
+    mic_enabled: bool,
+    title: String,
+}
+
+impl From<CallReport> for CallState {
+    fn from(report: CallReport) -> CallState {
+        CallState {
+            ready: report.ready,
+            joined: report.joined,
+            mic_enabled: report.mic_enabled,
+            title: report.title,
+        }
+    }
+}
+
+/// The page reports the call (the app's own command, capabilities/main.json): the media controls follow it.
+#[tauri::command]
+fn call_state(app: AppHandle, webview: Webview, snapshot: CallReport) -> Result<(), String> {
+    the_page(&app, &webview)?;
+    media_controls::update(&app, &snapshot.into());
+    Ok(())
+}
+
+/// Runs one of the shared commands on the room (`toggle-mute`, …) through the page's `run`.
+fn run_on_page(app: &AppHandle, command: &str) {
+    if let Some(window) = app.get_webview_window(WINDOW) {
+        let request = serde_json::json!({ "command": command });
+        let _ = window.eval(format!(
+            "window.__sidevoiceHost && window.__sidevoiceHost.run({request});"
+        ));
+    }
+}
+
 /// The app: one window, on the bundled interface, with the members the apps share.
 fn run_app() {
     // Where the call's events go: over the channel the page opens (the shared plugin's `voice_events`).
@@ -118,8 +160,17 @@ fn run_app() {
         // The commands the apps share (`host.voice`, `host.engine`, `host.microphone`, `host.pairings`): who may call is
         // the app's one window, on its own page.
         .plugin(sidevoice_app_tauri::init(the_page, pages))
+        .invoke_handler(tauri::generate_handler![call_state])
         .setup(move |app| {
             let handle = app.handle().clone();
+            // The headset's buttons and the lock screen's controls act on the call through the page, as the desktop's do.
+            let media_app = handle.clone();
+            media_controls::attach(
+                &handle,
+                Arc::new(move |command| match command {
+                    MediaCommand::ToggleMute => run_on_page(&media_app, "toggle-mute"),
+                }),
+            );
             // Before the engine's first HTTPS request. Without it, remote providers and downloads fail; the rest runs.
             if let Err(error) = platform::tls::init() {
                 log::error!("tls: {error}");
@@ -158,6 +209,8 @@ fn run_app() {
                         if let Some(host) = page_app.try_state::<AppHost>() {
                             host.page_changed();
                         }
+                        // No call until the new page says so: the media controls let go.
+                        media_controls::update(&page_app, &CallState::default());
                     }
                 })
                 .build()?;

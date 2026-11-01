@@ -70,17 +70,18 @@ part, `mobile/js/mobile-bridge.js`, which assembles `host`:
 | `voice`, `engine` | The voice call the app runs itself (sidevoice-voice on the phone's microphone and speaker) and the engine it takes its models from: sherpa-onnx (Silero) and the remote providers on a phone (sidevoice-engine's README, "Android" and "iOS"). |
 | `microphone` | The system's own permission (`sidevoice-app-tauri`'s `platform/microphone`); `openSettings` opens the app's page of the system's settings. |
 | `pairings` | The pairings in the app's private storage (`mobile/src/pairings.rs`), not the webview's. |
-| `presence` | `{ media: "app" }`: the app owns the call's audio, so the page registers no Media Session and plays no Now Playing element of its own. Its headset buttons and lock-screen controls are sidevoice-desktop#349: until then a phone has **none** (the shared plugin's `platform/media_controls` has bodies for the computers only, and is not in a phone's build). |
+| `presence` | `{ media: "app" }`: the app owns the call's audio, so the page registers no Media Session and plays no Now Playing element of its own. The app answers the headset's play/pause and the lock screen's (the shared plugin's `platform/media_controls`: MediaPlayer on iOS, a `MediaSession` on Android; docs/MEDIA_CONTROLS.md). |
 | `reach` | `{ plainHttpPrivate: true }`, as on the desktop. |
 
 Nothing of the desktop's own (`localHost`, `reset`, `muteShortcut`, `callControls`, `updater`, `debug`, `deviceName`) is
 offered, and neither is `build` yet: the mobile app's build kinds (nightly and release, D-MOBILE-CHANNELS) come with their
-own row. There is no `snapshot`/`run` either: nothing native reads the call's state on a phone yet (the media controls
-and the call's service will).
+own row. The page reports the call (the members' `room`) to the app's own command `call_state`, which the media controls
+follow, and the app runs the headset's `toggle-mute` on the room through `run`, as the desktop does.
 
 - **Who may call.** The app's one window, `main`, on the app's own origin (`is_the_page`), as every shared command asks
   first; `mobile/capabilities/main.json` grants it every command of `app-tauri/ACL.md` but the call's levels
-  (`bridge_level`, `bridge_playback`), which feed the desktop's call controls card. A test keeps the two in step.
+  (`bridge_level`, `bridge_playback`), which feed the desktop's call controls card, and the app's own `call_state`. A
+  test keeps the two in step.
 - **The application host** (`AppHost`) is the desktop's, with the phone's hooks: every request admitted (a phone never
   resets its data under the call), the provider keys under `ai.sidevoice.mobile.providers` (docs/CREDENTIALS.md), and the
   models in `models/` of the app's own files, private to the app and kept out of the device backup (iOS marks the
@@ -111,8 +112,9 @@ and the call's service will).
 What only a device shows, for the M-FG gate (plan §F.2): a call's first Join on each phone (remote STT/TTS and Silero, a
 turn and a reply); the audio session's route (loudspeaker, a wired or Bluetooth headset) and what other apps' audio does
 when the app starts, since the session is activated at start; that a model download and a remote provider's request
-pass the verifier on Android; that the xcframework is embedded and signed in an iOS archive; and the APK's libraries
-loading on a phone.
+pass the verifier on Android; that the xcframework is embedded and signed in an iOS archive; the APK's libraries
+loading on a phone; and the media controls (a headset's play/pause, with and without headphones; the lock screen and
+Control Center on iOS; the media session's notification on Android, once the call starts the service).
 
 ## Who owns the native projects
 
@@ -284,5 +286,5 @@ stays unsigned with no secret. Its one step is `cargo xtask mobile testflight --
 
 ## Not here yet
 
-Headset buttons and lock-screen controls (sidevoice-desktop#349); starting and stopping the call's service with the call,
+Starting and stopping the call's service with the call,
 and acting on its events (Android); the build kinds (nightly with Developer options, release).

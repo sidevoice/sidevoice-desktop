@@ -25,6 +25,15 @@
   // Its events come over the channel the members open for it (`voice_events`), not through the global.
   const voiceCall = members.voice();
 
+  /** The call as the room reports it (the members' `room`), for the app's media controls: what the headset buttons and
+   *  the lock screen need, sent to the app's own `call_state` whenever it changes. The app runs the shared commands
+   *  (`toggle-mute`, …) on the room through `run`. */
+  const reporting = members.room({
+    version: 2,
+    publish: (snapshot) => transport.own.send("call_state", { snapshot }),
+    extend: () => ({}),
+  });
+
   const api = {
     /** The contract this app speaks: the desktop's (docs/BRIDGE.md). */
     version: 2,
@@ -39,13 +48,18 @@
       // The pairings, in the app's private storage (mobile/src/pairings.rs), not the webview's.
       pairings: members.pairings(),
       /** The app owns the call's audio and the system's media on a phone: the page must not register Media Session
-       *  handlers or play a Now Playing element of its own. Its headset buttons and lock-screen controls are
-       *  sidevoice-desktop#349; until then there are none. */
+       *  handlers or play a Now Playing element of its own. The app answers the headset's buttons and the lock screen
+       *  (sidevoice-app-tauri's platform/media_controls). */
       presence: Object.freeze({ media: "app" }),
       /** The webview sends plain http to a private address; to whom, and with whose consent, is the page's policy. */
       reach: Object.freeze({ plainHttpPrivate: true }),
     }),
+    snapshot: reporting.snapshot,
+    /** Runs one command from the app (a headset, the lock screen) through the web UI's own actions: `{command, …}`.
+     *  Returns whether it ran. */
+    run: reporting.run,
   };
   win.__sidevoiceHost = api;
+  reporting.start();
   return api;
 });

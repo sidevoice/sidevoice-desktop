@@ -1,9 +1,10 @@
 {
   "$schema": "../gen/schemas/mobile-schema.json",
   "identifier": "main",
-  "description": "The app's window shows only the interface bundled in the app (its own pages). It may use the app's model engine and run the voice call the app runs itself (host.engine, host.voice), read and request the app's microphone permission or open its page of the system's settings (host.microphone), and read and write the pairings the app keeps for it (host.pairings), all through the shared plugin sidevoice-app-tauri (its ACL.md). Not the call's levels (bridge-level, bridge-playback): they feed the desktop's call controls card, which this app has none of. Nothing else.",
+  "description": "The app's window shows only the interface bundled in the app (its own pages). It may use the app's model engine and run the voice call the app runs itself (host.engine, host.voice), read and request the app's microphone permission or open its page of the system's settings (host.microphone), and read and write the pairings the app keeps for it (host.pairings), all through the shared plugin sidevoice-app-tauri (its ACL.md), and report the call to the app (call_state), which the headset's buttons and the lock screen's controls follow. Not the call's levels (bridge-level, bridge-playback): they feed the desktop's call controls card, which this app has none of. Nothing else.",
   "windows": ["main"],
   "permissions": [
+    "allow-call-state",
     "sidevoice-app-tauri:allow-engine-cancel",
     "sidevoice-app-tauri:allow-engine-capabilities",
     "sidevoice-app-tauri:allow-engine-catalogs",

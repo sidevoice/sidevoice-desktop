@@ -1,6 +1,8 @@
 # Headset and media controls
 
-The shared plugin's `app-tauri/src/platform/media_controls.rs` exposes `available`, `attach` and `update`.
+The shared plugin's `app-tauri/src/platform/media_controls.rs` exposes `available`, `attach` and `update`. The desktop app
+updates it from its `bridge_state`, the mobile app from its `call_state` (the page's report of the call); both run the
+command on the room through `window.__sidevoiceHost.run`.
 Where `available` is true the app offers `host.presence` (`{ media: "app" }`), independently of native voice. Startup attaches one
 process-lifetime command sink; call reports and navigation resets update it.
 
@@ -9,12 +11,17 @@ process-lifetime command sink; call reports and navigation resets update it.
 | macOS | Existing MediaPlayer Now Playing and AVAudioApplication mute gesture | Suppressed by `presence: { media: "app" }`, avoiding duplicate actions | Unverified on hardware |
 | Windows | Unavailable (no `presence`) | Page Media Session and its Now Playing audio element | Unverified in WebView2/on hardware |
 | Linux | Unavailable (no `presence`) | Page Media Session and its Now Playing audio element | Unverified in WebKitGTK/X11/Wayland/on hardware |
-| iOS, Android (mobile app) | None yet: the module is not in a phone's build (sidevoice-desktop#349) | Suppressed: the mobile app offers `presence: { media: "app" }` (it owns the call's audio) | None to verify yet |
+| iOS | MediaPlayer's Now Playing (lock screen, Control Center) and remote commands, and the AirPods mute gesture (iOS 17+): the macOS code (`apple.rs`) | Suppressed by `presence: { media: "app" }` | Unverified on hardware |
+| Android | A `MediaSession` (app-tauri's Kotlin, `MediaControls.kt`), active during a call, shown by the call's foreground service's notification (MediaStyle) | Suppressed by `presence: { media: "app" }` | Unverified on hardware |
 
 The page maps play to unmute, pause to toggle mute (including a pause delivered while muted),
 and `togglemicrophone`, where the webview supports it, to the requested microphone state.
 Hang-up removes the page handlers and pauses its Now Playing element. A dedicated hardware
-hang-up gesture is not claimed. AirPods/Beats' native mute gesture remains macOS-only.
+hang-up gesture is not claimed. AirPods/Beats' native mute gesture is macOS's and iOS's (17 and later).
+
+On a phone the same rule holds for the native commands: play unmutes, pause toggles. On Android a headset's single press
+arrives as pause while the session plays (the microphone is open) and as play while it is paused (muted). There is no
+next-track mapping (skip the reply) on any host: the desktop has none, and adding one is its own decision.
 
 `npm run web && npm test` runs the pinned page's Media Session and microphone fan-out bodies,
 verbatim from its release bundle, against a live native-call bridge object with Tauri commands

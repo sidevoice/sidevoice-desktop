@@ -1,12 +1,15 @@
 //! Ownership of headset buttons and media keys, independent of the voice engine.
 //!
-//! macOS retains Now Playing and the AirPods mute gesture. Other hosts leave
-//! ownership with the page's Media Session, including while native voice runs.
+//! macOS and iOS hold Now Playing and the AirPods mute gesture (`apple.rs`); Android a media session (Kotlin,
+//! `android/…/MediaControlsPlugin.kt`), which the call's notification shows. Windows and Linux leave ownership with
+//! the page's Media Session, including while native voice runs.
 
 use std::sync::Arc;
 use tauri::AppHandle;
 
 #[cfg_attr(target_os = "macos", path = "media_controls/macos.rs")]
+#[cfg_attr(target_os = "ios", path = "media_controls/ios.rs")]
+#[cfg_attr(target_os = "android", path = "media_controls/android.rs")]
 #[cfg_attr(target_os = "windows", path = "media_controls/windows.rs")]
 #[cfg_attr(target_os = "linux", path = "media_controls/linux.rs")]
 mod imp;

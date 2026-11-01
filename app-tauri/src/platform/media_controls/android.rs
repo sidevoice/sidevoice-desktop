@@ -1,0 +1,110 @@
+//! Android: a media session (`MediaSession`), held by the plugin's Kotlin (`android/…/MediaControls.kt`, reached
+//! through `AppPlugin.kt`, `platform::kotlin`). While there is a call it is active, says the call as playing (microphone
+//! open) or paused (muted), and receives a headset's play/pause and the lock screen's: Android hands them to the active
+//! session, and the call's foreground service shows that session in its notification. The commands are mapped as on
+//! macOS and iOS (`crate::headset`): play → unmute, pause → toggle.
+//!
+//! Every command that arrives is recorded in the app log (`headset …` lines), as on the Apple systems.
+use super::{CallState, CommandSink, MediaCommand, Os};
+use crate::headset::media_command_action;
+use crate::platform::kotlin;
+use serde_json::{json, Value};
+use std::sync::Mutex;
+use tauri::ipc::Channel;
+use tauri::{AppHandle, Manager};
+
+/// The Kotlin class's commands.
+const ATTACH: &str = "attachMediaControls";
+const UPDATE: &str = "updateMediaControls";
+
+struct Headset {
+    call: Mutex<CallState>,
+    sink: CommandSink,
+}
+
+fn record(source: &str, action: &str) {
+    sidevoice_app_core::debug::debug(&format!("headset {source} → {action}"));
+}
+
+/// A command of the session arrived (`play`, `pause`), on the Kotlin side's main thread.
+fn on_media_command(app: &AppHandle, command: &str) {
+    let headset = app.state::<Headset>();
+    let call = headset.call.lock().unwrap().clone();
+    let in_call = call.ready && call.joined;
+    let source = format!("session:{command}");
+    match if in_call { media_command_action(command, call.mic_enabled) } else { None } {
+        Some(what) => {
+            (headset.sink)(MediaCommand::ToggleMute);
+            record(&source, what);
+        }
+        None if in_call => record(&source, "already so"),
+        None => record(&source, "no call: only recorded"),
+    }
+}
+
+/// What the Kotlin side is told of the call: whether the session is active, whether the call plays (the microphone is
+/// open) and its title (the conversation's, or none).
+fn session_state(call: &CallState) -> Value {
+    json!({
+        "active": call.ready && call.joined,
+        "playing": call.mic_enabled,
+        "title": call.title.trim(),
+    })
+}
+
+pub(super) struct Native;
+
+impl Os for Native {
+    const NATIVE: bool = true;
+
+    fn attach(app: &AppHandle, sink: CommandSink) {
+        app.manage(Headset { call: Mutex::default(), sink });
+        let commands_app = app.clone();
+        let commands = Channel::<Value>::new(move |body| {
+            let message: Value = body.deserialize()?;
+            if let Some(command) = message.get("command").and_then(Value::as_str) {
+                on_media_command(&commands_app, command);
+            }
+            Ok(())
+        });
+        let Some(class) = kotlin::class() else { return record("attach", "no Kotlin class") };
+        if let Err(error) = class.run(ATTACH, json!({ "onCommand": commands })) {
+            record("attach", &error);
+        }
+    }
+
+    fn update(app: &AppHandle, call: &CallState) {
+        let Some(headset) = app.try_state::<Headset>() else { return };
+        *headset.call.lock().unwrap() = call.clone();
+        let Some(class) = kotlin::class() else { return };
+        if let Err(error) = class.run(UPDATE, session_state(call)) {
+            record("update", &error);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_session_is_active_only_in_a_call_and_plays_while_the_microphone_is_open() {
+        let call = CallState { ready: true, joined: true, mic_enabled: false, title: " Repo ".into() };
+        assert_eq!(session_state(&call), json!({"active": true, "playing": false, "title": "Repo"}));
+        let idle = CallState { ready: true, ..Default::default() };
+        assert_eq!(session_state(&idle)["active"], false);
+    }
+
+    #[test]
+    fn the_commands_are_the_kotlin_class_s() {
+        let class = include_str!("../../../android/src/main/java/ai/sidevoice/app/AppPlugin.kt");
+        for command in [ATTACH, UPDATE] {
+            assert!(class.contains(&format!("@Command\n    fun {command}(invoke: Invoke)")), "{command}");
+        }
+        assert!(class.contains("lateinit var onCommand: Channel"));
+        let session = include_str!("../../../android/src/main/java/ai/sidevoice/app/MediaControls.kt");
+        for command in ["\"play\"", "\"pause\""] {
+            assert!(session.contains(command), "{command}");
+        }
+    }
+}

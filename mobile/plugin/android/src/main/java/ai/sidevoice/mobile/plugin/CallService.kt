@@ -14,8 +14,11 @@ import android.media.AudioManager
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import ai.sidevoice.app.MediaControls
+import android.support.v4.media.session.MediaSessionCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import androidx.media.app.NotificationCompat.MediaStyle
 
 /**
  * The foreground service that keeps the process of a call alive while the screen is off or another app is in front:
@@ -121,7 +124,7 @@ class CallService : Service() {
                 .putExtra(EXTRA_SESSION, id),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_call_notification)
             .setContentTitle(getString(R.string.call_notification_title))
             .setContentText(getString(R.string.call_notification_text))
@@ -131,7 +134,14 @@ class CallService : Service() {
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setContentIntent(open)
             .addAction(0, getString(R.string.call_notification_hang_up), hangUp)
-            .build()
+        // The call's media session (the shared plugin's): the notification shows it, which puts the call's play/pause on
+        // the lock screen and in the media controls, beside Hang up.
+        MediaControls.token()?.let { token ->
+            builder.setStyle(
+                MediaStyle().setMediaSession(MediaSessionCompat.Token.fromToken(token)).setShowActionsInCompactView(0)
+            )
+        }
+        return builder.build()
     }
 
     /**
