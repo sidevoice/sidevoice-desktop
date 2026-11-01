@@ -113,7 +113,8 @@ through `run` (the call's service hangs up through it).
   cpal and the provider keys need, is set by Tauri's runtime (tao) before the app's code runs: nothing to do for it.
 - **The engine's native libraries.** sherpa-onnx is shared on a phone: `libsherpa-onnx-c-api.so` and `libonnxruntime.so`
   per ABI on Android (in `jniLibs/<abi>/`), `SherpaOnnxC.xcframework` on iOS (embedded through `bundle.iOS.frameworks`
-  in `mobile/tauri.conf.json`). `cargo xtask mobile build` gets them from the engine's own `cargo xtask android-build`
+  in `mobile/tauri.conf.json`, beside the system frameworks the Rust library calls and Xcode must link: AVFoundation and
+  AVFAudio for the audio session and the microphone's permission, AudioToolbox for cpal's audio units). `cargo xtask mobile build` gets them from the engine's own `cargo xtask android-build`
   or `ios-build`, at the commit Cargo.lock pins (the archive its pins name, checked against its digest), and builds the
   app against the same directory (`SHERPA_ONNX_LIB_DIR`), so nothing is downloaded unchecked. Git ignores both
   (`mobile/frameworks/`, the `.so` files of `jniLibs`).
