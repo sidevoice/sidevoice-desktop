@@ -6,12 +6,16 @@
 //! - `mobile generate android|ios`: the project made anew (the old one removed, so a file the template no longer has
 //!   goes too), then the icons derived from the sources (`tauri icon` writes them into the projects that exist). Runs
 //!   in mobile/, where tauri.conf.json is. The iOS project needs macOS and XcodeGen. The CLI's targets are not
-//!   installed here (`--skip-targets-install`): mobile/rust-toolchain.toml names them.
+//!   installed here (`--skip-targets-install`): mobile/rust-toolchain.toml names them. The iOS project also gets the
+//!   localized permission texts (mobile/ios/<language>.lproj/InfoPlist.strings), which the CLI has no setting for: they
+//!   are put where the project reads its sources before the CLI makes the project, and the project is read for them
+//!   after.
 
 use std::fs;
+use std::path::Path;
 
 use crate::platform::host::npm;
-use crate::util::{self, ensure, repo, write, Cmd};
+use crate::util::{self, ensure, mkdir, repo, write, Cmd};
 use crate::Result;
 
 /// A project of the mobile app: the Tauri CLI's name for it, and where it keeps it below mobile/.
@@ -54,6 +58,95 @@ fn pin_target_sdk(gradle: &str) -> Result<String> {
     Ok(line.replace(gradle, format!("${{1}}targetSdk = {ANDROID_TARGET_SDK}")).into_owned())
 }
 
+/// The directory of the iOS project that holds the app's own files (the Tauri template's `<app>_iOS`), which the Xcode
+/// project reads whole as sources of the app target: its Info.plist and entitlements are there, and so is what is put
+/// there before the project is made.
+const IOS_APP_DIR: &str = "sidevoice-mobile_iOS";
+
+/// The Xcode project's file, where a resource of the app target is listed.
+const IOS_PBXPROJ: &str = "sidevoice-mobile.xcodeproj/project.pbxproj";
+
+/// Where the iOS app's localized permission texts are, below mobile/: one `<language>.lproj/InfoPlist.strings` per
+/// language the web interface ships, English included. The texts of `Info.ios.plist` stay the English base (App Store
+/// validation looks for a purpose string in the `Info.plist`, not in a `.strings` file); `en.lproj` is there because
+/// XcodeGen makes `InfoPlist.strings` one localized resource only when the base language has the file.
+const IOS_TEXTS_DIR: &str = "ios";
+
+/// The file of each language folder: the system reads the app's `Info.plist` keys from it, in the person's language.
+const IOS_TEXTS_FILE: &str = "InfoPlist.strings";
+
+/// The languages of `mobile/ios`, sorted: the names of its `<language>.lproj` folders (`zh-Hans`, not `zh`).
+fn ios_languages(dir: &Path) -> Result<Vec<String>> {
+    let entries = fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let mut languages: Vec<String> = entries
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().is_dir())
+        .filter_map(|entry| entry.file_name().to_string_lossy().strip_suffix(".lproj").map(str::to_owned))
+        .collect();
+    languages.sort();
+    ensure(!languages.is_empty(), format!("{}: no <language>.lproj folder", dir.display()))?;
+    Ok(languages)
+}
+
+/// The localized texts where the iOS project reads them: put in `<project>/<app>_iOS/<language>.lproj/` before
+/// `tauri ios init`, which writes the template around what is there and leaves it, and XcodeGen lists them as
+/// resources of the app, so they land in the bundle as `<language>.lproj/InfoPlist.strings`.
+fn add_localized_texts(project: &Path) -> Result<()> {
+    let from = repo().join("mobile").join(IOS_TEXTS_DIR);
+    for language in ios_languages(&from)? {
+        let folder = format!("{language}.lproj");
+        let to = project.join(IOS_APP_DIR).join(&folder);
+        mkdir(&to)?;
+        let source = from.join(&folder).join(IOS_TEXTS_FILE);
+        fs::copy(&source, to.join(IOS_TEXTS_FILE)).map_err(|e| format!("{}: {e}", source.display()))?;
+    }
+    Ok(())
+}
+
+/// The regions the Xcode project knows (`knownRegions = ( en, "zh-Hans", … );`), unquoted.
+fn known_regions(pbxproj: &str) -> Vec<String> {
+    let block = util::re(r"(?s)knownRegions = \(([^)]*)\);");
+    block
+        .captures(pbxproj)
+        .map(|found| {
+            found[1]
+                .split(',')
+                .map(|region| region.trim().trim_matches('"'))
+                .filter(|region| !region.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Whether the project `pbxproj` (its text) has each of `languages` for the app: a known region, with its file in the
+/// project, and the file a resource of the app. A XcodeGen that stopped listing a `.lproj` folder's file as a
+/// resource, or that did not take the language as a region, would ship an app that has the texts only in English.
+fn check_localized_texts_listed(pbxproj: &str, languages: &[String]) -> Result<()> {
+    let regions = known_regions(pbxproj);
+    let mut missing = Vec::new();
+    if !pbxproj.contains(&format!("{IOS_TEXTS_FILE} in Resources")) {
+        missing.push(format!("{IOS_TEXTS_FILE} is not a resource of the app"));
+    }
+    for language in languages {
+        if !regions.contains(language) {
+            missing.push(format!("{language} is not a known region"));
+        }
+        if !pbxproj.contains(&format!("{language}.lproj/{IOS_TEXTS_FILE}")) {
+            missing.push(format!("{language}.lproj/{IOS_TEXTS_FILE} is not in the project"));
+        }
+    }
+    ensure(missing.is_empty(), format!("the iOS project does not have the localized texts: {}", missing.join("; ")))
+}
+
+/// [`check_localized_texts_listed`] on the project `generate` has just made, for each language of `mobile/ios`.
+fn check_localized_texts_in(project: &Path) -> Result<()> {
+    let languages = ios_languages(&repo().join("mobile").join(IOS_TEXTS_DIR))?;
+    let pbxproj = project.join(IOS_PBXPROJ);
+    let text = fs::read_to_string(&pbxproj).map_err(|e| format!("{}: {e}", pbxproj.display()))?;
+    check_localized_texts_listed(&text, &languages).map_err(|e| format!("{}: {e}", pbxproj.display()))
+}
+
 /// `mobile generate android|ios`.
 pub fn generate(name: &str) -> Result<()> {
     let project = project(name)?;
@@ -61,7 +154,13 @@ pub fn generate(name: &str) -> Result<()> {
     if dir.exists() {
         fs::remove_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
+    if project.cli == "ios" {
+        add_localized_texts(&dir)?;
+    }
     tauri(&[project.cli, "init", "--ci", "--skip-targets-install"]).run()?;
+    if project.cli == "ios" {
+        check_localized_texts_in(&dir)?;
+    }
     if project.cli == "android" {
         let gradle = dir.join("app/build.gradle.kts");
         let text = fs::read_to_string(&gradle).map_err(|e| format!("{}: {e}", gradle.display()))?;
@@ -82,6 +181,103 @@ mod tests {
         let ios = project("ios").unwrap();
         assert_eq!((ios.cli, ios.dir), ("ios", "gen/apple"));
         assert!(project("windows").err().unwrap().contains("android or ios"));
+    }
+
+    /// A language folder's `InfoPlist.strings`: the `"KEY" = "value";` lines, in file order.
+    fn strings_of(text: &str) -> Vec<(String, String)> {
+        let line = util::re(r#"(?m)^"([A-Za-z]+)" = "([^"\\]*)";$"#);
+        line.captures_iter(text).map(|found| (found[1].to_owned(), found[2].to_owned())).collect()
+    }
+
+    fn ios_dir() -> std::path::PathBuf {
+        repo().join("mobile").join(IOS_TEXTS_DIR)
+    }
+
+    fn info_ios_plist() -> String {
+        fs::read_to_string(repo().join("mobile/Info.ios.plist")).unwrap()
+    }
+
+    #[test]
+    fn every_language_has_both_permission_texts() {
+        let languages = ios_languages(&ios_dir()).unwrap();
+        assert!(languages.iter().any(|language| language == "en"), "English is the base: {languages:?}");
+        for language in languages {
+            let file = ios_dir().join(format!("{language}.lproj")).join(IOS_TEXTS_FILE);
+            let text = fs::read_to_string(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+            let keys: Vec<String> = strings_of(&text)
+                .into_iter()
+                .map(|(key, value)| {
+                    assert!(!value.trim().is_empty(), "{language}: {key} is empty");
+                    key
+                })
+                .collect();
+            assert_eq!(
+                keys,
+                ["NSMicrophoneUsageDescription", "NSLocalNetworkUsageDescription"],
+                "{language}: {IOS_TEXTS_FILE} is these two `\"KEY\" = \"text\";` lines and nothing else"
+            );
+        }
+    }
+
+    #[test]
+    fn the_english_strings_are_the_plists_base_texts() {
+        let plist = info_ios_plist();
+        let english = fs::read_to_string(ios_dir().join("en.lproj").join(IOS_TEXTS_FILE)).unwrap();
+        let strings = strings_of(&english);
+        assert_eq!(strings.len(), 2);
+        for (key, value) in strings {
+            let in_plist = util::re(&format!(r"<key>{key}</key>\s*<string>([^<]*)</string>"));
+            let base = in_plist.captures(&plist).unwrap_or_else(|| panic!("Info.ios.plist has no {key}"));
+            assert_eq!(&base[1], value, "{key}: the English of en.lproj and of Info.ios.plist are one text");
+        }
+    }
+
+    #[test]
+    fn the_plist_offers_the_languages_of_the_folders() {
+        let plist = info_ios_plist();
+        let listed = util::re(r"(?s)<key>CFBundleLocalizations</key>\s*<array>(.*?)</array>")
+            .captures(&plist)
+            .expect("Info.ios.plist has CFBundleLocalizations")[1]
+            .to_owned();
+        let mut offered: Vec<String> =
+            util::re(r"<string>([^<]*)</string>").captures_iter(&listed).map(|found| found[1].to_owned()).collect();
+        offered.sort();
+        assert_eq!(offered, ios_languages(&ios_dir()).unwrap());
+    }
+
+    #[test]
+    fn a_project_without_the_localized_texts_is_refused() {
+        let languages = ["de".to_owned(), "en".to_owned(), "zh-Hans".to_owned()];
+        let project = r#"
+            4C1 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = 9A2 /* InfoPlist.strings */; };
+            B11 /* de */ = {isa = PBXFileReference; name = de; path = de.lproj/InfoPlist.strings; };
+            B12 /* en */ = {isa = PBXFileReference; name = en; path = en.lproj/InfoPlist.strings; };
+            B13 /* zh-Hans */ = {isa = PBXFileReference; name = "zh-Hans"; path = "zh-Hans.lproj/InfoPlist.strings"; };
+            knownRegions = (
+                Base,
+                de,
+                en,
+                "zh-Hans",
+            );
+        "#;
+        assert_eq!(known_regions(project), ["Base", "de", "en", "zh-Hans"]);
+        check_localized_texts_listed(project, &languages).unwrap();
+
+        let no_region = project.replace("\"zh-Hans\",\n", "");
+        let error = check_localized_texts_listed(&no_region, &languages).unwrap_err();
+        assert!(error.contains("zh-Hans is not a known region"), "{error}");
+
+        let not_a_resource = project.replace("InfoPlist.strings in Resources", "InfoPlist.strings in Sources");
+        let error = check_localized_texts_listed(&not_a_resource, &languages).unwrap_err();
+        assert!(error.contains("not a resource of the app"), "{error}");
+
+        let no_file = project.replace("de.lproj/InfoPlist.strings", "de.lproj/Other.strings");
+        let error = check_localized_texts_listed(&no_file, &languages).unwrap_err();
+        assert!(error.contains("de.lproj/InfoPlist.strings is not in the project"), "{error}");
+
+        assert!(check_localized_texts_listed("no regions at all", &languages)
+            .unwrap_err()
+            .contains("not a known region"));
     }
 
     #[test]

@@ -27,7 +27,11 @@ of host is a crate, never a condition (AGENTS.md → "Host kind is a crate bound
   `NSAllowsLocalNetworking` (`mobile/Info.ios.plist`), which allows local addresses and leaves App Transport Security on
   for everything else.
 - **Permission texts.** `NSMicrophoneUsageDescription` and `NSLocalNetworkUsageDescription` are in
-  `mobile/Info.ios.plist`, in English; their translations are a later, reviewed change.
+  `mobile/Info.ios.plist` in English, the base (App Store validation looks for them there), and in the languages the web
+  interface ships (de, es, fr, it, ja, pl, zh-Hans) in `mobile/ios/<language>.lproj/InfoPlist.strings`, which `generate`
+  puts into the iOS project. `CFBundleLocalizations` in the plist is the list of languages iOS offers the app in. Adding
+  a language is a folder in `mobile/ios` and an entry in that list; a test checks that they agree, and that the English
+  of `en.lproj` is the plist's.
 
 ## Who owns the native projects
 
@@ -39,6 +43,7 @@ is an input the CLI reads:
 |---|---|
 | Identifier, name, version, minimum OS versions, the web interface to bundle | `mobile/tauri.conf.json` |
 | iOS `Info.plist` keys | `mobile/Info.ios.plist` (merged by the CLI) |
+| The iOS permission texts in each language | `mobile/ios/<language>.lproj/InfoPlist.strings`: the CLI has no setting for them, so `generate` puts them in `gen/apple/sidevoice-mobile_iOS/` before the CLI makes the project, and the project lists them as resources of the app, with each language as a known region (`generate` fails if it does not) |
 | Android manifest entries, resources and, later, Kotlin | the Android library of `mobile/plugin` (a Tauri plugin carrying only native project inputs; Gradle merges its manifest into the app's) |
 | App icons | `mobile/app-icon/` (drawn from the brand by `npm run icons`; `tauri icon` derives every size) |
 | The Rust toolchain and the four mobile targets | `mobile/rust-toolchain.toml` |

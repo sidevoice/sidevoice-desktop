@@ -1,0 +1,5 @@
+/* The microphone permission prompt. */
+"NSMicrophoneUsageDescription" = "Sidevoice 通过麦克风收听，以便你与智能体对话。";
+
+/* The local network permission prompt. */
+"NSLocalNetworkUsageDescription" = "Sidevoice 通过本地网络连接你已配对的计算机。";
