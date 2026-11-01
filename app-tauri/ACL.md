@@ -7,33 +7,35 @@ list; the app's own tests keep its capabilities to it (the room window is grante
 card's window none, no other window any).
 
 - **Window.** Where the app grants it: `room` is the app's room window, the page that owns the calls.
-- **Caller.** What the command asks of who invoked it before it does anything. `room page`: the app's own answer to
-  whether the webview is the page it owns the calls for (the desktop: the current room window, showing its own origin);
-  refused as `bad_request`. `capability`: nothing beyond the window the permission was granted to.
+- **Caller.** What the command asks of who invoked it, first thing it does. Every command asks the same: the app's own
+  answer to whether the webview is the page it owns the calls for (the desktop: the current room window, showing its own
+  origin); refused as `bad_request`, before anything else happens. The permission alone cannot say it: it names windows
+  by label (`room-*`) and cannot know which of them is the current room, so a stale or replaced room window passes it
+  and is refused here.
 - **Arguments.** What the page sends, as it names them (`snake_case` in Rust, `camelCase` on the wire).
 - **Tells the page.** What the command makes the host hand to the app's `EventSink`, besides its answer. The plugin's sink
   sends them over the channel the page opened (`voice_events`), `{key, type, data?}`, in the order the host made them, to
   the page they are for and to no other; the call's are `turn`, `state`, `level`, `playback-level`, `error` and `take`,
   the host's `say` and `devices`.
 - **Page.** The host numbers the pages that own its calls. `voice_events` answers the current page's number (and tells which document it is from, so that a late request of a replaced page cannot take the new page's channel), and every
-  other voice command sends it back as `page`: a command of a page that is not the current one is refused as
+  other voice command sends it back as `page` (the engine commands and the rest carry none: they are not a call's): a command of a page that is not the current one is refused as
   `page_stale` and changes nothing, and what the host would tell an old page is not sent.
 - **Card.** Whether the call controls card's window may invoke it: never.
 
 | Command | Permission | Window | Caller | Arguments | Tells the page | Card |
 |---|---|---|---|---|---|---|
-| `engine_capabilities` | `sidevoice-app-tauri:allow-engine-capabilities` | room | capability | none | nothing | no |
-| `engine_installed` | `sidevoice-app-tauri:allow-engine-installed` | room | capability | none | nothing | no |
-| `engine_install` | `sidevoice-app-tauri:allow-engine-install` | room | capability | `model`, `build?`, `engine?`, `job` | nothing (progress is polled with `engine_progress`) | no |
-| `engine_progress` | `sidevoice-app-tauri:allow-engine-progress` | room | capability | `job` | nothing | no |
-| `engine_cancel` | `sidevoice-app-tauri:allow-engine-cancel` | room | capability | `job` | nothing | no |
-| `engine_uninstall` | `sidevoice-app-tauri:allow-engine-uninstall` | room | capability | `model` | nothing | no |
-| `engine_memory` | `sidevoice-app-tauri:allow-engine-memory` | room | capability | none | nothing | no |
-| `engine_catalogs` | `sidevoice-app-tauri:allow-engine-catalogs` | room | capability | none | nothing | no |
-| `engine_set_credential` | `sidevoice-app-tauri:allow-engine-set-credential` | room | capability | `provider`, `key?` | nothing (the key is never returned or logged) | no |
-| `engine_has_credential` | `sidevoice-app-tauri:allow-engine-has-credential` | room | capability | `provider` | nothing | no |
-| `engine_test_credential` | `sidevoice-app-tauri:allow-engine-test-credential` | room | capability | `provider`, `key` | nothing (the key is never kept or logged) | no |
-| `engine_refresh` | `sidevoice-app-tauri:allow-engine-refresh` | room | capability | `provider` | nothing | no |
+| `engine_capabilities` | `sidevoice-app-tauri:allow-engine-capabilities` | room | room page | none | nothing | no |
+| `engine_installed` | `sidevoice-app-tauri:allow-engine-installed` | room | room page | none | nothing | no |
+| `engine_install` | `sidevoice-app-tauri:allow-engine-install` | room | room page | `model`, `build?`, `engine?`, `job` | nothing (progress is polled with `engine_progress`) | no |
+| `engine_progress` | `sidevoice-app-tauri:allow-engine-progress` | room | room page | `job` | nothing | no |
+| `engine_cancel` | `sidevoice-app-tauri:allow-engine-cancel` | room | room page | `job` | nothing | no |
+| `engine_uninstall` | `sidevoice-app-tauri:allow-engine-uninstall` | room | room page | `model` | nothing | no |
+| `engine_memory` | `sidevoice-app-tauri:allow-engine-memory` | room | room page | none | nothing | no |
+| `engine_catalogs` | `sidevoice-app-tauri:allow-engine-catalogs` | room | room page | none | nothing | no |
+| `engine_set_credential` | `sidevoice-app-tauri:allow-engine-set-credential` | room | room page | `provider`, `key?` | nothing (the key is never returned or logged) | no |
+| `engine_has_credential` | `sidevoice-app-tauri:allow-engine-has-credential` | room | room page | `provider` | nothing | no |
+| `engine_test_credential` | `sidevoice-app-tauri:allow-engine-test-credential` | room | room page | `provider`, `key` | nothing (the key is never kept or logged) | no |
+| `engine_refresh` | `sidevoice-app-tauri:allow-engine-refresh` | room | room page | `provider` | nothing | no |
 | `voice_events` | `sidevoice-app-tauri:allow-voice-events` | room | room page | `document` (the page's own start time), `events` (a channel) | from now on, every event of the calls and the devices, over that channel, while this is the current page; it answers the page's number, or refuses `page_stale` a request of a document that was replaced and reached the app late | no |
 | `voice_create_call` | `sidevoice-app-tauri:allow-voice-create-call` | room | room page | `page`, `key` | nothing | no |
 | `voice_route_input` | `sidevoice-app-tauri:allow-voice-route-input` | room | room page | `page`, `key?` | nothing | no |

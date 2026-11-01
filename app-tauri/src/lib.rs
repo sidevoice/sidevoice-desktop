@@ -11,8 +11,8 @@
 //! it back, and the host refuses a number that is not the current page's.
 //!
 //! Who may call is the app's to say: it hands [`init`] a function that answers, for a webview, whether it is the page the
-//! app owns the calls for. The voice commands ask it before they do anything; the engine commands are held by the
-//! capability alone (a window the app grants them to), as they were before they were a plugin (ACL.md).
+//! app owns the calls for. Every command asks it before it does anything, the engine's too: the capability (a window the app
+//! grants them to) cannot know which room window is the current one (ACL.md).
 
 mod acl;
 mod engine;
@@ -53,7 +53,7 @@ impl<R: Runtime> Callers<R> {
 }
 
 /// The plugin. `caller` answers whether a webview is the page the app owns the calls for (its current room window, on
-/// its own origin): the voice commands refuse any other with `bad_request`. `pages` is where the page's channel is kept
+/// its own origin): every command refuses any other with `bad_request`. `pages` is where the page's channel is kept
 /// (`voice_events`); the app hands a clone of it to its `AppHost` as the `EventSink`. The app manages its `AppHost` itself.
 pub fn init<R: Runtime>(
     caller: impl Fn(&AppHandle<R>, &Webview<R>) -> Result<(), String> + Send + Sync + 'static,
@@ -154,29 +154,23 @@ mod tests {
     }
 
     #[test]
-    fn every_command_but_the_engines_asks_the_caller_first_and_no_engine_command_does() {
+    fn every_command_asks_the_caller_first() {
         // A checkout on Windows may have CRLF line ends: the sources are read with LF.
         let lf = |source: &str| source.replace("\r\n", "\n");
-        let asking = [
+        let sources = [
+            lf(include_str!("engine.rs")),
             lf(include_str!("voice.rs")),
             lf(include_str!("microphone.rs")),
             lf(include_str!("observers.rs")),
             lf(include_str!("pairings.rs")),
         ];
-        let engine = lf(include_str!("engine.rs"));
         for command in COMMANDS {
-            if !command.starts_with("engine_") {
-                let source = asking.iter().find(|source| source.contains(&format!("fn {command}<"))).expect(command);
-                let first = body(source, command).lines().nth(1).unwrap_or_default().trim();
-                assert!(
-                    first.starts_with("allowed(&callers, &webview)") || first.starts_with("callers.check(&webview)"),
-                    "{command} asks the caller before anything else: {first}"
-                );
-            } else {
-                let at = engine.find(&format!("fn {command}(")).unwrap_or_else(|| panic!("no command {command}"));
-                let signature = &engine[at..engine[at..].find('{').map_or(engine.len(), |end| at + end)];
-                assert!(!signature.contains("Webview") && !signature.contains("Callers"), "{command}: {signature}");
-            }
+            let source = sources.iter().find(|source| source.contains(&format!("fn {command}<"))).expect(command);
+            let first = body(source, command).lines().nth(1).unwrap_or_default().trim();
+            assert!(
+                first.starts_with("allowed(&callers, &webview)") || first.starts_with("callers.check(&webview)"),
+                "{command} asks the caller before anything else: {first}"
+            );
         }
     }
 }

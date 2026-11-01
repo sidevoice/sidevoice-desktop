@@ -483,7 +483,8 @@ models is the voice call's (below), never the page's. `window.__sidevoiceDesktop
   signal's abort calls: `true` when the install will reject `install_cancelled`, also when it has not reached the app
   yet, which then refuses it as it arrives; `false` when it had already ended), `engine_uninstall {model}`,
   `engine_memory`. Granted to the room
-  window (`capabilities/room.json`), and to nothing else.
+  window (`capabilities/room.json`), and to nothing else; each re-checks that the caller is the current room window on
+  the app's own origin (else `bad_request`).
 
 ### Refusals
 
