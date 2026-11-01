@@ -1,33 +1,57 @@
-//! iOS: the web view's scroll view adjusts its content inset by the safe area (`contentInsetAdjustmentBehavior`,
-//! automatic by default), which shrinks the page's viewport by the status bar and the home indicator. Setting it to
-//! `never` makes the page's viewport the whole screen, with the insets reported through `env(safe-area-inset-*)`, which
-//! the interface pads with.
+//! iOS: the web view is made to fill its parent view's bounds (wry creates it with the parent's `frame`, which is in
+//! the parent's parent's coordinates), and the window and the view controller's view get the system background, so what
+//! the page does not cover is the app's ground and never the window's default black.
 use super::Os;
-use objc2::{msg_send, runtime::AnyObject};
+use objc2_ui_kit::{UIColor, UIView, UIViewController};
 use tauri::webview::PlatformWebview;
 
 pub struct Native;
 
-/// `UIScrollViewContentInsetAdjustmentBehavior.never`.
-const CONTENT_INSET_ADJUSTMENT_NEVER: isize = 2;
+/// The web view and the view controller's view, as UIKit objects. `None` if Tauri gave none.
+fn views(webview: &PlatformWebview) -> Option<(&UIView, &UIViewController)> {
+    let web_view = webview.inner().cast::<UIView>();
+    let controller = webview.view_controller().cast::<UIViewController>();
+    // SAFETY: Tauri hands the window's live `WKWebView` (a `UIView`) and `UIViewController`, which stay alive while the
+    // window does, and this is used on the main thread (`with_webview`), where UIKit objects are.
+    unsafe { Some((web_view.as_ref()?, controller.as_ref()?)) }
+}
 
 impl Os for Native {
-    fn cover_screen(webview: &PlatformWebview) {
-        let web_view = webview.inner().cast::<AnyObject>();
-        if web_view.is_null() {
+    fn fill_screen(webview: &PlatformWebview) {
+        let Some((web_view, controller)) = views(webview) else {
             return;
-        }
-        // SAFETY: `inner` is the window's live `WKWebView`, and this runs on the main thread (`with_webview`), where UIKit
-        // objects are used. `scrollView` is a `UIScrollView` property of it, and `contentInsetAdjustmentBehavior` takes
-        // the `NSInteger` enum above.
-        unsafe {
-            let scroll_view: *mut AnyObject = msg_send![web_view, scrollView];
-            if !scroll_view.is_null() {
-                let _: () = msg_send![
-                    scroll_view,
-                    setContentInsetAdjustmentBehavior: CONTENT_INSET_ADJUSTMENT_NEVER
-                ];
+        };
+        let ground = UIColor::systemBackgroundColor();
+        if let Some(container) = controller.view() {
+            web_view.setFrame(container.bounds());
+            container.setBackgroundColor(Some(&ground));
+            if let Some(window) = container.window() {
+                window.setBackgroundColor(Some(&ground));
             }
         }
+    }
+
+    fn layout(webview: &PlatformWebview) -> Option<String> {
+        let (web_view, controller) = views(webview)?;
+        let container = controller.view()?;
+        let window = container.window();
+        let rect = |view: &UIView| {
+            let frame = view.frame();
+            format!(
+                "{}x{} at {},{}",
+                frame.size.width, frame.size.height, frame.origin.x, frame.origin.y
+            )
+        };
+        let insets = web_view.safeAreaInsets();
+        Some(format!(
+            "window {}, view {}, web view {}, safe area top {} bottom {} left {} right {}",
+            window.as_deref().map_or("none".to_owned(), |w| rect(w)),
+            rect(&container),
+            rect(web_view),
+            insets.top,
+            insets.bottom,
+            insets.left,
+            insets.right,
+        ))
     }
 }

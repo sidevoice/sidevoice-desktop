@@ -6,5 +6,9 @@ use tauri::webview::PlatformWebview;
 pub struct Native;
 
 impl Os for Native {
-    fn cover_screen(_webview: &PlatformWebview) {}
+    fn fill_screen(_webview: &PlatformWebview) {}
+
+    fn layout(_webview: &PlatformWebview) -> Option<String> {
+        None
+    }
 }
