@@ -19,6 +19,8 @@ use std::{
 #[cfg_attr(target_os = "macos", path = "credentials/macos.rs")]
 #[cfg_attr(target_os = "windows", path = "credentials/windows.rs")]
 #[cfg_attr(target_os = "linux", path = "credentials/linux.rs")]
+#[cfg_attr(target_os = "ios", path = "credentials/ios.rs")]
+#[cfg_attr(target_os = "android", path = "credentials/android.rs")]
 mod imp;
 use imp::Native;
 
