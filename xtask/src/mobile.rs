@@ -7,14 +7,28 @@
 //!   goes too), then the icons derived from the sources (`tauri icon` writes them into the projects that exist). Runs
 //!   in mobile/, where tauri.conf.json is. The iOS project needs macOS and XcodeGen. The CLI's targets are not
 //!   installed here (`--skip-targets-install`): mobile/rust-toolchain.toml names them. The iOS project also gets the
-//!   localized permission texts (mobile/ios/<language>.lproj/InfoPlist.strings), which the CLI has no setting for: they
-//!   are put where the project reads its sources before the CLI makes the project, and the project is read for them
-//!   after.
+//!   localized permission texts (mobile/ios/<language>.lproj/InfoPlist.strings) and the privacy manifest
+//!   (mobile/PrivacyInfo.xcprivacy), which the CLI has no setting for: they are put where the project reads its sources
+//!   before the CLI makes the project, and the project is read for them after.
+//! - `mobile generated android|ios`: `generate`, then the committed project must be what it wrote (CI, every pull
+//!   request): a difference means an input or the CLI changed and the project was not regenerated and committed.
+//! - `mobile build android|ios`: the app as a pull request builds it, unsigned: Android's release APK for arm64, and
+//!   the iOS app for the simulator (no signing, so no secret), into dist/. Needs the SDK and NDK, or macOS with Xcode. The
+//!   Android APK is also checked for 16 KB pages, which Google Play requires (`mobile check-16kb [APK]` is that check alone),
+//!   and the iOS app for what it declares to Apple: the privacy manifest and the export compliance (`mobile check-ios [APP]`
+//!   is that check alone, ios.rs).
+//! - `mobile sign android`: sign.rs.
 //! - `mobile test android`: the Kotlin library's JVM unit tests, in the generated project (after a build).
+//! - `mobile testflight --build-number N`: the signed iOS archive uploaded to TestFlight, by hand from main (testflight.rs).
+
+pub mod check;
+pub mod ios;
+pub mod sign;
+pub mod testflight;
 
 use std::fs;
 use std::io::Cursor;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use plist::{Dictionary, Value};
 
@@ -69,6 +83,29 @@ const IOS_APP_DIR: &str = "sidevoice-mobile_iOS";
 
 /// The Xcode project's file, where a resource of the app target is listed.
 const IOS_PBXPROJ: &str = "sidevoice-mobile.xcodeproj/project.pbxproj";
+
+/// The privacy manifest where the iOS project reads it: put in `<project>/<app>_iOS/` before `tauri ios init`, which
+/// writes the template around what is there and leaves it, and XcodeGen lists it as a resource of the app, so it
+/// lands at the root of the bundle. A XcodeGen that stopped listing it as a resource (it has changed that once) would
+/// ship an app without a manifest, so the project is read for it.
+fn add_privacy_manifest(project: &Path) -> Result<()> {
+    let app = project.join(IOS_APP_DIR);
+    mkdir(&app)?;
+    let from = repo().join("mobile").join(ios::MANIFEST);
+    let to = app.join(ios::MANIFEST);
+    fs::copy(&from, &to).map_err(|e| format!("{}: {e}", from.display()))?;
+    Ok(())
+}
+
+/// The project lists the privacy manifest as a resource of the app (`… in Resources`).
+fn check_privacy_manifest_listed(project: &Path) -> Result<()> {
+    let pbxproj = project.join(IOS_PBXPROJ);
+    let text = fs::read_to_string(&pbxproj).map_err(|e| format!("{}: {e}", pbxproj.display()))?;
+    ensure(
+        text.contains(&format!("{} in Resources", ios::MANIFEST)),
+        format!("{}: {} is not a resource of the app: the app would ship without it", pbxproj.display(), ios::MANIFEST),
+    )
+}
 
 /// Where the iOS app's localized permission texts are, below mobile/: one `<language>.lproj/InfoPlist.strings` per
 /// language the web interface ships, English included. The texts of `Info.ios.plist` stay the English base (App Store
@@ -211,10 +248,12 @@ pub fn generate(name: &str) -> Result<()> {
     }
     if project.cli == "ios" {
         add_localized_texts(&dir)?;
+        add_privacy_manifest(&dir)?;
     }
     tauri(&[project.cli, "init", "--ci", "--skip-targets-install"]).run()?;
     if project.cli == "ios" {
         check_localized_texts_in(&dir)?;
+        check_privacy_manifest_listed(&dir)?;
     }
     if project.cli == "android" {
         let gradle = dir.join("app/build.gradle.kts");
@@ -224,6 +263,66 @@ pub fn generate(name: &str) -> Result<()> {
     // The icons: the CLI writes every size into the projects that exist, and a desktop set of its own into
     // mobile/icons/ (ignored by git, and nothing reads it).
     tauri(&["icon", "app-icon/app-icon.json"]).run()
+}
+
+/// `mobile generated android|ios`: the committed project is what `generate` writes.
+pub fn generated(name: &str) -> Result<()> {
+    generate(name)?;
+    let dir = format!("mobile/{}", project(name)?.dir);
+    let changes = Cmd::new("git")
+        .args(["status", "--porcelain", "--untracked-files=all", "--"])
+        .arg(&dir)
+        .dir(repo())
+        .stdout()?;
+    ensure(
+        changes.trim().is_empty(),
+        format!("the committed {dir} is not what `cargo xtask mobile generate {name}` writes:\n{changes}\nrun it and commit {dir}"),
+    )
+}
+
+/// What an unsigned Android build leaves, below mobile/gen/android.
+const UNSIGNED_APK: &str = "app/build/outputs/apk/universal/release/app-universal-release-unsigned.apk";
+
+/// The unsigned APK `mobile build android` puts in dist/.
+pub fn unsigned_apk() -> PathBuf {
+    repo().join("dist/Sidevoice-android-arm64-unsigned.apk")
+}
+
+/// `mobile build android|ios`: the app as a pull request builds it, unsigned, into dist/.
+pub fn build(name: &str) -> Result<()> {
+    let dist = repo().join("dist");
+    mkdir(&dist)?;
+    match project(name)?.cli {
+        "android" => {
+            tauri(&["android", "build", "--apk", "--target", "aarch64", "--ci"]).run()?;
+            let apk = repo().join("mobile/gen/android").join(UNSIGNED_APK);
+            let to = unsigned_apk();
+            fs::copy(&apk, &to).map_err(|e| format!("{}: {e}", apk.display()))?;
+            check::check_16kb(&to)
+        }
+        _ => {
+            tauri(&["ios", "build", "--target", "aarch64-sim", "--no-sign", "--ci"]).run()?;
+            let build = repo().join("mobile/gen/apple/build");
+            let app = find_app(&build, 3).ok_or_else(|| format!("no .app below {}", build.display()))?;
+            ios::check_app(&app)?;
+            // The app is a directory with symbolic links in it: zip keeps them (`-y`).
+            Cmd::new("zip")
+                .args(["-qry"])
+                .arg(dist.join("Sidevoice-ios-simulator.zip"))
+                .arg(app.file_name().ok_or("an .app has a name")?)
+                .dir(app.parent().ok_or("an .app has a parent")?)
+                .run()
+        }
+    }
+}
+
+/// The first `.app` directory below `dir`, at most `depth` levels down.
+fn find_app(dir: &Path, depth: usize) -> Option<PathBuf> {
+    let mut entries: Vec<PathBuf> = fs::read_dir(dir).ok()?.filter_map(|e| e.ok().map(|e| e.path())).collect();
+    entries.sort();
+    entries.iter().find(|p| p.is_dir() && p.extension().is_some_and(|e| e == "app")).cloned().or_else(|| {
+        (depth > 1).then(|| entries.iter().filter(|p| p.is_dir()).find_map(|p| find_app(p, depth - 1))).flatten()
+    })
 }
 
 /// `mobile test android`: the JVM unit tests of the Android library's Kotlin (`CallSession`), which need no device. They
@@ -570,6 +669,16 @@ mod tests {
         let languages = ios_languages(&ios_dir()).unwrap();
         let error = check_localized_texts_listed(&text, &languages).err().unwrap_or_else(|| LACKING.to_owned());
         assert!(error.starts_with(LACKING), "{error}");
+    }
+
+    #[test]
+    fn the_simulator_app_is_found_a_few_levels_down() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = dir.path().join("arm64-sim/Release-iphonesimulator/Sidevoice.app");
+        fs::create_dir_all(&app).unwrap();
+        fs::create_dir_all(dir.path().join("arm64-sim/other")).unwrap();
+        assert_eq!(find_app(dir.path(), 3), Some(app));
+        assert_eq!(find_app(dir.path(), 2), None, "deeper than asked");
     }
 
     #[test]

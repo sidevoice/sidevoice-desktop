@@ -27,12 +27,25 @@
 //!   installer. With `--channel release` or `nightly`, the AppImage and the installer are also signed as updates
 //!   (their `.sig`, checked).
 //!
-//! The mobile app's native projects (mobile.rs), by hand when the template or the app's inputs change:
+//! The mobile app's native projects (mobile.rs):
 //!
-//! - `mobile generate android|ios`: mobile/gen/<project> made anew by the Tauri CLI, with the icons derived from
-//!   mobile/app-icon. The committed projects are exactly this (the iOS one is made on macOS, with XcodeGen).
-//! - `mobile test android`: the Android library's JVM unit tests (the call service's sessions), in the generated project, after a
-//!   build has written its Gradle includes. Needs no device.
+//! - `mobile generate android|ios` (by hand, when an input or the CLI changes): mobile/gen/<project> made anew by the
+//!   Tauri CLI, with the icons derived from mobile/app-icon. The committed projects are exactly this (the iOS one is made
+//!   on macOS, with XcodeGen).
+//! - `mobile generated android|ios` (CI, every pull request): `generate`, then the committed project must be what it
+//!   wrote.
+//! - `mobile build android|ios` (CI, every pull request): the unsigned app, into dist/: the Android APK (arm64), checked
+//!   for 16 KB pages, and the iOS simulator app, checked for its privacy manifest and export compliance
+//!   (.github/workflows/mobile.yml). `mobile check-16kb [APK]` and `mobile check-ios [APP]` are those checks.
+//! - `mobile sign android` (CI, by hand from main): the unsigned APK aligned, signed with the upload key, verified and
+//!   checked for 16 KB pages, into dist/ (.github/workflows/mobile-android-signed.yml; mobile/sign.rs). Reads the
+//!   `ANDROID_UPLOAD_*` secrets.
+//! - `mobile test android` (by hand): the Android library's JVM unit tests (the call service's sessions), in the generated project,
+//!   after a build has written its Gradle includes. Needs no device.
+//! - `mobile testflight --build-number N` (by hand, from main: .github/workflows/mobile-testflight.yml): the iOS app archived
+//!   and signed through automatic provisioning with the App Store Connect API key, read, and uploaded to TestFlight. Reads
+//!   `APPLE_API_KEY`, `APPLE_API_ISSUER`, `APPLE_API_KEY_P8` (the .p8's contents, written to a 0600 file removed when it ends) and
+//!   `APPLE_TEAM_ID`.
 //!
 //! The Windows app, in the `windows` job after `bundle` (platform/release/windows.rs):
 //!
@@ -126,7 +139,8 @@ const USAGE: &str =
   | release package-screens
   | probe probe-app | probe local-host | probe probe | probe voice-models | probe card | probe exit
   | probe memory | probe voice-memory
-  | mobile generate android | mobile generate ios | mobile test android
+  | mobile generate android | mobile generate ios | mobile generated android | mobile generated ios
+  | mobile build android | mobile build ios | mobile sign android | mobile check-16kb [APK] | mobile check-ios [APP] | mobile test android | mobile testflight --build-number N
   | packaging compare BEFORE_REF | packaging files DIR OUTPUT
   | publish assets release TAG | publish assets nightly | publish release TAG | publish nightly
   | release-pr-title [BRANCH] | release-pr-checks
@@ -145,7 +159,14 @@ fn main() -> ExitCode {
         ["platform-guard"] => platform_guard::check(),
         ["host-graph"] => host_graph::check(),
         ["mobile", "generate", project] => mobile::generate(project),
+        ["mobile", "generated", project] => mobile::generated(project),
+        ["mobile", "build", project] => mobile::build(project),
+        ["mobile", "sign", "android"] => mobile::sign::sign_android(),
         ["mobile", "test", project] => mobile::test(project),
+        ["mobile", "check-16kb"] => mobile::check::check_16kb(&mobile::unsigned_apk()),
+        ["mobile", "check-16kb", apk] => mobile::check::check_16kb(std::path::Path::new(apk)),
+        ["mobile", "check-ios", app] => mobile::ios::check_app(std::path::Path::new(app)),
+        ["mobile", "testflight", "--build-number", number] => mobile::testflight::testflight(number),
         ["platform-clippy"] => checks::clippy(true),
         ["test"] => checks::test(),
         ["test-support"] => checks::test_support(),
