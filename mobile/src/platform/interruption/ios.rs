@@ -13,12 +13,12 @@ use objc2_avf_audio::{
 };
 use objc2_foundation::{NSNotification, NSNotificationCenter, NSNumber, NSString};
 
-use super::{Interruption, Listener, Os};
+use super::{Observed, Os};
 
 pub struct Native;
 
 impl Os for Native {
-    fn observe(listener: Listener) -> Result<(), String> {
+    fn observe(observed: Observed) -> Result<(), String> {
         // SAFETY: a constant of AVFAudio, linked by the app.
         let Some(name) = (unsafe { AVAudioSessionInterruptionNotification }) else {
             return Err("audio-session-interruptions-unavailable".into());
@@ -26,8 +26,8 @@ impl Os for Native {
         let block = RcBlock::new(move |notification: NonNull<NSNotification>| {
             // SAFETY: the center hands the block a live notification for the length of the call.
             let notification = unsafe { notification.as_ref() };
-            if let Some(event) = read(notification) {
-                listener(event);
+            if let Some((began, should_resume)) = read(notification) {
+                observed(began, should_resume);
             }
         });
         // SAFETY: no object to filter by, no queue (the block runs on the thread that posts, and only hands the event
@@ -47,7 +47,7 @@ impl Os for Native {
 }
 
 /// What `notification` says, if it is one the app can read.
-fn read(notification: &NSNotification) -> Option<Interruption> {
+fn read(notification: &NSNotification) -> Option<(bool, bool)> {
     let info = notification.userInfo()?;
     // SAFETY: the keys are constants of AVFAudio.
     let (type_key, option_key) = unsafe {
@@ -58,13 +58,14 @@ fn read(notification: &NSNotification) -> Option<Interruption> {
     };
     let kind = number(&info, type_key)?;
     match AVAudioSessionInterruptionType(kind) {
-        AVAudioSessionInterruptionType::Began => Some(Interruption::Began),
+        AVAudioSessionInterruptionType::Began => Some((true, false)),
         AVAudioSessionInterruptionType::Ended => {
             // Only given when it ended; absent, the system advises nothing, which is not to resume.
             let options = AVAudioSessionInterruptionOptions(number(&info, option_key).unwrap_or(0));
-            Some(Interruption::Ended {
-                resume: options.contains(AVAudioSessionInterruptionOptions::ShouldResume),
-            })
+            Some((
+                false,
+                options.contains(AVAudioSessionInterruptionOptions::ShouldResume),
+            ))
         }
         _ => None,
     }

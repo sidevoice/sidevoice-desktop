@@ -29,11 +29,24 @@ pub enum Interruption {
 /// Where the interruptions go, from any thread.
 pub type Listener = Arc<dyn Fn(Interruption) + Send + Sync>;
 
+/// What an OS observes of one: whether it `began` (else it ended) and, for an end, whether the system advises resuming.
+type Observed = Arc<dyn Fn(bool, bool) + Send + Sync>;
+
+fn interruption(began: bool, should_resume: bool) -> Interruption {
+    if began {
+        Interruption::Began
+    } else {
+        Interruption::Ended {
+            resume: should_resume,
+        }
+    }
+}
+
 /// What differs per OS: whether the system tells the app about interruptions.
 trait Os {
     /// Reports every interruption of the app's audio session to `listener`, for the rest of the process. An OS that does
     /// not tell the app (Android: the call's service does) reports none.
-    fn observe(_listener: Listener) -> Result<(), String> {
+    fn observe(_observed: Observed) -> Result<(), String> {
         Ok(())
     }
 }
@@ -44,12 +57,28 @@ trait Os {
 ///
 /// `audio-session-interruptions-unavailable` when the system does not offer them.
 pub fn observe(listener: Listener) -> Result<(), String> {
-    Native::observe(listener)
+    Native::observe(Arc::new(move |began, should_resume| {
+        listener(interruption(began, should_resume));
+    }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_the_os_observed_is_what_the_call_is_told() {
+        assert_eq!(interruption(true, false), Interruption::Began);
+        assert_eq!(interruption(true, true), Interruption::Began);
+        assert_eq!(
+            interruption(false, true),
+            Interruption::Ended { resume: true }
+        );
+        assert_eq!(
+            interruption(false, false),
+            Interruption::Ended { resume: false }
+        );
+    }
 
     #[test]
     fn observing_succeeds_and_reports_nothing_by_itself() {
