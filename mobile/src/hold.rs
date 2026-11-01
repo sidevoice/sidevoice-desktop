@@ -500,6 +500,22 @@ mod tests {
     }
 
     #[test]
+    fn a_page_replaced_during_any_interruption_lets_the_playback_go() {
+        // A transient interruption, a permanent-loss wait, and a focus asked for again that is not answered yet.
+        let mut transient = Hold::new();
+        transient.signal(Source::Focus, BEGAN);
+        let mut permanent = Hold::new();
+        permanent.signal(Source::Focus, Signal::Lost);
+        let mut regaining = Hold::new();
+        regaining.signal(Source::Focus, Signal::Lost);
+        regaining.microphone(false, false, yes, yes);
+        regaining.microphone(true, false, yes, yes);
+        for mut hold in [transient, permanent, regaining] {
+            assert_eq!(hold.clear(), [Effect::Playback(false)]);
+        }
+    }
+
+    #[test]
     fn the_end_of_the_call_lets_the_playback_go_and_forgets_the_waits() {
         let mut hold = Hold::new();
         hold.signal(Source::Focus, Signal::Lost);

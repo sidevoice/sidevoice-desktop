@@ -174,8 +174,10 @@ impl RoomCall {
     pub fn page_changed(&self, page: u64) {
         self.then(move |room| {
             room.page = page;
-            room.interruptions = Hold::new();
             room.hold(false, None);
+            // What the old page's interruptions held is let go first; the new page starts with none.
+            room.clear_interruption();
+            room.interruptions = Hold::new();
         });
     }
 
