@@ -44,7 +44,13 @@ pub fn preflight(owner: u32) -> io::Result<()> {
 /// Resolve the runtime's roots natively, before exit; `home` is the account's home directory.
 /// Callers never spell a native path. macOS keeps its existing WKWebView default store.
 pub fn locations(home: &Path) -> io::Result<Locations> {
-    Native::locations(home)
+    locations_of(home, IDENTIFIER)
+}
+
+/// [`locations`] for the bundle identifier `identifier`: where a build with that identifier keeps its storage. Only
+/// `legacy_identifier` asks for another one than the app's own.
+pub fn locations_of(home: &Path, identifier: &str) -> io::Result<Locations> {
+    Native::locations(home, identifier)
 }
 
 /// Snapshot the app and its browser writers before allowing the app to exit. The transaction
@@ -98,14 +104,14 @@ trait Os {
     /// Inspection failure refuses cleanup; even a reused live PID conservatively keeps the gate closed.
     fn exited(pid: u32) -> io::Result<bool>;
 
-    /// The runtime's storage roots; `home` is the account's home directory.
-    fn locations(_home: &Path) -> io::Result<Locations> {
+    /// The runtime's storage roots for the bundle identifier `identifier`; `home` is the account's home directory.
+    fn locations(_home: &Path, identifier: &str) -> io::Result<Locations> {
         // Tauri's `app_local_data_dir` (the same `dirs` local data folder plus the identifier), which it
         // supplies to Wry. WebView2 uses it as its UDF; WebKitGTK uses it for BOTH base_data_directory
         // and base_cache_directory, with cookies at <path>/cookies.
         let local = dirs::data_local_dir()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no local data folder for this account"))?;
-        Locations::new(vec![local.join(IDENTIFIER)])
+        Locations::new(vec![local.join(identifier)])
     }
 
     /// Add browser writers to the pre-exit observation. `sysinfo` owns native process enumeration;
@@ -316,6 +322,16 @@ mod tests {
         assert!(!paths.paths().is_empty());
         assert!(paths.paths().iter().all(|p| p.is_absolute() && p.ends_with(IDENTIFIER)));
         assert!(Locations::new(vec![PathBuf::from("../browser")]).is_err());
+    }
+
+    #[test]
+    fn locations_follow_the_identifier_asked_for() {
+        let temp = tempfile::tempdir().unwrap();
+        let own = locations(temp.path()).unwrap();
+        let other = locations_of(temp.path(), "dev.sidevoice.desktop").unwrap();
+        assert_eq!(own.paths().len(), other.paths().len());
+        assert!(other.paths().iter().all(|path| path.ends_with("dev.sidevoice.desktop")));
+        assert!(own.paths().iter().zip(other.paths()).all(|(own, other)| own.parent() == other.parent()));
     }
 
     #[test]
