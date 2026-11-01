@@ -4935,7 +4935,6 @@ dependencies = [
  "base64 0.22.1",
  "futures-util",
  "keyring-core",
- "libc",
  "log",
  "regex",
  "security-framework",
@@ -4944,7 +4943,6 @@ dependencies = [
  "sha2 0.11.0",
  "sidevoice-engine",
  "sidevoice-voice",
- "sysinfo",
  "tokio",
  "windows-native-keyring-store",
  "zbus-secret-service-keyring-store",
@@ -5126,11 +5124,19 @@ name = "sidevoice-mobile"
 version = "0.1.0"
 dependencies = [
  "atomic-write-file",
+ "jni 0.21.1",
+ "log",
+ "ndk-context",
  "objc2-foundation",
+ "rustls-platform-verifier",
+ "serde",
  "serde_json",
+ "sidevoice-app-core",
+ "sidevoice-app-tauri",
  "sidevoice-mobile-plugin",
  "tauri",
  "tauri-build",
+ "tauri-plugin-log",
  "tempfile",
 ]
 
