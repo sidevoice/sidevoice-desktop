@@ -18,7 +18,7 @@
 //! A build for a mobile target names its package (`-p`): the workspace holds the other kind of host too, and a
 //! workspace-wide build for iOS or Android would try to build it. The steps of the workflows and composite actions
 //! (`.github`, `.yml` and `.yaml`) are read for that, as parsed YAML and shell words, with a matrix's literal values.
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::Path;
 
 use regex::Regex;
@@ -399,7 +399,8 @@ fn unscoped_mobile_build(words: &[String]) -> bool {
     mobile && (!scoped || wide)
 }
 
-/// The host crates of `metadata` whose `src/lib.rs` does not carry the attribute of their kind as an inner attribute.
+/// The library and binary targets of the host crates of `metadata` (their `src_path`s) that do not carry the attribute of
+/// their kind as an inner attribute.
 fn missing_root_attributes(metadata: &Value) -> Result<Vec<String>> {
     let graph = Graph::read(metadata)?;
     let root = Path::new(metadata["workspace_root"].as_str().ok_or("cargo metadata: no workspace_root")?);
@@ -408,16 +409,32 @@ fn missing_root_attributes(metadata: &Value) -> Result<Vec<String>> {
         if !graph.members.contains_key(dir) {
             continue;
         }
-        let file = root.join(dir).join("src/lib.rs");
-        let source = std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
-        // The header of the file: inner attributes, comments and blank lines, up to the first item.
-        let header = source.lines().map(str::trim).take_while(|line| {
-            line.is_empty() || line.starts_with("//") || (line.starts_with("#![") && line.ends_with(']'))
-        });
-        let attribute = format!("#![cfg({kind})]");
-        if !header.into_iter().any(|line| line == attribute) {
-            found
-                .push(format!("{dir}/src/lib.rs: a host crate exists only for its kind: it starts with `{attribute}`"));
+        // Every library and binary target the package has, from Cargo (`src_path`), not by name.
+        let id = &graph.members[dir];
+        let package = metadata["packages"].as_array().into_iter().flatten().find(|package| package["id"] == *id);
+        let targets = package.and_then(|package| package["targets"].as_array()).into_iter().flatten();
+        let roots: BTreeSet<&str> = targets
+            .filter(|target| {
+                target["kind"].as_array().into_iter().flatten().filter_map(Value::as_str).any(|kind| {
+                    matches!(kind, "lib" | "rlib" | "cdylib" | "staticlib" | "dylib" | "proc-macro" | "bin")
+                })
+            })
+            .filter_map(|target| target["src_path"].as_str())
+            .collect();
+        if roots.is_empty() {
+            found.push(format!("{dir}/: no library or binary target in cargo metadata"));
+        }
+        for path in roots {
+            let source = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+            // The header of the file: inner attributes, comments and blank lines, up to the first item.
+            let header = source.lines().map(str::trim).take_while(|line| {
+                line.is_empty() || line.starts_with("//") || (line.starts_with("#![") && line.ends_with(']'))
+            });
+            let attribute = format!("#![cfg({kind})]");
+            if !header.into_iter().any(|line| line == attribute) {
+                let shown = Path::new(path).strip_prefix(root).unwrap_or(Path::new(path)).display();
+                found.push(format!("{shown}: a host crate exists only for its kind: it starts with `{attribute}`"));
+            }
         }
     }
     Ok(found)
@@ -428,7 +445,7 @@ fn missing_root_attributes(metadata: &Value) -> Result<Vec<String>> {
 pub fn check() -> Result<()> {
     let mut errors = Vec::new();
     for target in TARGETS {
-        let metadata = resolve(&repo().join("desktop"), target, true)?;
+        let metadata = resolve(&repo(), target, true)?;
         errors.extend(violations(&metadata)?.into_iter().map(|error| format!("{target}: {error}")));
         // The same on every target.
         if target == TARGETS[0] {
@@ -494,7 +511,11 @@ mod tests {
             .iter()
             .map(|(dir, name)| (name, format!("/ws/{dir}/Cargo.toml")))
             .chain(others.iter().map(|name| (name, format!("/registry/{name}/Cargo.toml"))))
-            .map(|(name, manifest)| json!({"id": name, "name": name, "manifest_path": manifest}))
+            .map(|(name, manifest)| {
+                let src = manifest.replace("Cargo.toml", "src/lib.rs");
+                json!({"id": name, "name": name, "manifest_path": manifest,
+                       "targets": [{"kind": ["lib"], "src_path": src}]})
+            })
             .collect();
         let nodes: Vec<Value> = packages
             .iter()
@@ -564,6 +585,19 @@ mod tests {
         assert_eq!(missing_root_attributes(&answer).unwrap(), Vec::<String>::new());
         write("mobile", "mod a;\n#![cfg(mobile)]");
         assert_eq!(missing_root_attributes(&answer).unwrap().len(), 1, "not in the header");
+        // Every library and binary target is read from Cargo, wherever its file is.
+        write("mobile", "#![cfg(mobile)]");
+        let mut with_bin = answer.clone();
+        let bin = json!({"kind": ["bin"], "src_path": format!("{}/desktop/src/other_main.rs", dir.path().display())});
+        for package in with_bin["packages"].as_array_mut().unwrap() {
+            if package["name"] == "sidevoice-desktop" {
+                package["targets"].as_array_mut().unwrap().push(bin.clone());
+            }
+        }
+        std::fs::write(dir.path().join("desktop/src/other_main.rs"), "fn main() {}").unwrap();
+        let missing = missing_root_attributes(&with_bin).unwrap();
+        assert_eq!(missing.len(), 1, "{missing:?}");
+        assert!(missing[0].contains("other_main.rs"), "{missing:?}");
     }
 
     #[test]

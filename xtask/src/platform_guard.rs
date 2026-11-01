@@ -931,10 +931,18 @@ impl Hosts {
                         }
                         let name = inner.first().and_then(ident).unwrap_or_default();
                         let args = group(inner.get(1), Delimiter::Parenthesis).unwrap_or_default();
-                        if host_attr(&name, &args, &self.aliases) {
+                        if host_attr(&name, &args, &self.aliases) || redirects_to_a_root(&name, &inner) {
                             self.found(tree);
                         }
                     }
+                }
+                // `mod lib;` / `mod main;` load a crate root's file as a module.
+                TokenTree::Ident(id)
+                    if id == "mod"
+                        && matches!(trees.get(at + 1).and_then(ident).as_deref(), Some("lib" | "main"))
+                        && punct(trees.get(at + 2), ';') =>
+                {
+                    self.found(tree);
                 }
                 TokenTree::Ident(id) if punct(trees.get(at + 1), '!') => {
                     let name = id.to_string();
@@ -1004,6 +1012,15 @@ fn defines_host_cfg(value: String) -> bool {
     }
     rest.strip_prefix("rustc-check-cfg=")
         .is_some_and(|check| TokenStream::from_str(check).is_ok_and(|check| names_host(&check, &HashSet::new())))
+}
+
+/// Whether an attribute `#[path = "..."]` names a file called `lib.rs` or `main.rs`: the file that carries a crate root's
+/// host-kind attribute would then also be loaded as a module, where the attribute gates that module.
+fn redirects_to_a_root(name: &str, body: &[TokenTree]) -> bool {
+    name == "path"
+        && punct(body.get(1), '=')
+        && matches!(body.get(2), Some(TokenTree::Literal(lit)) if string_value(lit)
+            .is_some_and(|value| matches!(value.rsplit('/').next(), Some("lib.rs" | "main.rs"))))
 }
 
 /// Which arguments of a call to a gate macro reach its `cfg`.
@@ -1179,7 +1196,15 @@ fn host_crate_root(root: &Path, path: &str) -> Option<&'static str> {
         _ => return None,
     };
     let crate_dir = std::iter::once(kind).chain(dir.iter().copied()).collect::<Vec<_>>().join("/");
-    root.join(crate_dir).join("Cargo.toml").is_file().then_some(if kind == "desktop" { "desktop" } else { "mobile" })
+    // Cargo's own roots only: a manifest that moves a target (`[lib] path`, `[[bin]] path`) has no file the name tells.
+    let manifest = std::fs::read_to_string(root.join(crate_dir).join("Cargo.toml")).ok()?;
+    let manifest: toml::Table = manifest.parse().ok()?;
+    let moved = manifest.get("lib").is_some_and(|lib| lib.get("path").is_some())
+        || manifest
+            .get("bin")
+            .and_then(toml::Value::as_array)
+            .is_some_and(|bins| bins.iter().any(|bin| bin.get("path").is_some()));
+    (!moved).then_some(if kind == "desktop" { "desktop" } else { "mobile" })
 }
 
 /// `platform/mod.rs`: the module root, which only declares and picks.
@@ -1925,6 +1950,27 @@ mod tests {
         assert!(fixture_repo(&wrong_kind).unwrap_err().contains("mobile/src/lib.rs"));
         let shared = [("app-core/Cargo.toml", "[package]\nname = \"c\"\n"), ("app-core/src/lib.rs", "#![cfg(mobile)]")];
         assert!(fixture_repo(&shared).unwrap_err().contains("app-core/src/lib.rs"));
+        // A root moved by the manifest, or loaded as a module of another file, is no crate root the name tells.
+        let moved = [
+            ("desktop/Cargo.toml", "[package]\nname = \"d\"\n[lib]\npath = \"src/other.rs\"\n"),
+            ("desktop/src/lib.rs", "#![cfg(desktop)]"),
+        ];
+        assert!(fixture_repo(&moved).unwrap_err().contains("desktop/src/lib.rs"));
+        let moved_bin = [
+            ("desktop/Cargo.toml", "[package]\nname = \"d\"\n[[bin]]\nname = \"x\"\npath = \"src/x.rs\"\n"),
+            ("desktop/src/main.rs", "#![cfg(desktop)]"),
+        ];
+        assert!(fixture_repo(&moved_bin).unwrap_err().contains("desktop/src/main.rs"));
+        for loader in
+            ["#[path = \"lib.rs\"] mod root;", "#[path = \"../src/main.rs\"] mod root;", "mod lib;", "mod main;"]
+        {
+            let loaded = [
+                ("mobile/Cargo.toml", "[package]\nname = \"m\"\n"),
+                ("mobile/src/lib.rs", "#![cfg(mobile)]\nmod a;"),
+                ("mobile/src/a.rs", loader),
+            ];
+            assert!(fixture_repo(&loaded).unwrap_err().contains("mobile/src/a.rs"), "{loader}");
+        }
         let module = [
             ("desktop/Cargo.toml", "[package]\nname = \"d\"\n"),
             ("desktop/src/lib.rs", "#![cfg(desktop)]\nmod a;"),
