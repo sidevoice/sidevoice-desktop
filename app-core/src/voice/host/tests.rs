@@ -1104,11 +1104,17 @@ fn a_call_ends_for_the_app_at_the_idle_state_after_its_stop_or_when_it_is_gone_o
         stopping: Arc::new(AtomicBool::new(false)),
         active: Arc::clone(&active),
     };
-    ended.idle();
+    ended.idle(false);
     assert_eq!(*told.said.lock().unwrap(), ["start"], "an idle state before any stop is not its end");
     ended.stopping.store(true, Ordering::SeqCst);
-    ended.idle();
-    ended.idle();
+    ended.idle(false);
+    assert_eq!(
+        *told.said.lock().unwrap(),
+        ["start"],
+        "the idle before the call went on is not the stop's, read late or not"
+    );
+    ended.idle(true);
+    ended.idle(true);
     ended.gone();
     assert_eq!(*told.said.lock().unwrap(), ["start", "end"], "told once");
 }

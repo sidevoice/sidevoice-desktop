@@ -116,8 +116,9 @@ fn call_state(
     snapshot: CallReport,
 ) -> Result<(), String> {
     the_page(&app, &webview)?;
-    // The green and the red button: the call's service follows the room's call.
-    app.state::<call::RoomCall>().joined(&app, snapshot.joined);
+    // The green and the red button: the call's service follows the room's call, of the current page.
+    let page = app.state::<AppHost>().page().0;
+    app.state::<call::RoomCall>().report(page, snapshot.joined);
     let previous = std::mem::replace(&mut *last.0.lock().unwrap(), snapshot.clone());
     if (previous.ready, previous.joined, previous.mic_enabled)
         != (snapshot.ready, snapshot.joined, snapshot.mic_enabled)
@@ -145,7 +146,6 @@ fn run_app() {
         // the app's one window, on its own page.
         .plugin(sidevoice_app_tauri::init(the_page, pages))
         .manage(LastReport::default())
-        .manage(call::RoomCall::default())
         .invoke_handler(tauri::generate_handler![call_state])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -169,10 +169,13 @@ fn run_app() {
                     admission: Arc::new(AlwaysAdmit),
                     events: Arc::new(events.clone()),
                     keys: Arc::new(Keychain::new(PROVIDER_KEYS)),
-                    // The call holds the audio session (iOS) and its foreground service (Android) while it runs.
+                    // The voice calls' audio holds the audio session (iOS).
                     calls: Arc::new(call::PhoneCall),
                 },
             ));
+            // The room's call holds the call's service (Android), for the host's current page.
+            let page = app.state::<AppHost>().page().0;
+            app.manage(call::RoomCall::new(handle.clone(), page));
             let page_app = handle.clone();
             WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App(BUNDLED_INTERFACE.into()))
                 .initialization_script(bridge::script(
@@ -189,14 +192,11 @@ fn run_app() {
                 .on_page_load(move |_webview, payload| {
                     if payload.event() == PageLoadEvent::Started {
                         if let Some(host) = page_app.try_state::<AppHost>() {
-                            host.page_changed();
+                            // A page that loads anew is in no call until it says so: the room's call of the one before
+                            // ends, queued now, before anything the new page reports (`call::RoomCall`).
+                            let page = host.page_changed().0;
+                            page_app.state::<call::RoomCall>().page_changed(page);
                         }
-                        // A page that loads anew is in no call until it says so. Off the thread that tells the page
-                        // loaded: the service is reached through the plugin's Kotlin, which runs on the UI thread.
-                        let room_app = page_app.clone();
-                        tauri::async_runtime::spawn_blocking(move || {
-                            room_app.state::<call::RoomCall>().joined(&room_app, false)
-                        });
                         *page_app.state::<LastReport>().0.lock().unwrap() = CallReport::default();
                     }
                 })
@@ -208,7 +208,9 @@ fn run_app() {
         .run(|app, event| {
             // Quitting: the calls stop and every model and audio device is let go, bounded.
             if let tauri::RunEvent::Exit = event {
-                app.state::<call::RoomCall>().joined(app, false);
+                if let Some(room) = app.try_state::<call::RoomCall>() {
+                    room.end(RELEASE_LIMIT);
+                }
                 if let Some(host) = app.try_state::<AppHost>() {
                     tauri::async_runtime::block_on(host.close(RELEASE_LIMIT));
                 }

@@ -785,9 +785,13 @@ pub fn refused(r: choice::Refusal) -> Refusal {
 /// Forward events with their immutable call key. Asynchronous delivery never consults the current input route. The
 /// idle state that answers a stop answers it once it is handed to the page. The meters go only when the page would draw
 /// them differently (`voice::meters`): about 60 a second otherwise, silence included (desktop#149).
-/// What tells the app's [`CallActivity`] that a lane's call has stopped: once, at the idle state that follows its stop
+/// What tells the app's [`CallActivity`] that a lane's call has stopped: once, at the idle state that answers its stop
 /// (sidevoice-voice closes the audio before it says idle), or when its events end (the call is gone), whichever comes
 /// first. A lane that was released (its page went, the app quits) is told the same way, by its own call.
+///
+/// The idle that answers the stop is the first one after the call went on (a state that is not idle, or an error): the
+/// call says idle once before it starts too (its first `mute`, which the lane makes before `start`), and the stop always
+/// comes after the start, so that early idle, however late this task reads it, is never taken for the stop's.
 struct Ended {
     counted: Arc<AtomicBool>,
     stopping: Arc<AtomicBool>,
@@ -795,8 +799,9 @@ struct Ended {
 }
 
 impl Ended {
-    fn idle(&self) {
-        if self.stopping.load(Ordering::SeqCst) {
+    /// An idle state, read after the call went on (`started`) or not.
+    fn idle(&self, started: bool) {
+        if started && self.stopping.load(Ordering::SeqCst) {
             self.gone();
         }
     }
@@ -818,6 +823,8 @@ fn forward(
 ) {
     tokio::spawn(async move {
         let mut meters = Meters::default();
+        // Whether the call has gone on: a state that is not idle, or an error of its start ([`Ended`]).
+        let mut started = false;
         while let Some(event) = events.next().await {
             let wanted = match &event {
                 VoiceEvent::Level(level) => meters.level(*level),
@@ -858,11 +865,14 @@ fn forward(
             let answered = match &event {
                 VoiceEvent::State(state) => {
                     if state.listening == Listening::Idle {
-                        ended.idle();
+                        ended.idle(started);
+                    } else {
+                        started = true;
                     }
                     lifecycle.lock().unwrap().state(state.listening == Listening::Idle)
                 }
                 VoiceEvent::Error(error) => {
+                    started = true;
                     lifecycle.lock().unwrap().error(&error.code);
                     None
                 }

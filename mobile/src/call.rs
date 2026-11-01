@@ -11,7 +11,7 @@
 //!   the first voice call's audio opens and deactivated once the last one's has stopped (iOS; declared at the app's start,
 //!   so that opening the app interrupts no other app's audio). Every voice call counts here, a try in Settings too: it plays
 //!   and records as well.
-use std::sync::Mutex;
+use std::sync::{mpsc, Mutex};
 
 use sidevoice_app_core::app::CallActivity;
 use sidevoice_app_core::sidevoice_voice::{AudioSession, Session, SessionConfig, SessionMode};
@@ -47,22 +47,93 @@ impl CallActivity for PhoneCall {
     }
 }
 
-/// Whether the room's call holds the call's service now.
-#[derive(Default)]
-pub struct RoomCall(Mutex<bool>);
+/// The room's call and the call's service, in one place: every change (a report of the page, a new page, the service
+/// ending on its own) is a job, done in order by one thread of their own, which is the only one to touch the service.
+/// So no lock is held while the plugin is waited for (it answers from Android's UI thread, which also hands the
+/// service's reports over), a callback of the service never waits, and a change made for a page that has since been
+/// replaced does nothing.
+pub struct RoomCall {
+    jobs: Mutex<mpsc::Sender<Job>>,
+}
+
+type Job = Box<dyn FnOnce(&mut Room) + Send>;
+
+/// What only the room's thread holds.
+pub struct Room {
+    pub app: AppHandle,
+    /// The page whose call this is (the host's page generation): reports of another are not its.
+    pub page: u64,
+    /// Whether the call's service runs for it.
+    holding: bool,
+}
 
 impl RoomCall {
-    /// The page says whether the call is joined: the service follows, starting at the join and stopping at the end.
-    pub fn joined(&self, app: &AppHandle, joined: bool) {
-        let mut holding = self.0.lock().unwrap();
-        if joined == *holding {
+    /// The room of `app`, for the host's current page `page`.
+    pub fn new(app: AppHandle, page: u64) -> RoomCall {
+        let (jobs, received) = mpsc::channel::<Job>();
+        let mut room = Room {
+            app,
+            page,
+            holding: false,
+        };
+        std::thread::Builder::new()
+            .name("room-call".into())
+            .spawn(move || {
+                for job in received {
+                    job(&mut room);
+                }
+            })
+            .expect("a thread for the room's call");
+        RoomCall {
+            jobs: Mutex::new(jobs),
+        }
+    }
+
+    /// Queues `job`; it runs after every job queued before it.
+    pub fn then(&self, job: impl FnOnce(&mut Room) + Send + 'static) {
+        let _ = self.jobs.lock().unwrap().send(Box::new(job));
+    }
+
+    /// A page loaded: the call of the one before ends, and only the new page's reports count from now on. Queued at once,
+    /// in order with what the new page reports after it.
+    pub fn page_changed(&self, page: u64) {
+        self.then(move |room| {
+            room.page = page;
+            room.hold(false);
+        });
+    }
+
+    /// The page `page` says whether its call is joined (the green and the red button).
+    pub fn report(&self, page: u64, joined: bool) {
+        self.then(move |room| {
+            if room.page == page {
+                room.hold(joined);
+            }
+        });
+    }
+
+    /// Quitting: the service stops, waited for up to `limit`.
+    pub fn end(&self, limit: std::time::Duration) {
+        let (done, finished) = mpsc::channel();
+        self.then(move |room| {
+            room.hold(false);
+            let _ = done.send(());
+        });
+        let _ = finished.recv_timeout(limit);
+    }
+}
+
+impl Room {
+    /// Starts or stops the call's service, as `joined` says.
+    fn hold(&mut self, joined: bool) {
+        if joined == self.holding {
             return;
         }
         if joined {
-            let events = app.clone();
-            match start_call_service(app, move |event| on_service_event(&events, event)) {
+            let app = self.app.clone();
+            match start_call_service(&self.app, move |event| on_service_event(&app, event)) {
                 Ok(()) => {
-                    *holding = true;
+                    self.holding = true;
                     log::info!("call: started");
                 }
                 // The call goes on in front; it does not outlive the screen. Recorded by its code
@@ -70,8 +141,8 @@ impl RoomCall {
                 Err(error) => log::error!("call: the call's service did not start: {error}"),
             }
         } else {
-            *holding = false;
-            if let Err(error) = stop_call_service(app) {
+            self.holding = false;
+            if let Err(error) = stop_call_service(&self.app) {
                 log::warn!("call: the call's service did not stop: {error}");
             }
             log::info!("call: ended");
@@ -79,15 +150,15 @@ impl RoomCall {
     }
 }
 
-/// What the call's service reports: an end the app did not ask for hangs the call up; a change of the audio focus is
-/// recorded (what to do about it is a decision of its own).
+/// What the call's service reports, as it reports it (it must not wait): an end the app did not ask for hangs the call
+/// up; a change of the audio focus is recorded (what to do about it is a decision of its own).
 fn on_service_event(app: &AppHandle, event: CallEvent) {
     log::info!("call service: {event:?}");
     if let Some(reason) = hang_up_for(&event) {
         log::info!("call: hung up by the service ({reason:?})");
         // The service is gone: the next join starts another.
         if let Some(room) = app.try_state::<RoomCall>() {
-            *room.0.lock().unwrap() = false;
+            room.then(|room| room.holding = false);
         }
         run_on_page(app, "hang-up");
     }

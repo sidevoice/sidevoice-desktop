@@ -1,40 +1,32 @@
 //! The mobile app's own texts, the ones the page shows but the app words (docs/MOBILE.md -> "The bridge"): how to allow a
 //! blocked microphone on this phone, and the button that opens that settings page (D-HOST-OS: each app words its own
-//! system's help). One table per language, English the fallback; adding a text means adding its key to English.
+//! system's help). One bundle per language (`i18n/<language>.rs`), English the fallback; adding a text means adding its
+//! key to English.
+mod en;
+mod es;
+
+/// The languages the app words its texts in, with their bundles.
+const BUNDLES: [(&str, &[(&str, &str)]); 2] = [("en", en::TEXTS), ("es", es::TEXTS)];
 
 /// The languages the app words its texts in.
-pub const LANGUAGES: [&str; 2] = ["en", "es"];
+pub const LANGUAGES: [&str; 2] = [BUNDLES[0].0, BUNDLES[1].0];
 
-const EN: &[(&str, &str)] = &[
-    ("microphone.help_ios", "Open Settings › Sidevoice and turn on Microphone. Then check again."),
-    (
-        "microphone.help_android",
-        "Open the app’s settings › Permissions › Microphone and choose “Allow only while using the app”. Then check again.",
-    ),
-    ("microphone.open_settings_ios", "Open Settings"),
-    ("microphone.open_settings_android", "Open app settings"),
-];
-
-const ES: &[(&str, &str)] = &[
-    ("microphone.help_ios", "Abre Ajustes › Sidevoice y activa Micrófono. Después vuelve a comprobar."),
-    (
-        "microphone.help_android",
-        "Abre los ajustes de la app › Permisos › Micrófono y elige «Permitir solo mientras se usa la app». Después vuelve a comprobar.",
-    ),
-    ("microphone.open_settings_ios", "Abrir Ajustes"),
-    ("microphone.open_settings_android", "Abrir ajustes de la app"),
-];
+fn find(bundle: &[(&str, &'static str)], key: &str) -> Option<&'static str> {
+    bundle
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map(|(_, text)| *text)
+}
 
 /// `key` in `language`, else in English; the key itself when English lacks it too (a test keeps that from happening).
 pub fn t(language: &str, key: &'static str) -> &'static str {
-    let table = match language {
-        "es" => ES,
-        _ => EN,
-    };
-    let find = |table: &[(&str, &'static str)]| {
-        table.iter().find(|(k, _)| *k == key).map(|(_, text)| *text)
-    };
-    find(table).or_else(|| find(EN)).unwrap_or(key)
+    let bundle = BUNDLES
+        .iter()
+        .find(|(name, _)| *name == language)
+        .map_or(en::TEXTS, |(_, bundle)| *bundle);
+    find(bundle, key)
+        .or_else(|| find(en::TEXTS, key))
+        .unwrap_or(key)
 }
 
 #[cfg(test)]
@@ -42,17 +34,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_language_has_every_english_key() {
-        for (key, _) in EN {
-            for language in LANGUAGES {
-                let table = if language == "es" { ES } else { EN };
+    fn every_language_has_every_english_key_and_no_other() {
+        for (language, bundle) in BUNDLES {
+            for (key, _) in en::TEXTS {
+                assert!(find(bundle, key).is_some(), "{language} lacks {key}");
+            }
+            for (key, _) in bundle {
                 assert!(
-                    table.iter().any(|(k, _)| k == key),
-                    "{language} lacks {key}"
+                    find(en::TEXTS, key).is_some(),
+                    "{language} has {key}, which English does not"
                 );
             }
         }
-        assert_eq!(EN.len(), ES.len(), "a key only Spanish has");
     }
 
     #[test]
