@@ -76,6 +76,23 @@ class MobilePlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
+    /** Asks the running service to request the audio focus again; its answer comes as a `focus` report. */
+    @Command
+    fun requestCallFocus(invoke: Invoke) {
+        val context = activity.applicationContext
+        val session = CallSession.current()
+        if (session == null) {
+            invoke.reject("No call's service is running", "not-running")
+            return
+        }
+        context.startService(
+            Intent(context, CallService::class.java)
+                .setAction(CallService.ACTION_REFOCUS)
+                .putExtra(CallService.EXTRA_SESSION, session.id)
+        )
+        invoke.resolve()
+    }
+
     /** Stops the service, if it runs: it reports `requested`, and the notification and the focus are gone. */
     @Command
     fun stopCallService(invoke: Invoke) {

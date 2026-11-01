@@ -9,6 +9,7 @@
 mod acl_tests;
 mod bridge;
 mod call;
+mod hold;
 mod i18n;
 pub mod pairings;
 mod platform;
@@ -99,6 +100,8 @@ struct CallReport {
     ready: bool,
     joined: bool,
     mic_enabled: bool,
+    /// The mute cannot be used (no conversation is selected).
+    mic_disabled: bool,
     title: String,
     /// When the call was joined, as the page marks it (ms since the epoch): a later join is another call.
     since: Option<f64>,
@@ -133,8 +136,12 @@ fn call_state(
     }
     // The green and the red button: the call's service follows the room's call (`call::RoomCall` checks the page again,
     // in order with the page's changes).
-    app.state::<call::RoomCall>()
-        .report(page, snapshot.joined, snapshot.since);
+    app.state::<call::RoomCall>().report(
+        page,
+        snapshot.joined,
+        snapshot.since,
+        (snapshot.mic_enabled, snapshot.mic_disabled),
+    );
     let previous = std::mem::replace(&mut *last.0.lock().unwrap(), snapshot.clone());
     if (previous.ready, previous.joined, previous.mic_enabled)
         != (snapshot.ready, snapshot.joined, snapshot.mic_enabled)
@@ -173,6 +180,7 @@ fn run_app() {
             if let Err(error) = call::configure() {
                 log::error!("audio session: {error}");
             }
+            let phone = Arc::new(call::PhoneCall::default());
             app.manage(Pairings(Arc::new(pairings::PairingFile::of_app(&handle)?)));
             // The application host: the voice call and the engine. A phone never resets its data under the call, so
             // every request is admitted.
@@ -186,12 +194,15 @@ fn run_app() {
                     events: Arc::new(events.clone()),
                     keys: Arc::new(Keychain::new(PROVIDER_KEYS)),
                     // The voice calls' audio holds the audio session (iOS).
-                    calls: Arc::new(call::PhoneCall),
+                    calls: phone.clone(),
                 },
             ));
             // The room's call holds the call's service (Android), for the host's current page.
             let page = app.state::<AppHost>().page().0;
-            app.manage(call::RoomCall::new(handle.clone(), page));
+            app.manage(call::RoomCall::new(handle.clone(), page, phone.clone()));
+            // The system taking the audio away (a phone call, an alarm) pauses it; iOS tells the app here, Android through the
+            // call's service.
+            call::watch_interruptions(&handle, phone);
             let page_app = handle.clone();
             WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App(BUNDLED_INTERFACE.into()))
                 .initialization_script(bridge::script(

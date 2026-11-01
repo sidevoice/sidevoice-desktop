@@ -24,4 +24,8 @@ impl Os for Native {
     fn stop<R: Runtime>(_app: &AppHandle<R>) -> Result<(), CallServiceError> {
         Err(CallServiceError::Unsupported)
     }
+
+    fn refocus<R: Runtime>(_app: &AppHandle<R>) -> Result<(), CallServiceError> {
+        Err(CallServiceError::Unsupported)
+    }
 }

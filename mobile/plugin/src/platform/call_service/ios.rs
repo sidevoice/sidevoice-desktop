@@ -25,4 +25,9 @@ impl Os for Native {
     fn stop<R: Runtime>(_app: &AppHandle<R>) -> Result<(), CallServiceError> {
         Ok(())
     }
+
+    /// The audio session is the call's own (activated by the app); there is no focus to ask for.
+    fn refocus<R: Runtime>(_app: &AppHandle<R>) -> Result<(), CallServiceError> {
+        Ok(())
+    }
 }

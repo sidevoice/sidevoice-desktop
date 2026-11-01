@@ -49,7 +49,7 @@ internal object CallSession {
      */
     fun hangUpAddress(id: Long): String = "sidevoice-call://hang-up/$id"
 
-    /** Reports that the audio focus of [session] changed (`gained`, `lost`, `lost-transient`, `duck`), if it is running. */
+    /** Reports that the audio focus of [session] changed (`gained`, `lost`, `lost-transient`, `duck`, `refused`), if it is running. */
     fun focus(session: Session, state: String) {
         if (get(session.id) != null) session.report(mapOf("type" to "focus", "state" to state))
     }
