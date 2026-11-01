@@ -26,15 +26,17 @@ cpal = { version = "0.18", default-features = false }
 # The microphone device worker's answers (platform/microphone.rs).
 tokio = { version = "1", features = ["sync", "time", "rt"] }
 
-[target.'cfg(target_os = "macos")'.dependencies]
-# Headset buttons and the AirPods mute gesture, and Now Playing (platform/media_controls/macos.rs).
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+# AVFoundation's microphone permission, the same on both (platform/microphone/apple.rs).
 objc2 = "0.6"
 block2 = "0.6"
+objc2-av-foundation = { version = "0.3", default-features = false, features = ["std", "AVCaptureDevice", "AVMediaFormat", "block2"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Headset buttons and the AirPods mute gesture, and Now Playing (platform/media_controls/macos.rs).
 objc2-foundation = { version = "0.3", features = ["NSString", "NSDictionary", "NSValue", "NSError", "NSObject", "NSArray", "NSRunLoop", "block2"] }
 objc2-media-player = { version = "0.3", features = ["MPRemoteCommandCenter", "MPRemoteCommand", "MPRemoteCommandEvent", "MPNowPlayingInfoCenter", "MPMediaItem", "block2"] }
 objc2-avf-audio = { version = "0.3", features = ["AVAudioApplication", "block2"] }
-# The microphone permission the room page asks for in its first-run setup (platform/microphone/macos.rs).
-objc2-av-foundation = { version = "0.3", default-features = false, features = ["std", "AVCaptureDevice", "AVMediaFormat", "block2"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # The unpackaged app's privacy gate in the registry, and the device worker's COM apartment (platform/microphone/windows.rs).

@@ -26,9 +26,7 @@ pub async fn microphone<R: Runtime>(
         "state" => native::state().await,
         "request" => native::request().await,
         "open-settings" => {
-            return native::open_settings(&app)
-                .map_err(|_| refusal("internal", "System Settings could not be opened."))
-                .map(|()| Value::Null)
+            return native::open_settings(&app).map_err(|why| refusal("internal", why)).map(|()| Value::Null)
         }
         _ => return Err(refusal("bad_request", format!("not a microphone action: {action}"))),
     }
