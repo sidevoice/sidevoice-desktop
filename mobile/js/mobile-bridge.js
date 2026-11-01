@@ -25,9 +25,9 @@
   // Its events come over the channel the members open for it (`voice_events`), not through the global.
   const voiceCall = members.voice();
 
-  /** The call as the room reports it (the members' `room`), for the app's media controls: what the headset buttons and
-   *  the lock screen need, sent to the app's own `call_state` whenever it changes. The app runs the shared commands
-   *  (`toggle-mute`, …) on the room through `run`. */
+  /** The call as the room reports it (the members' `room`), sent to the app's own `call_state` whenever it changes; the
+   *  app runs the shared commands (`hang-up`, `toggle-mute`, …) on the room through `run`: the call's service hangs up
+   *  through it when the person ends the call from its notification. */
   const reporting = members.room({
     version: 2,
     publish: (snapshot) => transport.own.send("call_state", { snapshot }),
@@ -55,8 +55,8 @@
       reach: Object.freeze({ plainHttpPrivate: true }),
     }),
     snapshot: reporting.snapshot,
-    /** Runs one command from the app (a headset, the lock screen) through the web UI's own actions: `{command, …}`.
-     *  Returns whether it ran. */
+    /** Runs one command from the app (the call's notification, a headset) through the web UI's own actions:
+     *  `{command, …}`. Returns whether it ran. */
     run: reporting.run,
   };
   win.__sidevoiceHost = api;

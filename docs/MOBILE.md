@@ -70,13 +70,13 @@ part, `mobile/js/mobile-bridge.js`, which assembles `host`:
 | `voice`, `engine` | The voice call the app runs itself (sidevoice-voice on the phone's microphone and speaker) and the engine it takes its models from: sherpa-onnx (Silero) and the remote providers on a phone (sidevoice-engine's README, "Android" and "iOS"). |
 | `microphone` | The system's own permission (`sidevoice-app-tauri`'s `platform/microphone`); `openSettings` opens the app's page of the system's settings. |
 | `pairings` | The pairings in the app's private storage (`mobile/src/pairings.rs`), not the webview's. |
-| `presence` | `{ media: "app" }`: the app owns the call's audio, so the page registers no Media Session and plays no Now Playing element of its own. The app answers the headset's play/pause and the lock screen's (the shared plugin's `platform/media_controls`: MediaPlayer on iOS, a `MediaSession` on Android; docs/MEDIA_CONTROLS.md). |
+| `presence` | `{ media: "app" }`: the app owns the call's audio, so the page registers no Media Session and plays no Now Playing element of its own. The app answers the headset's play/pause and the lock screen's (the shared plugin's `platform/media_controls`: MediaPlayer on iOS, a `MediaSession` held by the call's service on Android; docs/MEDIA_CONTROLS.md). |
 | `reach` | `{ plainHttpPrivate: true }`, as on the desktop. |
 
 Nothing of the desktop's own (`localHost`, `reset`, `muteShortcut`, `callControls`, `updater`, `debug`, `deviceName`) is
 offered, and neither is `build` yet: the mobile app's build kinds (nightly and release, D-MOBILE-CHANNELS) come with their
-own row. The page reports the call (the members' `room`) to the app's own command `call_state`, which the media controls
-follow, and the app runs the headset's `toggle-mute` on the room through `run`, as the desktop does.
+own row. The page reports the call (the members' `room`) to the app's own `call_state`, and the app runs commands on the room
+through `run` (the call's service hangs up through it).
 
 - **Who may call.** The app's one window, `main`, on the app's own origin (`is_the_page`), as every shared command asks
   first; `mobile/capabilities/main.json` grants it every command of `app-tauri/ACL.md` but the call's levels
@@ -87,13 +87,21 @@ follow, and the app runs the headset's `toggle-mute` on the room through `run`, 
   models in `models/` of the app's own files, private to the app and kept out of the device backup (iOS marks the
   folder, Android's backup rules name it). A page that loads anew owns none of the calls of the one before; quitting stops
   the calls and lets the models go, as on the desktop.
-- **The audio session** (iOS; D-AUDIO-SESSION, sidevoice-voice's `Session`): declared at start as play-and-record with
-  mode `Default`, the loudspeaker rather than the receiver, and Bluetooth hands-free allowed, and activated right away,
-  while the app is in front (iOS refuses to start recording from the background). Android has no session to declare.
-  **Not verified on a device yet**; see "Not verified" below.
+- **The call's lifecycle** (D-CALL-LIFECYCLE, `mobile/src/call.rs`), the same on both phones: the green call button
+  starts the call (the page starts the voice call), the red one ends it. sidevoice-app-core's host tells the app when its
+  first call is about to start and when its last one has stopped (`Hooks::calls`, `CallActivity`; the desktop does
+  nothing there). At the start, before the call's audio opens and while the app is in front, the app activates the audio
+  session (iOS) and starts the call's foreground service (Android); either refusing refuses the call, with why. At the
+  end it stops the service and deactivates the session, so another app's audio goes on. The service ending on its own
+  (Hang up in its notification, the app removed from the recents list, the system) hangs up the call on the page
+  (`window.__sidevoiceHost.run({command: "hang-up"})`). The page reports the call to the app's own `call_state`
+  (logged; the media controls follow it), and the app runs commands on the room through `run`.
+- **The audio session** (iOS; D-AUDIO-SESSION, sidevoice-voice's `Session`): declared at the app's start as
+  play-and-record with mode `Default`, the loudspeaker rather than the receiver, and Bluetooth hands-free allowed;
+  activated only when a call starts (above). Android has no session to declare. **Not verified on a device yet**; see
+  "Not verified" below.
 - **Background audio** (iOS): `UIBackgroundModes` `audio` in `mobile/Info.ios.plist`, so a call goes on with the screen
-  locked. Android keeps the call's process with its foreground service (above), which nothing starts yet: wiring the
-  call to it is its own step.
+  locked. Android keeps the call's process with its foreground service (above), which runs for exactly the call.
 - **HTTPS on Android.** The engine's `reqwest` verifies certificates with `rustls-platform-verifier`, whose Android side is
   Kotlin: the Android library of `mobile/plugin` adds it to the app's Gradle build (from the crate's own Maven directory,
   which `cargo metadata` finds, at the version Cargo.lock resolves; `consumer-rules.pro` keeps it from R8), and the app
@@ -111,10 +119,11 @@ follow, and the app runs the headset's `toggle-mute` on the room through `run`, 
 
 What only a device shows, for the M-FG gate (plan §F.2): a call's first Join on each phone (remote STT/TTS and Silero, a
 turn and a reply); the audio session's route (loudspeaker, a wired or Bluetooth headset) and what other apps' audio does
-when the app starts, since the session is activated at start; that a model download and a remote provider's request
-pass the verifier on Android; that the xcframework is embedded and signed in an iOS archive; the APK's libraries
-loading on a phone; and the media controls (a headset's play/pause, with and without headphones; the lock screen and
-Control Center on iOS; the media session's notification on Android, once the call starts the service).
+when a call starts and ends (the session is activated and deactivated with it); the call's service starting and
+stopping with the call, and its Hang up; the media controls (a headset's play/pause with and without headphones,
+the lock screen and Control Center on iOS, the call notification's controls on Android); that a model download and a remote provider's request
+pass the verifier on Android; that the xcframework is embedded and signed in an iOS archive; and the APK's libraries
+loading on a phone.
 
 ## Who owns the native projects
 
@@ -286,5 +295,5 @@ stays unsigned with no secret. Its one step is `cargo xtask mobile testflight --
 
 ## Not here yet
 
-Starting and stopping the call's service with the call,
-and acting on its events (Android); the build kinds (nightly with Developer options, release).
+Acting on the call's audio focus (Android); the build
+kinds (nightly with Developer options, release).
