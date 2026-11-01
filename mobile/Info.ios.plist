@@ -6,7 +6,21 @@
   <key>NSMicrophoneUsageDescription</key>
   <string>Sidevoice listens through the microphone so you can talk with your agent.</string>
   <key>NSLocalNetworkUsageDescription</key>
-  <string>Sidevoice reaches your paired computer on the local network.</string>
+  <string>Sidevoice connects to your paired computer over the local network.</string>
+  <!-- The two texts above are the English base. The other languages are mobile/ios/<language>.lproj/InfoPlist.strings,
+       which `cargo xtask mobile generate ios` puts into the project; this list is the languages iOS offers the app in,
+       the folders of mobile/ios (xtask tests that they agree). -->
+  <key>CFBundleLocalizations</key>
+  <array>
+    <string>en</string>
+    <string>de</string>
+    <string>es</string>
+    <string>fr</string>
+    <string>it</string>
+    <string>ja</string>
+    <string>pl</string>
+    <string>zh-Hans</string>
+  </array>
   <key>NSAppTransportSecurity</key>
   <dict>
     <key>NSAllowsLocalNetworking</key>

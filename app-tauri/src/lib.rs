@@ -11,12 +11,18 @@
 //! it back, and the host refuses a number that is not the current page's.
 //!
 //! Who may call is the app's to say: it hands [`init`] a function that answers, for a webview, whether it is the page the
-//! app owns the calls for. The voice commands ask it before they do anything; the engine commands are held by the
-//! capability alone (a window the app grants them to), as they were before they were a plugin (ACL.md).
+//! app owns the calls for. Every command asks it before it does anything, the engine's too: the capability (a window the app
+//! grants them to) cannot know which room window is the current one (ACL.md).
 
 mod acl;
 mod engine;
+pub mod headset;
+pub mod js;
+mod microphone;
+mod observers;
 mod pages;
+mod pairings;
+pub mod platform;
 mod voice;
 
 use std::sync::Arc;
@@ -25,7 +31,9 @@ use tauri::plugin::{Builder, TauriPlugin};
 use tauri::{AppHandle, Manager, Runtime, Webview};
 
 pub use acl::{inventory, Entry};
+pub use observers::{CallObserver, Observers};
 pub use pages::Pages;
+pub use pairings::{PairingStore, Pairings};
 
 include!("../commands.rs");
 
@@ -45,7 +53,7 @@ impl<R: Runtime> Callers<R> {
 }
 
 /// The plugin. `caller` answers whether a webview is the page the app owns the calls for (its current room window, on
-/// its own origin): the voice commands refuse any other with `bad_request`. `pages` is where the page's channel is kept
+/// its own origin): every command refuses any other with `bad_request`. `pages` is where the page's channel is kept
 /// (`voice_events`); the app hands a clone of it to its `AppHost` as the `EventSink`. The app manages its `AppHost` itself.
 pub fn init<R: Runtime>(
     caller: impl Fn(&AppHandle<R>, &Webview<R>) -> Result<(), String> + Send + Sync + 'static,
@@ -81,11 +89,16 @@ pub fn init<R: Runtime>(
             voice::voice_end_input,
             voice::voice_audio_devices,
             voice::voice_set_audio_devices,
+            microphone::microphone,
+            observers::bridge_level,
+            observers::bridge_playback,
+            pairings::pairings_read,
+            pairings::pairings_write,
         ])
-        .setup(move |app, _| {
+        .setup(move |app, api| {
             app.manage(Callers::<R>(Arc::new(caller)));
             app.manage(pages);
-            Ok(())
+            platform::microphone::setup(api)
         })
         .build()
 }
@@ -133,7 +146,7 @@ mod tests {
 
     /// The body of the command called `name` in `source`: from its signature to the next command.
     fn body<'a>(source: &'a str, name: &str) -> &'a str {
-        let from = source.find(&format!("pub async fn {name}<")).unwrap_or_else(|| panic!("no command {name}"));
+        let from = source.find(&format!("fn {name}<")).unwrap_or_else(|| panic!("no command {name}"));
         let rest = &source[from..];
         let open = rest.find("{\n").unwrap();
         let end = rest[open..].find("\n}\n").map_or(rest.len(), |end| open + end);
@@ -141,19 +154,23 @@ mod tests {
     }
 
     #[test]
-    fn every_voice_command_asks_the_caller_first_and_no_engine_command_does() {
+    fn every_command_asks_the_caller_first() {
         // A checkout on Windows may have CRLF line ends: the sources are read with LF.
-        let (voice, engine) =
-            (include_str!("voice.rs").replace("\r\n", "\n"), include_str!("engine.rs").replace("\r\n", "\n"));
+        let lf = |source: &str| source.replace("\r\n", "\n");
+        let sources = [
+            lf(include_str!("engine.rs")),
+            lf(include_str!("voice.rs")),
+            lf(include_str!("microphone.rs")),
+            lf(include_str!("observers.rs")),
+            lf(include_str!("pairings.rs")),
+        ];
         for command in COMMANDS {
-            if command.starts_with("voice_") {
-                let first = body(&voice, command).lines().nth(1).unwrap_or_default().trim();
-                assert_eq!(first, "allowed(&callers, &webview)?;", "{command} asks the caller before anything else");
-            } else {
-                let at = engine.find(&format!("fn {command}(")).unwrap_or_else(|| panic!("no command {command}"));
-                let signature = &engine[at..engine[at..].find('{').map_or(engine.len(), |end| at + end)];
-                assert!(!signature.contains("Webview") && !signature.contains("Callers"), "{command}: {signature}");
-            }
+            let source = sources.iter().find(|source| source.contains(&format!("fn {command}<"))).expect(command);
+            let first = body(source, command).lines().nth(1).unwrap_or_default().trim();
+            assert!(
+                first.starts_with("allowed(&callers, &webview)") || first.starts_with("callers.check(&webview)"),
+                "{command} asks the caller before anything else: {first}"
+            );
         }
     }
 }

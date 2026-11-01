@@ -5,6 +5,8 @@ use tauri::utils::config::BundleType;
 pub(super) struct Native;
 
 impl Os for Native {
+    const SYSTEM: &'static str = "linux";
+
     fn device_name() -> Option<String> {
         std::fs::read_to_string("/etc/machine-info").ok().and_then(|file| computer_name::pretty_hostname(&file))
     }

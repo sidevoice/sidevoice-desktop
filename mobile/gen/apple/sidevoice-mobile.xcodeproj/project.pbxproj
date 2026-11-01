@@ -19,6 +19,7 @@
 		9E6F9ACB042B66F798582895 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 180609C9C60033406A6A7F17 /* LaunchScreen.storyboard */; };
 		AC33FD4D84BBAB8E32E65AAF /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 438F566187470C3B8979F853 /* Security.framework */; };
 		C09EB1C2FBC84EA35047F9B2 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 86D727D8E9CA54F3F9AF1E0A /* WebKit.framework */; };
+		E9F8822009B25DCE34A8BB89 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = 9A0A053ECF6DDFBEA53C23D6 /* InfoPlist.strings */; };
 		ECBBF484E2A18C6DE375122D /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7D0D2F377196B00F1647880E /* QuartzCore.framework */; };
 /* End PBXBuildFile section */
 
@@ -28,21 +29,29 @@
 		438F566187470C3B8979F853 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 		46B600F3D87A8B86B45A62C9 /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
 		48772D858001537DA0BAD70F /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
+		4A0565150C0509FAC5C66706 /* de */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = de; path = de.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		5721EA507184E736863684BC /* entry.rs */ = {isa = PBXFileReference; path = entry.rs; sourceTree = "<group>"; };
+		5B34888E35B7881216856F13 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/InfoPlist.strings"; sourceTree = "<group>"; };
 		749529AE2409B9FB50B39312 /* platform.rs */ = {isa = PBXFileReference; path = platform.rs; sourceTree = "<group>"; };
 		7D0D2F377196B00F1647880E /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		86D727D8E9CA54F3F9AF1E0A /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
 		8CEBA3D0D0988EFC5779F1E0 /* origin.rs */ = {isa = PBXFileReference; path = origin.rs; sourceTree = "<group>"; };
+		9B99011EAA107BB9AD2AA47E /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A113CAD3D1FD380DEEE3CE26 /* es */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = es; path = es.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		A13AEA8AD965C33B4A462A4E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A3D98CD41CC1FB03FA370222 /* fr */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = fr; path = fr.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		AC7B192F6F772B984C2013E8 /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
 		B5E6137564CC46CBF5FDCAF7 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		BE293A96151AB5D44D76E3EC /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 		C5232FA644011E76A9B33911 /* sidevoice-mobile_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "sidevoice-mobile_iOS.entitlements"; sourceTree = "<group>"; };
+		C9DA64017592563391BEB038 /* pl */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = pl; path = pl.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		D53EC9AD147484E515EBA7F0 /* ja */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ja; path = ja.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		D6067A41257B6008E8BE4CA5 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		DD941F079E3C0751703CE1EC /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		DEBD9545CF90786BDDD5D639 /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
 		E47F552120DB7A20BEDF5D2E /* sidevoice-mobile_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "sidevoice-mobile_iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		EF7D695C7A6ACAD12DA94258 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
+		F5C816DDD53EA53511CBA66B /* it */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = it; path = it.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		FBE97951AA487058954DF9BE /* assets */ = {isa = PBXFileReference; lastKnownFileType = folder; path = assets; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
@@ -129,6 +138,7 @@
 				DD941F079E3C0751703CE1EC /* Info.plist */,
 				B5E6137564CC46CBF5FDCAF7 /* PrivacyInfo.xcprivacy */,
 				C5232FA644011E76A9B33911 /* sidevoice-mobile_iOS.entitlements */,
+				9A0A053ECF6DDFBEA53C23D6 /* InfoPlist.strings */,
 			);
 			path = "sidevoice-mobile_iOS";
 			sourceTree = "<group>";
@@ -204,7 +214,14 @@
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				Base,
+				de,
 				en,
+				es,
+				fr,
+				it,
+				ja,
+				pl,
+				"zh-Hans",
 			);
 			mainGroup = B0271E212E475EE881D927B7;
 			minimizedProjectReferenceProxies = 1;
@@ -224,6 +241,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				06AEF62B7E54BF34FE611772 /* Assets.xcassets in Resources */,
+				E9F8822009B25DCE34A8BB89 /* InfoPlist.strings in Resources */,
 				9E6F9ACB042B66F798582895 /* LaunchScreen.storyboard in Resources */,
 				96B7456F28698AC3D7BA5A0D /* PrivacyInfo.xcprivacy in Resources */,
 				9C2DFA35B78BDAD31399A365 /* assets in Resources */,
@@ -266,6 +284,24 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXVariantGroup section */
+		9A0A053ECF6DDFBEA53C23D6 /* InfoPlist.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				4A0565150C0509FAC5C66706 /* de */,
+				9B99011EAA107BB9AD2AA47E /* en */,
+				A113CAD3D1FD380DEEE3CE26 /* es */,
+				A3D98CD41CC1FB03FA370222 /* fr */,
+				F5C816DDD53EA53511CBA66B /* it */,
+				D53EC9AD147484E515EBA7F0 /* ja */,
+				C9DA64017592563391BEB038 /* pl */,
+				5B34888E35B7881216856F13 /* zh-Hans */,
+			);
+			name = InfoPlist.strings;
+			sourceTree = "<group>";
+		};
+/* End PBXVariantGroup section */
 
 /* Begin XCBuildConfiguration section */
 		26FF8747169D34D95751B320 /* debug */ = {

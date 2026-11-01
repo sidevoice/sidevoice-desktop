@@ -1,7 +1,7 @@
 //! The call controls card (sidevoice/sidevoice-desktop#4): a small window that floats over the person's other apps
 //! during a call, while the room's stage is out of view (#165: the room hidden, minimised, covered or on another
 //! Space, or the page on Settings), and never takes focus from them. It shows the web build's `call-controls.html`,
-//! which talks only to `bridge/call-controls-bridge.js` (docs/BRIDGE.md → "The call controls card"); the app relays the
+//! which talks only to `desktop/core/js/call-controls-bridge.js` (docs/BRIDGE.md → "The call controls card"); the app relays the
 //! call to it from the room window and carries its buttons back.
 //!
 //! - macOS: a non-activating `NSPanel` (tauri-nspanel) at the status level, on every Space and over full-screen apps.
@@ -13,11 +13,11 @@
 
 use crate::platform::card_window::{CardSpec, CardWindow, NativeCardWindow};
 use crate::platform::desktop_geometry;
-use crate::platform::host::APP_ORIGIN;
 use crate::platform::pointer_events::{self, PointerEvent, PointerState, Subscription};
 use crate::platform::window_visibility::{self, Visibility};
 use crate::{debug, AppState};
 use serde::Deserialize;
+use sidevoice_app_tauri::platform::origin::APP_ORIGIN;
 use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
 use sidevoice_desktop_core::call_controls::{
     self as logic, Corner, Display, Edge, Placements, Point, Rect, Size, Spot,

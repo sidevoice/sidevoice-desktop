@@ -8,10 +8,11 @@ two apart.
 
 ## Two products in one repository
 
-The mobile app (`mobile/`, plan: sidevoice/sidevoice-desktop#289) does not exist yet and nothing here builds it. What
-is ready for it, so that adding it needs no change to the desktop app's tags, releases or nightly:
+The mobile app lives in `mobile/` (plan: sidevoice/sidevoice-desktop#289) and has no release package yet: per
+sidevoice/sidevoice-desktop#320 the package is added at the first store submission. What is ready for it, so that adding
+the package needs no change to the desktop app's tags, releases or nightly:
 
-| | Desktop app (today) | Mobile app (when it exists) |
+| | Desktop app (today) | Mobile app (once its package exists) |
 |---|---|---|
 | release-please package | `.` (every commit; with the mobile package, every commit except the ones that touch only `mobile/`) | `mobile` |
 | Tag | `vX.Y.Z` (unchanged) | `mobile-vX.Y.Z` |
@@ -271,6 +272,19 @@ cargo xtask release checksums
 ```
 
 leaves the signed, notarized and stapled `dist/Sidevoice_X.Y.Z_aarch64.dmg` and its `dist/SHA256SUMS.txt`.
+
+## Legacy identifier carry-over
+
+Until `ai.sidevoice.desktop`, the app's identifier was `dev.sidevoice.desktop`. `desktop/src/legacy_identifier.rs` copies
+an install's app data, browser storage and provider keys over from it at launch, until its journal (in the reset's
+control directory) says it has finished, and never changes the old ones (docs/APP_DATA.md, WEBVIEW_DATA.md,
+CREDENTIALS.md). **It stays until 1.0.** Someone can skip releases, so a fixed number of them is no boundary. Removing
+it needs a release note that says "update through vX.Y first" (X.Y: the first release that contains it) and how to
+remove the old identifier's data by hand (APP_DATA.md has the list). To remove it: the module and its call in `run()`,
+the `stop` call in `data::begin_reset`, `platform::app_data::{carried_from, create_folder}` (and its `Os` method),
+`webview_data::locations_of`, `Keychain::{providers_in, copy_key_from}` and the `credentials` functions under them
+(app-core) with their tests, `data::PAIRINGS_FILE` if nothing else uses it, and the three doc sections called "From the
+previous identifier".
 
 ## When something fails
 
