@@ -51,7 +51,14 @@ mod tests {
     }
 
     #[test]
+    fn legacy_keys_are_copied_in_the_real_keychain() {
+        copy_native();
+    }
+
+    #[test]
     fn public_functions_round_trip_in_the_test_namespace() {
+        // Serialised with the other tests that go through the one admission (`admit`).
+        let _serial = serial();
         // A per-process namespace of the test's own: no person's keys are touched.
         let service = test_service();
         assert_eq!(read(&service, "openai"), Ok(None));
