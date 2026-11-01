@@ -19,8 +19,10 @@ fn views(webview: &PlatformWebview) -> Option<(&UIView, &UIViewController)> {
     unsafe { Some((web_view.as_ref()?, controller.as_ref()?)) }
 }
 
-/// Keeps the page at its own scale: no pinch, no zoom range, no bounce back from one. WebKit sets the zoom range from
-/// the page's viewport each time it loads, so this runs after each load too; the pinch recognizer is the part it leaves.
+/// Stops the pinch: the scroll view's pinch recognizer is off, which is what blocks the gesture. The one zoom scale and
+/// no bounce are set too, but WebKit rewrites the zoom range while it renders and resizes, so they are only a second
+/// line; this runs again after each page load. It does not touch focus auto-zoom (the web's fields are 16px) or
+/// double-tap.
 fn lock_zoom(web_view: &UIView) {
     // SAFETY: `scrollView` is `WKWebView`'s `UIScrollView` property, and `web_view` is the window's `WKWebView`.
     let scroll_view: Option<Retained<UIScrollView>> = unsafe { msg_send![web_view, scrollView] };
