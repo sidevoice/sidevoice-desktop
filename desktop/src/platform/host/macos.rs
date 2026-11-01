@@ -5,6 +5,8 @@ use tauri::utils::config::BundleType;
 pub(super) struct Native;
 
 impl Os for Native {
+    const SYSTEM: &'static str = "macos";
+
     fn device_name() -> Option<String> {
         whoami::devicename().ok()
     }

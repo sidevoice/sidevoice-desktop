@@ -60,7 +60,7 @@ Operator rule (2026-10-25). Applies to product code, tests, xtask and build scri
   Cargo binary root (`src/main.rs`, `src/bin/*.rs`, `src/bin/*/main.rs`), which the linker reads from the crate root and so
   cannot live in `platform`.
 
-Reference in this repo: `platform/microphone.rs`, `platform/desktop_geometry.rs` and `platform/confirmation.rs`, each public
+Reference in this repo: `app-tauri/src/platform/microphone.rs`, `desktop/src/platform/desktop_geometry.rs` and `desktop/src/platform/confirmation.rs`, each public
 plain functions over a private per-OS trait. (sidevoice-connector and core keep their separately approved public-trait
 shape; do not copy it here.)
 
