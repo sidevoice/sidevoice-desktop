@@ -1,5 +1,6 @@
 //! Provider secrets in the OS credential store (docs/CREDENTIALS.md). No store error or secret is formatted or logged.
-//! The service/account pair is the original macOS namespace, not a catalog-dependent list.
+//! The service/account pair is the app's namespace (the `service`, which the app passes in exactly), not a
+//! catalog-dependent list.
 //!
 //! The common code here owns the naming, validation, requests, namespace clearing, admission and error categories.
 //! What differs per OS is the store itself (`Os::store`), how a whole namespace is deleted (`Os::clear_namespace`) and
@@ -20,20 +21,6 @@ use std::{
 #[cfg_attr(target_os = "linux", path = "credentials/linux.rs")]
 mod imp;
 use imp::Native;
-
-const SERVICE: &str = "ai.sidevoice.desktop.providers";
-
-/// The namespace the public functions use: `SERVICE`. Test builds give them a per-process namespace of their own, so
-/// fixtures of the public functions on a native store never read or clear a person's keys.
-fn namespace() -> &'static str {
-    #[cfg(not(test))]
-    return SERVICE;
-    #[cfg(test)]
-    {
-        static TEST: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-        TEST.get_or_init(tests::test_service)
-    }
-}
 
 /// How long a caller waits for a store that can prompt (`Os::PROMPTS`) before answering `Unavailable`.
 const WAIT: Duration = Duration::from_secs(30);
@@ -80,54 +67,52 @@ pub fn valid(provider: &str) -> bool {
         && provider.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-/// A provider's key. Missing is `None`; inaccessible storage is `Unavailable`.
-pub fn read(provider: &str) -> Result<Option<String>, Error> {
+/// A provider's key in the namespace `service`. Missing is `None`; inaccessible storage is `Unavailable`.
+pub fn read(service: &str, provider: &str) -> Result<Option<String>, Error> {
     let provider = Provider::new(provider)?;
-    admit(move || read_in(Native::store()?.as_ref(), namespace(), &provider))
+    let service = service.to_owned();
+    admit(move || read_in(Native::store()?.as_ref(), &service, &provider))
 }
 
 /// Replace a key, or remove it for `None`. Removing a missing key succeeds.
 /// Oversized credentials are refused before replacing the stored value; never truncated.
-pub fn write(provider: &str, secret: Option<&str>) -> Result<(), Error> {
+pub fn write(service: &str, provider: &str, secret: Option<&str>) -> Result<(), Error> {
     let provider = Provider::new(provider)?;
-    let secret = secret.map(str::to_owned);
-    admit(move || write_in(Native::store()?.as_ref(), namespace(), &provider, secret.as_deref()))
+    let (service, secret) = (service.to_owned(), secret.map(str::to_owned));
+    admit(move || write_in(Native::store()?.as_ref(), &service, &provider, secret.as_deref()))
 }
 
-/// Delete the exact service namespace, including unknown or obsolete accounts.
+/// Delete the exact service namespace `service`, including unknown or obsolete accounts.
 /// An unrelated service is never removed; partial cleanup is an error.
-pub fn clear_all() -> Result<(), Error> {
-    admit(|| Native::clear_namespace(namespace()))
+pub fn clear_all(service: &str) -> Result<(), Error> {
+    let service = service.to_owned();
+    admit(move || Native::clear_namespace(&service))
 }
 
-/// The providers with a key in the namespace the app kept under the bundle identifier `identifier` (its
-/// `<identifier>.providers` service): the accounts there that are valid provider ids. `Err` when it cannot be listed.
-pub fn providers_in(identifier: &str) -> Result<Vec<String>, Error> {
-    let service = service_of(identifier);
+/// The providers with a key in the namespace `service`: the accounts there that are valid provider ids. `Err` when it
+/// cannot be listed.
+pub fn providers_in(service: &str) -> Result<Vec<String>, Error> {
+    let service = service.to_owned();
     admit(move || providers_of(Native::store()?.as_ref(), &service))
 }
 
-/// Copy `provider`'s key from the namespace of the bundle identifier `identifier` to the one the public functions use,
-/// unless that one holds a key for it: `Ok(true)` copied and read back, `Ok(false)` nothing to copy. Nothing is
-/// overwritten or deleted. One key per call, each with its own admission and deadline. Both hooks run on the store's
-/// worker, even for a copy that completes after this call stopped waiting (`Unavailable` at the deadline):
-/// `may_write` right before the key is written, which happens only if it returns true; `settled` once the key is
-/// settled (written and read back equal, or nothing to copy), and the call fails unless it returns true. So the caller
-/// records a key there after its write: a write that fails, or a crash before the record, leaves it to be tried again,
-/// and copying only where no key is makes that harmless.
+/// Copy `provider`'s key from the namespace `from` to the namespace `to`, unless `to` holds a key for it: `Ok(true)`
+/// copied and read back, `Ok(false)` nothing to copy. Nothing is overwritten or deleted. One key per call, each with
+/// its own admission and deadline. Both hooks run on the store's worker, even for a copy that completes after this call
+/// stopped waiting (`Unavailable` at the deadline): `may_write` right before the key is written, which happens only if
+/// it returns true; `settled` once the key is settled (written and read back equal, or nothing to copy), and the call
+/// fails unless it returns true. So the caller records a key there after its write: a write that fails, or a crash
+/// before the record, leaves it to be tried again, and copying only where no key is makes that harmless.
 pub fn copy_key_from(
-    identifier: &str,
+    from: &str,
+    to: &str,
     provider: &str,
     may_write: impl FnOnce() -> bool + Send + 'static,
     settled: impl FnOnce() -> bool + Send + 'static,
 ) -> Result<bool, Error> {
-    let (from, provider) = (service_of(identifier), Provider::new(provider)?);
-    admit(move || copy_key(Native::store()?.as_ref(), &from, namespace(), &provider, may_write, settled))
-}
-
-/// The service of the namespace that a build with the bundle identifier `identifier` kept its provider keys in.
-fn service_of(identifier: &str) -> String {
-    format!("{identifier}.providers")
+    let provider = Provider::new(provider)?;
+    let (from, to) = (from.to_owned(), to.to_owned());
+    admit(move || copy_key(Native::store()?.as_ref(), &from, &to, &provider, may_write, settled))
 }
 
 fn providers_of(store: &CredentialStore, service: &str) -> Result<Vec<String>, Error> {
@@ -262,6 +247,9 @@ mod tests {
     use super::*;
     use keyring_core::api::CredentialStoreApi;
 
+    /// The service the memory store's fixtures use.
+    const SERVICE: &str = "ai.sidevoice.test.providers";
+
     pub(super) fn provider(id: &str) -> Provider {
         Provider::new(id).unwrap()
     }
@@ -316,7 +304,7 @@ mod tests {
     /// machine.
     pub(super) fn test_service() -> String {
         format!(
-            "ai.sidevoice.desktop.test-{}-{}",
+            "ai.sidevoice.test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
         )
@@ -369,9 +357,9 @@ mod tests {
     fn malformed_ids_cannot_address_credentials() {
         for id in ["", "OpenAI", "with.dot", "with/slash", "with space", "é", &"a".repeat(33)] {
             assert!(!valid(id));
-            assert_eq!(read(id), Err(Error::InvalidProvider));
-            assert_eq!(write(id, Some("test-only")), Err(Error::InvalidProvider));
-            assert_eq!(write(id, None), Err(Error::InvalidProvider));
+            assert_eq!(read(SERVICE, id), Err(Error::InvalidProvider));
+            assert_eq!(write(SERVICE, id, Some("test-only")), Err(Error::InvalidProvider));
+            assert_eq!(write(SERVICE, id, None), Err(Error::InvalidProvider));
         }
         assert!(valid(&"a".repeat(32)));
         let store = memory();
@@ -407,25 +395,24 @@ mod tests {
     }
 
     /// [`copy_key_from`] through the real store (macOS and Windows run it; Linux has no store on headless CI): a key
-    /// under the namespace of another identifier, unique to this test, is copied to the namespace the public functions
-    /// use in test builds, and stays in the old one.
+    /// under one namespace, unique to this test, is copied to another, and stays in the first.
     pub(super) fn copy_native() {
         let _serial = serial();
-        let identifier = test_service();
-        let old = service_of(&identifier);
+        let id = test_service();
+        let (old, new) = (format!("{id}.old"), format!("{id}.new"));
         let store = Native::store().unwrap();
         write_in(store.as_ref(), &old, &provider("openai"), Some("test-only")).unwrap();
-        assert_eq!(providers_in(&identifier), Ok(vec!["openai".to_owned()]));
-        assert_eq!(copy_key_from(&identifier, "openai", || true, || true), Ok(true));
-        assert_eq!(read("openai").unwrap().as_deref(), Some("test-only"));
+        assert_eq!(providers_in(&old), Ok(vec!["openai".to_owned()]));
+        assert_eq!(copy_key_from(&old, &new, "openai", || true, || true), Ok(true));
+        assert_eq!(read(&new, "openai").unwrap().as_deref(), Some("test-only"));
         assert_eq!(read_in(store.as_ref(), &old, &provider("openai")).unwrap().as_deref(), Some("test-only"));
-        assert_eq!(copy_key_from(&identifier, "openai", || true, || true), Ok(false));
-        clear_all().unwrap();
+        assert_eq!(copy_key_from(&old, &new, "openai", || true, || true), Ok(false));
+        clear_all(&new).unwrap();
         clear_in(store.as_ref(), &old).unwrap();
     }
 
-    /// The namespace of the builds before `ai.sidevoice.desktop` (`legacy_identifier`).
-    const OLD: &str = "dev.sidevoice.desktop.providers";
+    /// The namespace the keys are carried from.
+    const OLD: &str = "ai.sidevoice.test.old.providers";
 
     fn copy(store: &CredentialStore, id: &str) -> Result<bool, Error> {
         copy_key(store, OLD, SERVICE, &provider(id), || true, || true)
@@ -433,12 +420,6 @@ mod tests {
 
     fn key(store: &CredentialStore, service: &str, id: &str) -> Option<String> {
         read_in(store, service, &provider(id)).unwrap()
-    }
-
-    #[test]
-    fn a_namespace_is_its_identifier_plus_providers() {
-        assert_eq!(service_of("ai.sidevoice.desktop"), SERVICE);
-        assert_eq!(service_of("dev.sidevoice.desktop"), OLD);
     }
 
     #[test]

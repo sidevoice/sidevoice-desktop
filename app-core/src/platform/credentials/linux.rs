@@ -36,11 +36,12 @@ mod tests {
     fn missing_secret_service_is_explicitly_unavailable() {
         const CHILD: &str = "SIDEVOICE_CREDENTIAL_UNAVAILABLE_TEST";
         if std::env::var_os(CHILD).is_some() {
-            assert_eq!(read("openai"), Err(Error::Unavailable));
-            assert_eq!(write("openai", Some("test-only")), Err(Error::Unavailable));
-            assert_eq!(clear_all(), Err(Error::Unavailable));
-            assert_eq!(providers_in("dev.sidevoice.desktop"), Err(Error::Unavailable));
-            assert_eq!(copy_key_from("dev.sidevoice.desktop", "openai", || true, || true), Err(Error::Unavailable));
+            let service = test_service();
+            assert_eq!(read(&service, "openai"), Err(Error::Unavailable));
+            assert_eq!(write(&service, "openai", Some("test-only")), Err(Error::Unavailable));
+            assert_eq!(clear_all(&service), Err(Error::Unavailable));
+            assert_eq!(providers_in(&service), Err(Error::Unavailable));
+            assert_eq!(copy_key_from(&service, &service, "openai", || true, || true), Err(Error::Unavailable));
             return;
         }
         // Isolate the bus environment from concurrent tests and any real user's keyring.

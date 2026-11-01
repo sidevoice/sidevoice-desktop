@@ -113,8 +113,8 @@ test("the data bridge uses fixed native commands and no page-supplied paths", as
   await api.host.data.uninstall();
   await api.host.data.resetReport();
   assert.deepEqual(calls.slice(-5), [
-    ["data_pairings_read", undefined],
-    ["data_pairings_write", { value: { pairings: [], pendingRevokes: [] } }],
+    ["pairings_read", undefined],
+    ["pairings_write", { value: { pairings: [], pendingRevokes: [] } }],
     ["data_delete_all", undefined],
     ["data_uninstall", undefined],
     ["data_reset_report", undefined],
@@ -357,10 +357,11 @@ test("the shared commands are invoked under their plugin's name and the app's ow
   const shared = wire.filter((cmd) => cmd.startsWith(PLUGIN)).map((cmd) => cmd.slice(PLUGIN.length));
   assert.deepEqual(shared.slice(0, 2), ["engine_catalogs", "engine_memory"]);
   assert.ok(shared.includes("voice_create_call") && shared.includes("voice_start"), shared.join());
-  assert.ok(shared.every((cmd) => /^(voice|engine)_/.test(cmd)), "nothing else is the plugin's");
+  assert.ok(shared.includes("pairings_read"), shared.join());
+  assert.ok(shared.every((cmd) => /^(voice|engine)_|^(microphone|bridge_level|bridge_playback|pairings_read|pairings_write)$/.test(cmd)), "nothing else is the plugin's");
   const own = wire.filter((cmd) => !cmd.startsWith(PLUGIN));
-  assert.ok(own.includes("data_pairings_read") && own.includes("data_reset_report"), own.join());
-  assert.ok(own.every((cmd) => !/^(voice|engine)_/.test(cmd)), "no shared command without its plugin's name");
+  assert.ok(own.includes("data_reset_report"), own.join());
+  assert.ok(own.every((cmd) => !/^(voice|engine)_|^(microphone|bridge_level|bridge_playback|pairings_read|pairings_write)$/.test(cmd)), "no shared command without its plugin's name");
 });
 
 test("the call's events come over the channel the page opened, in index order, and every command carries the page's number", async () => {

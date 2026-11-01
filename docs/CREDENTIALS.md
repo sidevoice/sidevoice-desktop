@@ -1,7 +1,9 @@
 # Provider credentials
 
-`platform/credentials.rs` owns the provider keys through plain functions: `valid(provider)`, `read(provider)`,
-`write(provider, key | None)` and `clear_all()`, which clears the provider namespace. The engine and bridge use the
+`app-core/src/platform/credentials.rs` owns the provider keys through plain functions: `valid(provider)`, and, in the app's
+namespace `service` (which the app passes in exactly: the desktop's is `ai.sidevoice.desktop.providers`, `desktop/src/app_hooks.rs`),
+`read(service, provider)`, `write(service, provider, key | None)` and `clear_all(service)`, which clears the provider namespace.
+`app-core`'s `Keychain` is the app's `ProviderKeys` on it. The engine and bridge use the
 same store on every supported OS. The page can set a key, remove it, and ask whether it exists; it cannot read it back. Native voice availability is unchanged.
 
 The implementation uses the maintained [keyring ecosystem](https://docs.rs/keyring/latest/keyring/):
@@ -34,9 +36,11 @@ operations can be retried. An indefinitely unanswered prompt may require dismiss
 ## From the previous identifier
 
 The service is the bundle identifier plus `.providers`, and the identifier was `dev.sidevoice.desktop` before
-`ai.sidevoice.desktop`. At launch, first (`legacy_identifier.rs`, until its journal says it has finished;
-APP_DATA.md), `providers_in(identifier)` lists the old service (the same exact-service search as `clear_all`), and
-`copy_key_from(identifier, provider, may_write, settled)` handles one provider whose account is a valid provider id
+`ai.sidevoice.desktop`. The old service is named by the carry-over itself (`LEGACY_KEYS`), as the app names its own
+(`app_hooks.rs`): `app-core` takes both exactly. At launch, first (`legacy_identifier.rs`, until its journal says it
+has finished; APP_DATA.md), `Keychain::providers_in(service)` lists the old service (the same exact-service search as
+`clear_all`), and `Keychain::copy_key_from(from, provider, may_write, settled)` (`credentials::copy_key_from(from, to,
+...)` in `app-core`, `to` being the app's service) handles one provider whose account is a valid provider id
 at a time,
 **each call with its own admission and 30-second deadline**: it copies the key if the new namespace holds none for it,
 and reads it back equal. **Nothing is overwritten or deleted**: a new key wins and the old one stays, so an old key

@@ -5,7 +5,7 @@
 //!
 //! KEEP THIS MODULE UNTIL 1.0 (RELEASING.md, "Legacy identifier carry-over"); removing it needs a release note that
 //! says "update through vX.Y first". What exists only for it: `platform::app_data::{carried_from, create_folder}`,
-//! `platform::webview_data::locations_of`, `platform::credentials::{providers_in, copy_key_from}`,
+//! `platform::webview_data::locations_of`, `Keychain::{providers_in, copy_key_from}` (app-core),
 //! `data::PAIRINGS_FILE` unless something else uses it, and the `stop` call in `data::begin_reset`.
 //!
 //! **It copies and never deletes or moves anything of the old identifier**: the old folders and keys stay where they
@@ -38,7 +38,7 @@
 //!   replaced), and the copy renamed to `<new>`. The marker in place is the commit: that folder is carried, whatever
 //!   the journal managed to say, so a retry never copies over what the app wrote since. A copy with its marker and
 //!   nothing at `<new>` is a swap stopped between its two renames: only the second is left.
-//! - **Provider keys** (`credentials::copy_key_from`): each old key the new namespace lacks is copied and read back,
+//! - **Provider keys** (`Keychain::copy_key_from`): each old key the new namespace lacks is copied and read back,
 //!   one at a time, each with its own admission and deadline; nothing is overwritten or deleted, and nothing is written
 //!   once a reset ended the carry-over. Each provider is settled by a record beside the journal
 //!   (`legacy-identifier.key-<provider>`), written by the store's worker once its key is written and read back (or
@@ -52,9 +52,10 @@
 //! (the system keys it by bundle id) and the reset's control directory.
 
 use crate::data::PAIRINGS_FILE;
-use crate::platform::{account, app_data, credentials, reset_handoff};
+use crate::platform::{account, app_data, reset_handoff};
 use log::Level;
 use serde::{Deserialize, Serialize};
+use sidevoice_app_core::app::{KeyError, Keychain};
 use sidevoice_desktop_core::call_controls::PLACEMENTS_FILE;
 use sidevoice_desktop_core::settings;
 use sidevoice_local_host::store;
@@ -70,6 +71,10 @@ use std::{
 
 /// The bundle identifier of the builds before `ai.sidevoice.desktop`.
 const LEGACY: &str = "dev.sidevoice.desktop";
+
+/// The namespace of the provider keys in the OS credential store that those builds kept: the bundle identifier plus
+/// `.providers` (docs/CREDENTIALS.md).
+const LEGACY_KEYS: &str = "dev.sidevoice.desktop.providers";
 
 /// The journal, in the reset's control directory.
 const JOURNAL: &str = "legacy-identifier.json";
@@ -211,7 +216,7 @@ impl Report {
     }
 }
 
-/// A hook `credentials::copy_key_from` runs on the store's worker: whether it may write a provider's key, then the
+/// A hook `Keychain::copy_key_from` runs on the store's worker: whether it may write a provider's key, then the
 /// record that the key is settled.
 type Hook = Box<dyn FnOnce() -> bool + Send>;
 
@@ -223,13 +228,16 @@ pub fn carry_over() -> Report {
         return said("another instance is running: left for a later launch");
     }
     match account::home().and_then(|home| app_data::carried_from(&home, LEGACY)) {
-        Ok(folders) => run(
-            &folders,
-            &control,
-            &Io::default(),
-            || credentials::providers_in(LEGACY),
-            |provider, may_write, settled| credentials::copy_key_from(LEGACY, provider, may_write, settled),
-        ),
+        Ok(folders) => {
+            let keychain = crate::app_hooks::keychain();
+            run(
+                &folders,
+                &control,
+                &Io::default(),
+                || Keychain::providers_in(LEGACY_KEYS),
+                |provider, may_write, settled| keychain.copy_key_from(LEGACY_KEYS, provider, may_write, settled),
+            )
+        }
         Err(key) => said(&format!("not looked at ({key})")),
     }
 }
@@ -249,13 +257,13 @@ fn lock(control: &Path) -> Option<fs::File> {
 }
 
 /// [`carry_over`] for these `(old, new)` folders (the app data folder first), with the journal in `control`. `list`
-/// names the providers with an old key; `copy` copies one, with the two [`Hook`]s of `credentials::copy_key_from`.
+/// names the providers with an old key; `copy` copies one, with the two [`Hook`]s of `Keychain::copy_key_from`.
 fn run(
     folders: &[(PathBuf, PathBuf)],
     control: &Path,
     io: &Io,
-    list: impl FnOnce() -> Result<Vec<String>, credentials::Error>,
-    copy: impl FnMut(&str, Hook, Hook) -> Result<bool, credentials::Error>,
+    list: impl FnOnce() -> Result<Vec<String>, KeyError>,
+    copy: impl FnMut(&str, Hook, Hook) -> Result<bool, KeyError>,
 ) -> Report {
     let mut report = Report(Vec::new());
     let mut state = match read_state(control) {
@@ -443,8 +451,8 @@ fn sibling(path: &Path, suffix: &str) -> PathBuf {
 /// runs and writes the provider's record once its key is settled; whether all are settled.
 fn keys(
     control: &Path,
-    list: impl FnOnce() -> Result<Vec<String>, credentials::Error>,
-    mut copy: impl FnMut(&str, Hook, Hook) -> Result<bool, credentials::Error>,
+    list: impl FnOnce() -> Result<Vec<String>, KeyError>,
+    mut copy: impl FnMut(&str, Hook, Hook) -> Result<bool, KeyError>,
     report: &mut Report,
 ) -> bool {
     let providers = match list() {
@@ -506,7 +514,6 @@ fn exists(path: &Path) -> io::Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use credentials::Error;
     use sidevoice_platform::fs::TestFiles;
     use std::rc::Rc;
 
@@ -528,16 +535,16 @@ mod tests {
         fs::read_to_string(dir.join(name)).unwrap()
     }
 
-    fn no_keys() -> Result<Vec<String>, Error> {
+    fn no_keys() -> Result<Vec<String>, KeyError> {
         Ok(Vec::new())
     }
 
-    fn no_copy(_: &str, _: Hook, _: Hook) -> Result<bool, Error> {
+    fn no_copy(_: &str, _: Hook, _: Hook) -> Result<bool, KeyError> {
         unreachable!("no key to copy")
     }
 
-    /// A copy as `credentials::copy_key_from` makes it when its write goes through: allowed, written, then recorded.
-    fn copied(_: &str, may_write: Hook, settled: Hook) -> Result<bool, Error> {
+    /// A copy as `Keychain::copy_key_from` makes it when its write goes through: allowed, written, then recorded.
+    fn copied(_: &str, may_write: Hook, settled: Hook) -> Result<bool, KeyError> {
         Ok(may_write() && settled())
     }
 
@@ -593,6 +600,11 @@ mod tests {
         std::iter::once(dir.to_path_buf())
             .chain(backups)
             .any(|dir| fs::read_to_string(dir.join(name)).is_ok_and(|found| found == text))
+    }
+
+    #[test]
+    fn the_old_keys_namespace_is_the_old_identifier_plus_providers() {
+        assert_eq!(LEGACY_KEYS, format!("{LEGACY}.providers"));
     }
 
     #[test]
@@ -857,7 +869,7 @@ mod tests {
         let (_temp, root) = scratch();
         let (folders, control) = (nightly(&root), root.join("control"));
 
-        let report = run(&folders, &control, &Io::default(), || Err(Error::Unavailable), no_copy);
+        let report = run(&folders, &control, &Io::default(), || Err(KeyError::Unavailable), no_copy);
         assert_carried_but_open(&folders, &control);
         assert!(report.0.iter().any(|(level, line)| *level == Level::Warn && line.contains("Unavailable")));
 
@@ -889,9 +901,9 @@ mod tests {
                     std::thread::sleep(std::time::Duration::from_millis(50));
                     may_write() && settled()
                 }));
-                Err(Error::Unavailable)
+                Err(KeyError::Unavailable)
             }
-            _ => Err(Error::Unavailable),
+            _ => Err(KeyError::Unavailable),
         };
         run(&folders, &control, &Io::default(), list, copy);
         assert_carried_but_open(&folders, &control);
@@ -915,7 +927,7 @@ mod tests {
         let pending = std::cell::RefCell::new(None);
         let waiting = |_: &str, may_write: Hook, _: Hook| {
             *pending.borrow_mut() = Some(may_write);
-            Err(Error::Unavailable)
+            Err(KeyError::Unavailable)
         };
         run(&folders, &control, &Io::default(), || Ok(vec!["openai".into()]), waiting);
         stop(&control).unwrap();
@@ -930,7 +942,7 @@ mod tests {
         // Allowed to write, and the write fails (or the process ends before the record): it is never settled.
         let failing = |_: &str, may_write: Hook, _: Hook| {
             assert!(may_write());
-            Err(Error::Failed)
+            Err(KeyError::Failed)
         };
         run(&folders, &control, &Io::default(), list, failing);
         assert!(!record.exists());

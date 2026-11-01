@@ -62,7 +62,7 @@ mod tests {
             assert_eq!(entry.permission, permission, "{}", entry.command);
             assert_eq!(entry.window, "room", "{}", entry.command);
             assert_eq!(entry.card, "no", "{}", entry.command);
-            let expected = if entry.command.starts_with("voice_") { "room page" } else { "capability" };
+            let expected = if entry.command.starts_with("engine_") { "capability" } else { "room page" };
             assert_eq!(entry.caller, expected, "{}", entry.command);
             assert!(!entry.arguments.is_empty() && !entry.tells_the_page.is_empty(), "{}", entry.command);
         }

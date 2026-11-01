@@ -1,4 +1,4 @@
-//! What a headset button does to the call's microphone (the app's `src/platform/media_controls/macos.rs` wires it to macOS).
+//! What a headset button does to the call's microphone (`platform/media_controls/macos.rs` wires it to macOS).
 
 /// What a media command does to the microphone, given whether it is on now. `None`: leave it.
 pub fn media_command_action(command: &str, mic_enabled: bool) -> Option<&'static str> {

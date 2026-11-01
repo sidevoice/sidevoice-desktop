@@ -7,7 +7,7 @@ use serde_json::Value;
 use sidevoice_app_tauri::inventory;
 
 use super::is_room_page;
-use crate::platform::host::APP_ORIGIN;
+use sidevoice_app_tauri::platform::origin::APP_ORIGIN;
 
 /// Every capability file of the app, by name.
 fn capabilities() -> Vec<(String, Value)> {
@@ -82,4 +82,23 @@ fn only_the_current_room_window_on_the_apps_own_origin_is_the_page() {
         is_room_page(Some("room-2"), "room-2", Some(other)).is_err(),
         "the other platform's origin is not this one's"
     );
+}
+
+/// The bridge script is told what native media keys the host has, as the literal it reads.
+#[test]
+fn the_bridge_script_receives_the_hosts_media_support() {
+    let support = sidevoice_app_tauri::platform::media_controls::support();
+    let script = sidevoice_desktop_core::bridge::script_for_origin(
+        "tauri://localhost",
+        false,
+        &sidevoice_desktop_core::build_info::BuildInfo::new("dev", "0.0.0", "", ""),
+        None,
+        &Default::default(),
+        false,
+        &[],
+        support,
+        false,
+    );
+    let literal = serde_json::to_string(&support).unwrap();
+    assert!(script.contains(&format!("factory(window, \"tauri://localhost\", {literal},")));
 }

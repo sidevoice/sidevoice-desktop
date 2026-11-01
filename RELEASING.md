@@ -281,8 +281,9 @@ CREDENTIALS.md). **It stays until 1.0.** Someone can skip releases, so a fixed n
 it needs a release note that says "update through vX.Y first" (X.Y: the first release that contains it) and how to
 remove the old identifier's data by hand (APP_DATA.md has the list). To remove it: the module and its call in `run()`,
 the `stop` call in `data::begin_reset`, `platform::app_data::{carried_from, create_folder}` (and its `Os` method),
-`webview_data::locations_of`, `credentials::{providers_in, copy_key_from}` with their tests, `data::PAIRINGS_FILE` if
-nothing else uses it, and the three doc sections called "From the previous identifier".
+`webview_data::locations_of`, `Keychain::{providers_in, copy_key_from}` and the `credentials` functions under them
+(app-core) with their tests, `data::PAIRINGS_FILE` if nothing else uses it, and the three doc sections called "From the
+previous identifier".
 
 ## When something fails
 
