@@ -70,7 +70,7 @@ part, `mobile/js/mobile-bridge.js`, which assembles `host`:
 | `voice`, `engine` | The voice call the app runs itself (sidevoice-voice on the phone's microphone and speaker) and the engine it takes its models from: sherpa-onnx (Silero) and the remote providers on a phone (sidevoice-engine's README, "Android" and "iOS"). |
 | `microphone` | The system's own permission, never the webview's: AVFoundation's on iOS, the runtime permission on Android (`sidevoice-app-tauri`'s `platform/microphone`). `openSettings` opens the app's page of the system's settings, and `help(language)` gives the app's own words for a blocked microphone on this phone (`mobile/src/i18n.rs`, en and es, English the fallback; D-HOST-OS). |
 | `pairings` | The pairings in the app's private storage (`mobile/src/pairings.rs`), not the webview's. |
-| `presence` | `{ media: "app" }`: the app owns the call's audio, so the page registers no Media Session and plays no Now Playing element of its own. Its headset buttons and lock-screen controls are sidevoice-desktop#349: until then a phone has **none** (the shared plugin's `platform/media_controls` has bodies for the computers only, and is not in a phone's build). |
+| `presence` | `{ media: "app" }`: the app owns the call's audio, so the page registers no Media Session and plays no Now Playing element of its own. The app answers the headset's play/pause and the lock screen's (the shared plugin's `platform/media_controls`: MediaPlayer on iOS, a `MediaSession` held by the call's service on Android; docs/MEDIA_CONTROLS.md). |
 | `reach` | `{ plainHttpPrivate: true }`, as on the desktop. |
 
 Nothing of the desktop's own (`localHost`, `reset`, `muteShortcut`, `callControls`, `updater`, `debug`, `deviceName`) is
@@ -96,7 +96,8 @@ through `run` (the call's service hangs up through it).
     front, as Android requires) and stops when it says not (the red button, a page that loads anew, the app quitting).
     A start the system refuses is logged by its code (`not-visible`, `microphone-permission`, …), and the call goes on in
     front. The service ending on its own (Hang up in its notification, the app removed from the recents list, the
-    system) hangs up the call on the page (`window.__sidevoiceHost.run({command: "hang-up"})`).
+    system) hangs up the call on the page (`window.__sidevoiceHost.run({command: "hang-up"})`). The media controls follow `call_state` too, and the
+    call's service owns the Android media session.
   - **The call's audio** holds the audio session (iOS): sidevoice-app-core's host tells the app before the first voice
     call's audio opens and after the last one's has stopped (`Hooks::calls`, `CallActivity`; the idle state that answers
     a stop, which sidevoice-voice sends once its audio is closed; the desktop does nothing there). Every voice call
@@ -127,7 +128,8 @@ through `run` (the call's service hangs up through it).
 What only a device shows, for the M-FG gate (plan §F.2): a call's first Join on each phone (remote STT/TTS and Silero, a
 turn and a reply); the audio session's route (loudspeaker, a wired or Bluetooth headset) and what other apps' audio does
 when a call starts and ends (the session is activated and deactivated with it); the call's service starting and
-stopping with the call, and its Hang up; that a model download and a remote provider's request
+stopping with the call, and its Hang up; the media controls (a headset's play/pause with and without headphones,
+the lock screen and Control Center on iOS, the call notification's controls on Android); that a model download and a remote provider's request
 pass the verifier on Android; that the xcframework is embedded and signed in an iOS archive; and the APK's libraries
 loading on a phone.
 
@@ -330,5 +332,4 @@ paused).
 
 ## Not here yet
 
-Headset buttons and lock-screen controls (sidevoice-desktop#349); the build
-kinds (nightly with Developer options, release).
+The build kinds (nightly with Developer options, release).

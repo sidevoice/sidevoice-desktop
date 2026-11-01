@@ -102,8 +102,8 @@
       // The pairings, in the app's private storage (mobile/src/pairings.rs), not the webview's.
       pairings: members.pairings(),
       /** The app owns the call's audio and the system's media on a phone: the page must not register Media Session
-       *  handlers or play a Now Playing element of its own. Its headset buttons and lock-screen controls are
-       *  sidevoice-desktop#349; until then there are none. */
+       *  handlers or play a Now Playing element of its own. The app answers the headset's buttons and the lock screen
+       *  (sidevoice-app-tauri's platform/media_controls). */
       presence: Object.freeze({ media: "app" }),
       /** The webview sends plain http to a private address; to whom, and with whose consent, is the page's policy. */
       reach: Object.freeze({ plainHttpPrivate: true }),

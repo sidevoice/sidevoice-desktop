@@ -69,6 +69,10 @@ rootProject.allprojects {
 dependencies {
     implementation("rustls:rustls-platform-verifier:$rustlsPlatformVerifierVersion")
     implementation("androidx.core:core-ktx:1.16.0")
+    // The call's media session is the shared plugin's (sidevoice-app-tauri's Android library, `MediaControls`), and the
+    // service's notification shows it, through androidx.media's MediaStyle.
+    implementation(project(":sidevoice-app-tauri"))
+    implementation("androidx.media:media:1.7.0")
     // The template's own version (gen/android/app/build.gradle.kts): the hosting activity's lifecycle is read from it.
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation(project(":tauri-android"))
