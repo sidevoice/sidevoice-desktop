@@ -7,7 +7,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
 use super::meters::Meters;
@@ -57,6 +57,66 @@ impl LaneAudio for SharedNativeAudio {
     }
 }
 
+/// What the app does around its calls' audio: before the first voice call of the host opens the microphone and the
+/// speaker, and after the last one's audio has stopped. A phone holds the audio session for it (iOS activates it, and
+/// deactivates it after), so every voice call counts: the room's, and a try in Settings.
+pub trait CallActivity: Send + Sync + 'static {
+    /// The first call's audio is about to open. `Err` with a stable code (sidevoice-voice's, as
+    /// `audio-session-activate-failed`) refuses that start: the call is not made.
+    fn starting(&self) -> Result<(), String>;
+    /// The last call's audio has stopped.
+    fn ended(&self);
+}
+
+/// An app with nothing to do around its calls (the desktop: its audio is the system's to share).
+pub struct NoCallActivity;
+
+impl CallActivity for NoCallActivity {
+    fn starting(&self) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn ended(&self) {}
+}
+
+/// How many lanes have a call that started and has not stopped, and the app's [`CallActivity`], told the first start and
+/// the last end.
+#[derive(Default)]
+pub struct ActiveCalls {
+    running: Mutex<usize>,
+    activity: OnceLock<Arc<dyn CallActivity>>,
+}
+
+impl ActiveCalls {
+    /// The app's observer, once.
+    pub fn observe(&self, activity: Arc<dyn CallActivity>) {
+        let _ = self.activity.set(activity);
+    }
+
+    /// A call starts: the first one asks the app first, which may refuse it.
+    fn begin(&self) -> Result<(), String> {
+        let mut running = self.running.lock().unwrap();
+        if *running == 0 {
+            if let Some(activity) = self.activity.get() {
+                activity.starting()?;
+            }
+        }
+        *running += 1;
+        Ok(())
+    }
+
+    /// A call that started has stopped: the last one tells the app.
+    fn end(&self) {
+        let mut running = self.running.lock().unwrap();
+        *running = running.saturating_sub(1);
+        if *running == 0 {
+            if let Some(activity) = self.activity.get() {
+                activity.ended();
+            }
+        }
+    }
+}
+
 /// Where the call's events go: the room page (`to_page`), as JSON.
 pub type Page = Arc<dyn Fn(Value) + Send + Sync>;
 
@@ -94,6 +154,8 @@ pub struct VoiceState<A: LaneAudio = SharedNativeAudio> {
     keeping: Mutex<Vec<JoinHandle<()>>>,
     /// Quitting: nothing is kept any more; what would be is let go at once.
     closing: AtomicBool,
+    /// The calls that run, for the app's [`CallActivity`].
+    pub active: Arc<ActiveCalls>,
 }
 
 pub struct CallLane<P> {
@@ -107,6 +169,11 @@ pub struct CallLane<P> {
     input: P,
     /// What the page last asked of `mute`, kept from the lane's creation: the call is made with it.
     muted: AtomicBool,
+    /// Whether the lane's call started and is counted in `active`, until its audio has stopped (`forward`).
+    counted: Arc<AtomicBool>,
+    /// Whether the lane's call was asked to stop: the idle state after it says its audio has stopped.
+    stopping: Arc<AtomicBool>,
+    active: Arc<ActiveCalls>,
     lifecycle: Arc<Mutex<Lifecycle>>,
     /// Whether the lane was released; held while an event is handed to the page, so that once it is set nothing
     /// reaches the page again (see `CallLane::release`).
@@ -172,6 +239,7 @@ impl<A: LaneAudio> VoiceState<A> {
             minute: Self::idle_minute(),
             keeping: Mutex::new(Vec::new()),
             closing: AtomicBool::new(false),
+            active: Arc::default(),
         }
     }
 
@@ -232,7 +300,7 @@ impl<A: LaneAudio> VoiceState<A> {
             return Err(refusal("bad_request", "Voice call key already exists."));
         }
         let (io, input) = self.audio.attach();
-        calls.insert(key, Arc::new(CallLane::new(io, input, page)));
+        calls.insert(key, Arc::new(CallLane::new(io, input, page, Arc::clone(&self.active))));
         Ok(())
     }
 
@@ -338,11 +406,21 @@ impl<A: LaneAudio> VoiceState<A> {
             return Err(refusal("bad_request", "The voice call has started already."));
         }
         let setup = applied.halves.setup().map_err(|code| refusal("internal", code))?;
-        let io =
-            lane.io.lock().unwrap().take().ok_or_else(|| refusal("internal", "Voice lane audio was already taken."))?;
+        // The app holds the audio for the call before it opens (the first call only), or refuses it.
+        lane.active.begin().map_err(|why| failed("The call could not start", why))?;
+        let Some(io) = lane.io.lock().unwrap().take() else {
+            lane.active.end();
+            return Err(refusal("internal", "Voice lane audio was already taken."));
+        };
+        lane.counted.store(true, Ordering::SeqCst);
+        let ended = Ended {
+            counted: Arc::clone(&lane.counted),
+            stopping: Arc::clone(&lane.stopping),
+            active: Arc::clone(&lane.active),
+        };
         let (call, events) = VoiceCall::new(io, setup);
         call.mute(lane.muted.load(Ordering::SeqCst));
-        forward(page, key.to_owned(), events, Arc::clone(&lane.lifecycle), Arc::clone(&lane.released));
+        forward(page, key.to_owned(), events, Arc::clone(&lane.lifecycle), Arc::clone(&lane.released), ended);
         call.start(StartOptions { take });
         *running = Some(Running { call, applied });
         Ok(())
@@ -557,7 +635,7 @@ impl<A: LaneAudio> VoiceState<A> {
 }
 
 impl<P> CallLane<P> {
-    fn new(io: Box<dyn AudioIo>, input: P, page: u64) -> Self {
+    fn new(io: Box<dyn AudioIo>, input: P, page: u64, active: Arc<ActiveCalls>) -> Self {
         Self {
             page,
             call: tokio::sync::Mutex::new(None),
@@ -565,6 +643,9 @@ impl<P> CallLane<P> {
             io: Mutex::new(Some(io)),
             input,
             muted: AtomicBool::new(false),
+            counted: Arc::new(AtomicBool::new(false)),
+            stopping: Arc::new(AtomicBool::new(false)),
+            active,
             lifecycle: Arc::new(Mutex::new(Lifecycle::default())),
             released: Arc::new(Mutex::new(false)),
             sayings: Arc::new(Mutex::new(HashMap::new())),
@@ -605,6 +686,8 @@ impl<P> CallLane<P> {
                     lifecycle.stopped.push_back(sender);
                 }
             }
+            // The idle state that answers it says the audio has stopped (`forward`), released lane or not.
+            self.stopping.store(true, Ordering::SeqCst);
             call.stop();
             (answered, std::mem::take(&mut *self.telling.lock().unwrap()))
         };
@@ -702,9 +785,48 @@ pub fn refused(r: choice::Refusal) -> Refusal {
 /// Forward events with their immutable call key. Asynchronous delivery never consults the current input route. The
 /// idle state that answers a stop answers it once it is handed to the page. The meters go only when the page would draw
 /// them differently (`voice::meters`): about 60 a second otherwise, silence included (desktop#149).
-fn forward(page: Page, key: String, mut events: Events, lifecycle: Arc<Mutex<Lifecycle>>, released: Arc<Mutex<bool>>) {
+/// What tells the app's [`CallActivity`] that a lane's call has stopped: once, at the idle state that answers its stop
+/// (sidevoice-voice closes the audio before it says idle), or when its events end (the call is gone), whichever comes
+/// first. A lane that was released (its page went, the app quits) is told the same way, by its own call.
+///
+/// The call says idle once before it starts (its first `mute`, which the lane makes before `start`, takes it out of its
+/// initial state), and once more for every stop, whatever state the stop finds (sidevoice-voice's `Call::stop`, after
+/// the audio is closed): a stop before the audio was ready says idle too. The stop always comes after the start, so the
+/// idle that answers it is any idle but that first one, however late this task reads either. A call that went on (a
+/// state that is not idle, or an error) has had its first idle already.
+struct Ended {
+    counted: Arc<AtomicBool>,
+    stopping: Arc<AtomicBool>,
+    active: Arc<ActiveCalls>,
+}
+
+impl Ended {
+    /// An idle state; `first`: the first the call said, before it went on.
+    fn idle(&self, first: bool) {
+        if !first && self.stopping.load(Ordering::SeqCst) {
+            self.gone();
+        }
+    }
+
+    fn gone(&self) {
+        if self.counted.swap(false, Ordering::SeqCst) {
+            self.active.end();
+        }
+    }
+}
+
+fn forward(
+    page: Page,
+    key: String,
+    mut events: Events,
+    lifecycle: Arc<Mutex<Lifecycle>>,
+    released: Arc<Mutex<bool>>,
+    ended: Ended,
+) {
     tokio::spawn(async move {
         let mut meters = Meters::default();
+        // Whether the call's first idle is still to come: the one before it goes on ([`Ended`]).
+        let mut first_idle = true;
         while let Some(event) = events.next().await {
             let wanted = match &event {
                 VoiceEvent::Level(level) => meters.level(*level),
@@ -743,8 +865,15 @@ fn forward(page: Page, key: String, mut events: Events, lifecycle: Arc<Mutex<Lif
             }
             // Where the call is, once the page has the event that says so: what waits on it hears it after the page.
             let answered = match &event {
-                VoiceEvent::State(state) => lifecycle.lock().unwrap().state(state.listening == Listening::Idle),
+                VoiceEvent::State(state) => {
+                    if state.listening == Listening::Idle {
+                        ended.idle(first_idle);
+                    }
+                    first_idle = false;
+                    lifecycle.lock().unwrap().state(state.listening == Listening::Idle)
+                }
                 VoiceEvent::Error(error) => {
+                    first_idle = false;
                     lifecycle.lock().unwrap().error(&error.code);
                     None
                 }
@@ -754,6 +883,7 @@ fn forward(page: Page, key: String, mut events: Events, lifecycle: Arc<Mutex<Lif
                 let _ = answered.send(());
             }
         }
+        ended.gone();
         lifecycle.lock().unwrap().end();
     });
 }

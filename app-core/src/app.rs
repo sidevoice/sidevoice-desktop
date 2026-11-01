@@ -63,7 +63,11 @@ pub struct Hooks {
     pub admission: Arc<dyn Admission>,
     pub events: Arc<dyn EventSink>,
     pub keys: Arc<dyn ProviderKeys>,
+    /// What the app does when its first call starts and its last ends (D-CALL-LIFECYCLE); [`NoCallActivity`] for nothing.
+    pub calls: Arc<dyn CallActivity>,
 }
+
+pub use crate::voice::host::{CallActivity, NoCallActivity};
 
 /// Lets work use the app's data, or refuses it while the data is being changed.
 pub trait Admission: Send + Sync + 'static {
@@ -187,6 +191,7 @@ impl<A: LaneAudio> AppHost<A> {
             }
         };
         let generation = Arc::clone(&voice.page);
+        voice.active.observe(Arc::clone(&hooks.calls));
         let inner = Inner {
             runtime,
             hooks,

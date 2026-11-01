@@ -136,6 +136,14 @@ pub fn engine_in_lock(lock: &str) -> Result<String> {
 /// target/ (`~/.cache/sidevoice-engine/sherpa-onnx`), the directory printed and, on a runner, exported as
 /// `SHERPA_ONNX_LIB_DIR` (docs/ENGINES.md, "Building"). So no build script downloads anything unchecked.
 pub fn sherpa_libs() -> Result<()> {
+    engine_xtask(&["sherpa-libs"])?.run()
+}
+
+/// sidevoice-engine's own `cargo xtask <args>`, at the commit Cargo.lock pins: that commit fetched afresh (into
+/// target/xtask/, or the runner's temporary directory), and its xtask run from desktop/, so the app's toolchain builds it
+/// too. Without its default features it does not build the engine (nor sherpa-onnx-sys) before it runs. Its standard
+/// output is the command's.
+pub fn engine_xtask(args: &[&str]) -> Result<Cmd> {
     let rev = pinned_engine()?;
     let base = std::env::var_os("RUNNER_TEMP").map_or_else(|| repo().join("target/xtask"), Into::into);
     mkdir(&base)?;
@@ -154,15 +162,12 @@ pub fn sherpa_libs() -> Result<()> {
         &rev,
     ]))?;
     quiet(Cmd::new("git").arg("-C").arg(&engine).args(["checkout", "-q", "FETCH_HEAD"]))?;
-    // From desktop, so the app's toolchain builds the engine's xtask too. Without its default features it does not
-    // build the engine (nor sherpa-onnx-sys) before the libraries are there. Its standard output (the directory) is
-    // this command's.
-    Cmd::new("cargo")
+    Ok(Cmd::new("cargo")
         .args(["run", "--quiet", "--locked", "--manifest-path"])
         .arg(engine.join("xtask/Cargo.toml"))
-        .args(["--no-default-features", "--", "sherpa-libs"])
-        .dir(repo().join("desktop"))
-        .run()
+        .args(["--no-default-features", "--"])
+        .args(args)
+        .dir(repo().join("desktop")))
 }
 
 /// `bundle [--channel release|nightly|dev]`: this host's installers, as a release ships them: the .deb and the

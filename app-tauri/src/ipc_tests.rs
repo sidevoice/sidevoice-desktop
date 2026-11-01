@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 use sidevoice_app_core::app::{
-    AlwaysAdmit, AppHost, EventSink, Hooks, HostConfig, KeyError, PageGeneration, ProviderKeys,
+    AlwaysAdmit, AppHost, EventSink, Hooks, HostConfig, KeyError, NoCallActivity, PageGeneration, ProviderKeys,
 };
 use tauri::ipc::{CallbackFn, InvokeBody, RuntimeAuthority};
 use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, MockRuntime, INVOKE_KEY};
@@ -109,7 +109,12 @@ fn fixture_where(name: &str, windows: &[&str], own: &'static str) -> Fixture {
     *context.runtime_authority_mut() = authority(windows);
     let pages = Pages::default();
     let app = mock_builder().plugin(crate::init(the_page(own), pages.clone())).build(context).unwrap();
-    let hooks = Hooks { admission: Arc::new(AlwaysAdmit), events: Arc::new(pages), keys: Arc::new(Nowhere) };
+    let hooks = Hooks {
+        admission: Arc::new(AlwaysAdmit),
+        events: Arc::new(pages),
+        keys: Arc::new(Nowhere),
+        calls: Arc::new(NoCallActivity),
+    };
     app.manage(AppHost::new(
         HostConfig { model_root: root.clone() },
         tauri::async_runtime::handle().inner().clone(),

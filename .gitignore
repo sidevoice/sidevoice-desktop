@@ -22,3 +22,6 @@ card-shots/
 # nothing reads.
 mobile/icons/
 mobile/gen/schemas/
+# The engine's native libraries an app build packages (`cargo xtask mobile build`): sherpa-onnx's iOS xcframework and each
+# target's binary (Android's go to mobile/gen/android/app/src/main/jniLibs, whose .so the project's own .gitignore ignores).
+mobile/frameworks/

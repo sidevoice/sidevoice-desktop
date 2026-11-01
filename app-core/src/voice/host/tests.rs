@@ -1044,3 +1044,74 @@ fn a_page_going_settles_every_waiter_though_a_call_never_finishes_loading() {
         assert!(state.lane("empty-2").await.is_err() && state.lane("loading-0").await.is_err());
     });
 }
+
+/// The app's call activity, as it was told: `start` and `end` in order, and whether it refuses.
+#[derive(Default)]
+struct Told {
+    said: Mutex<Vec<&'static str>>,
+    refuse: AtomicBool,
+}
+
+impl super::CallActivity for Told {
+    fn starting(&self) -> Result<(), String> {
+        if self.refuse.load(Ordering::SeqCst) {
+            return Err("audio-session-activate-failed".into());
+        }
+        self.said.lock().unwrap().push("start");
+        Ok(())
+    }
+
+    fn ended(&self) {
+        self.said.lock().unwrap().push("end");
+    }
+}
+
+#[test]
+fn the_app_hears_the_first_call_start_and_the_last_one_end() {
+    let told = Arc::new(Told::default());
+    let active = super::ActiveCalls::default();
+    active.observe(Arc::clone(&told) as Arc<dyn super::CallActivity>);
+    active.begin().unwrap();
+    active.begin().unwrap();
+    active.end();
+    assert_eq!(*told.said.lock().unwrap(), ["start"], "a second call neither starts nor ends anything");
+    active.end();
+    active.begin().unwrap();
+    assert_eq!(*told.said.lock().unwrap(), ["start", "end", "start"]);
+}
+
+#[test]
+fn a_start_the_app_refuses_is_not_counted() {
+    let told = Arc::new(Told::default());
+    told.refuse.store(true, Ordering::SeqCst);
+    let active = super::ActiveCalls::default();
+    active.observe(Arc::clone(&told) as Arc<dyn super::CallActivity>);
+    assert_eq!(active.begin(), Err("audio-session-activate-failed".to_owned()));
+    told.refuse.store(false, Ordering::SeqCst);
+    active.begin().unwrap();
+    active.end();
+    assert_eq!(*told.said.lock().unwrap(), ["start", "end"]);
+}
+
+#[test]
+fn a_call_ends_for_the_app_at_the_idle_state_after_its_stop_or_when_it_is_gone_once() {
+    let told = Arc::new(Told::default());
+    let active = Arc::new(super::ActiveCalls::default());
+    active.observe(Arc::clone(&told) as Arc<dyn super::CallActivity>);
+    active.begin().unwrap();
+    let ended = super::Ended {
+        counted: Arc::new(AtomicBool::new(true)),
+        stopping: Arc::new(AtomicBool::new(false)),
+        active: Arc::clone(&active),
+    };
+    ended.idle(true);
+    assert_eq!(*told.said.lock().unwrap(), ["start"], "the call's first idle is not its end");
+    ended.idle(false);
+    assert_eq!(*told.said.lock().unwrap(), ["start"], "an idle before any stop is not its end");
+    ended.stopping.store(true, Ordering::SeqCst);
+    // A stop before the audio was ready: its idle may come with nothing but the first idle before it.
+    ended.idle(false);
+    ended.idle(false);
+    ended.gone();
+    assert_eq!(*told.said.lock().unwrap(), ["start", "end"], "told once");
+}
