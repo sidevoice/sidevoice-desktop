@@ -77,12 +77,16 @@ targets:
     dependencies:
       - framework: libapp.a
         embed: false
+      - framework: ../../frameworks/SherpaOnnxC.xcframework
       - sdk: CoreGraphics.framework
       - sdk: Metal.framework
       - sdk: MetalKit.framework
       - sdk: QuartzCore.framework
       - sdk: Security.framework
       - sdk: UIKit.framework
+      - sdk: AVFoundation.framework
+      - sdk: AVFAudio.framework
+      - sdk: AudioToolbox.framework
       - sdk: WebKit.framework
     preBuildScripts:
       - script: |
