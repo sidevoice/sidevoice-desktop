@@ -120,6 +120,7 @@ pub fn assemble(kind: &str, tag: Option<&str>) -> Result<()> {
         ("nightly", None) => ("nightly", true),
         _ => return Err("publish assets release TAG | publish assets nightly".into()),
     };
+    ensure(nightly || is_desktop_tag(tag), not_desktop(tag))?;
     let version = version()?;
     let assets = assets();
     // As `mkdir assets` did: never over an earlier one.
@@ -166,6 +167,18 @@ fn uploads() -> Result<Vec<PathBuf>> {
     Ok(uploads)
 }
 
+/// Whether `tag` is the desktop app's release: `vX.Y.Z`, with a suffix (`-rc.N`) for a candidate. This repository
+/// releases more than one product, each under a tag of its own (`mobile-vX.Y.Z`), and what is published here becomes
+/// GitHub's latest release, which is the app's updater feed (RELEASING.md → "Updates"): another product's tag must
+/// never get here.
+pub fn is_desktop_tag(tag: &str) -> bool {
+    crate::util::re(r"^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$").is_match(tag)
+}
+
+fn not_desktop(tag: &str) -> String {
+    format!("{tag} is not a desktop release tag (vX.Y.Z): this publishes the desktop app, whose release is the updater's latest")
+}
+
 /// How `gh release edit` publishes the draft TAG: a version with a `-` suffix (`-rc.N`) is a pre-release, never
 /// latest.
 pub fn release_flags(tag: &str) -> [&'static str; 3] {
@@ -178,6 +191,7 @@ pub fn release_flags(tag: &str) -> [&'static str; 3] {
 
 /// `publish release TAG`: `assets/` attached to the draft release TAG (release-please's), then published.
 pub fn release(tag: &str) -> Result<()> {
+    ensure(is_desktop_tag(tag), not_desktop(tag))?;
     let uploads = uploads()?;
     Cmd::new("gh").args(["release", "upload", tag]).args(&uploads).arg("--clobber").run()?;
     Cmd::new("gh").args(["release", "edit", tag]).args(release_flags(tag)).run()
@@ -296,6 +310,16 @@ mod tests {
         let all = names(&["a.dmg", "a_x64-setup.exe", "a.deb", "a.AppImage"]);
         assert!(missing_kinds(&all).is_empty());
         assert_eq!(missing_kinds(&names(&["a.dmg", "a.deb"])), ["exe", "AppImage"]);
+    }
+
+    #[test]
+    fn only_the_desktop_apps_tags_are_published_as_its_releases() {
+        for tag in ["v0.3.0", "v1.20.3", "v0.3.0-rc.1"] {
+            assert!(is_desktop_tag(tag), "{tag}");
+        }
+        for tag in ["mobile-v0.1.0", "mobile-v1.0.0-rc.1", "nightly", "mobile-nightly", "0.3.0", "v0.3", "v0.3.0 "] {
+            assert!(!is_desktop_tag(tag), "{tag}");
+        }
     }
 
     #[test]
