@@ -67,8 +67,9 @@
       interrupt: (_request, state, actions) => {
         if (!state.joined) return false;
         if (state.micEnabled && !state.micDisabled) {
-          actions.toggleMic();
+          // Ours before it is muted: the store notifies as the mute is made, and the watcher must find it ours.
           owned = { since: state.since, seen: false };
+          actions.toggleMic();
         }
         return true;
       },

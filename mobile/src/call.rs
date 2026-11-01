@@ -139,6 +139,10 @@ pub struct Room {
     waiting: Option<Wait>,
     /// Whether the playback is held.
     paused: bool,
+    /// The microphone as the page last reported it (`enabled`, `disabled`).
+    mic: (bool, bool),
+    /// The audio session, given back before the playback goes on after an interruption that did not end by itself.
+    phone: Arc<PhoneCall>,
 }
 
 /// Where an interruption comes from: the call can be taken away by both at once (an alarm on an audio focus that is
@@ -209,9 +213,16 @@ fn focus_signal(state: FocusState) -> Option<Signal> {
 /// Where the person's unmute is waited for after an interruption that does not end by itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Wait {
-    /// Whether the microphone has been seen muted since: a report of the page from before the pause reached it is not an
-    /// unmute.
+    /// Whether the microphone has been seen muted: a report of the page from before the mute reached it is not an unmute.
     muted: bool,
+}
+
+impl Wait {
+    /// The wait that begins with the microphone as the page last reported it (`enabled`, `disabled`): muted already if the
+    /// page said so, whether before the interruption (the person's own mute) or since it began.
+    fn of(mic: (bool, bool)) -> Wait {
+        Wait { muted: !mic.0 }
+    }
 }
 
 /// The page reports the microphone (`enabled`, `disabled`: the mute cannot be used): the wait after it, and whether the
@@ -229,7 +240,7 @@ fn wait_after(wait: Wait, enabled: bool, disabled: bool) -> (Option<Wait>, bool)
 
 impl RoomCall {
     /// The room of `app`, for the host's current page `page`.
-    pub fn new(app: AppHandle, page: u64) -> RoomCall {
+    pub fn new(app: AppHandle, page: u64, phone: Arc<PhoneCall>) -> RoomCall {
         let (jobs, received) = mpsc::channel::<Job>();
         let mut room = Room {
             app,
@@ -240,6 +251,8 @@ impl RoomCall {
             since: None,
             waiting: None,
             paused: false,
+            mic: (true, false),
+            phone,
         };
         std::thread::Builder::new()
             .name("room-call".into())
@@ -264,6 +277,7 @@ impl RoomCall {
     pub fn page_changed(&self, page: u64) {
         self.then(move |room| {
             room.page = page;
+            room.mic = (true, false);
             room.hold(false, None);
         });
     }
@@ -345,7 +359,7 @@ impl Room {
                 // Nothing will end it: paused, until the person unmutes.
                 if !self.interrupted.any() {
                     self.pause();
-                    self.waiting = Some(Wait { muted: false });
+                    self.waiting = Some(Wait::of(self.mic));
                 }
             }
         }
@@ -354,12 +368,22 @@ impl Room {
     /// The page reports the microphone: after an interruption that does not end by itself, the person's unmute lifts the
     /// pause (the playback goes on).
     fn microphone(&mut self, enabled: bool, disabled: bool) {
+        // Always kept, interrupted or not: a mute reported before the wait begins is the evidence the wait needs (the page
+        // reports a change only once).
+        self.mic = (enabled, disabled);
         let Some(wait) = self.waiting else { return };
         let (waiting, lifted) = wait_after(wait, enabled, disabled);
         self.waiting = waiting;
-        if lifted {
+        if !lifted {
+            return;
+        }
+        // The audio session may have been refused when the interruption ended: it is asked for again before the playback
+        // goes on, and the wait goes on if it is refused again.
+        if self.phone.reactivate() {
             log::info!("call: resumed by the person");
             self.hold_playback(false);
+        } else {
+            self.waiting = Some(Wait { muted: false });
         }
     }
 
@@ -401,7 +425,7 @@ impl Room {
         if resume {
             self.hold_playback(false);
         } else {
-            self.waiting = Some(Wait { muted: false });
+            self.waiting = Some(Wait::of(self.mic));
         }
     }
 }
@@ -515,6 +539,20 @@ mod tests {
         assert_eq!(wait_after(muted, true, false), (None, true));
         // A microphone that cannot be muted has nothing to wait for.
         assert_eq!(wait_after(waiting, true, true), (None, true));
+    }
+
+    #[test]
+    fn a_mute_reported_before_the_wait_begins_counts() {
+        // Muted (by the interruption, or by the person before it), reported once; then the wait begins; then they unmute.
+        let wait = Wait::of((false, false));
+        assert_eq!(wait, Wait { muted: true });
+        assert_eq!(wait_after(wait, true, false), (None, true));
+        // Not yet muted when it begins: the unmute must come after the mute.
+        let wait = Wait::of((true, false));
+        assert_eq!(wait_after(wait, true, false), (Some(wait), false));
+        let (wait, lifted) = wait_after(wait, false, false);
+        assert!(!lifted);
+        assert_eq!(wait_after(wait.unwrap(), true, false), (None, true));
     }
 
     #[test]

@@ -198,7 +198,7 @@ fn run_app() {
             ));
             // The room's call holds the call's service (Android), for the host's current page.
             let page = app.state::<AppHost>().page().0;
-            app.manage(call::RoomCall::new(handle.clone(), page));
+            app.manage(call::RoomCall::new(handle.clone(), page, phone.clone()));
             // The system taking the audio away (a phone call, an alarm) pauses it; iOS tells the app here, Android through the
             // call's service.
             call::watch_interruptions(&handle, phone);

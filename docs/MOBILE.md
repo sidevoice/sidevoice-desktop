@@ -321,7 +321,7 @@ paused).
   touched. The commands carry the call they are for (`since`), so they never reach a later call of the same page; a call
   that ends while interrupted gives the mute back for the next one.
 - **No end by itself**: `shouldResume` false (another app goes on playing), the audio session that could not be activated
-  again, or a focus the system refused. The microphone stays muted and the playback held until the person unmutes.
+  again, or a focus the system refused. The microphone stays muted and the playback held until the person unmutes (the session is asked for again first; if it is refused again the wait goes on).
 - On iOS the audio session is activated again first (if a voice call has audio open), under the same lock as the session's
   activation and deactivation by the calls, so it is never active after the last call's audio has stopped.
 

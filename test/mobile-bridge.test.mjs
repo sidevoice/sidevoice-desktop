@@ -129,7 +129,8 @@ async function room() {
   const view = { call: { joined: true }, mic: { enabled: true, disabled: false }, callCard: {} };
   const subscribers = [];
   let toggles = 0;
-  win.sidevoiceActions = { toggleMic: () => { toggles++; view.mic.enabled = !view.mic.enabled; } };
+  // The web UI's store notifies as the action is made, not afterwards.
+  win.sidevoiceActions = { toggleMic: () => { toggles++; view.mic.enabled = !view.mic.enabled; subscribers.forEach((fn) => fn()); } };
   win.sidevoiceUI = { store: { getState: () => view, subscribe: (fn) => (subscribers.push(fn), () => {}) } };
   intervals.forEach((tick) => tick()); // the room is up: the app follows its store
   const change = () => subscribers.forEach((fn) => fn());
@@ -163,8 +164,7 @@ test("a person who had muted themselves stays muted", async () => {
 
 test("a person who takes the mute over during the interruption keeps it, whatever they do", async () => {
   const r = await room();
-  r.interrupt();
-  r.change(); // seen muted
+  r.interrupt(); // seen muted as it is made
   r.view.mic.enabled = true; // the person unmutes
   r.change();
   r.view.mic.enabled = false; // and mutes again
