@@ -10,7 +10,7 @@ const mobile = readFileSync(new URL("../mobile/js/mobile-bridge.js", import.meta
 const composed = `(function (transportOf, membersOf) {\n${mobile}\n})(${transport}, ${members});`;
 const PLUGIN = "plugin:sidevoice-app-tauri|";
 
-function install(origin, pageOrigin = origin, microphoneSettings = true) {
+function install(origin, pageOrigin = origin, microphoneSettings = true, microphoneHelp = null) {
   const module = { exports: {} };
   vm.runInNewContext(composed, { module, Promise, JSON, Date });
   const invoked = [];
@@ -27,7 +27,7 @@ function install(origin, pageOrigin = origin, microphoneSettings = true) {
     clearInterval: () => {},
     setTimeout: (fn) => setTimeout(fn, 0),
   };
-  const api = module.exports(win, origin, microphoneSettings);
+  const api = module.exports(win, origin, microphoneSettings, microphoneHelp);
   return { api, win, invoked };
 }
 
@@ -88,4 +88,17 @@ test("the call is reported to the app, and the app's commands run on the room", 
   assert.equal(last[0], "call_state");
   assert.equal(JSON.stringify([last[1].snapshot.ready, last[1].snapshot.joined, last[1].snapshot.micEnabled, last[1].snapshot.title]),
     JSON.stringify([true, true, true, "Repo"]));
+});
+
+test("the microphone is the app's, with its own words for a blocked one (iOS: AVFoundation's permission)", async () => {
+  const help = { en: { steps: ["Open Settings › Sidevoice and turn on Microphone. Then check again."], openSettings: "Open Settings" },
+    es: { steps: ["Abre Ajustes › Sidevoice y activa Micrófono. Después vuelve a comprobar."], openSettings: "Abrir Ajustes" } };
+  const { api, invoked } = install("tauri://localhost", "tauri://localhost", true, help);
+  const microphone = api.host.microphone;
+  // The state is the app's command, never the webview's getUserMedia.
+  await microphone.state();
+  assert.ok(invoked.some(([command, args]) => command === `${PLUGIN}microphone` && args.action === "state"));
+  assert.equal(microphone.help("es-ES").openSettings, "Abrir Ajustes");
+  assert.equal(microphone.help("de").steps[0], help.en.steps[0]);
+  assert.equal(install("tauri://localhost").api.host.microphone.help, undefined, "no words, no help");
 });

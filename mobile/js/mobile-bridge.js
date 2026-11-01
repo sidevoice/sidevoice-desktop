@@ -11,8 +11,8 @@
 // a member that is not there is not offered. On any origin other than the app's own it does nothing at all.
 (function (factory) {
   if (typeof module === "object" && module.exports) module.exports = factory; // unit tests
-  else factory(window, "__SIDEVOICE_APP_ORIGIN__", "__SIDEVOICE_MICROPHONE_SETTINGS__");
-})(function installMobileBridge(win, appOrigin, microphoneSettingsOffered) {
+  else factory(window, "__SIDEVOICE_APP_ORIGIN__", "__SIDEVOICE_MICROPHONE_SETTINGS__", "__SIDEVOICE_MICROPHONE_HELP__");
+})(function installMobileBridge(win, appOrigin, microphoneSettingsOffered, microphoneHelp) {
   "use strict";
   // scheme://host rather than location.origin: the app's own pages (tauri://localhost) may have an opaque origin.
   if (win.location.protocol + "//" + win.location.host !== appOrigin) return null;
@@ -43,8 +43,10 @@
       engine: Object.freeze(members.engine()),
       // The voice call the app runs: the page neither opens the microphone nor runs models.
       voice: voiceCall.host,
-      // The system's own microphone permission (app-tauri platform/microphone), and its settings page where it has one.
-      microphone: members.microphone(microphoneSettingsOffered === true),
+      // The system's own microphone permission (app-tauri platform/microphone: AVFoundation's on iOS, the runtime
+      // permission on Android), never the webview's; its settings page where it has one, and the app's words for a
+      // blocked one on this phone (mobile/src/i18n.rs).
+      microphone: members.microphone(microphoneSettingsOffered === true, microphoneHelp),
       // The pairings, in the app's private storage (mobile/src/pairings.rs), not the webview's.
       pairings: members.pairings(),
       /** The app owns the call's audio and the system's media on a phone: the page must not register Media Session

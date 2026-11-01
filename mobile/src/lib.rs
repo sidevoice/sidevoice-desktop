@@ -10,6 +10,7 @@
 mod acl_tests;
 mod bridge;
 mod call;
+mod i18n;
 pub mod pairings;
 mod platform;
 
@@ -197,6 +198,7 @@ fn run_app() {
                 .initialization_script(bridge::script(
                     APP_ORIGIN,
                     sidevoice_app_tauri::platform::microphone::settings_available(),
+                    bridge::microphone_help().as_ref(),
                 ))
                 // Only the app's own pages: the interface never navigates away.
                 .on_navigation(|url| navigation_allowed(url, APP_ORIGIN))
