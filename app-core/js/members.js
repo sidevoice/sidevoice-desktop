@@ -340,8 +340,10 @@
   /** The app's microphone access (docs/BRIDGE.md → "The microphone permission"), onto the `microphone` command, on every
    *  OS: the system's own answer, never the webview's. The app runs the voice call, so the page is never granted
    *  `getUserMedia`: this is also how it asks the OS for the microphone. The first-run setup asks through this.
-   *  `settingsPage`: whether the OS has a microphone privacy page to open (`openSettings`). */
-  function microphone(settingsPage) {
+   *  `settingsPage`: whether the OS has a microphone privacy page to open (`openSettings`). `helpTexts`: the app's words for a
+   *  blocked microphone on this system, one entry per language it has them in, `{ "<language>": { steps: [text],
+   *  openSettings?: label } }`, with `en` among them: they are the app's, so is the system's they are for. */
+  function microphone(settingsPage, helpTexts) {
     const listeners = new Set();
     let timer = null;
     let last = null;
@@ -366,6 +368,15 @@
       /** Opens the system's microphone privacy page, where a denial is undone. Only where the OS has one (not Linux). */
       ...(settingsPage === true ? {
         openSettings: () => call("microphone", { action: "open-settings" }).then(() => undefined),
+      } : {}),
+      /** How to allow a blocked microphone here, in `language` (a BCP 47 tag, the page's): the app's words in it, or in its
+       *  primary language (`es` for `es-419`), else English. Answers at once. Only with words to give. */
+      ...(helpTexts && typeof helpTexts === "object" && helpTexts.en ? {
+        help(language) {
+          const tag = String(language ?? "");
+          const own = (key) => (Object.hasOwn(helpTexts, key) ? helpTexts[key] : undefined);
+          return own(tag) ?? own(tag.split(/[-_]/)[0].toLowerCase()) ?? helpTexts.en;
+        },
       } : {}),
       /** `listener()` whenever `state()` changes: the permission (in System Settings) or a microphone plugged in or
        *  out; read it with `state()`. Polled every 2 s while anyone listens. Returns `stop`. */

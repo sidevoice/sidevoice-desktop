@@ -5,7 +5,9 @@ use tauri::utils::config::BundleType;
 pub(super) struct Native;
 
 impl Os for Native {
-    const SYSTEM: &'static str = "linux";
+    const SHORTCUT_MODIFIER: &'static str = "Ctrl";
+    const MICROPHONE_HELP: &'static str = "microphone.help_linux";
+    const MICROPHONE_SETTINGS_LABEL: Option<&'static str> = None;
 
     fn device_name() -> Option<String> {
         std::fs::read_to_string("/etc/machine-info").ok().and_then(|file| computer_name::pretty_hostname(&file))

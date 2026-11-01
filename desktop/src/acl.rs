@@ -98,7 +98,8 @@ fn the_bridge_script_receives_the_hosts_media_support() {
         &[],
         available,
         false,
-        "linux",
+        "Ctrl",
+        &Default::default(),
         &sidevoice_desktop_core::bridge::Parts { transport: "TRANSPORT", members: "MEMBERS" },
     );
     let literal = serde_json::to_string(&available).unwrap();
@@ -123,7 +124,8 @@ fn the_rooms_script_is_made_of_the_real_parts_with_no_placeholder_left() {
         &[],
         true,
         true,
-        "macos",
+        "⌘",
+        &crate::platform::host::microphone_help(),
         &parts,
     );
     // (`win.__SIDEVOICE_TARGET__` is the web's own global; a placeholder is a string.)

@@ -1291,7 +1291,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.60.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1528,7 +1528,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2902,9 +2902,9 @@ checksum = "34b357333733e8260735ba5894eb928c02ecc69c78715f01a8019e7fa7f2db4c"
 
 [[package]]
 name = "libc"
-version = "0.2.189"
+version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
+checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
 name = "libdbus-sys"
@@ -3118,7 +3118,7 @@ dependencies = [
  "png 0.18.1",
  "serde",
  "thiserror 2.0.21",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3308,7 +3308,7 @@ version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "680998035259dcfcafe653688bf2aa6d3e2dc05e98be6ab46afb089dc84f1df8"
 dependencies = [
- "proc-macro-crate 1.3.1",
+ "proc-macro-crate 2.0.2",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -4178,7 +4178,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4325,9 +4325,9 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "reqwest"
-version = "0.13.0"
+version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b11be62ac29861f5e3205a0941578e265c93fa566fd1c36cfdb20a16ae3efc5"
+checksum = "04e9018c9d814e5f30cc16a0f03271aeab3571e609612d9fe78c1aa8d11c2f62"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -4447,7 +4447,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.60.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4506,7 +4506,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.60.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4935,7 +4935,6 @@ dependencies = [
  "base64 0.22.1",
  "futures-util",
  "keyring-core",
- "libc",
  "log",
  "regex",
  "security-framework",
@@ -4944,7 +4943,6 @@ dependencies = [
  "sha2 0.11.0",
  "sidevoice-engine",
  "sidevoice-voice",
- "sysinfo",
  "tokio",
  "windows-native-keyring-store",
  "zbus-secret-service-keyring-store",
@@ -5068,8 +5066,8 @@ dependencies = [
 
 [[package]]
 name = "sidevoice-engine"
-version = "0.7.0"
-source = "git+https://github.com/sidevoice/sidevoice-engine?tag=v0.7.0#58d94724c95556e4ed27bf5cbe046d32c555a5d1"
+version = "0.8.0"
+source = "git+https://github.com/sidevoice/sidevoice-engine?tag=v0.8.0#e70474455e57b8f17510984aa2d272d5d82329d2"
 dependencies = [
  "async-lock",
  "async-trait",
@@ -5078,6 +5076,7 @@ dependencies = [
  "futures-core",
  "inventory",
  "js-sys",
+ "libc",
  "ort",
  "ort-sys",
  "reqwest",
@@ -5125,11 +5124,19 @@ name = "sidevoice-mobile"
 version = "0.1.0"
 dependencies = [
  "atomic-write-file",
+ "jni 0.21.1",
+ "log",
+ "ndk-context",
  "objc2-foundation",
+ "rustls-platform-verifier",
+ "serde",
  "serde_json",
+ "sidevoice-app-core",
+ "sidevoice-app-tauri",
  "sidevoice-mobile-plugin",
  "tauri",
  "tauri-build",
+ "tauri-plugin-log",
  "tempfile",
 ]
 
@@ -5172,8 +5179,8 @@ dependencies = [
 
 [[package]]
 name = "sidevoice-voice"
-version = "0.7.6"
-source = "git+https://github.com/sidevoice/sidevoice-voice?tag=v0.7.6#1dddf6a310f0b3be2f1d82e7808cf54c8a086259"
+version = "0.8.0"
+source = "git+https://github.com/sidevoice/sidevoice-voice?tag=v0.8.0#96edb942f85d767184facb60c499739a55b4c6fc"
 dependencies = [
  "async-trait",
  "cfg_aliases",
@@ -5182,6 +5189,8 @@ dependencies = [
  "futures-util",
  "icu_locale",
  "js-sys",
+ "objc2-avf-audio",
+ "objc2-foundation",
  "rtrb",
  "serde",
  "serde_json",
@@ -5259,7 +5268,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5989,7 +5998,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.60.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6354,7 +6363,7 @@ dependencies = [
  "png 0.18.1",
  "serde",
  "thiserror 2.0.21",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6395,7 +6404,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6834,7 +6843,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6855,7 +6864,7 @@ dependencies = [
  "objc2-foundation",
  "objc2-quartz-core",
  "raw-window-handle",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
  "windows-version",
 ]
 

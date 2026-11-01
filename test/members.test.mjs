@@ -90,6 +90,28 @@ test("the microphone offers the system's settings page only where the app says t
   assert.deepEqual(calls, [["microphone", { action: "state" }], ["microphone", { action: "open-settings" }]]);
 });
 
+test("the microphone words a blocked one in the page's language, or its primary language, or English, only with words to give", () => {
+  const { transport } = fakeTransport();
+  const texts = {
+    en: { steps: ["Open System Settings."], openSettings: "Open System Settings" },
+    es: { steps: ["Abre Ajustes del Sistema."], openSettings: "Abrir Ajustes del Sistema" },
+  };
+  const microphone = makeMembers(fakeWindow().win, transport).microphone(true, texts);
+  assert.deepEqual(plain(microphone.help("es")), texts.es);
+  assert.deepEqual(plain(microphone.help("es-419")), texts.es, "its primary language");
+  assert.deepEqual(plain(microphone.help("ES_es")), texts.es, "in any case");
+  assert.deepEqual(plain(microphone.help("en-GB")), texts.en);
+  for (const other of ["de", "zh-Hans", "", undefined, null, 7, "constructor", "__proto__", "toString"]) {
+    assert.deepEqual(plain(microphone.help(other)), texts.en, `English where it has no words: ${String(other)}`);
+  }
+  // Nothing to say is no help: the page then shows its own.
+  const { help: none } = makeMembers(fakeWindow().win, transport).microphone(true);
+  assert.equal(none, undefined);
+  for (const bad of [null, "text", {}, { es: texts.es }, "__SIDEVOICE_MICROPHONE_HELP__"]) {
+    assert.equal(makeMembers(fakeWindow().win, transport).microphone(true, bad).help, undefined, String(bad));
+  }
+});
+
 test("the pairings are read and written whole", async () => {
   const { transport, calls } = fakeTransport();
   const pairings = makeMembers(fakeWindow().win, transport).pairings();
