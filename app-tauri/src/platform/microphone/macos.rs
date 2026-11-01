@@ -1,5 +1,8 @@
 //! The macOS body: AVFoundation's permission (`apple.rs`) and System Settings' microphone pane.
-use super::{apple, AccessState, Os};
+use super::{AccessState, Os};
+
+#[path = "apple.rs"]
+mod apple;
 
 pub struct Native;
 impl Os for Native {

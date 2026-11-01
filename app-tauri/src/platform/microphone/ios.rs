@@ -1,6 +1,9 @@
 //! The iOS body: AVFoundation's permission (`apple.rs`; the prompt shows the app's `NSMicrophoneUsageDescription`) and the
 //! app's own page of Settings, where the microphone switch is.
-use super::{apple, AccessState, Os};
+use super::{AccessState, Os};
+
+#[path = "apple.rs"]
+mod apple;
 
 pub struct Native;
 impl Os for Native {

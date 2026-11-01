@@ -26,10 +26,6 @@ mod imp;
 #[cfg(target_os = "android")]
 #[path = "microphone/android.rs"]
 mod imp;
-// AVFoundation's permission, which macOS and iOS share.
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-#[path = "microphone/apple.rs"]
-mod apple;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccessState {
