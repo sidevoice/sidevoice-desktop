@@ -23,7 +23,8 @@
     "copyright": "Copyright 2026 Ruben Pahino",
     "icon": ["app-icon/window.png", "app-icon/window.ico"],
     "iOS": {
-      "minimumSystemVersion": "15.0"
+      "minimumSystemVersion": "15.0",
+      "frameworks": ["frameworks/SherpaOnnxC.xcframework"]
     },
     "android": {
       "minSdkVersion": 26

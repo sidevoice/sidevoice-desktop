@@ -21,6 +21,12 @@
     <string>pl</string>
     <string>zh-Hans</string>
   </array>
+  <!-- A call goes on with the screen locked or another app in front: the audio session it holds keeps the app running
+       while it records and plays (iOS has no service to start for it; docs/MOBILE.md). -->
+  <key>UIBackgroundModes</key>
+  <array>
+    <string>audio</string>
+  </array>
   <key>NSAppTransportSecurity</key>
   <dict>
     <key>NSAllowsLocalNetworking</key>

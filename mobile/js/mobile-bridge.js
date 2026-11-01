@@ -1,0 +1,51 @@
+// Sidevoice mobile bridge — injected by the mobile app into the page its window loads (docs/MOBILE.md -> "The bridge").
+//
+// This is the mobile app's part of the page's script: the assembly of `host` from the members every app shares
+// (sidevoice-app-core/js/members.js), reached through the shell's transport (sidevoice-app-tauri/js/transport.js). The three
+// are one script, composed by the app (mobile/src/bridge.rs, docs/BRIDGE.md -> "Parts"): this part is evaluated where
+// `transportOf` and `membersOf`, the other two, are in scope.
+//
+// The phone offers the voice call it runs itself, its engine, its microphone permission and its pairings, and owns the
+// call's media: the page registers no Media Session of its own (`presence.media: "app"`). Nothing of the desktop's
+// (the local host, the reset, the mute shortcut, the call controls card, the updater, the developer options) is offered:
+// a member that is not there is not offered. On any origin other than the app's own it does nothing at all.
+(function (factory) {
+  if (typeof module === "object" && module.exports) module.exports = factory; // unit tests
+  else factory(window, "__SIDEVOICE_APP_ORIGIN__", "__SIDEVOICE_MICROPHONE_SETTINGS__");
+})(function installMobileBridge(win, appOrigin, microphoneSettingsOffered) {
+  "use strict";
+  // scheme://host rather than location.origin: the app's own pages (tauri://localhost) may have an opaque origin.
+  if (win.location.protocol + "//" + win.location.host !== appOrigin) return null;
+  // The app never tells the interface where to look first (sidevoice-web's `__SIDEVOICE_TARGET__`): pairing does.
+  win.__SIDEVOICE_TARGET__ = null;
+  if (win.__sidevoiceHost) return win.__sidevoiceHost;
+
+  const transport = transportOf(win);
+  const members = membersOf(win, transport);
+  // Its events come over the channel the members open for it (`voice_events`), not through the global.
+  const voiceCall = members.voice();
+
+  const api = {
+    /** The contract this app speaks: the desktop's (docs/BRIDGE.md). */
+    version: 2,
+    /** What this app offers the page besides the webview itself, one optional member per thing (docs/BRIDGE.md -> "The
+     *  host"). */
+    host: Object.freeze({
+      engine: Object.freeze(members.engine()),
+      // The voice call the app runs: the page neither opens the microphone nor runs models.
+      voice: voiceCall.host,
+      // The system's own microphone permission (app-tauri platform/microphone), and its settings page where it has one.
+      microphone: members.microphone(microphoneSettingsOffered === true),
+      // The pairings, in the app's private storage (mobile/src/pairings.rs), not the webview's.
+      pairings: members.pairings(),
+      /** The app owns the call's audio and the system's media on a phone: the page must not register Media Session
+       *  handlers or play a Now Playing element of its own. Its headset buttons and lock-screen controls are
+       *  sidevoice-desktop#349; until then there are none. */
+      presence: Object.freeze({ media: "app" }),
+      /** The webview sends plain http to a private address; to whom, and with whose consent, is the page's policy. */
+      reach: Object.freeze({ plainHttpPrivate: true }),
+    }),
+  };
+  win.__sidevoiceHost = api;
+  return api;
+});

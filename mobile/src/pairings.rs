@@ -1,10 +1,8 @@
 //! The pairings the room page keeps (the machines it is paired with and the revocations still to tell them), as one JSON
 //! file, alone in a folder of its own in the app's private storage (`pairings/pairings.json`): read and written whole,
 //! as the page's JSON, with the refusals the page already knows from the desktop (`data.pairings-invalid`, `-read`,
-//! `-write`; docs/BRIDGE.md). `read` and `write` are the pair of the shared plugin's `PairingStore`, which the app
-//! implements for this file when the plugin joins the app (row 49: the mobile crate does not depend on
-//! `sidevoice-app-tauri` before its engine and voice build for the phone). `PairingFile::of_app(app)` is the constructor
-//! that picks the file.
+//! `-write`; docs/BRIDGE.md): the app's `PairingStore` for the shared plugin's `pairings_read` and `pairings_write`.
+//! `PairingFile::of_app(app)` is the constructor that picks the file.
 //!
 //! A write is atomic: the new record is written to a temporary file in the same directory, synced, renamed over the old
 //! one and the directory synced (`atomic-write-file`), so a crash or a power loss leaves the old record or the new one,
@@ -22,7 +20,7 @@
 //!
 //! Nothing here defends against another process of the same user, as the desktop's held directory does: on a phone the
 //! file is in the app's own sandbox (the data directory only this app can open), and no other app can reach it.
-use crate::platform::{app_files, backup, private_dir};
+use crate::platform::{backup, private_dir};
 use atomic_write_file::AtomicWriteFile;
 use serde_json::{json, Value};
 use std::{
@@ -30,7 +28,7 @@ use std::{
     io::{self, ErrorKind, Read, Write},
     path::{Path, PathBuf},
 };
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Runtime};
 
 /// The most a record may hold, read or written (the desktop's bound).
 const LIMIT: u64 = 64 * 1024;
@@ -96,11 +94,7 @@ impl PairingFile {
     /// Android (`platform::app_files`), from Tauri's path resolver. Nothing is created until the first write, which
     /// creates the folder, private to the app.
     pub fn of_app<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Self> {
-        let mut files = app.path().app_data_dir()?;
-        if let Some(own) = app_files::FILES {
-            files.push(own);
-        }
-        Ok(Self::new(&files))
+        Ok(Self::new(&crate::own_files(app)?))
     }
 
     /// The record in the folder `pairings/` of `files`.
@@ -160,6 +154,17 @@ impl PairingFile {
             .and_then(|()| exclude(&self.directory))
             .map_err(|_| refused("data.pairings-write"))?;
         reported(write_atomically(&self.path, &bytes), &self.path, &bytes)
+    }
+}
+
+/// The shared plugin's store of the pairings (`pairings_read`, `pairings_write`): this file.
+impl sidevoice_app_tauri::PairingStore for PairingFile {
+    fn read(&self) -> Answer {
+        PairingFile::read(self)
+    }
+
+    fn write(&self, value: &Value) -> Answer {
+        PairingFile::write(self, value)
     }
 }
 

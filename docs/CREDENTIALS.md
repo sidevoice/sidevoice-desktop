@@ -1,7 +1,7 @@
 # Provider credentials
 
 `app-core/src/platform/credentials.rs` owns the provider keys through plain functions: `valid(provider)`, and, in the app's
-namespace `service` (which the app passes in exactly: the desktop's is `ai.sidevoice.desktop.providers`, `desktop/src/app_hooks.rs`),
+namespace `service` (which the app passes in exactly: the desktop's is `ai.sidevoice.desktop.providers`, `desktop/src/app_hooks.rs`; the mobile app's `ai.sidevoice.mobile.providers`, `mobile/src/lib.rs`),
 `read(service, provider)`, `write(service, provider, key | None)` and `clear_all(service)`, which clears the provider namespace.
 `app-core`'s `Keychain` is the app's `ProviderKeys` on it. The engine and bridge use the
 same store on every supported OS. The page can set a key, remove it, and ask whether it exists; it cannot read it back. Native voice availability is unchanged.

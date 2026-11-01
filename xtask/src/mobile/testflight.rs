@@ -108,6 +108,7 @@ pub fn testflight(build_number_text: &str) -> Result<()> {
         &config,
         "--ci",
     ])
+    .env("SHERPA_ONNX_LIB_DIR", super::engine_libs("ios", "aarch64-apple-ios")?)
     .env("APPLE_API_KEY", &key_id)
     .env("APPLE_API_ISSUER", &issuer)
     .env("APPLE_API_KEY_PATH", &key)

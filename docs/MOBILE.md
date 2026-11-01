@@ -9,14 +9,13 @@ of host is a crate, never a condition (AGENTS.md → "Host kind is a crate bound
 - **The window** (`mobile/src/lib.rs`) shows `voice/index.html`, the interface of the sidevoice-web release
   `web.pin.json` names (`npm run web` puts it in `ui/`, as for the desktop app, and every Tauri build and dev run starts
   with it).
-- **No bridge.** The app injects nothing, so the interface runs as it does in a browser: it pairs with a machine through
-  a one-time code and keeps its pairings in the webview's storage. The members the apps give it (`window.__sidevoiceHost`)
-  come with later rows.
+- **The bridge** gives the page the app's members (`window.__sidevoiceHost`; "The bridge" below): the voice call the app
+  runs, its engine, the microphone's permission and the pairings, through the commands every app shares.
 - **No page captures anything.** The permission handler denies every request (microphone, camera, screen): the webview
-  would grant them all if the app set none. The app will own the microphone, as the desktop app does.
+  would grant them all if the app set none. The app owns the microphone and the speaker, as the desktop app does.
 - **Only the app's own pages.** A navigation anywhere else goes nowhere (`navigation_allowed`).
 - **The origin** the page presents is Tauri's own: `http://tauri.localhost` on Android, `tauri://localhost` on iOS
-  (`mobile/src/platform/origin.rs`). The node accepts both without configuration (docs/TARGETS.md). On Android the page
+  (`sidevoice-app-tauri`'s `platform/origin.rs`, the one the desktop app reads too). The node accepts both without configuration (docs/TARGETS.md). On Android the page
   is on http, so reaching a node's plain-http address on the local network is not mixed content.
 - **Plain http to the local network.** A node on the local network has an address no certificate can name, so the app
   may speak plain http to it. On Android that is a network security config in `mobile/plugin/android`, merged into the
@@ -59,6 +58,61 @@ of host is a crate, never a condition (AGENTS.md → "Host kind is a crate bound
     .digest` and wasm in the web interface), none of which is encryption of the app's own. Native code that brings its own
     TLS or cipher (a Rust TLS library, an AEAD) changes the answer to true, with Apple's annual self-classification
     report; that is checked in the row that adds it.
+
+## The bridge
+
+`mobile/src/bridge.rs` composes the page's script as the desktop does (docs/BRIDGE.md → "Parts"): the transport of the
+shared plugin (`sidevoice-app-tauri`), the members every app shares (`sidevoice-app-core/js/members.js`) and the app's own
+part, `mobile/js/mobile-bridge.js`, which assembles `host`:
+
+| `host.*` | What |
+|---|---|
+| `voice`, `engine` | The voice call the app runs itself (sidevoice-voice on the phone's microphone and speaker) and the engine it takes its models from: sherpa-onnx (Silero) and the remote providers on a phone (sidevoice-engine's README, "Android" and "iOS"). |
+| `microphone` | The system's own permission (`sidevoice-app-tauri`'s `platform/microphone`); `openSettings` opens the app's page of the system's settings. |
+| `pairings` | The pairings in the app's private storage (`mobile/src/pairings.rs`), not the webview's. |
+| `presence` | `{ media: "app" }`: the app owns the call's audio, so the page registers no Media Session and plays no Now Playing element of its own. Its headset buttons and lock-screen controls are sidevoice-desktop#349: until then a phone has **none** (the shared plugin's `platform/media_controls` has bodies for the computers only, and is not in a phone's build). |
+| `reach` | `{ plainHttpPrivate: true }`, as on the desktop. |
+
+Nothing of the desktop's own (`localHost`, `reset`, `muteShortcut`, `callControls`, `updater`, `debug`, `deviceName`) is
+offered, and neither is `build` yet: the mobile app's build kinds (nightly and release, D-MOBILE-CHANNELS) come with their
+own row. There is no `snapshot`/`run` either: nothing native reads the call's state on a phone yet (the media controls
+and the call's service will).
+
+- **Who may call.** The app's one window, `main`, on the app's own origin (`is_the_page`), as every shared command asks
+  first; `mobile/capabilities/main.json` grants it every command of `app-tauri/ACL.md` but the call's levels
+  (`bridge_level`, `bridge_playback`), which feed the desktop's call controls card. A test keeps the two in step.
+- **The application host** (`AppHost`) is the desktop's, with the phone's hooks: every request admitted (a phone never
+  resets its data under the call), the provider keys under `ai.sidevoice.mobile.providers` (docs/CREDENTIALS.md), and the
+  models in `models/` of the app's own files, private to the app and kept out of the device backup (iOS marks the
+  folder, Android's backup rules name it). A page that loads anew owns none of the calls of the one before; quitting stops
+  the calls and lets the models go, as on the desktop.
+- **The audio session** (iOS; D-AUDIO-SESSION, sidevoice-voice's `Session`): declared at start as play-and-record with
+  mode `Default`, the loudspeaker rather than the receiver, and Bluetooth hands-free allowed, and activated right away,
+  while the app is in front (iOS refuses to start recording from the background). Android has no session to declare.
+  **Not verified on a device yet**; see "Not verified" below.
+- **Background audio** (iOS): `UIBackgroundModes` `audio` in `mobile/Info.ios.plist`, so a call goes on with the screen
+  locked. Android keeps the call's process with its foreground service (above), which nothing starts yet: wiring the
+  call to it is its own step.
+- **HTTPS on Android.** The engine's `reqwest` verifies certificates with `rustls-platform-verifier`, whose Android side is
+  Kotlin: the Android library of `mobile/plugin` adds it to the app's Gradle build (from the crate's own Maven directory,
+  which `cargo metadata` finds, at the version Cargo.lock resolves; `consumer-rules.pro` keeps it from R8), and the app
+  hands the verifier the application's context at start (`mobile/src/platform/tls/android.rs`). `ndk_context`, which
+  cpal and the provider keys need, is set by Tauri's runtime (tao) before the app's code runs: nothing to do for it.
+- **The engine's native libraries.** sherpa-onnx is shared on a phone: `libsherpa-onnx-c-api.so` and `libonnxruntime.so`
+  per ABI on Android (in `jniLibs/<abi>/`), `SherpaOnnxC.xcframework` on iOS (embedded through `bundle.iOS.frameworks`
+  in `mobile/tauri.conf.json`). `cargo xtask mobile build` gets them from the engine's own `cargo xtask android-build`
+  or `ios-build`, at the commit Cargo.lock pins (the archive its pins name, checked against its digest), and builds the
+  app against the same directory (`SHERPA_ONNX_LIB_DIR`), so nothing is downloaded unchecked. Git ignores both
+  (`mobile/frameworks/`, the `.so` files of `jniLibs`).
+- **The log**: `tauri-plugin-log` to the system's (logcat, the unified log) and a file in the app's log folder.
+
+### Not verified
+
+What only a device shows, for the M-FG gate (plan §F.2): a call's first Join on each phone (remote STT/TTS and Silero, a
+turn and a reply); the audio session's route (loudspeaker, a wired or Bluetooth headset) and what other apps' audio does
+when the app starts, since the session is activated at start; that a model download and a remote provider's request
+pass the verifier on Android; that the xcframework is embedded and signed in an iOS archive; and the APK's libraries
+loading on a phone.
 
 ## Who owns the native projects
 
@@ -130,6 +184,10 @@ TAURI_APP_PATH=$PWD npx tauri android build --apk --target aarch64 --ci
 # iOS: macOS with Xcode and XcodeGen
 TAURI_APP_PATH=$PWD npx tauri ios build --target aarch64-sim --no-sign --ci
 ```
+
+A build by hand needs the engine's native libraries first, and `SHERPA_ONNX_LIB_DIR` pointing at the target's (above,
+"The bridge"); `cargo xtask mobile build android|ios` does both (it also needs cargo-ndk for Android, which the engine's
+build uses).
 
 An Android build without a signing key is an unsigned APK; a debug build (`--debug`) is signed with the debug key and
 installs as it is.
@@ -226,5 +284,5 @@ stays unsigned with no secret. Its one step is `cargo xtask mobile testflight --
 
 ## Not here yet
 
-The bridge (`__sidevoiceHost`: voice, engine, microphone, pairings), the microphone permission, `UIBackgroundModes`
-(audio).
+Headset buttons and lock-screen controls (sidevoice-desktop#349); starting and stopping the call's service with the call,
+and acting on its events (Android); the build kinds (nightly with Developer options, release).
