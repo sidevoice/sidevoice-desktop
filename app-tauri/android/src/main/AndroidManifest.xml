@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Merged by Gradle into the app's manifest, which the project never edits (design D.4, generator model G-a). Without this
+     declaration the system answers every request for the microphone with a refusal, and never shows the prompt. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+</manifest>

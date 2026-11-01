@@ -26,8 +26,21 @@ of host is a crate, never a condition (AGENTS.md → "Host kind is a crate bound
   policy (it refuses a public address over http) and that the only page is the bundled one. On iOS it is
   `NSAllowsLocalNetworking` (`mobile/Info.ios.plist`), which allows local addresses and leaves App Transport Security on
   for everything else.
+- **No pairings in backups.** The pairings hold the access token to the person's computer, so they are excluded from
+  every OS backup and device transfer (operator decision, 2026-11-01), like the provider keys: after a restore the person
+  pairs again. The record is `pairings/pairings.json` in the app's files, alone in its folder, so one folder is what is kept
+  out, the temporary file of an interrupted write included. iOS marks `pairings/` `isExcludedFromBackup` before each
+  write (`mobile/src/platform/backup/ios.rs`). Android excludes `pairings/`, and the SharedPreferences file of the provider
+  keys (`keyring-sidevoice-providers.xml`, which another phone could not decrypt anyway), in the plugin's
+  `res/xml/data_extraction_rules.xml` (Android 12 and newer: cloud backup and device transfer) and `res/xml/backup_rules.xml`
+  (Android 11 and older), which its manifest points to. The details are in docs/PAIRING_STORAGE.md ("On the phone" →
+  Backups).
 - **Permission texts.** `NSMicrophoneUsageDescription` and `NSLocalNetworkUsageDescription` are in
-  `mobile/Info.ios.plist`, in English; their translations are a later, reviewed change.
+  `mobile/Info.ios.plist` in English, the base (App Store validation looks for them there), and in the languages the web
+  interface ships (de, es, fr, it, ja, pl, zh-Hans) in `mobile/ios/<language>.lproj/InfoPlist.strings`, which `generate`
+  puts into the iOS project. `CFBundleLocalizations` in the plist is the list of languages iOS offers the app in. Adding
+  a language is a folder in `mobile/ios` and an entry in that list; a test checks that they agree, and that the English
+  of `en.lproj` is the plist's.
 
 ## Who owns the native projects
 
@@ -39,6 +52,7 @@ is an input the CLI reads:
 |---|---|
 | Identifier, name, version, minimum OS versions, the web interface to bundle | `mobile/tauri.conf.json` |
 | iOS `Info.plist` keys | `mobile/Info.ios.plist` (merged by the CLI) |
+| The iOS permission texts in each language | `mobile/ios/<language>.lproj/InfoPlist.strings`: the CLI has no setting for them, so `generate` puts them in `gen/apple/sidevoice-mobile_iOS/` before the CLI makes the project, and the project lists them as resources of the app, with each language as a known region (`generate` fails if it does not) |
 | Android manifest entries, resources and, later, Kotlin | the Android library of `mobile/plugin` (a Tauri plugin carrying only native project inputs; Gradle merges its manifest into the app's) |
 | App icons | `mobile/app-icon/` (drawn from the brand by `npm run icons`; `tauri icon` derives every size) |
 | The Rust toolchain and the four mobile targets | `mobile/rust-toolchain.toml` |
@@ -54,6 +68,36 @@ if the template stops having it). Android 17 (API 37) asks an app that targets i
 (`ACCESS_LOCAL_NETWORK`, a runtime permission) before it reaches a machine on it, and the app declares and requests
 nothing of the kind yet; moving `targetSdk` to 37 comes with that permission, in the manifest and as a request before the
 first connection to a paired machine.
+
+## The call's service (Android)
+
+A call must outlive the screen: with it off, or another app in front, Android stops a process that holds the microphone
+unless a foreground service says it is in use. `mobile/plugin` carries that service (`CallService.kt`, `MobilePlugin.kt`
+and the manifest entry, all merged into the app by Gradle). It has the foreground service types **microphone** (the call
+listens) and **media playback** (the agent speaks), and a notification with the app's name, "In a call" and a **Hang up**
+action, in the system's language (`res/values`, English, and `values-es`; the Spanish is the desktop app's wording).
+
+- **Start while visible.** Android lets a microphone service start only from an app that is on screen and has the
+  microphone allowed (since Android 14, and enforced strictly from 15), so `start_call_service` is called while the app is
+  visible. Visible is the hosting activity's own lifecycle (started), not the process's, which reports a stop some time
+  late. The call refuses by name (`not-visible`, `microphone-permission`, `already-running`, `not-allowed`) instead
+  of by the system's exception. Once the service runs, it goes on in the background.
+- **A deterministic end.** One service at a time, and one `Stopped` report to the app for each start, whoever ends it. Each
+  start is a session with a number, which the service carries in its intents; the system ends a service after the app may
+  have started the next call, so a service only acts on its own session (its end, its focus, its notification's Hang up
+  are nothing once that session is over). `cargo xtask mobile test android` runs the JVM tests of that rule. Whoever ends it:
+  the app (`stop_call_service`: `requested`), the person (Hang up in the notification: `hang-up`; the app removed from
+  the recents list: `task-removed`) or the system (`system`, also when it refused the start). The notification, the
+  audio focus and the service go with it, and the system never restarts it: a call does not survive its process.
+- **Audio focus.** The service holds the call's focus (transient: other media pauses and comes back after) from the start
+  to the end, and reports `Focus` changes (`gained`, `lost`, `lost-transient`, `duck`). What to do about them (mute,
+  pause, hang up) is the call's decision, not the service's.
+- The Rust side is `start_call_service(app, on_event)` and `stop_call_service(app)` of `sidevoice-mobile-plugin`
+  (`call_service.rs`); the shared call code reaches the service through them. iOS has no service to start: a call stays
+  alive there through the `audio` background mode, which is configuration.
+- The manifest declares `RECORD_AUDIO`, the two foreground-service permissions and `POST_NOTIFICATIONS`; asking the
+  person for the microphone and for notifications is the microphone permission's row. Without notifications allowed
+  (Android 13 and later) the service runs and the system lists it, but shows no notification.
 
 ## Building
 
@@ -116,4 +160,4 @@ the keystore file instead of `ANDROID_UPLOAD_KEYSTORE_B64`.
 ## Not here yet
 
 The bridge (`__sidevoiceHost`: voice, engine, microphone, pairings), the microphone permission, `UIBackgroundModes`
-(audio), the privacy manifest and export compliance, the Android foreground service, and the iOS signing.
+(audio), the privacy manifest and export compliance, and the iOS signing.
