@@ -270,14 +270,7 @@ fn listed(listing: Result<Result<AudioDevices, String>, tokio::task::JoinError>)
         refused.params.insert("code".into(), json!(code));
         refused
     })?;
-    Ok(seam_devices(&devices))
-}
-
-/// `devices` as the seam's `VoiceAudioDevices`: natively, the speaker can always be chosen.
-pub(super) fn seam_devices(devices: &AudioDevices) -> Value {
-    let mut value = json!(devices);
-    value["outputSelectable"] = json!(true);
-    value
+    Ok(json!(devices))
 }
 
 #[cfg(test)]
