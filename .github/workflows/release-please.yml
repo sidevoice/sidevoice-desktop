@@ -24,6 +24,8 @@ jobs:
       issues: write
       pull-requests: write
       actions: write
+    # The outputs without a prefix are the root package's, the desktop app's (release-please-config.json); another
+    # product's are prefixed by its path (`mobile--release_created`) and are not built here: its own job reads them.
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
@@ -45,6 +47,7 @@ jobs:
   assets:
     name: Release assets
     needs: release-please
+    # The desktop app's release only (`xtask publish` refuses a tag that is not vX.Y.Z).
     if: needs.release-please.outputs.release_created == 'true'
     permissions:
       contents: write
