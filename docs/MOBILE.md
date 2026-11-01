@@ -41,6 +41,24 @@ of host is a crate, never a condition (AGENTS.md → "Host kind is a crate bound
   puts into the iOS project. `CFBundleLocalizations` in the plist is the list of languages iOS offers the app in. Adding
   a language is a folder in `mobile/ios` and an entry in that list; a test checks that they agree, and that the English
   of `en.lproj` is the plist's.
+- **What the iOS app declares to Apple** (`mobile/PrivacyInfo.xcprivacy` and `mobile/Info.ios.plist`; the numbers below
+  are the app as of the Tauri shell alone, and each later row that links more code re-reads them):
+  - *Tracking and collection: none.* `NSPrivacyTracking` is false, with no tracking domains, and no data type is
+    collected: the app has no server of its own, no analytics and no account, and the only place a pairing code or a
+    page's traffic goes is the person's own machine. When the app starts to send audio or text to a provider the person
+    chose (the first native call), whether that is collection to declare is a decision for the operator, in that row.
+  - *Required-reason APIs: file timestamp only.* The executable imports `stat` and `fstat` (Rust's `std::fs`, which
+    Tauri reads its bundled files and its data directory with), declared with reason `C617.1` (metadata of files in the
+    app's own container). It calls nothing of the other categories: no system boot time (`mach_absolute_time`,
+    `systemUptime`), no disk space (`statfs`, `statvfs`, the volume capacity keys), no user defaults, no active
+    keyboards. `cargo xtask mobile build ios` checks it on every build: the executable's strings are read for the names of
+    those APIs, and a call the manifest gives no reason for fails the build, so a library that brings one in is caught
+    where it lands.
+  - *Export compliance: no encryption beyond the system's.* `ITSAppUsesNonExemptEncryption` is false. What the app has is
+    the system's TLS (the web view's own network stack) and hashing (SHA-256: `sha2` in the Rust libraries, `crypto.subtle
+    .digest` and wasm in the web interface), none of which is encryption of the app's own. Native code that brings its own
+    TLS or cipher (a Rust TLS library, an AEAD) changes the answer to true, with Apple's annual self-classification
+    report; that is checked in the row that adds it.
 
 ## Who owns the native projects
 
@@ -51,7 +69,8 @@ is an input the CLI reads:
 | What | Input |
 |---|---|
 | Identifier, name, version, minimum OS versions, the web interface to bundle | `mobile/tauri.conf.json` |
-| iOS `Info.plist` keys | `mobile/Info.ios.plist` (merged by the CLI) |
+| iOS `Info.plist` keys (permission texts, export compliance) | `mobile/Info.ios.plist` (merged by the CLI) |
+| The iOS privacy manifest | `mobile/PrivacyInfo.xcprivacy`: the CLI has no setting for it, so `generate` puts it in `gen/apple/sidevoice-mobile_iOS/` before the CLI makes the project, and the project lists it as a resource of the app (`generate` fails if it does not) |
 | The iOS permission texts in each language | `mobile/ios/<language>.lproj/InfoPlist.strings`: the CLI has no setting for them, so `generate` puts them in `gen/apple/sidevoice-mobile_iOS/` before the CLI makes the project, and the project lists them as resources of the app, with each language as a known region (`generate` fails if it does not) |
 | Android manifest entries, resources and, later, Kotlin | the Android library of `mobile/plugin` (a Tauri plugin carrying only native project inputs; Gradle merges its manifest into the app's) |
 | App icons | `mobile/app-icon/` (drawn from the brand by `npm run icons`; `tauri icon` derives every size) |
@@ -128,6 +147,9 @@ installs as it is.
 - **iOS** (macOS, XcodeGen): `cargo xtask mobile generated ios`, then `cargo xtask mobile build ios`, the app for the
   simulator, unsigned, as the artifact `Sidevoice-ios-simulator-app`. When the committed project is not what the CLI
   wrote, the job uploads what it wrote (`mobile-gen-apple`) to commit as `mobile/gen/apple`.
+- The iOS build ends with `cargo xtask mobile check-ios` on the app it made: the privacy manifest is at the root of the
+  bundle, the encryption and tracking declarations are there, and the manifest gives a reason for each required-reason API
+  the executable calls (above).
 - **`generated`** is the regeneration diff: it runs `generate` and fails on any difference in `mobile/gen/<project>`.
 - Every external action is pinned by its full commit SHA, the version in a comment, so a moved tag cannot run new code
   beside the build; so are those of the composite action and of the signing workflow. (The desktop workflows still use
@@ -160,4 +182,4 @@ the keystore file instead of `ANDROID_UPLOAD_KEYSTORE_B64`.
 ## Not here yet
 
 The bridge (`__sidevoiceHost`: voice, engine, microphone, pairings), the microphone permission, `UIBackgroundModes`
-(audio), the privacy manifest and export compliance, and the iOS signing.
+(audio), and the iOS signing.
