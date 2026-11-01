@@ -1,0 +1,10 @@
+//! English, the fallback: every key is here.
+pub const TEXTS: &[(&str, &str)] = &[
+    ("microphone.help_ios", "Open Sidevoice’s settings with the button below and turn on Microphone. Then check again."),
+    (
+        "microphone.help_android",
+        "Open the app’s settings, go to Permissions › Microphone, and allow microphone access. Then check again.",
+    ),
+    ("microphone.open_settings_ios", "Open Settings"),
+    ("microphone.open_settings_android", "Open app settings"),
+];

@@ -91,8 +91,8 @@ test("the call is reported to the app, and the app's commands run on the room", 
 });
 
 test("the microphone is the app's, with its own words for a blocked one (iOS: AVFoundation's permission)", async () => {
-  const help = { en: { steps: ["Open Settings › Sidevoice and turn on Microphone. Then check again."], openSettings: "Open Settings" },
-    es: { steps: ["Abre Ajustes › Sidevoice y activa Micrófono. Después vuelve a comprobar."], openSettings: "Abrir Ajustes" } };
+  const help = { en: { steps: ["Open Sidevoice’s settings with the button below and turn on Microphone. Then check again."], openSettings: "Open Settings" },
+    es: { steps: ["Abre los ajustes de Sidevoice con el botón de abajo y activa Micrófono. Después, vuelve a comprobarlo."], openSettings: "Abrir Ajustes" } };
   const { api, invoked } = install("tauri://localhost", "tauri://localhost", true, help);
   const microphone = api.host.microphone;
   // The state is the app's command, never the webview's getUserMedia.
