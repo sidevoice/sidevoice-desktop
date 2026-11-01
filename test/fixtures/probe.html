@@ -71,7 +71,7 @@ what the interface's own window offers — same origin, same permission rule —
   // What this build is, and its updates (docs/BRIDGE.md → "The build", "The updater"): the probe app is a dev build, so
   // `host.build` says so and the page has no `host.updater`; its commands refuse.
   try {
-    const host = window.__sidevoiceDesktop.host;
+    const host = window.__sidevoiceHost.host;
     const status = await window.__TAURI_INTERNALS__.invoke("updater", { action: "status" }).then(() => "answered", (error) => error && error.key);
     await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-build ok build=" + JSON.stringify(host.build) +
       " updater=" + ("updater" in host) + " status=" + status });
@@ -83,7 +83,7 @@ what the interface's own window offers — same origin, same permission rule —
   // settings"), and no target (docs/TARGETS.md): the web's shortcut form kept in the app's, one that is not a shortcut
   // refused, none, and the card's controls always shown and back.
   try {
-    const { muteShortcut, callControls } = window.__sidevoiceDesktop.host;
+    const { muteShortcut, callControls } = window.__sidevoiceHost.host;
     const set = await muteShortcut.set("shift+cmd+f9");
     const invalid = await muteShortcut.set("M").then(() => "answered", (error) => error && error.key);
     const off = await muteShortcut.set(null);
@@ -101,7 +101,7 @@ what the interface's own window offers — same origin, same permission rule —
   // sidevoice-web's `ModelCatalogs.install(model, {build, engine, onProgress, signal})` — by a catalogue build id, by an
   // engine, by nothing (the recommended build) —, refusals by key, the machine's memory, a download cancelled by its
   // signal.
-  const engine = window.__sidevoiceDesktop && window.__sidevoiceDesktop.host && window.__sidevoiceDesktop.host.engine;
+  const engine = window.__sidevoiceHost && window.__sidevoiceHost.host && window.__sidevoiceHost.host.engine;
   if (!engine) { await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-engine none" }); return; }
   async function until(check, ms) {
     const end = Date.now() + ms;
@@ -173,13 +173,13 @@ what the interface's own window offers — same origin, same permission rule —
   // devices, and a start that settles, asking for its take: once stopped, the take reaches `onTake` as a Float32Array
   // before the stop resolves. A CI runner may have no microphone or speaker: then the start is refused with the call's
   // code, which is what the probe reports, and there is no take.
-  const voice = window.__sidevoiceDesktop && window.__sidevoiceDesktop.host && window.__sidevoiceDesktop.host.voice;
+  const voice = window.__sidevoiceHost && window.__sidevoiceHost.host && window.__sidevoiceHost.host.voice;
   if (!voice) { await window.__TAURI_INTERNALS__.invoke("debug_log", { line: "probe-voice none" }); return; }
   try {
     const refusedBy = (error) => error && error.key + "/" + error.code;
     const kokoro = { catalog: "local", model: "kokoro-82m-v1.0" };
     await voice.routeInput(null);
-    const catalogs = await window.__sidevoiceDesktop.host.engine.catalogs();
+    const catalogs = await window.__sidevoiceHost.host.engine.catalogs();
     const models = catalogs[0].models;
     const remote = catalogs.slice(1).map((c) => c.id + ":" + (c.status.reason ? c.status.reason.code : "current")).join(",");
     // A model its catalogue does not list is refused by key and code, on the call's `ready`; nothing was started.
@@ -238,7 +238,7 @@ what the interface's own window offers — same origin, same permission rule —
     // The webview may deliver an earlier call's start after the input route has changed.
     await voice.routeInput(null);
     await new Promise((resolve) => setTimeout(() => {
-      const send = (key, data) => window.__sidevoiceDesktop.voiceEvent({ key, type: "turn", data });
+      const send = (key, data) => window.__sidevoiceHost.voiceEvent({ key, type: "turn", data });
       send(second.id, { phase: "started", turn_id: "probe-a-turn", started_at: 1 });
       send(third.id, { phase: "started", turn_id: "probe-b-turn", started_at: 2 });
       send(third.id, { phase: "finished", turn_id: "probe-b-turn", text: "B" });
@@ -267,7 +267,7 @@ what the interface's own window offers — same origin, same permission rule —
   // preloaded. With SIDEVOICE_DEBUG_EXIT the app then quits or restarts on this line (src/probe.rs), and `probe exit`
   // checks that the process ends cleanly (#121).
   try {
-    const tiny = (await window.__sidevoiceDesktop.host.engine.catalogs())[0].models.find((m) => m.id === "whisper-tiny");
+    const tiny = (await window.__sidevoiceHost.host.engine.catalogs())[0].models.find((m) => m.id === "whisper-tiny");
     const cpp = tiny && tiny.builds.find((b) => b.backend === "whisper-cpp" && b.available);
     const stt = { catalog: "local", model: "whisper-tiny", language: "en", build: cpp ? cpp.id : "none" };
     const loaded = await voice.preload({ input: { stt } }).then(() => "ok", (error) => error && error.key + "/" + error.code);

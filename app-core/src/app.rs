@@ -21,6 +21,7 @@
 //! (docs/BRIDGE.md → "Refusals").
 
 mod engine;
+mod keychain;
 #[cfg(test)]
 mod tests;
 mod voice;
@@ -42,6 +43,7 @@ use tokio::task::JoinHandle;
 use crate::engine::{Jobs, NativeEngines};
 use crate::voice::host::{LaneAudio, Refusal, VoiceState};
 
+pub use keychain::Keychain;
 pub use voice::AudioChoice;
 
 /// How often the devices are listed to tell the page when they change: the system tells cpal of no change.

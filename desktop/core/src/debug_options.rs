@@ -1,4 +1,4 @@
-//! The developer options of a nightly or a dev build (`window.__sidevoiceDesktop.host.debug`, docs/BRIDGE.md → "The
+//! The developer options of a nightly or a dev build (`window.__sidevoiceHost.host.debug`, docs/BRIDGE.md → "The
 //! developer options"): three switches the room's hidden "Developer options" section turns, kept in the settings and
 //! off by default. The shell puts them on the webviews (src/debug_options.rs); this is what they are, which this
 //! platform has, and what the page is told.

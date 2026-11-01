@@ -1,7 +1,9 @@
 # Provider credentials
 
-`platform/credentials.rs` owns the provider keys through plain functions: `valid(provider)`, `read(provider)`,
-`write(provider, key | None)` and `clear_all()`, which clears the provider namespace. The engine and bridge use the
+`app-core/src/platform/credentials.rs` owns the provider keys through plain functions: `valid(provider)`, and, in the app's
+namespace `service` (which the app passes in exactly: the desktop's is `ai.sidevoice.desktop.providers`, `desktop/src/app_hooks.rs`),
+`read(service, provider)`, `write(service, provider, key | None)` and `clear_all(service)`, which clears the provider namespace.
+`app-core`'s `Keychain` is the app's `ProviderKeys` on it. The engine and bridge use the
 same store on every supported OS. The page can set a key, remove it, and ask whether it exists; it cannot read it back. Native voice availability is unchanged.
 
 The implementation uses the maintained [keyring ecosystem](https://docs.rs/keyring/latest/keyring/):
@@ -10,15 +12,17 @@ There is no global keyring default, plaintext fallback, or production in-memory 
 
 | OS | Store and naming | Limits / availability |
 |---|---|---|
-| macOS | `apple-native-keyring-store` as it is: generic passwords in the user's login keychain; service `ai.sidevoice.desktop.providers`, account = provider | No compatibility with keys kept by earlier app versions (there are no users yet). Other keychains in the search list are not read or written. OS access control and Keychain prompts apply. |
+| macOS | `apple-native-keyring-store` as it is: generic passwords in the user's login keychain; service `ai.sidevoice.desktop.providers`, account = provider | Keys kept under the previous service `dev.sidevoice.desktop.providers` are copied once (below). Other keychains in the search list are not read or written. OS access control and Keychain prompts apply. |
 | Windows | `windows-native-keyring-store`, Credential Manager generic passwords; target `<provider>/ai.sidevoice.desktop.providers` | Keyring validates its UTF-16 password blob against `CRED_MAX_CREDENTIAL_BLOB_SIZE` (2,560 bytes) before calling `CredWriteW`. At most 1,280 UTF-16 code units (640 supplementary-plane characters). Oversized writes fail without truncation or replacing the old key. Names fit the native limits. Entries explicitly use local-machine persistence (`Local` / `CRED_PERSIST_LOCAL_MACHINE`), so they survive logoff without roaming to other computers. Updating a formerly roaming entry changes it to local persistence. |
+| iOS | `apple-native-keyring-store`'s `protected` store, the app's Data Protection keychain (the only keychain iOS has): generic passwords in the app's own access group, service = the namespace the app passes in, account = provider | Entries are written `AfterFirstUnlockThisDeviceOnly`: readable from the first unlock after a restart on, so a call under a locked screen can still open its provider connection, and never synchronized with iCloud nor restored onto another phone from a backup (the keys are typed again there). Needs the signed app's keychain access group: an unsigned test binary gets `errSecMissingEntitlement`. Nothing prompts. |
+| Android | `android-native-keyring-store`: one SharedPreferences file (`keyring-sidevoice-providers`) in the app's private storage, each value AES-GCM encrypted by a Keystore key (alias `keyring-sidevoice-providers`, no user authentication required, so a call can read its keys under a locked screen) | Reaches Android through JNI on the application context `ndk-context` holds, which Tauri initialises before the app runs. The Keystore key never leaves the device and is not part of any backup. A file restored without its key (Auto Backup onto another phone) can no longer be decrypted: the key's read is `credentials_failed` until it is typed again. Nothing prompts. **Known limitation:** the library (1.0.0, the latest) drops the result of `SharedPreferences.commit()`, so a write or a delete the disk refuses (full, I/O error) is reported as done, and after a restart the previous record is back; `clear_all` can say it cleared a key that is still there. Nothing here can see the result without replacing the library's store. |
 | Linux | `zbus-secret-service-keyring-store`, encrypted D-Bus session with the user's Secret Service; exact `service` and `username` attributes | Requires a reachable session bus and accessible Secret Service. Missing/inaccessible/locked stores return `credentials_unavailable`, never absence or a successful fallback. A store may use its normal unlock prompt; callers wait at most 30 seconds, then receive `credentials_unavailable`. |
 
 Provider IDs retain the existing syntax: 1–32 ASCII lowercase letters, digits or dashes. Valid IDs outside
 today's catalog can be stored and read. `clear_all()` removes the entire exact service, including unknown or
 obsolete accounts, without consulting that catalog. macOS deletes the exact service in the login keychain with one service-scoped `SecItemDelete`. Windows uses an anchored, escaped namespace pattern and a delimiter forbidden in service
-names, so similarly named services are excluded. Linux searches the exact service attribute across
-collections. Clear reports any deletion failure instead of claiming partial cleanup succeeded.
+names, so similarly named services are excluded, and so does Android (its search is a regular expression matched anywhere). Linux and iOS search the exact service attribute (Linux across
+collections). Clear reports any deletion failure instead of claiming partial cleanup succeeded (on Android, one the disk refuses is not seen: see its row).
 
 Backend errors are reduced to fixed categories; their messages, debug values, and malformed secret bytes
 never reach logs or the bridge. The bridge retains `provider_invalid`, `credentials_failed`, and
@@ -30,6 +34,34 @@ keyring backend cannot cancel a pending call: after a timeout the outcome remain
 calls return unavailable immediately until that operation ends. Only one worker can remain pending;
 retries never accumulate threads or race a late write against a subsequent write/clear. Once it ends,
 operations can be retried. An indefinitely unanswered prompt may require dismissal or app restart.
+
+## From the previous identifier
+
+The service is the bundle identifier plus `.providers`, and the identifier was `dev.sidevoice.desktop` before
+`ai.sidevoice.desktop`. The old service is named by the carry-over itself (`LEGACY_KEYS`), as the app names its own
+(`app_hooks.rs`): `app-core` takes both exactly. At launch, first (`legacy_identifier.rs`, until its journal says it
+has finished; APP_DATA.md), `Keychain::providers_in(service)` lists the old service (the same exact-service search as
+`clear_all`), and `Keychain::copy_key_from(from, provider, may_write, settled)` (`credentials::copy_key_from(from, to,
+...)` in `app-core`, `to` being the app's service) handles one provider whose account is a valid provider id
+at a time,
+**each call with its own admission and 30-second deadline**: it copies the key if the new namespace holds none for it,
+and reads it back equal. **Nothing is overwritten or deleted**: a new key wins and the old one stays, so an old key
+and a different new one are both kept.
+
+Both hooks run on the store's worker. `may_write` runs right before the key is written, which happens only if it
+returns true: the carry-over refuses once a reset has ended it, so no key is copied after a reset. `settled` runs once
+the key is settled (written and read back equal, or nothing to copy): the carry-over records the provider there
+(`legacy-identifier.key-<provider>`, beside its journal). A copy that completes after its caller stopped waiting (a
+Keychain prompt answered late) is therefore recorded all the same, after its own write, and a key is never copied
+twice (one the person removes later never comes back). A write that fails, or a crash before the record, leaves the
+provider unrecorded: the next launch tries it again, and copying only where no key is makes that harmless.
+While such a copy is pending, the next provider finds the admission busy and is tried at the next launch. A key that
+cannot be read is reported and tried again at the next launch; the others go on. An old store that cannot be listed
+(`Unavailable`, e.g. no Secret Service) is asked again at every launch. The log names the provider ids, never a key
+or a store message. On macOS the new build is a different code identity from the one that stored the keys, so the
+Keychain asks once per key whether it may use it. The old entries stay in the store until removed by hand
+(APP_DATA.md, "From the previous identifier"). Removed with `legacy_identifier.rs` (RELEASING.md, "Legacy identifier
+carry-over").
 
 ## Reset
 
@@ -45,12 +77,14 @@ Portable contract tests live with the interface and run without Tauri/model link
 jobs run them through `cargo xtask test-support`; the Linux workspace tests run them too.
 The shared concern holds the public functions and every store-independent body: naming, validation, requests,
 the default namespace clear (the store's exact `service` search, then deleting each entry it returns), admission and
-error categories. Its private `Os` trait, implemented by `Native` in `credentials/{macos,windows,linux}.rs`, has the
+error categories. Its private `Os` trait, implemented by `Native` in `credentials/{macos,windows,linux,ios,android}.rs`, has the
 real differences only:
 
 - `store()`: the OS's keyring store. Windows' store applies local persistence to its entries and turns the exact
-  `service` search into the anchored target pattern. macOS uses the library store unchanged.
-- `clear_namespace(service)`: deletes the whole namespace. The default is the search-and-delete above (Windows, Linux).
+  `service` search into the anchored target pattern. iOS's applies the `after-first-unlock-this-device-only` access
+  policy to its entries (the common requests build them with no options). Android's anchors the service search like
+  Windows'. macOS uses the library store unchanged.
+- `clear_namespace(service)`: deletes the whole namespace. The default is the search-and-delete above (Windows, Linux, iOS, Android).
   macOS overrides it with one service-scoped `SecItemDelete` for all matches in the login keychain. The library's
   search would rebuild each account from its attribute text and delete by that name, so an account that does not
   round-trip through text could be missed while its `NoEntry` reads as success. The override reads no account.
@@ -78,3 +112,8 @@ read/write/clear: those operations intentionally hide the OS metadata and setup 
   remain **unverified**. On an unlocked desktop, run the test above with `native_contract -- --ignored`.
 - macOS access prompts/code-signing trust and Windows interactive-user behavior need real-machine
   verification beyond runner round trips. This does not establish native call support on either OS.
+- iOS and Android are type-checked and linted (`cargo clippy --tests` for `aarch64-apple-ios`, `aarch64-apple-ios-sim` and
+  `aarch64-linux-android`), and their stores are not exercised by any CI job yet: a test binary cannot run on a phone,
+  and the stores need the running app (the signed app's access group; the application context). Each OS file carries the
+  common contract as an ignored `native_contract` to run inside the app on a device or emulator. The first real round
+  trip is a device run, **unverified** until then.

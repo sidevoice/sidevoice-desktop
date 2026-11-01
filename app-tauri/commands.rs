@@ -29,4 +29,9 @@ pub const COMMANDS: &[&str] = &[
     "voice_end_input",
     "voice_audio_devices",
     "voice_set_audio_devices",
+    "microphone",
+    "bridge_level",
+    "bridge_playback",
+    "pairings_read",
+    "pairings_write",
 ];
