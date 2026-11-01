@@ -1,10 +1,10 @@
-// Unit tests of bridge/no-context-menu.js against a fake window.
+// Unit tests of desktop/core/js/no-context-menu.js against a fake window.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
-const source = readFileSync(new URL("../bridge/no-context-menu.js", import.meta.url), "utf8");
+const source = readFileSync(new URL("../desktop/core/js/no-context-menu.js", import.meta.url), "utf8");
 
 function press({ editable = false, selected = "" } = {}) {
   const module = { exports: {} };

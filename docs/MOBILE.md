@@ -1,0 +1,230 @@
+# The mobile app
+
+`mobile/` is the Sidevoice app for phones: a Tauri 2 shell (`sidevoice-mobile`, identifier `ai.sidevoice.mobile` on iOS
+and Android) around the same web interface the desktop app bundles. It is a crate of its own beside `desktop/`: a kind
+of host is a crate, never a condition (AGENTS.md → "Host kind is a crate boundary"). Plan: sidevoice/sidevoice-desktop#289.
+
+## What it is today
+
+- **The window** (`mobile/src/lib.rs`) shows `voice/index.html`, the interface of the sidevoice-web release
+  `web.pin.json` names (`npm run web` puts it in `ui/`, as for the desktop app, and every Tauri build and dev run starts
+  with it).
+- **No bridge.** The app injects nothing, so the interface runs as it does in a browser: it pairs with a machine through
+  a one-time code and keeps its pairings in the webview's storage. The members the apps give it (`window.__sidevoiceHost`)
+  come with later rows.
+- **No page captures anything.** The permission handler denies every request (microphone, camera, screen): the webview
+  would grant them all if the app set none. The app will own the microphone, as the desktop app does.
+- **Only the app's own pages.** A navigation anywhere else goes nowhere (`navigation_allowed`).
+- **The origin** the page presents is Tauri's own: `http://tauri.localhost` on Android, `tauri://localhost` on iOS
+  (`mobile/src/platform/origin.rs`). The node accepts both without configuration (docs/TARGETS.md). On Android the page
+  is on http, so reaching a node's plain-http address on the local network is not mixed content.
+- **Plain http to the local network.** A node on the local network has an address no certificate can name, so the app
+  may speak plain http to it. On Android that is a network security config in `mobile/plugin/android`, merged into the
+  app's manifest (the template's release build says `usesCleartextTraffic=false`, which a network security config
+  overrides). It permits cleartext for **every** destination: the config names hosts, not private address ranges, and a
+  pairing code carries whatever address the machine has. What keeps the app off public http is the page's own reach
+  policy (it refuses a public address over http) and that the only page is the bundled one. On iOS it is
+  `NSAllowsLocalNetworking` (`mobile/Info.ios.plist`), which allows local addresses and leaves App Transport Security on
+  for everything else.
+- **No pairings in backups.** The pairings hold the access token to the person's computer, so they are excluded from
+  every OS backup and device transfer (operator decision, 2026-11-01), like the provider keys: after a restore the person
+  pairs again. The record is `pairings/pairings.json` in the app's files, alone in its folder, so one folder is what is kept
+  out, the temporary file of an interrupted write included. iOS marks `pairings/` `isExcludedFromBackup` before each
+  write (`mobile/src/platform/backup/ios.rs`). Android excludes `pairings/`, and the SharedPreferences file of the provider
+  keys (`keyring-sidevoice-providers.xml`, which another phone could not decrypt anyway), in the plugin's
+  `res/xml/data_extraction_rules.xml` (Android 12 and newer: cloud backup and device transfer) and `res/xml/backup_rules.xml`
+  (Android 11 and older), which its manifest points to. The details are in docs/PAIRING_STORAGE.md ("On the phone" →
+  Backups).
+- **Permission texts.** `NSMicrophoneUsageDescription` and `NSLocalNetworkUsageDescription` are in
+  `mobile/Info.ios.plist` in English, the base (App Store validation looks for them there), and in the languages the web
+  interface ships (de, es, fr, it, ja, pl, zh-Hans) in `mobile/ios/<language>.lproj/InfoPlist.strings`, which `generate`
+  puts into the iOS project. `CFBundleLocalizations` in the plist is the list of languages iOS offers the app in. Adding
+  a language is a folder in `mobile/ios` and an entry in that list; a test checks that they agree, and that the English
+  of `en.lproj` is the plist's.
+- **What the iOS app declares to Apple** (`mobile/PrivacyInfo.xcprivacy` and `mobile/Info.ios.plist`; the numbers below
+  are the app as of the Tauri shell alone, and each later row that links more code re-reads them):
+  - *Tracking and collection: none.* `NSPrivacyTracking` is false, with no tracking domains, and no data type is
+    collected: the app has no server of its own, no analytics and no account, and the only place a pairing code or a
+    page's traffic goes is the person's own machine. When the app starts to send audio or text to a provider the person
+    chose (the first native call), whether that is collection to declare is a decision for the operator, in that row.
+  - *Required-reason APIs: file timestamp only.* The executable imports `stat` and `fstat` (Rust's `std::fs`, which
+    Tauri reads its bundled files and its data directory with), declared with reason `C617.1` (metadata of files in the
+    app's own container). It calls nothing of the other categories: no system boot time (`mach_absolute_time`,
+    `systemUptime`), no disk space (`statfs`, `statvfs`, the volume capacity keys), no user defaults, no active
+    keyboards. `cargo xtask mobile build ios` checks it on every build: the executable's strings are read for the names of
+    those APIs, and a call the manifest gives no reason for fails the build, so a library that brings one in is caught
+    where it lands.
+  - *Export compliance: no encryption beyond the system's.* `ITSAppUsesNonExemptEncryption` is false. What the app has is
+    the system's TLS (the web view's own network stack) and hashing (SHA-256: `sha2` in the Rust libraries, `crypto.subtle
+    .digest` and wasm in the web interface), none of which is encryption of the app's own. Native code that brings its own
+    TLS or cipher (a Rust TLS library, an AEAD) changes the answer to true, with Apple's annual self-classification
+    report; that is checked in the row that adds it.
+
+## Who owns the native projects
+
+The generator model is **G-a: repeatable generation** (design D.4). `mobile/gen/android` and `mobile/gen/apple` are
+what the Tauri CLI writes, are committed, and are **never edited by hand**. Whatever the app needs beyond the template
+is an input the CLI reads:
+
+| What | Input |
+|---|---|
+| Identifier, name, version, minimum OS versions, the web interface to bundle | `mobile/tauri.conf.json` |
+| iOS `Info.plist` keys (permission texts, export compliance) | `mobile/Info.ios.plist` (merged by the CLI) |
+| The iOS privacy manifest | `mobile/PrivacyInfo.xcprivacy`: the CLI has no setting for it, so `generate` puts it in `gen/apple/sidevoice-mobile_iOS/` before the CLI makes the project, and the project lists it as a resource of the app (`generate` fails if it does not) |
+| The iOS permission texts in each language | `mobile/ios/<language>.lproj/InfoPlist.strings`: the CLI has no setting for them, so `generate` puts them in `gen/apple/sidevoice-mobile_iOS/` before the CLI makes the project, and the project lists them as resources of the app, with each language as a known region (`generate` fails if it does not) |
+| Android manifest entries, resources and, later, Kotlin | the Android library of `mobile/plugin` (a Tauri plugin carrying only native project inputs; Gradle merges its manifest into the app's) |
+| App icons | `mobile/app-icon/` (drawn from the brand by `npm run icons`; `tauri icon` derives every size) |
+| The Rust toolchain and the four mobile targets | `mobile/rust-toolchain.toml` |
+
+`cargo xtask mobile generate android|ios` makes a project anew (the old one removed) and derives the icons into it. The
+iOS project needs macOS and XcodeGen. Run it after changing an input or the Tauri CLI's version, and commit the result.
+An iOS build merges `Info.ios.plist` into
+`gen/apple/sidevoice-mobile_iOS/Info.plist`, so a local iOS build changes that one file; `generate` restores it.
+
+`compileSdk` is the template's (37 with the CLI pinned in package.json) and moves with the CLI. **`targetSdk` is 36**, the
+plan's: the template writes 37 and the CLI has no setting for it, so `generate` writes 36 over that one line (and fails
+if the template stops having it). Android 17 (API 37) asks an app that targets it to be allowed the local network
+(`ACCESS_LOCAL_NETWORK`, a runtime permission) before it reaches a machine on it, and the app declares and requests
+nothing of the kind yet; moving `targetSdk` to 37 comes with that permission, in the manifest and as a request before the
+first connection to a paired machine.
+
+## The call's service (Android)
+
+A call must outlive the screen: with it off, or another app in front, Android stops a process that holds the microphone
+unless a foreground service says it is in use. `mobile/plugin` carries that service (`CallService.kt`, `MobilePlugin.kt`
+and the manifest entry, all merged into the app by Gradle). It has the foreground service types **microphone** (the call
+listens) and **media playback** (the agent speaks), and a notification with the app's name, "In a call" and a **Hang up**
+action, in the system's language (`res/values`, English, and `values-es`; the Spanish is the desktop app's wording).
+
+- **Start while visible.** Android lets a microphone service start only from an app that is on screen and has the
+  microphone allowed (since Android 14, and enforced strictly from 15), so `start_call_service` is called while the app is
+  visible. Visible is the hosting activity's own lifecycle (started), not the process's, which reports a stop some time
+  late. The call refuses by name (`not-visible`, `microphone-permission`, `already-running`, `not-allowed`) instead
+  of by the system's exception. Once the service runs, it goes on in the background.
+- **A deterministic end.** One service at a time, and one `Stopped` report to the app for each start, whoever ends it. Each
+  start is a session with a number, which the service carries in its intents; the system ends a service after the app may
+  have started the next call, so a service only acts on its own session (its end, its focus, its notification's Hang up
+  are nothing once that session is over). `cargo xtask mobile test android` runs the JVM tests of that rule. Whoever ends it:
+  the app (`stop_call_service`: `requested`), the person (Hang up in the notification: `hang-up`; the app removed from
+  the recents list: `task-removed`) or the system (`system`, also when it refused the start). The notification, the
+  audio focus and the service go with it, and the system never restarts it: a call does not survive its process.
+- **Audio focus.** The service holds the call's focus (transient: other media pauses and comes back after) from the start
+  to the end, and reports `Focus` changes (`gained`, `lost`, `lost-transient`, `duck`). What to do about them (mute,
+  pause, hang up) is the call's decision, not the service's.
+- The Rust side is `start_call_service(app, on_event)` and `stop_call_service(app)` of `sidevoice-mobile-plugin`
+  (`call_service.rs`); the shared call code reaches the service through them. iOS has no service to start: a call stays
+  alive there through the `audio` background mode, which is configuration.
+- The manifest declares `RECORD_AUDIO`, the two foreground-service permissions and `POST_NOTIFICATIONS`; asking the
+  person for the microphone and for notifications is the microphone permission's row. Without notifications allowed
+  (Android 13 and later) the service runs and the system lists it, but shows no notification.
+
+## Building
+
+Always one package, never the workspace: it holds the desktop app too. The Tauri CLI is told which app is the one
+(`TAURI_APP_PATH`): Gradle calls it back from the package root, where it would find `desktop/` as well.
+
+```
+# Android: the SDK (platform 37), an NDK (r28 or later: 16 KB pages), JDK 21 and the Rust targets; from mobile/
+TAURI_APP_PATH=$PWD npx tauri android build --apk --target aarch64 --ci
+
+# iOS: macOS with Xcode and XcodeGen
+TAURI_APP_PATH=$PWD npx tauri ios build --target aarch64-sim --no-sign --ci
+```
+
+An Android build without a signing key is an unsigned APK; a debug build (`--debug`) is signed with the debug key and
+installs as it is.
+
+## CI
+
+`.github/workflows/mobile.yml` runs on every pull request (and on a push to `main`), on its own, so the desktop app's
+`build.yml` neither waits for it nor is held up by it. No job signs anything or sees a secret.
+
+- **Android** (Ubuntu): `cargo xtask mobile generated android`, then `cargo xtask mobile build android`, the unsigned
+  release APK for arm64, as the artifact `Sidevoice-android-arm64-unsigned-apk`. The build ends with the 16 KB check Google
+  Play makes (`cargo xtask mobile check-16kb [APK]`): the APK's uncompressed libraries start on 16 KB boundaries
+  (`zipalign -c -P 16`) and every loadable segment of every library is aligned to 16 KB (the ELF program headers); it
+  fails on any other and when there is no library. The job's log lists each library with its alignment.
+- **iOS** (macOS, XcodeGen): `cargo xtask mobile generated ios`, then `cargo xtask mobile build ios`, the app for the
+  simulator, unsigned, as the artifact `Sidevoice-ios-simulator-app`. When the committed project is not what the CLI
+  wrote, the job uploads what it wrote (`mobile-gen-apple`) to commit as `mobile/gen/apple`.
+- The iOS build ends with `cargo xtask mobile check-ios` on the app it made: the privacy manifest is at the root of the
+  bundle, the encryption and tracking declarations are there, and the manifest gives a reason for each required-reason API
+  the executable calls (above).
+- **`generated`** is the regeneration diff: it runs `generate` and fails on any difference in `mobile/gen/<project>`.
+- Every external action is pinned by its full commit SHA, the version in a comment, so a moved tag cannot run new code
+  beside the build; so are those of the composite action and of the signing workflow. (The desktop workflows still use
+  tags.)
+- The Rust and Gradle caches are written by a push to `main` only and their keys start with `mobile`. The Android
+  jobs share their setup (`.github/actions/setup-android`: JDK, the SDK platform and NDK versions, pinned there, the
+  toolchain, the caches).
+
+## Signing
+
+`.github/workflows/mobile-android-signed.yml` signs the Android app with the upload key. It is run by hand
+(`workflow_dispatch`), and its job refuses any ref but `main`; no pull request runs it. It builds the same unsigned APK
+as above, then `cargo xtask mobile sign android` aligns it for 16 KB pages (`zipalign -P 16`), signs it (`apksigner`),
+verifies the signature and checks that every native library's loadable segments are 16 KB aligned, which Google Play
+requires (`cargo xtask mobile check-16kb [APK]` is that check alone). The result is the artifact
+`Sidevoice-android-arm64-signed-apk`.
+
+It reads three repository Actions secrets, which must exist:
+
+| Secret | Holds |
+|---|---|
+| `ANDROID_UPLOAD_KEYSTORE_B64` | the upload key's PKCS#12 keystore, base64 encoded |
+| `ANDROID_UPLOAD_KEYSTORE_PASSWORD` | its password |
+| `ANDROID_UPLOAD_KEY_ALIAS` | the key's alias (`upload`) |
+
+Only the signing step sees them. The keystore and the password go into files only the runner's user can read, removed
+when the step ends, and the password never reaches a command line. On a laptop, `ANDROID_UPLOAD_KEYSTORE_PATH` names
+the keystore file instead of `ANDROID_UPLOAD_KEYSTORE_B64`.
+
+## TestFlight
+
+`.github/workflows/mobile-testflight.yml` signs the iOS app and uploads it to TestFlight. It is run by hand (Actions →
+mobile-testflight → Run workflow, on `main`) and runs nothing else: no pull request, no push, and every other mobile build
+stays unsigned with no secret. Its one step is `cargo xtask mobile testflight --build-number <run number>`
+(`xtask/src/mobile/testflight.rs`):
+
+1. The Tauri CLI archives the committed project and exports it for App Store Connect. Signing is **Xcode's automatic
+   provisioning**: `xcodebuild -allowProvisioningUpdates` with the App Store Connect API key
+   (`-authenticationKeyPath`, `-authenticationKeyID`, `-authenticationKeyIssuerID`), which gets the Apple Distribution
+   certificate (managed by Apple, not imported into a keychain) and the App Store provisioning profile for
+   `ai.sidevoice.mobile`, and registers that identifier in the account if it is not there. No certificate or profile is
+   stored as a secret.
+2. The archive is read before anything leaves the runner: it is the app `ai.sidevoice.mobile` at the build number, it is
+   signed, and it passes the privacy and export-compliance check (above).
+3. `xcrun altool --upload-app` uploads it. App Store Connect processes it (minutes), and TestFlight offers it to the
+   internal testers.
+
+- **The build number** is the run number of the workflow, which only grows, as TestFlight requires of the builds of a
+  version, and it is the app's `CFBundleVersion` whole. (The CLI's own `--build-number` appends it to the version,
+  `0.1.0.7`: four numbers where Apple accepts three.) The version, `CFBundleShortVersionString`, is `tauri.conf.json`'s.
+  A re-run of a run whose upload App Store Connect accepted has the same number and fails: dispatch again (a new run, a
+  new number) rather than re-running.
+- **Credentials.** The repository secrets `APPLE_API_KEY` (the key's id), `APPLE_API_ISSUER`, `APPLE_API_KEY_P8` (the
+  .p8's contents) and `APPLE_TEAM_ID`, the same the desktop notarization uses; the key needs the **Admin** role in App
+  Store Connect (the Developer role cannot create the certificate or the profile). Only the step that signs has them;
+  the .p8 is written to a file only the job's user can read, in a directory of its own, and removed when the command ends;
+  the contents are taken out of the command's environment as they are read, so no process it starts (the Tauri CLI,
+  `xcodebuild`, `altool`) gets them, only the file's path and the key's id and issuer. The checkout keeps no token.
+- **Main only.** The job refuses any other ref (`if`), so does the command, and the job runs in the environment
+  `testflight`. The gate that a workflow file on another branch cannot lift is the environment's: its deployment
+  branches are `main` only (Settings → Environments), and the key's secrets can be moved into it.
+- **Before the first dispatch**, in App Store Connect and the repository, once:
+  1. the key's role is Admin (a new key replaces `APPLE_API_KEY`, `APPLE_API_ISSUER` and `APPLE_API_KEY_P8`; the desktop
+     notarization keeps working with an Admin key);
+  2. any pending agreement is accepted (App Store Connect → Business → Agreements, by the account holder);
+  3. the app exists in App Store Connect (Apps → New App): platform iOS, bundle identifier `ai.sidevoice.mobile`, a name
+     and an SKU. Apple's API reference has no call that creates an app record (it can register a bundle identifier, not
+     this), so it is by hand. The identifier must be registered before the
+     form lists it: either by hand (Developer account → Identifiers → App IDs, explicit `ai.sidevoice.mobile`) or by a first
+     dispatch, whose export registers it and whose upload then fails for lack of the record;
+  4. the people who test are users of the team (Users and Access) and members of an internal testing group of the app
+     (TestFlight → Internal Testing); an internal build needs no beta review;
+  5. the environment `testflight` exists with the deployment-branch rule.
+
+## Not here yet
+
+The bridge (`__sidevoiceHost`: voice, engine, microphone, pairings), the microphone permission, `UIBackgroundModes`
+(audio).

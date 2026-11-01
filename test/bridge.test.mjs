@@ -1,11 +1,10 @@
-// Unit tests of bridge/desktop-bridge.js against a fake window: no browser, no Tauri.
+// Unit tests of the page's bridge script (the desktop's part with the members and the transport it is composed of,
+// test/bridge-source.mjs) against a fake window: no browser, no Tauri.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
-
-const source = readFileSync(new URL("../bridge/desktop-bridge.js", import.meta.url), "utf8");
+import { composed as source } from "./bridge-source.mjs";
 
 function loadFactory() {
   const module = { exports: {} };
@@ -93,25 +92,25 @@ test("does nothing on any other origin (auth pages, other sites)", () => {
   const install = loadFactory();
   const { win, calls } = fakeWindow("https://accounts.google.com");
   assert.equal(install(win, ORIGIN), null);
-  assert.equal(win.__sidevoiceDesktop, undefined);
+  assert.equal(win.__sidevoiceHost, undefined);
   assert.equal(calls.length, 0);
 });
 
 // The factory's arguments up to the microphone settings, then the uninstall offer.
-const uninstallArgs = (uninstall) => [null, false, false, false, undefined, undefined, undefined, false, uninstall];
+const uninstallArgs = (uninstall) => [false, false, false, false, undefined, undefined, undefined, false, uninstall];
 
-test("the data bridge uses fixed native commands and no page-supplied paths", async () => {
+test("the pairings and the reset use fixed native commands and no page-supplied paths", async () => {
   const install = loadFactory();
   const { win, calls } = fakeWindow(ORIGIN);
   const api = install(win, ORIGIN, ...uninstallArgs(true));
-  assert.equal(typeof api.host.data.deleteAll, "function");
-  assert.equal(typeof api.host.data.resetReport, "function");
-  assert.equal(typeof api.host.data.uninstall, "function");
-  await api.host.data.pairings.read();
-  await api.host.data.pairings.write({ pairings: [], pendingRevokes: [] });
-  await api.host.data.deleteAll();
-  await api.host.data.uninstall();
-  await api.host.data.resetReport();
+  assert.equal(typeof api.host.reset.deleteAll, "function");
+  assert.equal(typeof api.host.reset.resetReport, "function");
+  assert.equal(typeof api.host.reset.uninstall, "function");
+  await api.host.pairings.read();
+  await api.host.pairings.write({ pairings: [], pendingRevokes: [] });
+  await api.host.reset.deleteAll();
+  await api.host.reset.uninstall();
+  await api.host.reset.resetReport();
   assert.deepEqual(calls.slice(-5), [
     ["pairings_read", undefined],
     ["pairings_write", { value: { pairings: [], pendingRevokes: [] } }],
@@ -124,17 +123,17 @@ test("the data bridge uses fixed native commands and no page-supplied paths", as
 test("the reset is on every host, the uninstall only where offered, and neither follows the local host", () => {
   const install = loadFactory();
   // Windows and Linux: the reset, without the app's own removal.
-  const reset = install(fakeWindow(ORIGIN).win, ORIGIN, ...uninstallArgs(false)).host.data;
-  assert.equal(typeof reset.pairings.read, "function");
+  const { reset, pairings } = install(fakeWindow(ORIGIN).win, ORIGIN, ...uninstallArgs(false)).host;
+  assert.equal(typeof pairings.read, "function");
   assert.equal(typeof reset.deleteAll, "function");
   assert.equal(typeof reset.resetReport, "function");
   assert.equal(reset.uninstall, undefined);
   // Nothing told: the reset is still there, the uninstall is not.
-  const plain = install(fakeWindow(ORIGIN).win, ORIGIN).host.data;
+  const plain = install(fakeWindow(ORIGIN).win, ORIGIN).host.reset;
   assert.equal(typeof plain.deleteAll, "function");
   assert.equal(plain.uninstall, undefined);
   // The local host alone offers no uninstall.
-  const localOnly = install(fakeWindow(ORIGIN).win, ORIGIN, null, true).host.data;
+  const localOnly = install(fakeWindow(ORIGIN).win, ORIGIN, null, true).host.reset;
   assert.equal(localOnly.uninstall, undefined);
 });
 
@@ -345,15 +344,15 @@ test("installs once per page and survives a missing Tauri runtime", async () => 
 test("the shared commands are invoked under their plugin's name and the app's own under theirs", async () => {
   const install = loadFactory();
   const { win, wire } = fakeWindow(ORIGIN);
-  const api = install(win, ORIGIN, "native", true, true);
+  const api = install(win, ORIGIN, true, true, true);
   await api.host.engine.catalogs();
   await api.host.engine.memory();
   const call = api.host.voice.start({ output: { tts: { catalog: "local", model: "m" } } });
   call.ready.catch(() => {});
   await flush();
   await flush();
-  await api.host.data.pairings.read();
-  await api.host.data.resetReport();
+  await api.host.pairings.read();
+  await api.host.reset.resetReport();
   const shared = wire.filter((cmd) => cmd.startsWith(PLUGIN)).map((cmd) => cmd.slice(PLUGIN.length));
   assert.deepEqual(shared.slice(0, 2), ["engine_catalogs", "engine_memory"]);
   assert.ok(shared.includes("voice_create_call") && shared.includes("voice_start"), shared.join());
@@ -366,7 +365,7 @@ test("the shared commands are invoked under their plugin's name and the app's ow
 
 test("the call's events come over the channel the page opened, in index order, and every command carries the page's number", async () => {
   const { win, pages, channels, documents, wire, deliver } = fakeWindow(ORIGIN);
-  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const api = loadFactory()(win, ORIGIN, true, true, true);
   const call = api.host.voice.start(BOTH);
   call.ready.catch(() => {});
   const states = [];
@@ -398,7 +397,7 @@ test("the call's events come over the channel the page opened, in index order, a
 
 test("a channel the app has ended is let go, and a refusal of the page's number is asked again", async () => {
   const { win, channels, refusals, callbacks, deliver, finish } = fakeWindow(ORIGIN);
-  const voice = loadFactory()(win, ORIGIN, "native", true, true).host.voice;
+  const voice = loadFactory()(win, ORIGIN, true, true, true).host.voice;
   // The app refuses the page's number: the command is refused with it, and the next one asks again.
   refusals.push({ key: "bad_request", message: "not the room window" });
   await assert.rejects(voice.audioDevices(), { key: "bad_request" });
@@ -430,7 +429,6 @@ test("the engine is exactly the contract: its catalogues and keys, what runs her
     return Promise.resolve(typeof answers[cmd] === "function" ? answers[cmd]() : answers[cmd]);
   };
   const engine = install(win, ORIGIN).host.engine;
-  assert.equal(install(win, ORIGIN).host.app, "sidevoice-desktop");
   assert.deepEqual(Object.keys(engine).sort(), [
     "capabilities", "catalogs", "hasCredential", "install", "installed", "memory", "refresh", "setCredential",
     "testCredential", "uninstall",
@@ -614,7 +612,7 @@ test("native voice offers the shared host and independent calls", async () => {
     assert.equal("voice" in install(fakeWindow(ORIGIN).win, ORIGIN, null, true, offered).host, false);
   }
   const { win, calls } = voiceWindow();
-  const api = install(win, ORIGIN, "native", true, true);
+  const api = install(win, ORIGIN, true, true, true);
   const host = api.host.voice;
   assert.deepEqual(Object.keys(host).sort(), ["audioDevices", "onAudioDevices", "preload", "routeInput", "setAudioDevices", "start"]);
   const a = host.start(BOTH);
@@ -639,7 +637,7 @@ test("native voice offers the shared host and independent calls", async () => {
 
 test("start makes the lane, the call with its halves and its take, then asks when it works; settings with no half throw", async () => {
   const { win, calls } = voiceWindow();
-  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const api = loadFactory()(win, ORIGIN, true, true, true);
   const host = api.host.voice;
   for (const bad of [undefined, null, "words", {}, { input: null, output: null }, { idle_unload_minutes: 5 }]) {
     assert.throws(() => host.start(bad), { name: "TypeError" });
@@ -664,7 +662,7 @@ test("a call the app refuses rejects ready with the refusal, says nothing was pl
   const unhandled = [];
   const onUnhandled = (reason) => unhandled.push(reason);
   process.on("unhandledRejection", onUnhandled);
-  const call = loadFactory()(win, ORIGIN, "native", true, true).host.voice.start(BOTH);
+  const call = loadFactory()(win, ORIGIN, true, true, true).host.voice.start(BOTH);
   await assert.rejects(call.ready, (error) => error === refusal);
   const said = call.say("Hello");
   assert.deepEqual(plain(await said.outcome), { status: "not-played", reason: "failed", code: "model-unknown" });
@@ -680,14 +678,14 @@ test("a call the app refuses rejects ready with the refusal, says nothing was pl
 test("a call that fails before it works rejects ready with the native code", async () => {
   const refusal = { key: "voice_failed", code: "microphone-denied", message: "The call could not start." };
   const { win } = voiceWindow({ voice_ready: Object.assign(new Error(), { refusal }) });
-  const call = loadFactory()(win, ORIGIN, "native", true, true).host.voice.start(BOTH);
+  const call = loadFactory()(win, ORIGIN, true, true, true).host.voice.start(BOTH);
   await assert.rejects(call.ready, (error) => error === refusal);
   await call.stop();
 });
 
 test("ready resolves once the app says the call works and the page has its first state that is not idle", async () => {
   const { win } = voiceWindow({ voice_stop: true });
-  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const api = loadFactory()(win, ORIGIN, true, true, true);
   const call = api.host.voice.start(BOTH);
   let works = false;
   call.ready.then(() => { works = true; });
@@ -713,7 +711,7 @@ test("ready resolves once the app says the call works and the page has its first
 
 test("per-call commands carry the call key, wait for the call, and say handles remain separate", async () => {
   const { win, calls } = voiceWindow();
-  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const api = loadFactory()(win, ORIGIN, true, true, true);
   const a = api.host.voice.start(BOTH);
   const b = api.host.voice.start(BOTH);
   const saidA = a.say("A");
@@ -746,7 +744,7 @@ test("per-call commands carry the call key, wait for the call, and say handles r
 
 test("update sends each change to the call, one after the other, and refuses a malformed one", async () => {
   const { win, calls } = voiceWindow();
-  const call = loadFactory()(win, ORIGIN, "native", true, true).host.voice.start(SPEAK);
+  const call = loadFactory()(win, ORIGIN, true, true, true).host.voice.start(SPEAK);
   for (const bad of [undefined, null, "words", 7]) {
     await assert.rejects(call.update(bad), { name: "TypeError" });
   }
@@ -775,7 +773,7 @@ test("update sends each change to the call, one after the other, and refuses a m
 test("preload asks the app to load the models of the settings and rejects what it refuses", async () => {
   const refusal = { key: "voice_failed", code: "model-load-failed", message: "The models could not be loaded." };
   const { win, calls } = voiceWindow();
-  const host = loadFactory()(win, ORIGIN, "native", true, true).host.voice;
+  const host = loadFactory()(win, ORIGIN, true, true, true).host.voice;
   for (const bad of [undefined, null, {}, { input: null }]) {
     await assert.rejects(host.preload(bad), { name: "TypeError" });
   }
@@ -789,7 +787,7 @@ test("preload asks the app to load the models of the settings and rejects what i
 
 test("A to B routing keeps delayed per-call turns on A despite a later switch", async () => {
   const { win, calls } = voiceWindow();
-  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const api = loadFactory()(win, ORIGIN, true, true, true);
   const host = api.host.voice;
   const a = host.start(BOTH);
   const b = host.start(BOTH);
@@ -812,7 +810,7 @@ test("A to B routing keeps delayed per-call turns on A despite a later switch", 
 test("per-call state, levels, takes and saying outcomes are isolated after stop", async () => {
   const { win } = voiceWindow({ voice_stop: true });
   win.atob = atob;
-  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const api = loadFactory()(win, ORIGIN, true, true, true);
   const a = api.host.voice.start(BOTH, { take: true });
   const b = api.host.voice.start(BOTH);
   const heard = [];
@@ -862,7 +860,7 @@ test("mute and cancelInput never reject, and mutes keep their order", async () =
     if (cmd === "voice_cancel_input") return Promise.reject({ key: "bad_request", message: "Unknown voice call." });
     return Promise.resolve(null);
   };
-  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const api = loadFactory()(win, ORIGIN, true, true, true);
   const a = api.host.voice.start(BOTH);
   assert.equal(a.mute(true), undefined);
   assert.equal(a.mute(false), undefined);
@@ -887,7 +885,7 @@ test("endInput is asked in order with mutes, resolves once native closed the tur
     if (cmd === "voice_stop") return Promise.resolve(false);
     return Promise.resolve(null);
   };
-  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const api = loadFactory()(win, ORIGIN, true, true, true);
   const a = api.host.voice.start(BOTH);
   a.mute(true);
   let ended = false;
@@ -914,7 +912,7 @@ test("endInput is asked in order with mutes, resolves once native closed the tur
 test("stop delivers the call's own ends before it resolves: the partial saying, the open turn and the take", async () => {
   const { win, calls } = voiceWindow({ voice_stop: true });
   win.atob = atob;
-  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const api = loadFactory()(win, ORIGIN, true, true, true);
   const host = api.host.voice;
   const a = host.start(BOTH, { take: true });
   const turns = [];
@@ -964,7 +962,7 @@ test("stop delivers the call's own ends before it resolves: the partial saying, 
 test("shared audio devices stay at host scope", async () => {
   const devices = { inputs: [], outputs: [], input: null, output: null, outputSelectable: true };
   const { win, calls } = voiceWindow({ voice_audio_devices: devices, voice_set_audio_devices: devices });
-  const api = loadFactory()(win, ORIGIN, "native", true, true);
+  const api = loadFactory()(win, ORIGIN, true, true, true);
   const seen = [];
   const stop = api.host.voice.onAudioDevices((value) => seen.push(value));
   assert.deepEqual(plain(await api.host.voice.audioDevices()), devices);
@@ -1114,15 +1112,41 @@ test("works on the app's own pages, whose origin may be opaque", () => {
 
 test("the placeholders the app replaces are present exactly once", () => {
   assert.equal(source.split("__SIDEVOICE_ROOM_ORIGIN__").length, 2);
-  assert.equal(source.split("__SIDEVOICE_MEDIA_KEYS__").length, 2);
+  assert.equal(source.split("__SIDEVOICE_MEDIA__").length, 2);
   assert.equal(source.split("__SIDEVOICE_LOCAL_HOST__").length, 2);
   assert.equal(source.split("__SIDEVOICE_VOICE__").length, 2);
+  assert.equal(source.split("__SIDEVOICE_DEVICE_NAME__").length, 2);
+  assert.equal(source.split("__SIDEVOICE_SHORTCUT_MODIFIER__").length, 2);
+  assert.equal(source.split("__SIDEVOICE_MICROPHONE_HELP__").length, 2);
+  assert.equal(source.includes("__SIDEVOICE_OS__"), false, "the page is never told which system it runs on");
 });
 
-test("says who answers the media keys", () => {
+// The app owns the system's media controls on some OSes only: there it offers `presence`, elsewhere nothing, and the page
+// keeps its own Media Session.
+test("presence is offered only where the app owns the system's media", () => {
   const install = loadFactory();
-  assert.equal(install(fakeWindow(ORIGIN).win, ORIGIN, "native").host.mediaKeys, "native");
-  assert.equal(install(fakeWindow(ORIGIN).win, ORIGIN, "__SIDEVOICE_MEDIA_KEYS__").host.mediaKeys, null);
+  const presence = (media) => install(fakeWindow(ORIGIN).win, ORIGIN, media).host.presence;
+  assert.deepEqual(plain(presence(true)), { media: "app" });
+  assert.ok(Object.isFrozen(presence(true)));
+  for (const none of [undefined, false, null, "native", "__SIDEVOICE_MEDIA__"]) assert.equal(presence(none), undefined, String(none));
+});
+
+test("the webview sends plain http to a private address, and says so on every OS", () => {
+  const install = loadFactory();
+  for (const origin of ["tauri://localhost", "http://tauri.localhost"]) {
+    const { reach } = install(fakeWindow(origin).win, origin).host;
+    assert.deepEqual(plain(reach), { plainHttpPrivate: true }, origin);
+    assert.ok(Object.isFrozen(reach));
+  }
+});
+
+test("host.shortcutModifier is the label the app passed, and absent without one; there is no host.os", () => {
+  const install = loadFactory();
+  const host = (modifier) => install(fakeWindow(ORIGIN).win, ORIGIN, false, false, false, false, { channel: "dev", version: "0.4.0" },
+    undefined, undefined, false, false, modifier).host;
+  for (const modifier of ["⌘", "Ctrl"]) assert.equal(host(modifier).shortcutModifier, modifier);
+  for (const none of [undefined, null, "", 42]) assert.ok(!("shortcutModifier" in host(none)), String(none));
+  for (const modifier of ["⌘", "Ctrl", undefined]) assert.ok(!("os" in host(modifier)), "the page is never told which system it runs on");
 });
 
 // ---- host.localHost: this computer's own core (docs/LOCAL_HOST.md) ----
@@ -1140,18 +1164,19 @@ function localHostWindow(answers = {}) {
   return { win, calls, tick, cleared };
 }
 
-test("host carries the bridge version; localHost only where the app offers it", () => {
+test("the app carries the bridge version; localHost only where the app offers it", () => {
   const install = loadFactory();
   for (const offered of [undefined, false, "__SIDEVOICE_LOCAL_HOST__", "true"]) {
     const { win } = fakeWindow(ORIGIN);
     const api = install(win, ORIGIN, null, offered);
-    assert.equal(api.host.version, 2);
-    assert.equal(api.host.app, "sidevoice-desktop");
+    assert.equal(api.version, 2);
+    assert.equal("version" in api.host, false, "the version is the app's, not a member");
+    assert.equal("app" in api.host, false);
     assert.ok(api.host.engine, "the rest of the host is untouched");
     assert.equal("localHost" in api.host, false, String(offered));
   }
   const { win } = fakeWindow(ORIGIN);
-  const api = install(win, ORIGIN, "native", true);
+  const api = install(win, ORIGIN, true, true);
   assert.deepEqual(Object.keys(api.host.localHost).sort(), [
     "cancel", "install", "pairing", "pairingCode", "reconnect", "restart", "revealLog", "serviceInstall",
     "serviceUninstall", "setStartAtLogin", "start", "state", "stop", "subscribe",
@@ -1357,21 +1382,21 @@ test("the host's keys: updater only where the app can update itself, build alway
   // A dev build, a .deb, a bare binary: the app passes false, and the page shows nothing to update.
   for (const offered of [undefined, false, "__SIDEVOICE_UPDATER__", "true"]) {
     const api = install(fakeWindow(ORIGIN).win, ORIGIN, null, false, false, offered, { channel: "nightly", version: "0.4.0" });
-    assert.deepEqual(Object.keys(api.host).sort(), ["app", "build", "callControls", "data", "engine", "mediaKeys", "microphone", "muteShortcut", "version"], String(offered));
+    assert.deepEqual(Object.keys(api.host).sort(), ["build", "callControls", "engine", "microphone", "muteShortcut", "pairings", "reach", "reset"], String(offered));
     api.updaterEvent({ state: "idle" }); // nothing listens, nothing breaks
   }
-  const api = install(fakeWindow(ORIGIN).win, ORIGIN, "native", true, true, true, { channel: "release", version: "0.4.0" });
-  assert.deepEqual(Object.keys(api.host).sort(), ["app", "build", "callControls", "data", "engine", "localHost", "mediaKeys", "microphone", "muteShortcut", "updater", "version", "voice"]);
+  const api = install(fakeWindow(ORIGIN).win, ORIGIN, true, true, true, true, { channel: "release", version: "0.4.0" });
+  assert.deepEqual(Object.keys(api.host).sort(), ["build", "callControls", "engine", "localHost", "microphone", "muteShortcut", "pairings", "presence", "reach", "reset", "updater", "voice"]);
   // The AppUpdater seam, exactly.
   assert.deepEqual(Object.keys(api.host.updater).sort(), ["cancel", "check", "download", "restart", "setMode", "settings", "status", "subscribe"]);
   assert.ok(Object.isFrozen(api.host.updater));
 });
 
-test("host.computerName is the name the app passed, and absent without one", () => {
+test("host.deviceName is the name the app passed, and absent without one", () => {
   const install = loadFactory();
   const host = (name) => install(fakeWindow(ORIGIN).win, ORIGIN, null, false, false, false, { channel: "dev", version: "0.4.0" }, name).host;
-  assert.equal(host("Mac de Ana").computerName, "Mac de Ana");
-  for (const none of [undefined, null, "", 42]) assert.ok(!("computerName" in host(none)), String(none));
+  assert.equal(host("Mac de Ana").deviceName, "Mac de Ana");
+  for (const none of [undefined, null, "", 42]) assert.ok(!("deviceName" in host(none)), String(none));
 });
 
 test("host.updater's calls go to the updater command's actions and answer what the app says", async () => {
@@ -1438,12 +1463,27 @@ test("the app's updaterEvent hands each listener the status, until it stops", ()
 
 // ---- host.microphone: the app's microphone permission, for the page's first-run setup (docs/BRIDGE.md) ----
 
+test("host.microphone.help is the app's words for a blocked microphone, asked in the page's language", () => {
+  const install = loadFactory();
+  const words = { en: { steps: ["Open Settings."], openSettings: "Open Windows Settings" }, es: { steps: ["Abre Configuración."], openSettings: "Abrir Configuración de Windows" } };
+  const microphone = install(fakeWindow(ORIGIN).win, ORIGIN, false, false, false, false, undefined, undefined, undefined, true, false, "Ctrl", words).host.microphone;
+  assert.deepEqual(Object.keys(microphone).sort(), ["help", "onChange", "openSettings", "request", "state"]);
+  assert.ok(Object.isFrozen(microphone));
+  assert.deepEqual(plain(microphone.help("es-ES")), words.es);
+  assert.deepEqual(plain(microphone.help("fr")), words.en, "English where the app has no words");
+  // A system with no settings page names no button.
+  const linux = { en: { steps: ["Check your settings."] } };
+  const without = install(fakeWindow(ORIGIN).win, ORIGIN, false, false, false, false, undefined, undefined, undefined, false, false, "Ctrl", linux).host.microphone;
+  assert.deepEqual(plain(without.help("en")), linux.en);
+  assert.equal(without.openSettings, undefined);
+});
+
 test("host.microphone is on every OS, with or without native voice; openSettings only where the OS has a page", async () => {
   const install = loadFactory();
   for (const voice of [false, true]) {
     const withSettings = install(fakeWindow(ORIGIN).win, ORIGIN, null, false, voice, false, undefined, undefined, undefined, true);
     assert.equal("voice" in withSettings.host, voice);
-    assert.deepEqual(Object.keys(withSettings.host.microphone).sort(), ["onChange", "openSettings", "request", "state"]);
+    assert.deepEqual(Object.keys(withSettings.host.microphone).sort(), ["onChange", "openSettings", "request", "state"], "no words to give, no help");
     assert.ok(Object.isFrozen(withSettings.host.microphone));
     for (const offered of [undefined, false, "true", "__SIDEVOICE_MICROPHONE_SETTINGS__"]) {
       const api = install(fakeWindow(ORIGIN).win, ORIGIN, null, false, voice, false, undefined, undefined, undefined, offered);
@@ -1469,7 +1509,7 @@ test("host.microphone calls the microphone command with its action, and passes r
   const { win, calls } = settingsWindow({
     microphone: ({ action }) => (action === "open-settings" ? null : answer),
   });
-  const microphone = install(win, ORIGIN, "native", true, true, false, undefined, undefined, undefined, true).host.microphone;
+  const microphone = install(win, ORIGIN, true, true, true, false, undefined, undefined, undefined, true).host.microphone;
   assert.equal(await microphone.state(), "prompt");
   answer = "granted";
   assert.equal(await microphone.request(), "granted");
@@ -1481,7 +1521,7 @@ test("host.microphone calls the microphone command with its action, and passes r
   ]);
   const refusal = { key: "internal", message: "System Settings could not be opened." };
   const failing = settingsWindow({ microphone: () => Object.assign(new Error(), { refusal }) });
-  const host = install(failing.win, ORIGIN, "native", true, true, false, undefined, undefined, undefined, true).host;
+  const host = install(failing.win, ORIGIN, true, true, true, false, undefined, undefined, undefined, true).host;
   await assert.rejects(host.microphone.openSettings(), (error) => error === refusal);
 });
 
@@ -1489,7 +1529,7 @@ test("host.microphone.onChange fires when state() changes (permission or device)
   const install = loadFactory();
   let answer = "granted";
   const { win, tick } = settingsWindow({ microphone: () => answer });
-  const microphone = install(win, ORIGIN, "native", true, true).host.microphone;
+  const microphone = install(win, ORIGIN, true, true, true).host.microphone;
   assert.throws(() => microphone.onChange("nope"), { name: "TypeError" });
   let fired = 0;
   const stop = microphone.onChange(() => { fired++; });

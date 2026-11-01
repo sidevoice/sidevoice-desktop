@@ -53,7 +53,7 @@ tokio = { version = "1", features = ["time", "sync", "rt", "rt-multi-thread", "n
 # A one-use helper capability, delivered only through its inherited stdin pipe.
 getrandom = "0.3"
 # The app log (src/lib.rs `applog`): a rotating, size-capped file in the platform's log directory, fed by the Rust side and
-# by the room page's console errors (bridge/webview-log.js).
+# by the room page's console errors (desktop/core/js/webview-log.js).
 tauri-plugin-log = "2"
 # The system privacy pages, from Rust only: the opener plugin the app registers (the microphone's, sidevoice-app-tauri).
 tauri-plugin-opener = "2"

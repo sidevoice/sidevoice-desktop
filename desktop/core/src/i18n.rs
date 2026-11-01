@@ -1,5 +1,5 @@
-//! The app's native texts (tray menu, call controls), keyed, one bundle per language, English the fallback for a
-//! missing key or a language without a bundle (AGENTS.md). The language is the system's when there is a bundle for
+//! The app's native texts (tray menu, call controls, the microphone's help for the page), keyed, one bundle per language,
+//! English the fallback for a missing key or a language without a bundle (AGENTS.md). The language is the system's when there is a bundle for
 //! it; the shell reads the system's preferred languages once at start and picks with [`language`].
 
 /// The languages with a bundle.
@@ -52,6 +52,11 @@ const EN: &[(&str, &str)] = &[
     ("tray.show", "Show Sidevoice"),
     ("tray.settings", "Settings…"),
     ("tray.quit", "Quit Sidevoice"),
+    ("microphone.help_macos", "Open System Settings › Privacy & Security › Microphone and turn on Sidevoice. Then check again."),
+    ("microphone.help_windows", "Open Settings › Privacy & security › Microphone and turn on “Microphone access” and “Let desktop apps access your microphone”. Then check again."),
+    ("microphone.help_linux", "Check that your system’s privacy and sound settings let Sidevoice use the microphone. Then check again."),
+    ("microphone.open_settings", "Open System Settings"),
+    ("microphone.open_settings_windows", "Open Windows Settings"),
 ];
 
 const ES: &[(&str, &str)] = &[
@@ -71,6 +76,11 @@ const ES: &[(&str, &str)] = &[
     ("tray.show", "Mostrar Sidevoice"),
     ("tray.settings", "Ajustes…"),
     ("tray.quit", "Salir de Sidevoice"),
+    ("microphone.help_macos", "Abre Ajustes del Sistema › Privacidad y seguridad › Micrófono y activa Sidevoice. Después vuelve a comprobar."),
+    ("microphone.help_windows", "Abre Configuración › Privacidad y seguridad › Micrófono y activa «Acceso al micrófono» y «Permitir que las aplicaciones de escritorio accedan al micrófono». Después vuelve a comprobar."),
+    ("microphone.help_linux", "Comprueba que los ajustes de privacidad y de sonido del sistema dejan a Sidevoice usar el micrófono. Después vuelve a comprobar."),
+    ("microphone.open_settings", "Abrir Ajustes del Sistema"),
+    ("microphone.open_settings_windows", "Abrir Configuración de Windows"),
 ];
 
 #[cfg(test)]
@@ -83,6 +93,20 @@ mod tests {
         assert_eq!(language(&["de-DE", "es_419"]), "es");
         assert_eq!(language(&["de-DE", "fr"]), "en", "English when nothing has a bundle");
         assert_eq!(language::<&str>(&[]), "en");
+    }
+
+    #[test]
+    fn the_microphone_help_is_worded_in_each_language() {
+        for key in [
+            "microphone.help_macos",
+            "microphone.help_windows",
+            "microphone.help_linux",
+            "microphone.open_settings",
+            "microphone.open_settings_windows",
+        ] {
+            assert!(lookup(EN, key).is_some() && lookup(ES, key).is_some(), "{key}");
+            assert_ne!(t("es", key), t("en", key), "{key}: Spanish is its own words");
+        }
     }
 
     #[test]

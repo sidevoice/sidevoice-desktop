@@ -5,6 +5,10 @@ use winreg::{enums::HKEY_CURRENT_USER, RegKey};
 pub(super) struct Native;
 
 impl Os for Native {
+    const SHORTCUT_MODIFIER: &'static str = "Ctrl";
+    const MICROPHONE_HELP: &'static str = "microphone.help_windows";
+    const MICROPHONE_SETTINGS_LABEL: Option<&'static str> = Some("microphone.open_settings_windows");
+
     fn host_name() -> Option<String> {
         whoami::hostname().ok()
     }

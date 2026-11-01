@@ -1,41 +1,45 @@
 //! The app's side of the desktop bridge (docs/BRIDGE.md).
 //!
 //! The room page reports a [`CallSnapshot`] through the `bridge_state` command; the app drives the
-//! page with a [`Command`], evaluated as a call to `window.__sidevoiceDesktop.run(...)`. Pure logic
+//! page with a [`Command`], evaluated as a call to `window.__sidevoiceHost.run(...)`. Pure logic
 //! here; the Tauri wiring lives in `lib.rs`.
 
 use serde::{Deserialize, Serialize};
 
 use crate::build_info::BuildInfo;
+use crate::i18n;
 
-/// Removes the WebView's default context menu (bridge/no-context-menu.js); appended to the scripts of every window.
-pub const NO_CONTEXT_MENU_SCRIPT: &str = include_str!("../../../bridge/no-context-menu.js");
+/// Removes the WebView's default context menu (desktop/core/js/no-context-menu.js); appended to the scripts of every window.
+pub const NO_CONTEXT_MENU_SCRIPT: &str = include_str!("../js/no-context-menu.js");
 
 /// Forwards the room page's console warnings and errors, uncaught errors and unhandled rejections to the app log
-/// (bridge/webview-log.js); the room window only.
-pub const WEBVIEW_LOG_SCRIPT: &str = include_str!("../../../bridge/webview-log.js");
+/// (desktop/core/js/webview-log.js); the room window only.
+pub const WEBVIEW_LOG_SCRIPT: &str = include_str!("../js/webview-log.js");
 
-/// The bridge script, with its room-origin placeholder still in place.
-pub const SCRIPT_TEMPLATE: &str = include_str!("../../../bridge/desktop-bridge.js");
+/// The desktop's part of the bridge script (what only this app has, and the assembly of `host`), with its placeholders
+/// still in place. The other two parts of the page's script are [`Parts`].
+pub const SCRIPT_TEMPLATE: &str = include_str!("../js/desktop-bridge.js");
 const ORIGIN_PLACEHOLDER: &str = "\"__SIDEVOICE_ROOM_ORIGIN__\"";
-const MEDIA_KEYS_PLACEHOLDER: &str = "\"__SIDEVOICE_MEDIA_KEYS__\"";
+const MEDIA_PLACEHOLDER: &str = "\"__SIDEVOICE_MEDIA__\"";
 const LOCAL_HOST_PLACEHOLDER: &str = "\"__SIDEVOICE_LOCAL_HOST__\"";
 const VOICE_PLACEHOLDER: &str = "\"__SIDEVOICE_VOICE__\"";
 const UPDATER_PLACEHOLDER: &str = "\"__SIDEVOICE_UPDATER__\"";
 const BUILD_PLACEHOLDER: &str = "\"__SIDEVOICE_BUILD__\"";
-const COMPUTER_NAME_PLACEHOLDER: &str = "\"__SIDEVOICE_COMPUTER_NAME__\"";
+const DEVICE_NAME_PLACEHOLDER: &str = "\"__SIDEVOICE_DEVICE_NAME__\"";
 const MICROPHONE_SETTINGS_PLACEHOLDER: &str = "\"__SIDEVOICE_MICROPHONE_SETTINGS__\"";
 const DEBUG_PLACEHOLDER: &str = "\"__SIDEVOICE_DEBUG__\"";
 const UNINSTALL_PLACEHOLDER: &str = "\"__SIDEVOICE_UNINSTALL__\"";
+const SHORTCUT_MODIFIER_PLACEHOLDER: &str = "\"__SIDEVOICE_SHORTCUT_MODIFIER__\"";
+const MICROPHONE_HELP_PLACEHOLDER: &str = "\"__SIDEVOICE_MICROPHONE_HELP__\"";
 
 /// What the app tells the page it offers beyond the web, the same on every OS: this computer's own core, the local host
-/// (`window.__sidevoiceDesktop.host.localHost`, docs/LOCAL_HOST.md), and the voice call the app runs itself
-/// (`window.__sidevoiceDesktop.host.voice`, docs/BRIDGE.md -> "The voice call"). Both are always offered; the page
-/// (web v0.11.0) still reads them, so the bridge keeps telling it until a web release no longer does.
+/// (`window.__sidevoiceHost.host.localHost`, docs/LOCAL_HOST.md), and the voice call the app runs itself
+/// (`window.__sidevoiceHost.host.voice`, docs/BRIDGE.md -> "The voice call"). Both are always offered; the flags stay
+/// while the script reads them.
 const OFFERED: &str = "true";
 
 /// The call controls card's bridge script, with its origin placeholder still in place.
-pub const CALL_CONTROLS_SCRIPT_TEMPLATE: &str = include_str!("../../../bridge/call-controls-bridge.js");
+pub const CALL_CONTROLS_SCRIPT_TEMPLATE: &str = include_str!("../js/call-controls-bridge.js");
 const APP_ORIGIN_PLACEHOLDER: &str = "\"__SIDEVOICE_APP_ORIGIN__\"";
 const RESIZE_PLACEHOLDER: &str = "\"__SIDEVOICE_RESIZE__\"";
 
@@ -54,54 +58,100 @@ pub fn call_controls_script(origin: &str, resize: bool) -> String {
 /// What the app pushes to the card: any subset of `{call, level, playback, place, size, pointerInside,
 /// outsideClicks, alwaysExpanded, muteShortcut}` (call-controls/host.ts `CallControlsState`).
 pub fn call_controls_push(patch: &serde_json::Value) -> String {
-    format!("window.__sidevoiceDesktop && window.__sidevoiceDesktop.receive({patch});")
+    format!("window.__sidevoiceHost && window.__sidevoiceHost.receive({patch});")
+}
+
+/// The parts of the page's script that other crates own, as the code they ship: `transport` is the shell binding's
+/// (`sidevoice-app-tauri`: how the page reaches the shared commands) and `members` the apps' (`sidevoice-app-core`: the
+/// engine, the voice call, the microphone, the pairings and the call state). Each is one function expression
+/// (docs/BRIDGE.md -> "Parts"). This crate names neither crate, so the app that has them hands them over.
+#[derive(Debug, Clone, Copy)]
+pub struct Parts<'a> {
+    pub transport: &'a str,
+    pub members: &'a str,
+}
+
+/// The page's script: the desktop's part, in a scope where the other two are `transportOf` and `membersOf`. The tests
+/// that run the script in node (test/bridge-source.mjs) compose it the same way.
+fn compose(parts: &Parts<'_>, desktop: &str) -> String {
+    format!("(function (transportOf, membersOf) {{\n{desktop}\n}})({}, {});", parts.transport, parts.members)
 }
 
 /// The script injected into the main window, bound to one page origin. `updater`: whether this copy of the app updates
-/// itself (`window.__sidevoiceDesktop.host.updater`; core `updater::offered`), which the shell finds at start; `build`:
-/// what this build is (`host.build`; core `build_info`); `computer_name`: the name the person gave this computer
-/// (`host.computerName`, absent with none; core `computer_name`); `debug`: the developer options kept in the settings,
+/// itself (`window.__sidevoiceHost.host.updater`; core `updater::offered`), which the shell finds at start; `build`:
+/// what this build is (`host.build`; core `build_info`); `device_name`: the name the person gave this computer
+/// (`host.deviceName`, absent with none; core `computer_name`); `debug`: the developer options kept in the settings,
 /// told to the page (with the switches this platform has) only in a build that offers `host.debug` (core `debug_options`);
 /// `microphone_settings`: whether the platform can open its microphone privacy page, independently of native voice.
 /// `diagnostics`: native diagnostic switches the shell actually implements on this runtime.
-/// `media_keys`: media-control ownership supplied by the shell, independently of native voice.
+/// `media`: whether the app owns the system's media controls (`host.presence`, offered only then), independently of native
+/// voice.
 /// `host.localHost` and `host.voice` are always offered ([`OFFERED`]).
-/// `uninstall`: whether the app can also remove itself after the reset (`host.data.uninstall`); delete-all and its
-/// report (`host.data.deleteAll`, `resetReport`) are on every host.
+/// `uninstall`: whether the app can also remove itself after the reset (`host.reset.uninstall`); delete-all and its
+/// report (`host.reset.deleteAll`, `resetReport`) are on every host.
+/// `shortcut_modifier`: the label of the modifier a shortcut is written with here, `⌘` or `Ctrl` (`host.shortcutModifier`;
+/// `platform::host::shortcut_modifier`).
+/// `microphone_help`: how to allow a blocked microphone here, in each language the app has words in (`host.microphone.help`;
+/// [`microphone_help], `platform::host::microphone_help`).
+/// `parts`: the transport and the members, composed with the desktop's part into the one script the page gets.
 #[allow(clippy::too_many_arguments)]
 pub fn script_for_origin(
     origin: &str,
     updater: bool,
     build: &BuildInfo,
-    computer_name: Option<&str>,
+    device_name: Option<&str>,
     debug: &crate::debug_options::DebugOptions,
     microphone_settings: bool,
     diagnostics: &[crate::debug_options::Switch],
-    media_keys: Option<&str>,
+    media: bool,
     uninstall: bool,
+    shortcut_modifier: &str,
+    microphone_help: &serde_json::Value,
+    parts: &Parts<'_>,
 ) -> String {
     let literal = serde_json::to_string(origin).expect("a string serialises");
-    let keys = serde_json::to_string(&media_keys).expect("serialises");
     let flag = |offered: bool| if offered { "true" } else { "false" };
     let debug = if crate::debug_options::offered(&build.channel) {
         debug.state(diagnostics).to_string()
     } else {
         "null".to_owned()
     };
-    SCRIPT_TEMPLATE
+    let desktop = SCRIPT_TEMPLATE
         .replacen(ORIGIN_PLACEHOLDER, &literal, 1)
-        .replacen(MEDIA_KEYS_PLACEHOLDER, &keys, 1)
+        .replacen(MEDIA_PLACEHOLDER, flag(media), 1)
         .replacen(LOCAL_HOST_PLACEHOLDER, OFFERED, 1)
         .replacen(VOICE_PLACEHOLDER, OFFERED, 1)
         .replacen(UPDATER_PLACEHOLDER, flag(updater), 1)
         .replacen(BUILD_PLACEHOLDER, &serde_json::to_string(build).expect("serialises"), 1)
-        .replacen(COMPUTER_NAME_PLACEHOLDER, &serde_json::to_string(&computer_name).expect("serialises"), 1)
+        .replacen(DEVICE_NAME_PLACEHOLDER, &serde_json::to_string(&device_name).expect("serialises"), 1)
         .replacen(DEBUG_PLACEHOLDER, &debug, 1)
         .replacen(MICROPHONE_SETTINGS_PLACEHOLDER, flag(microphone_settings), 1)
         .replacen(UNINSTALL_PLACEHOLDER, flag(uninstall), 1)
+        .replacen(SHORTCUT_MODIFIER_PLACEHOLDER, &serde_json::to_string(shortcut_modifier).expect("serialises"), 1)
+        .replacen(MICROPHONE_HELP_PLACEHOLDER, &microphone_help.to_string(), 1);
+    compose(parts, &desktop)
 }
 
-/// The bridge's version: the room page sends it in every snapshot (bridge/desktop-bridge.js).
+/// How to allow a blocked microphone, for `host.microphone.help(language)`: one entry per language the app has words in
+/// (`i18n::LANGUAGES`), `{ "steps": [text], "openSettings"?: label }`, the texts being the catalogue's `help` and
+/// `settings_label` keys in that language (English where it lacks one). The label is there only where the system has a
+/// settings page to open. The page's script picks the entry for the language it asks in, or English.
+pub fn microphone_help(help: &str, settings_label: Option<&str>) -> serde_json::Value {
+    let entry = |language: &str| {
+        let mut entry = serde_json::json!({ "steps": [i18n::t(language, help)] });
+        if let Some(label) = settings_label {
+            entry["openSettings"] = i18n::t(language, label).into();
+        }
+        entry
+    };
+    i18n::LANGUAGES
+        .iter()
+        .map(|&language| (language.to_owned(), entry(language)))
+        .collect::<serde_json::Map<_, _>>()
+        .into()
+}
+
+/// The bridge's version: the room page sends it in every snapshot (desktop/core/js/desktop-bridge.js).
 pub const VERSION: u32 = 2;
 
 /// What the agent is doing, as the room's view model says (its `session`): the card's avatar shows it, and only it.
@@ -232,7 +282,7 @@ impl Command {
     /// as JSON, so no value it carries can break out of the call.
     pub fn script(&self) -> String {
         let json = serde_json::to_string(self).expect("a command serialises");
-        format!("window.__sidevoiceDesktop && window.__sidevoiceDesktop.run({json});")
+        format!("window.__sidevoiceHost && window.__sidevoiceHost.run({json});")
     }
 }
 
@@ -323,6 +373,9 @@ fn with_title(status: &str, title: &str) -> String {
 mod tests {
     use super::*;
 
+    /// Stand-ins for the transport and the members, which other crates own.
+    const PARTS: Parts<'static> = Parts { transport: "TRANSPORT", members: "MEMBERS" };
+
     #[test]
     fn tray_icon_slot_applies_only_changes_and_only_the_latest() {
         use TrayIcon::*;
@@ -376,10 +429,28 @@ mod tests {
         assert!(NO_CONTEXT_MENU_SCRIPT.contains("contextmenu"));
     }
 
+    /// The microphone's help as the macOS build tells the page.
+    fn macos_help() -> serde_json::Value {
+        microphone_help("microphone.help_macos", Some("microphone.open_settings"))
+    }
+
+    #[test]
+    fn the_microphone_help_is_in_each_language_and_names_the_settings_button_only_where_there_is_a_page() {
+        let with = macos_help();
+        assert_eq!(with["en"]["steps"][0], i18n::t("en", "microphone.help_macos"));
+        assert_eq!(with["es"]["steps"][0], i18n::t("es", "microphone.help_macos"));
+        assert_eq!(with["es"]["openSettings"], "Abrir Ajustes del Sistema");
+        assert_eq!(with.as_object().unwrap().len(), i18n::LANGUAGES.len());
+        let without = microphone_help("microphone.help_linux", None);
+        assert!(without["en"].get("openSettings").is_none() && without["es"].get("openSettings").is_none());
+        assert_eq!(without["en"]["steps"].as_array().unwrap().len(), 1);
+    }
+
     #[test]
     fn script_binds_the_origin_as_a_js_string() {
         let dev = BuildInfo::new("dev", "0.4.0", "", "");
         let off = crate::debug_options::DebugOptions::default();
+        let help = macos_help();
         let s = script_for_origin(
             "https://voice.example.com",
             false,
@@ -388,31 +459,49 @@ mod tests {
             &off,
             false,
             &crate::debug_options::Switch::ALL,
-            Some("native"),
+            true,
             false,
+            "⌘",
+            &help,
+            &PARTS,
         );
         assert!(!s.contains("__SIDEVOICE_ROOM_ORIGIN__"));
-        assert!(!s.contains("__SIDEVOICE_MEDIA_KEYS__"));
+        assert!(!s.contains("__SIDEVOICE_MEDIA__"));
         assert!(!s.contains("__SIDEVOICE_LOCAL_HOST__"));
         assert!(!s.contains("__SIDEVOICE_VOICE__"));
         assert!(!s.contains("__SIDEVOICE_UPDATER__"));
         assert!(!s.contains("__SIDEVOICE_BUILD__"));
-        assert!(!s.contains("__SIDEVOICE_COMPUTER_NAME__"));
+        assert!(!s.contains("__SIDEVOICE_DEVICE_NAME__"));
         assert!(!s.contains("__SIDEVOICE_DEBUG__"));
         assert!(!s.contains("__SIDEVOICE_MICROPHONE_SETTINGS__"));
         assert!(!s.contains("__SIDEVOICE_UNINSTALL__"));
-        let platform = r#""native", true, true"#;
+        assert!(!s.contains("__SIDEVOICE_SHORTCUT_MODIFIER__"));
+        assert!(!s.contains("__SIDEVOICE_MICROPHONE_HELP__"));
+        let platform = "true, true, true";
         let dev_build = r#"{"channel":"dev","version":"0.4.0"}"#;
         // A dev build has the developer options: what the settings keep, and the switches this platform has.
         let debug = off.state(&crate::debug_options::Switch::ALL);
+        let told = help.to_string();
         let expected = format!(
-            r#"factory(window, "https://voice.example.com", {platform}, false, {dev_build}, null, {debug}, false, false)"#
+            r#"factory(window, "https://voice.example.com", {platform}, false, {dev_build}, null, {debug}, false, false, "⌘", {told})"#
         );
         assert!(s.contains(&expected), "{expected}");
-        let no_diagnostics =
-            script_for_origin("https://voice.example.com", false, &dev, None, &off, false, &[], None, false);
+        let no_diagnostics = script_for_origin(
+            "https://voice.example.com",
+            false,
+            &dev,
+            None,
+            &off,
+            false,
+            &[],
+            false,
+            false,
+            "Ctrl",
+            &help,
+            &PARTS,
+        );
         assert!(no_diagnostics.contains(&off.state(&[]).to_string()));
-        assert!(no_diagnostics.contains(r#"factory(window, "https://voice.example.com", null,"#));
+        assert!(no_diagnostics.contains(r#"factory(window, "https://voice.example.com", false,"#));
         // A release that can update itself: the page gets `host.updater`, and `host.build` says it is a release.
         let release = BuildInfo::new("release", "0.4.0", "", "");
         let offered = script_for_origin(
@@ -423,11 +512,14 @@ mod tests {
             &off,
             true,
             &crate::debug_options::Switch::ALL,
-            Some("native"),
             true,
+            true,
+            "⌘",
+            &help,
+            &PARTS,
         );
         let expected = format!(
-            r#"factory(window, "https://voice.example.com", {platform}, true, {{"channel":"release","version":"0.4.0"}}, "Mac de Ana", null, true, true)"#
+            r#"factory(window, "https://voice.example.com", {platform}, true, {{"channel":"release","version":"0.4.0"}}, "Mac de Ana", null, true, true, "⌘", {told})"#
         );
         assert!(offered.contains(&expected), "{expected}");
         // A hostile value cannot break out of the string literal.
@@ -439,20 +531,88 @@ mod tests {
             &off,
             true,
             &crate::debug_options::Switch::ALL,
-            Some("native"),
+            true,
             false,
+            "\"); alert(1); (\"",
+            &help,
+            &PARTS,
         );
         assert!(evil.contains(r#"factory(window, "\"); alert(1); (\"""#));
         assert!(evil.contains(r#"{"channel":"dev","version":"0.4.0"}, "\"); alert(1); (\"", "#));
+        assert!(evil.contains(&format!(r#", false, "\"); alert(1); (\"", {told})"#)));
+        // The help is JSON the catalogue wrote: whatever its texts hold stays inside the literal, as the other values do.
+        let quoting = microphone_help("quote\"); alert(1); (\"", None);
+        let hostile = script_for_origin(
+            "https://voice.example.com",
+            false,
+            &dev,
+            None,
+            &off,
+            false,
+            &[],
+            false,
+            false,
+            "Ctrl",
+            &quoting,
+            &PARTS,
+        );
+        assert!(hostile.contains(&quoting.to_string()));
+    }
+
+    /// The page's script is the desktop's part in a scope where the transport and the members are `transportOf` and
+    /// `membersOf`, the shape test/bridge-source.mjs composes to run the same script in node.
+    #[test]
+    fn the_script_is_the_desktops_part_with_the_other_two_in_scope() {
+        let dev = BuildInfo::new("dev", "0.4.0", "", "");
+        let off = crate::debug_options::DebugOptions::default();
+        let help = macos_help();
+        let script = script_for_origin(
+            "https://voice.example.com",
+            false,
+            &dev,
+            None,
+            &off,
+            false,
+            &[],
+            false,
+            false,
+            "Ctrl",
+            &help,
+            &PARTS,
+        );
+        assert!(
+            script.starts_with("(function (transportOf, membersOf) {\n// Sidevoice desktop bridge"),
+            "{script:.120}"
+        );
+        assert!(script.ends_with("\n})(TRANSPORT, MEMBERS);"));
+        assert_eq!(
+            script.matches("TRANSPORT").count(),
+            1,
+            "the parts are handed over once, and not read by the desktop's"
+        );
+        assert_eq!(script.matches("MEMBERS").count(), 1);
     }
 
     #[test]
     fn the_local_host_and_the_voice_call_are_offered_on_every_os() {
         let dev = BuildInfo::new("dev", "0.4.0", "", "");
         let off = crate::debug_options::DebugOptions::default();
-        let told =
-            script_for_origin("https://voice.example.com", false, &dev, None, &off, false, &[], Some("native"), false);
-        let line = r#"factory(window, "https://voice.example.com", "native", true, true, false, {"channel":"dev","version":"0.4.0"}, null, "#;
+        let help = macos_help();
+        let told = script_for_origin(
+            "https://voice.example.com",
+            false,
+            &dev,
+            None,
+            &off,
+            false,
+            &[],
+            true,
+            false,
+            "Ctrl",
+            &help,
+            &PARTS,
+        );
+        let line = r#"factory(window, "https://voice.example.com", true, true, true, false, {"channel":"dev","version":"0.4.0"}, null, "#;
         assert!(told.contains(line), "{line}");
     }
 
@@ -461,11 +621,25 @@ mod tests {
     fn the_uninstall_offer_is_told_to_the_page_and_changes_nothing_else() {
         let dev = BuildInfo::new("dev", "0.4.0", "", "");
         let off = crate::debug_options::DebugOptions::default();
+        let help = macos_help();
         let script = |uninstall| {
-            script_for_origin("https://voice.example.com", false, &dev, None, &off, false, &[], None, uninstall)
+            script_for_origin(
+                "https://voice.example.com",
+                false,
+                &dev,
+                None,
+                &off,
+                false,
+                &[],
+                false,
+                uninstall,
+                "Ctrl",
+                &help,
+                &PARTS,
+            )
         };
-        // The factory's last arguments: the microphone settings (false here), then the uninstall.
-        let call = |told: &str| format!("false, {told});\n}})(function installDesktopBridge(");
+        // The factory's last arguments: the microphone settings (false here), the uninstall, the shortcut modifier, then the help.
+        let call = |told: &str| format!("false, {told}, \"Ctrl\", {help});\n}})(function installDesktopBridge(");
         let (without, with) = (script(false), script(true));
         assert!(without.contains(&call("false")) && with.contains(&call("true")));
         assert_eq!(with.replacen(&call("true"), &call("false"), 1), without);
@@ -487,7 +661,7 @@ mod tests {
     fn commands_travel_as_json() {
         assert_eq!(
             Command::ToggleMute.script(),
-            r#"window.__sidevoiceDesktop && window.__sidevoiceDesktop.run({"command":"toggle-mute"});"#
+            r#"window.__sidevoiceHost && window.__sidevoiceHost.run({"command":"toggle-mute"});"#
         );
         assert_eq!(Command::HangUp.name(), "hang-up");
         let pick = Command::SelectParticipant { thread_id: "t\"); alert(1); (\"".into() };

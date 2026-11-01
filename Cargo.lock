@@ -77,6 +77,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "android-native-keyring-store"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "48c6349ddff23194f8fdce2ea8849380f5a4868c1648965b70e801e104cba9b3"
+dependencies = [
+ "base64 0.22.1",
+ "jni 0.21.1",
+ "keyring-core",
+ "log",
+ "ndk-context",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tracing",
+]
+
+[[package]]
 name = "android_log-sys"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -287,6 +305,16 @@ name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
+
+[[package]]
+name = "atomic-write-file"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae67d5c03ee972c101a1d8db3ddbf8a9c819ad1ea9d6fd9cd385605547b60edb"
+dependencies = [
+ "nix",
+ "rand",
+]
 
 [[package]]
 name = "autocfg"
@@ -4902,6 +4930,7 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 name = "sidevoice-app-core"
 version = "0.3.0"
 dependencies = [
+ "android-native-keyring-store",
  "apple-native-keyring-store",
  "base64 0.22.1",
  "futures-util",
@@ -5089,6 +5118,29 @@ dependencies = [
  "tar",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "sidevoice-mobile"
+version = "0.1.0"
+dependencies = [
+ "atomic-write-file",
+ "objc2-foundation",
+ "serde_json",
+ "sidevoice-mobile-plugin",
+ "tauri",
+ "tauri-build",
+ "tempfile",
+]
+
+[[package]]
+name = "sidevoice-mobile-plugin"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
 ]
 
 [[package]]

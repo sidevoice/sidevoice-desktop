@@ -3,6 +3,7 @@
 
 pub mod checks;
 pub mod host_graph;
+pub mod mobile;
 pub mod packaging;
 pub mod platform;
 pub mod platform_guard;

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Sidevoice",
+  "version": "0.1.0",
+  "identifier": "ai.sidevoice.mobile",
+  "build": {
+    "frontendDist": "../ui",
+    "beforeDevCommand": "npm run web",
+    "beforeBuildCommand": "npm run web"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "category": "Productivity",
+    "shortDescription": "Give your agent a voice.",
+    "longDescription": "Sidevoice: give your coding agent a voice. Keep the conversation.",
+    "license": "Apache-2.0",
+    "copyright": "Copyright 2026 Ruben Pahino",
+    "icon": ["app-icon/window.png", "app-icon/window.ico"],
+    "iOS": {
+      "minimumSystemVersion": "15.0"
+    },
+    "android": {
+      "minSdkVersion": 26
+    }
+  }
+}
