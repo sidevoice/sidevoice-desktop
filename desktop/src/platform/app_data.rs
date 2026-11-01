@@ -71,6 +71,28 @@ pub fn delete_data(home: &Path, browser: &io::Result<Released>, steps: Steps) ->
     Native::delete_extra_data(&home, steps)
 }
 
+/// The folders that hold an install's data under the bundle identifier `previous` and under the app's own, paired: the
+/// app data folder first, then each browser storage root that is not inside it (`webview_data`), resolved by the same
+/// rule for both so the pairs line up. Only `legacy_identifier` asks, to carry an install over from `previous`.
+pub fn carried_from(home: &Path, previous: &str) -> Result<Vec<(PathBuf, PathBuf)>, &'static str> {
+    let (old, new) = (install_folders(home, previous)?, install_folders(home, IDENTIFIER)?);
+    Ok(old.into_iter().zip(new).collect())
+}
+
+/// The app data folder under `identifier` for `home`, then the browser storage roots that are not inside it.
+fn install_folders(home: &Path, identifier: &str) -> Result<Vec<PathBuf>, &'static str> {
+    let Places { data, webview, .. } = Places::native(home.to_path_buf(), identifier)?;
+    let mut folders: Vec<PathBuf> = webview.into_iter().filter(|root| !root.starts_with(&data)).collect();
+    folders.insert(0, data);
+    Ok(folders)
+}
+
+/// Make the folder `path`, failing when anything is there already, so that no other user can enter it until the caller
+/// gives it its final permissions: the copies `legacy_identifier` makes of an install.
+pub fn create_folder(path: &Path) -> io::Result<()> {
+    Native::create_folder(path)
+}
+
 /// Read-only: whether an existing protected directory under `home` (the connector's data and releases) and its
 /// whole tree could be removed. It must be an ordinary directory, reached from `home` with no link or volume
 /// change. A missing directory passes. The `Err` is a short reason.
@@ -84,12 +106,15 @@ trait Os {
     fn delete_extra_data(_home: &Home, _steps: Steps) -> Result<(), Error> {
         Ok(())
     }
+
+    /// [`create_folder`].
+    fn create_folder(path: &Path) -> io::Result<()>;
 }
 
 /// The app folders every OS has, once `home` is checked to still be the account home.
 fn delete_app_folders(home: &Home, browser: &io::Result<Released>, steps: Steps) -> Result<(), Error> {
     let places = match account::home() {
-        Ok(account) if account == home.path => Places::native(account),
+        Ok(account) if account == home.path => Places::native(account, IDENTIFIER),
         _ => Err("unsafe-home"),
     };
     delete_folders(home, places, browser, steps)
@@ -149,14 +174,15 @@ struct Folders {
 }
 
 impl Places {
-    /// For the account `home` (`account::home`).
-    fn native(home: PathBuf) -> Result<Self, &'static str> {
+    /// For the account `home` (`account::home`), under the bundle identifier `identifier` (the app's own, except for
+    /// [`carried_from`]).
+    fn native(home: PathBuf, identifier: &str) -> Result<Self, &'static str> {
         let unavailable = "reset.unavailable";
-        let webview = webview_data::locations(&home).map_err(|_| unavailable)?.paths().to_vec();
+        let webview = webview_data::locations_of(&home, identifier).map_err(|_| unavailable)?.paths().to_vec();
         Ok(Self {
-            data: dirs::data_dir().ok_or(unavailable)?.join(IDENTIFIER),
-            cache: dirs::cache_dir().ok_or(unavailable)?.join(IDENTIFIER),
-            logs: dirs::data_local_dir().ok_or(unavailable)?.join(IDENTIFIER).join("logs"),
+            data: dirs::data_dir().ok_or(unavailable)?.join(identifier),
+            cache: dirs::cache_dir().ok_or(unavailable)?.join(identifier),
+            logs: dirs::data_local_dir().ok_or(unavailable)?.join(identifier).join("logs"),
             models: sidevoice_platform::data_dir::models_dir().ok_or(unavailable)?,
             webview,
         })
@@ -530,7 +556,7 @@ mod tests {
     #[test]
     fn native_folders_are_inside_home_distinct_and_unnested() {
         let Ok(home) = account::home() else { return };
-        let Ok(folders) = Places::native(home.clone()).map(Folders::from) else { return };
+        let Ok(folders) = Places::native(home.clone(), IDENTIFIER).map(Folders::from) else { return };
         for (index, folder) in folders.list.iter().enumerate() {
             assert!(folder.path.starts_with(&home) && folder.path != home);
             assert!(folders.list[index + 1..]
@@ -538,6 +564,33 @@ mod tests {
                 .all(|other| !other.path.starts_with(&folder.path) && !folder.path.starts_with(&other.path)));
         }
         assert!(folders.list.iter().any(|folder| folder.name == "models" && folder.path == folders.models));
+    }
+
+    #[test]
+    fn a_new_folder_is_made_once_and_lets_no_one_else_in() {
+        let (_temp, home) = fixture();
+        let folder = home.join("copy");
+        create_folder(&folder).unwrap();
+        assert_eq!(create_folder(&folder).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+        // As private as a private directory: the same mode on Unix; on Windows both are left to their ACL.
+        assert_eq!(fs::metadata(&folder).unwrap().permissions(), fs::metadata(&home).unwrap().permissions());
+    }
+
+    #[test]
+    fn each_carried_folder_is_paired_with_the_same_one_under_the_apps_identifier() {
+        let old = "dev.sidevoice.desktop";
+        let Ok(home) = account::home() else { return };
+        let Ok(pairs) = carried_from(&home, old) else { return };
+        assert_eq!(pairs[0].1, dirs::data_dir().unwrap().join(IDENTIFIER), "Tauri's app data folder, first");
+        for (index, (from, to)) in pairs.iter().enumerate() {
+            assert!(from.starts_with(&home) && to.starts_with(&home));
+            assert_eq!(from.to_string_lossy().replace(old, IDENTIFIER), to.to_string_lossy());
+            // Distinct and unnested: each one is copied on its own.
+            assert!(pairs[index + 1..].iter().all(|(other, _)| !other.starts_with(from) && !from.starts_with(other)));
+        }
+        // All of the browser storage is carried.
+        let webview = webview_data::locations(&home).unwrap();
+        assert!(webview.paths().iter().all(|root| pairs.iter().any(|(_, to)| root.starts_with(to))));
     }
 
     #[test]
