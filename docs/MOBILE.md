@@ -68,7 +68,7 @@ part, `mobile/js/mobile-bridge.js`, which assembles `host`:
 | `host.*` | What |
 |---|---|
 | `voice`, `engine` | The voice call the app runs itself (sidevoice-voice on the phone's microphone and speaker) and the engine it takes its models from: sherpa-onnx (Silero) and the remote providers on a phone (sidevoice-engine's README, "Android" and "iOS"). |
-| `microphone` | The system's own permission (`sidevoice-app-tauri`'s `platform/microphone`); `openSettings` opens the app's page of the system's settings. |
+| `microphone` | The system's own permission, never the webview's: AVFoundation's on iOS, the runtime permission on Android (`sidevoice-app-tauri`'s `platform/microphone`). `openSettings` opens the app's page of the system's settings, and `help(language)` gives the app's own words for a blocked microphone on this phone (`mobile/src/i18n.rs`, en and es, English the fallback; D-HOST-OS). |
 | `pairings` | The pairings in the app's private storage (`mobile/src/pairings.rs`), not the webview's. |
 | `presence` | `{ media: "app" }`: the app owns the call's audio, so the page registers no Media Session and plays no Now Playing element of its own. Its headset buttons and lock-screen controls are sidevoice-desktop#349: until then a phone has **none** (the shared plugin's `platform/media_controls` has bodies for the computers only, and is not in a phone's build). |
 | `reach` | `{ plainHttpPrivate: true }`, as on the desktop. |
