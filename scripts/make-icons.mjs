@@ -7,6 +7,9 @@
 //   desktop/packaging/shared/tray/{idle,live,muted}.png          macOS menu bar, template images (one ink)
 //   desktop/packaging/shared/tray/{light,dark}-{idle,live,muted}.png   Windows / Linux tray, for light and dark bars
 //   desktop/packaging/macos/dmg/background.png, background@2x.png      the .dmg window
+//   mobile/app-icon/{icon.png,android-foreground.png,app-icon.json}   the mobile app's icon sources: `cargo xtask mobile generate`
+//                                                                    derives every size from them (`tauri icon`)
+//   mobile/app-icon/window.{png,ico}                                   the window icon its build embeds (never shown on a phone)
 //
 //   npm run icons
 //
@@ -155,6 +158,18 @@ for (const [file, size] of [["32x32.png", 32], ["64x64.png", 64], ["128x128.png"
 }
 // For the screens in docs/brand-screens and anyone who wants to look at it.
 out("desktop/packaging/macos/macos-1024.png", mac[1024]);
+
+// Mobile: the sources `tauri icon` derives every size from (the app's `gen/` projects get them when they are generated).
+// iOS wants a square with no transparency (the system rounds it) and Android an adaptive icon: the plate's colour as the
+// background, and the mark alone as the foreground, on a 1024 canvas standing for the 108 dp one. The system shows its
+// 72 dp centre, in which the mark's bars span 63 % of the plate as they do in the tile: the mark's 24 box at 684 px.
+const TILE_COLOUR = TILE.match(/<rect width="24" height="24" rx="[\d.]+" fill="(#[0-9a-f]{6})"/)[1];
+out("mobile/app-icon/icon.png", png(svg(24, 24, inner(TILE).replace(/(<rect width="24" height="24") rx="[\d.]+"/, "$1")), 1024));
+out("mobile/app-icon/android-foreground.png", png(svg(1024, 1024, place(MARK_DARK, 170, 170, 684)), 1024));
+out("mobile/app-icon/app-icon.json", JSON.stringify({ default: "icon.png", bg_color: TILE_COLOUR, android_fg: "android-foreground.png" }, null, 2) + "\n");
+out("mobile/app-icon/window.png", png(svg(24, 24, inner(TILE)), 32));
+// tauri-build wants an .ico too where it builds the crate for a Windows host (the desktop workflows do, to check it).
+out("mobile/app-icon/window.ico", ico([[32, png(svg(24, 24, inner(TILE)), 32)]]));
 
 // ------------------------------------------------------------------ tray
 

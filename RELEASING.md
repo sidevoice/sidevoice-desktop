@@ -8,10 +8,11 @@ two apart.
 
 ## Two products in one repository
 
-The mobile app (`mobile/`, plan: sidevoice/sidevoice-desktop#289) does not exist yet and nothing here builds it. What
-is ready for it, so that adding it needs no change to the desktop app's tags, releases or nightly:
+The mobile app lives in `mobile/` (plan: sidevoice/sidevoice-desktop#289) and has no release package yet: per
+sidevoice/sidevoice-desktop#320 the package is added at the first store submission. What is ready for it, so that adding
+the package needs no change to the desktop app's tags, releases or nightly:
 
-| | Desktop app (today) | Mobile app (when it exists) |
+| | Desktop app (today) | Mobile app (once its package exists) |
 |---|---|---|
 | release-please package | `.` (every commit; with the mobile package, every commit except the ones that touch only `mobile/`) | `mobile` |
 | Tag | `vX.Y.Z` (unchanged) | `mobile-vX.Y.Z` |

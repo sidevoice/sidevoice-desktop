@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Merged by Gradle into the generated app's manifest, which this project never edits (design D.4, generator model
+     G-a). The template sets usesCleartextTraffic to false in a release build; a network security config takes
+     precedence over it. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:networkSecurityConfig="@xml/network_security_config" />
+</manifest>
