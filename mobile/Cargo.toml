@@ -34,6 +34,8 @@ log = "0.4"
 [target.'cfg(target_os = "ios")'.dependencies]
 # The pairings file out of the device backup (src/platform/backup/ios.rs): NSURL's `NSURLIsExcludedFromBackupKey`. Already
 # in the iOS build through Tauri; only the types the call names.
+# The web view's scroll view (src/platform/webview/ios.rs): one message to it, no UIKit types.
+objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSError", "NSString", "NSURL", "NSValue"] }
 
 [target.'cfg(target_os = "android")'.dependencies]

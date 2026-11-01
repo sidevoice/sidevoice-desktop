@@ -216,7 +216,9 @@ fn run_app() {
                         *page_app.state::<LastReport>().0.lock().unwrap() = CallReport::default();
                     }
                 })
-                .build()?;
+                .build()?
+                // The page owns the safe areas: the web view runs edge to edge (`platform::webview`).
+                .with_webview(|webview| platform::webview::cover_screen(&webview))?;
             Ok(())
         })
         .build(tauri::generate_context!())
