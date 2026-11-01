@@ -664,9 +664,13 @@ impl SecretDir {
         Ok(SecretDir { path })
     }
 
-    /// A new file in it holding `bytes`, created readable and writable by this user only (0600).
+    /// A new file in it holding `bytes`, created readable and writable by this user only (0600). A `name` with
+    /// directories (`private_keys/AuthKey.p8`) has them made private (0700) first.
     pub fn file(&self, name: &str, bytes: &[u8]) -> Result<PathBuf> {
         let path = self.path.join(name);
+        if let Some(parent) = path.parent().filter(|parent| *parent != self.path) {
+            Files::ensure_private_dir(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
         Files::create_private(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
         Ok(path)
     }
@@ -858,6 +862,8 @@ mod tests {
             Files::shut_others_out(&key);
             assert_eq!(read_secret(&key).unwrap(), b"fixture-secret");
             assert!(dir.file("key", b"replacement").is_err());
+            let nested = dir.file("private_keys/AuthKey_1.p8", b"nested-secret").unwrap();
+            assert_eq!(read_secret(&nested).unwrap(), b"nested-secret");
             let missing = read_secret(&dir.path.join("missing")).unwrap_err();
             assert!(!missing.contains("fixture-secret"));
         }

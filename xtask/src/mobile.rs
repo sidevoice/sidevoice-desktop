@@ -19,10 +19,12 @@
 //!   is that check alone, ios.rs).
 //! - `mobile sign android`: sign.rs.
 //! - `mobile test android`: the Kotlin library's JVM unit tests, in the generated project (after a build).
+//! - `mobile testflight --build-number N`: the signed iOS archive uploaded to TestFlight, by hand from main (testflight.rs).
 
 pub mod check;
 pub mod ios;
 pub mod sign;
+pub mod testflight;
 
 use std::fs;
 use std::io::Cursor;
