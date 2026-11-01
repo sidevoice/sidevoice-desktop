@@ -718,9 +718,9 @@ interface MicrophonePermission {
   `state()`: there is nothing to ask.
 - `onChange(listener)`: `listener()` whenever `state()` changes, so on a permission change and on a microphone plugged
   in or out; the page reads `state()` again. Polled every 2 s while anyone listens; returns `stop`.
-- `openSettings()`: only where the OS has a standard microphone privacy page (macOS, Windows and iOS; absent on Linux, which
-  has none, and on Android, whose app-details page is an intent the opener cannot send). It opens a fixed URL through
-  `tauri-plugin-opener` (Rust API) and accepts no URL or program from the page; no generic opener permission is granted to JavaScript, and the plugin's automatic link interception is disabled.
+- `openSettings()`: only where the OS has a microphone privacy page (macOS, Windows, iOS and Android; absent on Linux, which
+  has none). It opens a fixed URL through
+  `tauri-plugin-opener` (Rust API; on Android, an intent the plugin's Kotlin class sends, below) and accepts no URL or program from the page; no generic opener permission is granted to JavaScript, and the plugin's automatic link interception is disabled.
   Opening it says nothing about access. The page detects it by presence.
 - A refusal rejects `{key, message}`: `bad_request` for a malformed call or another caller, `internal` when the system
   does not answer or Settings does not open.
@@ -740,7 +740,9 @@ device, a missing device beats everything else, and a grant needs a readable dev
   `MicrophonePlugin`), through Tauri's `checkPermissions` and `requestPermissions` commands, which also remember a refusal
   for good: not asked yet, or refused once → `"prompt"`, granted → `"granted"`, refused for good → `"denied"`. The class's
   library manifest declares the permission, which the app's merged manifest then has; without that declaration the system
-  refuses without a prompt. The Rust side holds the loaded class from the plugin's setup on. No settings page is opened.
+  refuses without a prompt. The Rust side holds the loaded class from the plugin's setup on. Settings: the app's own
+  details page (`Settings.ACTION_APPLICATION_DETAILS_SETTINGS` with `package:<id>`), where a refusal for good is undone;
+  the class sends that intent itself (`openSettings`), because the opener plugin only sends an `ACTION_VIEW` of a URI.
 - **Windows:** the registry privacy policy, read with `winreg` (no writes): the machine switch
   (`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone`) and this user's
   desktop-app switch (`HKCU\…\microphone\NonPackaged`), value `Value`. Sidevoice is an unpackaged NSIS executable, so

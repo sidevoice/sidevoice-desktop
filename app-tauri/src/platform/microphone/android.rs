@@ -1,17 +1,20 @@
 //! Android's runtime permission `RECORD_AUDIO`, asked of the person by the plugin's Kotlin class
 //! (`android/src/main/java/ai/sidevoice/app/MicrophonePlugin.kt`) through Tauri's own `checkPermissions` and
 //! `requestPermissions` commands: they hold the activity result and remember a "never ask again", which the system's
-//! `checkSelfPermission` alone cannot tell from "not asked yet".
-use super::{AccessState, Os};
+//! `checkSelfPermission` alone cannot tell from "not asked yet". The same class opens the app's page of the system's
+//! settings (`openSettings`), where that refusal is undone.
+use super::{AccessState, Os, SETTINGS_NOT_OPENED};
 use serde_json::{json, Value};
 use std::{error::Error, future::Future, pin::Pin, sync::OnceLock};
 use tauri::plugin::{PluginApi, PluginHandle};
-use tauri::Runtime;
+use tauri::{AppHandle, Runtime};
 
 /// The Kotlin class and the alias of the permission it declares.
 const PACKAGE: &str = "ai.sidevoice.app";
 const CLASS: &str = "MicrophonePlugin";
 const ALIAS: &str = "microphone";
+/// The class's own command that opens the app's page of the system's settings.
+const OPEN_SETTINGS: &str = "openSettings";
 
 const UNANSWERED: &str = "The system did not answer the microphone request.";
 
@@ -30,6 +33,16 @@ impl Os for Native {
     async fn ask() -> Result<AccessState, &'static str> {
         access(&KOTLIN.get().ok_or(UNANSWERED)?.request().await?)
     }
+
+    /// The app's page of the system's settings, where a refusal for good is undone. It is an intent, which the opener
+    /// plugin (an `ACTION_VIEW` of a URI) cannot send, so the Kotlin class sends it.
+    fn settings_available() -> bool {
+        true
+    }
+
+    fn open_settings<R: Runtime>(_app: &AppHandle<R>) -> Result<(), &'static str> {
+        KOTLIN.get().ok_or(SETTINGS_NOT_OPENED)?.open_settings()
+    }
 }
 
 /// The permission commands of the loaded class, whatever runtime its handle belongs to: the platform's functions take
@@ -39,6 +52,8 @@ trait Kotlin: Send + Sync {
     fn check(&self) -> Result<Value, &'static str>;
     /// Prompts when the system will, and answers with the states once the person has.
     fn request(&self) -> Pin<Box<dyn Future<Output = Result<Value, &'static str>> + Send + '_>>;
+    /// Shows the app's page of the system's settings.
+    fn open_settings(&self) -> Result<(), &'static str>;
 }
 
 impl<R: Runtime> Kotlin for PluginHandle<R> {
@@ -51,6 +66,11 @@ impl<R: Runtime> Kotlin for PluginHandle<R> {
         Box::pin(async {
             self.run_mobile_plugin_async("requestPermissions", request_arguments()).await.map_err(|_| UNANSWERED)
         })
+    }
+
+    fn open_settings(&self) -> Result<(), &'static str> {
+        // `openSettings` reads no argument either, and answers with an empty object.
+        self.run_mobile_plugin::<Value>(OPEN_SETTINGS, ()).map(drop).map_err(|_| SETTINGS_NOT_OPENED)
     }
 }
 
@@ -87,5 +107,17 @@ mod tests {
         let class = include_str!("../../../android/src/main/java/ai/sidevoice/app/MicrophonePlugin.kt");
         assert!(class.contains(&format!("alias = \"{ALIAS}\"")), "MicrophonePlugin.kt declares no `{ALIAS}` alias");
         assert!(class.contains(&format!("package {PACKAGE}\n")) && class.contains(&format!("class {CLASS}(")));
+    }
+
+    #[test]
+    fn the_settings_command_is_one_the_kotlin_class_has_and_opens_the_apps_own_page() {
+        let class = include_str!("../../../android/src/main/java/ai/sidevoice/app/MicrophonePlugin.kt");
+        assert!(
+            class.contains(&format!("@Command\n    fun {OPEN_SETTINGS}(invoke: Invoke)")),
+            "MicrophonePlugin.kt has no `{OPEN_SETTINGS}` command"
+        );
+        // The action and the `package:` URI of this app, not of another.
+        assert!(class.contains("Settings.ACTION_APPLICATION_DETAILS_SETTINGS"));
+        assert!(class.contains(r#"Uri.fromParts("package", activity.packageName, null)"#));
     }
 }

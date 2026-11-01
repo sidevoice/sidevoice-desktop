@@ -57,6 +57,9 @@ impl From<bool> for Devices {
     }
 }
 
+/// Why the privacy page did not open: the OS has none, or it refused to show it.
+const SETTINGS_NOT_OPENED: &str = "System Settings could not be opened.";
+
 /// How long a caller waits for the device list before answering `Devices::Unknown`.
 const DEADLINE: Duration = Duration::from_secs(2);
 
@@ -237,6 +240,19 @@ trait Os {
     /// The fixed system microphone privacy page, where the OS has a standard URI for it.
     const SETTINGS_URL: Option<&'static str> = None;
 
+    /// Whether this OS has a page of the app's microphone switch to open: by default, whether it has a fixed URI for
+    /// it. An OS whose page is not a URI (Android's is an intent) says so here and in `open_settings`.
+    fn settings_available() -> bool {
+        Self::SETTINGS_URL.is_some()
+    }
+
+    /// Open that page: by default the fixed URI, through the registered opener plugin. Opening it proves nothing about
+    /// access.
+    fn open_settings<R: Runtime>(app: &AppHandle<R>) -> Result<(), &'static str> {
+        let url = Self::SETTINGS_URL.ok_or(SETTINGS_NOT_OPENED)?;
+        app.opener().open_url(url, None::<&str>).map_err(|_| SETTINGS_NOT_OPENED)
+    }
+
     /// The OS's permission alone, re-read every time and without prompting. An OS that cannot be read is
     /// `Unavailable`, never a grant.
     fn permission() -> Result<AccessState, &'static str>;
@@ -302,16 +318,15 @@ pub async fn request() -> Result<AccessState, &'static str> {
     request_of::<imp::Native>(input_devices().await).await
 }
 
-/// Whether this OS has a fixed microphone privacy page to open.
+/// Whether this OS has a microphone privacy page to open (`Os::settings_available`).
 pub fn settings_available() -> bool {
-    imp::Native::SETTINGS_URL.is_some()
+    imp::Native::settings_available()
 }
 
-/// Open the fixed system microphone privacy page through the registered opener plugin. Opening it proves nothing
-/// about access. UnsupportedPlatform on hosts without a standard settings URI (Linux).
-pub fn open_settings<R: Runtime>(app: &AppHandle<R>) -> Result<(), tauri_plugin_opener::Error> {
-    let url = imp::Native::SETTINGS_URL.ok_or(tauri_plugin_opener::Error::UnsupportedPlatform)?;
-    app.opener().open_url(url, None::<&str>)
+/// Open the system microphone privacy page (`Os::open_settings`). Opening it proves nothing about access. An error on
+/// an OS without one (Linux).
+pub fn open_settings<R: Runtime>(app: &AppHandle<R>) -> Result<(), &'static str> {
+    imp::Native::open_settings(app)
 }
 
 #[cfg(test)]
@@ -396,6 +411,8 @@ mod tests {
         assert_eq!(request_of::<Broken>(Devices::Present).await, Err("unreadable"));
         assert_eq!(Allowed::SETTINGS_URL, None);
         assert!(Refused::SETTINGS_URL.is_some());
+        assert!(!Allowed::settings_available());
+        assert!(Refused::settings_available());
     }
 
     /// An enumerator whose fake enumeration answers `Present` only when the test releases it, counting its runs.
