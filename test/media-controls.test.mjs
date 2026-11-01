@@ -4,10 +4,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import vm from "node:vm";
+import { composed } from "./bridge-source.mjs";
 
 const assets = new URL("../ui/voice/assets/", import.meta.url);
 const controller = readFileSync(new URL(readdirSync(assets).find(name => /^room-session-controller-.*\.js$/.test(name)), assets), "utf8");
-const bridge = readFileSync(new URL("../bridge/desktop-bridge.js", import.meta.url), "utf8");
+const bridge = composed;
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
 // The release is minified. Identify the media region and its microphone setter by their public seams,

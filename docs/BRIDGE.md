@@ -8,11 +8,11 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 
 | Where | What |
 |---|---|
-| `bridge/desktop-bridge.js` | Injected by the app into every page of the room window, before the page's own scripts. Bound to the app's own origin (the bundled interface). |
+| `bridge/desktop-bridge.js`, `app-core/js/members.js`, `app-tauri/js/transport.js` | The page's script, injected by the app into every page of the room window, before the page's own scripts, bound to the app's own origin (the bundled interface). It is three parts, one per crate that owns them (below). |
 | `desktop/core/src/bridge.rs` | The contract on the Rust side: `CallSnapshot`, `Command`, and how the tray renders a snapshot. Unit-tested. |
 | `desktop/src/lib.rs` | Wiring: the `bridge_state` command, `send(Command)`; `capabilities/room.json`. The mute shortcut, behind `muteShortcut`, and the one writer of the app's settings (below). |
 | `app-tauri/src/engine.rs`, `app-core/src/app/engine.rs` | The engine's commands, behind `engine` (below): its catalogues, provider keys and models on disk. The plugin's are the transport (`app-tauri/ACL.md` says who may call each); `app-core`'s do the work. |
-| `app-tauri/src/voice.rs`, `desktop/src/voice.rs`, `desktop/src/platform/credentials.rs`, `app-core/src/app.rs`, `app-core/src/app/voice.rs`, `app-core/src/voice.rs`, `app-core/src/voice/` | The voice call the app runs, behind `voice` (below): the commands in the plugin, what they do and the hooks the app gives the host (admission, events, keys: `app-core`'s `AppHost`, `desktop/src/app_hooks.rs`), the call host, the models it picks from the catalogues and the settings the page sends in `app-core` (unit-tested), and the keychain the engine reads provider keys from. |
+| `app-tauri/src/voice.rs`, `desktop/src/voice.rs`, `app-core/src/platform/credentials.rs`, `app-core/src/app.rs`, `app-core/src/app/voice.rs`, `app-core/src/voice.rs`, `app-core/src/voice/` | The voice call the app runs, behind `voice` (below): the commands in the plugin, what they do and the hooks the app gives the host (admission, events, keys: `app-core`'s `AppHost`, `desktop/src/app_hooks.rs`), the call host, the models it picks from the catalogues and the settings the page sends in `app-core` (unit-tested), and the keychain the engine reads provider keys from. |
 | `desktop/src/local_host.rs`, `desktop/local-host/` | This computer's own core, behind `localHost` (below; docs/LOCAL_HOST.md). |
 | `desktop/src/tray.rs` | The menu-bar icon and its menu. |
 | `bridge/call-controls-bridge.js` | Injected into the call controls card's window (below). |
@@ -20,6 +20,20 @@ It uses the seams the web UI already publishes for itself, and never reads or cl
 | `desktop/src/updater.rs`, `desktop/core/src/updater.rs`, `desktop/core/src/build_info.rs` | The app's updates, behind `updater`, and what this build is, `build` (below). |
 | `desktop/src/debug_options.rs`, `desktop/core/src/debug_options.rs` | The developer options, behind `debug` in a nightly or a dev build (below). |
 | `desktop/src/platform/host.rs`, `desktop/core/src/computer_name.rs` | This computer's name, `computerName` (below; the Linux file's parsing unit-tested). |
+
+## Parts
+
+The page's script is three function expressions, each owned by the crate it belongs to, and the desktop composes them
+(`desktop/core/src/bridge.rs`, `Parts`; `test/bridge-source.mjs` composes the same for the tests):
+
+| Part | Crate | What it is |
+|---|---|---|
+| Transport, `(win) => transport` | `app-tauri/js/transport.js`, as `sidevoice_app_tauri::js::TRANSPORT` | How the page reaches the plugin's commands (`call`, `send`, under the plugin's name), receives a channel's messages (`channel`, in index order) and reaches the app's own commands (`own.call`, `own.send`). All the page's code knows of Tauri. |
+| Members, `(win, transport) => members` | `app-core/js/members.js`, as `sidevoice_app_core::js::MEMBERS` | What every app shares, and nothing of any shell: `engine()`, `voice()`, `microphone(settingsPage)`, `pairings()` and `room(…)`, the call state the page reports (`snapshot`, `report`) and the commands it runs for the app (`toggle-mute`, `hang-up`, `skip-reply`, `keep-alive`, `cancel-input`). An app adds to the snapshot (`extend`), to the commands (`commands`) and to what it follows in the room (`attached`). The members are tested against a transport of the tests' own (`test/members.test.mjs`). |
+| Desktop, the file itself | `bridge/desktop-bridge.js` | What only the desktop has: the local host, the updater, the mute shortcut, the developer options, the call controls card's settings and its projection of the call (its participants and devices, the commands that select a conversation or a device, the levels sent to it), the reset, and the assembly of `host`. |
+
+`script_for_origin` gives the desktop's part its placeholders and wraps it as `(function (transportOf, membersOf) { … })(transport, members);`:
+the desktop's part makes the transport for its window, hands it to the members, and keeps the app's own commands for itself.
 
 ## What the bridge reads and calls in the web UI
 
@@ -142,7 +156,7 @@ no report remains. Otherwise it keeps the app, adds `{step: "app", key: "reset.a
 `{step: "app", key: "reset.app-trash-failed"}` to `failed`, and relaunches it exactly as `deleteAll()` does, so
 `resetReport()` names what remains and the person can retry.
 
-Commands: `data_pairings_read`, `data_pairings_write {value}`, `data_delete_all`, `data_uninstall`,
+Commands: `pairings_read`, `pairings_write {value}` (the shared plugin's, over the app's `PairingStore`; the desktop's is in `desktop/src/data.rs`), `data_delete_all`, `data_uninstall`,
 `data_reset_report`; only the room capability grants them and each checks the room origin.
 
 ### Call state
@@ -187,13 +201,13 @@ ticks often; unchanged snapshots are not re-sent). The app also resets to `ready
 every navigation of the room window.
 
 ```js
-window.__TAURI_INTERNALS__.invoke("bridge_level", { level })   // 0–100, during a call, at most every 80 ms
+window.__TAURI_INTERNALS__.invoke("plugin:sidevoice-app-tauri|bridge_level", { level })   // 0–100, during a call, at most every 80 ms
 ```
 
 The microphone's level for the card's wave: only during a call, only when it changes (a drop to 0 always goes).
 
 ```js
-window.__TAURI_INTERNALS__.invoke("bridge_playback", { level, threadId })   // 0–1, during a call, at most every 40 ms
+window.__TAURI_INTERNALS__.invoke("plugin:sidevoice-app-tauri|bridge_playback", { level, threadId })   // 0–1, during a call, at most every 40 ms
 ```
 
 The voice's output level and whose reply it is, for the card's avatar's mouth: only during a call, only when it
@@ -469,7 +483,8 @@ models is the voice call's (below), never the page's. `window.__sidevoiceDesktop
   signal's abort calls: `true` when the install will reject `install_cancelled`, also when it has not reached the app
   yet, which then refuses it as it arrives; `false` when it had already ended), `engine_uninstall {model}`,
   `engine_memory`. Granted to the room
-  window (`capabilities/room.json`), and to nothing else.
+  window (`capabilities/room.json`), and to nothing else; each re-checks that the caller is the current room window on
+  the app's own origin (else `bad_request`).
 
 ### Refusals
 
@@ -689,7 +704,7 @@ What is this app's own:
   The app mirrors a global user mute to all calls. Native output from every call is mixed once before
   the single AEC reference. Each call's playback level reflects only its own rendered samples; a device
   failure is sent to each affected call.
-- Keys: `host.engine.setCredential` writes the OS credential store (`desktop/src/platform/credentials.rs`), and the engine reads it
+- Keys: `host.engine.setCredential` writes the OS credential store (`app-core/src/platform/credentials.rs`, in the namespace the app passes), and the engine reads it
   when a provider is listed, or its model loaded or called. `host.engine.testCredential` writes nothing: its key goes
   only to a trial engine of its own.
 
@@ -712,27 +727,37 @@ interface MicrophonePermission {
 - `state()`: never prompts, and reads the system afresh each time. A denial stands whatever is plugged in; otherwise
   no audio input device is `"missing"`. A system that does not answer (below) rejects with `internal`; the bridge has
   no extra state string for it, and it is never a grant.
-- `request()`: macOS only has a prompt: `AVCaptureDevice.requestAccess(for: .audio)` asks the first time (with
-  `NSMicrophoneUsageDescription`, `desktop/packaging/macos/Info.plist`), afterwards it answers at once with the stored
-  answer. On Windows and Linux it is `state()`: there is nothing to ask.
+- `request()`: macOS, iOS and Android have a prompt. On macOS and iOS `AVCaptureDevice.requestAccess(for: .audio)` asks the
+  first time (with `NSMicrophoneUsageDescription`, `desktop/packaging/macos/Info.plist`), afterwards it answers at once
+  with the stored answer. On Android it is the `RECORD_AUDIO` runtime permission (below). On Windows and Linux it is
+  `state()`: there is nothing to ask.
 - `onChange(listener)`: `listener()` whenever `state()` changes, so on a permission change and on a microphone plugged
   in or out; the page reads `state()` again. Polled every 2 s while anyone listens; returns `stop`.
-- `openSettings()`: only where the OS has a standard microphone privacy page (macOS and Windows; absent on Linux, which
-  has none). It opens a fixed URL through `tauri-plugin-opener` (Rust API) and accepts no URL or program from the page; no
-  generic opener permission is granted to JavaScript, and the plugin's automatic link interception is disabled.
+- `openSettings()`: only where the OS has a microphone privacy page (macOS, Windows, iOS and Android; absent on Linux, which
+  has none). It opens a fixed URL through
+  `tauri-plugin-opener` (Rust API; on Android, an intent the plugin's Kotlin class sends, below) and accepts no URL or program from the page; no generic opener permission is granted to JavaScript, and the plugin's automatic link interception is disabled.
   Opening it says nothing about access. The page detects it by presence.
 - A refusal rejects `{key, message}`: `bad_request` for a malformed call or another caller, `internal` when the system
   does not answer or Settings does not open.
-- Command behind it: `microphone {action}`, `action` `state`, `request` or `open-settings` (`desktop/src/microphone.rs`).
+- Command behind it: `microphone {action}`, `action` `state`, `request` or `open-settings` (`app-tauri/src/microphone.rs`, invoked as `plugin:sidevoice-app-tauri|microphone`).
   Granted to the room window (`capabilities/room.json`); it re-checks that the caller is the current room window on the
   app's own page.
 
-Per OS (`desktop/src/platform/microphone.rs`; the rule every OS shares is one function there: a denial beats a missing
+Per OS (`app-tauri/src/platform/microphone.rs`; the rule every OS shares is one function there: a denial beats a missing
 device, a missing device beats everything else, and a grant needs a readable device list):
 
 - **macOS:** `AVCaptureDevice.authorizationStatus(for: .audio)`: not determined → `"prompt"`, authorized → `"granted"`,
   denied or restricted → `"denied"`; no `AVCaptureDevice.default(for: .audio)` → `"missing"`. Settings:
   `x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone`.
+- **iOS:** the same `AVCaptureDevice` calls as macOS (`platform/microphone/apple.rs`, shared by both), with the app's
+  `NSMicrophoneUsageDescription` (`mobile/Info.ios.plist`). Settings: `app-settings:` (the app's own page).
+- **Android:** the `RECORD_AUDIO` runtime permission, asked by a Kotlin class of the plugin (`app-tauri/android`,
+  `MicrophonePlugin`), through Tauri's `checkPermissions` and `requestPermissions` commands, which also remember a refusal
+  for good: not asked yet, or refused once → `"prompt"`, granted → `"granted"`, refused for good → `"denied"`. The class's
+  library manifest declares the permission, which the app's merged manifest then has; without that declaration the system
+  refuses without a prompt. The Rust side holds the loaded class from the plugin's setup on. Settings: the app's own
+  details page (`Settings.ACTION_APPLICATION_DETAILS_SETTINGS` with `package:<id>`), where a refusal for good is undone;
+  the class sends that intent itself (`openSettings`), because the opener plugin only sends an `ACTION_VIEW` of a URI.
 - **Windows:** the registry privacy policy, read with `winreg` (no writes): the machine switch
   (`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone`) and this user's
   desktop-app switch (`HKCU\…\microphone\NonPackaged`), value `Value`. Sidevoice is an unpackaged NSIS executable, so
@@ -745,7 +770,8 @@ device, a missing device beats everything else, and a grant needs a readable dev
   `"missing"`.
 - **Device presence (Windows, Linux):** `cpal` (WASAPI active capture endpoints; ALSA PCM hints, which include the
   PipeWire/Pulse ALSA plugins where installed) lists the input devices; no stream is opened. A listing that fails is not
-  an empty one: it is unavailable.
+  an empty one: it is unavailable. On iOS cpal lists one `default` input (the route follows the audio session), and on
+  Android the devices `AudioManager` reports (through `ndk-context`, which Tauri initialises).
 
 ## The mute shortcut
 

@@ -1,6 +1,6 @@
 # Headset and media controls
 
-The shell's `platform/media_controls.rs` exposes `support`, `attach` and `update`.
+The shared plugin's `app-tauri/src/platform/media_controls.rs` exposes `support`, `attach` and `update`.
 Its support value supplies `host.mediaKeys` independently of native voice. Startup attaches one
 process-lifetime command sink; call reports and navigation resets update it.
 
