@@ -14,10 +14,11 @@ mod tests {
     const DATA_EXTRACTION_RULES: &str =
         include_str!("../android/src/main/res/xml/data_extraction_rules.xml");
 
-    /// What stays out of a backup: the pairings file (`mobile/src/pairings.rs`) and the SharedPreferences file of the
-    /// provider keys (`keyring-` and the store's name, `app-core/src/platform/credentials/android.rs`).
+    /// What stays out of a backup: the folder of the pairings record (`pairings/` in `mobile/src/pairings.rs`; the temporary
+    /// file of a write is in it too, and no rule could name that) and the SharedPreferences file of the provider keys
+    /// (`keyring-` and the store's name, `app-core/src/platform/credentials/android.rs`).
     const EXCLUDED: [&str; 2] = [
-        r#"<exclude domain="file" path="pairings.json" />"#,
+        r#"<exclude domain="file" path="pairings/" />"#,
         r#"<exclude domain="sharedpref" path="keyring-sidevoice-providers.xml" />"#,
     ];
 
@@ -39,7 +40,7 @@ mod tests {
     }
 
     #[test]
-    fn android_12_and_newer_exclude_both_files_from_a_backup_and_from_a_transfer() {
+    fn android_12_and_newer_exclude_both_from_a_backup_and_from_a_transfer() {
         for channel in ["cloud-backup", "device-transfer"] {
             let rules = inside(DATA_EXTRACTION_RULES, channel);
             for excluded in EXCLUDED {
@@ -49,7 +50,7 @@ mod tests {
     }
 
     #[test]
-    fn android_11_and_older_exclude_both_files_from_a_backup() {
+    fn android_11_and_older_exclude_both_from_a_backup() {
         let rules = inside(BACKUP_RULES, "full-backup-content");
         for excluded in EXCLUDED {
             assert!(rules.contains(excluded), "{excluded}");

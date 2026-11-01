@@ -1,5 +1,5 @@
-//! Android: nothing to do on the file. The backup rules in the Android library of `mobile/plugin` name the files that
-//! stay out, and the system reads them.
+//! Android: nothing to do on the directory. The backup rules in the Android library of `mobile/plugin` name what
+//! stays out, and the system reads them.
 use super::Os;
 use std::{io, path::Path};
 
