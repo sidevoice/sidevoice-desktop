@@ -11,13 +11,16 @@ process-lifetime command sink; call reports and navigation resets update it.
 | macOS | Existing MediaPlayer Now Playing and AVAudioApplication mute gesture | Suppressed by `presence: { media: "app" }`, avoiding duplicate actions | Unverified on hardware |
 | Windows | Unavailable (no `presence`) | Page Media Session and its Now Playing audio element | Unverified in WebView2/on hardware |
 | Linux | Unavailable (no `presence`) | Page Media Session and its Now Playing audio element | Unverified in WebKitGTK/X11/Wayland/on hardware |
-| iOS | MediaPlayer's Now Playing (lock screen, Control Center) and remote commands, and the AirPods mute gesture (iOS 17+): the macOS code (`apple.rs`) | Suppressed by `presence: { media: "app" }` | Unverified on hardware |
-| Android | A `MediaSession` (app-tauri's Kotlin, `MediaControls.kt`), active during a call, shown by the call's foreground service's notification (MediaStyle) | Suppressed by `presence: { media: "app" }` | Unverified on hardware |
+| iOS | MediaPlayer's Now Playing (lock screen, Control Center) and remote commands, the macOS code (`apple.rs`); the AirPods mute gesture on iOS 17+ through `AVAudioApplicationInputMuteStateChangeNotification` (iOS mutes the input itself; the app keeps the call in step), its symbols looked up at run time so iOS 15 and 16 launch | Suppressed by `presence: { media: "app" }` | Unverified on hardware |
+| Android | A `MediaSession` owned by the call's foreground service (`CallService`), so it exists only during the call; the call's state and the commands go through app-tauri's Kotlin (`MediaControls.kt`). Its notification shows the session: on Android 13+ the system draws play/pause and a Hang up custom action from the session; on 8–12 the notification carries its own Mute/Unmute and Hang up buttons, refreshed as the call mutes | Suppressed by `presence: { media: "app" }` | Unverified on hardware |
 
 The page maps play to unmute, pause to toggle mute (including a pause delivered while muted),
 and `togglemicrophone`, where the webview supports it, to the requested microphone state.
 Hang-up removes the page handlers and pauses its Now Playing element. A dedicated hardware
-hang-up gesture is not claimed. AirPods/Beats' native mute gesture is macOS's and iOS's (17 and later).
+hang-up gesture is not claimed. AirPods/Beats' native mute gesture is macOS's (a handler block, `setInputMuteStateChangeHandler`, macOS only) and
+iOS's (17 and later, a notification). What differs between the two is a private trait of `apple.rs` (`Apple`), one
+method per difference, implemented by `macos.rs` and `ios.rs`: the playback state (macOS sets it, iOS has none to
+set) and how the gesture is heard.
 
 On a phone the same rule holds for the native commands: play unmutes, pause toggles. On Android a headset's single press
 arrives as pause while the session plays (the microphone is open) and as play while it is paused (muted). There is no

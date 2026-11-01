@@ -1,57 +1,46 @@
 package ai.sidevoice.app
 
-import android.content.Context
-import android.media.MediaMetadata
-import android.media.session.MediaSession
-import android.media.session.PlaybackState
-import android.os.Handler
-import android.os.Looper
-
 /**
- * The call's media session, one for the process. While there is a call it is active and says the call: playing while the
- * microphone is open, paused while it is muted. Android hands the active session a headset's play/pause (a single press
- * of a wired or Bluetooth headset arrives as pause while playing and as play while paused) and the controls of the
- * notification that shows it; each arrives here as `play` or `pause`, and goes to Rust, which decides what it does to the
- * call (platform/media_controls/android.rs, the same rule as on macOS and iOS).
+ * The call's media controls as the shared plugin knows them: the call's state (from Rust, platform/media_controls/android.rs)
+ * and where the controls' commands go (to Rust, which decides what they do to the call, by the same rule as on macOS
+ * and iOS: play unmutes, pause toggles).
  *
- * The call's foreground service shows the session in its notification ([token]), which is what puts the call's
- * controls on the lock screen.
+ * The media session itself is the call's foreground service's (the mobile app's `CallService`): it exists only while the
+ * call runs, follows [state] through [observe], and hands its play and pause, and its notification's mute button, to
+ * [command].
  */
 object MediaControls {
+    /** The call as the controls show it: whether there is one, whether it plays (the microphone is open), its title. */
+    data class State(val active: Boolean, val playing: Boolean, val title: String)
+
     private val lock = Any()
-    private var session: MediaSession? = null
+    private var send: ((String) -> Unit)? = null
+    private var state = State(active = false, playing = false, title = "")
+    private val listeners = mutableListOf<(State) -> Unit>()
 
-    /** The session's token, once it is made: the call's service gives it to its notification. */
-    fun token(): MediaSession.Token? = synchronized(lock) { session?.sessionToken }
+    /** Where the commands go, once, when the app starts. */
+    fun attach(send: (String) -> Unit) = synchronized(lock) { this.send = send }
 
-    /** Makes the session, once, with where its commands go. Inactive until there is a call. */
-    fun attach(context: Context, send: (String) -> Unit) = synchronized(lock) {
-        if (session != null) return@synchronized
-        session = MediaSession(context, "sidevoice-call").apply {
-            setCallback(object : MediaSession.Callback() {
-                override fun onPlay() = send("play")
-                override fun onPause() = send("pause")
-            }, Handler(Looper.getMainLooper()))
+    /** The call changed: every observer hears it. */
+    fun update(active: Boolean, playing: Boolean, title: String) {
+        val (now, observers) = synchronized(lock) {
+            state = State(active, playing, title)
+            state to listeners.toList()
         }
+        observers.forEach { it(now) }
     }
 
-    /** Follows the call: [active] while there is one, [playing] while its microphone is open, [title] its conversation's. */
-    fun update(active: Boolean, playing: Boolean, title: String) = synchronized(lock) {
-        val session = session ?: return@synchronized
-        if (!active) {
-            session.setPlaybackState(state(PlaybackState.STATE_STOPPED))
-            session.isActive = false
-            return@synchronized
-        }
-        val metadata = MediaMetadata.Builder().putString(MediaMetadata.METADATA_KEY_TITLE, "Sidevoice")
-        if (title.isNotEmpty()) metadata.putString(MediaMetadata.METADATA_KEY_ARTIST, title)
-        session.setMetadata(metadata.build())
-        session.setPlaybackState(state(if (playing) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED))
-        session.isActive = true
+    /** The call as it is now. */
+    fun state(): State = synchronized(lock) { state }
+
+    /** A command of the controls: `play` or `pause`. */
+    fun command(name: String) {
+        synchronized(lock) { send }?.invoke(name)
     }
 
-    private fun state(state: Int): PlaybackState = PlaybackState.Builder()
-        .setActions(PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or PlaybackState.ACTION_PLAY_PAUSE)
-        .setState(state, PlaybackState.PLAYBACK_POSITION_UNKNOWN, 1f)
-        .build()
+    /** Hears every change of the call from now on, until the returned function is called. */
+    fun observe(listener: (State) -> Unit): () -> Unit {
+        synchronized(lock) { listeners.add(listener) }
+        return { synchronized(lock) { listeners.remove(listener) } }
+    }
 }

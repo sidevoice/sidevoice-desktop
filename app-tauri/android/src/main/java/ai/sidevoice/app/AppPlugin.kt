@@ -38,8 +38,8 @@ class UpdateMediaControlsArgs {
  * person can only undo it on the app's own page of the system's settings. That page is an intent, which the opener plugin
  * (an `ACTION_VIEW` of a URI) cannot send.
  *
- * **The media controls.** The call's media session ([MediaControls]): made once, with where its commands go, then told
- * the call as it changes (platform/media_controls/android.rs).
+ * **The media controls** ([MediaControls]): where their commands go, once, then the call as it changes
+ * (platform/media_controls/android.rs). The media session is the call's service's.
  */
 @TauriPlugin(
     permissions = [Permission(strings = [Manifest.permission.RECORD_AUDIO], alias = "microphone")]
@@ -60,9 +60,7 @@ class AppPlugin(private val activity: Activity) : Plugin(activity) {
     @Command
     fun attachMediaControls(invoke: Invoke) {
         val args = invoke.parseArgs(AttachMediaControlsArgs::class.java)
-        MediaControls.attach(activity.applicationContext) { command ->
-            args.onCommand.send(JSObject().also { it.put("command", command) })
-        }
+        MediaControls.attach { command -> args.onCommand.send(JSObject().also { it.put("command", command) }) }
         invoke.resolve()
     }
 

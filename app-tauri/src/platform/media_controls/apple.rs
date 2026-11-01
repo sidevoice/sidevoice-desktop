@@ -16,7 +16,7 @@
 
 use block2::RcBlock;
 use objc2::rc::Retained;
-use objc2::runtime::{AnyClass, AnyObject, Bool};
+use objc2::runtime::{AnyClass, AnyObject};
 use objc2_avf_audio::AVAudioApplication;
 use objc2_foundation::{NSDictionary, NSString};
 use objc2_media_player::{
@@ -30,6 +30,23 @@ use crate::headset::{media_command_action, mute_gesture_action};
 use crate::platform::media_controls::{CallState, CommandSink, MediaCommand};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
+
+/// What differs between macOS and iOS in this code, one method per difference, each with what an OS that does not have it
+/// does by default; `macos.rs` and `ios.rs` implement it for their `Native`.
+pub(super) trait Apple {
+    /// Says whether the app plays (`MPNowPlayingInfoCenter.playbackState`). Only macOS reads it, and requires it whenever
+    /// playback starts or stops; iOS takes it from the app's audio session.
+    fn set_playback_state(_center: &MPNowPlayingInfoCenter, _state: MPNowPlayingPlaybackState) {}
+
+    /// Starts hearing the AirPods / Beats mute gesture, each one handed to [`heard`]; whether it does. Called on the main
+    /// thread, with `AVAudioApplication` present. None by default.
+    fn listen_for_mute_gesture(_app: &AppHandle) -> bool {
+        false
+    }
+
+    /// Stops hearing it.
+    fn stop_listening_for_mute_gesture() {}
+}
 
 struct Headset {
     call: Mutex<CallState>,
@@ -85,6 +102,15 @@ fn on_mute_gesture(app: &AppHandle, muted: bool) -> bool {
     true
 }
 
+/// The mute gesture arrived (as the system says it, on any thread): what the call does with it, unless it is the app's
+/// own change coming back. Returns whether the call's microphone is now as asked: false when there is no call to mute.
+pub fn heard(app: &AppHandle, muted: bool) -> bool {
+    if echo(muted) {
+        return true; // the app's own change, already done
+    }
+    on_mute_gesture(app, muted)
+}
+
 /// Installs the command handlers, once, on the main thread.
 pub fn attach(app: &AppHandle, sink: CommandSink) {
     app.manage(Headset { call: Mutex::default(), sink });
@@ -92,17 +118,15 @@ pub fn attach(app: &AppHandle, sink: CommandSink) {
     let _ = app.run_on_main_thread(move || setup(&app2));
 }
 
-/// Follows the call: the commands enabled and the call shown while there is one, on the main thread. `playback_state`:
-/// whether the app says itself whether it plays (`MPNowPlayingInfoCenter.playbackState`), which only macOS reads and
-/// requires: iOS takes it from the app's audio session.
-pub fn update(app: &AppHandle, snapshot: &CallState, playback_state: bool) {
+/// Follows the call: the commands enabled and the call shown while there is one, on the main thread.
+pub fn update<N: Apple>(app: &AppHandle, snapshot: &CallState) {
     let Some(headset) = app.try_state::<Headset>() else { return };
     *headset.call.lock().unwrap() = snapshot.clone();
     let active = headset.active();
     let title = snapshot.title.trim().to_owned();
     let (mic, in_call) = (snapshot.mic_enabled, snapshot.ready && snapshot.joined);
     let app2 = app.clone();
-    let _ = app.run_on_main_thread(move || apply(&app2, active, in_call, mic, &title, playback_state));
+    let _ = app.run_on_main_thread(move || apply::<N>(&app2, active, in_call, mic, &title));
 }
 
 /// Whether the gesture handler is installed now (only during a call).
@@ -157,7 +181,7 @@ fn setup(app: &AppHandle) {
     }
 }
 
-fn apply(app: &AppHandle, active: bool, in_call: bool, mic_enabled: bool, title: &str, playback_state: bool) {
+fn apply<N: Apple>(app: &AppHandle, active: bool, in_call: bool, mic_enabled: bool, title: &str) {
     // SAFETY: main thread (update() dispatches here); plain Foundation / MediaPlayer calls.
     unsafe {
         for (command, _) in commands() {
@@ -181,21 +205,20 @@ fn apply(app: &AppHandle, active: bool, in_call: bool, mic_enabled: bool, title:
             center.setNowPlayingInfo(Some(&info));
             // Apple: on macOS this must be set whenever playback starts or stops, or remote commands may not
             // arrive. "Playing" while the microphone is open, "paused" while muted (as the web interface does).
-            if playback_state {
-                center.setPlaybackState(if mic_enabled || !in_call {
+            N::set_playback_state(
+                &center,
+                if mic_enabled || !in_call {
                     MPNowPlayingPlaybackState::Playing
                 } else {
                     MPNowPlayingPlaybackState::Paused
-                });
-            }
+                },
+            );
         } else {
-            if playback_state {
-                center.setPlaybackState(MPNowPlayingPlaybackState::Stopped);
-            }
+            N::set_playback_state(&center, MPNowPlayingPlaybackState::Stopped);
             center.setNowPlayingInfo(None);
         }
     }
-    gesture(app, active, in_call, mic_enabled);
+    gesture::<N>(app, active, in_call, mic_enabled);
     sidevoice_app_core::debug::debug(&format!(
         "headset apply active={active} in_call={in_call} mic={mic_enabled} gesture_api={} gesture_on={}",
         gesture_api(),
@@ -203,28 +226,20 @@ fn apply(app: &AppHandle, active: bool, in_call: bool, mic_enabled: bool, title:
     ));
 }
 
-/// AirPods / Beats mute gesture (macOS 14+): installed while active, kept in step with the microphone.
-fn gesture(app: &AppHandle, active: bool, in_call: bool, mic_enabled: bool) {
+/// AirPods / Beats mute gesture (macOS 14+, iOS 17+, where `AVAudioApplication` exists): heard while active, and the
+/// system's input mute kept in step with the microphone.
+fn gesture<N: Apple>(app: &AppHandle, active: bool, in_call: bool, mic_enabled: bool) {
     if !gesture_api() {
         return;
     }
-    // SAFETY: the class exists (checked above); the handler block is retained by the system.
+    // SAFETY: the class exists (checked above); main thread.
     unsafe {
         let shared = AVAudioApplication::sharedInstance();
         let mut on = GESTURE_ON.lock().unwrap();
         if active && !*on {
-            let app = app.clone();
-            let handler = RcBlock::new(move |muted: Bool| -> Bool {
-                if echo(muted.as_bool()) {
-                    return Bool::YES; // the app's own change, already done
-                }
-                Bool::new(on_mute_gesture(&app, muted.as_bool()))
-            });
-            if shared.setInputMuteStateChangeHandler_error(Some(&handler)).is_ok() {
-                *on = true;
-            }
+            *on = N::listen_for_mute_gesture(app);
         } else if !active && *on {
-            let _ = shared.setInputMuteStateChangeHandler_error(None);
+            N::stop_listening_for_mute_gesture();
             set_muted(&shared, false);
             *on = false;
         }

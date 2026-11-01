@@ -1,8 +1,8 @@
-//! Android: a media session (`MediaSession`), held by the plugin's Kotlin (`android/…/MediaControls.kt`, reached
-//! through `AppPlugin.kt`, `platform::kotlin`). While there is a call it is active, says the call as playing (microphone
-//! open) or paused (muted), and receives a headset's play/pause and the lock screen's: Android hands them to the active
-//! session, and the call's foreground service shows that session in its notification. The commands are mapped as on
-//! macOS and iOS (`crate::headset`): play → unmute, pause → toggle.
+//! Android: the plugin's Kotlin (`android/…/MediaControls.kt`, reached through `AppPlugin.kt`, `platform::kotlin`) is
+//! told the call (active, playing while the microphone is open, its title) and hands back the controls' commands. The
+//! media session is the call's foreground service's (the mobile app's `CallService`), which exists only during the call:
+//! it says the call as playing or paused, Android hands it a headset's play/pause, and its notification and the lock
+//! screen show it. The commands are mapped as on macOS and iOS (`crate::headset`): play → unmute, pause → toggle.
 //!
 //! Every command that arrives is recorded in the app log (`headset …` lines), as on the Apple systems.
 use super::{CallState, CommandSink, MediaCommand, Os};
@@ -102,9 +102,10 @@ mod tests {
             assert!(class.contains(&format!("@Command\n    fun {command}(invoke: Invoke)")), "{command}");
         }
         assert!(class.contains("lateinit var onCommand: Channel"));
-        let session = include_str!("../../../android/src/main/java/ai/sidevoice/app/MediaControls.kt");
-        for command in ["\"play\"", "\"pause\""] {
-            assert!(session.contains(command), "{command}");
-        }
+        let controls = include_str!("../../../android/src/main/java/ai/sidevoice/app/MediaControls.kt");
+        assert!(
+            controls.contains("fun command(name: String)")
+                && controls.contains("fun update(active: Boolean, playing: Boolean, title: String)")
+        );
     }
 }

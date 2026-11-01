@@ -135,7 +135,12 @@ fn call_state(
 
 impl From<CallReport> for CallState {
     fn from(report: CallReport) -> CallState {
-        CallState { ready: report.ready, joined: report.joined, mic_enabled: report.mic_enabled, title: report.title }
+        CallState {
+            ready: report.ready,
+            joined: report.joined,
+            mic_enabled: report.mic_enabled,
+            title: report.title,
+        }
     }
 }
 
