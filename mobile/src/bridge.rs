@@ -47,7 +47,9 @@ mod tests {
             );
         }
         let ios = script("tauri://localhost", true);
-        assert!(!ios.contains("__SIDEVOICE_"), "a placeholder is left");
+        for placeholder in [ORIGIN_PLACEHOLDER, MICROPHONE_SETTINGS_PLACEHOLDER] {
+            assert!(!ios.contains(placeholder), "{placeholder} is left");
+        }
         assert!(ios.contains("factory(window, \"tauri://localhost\", true)"));
         assert!(script("http://tauri.localhost", false)
             .contains("factory(window, \"http://tauri.localhost\", false)"));
@@ -64,14 +66,16 @@ mod tests {
     #[test]
     fn the_page_is_told_the_app_owns_the_media_and_nothing_of_the_desktop_s() {
         assert!(SCRIPT_TEMPLATE.contains("presence: Object.freeze({ media: \"app\" })"));
+        // The members of `host` the desktop has, as the host object would name them.
         for desktop in [
-            "localHost",
-            "reset",
-            "muteShortcut",
-            "callControls",
-            "updater",
+            "localHost:",
+            "reset:",
+            "muteShortcut:",
+            "callControls:",
+            "updater:",
             "debug:",
             "os:",
+            "build:",
         ] {
             assert!(!SCRIPT_TEMPLATE.contains(desktop), "{desktop}");
         }
