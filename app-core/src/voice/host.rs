@@ -57,13 +57,14 @@ impl LaneAudio for SharedNativeAudio {
     }
 }
 
-/// What the app does around its calls' audio (D-CALL-LIFECYCLE): before the first call of the host starts, and after the
-/// last one ends. A phone uses it to hold the audio for the call (iOS activates its audio session, Android starts the
-/// call's foreground service) and to give it back.
+/// What the app does around its calls' audio: before the first voice call of the host opens the microphone and the
+/// speaker, and after the last one's audio has stopped. A phone holds the audio session for it (iOS activates it, and
+/// deactivates it after), so every voice call counts: the room's, and a try in Settings.
 pub trait CallActivity: Send + Sync + 'static {
-    /// The first call is about to start (its audio opens next). `Err` with why refuses that start: the call is not made.
+    /// The first call's audio is about to open. `Err` with a stable code (sidevoice-voice's, as
+    /// `audio-session-activate-failed`) refuses that start: the call is not made.
     fn starting(&self) -> Result<(), String>;
-    /// The last call has stopped.
+    /// The last call's audio has stopped.
     fn ended(&self);
 }
 
@@ -168,8 +169,10 @@ pub struct CallLane<P> {
     input: P,
     /// What the page last asked of `mute`, kept from the lane's creation: the call is made with it.
     muted: AtomicBool,
-    /// Whether the lane's call started and is counted in `active` (until it stops).
-    counted: AtomicBool,
+    /// Whether the lane's call started and is counted in `active`, until its audio has stopped (`forward`).
+    counted: Arc<AtomicBool>,
+    /// Whether the lane's call was asked to stop: the idle state after it says its audio has stopped.
+    stopping: Arc<AtomicBool>,
     active: Arc<ActiveCalls>,
     lifecycle: Arc<Mutex<Lifecycle>>,
     /// Whether the lane was released; held while an event is handed to the page, so that once it is set nothing
@@ -410,9 +413,14 @@ impl<A: LaneAudio> VoiceState<A> {
             return Err(refusal("internal", "Voice lane audio was already taken."));
         };
         lane.counted.store(true, Ordering::SeqCst);
+        let ended = Ended {
+            counted: Arc::clone(&lane.counted),
+            stopping: Arc::clone(&lane.stopping),
+            active: Arc::clone(&lane.active),
+        };
         let (call, events) = VoiceCall::new(io, setup);
         call.mute(lane.muted.load(Ordering::SeqCst));
-        forward(page, key.to_owned(), events, Arc::clone(&lane.lifecycle), Arc::clone(&lane.released));
+        forward(page, key.to_owned(), events, Arc::clone(&lane.lifecycle), Arc::clone(&lane.released), ended);
         call.start(StartOptions { take });
         *running = Some(Running { call, applied });
         Ok(())
@@ -635,7 +643,8 @@ impl<P> CallLane<P> {
             io: Mutex::new(Some(io)),
             input,
             muted: AtomicBool::new(false),
-            counted: AtomicBool::new(false),
+            counted: Arc::new(AtomicBool::new(false)),
+            stopping: Arc::new(AtomicBool::new(false)),
             active,
             lifecycle: Arc::new(Mutex::new(Lifecycle::default())),
             released: Arc::new(Mutex::new(false)),
@@ -677,16 +686,14 @@ impl<P> CallLane<P> {
                     lifecycle.stopped.push_back(sender);
                 }
             }
+            // The idle state that answers it says the audio has stopped (`forward`), released lane or not.
+            self.stopping.store(true, Ordering::SeqCst);
             call.stop();
             (answered, std::mem::take(&mut *self.telling.lock().unwrap()))
         };
         let _ = answered.await;
         for task in telling {
             let _ = task.await;
-        }
-        // Its audio is closed: the app may give it back if it was the last call.
-        if self.counted.swap(false, Ordering::SeqCst) {
-            self.active.end();
         }
         true
     }
@@ -778,7 +785,37 @@ pub fn refused(r: choice::Refusal) -> Refusal {
 /// Forward events with their immutable call key. Asynchronous delivery never consults the current input route. The
 /// idle state that answers a stop answers it once it is handed to the page. The meters go only when the page would draw
 /// them differently (`voice::meters`): about 60 a second otherwise, silence included (desktop#149).
-fn forward(page: Page, key: String, mut events: Events, lifecycle: Arc<Mutex<Lifecycle>>, released: Arc<Mutex<bool>>) {
+/// What tells the app's [`CallActivity`] that a lane's call has stopped: once, at the idle state that follows its stop
+/// (sidevoice-voice closes the audio before it says idle), or when its events end (the call is gone), whichever comes
+/// first. A lane that was released (its page went, the app quits) is told the same way, by its own call.
+struct Ended {
+    counted: Arc<AtomicBool>,
+    stopping: Arc<AtomicBool>,
+    active: Arc<ActiveCalls>,
+}
+
+impl Ended {
+    fn idle(&self) {
+        if self.stopping.load(Ordering::SeqCst) {
+            self.gone();
+        }
+    }
+
+    fn gone(&self) {
+        if self.counted.swap(false, Ordering::SeqCst) {
+            self.active.end();
+        }
+    }
+}
+
+fn forward(
+    page: Page,
+    key: String,
+    mut events: Events,
+    lifecycle: Arc<Mutex<Lifecycle>>,
+    released: Arc<Mutex<bool>>,
+    ended: Ended,
+) {
     tokio::spawn(async move {
         let mut meters = Meters::default();
         while let Some(event) = events.next().await {
@@ -819,7 +856,12 @@ fn forward(page: Page, key: String, mut events: Events, lifecycle: Arc<Mutex<Lif
             }
             // Where the call is, once the page has the event that says so: what waits on it hears it after the page.
             let answered = match &event {
-                VoiceEvent::State(state) => lifecycle.lock().unwrap().state(state.listening == Listening::Idle),
+                VoiceEvent::State(state) => {
+                    if state.listening == Listening::Idle {
+                        ended.idle();
+                    }
+                    lifecycle.lock().unwrap().state(state.listening == Listening::Idle)
+                }
                 VoiceEvent::Error(error) => {
                     lifecycle.lock().unwrap().error(&error.code);
                     None
@@ -830,6 +872,7 @@ fn forward(page: Page, key: String, mut events: Events, lifecycle: Arc<Mutex<Lif
                 let _ = answered.send(());
             }
         }
+        ended.gone();
         lifecycle.lock().unwrap().end();
     });
 }

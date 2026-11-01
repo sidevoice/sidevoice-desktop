@@ -116,6 +116,8 @@ fn call_state(
     snapshot: CallReport,
 ) -> Result<(), String> {
     the_page(&app, &webview)?;
+    // The green and the red button: the call's service follows the room's call.
+    app.state::<call::RoomCall>().joined(&app, snapshot.joined);
     let previous = std::mem::replace(&mut *last.0.lock().unwrap(), snapshot.clone());
     if (previous.ready, previous.joined, previous.mic_enabled)
         != (snapshot.ready, snapshot.joined, snapshot.mic_enabled)
@@ -143,6 +145,7 @@ fn run_app() {
         // the app's one window, on its own page.
         .plugin(sidevoice_app_tauri::init(the_page, pages))
         .manage(LastReport::default())
+        .manage(call::RoomCall::default())
         .invoke_handler(tauri::generate_handler![call_state])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -150,7 +153,7 @@ fn run_app() {
             if let Err(error) = platform::tls::init() {
                 log::error!("tls: {error}");
             }
-            // Declared now, activated only when a call starts (`call::PhoneCall`).
+            // Declared now, activated only while a call's audio is open (`call::PhoneCall`).
             if let Err(error) = call::configure() {
                 log::error!("audio session: {error}");
             }
@@ -167,7 +170,7 @@ fn run_app() {
                     events: Arc::new(events.clone()),
                     keys: Arc::new(Keychain::new(PROVIDER_KEYS)),
                     // The call holds the audio session (iOS) and its foreground service (Android) while it runs.
-                    calls: Arc::new(call::PhoneCall(handle.clone())),
+                    calls: Arc::new(call::PhoneCall),
                 },
             ));
             let page_app = handle.clone();
@@ -188,6 +191,13 @@ fn run_app() {
                         if let Some(host) = page_app.try_state::<AppHost>() {
                             host.page_changed();
                         }
+                        // A page that loads anew is in no call until it says so. Off the thread that tells the page
+                        // loaded: the service is reached through the plugin's Kotlin, which runs on the UI thread.
+                        let room_app = page_app.clone();
+                        tauri::async_runtime::spawn_blocking(move || {
+                            room_app.state::<call::RoomCall>().joined(&room_app, false)
+                        });
+                        *page_app.state::<LastReport>().0.lock().unwrap() = CallReport::default();
                     }
                 })
                 .build()?;
@@ -198,6 +208,7 @@ fn run_app() {
         .run(|app, event| {
             // Quitting: the calls stop and every model and audio device is let go, bounded.
             if let tauri::RunEvent::Exit = event {
+                app.state::<call::RoomCall>().joined(app, false);
                 if let Some(host) = app.try_state::<AppHost>() {
                     tauri::async_runtime::block_on(host.close(RELEASE_LIMIT));
                 }

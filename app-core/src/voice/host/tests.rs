@@ -1092,3 +1092,23 @@ fn a_start_the_app_refuses_is_not_counted() {
     active.end();
     assert_eq!(*told.said.lock().unwrap(), ["start", "end"]);
 }
+
+#[test]
+fn a_call_ends_for_the_app_at_the_idle_state_after_its_stop_or_when_it_is_gone_once() {
+    let told = Arc::new(Told::default());
+    let active = Arc::new(super::ActiveCalls::default());
+    active.observe(Arc::clone(&told) as Arc<dyn super::CallActivity>);
+    active.begin().unwrap();
+    let ended = super::Ended {
+        counted: Arc::new(AtomicBool::new(true)),
+        stopping: Arc::new(AtomicBool::new(false)),
+        active: Arc::clone(&active),
+    };
+    ended.idle();
+    assert_eq!(*told.said.lock().unwrap(), ["start"], "an idle state before any stop is not its end");
+    ended.stopping.store(true, Ordering::SeqCst);
+    ended.idle();
+    ended.idle();
+    ended.gone();
+    assert_eq!(*told.said.lock().unwrap(), ["start", "end"], "told once");
+}

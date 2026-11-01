@@ -1,16 +1,18 @@
-//! The call's lifecycle on a phone (D-CALL-LIFECYCLE): what the app holds while a call runs, the same on Android and
-//! iOS. The call starts when the person presses the green call button (the page starts the voice call) and ends at the
-//! red hang-up button (the page stops it); sidevoice-app-core's host tells the app the first start and the last end
-//! ([`CallActivity`]).
+//! The call's lifecycle on a phone (D-CALL-LIFECYCLE), the same on Android and iOS: the call starts when the person
+//! presses the green call button and ends at the red hang-up button.
 //!
-//! - **Starting**, before the call's audio opens: the audio session is activated (iOS; declared at the app's start,
-//!   activated only now, so that opening the app interrupts no other app's audio), then the call's foreground service is
-//!   started (Android; iOS keeps the call alive with its `audio` background mode). Either refusing refuses the call,
-//!   with the reason, and what was taken is given back.
-//! - **Ended**, once the call's audio is closed: the service is stopped and the session deactivated, which lets the
-//!   audio another app was playing go on.
-//! - **The service ending on its own** (the person pressed Hang up in its notification, removed the app from the recents
-//!   list, or the system ended it) hangs up the call on the page, as the red button does.
+//! - **The room's call** (the page reports it joined, `call_state`): the call's foreground service runs for exactly that
+//!   (Android; iOS keeps the call alive with its `audio` background mode). It starts when the page says the call is joined
+//!   (a press of the green button, so the app is in front, as Android requires), and stops when it says it is not (the
+//!   red button, the page reloading, the app quitting). The service ending on its own (the person pressed Hang up in its
+//!   notification, removed the app from the recents list, or the system ended it) hangs up the call on the page, as the
+//!   red button does.
+//! - **The call's audio** ([`PhoneCall`], sidevoice-app-core's `CallActivity`): the audio session is activated before
+//!   the first voice call's audio opens and deactivated once the last one's has stopped (iOS; declared at the app's start,
+//!   so that opening the app interrupts no other app's audio). Every voice call counts here, a try in Settings too: it plays
+//!   and records as well.
+use std::sync::Mutex;
+
 use sidevoice_app_core::app::CallActivity;
 use sidevoice_app_core::sidevoice_voice::{AudioSession, Session, SessionConfig, SessionMode};
 use sidevoice_mobile_plugin::{start_call_service, stop_call_service, CallEvent, StopReason};
@@ -30,34 +32,50 @@ pub fn configure() -> Result<(), String> {
     Session::configure(&CALL_AUDIO)
 }
 
-/// The phone's side of the host's calls.
-pub struct PhoneCall(pub AppHandle);
+/// The phone's side of the host's voice calls: the audio session while any of them has audio open.
+pub struct PhoneCall;
 
 impl CallActivity for PhoneCall {
     fn starting(&self) -> Result<(), String> {
-        Session::activate()?;
-        let app = self.0.clone();
-        if let Err(error) = start_call_service(&self.0, move |event| on_service_event(&app, event))
-        {
-            give_back_session();
-            return Err(error.to_string());
-        }
-        log::info!("call: started");
-        Ok(())
+        Session::activate()
     }
 
     fn ended(&self) {
-        if let Err(error) = stop_call_service(&self.0) {
-            log::warn!("call: the service did not stop: {error}");
+        if let Err(error) = Session::deactivate() {
+            log::warn!("call: the audio session was not given back: {error}");
         }
-        give_back_session();
-        log::info!("call: ended");
     }
 }
 
-fn give_back_session() {
-    if let Err(error) = Session::deactivate() {
-        log::warn!("call: the audio session was not given back: {error}");
+/// Whether the room's call holds the call's service now.
+#[derive(Default)]
+pub struct RoomCall(Mutex<bool>);
+
+impl RoomCall {
+    /// The page says whether the call is joined: the service follows, starting at the join and stopping at the end.
+    pub fn joined(&self, app: &AppHandle, joined: bool) {
+        let mut holding = self.0.lock().unwrap();
+        if joined == *holding {
+            return;
+        }
+        if joined {
+            let events = app.clone();
+            match start_call_service(app, move |event| on_service_event(&events, event)) {
+                Ok(()) => {
+                    *holding = true;
+                    log::info!("call: started");
+                }
+                // The call goes on in front; it does not outlive the screen. Recorded by its code
+                // (`not-visible`, `microphone-permission`, …).
+                Err(error) => log::error!("call: the call's service did not start: {error}"),
+            }
+        } else {
+            *holding = false;
+            if let Err(error) = stop_call_service(app) {
+                log::warn!("call: the call's service did not stop: {error}");
+            }
+            log::info!("call: ended");
+        }
     }
 }
 
@@ -67,6 +85,10 @@ fn on_service_event(app: &AppHandle, event: CallEvent) {
     log::info!("call service: {event:?}");
     if let Some(reason) = hang_up_for(&event) {
         log::info!("call: hung up by the service ({reason:?})");
+        // The service is gone: the next join starts another.
+        if let Some(room) = app.try_state::<RoomCall>() {
+            *room.0.lock().unwrap() = false;
+        }
         run_on_page(app, "hang-up");
     }
 }
