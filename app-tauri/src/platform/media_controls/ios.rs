@@ -57,7 +57,7 @@ struct Observer(Retained<ProtocolObject<dyn NSObjectProtocol>>);
 unsafe impl Send for Observer {}
 static OBSERVER: Mutex<Option<Observer>> = Mutex::new(None);
 
-impl apple::Apple for Native {
+impl apple::Os for Native {
     fn listen_for_mute_gesture(app: &AppHandle) -> bool {
         let (Some(name), Some(key)) = (
             exported_string(c"AVAudioApplicationInputMuteStateChangeNotification"),

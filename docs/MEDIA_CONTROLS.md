@@ -18,7 +18,7 @@ The page maps play to unmute, pause to toggle mute (including a pause delivered 
 and `togglemicrophone`, where the webview supports it, to the requested microphone state.
 Hang-up removes the page handlers and pauses its Now Playing element. A dedicated hardware
 hang-up gesture is not claimed. AirPods/Beats' native mute gesture is macOS's (a handler block, `setInputMuteStateChangeHandler`, macOS only) and
-iOS's (17 and later, a notification). What differs between the two is a private trait of `apple.rs` (`Apple`), one
+iOS's (17 and later, a notification). What differs between the two is a private trait of `apple.rs` (`Os`, as every platform concern's), one
 method per difference, implemented by `macos.rs` and `ios.rs`: the playback state (macOS sets it, iOS has none to
 set) and how the gesture is heard.
 

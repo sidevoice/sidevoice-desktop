@@ -24,7 +24,7 @@ impl Os for Native {
     }
 }
 
-impl apple::Apple for Native {
+impl apple::Os for Native {
     /// Apple: on macOS this must be set whenever playback starts or stops, or remote commands may not arrive.
     fn set_playback_state(center: &MPNowPlayingInfoCenter, state: MPNowPlayingPlaybackState) {
         // SAFETY: main thread (`apple::update` dispatches there); a plain property set.

@@ -33,7 +33,7 @@ use tauri::{AppHandle, Manager};
 
 /// What differs between macOS and iOS in this code, one method per difference, each with what an OS that does not have it
 /// does by default; `macos.rs` and `ios.rs` implement it for their `Native`.
-pub(super) trait Apple {
+pub(super) trait Os {
     /// Says whether the app plays (`MPNowPlayingInfoCenter.playbackState`). Only macOS reads it, and requires it whenever
     /// playback starts or stops; iOS takes it from the app's audio session.
     fn set_playback_state(_center: &MPNowPlayingInfoCenter, _state: MPNowPlayingPlaybackState) {}
@@ -119,7 +119,7 @@ pub fn attach(app: &AppHandle, sink: CommandSink) {
 }
 
 /// Follows the call: the commands enabled and the call shown while there is one, on the main thread.
-pub fn update<N: Apple>(app: &AppHandle, snapshot: &CallState) {
+pub fn update<N: Os>(app: &AppHandle, snapshot: &CallState) {
     let Some(headset) = app.try_state::<Headset>() else { return };
     *headset.call.lock().unwrap() = snapshot.clone();
     let active = headset.active();
@@ -181,7 +181,7 @@ fn setup(app: &AppHandle) {
     }
 }
 
-fn apply<N: Apple>(app: &AppHandle, active: bool, in_call: bool, mic_enabled: bool, title: &str) {
+fn apply<N: Os>(app: &AppHandle, active: bool, in_call: bool, mic_enabled: bool, title: &str) {
     // SAFETY: main thread (update() dispatches here); plain Foundation / MediaPlayer calls.
     unsafe {
         for (command, _) in commands() {
@@ -228,7 +228,7 @@ fn apply<N: Apple>(app: &AppHandle, active: bool, in_call: bool, mic_enabled: bo
 
 /// AirPods / Beats mute gesture (macOS 14+, iOS 17+, where `AVAudioApplication` exists): heard while active, and the
 /// system's input mute kept in step with the microphone.
-fn gesture<N: Apple>(app: &AppHandle, active: bool, in_call: bool, mic_enabled: bool) {
+fn gesture<N: Os>(app: &AppHandle, active: bool, in_call: bool, mic_enabled: bool) {
     if !gesture_api() {
         return;
     }

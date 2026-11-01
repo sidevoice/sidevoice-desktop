@@ -88,14 +88,19 @@ through `run` (the call's service hangs up through it).
   folder, Android's backup rules name it). A page that loads anew owns none of the calls of the one before; quitting stops
   the calls and lets the models go, as on the desktop.
 - **The call's lifecycle** (D-CALL-LIFECYCLE, `mobile/src/call.rs`), the same on both phones: the green call button
-  starts the call (the page starts the voice call), the red one ends it. sidevoice-app-core's host tells the app when its
-  first call is about to start and when its last one has stopped (`Hooks::calls`, `CallActivity`; the desktop does
-  nothing there). At the start, before the call's audio opens and while the app is in front, the app activates the audio
-  session (iOS) and starts the call's foreground service (Android); either refusing refuses the call, with why. At the
-  end it stops the service and deactivates the session, so another app's audio goes on. The service ending on its own
-  (Hang up in its notification, the app removed from the recents list, the system) hangs up the call on the page
-  (`window.__sidevoiceHost.run({command: "hang-up"})`). The page reports the call to the app's own `call_state`
-  (logged; the media controls follow it), and the app runs commands on the room through `run`.
+  starts the call, the red one ends it.
+  - **The room's call** holds the call's foreground service (Android): the page reports the call to the app's own
+    `call_state`, and the service starts when the report says joined (a press of the green button, with the app in
+    front, as Android requires) and stops when it says not (the red button, a page that loads anew, the app quitting).
+    A start the system refuses is logged by its code (`not-visible`, `microphone-permission`, …), and the call goes on in
+    front. The service ending on its own (Hang up in its notification, the app removed from the recents list, the
+    system) hangs up the call on the page (`window.__sidevoiceHost.run({command: "hang-up"})`). The media controls follow `call_state` too, and the
+    call's service owns the Android media session.
+  - **The call's audio** holds the audio session (iOS): sidevoice-app-core's host tells the app before the first voice
+    call's audio opens and after the last one's has stopped (`Hooks::calls`, `CallActivity`; the idle state that answers
+    a stop, which sidevoice-voice sends once its audio is closed; the desktop does nothing there). Every voice call
+    counts, a try in Settings too. A session the system will not activate refuses the call with its code
+    (`audio-session-activate-failed`).
 - **The audio session** (iOS; D-AUDIO-SESSION, sidevoice-voice's `Session`): declared at the app's start as
   play-and-record with mode `Default`, the loudspeaker rather than the receiver, and Bluetooth hands-free allowed;
   activated only when a call starts (above). Android has no session to declare. **Not verified on a device yet**; see
