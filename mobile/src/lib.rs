@@ -196,7 +196,10 @@ fn run_app() {
             media_controls::attach(
                 &handle,
                 Arc::new(move |command| match command {
-                    MediaCommand::ToggleMute => call::run_on_page(&media_app, "toggle-mute"),
+                    MediaCommand::ToggleMute => call::run_on_page(
+                        &media_app,
+                        serde_json::json!({ "command": "toggle-mute" }),
+                    ),
                 }),
             );
             // Before the engine's first HTTPS request. Without it, remote providers and downloads fail; the rest runs.
