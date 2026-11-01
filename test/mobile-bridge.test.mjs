@@ -21,7 +21,8 @@ function install(origin, pageOrigin = origin, microphoneSettings = true, microph
     __TAURI_INTERNALS__: {
       transformCallback: () => 1,
       unregisterCallback: () => {},
-      invoke: (command, args) => (invoked.push([command, args]), Promise.resolve(command.endsWith("voice_events") ? 1 : null)),
+      invoke: (command, args) => (invoked.push([command, args]),
+        Promise.resolve(command.endsWith("voice_events") ? 1 : command === "call_page" ? 7 : null)),
     },
     setInterval: () => 1,
     clearInterval: () => {},
@@ -75,9 +76,10 @@ test("the call is reported to the app, and the app's commands run on the room", 
   const { api, win, invoked } = install("tauri://localhost");
   const settled = () => new Promise((resolve) => setTimeout(resolve, 0));
   await settled();
-  // Before the room is up: reported once, not ready.
-  assert.deepEqual(invoked.map(([command]) => command), ["call_state"]);
-  assert.equal(invoked[0][1].snapshot.ready, false);
+  // Before the room is up: reported once, not ready, with the page's number (asked once).
+  assert.deepEqual(invoked.map(([command]) => command), ["call_page", "call_state"]);
+  assert.equal(invoked[1][1].page, 7);
+  assert.equal(invoked[1][1].snapshot.ready, false);
   let toggled = 0;
   win.sidevoiceActions = { toggleMic: () => { toggled++; } };
   win.sidevoiceUI = { store: { getState: () => ({ call: { joined: true }, mic: { enabled: true }, callCard: { title: "Repo" } }), subscribe: () => () => {} } };
@@ -86,6 +88,8 @@ test("the call is reported to the app, and the app's commands run on the room", 
   await settled();
   const last = invoked.at(-1);
   assert.equal(last[0], "call_state");
+  assert.equal(last[1].page, 7);
+  assert.equal(invoked.filter(([command]) => command === "call_page").length, 1, "the number is asked once");
   assert.equal(JSON.stringify([last[1].snapshot.ready, last[1].snapshot.joined, last[1].snapshot.micEnabled, last[1].snapshot.title]),
     JSON.stringify([true, true, true, "Repo"]));
 });

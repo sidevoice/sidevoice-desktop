@@ -108,18 +108,31 @@ struct CallReport {
 #[derive(Default)]
 struct LastReport(std::sync::Mutex<CallReport>);
 
-/// The page reports the call (the app's own command, capabilities/main.json). Logged when it joins or leaves a call, or
-/// mutes; never the conversation's title.
+/// The page's number (the host's page generation), asked once by the page's script when it loads (the app's own
+/// command): it sends it back with every report, so that a report of a page that has since been replaced, reaching the
+/// app late, is told from the current page's.
+#[tauri::command]
+fn call_page(app: AppHandle, webview: Webview) -> Result<u64, String> {
+    the_page(&app, &webview)?;
+    Ok(app.state::<AppHost>().page().0)
+}
+
+/// The page `page` reports the call (the app's own command, capabilities/main.json). Logged when it joins or leaves a
+/// call, or mutes; never the conversation's title.
 #[tauri::command]
 fn call_state(
     app: AppHandle,
     webview: Webview,
     last: tauri::State<'_, LastReport>,
+    page: u64,
     snapshot: CallReport,
 ) -> Result<(), String> {
     the_page(&app, &webview)?;
-    // The green and the red button: the call's service follows the room's call, of the current page.
-    let page = app.state::<AppHost>().page().0;
+    if page != app.state::<AppHost>().page().0 {
+        return Ok(()); // a page that has been replaced: its call is over
+    }
+    // The green and the red button: the call's service follows the room's call (`call::RoomCall` checks the page again,
+    // in order with the page's changes).
     app.state::<call::RoomCall>().report(page, snapshot.joined);
     let previous = std::mem::replace(&mut *last.0.lock().unwrap(), snapshot.clone());
     if (previous.ready, previous.joined, previous.mic_enabled)
@@ -172,7 +185,7 @@ fn run_app() {
         // the app's one window, on its own page.
         .plugin(sidevoice_app_tauri::init(the_page, pages))
         .manage(LastReport::default())
-        .invoke_handler(tauri::generate_handler![call_state])
+        .invoke_handler(tauri::generate_handler![call_page, call_state])
         .setup(move |app| {
             let handle = app.handle().clone();
             // The headset's buttons and the lock screen's controls act on the call through the page, as the desktop's do.

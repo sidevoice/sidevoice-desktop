@@ -63,8 +63,11 @@ pub struct Room {
     pub app: AppHandle,
     /// The page whose call this is (the host's page generation): reports of another are not its.
     pub page: u64,
-    /// Whether the call's service runs for it.
-    holding: bool,
+    /// The service that runs for it, by the number of its start (`None`: none runs). Each start has its own number, so a
+    /// report of a service that has since been replaced is not taken for the new one's.
+    holding: Option<u64>,
+    /// The number of the last start.
+    starts: u64,
 }
 
 impl RoomCall {
@@ -74,7 +77,8 @@ impl RoomCall {
         let mut room = Room {
             app,
             page,
-            holding: false,
+            holding: None,
+            starts: 0,
         };
         std::thread::Builder::new()
             .name("room-call".into())
@@ -126,14 +130,17 @@ impl RoomCall {
 impl Room {
     /// Starts or stops the call's service, as `joined` says.
     fn hold(&mut self, joined: bool) {
-        if joined == self.holding {
+        if joined == self.holding.is_some() {
             return;
         }
         if joined {
-            let app = self.app.clone();
-            match start_call_service(&self.app, move |event| on_service_event(&app, event)) {
+            self.starts += 1;
+            let (app, start, page) = (self.app.clone(), self.starts, self.page);
+            match start_call_service(&self.app, move |event| {
+                on_service_event(&app, start, page, event)
+            }) {
                 Ok(()) => {
-                    self.holding = true;
+                    self.holding = Some(start);
                     log::info!("call: started");
                 }
                 // The call goes on in front; it does not outlive the screen. Recorded by its code
@@ -141,7 +148,7 @@ impl Room {
                 Err(error) => log::error!("call: the call's service did not start: {error}"),
             }
         } else {
-            self.holding = false;
+            self.holding = None;
             if let Err(error) = stop_call_service(&self.app) {
                 log::warn!("call: the call's service did not stop: {error}");
             }
@@ -150,17 +157,24 @@ impl Room {
     }
 }
 
-/// What the call's service reports, as it reports it (it must not wait): an end the app did not ask for hangs the call
-/// up; a change of the audio focus is recorded (what to do about it is a decision of its own).
-fn on_service_event(app: &AppHandle, event: CallEvent) {
+/// What the service of start `start`, made for the call of page `page`, reports, as it reports it (it must not wait): an
+/// end the app did not ask for hangs that call up, on the room's thread and only while that service is still the one
+/// that runs for that page; a change of the audio focus is recorded (what to do about it is a decision of its own).
+fn on_service_event(app: &AppHandle, start: u64, page: u64, event: CallEvent) {
     log::info!("call service: {event:?}");
     if let Some(reason) = hang_up_for(&event) {
-        log::info!("call: hung up by the service ({reason:?})");
-        // The service is gone: the next join starts another.
-        if let Some(room) = app.try_state::<RoomCall>() {
-            room.then(|room| room.holding = false);
-        }
-        run_on_page(app, "hang-up");
+        let Some(room) = app.try_state::<RoomCall>() else {
+            return;
+        };
+        room.then(move |room| {
+            if room.holding != Some(start) || room.page != page {
+                return; // an older service's end: the call it was for is over already
+            }
+            log::info!("call: hung up by the service ({reason:?})");
+            // The service is gone: the next join starts another.
+            room.holding = None;
+            run_on_page(&room.app, "hang-up");
+        });
     }
 }
 

@@ -789,9 +789,11 @@ pub fn refused(r: choice::Refusal) -> Refusal {
 /// (sidevoice-voice closes the audio before it says idle), or when its events end (the call is gone), whichever comes
 /// first. A lane that was released (its page went, the app quits) is told the same way, by its own call.
 ///
-/// The idle that answers the stop is the first one after the call went on (a state that is not idle, or an error): the
-/// call says idle once before it starts too (its first `mute`, which the lane makes before `start`), and the stop always
-/// comes after the start, so that early idle, however late this task reads it, is never taken for the stop's.
+/// The call says idle once before it starts (its first `mute`, which the lane makes before `start`, takes it out of its
+/// initial state), and once more for every stop, whatever state the stop finds (sidevoice-voice's `Call::stop`, after
+/// the audio is closed): a stop before the audio was ready says idle too. The stop always comes after the start, so the
+/// idle that answers it is any idle but that first one, however late this task reads either. A call that went on (a
+/// state that is not idle, or an error) has had its first idle already.
 struct Ended {
     counted: Arc<AtomicBool>,
     stopping: Arc<AtomicBool>,
@@ -799,9 +801,9 @@ struct Ended {
 }
 
 impl Ended {
-    /// An idle state, read after the call went on (`started`) or not.
-    fn idle(&self, started: bool) {
-        if started && self.stopping.load(Ordering::SeqCst) {
+    /// An idle state; `first`: the first the call said, before it went on.
+    fn idle(&self, first: bool) {
+        if !first && self.stopping.load(Ordering::SeqCst) {
             self.gone();
         }
     }
@@ -823,8 +825,8 @@ fn forward(
 ) {
     tokio::spawn(async move {
         let mut meters = Meters::default();
-        // Whether the call has gone on: a state that is not idle, or an error of its start ([`Ended`]).
-        let mut started = false;
+        // Whether the call's first idle is still to come: the one before it goes on ([`Ended`]).
+        let mut first_idle = true;
         while let Some(event) = events.next().await {
             let wanted = match &event {
                 VoiceEvent::Level(level) => meters.level(*level),
@@ -865,14 +867,13 @@ fn forward(
             let answered = match &event {
                 VoiceEvent::State(state) => {
                     if state.listening == Listening::Idle {
-                        ended.idle(started);
-                    } else {
-                        started = true;
+                        ended.idle(first_idle);
                     }
+                    first_idle = false;
                     lifecycle.lock().unwrap().state(state.listening == Listening::Idle)
                 }
                 VoiceEvent::Error(error) => {
-                    started = true;
+                    first_idle = false;
                     lifecycle.lock().unwrap().error(&error.code);
                     None
                 }
