@@ -90,7 +90,9 @@ Operator decision (2026-10-30), amended 2026-11-01 (D-RULE-ROOT). Applies like t
 - **Enforced in CI**, in the Platform boundary job: `cargo xtask platform-guard` (the conditions, in every Rust file,
   `platform` included, and the features, target tables and lints of every `Cargo.toml`; the one accepted form is the
   crate-root attribute above, in a crate under the directory of its kind) and `cargo xtask host-graph` (the crates'
-  dependencies on each supported target with every feature on, from `cargo metadata`; that each host crate carries its
+  dependencies on each supported target with every feature on, from `cargo metadata`; that every library and binary target of
+  each host crate carries its
   root attribute and the root `default-members` hold no mobile crate; and the steps of the workflows that build for a
   mobile target). They read tokens, manifests, workflows and resolution and build nothing;
-  their limits are in the head of `xtask/src/platform_guard.rs` and `xtask/src/host_graph.rs`.
+  their limits are in the head of `xtask/src/platform_guard.rs` and `xtask/src/host_graph.rs`. They are convention guards,
+  not sandboxes: they catch the honest mistake and the usual workaround, and a deliberate bypass is a matter for review.
