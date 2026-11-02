@@ -21,8 +21,8 @@
 // part is evaluated where `transportOf` and `membersOf`, the other two, are in scope.
 (function (factory) {
   if (typeof module === "object" && module.exports) module.exports = factory; // unit tests
-  else factory(window, "__SIDEVOICE_ROOM_ORIGIN__", "__SIDEVOICE_MEDIA__", "__SIDEVOICE_LOCAL_HOST__", "__SIDEVOICE_VOICE__", "__SIDEVOICE_UPDATER__", "__SIDEVOICE_BUILD__", "__SIDEVOICE_DEVICE_NAME__", "__SIDEVOICE_DEBUG__", "__SIDEVOICE_MICROPHONE_SETTINGS__", "__SIDEVOICE_UNINSTALL__", "__SIDEVOICE_SHORTCUT_MODIFIER__", "__SIDEVOICE_MICROPHONE_HELP__");
-})(function installDesktopBridge(win, roomOrigin, mediaOwned, localHostOffered, voiceOffered, updaterOffered, build, deviceName, debugState, microphoneSettingsOffered, uninstallOffered, shortcutModifier, microphoneHelp) {
+  else factory(window, "__SIDEVOICE_ROOM_ORIGIN__", "__SIDEVOICE_MEDIA__", "__SIDEVOICE_LOCAL_HOST__", "__SIDEVOICE_VOICE__", "__SIDEVOICE_UPDATER__", "__SIDEVOICE_BUILD__", "__SIDEVOICE_DEVICE_NAME__", "__SIDEVOICE_DEBUG__", "__SIDEVOICE_MICROPHONE_SETTINGS__", "__SIDEVOICE_UNINSTALL__", "__SIDEVOICE_SHORTCUT_MODIFIER__", "__SIDEVOICE_MICROPHONE_HELP__", "__SIDEVOICE_MESSAGES__");
+})(function installDesktopBridge(win, roomOrigin, mediaOwned, localHostOffered, voiceOffered, updaterOffered, build, deviceName, debugState, microphoneSettingsOffered, uninstallOffered, shortcutModifier, microphoneHelp, messageTables) {
   "use strict";
   // scheme://host rather than location.origin: the app's own pages (tauri://localhost) may have an opaque origin.
   if (win.location.protocol + "//" + win.location.host !== roomOrigin) return null;
@@ -457,6 +457,8 @@
       ...(voiceCall ? { voice: voiceCall.host } : {}),
       // The app's native microphone access, on every OS (src/platform/microphone.rs), and its words for a blocked one.
       microphone: members.microphone(microphoneSettingsOffered === true, microphoneHelp),
+      // The app's wording of the web's texts that an app changes (shared/tauri/i18n), over the web's catalogue.
+      ...(members.messages(messageTables) ? { messages: members.messages(messageTables) } : {}),
       /** What this build is: a release, a nightly (both with `updater`), or a development build. */
       build: Object.freeze({ ...build }),
       // The name the person gave this computer ("Mac de Ana"): the page proposes it as the device's name. Only

@@ -239,6 +239,7 @@ fn run_app() {
                     APP_ORIGIN,
                     sidevoice_shared_tauri::platform::microphone::settings_available(),
                     bridge::microphone_help().as_ref(),
+                    &bridge::messages(),
                 ))
                 // Only the app's own pages: the interface never navigates away.
                 .on_navigation(|url| navigation_allowed(url, APP_ORIGIN))

@@ -23,6 +23,7 @@ const DEBUG_PLACEHOLDER: &str = "\"__SIDEVOICE_DEBUG__\"";
 const UNINSTALL_PLACEHOLDER: &str = "\"__SIDEVOICE_UNINSTALL__\"";
 const SHORTCUT_MODIFIER_PLACEHOLDER: &str = "\"__SIDEVOICE_SHORTCUT_MODIFIER__\"";
 const MICROPHONE_HELP_PLACEHOLDER: &str = "\"__SIDEVOICE_MICROPHONE_HELP__\"";
+const MESSAGES_PLACEHOLDER: &str = "\"__SIDEVOICE_MESSAGES__\"";
 
 /// What the app tells the page it offers beyond the web, the same on every OS: this computer's own core, the local host
 /// (`window.__sidevoiceHost.host.localHost`, docs/LOCAL_HOST.md), and the voice call the app runs itself
@@ -87,6 +88,8 @@ fn compose(parts: &Parts<'_>, desktop: &str) -> String {
 /// `platform::host::shortcut_modifier`).
 /// `microphone_help`: how to allow a blocked microphone here, in each language the app has words in (`host.microphone.help`;
 /// [`microphone_help], `platform::host::microphone_help`).
+/// `messages`: the app's wording of the web's texts that it changes, per language (`host.messages`; docs/BRIDGE.md ->
+/// "The message overlay"; shared `messages::tables`).
 /// `parts`: the transport and the members, composed with the desktop's part into the one script the page gets.
 #[allow(clippy::too_many_arguments)]
 pub fn script_for_origin(
@@ -101,6 +104,7 @@ pub fn script_for_origin(
     uninstall: bool,
     shortcut_modifier: &str,
     microphone_help: &serde_json::Value,
+    messages: &serde_json::Value,
     parts: &Parts<'_>,
 ) -> String {
     let literal = serde_json::to_string(origin).expect("a string serialises");
@@ -123,7 +127,8 @@ pub fn script_for_origin(
         .replacen(MICROPHONE_SETTINGS_PLACEHOLDER, flag(microphone_settings), 1)
         .replacen(UNINSTALL_PLACEHOLDER, flag(uninstall), 1)
         .replacen(SHORTCUT_MODIFIER_PLACEHOLDER, &serde_json::to_string(shortcut_modifier).expect("serialises"), 1)
-        .replacen(MICROPHONE_HELP_PLACEHOLDER, &microphone_help.to_string(), 1);
+        .replacen(MICROPHONE_HELP_PLACEHOLDER, &microphone_help.to_string(), 1)
+        .replacen(MESSAGES_PLACEHOLDER, &messages.to_string(), 1);
     compose(parts, &desktop)
 }
 
@@ -472,6 +477,7 @@ mod tests {
             false,
             "⌘",
             &help,
+            &serde_json::json!({}),
             &parts(),
         );
         assert!(!s.contains("__SIDEVOICE_ROOM_ORIGIN__"));
@@ -486,13 +492,14 @@ mod tests {
         assert!(!s.contains("__SIDEVOICE_UNINSTALL__"));
         assert!(!s.contains("__SIDEVOICE_SHORTCUT_MODIFIER__"));
         assert!(!s.contains("__SIDEVOICE_MICROPHONE_HELP__"));
+        assert!(!s.contains("__SIDEVOICE_MESSAGES__"));
         let platform = "true, true, true";
         let dev_build = r#"{"channel":"dev","version":"0.4.0"}"#;
         // A dev build has the developer options: what the settings keep, and the switches this platform has.
         let debug = off.state(&crate::debug_options::Switch::ALL);
         let told = help.to_string();
         let expected = format!(
-            r#"factory(window, "https://voice.example.com", {platform}, false, {dev_build}, null, {debug}, false, false, "⌘", {told})"#
+            r#"factory(window, "https://voice.example.com", {platform}, false, {dev_build}, null, {debug}, false, false, "⌘", {told}, {{}})"#
         );
         assert!(s.contains(&expected), "{expected}");
         let no_diagnostics = script_for_origin(
@@ -507,6 +514,7 @@ mod tests {
             false,
             "Ctrl",
             &help,
+            &serde_json::json!({}),
             &parts(),
         );
         assert!(no_diagnostics.contains(&off.state(&[]).to_string()));
@@ -525,10 +533,11 @@ mod tests {
             true,
             "⌘",
             &help,
+            &serde_json::json!({}),
             &parts(),
         );
         let expected = format!(
-            r#"factory(window, "https://voice.example.com", {platform}, true, {{"channel":"release","version":"0.4.0"}}, "Mac de Ana", null, true, true, "⌘", {told})"#
+            r#"factory(window, "https://voice.example.com", {platform}, true, {{"channel":"release","version":"0.4.0"}}, "Mac de Ana", null, true, true, "⌘", {told}, {{}})"#
         );
         assert!(offered.contains(&expected), "{expected}");
         // A hostile value cannot break out of the string literal.
@@ -544,11 +553,12 @@ mod tests {
             false,
             "\"); alert(1); (\"",
             &help,
+            &serde_json::json!({}),
             &parts(),
         );
         assert!(evil.contains(r#"factory(window, "\"); alert(1); (\"""#));
         assert!(evil.contains(r#"{"channel":"dev","version":"0.4.0"}, "\"); alert(1); (\"", "#));
-        assert!(evil.contains(&format!(r#", false, "\"); alert(1); (\"", {told})"#)));
+        assert!(evil.contains(&format!(r#", false, "\"); alert(1); (\"", {told}, {{}})"#)));
         // The help is JSON the catalogue wrote: whatever its texts hold stays inside the literal, as the other values do.
         let quoting = microphone_help("quote\"); alert(1); (\"", None);
         let hostile = script_for_origin(
@@ -563,6 +573,7 @@ mod tests {
             false,
             "Ctrl",
             &quoting,
+            &serde_json::json!({}),
             &parts(),
         );
         assert!(hostile.contains(&quoting.to_string()));
@@ -587,6 +598,7 @@ mod tests {
             false,
             "Ctrl",
             &help,
+            &serde_json::json!({}),
             &parts(),
         );
         assert!(
@@ -619,6 +631,7 @@ mod tests {
             false,
             "Ctrl",
             &help,
+            &serde_json::json!({}),
             &parts(),
         );
         let line = r#"factory(window, "https://voice.example.com", true, true, true, false, {"channel":"dev","version":"0.4.0"}, null, "#;
@@ -644,11 +657,12 @@ mod tests {
                 uninstall,
                 "Ctrl",
                 &help,
+                &serde_json::json!({}),
                 &parts(),
             )
         };
-        // The factory's last arguments: the microphone settings (false here), the uninstall, the shortcut modifier, then the help.
-        let call = |told: &str| format!("false, {told}, \"Ctrl\", {help});\n}})(function installDesktopBridge(");
+        // The factory's last arguments: the microphone settings (false here), the uninstall, the shortcut modifier, then the help and the messages.
+        let call = |told: &str| format!("false, {told}, \"Ctrl\", {help}, {{}});\n}})(function installDesktopBridge(");
         let (without, with) = (script(false), script(true));
         assert!(without.contains(&call("false")) && with.contains(&call("true")));
         assert_eq!(with.replacen(&call("true"), &call("false"), 1), without);

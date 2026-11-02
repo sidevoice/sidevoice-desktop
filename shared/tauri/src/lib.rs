@@ -18,6 +18,7 @@ mod acl;
 mod engine;
 pub mod headset;
 pub mod js;
+pub mod messages;
 mod microphone;
 mod observers;
 mod pages;

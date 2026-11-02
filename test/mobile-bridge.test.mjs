@@ -10,7 +10,7 @@ const mobile = readFileSync(new URL("../mobile/tauri/js/mobile-bridge.js", impor
 const composed = `(function (transportOf, membersOf) {\n${mobile}\n})(${transport}, ${members});`;
 const PLUGIN = "plugin:sidevoice-shared-tauri|";
 
-function install(origin, pageOrigin = origin, microphoneSettings = true, microphoneHelp = null) {
+function install(origin, pageOrigin = origin, microphoneSettings = true, microphoneHelp = null, messageTables = null) {
   const module = { exports: {} };
   vm.runInNewContext(composed, { module, Promise, JSON, Date });
   const invoked = [];
@@ -29,7 +29,7 @@ function install(origin, pageOrigin = origin, microphoneSettings = true, microph
     clearInterval: () => {},
     setTimeout: (fn) => setTimeout(fn, 0),
   };
-  const api = module.exports(win, origin, microphoneSettings, microphoneHelp);
+  const api = module.exports(win, origin, microphoneSettings, microphoneHelp, messageTables);
   return { api, win, invoked, intervals };
 }
 
@@ -51,6 +51,15 @@ for (const origin of ["tauri://localhost", "http://tauri.localhost"]) {
     assert.ok(Object.isFrozen(host));
   });
 }
+
+test("the phone's wording of the web's texts is offered per language, and only when it has any", () => {
+  const tables = { en: { "devices.speakerFixed": "Change it from Control Center." }, es: { "devices.speakerFixed": "Cámbialo en el Centro de control." } };
+  const { messages } = install("tauri://localhost", "tauri://localhost", true, null, tables).api.host;
+  assert.equal(messages("es")["devices.speakerFixed"], "Cámbialo en el Centro de control.");
+  assert.equal(messages("en")["devices.speakerFixed"], "Change it from Control Center.");
+  assert.deepEqual(Object.keys(messages("de")), []);
+  assert.equal(install("tauri://localhost").api.host.messages, undefined);
+});
 
 test("on any other origin it does nothing", () => {
   const { api, win } = install("tauri://localhost", "https://example.com");
