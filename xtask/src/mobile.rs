@@ -251,7 +251,10 @@ pub fn generate(name: &str) -> Result<()> {
         add_privacy_manifest(&dir)?;
         // The project embeds the engine's two xcframeworks (`bundle.iOS.frameworks`): they are made first, so that the CLI
         // and XcodeGen find what the project references.
-        if !["sherpa-onnx.xcframework", "onnxruntime.xcframework"].iter().all(|f| repo().join(IOS_FRAMEWORKS).join(f).is_dir()) {
+        if !["sherpa-onnx.xcframework", "onnxruntime.xcframework"]
+            .iter()
+            .all(|f| repo().join(IOS_FRAMEWORKS).join(f).is_dir())
+        {
             engine_libs(name, "aarch64-apple-ios-sim")?;
         }
     }

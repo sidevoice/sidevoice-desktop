@@ -98,22 +98,23 @@ pub fn testflight(build_number_text: &str) -> Result<()> {
     }
     let config = serde_json::json!({ "bundle": { "iOS": { "bundleVersion": build.to_string() } } }).to_string();
     let libs = super::AppBuildLibs::hold("ios", "aarch64-apple-ios")?;
-    libs.libs.apply(tauri(&[
-        "ios",
-        "build",
-        "--target",
-        "aarch64",
-        "--export-method",
-        "app-store-connect",
-        "--config",
-        &config,
-        "--ci",
-    ]))
-    .env("APPLE_API_KEY", &key_id)
-    .env("APPLE_API_ISSUER", &issuer)
-    .env("APPLE_API_KEY_PATH", &key)
-    .env("APPLE_DEVELOPMENT_TEAM", &team)
-    .run()?;
+    libs.libs
+        .apply(tauri(&[
+            "ios",
+            "build",
+            "--target",
+            "aarch64",
+            "--export-method",
+            "app-store-connect",
+            "--config",
+            &config,
+            "--ci",
+        ]))
+        .env("APPLE_API_KEY", &key_id)
+        .env("APPLE_API_ISSUER", &issuer)
+        .env("APPLE_API_KEY_PATH", &key)
+        .env("APPLE_DEVELOPMENT_TEAM", &team)
+        .run()?;
     drop(libs);
 
     let ipas = find_ipa(&out, 3)?;
