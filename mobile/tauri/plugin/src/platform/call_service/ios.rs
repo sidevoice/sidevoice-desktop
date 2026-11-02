@@ -141,13 +141,26 @@ struct Call {
     id: u64,
     uuid: Retained<NSUUID>,
     events: CallEvents,
-    /// What the system was last told of it.
-    shown: CallDetails,
+    /// The title the system was last told.
+    title: String,
     /// Reported connected (once, when its audio is first activated).
     connected: bool,
-    /// The mute actions the app asked for and CallKit has not performed yet (their `CXAction` UUIDs): performed, they are
-    /// the app's own coming back, not a mute from outside, and are not reported (a late one must not undo a newer mute).
+    mute: Mute,
+}
+
+/// The call's mute, as the page wants it and as CallKit has it.
+#[derive(Default)]
+struct Mute {
+    /// The page's, as last told (or as a mute from outside set it).
+    wanted: bool,
+    /// CallKit's: what it last performed.
+    system: bool,
+    /// The mute actions the app asked for and CallKit has neither performed nor refused yet (their `CXAction` UUIDs):
+    /// performed, they are the app's own coming back, not a mute from outside, and are not reported (a late one must not
+    /// undo a newer mute).
     asked: Vec<Retained<NSUUID>>,
+    /// Asked again once already after a refusal, for the mute now wanted.
+    retried: bool,
 }
 
 impl CallKit {
@@ -228,12 +241,9 @@ fn request_start(
             id,
             uuid,
             events,
-            shown: CallDetails {
-                title: details.title,
-                muted: false,
-            },
+            title: details.title,
             connected: false,
-            asked: Vec::new(),
+            mute: Mute::default(),
         });
         Ok((kit.controller.clone(), action))
     })?;
@@ -269,11 +279,11 @@ fn request_start(
 /// Shows the running call as `details` (main thread): its title when it changed, and the page's mute told to the system as
 /// the mute action CallKit expects.
 fn show(details: CallDetails) {
-    let request = CALLKIT.with_borrow_mut(|kit| {
+    let ask = CALLKIT.with_borrow_mut(|kit| {
         let kit = kit.as_mut()?;
         let call = kit.call.as_mut()?;
-        if call.shown.title != details.title {
-            call.shown.title = details.title.clone();
+        if call.title != details.title {
+            call.title = details.title.clone();
             // SAFETY: a new update, reported for the call that runs.
             unsafe {
                 let update = CXCallUpdate::new();
@@ -282,47 +292,71 @@ fn show(details: CallDetails) {
                 kit.provider.reportCallWithUUID_updated(&call.uuid, &update);
             }
         }
-        if call.shown.muted == details.muted {
+        if call.mute.wanted == details.muted {
             return None;
         }
-        call.shown.muted = details.muted;
-        // SAFETY: a new action for the call that runs.
-        let action = unsafe {
-            CXSetMutedCallAction::initWithCallUUID_muted(
+        call.mute.wanted = details.muted;
+        call.mute.retried = false;
+        Some(details.muted)
+    });
+    if let Some(muted) = ask {
+        ask_mute(muted);
+    }
+}
+
+/// Asks CallKit to mute or unmute the running call (main thread). A refusal, once nothing else is asked, is asked again
+/// once for the mute the page wants then; past that the system's call keeps the mute it has, and the log says so.
+fn ask_mute(muted: bool) {
+    let request = CALLKIT.with_borrow_mut(|kit| {
+        let kit = kit.as_mut()?;
+        let call = kit.call.as_mut()?;
+        // SAFETY: a new action for the call that runs, and its own identifier.
+        let (action, asked) = unsafe {
+            let action = CXSetMutedCallAction::initWithCallUUID_muted(
                 CXSetMutedCallAction::alloc(),
                 &call.uuid,
-                details.muted,
-            )
+                muted,
+            );
+            let asked = action.UUID();
+            (action, asked)
         };
-        // SAFETY: the action's own identifier.
-        let asked = unsafe { action.UUID() };
-        call.asked.push(asked.clone());
-        Some((kit.controller.clone(), action, asked))
+        call.mute.asked.push(asked.clone());
+        Some((kit.controller.clone(), action, asked, call.id))
     });
-    if let Some((controller, action, asked)) = request {
-        let answered = RcBlock::new(move |error: *mut NSError| {
-            // SAFETY: as above.
-            if let Some(error) = unsafe { error.as_ref() } {
-                log::warn!(
-                    "call: CallKit refused the mute ({}, {})",
-                    error.domain(),
-                    error.code()
-                );
-                // Never performed: nothing of it comes back, and the system's call keeps the mute it had.
-                CALLKIT.with_borrow_mut(|kit| {
-                    if let Some(call) = kit.as_mut().and_then(|kit| kit.call.as_mut()) {
-                        let before = call.asked.len();
-                        call.asked.retain(|uuid| **uuid != *asked);
-                        if call.asked.len() != before {
-                            call.shown.muted = !call.shown.muted;
-                        }
-                    }
-                });
+    let Some((controller, action, asked, id)) = request else {
+        return;
+    };
+    let answered = RcBlock::new(move |error: *mut NSError| {
+        // SAFETY: as above.
+        let Some(error) = (unsafe { error.as_ref() }) else {
+            return;
+        };
+        log::warn!(
+            "call: CallKit refused the mute ({}, {})",
+            error.domain(),
+            error.code()
+        );
+        // Never performed: nothing of it comes back.
+        let again = CALLKIT.with_borrow_mut(|kit| {
+            let call = kit.as_mut()?.call.as_mut().filter(|call| call.id == id)?;
+            call.mute.asked.retain(|uuid| **uuid != *asked);
+            let mute = &mut call.mute;
+            if !mute.asked.is_empty() || mute.wanted == mute.system {
+                return None;
             }
+            if mute.retried {
+                log::warn!("call: the system's call keeps its mute ({})", mute.system);
+                return None;
+            }
+            mute.retried = true;
+            Some(mute.wanted)
         });
-        // SAFETY: as in `request_start`.
-        unsafe { controller.requestTransactionWithAction_completion(&action, &answered) };
-    }
+        if let Some(muted) = again {
+            ask_mute(muted);
+        }
+    });
+    // SAFETY: as in `request_start`.
+    unsafe { controller.requestTransactionWithAction_completion(&action, &answered) };
 }
 
 /// Ends the call of start `id`, if it is the one that runs (main thread): it is the app's no more, `reason` (if any) is
@@ -444,11 +478,13 @@ define_class!(
                 if *call.uuid != *uuid {
                     return None;
                 }
-                if let Some(at) = call.asked.iter().position(|asked| **asked == *id) {
-                    call.asked.remove(at);
+                call.mute.system = muted;
+                if let Some(at) = call.mute.asked.iter().position(|asked| **asked == *id) {
+                    call.mute.asked.remove(at);
                     return None;
                 }
-                call.shown.muted = muted;
+                // From outside: the page follows it, so it is what the page wants now.
+                call.mute.wanted = muted;
                 Some(call.events.clone())
             });
             if let Some(events) = external {

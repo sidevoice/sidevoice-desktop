@@ -37,6 +37,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -81,8 +82,11 @@ class CallService : Service() {
     private var control: CallControlScope? = null
     /** This service's call is over: a call Telecom gives after that is disconnected at once, so none is left behind. */
     private var telecomEnded = false
-    /** The microphone mute the service last set itself, until Telecom tells it back (then it is no mute from outside). */
-    private var echo: Boolean? = null
+    /**
+     * The microphone mutes the service set itself and Telecom has not told back yet, oldest first: told back, they are no
+     * mute from outside.
+     */
+    private val echoes = ArrayDeque<Boolean>()
     /** The page's mute, as last told ([ACTION_UPDATE]). */
     private var pageMuted: Boolean? = null
     /** Whether the service turned the system's microphone mute on: it is turned off again at the end. */
@@ -274,7 +278,7 @@ class CallService : Service() {
         if (control == null) return
         val audio = getSystemService(AudioManager::class.java)
         if (audio.isMicrophoneMute != muted) {
-            echo = muted
+            echoes.addLast(muted)
             audio.isMicrophoneMute = muted
             mutedTheSystem = muted
         }
@@ -315,7 +319,10 @@ class CallService : Service() {
                     added = call
                     if (telecomEnded || session?.id != mine.id) {
                         // The call ended before Telecom gave it: disconnected now, so that none is left behind.
-                        launch { call.disconnect(DisconnectCause(DisconnectCause.LOCAL)) }
+                        launch {
+                            call.disconnect(DisconnectCause(DisconnectCause.LOCAL))
+                            call.cancel()
+                        }
                         return@addCall
                     }
                     // Kept from now: an end while it is being set active disconnects it (`endTelecom`).
@@ -327,6 +334,9 @@ class CallService : Service() {
                             Log.w(TAG, "Telecom: the call was not set active: $result; it stays the app's own")
                             registered = null
                             call.disconnect(DisconnectCause(DisconnectCause.ERROR))
+                            // Its collectors (mute, route) do not end with the disconnect: they go now, and the call's
+                            // coroutine with them.
+                            call.cancel()
                         } else {
                             telecomHolds(mine, call)
                         }
@@ -335,17 +345,19 @@ class CallService : Service() {
                     // already is says nothing (Telecom may tell it at the start); the page's own mute coming back is the same
                     // as the page, and changes nothing there.
                     launch {
-                        var known = getSystemService(AudioManager::class.java).isMicrophoneMute
+                        val audio = getSystemService(AudioManager::class.java)
+                        var known = audio.isMicrophoneMute
                         call.isMuted.collect { muted ->
                             if (muted == known) return@collect
                             known = muted
-                            // The service's own mute (the page's) coming back: not reported, so that a late one never undoes
-                            // a newer mute of the page's.
-                            if (echo == muted) {
-                                echo = null
+                            // The service's own mutes (the page's) coming back, up to this one: acknowledged, not reported.
+                            val own = echoes.indexOf(muted)
+                            if (own >= 0) {
+                                repeat(own + 1) { echoes.removeFirst() }
                                 return@collect
                             }
-                            echo = null
+                            // Late: the microphone is no longer so (a newer change came after it), so it says nothing now.
+                            if (audio.isMicrophoneMute != muted) return@collect
                             if (control === call) CallSession.muted(mine, muted)
                         }
                     }
@@ -395,7 +407,7 @@ class CallService : Service() {
         val call = registered
         registered = null
         control = null
-        echo = null
+        echoes.clear()
         val job = telecom
         telecom = null
         if (mutedTheSystem) {
