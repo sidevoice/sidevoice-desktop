@@ -2,12 +2,14 @@
 //! the parent's parent's coordinates), and the window and the view controller's view get the system background, so what
 //! the page does not cover shows the system's background (light or dark with the device) instead of the window's unset
 //! colour. Its scroll view cannot be pinch-zoomed: an app is not a document, and a zoomed-out page left the screen black
-//! around it. The window is only there once the view is on screen, so this runs again after the page loads.
+//! around it. Its scroll view adds no safe-area inset of its own (the page owns the safe areas), or WebKit lays the page out
+//! 96 points short of the screen and the strip below it shows black. The window is only there once the view is on screen, so
+//! this runs again after the page loads.
 use super::Os;
 use block2::RcBlock;
 use objc2::{msg_send, rc::Retained, runtime::AnyObject};
 use objc2_foundation::NSString;
-use objc2_ui_kit::{UIColor, UIScrollView, UIView, UIViewController};
+use objc2_ui_kit::{UIColor, UIScrollView, UIScrollViewContentInsetAdjustmentBehavior, UIView, UIViewController};
 use tauri::webview::PlatformWebview;
 
 pub struct Native;
@@ -31,6 +33,10 @@ fn lock_zoom(web_view: &UIView) {
     let Some(scroll_view) = scroll_view else {
         return;
     };
+    // The page owns the safe areas (`env(safe-area-inset-*)`): the scroll view adds none of its own. With the default
+    // (automatic) it adds the status bar's and the home indicator's, and WebKit lays the page out in what is left: 860 of
+    // the 956 points of a Pro Max, a strip of the screen the page does not cover.
+    scroll_view.setContentInsetAdjustmentBehavior(UIScrollViewContentInsetAdjustmentBehavior::Never);
     scroll_view.setMinimumZoomScale(1.0);
     scroll_view.setMaximumZoomScale(1.0);
     scroll_view.setZoomScale(1.0);
@@ -39,7 +45,6 @@ fn lock_zoom(web_view: &UIView) {
         pinch.setEnabled(false);
     }
 }
-
 
 /// Asks the page what it measures (the viewport, the document, the root element and the backgrounds) and logs the answer:
 /// the web view's side of a layout the native side cannot see.
