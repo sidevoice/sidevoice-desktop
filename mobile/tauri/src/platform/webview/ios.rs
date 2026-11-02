@@ -9,7 +9,9 @@ use super::Os;
 use block2::RcBlock;
 use objc2::{msg_send, rc::Retained, runtime::AnyObject};
 use objc2_foundation::NSString;
-use objc2_ui_kit::{UIColor, UIScrollView, UIScrollViewContentInsetAdjustmentBehavior, UIView, UIViewController};
+use objc2_ui_kit::{
+    UIColor, UIScrollView, UIScrollViewContentInsetAdjustmentBehavior, UIView, UIViewController,
+};
 use tauri::webview::PlatformWebview;
 
 pub struct Native;
