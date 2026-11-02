@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.view.WindowManager
 import android.webkit.WebView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -20,6 +21,12 @@ import app.tauri.plugin.PluginManager
 class StartCallServiceArgs {
     /** Where the service reports (`CallEvent`, in Rust). */
     lateinit var onEvent: Channel
+}
+
+@InvokeArg
+class KeepScreenOnArgs {
+    /** Whether the screen is kept on (`true`) or may turn off again. */
+    var on: Boolean = false
 }
 
 /** The app's Rust asks for the call's service ([CallService]) here; no page does. */
@@ -102,6 +109,23 @@ class MobilePlugin(private val activity: Activity) : Plugin(activity) {
             context.stopService(Intent(context, CallService::class.java))
         }
         invoke.resolve()
+    }
+
+    /**
+     * Keeps the screen on (`FLAG_KEEP_SCREEN_ON` on the activity's window) or lets it turn off again. The window is the
+     * UI thread's: the flag is set there, and the answer comes after.
+     */
+    @Command
+    fun keepScreenOn(invoke: Invoke) {
+        val args = invoke.parseArgs(KeepScreenOnArgs::class.java)
+        activity.runOnUiThread {
+            if (args.on) {
+                activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            } else {
+                activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+            invoke.resolve()
+        }
     }
 
     /**

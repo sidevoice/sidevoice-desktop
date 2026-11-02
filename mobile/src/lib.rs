@@ -11,6 +11,7 @@
 mod acl_tests;
 mod bridge;
 mod call;
+mod downloads;
 mod hold;
 mod i18n;
 pub mod pairings;
@@ -235,6 +236,8 @@ fn run_app() {
                     keys: Arc::new(Keychain::new(PROVIDER_KEYS)),
                     // The voice calls' audio holds the audio session (iOS).
                     calls: phone.clone(),
+                    // The screen stays on while a model download runs: the system suspends the app soon after it turns off.
+                    downloads: Arc::new(downloads::KeepScreenOn::new(handle.clone())),
                 },
             ));
             // The room's call holds the call's service (Android), for the host's current page.

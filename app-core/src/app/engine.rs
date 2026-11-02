@@ -102,8 +102,12 @@ impl<A: LaneAudio> AppHost<A> {
     ) -> Result<(), Error> {
         let lease = self.lease()?;
         let (engines, jobs) = (self.engines()?, Arc::clone(&self.inner.jobs));
+        let downloads = Arc::clone(&self.inner.downloads);
         self.blocking(move || {
             let _lease = lease;
+            // Counted until the install ends, even if the caller stops waiting for it; the hook may wait on the system, so
+            // not on a worker.
+            let _running = downloads.begin();
             let wanted = Wanted { build: build.as_deref(), engine: engine.as_deref() };
             engines.install_job(&jobs, &job, &model, wanted)
         })
