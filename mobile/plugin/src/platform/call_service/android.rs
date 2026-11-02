@@ -45,6 +45,10 @@ impl Os for Native {
     fn stop<R: Runtime>(app: &AppHandle<R>) -> Result<(), CallServiceError> {
         run(app, "stopCallService", ())
     }
+
+    fn refocus<R: Runtime>(app: &AppHandle<R>) -> Result<(), CallServiceError> {
+        run(app, "requestCallFocus", ())
+    }
 }
 
 fn run<R: Runtime>(

@@ -46,7 +46,7 @@ runs:
         workspaces: |
           .
           xtask
-        prefix-key: v0-rust-mobile
+        prefix-key: v1-rust-mobile
         shared-key: ${{ inputs.cache }}
         save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     # The engine's Android libraries are made by its own xtask (`cargo xtask mobile build android` runs its `android-build`),

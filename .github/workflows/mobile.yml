@@ -67,7 +67,7 @@ jobs:
           workspaces: |
             .
             xtask
-          prefix-key: v0-rust-mobile
+          prefix-key: v1-rust-mobile
           shared-key: ios
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       # The Tauri CLI renders the Xcode project with XcodeGen.

@@ -278,7 +278,7 @@ app's composition is always there; what is a fact of one OS or one build is obse
 | `build` | always | What this build is (below). |
 | `microphone` | always | Native microphone access; `openSettings` only where the OS has a privacy page; `help(language)`, the app's words for a blocked one. |
 | `engine`, `voice` | always | The model engine and the voice call the app runs (below). |
-| `presence` | only where the app owns the system's media | `{ media: "app" }`, supplied by `platform::media_controls::available()`: macOS. The mobile app offers it always (docs/MOBILE.md → "The bridge"). |
+| `presence` | only where the app owns the system's media | `{ media: "app" }`, supplied by `platform::media_controls::available()`: macOS. The mobile app offers it always (iOS and Android own the media; docs/MOBILE.md → "The bridge"). |
 | `pairings` | always | The pairings the app keeps for the page (above). |
 | `reach` | always | `{ plainHttpPrivate: true }`: the webview, at the app's own origin, sends plain http to a private address; whom it may send a secret to, and with whose consent, stay the page's policy. |
 | `localHost` | always | This computer's own core (below). |

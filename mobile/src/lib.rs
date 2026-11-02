@@ -4,12 +4,14 @@
 //!
 //! The window shows only the app's own pages, and gives the page the app's members (`window.__sidevoiceHost`,
 //! src/bridge.rs): the voice call the app runs, its engine, the microphone's permission and the pairings, through the
-//! commands every app shares (`sidevoice-app-tauri`, over `sidevoice-app-core`'s application host). No page captures
+//! commands every app shares (`sidevoice-app-tauri`, over `sidevoice-app-core`'s application host). The page reports
+//! the call back (`call_state`), which the headset's buttons and the lock screen's controls follow. No page captures
 //! anything: the app owns the microphone and the speaker, as on the desktop (docs/MOBILE.md).
 #[cfg(test)]
 mod acl_tests;
 mod bridge;
 mod call;
+mod hold;
 mod i18n;
 pub mod pairings;
 mod platform;
@@ -18,6 +20,7 @@ use std::{path::PathBuf, sync::Arc};
 
 pub use platform::entry::run;
 use sidevoice_app_core::app::{AlwaysAdmit, AppHost, Hooks, HostConfig, Keychain};
+use sidevoice_app_tauri::platform::media_controls::{self, CallState, MediaCommand};
 use sidevoice_app_tauri::platform::origin::APP_ORIGIN;
 use sidevoice_app_tauri::{Pages, Pairings};
 use tauri::{
@@ -100,6 +103,8 @@ struct CallReport {
     ready: bool,
     joined: bool,
     mic_enabled: bool,
+    /// The mute cannot be used (no conversation is selected).
+    mic_disabled: bool,
     title: String,
     /// When the call was joined, as the page marks it (ms since the epoch): a later join is another call.
     since: Option<f64>,
@@ -134,8 +139,12 @@ fn call_state(
     }
     // The green and the red button: the call's service follows the room's call (`call::RoomCall` checks the page again,
     // in order with the page's changes).
-    app.state::<call::RoomCall>()
-        .report(page, snapshot.joined, snapshot.since);
+    app.state::<call::RoomCall>().report(
+        page,
+        snapshot.joined,
+        snapshot.since,
+        (snapshot.mic_enabled, snapshot.mic_disabled),
+    );
     let previous = std::mem::replace(&mut *last.0.lock().unwrap(), snapshot.clone());
     if (previous.ready, previous.joined, previous.mic_enabled)
         != (snapshot.ready, snapshot.joined, snapshot.mic_enabled)
@@ -147,7 +156,31 @@ fn call_state(
             snapshot.mic_enabled
         );
     }
+    // The headset's buttons and the lock screen's controls follow the call.
+    media_state(&app.state::<call::RoomCall>(), page, snapshot.into());
     Ok(())
+}
+
+/// The media controls follow `state`, the call of page `page`: on the room's call's thread, in order with the page's
+/// other changes, and not at all once a newer page has replaced it (the media controls reach the plugin's Kotlin, which
+/// runs on Android's UI thread: never from there).
+fn media_state(room: &call::RoomCall, page: u64, state: CallState) {
+    room.then(move |room| {
+        if room.page == page {
+            media_controls::update(&room.app, &state);
+        }
+    });
+}
+
+impl From<CallReport> for CallState {
+    fn from(report: CallReport) -> CallState {
+        CallState {
+            ready: report.ready,
+            joined: report.joined,
+            mic_enabled: report.mic_enabled,
+            title: report.title,
+        }
+    }
 }
 
 /// The app: one window, on the bundled interface, with the members the apps share.
@@ -166,6 +199,19 @@ fn run_app() {
         .invoke_handler(tauri::generate_handler![call_page, call_state])
         .setup(move |app| {
             let handle = app.handle().clone();
+            // The headset's buttons and the lock screen's controls act on the call through the page, as the desktop's do,
+            // and on the room's call's thread, in order with its reports and interruptions (`call::RoomCall`).
+            let media_app = handle.clone();
+            media_controls::attach(
+                &handle,
+                Arc::new(move |command| match command {
+                    MediaCommand::ToggleMute => {
+                        if let Some(room) = media_app.try_state::<call::RoomCall>() {
+                            room.toggle_mute();
+                        }
+                    }
+                }),
+            );
             // Before the engine's first HTTPS request. Without it, remote providers and downloads fail; the rest runs.
             if let Err(error) = platform::tls::init() {
                 log::error!("tls: {error}");
@@ -174,6 +220,7 @@ fn run_app() {
             if let Err(error) = call::configure() {
                 log::error!("audio session: {error}");
             }
+            let phone = Arc::new(call::PhoneCall::default());
             app.manage(Pairings(Arc::new(pairings::PairingFile::of_app(&handle)?)));
             // The application host: the voice call and the engine. A phone never resets its data under the call, so
             // every request is admitted.
@@ -187,12 +234,15 @@ fn run_app() {
                     events: Arc::new(events.clone()),
                     keys: Arc::new(Keychain::new(PROVIDER_KEYS)),
                     // The voice calls' audio holds the audio session (iOS).
-                    calls: Arc::new(call::PhoneCall),
+                    calls: phone.clone(),
                 },
             ));
             // The room's call holds the call's service (Android), for the host's current page.
             let page = app.state::<AppHost>().page().0;
-            app.manage(call::RoomCall::new(handle.clone(), page));
+            app.manage(call::RoomCall::new(handle.clone(), page, phone.clone()));
+            // The system taking the audio away (a phone call, an alarm) pauses it; iOS tells the app here, Android through the
+            // call's service.
+            call::watch_interruptions(&handle, phone);
             let page_app = handle.clone();
             WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App(BUNDLED_INTERFACE.into()))
                 .initialization_script(bridge::script(
@@ -206,18 +256,33 @@ fn run_app() {
                 // would grant every request when the app sets no handler.
                 .on_permission_request(|_webview, _kind| PermissionResponse::Deny)
                 // A page that loads anew owns none of the calls of the one before, and hears nothing of them.
-                .on_page_load(move |_webview, payload| {
+                .on_page_load(move |webview, payload| {
+                    if payload.event() == PageLoadEvent::Finished {
+                        // The window is on screen by now: where the web view really is (the insets are 0 before).
+                        let _ = webview.with_webview(|webview| {
+                            platform::webview::fill_screen(&webview);
+                            platform::webview::log_layout("page loaded", &webview)
+                        });
+                    }
                     if payload.event() == PageLoadEvent::Started {
                         if let Some(host) = page_app.try_state::<AppHost>() {
                             // A page that loads anew is in no call until it says so: the room's call of the one before
                             // ends, queued now, before anything the new page reports (`call::RoomCall`).
                             let page = host.page_changed().0;
-                            page_app.state::<call::RoomCall>().page_changed(page);
+                            let room = page_app.state::<call::RoomCall>();
+                            room.page_changed(page);
+                            // The media controls let go too, in the same order (`media_state`).
+                            media_state(&room, page, CallState::default());
                         }
                         *page_app.state::<LastReport>().0.lock().unwrap() = CallReport::default();
                     }
                 })
-                .build()?;
+                .build()?
+                // The page owns the safe areas: the web view fills the screen, on the system's background (`platform::webview`).
+                .with_webview(|webview| {
+                    platform::webview::fill_screen(&webview);
+                    platform::webview::log_layout("at start", &webview);
+                })?;
             Ok(())
         })
         .build(tauri::generate_context!())

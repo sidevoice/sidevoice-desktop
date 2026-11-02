@@ -49,7 +49,10 @@ internal object CallSession {
      */
     fun hangUpAddress(id: Long): String = "sidevoice-call://hang-up/$id"
 
-    /** Reports that the audio focus of [session] changed (`gained`, `lost`, `lost-transient`, `duck`), if it is running. */
+    /** What names one session's mute button (Android 12 and older), as [hangUpAddress] for its Hang up. */
+    fun toggleMuteAddress(id: Long): String = "sidevoice-call://toggle-mute/$id"
+
+    /** Reports that the audio focus of [session] changed (`gained`, `lost`, `lost-transient`, `duck`, `refused`), if it is running. */
     fun focus(session: Session, state: String) {
         if (get(session.id) != null) session.report(mapOf("type" to "focus", "state" to state))
     }

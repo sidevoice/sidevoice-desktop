@@ -11,7 +11,8 @@ mod platform;
 use tauri::{plugin::TauriPlugin, Runtime};
 
 pub use call_service::{
-    start_call_service, stop_call_service, CallEvent, CallServiceError, FocusState, StopReason,
+    request_call_focus, start_call_service, stop_call_service, CallEvent, CallServiceError,
+    FocusState, StopReason,
 };
 
 pub fn init<R: Runtime>() -> TauriPlugin<R> {

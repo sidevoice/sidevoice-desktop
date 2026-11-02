@@ -70,7 +70,7 @@ part, `mobile/js/mobile-bridge.js`, which assembles `host`:
 | `voice`, `engine` | The voice call the app runs itself (sidevoice-voice on the phone's microphone and speaker) and the engine it takes its models from: sherpa-onnx (Silero) and the remote providers on a phone (sidevoice-engine's README, "Android" and "iOS"). |
 | `microphone` | The system's own permission, never the webview's: AVFoundation's on iOS, the runtime permission on Android (`sidevoice-app-tauri`'s `platform/microphone`). `openSettings` opens the app's page of the system's settings, and `help(language)` gives the app's own words for a blocked microphone on this phone (`mobile/src/i18n.rs`, en and es, English the fallback; D-HOST-OS). |
 | `pairings` | The pairings in the app's private storage (`mobile/src/pairings.rs`), not the webview's. |
-| `presence` | `{ media: "app" }`: the app owns the call's audio, so the page registers no Media Session and plays no Now Playing element of its own. Its headset buttons and lock-screen controls are sidevoice-desktop#349: until then a phone has **none** (the shared plugin's `platform/media_controls` has bodies for the computers only, and is not in a phone's build). |
+| `presence` | `{ media: "app" }`: the app owns the call's audio, so the page registers no Media Session and plays no Now Playing element of its own. The app answers the headset's play/pause and the lock screen's (the shared plugin's `platform/media_controls`: MediaPlayer on iOS, a `MediaSession` held by the call's service on Android; docs/MEDIA_CONTROLS.md). |
 | `reach` | `{ plainHttpPrivate: true }`, as on the desktop. |
 
 Nothing of the desktop's own (`localHost`, `reset`, `muteShortcut`, `callControls`, `updater`, `debug`, `deviceName`) is
@@ -96,7 +96,8 @@ through `run` (the call's service hangs up through it).
     front, as Android requires) and stops when it says not (the red button, a page that loads anew, the app quitting).
     A start the system refuses is logged by its code (`not-visible`, `microphone-permission`, …), and the call goes on in
     front. The service ending on its own (Hang up in its notification, the app removed from the recents list, the
-    system) hangs up the call on the page (`window.__sidevoiceHost.run({command: "hang-up"})`).
+    system) hangs up the call on the page (`window.__sidevoiceHost.run({command: "hang-up"})`). The media controls follow `call_state` too, and the
+    call's service owns the Android media session.
   - **The call's audio** holds the audio session (iOS): sidevoice-app-core's host tells the app before the first voice
     call's audio opens and after the last one's has stopped (`Hooks::calls`, `CallActivity`; the idle state that answers
     a stop, which sidevoice-voice sends once its audio is closed; the desktop does nothing there). Every voice call
@@ -118,7 +119,10 @@ through `run` (the call's service hangs up through it).
   in `mobile/tauri.conf.json`, beside the system frameworks the Rust library calls and Xcode must link: AVFoundation and
   AVFAudio for the audio session and the microphone's permission, AudioToolbox for cpal's audio units). `cargo xtask mobile build` gets them from the engine's own `cargo xtask android-build`
   or `ios-build`, at the commit Cargo.lock pins (the archive its pins name, checked against its digest), and builds the
-  app against the same directory (`SHERPA_ONNX_LIB_DIR`), so nothing is downloaded unchecked. Git ignores both
+  app against the same directory (`SHERPA_ONNX_LIB_DIR`), so nothing is downloaded unchecked. The variable is also
+  written into the repository's `.cargo/config.toml` (`[env]`) for the length of the build and taken out after it: the
+  cargo the native project runs again from inside its build (Xcode's build phase, Gradle's `rust` task) gets from the
+  Tauri CLI only the `TAURI*`, `WRY*`, `CARGO_*` and `RUST_*` variables, and would otherwise link a copy of its own. Git ignores both
   (`mobile/frameworks/`, the `.so` files of `jniLibs`).
 - **The log**: `tauri-plugin-log` to the system's (logcat, the unified log) and a file in the app's log folder.
 
@@ -127,7 +131,8 @@ through `run` (the call's service hangs up through it).
 What only a device shows, for the M-FG gate (plan §F.2): a call's first Join on each phone (remote STT/TTS and Silero, a
 turn and a reply); the audio session's route (loudspeaker, a wired or Bluetooth headset) and what other apps' audio does
 when a call starts and ends (the session is activated and deactivated with it); the call's service starting and
-stopping with the call, and its Hang up; that a model download and a remote provider's request
+stopping with the call, and its Hang up; the media controls (a headset's play/pause with and without headphones,
+the lock screen and Control Center on iOS, the call notification's controls on Android); that a model download and a remote provider's request
 pass the verifier on Android; that the xcframework is embedded and signed in an iOS archive; and the APK's libraries
 loading on a phone.
 
@@ -180,7 +185,7 @@ action, in the system's language (`res/values`, English, and `values-es`; the Sp
   the recents list: `task-removed`) or the system (`system`, also when it refused the start). The notification, the
   audio focus and the service go with it, and the system never restarts it: a call does not survive its process.
 - **Audio focus.** The service holds the call's focus (transient: other media pauses and comes back after) from the start
-  to the end, and reports `Focus` changes (`gained`, `lost`, `lost-transient`, `duck`). What to do about them (mute,
+  to the end, and reports `Focus` changes (`gained`, `lost`, `lost-transient`, `duck`, `refused`). What to do about them (mute,
   pause, hang up) is the call's decision, not the service's.
 - The Rust side is `start_call_service(app, on_event)` and `stop_call_service(app)` of `sidevoice-mobile-plugin`
   (`call_service.rs`); the shared call code reaches the service through them. iOS has no service to start: a call stays
@@ -299,7 +304,35 @@ stays unsigned with no secret. Its one step is `cargo xtask mobile testflight --
      (TestFlight → Internal Testing); an internal build needs no beta review;
   5. the environment `testflight` exists with the deployment-branch rule.
 
+## Audio interruptions (D-AUDIO-FOCUS)
+
+A phone call, an alarm or another app taking the audio **pauses the conversation while it lasts and resumes it when it
+ends**; it never hangs up on its own (`mobile/src/call.rs`). Only while the room's call is held (a try in Settings is not
+paused).
+
+- **Where it comes from.** iOS: `AVAudioSessionInterruptionNotification` (`platform/interruption`), `began` and `ended`
+  with `shouldResume`. Android: the call's service reports its audio focus (`Focus`): `lost` and `lost-transient` begin an
+  interruption that ends with `gained`; `lost` (for good: another app plays) and `refused` (the system refused the request
+  outright) pause with no end to wait for; `duck` (another app quietly over the call) is none. A request made while a phone call is on is delayed by the system:
+  `lost-transient` now, `gained` when the call ends. The call pauses at the first interruption and resumes at the last end,
+  whichever source.
+- **Pause** is the page's own mute (the `interrupt` command of `mobile/js/mobile-bridge.js`, so the page shows the call
+  muted) and the agent's playback held (`AppHost::pause_playback`: the chunks not yet handed to the speaker are kept, in
+  order, and played on resuming). **Known limit:** what the speaker already has queued is the device's and keeps playing
+  (iOS stops it with the session; on Android the system silences the media while a call is on); a lossless pause of that
+  needs a pause in `sidevoice-voice`'s `AudioIo` (sidevoice-voice#94).
+- **Resume** gives the mute back as it was, but only while it is still the system's: the page watches its mute, and a
+  person who muted themselves before stays muted, one who unmuted (and perhaps muted again) has taken it over and is not
+  touched. The commands carry the call they are for (`since`), so they never reach a later call of the same page; a call
+  that ends while interrupted gives the mute back for the next one.
+- **No end by itself**: `shouldResume` false (another app goes on playing), the audio session that could not be activated
+  again, or a focus lost for good or refused (Android). The microphone stays muted and the playback held until the person
+  unmutes: the session is asked for again first (refused again: the wait goes on), and on Android the service requests the audio
+  focus again (`request_call_focus`), the playback is released only when it is granted; a delayed grant is a pause that ends
+  with the gain, a refusal pauses again and the person must mute and unmute once more. The state machine is `mobile/src/hold.rs`.
+- On iOS the audio session is activated again first (if a voice call has audio open), under the same lock as the session's
+  activation and deactivation by the calls, so it is never active after the last call's audio has stopped.
+
 ## Not here yet
 
-Headset buttons and lock-screen controls (sidevoice-desktop#349); acting on the call's audio focus (Android); the build
-kinds (nightly with Developer options, release).
+The build kinds (nightly with Developer options, release).

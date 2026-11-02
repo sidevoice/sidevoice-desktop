@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.webkit.WebView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import app.tauri.annotation.Command
@@ -24,6 +25,18 @@ class StartCallServiceArgs {
 /** The app's Rust asks for the call's service ([CallService]) here; no page does. */
 @TauriPlugin
 class MobilePlugin(private val activity: Activity) : Plugin(activity) {
+    /**
+     * The page is an app, not a document: it does not pinch-zoom, and shows no zoom buttons. (Text size is the system's
+     * font scale, which the page follows.)
+     */
+    override fun load(webView: WebView) {
+        webView.settings.apply {
+            setSupportZoom(false)
+            builtInZoomControls = false
+            displayZoomControls = false
+        }
+    }
+
     /**
      * Starts the service. Android lets a microphone service start only from a visible app and with the microphone
      * allowed, so a call that is not is refused here, by name, instead of by the system's exception. Once started,
@@ -61,6 +74,23 @@ class MobilePlugin(private val activity: Activity) : Plugin(activity) {
             CallSession.end(session, "system", report = false)
             invoke.reject(error.message ?: "The system refused the call's service", "not-allowed")
         }
+    }
+
+    /** Asks the running service to request the audio focus again; its answer comes as a `focus` report. */
+    @Command
+    fun requestCallFocus(invoke: Invoke) {
+        val context = activity.applicationContext
+        val session = CallSession.current()
+        if (session == null) {
+            invoke.reject("No call's service is running", "not-running")
+            return
+        }
+        context.startService(
+            Intent(context, CallService::class.java)
+                .setAction(CallService.ACTION_REFOCUS)
+                .putExtra(CallService.EXTRA_SESSION, session.id)
+        )
+        invoke.resolve()
     }
 
     /** Stops the service, if it runs: it reports `requested`, and the notification and the focus are gone. */

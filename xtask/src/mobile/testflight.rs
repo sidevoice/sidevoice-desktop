@@ -97,6 +97,7 @@ pub fn testflight(build_number_text: &str) -> Result<()> {
         fs::remove_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
     }
     let config = serde_json::json!({ "bundle": { "iOS": { "bundleVersion": build.to_string() } } }).to_string();
+    let libs = super::AppBuildLibs::hold("ios", "aarch64-apple-ios")?;
     tauri(&[
         "ios",
         "build",
@@ -108,12 +109,13 @@ pub fn testflight(build_number_text: &str) -> Result<()> {
         &config,
         "--ci",
     ])
-    .env("SHERPA_ONNX_LIB_DIR", super::engine_libs("ios", "aarch64-apple-ios")?)
+    .env("SHERPA_ONNX_LIB_DIR", &libs.dir)
     .env("APPLE_API_KEY", &key_id)
     .env("APPLE_API_ISSUER", &issuer)
     .env("APPLE_API_KEY_PATH", &key)
     .env("APPLE_DEVELOPMENT_TEAM", &team)
     .run()?;
+    drop(libs);
 
     let ipas = find_ipa(&out, 3)?;
     ensure(ipas.len() == 1, format!("expected one .ipa below {}, found {}", out.display(), ipas.len()))?;

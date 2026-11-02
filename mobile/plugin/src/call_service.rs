@@ -45,6 +45,8 @@ pub enum FocusState {
     LostTransient,
     /// Another app may play quietly over the call.
     Duck,
+    /// The system refused the call's request outright: no focus is held and none will be given later.
+    Refused,
 }
 
 /// Why the service did not start, or could not be asked.
@@ -101,6 +103,12 @@ pub fn stop_call_service<R: Runtime>(app: &AppHandle<R>) -> Result<(), CallServi
     platform::stop(app)
 }
 
+/// Asks the service to request the audio focus again, after it was lost for good (`FocusState::Lost`) or refused
+/// (`FocusState::Refused`). Its answer is a `Focus` event: `Gained`, `LostTransient` (the grant is delayed) or `Refused`.
+pub fn request_call_focus<R: Runtime>(app: &AppHandle<R>) -> Result<(), CallServiceError> {
+    platform::refocus(app)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,6 +153,7 @@ mod tests {
             ("gained", FocusState::Gained),
             ("lost", FocusState::Lost),
             ("duck", FocusState::Duck),
+            ("refused", FocusState::Refused),
         ] {
             assert_eq!(
                 event(&format!(r#"{{"type":"focus","state":"{text}"}}"#)),

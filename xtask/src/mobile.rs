@@ -329,26 +329,68 @@ pub fn engine_libs(name: &str, target: &str) -> Result<PathBuf> {
     Ok(linked)
 }
 
+/// The engine's libraries for one app build, held where every cargo the build runs finds them: in this process's
+/// environment for the Tauri CLI's own cargo, and in the repository's cargo config (`.cargo/config.toml`, `[env]`) for
+/// the cargo the native project runs again from inside its build (the Xcode build phase, Gradle's `rust` task). The Tauri
+/// CLI hands those only the variables named `TAURI*`, `WRY*`, `CARGO_*` or `RUST_*`, and `PATH` and `TMPDIR`
+/// (`env_vars` in its `mobile` module), so `SHERPA_ONNX_LIB_DIR` would not reach them: their `sherpa-onnx-sys` would
+/// then download its own copy, unchecked, and on iOS lose the target's library (`library 'sherpa-onnx-c-api' not found`),
+/// whatever a build cache happened to keep. The config is given back as it was when this is dropped, failed build or not.
+pub struct AppBuildLibs {
+    /// The directory the build's target links against.
+    pub dir: PathBuf,
+    config: PathBuf,
+    original: Option<Vec<u8>>,
+}
+
+impl AppBuildLibs {
+    /// [`engine_libs`] for `target`, written into the cargo config for the length of the build.
+    pub fn hold(name: &str, target: &str) -> Result<AppBuildLibs> {
+        let dir = engine_libs(name, target)?;
+        let config = repo().join(".cargo/config.toml");
+        let original = fs::read(&config).ok();
+        let mut text = original.as_deref().map(String::from_utf8_lossy).unwrap_or_default().into_owned();
+        ensure(!text.contains("\n[env]"), format!("{}: has an [env] table already", config.display()))?;
+        let value = serde_json::to_string(&dir.to_string_lossy()).map_err(|e| e.to_string())?;
+        text.push_str(&format!(
+            "\n# Written by `cargo xtask mobile` for one app build, and taken out after it (xtask/src/mobile.rs, AppBuildLibs).\n[env]\nSHERPA_ONNX_LIB_DIR = {value}\n"
+        ));
+        write(&config, text)?;
+        Ok(AppBuildLibs { dir, config, original })
+    }
+}
+
+impl Drop for AppBuildLibs {
+    fn drop(&mut self) {
+        let _ = match &self.original {
+            Some(bytes) => fs::write(&self.config, bytes),
+            None => fs::remove_file(&self.config),
+        };
+    }
+}
+
 /// `mobile build android|ios`: the app as a pull request builds it, unsigned, into dist/.
 pub fn build(name: &str) -> Result<()> {
     let dist = repo().join("dist");
     mkdir(&dist)?;
     match project(name)?.cli {
         "android" => {
-            let libs = engine_libs(name, "aarch64-linux-android")?;
+            let libs = AppBuildLibs::hold(name, "aarch64-linux-android")?;
             tauri(&["android", "build", "--apk", "--target", "aarch64", "--ci"])
-                .env("SHERPA_ONNX_LIB_DIR", libs)
+                .env("SHERPA_ONNX_LIB_DIR", &libs.dir)
                 .run()?;
+            drop(libs);
             let apk = repo().join("mobile/gen/android").join(UNSIGNED_APK);
             let to = unsigned_apk();
             fs::copy(&apk, &to).map_err(|e| format!("{}: {e}", apk.display()))?;
             check::check_16kb(&to)
         }
         _ => {
-            let libs = engine_libs(name, "aarch64-apple-ios-sim")?;
+            let libs = AppBuildLibs::hold(name, "aarch64-apple-ios-sim")?;
             tauri(&["ios", "build", "--target", "aarch64-sim", "--no-sign", "--ci"])
-                .env("SHERPA_ONNX_LIB_DIR", libs)
+                .env("SHERPA_ONNX_LIB_DIR", &libs.dir)
                 .run()?;
+            drop(libs);
             let build = repo().join("mobile/gen/apple/build");
             let app = find_app(&build, 3).ok_or_else(|| format!("no .app below {}", build.display()))?;
             ios::check_app(&app)?;

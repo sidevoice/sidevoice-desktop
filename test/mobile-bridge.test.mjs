@@ -14,6 +14,7 @@ function install(origin, pageOrigin = origin, microphoneSettings = true, microph
   const module = { exports: {} };
   vm.runInNewContext(composed, { module, Promise, JSON, Date });
   const invoked = [];
+  const intervals = [];
   const url = new URL(pageOrigin);
   const win = {
     location: { protocol: url.protocol, host: url.host },
@@ -24,12 +25,12 @@ function install(origin, pageOrigin = origin, microphoneSettings = true, microph
       invoke: (command, args) => (invoked.push([command, args]),
         Promise.resolve(command.endsWith("voice_events") ? 1 : command === "call_page" ? 7 : null)),
     },
-    setInterval: () => 1,
+    setInterval: (fn) => (intervals.push(fn), 1),
     clearInterval: () => {},
     setTimeout: (fn) => setTimeout(fn, 0),
   };
   const api = module.exports(win, origin, microphoneSettings, microphoneHelp);
-  return { api, win, invoked };
+  return { api, win, invoked, intervals };
 }
 
 for (const origin of ["tauri://localhost", "http://tauri.localhost"]) {
@@ -119,4 +120,81 @@ test("a command for a given page's call runs only on that call", async () => {
   assert.equal(hungUp, 0);
   assert.equal(api.run({ command: "hang-up", page: 7, since }), true);
   assert.equal(hungUp, 1);
+});
+
+/** A room with a store the test can change, as the web UI's: `change()` ticks the subscribers. */
+async function room() {
+  const { api, win, intervals } = install("tauri://localhost");
+  await new Promise((resolve) => setTimeout(resolve, 0)); // the page's number (7) is known
+  const view = { call: { joined: true }, mic: { enabled: true, disabled: false }, callCard: {} };
+  const subscribers = [];
+  let toggles = 0;
+  // The web UI's store notifies as the action is made, not afterwards.
+  win.sidevoiceActions = { toggleMic: () => { toggles++; view.mic.enabled = !view.mic.enabled; subscribers.forEach((fn) => fn()); } };
+  win.sidevoiceUI = { store: { getState: () => view, subscribe: (fn) => (subscribers.push(fn), () => {}) } };
+  intervals.forEach((tick) => tick()); // the room is up: the app follows its store
+  const change = () => subscribers.forEach((fn) => fn());
+  const since = () => api.snapshot().since;
+  return {
+    api, view, change, toggles: () => toggles,
+    interrupt: () => api.run({ command: "interrupt", page: 7, since: since() }),
+    resume: (restoreMic = true) => api.run({ command: "resume", page: 7, since: since(), restoreMic }),
+  };
+}
+
+test("the system taking the audio away mutes the call and gives the mute back as it was", async () => {
+  const r = await room();
+  assert.equal(r.interrupt(), true);
+  assert.equal(r.view.mic.enabled, false);
+  r.change();
+  assert.equal(r.resume(), true);
+  assert.equal(r.view.mic.enabled, true);
+  assert.equal(r.toggles(), 2);
+});
+
+test("a person who had muted themselves stays muted", async () => {
+  const r = await room();
+  r.view.mic.enabled = false;
+  assert.equal(r.interrupt(), true);
+  r.change();
+  assert.equal(r.resume(), true);
+  assert.equal(r.view.mic.enabled, false);
+  assert.equal(r.toggles(), 0);
+});
+
+test("a person who takes the mute over during the interruption keeps it, whatever they do", async () => {
+  const r = await room();
+  r.interrupt(); // seen muted as it is made
+  r.view.mic.enabled = true; // the person unmutes
+  r.change();
+  r.view.mic.enabled = false; // and mutes again
+  r.change();
+  assert.equal(r.resume(), true);
+  assert.equal(r.view.mic.enabled, false, "their latest mute is not undone");
+});
+
+test("the system advising against resuming leaves the mute, and it is the person's from then on", async () => {
+  const r = await room();
+  r.interrupt();
+  r.change();
+  assert.equal(r.resume(false), true);
+  assert.equal(r.view.mic.enabled, false);
+  assert.equal(r.resume(), true, "a later resume changes nothing");
+  assert.equal(r.view.mic.enabled, false);
+});
+
+test("a call that ends while interrupted gives the mute back for the next one", async () => {
+  const r = await room();
+  r.interrupt();
+  r.change();
+  r.view.call.joined = false; // hung up
+  r.change();
+  assert.equal(r.view.mic.enabled, true);
+});
+
+test("an interruption command is for one call of one page", async () => {
+  const r = await room();
+  assert.equal(r.api.run({ command: "interrupt", page: 6, since: r.api.snapshot().since }), false, "another page's");
+  assert.equal(r.api.run({ command: "interrupt", page: 7, since: r.api.snapshot().since - 1 }), false, "another call's");
+  assert.equal(r.view.mic.enabled, true);
 });

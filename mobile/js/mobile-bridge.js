@@ -37,12 +37,53 @@
     pageNumber = null;
     throw error;
   }));
+  // The mute the system took for an interruption (a phone call, an alarm) when the person was not muted: `{since, seen}`, for
+  // the call it was taken in; `seen` once the page has been seen muted. It is the system's only while nobody has touched the
+  // mute since: a person who unmutes (and perhaps mutes again) has taken it over, and nothing is given back.
+  let owned = null;
+  /** Whatever happens to the mute while it is ours: the person taking it over, or the call ending. */
+  const follow = (ui) => {
+    if (!owned) return;
+    const view = (ui.store && ui.store.getState()) || {};
+    const enabled = (view.mic || {}).enabled !== false;
+    if (!(view.call || {}).joined) {
+      // The call ended while interrupted: the mute goes back as it was, for the next one.
+      const mine = owned;
+      owned = null;
+      if (mine.seen && !enabled && !(view.mic || {}).disabled && win.sidevoiceActions) win.sidevoiceActions.toggleMic();
+    } else if (!enabled) owned.seen = true;
+    else if (owned.seen) owned = null; // unmuted by the person
+  };
   const reporting = members.room({
     version: 2,
     publish: (snapshot) => {
       numbered().then((number) => transport.own.send("call_state", { page: number, snapshot }), () => {});
     },
     extend: () => ({}),
+    attached: (ui) => ui.store.subscribe(() => follow(ui)),
+    commands: {
+      // The system took the audio away: the call pauses as the page's own mute does (the page shows it muted). A person who
+      // had muted themselves stays as they were, and is not unmuted when it ends.
+      interrupt: (_request, state, actions) => {
+        if (!state.joined) return false;
+        if (state.micEnabled && !state.micDisabled) {
+          // Ours before it is muted: the store notifies as the mute is made, and the watcher must find it ours.
+          owned = { since: state.since, seen: false };
+          actions.toggleMic();
+        }
+        return true;
+      },
+      // The system gave it back: the mute goes back as it was, if it is still the system's (the person has not taken it over),
+      // unless the system advises not to resume (`restoreMic` false: the mute stays, the person's from now on).
+      resume: (request, state, actions) => {
+        const mine = owned;
+        owned = null;
+        if (mine && mine.since === state.since && request.restoreMic !== false && !state.micEnabled && !state.micDisabled) {
+          actions.toggleMic();
+        }
+        return true;
+      },
+    },
   });
 
   const api = {
@@ -61,8 +102,8 @@
       // The pairings, in the app's private storage (mobile/src/pairings.rs), not the webview's.
       pairings: members.pairings(),
       /** The app owns the call's audio and the system's media on a phone: the page must not register Media Session
-       *  handlers or play a Now Playing element of its own. Its headset buttons and lock-screen controls are
-       *  sidevoice-desktop#349; until then there are none. */
+       *  handlers or play a Now Playing element of its own. The app answers the headset's buttons and the lock screen
+       *  (sidevoice-app-tauri's platform/media_controls). */
       presence: Object.freeze({ media: "app" }),
       /** The webview sends plain http to a private address; to whom, and with whose consent, is the page's policy. */
       reach: Object.freeze({ plainHttpPrivate: true }),

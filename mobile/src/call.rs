@@ -11,11 +11,20 @@
 //!   the first voice call's audio opens and deactivated once the last one's has stopped (iOS; declared at the app's start,
 //!   so that opening the app interrupts no other app's audio). Every voice call counts here, a try in Settings too: it plays
 //!   and records as well.
-use std::sync::{mpsc, Mutex};
+//! - **The system taking the audio away** (D-AUDIO-FOCUS: a phone call, an alarm, another app that plays; iOS: the audio
+//!   session is interrupted, Android: the call's audio focus is lost): the conversation pauses while it lasts and resumes
+//!   when it ends; it never hangs up on its own. Pausing is the page's mute, so that the page shows the call muted, and
+//!   the agent's playback held ([`AppHost::pause_playback`]); resuming gives the mute back as it was (a person who had
+//!   muted themselves stays muted).
+use std::sync::{mpsc, Arc, Mutex};
 
-use sidevoice_app_core::app::CallActivity;
+use crate::hold::{focus_signal, Effect, Hold, Signal, Source};
+use crate::platform::interruption::{self, Interruption};
+use sidevoice_app_core::app::{AppHost, CallActivity};
 use sidevoice_app_core::sidevoice_voice::{AudioSession, Session, SessionConfig, SessionMode};
-use sidevoice_mobile_plugin::{start_call_service, stop_call_service, CallEvent, StopReason};
+use sidevoice_mobile_plugin::{
+    request_call_focus, start_call_service, stop_call_service, CallEvent, StopReason,
+};
 use tauri::{AppHandle, Manager};
 
 /// How the call uses the audio session (iOS; D-AUDIO-SESSION, sidevoice-voice's `SessionConfig`): play-and-record, the
@@ -33,17 +42,70 @@ pub fn configure() -> Result<(), String> {
 }
 
 /// The phone's side of the host's voice calls: the audio session while any of them has audio open.
-pub struct PhoneCall;
+#[derive(Default)]
+pub struct PhoneCall {
+    /// Whether a voice call has audio open: the session is active. Held across every activation and deactivation, so that
+    /// the state and the session change together (an interruption's end cannot activate it again after the last call's
+    /// audio has stopped).
+    audio: Mutex<bool>,
+}
+
+impl PhoneCall {
+    /// The system gave the audio back after an interruption (iOS deactivated the session): activates it again if a voice
+    /// call has audio open, so that it can record and play on. A session nothing uses stays inactive. Whether the audio can
+    /// go on: false when the system refused.
+    fn reactivate(&self) -> bool {
+        let audio = self.audio.lock().unwrap();
+        if !*audio {
+            return true;
+        }
+        match Session::activate() {
+            Ok(()) => true,
+            Err(error) => {
+                log::warn!("call: the audio session was not activated again: {error}");
+                false
+            }
+        }
+    }
+}
 
 impl CallActivity for PhoneCall {
     fn starting(&self) -> Result<(), String> {
-        Session::activate()
+        let mut audio = self.audio.lock().unwrap();
+        Session::activate()?;
+        *audio = true;
+        Ok(())
     }
 
     fn ended(&self) {
+        let mut audio = self.audio.lock().unwrap();
+        *audio = false;
         if let Err(error) = Session::deactivate() {
             log::warn!("call: the audio session was not given back: {error}");
         }
+    }
+}
+
+/// Pauses the room's call while the system has the audio session interrupted (iOS) and resumes it when that ends, and
+/// gives `phone` the session back first so that the call's audio can go on (D-AUDIO-FOCUS). Android needs none of this
+/// (the call's service reports its audio focus: [`on_service_event`]).
+pub fn watch_interruptions(app: &AppHandle, phone: Arc<PhoneCall>) {
+    let app = app.clone();
+    let listener = Arc::new(move |event: Interruption| {
+        log::info!("audio session: {event:?}");
+        let signal = match event {
+            Interruption::Began => Signal::Began,
+            // Not resumed on its own when the system advises against it, or the session could not be activated again.
+            Interruption::Ended { resume } => Signal::Ended {
+                resume: phone.reactivate() && resume,
+            },
+        };
+        if let Some(room) = app.try_state::<RoomCall>() {
+            room.then(move |room| room.signal(Source::Session, signal));
+        }
+    });
+    if let Err(error) = interruption::observe(listener) {
+        log::error!("audio session: {error}");
     }
 }
 
@@ -68,17 +130,26 @@ pub struct Room {
     holding: Option<u64>,
     /// The number of the last start.
     starts: u64,
+    /// The call being held, by the page's mark of when it was joined: what the interruption commands are for.
+    since: Option<f64>,
+    /// What the system's interruptions have done to the call (`hold.rs`).
+    interruptions: Hold,
+    /// The audio session, given back before the playback goes on after an interruption that did not end by itself.
+    phone: Arc<PhoneCall>,
 }
 
 impl RoomCall {
     /// The room of `app`, for the host's current page `page`.
-    pub fn new(app: AppHandle, page: u64) -> RoomCall {
+    pub fn new(app: AppHandle, page: u64, phone: Arc<PhoneCall>) -> RoomCall {
         let (jobs, received) = mpsc::channel::<Job>();
         let mut room = Room {
             app,
             page,
             holding: None,
             starts: 0,
+            since: None,
+            interruptions: Hold::new(),
+            phone,
         };
         std::thread::Builder::new()
             .name("room-call".into())
@@ -104,16 +175,33 @@ impl RoomCall {
         self.then(move |room| {
             room.page = page;
             room.hold(false, None);
+            // What the old page's interruptions held is let go first; the new page starts with none.
+            room.clear_interruption();
+            room.interruptions = Hold::new();
         });
     }
 
     /// The page `page` says whether its call is joined (the green and the red button), and since when (`since`, the
     /// page's own mark of that call: a join of the same page later is another call).
-    pub fn report(&self, page: u64, joined: bool, since: Option<f64>) {
+    /// `mic` is the microphone as the page reports it (`enabled`, `disabled`).
+    pub fn report(&self, page: u64, joined: bool, since: Option<f64>, mic: (bool, bool)) {
         self.then(move |room| {
             if room.page == page {
                 room.hold(joined, since);
+                room.microphone(mic.0, mic.1);
             }
+        });
+    }
+
+    /// A headset's button or the lock screen asked to mute or unmute: the page's own mute, as the interruptions use it, for
+    /// the current page's call (its number, and the call's join mark when its service holds it), in order with the rest.
+    pub fn toggle_mute(&self) {
+        self.then(|room| {
+            let mut request = serde_json::json!({ "command": "toggle-mute", "page": room.page });
+            if let Some(since) = room.since {
+                request["since"] = since.into();
+            }
+            run_on_page(&room.app, request);
         });
     }
 
@@ -142,6 +230,7 @@ impl Room {
             }) {
                 Ok(()) => {
                     self.holding = Some(start);
+                    self.since = since;
                     log::info!("call: started");
                 }
                 // The call goes on in front; it does not outlive the screen. Recorded by its code
@@ -150,10 +239,76 @@ impl Room {
             }
         } else {
             self.holding = None;
+            self.clear_interruption();
+            self.since = None;
             if let Err(error) = stop_call_service(&self.app) {
                 log::warn!("call: the call's service did not stop: {error}");
             }
             log::info!("call: ended");
+        }
+    }
+
+    /// What the system said, from `source`. Nothing of it while no room call is held (a try in Settings is not paused).
+    fn signal(&mut self, source: Source, signal: Signal) {
+        if self.holding.is_none() {
+            return;
+        }
+        let effects = self.interruptions.signal(source, signal);
+        self.apply(effects);
+    }
+
+    /// The page reports the microphone: after an interruption that does not end by itself, the person's unmute lifts the
+    /// pause.
+    fn microphone(&mut self, enabled: bool, disabled: bool) {
+        let (app, phone) = (self.app.clone(), self.phone.clone());
+        let effects = self.interruptions.microphone(
+            enabled,
+            disabled,
+            || phone.reactivate(),
+            || match request_call_focus(&app) {
+                Ok(()) => true,
+                Err(error) => {
+                    log::warn!("call: the audio focus was not asked for again: {error}");
+                    false
+                }
+            },
+        );
+        self.apply(effects);
+    }
+
+    /// The call ends (or its page goes) while interrupted: the playback is let go, so that the next call is not held. The
+    /// page gives the mute back itself when its call ends.
+    fn clear_interruption(&mut self) {
+        let effects = self.interruptions.clear();
+        self.apply(effects);
+    }
+
+    fn apply(&self, effects: Vec<Effect>) {
+        for effect in effects {
+            match effect {
+                // The page mutes (its own mute, remembered by the page as ours).
+                Effect::Interrupt => {
+                    log::info!("call: paused, the system took the audio");
+                    run_on_page(
+                        &self.app,
+                        serde_json::json!({ "command": "interrupt", "page": self.page, "since": self.since }),
+                    );
+                }
+                // The page gives back the mute it took, if it is still the system's.
+                Effect::Resume { restore_mic } => run_on_page(
+                    &self.app,
+                    serde_json::json!({ "command": "resume", "page": self.page, "since": self.since, "restoreMic": restore_mic }),
+                ),
+                Effect::Playback(held) => {
+                    log::info!(
+                        "call: the playback is {}",
+                        if held { "held" } else { "released" }
+                    );
+                    if let Some(host) = self.app.try_state::<AppHost>() {
+                        host.pause_playback(held);
+                    }
+                }
+            }
         }
     }
 }
@@ -162,9 +317,19 @@ impl Room {
 /// must not wait): an end the app did not ask for hangs that call up, on the room's thread and only while that service
 /// is still the one that runs for that page, and on the page only if that call is still the one it has (the page checks
 /// `page` and `since` when the command reaches it, which can be after another page or call has taken its place); a
-/// change of the audio focus is recorded (what to do about it is a decision of its own).
+/// change of the audio focus pauses the call or resumes it (an interruption never hangs up).
 fn on_service_event(app: &AppHandle, start: u64, page: u64, since: Option<f64>, event: CallEvent) {
     log::info!("call service: {event:?}");
+    if let CallEvent::Focus { state } = event {
+        if let (Some(signal), Some(room)) = (focus_signal(state), app.try_state::<RoomCall>()) {
+            room.then(move |room| {
+                if room.holding == Some(start) && room.page == page {
+                    room.signal(Source::Focus, signal);
+                }
+            });
+        }
+        return;
+    }
     if let Some(reason) = hang_up_for(&event) {
         let Some(room) = app.try_state::<RoomCall>() else {
             return;
@@ -176,6 +341,7 @@ fn on_service_event(app: &AppHandle, start: u64, page: u64, since: Option<f64>, 
             log::info!("call: hung up by the service ({reason:?})");
             // The service is gone: the next join starts another.
             room.holding = None;
+            room.clear_interruption();
             run_on_page(
                 &room.app,
                 serde_json::json!({ "command": "hang-up", "page": page, "since": since }),
