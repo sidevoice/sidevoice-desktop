@@ -22,10 +22,14 @@
     <string>zh-Hans</string>
   </array>
   <!-- A call goes on with the screen locked or another app in front: the audio session it holds keeps the app running
-       while it records and plays (iOS has no service to start for it; docs/MOBILE.md). -->
+       while it records and plays (iOS has no service to start for it; docs/MOBILE.md). The call is a CallKit call, and
+       CallKit takes one only from an app with the `voip` mode: without it every CXStartCallAction is refused as unentitled
+       (com.apple.CallKit.error.requesttransaction, 1) and the call stays the app's own, with its Now Playing card on the
+       lock screen. `cargo xtask mobile check-ios` checks both on the app as built. -->
   <key>UIBackgroundModes</key>
   <array>
     <string>audio</string>
+    <string>voip</string>
   </array>
   <key>NSAppTransportSecurity</key>
   <dict>
