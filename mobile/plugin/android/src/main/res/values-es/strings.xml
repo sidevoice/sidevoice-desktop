@@ -3,4 +3,6 @@
     <string name="call_channel_name">Llamadas</string>
     <string name="call_notification_text">En llamada</string>
     <string name="call_notification_hang_up">Colgar</string>
+    <string name="call_notification_mute">Silenciar</string>
+    <string name="call_notification_unmute">Activar micrófono</string>
 </resources>

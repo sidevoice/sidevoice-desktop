@@ -3,7 +3,8 @@
 //!
 //! The window shows only the app's own pages, and gives the page the app's members (`window.__sidevoiceHost`,
 //! src/bridge.rs): the voice call the app runs, its engine, the microphone's permission and the pairings, through the
-//! commands every app shares (`sidevoice-app-tauri`, over `sidevoice-app-core`'s application host). No page captures
+//! commands every app shares (`sidevoice-app-tauri`, over `sidevoice-app-core`'s application host). The page reports
+//! the call back (`call_state`), which the headset's buttons and the lock screen's controls follow. No page captures
 //! anything: the app owns the microphone and the speaker, as on the desktop (docs/MOBILE.md).
 #[cfg(test)]
 mod acl_tests;
@@ -18,6 +19,7 @@ use std::{path::PathBuf, sync::Arc};
 
 pub use platform::entry::run;
 use sidevoice_app_core::app::{AlwaysAdmit, AppHost, Hooks, HostConfig, Keychain};
+use sidevoice_app_tauri::platform::media_controls::{self, CallState, MediaCommand};
 use sidevoice_app_tauri::platform::origin::APP_ORIGIN;
 use sidevoice_app_tauri::{Pages, Pairings};
 use tauri::{
@@ -153,7 +155,31 @@ fn call_state(
             snapshot.mic_enabled
         );
     }
+    // The headset's buttons and the lock screen's controls follow the call.
+    media_state(&app.state::<call::RoomCall>(), page, snapshot.into());
     Ok(())
+}
+
+/// The media controls follow `state`, the call of page `page`: on the room's call's thread, in order with the page's
+/// other changes, and not at all once a newer page has replaced it (the media controls reach the plugin's Kotlin, which
+/// runs on Android's UI thread: never from there).
+fn media_state(room: &call::RoomCall, page: u64, state: CallState) {
+    room.then(move |room| {
+        if room.page == page {
+            media_controls::update(&room.app, &state);
+        }
+    });
+}
+
+impl From<CallReport> for CallState {
+    fn from(report: CallReport) -> CallState {
+        CallState {
+            ready: report.ready,
+            joined: report.joined,
+            mic_enabled: report.mic_enabled,
+            title: report.title,
+        }
+    }
 }
 
 /// The app: one window, on the bundled interface, with the members the apps share.
@@ -172,6 +198,19 @@ fn run_app() {
         .invoke_handler(tauri::generate_handler![call_page, call_state])
         .setup(move |app| {
             let handle = app.handle().clone();
+            // The headset's buttons and the lock screen's controls act on the call through the page, as the desktop's do,
+            // and on the room's call's thread, in order with its reports and interruptions (`call::RoomCall`).
+            let media_app = handle.clone();
+            media_controls::attach(
+                &handle,
+                Arc::new(move |command| match command {
+                    MediaCommand::ToggleMute => {
+                        if let Some(room) = media_app.try_state::<call::RoomCall>() {
+                            room.toggle_mute();
+                        }
+                    }
+                }),
+            );
             // Before the engine's first HTTPS request. Without it, remote providers and downloads fail; the rest runs.
             if let Err(error) = platform::tls::init() {
                 log::error!("tls: {error}");
@@ -229,7 +268,10 @@ fn run_app() {
                             // A page that loads anew is in no call until it says so: the room's call of the one before
                             // ends, queued now, before anything the new page reports (`call::RoomCall`).
                             let page = host.page_changed().0;
-                            page_app.state::<call::RoomCall>().page_changed(page);
+                            let room = page_app.state::<call::RoomCall>();
+                            room.page_changed(page);
+                            // The media controls let go too, in the same order (`media_state`).
+                            media_state(&room, page, CallState::default());
                         }
                         *page_app.state::<LastReport>().0.lock().unwrap() = CallReport::default();
                     }

@@ -193,6 +193,18 @@ impl RoomCall {
         });
     }
 
+    /// A headset's button or the lock screen asked to mute or unmute: the page's own mute, as the interruptions use it, for
+    /// the current page's call (its number, and the call's join mark when its service holds it), in order with the rest.
+    pub fn toggle_mute(&self) {
+        self.then(|room| {
+            let mut request = serde_json::json!({ "command": "toggle-mute", "page": room.page });
+            if let Some(since) = room.since {
+                request["since"] = since.into();
+            }
+            run_on_page(&room.app, request);
+        });
+    }
+
     /// Quitting: the service stops, waited for up to `limit`.
     pub fn end(&self, limit: std::time::Duration) {
         let (done, finished) = mpsc::channel();
