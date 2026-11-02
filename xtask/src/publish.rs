@@ -14,6 +14,11 @@ use crate::Result;
 const INSTALLERS: &[&str] = &[".dmg", "-setup.exe", ".deb", ".AppImage"];
 const KINDS: &[&str] = &["dmg", "exe", "deb", "AppImage"];
 const SUMS: &str = "SHA256SUMS";
+/// The mobile app's assets on the `nightly` pre-release: attached by mobile-android-signed.yml (`publish apk-nightly`),
+/// never part of `assets/`, and left alone by `publish nightly`. The checksum file is the APK's own: SHA256SUMS has
+/// one writer, the desktop's publish.
+const APK_NIGHTLY: &str = "Sidevoice_nightly_arm64.apk";
+const APK_NIGHTLY_SUM: &str = "Sidevoice_nightly_arm64.apk.sha256";
 
 /// Where the build's artifacts are downloaded to, and where the assets are put together.
 fn artifacts() -> PathBuf {
@@ -206,9 +211,48 @@ pub fn nightly_notes(sha: &str, when: &str) -> String {
     )
 }
 
-/// The assets of the release that `local` does not replace: an older snapshot's leftovers.
+/// The assets of the release that `local` does not replace: an older snapshot's leftovers. The mobile app's own
+/// (`APK_NIGHTLY` and its checksum) are another job's and never leftovers.
 pub fn stale<'a>(published: &'a str, local: &[String]) -> Vec<&'a str> {
-    published.lines().filter(|name| !name.is_empty() && !local.iter().any(|l| l == name)).collect()
+    published
+        .lines()
+        .filter(|name| {
+            !name.is_empty() && ![APK_NIGHTLY, APK_NIGHTLY_SUM].contains(name) && !local.iter().any(|l| l == name)
+        })
+        .collect()
+}
+
+/// `publish apk-nightly`: the signed APK (`mobile sign android`) attached to the `nightly` pre-release as
+/// `Sidevoice_nightly_arm64.apk`, with `Sidevoice_nightly_arm64.apk.sha256` (`sha256sum` format). Both are replaced
+/// (`--clobber`); nothing else of the release is touched. The release is the desktop nightly's: it must exist.
+pub fn apk_nightly() -> Result<()> {
+    let apk = repo().join("dist/Sidevoice-android-arm64.apk");
+    ensure(fs::metadata(&apk).is_ok_and(|m| m.len() > 0), format!("{}: no signed APK, or it is empty", apk.display()))?;
+    let dir = repo().join("assets-apk");
+    ensure(!dir.exists(), format!("{} is there already: remove it first", dir.display()))?;
+    crate::util::mkdir(&dir)?;
+    let published = dir.join(APK_NIGHTLY);
+    fs::copy(&apk, &published).map_err(|e| format!("{}: {e}", apk.display()))?;
+    let sum = sums(std::slice::from_ref(&published))?;
+    let sum_file = dir.join(APK_NIGHTLY_SUM);
+    write(&sum_file, &sum)?;
+    eprint!("{sum}");
+    // The release is the desktop's to create: a first push may get here before it does, so wait a little for it.
+    let mut exists = false;
+    for attempt in 0..10 {
+        exists = Cmd::new("gh").args(["release", "view", "nightly"]).attempt()?.0;
+        if exists {
+            break;
+        }
+        if attempt < 9 {
+            std::thread::sleep(std::time::Duration::from_secs(30));
+        }
+    }
+    ensure(
+        exists,
+        "there is no `nightly` release after 5 minutes: the desktop's publish-nightly (build.yml) creates it",
+    )?;
+    Cmd::new("gh").args(["release", "upload", "nightly"]).arg(&published).arg(&sum_file).arg("--clobber").run()
 }
 
 /// `publish nightly`: the tag `nightly` moved to this commit (`GITHUB_SHA`, or HEAD), and the one `nightly`
@@ -332,6 +376,11 @@ mod tests {
     fn the_nightly_drops_only_what_it_does_not_replace() {
         let local = vec!["Sidevoice_nightly_aarch64.dmg".to_owned(), "SHA256SUMS".to_owned()];
         assert_eq!(stale("Sidevoice_nightly_aarch64.dmg\nSHA256SUMS\nold.zip\n\n", &local), ["old.zip"]);
+        // The mobile app's assets belong to another job.
+        assert_eq!(
+            stale("old.zip\nSidevoice_nightly_arm64.apk\nSidevoice_nightly_arm64.apk.sha256\n", &local),
+            ["old.zip"]
+        );
         assert!(nightly_notes("abc", "2026-10-12T10:00:00Z")
             .starts_with("Snapshot of `main` at abc (committed 2026-10-12T10:00:00Z)."));
     }

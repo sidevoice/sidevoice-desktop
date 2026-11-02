@@ -174,14 +174,25 @@ repository", above.)
 ## Nightly
 
 Every green `build` on `main` (a push that touches only `mobile/` runs none) moves the tag `nightly` to that commit
-and replaces every asset of the one `nightly` pre-release: `Sidevoice_nightly_aarch64.dmg`, `Sidevoice_nightly_x64-setup.exe`,
+and replaces the desktop's assets of the one `nightly` pre-release (the APK below is another job's and stays): `Sidevoice_nightly_aarch64.dmg`, `Sidevoice_nightly_x64-setup.exe`,
 `Sidevoice_nightly_amd64.deb`, `Sidevoice_nightly_amd64.AppImage`, `SHA256SUMS`. Fixed names, so a link keeps
 working, plus its updates and `latest.json`, the nightly's feed (Updates, below). Its notes give the commit and its
 date. It is a snapshot, not a release: the app inside reports its nightly version (Channels, above), it is never
 latest, and release-please ignores the tag (it is not `vX.Y.Z`). It is the desktop app's nightly; the mobile app's will
-be a tag and a pre-release of its own.
+be a tag and a pre-release of its own. Until then the mobile app's signed Android APK rides on this pre-release, see below.
 
-Build artifacts on Actions runs are kept 7 days, for debugging only. Download from Releases.
+**The Android APK on the nightly.** `mobile-android-signed.yml` runs on every push to `main` (and by hand, from `main`),
+builds and signs the app with the upload key (a read-only job), and a second job with the only write token attaches it to this same pre-release with `gh release upload
+--clobber` (`cargo xtask publish apk-nightly`): `Sidevoice_nightly_arm64.apk` and its own
+`Sidevoice_nightly_arm64.apk.sha256`, downloadable without logging in:
+https://github.com/sidevoice/sidevoice-desktop/releases/download/nightly/Sidevoice_nightly_arm64.apk
+Each file has one writer: `SHA256SUMS` is the desktop publish's and does not list the APK, and the desktop publish
+leaves the two APK assets alone when it replaces the rest (`stale` in xtask/src/publish.rs). The two workflows are
+independent: the APK may be a push ahead of or behind the installers. A newer push cancels an older APK build, but never the upload (`--clobber` deletes before it uploads): uploads queue, one at a time. The
+release is the desktop's to create; the upload waits up to 5 minutes for it, then fails. Like the installers, the APK is not
+attested (the desktop publish makes no attestation either).
+
+Build artifacts on Actions runs are kept 7 days (the signed APK's, 14), for debugging only. Download from Releases.
 
 ## Updates
 
