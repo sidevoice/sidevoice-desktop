@@ -3,20 +3,14 @@ use tauri::{
     ipc::Channel,
     plugin::{
         mobile::{ErrorResponse, PluginInvokeError},
-        PluginApi, PluginHandle,
+        PluginApi,
     },
-    AppHandle, Manager, Runtime,
+    AppHandle, Runtime,
 };
 
 use super::Os;
+use crate::platform::kotlin;
 use crate::{CallEvent, CallServiceError};
-
-/// The Kotlin plugin's package, and its class (`android/src/main/java/ai/sidevoice/mobile/plugin/MobilePlugin.kt`).
-const PACKAGE: &str = "ai.sidevoice.mobile.plugin";
-const CLASS: &str = "MobilePlugin";
-
-/// The handle of the Kotlin plugin, kept in the app's state.
-struct Plugin<R: Runtime>(PluginHandle<R>);
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,9 +24,7 @@ impl Os for Native {
     fn register<R: Runtime, C: DeserializeOwned>(
         api: PluginApi<R, C>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let handle = api.register_android_plugin(PACKAGE, CLASS)?;
-        api.app().manage(Plugin(handle));
-        Ok(())
+        kotlin::register(api)
     }
 
     fn start<R: Runtime>(
@@ -56,12 +48,8 @@ fn run<R: Runtime>(
     command: &str,
     args: impl Serialize,
 ) -> Result<(), CallServiceError> {
-    let plugin = app
-        .try_state::<Plugin<R>>()
-        .ok_or_else(|| CallServiceError::Unreachable("the plugin is not set up".into()))?;
-    plugin
-        .0
-        .run_mobile_plugin::<()>(command, args)
+    kotlin::run(app, command, args)
+        .ok_or_else(|| CallServiceError::Unreachable("the plugin is not set up".into()))?
         .map_err(|error| match error {
             PluginInvokeError::InvokeRejected(ErrorResponse { code, message, .. }) => {
                 CallServiceError::Refused {

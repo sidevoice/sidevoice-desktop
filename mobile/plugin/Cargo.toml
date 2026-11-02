@@ -13,6 +13,12 @@ links = "sidevoice-mobile-plugin"
 tauri = "2.12"
 serde = { version = "1", features = ["derive"] }
 
+[target.'cfg(target_os = "ios")'.dependencies]
+# The screen kept on (src/platform/screen/ios.rs): `UIApplication.isIdleTimerDisabled`. Already in the iOS build through Tauri;
+# only the types the call names.
+objc2 = "0.6"
+objc2-ui-kit = { version = "0.3", default-features = false, features = ["std", "UIApplication", "UIResponder"] }
+
 [build-dependencies]
 tauri-plugin = { version = "2.7", features = ["build"] }
 

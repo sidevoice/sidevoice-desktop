@@ -4,8 +4,11 @@
 //!
 //! - **The call's service** ([`call_service`]): a foreground service keeps the process of a call alive on Android while
 //!   the screen is off or another app is in front. The app starts it while it is visible and stops it when the call ends.
+//! - **The screen** ([`keep_screen_on`]): kept on while a model download runs, since the system suspends the app, and
+//!   the download, soon after the screen turns off.
 mod call_service;
 mod platform;
+mod screen;
 
 use tauri::{plugin::TauriPlugin, Runtime};
 
@@ -13,6 +16,7 @@ pub use call_service::{
     request_call_focus, start_call_service, stop_call_service, CallEvent, CallServiceError,
     FocusState, StopReason,
 };
+pub use screen::{keep_screen_on, ScreenError};
 
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
     tauri::plugin::Builder::new("mobile")
