@@ -178,7 +178,8 @@ pub fn probe() -> Result<()> {
     ensure(!cancelled, "a cancelled download left files")?;
     // The cancelled download's `partial/<digest>.part` is kept, for the next attempt to resume (engine 0.10); anything else in
     // partial/ is a download left half written.
-    let half = paths(&storage.join("partial")).into_iter().any(|p| p.is_file() && p.extension().is_none_or(|e| e != "part"));
+    let half =
+        paths(&storage.join("partial")).into_iter().any(|p| p.is_file() && p.extension().is_none_or(|e| e != "part"));
     ensure(!half, "a download was left half written")?;
 
     let voice = grep(&text, "probe-voice ok");
