@@ -107,3 +107,16 @@ jobs:
           path: dist/*.zip
           retention-days: 7
           if-no-files-found: error
+      # The app on a simulator of the biggest iPhone, in light and dark: a screenshot of what the screen really shows and the
+      # app's own log (the layout lines of `platform::webview`). Evidence for a layout fault no code reading shows (a strip
+      # of the screen the page does not cover); cheap, so it runs with the build.
+      - name: The app on an iPhone Pro Max simulator, screenshots and log
+        if: ${{ !cancelled() }}
+        run: scripts/ios-simulator-screenshots.sh dist/Sidevoice-ios-simulator.zip ai.sidevoice.mobile dist/simulator
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !cancelled() }}
+        with:
+          name: Sidevoice-ios-simulator-screenshots
+          path: dist/simulator
+          retention-days: 7
+          if-no-files-found: error
