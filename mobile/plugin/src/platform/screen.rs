@@ -6,10 +6,6 @@ use crate::ScreenError;
 
 #[cfg_attr(target_os = "android", path = "screen/android.rs")]
 #[cfg_attr(target_os = "ios", path = "screen/ios.rs")]
-#[cfg_attr(
-    not(any(target_os = "android", target_os = "ios")),
-    path = "screen/other.rs"
-)]
 mod imp;
 use imp::Native;
 
