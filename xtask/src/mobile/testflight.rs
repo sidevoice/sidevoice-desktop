@@ -98,7 +98,7 @@ pub fn testflight(build_number_text: &str) -> Result<()> {
     }
     let config = serde_json::json!({ "bundle": { "iOS": { "bundleVersion": build.to_string() } } }).to_string();
     let libs = super::AppBuildLibs::hold("ios", "aarch64-apple-ios")?;
-    tauri(&[
+    libs.libs.apply(tauri(&[
         "ios",
         "build",
         "--target",
@@ -108,8 +108,7 @@ pub fn testflight(build_number_text: &str) -> Result<()> {
         "--config",
         &config,
         "--ci",
-    ])
-    .env("SHERPA_ONNX_LIB_DIR", &libs.dir)
+    ]))
     .env("APPLE_API_KEY", &key_id)
     .env("APPLE_API_ISSUER", &issuer)
     .env("APPLE_API_KEY_PATH", &key)
