@@ -50,6 +50,7 @@
 		08702CFC095D2F17073267AA /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
 		0C54967DE38A99011EDDA22E /* AVFAudio.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFAudio.framework; path = System/Library/Frameworks/AVFAudio.framework; sourceTree = SDKROOT; };
 		180609C9C60033406A6A7F17 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
+		216916D93E3C8D75635265CC /* downloads.rs */ = {isa = PBXFileReference; path = downloads.rs; sourceTree = "<group>"; };
 		299D7B306F3BF743AC1EF244 /* interruption.rs */ = {isa = PBXFileReference; path = interruption.rs; sourceTree = "<group>"; };
 		2BF45AA0672154DA34102887 /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		2CA4698307C9928A0B5866DB /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
@@ -209,6 +210,7 @@
 				64394271D504A3167B6E3545 /* acl_tests.rs */,
 				49F5B7CE8791856160DB8F83 /* bridge.rs */,
 				F94DC09ACE0378E1E536E6AE /* call.rs */,
+				216916D93E3C8D75635265CC /* downloads.rs */,
 				D36FBE442FE36E95B601C9D1 /* hold.rs */,
 				013D7F0BABED445EF788A289 /* i18n.rs */,
 				AC7B192F6F772B984C2013E8 /* lib.rs */,
