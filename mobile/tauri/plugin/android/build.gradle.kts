@@ -73,6 +73,9 @@ dependencies {
     // service's notification shows it, through androidx.media's MediaStyle.
     implementation(project(":sidevoice-shared-tauri"))
     implementation("androidx.media:media:1.7.0")
+    // The call as a self-managed call of the system's Telecom (CallService), and the coroutines its API runs in.
+    implementation("androidx.core:core-telecom:1.0.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     // The template's own version (gen/android/app/build.gradle.kts): the hosting activity's lifecycle is read from it.
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation(project(":tauri-android"))

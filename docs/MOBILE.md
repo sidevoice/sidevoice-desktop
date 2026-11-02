@@ -89,7 +89,8 @@ through `run` (the call's service hangs up through it).
   the calls and lets the models go, as on the desktop.
 - **The call's lifecycle** (D-CALL-LIFECYCLE, `mobile/tauri/src/call.rs`), the same on both phones: the green call button
   starts the call, the red one ends it.
-  - **The room's call** holds the call's foreground service (Android): the page reports the call to the app's own
+  - **The room's call** is a phone call of the system's own ("The system's call" below: a CallKit call on iOS, the call's
+    foreground service and its Telecom call on Android): the page reports the call to the app's own
     `call_state`, with its page's number (asked once from `call_page`, so a report of a replaced page that reaches the
     app late changes nothing), and one thread of the app (`RoomCall`) takes the reports, the page changes and the
     service's own end in order. The service starts when the report says joined (a press of the green button, with the app in
@@ -97,12 +98,15 @@ through `run` (the call's service hangs up through it).
     A start the system refuses is logged by its code (`not-visible`, `microphone-permission`, …), and the call goes on in
     front. The service ending on its own (Hang up in its notification, the app removed from the recents list, the
     system) hangs up the call on the page (`window.__sidevoiceHost.run({command: "hang-up"})`). The media controls follow `call_state` too, and the
-    call's service owns the Android media session.
+    call's service owns the Android media session; on iOS they show nothing while the CallKit call lasts.
   - **The call's audio** holds the audio session (iOS): sidevoice-shared's host tells the app before the first voice
     call's audio opens and after the last one's has stopped (`Hooks::calls`, `CallActivity`; the idle state that answers
     a stop, which sidevoice-voice sends once its audio is closed; the desktop does nothing there). Every voice call
     counts, a try in Settings too. A session the system will not activate refuses the call with its code
-    (`audio-session-activate-failed`).
+    (`audio-session-activate-failed`). While the room's call is a CallKit call, CallKit activates and deactivates the
+    session, not the app: the first voice call's audio waits for `provider(_:didActivate:)` (up to 5 s; past it, or while
+    CallKit holds the call, the voice call is refused with `audio-session-activate-failed`: the app never activates a
+    session CallKit owns), and the last one's end leaves the deactivation to CallKit.
 - **The audio session** (iOS; D-AUDIO-SESSION, sidevoice-voice's `Session`): declared at the app's start as
   play-and-record with mode `Default`, the loudspeaker rather than the receiver, and Bluetooth hands-free allowed;
   activated only when a call starts (above). Android has no session to declare. **Not verified on a device yet**; see
@@ -133,7 +137,10 @@ when a call starts and ends (the session is activated and deactivated with it); 
 stopping with the call, and its Hang up; the media controls (a headset's play/pause with and without headphones,
 the lock screen and Control Center on iOS, the call notification's controls on Android); that a model download and a remote provider's request
 pass the verifier on Android; that the xcframework is embedded and signed in an iOS archive; and the APK's libraries
-loading on a phone.
+loading on a phone. The system's call: the CallKit call on the lock screen and in the in-call screen, its mute, end and hold, and the
+audio starting only once CallKit activates the session; the Telecom call in a Bluetooth or car kit, its mute and
+disconnect, a phone call holding it, the loudspeaker chosen, and what Telecom's communication mode does to the call's
+audio (cpal's streams are not `VOICE_COMMUNICATION`, cpal#995).
 
 ## Who owns the native projects
 
@@ -184,14 +191,53 @@ action, in the system's language (`res/values`, English, and `values-es`; the Sp
   the recents list: `task-removed`) or the system (`system`, also when it refused the start). The notification, the
   audio focus and the service go with it, and the system never restarts it: a call does not survive its process.
 - **Audio focus.** The service holds the call's focus (transient: other media pauses and comes back after) from the start
-  to the end, and reports `Focus` changes (`gained`, `lost`, `lost-transient`, `duck`, `refused`). What to do about them (mute,
+  until Telecom holds the call (then the focus is Telecom's: "The system's call" above), and reports `Focus` changes (`gained`, `lost`, `lost-transient`, `duck`, `refused`). What to do about them (mute,
   pause, hang up) is the call's decision, not the service's.
-- The Rust side is `start_call_service(app, on_event)` and `stop_call_service(app)` of `sidevoice-mobile-plugin`
-  (`call_service.rs`); the shared call code reaches the service through them. iOS has no service to start: a call stays
-  alive there through the `audio` background mode, which is configuration.
-- The manifest declares `RECORD_AUDIO`, the two foreground-service permissions and `POST_NOTIFICATIONS`; asking the
+- The Rust side is `start_call_service(app, details, on_event)`, `update_call_service(app, details)` and
+  `stop_call_service(app)` of `sidevoice-mobile-plugin` (`call_service.rs`); the app's call code reaches the service through
+  them. On iOS the same functions run the CallKit call ("The system's call" above); the call stays alive there through
+  CallKit and the `audio` background mode.
+- The manifest declares `RECORD_AUDIO`, the foreground-service permissions (microphone, media playback and phone call),
+  the Telecom ones ("The system's call" above) and `POST_NOTIFICATIONS`; asking the
   person for the microphone and for notifications is the microphone permission's row. Without notifications allowed
   (Android 13 and later) the service runs and the system lists it, but shows no notification.
+
+## The system's call (CallKit, Telecom)
+
+The room's call is a phone call of the system's own, so the lock screen, the system's in-call screens and a Bluetooth or car
+kit show it and act on it (operator, 2026-11-02, after a device test showed only a Now Playing card). It is the plugin's
+call service (`sidevoice-mobile-plugin`'s `call_service`), started and ended as above (`mobile/tauri/src/call.rs`).
+
+- **iOS: CallKit**, in Rust (`plugin/src/platform/call_service/ios.rs`, objc2's CallKit bindings; the plugin has no Swift).
+  One `CXProvider`, made at the app's start: audio only, one call at a time, not in the Phone app's Recents, the mark in one
+  ink as its icon (`plugin/assets/call-icon.png`, `npm run icons`). The green button asks a `CXCallController` for a
+  `CXStartCallAction` whose handle is the conversation's title (the app's name before one is chosen); the provider reports
+  it connecting, and connected when CallKit activates its audio. The red button asks for a `CXEndCallAction`; an end the app
+  did not ask for (the in-call screen, the lock screen, a headset, a car kit) hangs up the page's call. A refusal (code
+  `call-refused`, CallKit's error in the log) leaves the call the app's own: its own audio session and Now Playing.
+- **Android: Core-Telecom** (`androidx.core:core-telecom`), in the call's service (`CallService.kt`): once it is in the
+  foreground it adds a self-managed outgoing audio call, named after the conversation, and sets it active. Telecom holds the
+  call's audio from then (the mode, the focus, the route), so the service gives up its own focus request (a loss reported
+  meanwhile is given back as a gain), chooses the loudspeaker over the earpiece (as iOS does), and its notification
+  becomes a call's (`CallStyle`, with the Mute button). A disconnect from outside the app ends the service as its
+  notification's Hang up does (`hang-up`); Telecom ending the call otherwise is `system`. Telecom refusing the call (an
+  emergency call on, the registration failing) leaves the call the app's own: the service's focus and media notification.
+  The manifest adds `MANAGE_OWN_CALLS` (granted at install), `FOREGROUND_SERVICE_PHONE_CALL` (the service is also of type
+  `phoneCall`) and `MODIFY_AUDIO_SETTINGS` (below).
+- **Mute.** A mute or unmute from the system's side (CallKit's `CXSetMutedCallAction`, Telecom's `isMuted`) is set on the
+  page's own mute, as the person's (`window.__sidevoiceHost.run({command: "mute", muted, page, since})`; nothing when it is
+  so already), carrying the call it is for as the interruptions' commands do. The page's mute goes the other way when it
+  changes: as a `CXSetMutedCallAction` the app asks for, and on Android as the system's microphone mute (turned off again
+  when the call ends, if the service turned it on), so a car kit shows what the page shows.
+- **Hold.** The system holding the call (another call taking its place: `CXSetHeldCallAction`, Telecom's `onSetInactive`)
+  pauses it as an interruption does (D-AUDIO-FOCUS, "Audio interruptions" below), and taking it off hold resumes it.
+- **The title** follows the conversation: CallKit gets a call update, Android's notification a new name (Telecom's own
+  name for the call is the one it started with: Core-Telecom 1.0 has no update for it).
+- **The media controls** (docs/MEDIA_CONTROLS.md): on iOS none while the CallKit call lasts (no second card on the lock
+  screen; a headset's buttons come through CallKit); on Android the media session stays, without a card, because Telecom
+  leaves a self-managed call's headset buttons to the app.
+- **App Store.** Apple does not accept CallKit in apps sold in China: the app's availability there is an operator decision
+  before a release.
 
 ## Building
 

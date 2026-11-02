@@ -10,12 +10,19 @@ use tauri::{
 
 use super::Os;
 use crate::platform::kotlin;
-use crate::{CallEvent, CallServiceError};
+use crate::{CallDetails, CallEvent, CallEvents, CallServiceError};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct StartArgs {
+struct StartArgs<'a> {
+    title: &'a str,
     on_event: Channel<CallEvent>,
+}
+
+#[derive(Serialize)]
+struct UpdateArgs<'a> {
+    title: &'a str,
+    muted: bool,
 }
 
 pub struct Native;
@@ -29,9 +36,39 @@ impl Os for Native {
 
     fn start<R: Runtime>(
         app: &AppHandle<R>,
-        events: Channel<CallEvent>,
+        details: &CallDetails,
+        events: CallEvents,
     ) -> Result<(), CallServiceError> {
-        run(app, "startCallService", StartArgs { on_event: events })
+        // The service's reports come over a channel, as JSON.
+        let on_event = Channel::<CallEvent>::new(move |body| {
+            events(
+                body.deserialize::<CallEvent>()
+                    .map_err(tauri::Error::Json)?,
+            );
+            Ok(())
+        });
+        run(
+            app,
+            "startCallService",
+            StartArgs {
+                title: &details.title,
+                on_event,
+            },
+        )
+    }
+
+    fn update<R: Runtime>(
+        app: &AppHandle<R>,
+        details: &CallDetails,
+    ) -> Result<(), CallServiceError> {
+        run(
+            app,
+            "updateCallService",
+            UpdateArgs {
+                title: &details.title,
+                muted: details.muted,
+            },
+        )
     }
 
     fn stop<R: Runtime>(app: &AppHandle<R>) -> Result<(), CallServiceError> {

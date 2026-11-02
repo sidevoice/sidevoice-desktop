@@ -19,8 +19,17 @@ import app.tauri.plugin.PluginManager
 
 @InvokeArg
 class StartCallServiceArgs {
+    /** The conversation the call is on (empty for none): the system shows it as the call's other party. */
+    var title: String = ""
     /** Where the service reports (`CallEvent`, in Rust). */
     lateinit var onEvent: Channel
+}
+
+@InvokeArg
+class UpdateCallServiceArgs {
+    var title: String = ""
+    /** Whether the page has the call muted. */
+    var muted: Boolean = false
 }
 
 @InvokeArg
@@ -74,6 +83,7 @@ class MobilePlugin(private val activity: Activity) : Plugin(activity) {
                 Intent(context, CallService::class.java)
                     .setAction(CallService.ACTION_START)
                     .putExtra(CallService.EXTRA_SESSION, session.id)
+                    .putExtra(CallService.EXTRA_TITLE, args.title)
             )
             invoke.resolve()
         } catch (error: RuntimeException) {
@@ -98,6 +108,33 @@ class MobilePlugin(private val activity: Activity) : Plugin(activity) {
                 .putExtra(CallService.EXTRA_SESSION, session.id)
         )
         invoke.resolve()
+    }
+
+    /**
+     * Tells the running service what the call shows now: its title, and the page's mute (the system's call and its
+     * microphone mute follow it). Nothing when none runs.
+     */
+    @Command
+    fun updateCallService(invoke: Invoke) {
+        val args = invoke.parseArgs(UpdateCallServiceArgs::class.java)
+        val context = activity.applicationContext
+        val session = CallSession.current()
+        if (session == null) {
+            invoke.resolve()
+            return
+        }
+        try {
+            context.startService(
+                Intent(context, CallService::class.java)
+                    .setAction(CallService.ACTION_UPDATE)
+                    .putExtra(CallService.EXTRA_SESSION, session.id)
+                    .putExtra(CallService.EXTRA_TITLE, args.title)
+                    .putExtra(CallService.EXTRA_MUTED, args.muted)
+            )
+            invoke.resolve()
+        } catch (error: RuntimeException) {
+            invoke.reject(error.message ?: "The call's service could not be reached", "not-allowed")
+        }
     }
 
     /** Stops the service, if it runs: it reports `requested`, and the notification and the focus are gone. */

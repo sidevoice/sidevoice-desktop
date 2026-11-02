@@ -1,11 +1,20 @@
-//! The call's foreground service (Android; docs/MOBILE.md → "The call's service").
+//! The call as the system knows it (docs/MOBILE.md → "The call's service" and "The system's call"): a phone call of the
+//! system's own, which the lock screen, the in-call screens and a Bluetooth or car kit show and act on.
 //!
-//! The service is Kotlin (`android/…/CallService.kt`), started by the app while it is visible and stopped by the app when
-//! the call ends. It tells the app what it cannot know otherwise, as [`CallEvent`]s: that it stopped (the person hung up
-//! from its notification, removed the app from the recents list, or the system ended it), and that the call lost or
-//! regained the audio focus. What to do about either (hang up, mute, resume) is the call's decision, not the service's.
+//! - **Android**: the call's foreground service (Kotlin, `android/…/CallService.kt`), which keeps the process alive while
+//!   the screen is off, and the self-managed call it adds to the system's Telecom (Core-Telecom) for its length.
+//! - **iOS**: a CallKit call (`CXProvider`, `CXCallController`), which also keeps the app running, and activates the audio
+//!   session for it.
+//!
+//! The app starts it while it is visible and ends it when the call ends. It tells the app what it cannot know otherwise, as
+//! [`CallEvent`]s: that it ended (the person hung up from the system's screens or the notification, removed the app from the
+//! recents list, or the system ended it), that the call lost or regained the audio, was muted or held from outside the
+//! app, and (iOS) when the system activated the call's audio. What to do about any of it (hang up, mute, pause, resume)
+//! is the call's decision, not the service's.
+use std::sync::Arc;
+
 use serde::Deserialize;
-use tauri::{ipc::Channel, AppHandle, Runtime};
+use tauri::{AppHandle, Runtime};
 
 use crate::platform::call_service as platform;
 
@@ -15,8 +24,15 @@ use crate::platform::call_service as platform;
 pub enum CallEvent {
     /// The service ended, once for each start, whoever ended it.
     Stopped { reason: StopReason },
-    /// The audio focus the call holds changed.
+    /// The audio focus the call holds changed (Android, while the system's Telecom does not hold the call).
     Focus { state: FocusState },
+    /// The system's call was muted (`true`) or unmuted from outside the app: its in-call screen, a Bluetooth or car kit.
+    Muted { muted: bool },
+    /// The system put the call on hold (`true`: another call took its place) or took it off hold.
+    Held { held: bool },
+    /// The system activated (`true`) or deactivated the call's audio session (iOS: CallKit owns its activation while the
+    /// call lasts; see [`call_activates_audio`]).
+    Audio { active: bool },
 }
 
 /// Why the service ended.
@@ -25,7 +41,8 @@ pub enum CallEvent {
 pub enum StopReason {
     /// The app asked ([`stop_call_service`]).
     Requested,
-    /// The person pressed Hang up in the notification.
+    /// The person hung up from outside the app: the notification's Hang up, the system's in-call screen, a headset or a car
+    /// kit.
     HangUp,
     /// The person removed the app from the recents list.
     TaskRemoved,
@@ -54,7 +71,7 @@ pub enum FocusState {
 pub enum CallServiceError {
     /// The service refused: `code` says why (`not-visible`: the app is not on screen, and Android lets a microphone
     /// service start only from there; `microphone-permission`: the microphone is not allowed yet; `already-running`;
-    /// `not-allowed`: the system refused the start).
+    /// `not-allowed`: the system refused the start; `call-refused`: CallKit refused the call).
     Refused {
         code: Option<String>,
         message: String,
@@ -81,30 +98,57 @@ impl std::fmt::Display for CallServiceError {
 
 impl std::error::Error for CallServiceError {}
 
-/// Starts the service and reports what happens to it to `on_event`, from any thread. Call it while the app is visible.
-/// Where the OS has no service to start (iOS keeps a call alive with a background mode that is configuration), it does
-/// nothing and succeeds.
-pub fn start_call_service<R: Runtime>(
-    app: &AppHandle<R>,
-    on_event: impl Fn(CallEvent) + Send + Sync + 'static,
-) -> Result<(), CallServiceError> {
-    let events = Channel::<CallEvent>::new(move |body| {
-        on_event(
-            body.deserialize::<CallEvent>()
-                .map_err(tauri::Error::Json)?,
-        );
-        Ok(())
-    });
-    platform::start(app, events)
+/// Where a call's events go, from any thread; it must not wait.
+pub type CallEvents = Arc<dyn Fn(CallEvent) + Send + Sync>;
+
+/// What the system shows of the call: the conversation it is on (`title`, empty for none) and whether the person muted it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CallDetails {
+    pub title: String,
+    pub muted: bool,
 }
 
-/// Stops the service, if it runs. It reports `Stopped(Requested)` to the `on_event` it started with.
+/// Starts the system's call, an outgoing audio call shown as `details`, and reports what happens to it to `on_event`, from
+/// any thread. Call it while the app is visible. A refusal says why, and nothing runs.
+pub fn start_call_service<R: Runtime>(
+    app: &AppHandle<R>,
+    details: &CallDetails,
+    on_event: impl Fn(CallEvent) + Send + Sync + 'static,
+) -> Result<(), CallServiceError> {
+    platform::start(app, details, Arc::new(on_event))
+}
+
+/// Shows the running call as `details` now: its title, and the mute the page has (the system's screens and a Bluetooth or
+/// car kit show it, and on Android the system's microphone mute follows it). Nothing when no call runs.
+pub fn update_call_service<R: Runtime>(
+    app: &AppHandle<R>,
+    details: &CallDetails,
+) -> Result<(), CallServiceError> {
+    platform::update(app, details)
+}
+
+/// Ends the system's call, if one runs. It reports `Stopped(Requested)` to the `on_event` it started with.
 pub fn stop_call_service<R: Runtime>(app: &AppHandle<R>) -> Result<(), CallServiceError> {
     platform::stop(app)
 }
 
+/// Whether the system activates the audio session of its call (iOS: CallKit does, and an app must leave the activation of
+/// a CallKit call's session to it, starting its audio once it says so: [`CallEvent::Audio`]). False where the app has no
+/// session to activate, or activates it itself.
+pub fn call_activates_audio() -> bool {
+    platform::activates_audio()
+}
+
+/// Whether the system's call takes the place of the app's media controls while it lasts (iOS: the lock screen shows the
+/// call, and a headset's buttons act on it through CallKit, so a Now Playing card would be a second one). False where the
+/// app keeps its own (Android: Telecom leaves a self-managed call's headset buttons to the app's media session).
+pub fn call_replaces_media_controls() -> bool {
+    platform::replaces_media_controls()
+}
+
 /// Asks the service to request the audio focus again, after it was lost for good (`FocusState::Lost`) or refused
-/// (`FocusState::Refused`). Its answer is a `Focus` event: `Gained`, `LostTransient` (the grant is delayed) or `Refused`.
+/// (`FocusState::Refused`). Its answer is a `Focus` event: `Gained`, `LostTransient` (the grant is delayed) or `Refused`
+/// (`Gained` at once while the system's Telecom holds the call's audio).
 pub fn request_call_focus<R: Runtime>(app: &AppHandle<R>) -> Result<(), CallServiceError> {
     platform::refocus(app)
 }
@@ -148,6 +192,18 @@ mod tests {
             CallEvent::Focus {
                 state: FocusState::LostTransient
             }
+        );
+        assert_eq!(
+            event(r#"{"type":"muted","muted":true}"#),
+            CallEvent::Muted { muted: true }
+        );
+        assert_eq!(
+            event(r#"{"type":"held","held":false}"#),
+            CallEvent::Held { held: false }
+        );
+        assert_eq!(
+            event(r#"{"type":"audio","active":true}"#),
+            CallEvent::Audio { active: true }
         );
         for (text, state) in [
             ("gained", FocusState::Gained),

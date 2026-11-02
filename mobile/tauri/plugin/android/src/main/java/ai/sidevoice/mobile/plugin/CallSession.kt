@@ -10,8 +10,8 @@ package ai.sidevoice.mobile.plugin
  */
 internal object CallSession {
     /** One start of the call's service, and where its reports go. */
-    class Session internal constructor(val id: Long, private val sink: (Map<String, String>) -> Unit) {
-        internal fun report(event: Map<String, String>) = sink(event)
+    class Session internal constructor(val id: Long, private val sink: (Map<String, Any>) -> Unit) {
+        internal fun report(event: Map<String, Any>) = sink(event)
     }
 
     private val lock = Any()
@@ -19,7 +19,7 @@ internal object CallSession {
     private var last = 0L
 
     /** The session of a new start, reporting to [sink]. Null when one is running. */
-    fun begin(sink: (Map<String, String>) -> Unit): Session? = synchronized(lock) {
+    fun begin(sink: (Map<String, Any>) -> Unit): Session? = synchronized(lock) {
         if (current != null) null else Session(++last, sink).also { current = it }
     }
 
@@ -56,4 +56,17 @@ internal object CallSession {
     fun focus(session: Session, state: String) {
         if (get(session.id) != null) session.report(mapOf("type" to "focus", "state" to state))
     }
+
+    /** Reports that the system's call of [session] was muted or unmuted from outside the app, if it is running. */
+    fun muted(session: Session, muted: Boolean) {
+        if (get(session.id) != null) session.report(mapOf("type" to "muted", "muted" to muted))
+    }
+
+    /** Reports that the system put the call of [session] on hold, or took it off, if it is running. */
+    fun held(session: Session, held: Boolean) {
+        if (get(session.id) != null) session.report(mapOf("type" to "held", "held" to held))
+    }
+
+    /** What names one session's call to the system's Telecom (its address). */
+    fun callAddress(id: Long): String = "sidevoice-call://call/$id"
 }

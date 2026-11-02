@@ -5,14 +5,20 @@
      attributes merge in without a conflict: the pairings and the provider keys stay out of backups and transfers
      (res/xml/backup_rules.xml has why). -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- The call's service (CallService): it listens (microphone) and the agent speaks (media playback), as a
-         foreground service with a notification. -->
+    <!-- The call's service (CallService): it listens (microphone), the agent speaks (media playback) and it is a phone
+         call (Telecom's), as a foreground service with a notification. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <!-- Without it, from Android 13 the notification is not shown (the service runs, and the system lists it). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- The call is a self-managed call of the system's Telecom (Core-Telecom, CallService): a phone call the system, a
+         Bluetooth or car kit and a watch show. MANAGE_OWN_CALLS is granted at install; the service is a phone call too
+         (its foreground type), and gives the page's mute to the system's microphone mute (MODIFY_AUDIO_SETTINGS). -->
+    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
     <application
         android:networkSecurityConfig="@xml/network_security_config"
@@ -21,6 +27,6 @@
         <service
             android:name="ai.sidevoice.mobile.plugin.CallService"
             android:exported="false"
-            android:foregroundServiceType="microphone|mediaPlayback" />
+            android:foregroundServiceType="microphone|mediaPlayback|phoneCall" />
     </application>
 </manifest>

@@ -3397,6 +3397,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-call-kit"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e33ab4dde42f7a6955a9ed8af82b9ff7d163b3791f5cf6288312742dc874403"
+dependencies = [
+ "block2",
+ "dispatch2",
+ "objc2",
+ "objc2-avf-audio",
+ "objc2-foundation",
+]
+
+[[package]]
 name = "objc2-cloud-kit"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5103,7 +5116,13 @@ dependencies = [
 name = "sidevoice-mobile-plugin"
 version = "0.1.0"
 dependencies = [
+ "block2",
+ "dispatch2",
+ "log",
  "objc2",
+ "objc2-avf-audio",
+ "objc2-call-kit",
+ "objc2-foundation",
  "objc2-ui-kit",
  "serde",
  "serde_json",

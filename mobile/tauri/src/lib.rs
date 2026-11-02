@@ -138,13 +138,13 @@ fn call_state(
     if page != app.state::<AppHost>().page().0 {
         return Ok(()); // a page that has been replaced: its call is over
     }
-    // The green and the red button: the call's service follows the room's call (`call::RoomCall` checks the page again,
-    // in order with the page's changes).
+    // The green and the red button: the system's call follows the room's call, and the headset's buttons and the lock
+    // screen's controls follow the call (`call::RoomCall` checks the page again, in order with the page's changes).
     app.state::<call::RoomCall>().report(
         page,
-        snapshot.joined,
+        snapshot.clone().into(),
         snapshot.since,
-        (snapshot.mic_enabled, snapshot.mic_disabled),
+        snapshot.mic_disabled,
     );
     let previous = std::mem::replace(&mut *last.0.lock().unwrap(), snapshot.clone());
     if (previous.ready, previous.joined, previous.mic_enabled)
@@ -157,20 +157,7 @@ fn call_state(
             snapshot.mic_enabled
         );
     }
-    // The headset's buttons and the lock screen's controls follow the call.
-    media_state(&app.state::<call::RoomCall>(), page, snapshot.into());
     Ok(())
-}
-
-/// The media controls follow `state`, the call of page `page`: on the room's call's thread, in order with the page's
-/// other changes, and not at all once a newer page has replaced it (the media controls reach the plugin's Kotlin, which
-/// runs on Android's UI thread: never from there).
-fn media_state(room: &call::RoomCall, page: u64, state: CallState) {
-    room.then(move |room| {
-        if room.page == page {
-            media_controls::update(&room.app, &state);
-        }
-    });
 }
 
 impl From<CallReport> for CallState {
@@ -274,8 +261,6 @@ fn run_app() {
                             let page = host.page_changed().0;
                             let room = page_app.state::<call::RoomCall>();
                             room.page_changed(page);
-                            // The media controls let go too, in the same order (`media_state`).
-                            media_state(&room, page, CallState::default());
                         }
                         *page_app.state::<LastReport>().0.lock().unwrap() = CallReport::default();
                     }

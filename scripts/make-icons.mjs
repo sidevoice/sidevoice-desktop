@@ -10,6 +10,7 @@
 //   mobile/tauri/app-icon/{icon.png,android-foreground.png,app-icon.json}   the mobile app's icon sources: `cargo xtask mobile generate`
 //                                                                    derives every size from them (`tauri icon`)
 //   mobile/tauri/plugin/android/src/main/res/drawable/ic_call_notification.xml   the Android call notification's small icon
+//   mobile/tauri/plugin/assets/call-icon.png                               the icon iOS shows for the app's CallKit calls
 //   mobile/tauri/app-icon/window.{png,ico}                                   the window icon its build embeds (never shown on a phone)
 //
 //   npm run icons
@@ -176,6 +177,9 @@ const capsule = ([x, y, w, h]) => {
 };
 out("mobile/tauri/plugin/android/src/main/res/drawable/ic_call_notification.xml",
   `<?xml version="1.0" encoding="utf-8"?>\n<!-- The brand mark in one ink (npm run icons). -->\n<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp"\n    android:viewportWidth="24" android:viewportHeight="24">\n    <path android:fillColor="#FFFFFFFF" android:pathData="${BARS.map(capsule).join("")}" />\n</vector>\n`);
+// The icon iOS shows for the app's CallKit calls (CXProviderConfiguration.iconTemplateImageData): a template, the mark in
+// one ink on nothing (the system draws its alpha), 40 pt square at 3x.
+out("mobile/tauri/plugin/assets/call-icon.png", png(svg(24, 24, inner(MARK_INK)), 120));
 // tauri-build wants an .ico too where it builds the crate for a Windows host (the desktop workflows do, to check it).
 out("mobile/tauri/app-icon/window.ico", ico([[32, png(svg(24, 24, inner(TILE)), 32)]]));
 
