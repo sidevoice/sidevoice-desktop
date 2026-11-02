@@ -22,11 +22,10 @@ xcrun simctl install "$udid" "$app"
 for mode in light dark; do
   xcrun simctl ui "$udid" appearance "$mode"
   xcrun simctl terminate "$udid" "$bundle" 2>/dev/null || true
-  xcrun simctl launch --console-pty "$udid" "$bundle" >"$out/console-$mode.txt" 2>&1 &
-  launch=$!
+  xcrun simctl launch "$udid" "$bundle" >"$out/launch-$mode.txt" 2>&1
   sleep 25
+  xcrun simctl spawn "$udid" launchctl list | grep -q "UIKitApplication:$bundle" || { echo "the app is not running after launch ($mode)" >&2; exit 1; }
   xcrun simctl io "$udid" screenshot "$out/screen-$mode.png"
-  kill "$launch" 2>/dev/null || true
   xcrun simctl terminate "$udid" "$bundle" 2>/dev/null || true
 done
 
