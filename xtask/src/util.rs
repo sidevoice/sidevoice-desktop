@@ -585,6 +585,13 @@ pub fn ci_nightly_version() -> Result<String> {
     nightly_version(manifest["."].as_str().unwrap_or_default(), &run)
 }
 
+/// HEAD's short commit and that commit's date (`YYYY-MM-DD`): what a nightly build says it is (`SIDEVOICE_BUILD_COMMIT`, `_DATE`).
+pub fn head_commit() -> Result<(String, String)> {
+    let head = Cmd::new("git").args(["log", "-1", "--abbrev=7", "--format=%h %cs"]).stdout()?;
+    let (commit, date) = head.trim().split_once(' ').ok_or("git log: no commit")?;
+    Ok((commit.to_owned(), date.to_owned()))
+}
+
 /// A `tauri build` (the Tauri CLI package.json pins).
 #[derive(Debug, Default, PartialEq)]
 pub struct TauriBuild<'a> {
@@ -626,9 +633,8 @@ impl TauriBuild<'_> {
         // A nightly's version, short commit and that commit's date (`YYYY-MM-DD`).
         let (version, commit, date) = match self.channel {
             Channel::Nightly => {
-                let head = Cmd::new("git").args(["log", "-1", "--abbrev=7", "--format=%h %cs"]).stdout()?;
-                let (commit, date) = head.trim().split_once(' ').ok_or("git log: no commit")?;
-                (ci_nightly_version()?, commit.to_owned(), date.to_owned())
+                let (commit, date) = head_commit()?;
+                (ci_nightly_version()?, commit, date)
             }
             _ => Default::default(),
         };
