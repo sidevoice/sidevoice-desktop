@@ -177,8 +177,16 @@ fn run_app() {
     let pages = Pages::default();
     let events = pages.clone();
     tauri::Builder::default()
-        // The app's log: the system's (logcat on Android, the unified log on iOS) and a file in the app's log folder.
-        .plugin(tauri_plugin_log::Builder::new().build())
+        // The app's log: the system's (logcat on Android, the unified log on iOS) and a file in the app's log folder, at
+        // `info` as on the desktop (the plugin's default is `trace`, every crate's every line, written synchronously to
+        // both while the call runs), with the window's own crates at `warn`.
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .level(log::LevelFilter::Info)
+                .level_for("tao", log::LevelFilter::Warn)
+                .level_for("wry", log::LevelFilter::Warn)
+                .build(),
+        )
         .plugin(sidevoice_mobile_plugin::init())
         // The commands the apps share (`host.voice`, `host.engine`, `host.microphone`, `host.pairings`): who may call is
         // the app's one window, on its own page.
