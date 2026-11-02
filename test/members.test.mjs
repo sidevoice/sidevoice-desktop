@@ -237,3 +237,14 @@ test("the commands the app adds run with the snapshot and the actions, and only 
   assert.equal(reporting.run(null), false);
   assert.equal(reporting.run("hang-up"), false);
 });
+
+test("the app's wording of the web's texts is the table of the exact language, only with words to give", () => {
+  const { transport } = fakeTransport();
+  const tables = { en: { "a.key": "Hello" }, es: { "a.key": "Hola" } };
+  const messages = makeMembers(fakeWindow().win, transport).messages(tables);
+  assert.deepEqual(plain(messages("es")), tables.es);
+  assert.deepEqual(plain(messages("en")), tables.en);
+  // The page tries the primary subtag itself: nothing is guessed here.
+  for (const other of ["es-419", "de", "", undefined, null, 7, "constructor", "__proto__", "toString"]) assert.deepEqual(plain(messages(other)), {}, String(other));
+  for (const bad of [undefined, null, "text", {}, { es: tables.es }]) assert.equal(makeMembers(fakeWindow().win, transport).messages(bad), undefined, String(bad));
+});

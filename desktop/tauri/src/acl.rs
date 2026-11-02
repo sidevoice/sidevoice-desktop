@@ -102,6 +102,7 @@ fn the_bridge_script_receives_the_hosts_media_support() {
         false,
         "Ctrl",
         &Default::default(),
+        &sidevoice_shared_tauri::messages::tables(&[]),
         &sidevoice_desktop_core::bridge::Parts {
             transport: "TRANSPORT",
             members: "MEMBERS",
@@ -133,6 +134,7 @@ fn the_rooms_script_is_made_of_the_real_parts_with_no_placeholder_left() {
         true,
         "⌘",
         &crate::platform::host::microphone_help(),
+        &sidevoice_shared_tauri::messages::tables(&[]),
         &parts,
     );
     // (`win.__SIDEVOICE_TARGET__` is the web's own global; a placeholder is a string.)

@@ -533,5 +533,17 @@
     return Object.freeze({ snapshot, report, run, joined: () => reportedJoined, start });
   }
 
-  return Object.freeze({ engine, voice, microphone, pairings, room });
+  /** The app's wording of the web's texts that its place changes (docs/BRIDGE.md → "The message overlay"). `tables`: one
+   *  table per language, `{ "<language>": { "<web catalogue key>": text } }`, with `en` among them. `messages(language)` is
+   *  the table of that exact language (the page tries the primary subtag itself), `{}` where the app has none. Answers at
+   *  once. Only with words to give. */
+  function messages(tables) {
+    if (!tables || typeof tables !== "object" || !tables.en) return undefined;
+    return (language) => {
+      const own = Object.hasOwn(tables, String(language ?? "")) ? tables[String(language)] : undefined;
+      return own && typeof own === "object" ? own : {};
+    };
+  }
+
+  return Object.freeze({ engine, voice, microphone, pairings, room, messages });
 })

@@ -327,6 +327,7 @@ fn open_room(app: &AppHandle) -> tauri::Result<()> {
             platform::uninstall::available(),
             host::shortcut_modifier(),
             &host::microphone_help(),
+            &sidevoice_shared_tauri::messages::tables(&[]),
             &bridge::Parts {
                 transport: sidevoice_shared_tauri::js::TRANSPORT,
                 members: sidevoice_shared_tauri::js::MEMBERS,

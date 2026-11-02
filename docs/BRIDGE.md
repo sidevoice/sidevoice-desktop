@@ -277,6 +277,7 @@ app's composition is always there; what is a fact of one OS or one build is obse
 | `deviceName` | when the system has one | The name the person gave this computer (below). |
 | `build` | always | What this build is (below). |
 | `microphone` | always | Native microphone access; `openSettings` only where the OS has a privacy page; `help(language)`, the app's words for a blocked one. |
+| `messages(language)` | always | The app's wording of the web's texts its place changes, for that exact language: `{ "<web catalogue key>": text }` ("The message overlay", below). |
 | `engine`, `voice` | always | The model engine and the voice call the app runs (below). |
 | `presence` | only where the app owns the system's media | `{ media: "app" }`, supplied by `platform::media_controls::available()`: macOS. The mobile app offers it always (iOS and Android own the media; docs/MOBILE.md → "The bridge"). |
 | `pairings` | always | The pairings the app keeps for the page (above). |
@@ -734,6 +735,25 @@ What is this app's own:
 - Keys: `host.engine.setCredential` writes the OS credential store (`shared/core/src/platform/credentials.rs`, in the namespace the app passes), and the engine reads it
   when a provider is listed, or its model loaded or called. `host.engine.testCredential` writes nothing: its key goes
   only to a trial engine of its own.
+
+## The message overlay
+
+Some of the web's texts are true in a browser and wrong in an app: the speaker row says "This browser plays through the
+system's speaker", and a phone has no browser and chooses its output from Control Center. The page does not ask which system
+it runs on and has no member per text: `host.messages(language)` answers the app's table of web catalogue keys to its own
+text, for that exact language tag (`{}` where it has none), and the web's translator applies it over its catalogue (the exact
+tag, then the primary subtag, then the catalogue, then English; sidevoice-web's `apps/web/src/i18n/translator.ts`). The
+catalogue keeps the browser's words.
+
+The tables are files next to the crate that injects them, one JSON object per language, with `en` required and every language
+the web offers present (`messages::LANGUAGES`): `shared/tauri/i18n/<language>.json` for what every app words the same way
+(the screen cannot be kept on here; the system refused something the call's voice needs), and `mobile/tauri/i18n/<os>/<language>.json`
+for a phone, per OS (the speaker). The app's own come over the shared ones (`messages::tables`) and are injected as
+`__SIDEVOICE_MESSAGES__`. `test/messages.test.mjs` fails, naming the key, when an overlay key is not one the pinned web's
+catalogues carry (`web.pin.json`): a web key that is renamed cannot silently stop applying.
+
+The microphone's help (`host.microphone.help`) could move to this overlay later, as the keys of the web's own help; it is not
+migrated.
 
 ## The microphone permission
 
