@@ -157,7 +157,7 @@ is an input the CLI reads:
 | The iOS permission texts in each language | `mobile/tauri/ios/<language>.lproj/InfoPlist.strings`: the CLI has no setting for them, so `generate` puts them in `gen/apple/sidevoice-mobile_iOS/` before the CLI makes the project, and the project lists them as resources of the app, with each language as a known region (`generate` fails if it does not) |
 | Android manifest entries, resources and, later, Kotlin | the Android library of `mobile/tauri/plugin` (a Tauri plugin carrying only native project inputs; Gradle merges its manifest into the app's) |
 | App icons | `mobile/tauri/app-icon/` (drawn from the brand by `npm run icons`; `tauri icon` derives every size) |
-| The Rust toolchain and the four mobile targets | `mobile/rust-toolchain.toml` |
+| The Rust toolchain and the mobile targets | `mobile/rust-toolchain.toml` |
 
 `cargo xtask mobile generate android|ios` makes a project anew (the old one removed) and derives the icons into it. The
 iOS project needs macOS and XcodeGen. Run it after changing an input or the Tauri CLI's version, and commit the result.
@@ -265,7 +265,7 @@ installs as it is.
 `build.yml` neither waits for it nor is held up by it. No job signs anything or sees a secret.
 
 - **Android** (Ubuntu): `cargo xtask mobile generated android`, then `cargo xtask mobile build android`, the unsigned
-  release APK for arm64, as the artifact `Sidevoice-android-arm64-unsigned-apk`. The build ends with the 16 KB check Google
+  universal release APK (arm64-v8a and armeabi-v7a), as the artifact `Sidevoice-android-unsigned-apk`. The build ends with the 16 KB check Google
   Play makes (`cargo xtask mobile check-16kb [APK]`): the APK's uncompressed libraries start on 16 KB boundaries
   (`zipalign -c -P 16`) and every loadable segment of every library is aligned to 16 KB (the ELF program headers); it
   fails on any other and when there is no library. The job's log lists each library with its alignment.
@@ -290,7 +290,7 @@ on every push to `main` and by hand (`workflow_dispatch`), and its job refuses a
 as above, then `cargo xtask mobile sign android` aligns it for 16 KB pages (`zipalign -P 16`), signs it (`apksigner`),
 verifies the signature and checks that every native library's loadable segments are 16 KB aligned, which Google Play
 requires (`cargo xtask mobile check-16kb [APK]` is that check alone). The result is the artifact
-`Sidevoice-android-arm64-signed-apk`, and the file `Sidevoice_nightly_arm64.apk` (with `Sidevoice_nightly_arm64.apk.sha256`) on the public `nightly` pre-release, which anyone can download: https://github.com/sidevoice/sidevoice-desktop/releases/download/nightly/Sidevoice_nightly_arm64.apk (RELEASING.md → "Nightly").
+`Sidevoice-android-signed-apk`, and the file `Sidevoice_nightly_android.apk` (with `Sidevoice_nightly_android.apk.sha256`) on the public `nightly` pre-release, which anyone can download: https://github.com/sidevoice/sidevoice-desktop/releases/download/nightly/Sidevoice_nightly_android.apk (RELEASING.md → "Nightly").
 
 It reads three repository Actions secrets, which must exist:
 

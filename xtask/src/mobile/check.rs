@@ -3,7 +3,7 @@
 //!
 //! The APK has its uncompressed libraries on 16 KB boundaries (`zipalign -c -P 16`), so the system maps them out of it,
 //! and every library's loadable segments are aligned to 16 KB (read from the ELF program headers), which Google Play
-//! requires of apps that target Android 15 or later on 64-bit devices. It fails when there is no native library at all.
+//! requires of apps that target Android 15 or later on 64-bit devices (the 32-bit armeabi-v7a libraries are outside it). It fails when there is no native library at all.
 //! The tool is the Android SDK's build-tools' `zipalign` (`ANDROID_HOME`, the newest installed).
 
 use std::fs;
@@ -52,6 +52,12 @@ pub fn check_16kb(apk: &Path) -> Result<()> {
         }
         let mut bytes = Vec::new();
         entry.read_to_end(&mut bytes).map_err(|e| format!("{name}: {e}"))?;
+        // Google Play's rule is for 64-bit apps: a 32-bit library (armeabi-v7a) is counted, not measured.
+        if bytes.starts_with(b"\x7fELF") && bytes.get(4) == Some(&1) {
+            println!("{name}: 32-bit, outside the 16 KB rule");
+            checked += 1;
+            continue;
+        }
         let alignments = load_alignments(&bytes).map_err(|e| format!("{name}: {e}"))?;
         for align in &alignments {
             ensure(*align >= PAGE, format!("{name}: a loadable segment is aligned to {align} bytes, not {PAGE}"))?;
@@ -69,7 +75,7 @@ pub fn check_16kb(apk: &Path) -> Result<()> {
 }
 
 /// The alignment of each loadable segment (`PT_LOAD`) of a 64-bit little-endian ELF file, which every Android ABI the
-/// app ships is (arm64-v8a, x86_64).
+/// 16 KB rule applies to (arm64-v8a, x86_64; the 32-bit armeabi-v7a libraries are skipped by the caller).
 fn load_alignments(elf: &[u8]) -> Result<Vec<u64>> {
     let at = |offset: usize, len: usize| elf.get(offset..offset + len).ok_or("a truncated ELF file".to_owned());
     let u16_at = |offset| at(offset, 2).map(|b| u16::from_le_bytes(b.try_into().expect("2 bytes")));

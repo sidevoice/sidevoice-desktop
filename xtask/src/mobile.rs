@@ -12,7 +12,7 @@
 //!   before the CLI makes the project, and the project is read for them after.
 //! - `mobile generated android|ios`: `generate`, then the committed project must be what it wrote (CI, every pull
 //!   request): a difference means an input or the CLI changed and the project was not regenerated and committed.
-//! - `mobile build android|ios`: the app as a pull request builds it, unsigned: Android's release APK for arm64, and
+//! - `mobile build android|ios`: the app as a pull request builds it, unsigned: Android's universal release APK (arm64-v8a and armeabi-v7a), and
 //!   the iOS app for the simulator (no signing, so no secret), into dist/. Needs the SDK and NDK, or macOS with Xcode. The
 //!   Android APK is also checked for 16 KB pages, which Google Play requires (`mobile check-16kb [APK]` is that check alone),
 //!   and the iOS app for what it declares to Apple: the privacy manifest and the export compliance (`mobile check-ios [APP]`
@@ -298,7 +298,7 @@ const UNSIGNED_APK: &str = "app/build/outputs/apk/universal/release/app-universa
 
 /// The unsigned APK `mobile build android` puts in dist/.
 pub fn unsigned_apk() -> PathBuf {
-    repo().join("dist/Sidevoice-android-arm64-unsigned.apk")
+    repo().join("dist/Sidevoice-android-unsigned.apk")
 }
 
 /// Where the Android project takes the native libraries it packages beside the app's own (`jniLibs/<abi>/`; git ignores
@@ -315,24 +315,41 @@ const IOS_FRAMEWORKS: &str = "mobile/tauri/frameworks";
 /// `.so`) go to the project's `jniLibs/<abi>/`; iOS's two xcframeworks (`sherpa-onnx` and `onnxruntime`, one shared
 /// runtime) to mobile/tauri/frameworks/, with each target's slices beside them.
 pub fn engine_libs(name: &str, target: &str) -> Result<EngineLibs> {
+    Ok(engine_libs_of(name, &[target])?.remove(0))
+}
+
+/// [`engine_libs`] for each of `targets`, fetched once.
+fn engine_libs_of(name: &str, targets: &[&str]) -> Result<Vec<EngineLibs>> {
     let android = project(name)?.cli == "android";
     let dir = repo().join(if android { ANDROID_LIBS } else { IOS_FRAMEWORKS });
     let dir_text = dir.to_string_lossy().into_owned();
     crate::checks::engine_xtask(&["mobile-libs", if android { "android" } else { "ios" }, &dir_text])?.run()?;
-    let (sherpa, onnxruntime) = if android {
-        let abi = match target {
-            "aarch64-linux-android" => "arm64-v8a",
-            "x86_64-linux-android" => "x86_64",
-            other => return Err(format!("no Android ABI for {other}")),
+    let mut all = Vec::new();
+    for target in targets {
+        let (sherpa, onnxruntime) = if android {
+            (dir.join(android_abi(target)?), None)
+        } else {
+            (dir.join(format!("lib-{target}")), Some(dir.join(format!("frameworks-{target}"))))
         };
-        (dir.join(abi), None)
-    } else {
-        (dir.join(format!("lib-{target}")), Some(dir.join(format!("frameworks-{target}"))))
-    };
-    for linked in std::iter::once(&sherpa).chain(onnxruntime.as_ref()) {
-        ensure(linked.is_dir(), format!("{}: the engine's libraries have nothing for {target}", linked.display()))?;
+        for linked in std::iter::once(&sherpa).chain(onnxruntime.as_ref()) {
+            ensure(linked.is_dir(), format!("{}: the engine's libraries have nothing for {target}", linked.display()))?;
+        }
+        all.push(EngineLibs { sherpa, onnxruntime });
     }
-    Ok(EngineLibs { sherpa, onnxruntime })
+    Ok(all)
+}
+
+/// The Rust targets the Android app is built for (D-ANDROID-ABIS: 64-bit and 32-bit ARM phones; x86_64, the emulator, is
+/// built by hand), and each one's ABI directory.
+const ANDROID_TARGETS: [&str; 2] = ["aarch64-linux-android", "armv7-linux-androideabi"];
+
+fn android_abi(target: &str) -> Result<&'static str> {
+    match target {
+        "aarch64-linux-android" => Ok("arm64-v8a"),
+        "armv7-linux-androideabi" => Ok("armeabi-v7a"),
+        "x86_64-linux-android" => Ok("x86_64"),
+        other => Err(format!("no Android ABI for {other}")),
+    }
 }
 
 /// What an app build of one target links against: `SHERPA_ONNX_LIB_DIR`, and on iOS `ONNXRUNTIME_FRAMEWORK_DIR` (the
@@ -368,29 +385,47 @@ impl EngineLibs {
 /// 'sherpa-onnx-c-api' not found`), whatever a build cache happened to keep. The config is given back as it was when this
 /// is dropped, failed build or not.
 pub struct AppBuildLibs {
-    /// What the build's target links against.
+    /// What the build's first target links against (iOS builds one target; Android's are in the cargo config).
     pub libs: EngineLibs,
     config: PathBuf,
     original: Option<Vec<u8>>,
 }
 
 impl AppBuildLibs {
-    /// [`engine_libs`] for `target`, written into the cargo config for the length of the build.
-    pub fn hold(name: &str, target: &str) -> Result<AppBuildLibs> {
-        let libs = engine_libs(name, target)?;
+    /// [`engine_libs`] for each of `targets`, written into the cargo config for the length of the build.
+    ///
+    /// iOS (one target) is given as `[env]` variables. Android's build runs one cargo per ABI under one Gradle build, and
+    /// `[env]` has no per-target form, so each target gets cargo's build-script override for the `sherpa-onnx` link
+    /// (`[target.<triple>.sherpa-onnx]`): `sherpa-onnx-sys`'s build script is not run, and the target links the engine's
+    /// shared libraries of its own ABI, which `jniLibs/<abi>/` already holds for Gradle to package.
+    pub fn hold(name: &str, targets: &[&str]) -> Result<AppBuildLibs> {
+        let android = project(name)?.cli == "android";
+        let mut all = engine_libs_of(name, targets)?;
         let config = repo().join(".cargo/config.toml");
         let original = fs::read(&config).ok();
         let mut text = original.as_deref().map(String::from_utf8_lossy).unwrap_or_default().into_owned();
-        ensure(!text.contains("\n[env]"), format!("{}: has an [env] table already", config.display()))?;
         text.push_str(
-            "\n# Written by `cargo xtask mobile` for one app build, and taken out after it (xtask/src/mobile.rs, AppBuildLibs).\n[env]\n",
+            "\n# Written by `cargo xtask mobile` for one app build, and taken out after it (xtask/src/mobile.rs, AppBuildLibs).\n",
         );
-        for (key, value) in libs.vars() {
-            let value = serde_json::to_string(&value.to_string_lossy()).map_err(|e| e.to_string())?;
-            text.push_str(&format!("{key} = {value}\n"));
+        if android {
+            ensure(!text.contains(".sherpa-onnx]"), format!("{}: overrides sherpa-onnx already", config.display()))?;
+            for (target, libs) in targets.iter().zip(&all) {
+                let dir =
+                    serde_json::to_string(&format!("native={}", libs.sherpa.display())).map_err(|e| e.to_string())?;
+                text.push_str(&format!(
+                    "[target.{target}.sherpa-onnx]\nrustc-link-search = [{dir}]\nrustc-link-lib = [\"dylib=sherpa-onnx-c-api\", \"dylib=onnxruntime\"]\n"
+                ));
+            }
+        } else {
+            ensure(!text.contains("\n[env]"), format!("{}: has an [env] table already", config.display()))?;
+            text.push_str("[env]\n");
+            for (key, value) in all[0].vars() {
+                let value = serde_json::to_string(&value.to_string_lossy()).map_err(|e| e.to_string())?;
+                text.push_str(&format!("{key} = {value}\n"));
+            }
         }
         write(&config, text)?;
-        Ok(AppBuildLibs { libs, config, original })
+        Ok(AppBuildLibs { libs: all.remove(0), config, original })
     }
 }
 
@@ -409,8 +444,8 @@ pub fn build(name: &str) -> Result<()> {
     mkdir(&dist)?;
     match project(name)?.cli {
         "android" => {
-            let libs = AppBuildLibs::hold(name, "aarch64-linux-android")?;
-            libs.libs.apply(tauri(&["android", "build", "--apk", "--target", "aarch64", "--ci"])).run()?;
+            let libs = AppBuildLibs::hold(name, &ANDROID_TARGETS)?;
+            tauri(&["android", "build", "--apk", "--target", "aarch64", "--target", "armv7", "--ci"]).run()?;
             drop(libs);
             let apk = repo().join("mobile/tauri/gen/android").join(UNSIGNED_APK);
             let to = unsigned_apk();
@@ -418,7 +453,7 @@ pub fn build(name: &str) -> Result<()> {
             check::check_16kb(&to)
         }
         _ => {
-            let libs = AppBuildLibs::hold(name, "aarch64-apple-ios-sim")?;
+            let libs = AppBuildLibs::hold(name, &["aarch64-apple-ios-sim"])?;
             libs.libs.apply(tauri(&["ios", "build", "--target", "aarch64-sim", "--no-sign", "--ci"])).run()?;
             drop(libs);
             let build = repo().join("mobile/tauri/gen/apple/build");

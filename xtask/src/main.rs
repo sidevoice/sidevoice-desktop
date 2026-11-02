@@ -114,8 +114,8 @@
 //!   pre-release, never latest).
 //! - `publish nightly`: the `nightly` tag moved to this commit (`GITHUB_SHA`, or HEAD) and the `nightly` pre-release
 //!   replaced by assets/ (its notes say `WHEN` it was committed); the mobile app's assets on it are left alone.
-//! - `publish apk-nightly`: the signed APK (dist/Sidevoice-android-arm64.apk) and its `.sha256` attached to the
-//!   `nightly` pre-release as `Sidevoice_nightly_arm64.apk` (mobile-android-signed.yml).
+//! - `publish apk-nightly`: the signed APK (dist/Sidevoice-android.apk) and its `.sha256` attached to the
+//!   `nightly` pre-release as `Sidevoice_nightly_android.apk` (mobile-android-signed.yml).
 //!
 //! The release PR (checks.rs), `gh` with `GH_TOKEN` and `GH_REPO`:
 //!
