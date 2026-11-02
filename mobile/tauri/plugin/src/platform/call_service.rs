@@ -12,7 +12,8 @@ mod imp;
 use imp::Native;
 
 trait Os {
-    /// Whether the system activates its call's audio session (and the app must leave that to it).
+    /// Whether the system makes its call's audio ready (CallKit's session, Telecom's active call and route), and the
+    /// service reports when (`CallEvent::Audio`).
     const ACTIVATES_AUDIO: bool = false;
 
     /// Whether the system's call shows on the lock screen and takes a headset's buttons in place of the app's media

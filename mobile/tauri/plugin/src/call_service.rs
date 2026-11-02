@@ -9,7 +9,8 @@
 //! The app starts it while it is visible and ends it when the call ends. It tells the app what it cannot know otherwise, as
 //! [`CallEvent`]s: that it ended (the person hung up from the system's screens or the notification, removed the app from the
 //! recents list, or the system ended it), that the call lost or regained the audio, was muted or held from outside the
-//! app, and (iOS) when the system activated the call's audio. What to do about any of it (hang up, mute, pause, resume)
+//! app, and when the call's audio is ready to open (iOS: CallKit activated the session; Android: Telecom made the call
+//! active and settled its route, or the call stays the app's own). What to do about any of it (hang up, mute, pause, resume)
 //! is the call's decision, not the service's.
 use std::sync::Arc;
 
@@ -30,8 +31,10 @@ pub enum CallEvent {
     Muted { muted: bool },
     /// The system put the call on hold (`true`: another call took its place) or took it off hold.
     Held { held: bool },
-    /// The system activated (`true`) or deactivated the call's audio session (iOS: CallKit owns its activation while the
-    /// call lasts; see [`call_activates_audio`]).
+    /// The call's audio is ready to open (`true`) or was taken away (see [`call_activates_audio`]). iOS: CallKit activated
+    /// or deactivated the session, which it owns while the call lasts. Android: once per start, when Telecom has made the
+    /// call active and its route has settled (the communication mode and the loudspeaker, whose change would cut off a
+    /// stream already open), or at once when the call stays the app's own (Telecom refused it, or did not answer in time).
     Audio { active: bool },
 }
 
@@ -132,9 +135,10 @@ pub fn stop_call_service<R: Runtime>(app: &AppHandle<R>) -> Result<(), CallServi
     platform::stop(app)
 }
 
-/// Whether the system activates the audio session of its call (iOS: CallKit does, and an app must leave the activation of
-/// a CallKit call's session to it, starting its audio once it says so: [`CallEvent::Audio`]). False where the app has no
-/// session to activate, or activates it itself.
+/// Whether the system makes its call's audio ready, and the app opens its audio only once the service says so
+/// ([`CallEvent::Audio`]). iOS: CallKit activates a CallKit call's session, and an app must leave that to it. Android:
+/// Telecom making the call active switches the audio mode and the route, which cuts off any stream open before it. False
+/// where the app opens its audio when it likes.
 pub fn call_activates_audio() -> bool {
     platform::activates_audio()
 }

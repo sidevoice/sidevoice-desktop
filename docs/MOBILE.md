@@ -106,7 +106,12 @@ through `run` (the call's service hangs up through it).
     (`audio-session-activate-failed`). While the room's call is a CallKit call, CallKit activates and deactivates the
     session, not the app: the first voice call's audio waits for `provider(_:didActivate:)` (up to 5 s; past it, or while
     CallKit holds the call, the voice call is refused with `audio-session-activate-failed`: the app never activates a
-    session CallKit owns), and the last one's end leaves the deactivation to CallKit.
+    session CallKit owns), and the last one's end leaves the deactivation to CallKit. On Android the same wait holds
+    for Telecom: setting the call active switches the audio mode to communication and the route to the loudspeaker, and
+    AAudio cuts off any stream open across that (a spurious "audio device unavailable" at the call's start), so the
+    first voice call's audio opens only once the call's service reports `audio`: Telecom made the call active and its
+    route settled, or at once when Telecom refuses the call (it stays the app's own), or after 3 s whatever Telecom is
+    doing. logcat (`SidevoiceCall`) says which: `audio: the call's audio opens now: …`.
 - **The audio session** (iOS; D-AUDIO-SESSION, sidevoice-voice's `Session`): declared at the app's start as
   play-and-record with mode `Default`, the loudspeaker rather than the receiver, and Bluetooth hands-free allowed;
   activated only when a call starts (above). Android has no session to declare. **Not verified on a device yet**; see
