@@ -77,7 +77,8 @@ targets:
     dependencies:
       - framework: libapp.a
         embed: false
-      - framework: ../../frameworks/SherpaOnnxC.xcframework
+      - framework: ../../frameworks/sherpa-onnx.xcframework
+      - framework: ../../frameworks/onnxruntime.xcframework
       - sdk: CoreGraphics.framework
       - sdk: Metal.framework
       - sdk: MetalKit.framework

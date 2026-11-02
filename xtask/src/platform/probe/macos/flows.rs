@@ -169,14 +169,17 @@ pub fn probe() -> Result<()> {
     let engine = grep(&text, "probe-engine ok");
     ensure(!engine.is_empty(), "no probe-engine ok")?;
     check_engine_line(&engine.join("\n"))?;
-    // sidevoice-engine's storage: a folder per installed build, nothing of the cancelled one, nothing half written.
+    // sidevoice-engine's storage: a folder per installed build, nothing of the cancelled one but its resumable partial file.
     // The app's `Models` in the probe's home: `sidevoice-platform`'s `data_dir::models_dir()` on macOS. Spelled out because xtask
     // is a dependency-light package of its own (no C toolchain, no git dependency) and that crate pulls the local channel.
     let storage = data.home.join("Library/Application Support/Sidevoice/Models");
     Cmd::new("ls").arg("-laR").arg(storage.join("models")).run()?;
     let cancelled = paths(&storage.join("models")).into_iter().any(|p| p.to_string_lossy().contains("whisper-small"));
     ensure(!cancelled, "a cancelled download left files")?;
-    let half = paths(&storage.join("partial")).into_iter().any(|p| p.is_file());
+    // The cancelled download's `partial/<digest>.part` is kept, for the next attempt to resume (engine 0.10); anything else in
+    // partial/ is a download left half written.
+    let half =
+        paths(&storage.join("partial")).into_iter().any(|p| p.is_file() && p.extension().is_none_or(|e| e != "part"));
     ensure(!half, "a download was left half written")?;
 
     let voice = grep(&text, "probe-voice ok");
