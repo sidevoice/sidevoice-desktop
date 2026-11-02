@@ -51,11 +51,11 @@
 		035C90F560637AC4EE9E2858 /* microphone_help.rs */ = {isa = PBXFileReference; path = microphone_help.rs; sourceTree = "<group>"; };
 		04B561B0C6069C039FFEED09 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
 		084491628E8D53FF0885F833 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
+		085474441D5CE1D859DE3A39 /* screen.rs */ = {isa = PBXFileReference; path = screen.rs; sourceTree = "<group>"; };
 		08702CFC095D2F17073267AA /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
 		0C54967DE38A99011EDDA22E /* AVFAudio.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFAudio.framework; path = System/Library/Frameworks/AVFAudio.framework; sourceTree = SDKROOT; };
 		14CB5A0F01AD530B798B8BA3 /* sherpa-onnx.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = "sherpa-onnx.xcframework"; path = "../../frameworks/sherpa-onnx.xcframework"; sourceTree = "<group>"; };
 		180609C9C60033406A6A7F17 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
-		216916D93E3C8D75635265CC /* downloads.rs */ = {isa = PBXFileReference; path = downloads.rs; sourceTree = "<group>"; };
 		26D96D0B9DBADA3317A773B9 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
 		299D7B306F3BF743AC1EF244 /* interruption.rs */ = {isa = PBXFileReference; path = interruption.rs; sourceTree = "<group>"; };
 		2BF45AA0672154DA34102887 /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
@@ -239,12 +239,12 @@
 				64394271D504A3167B6E3545 /* acl_tests.rs */,
 				49F5B7CE8791856160DB8F83 /* bridge.rs */,
 				F94DC09ACE0378E1E536E6AE /* call.rs */,
-				216916D93E3C8D75635265CC /* downloads.rs */,
 				D36FBE442FE36E95B601C9D1 /* hold.rs */,
 				013D7F0BABED445EF788A289 /* i18n.rs */,
 				AC7B192F6F772B984C2013E8 /* lib.rs */,
 				3ED59F09A85CF8FF41D62009 /* pairings.rs */,
 				749529AE2409B9FB50B39312 /* platform.rs */,
+				085474441D5CE1D859DE3A39 /* screen.rs */,
 				AA1884F220662184B30B9C9B /* i18n */,
 				C8A96FD8F714BFFEBAC54283 /* platform */,
 			);
