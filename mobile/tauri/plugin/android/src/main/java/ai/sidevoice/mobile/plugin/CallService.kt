@@ -29,7 +29,6 @@ import androidx.core.app.ServiceCompat
 import androidx.core.telecom.CallAttributesCompat
 import androidx.core.telecom.CallControlResult
 import androidx.core.telecom.CallControlScope
-import androidx.core.telecom.CallEndpointCompat
 import androidx.core.telecom.CallsManager
 import androidx.media.app.NotificationCompat.MediaStyle
 import kotlinx.coroutines.CancellationException
@@ -168,7 +167,7 @@ class CallService : Service() {
         audioReadyFor = null
         cancelAudioDeadline()
         val deadline = Runnable {
-            audioReady(mine, "fallback: Telecom did not make the call active within ${AUDIO_READY_LIMIT_MS} ms")
+            audioReady(mine, "fallback: Telecom did not make the call active within $AUDIO_READY_LIMIT_MS ms")
         }
         audioDeadline = deadline
         main.postDelayed(deadline, AUDIO_READY_LIMIT_MS)
