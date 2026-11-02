@@ -174,12 +174,17 @@ impl PhoneCall {
 }
 
 impl CallActivity for PhoneCall {
-    /// Before the first voice call's audio opens: the session is activated by the app, or (during a call of the system's
-    /// that makes its own audio ready) the system's word that it is ready is waited for while the call starts. While the
-    /// system holds its call, or past the wait, the voice call is refused: the app never opens audio the system's call owns
-    /// before the system says so.
+    /// Before the first voice call's audio opens: the session is declared again, and activated by the app, or (during a
+    /// call of the system's that makes its own audio ready) the system's word that it is ready is waited for while the call
+    /// starts. While the system holds its call, or past the wait, the voice call is refused: the app never opens audio the
+    /// system's call owns before the system says so.
     fn starting(&self) -> Result<(), String> {
         let mut audio = self.audio.lock().unwrap();
+        // Declared again first, the same as at the app's start: whatever took the declaration away under an earlier call
+        // (a reset of the media services) does not keep this one from recording.
+        if let Err(error) = configure() {
+            log::warn!("call: the audio session was not declared again: {error}");
+        }
         let deadline = Instant::now() + SYSTEM_AUDIO_LIMIT;
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
@@ -234,6 +239,17 @@ pub fn watch_interruptions(app: &AppHandle, phone: Arc<PhoneCall>) {
             Interruption::Ended { resume } => Signal::Ended {
                 resume: phone.reactivate() && resume,
             },
+            // The reset took the session's declaration with it: without it the call cannot record, now or in any later
+            // call, until the app starts again. It is declared again, and activated again if the app holds it; the voice
+            // reopens its streams itself. Nothing of the call pauses or resumes.
+            Interruption::Reset => {
+                match configure() {
+                    Ok(()) => log::info!("audio session: declared again after the reset"),
+                    Err(error) => log::error!("audio session: not declared again: {error}"),
+                }
+                phone.reactivate();
+                return;
+            }
         };
         if let Some(room) = app.try_state::<RoomCall>() {
             room.then(move |room| room.signal(Source::Session, signal));

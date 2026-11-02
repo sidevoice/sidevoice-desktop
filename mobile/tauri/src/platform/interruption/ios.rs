@@ -1,6 +1,8 @@
 //! iOS: `AVAudioSessionInterruptionNotification`, posted when the system deactivates the session (a phone call, an alarm,
 //! Siri, another app that takes the audio) and again when it is over, with `shouldResume` when the app should go on.
-//! The notification is the system's own; the type and option are read from `userInfo` as Apple documents.
+//! The notification is the system's own; the type and option are read from `userInfo` as Apple documents. And
+//! `AVAudioSessionMediaServicesWereResetNotification`, posted once the media services are back after a reset, carrying
+//! nothing.
 use std::ptr::NonNull;
 
 use block2::RcBlock;
@@ -9,11 +11,11 @@ use objc2::runtime::AnyObject;
 use objc2_avf_audio::{
     AVAudioSessionInterruptionNotification, AVAudioSessionInterruptionOptionKey,
     AVAudioSessionInterruptionOptions, AVAudioSessionInterruptionType,
-    AVAudioSessionInterruptionTypeKey,
+    AVAudioSessionInterruptionTypeKey, AVAudioSessionMediaServicesWereResetNotification,
 };
 use objc2_foundation::{NSNotification, NSNotificationCenter, NSNumber, NSString};
 
-use super::{Observed, Os};
+use super::{Observed, ObservedReset, Os};
 
 pub struct Native;
 
@@ -41,6 +43,26 @@ impl Os for Native {
             )
         };
         // The center keeps the observer until it is removed, and it is not removed: it lives as long as the process.
+        std::mem::forget(observer);
+        Ok(())
+    }
+
+    fn observe_reset(reset: ObservedReset) -> Result<(), String> {
+        // SAFETY: a constant of AVFAudio, linked by the app.
+        let Some(name) = (unsafe { AVAudioSessionMediaServicesWereResetNotification }) else {
+            return Err("audio-session-interruptions-unavailable".into());
+        };
+        let block = RcBlock::new(move |_: NonNull<NSNotification>| reset());
+        // SAFETY: as for the interruptions: no object, no queue, a Send + Sync block the center retains.
+        let observer = unsafe {
+            NSNotificationCenter::defaultCenter().addObserverForName_object_queue_usingBlock(
+                Some(name),
+                None,
+                None,
+                &block,
+            )
+        };
+        // Kept for the life of the process, as the interruptions' observer.
         std::mem::forget(observer);
         Ok(())
     }
