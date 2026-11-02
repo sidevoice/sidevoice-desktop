@@ -9,6 +9,7 @@ const ORIGIN_PLACEHOLDER: &str = "\"__SIDEVOICE_APP_ORIGIN__\"";
 const MICROPHONE_SETTINGS_PLACEHOLDER: &str = "\"__SIDEVOICE_MICROPHONE_SETTINGS__\"";
 const MICROPHONE_HELP_PLACEHOLDER: &str = "\"__SIDEVOICE_MICROPHONE_HELP__\"";
 const MESSAGES_PLACEHOLDER: &str = "\"__SIDEVOICE_MESSAGES__\"";
+const DEVICE_NAME_PLACEHOLDER: &str = "\"__SIDEVOICE_DEVICE_NAME__\"";
 
 /// The app's wording of the web's texts that a phone changes, in every language (`host.messages(language)`; sidevoice-shared's
 /// members): `{ "<language>": { "<web catalogue key>": text } }`, this OS's tables over what every app shares.
@@ -41,15 +42,22 @@ pub fn microphone_help() -> Option<serde_json::Value> {
     )
 }
 
+/// The name the person gave this phone (`host.deviceName`, docs/BRIDGE.md), if the system has one.
+pub fn device_name() -> Option<String> {
+    crate::platform::device_name::device_name()
+}
+
 /// The script injected into the app's window, bound to the app's own `origin`: on any other it does nothing.
 /// `microphone_settings`: whether the system has a settings page for the app's microphone permission
 /// (`host.microphone.openSettings`); `microphone_help`: the app's words for a blocked microphone ([`microphone_help`]);
-/// `messages`: its wording of the web's texts a phone changes ([`messages`]).
+/// `messages`: its wording of the web's texts a phone changes ([`messages`]); `device_name`: the name the person gave the
+/// phone ([`device_name`]), none to let the page name it.
 pub fn script(
     origin: &str,
     microphone_settings: bool,
     microphone_help: Option<&serde_json::Value>,
     messages: &serde_json::Value,
+    device_name: Option<&str>,
 ) -> String {
     let literal = serde_json::to_string(origin).expect("a string serialises");
     let mobile = SCRIPT_TEMPLATE
@@ -64,7 +72,12 @@ pub fn script(
             &microphone_help.map_or_else(|| "null".to_owned(), |help| help.to_string()),
             1,
         )
-        .replacen(MESSAGES_PLACEHOLDER, &messages.to_string(), 1);
+        .replacen(MESSAGES_PLACEHOLDER, &messages.to_string(), 1)
+        .replacen(
+            DEVICE_NAME_PLACEHOLDER,
+            &serde_json::to_string(&device_name).expect("a name serialises"),
+            1,
+        );
     compose(
         sidevoice_shared_tauri::js::TRANSPORT,
         sidevoice_shared_tauri::js::MEMBERS,
@@ -89,6 +102,7 @@ mod tests {
             MICROPHONE_SETTINGS_PLACEHOLDER,
             MICROPHONE_HELP_PLACEHOLDER,
             MESSAGES_PLACEHOLDER,
+            DEVICE_NAME_PLACEHOLDER,
         ] {
             assert_eq!(
                 SCRIPT_TEMPLATE.matches(placeholder).count(),
@@ -96,22 +110,23 @@ mod tests {
                 "{placeholder}"
             );
         }
-        let ios = script("tauri://localhost", true, None, &messages());
+        let ios = script("tauri://localhost", true, None, &messages(), None);
         for placeholder in [
             ORIGIN_PLACEHOLDER,
             MICROPHONE_SETTINGS_PLACEHOLDER,
             MICROPHONE_HELP_PLACEHOLDER,
             MESSAGES_PLACEHOLDER,
+            DEVICE_NAME_PLACEHOLDER,
         ] {
             assert!(!ios.contains(placeholder), "{placeholder} is left");
         }
         assert!(ios.contains(&format!(
-            "factory(window, \"tauri://localhost\", true, null, {})",
+            "factory(window, \"tauri://localhost\", true, null, {}, null)",
             messages()
         )));
         assert!(
-            script("http://tauri.localhost", false, None, &messages()).contains(&format!(
-                "factory(window, \"http://tauri.localhost\", false, null, {})",
+            script("http://tauri.localhost", false, None, &messages(), None).contains(&format!(
+                "factory(window, \"http://tauri.localhost\", false, null, {}, null)",
                 messages()
             ))
         );
@@ -147,8 +162,23 @@ mod tests {
     }
 
     #[test]
+    fn the_device_name_is_given_to_the_page_as_a_string_literal_or_not_at_all() {
+        let named = script(
+            "tauri://localhost",
+            true,
+            None,
+            &messages(),
+            Some("Ana's \"S24\""),
+        );
+        assert!(named.contains(&format!(
+            "factory(window, \"tauri://localhost\", true, null, {}, \"Ana's \\\"S24\\\"\")",
+            messages()
+        )));
+    }
+
+    #[test]
     fn the_script_is_made_of_the_real_parts() {
-        let composed = script("tauri://localhost", true, None, &messages());
+        let composed = script("tauri://localhost", true, None, &messages(), None);
         assert!(composed.starts_with("(function (transportOf, membersOf) {\n"));
         assert!(composed.contains(sidevoice_shared_tauri::js::TRANSPORT));
         assert!(composed.contains(sidevoice_shared_tauri::js::MEMBERS));
@@ -194,9 +224,9 @@ mod tests {
                 "{language}"
             );
         }
-        let script = script("tauri://localhost", true, Some(&help), &messages());
+        let script = script("tauri://localhost", true, Some(&help), &messages(), None);
         assert!(script.contains(&format!(
-            "factory(window, \"tauri://localhost\", true, {help}, {})",
+            "factory(window, \"tauri://localhost\", true, {help}, {}, null)",
             messages()
         )));
     }
