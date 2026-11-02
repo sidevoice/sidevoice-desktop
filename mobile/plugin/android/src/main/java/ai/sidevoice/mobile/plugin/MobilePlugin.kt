@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.view.WindowManager
+import android.webkit.WebView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import app.tauri.annotation.Command
@@ -31,6 +32,18 @@ class KeepScreenOnArgs {
 /** The app's Rust asks for the call's service ([CallService]) here; no page does. */
 @TauriPlugin
 class MobilePlugin(private val activity: Activity) : Plugin(activity) {
+    /**
+     * The page is an app, not a document: it does not pinch-zoom, and shows no zoom buttons. (Text size is the system's
+     * font scale, which the page follows.)
+     */
+    override fun load(webView: WebView) {
+        webView.settings.apply {
+            setSupportZoom(false)
+            builtInZoomControls = false
+            displayZoomControls = false
+        }
+    }
+
     /**
      * Starts the service. Android lets a microphone service start only from a visible app and with the microphone
      * allowed, so a call that is not is refused here, by name, instead of by the system's exception. Once started,

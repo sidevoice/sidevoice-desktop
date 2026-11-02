@@ -6,3 +6,4 @@ pub mod interruption;
 pub mod microphone_help;
 pub mod private_dir;
 pub mod tls;
+pub mod webview;
