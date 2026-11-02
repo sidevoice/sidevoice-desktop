@@ -57,12 +57,11 @@ impl Os for Native {
     fn register<R: Runtime, C: DeserializeOwned>(
         api: PluginApi<R, C>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        api.app().run_on_main_thread(|| {
-            match MainThreadMarker::new() {
+        api.app()
+            .run_on_main_thread(|| match MainThreadMarker::new() {
                 Some(main) => CALLKIT.with_borrow_mut(|kit| *kit = Some(CallKit::new(main))),
                 None => log::error!("call: CallKit was not set up (not on the main thread)"),
-            }
-        })?;
+            })?;
         Ok(())
     }
 
