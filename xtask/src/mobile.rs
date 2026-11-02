@@ -249,9 +249,9 @@ pub fn generate(name: &str) -> Result<()> {
     if project.cli == "ios" {
         add_localized_texts(&dir)?;
         add_privacy_manifest(&dir)?;
-        // The project embeds the engine's xcframework (`bundle.iOS.frameworks`): it is made first, so that the CLI and
-        // XcodeGen find what the project references.
-        if !repo().join(IOS_FRAMEWORKS).join("sherpa-onnx.xcframework").is_dir() {
+        // The project embeds the engine's two xcframeworks (`bundle.iOS.frameworks`): they are made first, so that the CLI
+        // and XcodeGen find what the project references.
+        if !["sherpa-onnx.xcframework", "onnxruntime.xcframework"].iter().all(|f| repo().join(IOS_FRAMEWORKS).join(f).is_dir()) {
             engine_libs(name, "aarch64-apple-ios-sim")?;
         }
     }
