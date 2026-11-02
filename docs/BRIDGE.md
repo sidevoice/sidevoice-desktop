@@ -274,7 +274,7 @@ app's composition is always there; what is a fact of one OS or one build is obse
 | Member | Offered | What it is |
 |---|---|---|
 | `shortcutModifier` | always | The label of the modifier a shortcut is written with here, `⌘` on macOS and `Ctrl` on Windows and Linux (`platform::host::shortcut_modifier`), for the page's key caps. |
-| `deviceName` | when the system has one | The name the person gave this computer (below). |
+| `deviceName` | when the system has one | The name the person gave this computer or phone (below). |
 | `build` | always | What this build is (below). |
 | `microphone` | always | Native microphone access; `openSettings` only where the OS has a privacy page; `help(language)`, the app's words for a blocked one. |
 | `messages(language)` | always | The app's wording of the web's texts its place changes, for that exact language: `{ "<web catalogue key>": text }` ("The message overlay", below). |
@@ -298,7 +298,8 @@ the Computer Name (System Settings → General → Sharing, «Mac de Ana»; Syst
 on Linux the pretty hostname (`PRETTY_HOSTNAME` in `/etc/machine-info`, `hostnamectl set-hostname --pretty`), else
 the hostname. A non-empty string, trimmed; absent when the system has none, and the page then names the device
 itself (the page's, in a browser's words: "Chrome on Mac"). Read each time the room window opens (`desktop/tauri/src/platform/host.rs`,
-core `computer_name`).
+core `computer_name`). The mobile app supplies it too, read when its window is made (`mobile/tauri/src/platform/device_name`): on Android the
+name given in Settings (`Settings.Global` `device_name`), else the Bluetooth name, else the model's human name; on iOS `UIDevice.current.name`.
 
 ## The local host
 

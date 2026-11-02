@@ -10,7 +10,7 @@ const mobile = readFileSync(new URL("../mobile/tauri/js/mobile-bridge.js", impor
 const composed = `(function (transportOf, membersOf) {\n${mobile}\n})(${transport}, ${members});`;
 const PLUGIN = "plugin:sidevoice-shared-tauri|";
 
-function install(origin, pageOrigin = origin, microphoneSettings = true, microphoneHelp = null, messageTables = null) {
+function install(origin, pageOrigin = origin, microphoneSettings = true, microphoneHelp = null, messageTables = null, deviceName = null) {
   const module = { exports: {} };
   vm.runInNewContext(composed, { module, Promise, JSON, Date });
   const invoked = [];
@@ -29,7 +29,7 @@ function install(origin, pageOrigin = origin, microphoneSettings = true, microph
     clearInterval: () => {},
     setTimeout: (fn) => setTimeout(fn, 0),
   };
-  const api = module.exports(win, origin, microphoneSettings, microphoneHelp, messageTables);
+  const api = module.exports(win, origin, microphoneSettings, microphoneHelp, messageTables, deviceName);
   return { api, win, invoked, intervals };
 }
 
@@ -233,4 +233,13 @@ test("an unmute from the system's call takes over the interruption's mute", asyn
   r.api.run({ command: "mute", page: 7, since: r.api.snapshot().since, muted: true });
   assert.equal(r.resume(), true);
   assert.equal(r.view.mic.enabled, false, "the person's latest mute is not undone");
+});
+
+test("the phone's name is offered as host.deviceName, and left out when the system has none", () => {
+  const named = install("tauri://localhost", undefined, true, null, null, "Galaxy de Ana");
+  assert.equal(named.api.host.deviceName, "Galaxy de Ana");
+  for (const none of [null, ""]) {
+    const { api } = install("tauri://localhost", undefined, true, null, null, none);
+    assert.equal("deviceName" in api.host, false);
+  }
 });

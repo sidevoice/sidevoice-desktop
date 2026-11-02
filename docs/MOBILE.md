@@ -72,8 +72,9 @@ part, `mobile/tauri/js/mobile-bridge.js`, which assembles `host`:
 | `pairings` | The pairings in the app's private storage (`mobile/tauri/src/pairings.rs`), not the webview's. |
 | `presence` | `{ media: "app" }`: the app owns the call's audio, so the page registers no Media Session and plays no Now Playing element of its own. The app answers the headset's play/pause and the lock screen's (the shared plugin's `platform/media_controls`: MediaPlayer on iOS, a `MediaSession` held by the call's service on Android; docs/MEDIA_CONTROLS.md). |
 | `reach` | `{ plainHttpPrivate: true }`, as on the desktop. |
+| `deviceName` | The name the person gave the phone (`mobile/tauri/src/platform/device_name`), read when the window is made: on Android `Settings.Global` `device_name`, else `Settings.Secure` `bluetooth_name`, else the model (`Samsung SM-A600FN`), with no permission; on iOS `UIDevice.current.name`, which since iOS 16 is the generic model ("iPhone") without the user-assigned-device-name entitlement. Without it the page would name the phone from the webview's user agent ("Chrome on Android"). |
 
-Nothing of the desktop's own (`localHost`, `reset`, `muteShortcut`, `callControls`, `updater`, `debug`, `deviceName`) is
+Nothing of the desktop's own (`localHost`, `reset`, `muteShortcut`, `callControls`, `updater`, `debug`) is
 offered, and neither is `build` yet: the mobile app's build kinds (nightly and release, D-MOBILE-CHANNELS) come with their
 own row. The page reports the call (the members' `room`) to the app's own `call_state`, and the app runs commands on the room
 through `run` (the call's service hangs up through it).
