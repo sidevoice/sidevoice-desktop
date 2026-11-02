@@ -41,13 +41,13 @@ jobs:
         run: cargo xtask mobile generated android
       - name: Clippy over the mobile crates, warnings denied (empty on a computer, so cargo xtask lint cannot reach them)
         run: cargo xtask mobile lint android
-      - name: The unsigned APK (arm64), and its native libraries' alignment to 16 KB pages (Google Play's rule)
+      - name: The unsigned APK (universal: arm64-v8a and armeabi-v7a), and its native libraries' alignment to 16 KB pages (Google Play's rule)
         if: ${{ !cancelled() }}
         run: cargo xtask mobile build android
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: ${{ !cancelled() }}
         with:
-          name: Sidevoice-android-arm64-unsigned-apk
+          name: Sidevoice-android-unsigned-apk
           path: dist/*.apk
           retention-days: 7
           if-no-files-found: error

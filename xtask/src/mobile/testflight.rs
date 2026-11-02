@@ -97,7 +97,7 @@ pub fn testflight(build_number_text: &str) -> Result<()> {
         fs::remove_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
     }
     let config = serde_json::json!({ "bundle": { "iOS": { "bundleVersion": build.to_string() } } }).to_string();
-    let libs = super::AppBuildLibs::hold("ios", "aarch64-apple-ios")?;
+    let libs = super::AppBuildLibs::hold("ios", &["aarch64-apple-ios"])?;
     libs.libs
         .apply(tauri(&[
             "ios",

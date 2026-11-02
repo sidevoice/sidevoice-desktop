@@ -17,8 +17,8 @@ const SUMS: &str = "SHA256SUMS";
 /// The mobile app's assets on the `nightly` pre-release: attached by mobile-android-signed.yml (`publish apk-nightly`),
 /// never part of `assets/`, and left alone by `publish nightly`. The checksum file is the APK's own: SHA256SUMS has
 /// one writer, the desktop's publish.
-const APK_NIGHTLY: &str = "Sidevoice_nightly_arm64.apk";
-const APK_NIGHTLY_SUM: &str = "Sidevoice_nightly_arm64.apk.sha256";
+const APK_NIGHTLY: &str = "Sidevoice_nightly_android.apk";
+const APK_NIGHTLY_SUM: &str = "Sidevoice_nightly_android.apk.sha256";
 
 /// Where the build's artifacts are downloaded to, and where the assets are put together.
 fn artifacts() -> PathBuf {
@@ -223,10 +223,10 @@ pub fn stale<'a>(published: &'a str, local: &[String]) -> Vec<&'a str> {
 }
 
 /// `publish apk-nightly`: the signed APK (`mobile sign android`) attached to the `nightly` pre-release as
-/// `Sidevoice_nightly_arm64.apk`, with `Sidevoice_nightly_arm64.apk.sha256` (`sha256sum` format). Both are replaced
+/// `Sidevoice_nightly_android.apk`, with `Sidevoice_nightly_android.apk.sha256` (`sha256sum` format). Both are replaced
 /// (`--clobber`); nothing else of the release is touched. The release is the desktop nightly's: it must exist.
 pub fn apk_nightly() -> Result<()> {
-    let apk = repo().join("dist/Sidevoice-android-arm64.apk");
+    let apk = repo().join("dist/Sidevoice-android.apk");
     ensure(fs::metadata(&apk).is_ok_and(|m| m.len() > 0), format!("{}: no signed APK, or it is empty", apk.display()))?;
     let dir = repo().join("assets-apk");
     ensure(!dir.exists(), format!("{} is there already: remove it first", dir.display()))?;
@@ -378,7 +378,7 @@ mod tests {
         assert_eq!(stale("Sidevoice_nightly_aarch64.dmg\nSHA256SUMS\nold.zip\n\n", &local), ["old.zip"]);
         // The mobile app's assets belong to another job.
         assert_eq!(
-            stale("old.zip\nSidevoice_nightly_arm64.apk\nSidevoice_nightly_arm64.apk.sha256\n", &local),
+            stale("old.zip\nSidevoice_nightly_android.apk\nSidevoice_nightly_android.apk.sha256\n", &local),
             ["old.zip"]
         );
         assert!(nightly_notes("abc", "2026-10-12T10:00:00Z")

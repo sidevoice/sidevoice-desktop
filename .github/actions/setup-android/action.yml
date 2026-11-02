@@ -34,7 +34,7 @@ runs:
         "$sdkmanager" "platforms;$ANDROID_PLATFORM" "ndk;$ANDROID_NDK_VERSION"
         echo "NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
         echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
-    - name: Rust, as mobile/rust-toolchain.toml says (the toolchain and the four mobile targets)
+    - name: Rust, as mobile/rust-toolchain.toml says (the toolchain and the mobile targets)
       shell: bash
       working-directory: mobile
       run: |

@@ -1,8 +1,8 @@
 //! The Android app signed with the upload key.
 //!
-//! - `mobile sign android`: dist/Sidevoice-android-arm64-unsigned.apk (`mobile build android`) aligned (`zipalign`,
+//! - `mobile sign android`: dist/Sidevoice-android-unsigned.apk (`mobile build android`) aligned (`zipalign`,
 //!   16 KB pages for the uncompressed libraries, 4 bytes for the rest), signed with `apksigner` (v2 and later schemes)
-//!   with the upload key, verified, and checked ([`check_16kb`]), into dist/Sidevoice-android-arm64.apk. Reads
+//!   with the upload key, verified, and checked ([`check_16kb`]), into dist/Sidevoice-android.apk. Reads
 //!   `ANDROID_UPLOAD_KEY_ALIAS`, `ANDROID_UPLOAD_KEYSTORE_PASSWORD` and the PKCS#12 keystore: `ANDROID_UPLOAD_KEYSTORE_B64`
 //!   (its contents, base64) or, on a laptop, `ANDROID_UPLOAD_KEYSTORE_PATH` (the file). The keystore and its password go
 //!   into files only this user can read, removed when the command ends; the password never reaches a command line.
@@ -20,7 +20,7 @@ use crate::util::{ensure, read_secret, repo, work, Cmd, SecretDir};
 use crate::Result;
 
 fn signed() -> PathBuf {
-    repo().join("dist/Sidevoice-android-arm64.apk")
+    repo().join("dist/Sidevoice-android.apk")
 }
 
 /// The upload keystore's file, in `dir`: the contents `ANDROID_UPLOAD_KEYSTORE_B64` holds, or the file

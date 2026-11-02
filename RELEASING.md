@@ -183,9 +183,9 @@ be a tag and a pre-release of its own. Until then the mobile app's signed Androi
 
 **The Android APK on the nightly.** `mobile-android-signed.yml` runs on every push to `main` (and by hand, from `main`),
 builds and signs the app with the upload key (a read-only job), and a second job with the only write token attaches it to this same pre-release with `gh release upload
---clobber` (`cargo xtask publish apk-nightly`): `Sidevoice_nightly_arm64.apk` and its own
-`Sidevoice_nightly_arm64.apk.sha256`, downloadable without logging in:
-https://github.com/sidevoice/sidevoice-desktop/releases/download/nightly/Sidevoice_nightly_arm64.apk
+--clobber` (`cargo xtask publish apk-nightly`): `Sidevoice_nightly_android.apk` and its own
+`Sidevoice_nightly_android.apk.sha256`, downloadable without logging in:
+https://github.com/sidevoice/sidevoice-desktop/releases/download/nightly/Sidevoice_nightly_android.apk
 Each file has one writer: `SHA256SUMS` is the desktop publish's and does not list the APK, and the desktop publish
 leaves the two APK assets alone when it replaces the rest (`stale` in xtask/src/publish.rs). The two workflows are
 independent: the APK may be a push ahead of or behind the installers. A newer push cancels an older APK build, but never the upload (`--clobber` deletes before it uploads): uploads queue, one at a time. The
