@@ -36,8 +36,8 @@ use std::path::{Path, PathBuf};
 
 use plist::{Dictionary, Value};
 
-use crate::platform::host::npm;
 use crate::platform;
+use crate::platform::host::npm;
 use crate::util::{self, ensure, mkdir, repo, write, Cmd};
 use crate::Result;
 
