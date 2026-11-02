@@ -284,12 +284,12 @@ installs as it is.
 
 ## Signing
 
-`.github/workflows/mobile-android-signed.yml` signs the Android app with the upload key. It is run by hand
-(`workflow_dispatch`), and its job refuses any ref but `main`; no pull request runs it. It builds the same unsigned APK
+`.github/workflows/mobile-android-signed.yml` signs the Android app with the upload key. It is run
+on every push to `main` and by hand (`workflow_dispatch`), and its job refuses any ref but `main`; no pull request runs it. It builds the same unsigned APK
 as above, then `cargo xtask mobile sign android` aligns it for 16 KB pages (`zipalign -P 16`), signs it (`apksigner`),
 verifies the signature and checks that every native library's loadable segments are 16 KB aligned, which Google Play
 requires (`cargo xtask mobile check-16kb [APK]` is that check alone). The result is the artifact
-`Sidevoice-android-arm64-signed-apk`.
+`Sidevoice-android-arm64-signed-apk`, and the file `Sidevoice_nightly_arm64.apk` (with `Sidevoice_nightly_arm64.apk.sha256`) on the public `nightly` pre-release, which anyone can download: https://github.com/sidevoice/sidevoice-desktop/releases/download/nightly/Sidevoice_nightly_arm64.apk (RELEASING.md → "Nightly").
 
 It reads three repository Actions secrets, which must exist:
 

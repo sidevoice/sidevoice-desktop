@@ -179,7 +179,18 @@ and replaces every asset of the one `nightly` pre-release: `Sidevoice_nightly_aa
 working, plus its updates and `latest.json`, the nightly's feed (Updates, below). Its notes give the commit and its
 date. It is a snapshot, not a release: the app inside reports its nightly version (Channels, above), it is never
 latest, and release-please ignores the tag (it is not `vX.Y.Z`). It is the desktop app's nightly; the mobile app's will
-be a tag and a pre-release of its own.
+be a tag and a pre-release of its own. Until then the mobile app's signed Android APK rides on this pre-release, see below.
+
+**The Android APK on the nightly.** `mobile-android-signed.yml` runs on every push to `main` (and by hand, from `main`),
+builds and signs the app with the upload key, and attaches it to this same pre-release with `gh release upload
+--clobber` (`cargo xtask publish apk-nightly`): `Sidevoice_nightly_arm64.apk` and its own
+`Sidevoice_nightly_arm64.apk.sha256`, downloadable without logging in:
+https://github.com/sidevoice/sidevoice-desktop/releases/download/nightly/Sidevoice_nightly_arm64.apk
+Each file has one writer: `SHA256SUMS` is the desktop publish's and does not list the APK, and the desktop publish
+leaves the two APK assets alone when it replaces the rest (`stale` in xtask/src/publish.rs). The two workflows are
+independent: the APK may be a push ahead of or behind the installers, and a newer push cancels an older APK run. The
+release is the desktop's to create; the APK job fails if it does not exist yet. Like the installers, the APK is not
+attested (the desktop publish makes no attestation either).
 
 Build artifacts on Actions runs are kept 7 days, for debugging only. Download from Releases.
 

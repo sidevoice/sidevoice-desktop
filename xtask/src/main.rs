@@ -113,7 +113,9 @@
 //! - `publish release TAG`: assets/ attached to the draft release TAG, which is then published (a `-rc.N` as a
 //!   pre-release, never latest).
 //! - `publish nightly`: the `nightly` tag moved to this commit (`GITHUB_SHA`, or HEAD) and the `nightly` pre-release
-//!   replaced by assets/ (its notes say `WHEN` it was committed).
+//!   replaced by assets/ (its notes say `WHEN` it was committed); the mobile app's assets on it are left alone.
+//! - `publish apk-nightly`: the signed APK (dist/Sidevoice-android-arm64.apk) and its `.sha256` attached to the
+//!   `nightly` pre-release as `Sidevoice_nightly_arm64.apk` (mobile-android-signed.yml).
 //!
 //! The release PR (checks.rs), `gh` with `GH_TOKEN` and `GH_REPO`:
 //!
@@ -144,7 +146,7 @@ const USAGE: &str =
   | mobile generate android | mobile generate ios | mobile generated android | mobile generated ios
   | mobile build android | mobile build ios | mobile lint android | mobile lint ios | mobile sign android | mobile check-16kb [APK] | mobile check-ios [APP] | mobile test android | mobile testflight --build-number N
   | packaging compare BEFORE_REF | packaging files DIR OUTPUT
-  | publish assets release TAG | publish assets nightly | publish release TAG | publish nightly
+  | publish assets release TAG | publish assets nightly | publish release TAG | publish nightly | publish apk-nightly
   | release-pr-title [BRANCH] | release-pr-checks
 (C: release, nightly or dev, the default; xtask/src/main.rs says what each does)";
 
@@ -211,6 +213,7 @@ fn main() -> ExitCode {
         ["publish", "assets", kind, tag] => publish::assemble(kind, Some(tag)),
         ["publish", "release", tag] => publish::release(tag),
         ["publish", "nightly"] => publish::nightly(),
+        ["publish", "apk-nightly"] => publish::apk_nightly(),
         ["release-pr-title"] => checks::release_pr_title(None),
         ["release-pr-title", branch] => checks::release_pr_title(Some(branch)),
         ["release-pr-checks"] => checks::release_pr_checks(),
