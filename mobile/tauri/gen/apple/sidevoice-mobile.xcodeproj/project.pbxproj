@@ -56,11 +56,13 @@
 		14CB5A0F01AD530B798B8BA3 /* sherpa-onnx.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = "sherpa-onnx.xcframework"; path = "../../frameworks/sherpa-onnx.xcframework"; sourceTree = "<group>"; };
 		180609C9C60033406A6A7F17 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 		216916D93E3C8D75635265CC /* downloads.rs */ = {isa = PBXFileReference; path = downloads.rs; sourceTree = "<group>"; };
+		26D96D0B9DBADA3317A773B9 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
 		299D7B306F3BF743AC1EF244 /* interruption.rs */ = {isa = PBXFileReference; path = interruption.rs; sourceTree = "<group>"; };
 		2BF45AA0672154DA34102887 /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		2CA4698307C9928A0B5866DB /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		2F7FFFBA485380A406EB4250 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
 		342E293471DA6E0AD449A563 /* es.rs */ = {isa = PBXFileReference; path = es.rs; sourceTree = "<group>"; };
+		378557AB6D08AC23E9A6D8BA /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		3AF49EB321D75CDC67E166DB /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		3ED59F09A85CF8FF41D62009 /* pairings.rs */ = {isa = PBXFileReference; path = pairings.rs; sourceTree = "<group>"; };
 		3FCF79E06190BD77E1F527F8 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
@@ -70,6 +72,7 @@
 		49F5B7CE8791856160DB8F83 /* bridge.rs */ = {isa = PBXFileReference; path = bridge.rs; sourceTree = "<group>"; };
 		4A0565150C0509FAC5C66706 /* de */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = de; path = de.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		5146689FF402E85DE500476B /* backup.rs */ = {isa = PBXFileReference; path = backup.rs; sourceTree = "<group>"; };
+		536BB1C7D959EB9FF56EB28A /* device_name.rs */ = {isa = PBXFileReference; path = device_name.rs; sourceTree = "<group>"; };
 		5721EA507184E736863684BC /* entry.rs */ = {isa = PBXFileReference; path = entry.rs; sourceTree = "<group>"; };
 		58C2E83A04B6987A0D4453C7 /* app_files.rs */ = {isa = PBXFileReference; path = app_files.rs; sourceTree = "<group>"; };
 		5B34888E35B7881216856F13 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/InfoPlist.strings"; sourceTree = "<group>"; };
@@ -184,6 +187,15 @@
 				86D727D8E9CA54F3F9AF1E0A /* WebKit.framework */,
 			);
 			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		615B3B6311CF4230A1CA8F47 /* device_name */ = {
+			isa = PBXGroup;
+			children = (
+				26D96D0B9DBADA3317A773B9 /* android.rs */,
+				378557AB6D08AC23E9A6D8BA /* ios.rs */,
+			);
+			path = device_name;
 			sourceTree = "<group>";
 		};
 		63D94CE980AE1EF2EBB0FFBE /* microphone_help */ = {
@@ -305,6 +317,7 @@
 			children = (
 				58C2E83A04B6987A0D4453C7 /* app_files.rs */,
 				5146689FF402E85DE500476B /* backup.rs */,
+				536BB1C7D959EB9FF56EB28A /* device_name.rs */,
 				5721EA507184E736863684BC /* entry.rs */,
 				299D7B306F3BF743AC1EF244 /* interruption.rs */,
 				D8ED5FADE4B6E55EBEA152B9 /* message_overlay.rs */,
@@ -313,6 +326,7 @@
 				C1188ECF695A1AC9631488B1 /* tls.rs */,
 				A6C8CD431FED33808E2B7AC8 /* webview.rs */,
 				7A9D2BCC197B63250747232C /* backup */,
+				615B3B6311CF4230A1CA8F47 /* device_name */,
 				C5DF4E9D279B95F0791F7AA3 /* interruption */,
 				CF13280DDF0E676A5BCFDECF /* message_overlay */,
 				63D94CE980AE1EF2EBB0FFBE /* microphone_help */,
