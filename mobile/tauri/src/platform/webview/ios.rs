@@ -4,7 +4,9 @@
 //! colour. Its scroll view cannot be pinch-zoomed: an app is not a document, and a zoomed-out page left the screen black
 //! around it. The window is only there once the view is on screen, so this runs again after the page loads.
 use super::Os;
-use objc2::{msg_send, rc::Retained};
+use block2::RcBlock;
+use objc2::{msg_send, rc::Retained, runtime::AnyObject};
+use objc2_foundation::NSString;
 use objc2_ui_kit::{UIColor, UIScrollView, UIView, UIViewController};
 use tauri::webview::PlatformWebview;
 
@@ -38,6 +40,27 @@ fn lock_zoom(web_view: &UIView) {
     }
 }
 
+
+/// Asks the page what it measures (the viewport, the document, the root element and the backgrounds) and logs the answer:
+/// the web view's side of a layout the native side cannot see.
+fn log_page(web_view: &UIView) {
+    const SCRIPT: &str = "(() => { const r = (e) => { if (!e) return null; const b = e.getBoundingClientRect(); \
+        return [Math.round(b.top), Math.round(b.height), getComputedStyle(e).backgroundColor].join(' '); }; \
+        return JSON.stringify({ inner: [innerWidth, innerHeight], visual: window.visualViewport && [visualViewport.width, \
+        visualViewport.height], client: [document.documentElement.clientWidth, document.documentElement.clientHeight], \
+        scroll: document.documentElement.scrollHeight, html: r(document.documentElement), body: r(document.body), \
+        root: r(document.getElementById('root')), screen: [screen.width, screen.height] }); })()";
+    let script = NSString::from_str(SCRIPT);
+    let done = RcBlock::new(|result: *mut AnyObject, _error: *mut AnyObject| {
+        // SAFETY: the result of a script that returns a string is an `NSString`, or null on an error.
+        if let Some(result) = unsafe { result.cast::<NSString>().as_ref() } {
+            log::info!("layout page: {result}");
+        }
+    });
+    // SAFETY: `evaluateJavaScript:completionHandler:` is `WKWebView`'s; the block takes the result and the error.
+    let _: () = unsafe { msg_send![web_view, evaluateJavaScript: &*script, completionHandler: &*done] };
+}
+
 impl Os for Native {
     fn fill_screen(webview: &PlatformWebview) {
         let Some((web_view, controller)) = views(webview) else {
@@ -65,6 +88,7 @@ impl Os for Native {
                 frame.size.width, frame.size.height, frame.origin.x, frame.origin.y
             )
         };
+        log_page(web_view);
         let insets = web_view.safeAreaInsets();
         let screen = window.as_deref().map_or("none".to_owned(), |w| {
             let bounds = w.screen().bounds();

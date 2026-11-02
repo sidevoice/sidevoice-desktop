@@ -34,6 +34,6 @@ done
 data=$(xcrun simctl get_app_container "$udid" "$bundle" data)
 mkdir -p "$out/app-data"
 find "$data/Library" -maxdepth 3 > "$out/app-data/tree.txt" 2>&1 || true
-cp -R "$data/Library/Logs" "$out/app-data/" 2>/dev/null || true
+cp -R "$data/Library/Application Support/$bundle/logs" "$out/app-data/" 2>/dev/null || true
 xcrun simctl spawn "$udid" log show --last 10m --info --debug --style compact --predicate 'process == "Sidevoice" OR process == "sidevoice-mobile"' >"$out/system-log.txt" 2>&1 || true
 xcrun simctl shutdown "$udid" || true

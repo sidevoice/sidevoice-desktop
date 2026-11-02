@@ -266,6 +266,14 @@ fn run_app() {
                             platform::webview::fill_screen(&webview);
                             platform::webview::log_layout("page loaded", &webview)
                         });
+                        // The page has drawn by then: where everything is once it has settled.
+                        let later = webview.clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(std::time::Duration::from_secs(8));
+                            let _ = later.with_webview(|webview| {
+                                platform::webview::log_layout("8 s after the page loaded", &webview)
+                            });
+                        });
                     }
                     if payload.event() == PageLoadEvent::Started {
                         if let Some(host) = page_app.try_state::<AppHost>() {
