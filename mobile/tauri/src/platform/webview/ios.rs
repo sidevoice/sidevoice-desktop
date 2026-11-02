@@ -66,8 +66,18 @@ impl Os for Native {
             )
         };
         let insets = web_view.safeAreaInsets();
+        let screen = window.as_deref().map_or("none".to_owned(), |w| {
+            let bounds = w.screen().bounds();
+            format!("{}x{}", bounds.size.width, bounds.size.height)
+        });
+        // SAFETY: `scrollView` is `WKWebView`'s `UIScrollView` property, and `web_view` is the window's `WKWebView`.
+        let scroll_view: Option<Retained<UIScrollView>> = unsafe { msg_send![web_view, scrollView] };
+        let scroll = scroll_view.as_deref().map_or("none".to_owned(), |s| {
+            let adjusted = s.adjustedContentInset();
+            format!("{} adjusted inset top {} bottom {}", rect(s), adjusted.top, adjusted.bottom)
+        });
         Some(format!(
-            "window {}, view {}, web view {}, safe area top {} bottom {} left {} right {}",
+            "screen {screen}, window {}, view {}, web view {}, scroll view {scroll}, safe area top {} bottom {} left {} right {}",
             window.as_deref().map_or("none".to_owned(), |w| rect(w)),
             rect(&container),
             rect(web_view),
