@@ -37,7 +37,7 @@ const BUILD: &str = "build";
 const MAIN: &str = "refs/heads/main";
 
 /// The bundle identifier the archive must be (mobile/tauri/tauri.conf.json).
-fn identifier() -> Result<String> {
+pub fn identifier() -> Result<String> {
     let path = repo().join("mobile/tauri/tauri.conf.json");
     let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let config: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
