@@ -13,7 +13,7 @@
 //! - `mobile generated android|ios`: `generate`, then the committed project must be what it wrote (CI, every pull
 //!   request): a difference means an input or the CLI changed and the project was not regenerated and committed.
 //! - `mobile build android|ios`: the app as a pull request builds it, unsigned: Android's universal release APK (arm64-v8a and armeabi-v7a), and
-//!   the iOS app for the simulator (no signing, so no secret), into dist/. Needs the SDK and NDK, or macOS with Xcode. The
+//!   the iOS app for the simulator (no signing, so no secret), into dist/; told what build it is (`host.build`: a nightly on CI, `dev` elsewhere, `SIDEVOICE_BUILD_CHANNEL` overrides; mobile/tauri/build.rs). Needs the SDK and NDK, or macOS with Xcode. The
 //!   Android APK is also checked for 16 KB pages, which Google Play requires (`mobile check-16kb [APK]` is that check alone),
 //!   and the iOS app for what it declares to Apple: the privacy manifest and the export compliance (`mobile check-ios [APP]`
 //!   is that check alone, ios.rs).
@@ -38,7 +38,7 @@ use plist::{Dictionary, Value};
 
 use crate::platform;
 use crate::platform::host::npm;
-use crate::util::{self, ensure, mkdir, repo, write, Cmd};
+use crate::util::{self, ensure, mkdir, repo, write, Channel, Cmd};
 use crate::Result;
 
 /// A project of the mobile app: the Tauri CLI's name for it, and where it keeps it below mobile/tauri/.
@@ -65,6 +65,28 @@ fn tauri(args: &[&str]) -> Cmd {
         .args(args)
         .dir(repo().join("mobile/tauri"))
         .env("TAURI_APP_PATH", repo().join("mobile/tauri"))
+}
+
+/// The channel a mobile build is: `SIDEVOICE_BUILD_CHANNEL` if set (`release`, `nightly` or `dev`), else `nightly` on a CI
+/// runner (every mobile build CI makes is a nightly: the TestFlight upload, the signed APK, the pull request's checks;
+/// D-MOBILE-CHANNELS), else `dev` (a laptop's is never a release).
+fn build_channel() -> Result<Channel> {
+    match std::env::var("SIDEVOICE_BUILD_CHANNEL") {
+        Ok(name) if !name.is_empty() => Channel::parse(&name),
+        _ if util::in_ci() => Ok(Channel::Nightly),
+        _ => Ok(Channel::Dev),
+    }
+}
+
+/// [`tauri`] for a build of the app: the app's build script is told what the build is (`host.build`, mobile/tauri/build.rs):
+/// the channel ([`build_channel`]) and, for a nightly, HEAD's short commit and date.
+fn build_tauri(args: &[&str]) -> Result<Cmd> {
+    let channel = build_channel()?;
+    let (commit, date) = if channel == Channel::Nightly { util::head_commit()? } else { Default::default() };
+    Ok(tauri(args)
+        .env("SIDEVOICE_BUILD_CHANNEL", channel.name())
+        .env("SIDEVOICE_BUILD_COMMIT", commit)
+        .env("SIDEVOICE_BUILD_DATE", date))
 }
 
 /// The Android `targetSdk` the app declares: 36, the plan's. The Tauri template writes its own (37 with the CLI package.json
@@ -423,10 +445,27 @@ impl AppBuildLibs {
                 let value = serde_json::to_string(&value.to_string_lossy()).map_err(|e| e.to_string())?;
                 text.push_str(&format!("{key} = {value}\n"));
             }
+            // The oldest iOS the app runs on, for the C and C++ the build scripts compile (whisper.cpp, aws-lc): without
+            // it they target the SDK's own version, and an availability check (`@available(iOS 18, *)`) is then compiled
+            // as always true, so the app calls what an older iOS lacks.
+            let minimum = serde_json::to_string(&ios_deployment_target()?).map_err(|e| e.to_string())?;
+            text.push_str(&format!("IPHONEOS_DEPLOYMENT_TARGET = {minimum}\n"));
         }
         write(&config, text)?;
         Ok(AppBuildLibs { libs: all.remove(0), config, original })
     }
+}
+
+/// The oldest iOS the app runs on: `bundle.iOS.minimumSystemVersion` in mobile/tauri/tauri.conf.json, which the Xcode
+/// project's deployment target is generated from.
+fn ios_deployment_target() -> Result<String> {
+    let path = repo().join("mobile/tauri/tauri.conf.json");
+    let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let config: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    config["bundle"]["iOS"]["minimumSystemVersion"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| format!("{}: no bundle.iOS.minimumSystemVersion", path.display()))
 }
 
 impl Drop for AppBuildLibs {
@@ -445,7 +484,7 @@ pub fn build(name: &str) -> Result<()> {
     match project(name)?.cli {
         "android" => {
             let libs = AppBuildLibs::hold(name, &ANDROID_TARGETS)?;
-            tauri(&["android", "build", "--apk", "--target", "aarch64", "--target", "armv7", "--ci"]).run()?;
+            build_tauri(&["android", "build", "--apk", "--target", "aarch64", "--target", "armv7", "--ci"])?.run()?;
             drop(libs);
             let apk = repo().join("mobile/tauri/gen/android").join(UNSIGNED_APK);
             let to = unsigned_apk();
@@ -454,7 +493,7 @@ pub fn build(name: &str) -> Result<()> {
         }
         _ => {
             let libs = AppBuildLibs::hold(name, &["aarch64-apple-ios-sim"])?;
-            libs.libs.apply(tauri(&["ios", "build", "--target", "aarch64-sim", "--no-sign", "--ci"])).run()?;
+            libs.libs.apply(build_tauri(&["ios", "build", "--target", "aarch64-sim", "--no-sign", "--ci"])?).run()?;
             drop(libs);
             let build = repo().join("mobile/tauri/gen/apple/build");
             let app = find_app(&build, 3).ok_or_else(|| format!("no .app below {}", build.display()))?;

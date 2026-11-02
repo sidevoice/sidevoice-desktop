@@ -10,7 +10,7 @@ const mobile = readFileSync(new URL("../mobile/tauri/js/mobile-bridge.js", impor
 const composed = `(function (transportOf, membersOf) {\n${mobile}\n})(${transport}, ${members});`;
 const PLUGIN = "plugin:sidevoice-shared-tauri|";
 
-function install(origin, pageOrigin = origin, microphoneSettings = true, microphoneHelp = null, messageTables = null, deviceName = null) {
+function install(origin, pageOrigin = origin, microphoneSettings = true, microphoneHelp = null, messageTables = null, deviceName = null, build = { channel: "dev", version: "0.1.0" }) {
   const module = { exports: {} };
   vm.runInNewContext(composed, { module, Promise, JSON, Date });
   const invoked = [];
@@ -29,7 +29,7 @@ function install(origin, pageOrigin = origin, microphoneSettings = true, microph
     clearInterval: () => {},
     setTimeout: (fn) => setTimeout(fn, 0),
   };
-  const api = module.exports(win, origin, microphoneSettings, microphoneHelp, messageTables, deviceName);
+  const api = module.exports(win, origin, microphoneSettings, microphoneHelp, messageTables, deviceName, build);
   return { api, win, invoked, intervals };
 }
 
@@ -42,7 +42,7 @@ for (const origin of ["tauri://localhost", "http://tauri.localhost"]) {
     assert.equal(typeof api.snapshot, "function");
     assert.equal(typeof api.run, "function");
     const host = api.host;
-    assert.deepEqual(Object.keys(host).sort(), ["engine", "microphone", "pairings", "presence", "reach", "voice"]);
+    assert.deepEqual(Object.keys(host).sort(), ["build", "engine", "microphone", "pairings", "presence", "reach", "voice"]);
     assert.equal(host.presence.media, "app");
     assert.deepEqual(Object.keys(host.presence).sort(), ["media", "screenAwake"]);
     assert.equal(JSON.stringify(host.reach), JSON.stringify({ plainHttpPrivate: true }));
@@ -264,4 +264,11 @@ test("a refusal of the native call is a failed hold, not an exception", async ()
   const { api, win } = install("tauri://localhost");
   win.__TAURI_INTERNALS__.invoke = (command) => command === "keep_screen_on" ? Promise.reject("no") : Promise.resolve(null);
   assert.equal(await api.host.presence.screenAwake.acquire(), "failed");
+});
+
+test("host.build is what the app says this build is, frozen", () => {
+  const nightly = { channel: "nightly", version: "0.1.0", commit: "a1b2c3d", date: "2026-11-02" };
+  const { api } = install("tauri://localhost", undefined, true, null, null, null, nightly);
+  assert.deepEqual({ ...api.host.build }, nightly);
+  assert.equal(Object.isFrozen(api.host.build), true);
 });

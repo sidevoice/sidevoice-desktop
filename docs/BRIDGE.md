@@ -275,7 +275,7 @@ app's composition is always there; what is a fact of one OS or one build is obse
 |---|---|---|
 | `shortcutModifier` | always | The label of the modifier a shortcut is written with here, `⌘` on macOS and `Ctrl` on Windows and Linux (`platform::host::shortcut_modifier`), for the page's key caps. |
 | `deviceName` | when the system has one | The name the person gave this computer or phone (below). |
-| `build` | always | What this build is (below). |
+| `build` | always | What this build is (below). The mobile app reports it too, in the same shape. |
 | `microphone` | always | Native microphone access; `openSettings` only where the OS has a privacy page; `help(language)`, the app's words for a blocked one. |
 | `messages(language)` | always | The app's wording of the web's texts its place changes, for that exact language: `{ "<web catalogue key>": text }` ("The message overlay", below). |
 | `engine`, `voice` | always | The model engine and the voice call the app runs (below). |
@@ -924,6 +924,15 @@ none loses another's.
 `host.updater` on the nightly's feed; `version` is its own (`X.Y.Z-nightly.N`, RELEASING.md → "Channels"), with the
 short `commit` and that commit's `date` (`YYYY-MM-DD`).
 `dev`: anything else (a laptop, a pull request, a manual run). Always present.
+
+The page unlocks its hidden "Developer options" by this channel: tapping (clicking) the Build row in Settings → Advanced 10 times,
+only when `channel` is `nightly` (sidevoice-web#438).
+
+The mobile app reports it as well (`mobile/tauri/src/bridge.rs` `build`, `mobile/tauri/build.rs`), from the same
+variables `cargo xtask mobile build` sets (`SIDEVOICE_BUILD_CHANNEL`, `_COMMIT`, `_DATE`): `nightly` on CI (the TestFlight
+upload, the signed APK and the pull request builds, D-MOBILE-CHANNELS), `dev` elsewhere, `release` only when told; `version`
+is the app's own (`mobile/tauri/tauri.conf.json`), with the nightly's `commit` and `date`. There is no `updater` or
+`debug` on a phone.
 
 ## The developer options
 
