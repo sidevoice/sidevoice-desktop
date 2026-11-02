@@ -29,12 +29,12 @@ function fakeStore(initial) {
   };
 }
 
-// The commands the apps share are a Tauri plugin's, invoked under its name (sidevoice-app-tauri/ACL.md). The tests name them
+// The commands the apps share are a Tauri plugin's, invoked under its name (sidevoice-shared-tauri/ACL.md). The tests name them
 // as the bridge does, without the plugin's prefix: whatever a test installs as `invoke` is handed the short name, and `wire`
 // keeps what was invoked. The app numbers the page that asks for its channel (`voice_events`, answered here with PAGE);
 // the voice commands carry the number back, which `pages` keeps and the tests do not see in the arguments. `deliver` is
 // the app sending over the page's channel.
-const PLUGIN = "plugin:sidevoice-app-tauri|";
+const PLUGIN = "plugin:sidevoice-shared-tauri|";
 const PAGE = 7;
 const TIME_ORIGIN = 1700000000000.5; // when the fake page started, which it tells the app as its document
 

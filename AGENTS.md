@@ -60,7 +60,7 @@ Operator rule (2026-10-25). Applies to product code, tests, xtask and build scri
   Cargo binary root (`src/main.rs`, `src/bin/*.rs`, `src/bin/*/main.rs`), which the linker reads from the crate root and so
   cannot live in `platform`.
 
-Reference in this repo: `app-tauri/src/platform/microphone.rs`, `desktop/src/platform/desktop_geometry.rs` and `desktop/src/platform/confirmation.rs`, each public
+Reference in this repo: `shared/tauri/src/platform/microphone.rs`, `desktop/tauri/src/platform/desktop_geometry.rs` and `desktop/tauri/src/platform/confirmation.rs`, each public
 plain functions over a private per-OS trait. (sidevoice-connector and core keep their separately approved public-trait
 shape; do not copy it here.)
 
@@ -68,12 +68,12 @@ shape; do not copy it here.)
 
 Operator decision (2026-10-30), amended 2026-11-01 (D-RULE-ROOT). Applies like the platform rule above: product code, tests, xtask and build scripts.
 
-- **A kind of host is a crate, never a condition.** The desktop app (`desktop/`) and the mobile app (`mobile/`) are
-  separate crates at the workspace root, each composing the crates it uses. What both use lives in a shared crate
-  (`app-core/`, `app-tauri/`) that takes whatever differs through a trait the app implements or a value it passes in,
+- **A kind of host is a crate, never a condition.** The desktop app (`desktop/tauri/`) and the mobile app (`mobile/tauri/`) are
+  separate crates (each root, `shared/`, `desktop/` and `mobile/`, holds a `core/` of pure logic and a `tauri/` adapter), each composing the crates it uses. What both use lives in a shared crate
+  (`shared/core/`, `shared/tauri/`) that takes whatever differs through a trait the app implements or a value it passes in,
   and never names an app. Not every crate exists yet: the checks look for each by its directory.
-- **A host crate exists only for its kind, decided at its crate root.** `desktop/src/lib.rs` and `desktop/src/main.rs`
-  carry `#![cfg(desktop)]`; `mobile/src/lib.rs` and `mobile/plugin/src/lib.rs` carry `#![cfg(mobile)]` (the conditions
+- **A host crate exists only for its kind, decided at its crate root.** `desktop/tauri/src/lib.rs` and `desktop/tauri/src/main.rs`
+  carry `#![cfg(desktop)]`; `mobile/tauri/src/lib.rs` and `mobile/tauri/plugin/src/lib.rs` carry `#![cfg(mobile)]` (the conditions
   tauri-build and tauri-plugin define through the crate's build script). Nothing else of the sort is allowed anywhere:
   `cfg(desktop)` or `cfg(mobile)` on an item, a module, inside `cfg_attr`, `cfg!` or a macro, in a shared crate or in
   `platform`; `feature = "desktop"` or `feature = "mobile"`; a `cfg_aliases!` entry named like one or built on one; a build
@@ -82,9 +82,9 @@ Operator decision (2026-10-30), amended 2026-11-01 (D-RULE-ROOT). Applies like t
   `platform`, one file per OS (`ios` and `android` are OSes like `macos`). Cargo cannot make a workspace member depend on
   the target, so the root `Cargo.toml` lists in `default-members` the crates a computer builds, and the mobile crates are
   linted and built by the mobile jobs (`cargo xtask mobile lint android|ios`, `-D warnings`), where they are not empty.
-- **Dependencies point one way:** the apps name `app-tauri`, which names Tauri and `app-core`, which names voice and
-  engine. `desktop/` and `mobile/` depend on neither each other nor anything that depends on the other, the shared
-  crates on neither app, and `app-core` has no shell (Tauri, wry, tao) in its closure.
+- **Dependencies point one way:** the apps name `shared/tauri`, which names Tauri and `shared/core`, which names voice and
+  engine. `desktop/tauri/` and `mobile/tauri/` depend on neither each other nor anything that depends on the other, the shared
+  crates on neither app, and `shared/core` has no shell (Tauri, wry, tao) in its closure.
 - **A build for iOS or Android names its package:** `-p`, never `--workspace`, `--all` or `--exclude`; the workspace
   holds the other kind of host too.
 - **Enforced in CI**, in the Platform boundary job: `cargo xtask platform-guard` (the conditions, in every Rust file,

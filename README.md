@@ -83,19 +83,20 @@ npm run web                                # fetch the pinned interface for the 
 npm test                                   # the bridge script
 cd desktop
 cargo test -p sidevoice-desktop-core       # settings, bridge contract, media rules
-cargo test -p sidevoice-app-core           # the voice call's host and builds, the engine's side
-cargo test -p sidevoice-app-tauri          # the plugin: its inventory of who may call what
+cargo test -p sidevoice-shared           # the voice call's host and builds, the engine's side
+cargo test -p sidevoice-shared-tauri          # the plugin: its inventory of who may call what
 cargo clippy --workspace --all-targets -- -D warnings
 npx tauri dev                              # needs a desktop: macOS, Windows, or Linux with WebKitGTK 4.1
 ```
 
 ```
-Cargo.toml           the Rust workspace: app-core/, desktop/ with its crates, and test-support/ (xtask/ is a workspace of its own)
-app-core/            what every app shares, with no shell: the voice call (host, models, settings) and the app's side of sidevoice-engine
-app-tauri/           the commands every app shares, as one Tauri plugin over app-core (its ACL.md says who may call each)
-desktop/src/         the shell: windows, tray, shortcut, commands, the voice call's commands (voice.rs) and its keychain
+Cargo.toml           the Rust workspace: shared/, desktop/, mobile/ and test-support/ (xtask/ is a workspace of its own)
+shared/core/         what every app shares, with no shell: the voice call (host, models, settings) and the app's side of sidevoice-engine
+shared/tauri/        the commands every app shares, as one Tauri plugin over shared/core (its ACL.md says who may call each); js/ holds the members and the transport of the page's script
 desktop/core/        pure logic (settings, bridge contract, media rules), testable without Tauri
-desktop/core/js/     the desktop's part of the script injected into the call page (the shared members are app-core/js, the Tauri transport app-tauri/js: docs/BRIDGE.md)
+desktop/tauri/       the desktop app: the shell (src/: windows, tray, shortcut, commands, the voice call's commands and its keychain), packaging, capabilities, and js/, the desktop's part of the script injected into the call page (docs/BRIDGE.md)
+desktop/local-host/  this computer's own core, reached from the app
+mobile/tauri/        the mobile app (iOS and Android): src/, plugin/ (Kotlin), gen/ (the generated native projects)
 ui/                  ui/voice/ holds the web interface, the pinned release (not committed)
 brand/               the brand files the icons and installer art are generated from
 docs/                the bridge, the engines and models, targets, macOS notes, the brand

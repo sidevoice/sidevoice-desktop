@@ -6,7 +6,7 @@ of host is a crate, never a condition (AGENTS.md → "Host kind is a crate bound
 
 ## What it is today
 
-- **The window** (`mobile/src/lib.rs`) shows `voice/index.html`, the interface of the sidevoice-web release
+- **The window** (`mobile/tauri/src/lib.rs`) shows `voice/index.html`, the interface of the sidevoice-web release
   `web.pin.json` names (`npm run web` puts it in `ui/`, as for the desktop app, and every Tauri build and dev run starts
   with it).
 - **The bridge** gives the page the app's members (`window.__sidevoiceHost`; "The bridge" below): the voice call the app
@@ -15,32 +15,32 @@ of host is a crate, never a condition (AGENTS.md → "Host kind is a crate bound
   would grant them all if the app set none. The app owns the microphone and the speaker, as the desktop app does.
 - **Only the app's own pages.** A navigation anywhere else goes nowhere (`navigation_allowed`).
 - **The origin** the page presents is Tauri's own: `http://tauri.localhost` on Android, `tauri://localhost` on iOS
-  (`sidevoice-app-tauri`'s `platform/origin.rs`, the one the desktop app reads too). The node accepts both without configuration (docs/TARGETS.md). On Android the page
+  (`sidevoice-shared-tauri`'s `platform/origin.rs`, the one the desktop app reads too). The node accepts both without configuration (docs/TARGETS.md). On Android the page
   is on http, so reaching a node's plain-http address on the local network is not mixed content.
 - **Plain http to the local network.** A node on the local network has an address no certificate can name, so the app
-  may speak plain http to it. On Android that is a network security config in `mobile/plugin/android`, merged into the
+  may speak plain http to it. On Android that is a network security config in `mobile/tauri/plugin/android`, merged into the
   app's manifest (the template's release build says `usesCleartextTraffic=false`, which a network security config
   overrides). It permits cleartext for **every** destination: the config names hosts, not private address ranges, and a
   pairing code carries whatever address the machine has. What keeps the app off public http is the page's own reach
   policy (it refuses a public address over http) and that the only page is the bundled one. On iOS it is
-  `NSAllowsLocalNetworking` (`mobile/Info.ios.plist`), which allows local addresses and leaves App Transport Security on
+  `NSAllowsLocalNetworking` (`mobile/tauri/Info.ios.plist`), which allows local addresses and leaves App Transport Security on
   for everything else.
 - **No pairings in backups.** The pairings hold the access token to the person's computer, so they are excluded from
   every OS backup and device transfer (operator decision, 2026-11-01), like the provider keys: after a restore the person
   pairs again. The record is `pairings/pairings.json` in the app's files, alone in its folder, so one folder is what is kept
   out, the temporary file of an interrupted write included. iOS marks `pairings/` `isExcludedFromBackup` before each
-  write (`mobile/src/platform/backup/ios.rs`). Android excludes `pairings/`, and the SharedPreferences file of the provider
+  write (`mobile/tauri/src/platform/backup/ios.rs`). Android excludes `pairings/`, and the SharedPreferences file of the provider
   keys (`keyring-sidevoice-providers.xml`, which another phone could not decrypt anyway), in the plugin's
   `res/xml/data_extraction_rules.xml` (Android 12 and newer: cloud backup and device transfer) and `res/xml/backup_rules.xml`
   (Android 11 and older), which its manifest points to. The details are in docs/PAIRING_STORAGE.md ("On the phone" →
   Backups).
 - **Permission texts.** `NSMicrophoneUsageDescription` and `NSLocalNetworkUsageDescription` are in
-  `mobile/Info.ios.plist` in English, the base (App Store validation looks for them there), and in the languages the web
-  interface ships (de, es, fr, it, ja, pl, zh-Hans) in `mobile/ios/<language>.lproj/InfoPlist.strings`, which `generate`
+  `mobile/tauri/Info.ios.plist` in English, the base (App Store validation looks for them there), and in the languages the web
+  interface ships (de, es, fr, it, ja, pl, zh-Hans) in `mobile/tauri/ios/<language>.lproj/InfoPlist.strings`, which `generate`
   puts into the iOS project. `CFBundleLocalizations` in the plist is the list of languages iOS offers the app in. Adding
-  a language is a folder in `mobile/ios` and an entry in that list; a test checks that they agree, and that the English
+  a language is a folder in `mobile/tauri/ios` and an entry in that list; a test checks that they agree, and that the English
   of `en.lproj` is the plist's.
-- **What the iOS app declares to Apple** (`mobile/PrivacyInfo.xcprivacy` and `mobile/Info.ios.plist`; the numbers below
+- **What the iOS app declares to Apple** (`mobile/tauri/PrivacyInfo.xcprivacy` and `mobile/tauri/Info.ios.plist`; the numbers below
   are the app as of the Tauri shell alone, and each later row that links more code re-reads them):
   - *Tracking and collection: none.* `NSPrivacyTracking` is false, with no tracking domains, and no data type is
     collected: the app has no server of its own, no analytics and no account, and the only place a pairing code or a
@@ -61,15 +61,15 @@ of host is a crate, never a condition (AGENTS.md → "Host kind is a crate bound
 
 ## The bridge
 
-`mobile/src/bridge.rs` composes the page's script as the desktop does (docs/BRIDGE.md → "Parts"): the transport of the
-shared plugin (`sidevoice-app-tauri`), the members every app shares (`sidevoice-app-core/js/members.js`) and the app's own
-part, `mobile/js/mobile-bridge.js`, which assembles `host`:
+`mobile/tauri/src/bridge.rs` composes the page's script as the desktop does (docs/BRIDGE.md → "Parts"): the transport of the
+shared plugin (`sidevoice-shared-tauri`), the members every app shares (`sidevoice-shared-tauri/js/members.js`) and the app's own
+part, `mobile/tauri/js/mobile-bridge.js`, which assembles `host`:
 
 | `host.*` | What |
 |---|---|
 | `voice`, `engine` | The voice call the app runs itself (sidevoice-voice on the phone's microphone and speaker) and the engine it takes its models from: sherpa-onnx (Silero) and the remote providers on a phone (sidevoice-engine's README, "Android" and "iOS"). |
-| `microphone` | The system's own permission, never the webview's: AVFoundation's on iOS, the runtime permission on Android (`sidevoice-app-tauri`'s `platform/microphone`). `openSettings` opens the app's page of the system's settings, and `help(language)` gives the app's own words for a blocked microphone on this phone (`mobile/src/i18n.rs`, en and es, English the fallback; D-HOST-OS). |
-| `pairings` | The pairings in the app's private storage (`mobile/src/pairings.rs`), not the webview's. |
+| `microphone` | The system's own permission, never the webview's: AVFoundation's on iOS, the runtime permission on Android (`sidevoice-shared-tauri`'s `platform/microphone`). `openSettings` opens the app's page of the system's settings, and `help(language)` gives the app's own words for a blocked microphone on this phone (`mobile/tauri/src/i18n.rs`, en and es, English the fallback; D-HOST-OS). |
+| `pairings` | The pairings in the app's private storage (`mobile/tauri/src/pairings.rs`), not the webview's. |
 | `presence` | `{ media: "app" }`: the app owns the call's audio, so the page registers no Media Session and plays no Now Playing element of its own. The app answers the headset's play/pause and the lock screen's (the shared plugin's `platform/media_controls`: MediaPlayer on iOS, a `MediaSession` held by the call's service on Android; docs/MEDIA_CONTROLS.md). |
 | `reach` | `{ plainHttpPrivate: true }`, as on the desktop. |
 
@@ -79,7 +79,7 @@ own row. The page reports the call (the members' `room`) to the app's own `call_
 through `run` (the call's service hangs up through it).
 
 - **Who may call.** The app's one window, `main`, on the app's own origin (`is_the_page`), as every shared command asks
-  first; `mobile/capabilities/main.json` grants it every command of `app-tauri/ACL.md` but the call's levels
+  first; `mobile/tauri/capabilities/main.json` grants it every command of `shared/tauri/ACL.md` but the call's levels
   (`bridge_level`, `bridge_playback`), which feed the desktop's call controls card, and the app's own `call_state`. A
   test keeps the two in step.
 - **The application host** (`AppHost`) is the desktop's, with the phone's hooks: every request admitted (a phone never
@@ -87,7 +87,7 @@ through `run` (the call's service hangs up through it).
   models in `models/` of the app's own files, private to the app and kept out of the device backup (iOS marks the
   folder, Android's backup rules name it). A page that loads anew owns none of the calls of the one before; quitting stops
   the calls and lets the models go, as on the desktop.
-- **The call's lifecycle** (D-CALL-LIFECYCLE, `mobile/src/call.rs`), the same on both phones: the green call button
+- **The call's lifecycle** (D-CALL-LIFECYCLE, `mobile/tauri/src/call.rs`), the same on both phones: the green call button
   starts the call, the red one ends it.
   - **The room's call** holds the call's foreground service (Android): the page reports the call to the app's own
     `call_state`, with its page's number (asked once from `call_page`, so a report of a replaced page that reaches the
@@ -98,7 +98,7 @@ through `run` (the call's service hangs up through it).
     front. The service ending on its own (Hang up in its notification, the app removed from the recents list, the
     system) hangs up the call on the page (`window.__sidevoiceHost.run({command: "hang-up"})`). The media controls follow `call_state` too, and the
     call's service owns the Android media session.
-  - **The call's audio** holds the audio session (iOS): sidevoice-app-core's host tells the app before the first voice
+  - **The call's audio** holds the audio session (iOS): sidevoice-shared's host tells the app before the first voice
     call's audio opens and after the last one's has stopped (`Hooks::calls`, `CallActivity`; the idle state that answers
     a stop, which sidevoice-voice sends once its audio is closed; the desktop does nothing there). Every voice call
     counts, a try in Settings too. A session the system will not activate refuses the call with its code
@@ -107,22 +107,22 @@ through `run` (the call's service hangs up through it).
   play-and-record with mode `Default`, the loudspeaker rather than the receiver, and Bluetooth hands-free allowed;
   activated only when a call starts (above). Android has no session to declare. **Not verified on a device yet**; see
   "Not verified" below.
-- **Background audio** (iOS): `UIBackgroundModes` `audio` in `mobile/Info.ios.plist`, so a call goes on with the screen
+- **Background audio** (iOS): `UIBackgroundModes` `audio` in `mobile/tauri/Info.ios.plist`, so a call goes on with the screen
   locked. Android keeps the call's process with its foreground service (above), which runs for exactly the call.
 - **HTTPS on Android.** The engine's `reqwest` verifies certificates with `rustls-platform-verifier`, whose Android side is
-  Kotlin: the Android library of `mobile/plugin` adds it to the app's Gradle build (from the crate's own Maven directory,
+  Kotlin: the Android library of `mobile/tauri/plugin` adds it to the app's Gradle build (from the crate's own Maven directory,
   which `cargo metadata` finds, at the version Cargo.lock resolves; `consumer-rules.pro` keeps it from R8), and the app
-  hands the verifier the application's context at start (`mobile/src/platform/tls/android.rs`). `ndk_context`, which
+  hands the verifier the application's context at start (`mobile/tauri/src/platform/tls/android.rs`). `ndk_context`, which
   cpal and the provider keys need, is set by Tauri's runtime (tao) before the app's code runs: nothing to do for it.
 - **The engine's native libraries.** sherpa-onnx is shared on a phone: `libsherpa-onnx-c-api.so` and `libonnxruntime.so`
   per ABI on Android (in `jniLibs/<abi>/`), `sherpa-onnx.xcframework` and `onnxruntime.xcframework` on iOS (one shared ONNX Runtime, for sherpa-onnx and the smart-turn backend; embedded and signed through `bundle.iOS.frameworks`
-  in `mobile/tauri.conf.json`, beside the system frameworks the Rust library calls and Xcode must link: AVFoundation and
+  in `mobile/tauri/tauri.conf.json`, beside the system frameworks the Rust library calls and Xcode must link: AVFoundation and
   AVFAudio for the audio session and the microphone's permission, AudioToolbox for cpal's audio units). `cargo xtask mobile build` gets them from the engine's own `cargo xtask mobile-libs android|ios` (no engine build), at the commit Cargo.lock pins (the archives its pins name, checked against their digests), and builds the
   app against the same directories (`SHERPA_ONNX_LIB_DIR`, and on iOS `ONNXRUNTIME_FRAMEWORK_DIR`), so nothing is downloaded unchecked. Both variables are also
   written into the repository's `.cargo/config.toml` (`[env]`) for the length of the build and taken out after it: the
   cargo the native project runs again from inside its build (Xcode's build phase, Gradle's `rust` task) gets from the
   Tauri CLI only the `TAURI*`, `WRY*`, `CARGO_*` and `RUST_*` variables, and would otherwise link a copy of its own. Git ignores both
-  (`mobile/frameworks/`, the `.so` files of `jniLibs`).
+  (`mobile/tauri/frameworks/`, the `.so` files of `jniLibs`).
 - **The log**: `tauri-plugin-log` to the system's (logcat, the unified log) and a file in the app's log folder.
 
 ### Not verified
@@ -137,18 +137,18 @@ loading on a phone.
 
 ## Who owns the native projects
 
-The generator model is **G-a: repeatable generation** (design D.4). `mobile/gen/android` and `mobile/gen/apple` are
+The generator model is **G-a: repeatable generation** (design D.4). `mobile/tauri/gen/android` and `mobile/tauri/gen/apple` are
 what the Tauri CLI writes, are committed, and are **never edited by hand**. Whatever the app needs beyond the template
 is an input the CLI reads:
 
 | What | Input |
 |---|---|
-| Identifier, name, version, minimum OS versions, the web interface to bundle | `mobile/tauri.conf.json` |
-| iOS `Info.plist` keys (permission texts, export compliance) | `mobile/Info.ios.plist` (merged by the CLI) |
-| The iOS privacy manifest | `mobile/PrivacyInfo.xcprivacy`: the CLI has no setting for it, so `generate` puts it in `gen/apple/sidevoice-mobile_iOS/` before the CLI makes the project, and the project lists it as a resource of the app (`generate` fails if it does not) |
-| The iOS permission texts in each language | `mobile/ios/<language>.lproj/InfoPlist.strings`: the CLI has no setting for them, so `generate` puts them in `gen/apple/sidevoice-mobile_iOS/` before the CLI makes the project, and the project lists them as resources of the app, with each language as a known region (`generate` fails if it does not) |
-| Android manifest entries, resources and, later, Kotlin | the Android library of `mobile/plugin` (a Tauri plugin carrying only native project inputs; Gradle merges its manifest into the app's) |
-| App icons | `mobile/app-icon/` (drawn from the brand by `npm run icons`; `tauri icon` derives every size) |
+| Identifier, name, version, minimum OS versions, the web interface to bundle | `mobile/tauri/tauri.conf.json` |
+| iOS `Info.plist` keys (permission texts, export compliance) | `mobile/tauri/Info.ios.plist` (merged by the CLI) |
+| The iOS privacy manifest | `mobile/tauri/PrivacyInfo.xcprivacy`: the CLI has no setting for it, so `generate` puts it in `gen/apple/sidevoice-mobile_iOS/` before the CLI makes the project, and the project lists it as a resource of the app (`generate` fails if it does not) |
+| The iOS permission texts in each language | `mobile/tauri/ios/<language>.lproj/InfoPlist.strings`: the CLI has no setting for them, so `generate` puts them in `gen/apple/sidevoice-mobile_iOS/` before the CLI makes the project, and the project lists them as resources of the app, with each language as a known region (`generate` fails if it does not) |
+| Android manifest entries, resources and, later, Kotlin | the Android library of `mobile/tauri/plugin` (a Tauri plugin carrying only native project inputs; Gradle merges its manifest into the app's) |
+| App icons | `mobile/tauri/app-icon/` (drawn from the brand by `npm run icons`; `tauri icon` derives every size) |
 | The Rust toolchain and the four mobile targets | `mobile/rust-toolchain.toml` |
 
 `cargo xtask mobile generate android|ios` makes a project anew (the old one removed) and derives the icons into it. The
@@ -166,7 +166,7 @@ first connection to a paired machine.
 ## The call's service (Android)
 
 A call must outlive the screen: with it off, or another app in front, Android stops a process that holds the microphone
-unless a foreground service says it is in use. `mobile/plugin` carries that service (`CallService.kt`, `MobilePlugin.kt`
+unless a foreground service says it is in use. `mobile/tauri/plugin` carries that service (`CallService.kt`, `MobilePlugin.kt`
 and the manifest entry, all merged into the app by Gradle). It has the foreground service types **microphone** (the call
 listens) and **media playback** (the agent speaks), and a notification with the app's name, "In a call" and a **Hang up**
 action, in the system's language (`res/values`, English, and `values-es`; the Spanish is the desktop app's wording).
@@ -196,10 +196,10 @@ action, in the system's language (`res/values`, English, and `values-es`; the Sp
 ## Building
 
 Always one package, never the workspace: it holds the desktop app too (and the mobile crates are empty on a computer: `#![cfg(mobile)]` at their roots, so a plain `cargo` command there skips them; `cargo xtask mobile lint android|ios` runs Clippy over them for their target). The Tauri CLI is told which app is the one
-(`TAURI_APP_PATH`): Gradle calls it back from the package root, where it would find `desktop/` as well.
+(`TAURI_APP_PATH`): Gradle calls it back from the package root, where it would find `desktop/tauri/` as well.
 
 ```
-# Android: the SDK (platform 37), an NDK (r28 or later: 16 KB pages), JDK 21 and the Rust targets; from mobile/
+# Android: the SDK (platform 37), an NDK (r28 or later: 16 KB pages), JDK 21 and the Rust targets; from mobile/tauri/
 TAURI_APP_PATH=$PWD npx tauri android build --apk --target aarch64 --ci
 
 # iOS: macOS with Xcode and XcodeGen
@@ -224,11 +224,11 @@ installs as it is.
   fails on any other and when there is no library. The job's log lists each library with its alignment.
 - **iOS** (macOS, XcodeGen): `cargo xtask mobile generated ios`, then `cargo xtask mobile build ios`, the app for the
   simulator, unsigned, as the artifact `Sidevoice-ios-simulator-app`. When the committed project is not what the CLI
-  wrote, the job uploads what it wrote (`mobile-gen-apple`) to commit as `mobile/gen/apple`.
+  wrote, the job uploads what it wrote (`mobile-gen-apple`) to commit as `mobile/tauri/gen/apple`.
 - The iOS build ends with `cargo xtask mobile check-ios` on the app it made: the privacy manifest is at the root of the
   bundle, the encryption and tracking declarations are there, and the manifest gives a reason for each required-reason API
   the executable calls (above).
-- **`generated`** is the regeneration diff: it runs `generate` and fails on any difference in `mobile/gen/<project>`.
+- **`generated`** is the regeneration diff: it runs `generate` and fails on any difference in `mobile/tauri/gen/<project>`.
 - Every external action is pinned by its full commit SHA, the version in a comment, so a moved tag cannot run new code
   beside the build; so are those of the composite action and of the signing workflow. (The desktop workflows still use
   tags.)
@@ -305,7 +305,7 @@ stays unsigned with no secret. Its one step is `cargo xtask mobile testflight --
 ## Audio interruptions (D-AUDIO-FOCUS)
 
 A phone call, an alarm or another app taking the audio **pauses the conversation while it lasts and resumes it when it
-ends**; it never hangs up on its own (`mobile/src/call.rs`). Only while the room's call is held (a try in Settings is not
+ends**; it never hangs up on its own (`mobile/tauri/src/call.rs`). Only while the room's call is held (a try in Settings is not
 paused).
 
 - **Where it comes from.** iOS: `AVAudioSessionInterruptionNotification` (`platform/interruption`), `began` and `ended`
@@ -314,7 +314,7 @@ paused).
   outright) pause with no end to wait for; `duck` (another app quietly over the call) is none. A request made while a phone call is on is delayed by the system:
   `lost-transient` now, `gained` when the call ends. The call pauses at the first interruption and resumes at the last end,
   whichever source.
-- **Pause** is the page's own mute (the `interrupt` command of `mobile/js/mobile-bridge.js`, so the page shows the call
+- **Pause** is the page's own mute (the `interrupt` command of `mobile/tauri/js/mobile-bridge.js`, so the page shows the call
   muted) and the agent's playback held (`AppHost::pause_playback`: the chunks not yet handed to the speaker are kept, in
   order, and played on resuming). **Known limit:** what the speaker already has queued is the device's and keeps playing
   (iOS stops it with the session; on Android the system silences the media while a call is on); a lossless pause of that
@@ -327,7 +327,7 @@ paused).
   again, or a focus lost for good or refused (Android). The microphone stays muted and the playback held until the person
   unmutes: the session is asked for again first (refused again: the wait goes on), and on Android the service requests the audio
   focus again (`request_call_focus`), the playback is released only when it is granted; a delayed grant is a pause that ends
-  with the gain, a refusal pauses again and the person must mute and unmute once more. The state machine is `mobile/src/hold.rs`.
+  with the gain, a refusal pauses again and the person must mute and unmute once more. The state machine is `mobile/tauri/src/hold.rs`.
 - On iOS the audio session is activated again first (if a voice call has audio open), under the same lock as the session's
   activation and deactivation by the calls, so it is never active after the last call's audio has stopped.
 
@@ -335,7 +335,7 @@ paused).
 
 The system suspends the app soon after the screen turns off, and a model download (the engine, inside the app's process) stops with it.
 While any install job runs, the screen is kept on: the host tells the app when the first download starts and the last one ends
-(`DownloadActivity`, one of `Hooks`), `mobile/src/downloads.rs` passes that to the plugin's `keep_screen_on`, which sets iOS
+(`DownloadActivity`, one of `Hooks`), `mobile/tauri/src/downloads.rs` passes that to the plugin's `keep_screen_on`, which sets iOS
 `UIApplication.isIdleTimerDisabled` (on the main thread) or Android's `FLAG_KEEP_SCREEN_ON` on the activity's window
 (`MobilePlugin.keepScreenOn`). The engine resumes a partial file with an HTTP range request, so a download that the system
 interrupts anyway (the person left the app) goes on where it stopped. Native background downloads are not here

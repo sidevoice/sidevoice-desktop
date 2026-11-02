@@ -5,9 +5,9 @@ import { readFileSync } from "node:fs";
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 
-export const transport = read("../app-tauri/js/transport.js");
-export const members = read("../app-core/js/members.js");
-export const desktop = read("../desktop/core/js/desktop-bridge.js");
+export const transport = read("../shared/tauri/js/transport.js");
+export const members = read("../shared/tauri/js/members.js");
+export const desktop = read("../desktop/tauri/js/desktop-bridge.js");
 
 /** The script the page gets, with the desktop's placeholders still in place. */
 export const composed = `(function (transportOf, membersOf) {\n${desktop}\n})(${transport}, ${members});`;

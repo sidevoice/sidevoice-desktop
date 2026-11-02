@@ -79,16 +79,16 @@ pub fn probe() -> Result<()> {
 /// `probe voice-models`: a call on the engine's real models through the app's adapter: Silero, Whisper tiny on
 /// whisper.cpp and Kokoro, downloaded into a scratch folder, or kept in `SIDEVOICE_REAL_CALL_MODELS` (CI caches it);
 /// the turn must come back as the clip's words and the reply must be spoken and heard, with injected audio in place of
-/// the devices (app-core/src/voice/models/engine/tests.rs). With it, the rest of the voice tests: the native host's
+/// the devices (shared/core/src/voice/models/engine/tests.rs). With it, the rest of the voice tests: the native host's
 /// lanes over stand-in shared devices, and a call on the machine's own devices, which is ready or fails by a code
-/// (app-core/src/voice/host/tests.rs). The same on every OS: nothing in it differs.
+/// (shared/core/src/voice/host/tests.rs). The same on every OS: nothing in it differs.
 pub fn voice_models() -> Result<()> {
     Cmd::new("cargo")
         .args([
             "test",
             "--release",
             "-p",
-            "sidevoice-app-core",
+            "sidevoice-shared",
             "--lib",
             "voice::",
             "--",

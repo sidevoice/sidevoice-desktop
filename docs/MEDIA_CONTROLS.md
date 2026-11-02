@@ -1,6 +1,6 @@
 # Headset and media controls
 
-The shared plugin's `app-tauri/src/platform/media_controls.rs` exposes `available`, `attach` and `update`. The desktop app
+The shared plugin's `shared/tauri/src/platform/media_controls.rs` exposes `available`, `attach` and `update`. The desktop app
 updates it from its `bridge_state`, the mobile app from its `call_state` (the page's report of the call); both run the
 command on the room through `window.__sidevoiceHost.run`.
 Where `available` is true the app offers `host.presence` (`{ media: "app" }`), independently of native voice. Startup attaches one
@@ -12,7 +12,7 @@ process-lifetime command sink; call reports and navigation resets update it.
 | Windows | Unavailable (no `presence`) | Page Media Session and its Now Playing audio element | Unverified in WebView2/on hardware |
 | Linux | Unavailable (no `presence`) | Page Media Session and its Now Playing audio element | Unverified in WebKitGTK/X11/Wayland/on hardware |
 | iOS | MediaPlayer's Now Playing (lock screen, Control Center) and remote commands, the macOS code (`apple.rs`); the AirPods mute gesture on iOS 17+ through `AVAudioApplicationInputMuteStateChangeNotification` (iOS mutes the input itself; the app keeps the call in step), its symbols looked up at run time so iOS 15 and 16 launch | Suppressed by `presence: { media: "app" }` | Unverified on hardware |
-| Android | A `MediaSession` owned by the call's foreground service (`CallService`), so it exists only during the call; the call's state and the commands go through app-tauri's Kotlin (`MediaControls.kt`). Its notification shows the session: on Android 13+ the system draws play/pause and a Hang up custom action from the session; on 8–12 the notification carries its own Mute/Unmute and Hang up buttons, refreshed as the call mutes | Suppressed by `presence: { media: "app" }` | Unverified on hardware |
+| Android | A `MediaSession` owned by the call's foreground service (`CallService`), so it exists only during the call; the call's state and the commands go through shared/tauri's Kotlin (`MediaControls.kt`). Its notification shows the session: on Android 13+ the system draws play/pause and a Hang up custom action from the session; on 8–12 the notification carries its own Mute/Unmute and Hang up buttons, refreshed as the call mutes | Suppressed by `presence: { media: "app" }` | Unverified on hardware |
 
 The page maps play to unmute, pause to toggle mute (including a pause delivered while muted),
 and `togglemicrophone`, where the webview supports it, to the requested microphone state.

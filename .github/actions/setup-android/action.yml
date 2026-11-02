@@ -18,7 +18,7 @@ runs:
       with:
         distribution: temurin
         java-version: 21
-    # The platform the generated project compiles against (mobile/gen/android: compileSdk) and the NDK (r28 or later
+    # The platform the generated project compiles against (mobile/tauri/gen/android: compileSdk) and the NDK (r28 or later
     # links with 16 KB pages, which Google Play requires); pinned here, as the toolchain's version is in
     # mobile/rust-toolchain.toml.
     - name: Android SDK platform and NDK

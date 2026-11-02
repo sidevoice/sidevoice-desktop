@@ -30,15 +30,15 @@ use crate::Result;
 /// The directory of the key's file (below `RUNNER_TEMP` on a runner).
 const SECRETS: &str = "sidevoice-testflight";
 
-/// Where the Tauri CLI leaves what it builds, below mobile/gen/apple.
+/// Where the Tauri CLI leaves what it builds, below mobile/tauri/gen/apple.
 const BUILD: &str = "build";
 
 /// A signed build runs from `main` only. The workflow's job says so too; this holds for the command on its own.
 const MAIN: &str = "refs/heads/main";
 
-/// The bundle identifier the archive must be (mobile/tauri.conf.json).
+/// The bundle identifier the archive must be (mobile/tauri/tauri.conf.json).
 fn identifier() -> Result<String> {
-    let path = repo().join("mobile/tauri.conf.json");
+    let path = repo().join("mobile/tauri/tauri.conf.json");
     let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let config: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
     config["identifier"].as_str().map(str::to_owned).ok_or_else(|| format!("{}: no identifier", path.display()))
@@ -92,7 +92,7 @@ pub fn testflight(build_number_text: &str) -> Result<()> {
     let key = secrets.file(&format!("private_keys/AuthKey_{key_id}.p8"), format!("{p8}\n").as_bytes())?;
     drop(p8);
 
-    let out = repo().join("mobile/gen/apple").join(BUILD);
+    let out = repo().join("mobile/tauri/gen/apple").join(BUILD);
     if out.exists() {
         fs::remove_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
     }

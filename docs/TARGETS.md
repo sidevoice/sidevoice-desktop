@@ -23,7 +23,7 @@ The window only ever navigates within the app's own pages; the microphone is gra
 ## No target
 
 The app never tells the interface where to look first: it injects `window.__SIDEVOICE_TARGET__ = null` (the web client
-contract) into the app's own pages (`desktop/core/js/desktop-bridge.js`), and keeps no address. Which machine the interface
+contract) into the app's own pages (`desktop/tauri/js/desktop-bridge.js`), and keeps no address. Which machine the interface
 talks to, and how to reach it, comes from pairing alone. A standalone static deployment may still set one by writing
 `/voice/target.js` (`SIDEVOICE_TARGET` in the nginx image).
 
@@ -44,7 +44,7 @@ talks to, and how to reach it, comes from pairing alone. A standalone static dep
   same window and rule). Where the app runs the call itself (`host.voice`, macOS) the page is never granted the
   microphone: the app owns it.
 - The voice call: `host.voice`'s seam on the probe page, and a call on the engine's real models through the app's
-  adapter, recorded speech in and a spoken reply out (`app-core/src/voice/models/engine/tests.rs`).
+  adapter, recorded speech in and a spoken reply out (`shared/core/src/voice/models/engine/tests.rs`).
 - A node on loopback is reached cross-origin from the interface's window, `Origin: tauri://localhost`, preflight and
   device token included (probe page, fake node).
 - Restarting as an installed update does, and quitting, with whisper.cpp's Metal build loaded (probe page): each

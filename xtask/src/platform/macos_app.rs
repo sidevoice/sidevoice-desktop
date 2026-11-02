@@ -94,7 +94,7 @@ pub fn unsigned(cmd: Cmd) -> Cmd {
     SIGNING_ENV.iter().fold(cmd, |cmd, name| cmd.env_remove(name))
 }
 
-/// What only the probe build carries (desktop/src/probe.rs): never in a release app.
+/// What only the probe build carries (desktop/tauri/src/probe.rs): never in a release app.
 pub const PROBE_ONLY: &[&str] = &[
     "SIDEVOICE_DEBUG_PAGE",
     "probe-engine",

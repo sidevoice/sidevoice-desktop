@@ -179,7 +179,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.changes.outputs.channel == 'nightly' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
         run: cargo xtask release app --channel ${{ needs.changes.outputs.channel }}
       # Tauri's bundler imports the certificate into a keychain of its own, signs every binary with the hardened runtime
-      # and the entitlements (desktop/packaging/macos/Entitlements.plist), then notarizes the app with the API key (the .p8 as a file
+      # and the entitlements (desktop/tauri/packaging/macos/Entitlements.plist), then notarizes the app with the API key (the .p8 as a file
       # only the runner's user may read, removed when the step ends) and staples it.
       - name: Build the app bundle (Developer ID signed, hardened runtime, notarized and stapled)
         if: needs.changes.outputs.sign == 'true'
@@ -246,7 +246,7 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-  # CI only: the same app built with the `probe` feature (desktop/src/probe.rs), which adds the probe page and the
+  # CI only: the same app built with the `probe` feature (desktop/tauri/src/probe.rs), which adds the probe page and the
   # switch that loads it into the room window, and the flows run on it. The release app (`macos`) has neither. No
   # secrets: it is never signed.
   macos-native:
@@ -282,7 +282,7 @@ jobs:
       - name: Portable native local-host fixtures
         run: cargo xtask test-support
       - name: Reset cleanup safety tests (temporary directories only)
-        run: cargo test --locked --manifest-path desktop/Cargo.toml --lib -- data::tests platform::webview_data --test-threads=1
+        run: cargo test --locked --manifest-path desktop/tauri/Cargo.toml --lib -- data::tests platform::webview_data --test-threads=1
       - name: The local host from the bundled page (stand-in core on its published socket, pairing, proxy, refusals)
         run: cargo xtask probe local-host
       - name: What the interface's window offers (probe page, same origin and permission rule)
@@ -327,7 +327,7 @@ jobs:
         id: models
         with:
           path: ${{ runner.temp }}/real-call-models
-          key: real-call-models-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.engine-rev }}-${{ hashFiles('app-core/src/voice/models/tests.rs') }}
+          key: real-call-models-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.engine-rev }}-${{ hashFiles('shared/core/src/voice/models/tests.rs') }}
           restore-keys: real-call-models-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.engine-rev }}-
       - name: A call on the engine's real models through the app's adapter (recorded speech in, a reply out)
         env:
@@ -449,7 +449,7 @@ jobs:
         id: models
         with:
           path: ${{ runner.temp }}/real-call-models
-          key: real-call-models-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.engine-rev }}-${{ hashFiles('app-core/src/voice/models/engine/tests.rs') }}
+          key: real-call-models-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.engine-rev }}-${{ hashFiles('shared/core/src/voice/models/engine/tests.rs') }}
           restore-keys: real-call-models-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.engine-rev }}-
       - name: A call on the engine's real models (injected audio) and on the runner's own devices
         if: ${{ !cancelled() }}

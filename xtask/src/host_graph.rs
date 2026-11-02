@@ -3,10 +3,10 @@
 //!
 //! The crates sit at the workspace root and each app composes the ones it uses (D-RULE-ROOT: a host crate exists only for its
 //! kind, `#![cfg(desktop)]` or `#![cfg(mobile)]` at its root, which `platform_guard` accepts nowhere else):
-//! - the host crates, `desktop/` and `mobile/`, depend on neither each other nor anything that depends on the other;
-//! - the shared crates, `app-core/` and `app-tauri/`, depend on neither host crate;
-//! - `app-core/` has no shell in its closure: no Tauri, no webview and no window crate, in any kind of dependency.
-//! - each host crate (`desktop`, `mobile`, `mobile/plugin`) carries the attribute of its kind at its root, and the
+//! - the host crates, `desktop/tauri/` and `mobile/tauri/`, depend on neither each other nor anything that depends on the other;
+//! - the shared crates, `shared/core/` and `shared/tauri/`, depend on neither host crate;
+//! - `shared/core/` has no shell in its closure: no Tauri, no webview and no window crate, in any kind of dependency.
+//! - each host crate (`desktop/tauri`, `mobile/tauri`, `mobile/tauri/plugin`) carries the attribute of its kind at its root, and the
 //!   workspace's `default-members`, which a plain `cargo build` or `cargo test` takes, hold no mobile crate.
 //!
 //! They are read from `cargo metadata` with every feature on, once for each supported target: a dependency behind a
@@ -37,14 +37,15 @@ const TARGETS: [&str; 5] = [
     "aarch64-linux-android",
 ];
 /// The host crates, by their directory at the workspace root.
-const HOSTS: [&str; 2] = ["desktop", "mobile"];
+const HOSTS: [&str; 2] = ["desktop/tauri", "mobile/tauri"];
 /// The shared crates, by directory.
-const SHARED: [&str; 2] = ["app-core", "app-tauri"];
+const SHARED: [&str; 2] = ["shared/core", "shared/tauri"];
 /// The shared crate that has no shell.
-const CORE: &str = "app-core";
+const CORE: &str = "shared/core";
 /// The host crates that exist only for their kind: the directory below the workspace root, and the kind whose attribute
 /// `#![cfg(..)]` its `src/lib.rs` carries.
-const ROOT_ATTRIBUTES: [(&str, &str); 3] = [("desktop", "desktop"), ("mobile", "mobile"), ("mobile/plugin", "mobile")];
+const ROOT_ATTRIBUTES: [(&str, &str); 3] =
+    [("desktop/tauri", "desktop"), ("mobile/tauri", "mobile"), ("mobile/tauri/plugin", "mobile")];
 
 /// Whether a crate is the shell: Tauri, with its plugins and runtime, and the webview and window crates under it.
 fn is_shell(name: &str) -> bool {
@@ -531,10 +532,10 @@ mod tests {
     }
 
     const WORKSPACE: [(&str, &str); 5] = [
-        ("desktop", "sidevoice-desktop"),
-        ("mobile", "sidevoice-mobile"),
-        ("app-core", "sidevoice-app-core"),
-        ("app-tauri", "sidevoice-app-tauri"),
+        ("desktop/tauri", "sidevoice-desktop"),
+        ("mobile/tauri", "sidevoice-mobile"),
+        ("shared/core", "sidevoice-shared"),
+        ("shared/tauri", "sidevoice-shared-tauri"),
         ("desktop/local-host", "sidevoice-local-host"),
     ];
 
@@ -546,12 +547,12 @@ mod tests {
     #[test]
     fn each_app_composes_the_shared_crates() {
         let edges = [
-            ("sidevoice-desktop", "sidevoice-app-tauri"),
+            ("sidevoice-desktop", "sidevoice-shared-tauri"),
             ("sidevoice-desktop", "sidevoice-local-host"),
-            ("sidevoice-mobile", "sidevoice-app-tauri"),
-            ("sidevoice-app-tauri", "sidevoice-app-core"),
-            ("sidevoice-app-tauri", "tauri"),
-            ("sidevoice-app-core", "serde"),
+            ("sidevoice-mobile", "sidevoice-shared-tauri"),
+            ("sidevoice-shared-tauri", "sidevoice-shared"),
+            ("sidevoice-shared-tauri", "tauri"),
+            ("sidevoice-shared", "serde"),
             ("sidevoice-desktop", "tauri-plugin-opener"),
         ];
         assert_eq!(found(&edges), Vec::<String>::new());
@@ -560,8 +561,7 @@ mod tests {
     #[test]
     fn the_default_members_hold_no_mobile_crate() {
         let mut answer = metadata(&WORKSPACE, &[], &[]);
-        answer["workspace_default_members"] =
-            json!(["sidevoice-desktop", "sidevoice-app-core", "sidevoice-local-host"]);
+        answer["workspace_default_members"] = json!(["sidevoice-desktop", "sidevoice-shared", "sidevoice-local-host"]);
         assert_eq!(violations(&answer).unwrap(), Vec::<String>::new());
         answer["workspace_default_members"] = json!(["sidevoice-desktop", "sidevoice-mobile"]);
         assert_eq!(violations(&answer).unwrap().len(), 1);
@@ -578,23 +578,24 @@ mod tests {
         // The workspace at `/ws` of `metadata`, moved to the temporary directory.
         let moved = metadata(&WORKSPACE, &[], &[]).to_string().replace("/ws", dir.path().to_str().unwrap());
         let answer: Value = serde_json::from_str(&moved).unwrap();
-        write("desktop", "#![cfg(desktop)]\n//! Docs.\nmod a;");
-        write("mobile", "//! Docs.\n#![allow(dead_code)]\n#![cfg(desktop)]\nmod a;");
+        write("desktop/tauri", "#![cfg(desktop)]\n//! Docs.\nmod a;");
+        write("mobile/tauri", "//! Docs.\n#![allow(dead_code)]\n#![cfg(desktop)]\nmod a;");
         assert_eq!(missing_root_attributes(&answer).unwrap().len(), 1, "mobile carries the other kind's");
-        write("mobile", "// A comment.\n\n#![cfg(mobile)]\nmod a;");
+        write("mobile/tauri", "// A comment.\n\n#![cfg(mobile)]\nmod a;");
         assert_eq!(missing_root_attributes(&answer).unwrap(), Vec::<String>::new());
-        write("mobile", "mod a;\n#![cfg(mobile)]");
+        write("mobile/tauri", "mod a;\n#![cfg(mobile)]");
         assert_eq!(missing_root_attributes(&answer).unwrap().len(), 1, "not in the header");
         // Every library and binary target is read from Cargo, wherever its file is.
-        write("mobile", "#![cfg(mobile)]");
+        write("mobile/tauri", "#![cfg(mobile)]");
         let mut with_bin = answer.clone();
-        let bin = json!({"kind": ["bin"], "src_path": format!("{}/desktop/src/other_main.rs", dir.path().display())});
+        let bin =
+            json!({"kind": ["bin"], "src_path": format!("{}/desktop/tauri/src/other_main.rs", dir.path().display())});
         for package in with_bin["packages"].as_array_mut().unwrap() {
             if package["name"] == "sidevoice-desktop" {
                 package["targets"].as_array_mut().unwrap().push(bin.clone());
             }
         }
-        std::fs::write(dir.path().join("desktop/src/other_main.rs"), "fn main() {}").unwrap();
+        std::fs::write(dir.path().join("desktop/tauri/src/other_main.rs"), "fn main() {}").unwrap();
         let missing = missing_root_attributes(&with_bin).unwrap();
         assert_eq!(missing.len(), 1, "{missing:?}");
         assert!(missing[0].contains("other_main.rs"), "{missing:?}");
@@ -603,48 +604,52 @@ mod tests {
     #[test]
     fn a_host_does_not_depend_on_the_other_host_directly_or_through_anything() {
         let direct = found(&[("sidevoice-mobile", "sidevoice-desktop")]);
-        assert_eq!(direct, ["mobile/ must not depend on desktop/: sidevoice-mobile -> sidevoice-desktop"]);
+        assert_eq!(direct, ["mobile/tauri/ must not depend on desktop/tauri/: sidevoice-mobile -> sidevoice-desktop"]);
         let through = found(&[
             ("sidevoice-desktop", "sidevoice-local-host"),
             ("sidevoice-local-host", "serde"),
             ("sidevoice-mobile", "serde"),
             ("serde", "sidevoice-desktop"),
         ]);
-        assert_eq!(through, ["mobile/ must not depend on desktop/: sidevoice-mobile -> serde -> sidevoice-desktop"]);
+        assert_eq!(
+            through,
+            ["mobile/tauri/ must not depend on desktop/tauri/: sidevoice-mobile -> serde -> sidevoice-desktop"]
+        );
         assert_eq!(found(&[("sidevoice-desktop", "sidevoice-mobile")]).len(), 1, "the other way round too");
     }
 
     #[test]
     fn the_shared_crates_depend_on_neither_host() {
         let found = found(&[
-            ("sidevoice-app-tauri", "sidevoice-app-core"),
-            ("sidevoice-app-core", "sidevoice-desktop"),
-            ("sidevoice-app-tauri", "sidevoice-mobile"),
+            ("sidevoice-shared-tauri", "sidevoice-shared"),
+            ("sidevoice-shared", "sidevoice-desktop"),
+            ("sidevoice-shared-tauri", "sidevoice-mobile"),
         ]);
         assert_eq!(
             found,
             [
-                "app-core/ must not depend on the host crate desktop/: sidevoice-app-core -> sidevoice-desktop",
-                "app-tauri/ must not depend on the host crate desktop/: sidevoice-app-tauri -> sidevoice-app-core -> sidevoice-desktop",
-                "app-tauri/ must not depend on the host crate mobile/: sidevoice-app-tauri -> sidevoice-mobile",
+                "shared/core/ must not depend on the host crate desktop/tauri/: sidevoice-shared -> sidevoice-desktop",
+                "shared/tauri/ must not depend on the host crate desktop/tauri/: sidevoice-shared-tauri -> sidevoice-shared -> sidevoice-desktop",
+                "shared/tauri/ must not depend on the host crate mobile/tauri/: sidevoice-shared-tauri -> sidevoice-mobile",
             ]
         );
     }
 
     #[test]
     fn the_core_has_no_shell_in_its_closure() {
-        let direct = found(&[("sidevoice-app-core", "tauri")]);
-        assert_eq!(direct, ["app-core/ must not depend on a shell (Tauri, wry, tao): sidevoice-app-core -> tauri"]);
-        let through = found(&[("sidevoice-app-core", "serde"), ("serde", "tauri-plugin-opener")]);
+        let direct = found(&[("sidevoice-shared", "tauri")]);
+        assert_eq!(direct, ["shared/core/ must not depend on a shell (Tauri, wry, tao): sidevoice-shared -> tauri"]);
+        let through = found(&[("sidevoice-shared", "serde"), ("serde", "tauri-plugin-opener")]);
         assert_eq!(through.len(), 1, "{through:?}");
-        assert!(through[0].ends_with("sidevoice-app-core -> serde -> tauri-plugin-opener"));
+        assert!(through[0].ends_with("sidevoice-shared -> serde -> tauri-plugin-opener"));
         // The Tauri plugin may have the shell: it is the shell's binding.
-        assert!(found(&[("sidevoice-app-tauri", "tauri"), ("sidevoice-app-tauri", "wry")]).is_empty());
+        assert!(found(&[("sidevoice-shared-tauri", "tauri"), ("sidevoice-shared-tauri", "wry")]).is_empty());
     }
 
     #[test]
     fn a_crate_that_is_not_in_the_workspace_yet_has_nothing_to_violate() {
-        let only_desktop = metadata(&[("desktop", "sidevoice-desktop")], &["tauri"], &[("sidevoice-desktop", "tauri")]);
+        let only_desktop =
+            metadata(&[("desktop/tauri", "sidevoice-desktop")], &["tauri"], &[("sidevoice-desktop", "tauri")]);
         assert!(violations(&only_desktop).unwrap().is_empty());
         assert!(violations(&json!({"workspace_root": "/ws"})).is_err());
     }
@@ -668,19 +673,19 @@ mod tests {
 
     #[test]
     fn a_dependency_behind_a_feature_is_a_dependency() {
-        // The shell is optional, behind a feature of `app-core` that no default turns on.
+        // The shell is optional, behind a feature of `shared/core` that no default turns on.
         let package = |name: &str, extra: &str| {
             format!("[package]\nname = \"{name}\"\nversion = \"0.0.0\"\nedition = \"2021\"\n{extra}")
         };
         let core = package(
-            "sidevoice-app-core",
-            "[dependencies]\ntauri = { path = \"../tauri\", optional = true }\n[features]\nshell = [\"dep:tauri\"]\n",
+            "sidevoice-shared",
+            "[dependencies]\ntauri = { path = \"../../tauri\", optional = true }\n[features]\nshell = [\"dep:tauri\"]\n",
         );
-        let dir = workspace(&[("app-core", &core), ("tauri", &package("tauri", ""))]);
+        let dir = workspace(&[("shared/core", &core), ("tauri", &package("tauri", ""))]);
         let metadata = resolve(dir.path(), "x86_64-unknown-linux-gnu", false).unwrap();
         assert_eq!(
             violations(&metadata).unwrap(),
-            ["app-core/ must not depend on a shell (Tauri, wry, tao): sidevoice-app-core -> tauri"]
+            ["shared/core/ must not depend on a shell (Tauri, wry, tao): sidevoice-shared -> tauri"]
         );
     }
 
@@ -697,7 +702,7 @@ jobs:
       - run: |
           # cargo build --workspace --target aarch64-apple-ios
           cargo check \\
-            --package sidevoice-app-core \\
+            --package sidevoice-shared \\
             --target aarch64-linux-android
           CC=zigcc cargo ndk -t arm64-v8a build -psidevoice-mobile
       - run: echo 'cargo build --target aarch64-apple-ios'
@@ -777,7 +782,7 @@ jobs:
             --all
       - run: cargo ndk -t arm64-v8a build
       - run: cargo build -p sidevoice-mobile --exclude sidevoice-desktop --target aarch64-apple-ios
-      - run: cargo build -p sidevoice-app-core
+      - run: cargo build -p sidevoice-shared
       - run: cd mobile && CC=zigcc cargo build --release --target aarch64-apple-ios
   commented:
     steps:

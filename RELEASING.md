@@ -1,6 +1,6 @@
 # Releasing
 
-One version for the whole desktop app, tagged `vX.Y.Z`. It lives in `desktop/tauri.conf.json`, `package.json`,
+One version for the whole desktop app, tagged `vX.Y.Z`. It lives in `desktop/tauri/tauri.conf.json`, `package.json`,
 `package-lock.json`, the three `Cargo.toml` and `Cargo.lock`; release-please moves them together
 (`release-please-config.json`). Never edit them by hand. This repository will release a second product, the mobile
 app, on its own: everything below is the desktop app's, and "Two products in one repository" says what keeps the
@@ -39,7 +39,7 @@ the package needs no change to the desktop app's tags, releases or nightly:
   changes at least one file outside `mobile/` (the PR that needs the release does; with nothing else to merge, a
   one-line fix in this file). Until the mobile package exists there is no exclusion and the empty commit works for the
   desktop app as documented below.
-- **A commit that changes only a shared crate** (`app-core/`, `app-tauri/`) belongs to the `.` package, not to `mobile`:
+- **A commit that changes only a shared crate** (`shared/core/`, `shared/tauri/`) belongs to the `.` package, not to `mobile`:
   release-please attributes a commit to a package by the files it touches, and a package is one directory. A mobile
   release for such a change needs a commit that touches `mobile/`, or the empty `Release-As` commit above.
 
@@ -120,7 +120,7 @@ writing its own would evict `main`'s and leave the next nightly to build from co
 
 What a build is, decided when it is built: `--channel` of `cargo xtask release app` and `bundle`, which the workflow
 sets from the run (`changes.channel`) and xtask hands to the app's build script (`SIDEVOICE_BUILD_CHANNEL`, with
-`SIDEVOICE_BUILD_COMMIT` and `SIDEVOICE_BUILD_DATE`; `desktop/build.rs` refuses anything else). The app says it to
+`SIDEVOICE_BUILD_COMMIT` and `SIDEVOICE_BUILD_DATE`; `desktop/tauri/build.rs` refuses anything else). The app says it to
 the page as `host.build` (docs/BRIDGE.md → "The build").
 
 - `release`: a run called with a release's tag. Has the updater (`host.updater`, its checks) on the releases' feed
@@ -204,7 +204,7 @@ channel is never offered the other's:
   first.
 
 The app installs only what is signed with the updater's key, checked against the public key in
-`desktop/tauri.conf.json` (`plugins.updater.pubkey`, minisign key id `EA1BE9B3A4CF715A`). The nightly's assets are
+`desktop/tauri/tauri.conf.json` (`plugins.updater.pubkey`, minisign key id `EA1BE9B3A4CF715A`). The nightly's assets are
 replaced one by one, so a check while that happens may miss one or pair one nightly's `latest.json` with another's
 update, whose signature then does not match: nothing is installed, the check or the download fails
 (`update-check-failed`, `update-download-failed`), and a later check finds them whole.
@@ -239,7 +239,7 @@ steps are skipped, and every secret those steps name resolves to nothing unless 
 from a fork never has the repository's secrets.)
 
 - The app: Tauri's bundler imports `APPLE_CERTIFICATE` into a keychain of its own, signs every binary with
-  `APPLE_SIGNING_IDENTITY`, the hardened runtime and `desktop/packaging/macos/Entitlements.plist` (the microphone; the keychain
+  `APPLE_SIGNING_IDENTITY`, the hardened runtime and `desktop/tauri/packaging/macos/Entitlements.plist` (the microphone; the keychain
   items the app keeps need no entitlement outside the sandbox), notarizes it with the App Store Connect API key
   (`APPLE_API_KEY`, `APPLE_API_ISSUER`, and `APPLE_API_KEY_P8` written to a file only the job can read,
   `APPLE_API_KEY_PATH`) and staples the ticket.
@@ -275,7 +275,7 @@ leaves the signed, notarized and stapled `dist/Sidevoice_X.Y.Z_aarch64.dmg` and 
 
 ## Legacy identifier carry-over
 
-Until `ai.sidevoice.desktop`, the app's identifier was `dev.sidevoice.desktop`. `desktop/src/legacy_identifier.rs` copies
+Until `ai.sidevoice.desktop`, the app's identifier was `dev.sidevoice.desktop`. `desktop/tauri/src/legacy_identifier.rs` copies
 an install's app data, browser storage and provider keys over from it at launch, until its journal (in the reset's
 control directory) says it has finished, and never changes the old ones (docs/APP_DATA.md, WEBVIEW_DATA.md,
 CREDENTIALS.md). **It stays until 1.0.** Someone can skip releases, so a fixed number of them is no boundary. Removing
@@ -283,7 +283,7 @@ it needs a release note that says "update through vX.Y first" (X.Y: the first re
 remove the old identifier's data by hand (APP_DATA.md has the list). To remove it: the module and its call in `run()`,
 the `stop` call in `data::begin_reset`, `platform::app_data::{carried_from, create_folder}` (and its `Os` method),
 `webview_data::locations_of`, `Keychain::{providers_in, copy_key_from}` and the `credentials` functions under them
-(app-core) with their tests, `data::PAIRINGS_FILE` if nothing else uses it, and the three doc sections called "From the
+(shared/core) with their tests, `data::PAIRINGS_FILE` if nothing else uses it, and the three doc sections called "From the
 previous identifier".
 
 ## When something fails

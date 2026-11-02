@@ -1,4 +1,4 @@
-// Unit tests of the shared members (app-core/js/members.js) against a transport of the tests' own: no browser, no Tauri.
+// Unit tests of the shared members (shared/tauri/js/members.js) against a transport of the tests' own: no browser, no Tauri.
 // What these tests hand the members is the whole of what the members know of how the app is reached.
 import { test } from "node:test";
 import assert from "node:assert/strict";

@@ -9,16 +9,8 @@ use serde::{Deserialize, Serialize};
 use crate::build_info::BuildInfo;
 use crate::i18n;
 
-/// Removes the WebView's default context menu (desktop/core/js/no-context-menu.js); appended to the scripts of every window.
-pub const NO_CONTEXT_MENU_SCRIPT: &str = include_str!("../js/no-context-menu.js");
-
-/// Forwards the room page's console warnings and errors, uncaught errors and unhandled rejections to the app log
-/// (desktop/core/js/webview-log.js); the room window only.
-pub const WEBVIEW_LOG_SCRIPT: &str = include_str!("../js/webview-log.js");
-
-/// The desktop's part of the bridge script (what only this app has, and the assembly of `host`), with its placeholders
-/// still in place. The other two parts of the page's script are [`Parts`].
-pub const SCRIPT_TEMPLATE: &str = include_str!("../js/desktop-bridge.js");
+// The scripts themselves (js/ of the app's Tauri crate) are handed over by the app: this crate holds the logic that fills in
+// their placeholders and composes them, and no file of the crate that ships them.
 const ORIGIN_PLACEHOLDER: &str = "\"__SIDEVOICE_ROOM_ORIGIN__\"";
 const MEDIA_PLACEHOLDER: &str = "\"__SIDEVOICE_MEDIA__\"";
 const LOCAL_HOST_PLACEHOLDER: &str = "\"__SIDEVOICE_LOCAL_HOST__\"";
@@ -38,21 +30,20 @@ const MICROPHONE_HELP_PLACEHOLDER: &str = "\"__SIDEVOICE_MICROPHONE_HELP__\"";
 /// while the script reads them.
 const OFFERED: &str = "true";
 
-/// The call controls card's bridge script, with its origin placeholder still in place.
-pub const CALL_CONTROLS_SCRIPT_TEMPLATE: &str = include_str!("../js/call-controls-bridge.js");
 const APP_ORIGIN_PLACEHOLDER: &str = "\"__SIDEVOICE_APP_ORIGIN__\"";
 const RESIZE_PLACEHOLDER: &str = "\"__SIDEVOICE_RESIZE__\"";
 
-/// The script injected into the call controls card's window, bound to the app's own origin. `resize`: whether the app
+/// The script injected into the call controls card's window, bound to the app's own origin. `template`: the card's bridge
+/// script with its placeholders still in place; `no_context_menu`: the script every window gets. `resize`: whether the app
 /// resizes the picture-in-picture by its grip (`host.callControls.resize`; not on Wayland, where it cannot see the pointer).
-pub fn call_controls_script(origin: &str, resize: bool) -> String {
+pub fn call_controls_script(template: &str, no_context_menu: &str, origin: &str, resize: bool) -> String {
     let literal = serde_json::to_string(origin).expect("a string serialises");
-    let bridge = CALL_CONTROLS_SCRIPT_TEMPLATE.replacen(APP_ORIGIN_PLACEHOLDER, &literal, 1).replacen(
+    let bridge = template.replacen(APP_ORIGIN_PLACEHOLDER, &literal, 1).replacen(
         RESIZE_PLACEHOLDER,
         if resize { "true" } else { "false" },
         1,
     );
-    format!("{bridge}\n{NO_CONTEXT_MENU_SCRIPT}")
+    format!("{bridge}\n{no_context_menu}")
 }
 
 /// What the app pushes to the card: any subset of `{call, level, playback, place, size, pointerInside,
@@ -61,14 +52,17 @@ pub fn call_controls_push(patch: &serde_json::Value) -> String {
     format!("window.__sidevoiceHost && window.__sidevoiceHost.receive({patch});")
 }
 
-/// The parts of the page's script that other crates own, as the code they ship: `transport` is the shell binding's
-/// (`sidevoice-app-tauri`: how the page reaches the shared commands) and `members` the apps' (`sidevoice-app-core`: the
+/// The parts of the page's script, as the code the app ships: `transport` is the shell binding's
+/// (`sidevoice-shared-tauri`: how the page reaches the shared commands) and `members` the apps' (`sidevoice-shared-tauri`: the
 /// engine, the voice call, the microphone, the pairings and the call state). Each is one function expression
-/// (docs/BRIDGE.md -> "Parts"). This crate names neither crate, so the app that has them hands them over.
+/// (docs/BRIDGE.md -> "Parts"); `desktop` is the desktop's own part (js/desktop-bridge.js of the app's Tauri crate: what only
+/// this app has, and the assembly of `host`), with its placeholders still in place. This crate names none of those crates, so
+/// the app that has them hands them over.
 #[derive(Debug, Clone, Copy)]
 pub struct Parts<'a> {
     pub transport: &'a str,
     pub members: &'a str,
+    pub desktop: &'a str,
 }
 
 /// The page's script: the desktop's part, in a scope where the other two are `transportOf` and `membersOf`. The tests
@@ -116,7 +110,8 @@ pub fn script_for_origin(
     } else {
         "null".to_owned()
     };
-    let desktop = SCRIPT_TEMPLATE
+    let desktop = parts
+        .desktop
         .replacen(ORIGIN_PLACEHOLDER, &literal, 1)
         .replacen(MEDIA_PLACEHOLDER, flag(media), 1)
         .replacen(LOCAL_HOST_PLACEHOLDER, OFFERED, 1)
@@ -151,7 +146,7 @@ pub fn microphone_help(help: &str, settings_label: Option<&str>) -> serde_json::
         .into()
 }
 
-/// The bridge's version: the room page sends it in every snapshot (desktop/core/js/desktop-bridge.js).
+/// The bridge's version: the room page sends it in every snapshot (desktop/tauri/js/desktop-bridge.js).
 pub const VERSION: u32 = 2;
 
 /// What the agent is doing, as the room's view model says (its `session`): the card's avatar shows it, and only it.
@@ -373,8 +368,22 @@ fn with_title(status: &str, title: &str) -> String {
 mod tests {
     use super::*;
 
-    /// Stand-ins for the transport and the members, which other crates own.
-    const PARTS: Parts<'static> = Parts { transport: "TRANSPORT", members: "MEMBERS" };
+    /// A script of the app's Tauri crate (its `js/`), read by path: this crate ships none of them.
+    fn script(name: &str) -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../tauri/js").join(name);
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+    }
+
+    static DESKTOP_BRIDGE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| script("desktop-bridge.js"));
+
+    /// The real desktop part, and stand-ins for the transport and the members, which other crates own.
+    fn parts() -> Parts<'static> {
+        Parts { transport: "TRANSPORT", members: "MEMBERS", desktop: &DESKTOP_BRIDGE }
+    }
+
+    fn card_script(origin: &str, resize: bool) -> String {
+        call_controls_script(&script("call-controls-bridge.js"), &script("no-context-menu.js"), origin, resize)
+    }
 
     #[test]
     fn tray_icon_slot_applies_only_changes_and_only_the_latest() {
@@ -425,8 +434,8 @@ mod tests {
 
     #[test]
     fn every_window_script_removes_the_default_context_menu() {
-        assert!(call_controls_script("tauri://localhost", true).contains("contextmenu"));
-        assert!(NO_CONTEXT_MENU_SCRIPT.contains("contextmenu"));
+        assert!(card_script("tauri://localhost", true).contains("contextmenu"));
+        assert!(script("no-context-menu.js").contains("contextmenu"));
     }
 
     /// The microphone's help as the macOS build tells the page.
@@ -463,7 +472,7 @@ mod tests {
             false,
             "⌘",
             &help,
-            &PARTS,
+            &parts(),
         );
         assert!(!s.contains("__SIDEVOICE_ROOM_ORIGIN__"));
         assert!(!s.contains("__SIDEVOICE_MEDIA__"));
@@ -498,7 +507,7 @@ mod tests {
             false,
             "Ctrl",
             &help,
-            &PARTS,
+            &parts(),
         );
         assert!(no_diagnostics.contains(&off.state(&[]).to_string()));
         assert!(no_diagnostics.contains(r#"factory(window, "https://voice.example.com", false,"#));
@@ -516,7 +525,7 @@ mod tests {
             true,
             "⌘",
             &help,
-            &PARTS,
+            &parts(),
         );
         let expected = format!(
             r#"factory(window, "https://voice.example.com", {platform}, true, {{"channel":"release","version":"0.4.0"}}, "Mac de Ana", null, true, true, "⌘", {told})"#
@@ -535,7 +544,7 @@ mod tests {
             false,
             "\"); alert(1); (\"",
             &help,
-            &PARTS,
+            &parts(),
         );
         assert!(evil.contains(r#"factory(window, "\"); alert(1); (\"""#));
         assert!(evil.contains(r#"{"channel":"dev","version":"0.4.0"}, "\"); alert(1); (\"", "#));
@@ -554,7 +563,7 @@ mod tests {
             false,
             "Ctrl",
             &quoting,
-            &PARTS,
+            &parts(),
         );
         assert!(hostile.contains(&quoting.to_string()));
     }
@@ -578,7 +587,7 @@ mod tests {
             false,
             "Ctrl",
             &help,
-            &PARTS,
+            &parts(),
         );
         assert!(
             script.starts_with("(function (transportOf, membersOf) {\n// Sidevoice desktop bridge"),
@@ -610,7 +619,7 @@ mod tests {
             false,
             "Ctrl",
             &help,
-            &PARTS,
+            &parts(),
         );
         let line = r#"factory(window, "https://voice.example.com", true, true, true, false, {"channel":"dev","version":"0.4.0"}, null, "#;
         assert!(told.contains(line), "{line}");
@@ -635,7 +644,7 @@ mod tests {
                 uninstall,
                 "Ctrl",
                 &help,
-                &PARTS,
+                &parts(),
             )
         };
         // The factory's last arguments: the microphone settings (false here), the uninstall, the shortcut modifier, then the help.
@@ -647,12 +656,10 @@ mod tests {
 
     #[test]
     fn the_card_s_script_binds_the_app_s_origin() {
-        let s = call_controls_script("tauri://localhost", true);
+        let s = card_script("tauri://localhost", true);
         assert!(!s.contains("__SIDEVOICE_APP_ORIGIN__") && !s.contains("__SIDEVOICE_RESIZE__"));
         assert!(s.contains(r#"factory(window, "tauri://localhost", true)"#));
-        assert!(
-            call_controls_script("tauri://localhost", false).contains(r#"factory(window, "tauri://localhost", false)"#)
-        );
+        assert!(card_script("tauri://localhost", false).contains(r#"factory(window, "tauri://localhost", false)"#));
         let push = call_controls_push(&serde_json::json!({"level": 3, "title": "\"); alert(1); (\""}));
         assert!(push.contains(r#"receive({"level":3,"title":"\"); alert(1); (\""});"#), "{push}");
     }

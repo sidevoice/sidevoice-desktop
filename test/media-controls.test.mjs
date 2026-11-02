@@ -68,7 +68,7 @@ function page(owned, origin) {
     __TAURI_INTERNALS__: {
       transformCallback: () => 1,
       invoke(command, args) {
-        const name = command.replace(/^plugin:sidevoice-app-tauri\|/, "");
+        const name = command.replace(/^plugin:sidevoice-shared-tauri\|/, "");
         if (name === "voice_events") return Promise.resolve(1);
         const { page, ...others } = args ?? {};
         calls.push([name, args && "page" in args ? others : args]);

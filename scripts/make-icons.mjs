@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 // Draws everything the app shows of the Sidevoice mark, from the brand files in brand/ (scripts/vendor-brand.mjs):
 //
-//   desktop/packaging/macos/icon.icns             macOS app icon, every size (16…1024), on Apple's icon grid
-//   desktop/packaging/windows/icon.ico              Windows app icon (16…256)
-//   desktop/packaging/linux/icons/{32x32,64x64,128x128,128x128@2x,icon}.png   Linux
-//   desktop/packaging/shared/tray/{idle,live,muted}.png          macOS menu bar, template images (one ink)
-//   desktop/packaging/shared/tray/{light,dark}-{idle,live,muted}.png   Windows / Linux tray, for light and dark bars
-//   desktop/packaging/macos/dmg/background.png, background@2x.png      the .dmg window
-//   mobile/app-icon/{icon.png,android-foreground.png,app-icon.json}   the mobile app's icon sources: `cargo xtask mobile generate`
+//   desktop/tauri/packaging/macos/icon.icns             macOS app icon, every size (16…1024), on Apple's icon grid
+//   desktop/tauri/packaging/windows/icon.ico              Windows app icon (16…256)
+//   desktop/tauri/packaging/linux/icons/{32x32,64x64,128x128,128x128@2x,icon}.png   Linux
+//   desktop/tauri/packaging/shared/tray/{idle,live,muted}.png          macOS menu bar, template images (one ink)
+//   desktop/tauri/packaging/shared/tray/{light,dark}-{idle,live,muted}.png   Windows / Linux tray, for light and dark bars
+//   desktop/tauri/packaging/macos/dmg/background.png, background@2x.png      the .dmg window
+//   mobile/tauri/app-icon/{icon.png,android-foreground.png,app-icon.json}   the mobile app's icon sources: `cargo xtask mobile generate`
 //                                                                    derives every size from them (`tauri icon`)
-//   mobile/plugin/android/src/main/res/drawable/ic_call_notification.xml   the Android call notification's small icon
-//   mobile/app-icon/window.{png,ico}                                   the window icon its build embeds (never shown on a phone)
+//   mobile/tauri/plugin/android/src/main/res/drawable/ic_call_notification.xml   the Android call notification's small icon
+//   mobile/tauri/app-icon/window.{png,ico}                                   the window icon its build embeds (never shown on a phone)
 //
 //   npm run icons
 //
@@ -146,38 +146,38 @@ function ico(images) {
 
 const mac = Object.fromEntries([16, 32, 64, 128, 256, 512, 1024].map((s) => [s, appIconMac(s)]));
 const [c16, c32] = [classic(mac[16]), classic(mac[32])];
-out("desktop/packaging/macos/icon.icns", icns([
+out("desktop/tauri/packaging/macos/icon.icns", icns([
   ["is32", c16.rgb], ["s8mk", c16.mask], ["ic11", mac[32]], // 16, 16@2x
   ["il32", c32.rgb], ["l8mk", c32.mask], ["ic12", mac[64]], // 32, 32@2x
   ["ic07", mac[128]], ["ic13", mac[256]], // 128, 128@2x
   ["ic08", mac[256]], ["ic14", mac[512]], // 256, 256@2x
   ["ic09", mac[512]], ["ic10", mac[1024]], // 512, 512@2x
 ]));
-out("desktop/packaging/windows/icon.ico", ico([16, 20, 24, 32, 40, 48, 64, 256].map((s) => [s, appIconFlat(s)])));
+out("desktop/tauri/packaging/windows/icon.ico", ico([16, 20, 24, 32, 40, 48, 64, 256].map((s) => [s, appIconFlat(s)])));
 for (const [file, size] of [["32x32.png", 32], ["64x64.png", 64], ["128x128.png", 128], ["128x128@2x.png", 256], ["icon.png", 512]]) {
-  out(`desktop/packaging/linux/icons/${file}`, appIconFlat(size));
+  out(`desktop/tauri/packaging/linux/icons/${file}`, appIconFlat(size));
 }
 // For the screens in docs/brand-screens and anyone who wants to look at it.
-out("desktop/packaging/macos/macos-1024.png", mac[1024]);
+out("desktop/tauri/packaging/macos/macos-1024.png", mac[1024]);
 
 // Mobile: the sources `tauri icon` derives every size from (the app's `gen/` projects get them when they are generated).
 // iOS wants a square with no transparency (the system rounds it) and Android an adaptive icon: the plate's colour as the
 // background, and the mark alone as the foreground, on a 1024 canvas standing for the 108 dp one. The system shows its
 // 72 dp centre, in which the mark's bars span 63 % of the plate as they do in the tile: the mark's 24 box at 684 px.
 const TILE_COLOUR = TILE.match(/<rect width="24" height="24" rx="[\d.]+" fill="(#[0-9a-f]{6})"/)[1];
-out("mobile/app-icon/icon.png", png(svg(24, 24, inner(TILE).replace(/(<rect width="24" height="24") rx="[\d.]+"/, "$1")), 1024));
-out("mobile/app-icon/android-foreground.png", png(svg(1024, 1024, place(MARK_DARK, 170, 170, 684)), 1024));
-out("mobile/app-icon/app-icon.json", JSON.stringify({ default: "icon.png", bg_color: TILE_COLOUR, android_fg: "android-foreground.png" }, null, 2) + "\n");
-out("mobile/app-icon/window.png", png(svg(24, 24, inner(TILE)), 32));
+out("mobile/tauri/app-icon/icon.png", png(svg(24, 24, inner(TILE).replace(/(<rect width="24" height="24") rx="[\d.]+"/, "$1")), 1024));
+out("mobile/tauri/app-icon/android-foreground.png", png(svg(1024, 1024, place(MARK_DARK, 170, 170, 684)), 1024));
+out("mobile/tauri/app-icon/app-icon.json", JSON.stringify({ default: "icon.png", bg_color: TILE_COLOUR, android_fg: "android-foreground.png" }, null, 2) + "\n");
+out("mobile/tauri/app-icon/window.png", png(svg(24, 24, inner(TILE)), 32));
 // The Android call notification's small icon: the mark in one ink (the system tints it), each bar a capsule.
 const capsule = ([x, y, w, h]) => {
   const r = w / 2;
   return `M${x + r},${y}a${r},${r} 0 0 1 ${r},${r}v${+(h - w).toFixed(2)}a${r},${r} 0 0 1 ${-w},0v${+(w - h).toFixed(2)}a${r},${r} 0 0 1 ${r},${-r}z`;
 };
-out("mobile/plugin/android/src/main/res/drawable/ic_call_notification.xml",
+out("mobile/tauri/plugin/android/src/main/res/drawable/ic_call_notification.xml",
   `<?xml version="1.0" encoding="utf-8"?>\n<!-- The brand mark in one ink (npm run icons). -->\n<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp"\n    android:viewportWidth="24" android:viewportHeight="24">\n    <path android:fillColor="#FFFFFFFF" android:pathData="${BARS.map(capsule).join("")}" />\n</vector>\n`);
 // tauri-build wants an .ico too where it builds the crate for a Windows host (the desktop workflows do, to check it).
-out("mobile/app-icon/window.ico", ico([[32, png(svg(24, 24, inner(TILE)), 32)]]));
+out("mobile/tauri/app-icon/window.ico", ico([[32, png(svg(24, 24, inner(TILE)), 32)]]));
 
 // ------------------------------------------------------------------ tray
 
@@ -211,7 +211,7 @@ const template = {
   muted: slashed(trayMark(MARK_INK), "#000", TRAY.w, TRAY.h) + dot("#000"),
 };
 for (const [state, body] of Object.entries(template)) {
-  out(`desktop/packaging/shared/tray/${state}.png`, png(svg(TRAY.w, TRAY.h, body), TRAY.w));
+  out(`desktop/tauri/packaging/shared/tray/${state}.png`, png(svg(TRAY.w, TRAY.h, body), TRAY.w));
 }
 
 // Windows and Linux do not tint tray icons and draw them square (16 px at 100 %), with their own spacing
@@ -229,7 +229,7 @@ for (const [ground, colourMark, ink] of [["light", MARK, "#4a2f6b"], ["dark", MA
     muted: slashed(place(colourMark, 0, 0, 32), ink, 32, 32, sq, 32 / 24),
   };
   for (const [state, body] of Object.entries(states)) {
-    out(`desktop/packaging/shared/tray/${ground}-${state}.png`, png(svg(32, 32, body), 32));
+    out(`desktop/tauri/packaging/shared/tray/${ground}-${state}.png`, png(svg(32, 32, body), 32));
   }
 }
 
@@ -254,8 +254,8 @@ const dmg = svg(DMG.width, DMG.height,
   `<svg x="${(DMG.width - lockupW) / 2}" y="40" width="${lockupW}" height="${LOCKUP_H}" viewBox="0 0 ${lw} ${lh}">${inner(LOCKUP)}</svg>` +
   `<rect x="32" y="112" width="${DMG.width - 64}" height="236" rx="24" fill="${SHELF}"/>` +
   arrow);
-out("desktop/packaging/macos/dmg/background.png", png(dmg, DMG.width));
-out("desktop/packaging/macos/dmg/background@2x.png", png(dmg, DMG.width * 2));
-writeFileSync(path.join(root, "desktop/packaging/macos/dmg/layout.json"), JSON.stringify(DMG, null, 2) + "\n");
+out("desktop/tauri/packaging/macos/dmg/background.png", png(dmg, DMG.width));
+out("desktop/tauri/packaging/macos/dmg/background@2x.png", png(dmg, DMG.width * 2));
+writeFileSync(path.join(root, "desktop/tauri/packaging/macos/dmg/layout.json"), JSON.stringify(DMG, null, 2) + "\n");
 
 console.log("icons, tray and .dmg background written from", JSON.parse(brand("source.json")).commit.slice(0, 7));

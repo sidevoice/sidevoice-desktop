@@ -1,6 +1,6 @@
 # Native remote pairing storage
 
-`desktop/src/data/pairings.rs` owns the existing remote-pairing schema and maps storage errors to the existing
+`desktop/tauri/src/data/pairings.rs` owns the existing remote-pairing schema and maps storage errors to the existing
 bridge refusal keys. The room commands and their caller checks stay in `data.rs`. The path is still Tauri's app-data
 `pairings.json`; local-host's `local-host.json` is a separate store.
 
@@ -37,13 +37,13 @@ test-support job includes this actual source module on all three hosts; no extra
 
 ## On the phone
 
-`mobile/src/pairings.rs` keeps the same record (`{pairings, pendingRevokes}`, at most 64 KiB, the same refusals
+`mobile/tauri/src/pairings.rs` keeps the same record (`{pairings, pendingRevokes}`, at most 64 KiB, the same refusals
 `data.pairings-invalid`, `data.pairings-read` and `data.pairings-write`) as one file, `pairings/pairings.json`, alone in a
 folder of its own in the app's private files. It has
 none of the desktop's held-directory machinery, because the sandbox is the boundary: no other app can open the app's data
 directory, and a link or a hard link there is the app's own. Its `read` and `write` are the pair of the shared plugin's
-`PairingStore` (`sidevoice-app-tauri`); the trait is implemented for it when the plugin joins the app (row 49), because
-`sidevoice-mobile` does not depend on `app-tauri` (and through it on the engine and voice) before they build for the phone.
+`PairingStore` (`sidevoice-shared-tauri`); the trait is implemented for it when the plugin joins the app (row 49), because
+`sidevoice-mobile` does not depend on `shared/tauri` (and through it on the engine and voice) before they build for the phone.
 
 - **Where.** `PairingFile::of_app(app)` takes Tauri's app data directory: the app's folder in Application Support on iOS;
   on Android the app's whole data directory, so the folder goes in its `files` folder (`Context.getFilesDir()`,
@@ -64,13 +64,13 @@ directory, and a link or a hard link there is the app's own. Its `read` and `wri
   after the new record is in place. After any error the file is read: if it holds the bytes just written, the write is
   reported done (whether the rename survives a power loss at that very moment is not known); otherwise it failed, and the old
   record is what a read returns.
-- **Shape.** The same check as the desktop's (`checked_pairings`, `desktop/src/data/pairings.rs`), copied: the desktop's file
+- **Shape.** The same check as the desktop's (`checked_pairings`, `desktop/tauri/src/data/pairings.rs`), copied: the desktop's file
   is also built without Tauri by `test-support` for the Windows and macOS fixture jobs, which cannot reach a shared copy in
-  `app-tauri` without linking a webview, and the mobile crate cannot reach `app-tauri` yet. The two stay copies of each
+  `shared/tauri` without linking a webview, and the mobile crate cannot reach `shared/tauri` yet. The two stay copies of each
   other until the shape has a home both can reach.
 - **iOS data protection.** The record has the system's default class, Complete Until First User Authentication
   ([Apple Platform Security](https://support.apple.com/guide/security/secb010e978a/web)): readable from the first unlock
-  after a restart, as a call under a locked screen needs. The app's entitlements are empty (`mobile/gen/apple`). Adding the
+  after a restart, as a call under a locked screen needs. The app's entitlements are empty (`mobile/tauri/gen/apple`). Adding the
   Data Protection capability would raise the default to Complete, and the record would be unreadable while the phone is
   locked. No code sets the class.
 - **Backups.** The record holds the access token to the person's computer, so it stays out of every OS backup (operator
@@ -88,7 +88,7 @@ directory, and a link or a hard link there is the app's own. Its `read` and `wri
     (`data.pairings-write`) and has written nothing: a read still returns the old record. The mark keeps the folder out of
     iCloud and computer backups, an encrypted one included; as Apple says, it guides the system and does not guarantee the
     item never appears in a backup.
-  - *Android.* `files/pairings/` is excluded by the backup rules of the Android library in `mobile/plugin`, which
+  - *Android.* `files/pairings/` is excluded by the backup rules of the Android library in `mobile/tauri/plugin`, which
     Gradle merges into the app's manifest (`gen/android` is not edited): `res/xml/data_extraction_rules.xml`
     (`android:dataExtractionRules`, Android 12 and newer) excludes it (`<exclude domain="file" path="pairings/" />`) from
     both `cloud-backup` and `device-transfer`, and `res/xml/backup_rules.xml` (`android:fullBackupContent`, Android 11 and
@@ -96,7 +96,7 @@ directory, and a link or a hard link there is the app's own. Its `read` and `wri
     ([Back up user data with Auto Backup](https://developer.android.com/identity/data/autobackup)). Both also exclude the
     SharedPreferences file of the provider keys, `shared_prefs/keyring-sidevoice-providers.xml`: `android-native-keyring-store`
     1.0.0 names the file `keyring-<store name>` and the app's store is `sidevoice-providers`
-    (`app-core/src/platform/credentials/android.rs`). It holds values only that phone's Keystore key can decrypt, so a
+    (`shared/core/src/platform/credentials/android.rs`). It holds values only that phone's Keystore key can decrypt, so a
     restored copy would be dead weight. The template's manifest sets neither `allowBackup` (default true) nor any rules, so
     the merge has no conflict and needs no `tools:replace`.
   - *Nothing left outside the rule.* The atomic write names its temporary file `.pairings.json.<six letters>` and removes it
