@@ -453,23 +453,14 @@ pub fn lint(name: &str) -> Result<()> {
     match project(name)?.cli {
         "android" => {
             let libs = engine_libs(name, "aarch64-linux-android")?;
-            Cmd::new("cargo")
-                .args(["ndk", "--target", "arm64-v8a", "clippy"])
-                .args(packages)
-                .args(flags)
-                .env("SHERPA_ONNX_LIB_DIR", libs)
-                .dir(&mobile)
-                .run()
+            let clippy = Cmd::new("cargo").args(["ndk", "--target", "arm64-v8a", "clippy"]).args(packages).args(flags);
+            libs.apply(clippy.dir(&mobile)).run()
         }
         _ => {
             let libs = engine_libs(name, "aarch64-apple-ios-sim")?;
-            Cmd::new("cargo")
-                .args(["clippy", "--target", "aarch64-apple-ios-sim"])
-                .args(packages)
-                .args(flags)
-                .env("SHERPA_ONNX_LIB_DIR", libs)
-                .dir(&mobile)
-                .run()
+            let clippy =
+                Cmd::new("cargo").args(["clippy", "--target", "aarch64-apple-ios-sim"]).args(packages).args(flags);
+            libs.apply(clippy.dir(&mobile)).run()
         }
     }
 }
