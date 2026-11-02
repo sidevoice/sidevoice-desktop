@@ -25,6 +25,8 @@ objc2-call-kit = { version = "0.3", default-features = false, features = ["std",
 objc2-avf-audio = { version = "0.3", default-features = false, features = ["std", "AVAudioSession"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData", "NSError", "NSSet", "NSString", "NSUUID", "NSValue"] }
 block2 = "0.6"
+# The main queue the CallKit controller answers on (its default is a private queue of its own).
+dispatch2 = "0.3"
 
 [build-dependencies]
 tauri-plugin = { version = "2.7", features = ["build"] }

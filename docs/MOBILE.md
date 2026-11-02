@@ -104,8 +104,9 @@ through `run` (the call's service hangs up through it).
     a stop, which sidevoice-voice sends once its audio is closed; the desktop does nothing there). Every voice call
     counts, a try in Settings too. A session the system will not activate refuses the call with its code
     (`audio-session-activate-failed`). While the room's call is a CallKit call, CallKit activates and deactivates the
-    session, not the app: the first voice call's audio waits for `provider(_:didActivate:)` (up to 5 s, then the app
-    activates it itself), and the last one's end leaves the deactivation to CallKit.
+    session, not the app: the first voice call's audio waits for `provider(_:didActivate:)` (up to 5 s; past it, or while
+    CallKit holds the call, the voice call is refused with `audio-session-activate-failed`: the app never activates a
+    session CallKit owns), and the last one's end leaves the deactivation to CallKit.
 - **The audio session** (iOS; D-AUDIO-SESSION, sidevoice-voice's `Session`): declared at the app's start as
   play-and-record with mode `Default`, the loudspeaker rather than the receiver, and Bluetooth hands-free allowed;
   activated only when a call starts (above). Android has no session to declare. **Not verified on a device yet**; see

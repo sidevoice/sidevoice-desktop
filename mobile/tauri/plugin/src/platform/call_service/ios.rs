@@ -10,7 +10,7 @@
 //! reported to it; the page's own mute is told to the system as a `CXSetMutedCallAction` the app asks for.
 //!
 //! Every CallKit object lives on the main thread: the provider's delegate is called there (no queue of its own), the
-//! controller answers there, and the app's requests are carried there (`run_on_main_thread`). The calls of this body come
+//! controller answers there (made with the main queue: its own default is a private one), and the app's requests are carried there (`run_on_main_thread`). The calls of this body come
 //! from the app's call thread, never from the main thread, which `start` waits on.
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -18,6 +18,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use block2::RcBlock;
+use dispatch2::DispatchQueue;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{define_class, msg_send, AllocAnyThread, MainThreadMarker, MainThreadOnly};
@@ -144,6 +145,9 @@ struct Call {
     shown: CallDetails,
     /// Reported connected (once, when its audio is first activated).
     connected: bool,
+    /// The mute actions the app asked for and CallKit has not performed yet (their `CXAction` UUIDs): performed, they are
+    /// the app's own coming back, not a mute from outside, and are not reported (a late one must not undo a newer mute).
+    asked: Vec<Retained<NSUUID>>,
 }
 
 impl CallKit {
@@ -164,7 +168,10 @@ impl CallKit {
             provider.setDelegate_queue(Some(ProtocolObject::from_ref(&*delegate)), None);
             CallKit {
                 provider,
-                controller: CXCallController::new(),
+                controller: CXCallController::initWithQueue(
+                    CXCallController::alloc(),
+                    DispatchQueue::main(),
+                ),
                 _delegate: delegate,
                 call: None,
             }
@@ -226,6 +233,7 @@ fn request_start(
                 muted: false,
             },
             connected: false,
+            asked: Vec::new(),
         });
         Ok((kit.controller.clone(), action))
     })?;
@@ -286,10 +294,13 @@ fn show(details: CallDetails) {
                 details.muted,
             )
         };
-        Some((kit.controller.clone(), action))
+        // SAFETY: the action's own identifier.
+        let asked = unsafe { action.UUID() };
+        call.asked.push(asked.clone());
+        Some((kit.controller.clone(), action, asked))
     });
-    if let Some((controller, action)) = request {
-        let answered = RcBlock::new(|error: *mut NSError| {
+    if let Some((controller, action, asked)) = request {
+        let answered = RcBlock::new(move |error: *mut NSError| {
             // SAFETY: as above.
             if let Some(error) = unsafe { error.as_ref() } {
                 log::warn!(
@@ -297,6 +308,16 @@ fn show(details: CallDetails) {
                     error.domain(),
                     error.code()
                 );
+                // Never performed: nothing of it comes back, and the system's call keeps the mute it had.
+                CALLKIT.with_borrow_mut(|kit| {
+                    if let Some(call) = kit.as_mut().and_then(|kit| kit.call.as_mut()) {
+                        let before = call.asked.len();
+                        call.asked.retain(|uuid| **uuid != *asked);
+                        if call.asked.len() != before {
+                            call.shown.muted = !call.shown.muted;
+                        }
+                    }
+                });
             }
         });
         // SAFETY: as in `request_start`.
@@ -412,17 +433,25 @@ define_class!(
             unsafe { action.fulfill() };
         }
 
-        /// Muted or unmuted: by the system's screens or a headset, or the app's own request coming back.
+        /// Muted or unmuted: by the system's screens or a headset (reported), or the app's own request coming back (only
+        /// acknowledged: a late one must not undo a newer mute of the page's).
         #[unsafe(method(provider:performSetMutedCallAction:))]
         fn perform_mute(&self, _provider: &CXProvider, action: &CXSetMutedCallAction) {
             // SAFETY: as above.
-            let (uuid, muted) = unsafe { (action.callUUID(), action.isMuted()) };
-            if let Some(events) = current(&uuid) {
-                CALLKIT.with_borrow_mut(|kit| {
-                    if let Some(call) = kit.as_mut().and_then(|kit| kit.call.as_mut()) {
-                        call.shown.muted = muted;
-                    }
-                });
+            let (uuid, muted, id) = unsafe { (action.callUUID(), action.isMuted(), action.UUID()) };
+            let external = CALLKIT.with_borrow_mut(|kit| {
+                let call = kit.as_mut()?.call.as_mut()?;
+                if *call.uuid != *uuid {
+                    return None;
+                }
+                if let Some(at) = call.asked.iter().position(|asked| **asked == *id) {
+                    call.asked.remove(at);
+                    return None;
+                }
+                call.shown.muted = muted;
+                Some(call.events.clone())
+            });
+            if let Some(events) = external {
                 events(CallEvent::Muted { muted });
             }
             // SAFETY: as above.

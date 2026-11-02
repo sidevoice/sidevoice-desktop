@@ -48,7 +48,8 @@ pub fn configure() -> Result<(), String> {
 }
 
 /// How long the first voice call's audio waits for the system to activate the session of its call (CallKit answers in well
-/// under a second). Past it the app activates the session itself, so that a call never goes without audio.
+/// under a second). Past it the voice call is refused (`audio-session-activate-failed`): the session is CallKit's to
+/// activate while its call lasts, never the app's.
 const SYSTEM_AUDIO_LIMIT: Duration = Duration::from_secs(5);
 
 /// The phone's side of the host's voice calls: the audio session while any of them has audio open.
@@ -75,11 +76,16 @@ enum SystemAudio {
     /// No such call: the app activates the session itself.
     #[default]
     None,
-    /// A call is starting, or on hold: the system has the session inactive, and activates it when it is ready.
-    Inactive,
+    /// A call is starting: the system activates the session when it is ready.
+    Pending,
+    /// The system activated the session and has deactivated it since (the call is on hold, another call has the audio).
+    Held,
     /// The system has activated it.
     Active,
 }
+
+/// What a voice call's audio refused for want of the system's session says (sidevoice-voice's code for it).
+const ACTIVATE_FAILED: &str = "audio-session-activate-failed";
 
 impl PhoneCall {
     /// The system gave the audio back after an interruption (iOS deactivated the session): activates it again if a voice
@@ -104,7 +110,7 @@ impl PhoneCall {
         let mut audio = self.audio.lock().unwrap();
         audio.system = match (on, audio.system) {
             (false, _) => SystemAudio::None,
-            (true, SystemAudio::None) => SystemAudio::Inactive,
+            (true, SystemAudio::None) => SystemAudio::Pending,
             (true, now) => now,
         };
         self.changed.notify_all();
@@ -117,7 +123,7 @@ impl PhoneCall {
             audio.system = if active {
                 SystemAudio::Active
             } else {
-                SystemAudio::Inactive
+                SystemAudio::Held
             };
         }
         self.changed.notify_all();
@@ -126,7 +132,8 @@ impl PhoneCall {
 
 impl CallActivity for PhoneCall {
     /// Before the first voice call's audio opens: the session is activated, by the app, or (during a call of the system's
-    /// that activates its own) by the system, waited for.
+    /// that activates its own) by the system, waited for while the call starts. While the system holds its call, or past the
+    /// wait, the voice call is refused: the app never activates a session the system owns.
     fn starting(&self) -> Result<(), String> {
         let mut audio = self.audio.lock().unwrap();
         let deadline = Instant::now() + SYSTEM_AUDIO_LIMIT;
@@ -137,12 +144,17 @@ impl CallActivity for PhoneCall {
                     break;
                 }
                 SystemAudio::Active => break,
-                SystemAudio::Inactive => {
+                SystemAudio::Held => {
+                    log::warn!("call: the system's call is on hold; no audio until it is back");
+                    return Err(ACTIVATE_FAILED.into());
+                }
+                SystemAudio::Pending => {
                     let left = deadline.saturating_duration_since(Instant::now());
                     if left.is_zero() {
-                        log::warn!("call: the system did not activate its call's audio session; the app does");
-                        Session::activate()?;
-                        break;
+                        log::warn!(
+                            "call: the system did not activate its call's audio session in time"
+                        );
+                        return Err(ACTIVATE_FAILED.into());
                     }
                     audio = self.changed.wait_timeout(audio, left).unwrap().0;
                 }

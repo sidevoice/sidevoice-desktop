@@ -75,8 +75,14 @@ class CallService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     /** The coroutine that adds the call to Telecom and runs for its length. */
     private var telecom: Job? = null
+    /** The call as Telecom gave it (added), until it is disconnected. */
+    private var registered: CallControlScope? = null
     /** The call, once Telecom holds it (active). */
     private var control: CallControlScope? = null
+    /** This service's call is over: a call Telecom gives after that is disconnected at once, so none is left behind. */
+    private var telecomEnded = false
+    /** The microphone mute the service last set itself, until Telecom tells it back (then it is no mute from outside). */
+    private var echo: Boolean? = null
     /** The page's mute, as last told ([ACTION_UPDATE]). */
     private var pageMuted: Boolean? = null
     /** Whether the service turned the system's microphone mute on: it is turned off again at the end. */
@@ -144,6 +150,7 @@ class CallService : Service() {
         session = mine
         requestFocus(mine)
         openMedia(mine)
+        telecomEnded = false
         addTelecomCall(mine)
     }
 
@@ -267,6 +274,7 @@ class CallService : Service() {
         if (control == null) return
         val audio = getSystemService(AudioManager::class.java)
         if (audio.isMicrophoneMute != muted) {
+            echo = muted
             audio.isMicrophoneMute = muted
             mutedTheSystem = muted
         }
@@ -305,14 +313,20 @@ class CallService : Service() {
                 ) {
                     val call = this
                     added = call
+                    if (telecomEnded || session?.id != mine.id) {
+                        // The call ended before Telecom gave it: disconnected now, so that none is left behind.
+                        launch { call.disconnect(DisconnectCause(DisconnectCause.LOCAL)) }
+                        return@addCall
+                    }
+                    // Kept from now: an end while it is being set active disconnects it (`endTelecom`).
+                    registered = call
                     launch {
                         val result = call.setActive()
+                        if (registered !== call) return@launch // ended meanwhile, and disconnected
                         if (result !is CallControlResult.Success) {
-                            Log.w(TAG, "Telecom: the call was not set active: $result")
+                            Log.w(TAG, "Telecom: the call was not set active: $result; it stays the app's own")
+                            registered = null
                             call.disconnect(DisconnectCause(DisconnectCause.ERROR))
-                        } else if (session?.id != mine.id) {
-                            // The call ended while Telecom took it.
-                            call.disconnect(DisconnectCause(DisconnectCause.LOCAL))
                         } else {
                             telecomHolds(mine, call)
                         }
@@ -323,10 +337,16 @@ class CallService : Service() {
                     launch {
                         var known = getSystemService(AudioManager::class.java).isMicrophoneMute
                         call.isMuted.collect { muted ->
-                            if (muted != known) {
-                                known = muted
-                                if (control === call) CallSession.muted(mine, muted)
+                            if (muted == known) return@collect
+                            known = muted
+                            // The service's own mute (the page's) coming back: not reported, so that a late one never undoes
+                            // a newer mute of the page's.
+                            if (echo == muted) {
+                                echo = null
+                                return@collect
                             }
+                            echo = null
+                            if (control === call) CallSession.muted(mine, muted)
                         }
                     }
                     // The loudspeaker rather than the earpiece, as on iOS: a headset or a Bluetooth device stays chosen.
@@ -340,8 +360,8 @@ class CallService : Service() {
                             }
                     }
                 }
-                // The call is over in Telecom. Not by the app (it lets go of `control` first): the service ends with it.
-                if (added != null && control === added && session?.id == mine.id) finish("system")
+                // The call is over in Telecom. Not by the app (it lets go of `registered` first): the service ends with it.
+                if (added != null && registered === added && session?.id == mine.id) finish("system")
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -366,20 +386,23 @@ class CallService : Service() {
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(mine.id))
     }
 
-    /** The call leaves Telecom: disconnected by the app, and its coroutines let go once it is. */
+    /**
+     * The call leaves Telecom: disconnected by the app, and its coroutines let go once it is. One Telecom has not given yet
+     * is disconnected when it arrives (`telecomEnded`); its coroutine ends with it.
+     */
     private fun endTelecom() {
-        val call = control
+        telecomEnded = true
+        val call = registered
+        registered = null
         control = null
+        echo = null
         val job = telecom
         telecom = null
         if (mutedTheSystem) {
             getSystemService(AudioManager::class.java).isMicrophoneMute = false
             mutedTheSystem = false
         }
-        if (call == null) {
-            job?.cancel()
-            return
-        }
+        if (call == null) return
         scope.launch {
             try {
                 call.disconnect(DisconnectCause(DisconnectCause.LOCAL))
