@@ -108,7 +108,7 @@ TestFlight.
 
 ## Inspecting the webviews (nightly and dev builds)
 
-A nightly and a dev build have hidden developer options in the room's Settings (click the version text 10 times in
+A nightly and a dev build have hidden developer options in the room's Settings (click the Build row in Settings → Advanced 10 times in
 5 seconds) with a "Web Inspector" switch; a release has neither the options nor an inspectable webview. The switch is
 off by default and is kept (docs/BRIDGE.md → "The developer options"). With it on:
 

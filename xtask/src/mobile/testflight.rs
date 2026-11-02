@@ -22,7 +22,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::{ios, tauri};
+use super::{build_tauri, ios};
 use crate::platform::ios_upload;
 use crate::util::{ensure, in_ci, repo, required_env, SecretDir};
 use crate::Result;
@@ -99,7 +99,7 @@ pub fn testflight(build_number_text: &str) -> Result<()> {
     let config = serde_json::json!({ "bundle": { "iOS": { "bundleVersion": build.to_string() } } }).to_string();
     let libs = super::AppBuildLibs::hold("ios", &["aarch64-apple-ios"])?;
     libs.libs
-        .apply(tauri(&[
+        .apply(build_tauri(&[
             "ios",
             "build",
             "--target",
@@ -109,7 +109,7 @@ pub fn testflight(build_number_text: &str) -> Result<()> {
             "--config",
             &config,
             "--ci",
-        ]))
+        ])?)
         .env("APPLE_API_KEY", &key_id)
         .env("APPLE_API_ISSUER", &issuer)
         .env("APPLE_API_KEY_PATH", &key)

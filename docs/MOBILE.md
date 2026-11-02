@@ -73,10 +73,10 @@ part, `mobile/tauri/js/mobile-bridge.js`, which assembles `host`:
 | `presence` | `{ media: "app" }`: the app owns the call's audio, so the page registers no Media Session and plays no Now Playing element of its own. The app answers the headset's play/pause and the lock screen's (the shared plugin's `platform/media_controls`: MediaPlayer on iOS, a `MediaSession` held by the call's service on Android; docs/MEDIA_CONTROLS.md). |
 | `reach` | `{ plainHttpPrivate: true }`, as on the desktop. |
 | `deviceName` | The name the person gave the phone (`mobile/tauri/src/platform/device_name`), read when the window is made: on Android `Settings.Global` `device_name`, else `Settings.Secure` `bluetooth_name`, else the model (`Samsung SM-A600FN`), with no permission; on iOS `UIDevice.current.name`, which since iOS 16 is the generic model ("iPhone") without the user-assigned-device-name entitlement. Without it the page would name the phone from the webview's user agent ("Chrome on Android"). |
+| `build` | What this build is, in the desktop's shape (docs/BRIDGE.md → "The build"): `{channel, version, commit?, date?}`. `cargo xtask mobile build` and `testflight` tell the build script (`mobile/tauri/build.rs`) the channel: `nightly` on CI, so every build shipped today (TestFlight, the signed APK) is a nightly with its `commit` and `date`, `dev` on a laptop, `SIDEVOICE_BUILD_CHANNEL` overriding; `version` is `tauri.conf.json`'s. The page unlocks its Developer options by the channel (Settings → Advanced, the Build row tapped 10 times; nightly only). |
 
 Nothing of the desktop's own (`localHost`, `reset`, `muteShortcut`, `callControls`, `updater`, `debug`) is
-offered, and neither is `build` yet: the mobile app's build kinds (nightly and release, D-MOBILE-CHANNELS) come with their
-own row. The page reports the call (the members' `room`) to the app's own `call_state`, and the app runs commands on the room
+offered. The page reports the call (the members' `room`) to the app's own `call_state`, and the app runs commands on the room
 through `run` (the call's service hangs up through it).
 
 - **Who may call.** The app's one window, `main`, on the app's own origin (`is_the_page`), as every shared command asks
@@ -396,4 +396,4 @@ interrupts anyway (the person left the app) goes on where it stopped. Native bac
 
 ## Not here yet
 
-The build kinds (nightly with Developer options, release).
+The release build kind (D-MOBILE-CHANNELS): every build shipped today is a nightly, and the release channel comes later.

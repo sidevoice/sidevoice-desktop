@@ -7,12 +7,12 @@
 //
 // The phone offers the voice call it runs itself, its engine, its microphone permission and its pairings, and owns the
 // call's media: the page registers no Media Session of its own (`presence.media: "app"`). Nothing of the desktop's
-// (the local host, the reset, the mute shortcut, the call controls card, the updater, the developer options) is offered:
+// (the local host, the reset, the mute shortcut, the call controls card, the updater, `debug`) is offered:
 // a member that is not there is not offered. On any origin other than the app's own it does nothing at all.
 (function (factory) {
   if (typeof module === "object" && module.exports) module.exports = factory; // unit tests
-  else factory(window, "__SIDEVOICE_APP_ORIGIN__", "__SIDEVOICE_MICROPHONE_SETTINGS__", "__SIDEVOICE_MICROPHONE_HELP__", "__SIDEVOICE_MESSAGES__", "__SIDEVOICE_DEVICE_NAME__");
-})(function installMobileBridge(win, appOrigin, microphoneSettingsOffered, microphoneHelp, messageTables, deviceName) {
+  else factory(window, "__SIDEVOICE_APP_ORIGIN__", "__SIDEVOICE_MICROPHONE_SETTINGS__", "__SIDEVOICE_MICROPHONE_HELP__", "__SIDEVOICE_MESSAGES__", "__SIDEVOICE_DEVICE_NAME__", "__SIDEVOICE_BUILD__");
+})(function installMobileBridge(win, appOrigin, microphoneSettingsOffered, microphoneHelp, messageTables, deviceName, build) {
   "use strict";
   // scheme://host rather than location.origin: the app's own pages (tauri://localhost) may have an opaque origin.
   if (win.location.protocol + "//" + win.location.host !== appOrigin) return null;
@@ -113,6 +113,9 @@
       // The name the person gave this phone ("Pixel de Ana"): the page proposes it as the device's name, instead of naming
       // it from the webview's user agent ("Chrome on Android"). Only where the system has one.
       ...(typeof deviceName === "string" && deviceName ? { deviceName } : {}),
+      /** What this build is, decided when it was built (docs/BRIDGE.md -> "The build"): the page shows it, and unlocks the
+       *  developer options by its channel (a nightly or a dev build). */
+      build: Object.freeze({ ...build }),
       // The pairings, in the app's private storage (mobile/tauri/src/pairings.rs), not the webview's.
       pairings: members.pairings(),
       /** The app owns the call's audio and the system's media on a phone: the page must not register Media Session

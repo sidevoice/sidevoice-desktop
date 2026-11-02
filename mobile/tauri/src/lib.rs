@@ -249,6 +249,12 @@ fn run_app() {
                     bridge::microphone_help().as_ref(),
                     &bridge::messages(),
                     bridge::device_name().as_deref(),
+                    &bridge::build(
+                        env!("SIDEVOICE_BUILD_CHANNEL"),
+                        &app.package_info().version.to_string(),
+                        env!("SIDEVOICE_BUILD_COMMIT"),
+                        env!("SIDEVOICE_BUILD_DATE"),
+                    ),
                 ))
                 // Only the app's own pages: the interface never navigates away.
                 .on_navigation(|url| navigation_allowed(url, APP_ORIGIN))
