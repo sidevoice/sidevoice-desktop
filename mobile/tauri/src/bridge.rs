@@ -186,7 +186,7 @@ mod tests {
 
     #[test]
     fn the_page_is_told_the_app_owns_the_media_and_nothing_of_the_desktop_s() {
-        assert!(SCRIPT_TEMPLATE.contains("presence: Object.freeze({ media: \"app\" })"));
+        assert!(SCRIPT_TEMPLATE.contains("presence: Object.freeze({\n        media: \"app\","));
         // The members of `host` the desktop has, as the host object would name them.
         for desktop in [
             "localHost:",

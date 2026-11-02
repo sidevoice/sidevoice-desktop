@@ -43,7 +43,8 @@ for (const origin of ["tauri://localhost", "http://tauri.localhost"]) {
     assert.equal(typeof api.run, "function");
     const host = api.host;
     assert.deepEqual(Object.keys(host).sort(), ["engine", "microphone", "pairings", "presence", "reach", "voice"]);
-    assert.equal(JSON.stringify(host.presence), JSON.stringify({ media: "app" }));
+    assert.equal(host.presence.media, "app");
+    assert.deepEqual(Object.keys(host.presence).sort(), ["media", "screenAwake"]);
     assert.equal(JSON.stringify(host.reach), JSON.stringify({ plainHttpPrivate: true }));
     for (const fn of ["catalogs", "install", "installed", "capabilities", "memory"]) assert.equal(typeof host.engine[fn], "function", fn);
     for (const fn of ["read", "write"]) assert.equal(typeof host.pairings[fn], "function", fn);
@@ -242,4 +243,25 @@ test("the phone's name is offered as host.deviceName, and left out when the syst
     const { api } = install("tauri://localhost", undefined, true, null, null, none);
     assert.equal("deviceName" in api.host, false);
   }
+});
+
+// sidevoice-desktop#384: the phone's webview has no Screen Wake Lock that holds, so the page keeps the screen on through the
+// app: the member must reach the native call (`keep_screen_on`, the app's own command) with the page asking, and again to let go.
+test("host.presence.screenAwake reaches the native keep_screen_on, to hold and to release", async () => {
+  const { api, invoked } = install("tauri://localhost");
+  const awake = api.host.presence.screenAwake;
+  assert.equal(awake.supported, true);
+  for (const fn of ["acquire", "release", "onReleased"]) assert.equal(typeof awake[fn], "function", fn);
+  assert.equal(await awake.acquire(), "held");
+  awake.release();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const asked = invoked.filter(([command]) => command === "keep_screen_on");
+  assert.equal(JSON.stringify(asked), JSON.stringify([["keep_screen_on", { on: true }], ["keep_screen_on", { on: false }]]));
+  assert.equal(typeof awake.onReleased(() => {}), "function");
+});
+
+test("a refusal of the native call is a failed hold, not an exception", async () => {
+  const { api, win } = install("tauri://localhost");
+  win.__TAURI_INTERNALS__.invoke = (command) => command === "keep_screen_on" ? Promise.reject("no") : Promise.resolve(null);
+  assert.equal(await api.host.presence.screenAwake.acquire(), "failed");
 });
