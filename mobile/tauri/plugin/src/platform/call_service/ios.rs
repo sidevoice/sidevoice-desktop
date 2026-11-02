@@ -58,8 +58,9 @@ impl Os for Native {
         api: PluginApi<R, C>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         api.app().run_on_main_thread(|| {
-            if let Some(main) = MainThreadMarker::new() {
-                CALLKIT.with_borrow_mut(|kit| *kit = Some(CallKit::new(main)));
+            match MainThreadMarker::new() {
+                Some(main) => CALLKIT.with_borrow_mut(|kit| *kit = Some(CallKit::new(main))),
+                None => log::error!("call: CallKit was not set up (not on the main thread)"),
             }
         })?;
         Ok(())
@@ -496,6 +497,7 @@ define_class!(
                     provider.reportOutgoingCallWithUUID_startedConnectingAtDate(&uuid, None);
                     action.fulfill();
                 } else {
+                    log::warn!("call: CallKit performed a start that is not the app's call");
                     action.fail();
                 }
             }
