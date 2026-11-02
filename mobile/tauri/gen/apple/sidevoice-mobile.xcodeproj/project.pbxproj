@@ -77,6 +77,7 @@
 		64394271D504A3167B6E3545 /* acl_tests.rs */ = {isa = PBXFileReference; path = acl_tests.rs; sourceTree = "<group>"; };
 		749529AE2409B9FB50B39312 /* platform.rs */ = {isa = PBXFileReference; path = platform.rs; sourceTree = "<group>"; };
 		7717DC1AC675EE5C22703A85 /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
+		78DA3D5C4ABD3C61CB5AAB0F /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		7D0D2F377196B00F1647880E /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		86D727D8E9CA54F3F9AF1E0A /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
 		8807C52FB04E7019B2BC1690 /* MediaPlayer.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MediaPlayer.framework; path = System/Library/Frameworks/MediaPlayer.framework; sourceTree = SDKROOT; };
@@ -87,6 +88,7 @@
 		A3D98CD41CC1FB03FA370222 /* fr */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = fr; path = fr.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		A6C8CD431FED33808E2B7AC8 /* webview.rs */ = {isa = PBXFileReference; path = webview.rs; sourceTree = "<group>"; };
 		AC7B192F6F772B984C2013E8 /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
+		AF77655BE2E35D9CB501F610 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
 		B5E6137564CC46CBF5FDCAF7 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		B7E57CBB3A47BDAD3039528B /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		BE293A96151AB5D44D76E3EC /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
@@ -97,6 +99,7 @@
 		D36FBE442FE36E95B601C9D1 /* hold.rs */ = {isa = PBXFileReference; path = hold.rs; sourceTree = "<group>"; };
 		D53EC9AD147484E515EBA7F0 /* ja */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ja; path = ja.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		D6067A41257B6008E8BE4CA5 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
+		D8ED5FADE4B6E55EBEA152B9 /* message_overlay.rs */ = {isa = PBXFileReference; path = message_overlay.rs; sourceTree = "<group>"; };
 		DA1A087B3D35A1E037C07349 /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		DD941F079E3C0751703CE1EC /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		DEBD9545CF90786BDDD5D639 /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
@@ -304,18 +307,29 @@
 				5146689FF402E85DE500476B /* backup.rs */,
 				5721EA507184E736863684BC /* entry.rs */,
 				299D7B306F3BF743AC1EF244 /* interruption.rs */,
+				D8ED5FADE4B6E55EBEA152B9 /* message_overlay.rs */,
 				035C90F560637AC4EE9E2858 /* microphone_help.rs */,
 				9F8D209D8F7F183F8C5BF60D /* private_dir.rs */,
 				C1188ECF695A1AC9631488B1 /* tls.rs */,
 				A6C8CD431FED33808E2B7AC8 /* webview.rs */,
 				7A9D2BCC197B63250747232C /* backup */,
 				C5DF4E9D279B95F0791F7AA3 /* interruption */,
+				CF13280DDF0E676A5BCFDECF /* message_overlay */,
 				63D94CE980AE1EF2EBB0FFBE /* microphone_help */,
 				6C86A9A2C43172A90C0FA47A /* private_dir */,
 				A4F4ADFF1EE4A1E8FEA820B9 /* tls */,
 				0AEE8EC07FFF92C7DC06F2CE /* webview */,
 			);
 			path = platform;
+			sourceTree = "<group>";
+		};
+		CF13280DDF0E676A5BCFDECF /* message_overlay */ = {
+			isa = PBXGroup;
+			children = (
+				AF77655BE2E35D9CB501F610 /* android.rs */,
+				78DA3D5C4ABD3C61CB5AAB0F /* ios.rs */,
+			);
+			path = message_overlay;
 			sourceTree = "<group>";
 		};
 		F010B9C6C3EF3F8A0AFA11F5 /* Sources */ = {
