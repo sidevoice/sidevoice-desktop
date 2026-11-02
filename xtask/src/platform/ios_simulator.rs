@@ -12,10 +12,7 @@ trait Os {
     /// `screen-dark.png`), the device used, the app's own log (`logs/`) and the system log of its process. Fails if the
     /// app does not launch or is not running when the screenshot is taken.
     fn screenshots(_zip: &Path, _bundle: &str, _out: &Path) -> Result<()> {
-        Err(format!(
-            "the iOS simulator is run from a Mac with Xcode, not from {}",
-            host::name()
-        ))
+        Err(format!("the iOS simulator is run from a Mac with Xcode, not from {}", host::name()))
     }
 }
 

@@ -16,17 +16,13 @@ const SETTLE: Duration = Duration::from_secs(25);
 
 /// A dotted version as numbers, to order versions (`26.5` after `26.10` is wrong as text).
 fn version(text: &str) -> Vec<u32> {
-    text.split('.')
-        .map(|part| part.parse().unwrap_or(0))
-        .collect()
+    text.split('.').map(|part| part.parse().unwrap_or(0)).collect()
 }
 
 /// The newest iPhone Pro Max device type and the newest available iOS runtime, from `simctl list ... -j`.
 fn pick(types: &str, runtimes: &str) -> Result<(String, String)> {
-    let types: serde_json::Value =
-        serde_json::from_str(types).map_err(|e| format!("device types: {e}"))?;
-    let runtimes: serde_json::Value =
-        serde_json::from_str(runtimes).map_err(|e| format!("runtimes: {e}"))?;
+    let types: serde_json::Value = serde_json::from_str(types).map_err(|e| format!("device types: {e}"))?;
+    let runtimes: serde_json::Value = serde_json::from_str(runtimes).map_err(|e| format!("runtimes: {e}"))?;
     let number = |name: &str| -> Option<u32> {
         let rest = name.strip_prefix("iPhone ")?.strip_suffix(" Pro Max")?;
         rest.parse().ok()
@@ -65,17 +61,12 @@ fn run_app(udid: &str, app: &Path, bundle: &str, out: &Path) -> Result<()> {
         let _ = simctl().args(["terminate", udid, bundle]).attempt()?;
         simctl().args(["launch", udid, bundle]).run()?;
         sleep(SETTLE);
-        let running = simctl()
-            .args(["spawn", udid, "launchctl", "list"])
-            .output()?;
+        let running = simctl().args(["spawn", udid, "launchctl", "list"]).output()?;
         ensure(
             running.contains(&format!("UIKitApplication:{bundle}")),
             format!("the app is not running after launch ({mode})"),
         )?;
-        simctl()
-            .args(["io", udid, "screenshot"])
-            .arg(out.join(format!("screen-{mode}.png")))
-            .run()?;
+        simctl().args(["io", udid, "screenshot"]).arg(out.join(format!("screen-{mode}.png"))).run()?;
         let _ = simctl().args(["terminate", udid, bundle]).attempt()?;
     }
     Ok(())
@@ -84,14 +75,10 @@ fn run_app(udid: &str, app: &Path, bundle: &str, out: &Path) -> Result<()> {
 impl Os for Native {
     fn screenshots(zip: &Path, bundle: &str, out: &Path) -> Result<()> {
         mkdir(out)?;
-        let work = tempfile::tempdir().map_err(|e| e.to_string())?;
-        Cmd::new("unzip")
-            .arg("-q")
-            .arg(zip)
-            .arg("-d")
-            .arg(work.path())
-            .run()?;
-        let app = fs::read_dir(work.path())
+        let work = std::env::temp_dir().join(format!("sidevoice-simulator-{}", std::process::id()));
+        mkdir(&work)?;
+        Cmd::new("unzip").arg("-q").arg(zip).arg("-d").arg(&work).run()?;
+        let app = fs::read_dir(&work)
             .map_err(|e| e.to_string())?
             .filter_map(|e| e.ok().map(|e| e.path()))
             .find(|p| p.extension().is_some_and(|e| e == "app"))
@@ -99,64 +86,32 @@ impl Os for Native {
 
         let (device, runtime) = pick(
             &simctl().args(["list", "devicetypes", "-j"]).stdout()?,
-            &simctl()
-                .args(["list", "runtimes", "available", "-j"])
-                .stdout()?,
+            &simctl().args(["list", "runtimes", "available", "-j"]).stdout()?,
         )?;
-        fs::write(
-            out.join("device.txt"),
-            format!("device type {device}, runtime {runtime}\n"),
-        )
-        .map_err(|e| e.to_string())?;
-        let udid = simctl()
-            .args([
-                "create",
-                "sidevoice-shot",
-                device.as_str(),
-                runtime.as_str(),
-            ])
-            .stdout()?
-            .trim()
-            .to_owned();
+        fs::write(out.join("device.txt"), format!("device type {device}, runtime {runtime}\n"))
+            .map_err(|e| e.to_string())?;
+        let udid =
+            simctl().args(["create", "sidevoice-shot", device.as_str(), runtime.as_str()]).stdout()?.trim().to_owned();
 
         let ran = run_app(&udid, &app, bundle, out);
 
         // The logs are kept whether or not the run went well: they say why it did not. The app's own log is where the app
         // writes it, below its data container (Tauri's log plugin, in the app's data directory).
-        let data = simctl()
-            .args(["get_app_container", udid.as_str(), bundle, "data"])
-            .stdout()
-            .map(|p| p.trim().to_owned());
+        let data =
+            simctl().args(["get_app_container", udid.as_str(), bundle, "data"]).stdout().map(|p| p.trim().to_owned());
         if let Ok(data) = data {
-            let logs = Path::new(&data)
-                .join("Library/Application Support")
-                .join(bundle)
-                .join("logs");
-            let _ = Cmd::new("cp")
-                .arg("-R")
-                .arg(&logs)
-                .arg(out.join("logs"))
-                .attempt()?;
+            let logs = Path::new(&data).join("Library/Application Support").join(bundle).join("logs");
+            let _ = Cmd::new("cp").arg("-R").arg(&logs).arg(out.join("logs")).attempt()?;
         }
         let system = simctl()
-            .args([
-                "spawn",
-                udid.as_str(),
-                "log",
-                "show",
-                "--last",
-                "10m",
-                "--info",
-                "--debug",
-                "--style",
-                "compact",
-            ])
+            .args(["spawn", udid.as_str(), "log", "show", "--last", "10m", "--info", "--debug", "--style", "compact"])
             .args(["--predicate", "process == \"Sidevoice\""])
             .attempt()?
             .1;
         fs::write(out.join("system-log.txt"), system).map_err(|e| e.to_string())?;
         let _ = simctl().args(["shutdown", udid.as_str()]).attempt()?;
         let _ = simctl().args(["delete", udid.as_str()]).attempt()?;
+        let _ = fs::remove_dir_all(&work);
         ran
     }
 }
@@ -177,10 +132,7 @@ mod tests {
             {"platform":"iOS","version":"26.10","identifier":"r2610","isAvailable":true},
             {"platform":"iOS","version":"27.0","identifier":"r270","isAvailable":false},
             {"platform":"watchOS","version":"30.0","identifier":"w","isAvailable":true}]}"#;
-        assert_eq!(
-            pick(types, runtimes).unwrap(),
-            ("t17".to_owned(), "r2610".to_owned())
-        );
+        assert_eq!(pick(types, runtimes).unwrap(), ("t17".to_owned(), "r2610".to_owned()));
     }
 
     #[test]
