@@ -342,7 +342,7 @@ fn an_install_reports_its_bytes_from_zero_to_the_total_and_lists_the_build_by_mo
 }
 
 #[test]
-fn a_cancel_stops_a_download_the_network_stopped_answering_and_leaves_nothing() {
+fn a_cancel_stops_a_download_the_network_stopped_answering_and_keeps_the_partial_file_to_resume() {
     let test = engines("cancel", true);
     let engines = &test.engines;
     let jobs = Jobs::default();
@@ -369,7 +369,8 @@ fn a_cancel_stops_a_download_the_network_stopped_answering_and_leaves_nothing() 
     assert_eq!(jobs.get("j1"), None);
     assert!(!jobs.cancel("j1"), "an ended job is not cancelled again");
     assert!(engines.installed().unwrap().is_empty());
-    assert!(partial(&test.root).is_empty(), "nothing half downloaded is kept: {:?}", partial(&test.root));
+    // The engine keeps the half-downloaded file for the next attempt to go on after (partial/<digest>.part, swept after a week).
+    assert_eq!(partial(&test.root).len(), 1, "the partial file is kept to resume: {:?}", partial(&test.root));
     assert!(engines.installing.try_lock().is_ok(), "the install lock is free");
 }
 
