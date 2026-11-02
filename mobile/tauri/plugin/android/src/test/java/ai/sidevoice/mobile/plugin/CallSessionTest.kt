@@ -11,7 +11,7 @@ import org.junit.Before
 import org.junit.Test
 
 class CallSessionTest {
-    private val reports = mutableListOf<Pair<Long, Map<String, String>>>()
+    private val reports = mutableListOf<Pair<Long, Map<String, Any>>>()
 
     private fun begin(): CallSession.Session {
         lateinit var session: CallSession.Session
@@ -78,5 +78,31 @@ class CallSessionTest {
         CallSession.end(session, "requested", report = false)
         CallSession.focus(session, "gained")
         assertEquals(listOf(session.id to mapOf("type" to "focus", "state" to "lost-transient")), reports)
+    }
+
+    @Test
+    fun theSystemsMuteAndHoldAreReportedOnlyWhileTheSessionRuns() {
+        val session = begin()
+        CallSession.muted(session, true)
+        CallSession.held(session, true)
+        CallSession.end(session, "requested", report = false)
+        CallSession.muted(session, false)
+        CallSession.held(session, false)
+        assertEquals(
+            listOf(
+                session.id to mapOf("type" to "muted", "muted" to true),
+                session.id to mapOf("type" to "held", "held" to true),
+            ),
+            reports
+        )
+    }
+
+    @Test
+    fun eachSessionsCallHasItsOwnAddress() {
+        val old = begin()
+        CallSession.end(old, "requested", report = false)
+        val new = begin()
+        assertNotEquals(CallSession.callAddress(old.id), CallSession.callAddress(new.id))
+        assertEquals("sidevoice-call://call/${new.id}", CallSession.callAddress(new.id))
     }
 }

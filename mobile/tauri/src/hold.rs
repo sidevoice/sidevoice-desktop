@@ -2,8 +2,8 @@
 //! takes what the system said and what the page reports of the microphone, and answers with the [`Effect`]s the call
 //! (`call.rs`) carries out. So its decisions are tested without a phone.
 //!
-//! Interruptions that end (a phone call, an alarm: iOS `began`/`ended`, Android `lost-transient`/`gained`) pause the call at
-//! the first and resume it at the last end. Those that do not end by themselves (iOS `shouldResume` false or an audio
+//! Interruptions that end (a phone call, an alarm: iOS `began`/`ended`, Android `lost-transient`/`gained`, and the system's
+//! call put on hold and taken off it, CallKit's or Telecom's) pause the call at the first and resume it at the last end. Those that do not end by themselves (iOS `shouldResume` false or an audio
 //! session that could not be taken back; Android a focus lost for good or refused) leave the call paused until the person
 //! unmutes; on Android the focus is then asked for again, and the playback is released only once it is granted.
 use sidevoice_mobile_plugin::FocusState;
@@ -27,6 +27,8 @@ pub enum Source {
     Session,
     /// Android: the call's audio focus was lost.
     Focus,
+    /// The system's call (CallKit, Telecom) was put on hold: another call took its place.
+    System,
 }
 
 /// What an interruption changes of the call.
@@ -41,11 +43,12 @@ pub enum Change {
 struct Interrupted {
     session: bool,
     focus: bool,
+    system: bool,
 }
 
 impl Interrupted {
     fn any(self) -> bool {
-        self.session || self.focus
+        self.session || self.focus || self.system
     }
 
     /// `source` is on or off now: what that changes of the call, if anything.
@@ -54,6 +57,7 @@ impl Interrupted {
         match source {
             Source::Session => self.session = on,
             Source::Focus => self.focus = on,
+            Source::System => self.system = on,
         }
         match (was, self.any()) {
             (false, true) => Some(Change::Pause),
@@ -522,5 +526,21 @@ mod tests {
         assert_eq!(hold.clear(), [Effect::Playback(false)]);
         assert!(hold.clear().is_empty());
         assert!(hold.microphone(true, false, yes, yes).is_empty());
+    }
+
+    #[test]
+    fn the_system_s_hold_pauses_the_call_and_taking_it_off_resumes_it() {
+        let mut hold = Hold::new();
+        assert_eq!(hold.signal(Source::System, BEGAN), holding());
+        // The audio session interrupted under the hold changes nothing more, and its end resumes nothing alone.
+        assert!(hold.signal(Source::Session, BEGAN).is_empty());
+        assert!(hold.signal(Source::Session, GAINED).is_empty());
+        assert_eq!(
+            hold.signal(Source::System, GAINED),
+            [
+                Effect::Resume { restore_mic: true },
+                Effect::Playback(false)
+            ]
+        );
     }
 }

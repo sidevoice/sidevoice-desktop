@@ -3,8 +3,12 @@
 //! Tauri CLI, never edited by hand, so what the Android app needs beyond the template lives in the Android library under
 //! `android/`, whose manifest, resources and code Gradle merges into the app's.
 //!
-//! - **The call's service** ([`call_service`]): a foreground service keeps the process of a call alive on Android while
-//!   the screen is off or another app is in front. The app starts it while it is visible and stops it when the call ends.
+//! - **The system's call** ([`call_service`]): the call as a phone call of the system's own, which the lock screen, the
+//!   in-call screens and a Bluetooth or car kit show. On Android a foreground service keeps the process alive while the
+//!   screen is off or another app is in front, and holds a self-managed Telecom call (Core-Telecom); on iOS it is a CallKit
+//!   call. The app starts it while it is visible and ends it when the call ends.
+//!
+//!   Its iOS body is Rust (objc2's CallKit bindings), like the rest of the app's iOS code: the plugin has no Swift.
 //! - **The screen** ([`keep_screen_on`]): kept on while a model download runs, since the system suspends the app, and
 //!   the download, soon after the screen turns off.
 mod call_service;
@@ -14,7 +18,8 @@ mod screen;
 use tauri::{plugin::TauriPlugin, Runtime};
 
 pub use call_service::{
-    request_call_focus, start_call_service, stop_call_service, CallEvent, CallServiceError,
+    call_activates_audio, call_replaces_media_controls, request_call_focus, start_call_service,
+    stop_call_service, update_call_service, CallDetails, CallEvent, CallEvents, CallServiceError,
     FocusState, StopReason,
 };
 pub use screen::{keep_screen_on, ScreenError};

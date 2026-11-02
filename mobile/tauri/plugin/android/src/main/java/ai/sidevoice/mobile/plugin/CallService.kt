@@ -6,6 +6,8 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.telecom.DisconnectCause
+import android.util.Log
 import android.content.pm.ServiceInfo
 import android.net.Uri
 import android.media.AudioAttributes
@@ -22,8 +24,22 @@ import android.os.Looper
 import ai.sidevoice.app.MediaControls
 import android.support.v4.media.session.MediaSessionCompat
 import androidx.core.app.NotificationCompat
+import androidx.core.app.Person
 import androidx.core.app.ServiceCompat
+import androidx.core.telecom.CallAttributesCompat
+import androidx.core.telecom.CallControlResult
+import androidx.core.telecom.CallControlScope
+import androidx.core.telecom.CallEndpointCompat
+import androidx.core.telecom.CallsManager
 import androidx.media.app.NotificationCompat.MediaStyle
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * The foreground service that keeps the process of a call alive while the screen is off or another app is in front:
@@ -34,8 +50,17 @@ import androidx.media.app.NotificationCompat.MediaStyle
  * system destroys a service after the app may already have started the next call, and the end of the old one must not
  * end the new one.
  *
- * It holds the call's audio focus for as long as it runs and says when it changes; what to do about that is the call's
- * decision. It is never restarted by the system: a call does not survive its process.
+ * It holds the call's audio focus and says when it changes; what to do about that is the call's decision. It is never
+ * restarted by the system: a call does not survive its process.
+ *
+ * **The system's call.** For its length the call is also a self-managed call of the system's Telecom (Core-Telecom: an
+ * outgoing audio call, with the conversation as its name), so a Bluetooth or car kit, a watch and the system's call
+ * notification show it as the phone call it is. Telecom holds the call's audio from then (the mode, the focus, the route):
+ * the service gives its own focus request up, and Telecom's hold (another call taking this one's place) is reported
+ * instead (`held`); a hang-up from outside the app ends the service (`hang-up`), and a mute from outside is reported
+ * (`muted`), while the page's mute is given to the system's microphone mute. The loudspeaker is chosen over the earpiece,
+ * as on iOS. The notification is a call's (CallStyle) while Telecom holds the call. Telecom refusing the call leaves it the
+ * app's own, as before: the service's focus and media notification.
  */
 class CallService : Service() {
     private var session: CallSession.Session? = null
@@ -44,13 +69,31 @@ class CallService : Service() {
     private var media: MediaSession? = null
     /** Stops following the call's state ([MediaControls.observe]). */
     private var unobserve: (() -> Unit)? = null
+    /** The conversation the call is on (empty for none). */
+    private var title = ""
+    /** Telecom's coroutines: the call's, and their ends. Never cancelled as a whole: a call is disconnected before its own go. */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    /** The coroutine that adds the call to Telecom and runs for its length. */
+    private var telecom: Job? = null
+    /** The call, once Telecom holds it (active). */
+    private var control: CallControlScope? = null
+    /** The page's mute, as last told ([ACTION_UPDATE]). */
+    private var pageMuted: Boolean? = null
+    /** Whether the service turned the system's microphone mute on: it is turned off again at the end. */
+    private var mutedTheSystem = false
+    /** Whether the audio focus was last reported lost (or refused): given back as gained when Telecom takes the call's audio. */
+    private var focusLost = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val id = intent?.getLongExtra(EXTRA_SESSION, NO_SESSION) ?: NO_SESSION
         when (intent?.action) {
-            ACTION_START -> begin(id)
+            ACTION_START -> begin(id, intent.getStringExtra(EXTRA_TITLE) ?: "")
+            // What the call shows now (its title) and the page's mute, for the session this instance serves.
+            ACTION_UPDATE -> session?.takeIf { it.id == id }?.let {
+                update(it, intent.getStringExtra(EXTRA_TITLE) ?: "", intent.getBooleanExtra(EXTRA_MUTED, false))
+            } ?: leaveIfIdle(startId)
             // Hang up, from the notification of the session this instance serves; one of an older call's means nothing.
             ACTION_HANG_UP -> session?.takeIf { it.id == id }?.let { finish("hang-up") } ?: leaveIfIdle(startId)
             // Ask for the audio focus again (it was lost for good, or refused), for the session this instance serves.
@@ -71,6 +114,7 @@ class CallService : Service() {
 
     /** Whoever ended it, the focus and the report are not left behind (the system may end a service on its own). */
     override fun onDestroy() {
+        endTelecom()
         closeMedia()
         abandonFocus()
         session?.let { CallSession.end(it, "system") }
@@ -78,7 +122,8 @@ class CallService : Service() {
         super.onDestroy()
     }
 
-    private fun begin(id: Long) {
+    private fun begin(id: Long, title: String) {
+        this.title = title
         // Within seconds of a startForegroundService, even when the call already ended: Android crashes the app otherwise.
         try {
             ServiceCompat.startForeground(this, NOTIFICATION_ID, notification(id), FOREGROUND_SERVICE_TYPES)
@@ -99,10 +144,12 @@ class CallService : Service() {
         session = mine
         requestFocus(mine)
         openMedia(mine)
+        addTelecomCall(mine)
     }
 
     /** Ends the call's service: the focus, the notification and the service itself, and the one report of its session. */
     private fun finish(reason: String) {
+        endTelecom()
         closeMedia()
         abandonFocus()
         session?.let { CallSession.end(it, reason) }
@@ -150,28 +197,23 @@ class CallService : Service() {
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setContentIntent(open)
         val token = media?.sessionToken
+        if (control != null) {
+            // Telecom holds the call: the notification is a call's (the system's call chip and its Hang up), with the mute
+            // button beside it. The media session goes on taking a headset's buttons, without a card of its own.
+            val person = Person.Builder().setName(displayName()).setImportant(true).build()
+            return builder
+                .setStyle(NotificationCompat.CallStyle.forOngoingCall(person, hangUp))
+                .addAction(muteAction(id))
+                .build()
+        }
         if (token == null || Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             // Android 13 and later draw a media notification's buttons from its session (the play/pause and the Hang up
             // custom action of `applyState`), and a notification without a session keeps its own Hang up.
             builder.addAction(R.drawable.ic_call_hang_up, getString(R.string.call_notification_hang_up), hangUp)
         } else {
             // Android 12 and older draw the notification's own buttons: mute or unmute, as the call is, and Hang up.
-            val playing = MediaControls.state().playing
-            val toggle = PendingIntent.getService(
-                this,
-                0,
-                Intent(this, CallService::class.java)
-                    .setAction(ACTION_TOGGLE_MUTE)
-                    .setData(Uri.parse(CallSession.toggleMuteAddress(id)))
-                    .putExtra(EXTRA_SESSION, id),
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-            )
             builder
-                .addAction(
-                    if (playing) R.drawable.ic_call_mute else R.drawable.ic_call_unmute,
-                    getString(if (playing) R.string.call_notification_mute else R.string.call_notification_unmute),
-                    toggle
-                )
+                .addAction(muteAction(id))
                 .addAction(R.drawable.ic_call_hang_up, getString(R.string.call_notification_hang_up), hangUp)
         }
         // The call's media session: the notification shows it, which puts the call's controls on the lock screen.
@@ -181,6 +223,172 @@ class CallService : Service() {
             builder.setStyle(style)
         }
         return builder.build()
+    }
+
+    /** The notification's mute or unmute button, as the call is now. */
+    private fun muteAction(id: Long): NotificationCompat.Action {
+        val playing = MediaControls.state().playing
+        val toggle = PendingIntent.getService(
+            this,
+            0,
+            Intent(this, CallService::class.java)
+                .setAction(ACTION_TOGGLE_MUTE)
+                .setData(Uri.parse(CallSession.toggleMuteAddress(id)))
+                .putExtra(EXTRA_SESSION, id),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        return NotificationCompat.Action(
+            if (playing) R.drawable.ic_call_mute else R.drawable.ic_call_unmute,
+            getString(if (playing) R.string.call_notification_mute else R.string.call_notification_unmute),
+            toggle
+        )
+    }
+
+    /** What the system shows as the call's other party: its conversation, or the app's name. */
+    private fun displayName(): String = title.trim().ifEmpty { getString(R.string.call_notification_title) }
+
+    /** What the call shows now and the page's mute ([ACTION_UPDATE]). */
+    private fun update(mine: CallSession.Session, title: String, muted: Boolean) {
+        val renamed = title != this.title
+        this.title = title
+        pageMuted = muted
+        applyMute()
+        if (renamed && control != null) {
+            getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(mine.id))
+        }
+    }
+
+    /**
+     * The page's mute given to the system's microphone mute while Telecom holds the call, so that the system's call (a car
+     * kit, a watch) shows it as the page does, and a mute the system made is lifted when the person unmutes in the app.
+     */
+    private fun applyMute() {
+        val muted = pageMuted ?: return
+        if (control == null) return
+        val audio = getSystemService(AudioManager::class.java)
+        if (audio.isMicrophoneMute != muted) {
+            audio.isMicrophoneMute = muted
+            mutedTheSystem = muted
+        }
+    }
+
+    /**
+     * Adds the call to the system's Telecom as a self-managed outgoing audio call, for [mine], and runs it for its length.
+     * Refused (Telecom will not take a call now, an emergency call is on), the call stays the app's own.
+     */
+    private fun addTelecomCall(mine: CallSession.Session) {
+        val calls = CallsManager(this)
+        try {
+            calls.registerAppWithTelecom(CallsManager.CAPABILITY_BASELINE)
+        } catch (error: RuntimeException) {
+            Log.w(TAG, "Telecom: the app was not registered; the call stays the app's own", error)
+            return
+        }
+        val attributes = CallAttributesCompat(
+            displayName = displayName(),
+            address = Uri.parse(CallSession.callAddress(mine.id)),
+            direction = CallAttributesCompat.DIRECTION_OUTGOING,
+            callType = CallAttributesCompat.CALL_TYPE_AUDIO_CALL,
+            // Another call (a phone call) may hold this one, as it holds any call: the app pauses it meanwhile.
+            callCapabilities = CallAttributesCompat.SUPPORTS_SET_INACTIVE,
+        )
+        telecom = scope.launch {
+            var added: CallControlScope? = null
+            try {
+                calls.addCall(
+                    attributes,
+                    onAnswer = { },
+                    // Hung up from outside the app: its notification, a Bluetooth or car kit, a watch.
+                    onDisconnect = { withContext(Dispatchers.Main) { if (session?.id == mine.id) finish("hang-up") } },
+                    onSetActive = { CallSession.held(mine, false) },
+                    onSetInactive = { CallSession.held(mine, true) },
+                ) {
+                    val call = this
+                    added = call
+                    launch {
+                        val result = call.setActive()
+                        if (result !is CallControlResult.Success) {
+                            Log.w(TAG, "Telecom: the call was not set active: $result")
+                            call.disconnect(DisconnectCause(DisconnectCause.ERROR))
+                        } else if (session?.id != mine.id) {
+                            // The call ended while Telecom took it.
+                            call.disconnect(DisconnectCause(DisconnectCause.LOCAL))
+                        } else {
+                            telecomHolds(mine, call)
+                        }
+                    }
+                    // A mute from outside the app: a change of the system's microphone mute (Telecom's mute is that). What it
+                    // already is says nothing (Telecom may tell it at the start); the page's own mute coming back is the same
+                    // as the page, and changes nothing there.
+                    launch {
+                        var known = getSystemService(AudioManager::class.java).isMicrophoneMute
+                        call.isMuted.collect { muted ->
+                            if (muted != known) {
+                                known = muted
+                                if (control === call) CallSession.muted(mine, muted)
+                            }
+                        }
+                    }
+                    // The loudspeaker rather than the earpiece, as on iOS: a headset or a Bluetooth device stays chosen.
+                    launch {
+                        combine(call.currentCallEndpoint, call.availableEndpoints) { current, available -> current to available }
+                            .collect { (current, available) ->
+                                if (current.type == CallEndpointCompat.TYPE_EARPIECE) {
+                                    available.firstOrNull { it.type == CallEndpointCompat.TYPE_SPEAKER }
+                                        ?.let { call.requestEndpointChange(it) }
+                                }
+                            }
+                    }
+                }
+                // The call is over in Telecom. Not by the app (it lets go of `control` first): the service ends with it.
+                if (added != null && control === added && session?.id == mine.id) finish("system")
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                Log.w(TAG, "Telecom refused the call; it stays the app's own", error)
+            }
+        }
+    }
+
+    /**
+     * Telecom holds [call] (active): its audio is Telecom's from now, so the service's own focus request is given up (a
+     * loss reported meanwhile is given back as a gain), the page's mute is given to the system's, and the notification
+     * becomes a call's.
+     */
+    private fun telecomHolds(mine: CallSession.Session, call: CallControlScope) {
+        control = call
+        abandonFocus()
+        if (focusLost) {
+            focusLost = false
+            CallSession.focus(mine, "gained")
+        }
+        applyMute()
+        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(mine.id))
+    }
+
+    /** The call leaves Telecom: disconnected by the app, and its coroutines let go once it is. */
+    private fun endTelecom() {
+        val call = control
+        control = null
+        val job = telecom
+        telecom = null
+        if (mutedTheSystem) {
+            getSystemService(AudioManager::class.java).isMicrophoneMute = false
+            mutedTheSystem = false
+        }
+        if (call == null) {
+            job?.cancel()
+            return
+        }
+        scope.launch {
+            try {
+                call.disconnect(DisconnectCause(DisconnectCause.LOCAL))
+            } catch (error: Exception) {
+                Log.w(TAG, "Telecom: the call was not disconnected", error)
+            } finally {
+                job?.cancel()
+            }
+        }
     }
 
     /**
@@ -265,21 +473,33 @@ class CallService : Service() {
                     .build()
             )
             .setAcceptsDelayedFocusGain(true)
-            .setOnAudioFocusChangeListener({ change -> CallSession.focus(mine, focusState(change)) }, Handler(Looper.getMainLooper()))
+            .setOnAudioFocusChangeListener({ change -> reportFocus(mine, focusState(change)) }, Handler(Looper.getMainLooper()))
             .build()
         focusRequest = request
         when (audio.requestAudioFocus(request)) {
             // Asked again by the person: the listener only hears of changes, so a grant is reported as the gain it is.
-            AudioManager.AUDIOFOCUS_REQUEST_GRANTED -> if (reportGranted) CallSession.focus(mine, "gained")
+            AudioManager.AUDIOFOCUS_REQUEST_GRANTED -> if (reportGranted) reportFocus(mine, "gained")
             // A phone call is on: the grant comes when it ends, as a gain.
-            AudioManager.AUDIOFOCUS_REQUEST_DELAYED -> CallSession.focus(mine, "lost-transient")
+            AudioManager.AUDIOFOCUS_REQUEST_DELAYED -> reportFocus(mine, "lost-transient")
             // Nothing will be given later.
-            else -> CallSession.focus(mine, "refused")
+            else -> reportFocus(mine, "refused")
         }
     }
 
-    /** The person asks to go on after a focus that was lost for good or refused: asked again, the answer reported. */
+    private fun reportFocus(mine: CallSession.Session, state: String) {
+        focusLost = state != "gained" && state != "duck"
+        CallSession.focus(mine, state)
+    }
+
+    /**
+     * The person asks to go on after a focus that was lost for good or refused: asked again, the answer reported. While
+     * Telecom holds the call's audio there is nothing to ask for: it is the call's.
+     */
     private fun refocus(mine: CallSession.Session) {
+        if (control != null) {
+            reportFocus(mine, "gained")
+            return
+        }
         abandonFocus()
         requestFocus(mine, reportGranted = true)
     }
@@ -302,15 +522,23 @@ class CallService : Service() {
         const val ACTION_HANG_UP = "ai.sidevoice.mobile.plugin.CALL_HANG_UP"
         const val ACTION_REFOCUS = "ai.sidevoice.mobile.plugin.CALL_REFOCUS"
         const val ACTION_TOGGLE_MUTE = "ai.sidevoice.mobile.plugin.CALL_TOGGLE_MUTE"
+        const val ACTION_UPDATE = "ai.sidevoice.mobile.plugin.CALL_UPDATE"
         /** The session's custom action that ends the call (the media controls of Android 13 and later). */
         private const val CUSTOM_HANG_UP = "ai.sidevoice.mobile.plugin.HANG_UP"
         /** The session (a number) an intent is for. */
         const val EXTRA_SESSION = "ai.sidevoice.mobile.plugin.SESSION"
+        /** The conversation the call is on. */
+        const val EXTRA_TITLE = "ai.sidevoice.mobile.plugin.TITLE"
+        /** Whether the page has the call muted. */
+        const val EXTRA_MUTED = "ai.sidevoice.mobile.plugin.MUTED"
+        private const val TAG = "SidevoiceCall"
         private const val NO_SESSION = -1L
         private const val CHANNEL_ID = "call"
         private const val NOTIFICATION_ID = 1
-        // What the manifest declares for the service, both: the call listens and the agent speaks.
+        // What the manifest declares for the service: the call listens, the agent speaks, and it is a phone call (Telecom's,
+        // which the manifest's MANAGE_OWN_CALLS allows).
         private const val FOREGROUND_SERVICE_TYPES =
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK or
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
     }
 }

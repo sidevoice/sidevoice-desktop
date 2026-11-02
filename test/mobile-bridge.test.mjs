@@ -198,3 +198,30 @@ test("an interruption command is for one call of one page", async () => {
   assert.equal(r.api.run({ command: "interrupt", page: 7, since: r.api.snapshot().since - 1 }), false, "another call's");
   assert.equal(r.view.mic.enabled, true);
 });
+
+test("the system's call muting or unmuting sets the page's mute, once", async () => {
+  const r = await room();
+  const mute = (muted, since = r.api.snapshot().since) => r.api.run({ command: "mute", page: 7, since, muted });
+  assert.equal(mute(true), true);
+  assert.equal(r.view.mic.enabled, false);
+  assert.equal(mute(true), true, "what it is already: nothing to do");
+  assert.equal(r.toggles(), 1);
+  assert.equal(mute(false), true);
+  assert.equal(r.view.mic.enabled, true);
+  assert.equal(r.toggles(), 2);
+  assert.equal(mute(true, r.api.snapshot().since - 1), false, "another call's");
+  assert.equal(r.api.run({ command: "mute", page: 7, since: r.api.snapshot().since }), false, "no state asked for");
+  r.view.mic.disabled = true;
+  assert.equal(mute(true), false, "a mute that cannot be used");
+  assert.equal(r.view.mic.enabled, true);
+});
+
+test("an unmute from the system's call takes over the interruption's mute", async () => {
+  const r = await room();
+  r.interrupt();
+  r.change();
+  r.api.run({ command: "mute", page: 7, since: r.api.snapshot().since, muted: false });
+  r.api.run({ command: "mute", page: 7, since: r.api.snapshot().since, muted: true });
+  assert.equal(r.resume(), true);
+  assert.equal(r.view.mic.enabled, false, "the person's latest mute is not undone");
+});

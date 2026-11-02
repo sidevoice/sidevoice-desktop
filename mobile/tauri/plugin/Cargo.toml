@@ -12,12 +12,19 @@ links = "sidevoice-mobile-plugin"
 [dependencies]
 tauri = "2.12"
 serde = { version = "1", features = ["derive"] }
+log = "0.4"
 
 [target.'cfg(target_os = "ios")'.dependencies]
 # The screen kept on (src/platform/screen/ios.rs): `UIApplication.isIdleTimerDisabled`. Already in the iOS build through Tauri;
 # only the types the call names.
 objc2 = "0.6"
 objc2-ui-kit = { version = "0.3", default-features = false, features = ["std", "UIApplication", "UIResponder"] }
+# The call as a CallKit call (src/platform/call_service/ios.rs): the provider, its delegate and the controller's actions. The
+# audio session's type is in the delegate's signature; the rest is Foundation's.
+objc2-call-kit = { version = "0.3", default-features = false, features = ["std", "block2", "dispatch2", "objc2-avf-audio", "CXAction", "CXCallAction", "CXCallController", "CXCallUpdate", "CXEndCallAction", "CXHandle", "CXProvider", "CXProviderConfiguration", "CXSetHeldCallAction", "CXSetMutedCallAction", "CXStartCallAction", "CXTransaction"] }
+objc2-avf-audio = { version = "0.3", default-features = false, features = ["std", "AVAudioSession"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData", "NSError", "NSSet", "NSString", "NSUUID", "NSValue"] }
+block2 = "0.6"
 
 [build-dependencies]
 tauri-plugin = { version = "2.7", features = ["build"] }

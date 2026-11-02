@@ -83,6 +83,14 @@
         }
         return true;
       },
+      // The system's own call (CallKit, Android's Telecom) was muted or unmuted from outside the page: its in-call screen, a
+      // Bluetooth or car kit. The page's mute is set to that, as the person's own (it is the person who asked); asking for
+      // what it is already does nothing, so the app hearing back its own change is harmless.
+      mute: (request, state, actions) => {
+        if (!state.joined || state.micDisabled || typeof request.muted !== "boolean") return false;
+        if (state.micEnabled === request.muted) actions.toggleMic();
+        return true;
+      },
     },
   });
 
