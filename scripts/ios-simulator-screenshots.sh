@@ -33,6 +33,7 @@ done
 # The app's own log files, if the log plugin wrote any, and the system log of the app's process.
 data=$(xcrun simctl get_app_container "$udid" "$bundle" data)
 mkdir -p "$out/app-data"
+find "$data/Library" -maxdepth 3 > "$out/app-data/tree.txt" 2>&1 || true
 cp -R "$data/Library/Logs" "$out/app-data/" 2>/dev/null || true
-xcrun simctl spawn "$udid" log show --last 5m --style compact --predicate 'process == "Sidevoice" OR process == "sidevoice-mobile"' >"$out/system-log.txt" 2>&1 || true
+xcrun simctl spawn "$udid" log show --last 10m --info --debug --style compact --predicate 'process == "Sidevoice" OR process == "sidevoice-mobile"' >"$out/system-log.txt" 2>&1 || true
 xcrun simctl shutdown "$udid" || true

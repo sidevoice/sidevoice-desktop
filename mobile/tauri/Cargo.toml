@@ -41,7 +41,7 @@ objc2-avf-audio = { version = "0.3", default-features = false, features = ["std"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSError", "NSString", "NSURL", "NSValue", "NSNotification", "NSOperation", "NSDictionary", "block2"] }
 # The web view, its scroll view and the window behind it (src/platform/webview/ios.rs): UIKit's views and colours, typed
 # (`objc2` above for the one property, `WKWebView.scrollView`, objc2-web-kit does not wrap).
-objc2-ui-kit = { version = "0.3", default-features = false, features = ["std", "UIColor", "UIGeometry", "UIGestureRecognizer", "UIInterface", "UIPinchGestureRecognizer", "UIResponder", "UIScrollView", "UIView", "UIViewController", "UIWindow", "objc2-core-foundation"] }
+objc2-ui-kit = { version = "0.3", default-features = false, features = ["std", "UIColor", "UIGeometry", "UIGestureRecognizer", "UIInterface", "UIPinchGestureRecognizer", "UIResponder", "UIScreen", "UIScrollView", "UIView", "UIViewController", "UIWindow", "objc2-core-foundation"] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFCGTypes"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
