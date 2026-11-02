@@ -1,14 +1,14 @@
-// Unit tests of the mobile app's page script (mobile/js/mobile-bridge.js with the members and the transport it is composed
-// of, as mobile/src/bridge.rs composes it) against a fake window: no browser, no Tauri.
+// Unit tests of the mobile app's page script (mobile/tauri/js/mobile-bridge.js with the members and the transport it is composed
+// of, as mobile/tauri/src/bridge.rs composes it) against a fake window: no browser, no Tauri.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { members, transport } from "./bridge-source.mjs";
 
-const mobile = readFileSync(new URL("../mobile/js/mobile-bridge.js", import.meta.url), "utf8");
+const mobile = readFileSync(new URL("../mobile/tauri/js/mobile-bridge.js", import.meta.url), "utf8");
 const composed = `(function (transportOf, membersOf) {\n${mobile}\n})(${transport}, ${members});`;
-const PLUGIN = "plugin:sidevoice-app-tauri|";
+const PLUGIN = "plugin:sidevoice-shared-tauri|";
 
 function install(origin, pageOrigin = origin, microphoneSettings = true, microphoneHelp = null) {
   const module = { exports: {} };

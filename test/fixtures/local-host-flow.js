@@ -1,4 +1,4 @@
-// CI only, injected only by the app built with the `probe` feature (desktop/src/probe.rs) when
+// CI only, injected only by the app built with the `probe` feature (desktop/tauri/src/probe.rs) when
 // SIDEVOICE_DEBUG=1 SIDEVOICE_DEBUG_LOCAL_HOST_FLOW=1: the local host (docs/LOCAL_HOST.md) as the ACTUAL bundled page
 // reaches it — the bundled room (ui/voice) at the app's own origin, with this app's bridge — against CI's stand-in
 // core on ~/.sidevoice/core/local.sock (`local-host-ci core`, desktop/local-host/examples/local-host-ci.rs).

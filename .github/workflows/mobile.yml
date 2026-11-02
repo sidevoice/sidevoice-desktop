@@ -1,7 +1,7 @@
 name: mobile
 
 # The mobile app (mobile/, docs/MOBILE.md), built unsigned on every pull request: an Android APK and an iOS app for the
-# simulator, and the check that the committed native projects (mobile/gen) are what the Tauri CLI writes from the app's
+# simulator, and the check that the committed native projects (mobile/tauri/gen) are what the Tauri CLI writes from the app's
 # inputs (generator model G-a). Nothing here signs or uploads anything and no job sees a secret: signing is its own
 # workflow, run by hand from main. It is a workflow of its own, so the desktop app's `build.yml` (its nightly and its
 # release) neither waits for it nor is held up by it.
@@ -91,7 +91,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: mobile-gen-apple
-          path: mobile/gen/apple
+          path: mobile/tauri/gen/apple
           include-hidden-files: true
           retention-days: 7
       - name: The app for the simulator, unsigned

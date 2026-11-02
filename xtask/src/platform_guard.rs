@@ -1614,10 +1614,10 @@ mod tests {
     #[test]
     fn root_rules_apply_to_mod_rs_only() {
         assert_eq!(other("#[cfg(target_os = \"macos\")] mod mac; #[allow(dead_code)] fn f() {}"), 0);
-        assert!(platform_root(Path::new("desktop/src/platform/mod.rs")));
-        assert!(!platform_root(Path::new("desktop/src/platform/tray.rs")));
-        assert!(!platform_root(Path::new("desktop/src/platform/tray/mod.rs")));
-        assert!(!platform_root(Path::new("desktop/src/other/mod.rs")));
+        assert!(platform_root(Path::new("desktop/tauri/src/platform/mod.rs")));
+        assert!(!platform_root(Path::new("desktop/tauri/src/platform/tray.rs")));
+        assert!(!platform_root(Path::new("desktop/tauri/src/platform/tray/mod.rs")));
+        assert!(!platform_root(Path::new("desktop/tauri/src/other/mod.rs")));
     }
 
     #[test]
@@ -1864,10 +1864,16 @@ mod tests {
         ] {
             assert_eq!(host_in_build_script(source), 0, "{source}");
         }
-        for path in ["build.rs", "desktop/build.rs", "desktop/build/platform.rs", "desktop/build/platform/mac.rs"] {
+        for path in [
+            "build.rs",
+            "desktop/tauri/build.rs",
+            "desktop/tauri/build/platform.rs",
+            "desktop/tauri/build/platform/mac.rs",
+        ] {
             assert!(build_script(path), "{path}");
         }
-        for path in ["desktop/src/lib.rs", "desktop/core/src/build_info.rs", "xtask/src/platform/build_tools.rs"] {
+        for path in ["desktop/tauri/src/lib.rs", "desktop/core/src/build_info.rs", "xtask/src/platform/build_tools.rs"]
+        {
             assert!(!build_script(path), "{path}");
         }
     }
@@ -1990,87 +1996,88 @@ mod tests {
     #[test]
     fn only_the_root_of_a_crate_below_its_kinds_directory_may_carry_the_attribute() {
         let dir = tempfile::tempdir().unwrap();
-        for manifest in ["desktop/Cargo.toml", "mobile/plugin/Cargo.toml", "app-core/Cargo.toml"] {
+        for manifest in ["desktop/tauri/Cargo.toml", "mobile/tauri/plugin/Cargo.toml", "shared/core/Cargo.toml"] {
             let path = dir.path().join(manifest);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, "[package]\nname = \"x\"\n").unwrap();
         }
         let at = |path| host_crate_root(dir.path(), path);
-        assert_eq!(at("desktop/src/lib.rs"), Some("desktop"));
-        assert_eq!(at("desktop/src/main.rs"), Some("desktop"));
-        assert_eq!(at("mobile/plugin/src/lib.rs"), Some("mobile"));
-        assert_eq!(at("mobile/src/lib.rs"), None, "no crate there");
-        assert_eq!(at("desktop/src/tray.rs"), None, "a module is not the root");
-        assert_eq!(at("desktop/src/platform/lib.rs"), None);
-        assert_eq!(at("app-core/src/lib.rs"), None, "a shared crate is no host's");
+        assert_eq!(at("desktop/tauri/src/lib.rs"), Some("desktop"));
+        assert_eq!(at("desktop/tauri/src/main.rs"), Some("desktop"));
+        assert_eq!(at("mobile/tauri/plugin/src/lib.rs"), Some("mobile"));
+        assert_eq!(at("mobile/tauri/src/lib.rs"), None, "no crate there");
+        assert_eq!(at("desktop/tauri/src/tray.rs"), None, "a module is not the root");
+        assert_eq!(at("desktop/tauri/src/platform/lib.rs"), None);
+        assert_eq!(at("shared/core/src/lib.rs"), None, "a shared crate is no host's");
         assert_eq!(at("xtask/src/lib.rs"), None);
     }
 
     #[test]
     fn host_crates_are_empty_for_the_other_kind_and_nothing_else_is() {
         let ok = [
-            ("desktop/Cargo.toml", "[package]\nname = \"d\"\n"),
-            ("desktop/src/lib.rs", "#![cfg(desktop)]\nmod a;"),
+            ("desktop/tauri/Cargo.toml", "[package]\nname = \"d\"\n"),
+            ("desktop/tauri/src/lib.rs", "#![cfg(desktop)]\nmod a;"),
             (
-                "desktop/src/main.rs",
+                "desktop/tauri/src/main.rs",
                 "#![cfg(desktop)]\n#![cfg_attr(not(debug_assertions), windows_subsystem = \"windows\")]\nfn main() {}",
             ),
-            ("mobile/Cargo.toml", "[package]\nname = \"m\"\n"),
-            ("mobile/src/lib.rs", "#![cfg(mobile)]\nmod a;"),
-            ("app-core/Cargo.toml", "[package]\nname = \"c\"\n"),
-            ("app-core/src/lib.rs", "pub fn shared() {}"),
+            ("mobile/tauri/Cargo.toml", "[package]\nname = \"m\"\n"),
+            ("mobile/tauri/src/lib.rs", "#![cfg(mobile)]\nmod a;"),
+            ("shared/core/Cargo.toml", "[package]\nname = \"c\"\n"),
+            ("shared/core/src/lib.rs", "pub fn shared() {}"),
         ];
         fixture_repo(&ok).unwrap();
         let wrong_kind =
-            [("mobile/Cargo.toml", "[package]\nname = \"m\"\n"), ("mobile/src/lib.rs", "#![cfg(desktop)]")];
-        assert!(fixture_repo(&wrong_kind).unwrap_err().contains("mobile/src/lib.rs"));
-        let shared = [("app-core/Cargo.toml", "[package]\nname = \"c\"\n"), ("app-core/src/lib.rs", "#![cfg(mobile)]")];
-        assert!(fixture_repo(&shared).unwrap_err().contains("app-core/src/lib.rs"));
+            [("mobile/tauri/Cargo.toml", "[package]\nname = \"m\"\n"), ("mobile/tauri/src/lib.rs", "#![cfg(desktop)]")];
+        assert!(fixture_repo(&wrong_kind).unwrap_err().contains("mobile/tauri/src/lib.rs"));
+        let shared =
+            [("shared/core/Cargo.toml", "[package]\nname = \"c\"\n"), ("shared/core/src/lib.rs", "#![cfg(mobile)]")];
+        assert!(fixture_repo(&shared).unwrap_err().contains("shared/core/src/lib.rs"));
         // A library the manifest moves is no root; the same path written out is the root.
         let moved = [
-            ("desktop/Cargo.toml", "[package]\nname = \"d\"\n[lib]\npath = \"src/other.rs\"\n"),
-            ("desktop/src/lib.rs", "#![cfg(desktop)]"),
+            ("desktop/tauri/Cargo.toml", "[package]\nname = \"d\"\n[lib]\npath = \"src/other.rs\"\n"),
+            ("desktop/tauri/src/lib.rs", "#![cfg(desktop)]"),
         ];
-        assert!(fixture_repo(&moved).unwrap_err().contains("desktop/src/lib.rs"));
+        assert!(fixture_repo(&moved).unwrap_err().contains("desktop/tauri/src/lib.rs"));
         let explicit = [
             (
-                "desktop/Cargo.toml",
+                "desktop/tauri/Cargo.toml",
                 "[package]\nname = \"d\"\n[lib]\npath = \"src/lib.rs\"\n[[bin]]\nname = \"d\"\npath = \"src/main.rs\"\n",
             ),
-            ("desktop/src/lib.rs", "#![cfg(desktop)]\nmod parser;"),
-            ("desktop/src/main.rs", "#![cfg(desktop)]"),
+            ("desktop/tauri/src/lib.rs", "#![cfg(desktop)]\nmod parser;"),
+            ("desktop/tauri/src/main.rs", "#![cfg(desktop)]"),
             // Modules that are only called lib or main are modules.
-            ("desktop/src/parser/mod.rs", "mod lib;\nmod main;\n#[path = \"lib.rs\"] mod again;"),
-            ("desktop/src/parser/lib.rs", "pub fn f() {}"),
-            ("desktop/src/parser/main.rs", "pub fn g() {}"),
+            ("desktop/tauri/src/parser/mod.rs", "mod lib;\nmod main;\n#[path = \"lib.rs\"] mod again;"),
+            ("desktop/tauri/src/parser/lib.rs", "pub fn f() {}"),
+            ("desktop/tauri/src/parser/main.rs", "pub fn g() {}"),
         ];
         fixture_repo(&explicit).unwrap();
         // A crate root loaded as a module of another file is gated as that module.
         for (file, loader) in [
-            ("mobile/src/a.rs", "#[path = \"lib.rs\"] mod root;"),
-            ("mobile/src/a.rs", "#[path = \"../src/lib.rs\"] mod root;"),
-            ("mobile/src/a.rs", "#[cfg_attr(test, path = \"lib.rs\")] mod root;"),
-            ("mobile/src/b/mod.rs", "#[path = \"../lib.rs\"] mod root;"),
+            ("mobile/tauri/src/a.rs", "#[path = \"lib.rs\"] mod root;"),
+            ("mobile/tauri/src/a.rs", "#[path = \"../src/lib.rs\"] mod root;"),
+            ("mobile/tauri/src/a.rs", "#[cfg_attr(test, path = \"lib.rs\")] mod root;"),
+            ("mobile/tauri/src/b/mod.rs", "#[path = \"../lib.rs\"] mod root;"),
         ] {
             let loaded = [
-                ("mobile/Cargo.toml", "[package]\nname = \"m\"\n"),
-                ("mobile/src/lib.rs", "#![cfg(mobile)]\nmod a;\nmod b;"),
+                ("mobile/tauri/Cargo.toml", "[package]\nname = \"m\"\n"),
+                ("mobile/tauri/src/lib.rs", "#![cfg(mobile)]\nmod a;\nmod b;"),
                 (file, loader),
             ];
             assert!(fixture_repo(&loaded).unwrap_err().contains(file), "{loader}");
         }
         let both = [
-            ("desktop/Cargo.toml", "[package]\nname = \"d\"\n"),
-            ("desktop/src/lib.rs", "#![cfg(desktop)]"),
-            ("desktop/src/main.rs", "#![cfg(desktop)]\nmod lib;"),
+            ("desktop/tauri/Cargo.toml", "[package]\nname = \"d\"\n"),
+            ("desktop/tauri/src/lib.rs", "#![cfg(desktop)]"),
+            ("desktop/tauri/src/main.rs", "#![cfg(desktop)]\nmod lib;"),
         ];
-        assert!(fixture_repo(&both).unwrap_err().contains("desktop/src/main.rs"));
+        assert!(fixture_repo(&both).unwrap_err().contains("desktop/tauri/src/main.rs"));
         let module = [
-            ("desktop/Cargo.toml", "[package]\nname = \"d\"\n"),
-            ("desktop/src/lib.rs", "#![cfg(desktop)]\nmod a;"),
-            ("desktop/src/a.rs", "#![cfg(desktop)]"),
+            ("desktop/tauri/Cargo.toml", "[package]\nname = \"d\"\n"),
+            ("desktop/tauri/src/lib.rs", "#![cfg(desktop)]\nmod a;"),
+            ("desktop/tauri/src/a.rs", "#![cfg(desktop)]"),
         ];
-        assert!(fixture_repo(&module).unwrap_err().contains("desktop/src/a.rs"));
+        assert!(fixture_repo(&module).unwrap_err().contains("desktop/tauri/src/a.rs"));
     }
 
     /// `inspect` over a Git repository holding `files`.

@@ -1,4 +1,4 @@
-// Unit tests of the Tauri transport (app-tauri/js/transport.js) against a fake `__TAURI_INTERNALS__`: no browser, no Tauri.
+// Unit tests of the Tauri transport (shared/tauri/js/transport.js) against a fake `__TAURI_INTERNALS__`: no browser, no Tauri.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import vm from "node:vm";
@@ -6,7 +6,7 @@ import { transport as source } from "./bridge-source.mjs";
 
 const makeTransport = vm.runInNewContext(source, { Promise });
 const flush = () => new Promise((resolve) => setImmediate(resolve));
-const PLUGIN = "plugin:sidevoice-app-tauri|";
+const PLUGIN = "plugin:sidevoice-shared-tauri|";
 
 function page() {
   const invoked = [];

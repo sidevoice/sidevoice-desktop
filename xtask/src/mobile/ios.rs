@@ -3,8 +3,8 @@
 //!
 //! - **Export compliance.** The app's `Info.plist` says whether it uses encryption beyond the system's
 //!   (`ITSAppUsesNonExemptEncryption`). Without the key App Store Connect asks the question again for every build, and
-//!   holds it from TestFlight until someone answers. What the key says is decided in mobile/Info.ios.plist.
-//! - **Privacy manifest.** `PrivacyInfo.xcprivacy` is at the root of the bundle (mobile/PrivacyInfo.xcprivacy, which
+//!   holds it from TestFlight until someone answers. What the key says is decided in mobile/tauri/Info.ios.plist.
+//! - **Privacy manifest.** `PrivacyInfo.xcprivacy` is at the root of the bundle (mobile/tauri/PrivacyInfo.xcprivacy, which
 //!   `mobile generate ios` puts in the project), says it does not track, and declares the reason for each category of
 //!   required-reason API the executable calls. Apple refuses an upload that calls one without a declared reason
 //!   (<https://developer.apple.com/documentation/bundleresources/describing-use-of-required-reason-api>).
@@ -157,7 +157,7 @@ fn declared_categories(manifest: &plist::Dictionary) -> Result<BTreeSet<String>>
 pub fn check_bundle(bundle: &Bundle) -> Result<()> {
     ensure(
         bundle.info.get("ITSAppUsesNonExemptEncryption").is_some_and(|v| v.as_boolean().is_some()),
-        "Info.plist does not say whether the app uses encryption beyond the system's (ITSAppUsesNonExemptEncryption, set in mobile/Info.ios.plist)",
+        "Info.plist does not say whether the app uses encryption beyond the system's (ITSAppUsesNonExemptEncryption, set in mobile/tauri/Info.ios.plist)",
     )?;
     let manifest = bundle.manifest.as_ref().ok_or(format!("{MANIFEST} is not at the root of the bundle"))?;
     ensure(

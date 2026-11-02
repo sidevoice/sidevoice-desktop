@@ -1,8 +1,8 @@
 node_modules/
 /target/
-desktop/gen/schemas/
-# Held by desktop/build.rs while it regenerates the command permissions.
-desktop/.build.lock
+desktop/tauri/gen/schemas/
+# Held by desktop/tauri/build.rs while it regenerates the command permissions.
+desktop/tauri/.build.lock
 dist/
 *.dmg
 .DS_Store
@@ -18,10 +18,10 @@ dmg-screens/
 card-shots/
 /artifacts/
 /assets/
-# The mobile app: what `tauri icon` writes beside its sources (mobile/app-icon) besides the projects' own icons, and
+# The mobile app: what `tauri icon` writes beside its sources (mobile/tauri/app-icon) besides the projects' own icons, and
 # nothing reads.
-mobile/icons/
-mobile/gen/schemas/
+mobile/tauri/icons/
+mobile/tauri/gen/schemas/
 # The engine's native libraries an app build packages (`cargo xtask mobile build`): sherpa-onnx's iOS xcframework and each
-# target's binary (Android's go to mobile/gen/android/app/src/main/jniLibs, whose .so the project's own .gitignore ignores).
-mobile/frameworks/
+# target's binary (Android's go to mobile/tauri/gen/android/app/src/main/jniLibs, whose .so the project's own .gitignore ignores).
+mobile/tauri/frameworks/

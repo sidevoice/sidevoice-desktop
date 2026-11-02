@@ -35,9 +35,9 @@ pub fn work(name: &str) -> Result<PathBuf> {
     Ok(dir)
 }
 
-/// The app's one version (desktop/tauri.conf.json; release-please moves it with the others).
+/// The app's one version (desktop/tauri/tauri.conf.json; release-please moves it with the others).
 pub fn version() -> Result<String> {
-    let path = repo().join("desktop/tauri.conf.json");
+    let path = repo().join("desktop/tauri/tauri.conf.json");
     let conf: serde_json::Value =
         serde_json::from_slice(&read_bytes(&path)?).map_err(|e| format!("{}: {e}", path.display()))?;
     conf["version"].as_str().map(str::to_owned).ok_or_else(|| format!("{} names no version", path.display()))

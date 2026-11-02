@@ -4927,52 +4927,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
-name = "sidevoice-app-core"
-version = "0.3.0"
-dependencies = [
- "android-native-keyring-store",
- "apple-native-keyring-store",
- "base64 0.22.1",
- "futures-util",
- "keyring-core",
- "log",
- "regex",
- "security-framework",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "sidevoice-engine",
- "sidevoice-voice",
- "tokio",
- "windows-native-keyring-store",
- "zbus-secret-service-keyring-store",
-]
-
-[[package]]
-name = "sidevoice-app-tauri"
-version = "0.3.0"
-dependencies = [
- "block2",
- "cpal",
- "log",
- "objc2",
- "objc2-av-foundation",
- "objc2-avf-audio",
- "objc2-foundation",
- "objc2-media-player",
- "serde_json",
- "sidevoice-app-core",
- "tauri",
- "tauri-plugin",
- "tauri-plugin-opener",
- "tauri-utils",
- "tokio",
- "toml 1.1.6+spec-1.1.0",
- "windows-sys 0.61.2",
- "winreg",
-]
-
-[[package]]
 name = "sidevoice-desktop"
 version = "0.3.0"
 dependencies = [
@@ -4996,12 +4950,12 @@ dependencies = [
  "same-file",
  "serde",
  "serde_json",
- "sidevoice-app-core",
- "sidevoice-app-tauri",
  "sidevoice-desktop-core",
  "sidevoice-desktop-test-support",
  "sidevoice-local-host",
  "sidevoice-platform",
+ "sidevoice-shared",
+ "sidevoice-shared-tauri",
  "sys-locale",
  "sysinfo",
  "tauri",
@@ -5136,9 +5090,9 @@ dependencies = [
  "rustls-platform-verifier",
  "serde",
  "serde_json",
- "sidevoice-app-core",
- "sidevoice-app-tauri",
  "sidevoice-mobile-plugin",
+ "sidevoice-shared",
+ "sidevoice-shared-tauri",
  "tauri",
  "tauri-build",
  "tauri-plugin-log",
@@ -5182,6 +5136,52 @@ dependencies = [
  "winapi-util",
  "windows",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "sidevoice-shared"
+version = "0.3.0"
+dependencies = [
+ "android-native-keyring-store",
+ "apple-native-keyring-store",
+ "base64 0.22.1",
+ "futures-util",
+ "keyring-core",
+ "log",
+ "regex",
+ "security-framework",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "sidevoice-engine",
+ "sidevoice-voice",
+ "tokio",
+ "windows-native-keyring-store",
+ "zbus-secret-service-keyring-store",
+]
+
+[[package]]
+name = "sidevoice-shared-tauri"
+version = "0.3.0"
+dependencies = [
+ "block2",
+ "cpal",
+ "log",
+ "objc2",
+ "objc2-av-foundation",
+ "objc2-avf-audio",
+ "objc2-foundation",
+ "objc2-media-player",
+ "serde_json",
+ "sidevoice-shared",
+ "tauri",
+ "tauri-plugin",
+ "tauri-plugin-opener",
+ "tauri-utils",
+ "tokio",
+ "toml 1.1.6+spec-1.1.0",
+ "windows-sys 0.61.2",
+ "winreg",
 ]
 
 [[package]]

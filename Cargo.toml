@@ -1,15 +1,15 @@
-# The Rust workspace of the repository: the crates every app shares (app-core/, app-tauri/), the desktop app (desktop/)
-# with the crates it is made of, the mobile app (mobile/) with its plugin, and the local host's test fixtures
-# (test-support/). A build for iOS or Android names its package (-p): the workspace holds the other kind of host too.
-# xtask/ is not a member: it is a package and workspace of its own, so it builds with no webview, native engine or C
-# toolchain. Cargo reads desktop/.cargo/config.toml and desktop/rust-toolchain.toml only from desktop/ (`cargo xtask`
+# The Rust workspace of the repository, in three roots that each hold a pure-logic crate and its Tauri adapter: shared/ (core/,
+# tauri/: what every app uses), desktop/ (core/, tauri/ the app, local-host/) and mobile/ (tauri/ the app, with its plugin/), and the
+# local host's test fixtures (test-support/). A build for iOS or Android names its package (-p): the workspace holds the other
+# kind of host too. xtask/ is not a member: it is a package and workspace of its own, so it builds with no webview, native
+# engine or C toolchain. Cargo reads desktop/.cargo/config.toml and desktop/rust-toolchain.toml only from desktop/ (`cargo xtask`
 # runs cargo there).
 [workspace]
 resolver = "2"
-members = ["app-core", "app-tauri", "desktop", "desktop/core", "desktop/local-host", "mobile", "mobile/plugin", "test-support"]
+members = ["shared/core", "shared/tauri", "desktop/tauri", "desktop/core", "desktop/local-host", "mobile/tauri", "mobile/tauri/plugin", "test-support"]
 # A plain `cargo build` or `cargo test` on a computer does not enter the mobile crates (Cargo cannot make a member depend on the
 # target; each host crate is empty for the other kind, `#![cfg(..)]` at its root). The mobile jobs name them (`-p`).
-default-members = ["app-core", "app-tauri", "desktop", "desktop/core", "desktop/local-host", "test-support"]
+default-members = ["shared/core", "shared/tauri", "desktop/tauri", "desktop/core", "desktop/local-host", "test-support"]
 
 # Profiles are read from the workspace root only.
 [profile.release]

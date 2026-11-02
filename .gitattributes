@@ -1,2 +1,2 @@
 # The bridge scripts are embedded with include_str! and matched byte for byte by tests: keep LF on every checkout.
-desktop/core/js/*.js text eol=lf
+desktop/tauri/js/*.js text eol=lf

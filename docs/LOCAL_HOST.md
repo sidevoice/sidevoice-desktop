@@ -12,8 +12,8 @@ package, without Node («Prepare this computer»; Install, below); either way th
 | Where | What |
 |---|---|
 | `desktop/local-host/` | The `sidevoice-local-host` crate: everything below, blocking IO, no Tauri, so it is tested anywhere Unix. |
-| `desktop/src/local_host.rs` | Starts it with the app's paths at launch, stops it at quit, answers the room page's `local_host_*` commands. |
-| `desktop/core/js/desktop-bridge.js` | `window.__sidevoiceHost.host.localHost` (docs/BRIDGE.md). |
+| `desktop/tauri/src/local_host.rs` | Starts it with the app's paths at launch, stops it at quit, answers the room page's `local_host_*` commands. |
+| `desktop/tauri/js/desktop-bridge.js` | `window.__sidevoiceHost.host.localHost` (docs/BRIDGE.md). |
 
 ## Where things are
 
