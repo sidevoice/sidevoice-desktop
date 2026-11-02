@@ -119,7 +119,10 @@ through `run` (the call's service hangs up through it).
   in `mobile/tauri.conf.json`, beside the system frameworks the Rust library calls and Xcode must link: AVFoundation and
   AVFAudio for the audio session and the microphone's permission, AudioToolbox for cpal's audio units). `cargo xtask mobile build` gets them from the engine's own `cargo xtask android-build`
   or `ios-build`, at the commit Cargo.lock pins (the archive its pins name, checked against its digest), and builds the
-  app against the same directory (`SHERPA_ONNX_LIB_DIR`), so nothing is downloaded unchecked. Git ignores both
+  app against the same directory (`SHERPA_ONNX_LIB_DIR`), so nothing is downloaded unchecked. The variable is also
+  written into the repository's `.cargo/config.toml` (`[env]`) for the length of the build and taken out after it: the
+  cargo the native project runs again from inside its build (Xcode's build phase, Gradle's `rust` task) gets from the
+  Tauri CLI only the `TAURI*`, `WRY*`, `CARGO_*` and `RUST_*` variables, and would otherwise link a copy of its own. Git ignores both
   (`mobile/frameworks/`, the `.so` files of `jniLibs`).
 - **The log**: `tauri-plugin-log` to the system's (logcat, the unified log) and a file in the app's log folder.
 
