@@ -125,7 +125,7 @@ mod tests {
             messages()
         )));
         assert!(
-            script("http://tauri.localhost", false, None, &messages()).contains(&format!(
+            script("http://tauri.localhost", false, None, &messages(), None).contains(&format!(
                 "factory(window, \"http://tauri.localhost\", false, null, {}, null)",
                 messages()
             ))
