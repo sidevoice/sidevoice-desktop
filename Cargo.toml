@@ -7,6 +7,9 @@
 [workspace]
 resolver = "2"
 members = ["app-core", "app-tauri", "desktop", "desktop/core", "desktop/local-host", "mobile", "mobile/plugin", "test-support"]
+# A plain `cargo build` or `cargo test` on a computer does not enter the mobile crates (Cargo cannot make a member depend on the
+# target; each host crate is empty for the other kind, `#![cfg(..)]` at its root). The mobile jobs name them (`-p`).
+default-members = ["app-core", "app-tauri", "desktop", "desktop/core", "desktop/local-host", "test-support"]
 
 # Profiles are read from the workspace root only.
 [profile.release]

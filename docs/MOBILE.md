@@ -195,7 +195,7 @@ action, in the system's language (`res/values`, English, and `values-es`; the Sp
 
 ## Building
 
-Always one package, never the workspace: it holds the desktop app too. The Tauri CLI is told which app is the one
+Always one package, never the workspace: it holds the desktop app too (and the mobile crates are empty on a computer: `#![cfg(mobile)]` at their roots, so a plain `cargo` command there skips them; `cargo xtask mobile lint android|ios` runs Clippy over them for their target). The Tauri CLI is told which app is the one
 (`TAURI_APP_PATH`): Gradle calls it back from the package root, where it would find `desktop/` as well.
 
 ```

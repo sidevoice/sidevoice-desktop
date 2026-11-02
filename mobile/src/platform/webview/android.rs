@@ -1,5 +1,4 @@
-//! Android and computers: nothing to do. Android's window is edge to edge from the Android library of `mobile/plugin`,
-//! and a computer has no safe area.
+//! Android: nothing to do. Its window is edge to edge from the Android library of `mobile/plugin`.
 use super::Os;
 use tauri::webview::PlatformWebview;
 

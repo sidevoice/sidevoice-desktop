@@ -24,7 +24,10 @@
 //!   An OS condition on the trait, on an inline module around it or on the whole file counts the same.
 //!
 //! Host kinds are not OS conditions, and have no place anywhere, `platform` included (D-RULE, AGENTS.md → "Host kind is
-//! a crate boundary"). What counts, in every Rust file, and in every Cargo manifest:
+//! a crate boundary"), with one exception (D-RULE-ROOT): a host crate exists only for its kind, so the root of a crate
+//! under `desktop/` may carry `#![cfg(desktop)]` and the root of one under `mobile/` `#![cfg(mobile)]`, written exactly so
+//! (a file-scope inner attribute of its `src/lib.rs` or `src/main.rs`, with no other predicate). The same condition in
+//! another crate or place, or the other kind's, counts. What counts, in every Rust file, and in every Cargo manifest:
 //! - `desktop` or `mobile` (the conditions tauri-build defines) in `cfg`, `cfg_attr` or `cfg!`, and
 //!   `feature = "desktop"` or `feature = "mobile"` there;
 //! - a `cfg_aliases!` entry named `desktop` or `mobile`, or built on one, and every use of such an alias;
@@ -38,6 +41,12 @@
 //!   and a `check-cfg` lint that declares one.
 //!
 //! Code for one kind of host lives in the crate of that host; `host_graph` checks the crates' dependencies.
+//!
+//! The crate-root exception is a convention guard, not a sandbox (the stance of the web lint in sidevoice-web): a root is
+//! the `src/lib.rs` or `src/main.rs` of a crate below `desktop/` or `mobile/` (a `[lib] path` elsewhere moves it away),
+//! and the attribute is refused in a file that another file loads as a module by `#[path]` (also under `cfg_attr`) or
+//! `mod name;`. Roots reached by `include!`, a macro, or a `[[bin]]` path elsewhere are for review; `host_graph` reads
+//! the real targets from `cargo metadata`.
 //!
 //! Limits, by design of a token scan: a program name or OS variable reaching `Command::new` through a constant
 //! or a computed value, a bare function imported by glob (`use libc::*`) and the arms of `cfg_select!` are not
@@ -895,6 +904,13 @@ struct Hosts {
     gates: HashMap<String, Reach>,
     /// The file is a build script (or a module of one), where `println!` is how a `cfg` is defined.
     build_script: bool,
+    /// The host kind this file may name as its crate-root attribute: the file is the root of a crate under that kind's
+    /// directory.
+    root_of: Option<&'static str>,
+    /// Where the file is, and the crate roots it must not load as modules.
+    loads: Option<Loads>,
+    /// The walk is at file scope (not inside a group), where an inner attribute is the crate's.
+    top: bool,
     lines: BTreeSet<usize>,
     count: usize,
 }
@@ -908,17 +924,38 @@ impl Hosts {
     fn walk(&mut self, trees: &[TokenTree]) {
         for (at, tree) in trees.iter().enumerate() {
             match tree {
-                TokenTree::Group(g) => self.walk(&flat(g.stream())),
+                TokenTree::Group(g) => {
+                    let top = std::mem::replace(&mut self.top, false);
+                    self.walk(&flat(g.stream()));
+                    self.top = top;
+                }
                 TokenTree::Punct(p) if p.as_char() == '#' => {
-                    let body = at + usize::from(punct(trees.get(at + 1), '!')) + 1;
+                    let inner_attribute = punct(trees.get(at + 1), '!');
+                    let body = at + usize::from(inner_attribute) + 1;
                     if let Some(inner) = group(trees.get(body), Delimiter::Bracket) {
                         let inner = flat(inner);
+                        if inner_attribute && self.top && self.is_root_attribute(&inner) {
+                            continue;
+                        }
                         let name = inner.first().and_then(ident).unwrap_or_default();
                         let args = group(inner.get(1), Delimiter::Parenthesis).unwrap_or_default();
-                        if host_attr(&name, &args, &self.aliases) {
+                        if host_attr(&name, &args, &self.aliases)
+                            || self.loads.as_ref().is_some_and(|loads| loads.path_attribute(&name, &inner))
+                        {
                             self.found(tree);
                         }
                     }
+                }
+                // `mod name;` that loads the file of a crate root as a module.
+                TokenTree::Ident(id)
+                    if id == "mod"
+                        && punct(trees.get(at + 2), ';')
+                        && trees
+                            .get(at + 1)
+                            .and_then(ident)
+                            .is_some_and(|name| self.loads.as_ref().is_some_and(|loads| loads.module(&name))) =>
+                {
+                    self.found(tree);
                 }
                 TokenTree::Ident(id) if punct(trees.get(at + 1), '!') => {
                     let name = id.to_string();
@@ -953,6 +990,17 @@ impl Hosts {
         }
     }
 
+    /// Whether `body` (inside `#![..]`) is exactly `cfg(<the kind of this crate>)`: the one host-kind condition accepted.
+    fn is_root_attribute(&self, body: &[TokenTree]) -> bool {
+        let Some(kind) = self.root_of else {
+            return false;
+        };
+        let predicate = group(body.get(1), Delimiter::Parenthesis).map(flat).unwrap_or_default();
+        body.len() == 2
+            && body.first().and_then(ident).as_deref() == Some("cfg")
+            && matches!(predicate.as_slice(), [only] if ident(only).as_deref() == Some(kind))
+    }
+
     /// `cfg_aliases! { name: { condition }, … }`: an entry named like a host kind or built on one counts, and becomes one.
     fn define(&mut self, body: &[TokenTree]) {
         for entry in body.split(|tree| punct(Some(tree), ',')) {
@@ -977,6 +1025,67 @@ fn defines_host_cfg(value: String) -> bool {
     }
     rest.strip_prefix("rustc-check-cfg=")
         .is_some_and(|check| TokenStream::from_str(check).is_ok_and(|check| names_host(&check, &HashSet::new())))
+}
+
+/// What a file needs to tell whether it loads a crate root of a host crate as a module (where its `#![cfg(..)]` would
+/// gate that module): its own path and the repository's crate roots.
+struct Loads {
+    file: String,
+    roots: BTreeSet<String>,
+}
+
+impl Loads {
+    /// `base/rel` with `.` and `..` resolved.
+    fn join(base: &str, rel: &str) -> String {
+        let mut parts: Vec<&str> = base.split('/').filter(|part| !part.is_empty()).collect();
+        for part in rel.split('/') {
+            match part {
+                "" | "." => {}
+                ".." => {
+                    parts.pop();
+                }
+                part => parts.push(part),
+            }
+        }
+        parts.join("/")
+    }
+
+    fn directory(&self) -> &str {
+        self.file.rsplit_once('/').map_or("", |(dir, _)| dir)
+    }
+
+    /// Whether `#[path = "rel"]` (also as an attribute applied by a `cfg_attr`) names a crate root.
+    fn path_attribute(&self, name: &str, body: &[TokenTree]) -> bool {
+        let named = |body: &[TokenTree]| match body {
+            [first, eq, TokenTree::Literal(lit), ..]
+                if ident(first).as_deref() == Some("path") && punct(Some(eq), '=') =>
+            {
+                string_value(lit).is_some_and(|rel| self.roots.contains(&Self::join(self.directory(), &rel)))
+            }
+            _ => false,
+        };
+        match name {
+            "path" => named(body),
+            "cfg_attr" => {
+                let args = group(body.get(1), Delimiter::Parenthesis).map(flat).unwrap_or_default();
+                args.split(|tree| punct(Some(tree), ',')).skip(1).any(named)
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether `mod name;` in this file loads a crate root.
+    fn module(&self, name: &str) -> bool {
+        let stem = self.file.rsplit('/').next().unwrap_or_default().trim_end_matches(".rs");
+        let base = if matches!(stem, "lib" | "main" | "mod") {
+            self.directory().to_owned()
+        } else {
+            Self::join(self.directory(), stem)
+        };
+        [format!("{name}.rs"), format!("{name}/mod.rs")]
+            .iter()
+            .any(|file| self.roots.contains(&Self::join(&base, file)))
+    }
 }
 
 /// Which arguments of a call to a gate macro reach its `cfg`.
@@ -1093,16 +1202,31 @@ fn gate_reach(body: &[TokenTree]) -> Option<Reach> {
 /// The host-kind conditions of one Rust file, wherever it is (`platform` included), and what it defines for the
 /// others: aliases and macros that gate. `build_script`: a build script, or a module of one.
 fn scan_host(source: &str, shared: &Shared, build_script: bool) -> Result<Report> {
+    scan_host_of(source, shared, build_script, None, None)
+}
+
+/// [`scan_host`] of a file that is (`root_of`) the root of a crate of that host kind (see [`host_crate_root`]).
+fn scan_host_of(
+    source: &str,
+    shared: &Shared,
+    build_script: bool,
+    root_of: Option<&'static str>,
+    loads: Option<Loads>,
+) -> Result<Report> {
     let trees = flat(TokenStream::from_str(source).map_err(|e| e.to_string())?);
     let mut hosts = Hosts {
         aliases: shared.host_aliases.clone(),
         gates: shared.gate_macros.clone(),
         build_script,
+        root_of,
+        loads,
         ..Hosts::default()
     };
     // Twice: an alias or a macro counts where it is used even above the entry that defines it.
+    hosts.top = true;
     hosts.walk(&trees);
     (hosts.count, hosts.lines) = (0, BTreeSet::new());
+    hosts.top = true;
     hosts.walk(&trees);
     let shared = Shared { host_aliases: hosts.aliases, gate_macros: hosts.gates, ..shared.clone() };
     Ok(Report { count: hosts.count, lines: hosts.lines, shared })
@@ -1133,6 +1257,27 @@ fn scan_manifest(text: &str, shared: &Shared) -> Result<Report> {
     let lines =
         found.iter().map(|name| text.lines().position(|line| line.contains(name.as_str())).map_or(1, |at| at + 1));
     Ok(Report { count: found.len(), lines: lines.collect(), shared: shared.clone() })
+}
+
+/// The host kind whose crate-root attribute `path` (relative to the repository `root`) may carry: `src/lib.rs` or
+/// `src/main.rs` of a crate (a folder holding a `Cargo.toml`) below `desktop/` or `mobile/`.
+fn host_crate_root(root: &Path, path: &str) -> Option<&'static str> {
+    let parts: Vec<&str> = path.split('/').collect();
+    let (kind, dir) = match parts.as_slice() {
+        [kind @ ("desktop" | "mobile"), dir @ .., "src", "lib.rs" | "main.rs"] => (*kind, dir),
+        _ => return None,
+    };
+    let crate_dir = std::iter::once(kind).chain(dir.iter().copied()).collect::<Vec<_>>().join("/");
+    // A library the manifest moves (`[lib] path` elsewhere than `src/lib.rs`) is not in `src/lib.rs`.
+    let manifest = std::fs::read_to_string(root.join(&crate_dir).join("Cargo.toml")).ok()?;
+    let manifest: toml::Table = manifest.parse().ok()?;
+    let moved = path.ends_with("/lib.rs")
+        && manifest
+            .get("lib")
+            .and_then(|lib| lib.get("path"))
+            .and_then(toml::Value::as_str)
+            .is_some_and(|lib| Loads::join(&crate_dir, lib) != format!("{crate_dir}/src/lib.rs"));
+    (!moved).then_some(if kind == "desktop" { "desktop" } else { "mobile" })
 }
 
 /// `platform/mod.rs`: the module root, which only declares and picks.
@@ -1195,6 +1340,8 @@ fn inspect(root: &Path) -> Result<()> {
     // What each file holds: its OS occurrences, and its host-kind conditions (the host kinds are everyone's: `platform`
     // files and the Cargo manifests are read for them too).
     let mut reports = Vec::new();
+    let roots: BTreeSet<String> =
+        files.iter().filter(|(path, _)| host_crate_root(root, path).is_some()).map(|(path, _)| path.clone()).collect();
     for (path, source) in &files {
         let os = if exempt(Path::new(path)) {
             scan_platform(source, platform_root(Path::new(path)), &shared)
@@ -1202,7 +1349,9 @@ fn inspect(root: &Path) -> Result<()> {
             scan_file(source, &shared, binary_root(root, path))
         };
         reports.push((path, os.map_err(|e| format!("{path}: {e}"))?, "OS occurrences", "move OS code into platform"));
-        let hosts = scan_host(source, &shared, build_script(path)).map_err(|e| format!("{path}: {e}"))?;
+        let loads = Loads { file: path.clone(), roots: roots.clone() };
+        let hosts = scan_host_of(source, &shared, build_script(path), host_crate_root(root, path), Some(loads))
+            .map_err(|e| format!("{path}: {e}"))?;
         reports.push((path, hosts, "host-kind conditions", HOST_FIX));
     }
     for (path, source) in &manifests {
@@ -1223,7 +1372,7 @@ fn inspect(root: &Path) -> Result<()> {
     }
 }
 
-const HOST_FIX: &str = "host kind is a crate boundary: put the code in the crate that owns it";
+const HOST_FIX: &str = "host kind is a crate boundary: put the code in the crate that owns it (the one condition is `#![cfg(desktop)]` or `#![cfg(mobile)]` at the root of a crate below that directory)";
 
 /// A build script, or a module of one: `build.rs`, and files in a `build/` directory.
 fn build_script(path: &str) -> bool {
@@ -1802,6 +1951,126 @@ mod tests {
             ),
         ];
         fixture_repo(&clean).unwrap();
+    }
+
+    fn root_host(source: &str, kind: &'static str) -> usize {
+        scan_host_of(source, &Shared::default(), false, Some(kind), None).unwrap().count
+    }
+
+    #[test]
+    fn a_crate_root_of_its_kind_carries_only_that_kind_as_an_inner_attribute() {
+        // The attribute, with docs and other inner attributes around it, in either kind's own crate.
+        assert_eq!(root_host("#![cfg(mobile)]\n//! Docs.\nmod a;", "mobile"), 0);
+        assert_eq!(root_host("//! Docs.\n#![allow(dead_code)]\n#![cfg( desktop )]\nfn f() {}", "desktop"), 0);
+        // Every other form still counts: the other kind, a longer predicate, an outer attribute, one nested in a group.
+        for (source, kind) in [
+            ("#![cfg(desktop)]", "mobile"),
+            ("#![cfg(mobile)]", "desktop"),
+            ("#![cfg(not(mobile))]", "mobile"),
+            ("#![cfg(all(mobile, test))]", "mobile"),
+            ("#![cfg(any(mobile, desktop))]", "mobile"),
+            ("#![cfg_attr(test, cfg(mobile))]", "mobile"),
+            ("#![cfg_attr(mobile, allow(dead_code))]", "mobile"),
+            ("#![cfg(feature = \"mobile\")]", "mobile"),
+            ("#![cfg(mobile)] #![cfg(mobile)] mod a { #![cfg(mobile)] }", "mobile"),
+            ("#[cfg(mobile)] fn f() {}", "mobile"),
+            ("#[cfg(mobile)] mod a;", "mobile"),
+            ("mod a { #![cfg(mobile)] }", "mobile"),
+            ("fn f() { if cfg!(mobile) {} }", "mobile"),
+            ("cfg_if::cfg_if! { if #[cfg(mobile)] { fn a() {} } }", "mobile"),
+        ] {
+            assert!(root_host(source, kind) > 0, "{source} in a {kind} crate");
+        }
+        // Only the second of two nested ones, and the attribute with a crate that is not a host's root, counts.
+        assert_eq!(root_host("#![cfg(mobile)] mod a { #![cfg(mobile)] }", "mobile"), 1);
+        assert_eq!(host("#![cfg(mobile)]"), 1, "a file that is no host crate's root");
+        assert_eq!(host("#![cfg(desktop)]"), 1);
+    }
+
+    #[test]
+    fn only_the_root_of_a_crate_below_its_kinds_directory_may_carry_the_attribute() {
+        let dir = tempfile::tempdir().unwrap();
+        for manifest in ["desktop/Cargo.toml", "mobile/plugin/Cargo.toml", "app-core/Cargo.toml"] {
+            let path = dir.path().join(manifest);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "[package]\nname = \"x\"\n").unwrap();
+        }
+        let at = |path| host_crate_root(dir.path(), path);
+        assert_eq!(at("desktop/src/lib.rs"), Some("desktop"));
+        assert_eq!(at("desktop/src/main.rs"), Some("desktop"));
+        assert_eq!(at("mobile/plugin/src/lib.rs"), Some("mobile"));
+        assert_eq!(at("mobile/src/lib.rs"), None, "no crate there");
+        assert_eq!(at("desktop/src/tray.rs"), None, "a module is not the root");
+        assert_eq!(at("desktop/src/platform/lib.rs"), None);
+        assert_eq!(at("app-core/src/lib.rs"), None, "a shared crate is no host's");
+        assert_eq!(at("xtask/src/lib.rs"), None);
+    }
+
+    #[test]
+    fn host_crates_are_empty_for_the_other_kind_and_nothing_else_is() {
+        let ok = [
+            ("desktop/Cargo.toml", "[package]\nname = \"d\"\n"),
+            ("desktop/src/lib.rs", "#![cfg(desktop)]\nmod a;"),
+            (
+                "desktop/src/main.rs",
+                "#![cfg(desktop)]\n#![cfg_attr(not(debug_assertions), windows_subsystem = \"windows\")]\nfn main() {}",
+            ),
+            ("mobile/Cargo.toml", "[package]\nname = \"m\"\n"),
+            ("mobile/src/lib.rs", "#![cfg(mobile)]\nmod a;"),
+            ("app-core/Cargo.toml", "[package]\nname = \"c\"\n"),
+            ("app-core/src/lib.rs", "pub fn shared() {}"),
+        ];
+        fixture_repo(&ok).unwrap();
+        let wrong_kind =
+            [("mobile/Cargo.toml", "[package]\nname = \"m\"\n"), ("mobile/src/lib.rs", "#![cfg(desktop)]")];
+        assert!(fixture_repo(&wrong_kind).unwrap_err().contains("mobile/src/lib.rs"));
+        let shared = [("app-core/Cargo.toml", "[package]\nname = \"c\"\n"), ("app-core/src/lib.rs", "#![cfg(mobile)]")];
+        assert!(fixture_repo(&shared).unwrap_err().contains("app-core/src/lib.rs"));
+        // A library the manifest moves is no root; the same path written out is the root.
+        let moved = [
+            ("desktop/Cargo.toml", "[package]\nname = \"d\"\n[lib]\npath = \"src/other.rs\"\n"),
+            ("desktop/src/lib.rs", "#![cfg(desktop)]"),
+        ];
+        assert!(fixture_repo(&moved).unwrap_err().contains("desktop/src/lib.rs"));
+        let explicit = [
+            (
+                "desktop/Cargo.toml",
+                "[package]\nname = \"d\"\n[lib]\npath = \"src/lib.rs\"\n[[bin]]\nname = \"d\"\npath = \"src/main.rs\"\n",
+            ),
+            ("desktop/src/lib.rs", "#![cfg(desktop)]\nmod parser;"),
+            ("desktop/src/main.rs", "#![cfg(desktop)]"),
+            // Modules that are only called lib or main are modules.
+            ("desktop/src/parser/mod.rs", "mod lib;\nmod main;\n#[path = \"lib.rs\"] mod again;"),
+            ("desktop/src/parser/lib.rs", "pub fn f() {}"),
+            ("desktop/src/parser/main.rs", "pub fn g() {}"),
+        ];
+        fixture_repo(&explicit).unwrap();
+        // A crate root loaded as a module of another file is gated as that module.
+        for (file, loader) in [
+            ("mobile/src/a.rs", "#[path = \"lib.rs\"] mod root;"),
+            ("mobile/src/a.rs", "#[path = \"../src/lib.rs\"] mod root;"),
+            ("mobile/src/a.rs", "#[cfg_attr(test, path = \"lib.rs\")] mod root;"),
+            ("mobile/src/b/mod.rs", "#[path = \"../lib.rs\"] mod root;"),
+        ] {
+            let loaded = [
+                ("mobile/Cargo.toml", "[package]\nname = \"m\"\n"),
+                ("mobile/src/lib.rs", "#![cfg(mobile)]\nmod a;\nmod b;"),
+                (file, loader),
+            ];
+            assert!(fixture_repo(&loaded).unwrap_err().contains(file), "{loader}");
+        }
+        let both = [
+            ("desktop/Cargo.toml", "[package]\nname = \"d\"\n"),
+            ("desktop/src/lib.rs", "#![cfg(desktop)]"),
+            ("desktop/src/main.rs", "#![cfg(desktop)]\nmod lib;"),
+        ];
+        assert!(fixture_repo(&both).unwrap_err().contains("desktop/src/main.rs"));
+        let module = [
+            ("desktop/Cargo.toml", "[package]\nname = \"d\"\n"),
+            ("desktop/src/lib.rs", "#![cfg(desktop)]\nmod a;"),
+            ("desktop/src/a.rs", "#![cfg(desktop)]"),
+        ];
+        assert!(fixture_repo(&module).unwrap_err().contains("desktop/src/a.rs"));
     }
 
     /// `inspect` over a Git repository holding `files`.

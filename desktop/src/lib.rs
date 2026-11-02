@@ -1,3 +1,4 @@
+#![cfg(desktop)]
 //! Sidevoice desktop: a Tauri shell around the Sidevoice web interface, bundled in the app, whose tray drives
 //! the call through the interface's own actions (docs/BRIDGE.md).
 //!

@@ -62,8 +62,8 @@
 		2F7FFFBA485380A406EB4250 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
 		342E293471DA6E0AD449A563 /* es.rs */ = {isa = PBXFileReference; path = es.rs; sourceTree = "<group>"; };
 		3AF49EB321D75CDC67E166DB /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
-		3CF4A4730CCA2ED1D581B4CD /* host.rs */ = {isa = PBXFileReference; path = host.rs; sourceTree = "<group>"; };
 		3ED59F09A85CF8FF41D62009 /* pairings.rs */ = {isa = PBXFileReference; path = pairings.rs; sourceTree = "<group>"; };
+		3FCF79E06190BD77E1F527F8 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
 		438F566187470C3B8979F853 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 		46B600F3D87A8B86B45A62C9 /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
 		48772D858001537DA0BAD70F /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
@@ -80,7 +80,6 @@
 		7D0D2F377196B00F1647880E /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		86D727D8E9CA54F3F9AF1E0A /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
 		8807C52FB04E7019B2BC1690 /* MediaPlayer.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MediaPlayer.framework; path = System/Library/Frameworks/MediaPlayer.framework; sourceTree = SDKROOT; };
-		8C7C54E881AB0C4ECFE9A136 /* host.rs */ = {isa = PBXFileReference; path = host.rs; sourceTree = "<group>"; };
 		9B99011EAA107BB9AD2AA47E /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		9F8D209D8F7F183F8C5BF60D /* private_dir.rs */ = {isa = PBXFileReference; path = private_dir.rs; sourceTree = "<group>"; };
 		A113CAD3D1FD380DEEE3CE26 /* es */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = es; path = es.lproj/InfoPlist.strings; sourceTree = "<group>"; };
@@ -88,11 +87,8 @@
 		A3D98CD41CC1FB03FA370222 /* fr */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = fr; path = fr.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		A6C8CD431FED33808E2B7AC8 /* webview.rs */ = {isa = PBXFileReference; path = webview.rs; sourceTree = "<group>"; };
 		AC7B192F6F772B984C2013E8 /* lib.rs */ = {isa = PBXFileReference; path = lib.rs; sourceTree = "<group>"; };
-		AE2D024A132682092607EB7C /* host.rs */ = {isa = PBXFileReference; path = host.rs; sourceTree = "<group>"; };
-		AED522E47066BFF089D0DD8A /* other.rs */ = {isa = PBXFileReference; path = other.rs; sourceTree = "<group>"; };
 		B5E6137564CC46CBF5FDCAF7 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		B7E57CBB3A47BDAD3039528B /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
-		BC60F9D1E3298BAE58B7DFCC /* host.rs */ = {isa = PBXFileReference; path = host.rs; sourceTree = "<group>"; };
 		BE293A96151AB5D44D76E3EC /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 		C1188ECF695A1AC9631488B1 /* tls.rs */ = {isa = PBXFileReference; path = tls.rs; sourceTree = "<group>"; };
 		C5232FA644011E76A9B33911 /* sidevoice-mobile_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "sidevoice-mobile_iOS.entitlements"; sourceTree = "<group>"; };
@@ -102,7 +98,6 @@
 		D53EC9AD147484E515EBA7F0 /* ja */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ja; path = ja.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		D6067A41257B6008E8BE4CA5 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		DA1A087B3D35A1E037C07349 /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
-		DBCA0DED9DAF11927A94CD98 /* host.rs */ = {isa = PBXFileReference; path = host.rs; sourceTree = "<group>"; };
 		DD941F079E3C0751703CE1EC /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		DEBD9545CF90786BDDD5D639 /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
 		E1D2AC4499397F9500F40456 /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = System/Library/Frameworks/AudioToolbox.framework; sourceTree = SDKROOT; };
@@ -144,8 +139,8 @@
 		0AEE8EC07FFF92C7DC06F2CE /* webview */ = {
 			isa = PBXGroup;
 			children = (
+				3FCF79E06190BD77E1F527F8 /* android.rs */,
 				DA1A087B3D35A1E037C07349 /* ios.rs */,
-				AED522E47066BFF089D0DD8A /* other.rs */,
 			);
 			path = webview;
 			sourceTree = "<group>";
@@ -192,7 +187,6 @@
 			isa = PBXGroup;
 			children = (
 				04B561B0C6069C039FFEED09 /* android.rs */,
-				DBCA0DED9DAF11927A94CD98 /* host.rs */,
 				2CA4698307C9928A0B5866DB /* ios.rs */,
 			);
 			path = microphone_help;
@@ -210,7 +204,6 @@
 			isa = PBXGroup;
 			children = (
 				084491628E8D53FF0885F833 /* android.rs */,
-				3CF4A4730CCA2ED1D581B4CD /* host.rs */,
 				7717DC1AC675EE5C22703A85 /* ios.rs */,
 			);
 			path = private_dir;
@@ -220,7 +213,6 @@
 			isa = PBXGroup;
 			children = (
 				60477C1251FDD0FCF53CB04B /* android.rs */,
-				8C7C54E881AB0C4ECFE9A136 /* host.rs */,
 				3AF49EB321D75CDC67E166DB /* ios.rs */,
 			);
 			path = backup;
@@ -256,7 +248,6 @@
 			isa = PBXGroup;
 			children = (
 				2F7FFFBA485380A406EB4250 /* android.rs */,
-				AE2D024A132682092607EB7C /* host.rs */,
 				B7E57CBB3A47BDAD3039528B /* ios.rs */,
 			);
 			path = tls;
@@ -301,7 +292,6 @@
 			isa = PBXGroup;
 			children = (
 				EC1438562998E34AFC61C312 /* android.rs */,
-				BC60F9D1E3298BAE58B7DFCC /* host.rs */,
 				2BF45AA0672154DA34102887 /* ios.rs */,
 			);
 			path = interruption;

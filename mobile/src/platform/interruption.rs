@@ -9,10 +9,6 @@ use std::sync::Arc;
 
 #[cfg_attr(target_os = "android", path = "interruption/android.rs")]
 #[cfg_attr(target_os = "ios", path = "interruption/ios.rs")]
-#[cfg_attr(
-    not(any(target_os = "android", target_os = "ios")),
-    path = "interruption/host.rs"
-)]
 mod imp;
 use imp::Native;
 

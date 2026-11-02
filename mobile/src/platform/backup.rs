@@ -3,16 +3,11 @@
 //! (which are `ThisDeviceOnly` on iOS and sealed by a Keystore key that does not migrate on Android).
 //!
 //! Only iOS asks the app to do it, so the directory the pairings live in is marked each time the app writes there.
-//! Android keeps files out by rules its manifest points to (the Android library of `mobile/plugin`), and a computer has
-//! no device backup.
+//! Android keeps files out by rules its manifest points to (the Android library of `mobile/plugin`).
 use std::{io, path::Path};
 
 #[cfg_attr(target_os = "android", path = "backup/android.rs")]
 #[cfg_attr(target_os = "ios", path = "backup/ios.rs")]
-#[cfg_attr(
-    not(any(target_os = "android", target_os = "ios")),
-    path = "backup/host.rs"
-)]
 mod imp;
 use imp::Native;
 

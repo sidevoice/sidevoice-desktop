@@ -5,11 +5,11 @@
 //!
 //! Only iOS asks the app to do it: its window has no background colour set (nothing is drawn there but black), and
 //! the web view takes the frame it was created with. Android's edge-to-edge window is the Android library's
-//! (`mobile/plugin`), and a computer has no safe area.
+//! (`mobile/plugin`).
 use tauri::webview::PlatformWebview;
 
+#[cfg_attr(target_os = "android", path = "webview/android.rs")]
 #[cfg_attr(target_os = "ios", path = "webview/ios.rs")]
-#[cfg_attr(not(target_os = "ios"), path = "webview/other.rs")]
 mod imp;
 use imp::Native;
 

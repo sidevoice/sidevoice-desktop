@@ -1,3 +1,4 @@
+#![cfg(mobile)]
 //! The Sidevoice mobile app: a native shell around the Sidevoice web interface the repository pins (`web.pin.json`,
 //! unpacked into `ui/` by `npm run web`, which every Tauri build and dev run starts with).
 //!

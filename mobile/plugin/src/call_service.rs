@@ -61,8 +61,6 @@ pub enum CallServiceError {
     },
     /// The service could not be reached.
     Unreachable(String),
-    /// This OS has no such service.
-    Unsupported,
 }
 
 impl std::fmt::Display for CallServiceError {
@@ -77,9 +75,6 @@ impl std::fmt::Display for CallServiceError {
                 message,
             }
             | CallServiceError::Unreachable(message) => f.write_str(message),
-            CallServiceError::Unsupported => {
-                f.write_str("the call's service is not available on this OS")
-            }
         }
     }
 }
