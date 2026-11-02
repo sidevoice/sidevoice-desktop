@@ -535,8 +535,11 @@ impl<A: LaneAudio> VoiceState<A> {
     }
 
     /// Pauses (`true`) or resumes what every call plays: the chunks not yet handed to the speaker are held, in order, and
-    /// played on resuming. The calls themselves go on; the microphone is the page's mute, not this.
+    /// played on resuming. The calls themselves go on; the microphone is the page's mute, not this. Paused, the system
+    /// holds the audio: a device stream it stops is waited for rather than opened again (which would take the audio back),
+    /// and opened again once resumed if it has not come back by itself.
     pub fn pause_playback(&self, paused: bool) {
+        self.devices.hold(paused);
         self.pause.set(paused);
     }
 
