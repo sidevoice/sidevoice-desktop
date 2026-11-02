@@ -115,11 +115,10 @@ through `run` (the call's service hangs up through it).
   hands the verifier the application's context at start (`mobile/src/platform/tls/android.rs`). `ndk_context`, which
   cpal and the provider keys need, is set by Tauri's runtime (tao) before the app's code runs: nothing to do for it.
 - **The engine's native libraries.** sherpa-onnx is shared on a phone: `libsherpa-onnx-c-api.so` and `libonnxruntime.so`
-  per ABI on Android (in `jniLibs/<abi>/`), `SherpaOnnxC.xcframework` on iOS (embedded through `bundle.iOS.frameworks`
+  per ABI on Android (in `jniLibs/<abi>/`), `sherpa-onnx.xcframework` and `onnxruntime.xcframework` on iOS (one shared ONNX Runtime, for sherpa-onnx and the smart-turn backend; embedded and signed through `bundle.iOS.frameworks`
   in `mobile/tauri.conf.json`, beside the system frameworks the Rust library calls and Xcode must link: AVFoundation and
-  AVFAudio for the audio session and the microphone's permission, AudioToolbox for cpal's audio units). `cargo xtask mobile build` gets them from the engine's own `cargo xtask android-build`
-  or `ios-build`, at the commit Cargo.lock pins (the archive its pins name, checked against its digest), and builds the
-  app against the same directory (`SHERPA_ONNX_LIB_DIR`), so nothing is downloaded unchecked. The variable is also
+  AVFAudio for the audio session and the microphone's permission, AudioToolbox for cpal's audio units). `cargo xtask mobile build` gets them from the engine's own `cargo xtask mobile-libs android|ios` (no engine build), at the commit Cargo.lock pins (the archives its pins name, checked against their digests), and builds the
+  app against the same directories (`SHERPA_ONNX_LIB_DIR`, and on iOS `ONNXRUNTIME_FRAMEWORK_DIR`), so nothing is downloaded unchecked. Both variables are also
   written into the repository's `.cargo/config.toml` (`[env]`) for the length of the build and taken out after it: the
   cargo the native project runs again from inside its build (Xcode's build phase, Gradle's `rust` task) gets from the
   Tauri CLI only the `TAURI*`, `WRY*`, `CARGO_*` and `RUST_*` variables, and would otherwise link a copy of its own. Git ignores both
@@ -207,9 +206,8 @@ TAURI_APP_PATH=$PWD npx tauri android build --apk --target aarch64 --ci
 TAURI_APP_PATH=$PWD npx tauri ios build --target aarch64-sim --no-sign --ci
 ```
 
-A build by hand needs the engine's native libraries first, and `SHERPA_ONNX_LIB_DIR` pointing at the target's (above,
-"The bridge"); `cargo xtask mobile build android|ios` does both (it also needs cargo-ndk for Android, which the engine's
-build uses).
+A build by hand needs the engine's native libraries first (`cargo xtask mobile-libs` in the engine), and `SHERPA_ONNX_LIB_DIR` (on iOS also `ONNXRUNTIME_FRAMEWORK_DIR`) pointing at the target's (above,
+"The bridge"); `cargo xtask mobile build android|ios` does both (it needs no cargo-ndk).
 
 An Android build without a signing key is an unsigned APK; a debug build (`--debug`) is signed with the debug key and
 installs as it is.

@@ -49,14 +49,8 @@ runs:
         prefix-key: v1-rust-mobile
         shared-key: ${{ inputs.cache }}
         save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-    # The engine's Android libraries are made by its own xtask (`cargo xtask mobile build android` runs its `android-build`),
-    # which builds with cargo-ndk: from its published crate, at the engine CI's version, after the cache so that no binary
-    # the cache restores stands in for this one.
-    - name: cargo-ndk
-      shell: bash
-      env:
-        CARGO_NDK_VERSION: "4.1.2"
-      run: cargo install cargo-ndk --locked --version "$CARGO_NDK_VERSION"
+    # The engine's Android libraries are fetched by its own xtask (`cargo xtask mobile build android` runs its `mobile-libs`),
+    # which builds nothing: no cargo-ndk.
     - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4.4.3
       with:
         cache-read-only: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}

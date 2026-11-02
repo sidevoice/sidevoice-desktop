@@ -9,13 +9,15 @@
 /* Begin PBXBuildFile section */
 		06AEF62B7E54BF34FE611772 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A13AEA8AD965C33B4A462A4E /* Assets.xcassets */; };
 		0A5E220D3E2D3888D349BFD2 /* MediaPlayer.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8807C52FB04E7019B2BC1690 /* MediaPlayer.framework */; };
+		1388ECDB9C0D66AACEFD4F1E /* sherpa-onnx.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 14CB5A0F01AD530B798B8BA3 /* sherpa-onnx.xcframework */; };
+		21B6467E147A3FFF79901543 /* onnxruntime.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = E91912903FD33CC85D2985D4 /* onnxruntime.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		25A9A45CBF0CE2CA775EB731 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D6067A41257B6008E8BE4CA5 /* Metal.framework */; };
 		2D6F1EE8D0808363FDF7D79A /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 48772D858001537DA0BAD70F /* CoreGraphics.framework */; };
 		304BE069D78F7582614F5BFE /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CDF4E02D7E5B1C22C68978F8 /* AVFoundation.framework */; };
-		314184A4B5932E18F6DCCFB9 /* SherpaOnnxC.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 594FACEF800340B2D2581D1D /* SherpaOnnxC.xcframework */; };
-		32456D1E90DD22B64FFF2CD8 /* SherpaOnnxC.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 594FACEF800340B2D2581D1D /* SherpaOnnxC.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		36C2D506005411E63AB37275 /* onnxruntime.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = E91912903FD33CC85D2985D4 /* onnxruntime.xcframework */; };
 		4881460A21EAA46E7177A20C /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = BE293A96151AB5D44D76E3EC /* libapp.a */; };
 		4FD31A2A4F20D37E980F9672 /* AVFAudio.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0C54967DE38A99011EDDA22E /* AVFAudio.framework */; };
+		556E439FD5DE6CE9EB256E45 /* sherpa-onnx.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 14CB5A0F01AD530B798B8BA3 /* sherpa-onnx.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		5F7C985DA86F97E397CC522E /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = DEBD9545CF90786BDDD5D639 /* main.mm */; };
 		80A03190BFECEF57B6FF0F92 /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 46B600F3D87A8B86B45A62C9 /* MetalKit.framework */; };
 		8A4474978DCA719C4F11E7AE /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EF7D695C7A6ACAD12DA94258 /* UIKit.framework */; };
@@ -36,7 +38,8 @@
 			dstPath = "";
 			dstSubfolderSpec = 10;
 			files = (
-				32456D1E90DD22B64FFF2CD8 /* SherpaOnnxC.xcframework in Embed Frameworks */,
+				556E439FD5DE6CE9EB256E45 /* sherpa-onnx.xcframework in Embed Frameworks */,
+				21B6467E147A3FFF79901543 /* onnxruntime.xcframework in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -50,6 +53,7 @@
 		084491628E8D53FF0885F833 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
 		08702CFC095D2F17073267AA /* bindings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = bindings.h; sourceTree = "<group>"; };
 		0C54967DE38A99011EDDA22E /* AVFAudio.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFAudio.framework; path = System/Library/Frameworks/AVFAudio.framework; sourceTree = SDKROOT; };
+		14CB5A0F01AD530B798B8BA3 /* sherpa-onnx.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = "sherpa-onnx.xcframework"; path = "../../frameworks/sherpa-onnx.xcframework"; sourceTree = "<group>"; };
 		180609C9C60033406A6A7F17 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 		216916D93E3C8D75635265CC /* downloads.rs */ = {isa = PBXFileReference; path = downloads.rs; sourceTree = "<group>"; };
 		299D7B306F3BF743AC1EF244 /* interruption.rs */ = {isa = PBXFileReference; path = interruption.rs; sourceTree = "<group>"; };
@@ -68,7 +72,6 @@
 		5146689FF402E85DE500476B /* backup.rs */ = {isa = PBXFileReference; path = backup.rs; sourceTree = "<group>"; };
 		5721EA507184E736863684BC /* entry.rs */ = {isa = PBXFileReference; path = entry.rs; sourceTree = "<group>"; };
 		58C2E83A04B6987A0D4453C7 /* app_files.rs */ = {isa = PBXFileReference; path = app_files.rs; sourceTree = "<group>"; };
-		594FACEF800340B2D2581D1D /* SherpaOnnxC.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = SherpaOnnxC.xcframework; path = ../../frameworks/SherpaOnnxC.xcframework; sourceTree = "<group>"; };
 		5B34888E35B7881216856F13 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/InfoPlist.strings"; sourceTree = "<group>"; };
 		60477C1251FDD0FCF53CB04B /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
 		64394271D504A3167B6E3545 /* acl_tests.rs */ = {isa = PBXFileReference; path = acl_tests.rs; sourceTree = "<group>"; };
@@ -100,6 +103,7 @@
 		E1D2AC4499397F9500F40456 /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = System/Library/Frameworks/AudioToolbox.framework; sourceTree = SDKROOT; };
 		E35847FB1E834B1E467DF186 /* en.rs */ = {isa = PBXFileReference; path = en.rs; sourceTree = "<group>"; };
 		E47F552120DB7A20BEDF5D2E /* sidevoice-mobile_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "sidevoice-mobile_iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		E91912903FD33CC85D2985D4 /* onnxruntime.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = onnxruntime.xcframework; path = ../../frameworks/onnxruntime.xcframework; sourceTree = "<group>"; };
 		EC1438562998E34AFC61C312 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
 		EF7D695C7A6ACAD12DA94258 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		F5C816DDD53EA53511CBA66B /* it */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = it; path = it.lproj/InfoPlist.strings; sourceTree = "<group>"; };
@@ -113,7 +117,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				4881460A21EAA46E7177A20C /* libapp.a in Frameworks */,
-				314184A4B5932E18F6DCCFB9 /* SherpaOnnxC.xcframework in Frameworks */,
+				1388ECDB9C0D66AACEFD4F1E /* sherpa-onnx.xcframework in Frameworks */,
+				36C2D506005411E63AB37275 /* onnxruntime.xcframework in Frameworks */,
 				2D6F1EE8D0808363FDF7D79A /* CoreGraphics.framework in Frameworks */,
 				25A9A45CBF0CE2CA775EB731 /* Metal.framework in Frameworks */,
 				80A03190BFECEF57B6FF0F92 /* MetalKit.framework in Frameworks */,
@@ -168,9 +173,10 @@
 				8807C52FB04E7019B2BC1690 /* MediaPlayer.framework */,
 				D6067A41257B6008E8BE4CA5 /* Metal.framework */,
 				46B600F3D87A8B86B45A62C9 /* MetalKit.framework */,
+				E91912903FD33CC85D2985D4 /* onnxruntime.xcframework */,
 				7D0D2F377196B00F1647880E /* QuartzCore.framework */,
 				438F566187470C3B8979F853 /* Security.framework */,
-				594FACEF800340B2D2581D1D /* SherpaOnnxC.xcframework */,
+				14CB5A0F01AD530B798B8BA3 /* sherpa-onnx.xcframework */,
 				EF7D695C7A6ACAD12DA94258 /* UIKit.framework */,
 				86D727D8E9CA54F3F9AF1E0A /* WebKit.framework */,
 			);
