@@ -145,12 +145,13 @@ struct Call {
     title: String,
     /// Reported connected (once, when its audio is first activated).
     connected: bool,
-    mute: Mute,
+    mute: Mute<Retained<NSUUID>>,
 }
 
-/// The call's mute, as the page wants it and as CallKit has it.
-#[derive(Default)]
-struct Mute {
+/// The call's mute, as the page wants it and as CallKit has it: what to ask CallKit for, and which of what it performs is a
+/// mute from outside. It does nothing itself (the CallKit calls are the caller's), so it is tested without a phone; its
+/// tests are in this file because only iOS has it (Android's counterpart is the service's `MuteEchoes`).
+struct Mute<Id> {
     /// The page's, as last told (or as a mute from outside set it).
     wanted: bool,
     /// CallKit's: what it last performed.
@@ -158,9 +159,81 @@ struct Mute {
     /// The mute actions the app asked for and CallKit has neither performed nor refused yet (their `CXAction` UUIDs):
     /// performed, they are the app's own coming back, not a mute from outside, and are not reported (a late one must not
     /// undo a newer mute).
-    asked: Vec<Retained<NSUUID>>,
-    /// Asked again once already after a refusal, for the mute now wanted.
+    asked: Vec<Id>,
+    /// Asked again once already, for the mute now wanted, when CallKit was left with another.
     retried: bool,
+}
+
+/// What a mute CallKit performed is.
+#[derive(Debug, PartialEq, Eq)]
+enum Performed {
+    /// From outside the app: to report.
+    Outside,
+    /// The app's own coming back; `Some` when CallKit is left with a mute the page does not want, to ask for again.
+    Own(Option<bool>),
+}
+
+impl<Id: PartialEq> Mute<Id> {
+    fn new() -> Mute<Id> {
+        Mute {
+            wanted: false,
+            system: false,
+            asked: Vec::new(),
+            retried: false,
+        }
+    }
+
+    /// The page wants `muted`: what to ask CallKit for, if anything.
+    fn want(&mut self, muted: bool) -> Option<bool> {
+        if self.wanted == muted {
+            return None;
+        }
+        self.wanted = muted;
+        self.retried = false;
+        // Nothing to ask when CallKit has it so and nothing asked is pending to change that.
+        (!self.asked.is_empty() || self.system != muted).then_some(muted)
+    }
+
+    /// The app asked CallKit for the action `id`.
+    fn asked(&mut self, id: Id) {
+        self.asked.push(id);
+    }
+
+    /// CallKit performed the action `id`, `muted`.
+    fn performed(&mut self, id: &Id, muted: bool) -> Performed {
+        self.system = muted;
+        match self.asked.iter().position(|asked| asked == id) {
+            Some(at) => {
+                self.asked.remove(at);
+                Performed::Own(self.reconcile())
+            }
+            None => {
+                // From outside: the page follows it, so it is what the page wants now.
+                self.wanted = muted;
+                Performed::Outside
+            }
+        }
+    }
+
+    /// CallKit refused the action `id`: what to ask for again, if anything.
+    fn refused(&mut self, id: &Id) -> Option<bool> {
+        self.asked.retain(|asked| asked != id);
+        self.reconcile()
+    }
+
+    /// Once nothing asked is pending: CallKit left with a mute the page does not want is asked again, once for that mute;
+    /// past that the system's call keeps its mute, and the log says so.
+    fn reconcile(&mut self) -> Option<bool> {
+        if !self.asked.is_empty() || self.wanted == self.system {
+            return None;
+        }
+        if self.retried {
+            log::warn!("call: the system's call keeps its mute ({})", self.system);
+            return None;
+        }
+        self.retried = true;
+        Some(self.wanted)
+    }
 }
 
 impl CallKit {
@@ -243,7 +316,7 @@ fn request_start(
             events,
             title: details.title,
             connected: false,
-            mute: Mute::default(),
+            mute: Mute::new(),
         });
         Ok((kit.controller.clone(), action))
     })?;
@@ -292,20 +365,14 @@ fn show(details: CallDetails) {
                 kit.provider.reportCallWithUUID_updated(&call.uuid, &update);
             }
         }
-        if call.mute.wanted == details.muted {
-            return None;
-        }
-        call.mute.wanted = details.muted;
-        call.mute.retried = false;
-        Some(details.muted)
+        call.mute.want(details.muted)
     });
     if let Some(muted) = ask {
         ask_mute(muted);
     }
 }
 
-/// Asks CallKit to mute or unmute the running call (main thread). A refusal, once nothing else is asked, is asked again
-/// once for the mute the page wants then; past that the system's call keeps the mute it has, and the log says so.
+/// Asks CallKit to mute or unmute the running call (main thread). A refusal is reconciled as [`Mute`] says.
 fn ask_mute(muted: bool) {
     let request = CALLKIT.with_borrow_mut(|kit| {
         let kit = kit.as_mut()?;
@@ -320,7 +387,7 @@ fn ask_mute(muted: bool) {
             let asked = action.UUID();
             (action, asked)
         };
-        call.mute.asked.push(asked.clone());
+        call.mute.asked(asked.clone());
         Some((kit.controller.clone(), action, asked, call.id))
     });
     let Some((controller, action, asked, id)) = request else {
@@ -339,17 +406,7 @@ fn ask_mute(muted: bool) {
         // Never performed: nothing of it comes back.
         let again = CALLKIT.with_borrow_mut(|kit| {
             let call = kit.as_mut()?.call.as_mut().filter(|call| call.id == id)?;
-            call.mute.asked.retain(|uuid| **uuid != *asked);
-            let mute = &mut call.mute;
-            if !mute.asked.is_empty() || mute.wanted == mute.system {
-                return None;
-            }
-            if mute.retried {
-                log::warn!("call: the system's call keeps its mute ({})", mute.system);
-                return None;
-            }
-            mute.retried = true;
-            Some(mute.wanted)
+            call.mute.refused(&asked)
         });
         if let Some(muted) = again {
             ask_mute(muted);
@@ -473,25 +530,21 @@ define_class!(
         fn perform_mute(&self, _provider: &CXProvider, action: &CXSetMutedCallAction) {
             // SAFETY: as above.
             let (uuid, muted, id) = unsafe { (action.callUUID(), action.isMuted(), action.UUID()) };
-            let external = CALLKIT.with_borrow_mut(|kit| {
+            let performed = CALLKIT.with_borrow_mut(|kit| {
                 let call = kit.as_mut()?.call.as_mut()?;
                 if *call.uuid != *uuid {
                     return None;
                 }
-                call.mute.system = muted;
-                if let Some(at) = call.mute.asked.iter().position(|asked| **asked == *id) {
-                    call.mute.asked.remove(at);
-                    return None;
-                }
-                // From outside: the page follows it, so it is what the page wants now.
-                call.mute.wanted = muted;
-                Some(call.events.clone())
+                Some((call.mute.performed(&id, muted), call.events.clone()))
             });
-            if let Some(events) = external {
-                events(CallEvent::Muted { muted });
-            }
             // SAFETY: as above.
             unsafe { action.fulfill() };
+            match performed {
+                Some((Performed::Outside, events)) => events(CallEvent::Muted { muted }),
+                // CallKit left with a mute the page no longer wants: asked again, now that nothing is borrowed.
+                Some((Performed::Own(Some(again)), _)) => ask_mute(again),
+                _ => {}
+            }
         }
 
         /// Held (another call took this one's place) or taken off hold.
@@ -546,5 +599,65 @@ impl Delegate {
         let this = Delegate::alloc(main).set_ivars(());
         // SAFETY: NSObject's `init`.
         unsafe { msg_send![super(this), init] }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Mute, Performed};
+
+    #[test]
+    fn the_app_s_own_mutes_coming_back_are_not_reported_even_late() {
+        let mut mute = Mute::new();
+        // The page muted, then unmuted, before CallKit performed either.
+        assert_eq!(mute.want(true), Some(true));
+        mute.asked(1);
+        assert_eq!(mute.want(false), Some(false));
+        mute.asked(2);
+        assert_eq!(
+            mute.performed(&1, true),
+            Performed::Own(None),
+            "still one pending"
+        );
+        assert_eq!(mute.performed(&2, false), Performed::Own(None));
+        assert_eq!(mute.performed(&3, true), Performed::Outside);
+        assert_eq!(mute.want(true), None, "the page followed it");
+    }
+
+    #[test]
+    fn a_refusal_asks_again_once_for_the_mute_wanted_then() {
+        let mut mute = Mute::new();
+        mute.want(true);
+        mute.asked(1);
+        assert_eq!(mute.refused(&1), Some(true));
+        mute.asked(2);
+        assert_eq!(mute.refused(&2), None, "once");
+        // A new wish asks again.
+        assert_eq!(mute.want(false), None, "CallKit is unmuted already");
+        assert_eq!(mute.want(true), Some(true));
+    }
+
+    #[test]
+    fn a_refusal_never_inverts_a_newer_wish() {
+        let mut mute = Mute::new();
+        mute.want(true);
+        mute.asked(1);
+        mute.want(false);
+        mute.asked(2);
+        // The older is refused while the newer is pending: nothing to ask yet.
+        assert_eq!(mute.refused(&1), None);
+        assert_eq!(mute.performed(&2, false), Performed::Own(None));
+    }
+
+    #[test]
+    fn an_own_mute_that_leaves_callkit_off_the_page_s_wish_is_reconciled() {
+        let mut mute = Mute::new();
+        mute.want(true);
+        mute.asked(1);
+        // From outside, an unmute; the page follows it, then the app's older mute is performed.
+        assert_eq!(mute.performed(&9, false), Performed::Outside);
+        assert_eq!(mute.performed(&1, true), Performed::Own(Some(false)));
+        mute.asked(2);
+        assert_eq!(mute.performed(&2, false), Performed::Own(None));
     }
 }

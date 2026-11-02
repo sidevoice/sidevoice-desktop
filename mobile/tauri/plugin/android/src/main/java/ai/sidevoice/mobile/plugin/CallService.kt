@@ -82,11 +82,8 @@ class CallService : Service() {
     private var control: CallControlScope? = null
     /** This service's call is over: a call Telecom gives after that is disconnected at once, so none is left behind. */
     private var telecomEnded = false
-    /**
-     * The microphone mutes the service set itself and Telecom has not told back yet, oldest first: told back, they are no
-     * mute from outside.
-     */
-    private val echoes = ArrayDeque<Boolean>()
+    /** The system's microphone mute while Telecom holds the call: the service's own mutes told from one from outside. */
+    private var echoes: MuteEchoes? = null
     /** The page's mute, as last told ([ACTION_UPDATE]). */
     private var pageMuted: Boolean? = null
     /** Whether the service turned the system's microphone mute on: it is turned off again at the end. */
@@ -278,7 +275,7 @@ class CallService : Service() {
         if (control == null) return
         val audio = getSystemService(AudioManager::class.java)
         if (audio.isMicrophoneMute != muted) {
-            echoes.addLast(muted)
+            echoes?.set(muted)
             audio.isMicrophoneMute = muted
             mutedTheSystem = muted
         }
@@ -341,24 +338,16 @@ class CallService : Service() {
                             telecomHolds(mine, call)
                         }
                     }
-                    // A mute from outside the app: a change of the system's microphone mute (Telecom's mute is that). What it
-                    // already is says nothing (Telecom may tell it at the start); the page's own mute coming back is the same
-                    // as the page, and changes nothing there.
+                    // A mute from outside the app: a change of the system's microphone mute (Telecom's mute is that), told
+                    // from the service's own coming back ([MuteEchoes]).
+                    val audio = getSystemService(AudioManager::class.java)
+                    val mutes = MuteEchoes(start = audio.isMicrophoneMute)
+                    echoes = mutes
                     launch {
-                        val audio = getSystemService(AudioManager::class.java)
-                        var known = audio.isMicrophoneMute
                         call.isMuted.collect { muted ->
-                            if (muted == known) return@collect
-                            known = muted
-                            // The service's own mutes (the page's) coming back, up to this one: acknowledged, not reported.
-                            val own = echoes.indexOf(muted)
-                            if (own >= 0) {
-                                repeat(own + 1) { echoes.removeFirst() }
-                                return@collect
+                            if (mutes.observed(muted, now = audio.isMicrophoneMute) && control === call) {
+                                CallSession.muted(mine, muted)
                             }
-                            // Late: the microphone is no longer so (a newer change came after it), so it says nothing now.
-                            if (audio.isMicrophoneMute != muted) return@collect
-                            if (control === call) CallSession.muted(mine, muted)
                         }
                     }
                     // The loudspeaker rather than the earpiece, as on iOS: a headset or a Bluetooth device stays chosen.
@@ -407,7 +396,7 @@ class CallService : Service() {
         val call = registered
         registered = null
         control = null
-        echoes.clear()
+        echoes = null
         val job = telecom
         telecom = null
         if (mutedTheSystem) {
