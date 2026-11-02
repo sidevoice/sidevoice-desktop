@@ -89,6 +89,7 @@ targets:
       - sdk: AVFAudio.framework
       - sdk: AudioToolbox.framework
       - sdk: MediaPlayer.framework
+      - sdk: Accelerate.framework
       - sdk: WebKit.framework
     preBuildScripts:
       - script: |
