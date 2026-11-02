@@ -216,7 +216,14 @@ fn run_app() {
                 // would grant every request when the app sets no handler.
                 .on_permission_request(|_webview, _kind| PermissionResponse::Deny)
                 // A page that loads anew owns none of the calls of the one before, and hears nothing of them.
-                .on_page_load(move |_webview, payload| {
+                .on_page_load(move |webview, payload| {
+                    if payload.event() == PageLoadEvent::Finished {
+                        // The window is on screen by now: where the web view really is (the insets are 0 before).
+                        let _ = webview.with_webview(|webview| {
+                            platform::webview::fill_screen(&webview);
+                            platform::webview::log_layout("page loaded", &webview)
+                        });
+                    }
                     if payload.event() == PageLoadEvent::Started {
                         if let Some(host) = page_app.try_state::<AppHost>() {
                             // A page that loads anew is in no call until it says so: the room's call of the one before
@@ -227,7 +234,12 @@ fn run_app() {
                         *page_app.state::<LastReport>().0.lock().unwrap() = CallReport::default();
                     }
                 })
-                .build()?;
+                .build()?
+                // The page owns the safe areas: the web view fills the screen, on the system's background (`platform::webview`).
+                .with_webview(|webview| {
+                    platform::webview::fill_screen(&webview);
+                    platform::webview::log_layout("at start", &webview);
+                })?;
             Ok(())
         })
         .build(tauri::generate_context!())
