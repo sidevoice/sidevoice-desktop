@@ -423,10 +423,27 @@ impl AppBuildLibs {
                 let value = serde_json::to_string(&value.to_string_lossy()).map_err(|e| e.to_string())?;
                 text.push_str(&format!("{key} = {value}\n"));
             }
+            // The oldest iOS the app runs on, for the C and C++ the build scripts compile (whisper.cpp, aws-lc): without
+            // it they target the SDK's own version, and an availability check (`@available(iOS 18, *)`) is then compiled
+            // as always true, so the app calls what an older iOS lacks.
+            let minimum = serde_json::to_string(&ios_deployment_target()?).map_err(|e| e.to_string())?;
+            text.push_str(&format!("IPHONEOS_DEPLOYMENT_TARGET = {minimum}\n"));
         }
         write(&config, text)?;
         Ok(AppBuildLibs { libs: all.remove(0), config, original })
     }
+}
+
+/// The oldest iOS the app runs on: `bundle.iOS.minimumSystemVersion` in mobile/tauri/tauri.conf.json, which the Xcode
+/// project's deployment target is generated from.
+fn ios_deployment_target() -> Result<String> {
+    let path = repo().join("mobile/tauri/tauri.conf.json");
+    let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let config: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    config["bundle"]["iOS"]["minimumSystemVersion"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| format!("{}: no bundle.iOS.minimumSystemVersion", path.display()))
 }
 
 impl Drop for AppBuildLibs {
