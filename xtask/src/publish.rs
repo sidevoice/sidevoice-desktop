@@ -237,8 +237,21 @@ pub fn apk_nightly() -> Result<()> {
     let sum_file = dir.join(APK_NIGHTLY_SUM);
     write(&sum_file, &sum)?;
     eprint!("{sum}");
-    let (exists, _) = Cmd::new("gh").args(["release", "view", "nightly"]).attempt()?;
-    ensure(exists, "there is no `nightly` release yet: the desktop's publish-nightly (build.yml) creates it")?;
+    // The release is the desktop's to create: a first push may get here before it does, so wait a little for it.
+    let mut exists = false;
+    for attempt in 0..10 {
+        exists = Cmd::new("gh").args(["release", "view", "nightly"]).attempt()?.0;
+        if exists {
+            break;
+        }
+        if attempt < 9 {
+            std::thread::sleep(std::time::Duration::from_secs(30));
+        }
+    }
+    ensure(
+        exists,
+        "there is no `nightly` release after 5 minutes: the desktop's publish-nightly (build.yml) creates it",
+    )?;
     Cmd::new("gh").args(["release", "upload", "nightly"]).arg(&published).arg(&sum_file).arg("--clobber").run()
 }
 

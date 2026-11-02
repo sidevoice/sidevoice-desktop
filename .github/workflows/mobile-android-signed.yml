@@ -20,10 +20,6 @@ on:
 permissions:
   contents: read
 
-# A newer push replaces an older run: only the latest main is the nightly's APK.
-concurrency:
-  group: mobile-android-signed
-  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -38,9 +34,11 @@ jobs:
     # A run of another branch is refused here, not by the secrets: whoever can push a branch can change its workflow.
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    # Only to attach the APK to the nightly release (last step); the signing step reads secrets, not this token.
-    permissions:
-      contents: write
+    # A newer push replaces an older build (nothing is published from here). Read-only token: the steps below run
+    # npm, Gradle and Cargo code, which never see a token that can write.
+    concurrency:
+      group: mobile-android-signed-build
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/setup-android
@@ -61,9 +59,28 @@ jobs:
           path: dist/Sidevoice-android-arm64.apk
           retention-days: 14
           if-no-files-found: error
-      # `gh release upload --clobber` of the APK and its own checksum file to the `nightly` pre-release. The release's
-      # other assets and its SHA256SUMS are the desktop publish-nightly's (build.yml): one writer per file.
-      - name: Attach the APK to the nightly pre-release
-        env:
-          GH_REPO: ${{ github.repository }}
+
+  # The only job with a token that can write, and it runs no build: it downloads the signed APK and attaches it to the
+  # `nightly` pre-release (`gh release upload --clobber` deletes an asset before it uploads the new one, so this job
+  # is never cancelled half way: runs queue, and the newest waiting one replaces an older waiting one). The release's
+  # other assets and its SHA256SUMS are the desktop publish-nightly's (build.yml): one writer per file.
+  publish:
+    name: Attach the APK to the nightly pre-release
+    needs: android
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: mobile-android-signed-publish
+      cancel-in-progress: false
+    env:
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: Sidevoice-android-arm64-signed-apk
+          path: dist
+      - name: Attach the APK and its checksum to the nightly pre-release
         run: cargo xtask publish apk-nightly
