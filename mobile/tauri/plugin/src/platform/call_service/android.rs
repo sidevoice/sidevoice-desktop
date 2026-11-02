@@ -28,6 +28,10 @@ struct UpdateArgs<'a> {
 pub struct Native;
 
 impl Os for Native {
+    // Telecom making the call active switches the audio mode and the route (to the loudspeaker), and AAudio cuts off a
+    // stream open across that: the service reports `audio` once both are done, or at once when Telecom refuses the call.
+    const ACTIVATES_AUDIO: bool = true;
+
     fn register<R: Runtime, C: DeserializeOwned>(
         api: PluginApi<R, C>,
     ) -> Result<(), Box<dyn std::error::Error>> {

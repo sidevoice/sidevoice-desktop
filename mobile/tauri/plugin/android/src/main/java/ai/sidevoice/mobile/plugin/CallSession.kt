@@ -67,6 +67,14 @@ internal object CallSession {
         if (get(session.id) != null) session.report(mapOf("type" to "held", "held" to held))
     }
 
+    /**
+     * Reports that the call's audio of [session] may open now (Telecom made the call active and its route settled, or the
+     * call stays the app's own), if it is running.
+     */
+    fun audioReady(session: Session) {
+        if (get(session.id) != null) session.report(mapOf("type" to "audio", "active" to true))
+    }
+
     /** What names one session's call to the system's Telecom (its address). */
     fun callAddress(id: Long): String = "sidevoice-call://call/$id"
 }

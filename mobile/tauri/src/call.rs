@@ -12,8 +12,10 @@
 //! - **The call's audio** ([`PhoneCall`], sidevoice-shared's `CallActivity`): the audio session is active from before the
 //!   first voice call's audio opens until the last one's has stopped (iOS; declared at the app's start, so that opening the
 //!   app interrupts no other app's audio). Every voice call counts here, a try in Settings too: it plays and records as
-//!   well. While the room's call is a CallKit call, CallKit activates and deactivates the session (Apple's rule for a
-//!   CallKit call): the first voice call's audio waits for it to say so.
+//!   well. While the room's call is a system's call, the first voice call's audio waits for the system to make the call's
+//!   audio ready: on iOS CallKit activates and deactivates the session (Apple's rule for a CallKit call); on Android
+//!   Telecom makes the call active and settles its route (the communication mode and the loudspeaker), which would cut
+//!   off any stream opened before (an AAudio disconnect at the call's start).
 //! - **The system taking the audio away** (D-AUDIO-FOCUS: a phone call, an alarm, another app that plays; iOS: the audio
 //!   session is interrupted, Android: the call's audio focus is lost; and the system's call put on hold, CallKit's or
 //!   Telecom's): the conversation pauses while it lasts and resumes when it ends; it never hangs up on its own. Pausing is the page's mute, so that the page shows the call muted, and
@@ -47,9 +49,10 @@ pub fn configure() -> Result<(), String> {
     Session::configure(&CALL_AUDIO)
 }
 
-/// How long the first voice call's audio waits for the system to activate the session of its call (CallKit answers in well
-/// under a second). Past it the voice call is refused (`audio-session-activate-failed`): the session is CallKit's to
-/// activate while its call lasts, never the app's.
+/// How long the first voice call's audio waits for the system to make its call's audio ready (CallKit and Telecom answer in
+/// well under a second; Android's call service reports ready by itself before this, Telecom or not). Past it the voice
+/// call is refused (`audio-session-activate-failed`): the session is CallKit's to activate while its call lasts, never the
+/// app's.
 const SYSTEM_AUDIO_LIMIT: Duration = Duration::from_secs(5);
 
 /// The phone's side of the host's voice calls: the audio session while any of them has audio open.
@@ -66,22 +69,71 @@ pub struct PhoneCall {
 struct Audio {
     /// Whether a voice call has audio open: the session is active.
     open: bool,
-    /// The system's call, where the system activates its audio session ([`call_activates_audio`]).
+    /// The system's call, where the system makes its audio ready ([`call_activates_audio`]).
     system: SystemAudio,
 }
 
-/// The audio session of the system's call, where the system activates it (CallKit).
+/// The audio of the system's call, where the system makes it ready (CallKit activates the session; Telecom makes the call
+/// active and settles its route).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 enum SystemAudio {
     /// No such call: the app activates the session itself.
     #[default]
     None,
-    /// A call is starting: the system activates the session when it is ready.
+    /// A call is starting: the system makes its audio ready when it is.
     Pending,
     /// The system activated the session and has deactivated it since (the call is on hold, another call has the audio).
     Held,
-    /// The system has activated it.
+    /// The system has made it ready.
     Active,
+}
+
+impl SystemAudio {
+    /// The room's call becomes a system's call whose audio the system makes ready (`on`), or stops being one.
+    fn call(self, on: bool) -> SystemAudio {
+        match (on, self) {
+            (false, _) => SystemAudio::None,
+            (true, SystemAudio::None) => SystemAudio::Pending,
+            (true, now) => now,
+        }
+    }
+
+    /// The system made its call's audio ready (`active`) or took it away; nothing while there is no such call.
+    fn audio(self, active: bool) -> SystemAudio {
+        match (self, active) {
+            (SystemAudio::None, _) => SystemAudio::None,
+            (_, true) => SystemAudio::Active,
+            (_, false) => SystemAudio::Held,
+        }
+    }
+
+    /// What the first voice call's audio does now, `timed_out` once its wait is over.
+    fn gate(self, timed_out: bool) -> Gate {
+        match self {
+            SystemAudio::None => Gate::Activate,
+            SystemAudio::Active => Gate::Open,
+            SystemAudio::Held => {
+                Gate::Refuse("the system's call is on hold; no audio until it is back")
+            }
+            SystemAudio::Pending if timed_out => {
+                Gate::Refuse("the system did not make its call's audio ready in time")
+            }
+            SystemAudio::Pending => Gate::Wait,
+        }
+    }
+}
+
+/// What the first voice call's audio does, as the system's call stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Gate {
+    /// No system's call: the app activates the session, and the audio opens.
+    Activate,
+    /// The system made its call's audio ready: the audio opens.
+    Open,
+    /// The system's call is starting: its word is waited for.
+    Wait,
+    /// Refused, for the reason given: the app never opens audio the system's call owns before the system says so.
+    Refuse(&'static str),
 }
 
 /// What a voice call's audio refused for want of the system's session says (sidevoice-voice's code for it).
@@ -105,57 +157,48 @@ impl PhoneCall {
         }
     }
 
-    /// The room's call is a call of the system's that activates its own audio session (`on`), or is not any more.
+    /// The room's call is a call of the system's that makes its own audio ready (`on`), or is not any more.
     fn system_call(&self, on: bool) {
         let mut audio = self.audio.lock().unwrap();
-        audio.system = match (on, audio.system) {
-            (false, _) => SystemAudio::None,
-            (true, SystemAudio::None) => SystemAudio::Pending,
-            (true, now) => now,
-        };
+        audio.system = audio.system.call(on);
         self.changed.notify_all();
     }
 
-    /// The system activated (`active`) or deactivated the audio session of its call.
+    /// The system made its call's audio ready (`active`: CallKit activated the session; Telecom made the call active and
+    /// its route settled, or the call stays the app's own) or took it away (CallKit deactivated the session).
     fn system_audio(&self, active: bool) {
         let mut audio = self.audio.lock().unwrap();
-        if audio.system != SystemAudio::None {
-            audio.system = if active {
-                SystemAudio::Active
-            } else {
-                SystemAudio::Held
-            };
-        }
+        audio.system = audio.system.audio(active);
         self.changed.notify_all();
     }
 }
 
 impl CallActivity for PhoneCall {
-    /// Before the first voice call's audio opens: the session is activated, by the app, or (during a call of the system's
-    /// that activates its own) by the system, waited for while the call starts. While the system holds its call, or past the
-    /// wait, the voice call is refused: the app never activates a session the system owns.
+    /// Before the first voice call's audio opens: the session is activated by the app, or (during a call of the system's
+    /// that makes its own audio ready) the system's word that it is ready is waited for while the call starts. While the
+    /// system holds its call, or past the wait, the voice call is refused: the app never opens audio the system's call owns
+    /// before the system says so.
     fn starting(&self) -> Result<(), String> {
         let mut audio = self.audio.lock().unwrap();
         let deadline = Instant::now() + SYSTEM_AUDIO_LIMIT;
         loop {
-            match audio.system {
-                SystemAudio::None => {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match audio.system.gate(left.is_zero()) {
+                Gate::Activate => {
                     Session::activate()?;
+                    log::info!("call: the audio opens (no system's call)");
                     break;
                 }
-                SystemAudio::Active => break,
-                SystemAudio::Held => {
-                    log::warn!("call: the system's call is on hold; no audio until it is back");
+                Gate::Open => {
+                    log::info!("call: the audio opens: the system's call made it ready");
+                    break;
+                }
+                Gate::Refuse(why) => {
+                    log::warn!("call: no audio: {why}");
                     return Err(ACTIVATE_FAILED.into());
                 }
-                SystemAudio::Pending => {
-                    let left = deadline.saturating_duration_since(Instant::now());
-                    if left.is_zero() {
-                        log::warn!(
-                            "call: the system did not activate its call's audio session in time"
-                        );
-                        return Err(ACTIVATE_FAILED.into());
-                    }
+                Gate::Wait => {
+                    log::info!("call: the audio waits for the system's call to make it ready");
                     audio = self.changed.wait_timeout(audio, left).unwrap().0;
                 }
             }
@@ -334,7 +377,8 @@ impl Room {
                 title: self.state.title.trim().to_owned(),
                 muted: false,
             };
-            // A voice call's audio that opens meanwhile waits for the system to activate the session (CallKit).
+            // A voice call's audio that opens meanwhile waits for the system to make the call's audio ready (CallKit's
+            // session; Telecom's active call and its route).
             let system_audio = call_activates_audio();
             self.phone.system_call(system_audio);
             match start_call_service(&self.app, &details, move |event| {
@@ -517,7 +561,7 @@ fn on_service_event(app: &AppHandle, start: u64, page: u64, since: Option<f64>, 
             });
             return;
         }
-        // The system activated or deactivated its call's audio session: a voice call's audio may be waiting for it.
+        // The system made its call's audio ready, or took it away: a voice call's audio may be waiting for it.
         CallEvent::Audio { active } => {
             room.then(move |room| {
                 if mine(room) {
@@ -607,6 +651,68 @@ mod tests {
         ] {
             assert_eq!(hang_up_for(&event), None, "{event:?}");
         }
+    }
+
+    #[test]
+    fn without_a_system_s_call_the_app_activates_the_session_itself() {
+        assert_eq!(SystemAudio::None.gate(false), Gate::Activate);
+        // A report for a call that is not the system's any more changes nothing.
+        assert_eq!(SystemAudio::None.audio(true), SystemAudio::None);
+        assert_eq!(SystemAudio::None.call(false), SystemAudio::None);
+    }
+
+    #[test]
+    fn the_audio_of_a_system_s_call_waits_until_the_system_makes_it_ready() {
+        let starting = SystemAudio::None.call(true);
+        assert_eq!(starting, SystemAudio::Pending);
+        assert_eq!(starting.gate(false), Gate::Wait);
+        // CallKit's session activated; Telecom's call active with its route settled, or Telecom refusing it.
+        let ready = starting.audio(true);
+        assert_eq!(ready.gate(false), Gate::Open);
+        assert_eq!(ready.gate(true), Gate::Open);
+        // The join reported again does not take the readiness back.
+        assert_eq!(ready.call(true), SystemAudio::Active);
+    }
+
+    #[test]
+    fn past_the_wait_or_on_hold_the_audio_is_refused() {
+        assert!(matches!(SystemAudio::Pending.gate(true), Gate::Refuse(_)));
+        let held = SystemAudio::Active.audio(false);
+        assert_eq!(held, SystemAudio::Held);
+        assert!(matches!(held.gate(false), Gate::Refuse(_)));
+        assert_eq!(held.audio(true).gate(false), Gate::Open);
+    }
+
+    #[test]
+    fn the_call_s_end_gives_the_session_back_to_the_app() {
+        for now in [SystemAudio::Pending, SystemAudio::Active, SystemAudio::Held] {
+            assert_eq!(now.call(false).gate(false), Gate::Activate, "{now:?}");
+        }
+    }
+
+    #[test]
+    fn a_waiting_start_opens_when_the_system_says_ready() {
+        let phone = Arc::new(PhoneCall::default());
+        phone.system_call(true);
+        let waiting = {
+            let phone = phone.clone();
+            std::thread::spawn(move || phone.starting())
+        };
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(!waiting.is_finished());
+        phone.system_audio(true);
+        assert_eq!(waiting.join().unwrap(), Ok(()));
+        assert!(phone.audio.lock().unwrap().open);
+    }
+
+    #[test]
+    fn a_start_while_the_system_s_call_is_held_is_refused() {
+        let phone = PhoneCall::default();
+        phone.system_call(true);
+        phone.system_audio(true);
+        phone.system_audio(false);
+        assert_eq!(phone.starting(), Err(ACTIVATE_FAILED.to_owned()));
+        assert!(!phone.audio.lock().unwrap().open);
     }
 
     #[test]

@@ -29,7 +29,6 @@ import androidx.core.app.ServiceCompat
 import androidx.core.telecom.CallAttributesCompat
 import androidx.core.telecom.CallControlResult
 import androidx.core.telecom.CallControlScope
-import androidx.core.telecom.CallEndpointCompat
 import androidx.core.telecom.CallsManager
 import androidx.media.app.NotificationCompat.MediaStyle
 import kotlinx.coroutines.CancellationException
@@ -39,6 +38,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -62,6 +62,12 @@ import kotlinx.coroutines.withContext
  * (`muted`), while the page's mute is given to the system's microphone mute. The loudspeaker is chosen over the earpiece,
  * as on iOS. The notification is a call's (CallStyle) while Telecom holds the call. Telecom refusing the call leaves it the
  * app's own, as before: the service's focus and media notification.
+ *
+ * **The call's audio waits for Telecom.** Setting the call active switches the audio mode to communication and the route
+ * to the loudspeaker, and AAudio cuts off any stream open across that change. So the app opens the call's microphone and
+ * speaker only once the service reports `audio` (as iOS waits for CallKit's activation): when Telecom has made the call
+ * active and its route has settled, or at once when the call stays the app's own (Telecom refused it), or past
+ * [AUDIO_READY_LIMIT_MS] whatever Telecom is doing. Logged (`SidevoiceCall`) with which of them it was.
  */
 class CallService : Service() {
     private var session: CallSession.Session? = null
@@ -90,6 +96,11 @@ class CallService : Service() {
     private var mutedTheSystem = false
     /** Whether the audio focus was last reported lost (or refused): given back as gained when Telecom takes the call's audio. */
     private var focusLost = false
+    /** The session whose call's audio was reported ready ([audioReady]): once per start. */
+    private var audioReadyFor: Long? = null
+    /** Reports the call's audio ready past [AUDIO_READY_LIMIT_MS], if Telecom has not by then. */
+    private var audioDeadline: Runnable? = null
+    private val main = Handler(Looper.getMainLooper())
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -121,6 +132,7 @@ class CallService : Service() {
 
     /** Whoever ended it, the focus and the report are not left behind (the system may end a service on its own). */
     override fun onDestroy() {
+        cancelAudioDeadline()
         endTelecom()
         closeMedia()
         abandonFocus()
@@ -152,11 +164,36 @@ class CallService : Service() {
         requestFocus(mine)
         openMedia(mine)
         telecomEnded = false
+        audioReadyFor = null
+        cancelAudioDeadline()
+        val deadline = Runnable {
+            audioReady(mine, "fallback: Telecom did not make the call active within $AUDIO_READY_LIMIT_MS ms")
+        }
+        audioDeadline = deadline
+        main.postDelayed(deadline, AUDIO_READY_LIMIT_MS)
         addTelecomCall(mine)
+    }
+
+    /**
+     * The call's audio of [mine] may open now, for the reason [why] (logged): reported once per start, and only while
+     * [mine] is the session this instance serves.
+     */
+    private fun audioReady(mine: CallSession.Session, why: String) {
+        if (session?.id != mine.id || audioReadyFor == mine.id) return
+        audioReadyFor = mine.id
+        cancelAudioDeadline()
+        Log.i(TAG, "audio: the call's audio opens now: $why")
+        CallSession.audioReady(mine)
+    }
+
+    private fun cancelAudioDeadline() {
+        audioDeadline?.let { main.removeCallbacks(it) }
+        audioDeadline = null
     }
 
     /** Ends the call's service: the focus, the notification and the service itself, and the one report of its session. */
     private fun finish(reason: String) {
+        cancelAudioDeadline()
         endTelecom()
         closeMedia()
         abandonFocus()
@@ -291,6 +328,7 @@ class CallService : Service() {
             calls.registerAppWithTelecom(CallsManager.CAPABILITY_BASELINE)
         } catch (error: RuntimeException) {
             Log.w(TAG, "Telecom: the app was not registered; the call stays the app's own", error)
+            audioReady(mine, "fallback: Telecom did not register the app")
             return
         }
         val attributes = CallAttributesCompat(
@@ -329,6 +367,7 @@ class CallService : Service() {
                         if (registered !== call) return@launch // ended meanwhile, and disconnected
                         if (result !is CallControlResult.Success) {
                             Log.w(TAG, "Telecom: the call was not set active: $result; it stays the app's own")
+                            audioReady(mine, "fallback: Telecom did not set the call active")
                             registered = null
                             call.disconnect(DisconnectCause(DisconnectCause.ERROR))
                             // Its collectors (mute, route) do not end with the disconnect: they go now, and the call's
@@ -336,6 +375,12 @@ class CallService : Service() {
                             call.cancel()
                         } else {
                             telecomHolds(mine, call)
+                            // The mode is the call's now; the route moves to the loudspeaker (below) unless something
+                            // else is chosen. The audio opens once it is where it stays.
+                            val (route, _) = combine(call.currentCallEndpoint, call.availableEndpoints) { current, available ->
+                                current to available
+                            }.first { (current, available) -> CallRoute.settled(current.type, available.map { it.type }) }
+                            audioReady(mine, "Telecom made the call active, on ${route.name} (endpoint type ${route.type})")
                         }
                     }
                     // A mute from outside the app: a change of the system's microphone mute (Telecom's mute is that), told
@@ -354,9 +399,8 @@ class CallService : Service() {
                     launch {
                         combine(call.currentCallEndpoint, call.availableEndpoints) { current, available -> current to available }
                             .collect { (current, available) ->
-                                if (current.type == CallEndpointCompat.TYPE_EARPIECE) {
-                                    available.firstOrNull { it.type == CallEndpointCompat.TYPE_SPEAKER }
-                                        ?.let { call.requestEndpointChange(it) }
+                                CallRoute.preferred(current.type, available.map { it.type })?.let { wanted ->
+                                    available.firstOrNull { it.type == wanted }?.let { call.requestEndpointChange(it) }
                                 }
                             }
                     }
@@ -367,6 +411,7 @@ class CallService : Service() {
                 throw error
             } catch (error: Exception) {
                 Log.w(TAG, "Telecom refused the call; it stays the app's own", error)
+                audioReady(mine, "fallback: Telecom refused the call")
             }
         }
     }
@@ -559,6 +604,11 @@ class CallService : Service() {
         private const val NO_SESSION = -1L
         private const val CHANNEL_ID = "call"
         private const val NOTIFICATION_ID = 1
+        /**
+         * How long the call's audio waits for Telecom before it opens anyway (Telecom answers in well under a second):
+         * shorter than the app's own wait for this report (call.rs, `SYSTEM_AUDIO_LIMIT`), past which the call is refused.
+         */
+        private const val AUDIO_READY_LIMIT_MS = 3_000L
         // What the manifest declares for the service: the call listens, the agent speaks, and it is a phone call (Telecom's,
         // which the manifest's MANAGE_OWN_CALLS allows).
         private const val FOREGROUND_SERVICE_TYPES =
