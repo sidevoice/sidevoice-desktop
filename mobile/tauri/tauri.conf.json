@@ -24,7 +24,7 @@
     "icon": ["app-icon/window.png", "app-icon/window.ico"],
     "iOS": {
       "minimumSystemVersion": "15.0",
-      "frameworks": ["AVFoundation", "AVFAudio", "AudioToolbox", "MediaPlayer", "frameworks/sherpa-onnx.xcframework", "frameworks/onnxruntime.xcframework"]
+      "frameworks": ["AVFoundation", "AVFAudio", "AudioToolbox", "MediaPlayer", "Accelerate", "frameworks/sherpa-onnx.xcframework", "frameworks/onnxruntime.xcframework"]
     },
     "android": {
       "minSdkVersion": 26

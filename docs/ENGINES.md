@@ -33,7 +33,7 @@ catalogues: `local` first, then each provider), in the shape `/engine` gives the
 
 - Backends, linked statically into the app through sidevoice-engine (the release `shared/core/Cargo.toml` pins: 0.5.0),
   with no Cargo features to choose: **sherpa-onnx 1.13.8** (ONNX Runtime) on the CPU, **whisper.cpp** (through
-  `whisper-rs`), compiled from source, on Metal on Apple Silicon, and the **remote** OpenAI and ElevenLabs backends.
+  `whisper-rs`), compiled from source, on Metal on Apple Silicon and on iOS (not on Android), and the **remote** OpenAI and ElevenLabs backends.
   Nothing is loaded at run time with `dlopen`, so the macOS app keeps library validation on: its only entitlement is
   the microphone.
 - Each stage of the voice call is a model of a catalogue, which picks its build when it loads it
