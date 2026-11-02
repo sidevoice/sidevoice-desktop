@@ -4,6 +4,8 @@
 //! - **Export compliance.** The app's `Info.plist` says whether it uses encryption beyond the system's
 //!   (`ITSAppUsesNonExemptEncryption`). Without the key App Store Connect asks the question again for every build, and
 //!   holds it from TestFlight until someone answers. What the key says is decided in mobile/tauri/Info.ios.plist.
+//! - **Background modes.** `UIBackgroundModes` has `audio` (the call goes on with the screen locked) and `voip` (CallKit
+//!   refuses every call of an app without it, as unentitled, and the call then has no call UI on the lock screen).
 //! - **Privacy manifest.** `PrivacyInfo.xcprivacy` is at the root of the bundle (mobile/tauri/PrivacyInfo.xcprivacy, which
 //!   `mobile generate ios` puts in the project), says it does not track, and declares the reason for each category of
 //!   required-reason API the executable calls. Apple refuses an upload that calls one without a declared reason
@@ -153,12 +155,25 @@ fn declared_categories(manifest: &plist::Dictionary) -> Result<BTreeSet<String>>
     Ok(declared)
 }
 
+/// The background modes the call needs: `audio` keeps the app running while the call records and plays with the screen
+/// locked, and `voip` is what CallKit asks of an app before it takes its calls (without it every start is refused as
+/// unentitled, and the call has no lock-screen call UI).
+const BACKGROUND_MODES: [&str; 2] = ["audio", "voip"];
+
 /// The checks above, on a bundle already read.
 pub fn check_bundle(bundle: &Bundle) -> Result<()> {
     ensure(
         bundle.info.get("ITSAppUsesNonExemptEncryption").is_some_and(|v| v.as_boolean().is_some()),
         "Info.plist does not say whether the app uses encryption beyond the system's (ITSAppUsesNonExemptEncryption, set in mobile/tauri/Info.ios.plist)",
     )?;
+    let modes = bundle.info.get("UIBackgroundModes").and_then(plist::Value::as_array);
+    let modes: Vec<&str> = modes.into_iter().flatten().filter_map(plist::Value::as_string).collect();
+    for mode in BACKGROUND_MODES {
+        ensure(
+            modes.contains(&mode),
+            format!("Info.plist's UIBackgroundModes has no `{mode}` (set in mobile/tauri/Info.ios.plist)"),
+        )?;
+    }
     let manifest = bundle.manifest.as_ref().ok_or(format!("{MANIFEST} is not at the root of the bundle"))?;
     ensure(
         manifest.get("NSPrivacyTracking").is_some_and(|v| v.as_boolean().is_some()),
@@ -261,9 +276,12 @@ mod tests {
         ))
     }
 
+    /// The background modes a built app declares (Info.ios.plist's).
+    const MODES: &str = "<key>UIBackgroundModes</key><array><string>audio</string><string>voip</string></array>";
+
     fn info(declared: bool) -> plist::Dictionary {
         match declared {
-            true => dict("<dict><key>ITSAppUsesNonExemptEncryption</key><false/></dict>"),
+            true => dict(&format!("<dict><key>ITSAppUsesNonExemptEncryption</key><false/>{MODES}</dict>")),
             false => dict("<dict/>"),
         }
     }
@@ -331,6 +349,19 @@ mod tests {
         assert!(check_bundle(&app).unwrap_err().contains("NSPrivacyTracking"));
     }
 
+    #[test]
+    fn the_call_s_background_modes_must_be_there() {
+        let mut app = bundle(&[], &[]);
+        app.info = dict(
+            "<dict><key>ITSAppUsesNonExemptEncryption</key><false/>\
+             <key>UIBackgroundModes</key><array><string>audio</string></array></dict>",
+        );
+        let error = check_bundle(&app).unwrap_err();
+        assert!(error.contains("no `voip`"), "{error}");
+        app.info = dict("<dict><key>ITSAppUsesNonExemptEncryption</key><false/></dict>");
+        assert!(check_bundle(&app).unwrap_err().contains("no `audio`"));
+    }
+
     /// An archive with the files of an app below `Payload/Sidevoice.app/`.
     fn ipa(dir: &Path, files: &[(&str, Vec<u8>)]) -> std::path::PathBuf {
         use std::io::Write;
@@ -349,7 +380,7 @@ mod tests {
             "<plist version=\"1.0\"><dict><key>CFBundleExecutable</key><string>Sidevoice</string>\
              <key>CFBundleIdentifier</key><string>{identifier}</string>\
              <key>CFBundleVersion</key><string>{version}</string>\
-             <key>ITSAppUsesNonExemptEncryption</key><false/></dict></plist>"
+             <key>ITSAppUsesNonExemptEncryption</key><false/>{MODES}</dict></plist>"
         );
         let manifest = "<plist version=\"1.0\"><dict><key>NSPrivacyTracking</key><false/>\
              <key>NSPrivacyAccessedAPITypes</key><array/></dict></plist>";

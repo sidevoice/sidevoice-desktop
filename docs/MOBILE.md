@@ -111,8 +111,9 @@ through `run` (the call's service hangs up through it).
   play-and-record with mode `Default`, the loudspeaker rather than the receiver, and Bluetooth hands-free allowed;
   activated only when a call starts (above). Android has no session to declare. **Not verified on a device yet**; see
   "Not verified" below.
-- **Background audio** (iOS): `UIBackgroundModes` `audio` in `mobile/tauri/Info.ios.plist`, so a call goes on with the screen
-  locked. Android keeps the call's process with its foreground service (above), which runs for exactly the call.
+- **Background audio** (iOS): `UIBackgroundModes` `audio` and `voip` in `mobile/tauri/Info.ios.plist`: `audio` so a call
+  goes on with the screen locked, `voip` because CallKit refuses every call of an app without it (unentitled), and the call
+  then has no call UI; `cargo xtask mobile check-ios` checks both on the app as built. Android keeps the call's process with its foreground service (above), which runs for exactly the call.
 - **HTTPS on Android.** The engine's `reqwest` verifies certificates with `rustls-platform-verifier`, whose Android side is
   Kotlin: the Android library of `mobile/tauri/plugin` adds it to the app's Gradle build (from the crate's own Maven directory,
   which `cargo metadata` finds, at the version Cargo.lock resolves; `consumer-rules.pro` keeps it from R8), and the app
@@ -196,7 +197,7 @@ action, in the system's language (`res/values`, English, and `values-es`; the Sp
 - The Rust side is `start_call_service(app, details, on_event)`, `update_call_service(app, details)` and
   `stop_call_service(app)` of `sidevoice-mobile-plugin` (`call_service.rs`); the app's call code reaches the service through
   them. On iOS the same functions run the CallKit call ("The system's call" above); the call stays alive there through
-  CallKit and the `audio` background mode.
+  CallKit and the `audio` and `voip` background modes.
 - The manifest declares `RECORD_AUDIO`, the foreground-service permissions (microphone, media playback and phone call),
   the Telecom ones ("The system's call" above) and `POST_NOTIFICATIONS`; asking the
   person for the microphone and for notifications is the microphone permission's row. Without notifications allowed
