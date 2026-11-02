@@ -2,10 +2,16 @@
 //! the parent's parent's coordinates), and the window and the view controller's view get the system background, so what
 //! the page does not cover shows the system's background (light or dark with the device) instead of the window's unset
 //! colour. Its scroll view cannot be pinch-zoomed: an app is not a document, and a zoomed-out page left the screen black
-//! around it. The window is only there once the view is on screen, so this runs again after the page loads.
+//! around it. Its scroll view adds no safe-area inset of its own (the page owns the safe areas), or WebKit lays the page out
+//! 96 points short of the screen and the strip below it shows black. The window is only there once the view is on screen, so
+//! this runs again after the page loads.
 use super::Os;
-use objc2::{msg_send, rc::Retained};
-use objc2_ui_kit::{UIColor, UIScrollView, UIView, UIViewController};
+use block2::RcBlock;
+use objc2::{msg_send, rc::Retained, runtime::AnyObject};
+use objc2_foundation::NSString;
+use objc2_ui_kit::{
+    UIColor, UIScrollView, UIScrollViewContentInsetAdjustmentBehavior, UIView, UIViewController,
+};
 use tauri::webview::PlatformWebview;
 
 pub struct Native;
@@ -29,6 +35,11 @@ fn lock_zoom(web_view: &UIView) {
     let Some(scroll_view) = scroll_view else {
         return;
     };
+    // The page owns the safe areas (`env(safe-area-inset-*)`): the scroll view adds none of its own. With the default
+    // (automatic) it adds the status bar's and the home indicator's, and WebKit lays the page out in what is left: 860 of
+    // the 956 points of a Pro Max, a strip of the screen the page does not cover.
+    scroll_view
+        .setContentInsetAdjustmentBehavior(UIScrollViewContentInsetAdjustmentBehavior::Never);
     scroll_view.setMinimumZoomScale(1.0);
     scroll_view.setMaximumZoomScale(1.0);
     scroll_view.setZoomScale(1.0);
@@ -36,6 +47,27 @@ fn lock_zoom(web_view: &UIView) {
     if let Some(pinch) = scroll_view.pinchGestureRecognizer() {
         pinch.setEnabled(false);
     }
+}
+
+/// Asks the page what it measures (the viewport, the document, the root element and the backgrounds) and logs the answer:
+/// the web view's side of a layout the native side cannot see.
+fn log_page(web_view: &UIView) {
+    const SCRIPT: &str = "(() => { const r = (e) => { if (!e) return null; const b = e.getBoundingClientRect(); \
+        return [Math.round(b.top), Math.round(b.height), getComputedStyle(e).backgroundColor].join(' '); }; \
+        return JSON.stringify({ inner: [innerWidth, innerHeight], visual: window.visualViewport && [visualViewport.width, \
+        visualViewport.height], client: [document.documentElement.clientWidth, document.documentElement.clientHeight], \
+        scroll: document.documentElement.scrollHeight, html: r(document.documentElement), body: r(document.body), \
+        root: r(document.getElementById('root')), screen: [screen.width, screen.height] }); })()";
+    let script = NSString::from_str(SCRIPT);
+    let done = RcBlock::new(|result: *mut AnyObject, _error: *mut AnyObject| {
+        // SAFETY: the result of a script that returns a string is an `NSString`, or null on an error.
+        if let Some(result) = unsafe { result.cast::<NSString>().as_ref() } {
+            log::info!("layout page: {result}");
+        }
+    });
+    // SAFETY: `evaluateJavaScript:completionHandler:` is `WKWebView`'s; the block takes the result and the error.
+    let _: () =
+        unsafe { msg_send![web_view, evaluateJavaScript: &*script, completionHandler: &*done] };
 }
 
 impl Os for Native {
@@ -65,9 +97,26 @@ impl Os for Native {
                 frame.size.width, frame.size.height, frame.origin.x, frame.origin.y
             )
         };
+        log_page(web_view);
         let insets = web_view.safeAreaInsets();
+        let screen = window.as_deref().map_or("none".to_owned(), |w| {
+            let bounds = w.screen().bounds();
+            format!("{}x{}", bounds.size.width, bounds.size.height)
+        });
+        // SAFETY: `scrollView` is `WKWebView`'s `UIScrollView` property, and `web_view` is the window's `WKWebView`.
+        let scroll_view: Option<Retained<UIScrollView>> =
+            unsafe { msg_send![web_view, scrollView] };
+        let scroll = scroll_view.as_deref().map_or("none".to_owned(), |s| {
+            let adjusted = s.adjustedContentInset();
+            format!(
+                "{} adjusted inset top {} bottom {}",
+                rect(s),
+                adjusted.top,
+                adjusted.bottom
+            )
+        });
         Some(format!(
-            "window {}, view {}, web view {}, safe area top {} bottom {} left {} right {}",
+            "screen {screen}, window {}, view {}, web view {}, scroll view {scroll}, safe area top {} bottom {} left {} right {}",
             window.as_deref().map_or("none".to_owned(), |w| rect(w)),
             rect(&container),
             rect(web_view),

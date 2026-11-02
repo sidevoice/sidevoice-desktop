@@ -17,6 +17,8 @@
 //!   Android APK is also checked for 16 KB pages, which Google Play requires (`mobile check-16kb [APK]` is that check alone),
 //!   and the iOS app for what it declares to Apple: the privacy manifest and the export compliance (`mobile check-ios [APP]`
 //!   is that check alone, ios.rs).
+//! - `mobile screenshots ios`: the app `mobile build ios` left in dist/ run on an iPhone Pro Max simulator, in light and dark:
+//!   screenshots and the app's log into dist/simulator/ (platform/ios_simulator.rs). Needs macOS with Xcode.
 //! - `mobile lint android|ios`: Clippy, warnings denied, over the mobile crates for their target (they are empty on a
 //!   computer: `#![cfg(mobile)]`).
 //! - `mobile sign android`: sign.rs.
@@ -34,6 +36,7 @@ use std::path::{Path, PathBuf};
 
 use plist::{Dictionary, Value};
 
+use crate::platform;
 use crate::platform::host::npm;
 use crate::util::{self, ensure, mkdir, repo, write, Cmd};
 use crate::Result;
@@ -439,6 +442,18 @@ fn find_app(dir: &Path, depth: usize) -> Option<PathBuf> {
     entries.iter().find(|p| p.is_dir() && p.extension().is_some_and(|e| e == "app")).cloned().or_else(|| {
         (depth > 1).then(|| entries.iter().filter(|p| p.is_dir()).find_map(|p| find_app(p, depth - 1))).flatten()
     })
+}
+
+/// `mobile screenshots ios`: the simulator app `mobile build ios` left in dist/, run on an iPhone Pro Max simulator in light
+/// and in dark appearance; the screenshots and the app's log go to dist/simulator/ (what a layout fault shows on a screen).
+pub fn screenshots(name: &str) -> Result<()> {
+    ensure(project(name)?.cli == "ios", "mobile screenshots: ios only")?;
+    let dist = repo().join("dist");
+    platform::ios_simulator::screenshots(
+        &dist.join("Sidevoice-ios-simulator.zip"),
+        &testflight::identifier()?,
+        &dist.join("simulator"),
+    )
 }
 
 /// `mobile lint android|ios`: Clippy over the mobile crates for the target they exist for, warnings denied (the crates are

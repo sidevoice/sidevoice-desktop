@@ -169,6 +169,7 @@ fn main() -> ExitCode {
         ["mobile", "check-16kb"] => mobile::check::check_16kb(&mobile::unsigned_apk()),
         ["mobile", "check-16kb", apk] => mobile::check::check_16kb(std::path::Path::new(apk)),
         ["mobile", "check-ios", app] => mobile::ios::check_app(std::path::Path::new(app)),
+        ["mobile", "screenshots", project] => mobile::screenshots(project),
         ["mobile", "testflight", "--build-number", number] => mobile::testflight::testflight(number),
         ["platform-clippy"] => checks::clippy(true),
         ["test"] => checks::test(),
