@@ -36,7 +36,8 @@ fn lock_zoom(web_view: &UIView) {
     // The page owns the safe areas (`env(safe-area-inset-*)`): the scroll view adds none of its own. With the default
     // (automatic) it adds the status bar's and the home indicator's, and WebKit lays the page out in what is left: 860 of
     // the 956 points of a Pro Max, a strip of the screen the page does not cover.
-    scroll_view.setContentInsetAdjustmentBehavior(UIScrollViewContentInsetAdjustmentBehavior::Never);
+    scroll_view
+        .setContentInsetAdjustmentBehavior(UIScrollViewContentInsetAdjustmentBehavior::Never);
     scroll_view.setMinimumZoomScale(1.0);
     scroll_view.setMaximumZoomScale(1.0);
     scroll_view.setZoomScale(1.0);
@@ -63,7 +64,8 @@ fn log_page(web_view: &UIView) {
         }
     });
     // SAFETY: `evaluateJavaScript:completionHandler:` is `WKWebView`'s; the block takes the result and the error.
-    let _: () = unsafe { msg_send![web_view, evaluateJavaScript: &*script, completionHandler: &*done] };
+    let _: () =
+        unsafe { msg_send![web_view, evaluateJavaScript: &*script, completionHandler: &*done] };
 }
 
 impl Os for Native {
@@ -100,10 +102,16 @@ impl Os for Native {
             format!("{}x{}", bounds.size.width, bounds.size.height)
         });
         // SAFETY: `scrollView` is `WKWebView`'s `UIScrollView` property, and `web_view` is the window's `WKWebView`.
-        let scroll_view: Option<Retained<UIScrollView>> = unsafe { msg_send![web_view, scrollView] };
+        let scroll_view: Option<Retained<UIScrollView>> =
+            unsafe { msg_send![web_view, scrollView] };
         let scroll = scroll_view.as_deref().map_or("none".to_owned(), |s| {
             let adjusted = s.adjustedContentInset();
-            format!("{} adjusted inset top {} bottom {}", rect(s), adjusted.top, adjusted.bottom)
+            format!(
+                "{} adjusted inset top {} bottom {}",
+                rect(s),
+                adjusted.top,
+                adjusted.bottom
+            )
         });
         Some(format!(
             "screen {screen}, window {}, view {}, web view {}, scroll view {scroll}, safe area top {} bottom {} left {} right {}",
