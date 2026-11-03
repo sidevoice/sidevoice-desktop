@@ -931,8 +931,8 @@ only when `channel` is `nightly` (sidevoice-web#438).
 The mobile app reports it as well (`mobile/tauri/src/bridge.rs` `build`, `mobile/tauri/build.rs`), from the same
 variables `cargo xtask mobile build` sets (`SIDEVOICE_BUILD_CHANNEL`, `_COMMIT`, `_DATE`): `nightly` on CI (the TestFlight
 upload, the signed APK and the pull request builds, D-MOBILE-CHANNELS), `dev` elsewhere, `release` only when told; `version`
-is the app's own (`mobile/tauri/tauri.conf.json`), with the nightly's `commit` and `date`. There is no `updater` or
-`debug` on a phone.
+is the app's own (`mobile/tauri/tauri.conf.json`), with the nightly's `commit` and `date`. There is no `updater` on a phone; its
+`debug` (below) has one switch.
 
 ## The developer options
 
@@ -942,7 +942,7 @@ is compiled only into a nightly or a dev build (the `sidevoice_debug_options` cf
 `debug_options` command exists but refuses `bad_request`, and nothing touches WebKit's private API.
 
 ```ts
-type DebugSwitch = "inspectable" | "compositingBorders" | "repaintCounters";
+type DebugSwitch = "inspectable" | "compositingBorders" | "repaintCounters" | "systemCall"; // systemCall: the phone's
 host.debug?: {
   /** The switches this platform has (all three on macOS, none elsewhere); the page hides the others. */
   readonly available: readonly DebugSwitch[];
@@ -967,6 +967,13 @@ the webviews (docs/MACOS.md); `compositingBorders` and `repaintCounters` are Web
 `_setCompositingBordersVisible:` and `_setCompositingRepaintCountersVisible:`, set on each webview's live preferences
 and offered only where WebKit provides their setters. All three are put on the room and the card as each is created and on each
 change. Windows and Linux: `available` is empty (Chromium's paint flags need a relaunch; no WebKitGTK binding is wired).
+**The phone** (`mobile/tauri/js/mobile-bridge.js`, `mobile/tauri/src/developer_options.rs`) has the same member with one switch,
+`systemCall`: `available` is `["systemCall"]`, and `host.debug` is absent in a release. `systemCall` ("Treat calls as system
+calls", docs/MOBILE.md → "The system's call") is off by default: the room's call is the app's own, with no CallKit provider
+on iOS and no Telecom registration on Android; on, the call is a CallKit or a Core-Telecom call. It is kept in the app's own
+files, read when each call starts, and read again by the page as it loads (`{action: "get"}`, so a reload shows the live state) and set through the app's own command `developer_options` (same arguments and answer as
+`debug_options`; the app's one window only, `capabilities/main.json`), refused `bad_request` in a release.
+
 The command is `debug_options` `{action: "set", name, enabled}`, answering `{available, inspectable,
 compositingBorders, repaintCounters}`; only the room page may call it (`capabilities/room.json`).
 

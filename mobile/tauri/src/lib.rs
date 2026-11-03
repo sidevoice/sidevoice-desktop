@@ -11,6 +11,7 @@
 mod acl_tests;
 mod bridge;
 mod call;
+mod developer_options;
 mod downloads;
 mod hold;
 mod i18n;
@@ -115,6 +116,30 @@ struct CallReport {
 #[derive(Default)]
 struct LastReport(std::sync::Mutex<CallReport>);
 
+/// `host.debug`'s one command (docs/BRIDGE.md → "The developer options"): `action` `get`, or `set` with a switch's `name` and `enabled`,
+/// answering the switches' state. Refused (`bad_request`) in a release, for a switch the phone lacks or another action.
+#[tauri::command]
+fn developer_options(
+    app: AppHandle,
+    webview: Webview,
+    options: tauri::State<'_, developer_options::DeveloperOptions>,
+    action: String,
+    name: Option<String>,
+    enabled: Option<bool>,
+) -> Result<serde_json::Value, serde_json::Value> {
+    let refusal = |why: String| serde_json::json!({ "key": "bad_request", "message": why });
+    the_page(&app, &webview).map_err(refusal)?;
+    match (action.as_str(), name, enabled) {
+        ("get", None, None) => options
+            .state()
+            .ok_or_else(|| refusal("The developer options are not in this build.".into())),
+        ("set", Some(name), Some(on)) => options.set(&name, on).map_err(refusal),
+        _ => Err(refusal(
+            "developer_options takes get, or set with a name and enabled".into(),
+        )),
+    }
+}
+
 /// The page's number (the host's page generation), asked once by the page's script when it loads (the app's own
 /// command): it sends it back with every report, so that a report of a page that has since been replaced, reaching the
 /// app late, is told from the current page's.
@@ -192,7 +217,11 @@ fn run_app() {
         // the app's one window, on its own page.
         .plugin(sidevoice_shared_tauri::init(the_page, pages))
         .manage(LastReport::default())
-        .invoke_handler(tauri::generate_handler![call_page, call_state])
+        .invoke_handler(tauri::generate_handler![
+            call_page,
+            call_state,
+            developer_options
+        ])
         .setup(move |app| {
             let handle = app.handle().clone();
             // The headset's buttons and the lock screen's controls act on the call through the page, as the desktop's do,
@@ -217,6 +246,11 @@ fn run_app() {
                 log::error!("audio session: {error}");
             }
             let phone = Arc::new(call::PhoneCall::default());
+            // The developer options (nightly and dev builds): read before the first call, whose kind they decide.
+            app.manage(developer_options::DeveloperOptions::of_app(
+                &handle,
+                env!("SIDEVOICE_BUILD_CHANNEL"),
+            )?);
             app.manage(Pairings(Arc::new(pairings::PairingFile::of_app(&handle)?)));
             // The application host: the voice call and the engine. A phone never resets its data under the call, so
             // every request is admitted.
@@ -255,6 +289,9 @@ fn run_app() {
                         env!("SIDEVOICE_BUILD_COMMIT"),
                         env!("SIDEVOICE_BUILD_DATE"),
                     ),
+                    app.state::<developer_options::DeveloperOptions>()
+                        .state()
+                        .as_ref(),
                 ))
                 // Only the app's own pages: the interface never navigates away.
                 .on_navigation(|url| navigation_allowed(url, APP_ORIGIN))

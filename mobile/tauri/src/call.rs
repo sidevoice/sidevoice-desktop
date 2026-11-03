@@ -1,10 +1,11 @@
 //! The call's lifecycle on a phone (D-CALL-LIFECYCLE), the same on Android and iOS: the call starts when the person
 //! presses the green call button and ends at the red hang-up button.
 //!
-//! - **The room's call** (the page reports it joined, `call_state`) is a phone call of the system's own for exactly that
-//!   long (the plugin's call service: a CallKit call on iOS; on Android the call's foreground service and the self-managed
-//!   Telecom call it holds). It starts when the page says the call is joined (a press of the green button, so the app is in
-//!   front, as Android requires), and ends when it says it is not (the red button, the page reloading, the app quitting).
+//! - **The room's call** (the page reports it joined, `call_state`) is the app's own call for exactly that long (on Android
+//!   the call's foreground service; on iOS nothing but the audio session), and a phone call of the system's own only while
+//!   the nightly developer option "Treat calls as system calls" is on (D-NO-CALLKIT-DEFAULT, `developer_options.rs`: a
+//!   CallKit call on iOS; on Android the service's self-managed Telecom call). It starts when the page says the call is joined (a press
+//!   of the green button, so the app is in front, as Android requires), and ends when it says it is not (the red button, the page reloading, the app quitting).
 //!   The system's call ending on its own (the person hung up from the system's screens, the notification, a headset or a
 //!   car kit, removed the app from the recents list, or the system ended it) hangs up the call on the page, as the red
 //!   button does. The system shows the conversation the call is on and the page's mute; a mute from the system's side
@@ -287,6 +288,9 @@ pub struct Room {
     interruptions: Hold,
     /// The audio session, given back before the playback goes on after an interruption that did not end by itself.
     phone: Arc<PhoneCall>,
+    /// Whether the call held is a system's call (CallKit, Telecom: the developer option, read when it started), else the
+    /// app's own.
+    system: bool,
     /// The call as the page last reported it.
     state: CallState,
     /// What the system's call was last told it shows (`None`: nothing yet).
@@ -305,6 +309,7 @@ impl RoomCall {
             since: None,
             interruptions: Hold::new(),
             phone,
+            system: false,
             state: CallState::default(),
             shown: None,
         };
@@ -395,13 +400,17 @@ impl Room {
             };
             // A voice call's audio that opens meanwhile waits for the system to make the call's audio ready (CallKit's
             // session; Telecom's active call and its route).
-            let system_audio = call_activates_audio();
+            // The room's call is the app's own, and waits for no system, unless the developer option turns the system's call on
+            // (D-NO-CALLKIT-DEFAULT).
+            let system = crate::developer_options::system_call(&self.app);
+            let system_audio = call_activates_audio(system);
             self.phone.system_call(system_audio);
-            match start_call_service(&self.app, &details, move |event| {
+            match start_call_service(&self.app, &details, system, move |event| {
                 on_service_event(&app, start, page, since, event)
             }) {
                 Ok(()) => {
                     self.holding = Some(start);
+                    self.system = system;
                     self.since = since;
                     // The system is told the page's mute and title at once (`show`), whatever it started with.
                     self.shown = None;
@@ -417,6 +426,7 @@ impl Room {
             }
         } else {
             self.holding = None;
+            self.system = false;
             self.clear_interruption();
             self.since = None;
             self.shown = None;
@@ -449,7 +459,7 @@ impl Room {
     /// The media controls follow the page's call (the media controls reach the plugin's Kotlin, which runs on Android's
     /// UI thread: never from there). Where the system's call takes their place, they show none while it lasts.
     fn media(&self) {
-        let state = if self.holding.is_some() && call_replaces_media_controls() {
+        let state = if self.holding.is_some() && call_replaces_media_controls(self.system) {
             CallState {
                 ready: self.state.ready,
                 ..CallState::default()
@@ -601,6 +611,7 @@ fn on_service_event(app: &AppHandle, start: u64, page: u64, since: Option<f64>, 
             log::info!("call: hung up by the service ({reason:?})");
             // The service is gone: the next join starts another.
             room.holding = None;
+            room.system = false;
             room.shown = None;
             room.phone.system_call(false);
             room.clear_interruption();

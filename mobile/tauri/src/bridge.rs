@@ -11,6 +11,7 @@ const MICROPHONE_HELP_PLACEHOLDER: &str = "\"__SIDEVOICE_MICROPHONE_HELP__\"";
 const MESSAGES_PLACEHOLDER: &str = "\"__SIDEVOICE_MESSAGES__\"";
 const DEVICE_NAME_PLACEHOLDER: &str = "\"__SIDEVOICE_DEVICE_NAME__\"";
 const BUILD_PLACEHOLDER: &str = "\"__SIDEVOICE_BUILD__\"";
+const DEBUG_PLACEHOLDER: &str = "\"__SIDEVOICE_DEBUG__\"";
 
 /// The app's wording of the web's texts that a phone changes, in every language (`host.messages(language)`; sidevoice-shared's
 /// members): `{ "<language>": { "<web catalogue key>": text } }`, this OS's tables over what every app shares.
@@ -65,7 +66,8 @@ pub fn build(channel: &str, version: &str, commit: &str, date: &str) -> serde_js
 /// `microphone_settings`: whether the system has a settings page for the app's microphone permission
 /// (`host.microphone.openSettings`); `microphone_help`: the app's words for a blocked microphone ([`microphone_help`]);
 /// `messages`: its wording of the web's texts a phone changes ([`messages`]); `device_name`: the name the person gave the
-/// phone ([`device_name`]), none to let the page name it; `build`: what this build is ([`build`]).
+/// phone ([`device_name`]), none to let the page name it; `build`: what this build is ([`build`]); `debug`: the developer
+/// options' state (`host.debug`, [`crate::developer_options::DeveloperOptions::state`]), none in a release (no `host.debug`).
 pub fn script(
     origin: &str,
     microphone_settings: bool,
@@ -73,6 +75,7 @@ pub fn script(
     messages: &serde_json::Value,
     device_name: Option<&str>,
     build: &serde_json::Value,
+    debug: Option<&serde_json::Value>,
 ) -> String {
     let literal = serde_json::to_string(origin).expect("a string serialises");
     let mobile = SCRIPT_TEMPLATE
@@ -93,7 +96,12 @@ pub fn script(
             &serde_json::to_string(&device_name).expect("a name serialises"),
             1,
         )
-        .replacen(BUILD_PLACEHOLDER, &build.to_string(), 1);
+        .replacen(BUILD_PLACEHOLDER, &build.to_string(), 1)
+        .replacen(
+            DEBUG_PLACEHOLDER,
+            &debug.map_or_else(|| "null".to_owned(), |debug| debug.to_string()),
+            1,
+        );
     compose(
         sidevoice_shared_tauri::js::TRANSPORT,
         sidevoice_shared_tauri::js::MEMBERS,
@@ -124,6 +132,7 @@ mod tests {
             MESSAGES_PLACEHOLDER,
             DEVICE_NAME_PLACEHOLDER,
             BUILD_PLACEHOLDER,
+            DEBUG_PLACEHOLDER,
         ] {
             assert_eq!(
                 SCRIPT_TEMPLATE.matches(placeholder).count(),
@@ -131,7 +140,15 @@ mod tests {
                 "{placeholder}"
             );
         }
-        let ios = script("tauri://localhost", true, None, &messages(), None, &dev());
+        let ios = script(
+            "tauri://localhost",
+            true,
+            None,
+            &messages(),
+            None,
+            &dev(),
+            None,
+        );
         for placeholder in [
             ORIGIN_PLACEHOLDER,
             MICROPHONE_SETTINGS_PLACEHOLDER,
@@ -139,11 +156,12 @@ mod tests {
             MESSAGES_PLACEHOLDER,
             DEVICE_NAME_PLACEHOLDER,
             BUILD_PLACEHOLDER,
+            DEBUG_PLACEHOLDER,
         ] {
             assert!(!ios.contains(placeholder), "{placeholder} is left");
         }
         assert!(ios.contains(&format!(
-            "factory(window, \"tauri://localhost\", true, null, {}, null, {})",
+            "factory(window, \"tauri://localhost\", true, null, {}, null, {}, null)",
             messages(),
             dev()
         )));
@@ -153,10 +171,11 @@ mod tests {
             None,
             &messages(),
             None,
-            &dev()
+            &dev(),
+            None
         )
         .contains(&format!(
-            "factory(window, \"http://tauri.localhost\", false, null, {}, null, {})",
+            "factory(window, \"http://tauri.localhost\", false, null, {}, null, {}, null)",
             messages(),
             dev()
         )));
@@ -200,9 +219,10 @@ mod tests {
             &messages(),
             Some("Ana's \"S24\""),
             &dev(),
+            None,
         );
         assert!(named.contains(&format!(
-            "factory(window, \"tauri://localhost\", true, null, {}, \"Ana's \\\"S24\\\"\", {})",
+            "factory(window, \"tauri://localhost\", true, null, {}, \"Ana's \\\"S24\\\"\", {}, null)",
             messages(),
             dev()
         )));
@@ -221,8 +241,35 @@ mod tests {
     }
 
     #[test]
+    fn the_developer_options_are_given_to_the_page_as_json_or_not_at_all() {
+        let state = serde_json::json!({"available": ["systemCall"], "systemCall": false});
+        let offered = script(
+            "tauri://localhost",
+            true,
+            None,
+            &messages(),
+            None,
+            &dev(),
+            Some(&state),
+        );
+        assert!(offered.contains(&format!(
+            "factory(window, \"tauri://localhost\", true, null, {}, null, {}, {state})",
+            messages(),
+            dev()
+        )));
+    }
+
+    #[test]
     fn the_script_is_made_of_the_real_parts() {
-        let composed = script("tauri://localhost", true, None, &messages(), None, &dev());
+        let composed = script(
+            "tauri://localhost",
+            true,
+            None,
+            &messages(),
+            None,
+            &dev(),
+            None,
+        );
         assert!(composed.starts_with("(function (transportOf, membersOf) {\n"));
         assert!(composed.contains(sidevoice_shared_tauri::js::TRANSPORT));
         assert!(composed.contains(sidevoice_shared_tauri::js::MEMBERS));
@@ -243,7 +290,6 @@ mod tests {
             "muteShortcut:",
             "callControls:",
             "updater:",
-            "debug:",
             "os:",
             "build:",
         ] {
@@ -280,9 +326,10 @@ mod tests {
             &messages(),
             None,
             &dev(),
+            None,
         );
         assert!(script.contains(&format!(
-            "factory(window, \"tauri://localhost\", true, {help}, {}, null, {})",
+            "factory(window, \"tauri://localhost\", true, {help}, {}, null, {}, null)",
             messages(),
             dev()
         )));

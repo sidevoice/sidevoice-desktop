@@ -3,7 +3,8 @@
 //! Tauri CLI, never edited by hand, so what the Android app needs beyond the template lives in the Android library under
 //! `android/`, whose manifest, resources and code Gradle merges into the app's.
 //!
-//! - **The system's call** ([`call_service`]): the call as a phone call of the system's own, which the lock screen, the
+//! - **The system's call** ([`call_service`]): the call as a phone call of the system's own when the app asks for it (off by
+//!   default: the app's own call runs only Android's foreground service), which the lock screen, the
 //!   in-call screens and a Bluetooth or car kit show. On Android a foreground service keeps the process alive while the
 //!   screen is off or another app is in front, and holds a self-managed Telecom call (Core-Telecom); on iOS it is a CallKit
 //!   call. The app starts it while it is visible and ends it when the call ends.

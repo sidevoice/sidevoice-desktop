@@ -16,6 +16,7 @@ use crate::{CallDetails, CallEvent, CallEvents, CallServiceError};
 #[serde(rename_all = "camelCase")]
 struct StartArgs<'a> {
     title: &'a str,
+    system_call: bool,
     on_event: Channel<CallEvent>,
 }
 
@@ -31,6 +32,8 @@ impl Os for Native {
     // Telecom making the call active switches the audio mode and the route (to the loudspeaker), and AAudio cuts off a
     // stream open across that: the service reports `audio` once both are done, or at once when Telecom refuses the call.
     const ACTIVATES_AUDIO: bool = true;
+    // The foreground service runs the app's own call too (without Telecom).
+    const OWN_CALL_SERVICE: bool = true;
 
     fn register<R: Runtime, C: DeserializeOwned>(
         api: PluginApi<R, C>,
@@ -41,6 +44,7 @@ impl Os for Native {
     fn start<R: Runtime>(
         app: &AppHandle<R>,
         details: &CallDetails,
+        system: bool,
         events: CallEvents,
     ) -> Result<(), CallServiceError> {
         // The service's reports come over a channel, as JSON.
@@ -56,6 +60,7 @@ impl Os for Native {
             "startCallService",
             StartArgs {
                 title: &details.title,
+                system_call: system,
                 on_event,
             },
         )
