@@ -315,8 +315,11 @@ research/live-activity-design-2026-11-02 (HANDOVER.md); this is how their data g
   actions, the stack opens the app's activity with an extra the plugin turns into `open-conversations`, and the audio
   switch (Android 12 and later, the app's own call) moves the call between the headphones and the loudspeaker with
   `AudioManager.setCommunicationDevice`. The card is drawn again on every update, when a headset comes or goes, and when
-  the appearance changes, at most once per 250 ms (what asks inside it is drawn at its end); a still is decoded again when
-  its file is written anew under the same name. `CallCardRenderTest` draws every state to PNG (light and dark, mic on and off, long texts)
+  the appearance changes, at most once per 250 ms (what asks inside it is drawn at its end); a still is decoded again
+  when its file is written anew under the same name. The own call is kept off the earpiece: a headset, else the
+  loudspeaker, also when headphones are removed. The card's channel is `call-card` at DEFAULT importance with no sound,
+  vibration or badge (the old LOW `call` channel is deleted). `CallCardRenderTest` draws every state to PNG (light and
+  dark, mic on and off, long texts)
   through the platform's own template in Robolectric; `cargo xtask mobile test android` copies them to
   `dist/android-call-card`, and the mobile workflow uploads them.
 

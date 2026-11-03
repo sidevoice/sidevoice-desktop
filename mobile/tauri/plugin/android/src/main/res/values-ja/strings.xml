@@ -8,5 +8,5 @@
     <string name="call_notification_mute">ミュート</string>
     <string name="call_notification_unmute">ミュート解除</string>
     <string name="call_route_speaker">スピーカー</string>
-    <string name="call_route_earpiece">電話</string>
+    <string name="call_route_earpiece">受話口</string>
 </resources>

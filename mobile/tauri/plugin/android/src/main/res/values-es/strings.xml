@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- The call's notification, where the page's words are not there yet (and its public version, its channel). Taken from
+     the web app's catalogue (state.inCall, card.mute, card.unmute, card.hangUp, card.speaker). -->
 <resources>
     <string name="call_channel_name">Llamadas</string>
     <string name="call_notification_text">En llamada</string>

@@ -78,7 +78,7 @@ class CallCardRenderTest {
         val route = if (headphones) CallCardViews.Route(CallCardViews.Output.HEADPHONES, name = "AirPods Pro") else null
         val intents = CallCardViews.Intents(null, null, null, null, null)
         val views = CallCardViews(context, card, route, intents) { still -> stills[still.file] }
-        val notification = NotificationCompat.Builder(context, "call")
+        val notification = NotificationCompat.Builder(context, "call-card")
             .setSmallIcon(R.drawable.ic_call_notification)
             .setShowWhen(false)
             .setStyle(NotificationCompat.DecoratedCustomViewStyle())
@@ -91,7 +91,7 @@ class CallCardRenderTest {
 
     private fun publicVersion(): Notification {
         val context: Context = ApplicationProvider.getApplicationContext()
-        return NotificationCompat.Builder(context, "call")
+        return NotificationCompat.Builder(context, "call-card")
             .setSmallIcon(R.drawable.ic_call_notification)
             .setContentText(context.getString(R.string.call_notification_text))
             .setShowWhen(false)

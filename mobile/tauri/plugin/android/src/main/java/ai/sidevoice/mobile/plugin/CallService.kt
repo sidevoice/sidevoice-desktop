@@ -119,6 +119,8 @@ class CallService : Service() {
     private var modeBefore = AudioManager.MODE_NORMAL
     private var routedDevice = false
     private var routedSco = false
+    /** Before Android 12: whether the own call turned the loudspeaker on, off the earpiece ([keepOffEarpiece]). */
+    private var routedSpeakerphone = false
     /** The system's microphone mute while Telecom holds the call: the service's own mutes told from one from outside. */
     private var echoes: MuteEchoes? = null
     /** The page's mute, as last told ([ACTION_UPDATE]). */
@@ -285,9 +287,17 @@ class CallService : Service() {
      */
     private fun notification(id: Long): Notification {
         val manager = getSystemService(NotificationManager::class.java)
-        // Created each time, so a change of the system's language renames it.
+        // Created each time, so a change of the system's language renames it. DEFAULT importance, so the card is not a
+        // silent notification (those are hidden on the Lock Screen by default and collapsed in the shade), but with no
+        // sound, vibration or badge. A channel's importance can't be raised once created: hence a new id, and the old
+        // LOW channel is deleted so Settings doesn't list two.
+        manager.deleteNotificationChannel(OLD_CHANNEL_ID)
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, getString(R.string.call_channel_name), NotificationManager.IMPORTANCE_LOW)
+            NotificationChannel(CHANNEL_ID, getString(R.string.call_channel_name), NotificationManager.IMPORTANCE_DEFAULT).apply {
+                setSound(null, null)
+                enableVibration(false)
+                setShowBadge(false)
+            }
         )
         val open = packageManager.getLaunchIntentForPackage(packageName)?.let {
             PendingIntent.getActivity(this, REQUEST_OPEN, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
@@ -730,12 +740,12 @@ class CallService : Service() {
         unwatchRoute()
         val audio = getSystemService(AudioManager::class.java)
         val devices = object : AudioDeviceCallback() {
-            override fun onAudioDevicesAdded(added: Array<out AudioDeviceInfo>) = show(mine.id)
-            override fun onAudioDevicesRemoved(removed: Array<out AudioDeviceInfo>) = show(mine.id)
+            override fun onAudioDevicesAdded(added: Array<out AudioDeviceInfo>) = moved(mine)
+            override fun onAudioDevicesRemoved(removed: Array<out AudioDeviceInfo>) = moved(mine)
         }
         audio.registerAudioDeviceCallback(devices, main)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val changed = AudioManager.OnCommunicationDeviceChangedListener { show(mine.id) }
+            val changed = AudioManager.OnCommunicationDeviceChangedListener { moved(mine) }
             audio.addOnCommunicationDeviceChangedListener({ main.post(it) }, changed)
             routeWatch = {
                 audio.unregisterAudioDeviceCallback(devices)
@@ -744,6 +754,13 @@ class CallService : Service() {
         } else {
             routeWatch = { audio.unregisterAudioDeviceCallback(devices) }
         }
+    }
+
+    /** A device came or went, or the call's device changed: off the earpiece if it landed there, and the card redrawn. */
+    private fun moved(mine: CallSession.Session) {
+        if (session?.id != mine.id) return
+        keepOffEarpiece()
+        show(mine.id)
     }
 
     /** Stops [watchRoute], and gives back the device the audio switch chose. */
@@ -758,9 +775,9 @@ class CallService : Service() {
 
     /**
      * The own call's audio route, which Telecom does for a system's call: the audio mode is communication, and the route a
-     * Bluetooth headset (HFP, or LE Audio) or a hearing aid, if one is connected (Android's
-     * self-managed audio guide: `AudioManager.setCommunicationDevice`). With none, the system's default stays (the earpiece or
-     * the speaker the app's own settings choose). Logged (`SidevoiceCall`): the mode and the device taken.
+     * Bluetooth headset (HFP, or LE Audio) or a hearing aid, then wired or USB headphones, if one is connected (Android's
+     * self-managed audio guide: `AudioManager.setCommunicationDevice`). With none, the loudspeaker, never the earpiece
+     * (D-LA-ROUTE; before Android 12 `setSpeakerphoneOn`, [keepOffEarpiece]). Logged (`SidevoiceCall`): the mode and the device taken.
      */
     private fun routeCommunication() {
         val audio = getSystemService(AudioManager::class.java)
@@ -771,19 +788,59 @@ class CallService : Service() {
         }
         Log.i(TAG, "route: audio mode communication (was ${modeBefore})")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val device = audio.availableCommunicationDevices.firstOrNull { it.type in HEADSET_TYPES }
+            // A headset if one is connected, otherwise the loudspeaker: never the earpiece, which the communication mode
+            // would choose by itself (D-LA-ROUTE: the speaker by default, no earpiece).
+            val available = audio.availableCommunicationDevices
+            val device = available.firstOrNull { it.type in HEADSET_TYPES }
+                ?: available.firstOrNull { it.type in HEADPHONES }
+                ?: available.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
             if (device == null) {
-                Log.i(TAG, "route: no headset for the call; the system's route stays")
+                Log.i(TAG, "route: no headset or loudspeaker for the call; the system's route stays")
             } else {
                 val taken = audio.setCommunicationDevice(device)
                 Log.i(TAG, "route: communication device ${device.productName} (type ${device.type}): ${if (taken) "set" else "refused"}")
                 routedDevice = taken
             }
-        } else if (audio.isBluetoothScoAvailableOffCall) {
+        } else if (outputs(audio).any { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO }) {
             @Suppress("DEPRECATION")
             audio.startBluetoothSco()
             routedSco = true
             Log.i(TAG, "route: Bluetooth SCO started (Android before 12)")
+        } else {
+            keepOffEarpiece()
+        }
+    }
+
+    /** The outputs connected now. */
+    private fun outputs(audio: AudioManager): Array<AudioDeviceInfo> = audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+
+    /**
+     * The own call is never left on the earpiece, which the person never chooses (D-LA-ROUTE): when the route falls there by
+     * itself (headphones removed, the communication mode's default), it moves to the loudspeaker. Telecom routes
+     * its own call. Logged (`SidevoiceCall`). If the system refuses, the card shows the earpiece as it is.
+     */
+    @Suppress("DEPRECATION") // isSpeakerphoneOn, before Android 12 only
+    private fun keepOffEarpiece() {
+        if (!communicating || control != null) return
+        val audio = getSystemService(AudioManager::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (audio.communicationDevice?.type != AudioDeviceInfo.TYPE_BUILTIN_EARPIECE) return
+            val speaker = audio.availableCommunicationDevices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+            val taken = speaker != null && audio.setCommunicationDevice(speaker)
+            routedDevice = routedDevice || taken
+            Log.i(TAG, "route: on the earpiece by itself, to the loudspeaker: ${if (taken) "set" else "refused"}")
+        } else {
+            // Before Android 12 the communication mode plays on the earpiece unless headphones are connected.
+            val headphones = outputs(audio).any { it.type in HEADPHONES }
+            if (!headphones && !audio.isSpeakerphoneOn) {
+                audio.isSpeakerphoneOn = true
+                routedSpeakerphone = true
+                Log.i(TAG, "route: no headphones, the loudspeaker (Android before 12)")
+            } else if (headphones && routedSpeakerphone) {
+                audio.isSpeakerphoneOn = false
+                routedSpeakerphone = false
+                Log.i(TAG, "route: headphones connected, off the loudspeaker (Android before 12)")
+            }
         }
     }
 
@@ -799,6 +856,11 @@ class CallService : Service() {
             @Suppress("DEPRECATION")
             audio.stopBluetoothSco()
             routedSco = false
+        }
+        if (routedSpeakerphone) {
+            @Suppress("DEPRECATION")
+            audio.isSpeakerphoneOn = false
+            routedSpeakerphone = false
         }
         audio.mode = modeBefore
         communicating = false
@@ -866,7 +928,9 @@ class CallService : Service() {
             AudioDeviceInfo.TYPE_HEARING_AID,
         )
         private const val NO_SESSION = -1L
-        private const val CHANNEL_ID = "call"
+        private const val CHANNEL_ID = "call-card"
+        /** The call's channel before the card (IMPORTANCE_LOW): deleted. */
+        private const val OLD_CHANNEL_ID = "call"
         private const val NOTIFICATION_ID = 1
         /**
          * How long the call's audio waits for Telecom before it opens anyway (Telecom answers in well under a second):
