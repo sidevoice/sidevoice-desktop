@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The call's notification, where the page's words are not there yet (and its public version, its channel). Taken from
+     the web app's catalogue (state.inCall, card.mute, card.unmute, card.hangUp). -->
+<resources>
+    <string name="call_channel_name">Chiamate</string>
+    <string name="call_notification_text">In chiamata</string>
+    <string name="call_notification_hang_up">Riaggancia</string>
+    <string name="call_notification_mute">Silenzia</string>
+    <string name="call_notification_unmute">Attiva microfono</string>
+    <string name="call_route_speaker">Altoparlante</string>
+    <string name="call_route_earpiece">Telefono</string>
+</resources>

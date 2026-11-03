@@ -53,6 +53,30 @@ class MobilePlugin(private val activity: Activity) : Plugin(activity) {
             builtInZoomControls = false
             displayZoomControls = false
         }
+        // The activity was made anew by the call card's stack (its process outlived it).
+        openConversations(activity.intent)
+    }
+
+    /** The app's activity is brought back by an intent: the call card's stack, maybe. */
+    override fun onNewIntent(intent: Intent) {
+        openConversations(intent)
+    }
+
+    /**
+     * The person tapped the other conversations on the call's card ([CallService.EXTRA_OPEN_CONVERSATIONS]): reported to the
+     * app as their action, which opens the page's conversation list. Handled once:
+     * - an intent from the recents list is the task's first intent replayed (FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY), so the
+     *   extra it may still carry is not a tap;
+     * - the activity's intent is replaced by one without the extra, so the activity being made again (a rotation) does not
+     *   open it twice.
+     */
+    private fun openConversations(intent: Intent?) {
+        if (intent?.hasExtra(CallService.EXTRA_OPEN_CONVERSATIONS) != true) return
+        val tapped = intent.getBooleanExtra(CallService.EXTRA_OPEN_CONVERSATIONS, false) &&
+            (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) == 0
+        activity.intent = Intent(intent).apply { removeExtra(CallService.EXTRA_OPEN_CONVERSATIONS) }
+        if (!tapped) return
+        CallSession.current()?.let { CallSession.action(it, "open-conversations") }
     }
 
     /**
@@ -114,12 +138,13 @@ class MobilePlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     /**
-     * Tells the running service what the call shows now: its title, and the page's mute (the system's call and its
-     * microphone mute follow it). Nothing when none runs.
+     * Tells the running service what the call shows now: its title, the page's mute (the system's call and its microphone
+     * mute follow it) and the call surface its card draws (passed on as the JSON it came in). Nothing when none runs.
      */
     @Command
     fun updateCallService(invoke: Invoke) {
         val args = invoke.parseArgs(UpdateCallServiceArgs::class.java)
+        val surface = invoke.getArgs().optJSONObject("surface")?.toString()
         val context = activity.applicationContext
         val session = CallSession.current()
         if (session == null) {
@@ -133,6 +158,7 @@ class MobilePlugin(private val activity: Activity) : Plugin(activity) {
                     .putExtra(CallService.EXTRA_SESSION, session.id)
                     .putExtra(CallService.EXTRA_TITLE, args.title)
                     .putExtra(CallService.EXTRA_MUTED, args.muted)
+                    .putExtra(CallService.EXTRA_SURFACE, surface)
             )
             invoke.resolve()
         } catch (error: RuntimeException) {

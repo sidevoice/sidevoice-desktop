@@ -2,8 +2,11 @@
 <resources>
     <string name="call_channel_name">Calls</string>
     <string name="call_notification_title" translatable="false">Sidevoice</string>
-    <string name="call_notification_text">In a call</string>
+    <string name="call_notification_text">In call</string>
     <string name="call_notification_hang_up">Hang up</string>
     <string name="call_notification_mute">Mute</string>
     <string name="call_notification_unmute">Unmute</string>
+    <!-- The audio switch's outputs, until the page says its own word (card.speaker); the earpiece has none in the page. -->
+    <string name="call_route_speaker">Speaker</string>
+    <string name="call_route_earpiece">Phone</string>
 </resources>

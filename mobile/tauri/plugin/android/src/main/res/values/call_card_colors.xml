@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The call card's inks and fills, light (values-night: dark): the web app's tokens as the Live Activity design measured
+     them (research/live-activity-design-2026-11-02, HANDOVER §2 and spec/GEOMETRY.md). -->
+<resources>
+    <color name="call_card_text">#FF1B1D24</color>
+    <color name="call_card_text_secondary">#FF545766</color>
+    <!-- rgba(27, 29, 36, .08) -->
+    <color name="call_card_button">#141B1D24</color>
+    <!-- The mute badge's 2 dp ring on the creature (GEOMETRY: the badge's ring), and the creature tile's ground. -->
+    <color name="call_card_badge_ring">#FFF2F0F6</color>
+    <color name="call_card_tile">#FFECE4F7</color>
+    <!-- Tones: ink (the state's words) and fill (its dot, the tile's glow). -->
+    <color name="call_card_lila_ink">#FF4A2F6B</color>
+    <color name="call_card_lila">#FF4A2F6B</color>
+    <color name="call_card_green_ink">#FF1D6B45</color>
+    <color name="call_card_green">#FF1D6B45</color>
+    <color name="call_card_warn_ink">#FF9A4A00</color>
+    <color name="call_card_warn">#FF9A4A00</color>
+    <color name="call_card_grey_ink">#FF545766</color>
+    <color name="call_card_grey">#FF686B7A</color>
+    <!-- Mute while off, and hang up: the same in both appearances. -->
+    <color name="call_card_muted">#FFF9DEDC</color>
+    <color name="call_card_muted_ink">#FF601410</color>
+    <color name="call_card_end">#FFDC362E</color>
+    <color name="call_card_white">#FFFFFFFF</color>
+</resources>

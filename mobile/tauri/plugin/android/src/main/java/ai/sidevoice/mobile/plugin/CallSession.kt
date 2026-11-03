@@ -49,8 +49,16 @@ internal object CallSession {
      */
     fun hangUpAddress(id: Long): String = "sidevoice-call://hang-up/$id"
 
-    /** What names one session's mute button (Android 12 and older), as [hangUpAddress] for its Hang up. */
-    fun toggleMuteAddress(id: Long): String = "sidevoice-call://toggle-mute/$id"
+    /** What names one session's button [action] on the card (mute, unmute, skip, route), as [hangUpAddress] for its Hang up. */
+    fun surfaceAddress(id: Long, action: String): String = "sidevoice-call://$action/$id"
+
+    /**
+     * Reports that the person asked for [action] on the call's card (`mute`, `unmute`, `skip`, `open-conversations`: Rust
+     * `SurfaceAction`), if [session] is running; the app runs it on the page.
+     */
+    fun action(session: Session, action: String) {
+        if (get(session.id) != null) session.report(mapOf("type" to "action", "action" to action))
+    }
 
     /** Reports that the audio focus of [session] changed (`gained`, `lost`, `lost-transient`, `duck`, `refused`), if it is running. */
     fun focus(session: Session, state: String) {

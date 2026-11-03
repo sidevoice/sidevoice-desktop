@@ -1,0 +1,271 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The call's notification, expanded: Sidevoice's own card (DecoratedCustomViewStyle: the system draws the header, this
+     the rest). The Lock Screen card of the Live Activity design, in dp (HANDOVER §4 "Android", spec/GEOMETRY.md
+     "androidExpanded"): the creature's tile, the conversation, model · machine and the state; the audio switch while
+     headphones are connected; then mute, skip, the other conversations and hang up. Filled by CallCardViews. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:clipChildren="false"
+    android:clipToPadding="false"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:orientation="horizontal">
+
+        <!-- The tile, drawn whole by CallCardArt (its glow, the creature standing out of it, the mute badge): 52 dp, 4 dp
+             down, 12 dp before the lines. The bitmap has 7 dp of room at each side and 10 above and below the tile, for
+             an accessory and the badge; the negative margins take that room back, so the row is as tall as the lines. -->
+        <ImageView
+            android:id="@+id/call_card_tile"
+            android:layout_width="66dp"
+            android:layout_height="72dp"
+            android:layout_marginStart="-7dp"
+            android:layout_marginTop="-10dp"
+            android:layout_marginEnd="5dp"
+            android:layout_marginBottom="-6dp"
+            android:importantForAccessibility="no"
+            android:scaleType="fitXY" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/call_card_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:fontFamily="@font/dm_sans_700"
+                android:includeFontPadding="false"
+                android:letterSpacing="-0.01"
+                android:lineHeight="23.5sp"
+                android:maxLines="1"
+                android:textColor="@color/call_card_text"
+                android:textSize="16sp" />
+
+            <TextView
+                android:id="@+id/call_card_sub"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:fontFamily="@font/dm_sans_400"
+                android:includeFontPadding="false"
+                android:lineHeight="19sp"
+                android:maxLines="1"
+                android:textColor="@color/call_card_text_secondary"
+                android:textSize="13sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="3dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <ImageView
+                    android:id="@+id/call_card_dot"
+                    android:layout_width="8dp"
+                    android:layout_height="8dp"
+                    android:layout_marginEnd="6dp"
+                    android:importantForAccessibility="no"
+                    android:src="@drawable/call_card_dot" />
+
+                <TextView
+                    android:id="@+id/call_card_state"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:fontFamily="@font/dm_sans_650"
+                    android:includeFontPadding="false"
+                    android:lineHeight="20.5sp"
+                    android:maxLines="1"
+                    android:textSize="14sp" />
+
+                <!-- While working: the time since the working phase began, " · 1:42" (no other state shows a time). The
+                     separator is a view of its own: a Chronometer's format applies only once it is on screen. -->
+                <TextView
+                    android:id="@+id/call_card_since_dot"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="4dp"
+                    android:fontFamily="@font/dm_sans_600"
+                    android:includeFontPadding="false"
+                    android:lineHeight="20.5sp"
+                    android:maxLines="1"
+                    android:text="·"
+                    android:textSize="14sp"
+                    android:visibility="gone"
+                    tools:ignore="HardcodedText" />
+
+                <Chronometer
+                    android:id="@+id/call_card_since"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="4dp"
+                    android:fontFamily="@font/dm_sans_600"
+                    android:includeFontPadding="false"
+                    android:lineHeight="20.5sp"
+                    android:maxLines="1"
+                    android:textSize="14sp"
+                    android:visibility="gone" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- The audio switch: only while headphones are connected. A whole 30 dp circle at the top of the row (the row's
+             container clips what stands above it). -->
+        <FrameLayout
+            android:id="@+id/call_card_route"
+            android:layout_width="30dp"
+            android:layout_height="30dp"
+            android:layout_marginStart="12dp"
+            android:background="@drawable/call_card_button"
+            android:visibility="gone">
+
+            <ImageView
+                android:id="@+id/call_card_route_icon"
+                android:layout_width="16dp"
+                android:layout_height="16dp"
+                android:layout_gravity="center"
+                android:importantForAccessibility="no" />
+        </FrameLayout>
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="40dp"
+        android:layout_marginTop="12dp"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <!-- Mute and skip, then the room the stack and hang up leave. Mute is the pill with its label when the label fits
+             whole in the row, and otherwise the round glyph button (CallCardViews measures it before building the views):
+             a button never ends in an ellipsis. -->
+        <FrameLayout
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_marginEnd="8dp"
+            android:layout_weight="1">
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="40dp"
+                android:orientation="horizontal">
+
+                <LinearLayout
+                    android:id="@+id/call_card_mute"
+                    android:layout_width="wrap_content"
+                    android:layout_height="40dp"
+                    android:background="@drawable/call_card_button"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingStart="13dp"
+                    android:paddingEnd="16dp">
+
+                    <ImageView
+                        android:id="@+id/call_card_mute_icon"
+                        android:layout_width="17dp"
+                        android:layout_height="17dp"
+                        android:layout_marginEnd="6dp"
+                        android:importantForAccessibility="no" />
+
+                    <TextView
+                        android:id="@+id/call_card_mute_label"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:fontFamily="@font/dm_sans_650"
+                        android:includeFontPadding="false"
+                        android:maxLines="1"
+                        android:textSize="14sp" />
+                </LinearLayout>
+
+                <FrameLayout
+                    android:id="@+id/call_card_mute_round"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:background="@drawable/call_card_button"
+                    android:visibility="gone">
+
+                    <ImageView
+                        android:id="@+id/call_card_mute_round_icon"
+                        android:layout_width="17dp"
+                        android:layout_height="17dp"
+                        android:layout_gravity="center"
+                        android:importantForAccessibility="no" />
+                </FrameLayout>
+
+                <FrameLayout
+                    android:id="@+id/call_card_skip"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginStart="8dp"
+                    android:background="@drawable/call_card_button">
+
+                    <ImageView
+                        android:layout_width="17dp"
+                        android:layout_height="17dp"
+                        android:layout_gravity="center"
+                        android:importantForAccessibility="no"
+                        android:src="@drawable/ic_card_skip" />
+                </FrameLayout>
+            </LinearLayout>
+        </FrameLayout>
+
+        <!-- The other conversations: up to three faces (CallCardArt, standing out above the row) and the total count. -->
+        <LinearLayout
+            android:id="@+id/call_card_others"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="8dp"
+            android:clipChildren="false"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <!-- 6 dp of room at each side and 12 above and below, taken back by the margins. -->
+            <ImageView
+                android:id="@+id/call_card_faces"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="-6dp"
+                android:layout_marginTop="-12dp"
+                android:layout_marginEnd="-6dp"
+                android:layout_marginBottom="-12dp"
+                android:importantForAccessibility="no" />
+
+            <TextView
+                android:id="@+id/call_card_count"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="3dp"
+                android:fontFamily="@font/dm_sans_650"
+                android:includeFontPadding="false"
+                android:importantForAccessibility="no"
+                android:maxLines="1"
+                android:textColor="@color/call_card_text_secondary"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <FrameLayout
+            android:id="@+id/call_card_hang_up"
+            android:layout_width="56dp"
+            android:layout_height="40dp"
+            android:background="@drawable/call_card_button_end">
+
+            <ImageView
+                android:layout_width="19dp"
+                android:layout_height="19dp"
+                android:layout_gravity="center"
+                android:importantForAccessibility="no"
+                android:src="@drawable/ic_card_hang_up_white" />
+        </FrameLayout>
+    </LinearLayout>
+</LinearLayout>

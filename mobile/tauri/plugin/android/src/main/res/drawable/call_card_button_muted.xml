@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The call card's mute button while the microphone is off. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="@color/call_card_muted" />
+    <corners android:radius="20dp" />
+</shape>
