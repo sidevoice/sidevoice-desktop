@@ -27,6 +27,8 @@ tauri = { version = "2.12", features = [] }
 atomic-write-file = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The creatures' stills reach the app as base64 (`call_still`, src/lib.rs), as the page's canvas gives them.
+base64 = "0.22"
 # The app's log (src/lib.rs): the system's (logcat, the unified log) and a file in the app's log folder.
 tauri-plugin-log = "2"
 log = "0.4"

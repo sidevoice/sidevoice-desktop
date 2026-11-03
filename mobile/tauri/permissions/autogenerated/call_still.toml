@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-call-still"
+description = "Enables the call_still command without any pre-configured scope."
+commands.allow = ["call_still"]
+
+[[permission]]
+identifier = "deny-call-still"
+description = "Denies the call_still command without any pre-configured scope."
+commands.deny = ["call_still"]

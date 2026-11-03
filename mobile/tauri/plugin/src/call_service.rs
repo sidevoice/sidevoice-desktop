@@ -18,6 +18,7 @@ use serde::Deserialize;
 use tauri::{AppHandle, Runtime};
 
 use crate::platform::call_service as platform;
+use crate::{CallSurface, SurfaceAction};
 
 /// What the service reports.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -36,6 +37,9 @@ pub enum CallEvent {
     /// call active and its route has settled (the communication mode and the loudspeaker, whose change would cut off a
     /// stream already open), or at once when the call stays the app's own (Telecom refused it, or did not answer in time).
     Audio { active: bool },
+    /// The person asked for `action` on one of the call's surfaces (the Live Activity's intents, the notification's
+    /// buttons, the stack of conversations): `{"type":"action","action":"skip"}`.
+    Action { action: SurfaceAction },
 }
 
 /// Why the service ended.
@@ -104,11 +108,13 @@ impl std::error::Error for CallServiceError {}
 /// Where a call's events go, from any thread; it must not wait.
 pub type CallEvents = Arc<dyn Fn(CallEvent) + Send + Sync>;
 
-/// What the system shows of the call: the conversation it is on (`title`, empty for none) and whether the person muted it.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// What the system shows of the call: the conversation it is on (`title`, empty for none), whether the person muted it,
+/// and what the call's own surfaces draw (`surface`: the Live Activity, the call's notification).
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct CallDetails {
     pub title: String,
     pub muted: bool,
+    pub surface: CallSurface,
 }
 
 /// Starts the call, an outgoing audio call shown as `details`, and reports what happens to it to `on_event`, from any
@@ -125,7 +131,8 @@ pub fn start_call_service<R: Runtime>(
 }
 
 /// Shows the running call as `details` now: its title, and the mute the page has (the system's screens and a Bluetooth or
-/// car kit show it, and on Android the system's microphone mute follows it). Nothing when no call runs.
+/// car kit show it, and on Android the system's microphone mute follows it), and its surface. Called on every change of
+/// any of them, at most a few times a second. Nothing when no call runs.
 pub fn update_call_service<R: Runtime>(
     app: &AppHandle<R>,
     details: &CallDetails,
@@ -213,6 +220,12 @@ mod tests {
             event(r#"{"type":"audio","active":true}"#),
             CallEvent::Audio { active: true }
         );
+        assert_eq!(
+            event(r#"{"type":"action","action":"cancel-send"}"#),
+            CallEvent::Action {
+                action: SurfaceAction::CancelSend
+            }
+        );
         for (text, state) in [
             ("gained", FocusState::Gained),
             ("lost", FocusState::Lost),
@@ -232,6 +245,9 @@ mod tests {
             serde_json::from_str::<CallEvent>(r#"{"type":"stopped","reason":"nope"}"#).is_err()
         );
         assert!(serde_json::from_str::<CallEvent>(r#"{"type":"ringing"}"#).is_err());
+        assert!(
+            serde_json::from_str::<CallEvent>(r#"{"type":"action","action":"dance"}"#).is_err()
+        );
     }
 
     #[test]

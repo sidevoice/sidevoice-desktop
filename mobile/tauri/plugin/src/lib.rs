@@ -10,9 +10,13 @@
 //!   call. The app starts it while it is visible and ends it when the call ends.
 //!
 //!   Its iOS body is Rust (objc2's CallKit bindings), like the rest of the app's iOS code: the plugin has no Swift.
+//! - **The call's surfaces** ([`call_surface`]): what the app's own Live Activity (iOS) and call notification (Android)
+//!   draw, carried in the call's details, with the creatures' stills kept by id where those read them, and what the
+//!   person asks for on them, reported as the call's events.
 //! - **The screen** ([`keep_screen_on`]): kept on while a model download runs, since the system suspends the app, and
 //!   the download, soon after the screen turns off.
 mod call_service;
+mod call_surface;
 mod platform;
 mod screen;
 
@@ -22,6 +26,11 @@ pub use call_service::{
     call_activates_audio, call_replaces_media_controls, request_call_focus, start_call_service,
     stop_call_service, update_call_service, CallDetails, CallEvent, CallEvents, CallServiceError,
     FocusState, StopReason,
+};
+pub use call_surface::{
+    clear_stills, forget_stills, save_still, stills_dir, CallSurface, Other, Phase, SpokenPage,
+    Still, StillError, SurfaceAction, SurfaceWords, STILLS_CAP, STILL_ID_LIMIT, STILL_LIMIT,
+    STILL_MAX_PX, URL_SCHEME,
 };
 pub use screen::{keep_screen_on, ScreenError};
 

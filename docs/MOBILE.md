@@ -75,6 +75,7 @@ part, `mobile/tauri/js/mobile-bridge.js`, which assembles `host`:
 | `deviceName` | The name the person gave the phone (`mobile/tauri/src/platform/device_name`), read when the window is made: on Android `Settings.Global` `device_name`, else `Settings.Secure` `bluetooth_name`, else the model (`Samsung SM-A600FN`), with no permission; on iOS `UIDevice.current.name`, which since iOS 16 is the generic model ("iPhone") without the user-assigned-device-name entitlement. Without it the page would name the phone from the webview's user agent ("Chrome on Android"). |
 | `debug` | The developer options of a nightly or a dev build (docs/BRIDGE.md → "The developer options"); absent in a release. One switch, `systemCall` ("Treat calls as system calls", off by default: "The system's call" below), kept in `developer-options.json` of the app's own files and set through the app's own `developer_options` command (`mobile/tauri/src/developer_options.rs`). |
 | `build` | What this build is, in the desktop's shape (docs/BRIDGE.md → "The build"): `{channel, version, commit?, date?}`. `cargo xtask mobile build` and `testflight` tell the build script (`mobile/tauri/build.rs`) the channel: `nightly` on CI, so every build shipped today (TestFlight, the signed APK) is a nightly with its `commit` and `date`, `dev` on a laptop, `SIDEVOICE_BUILD_CHANNEL` overriding; `version` is `tauri.conf.json`'s. The page unlocks its Developer options by the channel (Settings → Advanced, the Build row tapped 10 times; nightly only). |
+| `callSurface` | `{ active() }`, always `true`: the app draws the call's own surfaces (iOS's Live Activity, Android's call notification) from the room's `callSurface`, so the page publishes what costs it work (the creatures' stills, the spoken page). "The call surface" below. |
 
 Nothing of the desktop's own (`localHost`, `reset`, `muteShortcut`, `callControls`, `updater`) is
 offered. The page reports the call (the members' `room`) to the app's own `call_state`, and the app runs commands on the room
@@ -255,6 +256,49 @@ call service (`sidevoice-mobile-plugin`'s `call_service`), started and ended as 
   leaves a self-managed call's headset buttons to the app.
 - **App Store.** Apple does not accept CallKit in apps sold in China: the app's availability there is an operator decision
   before a release.
+
+## The call surface
+
+The call's own surfaces, drawn by the app rather than by the system's call (D-NO-CALLKIT-DEFAULT): the iOS Live Activity
+(the Lock Screen card and the Dynamic Island) and Android's ongoing call notification. Their design is
+research/live-activity-design-2026-11-02 (HANDOVER.md); this is how their data gets there and how they act on the call.
+
+- **One snapshot for both.** The page projects it in its room snapshot (sidevoice-web's `callSurface`, beside the
+  `callCard` the report already carries), and the bridge relays it in every `call_state` report as `surface`. The app reads
+  it with the room's `mood`, `turn`, `busyReason` and `canSkip` (`mobile/tauri/src/surface.rs`) into the plugin's
+  `CallSurface` (`mobile/tauri/plugin/src/call_surface.rs`), which travels in the `CallDetails` the call's service is
+  started and updated with, on every change, at most once every 250 ms (Android drops a notification's updates past
+  about five a second; a change inside that is shown at its end). Every field has a default: a page that sends less, or
+  a surface the app cannot read (logged), shows an empty, idle call, and never stops the call.
+- **What it carries** (camelCase, as Android's `updateCallService` receives it in `surface`): `phase` (`idle`,
+  `listening`, `transcribing`, `said`, `working`, `speaking`, `holding`, `offline`: the page's state line's order,
+  `said` while the person's words just sent show), `canSkip`, `canCancelSend`, `model` and `machine` (worded by the page),
+  `workingSince` (ms since the epoch, the room's busy clock, which may start a few seconds before the stage shows
+  working; absent when the page does not know it: no time is made up), `still`, up to three `others` (`{title, still}`),
+  `conversationCount` (every conversation, the current one included), `page` (`{text, lit}`, the spoken page while
+  speaking, `lit` in UTF-16 code units of `text`), `said`, and `words` (`state`, `offline`, `mute`, `unmute`, `skip`,
+  `skipName`, `cancelSend`, `hangUp`, `route` with `{route}` to fill, `speaker`, `conversations`), all in the page's
+  language. `offline` is always there: a surface the app stopped updating draws the offline state with it. While the call
+  switches conversation, the surface keeps what it showed until the new conversation's report comes.
+- **The creatures, by reference.** A still is `{id, k, file}` in the snapshot: the page's id (`<threadId>#<px>`; 240 px
+  for the current conversation, 108 for the others), `k` (how much of the still the body takes, 1 by default) and `file`,
+  the PNG's name in the stills folder, which the app fills (the id's bytes in hex, `.png`). The page hands each PNG over
+  once per id (`host.callSurface.still({id, png, px})`, base64, the app's `call_still`) and forgets the ones it shows no
+  more (`host.callSurface.forget(ids)`, `call_forget`). The bridge sends the reports, the stills and the forgetting one
+  after the other, and a still is answered only once its file is kept, so a report never names a still the app does not
+  have yet. Both are done on the call's own thread, in order with the reports: a forgotten still's file stays until
+  neither the surface the service last showed nor the next one draws it (an update can wait up to 250 ms). The app keeps
+  a still only if it is a PNG of `px` × `px` (its `IHDR`; at most 480 px and 512 KB, an id of at most 120 bytes, at most
+  8 MB in all) in the stills folder (`stills_dir`): `call-stills/` in the App Group container `group.ai.sidevoice.mobile`
+  on iOS, where the widget extension reads it, or the app's cache where there is no shared container (Android, and iOS
+  until the app is entitled to the group). It is emptied at the app's start and when a page loads anew (its call ended
+  with it); the new page sends its own.
+- **What the person does on a surface** comes back as the service's event `{"type":"action","action":…}` (`mute`,
+  `unmute`, `skip`, `cancel-send`, `hang-up`, `open-conversations`; `CallEvent::Action`), from the notification's buttons
+  or the Live Activity's intents, or on iOS as the link the app is opened with (`sidevoice://conversations`, Tauri's
+  `RunEvent::Opened`). The app runs it on the page's call as the page's own command (`mute` with the value, `skip-reply`,
+  `cancel-input`, `hang-up`, `open-conversations`), for the current page and call. The audio route is not one of them:
+  the system's route is the native side's to switch.
 
 ## Building
 

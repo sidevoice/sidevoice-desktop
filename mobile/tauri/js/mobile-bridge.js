@@ -55,12 +55,28 @@
     } else if (!enabled) owned.seen = true;
     else if (owned.seen) owned = null; // unmuted by the person
   };
+  /** The call's surfaces (the Live Activity, the call's notification; docs/MOBILE.md -> "The call surface"): the room's
+   *  `callSurface` rides in every report as `surface`, its creatures' stills by id (`{id, k}`). Their bytes are handed over
+   *  by the page itself, once per id and before the report that names it (`host.callSurface.still`), and forgotten when
+   *  the page shows them no more (`forget`). */
+  const surfaceOf = (view) => {
+    const surface = view && view.callSurface;
+    return surface && typeof surface === "object" ? { surface } : {};
+  };
+  /** What goes to the app about the call (its reports, the stills, the forgetting), one after the other, on the page's
+   *  number: a still is answered once its file is kept (`call_still`), and nothing after it goes before that, so a report
+   *  never names a still the app does not have yet. A refusal holds nothing up. */
+  let line = Promise.resolve();
+  const inOrder = (command, args, answered = false) => {
+    line = line
+      .then(() => numbered())
+      .then((number) => (answered ? transport.own.call : transport.own.send)(command, { page: number, ...args }))
+      .catch(() => {});
+  };
   const reporting = members.room({
     version: 2,
-    publish: (snapshot) => {
-      numbered().then((number) => transport.own.send("call_state", { page: number, snapshot }), () => {});
-    },
-    extend: () => ({}),
+    publish: (snapshot) => inOrder("call_state", { snapshot }),
+    extend: surfaceOf,
     attached: (ui) => ui.store.subscribe(() => follow(ui)),
     commands: {
       // The system took the audio away: the call pauses as the page's own mute does (the page shows it muted). A person who
@@ -90,6 +106,14 @@
       mute: (request, state, actions) => {
         if (!state.joined || state.micDisabled || typeof request.muted !== "boolean") return false;
         if (state.micEnabled === request.muted) actions.toggleMic();
+        return true;
+      },
+      // The stack of conversations on the call's surfaces was tapped: the app is in front, and the page shows its list
+      // of conversations (the room's `openConversations`, where the page has it).
+      "open-conversations": () => {
+        const ui = win.sidevoiceUI;
+        if (!ui || typeof ui.openConversations !== "function") return false;
+        ui.openConversations();
         return true;
       },
     },
@@ -154,6 +178,23 @@
       presence: Object.freeze({ media: "app" }),
       /** The webview sends plain http to a private address; to whom, and with whose consent, is the page's policy. */
       reach: Object.freeze({ plainHttpPrivate: true }),
+      /** The app draws the call's own surfaces (iOS's Live Activity, Android's call notification) from the room's
+       *  `callSurface`: the page publishes what costs it work (the stills, the spoken page) while `active()`, and hands
+       *  the creatures' stills over here. */
+      callSurface: Object.freeze({
+        active: () => true,
+        /** A still's PNG (`png`, base64), kept by the app under `id` where the surfaces read it. */
+        still: ({ id, png, px } = {}) => {
+          if (typeof id === "string" && id && typeof png === "string" && png && Number.isInteger(px) && px > 0) {
+            inOrder("call_still", { id, png, px }, true);
+          }
+        },
+        /** The stills the page shows no more. */
+        forget: (ids) => {
+          const strings = Array.isArray(ids) ? ids.filter((id) => typeof id === "string" && id) : [];
+          if (strings.length) inOrder("call_forget", { ids: strings });
+        },
+      }),
     }),
     snapshot: reporting.snapshot,
     /** Runs one command from the app (the call's notification, a headset) through the web UI's own actions:
