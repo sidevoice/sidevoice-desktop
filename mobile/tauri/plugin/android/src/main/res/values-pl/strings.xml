@@ -7,4 +7,6 @@
     <string name="call_notification_hang_up">Rozłącz</string>
     <string name="call_notification_mute">Wycisz</string>
     <string name="call_notification_unmute">Włącz mikrofon</string>
+    <string name="call_route_speaker">Głośnik</string>
+    <string name="call_route_earpiece">Telefon</string>
 </resources>

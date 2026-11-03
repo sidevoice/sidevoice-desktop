@@ -303,8 +303,10 @@ research/live-activity-design-2026-11-02 (HANDOVER.md); this is how their data g
   notification is a `DecoratedCustomViewStyle` (the system draws the header, with no time) whose RemoteViews draw the
   design's Lock Screen card in dp: expanded (the tile, the title, model · machine, the state with its dot and, while
   working, a `Chronometer` since `workingSince`; the audio switch while headphones are connected; mute, skip, the stack
-  of the other conversations and hang up), collapsed (the face, "{title} · {state}", mute, hang up) and a public version
-  for a Lock Screen that hides sensitive content ("Sidevoice", "In a call"). The tile and the stack of faces are bitmaps
+  of the other conversations and hang up; mute is the pill with its label only when the label, measured with the pill's
+  font, fits whole in the row, and otherwise the round glyph button: a button never ends in an ellipsis), collapsed (the
+  face, "{title} · {state}" where only the title is cut, mute, hang up) and a public version
+  for a Lock Screen that hides sensitive content ("Sidevoice", "In call"). The tile and the stack of faces are bitmaps
   drawn by the plugin (`CallCardArt`: the tone's glow, the creature enlarged by its `k` so an accessory stands out, grey
   while offline, the red mic badge), from the stills folder; DM Sans is bundled (`res/font`). The words are the page's;
   the plugin's `res/values*` (the eight languages the app ships) hold only what shows before the page's words come, the
@@ -313,7 +315,8 @@ research/live-activity-design-2026-11-02 (HANDOVER.md); this is how their data g
   actions, the stack opens the app's activity with an extra the plugin turns into `open-conversations`, and the audio
   switch (Android 12 and later, the app's own call) moves the call between the headphones and the loudspeaker with
   `AudioManager.setCommunicationDevice`. The card is drawn again on every update, when a headset comes or goes, and when
-  the appearance changes. `CallCardRenderTest` draws every state to PNG (light and dark, mic on and off, long texts)
+  the appearance changes, at most once per 250 ms (what asks inside it is drawn at its end); a still is decoded again when
+  its file is written anew under the same name. `CallCardRenderTest` draws every state to PNG (light and dark, mic on and off, long texts)
   through the platform's own template in Robolectric; `cargo xtask mobile test android` copies them to
   `dist/android-call-card`, and the mobile workflow uploads them.
 

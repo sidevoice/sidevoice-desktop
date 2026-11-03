@@ -75,7 +75,7 @@ class CallCardRenderTest {
 
     private fun render(card: CallCard, name: String, headphones: Boolean) {
         val context: Context = ApplicationProvider.getApplicationContext()
-        val route = if (headphones) CallCardViews.Route(headphones = true, name = "AirPods Pro") else null
+        val route = if (headphones) CallCardViews.Route(CallCardViews.Output.HEADPHONES, name = "AirPods Pro") else null
         val intents = CallCardViews.Intents(null, null, null, null, null)
         val views = CallCardViews(context, card, route, intents) { still -> stills[still.file] }
         val notification = NotificationCompat.Builder(context, "call")

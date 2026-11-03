@@ -45,6 +45,7 @@
                 android:ellipsize="end"
                 android:fontFamily="@font/dm_sans_700"
                 android:includeFontPadding="false"
+                android:letterSpacing="-0.01"
                 android:lineHeight="23.5sp"
                 android:maxLines="1"
                 android:textColor="@color/call_card_text"
@@ -95,7 +96,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="4dp"
-                    android:fontFamily="@font/dm_sans_650"
+                    android:fontFamily="@font/dm_sans_600"
                     android:includeFontPadding="false"
                     android:lineHeight="20.5sp"
                     android:maxLines="1"
@@ -109,7 +110,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="4dp"
-                    android:fontFamily="@font/dm_sans_650"
+                    android:fontFamily="@font/dm_sans_600"
                     android:includeFontPadding="false"
                     android:lineHeight="20.5sp"
                     android:maxLines="1"
@@ -118,13 +119,13 @@
             </LinearLayout>
         </LinearLayout>
 
-        <!-- The audio switch: only while headphones are connected. -->
+        <!-- The audio switch: only while headphones are connected. A whole 30 dp circle at the top of the row (the row's
+             container clips what stands above it). -->
         <FrameLayout
             android:id="@+id/call_card_route"
             android:layout_width="30dp"
             android:layout_height="30dp"
             android:layout_marginStart="12dp"
-            android:layout_marginTop="-2dp"
             android:background="@drawable/call_card_button"
             android:visibility="gone">
 
@@ -146,9 +147,9 @@
         android:gravity="center_vertical"
         android:orientation="horizontal">
 
-        <!-- Mute and skip take the room the stack and hang up leave, at most their own width: where the row is narrow
-             (the platform's template indents custom content), mute's label ends in an ellipsis rather than pushing hang
-             up out. -->
+        <!-- Mute and skip, then the room the stack and hang up leave. Mute is the pill with its label when the label fits
+             whole in the row, and otherwise the round glyph button (CallCardViews measures it before building the views):
+             a button never ends in an ellipsis. -->
         <FrameLayout
             android:layout_width="0dp"
             android:layout_height="40dp"
@@ -163,7 +164,6 @@
                 <LinearLayout
                     android:id="@+id/call_card_mute"
                     android:layout_width="wrap_content"
-                    android:layout_weight="1"
                     android:layout_height="40dp"
                     android:background="@drawable/call_card_button"
                     android:gravity="center_vertical"
@@ -182,13 +182,26 @@
                         android:id="@+id/call_card_mute_label"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:ellipsize="end"
                         android:fontFamily="@font/dm_sans_650"
                         android:includeFontPadding="false"
                         android:maxLines="1"
                         android:textSize="14sp" />
                 </LinearLayout>
+
+                <FrameLayout
+                    android:id="@+id/call_card_mute_round"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:background="@drawable/call_card_button"
+                    android:visibility="gone">
+
+                    <ImageView
+                        android:id="@+id/call_card_mute_round_icon"
+                        android:layout_width="17dp"
+                        android:layout_height="17dp"
+                        android:layout_gravity="center"
+                        android:importantForAccessibility="no" />
+                </FrameLayout>
 
                 <FrameLayout
                     android:id="@+id/call_card_skip"

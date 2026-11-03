@@ -6,8 +6,8 @@
     <color name="call_card_text_secondary">#FF545766</color>
     <!-- rgba(27, 29, 36, .08) -->
     <color name="call_card_button">#141B1D24</color>
-    <!-- The panel behind the card (the mute badge's ring) and the creature tile's ground. -->
-    <color name="call_card_panel">#FFF7F2FA</color>
+    <!-- The mute badge's 2 dp ring on the creature (GEOMETRY: the badge's ring), and the creature tile's ground. -->
+    <color name="call_card_badge_ring">#FFF2F0F6</color>
     <color name="call_card_tile">#FFECE4F7</color>
     <!-- Tones: ink (the state's words) and fill (its dot, the tile's glow). -->
     <color name="call_card_lila_ink">#FF4A2F6B</color>

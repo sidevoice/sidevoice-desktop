@@ -64,12 +64,18 @@ class MobilePlugin(private val activity: Activity) : Plugin(activity) {
 
     /**
      * The person tapped the other conversations on the call's card ([CallService.EXTRA_OPEN_CONVERSATIONS]): reported to the
-     * app as their action, which opens the page's conversation list. The extra is taken off, so the activity being made
-     * again (a rotation) does not open it twice.
+     * app as their action, which opens the page's conversation list. Handled once:
+     * - an intent from the recents list is the task's first intent replayed (FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY), so the
+     *   extra it may still carry is not a tap;
+     * - the activity's intent is replaced by one without the extra, so the activity being made again (a rotation) does not
+     *   open it twice.
      */
     private fun openConversations(intent: Intent?) {
-        if (intent?.getBooleanExtra(CallService.EXTRA_OPEN_CONVERSATIONS, false) != true) return
-        intent.removeExtra(CallService.EXTRA_OPEN_CONVERSATIONS)
+        if (intent?.hasExtra(CallService.EXTRA_OPEN_CONVERSATIONS) != true) return
+        val tapped = intent.getBooleanExtra(CallService.EXTRA_OPEN_CONVERSATIONS, false) &&
+            (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) == 0
+        activity.intent = Intent(intent).apply { removeExtra(CallService.EXTRA_OPEN_CONVERSATIONS) }
+        if (!tapped) return
         CallSession.current()?.let { CallSession.action(it, "open-conversations") }
     }
 

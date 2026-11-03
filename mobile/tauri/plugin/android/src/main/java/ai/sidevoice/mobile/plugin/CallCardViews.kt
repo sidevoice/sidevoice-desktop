@@ -11,14 +11,13 @@ import android.graphics.Path
 import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
-import android.graphics.Typeface
+import android.os.Build
 import android.os.SystemClock
-import android.text.SpannableStringBuilder
-import android.text.Spanned
-import android.text.style.ForegroundColorSpan
-import android.text.style.StyleSpan
+import android.text.TextPaint
+import android.util.TypedValue
 import android.view.View
 import android.widget.RemoteViews
+import androidx.core.content.res.ResourcesCompat
 import kotlin.math.roundToInt
 
 /**
@@ -36,8 +35,11 @@ internal class CallCardViews(
     /** A still's image by its file (decoded once by the caller); null where it cannot be read. */
     private val stills: (CallCard.Still) -> Bitmap?,
 ) {
-    /** Where the audio goes now: the headphones (named [name]), or the loudspeaker. */
-    data class Route(val headphones: Boolean, val name: String)
+    /** Where the audio goes now ([output]), and its name ([name]: the headphones' own, or the word for the speaker or the earpiece). */
+    data class Route(val output: Output, val name: String)
+
+    /** The outputs the audio switch shows: the headphones, the loudspeaker, or the earpiece (the switch then moves to the headphones). */
+    enum class Output { HEADPHONES, SPEAKER, EARPIECE }
 
     /** What each button does. [mute] sets the mute the button shows ("Silenciar" mutes, "Activar micrófono" unmutes). */
     data class Intents(
@@ -79,16 +81,33 @@ internal class CallCardViews(
 
         if (route != null) {
             views.setViewVisibility(R.id.call_card_route, View.VISIBLE)
-            views.setImageViewResource(R.id.call_card_route_icon, if (route.headphones) R.drawable.ic_card_headphones else R.drawable.ic_card_speaker)
+            views.setImageViewResource(
+                R.id.call_card_route_icon,
+                when (route.output) {
+                    Output.HEADPHONES -> R.drawable.ic_card_headphones
+                    Output.SPEAKER -> R.drawable.ic_card_speaker
+                    Output.EARPIECE -> R.drawable.ic_card_earpiece
+                },
+            )
             views.setContentDescription(R.id.call_card_route, card.words.route.replace("{route}", route.name).ifEmpty { route.name })
             intents.route?.let { views.setOnClickPendingIntent(R.id.call_card_route, it) }
         } else {
             views.setViewVisibility(R.id.call_card_route, View.GONE)
         }
 
-        mute(views)
-        views.setTextViewText(R.id.call_card_mute_label, muteLabel())
-        views.setTextColor(R.id.call_card_mute_label, color(if (card.muted) R.color.call_card_muted_ink else R.color.call_card_text))
+        // The pill with its label when the label fits whole, otherwise the round glyph button: never an ellipsis.
+        val faces = card.others.take(3)
+        if (labelFits(faces.size)) {
+            views.setViewVisibility(R.id.call_card_mute, View.VISIBLE)
+            views.setViewVisibility(R.id.call_card_mute_round, View.GONE)
+            mute(views, R.id.call_card_mute, R.id.call_card_mute_icon)
+            views.setTextViewText(R.id.call_card_mute_label, muteLabel())
+            views.setTextColor(R.id.call_card_mute_label, color(if (card.muted) R.color.call_card_muted_ink else R.color.call_card_text))
+        } else {
+            views.setViewVisibility(R.id.call_card_mute, View.GONE)
+            views.setViewVisibility(R.id.call_card_mute_round, View.VISIBLE)
+            mute(views, R.id.call_card_mute_round, R.id.call_card_mute_round_icon)
+        }
 
         // Skip is live only while the agent speaks; otherwise drawn at 32 % and inert.
         views.setFloat(R.id.call_card_skip, "setAlpha", if (card.canSkip) 1f else DISABLED_ALPHA)
@@ -96,7 +115,6 @@ internal class CallCardViews(
         views.setContentDescription(R.id.call_card_skip, card.words.skipName)
         intents.skip?.let { views.setOnClickPendingIntent(R.id.call_card_skip, it) }
 
-        val faces = card.others.take(3)
         if (faces.isEmpty()) {
             views.setViewVisibility(R.id.call_card_others, View.GONE)
         } else {
@@ -115,26 +133,55 @@ internal class CallCardViews(
     fun collapsed(): RemoteViews {
         val views = RemoteViews(context.packageName, R.layout.call_card_collapsed)
         views.setImageViewBitmap(R.id.call_card_face, art.round(card.still?.let(stills)))
-        val line = SpannableStringBuilder()
-        line.append(title(), StyleSpan(Typeface.BOLD), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-        if (card.words.state.isNotEmpty()) {
-            line.append(" · ")
-            val start = line.length
-            line.append(card.words.state)
-            line.setSpan(StyleSpan(Typeface.BOLD), start, line.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            line.setSpan(ForegroundColorSpan(tone().ink), start, line.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-        }
-        views.setTextViewText(R.id.call_card_line, line)
-        mute(views)
+        // Only the title is cut (the layout's weight); the state always shows whole.
+        views.setTextViewText(R.id.call_card_line, title())
+        val stated = card.words.state.isNotEmpty()
+        views.setTextViewText(R.id.call_card_line_state, card.words.state)
+        views.setTextColor(R.id.call_card_line_state, tone().ink)
+        views.setViewVisibility(R.id.call_card_line_dot, if (stated) View.VISIBLE else View.GONE)
+        views.setViewVisibility(R.id.call_card_line_state, if (stated) View.VISIBLE else View.GONE)
+        mute(views, R.id.call_card_mute, R.id.call_card_mute_icon)
         hangUp(views)
         return views
     }
 
-    private fun mute(views: RemoteViews) {
-        views.setInt(R.id.call_card_mute, "setBackgroundResource", if (card.muted) R.drawable.call_card_button_muted else R.drawable.call_card_button)
-        views.setImageViewResource(R.id.call_card_mute_icon, if (card.muted) R.drawable.ic_card_mic_off else R.drawable.ic_card_mic)
-        views.setContentDescription(R.id.call_card_mute, muteLabel())
-        intents.mute?.let { views.setOnClickPendingIntent(R.id.call_card_mute, it) }
+    /** The mute button [button] with its glyph [icon]: salmon while the mic is off, its full label as its accessible name. */
+    private fun mute(views: RemoteViews, button: Int, icon: Int) {
+        views.setInt(button, "setBackgroundResource", if (card.muted) R.drawable.call_card_button_muted else R.drawable.call_card_button)
+        views.setImageViewResource(icon, if (card.muted) R.drawable.ic_card_mic_off else R.drawable.ic_card_mic)
+        views.setContentDescription(button, muteLabel())
+        intents.mute?.let { views.setOnClickPendingIntent(button, it) }
+    }
+
+    /**
+     * Whether the mute pill's label fits whole in the actions row, measured with the pill's font against the row's real
+     * width ([rowWidth]), with skip, the stack of [faces] faces and its count, and hang up beside it (call_card.xml).
+     */
+    private fun labelFits(faces: Int): Boolean {
+        val metrics = context.resources.displayMetrics
+        fun dp(value: Float) = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, value, metrics)
+        fun paint(font: Int, sp: Float) = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            typeface = ResourcesCompat.getFont(context, font)
+            textSize = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, sp, metrics)
+        }
+        // The pill: 13 + glyph 17 + 6 + label + 16; skip 8 + 40; the room's 8; hang up 56.
+        val pill = dp(PILL_CHROME) + paint(R.font.dm_sans_650, 14f).measureText(muteLabel())
+        val stack = if (faces == 0) 0f else {
+            dp((CallCardArt.FACE + (faces - 1) * (CallCardArt.FACE - CallCardArt.FACE_OVERLAP) + STACK_GAPS).toFloat()) +
+                paint(R.font.dm_sans_650, 13f).measureText(card.count.toString())
+        }
+        return pill + dp(ROW_FIXED) + stack <= dp(rowWidth())
+    }
+
+    /**
+     * The actions row's width (dp): the notification as wide as the screen leaves (16 dp of shade at each side, at most the
+     * design's 380), less its 16 dp padding at each side, and on Android 12 and later the system's indent behind its icon
+     * column (36 dp: 312 of 348 in the design). An underestimate only shows the glyph where the label might have fitted.
+     */
+    private fun rowWidth(): Float {
+        val notification = minOf(context.resources.configuration.screenWidthDp - 2 * SHADE_MARGIN, NOTIFICATION_WIDTH)
+        val indent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) SYSTEM_INDENT else 0
+        return (notification - 2 * NOTIFICATION_PADDING - indent).toFloat()
     }
 
     private fun hangUp(views: RemoteViews) {
@@ -164,6 +211,15 @@ internal class CallCardViews(
 
     private companion object {
         const val DISABLED_ALPHA = 0.32f
+        const val PILL_CHROME = 13f + 17f + 6f + 16f
+        /** Skip and its gap (8 + 40), the gap after them (8), hang up (56). */
+        const val ROW_FIXED = 8f + 40f + 8f + 56f
+        /** The count's gap (3) and the stack's gap before hang up (8). */
+        const val STACK_GAPS = 3 + 8
+        const val SHADE_MARGIN = 16
+        const val NOTIFICATION_WIDTH = 380
+        const val NOTIFICATION_PADDING = 16
+        const val SYSTEM_INDENT = 36
         /** The working time is drawn a little lighter than the state (the design's 85 %). */
         const val SINCE_ALPHA = 0.85f
     }
@@ -255,7 +311,7 @@ internal class CallCardArt(private val context: Context) {
         val cx = face + px(BADGE_OUT) - radius
         val cy = cx
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-        paint.color = context.getColor(R.color.call_card_panel)
+        paint.color = context.getColor(R.color.call_card_badge_ring)
         canvas.drawCircle(cx, cy, radius + px(BADGE_RING), paint)
         paint.color = context.getColor(R.color.call_card_end)
         canvas.drawCircle(cx, cy, radius, paint)
@@ -287,7 +343,7 @@ internal class CallCardArt(private val context: Context) {
         const val BADGE = 22
         const val BADGE_RING = 2
         const val BADGE_OUT = 4
-        const val BADGE_GLYPH = 12
+        const val BADGE_GLYPH = 11
         const val FACE = 26
         const val FACE_OVERLAP = 8
         const val FACES_PAD_X = 6

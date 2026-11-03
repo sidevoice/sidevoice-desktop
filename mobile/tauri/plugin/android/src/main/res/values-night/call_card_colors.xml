@@ -5,7 +5,7 @@
     <color name="call_card_text_secondary">#FFB8B8C0</color>
     <!-- rgba(255, 255, 255, .13) -->
     <color name="call_card_button">#21FFFFFF</color>
-    <color name="call_card_panel">#FF2B2930</color>
+    <color name="call_card_badge_ring">#FF1E1E22</color>
     <color name="call_card_tile">#FF2F2741</color>
     <color name="call_card_lila_ink">#FFCDBBF0</color>
     <color name="call_card_lila">#FFC9B6EC</color>

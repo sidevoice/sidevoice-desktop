@@ -5,4 +5,6 @@
     <string name="call_notification_hang_up">Colgar</string>
     <string name="call_notification_mute">Silenciar</string>
     <string name="call_notification_unmute">Activar micrófono</string>
+    <string name="call_route_speaker">Altavoz</string>
+    <string name="call_route_earpiece">Teléfono</string>
 </resources>

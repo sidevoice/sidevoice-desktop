@@ -26,6 +26,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import ai.sidevoice.app.MediaControls
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -90,8 +91,15 @@ class CallService : Service() {
     private var title = ""
     /** What the notification draws ([ACTION_UPDATE]). */
     private var card = CallCard()
-    /** The stills the card draws, decoded once, by file name. */
-    private val stillImages = HashMap<String, Bitmap>()
+    /**
+     * The stills the card draws, decoded once per version of their file: by name, and the decoded file's time and size. A
+     * still keeps its name for a conversation (Rust `CallSurface`: `<thread>#<px>`) while the app writes it again with a new
+     * creature, so the name alone would keep drawing the old one.
+     */
+    private val stillImages = HashMap<String, Pair<StillVersion, Bitmap>>()
+    /** When the card was last drawn ([show]), on the uptime clock; and the drawing waiting for its turn, if one is. */
+    private var lastShown = 0L
+    private var pendingShow: Runnable? = null
     /** Whether the audio switch chose the call's device ([toggleRoute]): given back at the end. */
     private var routeChosen = false
     /** Redraws the card when a headset comes or goes, or the call's device changes ([watchRoute]). */
@@ -171,6 +179,7 @@ class CallService : Service() {
     /** Whoever ended it, the focus and the report are not left behind (the system may end a service on its own). */
     override fun onDestroy() {
         cancelAudioDeadline()
+        cancelShow()
         endTelecom()
         unwatchRoute()
         clearCommunication()
@@ -192,6 +201,7 @@ class CallService : Service() {
         // Within seconds of a startForegroundService, even when the call already ended: Android crashes the app otherwise.
         try {
             ServiceCompat.startForeground(this, NOTIFICATION_ID, notification(id), FOREGROUND_SERVICE_TYPES)
+            lastShown = SystemClock.uptimeMillis()
         } catch (error: RuntimeException) {
             // The system refused (a microphone service cannot start from the background, or without the microphone
             // allowed): nothing runs, and the app is told the service is gone.
@@ -247,6 +257,7 @@ class CallService : Service() {
     /** Ends the call's service: the focus, the notification and the service itself, and the one report of its session. */
     private fun finish(reason: String) {
         cancelAudioDeadline()
+        cancelShow()
         endTelecom()
         unwatchRoute()
         clearCommunication()
@@ -269,7 +280,7 @@ class CallService : Service() {
 
     /**
      * The call's notification: Sidevoice's card (HANDOVER §4 "Android"), expanded and collapsed, and its public version for a
-     * Lock Screen that hides sensitive content ("Sidevoice · In a call"). The system draws the header (mark and name; no
+     * Lock Screen that hides sensitive content ("Sidevoice · In call"). The system draws the header (mark and name; no
      * time, `setShowWhen(false)`); tapping it elsewhere opens the app.
      */
     private fun notification(id: Long): Notification {
@@ -309,10 +320,37 @@ class CallService : Service() {
         return notification
     }
 
-    /** Draws the card again, for the session [id] this instance serves. */
+    /**
+     * Draws the card again, for the session [id] this instance serves: at most once per [UPDATE_INTERVAL_MS] (Android drops a
+     * notification's updates past about five a second, and the last one may be the one lost). Whatever asks inside the
+     * interval (the page's updates, a headset's several device events, the audio switch) is drawn once at its end, with the
+     * card as it is then.
+     */
     private fun show(id: Long) {
+        if (session?.id != id || pendingShow != null) return
+        val wait = lastShown + UPDATE_INTERVAL_MS - SystemClock.uptimeMillis()
+        if (wait <= 0) {
+            draw(id)
+            return
+        }
+        val later = Runnable {
+            pendingShow = null
+            // The session served by then, which may be a call started meanwhile.
+            session?.let { draw(it.id) }
+        }
+        pendingShow = later
+        main.postDelayed(later, wait)
+    }
+
+    private fun draw(id: Long) {
         if (session?.id != id) return
+        lastShown = SystemClock.uptimeMillis()
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(id))
+    }
+
+    private fun cancelShow() {
+        pendingShow?.let { main.removeCallbacks(it) }
+        pendingShow = null
     }
 
     /**
@@ -346,14 +384,21 @@ class CallService : Service() {
         )
     }
 
-    /** A still the card draws, from the stills folder the app writes (Rust `stills_dir`): decoded once. */
+    /**
+     * A still the card draws, from the stills folder the app writes (Rust `stills_dir`): decoded once per version of the
+     * file, so a still the app wrote again under the same name is drawn anew.
+     */
     private fun still(still: CallCard.Still): Bitmap? {
-        stillImages[still.file]?.let { return it }
         val file = File(File(cacheDir, STILLS_DIR), still.file)
+        val version = StillVersion(file.lastModified(), file.length())
+        stillImages[still.file]?.takeIf { it.first == version }?.let { return it.second }
         val image = runCatching { BitmapFactory.decodeFile(file.path) }.getOrNull() ?: return null
-        stillImages[still.file] = image
+        stillImages[still.file] = version to image
         return image
     }
+
+    /** Which write of a still's file was decoded: its time and size. */
+    private data class StillVersion(val modified: Long, val length: Long)
 
     /** Lets go of the decoded stills the card no longer draws. */
     private fun keepStills() {
@@ -645,9 +690,15 @@ class CallService : Service() {
         val audio = getSystemService(AudioManager::class.java)
         val headphones = audio.availableCommunicationDevices.firstOrNull { it.type in HEADPHONES } ?: return null
         val current = audio.communicationDevice
-        val onHeadphones = current != null && current.type in HEADPHONES
-        val name = if (onHeadphones) current!!.productName.toString() else card.words.speaker
-        return CallCardViews.Route(onHeadphones, name.ifEmpty { headphones.productName.toString() })
+        // Named by where the audio really goes: the headphones by their name, the loudspeaker and the earpiece by the
+        // page's word or the plugin's own (before the page's words arrive).
+        return when {
+            current != null && current.type in HEADPHONES ->
+                CallCardViews.Route(CallCardViews.Output.HEADPHONES, current.productName.toString().ifEmpty { headphones.productName.toString() })
+            current?.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE ->
+                CallCardViews.Route(CallCardViews.Output.EARPIECE, getString(R.string.call_route_earpiece))
+            else -> CallCardViews.Route(CallCardViews.Output.SPEAKER, card.words.speaker.ifEmpty { getString(R.string.call_route_speaker) })
+        }
     }
 
     /**
@@ -822,6 +873,8 @@ class CallService : Service() {
          * shorter than the app's own wait for this report (call.rs, `SYSTEM_AUDIO_LIMIT`), past which the call is refused.
          */
         private const val AUDIO_READY_LIMIT_MS = 3_000L
+        /** The least time between two drawings of the card (as the app's own updates, call.rs `UPDATE_INTERVAL`). */
+        private const val UPDATE_INTERVAL_MS = 250L
         // What the manifest declares for the service: the call listens, the agent speaks, and it is a phone call (Telecom's,
         // which the manifest's MANAGE_OWN_CALLS allows).
         private const val FOREGROUND_SERVICE_TYPES =

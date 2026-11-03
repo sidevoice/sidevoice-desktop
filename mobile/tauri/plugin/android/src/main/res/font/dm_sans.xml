@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- DM Sans (SIL Open Font License 1.1: DM-SANS-OFL.txt, beside build.gradle.kts): the call card's type, as the web
-     app's. Static instances of the variable font at the weights the card uses (400 and 700; 650 is referenced on its own,
-     @font/dm_sans_650), so a bold span picks the 700 rather than a synthetic bold. -->
+     app's. Static instances of the variable font (opsz 14) at the weights the card uses: 400 and 700 here, so a bold span
+     picks the 700 rather than a synthetic bold; 600 (the working time) and 650 are referenced on their own. -->
 <font-family xmlns:android="http://schemas.android.com/apk/res/android">
     <font android:fontStyle="normal" android:fontWeight="400" android:font="@font/dm_sans_400" />
     <font android:fontStyle="normal" android:fontWeight="700" android:font="@font/dm_sans_700" />

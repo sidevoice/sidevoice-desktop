@@ -7,4 +7,6 @@
     <string name="call_notification_hang_up">Riaggancia</string>
     <string name="call_notification_mute">Silenzia</string>
     <string name="call_notification_unmute">Attiva microfono</string>
+    <string name="call_route_speaker">Altoparlante</string>
+    <string name="call_route_earpiece">Telefono</string>
 </resources>
