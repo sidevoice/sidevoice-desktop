@@ -274,6 +274,16 @@
     return { host: Object.freeze(host), changed: listeners.tell };
   }
 
+  /** What happens to other apps' media while the microphone is open in a call: sidevoice-web's `MediaDuckBridge`, onto the
+   *  `media_duck` command (docs/BRIDGE.md -> "The media setting"). Its answer is `{mode, lower, pause}`. */
+  function mediaDuck() {
+    const invalid = () => ({ key: "bad_request", message: "set(mode) takes 'lower', 'pause' or 'off'." });
+    return Object.freeze({
+      get: () => call("media_duck", { action: "get" }),
+      set: (mode) => (typeof mode === "string" ? call("media_duck", { action: "set", mode }) : Promise.reject(invalid())),
+    });
+  }
+
   /** The developer options (nightly and dev builds): sidevoice-web's hidden "Developer options" section, onto the
    *  `debug_options` command (docs/BRIDGE.md -> "The developer options"). Each switch reads live: what the app kept, then
    *  what the last `set` took. */
@@ -467,6 +477,7 @@
       /** The global mute shortcut, and whether the call controls card shows always in a call: the app's, set from
        *  the page's Settings. */
       muteShortcut: shortcut.host,
+      mediaDuck: mediaDuck(),
       callControls: callControls(),
       // Only in a nightly or a dev build: the developer options (docs/BRIDGE.md -> "The developer options").
       ...(debugOptions ? { debug: debugOptions } : {}),

@@ -287,6 +287,7 @@ app's composition is always there; what is a fact of one OS or one build is obse
 | `localHost` | always | This computer's own core (below). |
 | `reset` | always | `deleteAll`, `resetReport`, and `uninstall` only where the app can remove itself (macOS). |
 | `muteShortcut`, `callControls` | always | The app's own settings, set from the page's Settings. |
+| `mediaDuck` | always | What happens to other apps' media while the microphone is open in a call: `get()` and `set(mode)`, `mode` `lower` (the default), `pause` or `off` ([MEDIA_DUCK.md](MEDIA_DUCK.md)). Not offered by the mobile app yet. |
 | `updater` | a release or nightly that can update itself | Below. |
 | `debug` | a nightly or a dev build | The developer options (below). |
 | `callSurface` | the mobile app | `{ active(), still({id, png, px}), forget(ids) }`: the app draws the call's own surfaces from the room's `callSurface`, relayed in its call report with the stills by id; the page hands each still's PNG over once, before the report that names it, and forgets the ones it shows no more (docs/MOBILE.md → "The call surface"). |

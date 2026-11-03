@@ -1382,11 +1382,11 @@ test("the host's keys: updater only where the app can update itself, build alway
   // A dev build, a .deb, a bare binary: the app passes false, and the page shows nothing to update.
   for (const offered of [undefined, false, "__SIDEVOICE_UPDATER__", "true"]) {
     const api = install(fakeWindow(ORIGIN).win, ORIGIN, null, false, false, offered, { channel: "nightly", version: "0.4.0" });
-    assert.deepEqual(Object.keys(api.host).sort(), ["build", "callControls", "engine", "microphone", "muteShortcut", "pairings", "reach", "reset"], String(offered));
+    assert.deepEqual(Object.keys(api.host).sort(), ["build", "callControls", "engine", "mediaDuck", "microphone", "muteShortcut", "pairings", "reach", "reset"], String(offered));
     api.updaterEvent({ state: "idle" }); // nothing listens, nothing breaks
   }
   const api = install(fakeWindow(ORIGIN).win, ORIGIN, true, true, true, true, { channel: "release", version: "0.4.0" });
-  assert.deepEqual(Object.keys(api.host).sort(), ["build", "callControls", "engine", "localHost", "microphone", "muteShortcut", "pairings", "presence", "reach", "reset", "updater", "voice"]);
+  assert.deepEqual(Object.keys(api.host).sort(), ["build", "callControls", "engine", "localHost", "mediaDuck", "microphone", "muteShortcut", "pairings", "presence", "reach", "reset", "updater", "voice"]);
   // The AppUpdater seam, exactly.
   assert.deepEqual(Object.keys(api.host.updater).sort(), ["cancel", "check", "download", "restart", "setMode", "settings", "status", "subscribe"]);
   assert.ok(Object.isFrozen(api.host.updater));
@@ -1591,6 +1591,24 @@ test("host.muteShortcut gets and sets through the mute_shortcut command, refusin
     { action: "set", accelerator: "cmd+shift+m" },
     { action: "set", accelerator: null },
     { action: "set", accelerator: "M" },
+  ], "a wrong argument asks the app nothing");
+});
+
+test("host.mediaDuck gets and sets through the media_duck command, strings only", async () => {
+  const install = loadFactory();
+  const status = { mode: "lower", lower: "per-app", pause: "media-controls" };
+  const { win, calls } = settingsWindow({ media_duck: ({ action, mode }) => (action === "get" ? status : { ...status, mode }) });
+  const { host } = install(win, ORIGIN);
+  assert.deepEqual(Object.keys(host.mediaDuck).sort(), ["get", "set"]);
+  assert.ok(Object.isFrozen(host.mediaDuck));
+  assert.deepEqual(await host.mediaDuck.get(), status);
+  assert.equal((await host.mediaDuck.set("pause")).mode, "pause");
+  for (const wrong of [undefined, 5, null]) {
+    await assert.rejects(host.mediaDuck.set(wrong), (e) => e.key === "bad_request", String(wrong));
+  }
+  assert.deepEqual(calls.filter(([cmd]) => cmd === "media_duck").map(([, args]) => args), [
+    { action: "get" },
+    { action: "set", mode: "pause" },
   ], "a wrong argument asks the app nothing");
 });
 

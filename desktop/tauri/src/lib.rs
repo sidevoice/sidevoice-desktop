@@ -19,6 +19,7 @@ mod data;
 mod debug_options;
 mod legacy_identifier;
 mod local_host;
+mod media_duck;
 /// A look at the process's own memory, for CI's measurements of it (#145). Never in a release.
 #[cfg(any(test, feature = "probe"))]
 mod memory;
@@ -109,6 +110,11 @@ pub(crate) fn change_settings(app: &AppHandle, change: impl FnOnce(&mut Settings
     Ok(changed)
 }
 
+/// The choice about other apps' media, as kept.
+pub(crate) fn stored_media_duck(app: &AppHandle) -> sidevoice_desktop_core::media_duck::Mode {
+    app.state::<AppState>().settings.lock().unwrap().as_ref().map(|s| s.media_duck).unwrap_or_default()
+}
+
 /// Changes the settings with `change`, registers the mute shortcut they then hold and tells the card: how the system
 /// took it.
 fn change_shortcut(app: &AppHandle, change: impl FnOnce(&mut Settings)) -> Result<MuteShortcut, String> {
@@ -175,6 +181,7 @@ fn bridge_state(
     debug_detail(|| format!("bridge_state {:?}", CallSnapshot { rest: Default::default(), ..snapshot.clone() }));
     tray::update(&app, &snapshot);
     media_controls::update(&app, &media_state(&snapshot));
+    media_duck::call(&app, snapshot.joined, snapshot.mic_enabled);
     call_controls::update(&app);
     Ok(())
 }
@@ -280,6 +287,7 @@ fn reset_call_state(app: &AppHandle) {
     *app.state::<AppState>().call.lock().unwrap() = snapshot.clone();
     tray::update(app, &snapshot);
     media_controls::update(app, &media_state(&snapshot));
+    media_duck::call(app, false, false);
     call_controls::update(app);
     voice::page_changed(app);
 }
@@ -425,6 +433,7 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
         data::data_uninstall,
         data::data_reset_report,
         mute_shortcut,
+        media_duck::media_duck,
         call_controls::call_controls_settings,
         updater::updater,
         debug_options::debug_options
@@ -508,6 +517,7 @@ pub fn run() {
             // First run too: the interface itself asks for a pairing code; nothing has to be set up first.
             let current = stored.unwrap_or_else(Settings::first_run);
             apply_shortcut(&handle, &current.mute_shortcut);
+            app.manage(media_duck::MediaDuck::start(current.media_duck));
             // Before the room opens, so its bridge offers `host.updater`.
             updater::setup(&handle);
             open_room(&handle)?;
@@ -555,6 +565,7 @@ pub fn run() {
             // (`updater::before_exit`).
             if let tauri::RunEvent::Exit = event {
                 voice::shutdown(app);
+                media_duck::release(app);
                 call_controls::close(app);
                 local_host::shutdown(app);
                 if !app.state::<AppState>().resetting.load(Ordering::SeqCst) {

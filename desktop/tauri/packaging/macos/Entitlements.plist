@@ -5,5 +5,8 @@
   <!-- Hardened runtime: the microphone is only reachable with this entitlement. Not sandboxed. -->
   <key>com.apple.security.device.audio-input</key>
   <true/>
+  <!-- Apple events to Music and Spotify, to pause what plays while the microphone is open (docs/MEDIA_DUCK.md). -->
+  <key>com.apple.security.automation.apple-events</key>
+  <true/>
 </dict>
 </plist>

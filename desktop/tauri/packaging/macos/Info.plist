@@ -6,6 +6,9 @@
        app the moment its voice call opens the microphone. -->
   <key>NSMicrophoneUsageDescription</key>
   <string>Sidevoice usa el micrófono para que hables con tus agentes durante una llamada.</string>
+  <!-- Pausing Music and Spotify while the microphone is open (docs/MEDIA_DUCK.md); the system asks once per app. -->
+  <key>NSAppleEventsUsageDescription</key>
+  <string>Sidevoice can pause Music and Spotify while your microphone is open in a call, and resume them afterwards.</string>
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.productivity</string>
 </dict>
