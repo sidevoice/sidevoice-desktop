@@ -102,6 +102,16 @@ final class RenderTests: XCTestCase {
         long.model = "claude-opus-5-5 · xhigh"
         long.machine = "MacBook-Pro-de-Ruben.local"
         try sheet(long, name: "working-long-texts")
+        // A label that does not fit whole leaves its button as the glyph alone, never an ellipsis (German).
+        var german = Self.sample(.working, micOff: true)
+        german.words.state = "Arbeitet"
+        german.words.mute = "Stummschalten"
+        german.words.unmute = "Stummschaltung aufheben"
+        try sheet(german, name: "working-mic-off-de")
+        var germanIdle = Self.sample(.idle)
+        germanIdle.words.state = "Bereit"
+        germanIdle.words.mute = "Stummschalten"
+        try sheet(germanIdle, name: "idle-de")
         try save(lock(Self.sample(.working), dark: false, width: 418), "promax-lock-light-working")
         try save(expanded(Self.sample(.speaking), width: 418), "promax-expanded-speaking")
     }

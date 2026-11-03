@@ -45,8 +45,17 @@ public struct LockCard: View {
             }
             .frame(height: 72.14, alignment: .top)
             HStack(spacing: 8) {
-                MuteToggle(micOff: state.micOff) {
-                    MutePill(state: state, palette: palette, reduced: reduced)
+                // A button never ends in an ellipsis: its label whole, or its glyph alone (same colours, same name).
+                ViewThatFits(in: .horizontal) {
+                    MuteToggle(micOff: state.micOff) {
+                        MutePill(state: state, palette: palette, reduced: reduced)
+                    }
+                    MuteToggle(micOff: state.micOff) {
+                        RoundButtonFace(
+                            symbol: state.micOff ? "mic.slash.fill" : "mic.fill", size: 40, glyph: 17,
+                            fill: state.micOff ? Ink.mutedFill : palette.button,
+                            ink: state.micOff ? Ink.mutedInk : palette.text)
+                    }
                 }
                 .accessibilityLabel(state.micOff ? state.words.unmute : state.words.mute)
                 ActionButton(action: .skip, enabled: state.canSkip) {
@@ -91,7 +100,9 @@ struct MutePill: View {
                 .frame(width: 17, height: 17)
             Text(state.micOff ? state.words.unmute : state.words.mute)
                 .font(DMSans.font(14, 650))
-                .line(20.58)
+                .lineLimit(1)
+                .fixedSize()
+                .frame(height: 20.58)
         }
         .foregroundStyle(reduced && state.micOff ? Ink.mutedFill : ink)
         .padding(.leading, 12)
@@ -255,20 +266,30 @@ struct Reply: View {
                 .lineLimit(4)
                 .frame(maxWidth: .infinity, minHeight: 72, alignment: .topLeading)
             if state.canSkip {
-                ActionButton(action: .skip) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "forward.fill")
-                            .font(.system(size: 12, weight: .semibold))
-                            .frame(width: 14, height: 14)
-                        Text(state.words.skip)
-                            .font(DMSans.font(12, 650))
-                            .line(17.64)
+                // Never an ellipsis on a button: the label whole, or the glyph alone.
+                ViewThatFits(in: .horizontal) {
+                    ActionButton(action: .skip) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "forward.fill")
+                                .font(.system(size: 12, weight: .semibold))
+                                .frame(width: 14, height: 14)
+                            Text(state.words.skip)
+                                .font(DMSans.font(12, 650))
+                                .lineLimit(1)
+                                .fixedSize()
+                                .frame(height: 17.64)
+                        }
+                        .foregroundStyle(Palette.island.text)
+                        .padding(.leading, 8)
+                        .padding(.trailing, 10)
+                        .frame(height: 26)
+                        .background(Capsule().fill(Palette.island.button))
                     }
-                    .foregroundStyle(Palette.island.text)
-                    .padding(.leading, 8)
-                    .padding(.trailing, 10)
-                    .frame(height: 26)
-                    .background(Capsule().fill(Palette.island.button))
+                    ActionButton(action: .skip) {
+                        RoundButtonFace(
+                            symbol: "forward.fill", size: 26, glyph: 14, fill: Palette.island.button,
+                            ink: Palette.island.text)
+                    }
                 }
                 .accessibilityLabel(state.words.skipName)
             } else {
