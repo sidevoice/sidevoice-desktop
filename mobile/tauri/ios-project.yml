@@ -194,6 +194,7 @@ targets:
         discoveredDependencyFile: {{this.discovered-dependency-file}}{{/if}}
       {{~/each~}}
     {{~/if}}
+
   # Live Activity: the widget extension that draws the call's Live Activity (Lock Screen, Dynamic Island). Its version is
   # the app's (App Store Connect refuses an extension whose version differs).
   SidevoiceActivity:

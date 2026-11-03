@@ -126,7 +126,6 @@ public struct ExpandedBody: View {
                 Text(state.text ?? "")
                     .font(DMSans.font(15, 550))
                     .foregroundStyle(Palette.island.text)
-                    .lineSpacing(-0.53)
                     .lineLimit(2)
                     .frame(maxWidth: .infinity, minHeight: 38, alignment: .topLeading)
             }
@@ -242,16 +241,17 @@ struct VoiceCapsule: View {
     }
 }
 
-/// Speaking: the reply's page, 15 on 18, four lines, the heard words lit and the rest at 38 %; Saltar below it, right.
+/// Speaking: the reply's page, 15 pt, four lines, the heard words lit and the rest at 38 %; Saltar below it, right. SwiftUI
+/// has no line height below the font's own (DM Sans: 1.302, so 19.5 pt where the gallery has 18), so the four lines take
+/// 78 pt, not 72; Saltar sits 2 pt under them (the gallery's 4), which keeps the island under 160 pt.
 @available(iOS 16.1, *)
 struct Reply: View {
     var state: CallState
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: 4) {
+        VStack(alignment: .trailing, spacing: 2) {
             caption
                 .font(DMSans.font(15, 550)).tracking(-0.075)
-                .lineSpacing(-1.53)
                 .lineLimit(4)
                 .frame(maxWidth: .infinity, minHeight: 72, alignment: .topLeading)
             if state.canSkip {

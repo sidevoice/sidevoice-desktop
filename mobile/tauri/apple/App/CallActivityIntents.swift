@@ -5,7 +5,7 @@ import CallActivityApp
 
 /// The App Intents the app runs: the Live Activity's buttons (`LiveActivityIntent`s of the CallActivity package), listed
 /// so that the app's App Intents metadata has them.
-@available(iOS 16.0, *)
+@available(iOS 17.0, *)
 struct SidevoiceAppIntents: AppIntentsPackage {
     static var includedPackages: [any AppIntentsPackage.Type] { [CallActivityIntents.self] }
 }

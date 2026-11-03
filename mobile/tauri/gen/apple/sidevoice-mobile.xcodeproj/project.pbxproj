@@ -9,17 +9,25 @@
 /* Begin PBXBuildFile section */
 		06AEF62B7E54BF34FE611772 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A13AEA8AD965C33B4A462A4E /* Assets.xcassets */; };
 		0A5E220D3E2D3888D349BFD2 /* MediaPlayer.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8807C52FB04E7019B2BC1690 /* MediaPlayer.framework */; };
+		1164D36F3D325B2C5016F900 /* CallActivityApp in Frameworks */ = {isa = PBXBuildFile; productRef = B2906A64D576151165394A11 /* CallActivityApp */; };
 		1388ECDB9C0D66AACEFD4F1E /* sherpa-onnx.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 14CB5A0F01AD530B798B8BA3 /* sherpa-onnx.xcframework */; };
 		21B6467E147A3FFF79901543 /* onnxruntime.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = E91912903FD33CC85D2985D4 /* onnxruntime.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		25A9A45CBF0CE2CA775EB731 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D6067A41257B6008E8BE4CA5 /* Metal.framework */; };
+		26D76804BB7182D7A8987BEE /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E27E72B5E5F74FCE583F823F /* WidgetKit.framework */; };
 		29196373A038C9FB00D44BE2 /* Accelerate.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 117FBA52414C7BCA98E25C76 /* Accelerate.framework */; };
+		2B002C70372690F350A68811 /* CallActivityIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C0CCCFB54615F5CEE77227C /* CallActivityIntents.swift */; };
 		2D6F1EE8D0808363FDF7D79A /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 48772D858001537DA0BAD70F /* CoreGraphics.framework */; };
+		2E3D49D4719781A2C1CDA885 /* SidevoiceActivityWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCBE00F494A76306AC20E930 /* SidevoiceActivityWidgets.swift */; };
 		304BE069D78F7582614F5BFE /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CDF4E02D7E5B1C22C68978F8 /* AVFoundation.framework */; };
+		326C943893F189CEB5E93D25 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5110D95F2FDA8A4F485C96AA /* SwiftUI.framework */; };
+		32B21127FDFFA339B7BA0730 /* CallActivity in Frameworks */ = {isa = PBXBuildFile; productRef = 4D6578D13730D16FB786D0F3 /* CallActivity */; };
 		36C2D506005411E63AB37275 /* onnxruntime.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = E91912903FD33CC85D2985D4 /* onnxruntime.xcframework */; };
 		4881460A21EAA46E7177A20C /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = BE293A96151AB5D44D76E3EC /* libapp.a */; };
 		4FD31A2A4F20D37E980F9672 /* AVFAudio.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0C54967DE38A99011EDDA22E /* AVFAudio.framework */; };
+		5294B7DAFD44896A473565AF /* SidevoiceActivity.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 61C7ECE496BB70EEFE453E6C /* SidevoiceActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		556E439FD5DE6CE9EB256E45 /* sherpa-onnx.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 14CB5A0F01AD530B798B8BA3 /* sherpa-onnx.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		5F7C985DA86F97E397CC522E /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = DEBD9545CF90786BDDD5D639 /* main.mm */; };
+		7CD5321C54D03687539329B0 /* CallActivity in Frameworks */ = {isa = PBXBuildFile; productRef = A105F42B82FF912025B03552 /* CallActivity */; };
 		80A03190BFECEF57B6FF0F92 /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 46B600F3D87A8B86B45A62C9 /* MetalKit.framework */; };
 		8A4474978DCA719C4F11E7AE /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EF7D695C7A6ACAD12DA94258 /* UIKit.framework */; };
 		96B7456F28698AC3D7BA5A0D /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = B5E6137564CC46CBF5FDCAF7 /* PrivacyInfo.xcprivacy */; };
@@ -32,7 +40,28 @@
 		ECBBF484E2A18C6DE375122D /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7D0D2F377196B00F1647880E /* QuartzCore.framework */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		33B0E38D3597B5C4FFE3ED74 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 0A3459DC2D55B0F922979B82 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 188745A7202F55D4BFC5C072;
+			remoteInfo = SidevoiceActivity;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXCopyFilesBuildPhase section */
+		830CF7DA60B05A6B7B7F76A8 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				5294B7DAFD44896A473565AF /* SidevoiceActivity.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		EED069FD68684CBCFEC716C7 /* Embed Frameworks */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
@@ -57,6 +86,7 @@
 		117FBA52414C7BCA98E25C76 /* Accelerate.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Accelerate.framework; path = System/Library/Frameworks/Accelerate.framework; sourceTree = SDKROOT; };
 		14CB5A0F01AD530B798B8BA3 /* sherpa-onnx.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = "sherpa-onnx.xcframework"; path = "../../frameworks/sherpa-onnx.xcframework"; sourceTree = "<group>"; };
 		180609C9C60033406A6A7F17 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
+		20F786B267C7F9B83687598C /* CallActivity */ = {isa = PBXFileReference; lastKnownFileType = folder; name = CallActivity; path = ../../apple/CallActivity; sourceTree = SOURCE_ROOT; };
 		216916D93E3C8D75635265CC /* downloads.rs */ = {isa = PBXFileReference; path = downloads.rs; sourceTree = "<group>"; };
 		26D96D0B9DBADA3317A773B9 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
 		299D7B306F3BF743AC1EF244 /* interruption.rs */ = {isa = PBXFileReference; path = interruption.rs; sourceTree = "<group>"; };
@@ -73,12 +103,15 @@
 		48772D858001537DA0BAD70F /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
 		49F5B7CE8791856160DB8F83 /* bridge.rs */ = {isa = PBXFileReference; path = bridge.rs; sourceTree = "<group>"; };
 		4A0565150C0509FAC5C66706 /* de */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = de; path = de.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		5110D95F2FDA8A4F485C96AA /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 		5146689FF402E85DE500476B /* backup.rs */ = {isa = PBXFileReference; path = backup.rs; sourceTree = "<group>"; };
 		536BB1C7D959EB9FF56EB28A /* device_name.rs */ = {isa = PBXFileReference; path = device_name.rs; sourceTree = "<group>"; };
 		5721EA507184E736863684BC /* entry.rs */ = {isa = PBXFileReference; path = entry.rs; sourceTree = "<group>"; };
 		58C2E83A04B6987A0D4453C7 /* app_files.rs */ = {isa = PBXFileReference; path = app_files.rs; sourceTree = "<group>"; };
 		5B34888E35B7881216856F13 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/InfoPlist.strings"; sourceTree = "<group>"; };
+		5C0CCCFB54615F5CEE77227C /* CallActivityIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallActivityIntents.swift; sourceTree = "<group>"; };
 		60477C1251FDD0FCF53CB04B /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
+		61C7ECE496BB70EEFE453E6C /* SidevoiceActivity.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = SidevoiceActivity.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		64394271D504A3167B6E3545 /* acl_tests.rs */ = {isa = PBXFileReference; path = acl_tests.rs; sourceTree = "<group>"; };
 		749529AE2409B9FB50B39312 /* platform.rs */ = {isa = PBXFileReference; path = platform.rs; sourceTree = "<group>"; };
 		7717DC1AC675EE5C22703A85 /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
@@ -97,6 +130,7 @@
 		AF77655BE2E35D9CB501F610 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
 		B5E6137564CC46CBF5FDCAF7 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		B7E57CBB3A47BDAD3039528B /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
+		BCBE00F494A76306AC20E930 /* SidevoiceActivityWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidevoiceActivityWidgets.swift; sourceTree = "<group>"; };
 		BE293A96151AB5D44D76E3EC /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 		C1188ECF695A1AC9631488B1 /* tls.rs */ = {isa = PBXFileReference; path = tls.rs; sourceTree = "<group>"; };
 		C5232FA644011E76A9B33911 /* sidevoice-mobile_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "sidevoice-mobile_iOS.entitlements"; sourceTree = "<group>"; };
@@ -110,6 +144,7 @@
 		DD941F079E3C0751703CE1EC /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		DEBD9545CF90786BDDD5D639 /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
 		E1D2AC4499397F9500F40456 /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = System/Library/Frameworks/AudioToolbox.framework; sourceTree = SDKROOT; };
+		E27E72B5E5F74FCE583F823F /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
 		E35847FB1E834B1E467DF186 /* en.rs */ = {isa = PBXFileReference; path = en.rs; sourceTree = "<group>"; };
 		E47F552120DB7A20BEDF5D2E /* sidevoice-mobile_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "sidevoice-mobile_iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		E91912903FD33CC85D2985D4 /* onnxruntime.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = onnxruntime.xcframework; path = ../../frameworks/onnxruntime.xcframework; sourceTree = "<group>"; };
@@ -122,6 +157,16 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		50D53D5BC26C745432E9B2F3 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7CD5321C54D03687539329B0 /* CallActivity in Frameworks */,
+				26D76804BB7182D7A8987BEE /* WidgetKit.framework in Frameworks */,
+				326C943893F189CEB5E93D25 /* SwiftUI.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		DE39A56F0E67229065F5310F /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -141,6 +186,8 @@
 				0A5E220D3E2D3888D349BFD2 /* MediaPlayer.framework in Frameworks */,
 				29196373A038C9FB00D44BE2 /* Accelerate.framework in Frameworks */,
 				C09EB1C2FBC84EA35047F9B2 /* WebKit.framework in Frameworks */,
+				1164D36F3D325B2C5016F900 /* CallActivityApp in Frameworks */,
+				32B21127FDFFA339B7BA0730 /* CallActivity in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -173,6 +220,23 @@
 			path = bindings;
 			sourceTree = "<group>";
 		};
+		34E8CADBEC923B4BCFEDC00C /* App */ = {
+			isa = PBXGroup;
+			children = (
+				5C0CCCFB54615F5CEE77227C /* CallActivityIntents.swift */,
+			);
+			name = App;
+			path = ../../apple/App;
+			sourceTree = "<group>";
+		};
+		518B1E383890D80DE5DB041D /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				20F786B267C7F9B83687598C /* CallActivity */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
 		553C063CE291CA426A4DC348 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
@@ -189,8 +253,10 @@
 				7D0D2F377196B00F1647880E /* QuartzCore.framework */,
 				438F566187470C3B8979F853 /* Security.framework */,
 				14CB5A0F01AD530B798B8BA3 /* sherpa-onnx.xcframework */,
+				5110D95F2FDA8A4F485C96AA /* SwiftUI.framework */,
 				EF7D695C7A6ACAD12DA94258 /* UIKit.framework */,
 				86D727D8E9CA54F3F9AF1E0A /* WebKit.framework */,
+				E27E72B5E5F74FCE583F823F /* WidgetKit.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -217,6 +283,7 @@
 			isa = PBXGroup;
 			children = (
 				E47F552120DB7A20BEDF5D2E /* sidevoice-mobile_iOS.app */,
+				61C7ECE496BB70EEFE453E6C /* SidevoiceActivity.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -302,13 +369,25 @@
 				FBE97951AA487058954DF9BE /* assets */,
 				A13AEA8AD965C33B4A462A4E /* Assets.xcassets */,
 				180609C9C60033406A6A7F17 /* LaunchScreen.storyboard */,
+				34E8CADBEC923B4BCFEDC00C /* App */,
 				988857BD3C85CA7F7B8A7871 /* Externals */,
+				518B1E383890D80DE5DB041D /* Packages */,
 				ADC921D34DE174F794860973 /* sidevoice-mobile_iOS */,
 				F010B9C6C3EF3F8A0AFA11F5 /* Sources */,
 				812A66493B62787170CAE280 /* src */,
+				BCA856C5FB7A4808BC3208F1 /* Widget */,
 				553C063CE291CA426A4DC348 /* Frameworks */,
 				68F6539BB58D2F9FB3BE71ED /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		BCA856C5FB7A4808BC3208F1 /* Widget */ = {
+			isa = PBXGroup;
+			children = (
+				BCBE00F494A76306AC20E930 /* SidevoiceActivityWidgets.swift */,
+			);
+			name = Widget;
+			path = ../../apple/Widget;
 			sourceTree = "<group>";
 		};
 		C5DF4E9D279B95F0791F7AA3 /* interruption */ = {
@@ -365,6 +444,25 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		188745A7202F55D4BFC5C072 /* SidevoiceActivity */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 67F738D198E51064BE4893CD /* Build configuration list for PBXNativeTarget "SidevoiceActivity" */;
+			buildPhases = (
+				F452D14BB8F950F413C5687C /* Sources */,
+				50D53D5BC26C745432E9B2F3 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SidevoiceActivity;
+			packageProductDependencies = (
+				A105F42B82FF912025B03552 /* CallActivity */,
+			);
+			productName = SidevoiceActivity;
+			productReference = 61C7ECE496BB70EEFE453E6C /* SidevoiceActivity.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		8FEF4C21972FBB25DBDFD806 /* sidevoice-mobile_iOS */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 0BA946146CF739E153D15DBD /* Build configuration list for PBXNativeTarget "sidevoice-mobile_iOS" */;
@@ -373,14 +471,18 @@
 				59C1D4AAAAF141E39EBEBA39 /* Sources */,
 				38E7025396CBABF7062FF275 /* Resources */,
 				DE39A56F0E67229065F5310F /* Frameworks */,
+				830CF7DA60B05A6B7B7F76A8 /* Embed Foundation Extensions */,
 				EED069FD68684CBCFEC716C7 /* Embed Frameworks */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				5B9FE900335DD2BBF820673F /* PBXTargetDependency */,
 			);
 			name = "sidevoice-mobile_iOS";
 			packageProductDependencies = (
+				B2906A64D576151165394A11 /* CallActivityApp */,
+				4D6578D13730D16FB786D0F3 /* CallActivity */,
 			);
 			productName = "sidevoice-mobile_iOS";
 			productReference = E47F552120DB7A20BEDF5D2E /* sidevoice-mobile_iOS.app */;
@@ -413,12 +515,16 @@
 			);
 			mainGroup = B0271E212E475EE881D927B7;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				1CAB72CBEABDA13EAE590EA8 /* XCLocalSwiftPackageReference "../../apple/CallActivity" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 68F6539BB58D2F9FB3BE71ED /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
 				8FEF4C21972FBB25DBDFD806 /* sidevoice-mobile_iOS */,
+				188745A7202F55D4BFC5C072 /* SidevoiceActivity */,
 			);
 		};
 /* End PBXProject section */
@@ -467,11 +573,28 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				2B002C70372690F350A68811 /* CallActivityIntents.swift in Sources */,
 				5F7C985DA86F97E397CC522E /* main.mm in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F452D14BB8F950F413C5687C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2E3D49D4719781A2C1CDA885 /* SidevoiceActivityWidgets.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		5B9FE900335DD2BBF820673F /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 188745A7202F55D4BFC5C072 /* SidevoiceActivity */;
+			targetProxy = 33B0E38D3597B5C4FFE3ED74 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin PBXVariantGroup section */
 		9A0A053ECF6DDFBEA53C23D6 /* InfoPlist.strings */ = {
@@ -587,6 +710,26 @@
 			};
 			name = release;
 		};
+		9231F4F474241547FC1F920A /* release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = SidevoiceActivity/SidevoiceActivity.entitlements;
+				ENABLE_BITCODE = NO;
+				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
+				INFOPLIST_FILE = SidevoiceActivity/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.1;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = ai.sidevoice.mobile.activity;
+				PRODUCT_NAME = SidevoiceActivity;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = release;
+		};
 		C07A2DFB6513B421D4909E2F /* release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -675,6 +818,26 @@
 			};
 			name = debug;
 		};
+		DBC2C57A8CDC2D2E9EB94039 /* debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = SidevoiceActivity/SidevoiceActivity.entitlements;
+				ENABLE_BITCODE = NO;
+				"EXCLUDED_ARCHS[sdk=iphoneos*]" = x86_64;
+				INFOPLIST_FILE = SidevoiceActivity/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.1;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = ai.sidevoice.mobile.activity;
+				PRODUCT_NAME = SidevoiceActivity;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = debug;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -696,7 +859,38 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = debug;
 		};
+		67F738D198E51064BE4893CD /* Build configuration list for PBXNativeTarget "SidevoiceActivity" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DBC2C57A8CDC2D2E9EB94039 /* debug */,
+				9231F4F474241547FC1F920A /* release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = debug;
+		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		1CAB72CBEABDA13EAE590EA8 /* XCLocalSwiftPackageReference "../../apple/CallActivity" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../apple/CallActivity;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		4D6578D13730D16FB786D0F3 /* CallActivity */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CallActivity;
+		};
+		A105F42B82FF912025B03552 /* CallActivity */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CallActivity;
+		};
+		B2906A64D576151165394A11 /* CallActivityApp */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CallActivityApp;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 0A3459DC2D55B0F922979B82 /* Project object */;
 }

@@ -118,8 +118,8 @@ final class RenderTests: XCTestCase {
             .environment(\.colorScheme, dark ? .dark : .light)
     }
 
-    /// The expanded island: black, radius 44, the camera at the top; B's content from 40 pt down (42 while speaking, whose
-    /// creature sits beside the camera at x 28, y 10), 18 pt from the sides.
+    /// The expanded island: black, radius 44, the camera at the top; B's content from 40 pt down (the speaking view's
+    /// creature beside the camera at x 28, y 10; its reply from 40, not 42, and 13 from the bottom, not 14: see `Reply`), 18 pt from the sides.
     func expanded(_ state: CallState, width: CGFloat = 380) -> some View {
         let speaking = state.phase == .speaking
         return ZStack(alignment: .topLeading) {
@@ -130,7 +130,7 @@ final class RenderTests: XCTestCase {
             ExpandedBody(state: state)
                 .frame(width: width - 36)
                 .padding(.leading, 18)
-                .padding(.top, speaking ? 42 : 40)
+                .padding(.top, 40)
                 .padding(.bottom, Self.bottom(state.phase))
         }
         .frame(width: width, alignment: .topLeading)
@@ -141,7 +141,7 @@ final class RenderTests: XCTestCase {
 
     static func bottom(_ phase: CallState.Phase) -> CGFloat {
         switch phase {
-        case .speaking: 14
+        case .speaking: 13
         case .listening, .transcribing, .said: 18
         default: 10
         }

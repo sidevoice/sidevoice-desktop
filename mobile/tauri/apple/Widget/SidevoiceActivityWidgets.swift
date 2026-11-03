@@ -13,6 +13,7 @@ struct SidevoiceActivityWidgets: WidgetBundle {
 }
 
 /// The intents the extension's buttons name (they run in the app).
+@available(iOS 17.0, *)
 struct SidevoiceActivityIntents: AppIntentsPackage {
     static var includedPackages: [any AppIntentsPackage.Type] { [CallActivityIntents.self] }
 }

@@ -76,7 +76,7 @@ public struct ToggleRoute: LiveActivityIntent {
 }
 
 /// The intents of this package, for the app's and the extension's App Intents metadata.
-@available(iOS 16.0, *)
+@available(iOS 17.0, *)
 public struct CallActivityIntents: AppIntentsPackage {}
 
 /// The call's audio output while headphones are connected: the headphones, or the speaker by the app's override.
