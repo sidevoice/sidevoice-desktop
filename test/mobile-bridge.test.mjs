@@ -10,7 +10,9 @@ const mobile = readFileSync(new URL("../mobile/tauri/js/mobile-bridge.js", impor
 const composed = `(function (transportOf, membersOf) {\n${mobile}\n})(${transport}, ${members});`;
 const PLUGIN = "plugin:sidevoice-shared-tauri|";
 
-function install(origin, pageOrigin = origin, microphoneSettings = true, microphoneHelp = null, messageTables = null, deviceName = null, build = { channel: "dev", version: "0.1.0" }) {
+const live = { debug: null };
+
+function install(origin, pageOrigin = origin, microphoneSettings = true, microphoneHelp = null, messageTables = null, deviceName = null, build = { channel: "dev", version: "0.1.0" }, debugState = null) {
   const module = { exports: {} };
   vm.runInNewContext(composed, { module, Promise, JSON, Date });
   const invoked = [];
@@ -23,13 +25,13 @@ function install(origin, pageOrigin = origin, microphoneSettings = true, microph
       transformCallback: () => 1,
       unregisterCallback: () => {},
       invoke: (command, args) => (invoked.push([command, args]),
-        Promise.resolve(command.endsWith("voice_events") ? 1 : command === "call_page" ? 7 : null)),
+        Promise.resolve(command.endsWith("voice_events") ? 1 : command === "call_page" ? 7 : command === "developer_options" && args.action === "get" ? live.debug : null)),
     },
     setInterval: (fn) => (intervals.push(fn), 1),
     clearInterval: () => {},
     setTimeout: (fn) => setTimeout(fn, 0),
   };
-  const api = module.exports(win, origin, microphoneSettings, microphoneHelp, messageTables, deviceName, build);
+  const api = module.exports(win, origin, microphoneSettings, microphoneHelp, messageTables, deviceName, build, debugState);
   return { api, win, invoked, intervals };
 }
 
@@ -353,4 +355,34 @@ test("a report waits until the app has kept the still before it, and a refused s
   answers[1].reject(new Error("not kept"));
   await settled();
   assert.equal(reports(), before + 2, "a refusal does not stop the reports");
+});
+
+test("host.debug is the phone's one developer switch, only where the app offers it, and sets go to the app", async () => {
+  const none = install("tauri://localhost");
+  assert.equal("debug" in none.api.host, false, "a release has no host.debug");
+  const { api, invoked } = install("tauri://localhost", undefined, true, null, null, null, undefined, { available: ["systemCall"], systemCall: false });
+  const debug = api.host.debug;
+  assert.deepEqual([...debug.available], ["systemCall"]);
+  assert.equal(debug.systemCall, false, "off by default");
+  await assert.rejects(debug.set("inspectable", true), { key: "bad_request" });
+  await assert.rejects(debug.set("systemCall", "yes"), { key: "bad_request" });
+  assert.equal(invoked.some(([command, args]) => command === "developer_options" && args.action === "set"), false);
+  await debug.set("systemCall", true);
+  assert.equal(JSON.stringify(invoked.filter(([command, args]) => command === "developer_options" && args.action === "set")), JSON.stringify([["developer_options", { action: "set", name: "systemCall", enabled: true }]]));
+});
+
+test("host.debug after a reload reads the app's live state, not the snapshot the script was built with", async () => {
+  // The script's text is fixed at the app's start (systemCall off); the person turned it on since, and reloads the page.
+  live.debug = { available: ["systemCall"], systemCall: true };
+  try {
+    const { api, invoked } = install("tauri://localhost", undefined, true, null, null, null, undefined, { available: ["systemCall"], systemCall: false });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(JSON.stringify(invoked.filter(([command]) => command === "developer_options")), JSON.stringify([["developer_options", { action: "get" }]]));
+    assert.equal(api.host.debug.systemCall, true);
+  } finally {
+    live.debug = null;
+  }
+  const release = install("tauri://localhost");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(release.invoked.some(([command]) => command === "developer_options"), false, "a release never asks");
 });

@@ -73,10 +73,11 @@ part, `mobile/tauri/js/mobile-bridge.js`, which assembles `host`:
 | `presence` | `{ media: "app" }`: the app owns the call's audio, so the page registers no Media Session and plays no Now Playing element of its own. The app answers the headset's play/pause and the lock screen's (the shared plugin's `platform/media_controls`: MediaPlayer on iOS, a `MediaSession` held by the call's service on Android; docs/MEDIA_CONTROLS.md). |
 | `reach` | `{ plainHttpPrivate: true }`, as on the desktop. |
 | `deviceName` | The name the person gave the phone (`mobile/tauri/src/platform/device_name`), read when the window is made: on Android `Settings.Global` `device_name`, else `Settings.Secure` `bluetooth_name`, else the model (`Samsung SM-A600FN`), with no permission; on iOS `UIDevice.current.name`, which since iOS 16 is the generic model ("iPhone") without the user-assigned-device-name entitlement. Without it the page would name the phone from the webview's user agent ("Chrome on Android"). |
+| `debug` | The developer options of a nightly or a dev build (docs/BRIDGE.md → "The developer options"); absent in a release. One switch, `systemCall` ("Treat calls as system calls", off by default: "The system's call" below), kept in `developer-options.json` of the app's own files and set through the app's own `developer_options` command (`mobile/tauri/src/developer_options.rs`). |
 | `build` | What this build is, in the desktop's shape (docs/BRIDGE.md → "The build"): `{channel, version, commit?, date?}`. `cargo xtask mobile build` and `testflight` tell the build script (`mobile/tauri/build.rs`) the channel: `nightly` on CI, so every build shipped today (TestFlight, the signed APK) is a nightly with its `commit` and `date`, `dev` on a laptop, `SIDEVOICE_BUILD_CHANNEL` overriding; `version` is `tauri.conf.json`'s. The page unlocks its Developer options by the channel (Settings → Advanced, the Build row tapped 10 times; nightly only). |
 | `callSurface` | `{ active() }`, always `true`: the app draws the call's own surfaces (iOS's Live Activity, Android's call notification) from the room's `callSurface`, so the page publishes what costs it work (the creatures' stills, the spoken page). "The call surface" below. |
 
-Nothing of the desktop's own (`localHost`, `reset`, `muteShortcut`, `callControls`, `updater`, `debug`) is
+Nothing of the desktop's own (`localHost`, `reset`, `muteShortcut`, `callControls`, `updater`) is
 offered. The page reports the call (the members' `room`) to the app's own `call_state`, and the app runs commands on the room
 through `run` (the call's service hangs up through it).
 
@@ -91,8 +92,9 @@ through `run` (the call's service hangs up through it).
   the calls and lets the models go, as on the desktop.
 - **The call's lifecycle** (D-CALL-LIFECYCLE, `mobile/tauri/src/call.rs`), the same on both phones: the green call button
   starts the call, the red one ends it.
-  - **The room's call** is a phone call of the system's own ("The system's call" below: a CallKit call on iOS, the call's
-    foreground service and its Telecom call on Android): the page reports the call to the app's own
+  - **The room's call** is the app's own call, and a phone call of the system's own only while the nightly developer option
+    "Treat calls as system calls" is on ("The system's call" below: a CallKit call on iOS, the call's foreground service and its
+    Telecom call on Android; off, Android's foreground service without Telecom, and on iOS the audio session alone): the page reports the call to the app's own
     `call_state`, with its page's number (asked once from `call_page`, so a report of a replaced page that reaches the
     app late changes nothing), and one thread of the app (`RoomCall`) takes the reports, the page changes and the
     service's own end in order. The service starts when the report says joined (a press of the green button, with the app in
@@ -212,12 +214,20 @@ action, in the system's language (`res/values`, English, and `values-es`; the Sp
 
 ## The system's call (CallKit, Telecom)
 
-The room's call is a phone call of the system's own, so the lock screen, the system's in-call screens and a Bluetooth or car
+**Off by default** (D-NO-CALLKIT-DEFAULT, operator 2026-11-02): the room's call is the app's own, with the system owning
+neither the lock screen, nor the headset's buttons. With the nightly developer option "Treat calls as system calls" off, no
+`CXProvider` is made on iOS (the first system's call makes it) and nothing is registered with Telecom on Android (the call's
+foreground service runs, with its own focus and media notification); the audio session is the app's, activated without
+waiting for the system (`call_activates_audio(false)`), and the media controls are the app's (`call_replaces_media_controls(false)`).
+The option is read when each call starts; one call keeps the kind it started with. The rest of this section is what the
+option turns on.
+
+The room's call is then a phone call of the system's own, so the lock screen, the system's in-call screens and a Bluetooth or car
 kit show it and act on it (operator, 2026-11-02, after a device test showed only a Now Playing card). It is the plugin's
 call service (`sidevoice-mobile-plugin`'s `call_service`), started and ended as above (`mobile/tauri/src/call.rs`).
 
 - **iOS: CallKit**, in Rust (`plugin/src/platform/call_service/ios.rs`, objc2's CallKit bindings; the plugin has no Swift).
-  One `CXProvider`, made at the app's start: audio only, one call at a time, not in the Phone app's Recents, the mark in one
+  One `CXProvider`, made by the first system's call: audio only, one call at a time, not in the Phone app's Recents, the mark in one
   ink as its icon (`plugin/assets/call-icon.png`, `npm run icons`). The green button asks a `CXCallController` for a
   `CXStartCallAction` whose handle is the conversation's title (the app's name before one is chosen); the provider reports
   it connecting, and connected when CallKit activates its audio. The red button asks for a `CXEndCallAction`; an end the app
