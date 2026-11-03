@@ -300,6 +300,47 @@ research/live-activity-design-2026-11-02 (HANDOVER.md); this is how their data g
   `cancel-input`, `hang-up`, `open-conversations`), for the current page and call. The audio route is not one of them:
   the system's route is the native side's to switch.
 
+
+## The call's Live Activity (iOS)
+
+The iOS face of the call surface: the Lock Screen card and the Dynamic Island (compact, minimal and expanded, variant B),
+drawn as research/live-activity-design-2026-11-02 measures them (HANDOVER.md §4–§6, spec/GEOMETRY.md). It exists only
+while the app's own call does: the app starts it when its call starts (the app is in front then), updates it with every
+change of the call surface, and ends it at once (`.immediate`) when the call ends; one an earlier run left is ended when
+the app starts. With the developer option "Treat calls as system calls" on, none is started: the system draws that call
+itself (D-NO-CALLKIT-DEFAULT). Nothing runs before iOS 16.1 or while the person has turned Live Activities off for the app;
+its buttons need iOS 17 (before that it only shows the call).
+
+- **Where the code is.** ActivityKit has no Objective-C API, so the activity is Swift, in one local package,
+  `mobile/tauri/apple/CallActivity`: `CallActivity` (the attributes and state, the views, the App Intents and DM Sans,
+  OFL), linked by the app and by the widget extension, and `CallActivityApp` (start, update, end; the app only). The
+  Rust side (`mobile/tauri/plugin/src/platform/call_surface/ios.rs`) reaches it by name, `SidevoiceCallActivity`
+  (`start:`, `show:`, `end`, each with the call's details as JSON), from the call's service functions
+  (`start_call_service` for the app's own call, `update_call_service`, `stop_call_service`).
+- **The Xcode project** gets it through the Tauri CLI's own input for it, a custom XcodeGen template
+  (`mobile/tauri/ios-project.yml`, `bundle > iOS > template`): the CLI's template plus the package, the app's file that
+  lists the package's intents (`mobile/tauri/apple/App`), the App Group `group.ai.sidevoice.mobile` on the app and the
+  extension, and the widget extension `SidevoiceActivity` (`ai.sidevoice.mobile.activity`, `mobile/tauri/apple/Widget`),
+  embedded in the app, at the app's version. When the CLI's version moves, its template is taken again and these
+  additions kept. `Info.ios.plist` declares `NSSupportsLiveActivities` and the app's URL scheme, `sidevoice`
+  (`sidevoice://conversations`, the stack of the other conversations; `sidevoice://call`, the rest of the activity).
+- **Updates.** Every change goes out at once, except the reply's captions: a change of the spoken page alone waits until
+  about 2 s after the last update (iOS throttles local updates that come too often). Each update moves the activity's
+  `staleDate` three minutes ahead; a stale activity (the app stopped updating it) draws the offline state with the page's
+  offline word (D-LA-OFFLINE).
+- **Its buttons** are App Intents (`LiveActivityIntent`, run in the app's process, not offered to Shortcuts): mute (a
+  toggle with the value), skip, cancel send and hang up ask the Rust side for the page's action through the class it
+  defines, `SidevoiceCallSurfaceActions` (`act:`), which reports `CallEvent::Action`. The audio switch, shown only while
+  headphones are connected (D-LA-ROUTE), is the system's: it overrides the output to the speaker, or back
+  (`AVAudioSession`), and the activity follows the route as it changes.
+- **The words** are the page's (`words` in the call surface), so the activity has no catalogue of its own; the output's
+  name in the audio switch's accessible name is the system's.
+- **Evidence.** `cargo xtask mobile renders ios` runs the package's tests on an iPhone Pro Max simulator: every state's
+  views drawn to PNG at 3× (`ImageRenderer`) into dist/live-activity/, one sheet per state laid out as the gallery's
+  `pieces-<state>.png`, plus the mic off, Always-On, stale, half-heard captions, the audio on the speaker, no headphones,
+  long texts and a Pro Max; it also fails a card or an expanded island taller than 160 pt. CI uploads them as
+  `Sidevoice-ios-live-activity-renders`.
+
 ## Building
 
 Always one package, never the workspace: it holds the desktop app too (and the mobile crates are empty on a computer: `#![cfg(mobile)]` at their roots, so a plain `cargo` command there skips them; `cargo xtask mobile lint android|ios` runs Clippy over them for their target). The Tauri CLI is told which app is the one
@@ -332,6 +373,8 @@ installs as it is.
 - **iOS** (macOS, XcodeGen): `cargo xtask mobile generated ios`, then `cargo xtask mobile build ios`, the app for the
   simulator, unsigned, as the artifact `Sidevoice-ios-simulator-app`. When the committed project is not what the CLI
   wrote, the job uploads what it wrote (`mobile-gen-apple`) to commit as `mobile/tauri/gen/apple`.
+- **Live Activity renders** (macOS): `cargo xtask mobile renders ios`, every state of the call's Live Activity as PNG, as
+  the artifact `Sidevoice-ios-live-activity-renders` (above, "The call's Live Activity").
 - The iOS build ends with `cargo xtask mobile check-ios` on the app it made: the privacy manifest is at the root of the
   bundle, the encryption and tracking declarations are there, and the manifest gives a reason for each required-reason API
   the executable calls (above).

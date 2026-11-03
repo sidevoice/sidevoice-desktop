@@ -14,6 +14,12 @@ trait Os {
     fn screenshots(_zip: &Path, _bundle: &str, _out: &Path) -> Result<()> {
         Err(format!("the iOS simulator is run from a Mac with Xcode, not from {}", host::name()))
     }
+
+    /// The Swift package `package`'s tests run on the newest iPhone Pro Max simulator, with `CALL_ACTIVITY_RENDERS` set to
+    /// `out`, where the render tests leave their PNGs. Fails if a test fails.
+    fn renders(_package: &Path, _out: &Path) -> Result<()> {
+        Err(format!("the iOS simulator is run from a Mac with Xcode, not from {}", host::name()))
+    }
 }
 
 #[cfg_attr(target_os = "macos", path = "ios_simulator/macos.rs")]
@@ -22,6 +28,11 @@ trait Os {
 mod imp;
 
 use imp::Native;
+
+/// Runs the tests of the Swift package `package` on a simulator; their renders go to `out` (see `Os::renders`).
+pub fn renders(package: &Path, out: &Path) -> Result<()> {
+    Native::renders(package, out)
+}
 
 /// Runs the simulator app `zip` on a simulator and leaves its screenshots and logs in `out` (see `Os::screenshots`).
 pub fn screenshots(zip: &Path, bundle: &str, out: &Path) -> Result<()> {

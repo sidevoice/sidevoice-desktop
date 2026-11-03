@@ -31,6 +31,22 @@
     <string>audio</string>
     <string>voip</string>
   </array>
+  <!-- The call's own Live Activity (Lock Screen and Dynamic Island, drawn by the SidevoiceActivity extension; docs/MOBILE.md →
+       "The call's Live Activity"), and the app's links it opens: `sidevoice://conversations` (the stack of the other
+       conversations: the app opens on its conversation list) and `sidevoice://call` (the rest of it). -->
+  <key>NSSupportsLiveActivities</key>
+  <true/>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key>
+      <string>ai.sidevoice.mobile</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>sidevoice</string>
+      </array>
+    </dict>
+  </array>
   <key>NSAppTransportSecurity</key>
   <dict>
     <key>NSAllowsLocalNetworking</key>

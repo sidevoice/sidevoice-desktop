@@ -16,11 +16,13 @@
 use std::fs;
 use std::io;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::platform::call_surface as platform;
+use crate::{CallDetails, CallEvent, CallEvents};
 
 /// The snapshot of the call a surface draws, besides the conversation's title and the mute ([`CallDetails`]). Every field
 /// has a default, so a page that sends less (or nothing yet) draws an empty, idle call.
@@ -157,6 +159,11 @@ pub enum SurfaceAction {
 }
 
 impl SurfaceAction {
+    /// The action named `name` (`skip`, `cancel-send`, …), as a surface's native side asks for it.
+    pub fn named(name: &str) -> Option<SurfaceAction> {
+        serde_json::from_value(serde_json::Value::String(name.to_owned())).ok()
+    }
+
     /// The action a URL the app is opened with asks for (iOS: the Live Activity's links, `sidevoice://conversations`);
     /// none for any other (`sidevoice://call` only brings the app to the front).
     pub fn from_url(url: &str) -> Option<SurfaceAction> {
@@ -297,9 +304,76 @@ fn png_size(png: &[u8]) -> Option<(u32, u32)> {
     Some((number(8), number(12)))
 }
 
+/// The call's details as a surface's native side reads them (iOS: `Report` in CallActivityBridge.swift): `title`, `muted`
+/// and `surface`, in camelCase.
+fn details_json(details: &CallDetails) -> String {
+    #[derive(Serialize)]
+    struct Details<'a> {
+        title: &'a str,
+        muted: bool,
+        surface: &'a CallSurface,
+    }
+    serde_json::to_string(&Details {
+        title: &details.title,
+        muted: details.muted,
+        surface: &details.surface,
+    })
+    .unwrap_or_default()
+}
+
+/// Starts the surface the system draws apart from the call's service (iOS: the Live Activity) for the app's own call shown
+/// as `details`; what the person asks for on it is reported to `events` as [`CallEvent::Action`].
+pub(crate) fn start_surface(details: &CallDetails, events: CallEvents) {
+    platform::start(
+        &details_json(details),
+        Arc::new(move |name| match SurfaceAction::named(name) {
+            Some(action) => events(CallEvent::Action { action }),
+            None => log::warn!("call surface: no action named {name:?}"),
+        }),
+    );
+}
+
+/// Shows the call as `details` on that surface, if one is started.
+pub(crate) fn show_surface(details: &CallDetails) {
+    platform::show(&details_json(details));
+}
+
+/// Ends that surface, and any an earlier run of the app left.
+pub(crate) fn end_surface() {
+    platform::end();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_surface_s_native_side_reads_the_details_and_names_the_actions() {
+        let details = CallDetails {
+            title: "Globo".into(),
+            muted: true,
+            surface: CallSurface {
+                phase: Phase::Working,
+                ..CallSurface::default()
+            },
+        };
+        let json: serde_json::Value = serde_json::from_str(&details_json(&details)).unwrap();
+        assert_eq!(json["title"], "Globo");
+        assert_eq!(json["muted"], true);
+        assert_eq!(json["surface"]["phase"], "working");
+        assert_eq!(json["surface"]["canSkip"], false);
+        assert_eq!(
+            SurfaceAction::named("cancel-send"),
+            Some(SurfaceAction::CancelSend)
+        );
+        assert_eq!(SurfaceAction::named("hang-up"), Some(SurfaceAction::HangUp));
+        assert_eq!(SurfaceAction::named("mute"), Some(SurfaceAction::Mute));
+        assert_eq!(
+            SurfaceAction::named("route"),
+            None,
+            "the route is the native side's own"
+        );
+    }
 
     /// The start of a PNG of `width` × `height`: its signature and `IHDR` chunk.
     fn png_of(width: u32, height: u32) -> Vec<u8> {

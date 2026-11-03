@@ -12,7 +12,8 @@
 //!   Its iOS body is Rust (objc2's CallKit bindings), like the rest of the app's iOS code: the plugin has no Swift.
 //! - **The call's surfaces** ([`call_surface`]): what the app's own Live Activity (iOS) and call notification (Android)
 //!   draw, carried in the call's details, with the creatures' stills kept by id where those read them, and what the
-//!   person asks for on them, reported as the call's events.
+//!   person asks for on them, reported as the call's events. The Live Activity is started, updated and ended with the
+//!   app's own call; its views and buttons are Swift (mobile/tauri/apple), which the Rust side reaches by name.
 //! - **The screen** ([`keep_screen_on`]): kept on while a model download runs, since the system suspends the app, and
 //!   the download, soon after the screen turns off.
 mod call_service;
@@ -36,7 +37,11 @@ pub use screen::{keep_screen_on, ScreenError};
 
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
     tauri::plugin::Builder::new("mobile")
-        .setup(|_app, api| platform::call_service::register(api))
+        .setup(|_app, api| {
+            // A surface an earlier run left (the app was ended during a call) shows no call of this one.
+            call_surface::end_surface();
+            platform::call_service::register(api)
+        })
         .build()
 }
 
