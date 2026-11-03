@@ -1,3 +1,5 @@
 {
-  "devices.speakerFixed": "Sidevoice 通过手机当前的输出播放：扬声器、耳机或蓝牙。请在快捷设置或音量面板中切换。"
+  "devices.speakerFixed": "Sidevoice 通过手机当前的输出播放：扬声器、耳机或蓝牙。请在快捷设置或音量面板中切换。",
+  "devices.output.earpiece": "听筒",
+  "devices.output.speaker": "扬声器"
 }

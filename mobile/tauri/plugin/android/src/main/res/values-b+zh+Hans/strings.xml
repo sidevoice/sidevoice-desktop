@@ -9,6 +9,4 @@
     <string name="call_notification_unmute">取消静音</string>
     <string name="call_route_speaker">扬声器</string>
     <string name="call_route_earpiece">听筒</string>
-    <string name="output_earpiece">听筒</string>
-    <string name="output_built_in">内置输出</string>
 </resources>

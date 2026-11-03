@@ -24,7 +24,7 @@ mod screen;
 
 use tauri::{plugin::TauriPlugin, Runtime};
 
-pub use audio_outputs::{built_in_outputs, label_of, BuiltInOutput};
+pub use audio_outputs::{id_of, outputs, Output, OutputKind};
 pub use call_service::{
     call_activates_audio, call_replaces_media_controls, request_call_focus, start_call_service,
     stop_call_service, update_call_service, CallDetails, CallEvent, CallEvents, CallServiceError,

@@ -1,5 +1,6 @@
 package ai.sidevoice.mobile.plugin
 
+import android.media.AudioDeviceInfo
 import androidx.core.telecom.CallEndpointCompat.Companion.TYPE_BLUETOOTH
 import androidx.core.telecom.CallEndpointCompat.Companion.TYPE_EARPIECE
 import androidx.core.telecom.CallEndpointCompat.Companion.TYPE_SPEAKER
@@ -9,7 +10,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import android.media.AudioDeviceInfo
 
 class CallRouteTest {
     @Test

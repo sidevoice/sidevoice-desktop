@@ -1,3 +1,5 @@
 {
-  "devices.speakerFixed": "Sidevoice suena por la salida actual del teléfono: altavoz, auriculares o Bluetooth. Cámbiala desde los ajustes rápidos o el panel de volumen."
+  "devices.speakerFixed": "Sidevoice suena por la salida actual del teléfono: altavoz, auriculares o Bluetooth. Cámbiala desde los ajustes rápidos o el panel de volumen.",
+  "devices.output.earpiece": "Teléfono",
+  "devices.output.speaker": "Altavoz"
 }

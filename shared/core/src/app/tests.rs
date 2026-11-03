@@ -90,6 +90,7 @@ fn work_that_loads_models_keeps_its_lease_when_the_caller_gives_up_waiting() {
         keys: Arc::new(Nowhere),
         calls: Arc::new(NoCallActivity),
         downloads: Arc::new(NoDownloadActivity),
+        devices: Arc::new(NoDeviceLabels),
     };
     let host = AppHost::with_audio(
         HostConfig { model_root: root.clone() },
@@ -136,6 +137,7 @@ fn host_on(runtime: &tokio::runtime::Runtime, name: &str) -> (AppHost<Silent>, A
         keys: Arc::new(Nowhere),
         calls: Arc::new(NoCallActivity),
         downloads: Arc::new(NoDownloadActivity),
+        devices: Arc::new(NoDeviceLabels),
     };
     let host = AppHost::with_audio(
         HostConfig { model_root: root.clone() },
@@ -261,6 +263,7 @@ fn what_a_call_of_an_old_page_says_is_dropped_once_the_next_page_is_current() {
         keys: Arc::new(Nowhere),
         calls: Arc::new(NoCallActivity),
         downloads: Arc::new(NoDownloadActivity),
+        devices: Arc::new(NoDeviceLabels),
     };
     let host = AppHost::with_audio(
         HostConfig { model_root: root.clone() },
@@ -289,6 +292,7 @@ struct Upper;
 
 impl DeviceLabels for Upper {
     fn label(&self, devices: &mut AudioDevices) {
+        devices.outputs.retain(|device| device.id != "hidden");
         for device in &mut devices.outputs {
             device.label = device.label.to_uppercase();
         }
@@ -299,7 +303,7 @@ fn listing() -> AudioDevices {
     let device = |id: &str, label: &str| sidevoice_voice::AudioDevice { id: id.into(), label: label.into() };
     AudioDevices {
         inputs: vec![device("in", "mic")],
-        outputs: vec![device("out", "speaker")],
+        outputs: vec![device("out", "speaker"), device("hidden", "bus")],
         input: None,
         output: None,
         output_selectable: true,
@@ -309,11 +313,10 @@ fn listing() -> AudioDevices {
 
 #[test]
 fn the_apps_wording_is_given_to_every_listing_and_a_failed_listing_stays_failed() {
-    let labels = OnceLock::new();
-    let plain = worded(&labels, Ok(listing())).unwrap();
-    assert_eq!(plain.outputs[0].label, "speaker", "without a wording the system's names stay");
-    assert!(labels.set(Arc::new(Upper) as Arc<dyn DeviceLabels>).is_ok());
-    let named = worded(&labels, Ok(listing())).unwrap();
+    let plain = worded(&NoDeviceLabels, Ok(listing())).unwrap();
+    assert_eq!(plain, listing(), "without a wording the system's names stay");
+    let named = worded(&Upper, Ok(listing())).unwrap();
+    assert_eq!(named.outputs.len(), 1, "a device the app does not offer is not listed");
     assert_eq!((named.outputs[0].label.as_str(), named.inputs[0].label.as_str()), ("SPEAKER", "mic"));
-    assert_eq!(worded(&labels, Err("audio-devices-unavailable".into())), Err("audio-devices-unavailable".into()));
+    assert_eq!(worded(&Upper, Err("audio-devices-unavailable".into())), Err("audio-devices-unavailable".into()));
 }

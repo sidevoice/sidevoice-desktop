@@ -1,3 +1,5 @@
 {
-  "devices.speakerFixed": "Sidevoice joue le son sur la sortie actuelle du téléphone : haut-parleur, écouteurs ou Bluetooth. Changez-la depuis les réglages rapides ou le panneau de volume."
+  "devices.speakerFixed": "Sidevoice joue le son sur la sortie actuelle du téléphone : haut-parleur, écouteurs ou Bluetooth. Changez-la depuis les réglages rapides ou le panneau de volume.",
+  "devices.output.earpiece": "Téléphone",
+  "devices.output.speaker": "Haut-parleur"
 }

@@ -1,62 +1,71 @@
 package ai.sidevoice.mobile.plugin
 
 import android.media.AudioDeviceInfo
-import java.io.File
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AudioOutputsTest {
+    private fun kinds(vararg outputs: Pair<Int, Int>) = AudioOutputs.kinds(outputs.toList()).map { it.second }
+
     @Test
-    fun theBuiltInOutputsAreNamedByType() {
-        assertEquals(AudioOutputs.Kind.EARPIECE, AudioOutputs.kind(AudioDeviceInfo.TYPE_BUILTIN_EARPIECE))
-        assertEquals(AudioOutputs.Kind.SPEAKER, AudioOutputs.kind(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER))
-        assertEquals(AudioOutputs.Kind.SPEAKER, AudioOutputs.kind(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER_SAFE))
-        assertEquals(AudioOutputs.Kind.BUILT_IN, AudioOutputs.kind(AudioDeviceInfo.TYPE_TELEPHONY))
-        assertEquals(AudioOutputs.Kind.BUILT_IN, AudioOutputs.kind(AudioDeviceInfo.TYPE_BUS))
+    fun theEarpieceAndTheLoudspeakerAreToldByType() {
+        assertEquals(
+            listOf(AudioOutputs.Kind.EARPIECE, AudioOutputs.Kind.SPEAKER),
+            kinds(2 to AudioDeviceInfo.TYPE_BUILTIN_EARPIECE, 3 to AudioDeviceInfo.TYPE_BUILTIN_SPEAKER),
+        )
     }
 
     @Test
-    fun anExternalOutputKeepsItsOwnName() {
-        for (type in listOf(
-            AudioDeviceInfo.TYPE_WIRED_HEADSET,
-            AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
-            AudioDeviceInfo.TYPE_USB_HEADSET,
-            AudioDeviceInfo.TYPE_USB_DEVICE,
-            AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
-            AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
-            AudioDeviceInfo.TYPE_BLE_HEADSET,
-            AudioDeviceInfo.TYPE_HDMI,
-        )) {
-            assertNull("type $type", AudioOutputs.kind(type))
-        }
-    }
-
-    @Test
-    fun theNamesAreByIdAndOnlyOfTheBuiltInOnes() {
-        val outputs = listOf(
+    fun theSafeLoudspeakerTelephonyAndBusAreLeftOutBesideTheLoudspeaker() {
+        val outputs = kinds(
             2 to AudioDeviceInfo.TYPE_BUILTIN_EARPIECE,
             3 to AudioDeviceInfo.TYPE_BUILTIN_SPEAKER,
-            4 to AudioDeviceInfo.TYPE_TELEPHONY,
-            9 to AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+            4 to AudioDeviceInfo.TYPE_BUILTIN_SPEAKER_SAFE,
+            5 to AudioDeviceInfo.TYPE_TELEPHONY,
+            6 to AudioDeviceInfo.TYPE_BUS,
         )
         assertEquals(
-            listOf(2 to "EARPIECE", 3 to "SPEAKER", 4 to "BUILT_IN"),
-            AudioOutputs.names(outputs) { it.name },
+            listOf(
+                AudioOutputs.Kind.EARPIECE, AudioOutputs.Kind.SPEAKER,
+                AudioOutputs.Kind.HIDDEN, AudioOutputs.Kind.HIDDEN, AudioOutputs.Kind.HIDDEN,
+            ),
+            outputs,
         )
     }
 
     @Test
-    fun everyLanguageNamesTheOutputs() {
-        val res = File("src/main/res")
-        val folders = res.listFiles { file -> file.name.startsWith("values") && File(file, "strings.xml").exists() }!!
-        assertTrue("the languages of the app", folders.size >= 8)
-        for (folder in folders) {
-            val strings = File(folder, "strings.xml").readText()
-            for (name in listOf("output_earpiece", "output_built_in", "call_route_speaker")) {
-                assertTrue("${folder.name}: $name", Regex("""<string name="$name">[^<]+</string>""").containsMatchIn(strings))
-            }
-        }
+    fun theSafeLoudspeakerStandsInWhereThePhoneHasNoOther() {
+        assertEquals(listOf(AudioOutputs.Kind.SPEAKER), kinds(4 to AudioDeviceInfo.TYPE_BUILTIN_SPEAKER_SAFE))
+        // Whichever comes first in the list, the plain one is the loudspeaker.
+        assertEquals(
+            listOf(AudioOutputs.Kind.HIDDEN, AudioOutputs.Kind.SPEAKER),
+            kinds(4 to AudioDeviceInfo.TYPE_BUILTIN_SPEAKER_SAFE, 3 to AudioDeviceInfo.TYPE_BUILTIN_SPEAKER),
+        )
+    }
+
+    @Test
+    fun noKindIsGivenTwiceAndAnExternalOutputKeepsItsOwnName() {
+        val outputs = kinds(
+            3 to AudioDeviceInfo.TYPE_BUILTIN_SPEAKER,
+            7 to AudioDeviceInfo.TYPE_BUILTIN_SPEAKER,
+            9 to AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+            10 to AudioDeviceInfo.TYPE_WIRED_HEADSET,
+            11 to AudioDeviceInfo.TYPE_USB_HEADSET,
+        )
+        assertEquals(
+            listOf(
+                AudioOutputs.Kind.SPEAKER, AudioOutputs.Kind.HIDDEN,
+                AudioOutputs.Kind.EXTERNAL, AudioOutputs.Kind.EXTERNAL, AudioOutputs.Kind.EXTERNAL,
+            ),
+            outputs,
+        )
+    }
+
+    @Test
+    fun theAnswerIsInTheOrderOfTheOutputsAndByTheirIds() {
+        val answered = AudioOutputs.kinds(listOf(9 to AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, 3 to AudioDeviceInfo.TYPE_BUILTIN_SPEAKER))
+        assertEquals(listOf(9, 3), answered.map { it.first })
+        assertTrue(AudioOutputs.kinds(emptyList()).isEmpty())
     }
 }

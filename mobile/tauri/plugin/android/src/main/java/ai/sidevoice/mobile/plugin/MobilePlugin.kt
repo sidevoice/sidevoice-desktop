@@ -197,17 +197,15 @@ class MobilePlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     /**
-     * The phone's built-in outputs, each by `AudioDeviceInfo.getId()` (what the voice's AAudio host lists it by) with its name
-     * by type in the language of the system ([AudioOutputs]): Android names them all by the phone's model.
+     * The phone's outputs, each by `AudioDeviceInfo.getId()` (what the voice's AAudio host lists it by) with its kind
+     * ([AudioOutputs]): Android names the built-in ones all by the phone's model.
      */
     @Command
-    fun builtInOutputs(invoke: Invoke) {
-        val context = activity.applicationContext
-        val audio = context.getSystemService(AudioManager::class.java)
-        val outputs = audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS).map { it.id to it.type }
-        val named = AudioOutputs.names(outputs) { kind -> context.getString(kind.label) }
+    fun audioOutputs(invoke: Invoke) {
+        val audio = activity.applicationContext.getSystemService(AudioManager::class.java)
+        val kinds = AudioOutputs.kinds(audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS).map { it.id to it.type })
         val answer = JSObject()
-        answer.put("outputs", JSArray().also { list -> named.forEach { (id, label) -> list.put(JSObject().put("id", id).put("label", label)) } })
+        answer.put("outputs", JSArray().also { list -> kinds.forEach { (id, kind) -> list.put(JSObject().put("id", id).put("kind", kind.wire)) } })
         invoke.resolve(answer)
     }
 

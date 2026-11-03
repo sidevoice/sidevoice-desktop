@@ -247,8 +247,8 @@ impl<A: LaneAudio> AppHost<A> {
     pub async fn audio_devices(&self, page: PageGeneration) -> Result<Value, Refusal> {
         self.current(page)?;
         self.watch_devices();
-        let (devices, labels) = (self.inner.voice.devices.clone(), Arc::clone(&self.inner.labels));
-        listed(self.inner.runtime.spawn_blocking(move || worded(&labels, devices.list())).await)
+        let (devices, labels) = (self.inner.voice.devices.clone(), Arc::clone(&self.inner.hooks.devices));
+        listed(self.inner.runtime.spawn_blocking(move || worded(&*labels, devices.list())).await)
     }
 
     /// Chooses the microphone, the speaker or both, at any time: a call that runs switches its microphone at once and
@@ -258,11 +258,11 @@ impl<A: LaneAudio> AppHost<A> {
     pub async fn set_audio_devices(&self, page: PageGeneration, choice: AudioChoice) -> Result<Value, Refusal> {
         self.current(page)?;
         self.watch_devices();
-        let (devices, labels) = (self.inner.voice.devices.clone(), Arc::clone(&self.inner.labels));
+        let (devices, labels) = (self.inner.voice.devices.clone(), Arc::clone(&self.inner.hooks.devices));
         listed(
             self.inner
                 .runtime
-                .spawn_blocking(move || worded(&labels, devices.choose(choice.input, choice.output)))
+                .spawn_blocking(move || worded(&*labels, devices.choose(choice.input, choice.output)))
                 .await,
         )
     }

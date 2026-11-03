@@ -1,3 +1,5 @@
 {
-  "devices.speakerFixed": "Sidevoice odtwarza dźwięk przez bieżące wyjście telefonu: głośnik, słuchawki lub Bluetooth. Zmienisz je w szybkich ustawieniach lub w panelu głośności."
+  "devices.speakerFixed": "Sidevoice odtwarza dźwięk przez bieżące wyjście telefonu: głośnik, słuchawki lub Bluetooth. Zmienisz je w szybkich ustawieniach lub w panelu głośności.",
+  "devices.output.earpiece": "Telefon",
+  "devices.output.speaker": "Głośnik"
 }
