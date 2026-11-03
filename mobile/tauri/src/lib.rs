@@ -11,11 +11,11 @@
 mod acl_tests;
 mod bridge;
 mod call;
-mod downloads;
 mod hold;
 mod i18n;
 pub mod pairings;
 mod platform;
+mod screen;
 
 use std::{path::PathBuf, sync::Arc};
 
@@ -124,6 +124,19 @@ fn call_page(app: AppHandle, webview: Webview) -> Result<u64, String> {
     Ok(app.state::<AppHost>().page().0)
 }
 
+/// The page asks for the screen to stay on during the call, or to be let go (`host.presence.screenAwake`, the app's own
+/// command, capabilities/main.json). Asking twice is the same as once; a download may still need it.
+#[tauri::command]
+fn keep_screen_on(
+    app: AppHandle,
+    webview: Webview,
+    screen: tauri::State<'_, Arc<screen::Screen>>,
+    on: bool,
+) -> Result<(), String> {
+    the_page(&app, &webview)?;
+    screen.call(on).map_err(|error| error.to_string())
+}
+
 /// The page `page` reports the call (the app's own command, capabilities/main.json). Logged when it joins or leaves a
 /// call, or mutes; never the conversation's title.
 #[tauri::command]
@@ -192,7 +205,11 @@ fn run_app() {
         // the app's one window, on its own page.
         .plugin(sidevoice_shared_tauri::init(the_page, pages))
         .manage(LastReport::default())
-        .invoke_handler(tauri::generate_handler![call_page, call_state])
+        .invoke_handler(tauri::generate_handler![
+            call_page,
+            call_state,
+            keep_screen_on
+        ])
         .setup(move |app| {
             let handle = app.handle().clone();
             // The headset's buttons and the lock screen's controls act on the call through the page, as the desktop's do,
@@ -217,6 +234,9 @@ fn run_app() {
                 log::error!("audio session: {error}");
             }
             let phone = Arc::new(call::PhoneCall::default());
+            // The screen kept on: by a download, and by a call whose person asked for it.
+            let screen = Arc::new(screen::Screen::new(handle.clone()));
+            app.manage(screen.clone());
             app.manage(Pairings(Arc::new(pairings::PairingFile::of_app(&handle)?)));
             // The application host: the voice call and the engine. A phone never resets its data under the call, so
             // every request is admitted.
@@ -232,7 +252,7 @@ fn run_app() {
                     // The voice calls' audio holds the audio session (iOS).
                     calls: phone.clone(),
                     // The screen stays on while a model download runs: the system suspends the app soon after it turns off.
-                    downloads: Arc::new(downloads::KeepScreenOn::new(handle.clone())),
+                    downloads: Arc::new(screen::DownloadScreen(screen)),
                 },
             ));
             // The room's call holds the call's service (Android), for the host's current page.

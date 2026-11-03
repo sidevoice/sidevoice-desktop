@@ -70,7 +70,7 @@ part, `mobile/tauri/js/mobile-bridge.js`, which assembles `host`:
 | `voice`, `engine` | The voice call the app runs itself (sidevoice-voice on the phone's microphone and speaker) and the engine it takes its models from: sherpa-onnx (Silero) and the remote providers on a phone (sidevoice-engine's README, "Android" and "iOS"). |
 | `microphone` | The system's own permission, never the webview's: AVFoundation's on iOS, the runtime permission on Android (`sidevoice-shared-tauri`'s `platform/microphone`). `openSettings` opens the app's page of the system's settings, and `help(language)` gives the app's own words for a blocked microphone on this phone (`mobile/tauri/src/i18n.rs`, en and es, English the fallback; D-HOST-OS). |
 | `pairings` | The pairings in the app's private storage (`mobile/tauri/src/pairings.rs`), not the webview's. |
-| `presence` | `{ media: "app" }`: the app owns the call's audio, so the page registers no Media Session and plays no Now Playing element of its own. The app answers the headset's play/pause and the lock screen's (the shared plugin's `platform/media_controls`: MediaPlayer on iOS, a `MediaSession` held by the call's service on Android; docs/MEDIA_CONTROLS.md). |
+| `presence` | `{ media: "app" }`: the app owns the call's audio, so the page registers no Media Session and plays no Now Playing element of its own. `screenAwake` keeps the screen on during a call when the person asked for it (Settings, Call): the page asks the app's own `keep_screen_on`, and the app sets iOS `isIdleTimerDisabled` / Android `FLAG_KEEP_SCREEN_ON` (below), since a phone's webview has no Screen Wake Lock that holds. The app answers the headset's play/pause and the lock screen's (the shared plugin's `platform/media_controls`: MediaPlayer on iOS, a `MediaSession` held by the call's service on Android; docs/MEDIA_CONTROLS.md). |
 | `reach` | `{ plainHttpPrivate: true }`, as on the desktop. |
 | `deviceName` | The name the person gave the phone (`mobile/tauri/src/platform/device_name`), read when the window is made: on Android `Settings.Global` `device_name`, else `Settings.Secure` `bluetooth_name`, else the model (`Samsung SM-A600FN`), with no permission; on iOS `UIDevice.current.name`, which since iOS 16 is the generic model ("iPhone") without the user-assigned-device-name entitlement. Without it the page would name the phone from the webview's user agent ("Chrome on Android"). |
 | `build` | What this build is, in the desktop's shape (docs/BRIDGE.md → "The build"): `{channel, version, commit?, date?}`. `cargo xtask mobile build` and `testflight` tell the build script (`mobile/tauri/build.rs`) the channel: `nightly` on CI, so every build shipped today (TestFlight, the signed APK) is a nightly with its `commit` and `date`, `dev` on a laptop, `SIDEVOICE_BUILD_CHANNEL` overriding; `version` is `tauri.conf.json`'s. The page unlocks its Developer options by the channel (Settings → Advanced, the Build row tapped 10 times; nightly only). |
@@ -384,14 +384,14 @@ paused).
 - On iOS the audio session is activated again first (if a voice call has audio open), under the same lock as the session's
   activation and deactivation by the calls, so it is never active after the last call's audio has stopped.
 
-## Downloads keep the screen on
+## The screen stays on (downloads, the call)
 
 The system suspends the app soon after the screen turns off, and a model download (the engine, inside the app's process) stops with it.
 While any install job runs, the screen is kept on: the host tells the app when the first download starts and the last one ends
-(`DownloadActivity`, one of `Hooks`), `mobile/tauri/src/downloads.rs` passes that to the plugin's `keep_screen_on`, which sets iOS
+(`DownloadActivity`, one of `Hooks`), `mobile/tauri/src/screen.rs` passes that to the plugin's `keep_screen_on`, which sets iOS
 `UIApplication.isIdleTimerDisabled` (on the main thread) or Android's `FLAG_KEEP_SCREEN_ON` on the activity's window
 (`MobilePlugin.keepScreenOn`). The engine resumes a partial file with an HTTP range request, so a download that the system
-interrupts anyway (the person left the app) goes on where it stopped. Native background downloads are not here
+interrupts anyway (the person left the app) goes on where it stopped. The call asks the same way through the page's `host.presence.screenAwake` (the app's own command `keep_screen_on`); `Screen` keeps both reasons, so a call ending does not turn the screen off under a download, nor the reverse. Native background downloads are not here
 (sidevoice-desktop#361, option 2).
 
 ## Not here yet
