@@ -51,6 +51,18 @@ jobs:
           path: dist/*.apk
           retention-days: 7
           if-no-files-found: error
+      # The Kotlin library's JVM tests, after the build has written the Gradle includes: the call service's sessions, and the
+      # call notification drawn to PNG in every state (light, dark, mic on and off), the evidence to compare with the design.
+      - name: "The Android library's JVM tests, and the call card's renders (cargo xtask mobile test android)"
+        if: ${{ !cancelled() }}
+        run: cargo xtask mobile test android
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !cancelled() }}
+        with:
+          name: Sidevoice-android-call-card-renders
+          path: dist/android-call-card
+          retention-days: 14
+          if-no-files-found: error
 
   ios:
     name: iOS (simulator app)

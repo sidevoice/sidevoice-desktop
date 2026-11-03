@@ -554,13 +554,30 @@ pub fn lint(name: &str) -> Result<()> {
     }
 }
 
-/// `mobile test android`: the JVM unit tests of the Android library's Kotlin (`CallSession`), which need no device. They
-/// run in the generated project, so after a build has written its Gradle includes (`cargo xtask mobile build android`).
+/// `mobile test android`: the JVM unit tests of the Android library's Kotlin (`CallSession`, the call card), which need no
+/// device. They run in the generated project, so after a build has written its Gradle includes (`cargo xtask mobile build
+/// android`). The call card's renders (`CallCardRenderTest`) are copied to [`CALL_CARD_RENDERS`] in dist/, whatever the
+/// tests' outcome: they are the evidence a reviewer compares with the design.
 pub fn test(name: &str) -> Result<()> {
     ensure(project(name)?.cli == "android", "mobile test: android, the one with Kotlin of its own")?;
     let gradle = repo().join("mobile/tauri/gen/android");
-    Cmd::new(gradle.join("gradlew")).arg(":sidevoice-mobile-plugin:testDebugUnitTest").dir(&gradle).run()
+    let tests = Cmd::new(gradle.join("gradlew")).arg(":sidevoice-mobile-plugin:testDebugUnitTest").dir(&gradle).run();
+    let renders = repo().join("mobile/tauri/plugin/android/build/call-card-renders");
+    if renders.is_dir() {
+        let to = repo().join("dist").join(CALL_CARD_RENDERS);
+        mkdir(&to)?;
+        for entry in fs::read_dir(&renders).map_err(|e| format!("{}: {e}", renders.display()))? {
+            let from = entry.map_err(|e| format!("{}: {e}", renders.display()))?.path();
+            if let Some(file) = from.file_name() {
+                fs::copy(&from, to.join(file)).map_err(|e| format!("{}: {e}", from.display()))?;
+            }
+        }
+    }
+    tests
 }
+
+/// Where in dist/ `mobile test android` puts the call card's renders (the mobile workflow uploads them).
+const CALL_CARD_RENDERS: &str = "android-call-card";
 
 #[cfg(test)]
 mod tests {

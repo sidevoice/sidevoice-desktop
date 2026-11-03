@@ -42,8 +42,9 @@
 //! - `mobile sign android` (CI, by hand from main): the unsigned APK aligned, signed with the upload key, verified and
 //!   checked for 16 KB pages, into dist/ (.github/workflows/mobile-android-signed.yml; mobile/sign.rs). Reads the
 //!   `ANDROID_UPLOAD_*` secrets.
-//! - `mobile test android` (by hand): the Android library's JVM unit tests (the call service's sessions), in the generated project,
-//!   after a build has written its Gradle includes. Needs no device.
+//! - `mobile test android` (CI, every pull request): the Android library's JVM unit tests (the call service's sessions, the call
+//!   card drawn to PNG in every state, copied to dist/android-call-card), in the generated project, after a build has written
+//!   its Gradle includes. Needs no device.
 //! - `mobile testflight --build-number N` (by hand, from main: .github/workflows/mobile-testflight.yml): the iOS app archived
 //!   and signed through automatic provisioning with the App Store Connect API key, read, and uploaded to TestFlight. Reads
 //!   `APPLE_API_KEY`, `APPLE_API_ISSUER`, `APPLE_API_KEY_P8` (the .p8's contents, written to a 0600 file removed when it ends) and
