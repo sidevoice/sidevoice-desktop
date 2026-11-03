@@ -1,7 +1,7 @@
 fn main() {
     build_channel();
-    // The app's own commands, declared so its capability can grant them: the page's number, its report of the call and the
-    // creatures' stills its surfaces show (`call_page`, `call_state`, `call_still`, `call_forget`), and the developer
+    // The app's own commands, declared so its capability can grant them: the page's number, its report of the call, the
+    // creatures' stills its surfaces show (`call_page`, `call_state`, `call_still`, `call_forget`) and the developer
     // options' one (`developer_options`). What the apps share is the plugin's (sidevoice-shared-tauri).
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[

@@ -255,6 +255,108 @@ test("host.build is what the app says this build is, frozen", () => {
   assert.equal(Object.isFrozen(api.host.build), true);
 });
 
+test("the call's surface rides in the report, its stills by id; their bytes go before, and are forgotten", async () => {
+  const { api, win, invoked, intervals } = install("tauri://localhost");
+  const settled = () => new Promise((resolve) => setTimeout(resolve, 0));
+  await settled();
+  const surface = {
+    pendingCancellable: true, model: "Opus 5.5", machine: "mac-studio", workingSince: 1700000000000, conversationCount: 2,
+    still: { id: "t1#240", k: 1.3 }, others: [{ threadId: "t2", title: "B", reach: "listening", unread: 0, still: { id: "t2#108", k: 1 } }],
+    words: { state: "Trabajando", offline: "Desconectada" },
+  };
+  const view = { call: { joined: true }, mic: { enabled: true }, callCard: { title: "Repo", mood: "working" }, callSurface: null };
+  const subscribers = [];
+  win.sidevoiceActions = { toggleMic: () => {} };
+  win.sidevoiceUI = { store: { getState: () => view, subscribe: (fn) => (subscribers.push(fn), () => {}) } };
+  intervals.forEach((tick) => tick());
+  await settled();
+  // The page hands the bytes over first, then publishes the snapshot that names them.
+  api.host.callSurface.still({ id: "t1#240", png: "iVBORw0KGgo=", px: 240 });
+  api.host.callSurface.still({ id: "t2#108", png: "iVBORw0KGgoB", px: 108 });
+  view.callSurface = surface;
+  subscribers.forEach((fn) => fn());
+  await settled();
+  const sent = invoked.filter(([command]) => ["call_still", "call_state", "call_forget"].includes(command));
+  const order = sent.slice(-3).map(([command, args]) => command === "call_still" ? args.id : command);
+  assert.deepEqual(order, ["t1#240", "t2#108", "call_state"], "the stills before the report that names them");
+  const still = sent.find(([command]) => command === "call_still")[1];
+  assert.equal(JSON.stringify(still), JSON.stringify({ page: 7, id: "t1#240", png: "iVBORw0KGgo=", px: 240 }));
+  const report = sent.at(-1)[1].snapshot;
+  assert.equal(report.mood, "working");
+  assert.equal(JSON.stringify(report.surface), JSON.stringify(surface));
+  api.host.callSurface.forget(["t2#108", 3, ""]);
+  api.host.callSurface.forget([]);
+  await settled();
+  const forgets = invoked.filter(([command]) => command === "call_forget").map(([, args]) => args);
+  assert.equal(JSON.stringify(forgets), JSON.stringify([{ page: 7, ids: ["t2#108"] }]));
+});
+
+test("a still without its id or bytes is not sent", async () => {
+  const { api, invoked } = install("tauri://localhost");
+  api.host.callSurface.still({ id: "", png: "x", px: 1 });
+  api.host.callSurface.still({ id: "a", px: 1 });
+  api.host.callSurface.still({ id: "a", png: "x" });
+  api.host.callSurface.still({ id: "a", png: "x", px: 0 });
+  api.host.callSurface.still();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(invoked.filter(([command]) => command === "call_still").length, 0);
+});
+
+test("a page without a call surface reports none", async () => {
+  const { api, win } = install("tauri://localhost");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  win.sidevoiceActions = { toggleMic: () => {} };
+  win.sidevoiceUI = { store: { getState: () => ({ call: { joined: true }, mic: { enabled: true }, callCard: {} }), subscribe: () => () => {} } };
+  assert.equal("surface" in api.snapshot(), false);
+});
+
+test("the stack of conversations on the call's surfaces opens the page's list of conversations", async () => {
+  const { api, win } = install("tauri://localhost");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  let opened = 0;
+  win.sidevoiceActions = { toggleMic: () => {} };
+  win.sidevoiceUI = { store: { getState: () => ({ call: { joined: true }, mic: { enabled: true }, callCard: {} }), subscribe: () => () => {} } };
+  assert.equal(api.run({ command: "open-conversations", page: 7 }), false, "a page without the list's seam");
+  win.sidevoiceUI.openConversations = () => { opened++; };
+  assert.equal(api.run({ command: "open-conversations", page: 7 }), true);
+  assert.equal(opened, 1);
+  assert.equal(api.run({ command: "open-conversations", page: 6 }), false, "another page's");
+});
+
+test("a report waits until the app has kept the still before it, and a refused still holds nothing up", async () => {
+  const { api, win, invoked, intervals } = install("tauri://localhost");
+  const settled = async () => { for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0)); };
+  await settled();
+  const answers = [];
+  const invoke = win.__TAURI_INTERNALS__.invoke;
+  win.__TAURI_INTERNALS__.invoke = (command, args) => command === "call_still"
+    ? (invoked.push([command, args]), new Promise((resolve, reject) => answers.push({ resolve, reject })))
+    : invoke(command, args);
+  const view = { call: { joined: true }, mic: { enabled: true }, callCard: {}, callSurface: null };
+  const subscribers = [];
+  win.sidevoiceActions = { toggleMic: () => {} };
+  win.sidevoiceUI = { store: { getState: () => view, subscribe: (fn) => (subscribers.push(fn), () => {}) } };
+  intervals.forEach((tick) => tick());
+  await settled();
+  const reports = () => invoked.filter(([command]) => command === "call_state").length;
+  const before = reports();
+  api.host.callSurface.still({ id: "t1#240", png: "iVBORw0KGgo=", px: 240 });
+  view.callSurface = { still: { id: "t1#240", k: 1 } };
+  subscribers.forEach((fn) => fn());
+  await settled();
+  assert.equal(reports(), before, "the report names a still the app has not kept yet: it waits");
+  answers[0].resolve(null);
+  await settled();
+  assert.equal(reports(), before + 1);
+  api.host.callSurface.still({ id: "t2#108", png: "iVBORw0KGgoB", px: 108 });
+  view.callSurface = { still: { id: "t2#108", k: 1 } };
+  subscribers.forEach((fn) => fn());
+  await settled();
+  answers[1].reject(new Error("not kept"));
+  await settled();
+  assert.equal(reports(), before + 2, "a refusal does not stop the reports");
+});
+
 test("host.debug is the phone's one developer switch, only where the app offers it, and sets go to the app", async () => {
   const none = install("tauri://localhost");
   assert.equal("debug" in none.api.host, false, "a release has no host.debug");
