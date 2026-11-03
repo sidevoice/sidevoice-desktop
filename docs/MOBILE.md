@@ -183,8 +183,8 @@ first connection to a paired machine.
 A call must outlive the screen: with it off, or another app in front, Android stops a process that holds the microphone
 unless a foreground service says it is in use. `mobile/tauri/plugin` carries that service (`CallService.kt`, `MobilePlugin.kt`
 and the manifest entry, all merged into the app by Gradle). It has the foreground service types **microphone** (the call
-listens) and **media playback** (the agent speaks), and a notification with the app's name, "In a call" and a **Hang up**
-action, in the system's language (`res/values`, English, and `values-es`; the Spanish is the desktop app's wording).
+listens) and **media playback** (the agent speaks), and the call's notification, Sidevoice's own card ("The call surface"
+below, "Android's card").
 
 - **Start while visible.** Android lets a microphone service start only from an app that is on screen and has the
   microphone allowed (since Android 14, and enforced strictly from 15), so `start_call_service` is called while the app is
@@ -226,10 +226,10 @@ call service (`sidevoice-mobile-plugin`'s `call_service`), started and ended as 
 - **Android: Core-Telecom** (`androidx.core:core-telecom`), in the call's service (`CallService.kt`): once it is in the
   foreground it adds a self-managed outgoing audio call, named after the conversation, and sets it active. Telecom holds the
   call's audio from then (the mode, the focus, the route), so the service gives up its own focus request (a loss reported
-  meanwhile is given back as a gain), chooses the loudspeaker over the earpiece (as iOS does), and its notification
-  becomes a call's (`CallStyle`, with the Mute button). A disconnect from outside the app ends the service as its
-  notification's Hang up does (`hang-up`); Telecom ending the call otherwise is `system`. Telecom refusing the call (an
-  emergency call on, the registration failing) leaves the call the app's own: the service's focus and media notification.
+  meanwhile is given back as a gain) and chooses the loudspeaker over the earpiece (as iOS does). The notification stays
+  the app's card, without its audio switch (the route is Telecom's then). A disconnect from outside the app ends the
+  service as its notification's Hang up does (`hang-up`); Telecom ending the call otherwise is `system`. Telecom refusing
+  the call (an emergency call on, the registration failing) leaves the call the app's own: the service's focus.
   The manifest adds `MANAGE_OWN_CALLS` (granted at install), `FOREGROUND_SERVICE_PHONE_CALL` (the service is also of type
   `phoneCall`) and `MODIFY_AUDIO_SETTINGS` (below).
 - **Mute.** A mute or unmute from the system's side (CallKit's `CXSetMutedCallAction`, Telecom's `isMuted`) is set on the
@@ -289,6 +289,23 @@ research/live-activity-design-2026-11-02 (HANDOVER.md); this is how their data g
   `RunEvent::Opened`). The app runs it on the page's call as the page's own command (`mute` with the value, `skip-reply`,
   `cancel-input`, `hang-up`, `open-conversations`), for the current page and call. The audio route is not one of them:
   the system's route is the native side's to switch.
+- **Android's card** (`CallCard.kt`, `CallCardViews.kt`, `res/layout/call_card*.xml` in the plugin): the call service's
+  notification is a `DecoratedCustomViewStyle` (the system draws the header, with no time) whose RemoteViews draw the
+  design's Lock Screen card in dp: expanded (the tile, the title, model · machine, the state with its dot and, while
+  working, a `Chronometer` since `workingSince`; the audio switch while headphones are connected; mute, skip, the stack
+  of the other conversations and hang up), collapsed (the face, "{title} · {state}", mute, hang up) and a public version
+  for a Lock Screen that hides sensitive content ("Sidevoice", "In a call"). The tile and the stack of faces are bitmaps
+  drawn by the plugin (`CallCardArt`: the tone's glow, the creature enlarged by its `k` so an accessory stands out, grey
+  while offline, the red mic badge), from the stills folder; DM Sans is bundled (`res/font`). The words are the page's;
+  the plugin's `res/values*` (the eight languages the app ships) hold only what shows before the page's words come, the
+  public version and the channel. The buttons are PendingIntents to the service, so they work on the Lock Screen without
+  unlocking: hang up ends the service (`hang-up`), mute (with the value the button shows) and skip are reported as
+  actions, the stack opens the app's activity with an extra the plugin turns into `open-conversations`, and the audio
+  switch (Android 12 and later, the app's own call) moves the call between the headphones and the loudspeaker with
+  `AudioManager.setCommunicationDevice`. The card is drawn again on every update, when a headset comes or goes, and when
+  the appearance changes. `CallCardRenderTest` draws every state to PNG (light and dark, mic on and off, long texts)
+  through the platform's own template in Robolectric; `cargo xtask mobile test android` copies them to
+  `dist/android-call-card`, and the mobile workflow uploads them.
 
 ## Building
 

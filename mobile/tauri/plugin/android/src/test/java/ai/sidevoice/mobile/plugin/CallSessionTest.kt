@@ -67,8 +67,18 @@ class CallSessionTest {
         val new = begin()
         assertNotEquals(CallSession.hangUpAddress(old.id), CallSession.hangUpAddress(new.id))
         assertEquals("sidevoice-call://hang-up/${new.id}", CallSession.hangUpAddress(new.id))
-        assertNotEquals(CallSession.toggleMuteAddress(old.id), CallSession.toggleMuteAddress(new.id))
-        assertNotEquals(CallSession.hangUpAddress(new.id), CallSession.toggleMuteAddress(new.id))
+        assertNotEquals(CallSession.surfaceAddress(old.id, "mute"), CallSession.surfaceAddress(new.id, "mute"))
+        assertNotEquals(CallSession.surfaceAddress(new.id, "mute"), CallSession.surfaceAddress(new.id, "unmute"))
+        assertNotEquals(CallSession.hangUpAddress(new.id), CallSession.surfaceAddress(new.id, "mute"))
+    }
+
+    @Test
+    fun theCardsActionsAreReportedOnlyWhileTheSessionRuns() {
+        val session = begin()
+        CallSession.action(session, "skip")
+        CallSession.end(session, "requested", report = false)
+        CallSession.action(session, "mute")
+        assertEquals(listOf(session.id to mapOf("type" to "action", "action" to "skip")), reports)
     }
 
     @Test

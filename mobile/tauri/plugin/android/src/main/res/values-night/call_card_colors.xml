@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The call card's dark appearance (values/call_card_colors.xml has the light one and what each is). -->
+<resources>
+    <color name="call_card_text">#FFFAFAFA</color>
+    <color name="call_card_text_secondary">#FFB8B8C0</color>
+    <!-- rgba(255, 255, 255, .13) -->
+    <color name="call_card_button">#21FFFFFF</color>
+    <color name="call_card_panel">#FF2B2930</color>
+    <color name="call_card_tile">#FF2F2741</color>
+    <color name="call_card_lila_ink">#FFCDBBF0</color>
+    <color name="call_card_lila">#FFC9B6EC</color>
+    <color name="call_card_green_ink">#FF74D3A6</color>
+    <color name="call_card_green">#FF74D3A6</color>
+    <color name="call_card_warn_ink">#FFF5A35C</color>
+    <color name="call_card_warn">#FFF5A35C</color>
+    <color name="call_card_grey_ink">#FFB8B8C0</color>
+    <color name="call_card_grey">#FF93939C</color>
+</resources>

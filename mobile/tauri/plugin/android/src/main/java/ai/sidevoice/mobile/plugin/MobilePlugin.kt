@@ -51,6 +51,24 @@ class MobilePlugin(private val activity: Activity) : Plugin(activity) {
             builtInZoomControls = false
             displayZoomControls = false
         }
+        // The activity was made anew by the call card's stack (its process outlived it).
+        openConversations(activity.intent)
+    }
+
+    /** The app's activity is brought back by an intent: the call card's stack, maybe. */
+    override fun onNewIntent(intent: Intent) {
+        openConversations(intent)
+    }
+
+    /**
+     * The person tapped the other conversations on the call's card ([CallService.EXTRA_OPEN_CONVERSATIONS]): reported to the
+     * app as their action, which opens the page's conversation list. The extra is taken off, so the activity being made
+     * again (a rotation) does not open it twice.
+     */
+    private fun openConversations(intent: Intent?) {
+        if (intent?.getBooleanExtra(CallService.EXTRA_OPEN_CONVERSATIONS, false) != true) return
+        intent.removeExtra(CallService.EXTRA_OPEN_CONVERSATIONS)
+        CallSession.current()?.let { CallSession.action(it, "open-conversations") }
     }
 
     /**
@@ -111,12 +129,13 @@ class MobilePlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     /**
-     * Tells the running service what the call shows now: its title, and the page's mute (the system's call and its
-     * microphone mute follow it). Nothing when none runs.
+     * Tells the running service what the call shows now: its title, the page's mute (the system's call and its microphone
+     * mute follow it) and the call surface its card draws (passed on as the JSON it came in). Nothing when none runs.
      */
     @Command
     fun updateCallService(invoke: Invoke) {
         val args = invoke.parseArgs(UpdateCallServiceArgs::class.java)
+        val surface = invoke.getArgs().optJSONObject("surface")?.toString()
         val context = activity.applicationContext
         val session = CallSession.current()
         if (session == null) {
@@ -130,6 +149,7 @@ class MobilePlugin(private val activity: Activity) : Plugin(activity) {
                     .putExtra(CallService.EXTRA_SESSION, session.id)
                     .putExtra(CallService.EXTRA_TITLE, args.title)
                     .putExtra(CallService.EXTRA_MUTED, args.muted)
+                    .putExtra(CallService.EXTRA_SURFACE, surface)
             )
             invoke.resolve()
         } catch (error: RuntimeException) {

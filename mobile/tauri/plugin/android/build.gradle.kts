@@ -21,6 +21,13 @@ android {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
     }
+
+    // The call card's render test (CallCardRenderTest) inflates the plugin's layouts and draws them, in Robolectric.
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+        // Robolectric's Android 16 reaches into the JDK's file descriptors.
+        unitTests.all { it.jvmArgs("--add-opens=java.base/jdk.internal.access=ALL-UNNAMED") }
+    }
 }
 
 kotlin {
@@ -80,4 +87,7 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation(project(":tauri-android"))
     testImplementation("junit:junit:4.13.2")
+    // The call card drawn to PNG on the JVM (Robolectric's native graphics), for every state: CallCardRenderTest.
+    testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation("androidx.test:core:1.7.0")
 }

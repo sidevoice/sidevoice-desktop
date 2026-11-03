@@ -6,11 +6,16 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.content.res.Configuration
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.telecom.DisconnectCause
 import android.util.Log
 import android.content.pm.ServiceInfo
 import android.net.Uri
 import android.media.AudioAttributes
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.MediaMetadata
@@ -22,15 +27,12 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import ai.sidevoice.app.MediaControls
-import android.support.v4.media.session.MediaSessionCompat
 import androidx.core.app.NotificationCompat
-import androidx.core.app.Person
 import androidx.core.app.ServiceCompat
 import androidx.core.telecom.CallAttributesCompat
 import androidx.core.telecom.CallControlResult
 import androidx.core.telecom.CallControlScope
 import androidx.core.telecom.CallsManager
-import androidx.media.app.NotificationCompat.MediaStyle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -41,6 +43,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 /**
  * The foreground service that keeps the process of a call alive while the screen is off or another app is in front:
@@ -60,8 +63,15 @@ import kotlinx.coroutines.withContext
  * the service gives its own focus request up, and Telecom's hold (another call taking this one's place) is reported
  * instead (`held`); a hang-up from outside the app ends the service (`hang-up`), and a mute from outside is reported
  * (`muted`), while the page's mute is given to the system's microphone mute. The loudspeaker is chosen over the earpiece,
- * as on iOS. The notification is a call's (CallStyle) while Telecom holds the call. Telecom refusing the call leaves it the
- * app's own, as before: the service's focus and media notification.
+ * as on iOS. Telecom refusing the call leaves it the app's own, as before: the service's focus.
+ *
+ * **The notification is Sidevoice's own card** ([CallCardViews], HANDOVER §4 "Android"), whoever holds the call: the
+ * conversation, its creature and state, mute, skip, the other conversations (they open the app's conversation list) and
+ * hang up, drawn from the call surface the app sends with every update ([CallCard]). Its buttons come back here as
+ * PendingIntents to this service, so they work without unlocking: hang up ends the call as before, mute and skip are
+ * reported to the app as the person's actions, and the audio switch moves the call between the headphones and the
+ * loudspeaker itself (`setCommunicationDevice`). The media session stays, without a card of its own: a headset's button
+ * still mutes and unmutes the call.
  *
  * **The call's audio waits for Telecom.** Setting the call active switches the audio mode to communication and the route
  * to the loudspeaker, and AAudio cuts off any stream open across that change. So the app opens the call's microphone and
@@ -78,6 +88,14 @@ class CallService : Service() {
     private var unobserve: (() -> Unit)? = null
     /** The conversation the call is on (empty for none). */
     private var title = ""
+    /** What the notification draws ([ACTION_UPDATE]). */
+    private var card = CallCard()
+    /** The stills the card draws, decoded once, by file name. */
+    private val stillImages = HashMap<String, Bitmap>()
+    /** Whether the audio switch chose the call's device ([toggleRoute]): given back at the end. */
+    private var routeChosen = false
+    /** Redraws the card when a headset comes or goes, or the call's device changes ([watchRoute]). */
+    private var routeWatch: (() -> Unit)? = null
     /** Telecom's coroutines: the call's, and their ends. Never cancelled as a whole: a call is disconnected before its own go. */
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     /** The coroutine that adds the call to Telecom and runs for its length. */
@@ -110,14 +128,23 @@ class CallService : Service() {
             ACTION_START -> begin(id, intent.getStringExtra(EXTRA_TITLE) ?: "")
             // What the call shows now (its title) and the page's mute, for the session this instance serves.
             ACTION_UPDATE -> session?.takeIf { it.id == id }?.let {
-                update(it, intent.getStringExtra(EXTRA_TITLE) ?: "", intent.getBooleanExtra(EXTRA_MUTED, false))
+                update(
+                    it,
+                    intent.getStringExtra(EXTRA_TITLE) ?: "",
+                    intent.getBooleanExtra(EXTRA_MUTED, false),
+                    intent.getStringExtra(EXTRA_SURFACE),
+                )
             } ?: leaveIfIdle(startId)
             // Hang up, from the notification of the session this instance serves; one of an older call's means nothing.
             ACTION_HANG_UP -> session?.takeIf { it.id == id }?.let { finish("hang-up") } ?: leaveIfIdle(startId)
             // Ask for the audio focus again (it was lost for good, or refused), for the session this instance serves.
             ACTION_REFOCUS -> session?.takeIf { it.id == id }?.let { refocus(it) } ?: leaveIfIdle(startId)
-            // Mute or unmute, from the notification's button (Android 12 and older), of this session alone.
-            ACTION_TOGGLE_MUTE -> session?.takeIf { it.id == id }?.let { toggleMute() } ?: leaveIfIdle(startId)
+            // Mute, unmute or skip, from the card's buttons, of this session alone: the person's action, run by the app.
+            ACTION_SURFACE -> session?.takeIf { it.id == id }?.let { mine ->
+                intent.getStringExtra(EXTRA_ACTION)?.takeIf { it in SERVICE_ACTIONS }?.let { CallSession.action(mine, it) }
+            } ?: leaveIfIdle(startId)
+            // The card's audio switch, of this session alone.
+            ACTION_ROUTE -> session?.takeIf { it.id == id }?.let { toggleRoute(it) } ?: leaveIfIdle(startId)
             // Not asked by this app.
             else -> leaveIfIdle(startId)
         }
@@ -130,10 +157,17 @@ class CallService : Service() {
         super.onTaskRemoved(rootIntent)
     }
 
+    /** The appearance changed (light, dark): the card is drawn again in it. */
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        session?.let { show(it.id) }
+    }
+
     /** Whoever ended it, the focus and the report are not left behind (the system may end a service on its own). */
     override fun onDestroy() {
         cancelAudioDeadline()
         endTelecom()
+        unwatchRoute()
         closeMedia()
         abandonFocus()
         session?.let { CallSession.end(it, "system") }
@@ -143,6 +177,7 @@ class CallService : Service() {
 
     private fun begin(id: Long, title: String) {
         this.title = title
+        card = CallCard.of(title, muted = false, surface = null)
         // Within seconds of a startForegroundService, even when the call already ended: Android crashes the app otherwise.
         try {
             ServiceCompat.startForeground(this, NOTIFICATION_ID, notification(id), FOREGROUND_SERVICE_TYPES)
@@ -163,6 +198,7 @@ class CallService : Service() {
         session = mine
         requestFocus(mine)
         openMedia(mine)
+        watchRoute(mine)
         telecomEnded = false
         audioReadyFor = null
         cancelAudioDeadline()
@@ -195,6 +231,7 @@ class CallService : Service() {
     private fun finish(reason: String) {
         cancelAudioDeadline()
         endTelecom()
+        unwatchRoute()
         closeMedia()
         abandonFocus()
         session?.let { CallSession.end(it, reason) }
@@ -212,6 +249,11 @@ class CallService : Service() {
         if (session == null) stopSelf(startId)
     }
 
+    /**
+     * The call's notification: Sidevoice's card (HANDOVER §4 "Android"), expanded and collapsed, and its public version for a
+     * Lock Screen that hides sensitive content ("Sidevoice · In a call"). The system draws the header (mark and name; no
+     * time, `setShowWhen(false)`); tapping it elsewhere opens the app.
+     */
     private fun notification(id: Long): Notification {
         val manager = getSystemService(NotificationManager::class.java)
         // Created each time, so a change of the system's language renames it.
@@ -219,88 +261,98 @@ class CallService : Service() {
             NotificationChannel(CHANNEL_ID, getString(R.string.call_channel_name), NotificationManager.IMPORTANCE_LOW)
         )
         val open = packageManager.getLaunchIntentForPackage(packageName)?.let {
-            PendingIntent.getActivity(this, 0, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+            PendingIntent.getActivity(this, REQUEST_OPEN, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         }
-        val hangUp = PendingIntent.getService(
-            this,
-            0,
-            // The session is in the data too: PendingIntents are told apart by action, component and data, not by extras,
-            // so one with only the extra would be this session's Hang up overwritten by the next session's.
-            Intent(this, CallService::class.java)
-                .setAction(ACTION_HANG_UP)
-                .setData(Uri.parse(CallSession.hangUpAddress(id)))
-                .putExtra(EXTRA_SESSION, id),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
+        val views = CallCardViews(this, card, route(), intents(id), ::still)
+        val publicVersion = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_call_notification)
-            .setContentTitle(getString(R.string.call_notification_title))
             .setContentText(getString(R.string.call_notification_text))
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setShowWhen(false)
+            .build()
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_call_notification)
+            // What a surface that does not draw the card (a watch, an accessibility service) reads.
+            .setContentTitle(card.title.trim().ifEmpty { getString(R.string.call_notification_title) })
+            .setContentText(card.words.state.ifEmpty { getString(R.string.call_notification_text) })
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
+            .setShowWhen(false)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setContentIntent(open)
-        val token = media?.sessionToken
-        if (control != null) {
-            // Telecom holds the call: the notification is a call's (the system's call chip and its Hang up), with the mute
-            // button beside it. The media session goes on taking a headset's buttons, without a card of its own.
-            val person = Person.Builder().setName(displayName()).setImportant(true).build()
-            return builder
-                .setStyle(NotificationCompat.CallStyle.forOngoingCall(person, hangUp))
-                .addAction(muteAction(id))
-                .build()
-        }
-        if (token == null || Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // Android 13 and later draw a media notification's buttons from its session (the play/pause and the Hang up
-            // custom action of `applyState`), and a notification without a session keeps its own Hang up.
-            builder.addAction(R.drawable.ic_call_hang_up, getString(R.string.call_notification_hang_up), hangUp)
-        } else {
-            // Android 12 and older draw the notification's own buttons: mute or unmute, as the call is, and Hang up.
-            builder
-                .addAction(muteAction(id))
-                .addAction(R.drawable.ic_call_hang_up, getString(R.string.call_notification_hang_up), hangUp)
-        }
-        // The call's media session: the notification shows it, which puts the call's controls on the lock screen.
-        token?.let {
-            val style = MediaStyle().setMediaSession(MediaSessionCompat.Token.fromToken(it))
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) style.setShowActionsInCompactView(0, 1)
-            builder.setStyle(style)
-        }
-        return builder.build()
+            .setStyle(NotificationCompat.DecoratedCustomViewStyle())
+            .setCustomContentView(views.collapsed())
+            .setCustomBigContentView(views.expanded())
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(publicVersion)
+            .build()
+        keepStills()
+        return notification
     }
 
-    /** The notification's mute or unmute button, as the call is now. */
-    private fun muteAction(id: Long): NotificationCompat.Action {
-        val playing = MediaControls.state().playing
-        val toggle = PendingIntent.getService(
+    /** Draws the card again, for the session [id] this instance serves. */
+    private fun show(id: Long) {
+        if (session?.id != id) return
+        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(id))
+    }
+
+    /**
+     * The card's buttons, for session [id]. Each PendingIntent is told apart by its data (Android compares action, component
+     * and data, not extras), so one session's never carries the next one's number, and mute is not unmute.
+     */
+    private fun intents(id: Long): CallCardViews.Intents {
+        fun service(action: String, address: String, extra: String? = null): PendingIntent = PendingIntent.getService(
             this,
             0,
             Intent(this, CallService::class.java)
-                .setAction(ACTION_TOGGLE_MUTE)
-                .setData(Uri.parse(CallSession.toggleMuteAddress(id)))
-                .putExtra(EXTRA_SESSION, id),
+                .setAction(action)
+                .setData(Uri.parse(address))
+                .putExtra(EXTRA_SESSION, id)
+                .also { intent -> extra?.let { intent.putExtra(EXTRA_ACTION, it) } },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        return NotificationCompat.Action(
-            if (playing) R.drawable.ic_call_mute else R.drawable.ic_call_unmute,
-            getString(if (playing) R.string.call_notification_mute else R.string.call_notification_unmute),
-            toggle
+        val mute = if (card.muted) "unmute" else "mute"
+        // The stack opens the app on its conversation list: the activity (after unlocking), told by an extra that the
+        // plugin reads (MobilePlugin.onNewIntent) and reports as the person's action.
+        val conversations = packageManager.getLaunchIntentForPackage(packageName)?.let {
+            it.putExtra(EXTRA_OPEN_CONVERSATIONS, true)
+            PendingIntent.getActivity(this, REQUEST_CONVERSATIONS, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        }
+        return CallCardViews.Intents(
+            mute = service(ACTION_SURFACE, CallSession.surfaceAddress(id, mute), mute),
+            skip = service(ACTION_SURFACE, CallSession.surfaceAddress(id, "skip"), "skip"),
+            hangUp = service(ACTION_HANG_UP, CallSession.hangUpAddress(id)),
+            route = service(ACTION_ROUTE, CallSession.surfaceAddress(id, "route")),
+            conversations = conversations,
         )
+    }
+
+    /** A still the card draws, from the stills folder the app writes (Rust `stills_dir`): decoded once. */
+    private fun still(still: CallCard.Still): Bitmap? {
+        stillImages[still.file]?.let { return it }
+        val file = File(File(cacheDir, STILLS_DIR), still.file)
+        val image = runCatching { BitmapFactory.decodeFile(file.path) }.getOrNull() ?: return null
+        stillImages[still.file] = image
+        return image
+    }
+
+    /** Lets go of the decoded stills the card no longer draws. */
+    private fun keepStills() {
+        val drawn = (listOf(card.still) + card.others).mapNotNull { it?.file }.toSet()
+        stillImages.keys.retainAll(drawn)
     }
 
     /** What the system shows as the call's other party: its conversation, or the app's name. */
     private fun displayName(): String = title.trim().ifEmpty { getString(R.string.call_notification_title) }
 
-    /** What the call shows now and the page's mute ([ACTION_UPDATE]). */
-    private fun update(mine: CallSession.Session, title: String, muted: Boolean) {
-        val renamed = title != this.title
+    /** What the call shows now, the page's mute and the call surface ([ACTION_UPDATE]): the card is drawn again. */
+    private fun update(mine: CallSession.Session, title: String, muted: Boolean, surface: String?) {
         this.title = title
         pageMuted = muted
+        card = CallCard.of(title, muted, surface)
         applyMute()
-        if (renamed && control != null) {
-            getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(mine.id))
-        }
+        show(mine.id)
     }
 
     /**
@@ -429,7 +481,8 @@ class CallService : Service() {
             CallSession.focus(mine, "gained")
         }
         applyMute()
-        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(mine.id))
+        // The audio switch is Telecom's while it holds the call: the card drops it.
+        show(mine.id)
     }
 
     /**
@@ -461,10 +514,11 @@ class CallService : Service() {
     }
 
     /**
-     * The call's media session, made for [mine] and only while it runs: Android hands it a headset's play/pause (a press
-     * arrives as pause while the call plays, as play while it is muted), which go to the shared plugin
-     * ([MediaControls.command]) and from there to the call; the lock screen's controls are its own and its Hang up custom
-     * action (Android 13 and later), which ends this session's service as the notification's Hang up does.
+     * The call's media session, made for [mine] and only while it runs: Android hands it a headset's or a car's play/pause (a
+     * press arrives as pause while the call plays, as play while it is muted), which go to the shared plugin
+     * ([MediaControls.command]) and from there to the call (D-NO-CALLKIT-DEFAULT: the headset's buttons are the call's). No
+     * notification shows it (the card is the call's), so it draws no media card; its Hang up custom action stays for a
+     * controller that asks.
      */
     private fun openMedia(mine: CallSession.Session) {
         closeMedia()
@@ -485,12 +539,8 @@ class CallService : Service() {
                 val current = media ?: return@post
                 if (session?.id != mine.id) return@post
                 applyState(current, state)
-                // The notification's mute button follows the call (Android 12 and older draw it themselves).
-                getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(mine.id))
             }
         }
-        // Again, now with the session: the notification shows it.
-        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(mine.id))
     }
 
     private fun closeMedia() {
@@ -519,11 +569,6 @@ class CallService : Service() {
                 )
                 .build()
         )
-    }
-
-    /** The notification's mute button: the same as a headset's press. */
-    private fun toggleMute() {
-        MediaControls.command(if (MediaControls.state().playing) "pause" else "play")
     }
 
     /**
@@ -573,6 +618,75 @@ class CallService : Service() {
         requestFocus(mine, reportGranted = true)
     }
 
+    /**
+     * The card's audio switch, while headphones are connected and the call is the app's own (Telecom routes its own call):
+     * where the call's audio goes now. Android 12 and later (`setCommunicationDevice`); before, no switch.
+     */
+    private fun route(): CallCardViews.Route? {
+        if (control != null || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null
+        val audio = getSystemService(AudioManager::class.java)
+        val headphones = audio.availableCommunicationDevices.firstOrNull { it.type in HEADPHONES } ?: return null
+        val current = audio.communicationDevice
+        val onHeadphones = current != null && current.type in HEADPHONES
+        val name = if (onHeadphones) current!!.productName.toString() else card.words.speaker
+        return CallCardViews.Route(onHeadphones, name.ifEmpty { headphones.productName.toString() })
+    }
+
+    /**
+     * The audio switch: the call moves between the headphones and the loudspeaker (D-LA-ROUTE: one tap, no earpiece), among
+     * the devices the system offers a call now; the microphone follows the device. Logged (`SidevoiceCall`).
+     */
+    private fun toggleRoute(mine: CallSession.Session) {
+        if (control != null || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        val audio = getSystemService(AudioManager::class.java)
+        val available = audio.availableCommunicationDevices
+        val onHeadphones = audio.communicationDevice?.let { it.type in HEADPHONES } == true
+        val target = if (onHeadphones) {
+            available.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+        } else {
+            available.firstOrNull { it.type in HEADPHONES }
+        }
+        if (target == null) {
+            Log.i(TAG, "route: nothing to switch to")
+        } else {
+            val taken = audio.setCommunicationDevice(target)
+            routeChosen = routeChosen || taken
+            Log.i(TAG, "route: switch to ${target.productName} (type ${target.type}): ${if (taken) "set" else "refused"}")
+        }
+        show(mine.id)
+    }
+
+    /** Draws the card again when a headset comes or goes, or the call's device changes, while [mine] runs. */
+    private fun watchRoute(mine: CallSession.Session) {
+        unwatchRoute()
+        val audio = getSystemService(AudioManager::class.java)
+        val devices = object : AudioDeviceCallback() {
+            override fun onAudioDevicesAdded(added: Array<out AudioDeviceInfo>) = show(mine.id)
+            override fun onAudioDevicesRemoved(removed: Array<out AudioDeviceInfo>) = show(mine.id)
+        }
+        audio.registerAudioDeviceCallback(devices, main)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val changed = AudioManager.OnCommunicationDeviceChangedListener { show(mine.id) }
+            audio.addOnCommunicationDeviceChangedListener({ main.post(it) }, changed)
+            routeWatch = {
+                audio.unregisterAudioDeviceCallback(devices)
+                audio.removeOnCommunicationDeviceChangedListener(changed)
+            }
+        } else {
+            routeWatch = { audio.unregisterAudioDeviceCallback(devices) }
+        }
+    }
+
+    /** Stops [watchRoute], and gives back the device the audio switch chose. */
+    private fun unwatchRoute() {
+        routeWatch?.invoke()
+        routeWatch = null
+        if (routeChosen && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            getSystemService(AudioManager::class.java).clearCommunicationDevice()
+        }
+        routeChosen = false
+    }
+
     private fun abandonFocus() {
         focusRequest?.let { getSystemService(AudioManager::class.java).abandonAudioFocusRequest(it) }
         focusRequest = null
@@ -590,7 +704,10 @@ class CallService : Service() {
         const val ACTION_START = "ai.sidevoice.mobile.plugin.CALL_START"
         const val ACTION_HANG_UP = "ai.sidevoice.mobile.plugin.CALL_HANG_UP"
         const val ACTION_REFOCUS = "ai.sidevoice.mobile.plugin.CALL_REFOCUS"
-        const val ACTION_TOGGLE_MUTE = "ai.sidevoice.mobile.plugin.CALL_TOGGLE_MUTE"
+        /** A button of the card the app runs: [EXTRA_ACTION] says which ([SERVICE_ACTIONS]). */
+        const val ACTION_SURFACE = "ai.sidevoice.mobile.plugin.CALL_SURFACE"
+        /** The card's audio switch. */
+        const val ACTION_ROUTE = "ai.sidevoice.mobile.plugin.CALL_ROUTE"
         const val ACTION_UPDATE = "ai.sidevoice.mobile.plugin.CALL_UPDATE"
         /** The session's custom action that ends the call (the media controls of Android 13 and later). */
         private const val CUSTOM_HANG_UP = "ai.sidevoice.mobile.plugin.HANG_UP"
@@ -600,6 +717,27 @@ class CallService : Service() {
         const val EXTRA_TITLE = "ai.sidevoice.mobile.plugin.TITLE"
         /** Whether the page has the call muted. */
         const val EXTRA_MUTED = "ai.sidevoice.mobile.plugin.MUTED"
+        /** The call surface the card draws (Rust `CallSurface`, as JSON). */
+        const val EXTRA_SURFACE = "ai.sidevoice.mobile.plugin.SURFACE"
+        /** The action of an [ACTION_SURFACE]. */
+        const val EXTRA_ACTION = "ai.sidevoice.mobile.plugin.ACTION"
+        /** On the app's activity: the person tapped the stack of conversations; the app opens its conversation list. */
+        const val EXTRA_OPEN_CONVERSATIONS = "ai.sidevoice.mobile.plugin.OPEN_CONVERSATIONS"
+        /** The card's buttons the app runs (Rust `SurfaceAction`); hang up is the service's own, the stack the activity's. */
+        private val SERVICE_ACTIONS = setOf("mute", "unmute", "skip")
+        /** The headphones the audio switch moves the call to: wired, USB, Bluetooth (HFP, LE Audio) and hearing aids. */
+        private val HEADPHONES = setOf(
+            AudioDeviceInfo.TYPE_WIRED_HEADSET,
+            AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+            AudioDeviceInfo.TYPE_USB_HEADSET,
+            AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+            AudioDeviceInfo.TYPE_BLE_HEADSET,
+            AudioDeviceInfo.TYPE_HEARING_AID,
+        )
+        /** The folder the app keeps the call's stills in, in its cache (Rust `call_surface::stills_dir`). */
+        private const val STILLS_DIR = "call-stills"
+        private const val REQUEST_OPEN = 0
+        private const val REQUEST_CONVERSATIONS = 1
         private const val TAG = "SidevoiceCall"
         private const val NO_SESSION = -1L
         private const val CHANNEL_ID = "call"
