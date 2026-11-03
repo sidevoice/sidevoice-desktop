@@ -21,15 +21,16 @@
 //!   Telecom's): the conversation pauses while it lasts and resumes when it ends; it never hangs up on its own. Pausing is the page's mute, so that the page shows the call muted, and
 //!   the agent's playback held ([`AppHost::pause_playback`]); resuming gives the mute back as it was (a person who had
 //!   muted themselves stays muted).
+use std::collections::BTreeSet;
 use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::hold::{focus_signal, Effect, Hold, Signal, Source};
 use crate::platform::interruption::{self, Interruption};
 use sidevoice_mobile_plugin::{
-    call_activates_audio, call_replaces_media_controls, request_call_focus, start_call_service,
-    stop_call_service, update_call_service, CallDetails, CallEvent, CallSurface, StopReason,
-    SurfaceAction,
+    call_activates_audio, call_replaces_media_controls, clear_stills, forget_stills,
+    request_call_focus, save_still, start_call_service, stop_call_service, update_call_service,
+    CallDetails, CallEvent, CallSurface, StopReason, SurfaceAction,
 };
 use sidevoice_shared::app::{AppHost, CallActivity};
 use sidevoice_shared::sidevoice_voice::{AudioSession, Session, SessionConfig, SessionMode};
@@ -297,7 +298,36 @@ pub struct Room {
     /// When it was last told, and whether a later update is already on its way ([`UPDATE_INTERVAL`]).
     updated_at: Option<Instant>,
     update_queued: bool,
+    /// The stills the page forgot whose files stay while a surface may still draw them: the one the service last showed
+    /// or the one waiting to be shown names them ([`unreferenced`]).
+    forgotten: BTreeSet<String>,
 }
+
+/// The ids of the stills `surface` draws.
+fn still_ids(surface: &CallSurface) -> impl Iterator<Item = &str> {
+    let others = surface
+        .others
+        .iter()
+        .filter_map(|other| other.still.as_ref());
+    surface
+        .still
+        .iter()
+        .chain(others)
+        .map(|still| still.id.as_str())
+}
+
+/// Which of the `forgotten` stills none of `surfaces` draws any more: their files can go.
+fn unreferenced(forgotten: &BTreeSet<String>, surfaces: &[&CallSurface]) -> Vec<String> {
+    let drawn: BTreeSet<&str> = surfaces.iter().copied().flat_map(still_ids).collect();
+    forgotten
+        .iter()
+        .filter(|id| !drawn.contains(id.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// How long the page's still waits for the room's thread to keep it.
+const STILL_LIMIT: Duration = Duration::from_secs(5);
 
 /// The least time between two updates of the call's service: Android drops a notification's updates past about five a
 /// second, and iOS budgets a Live Activity's. A change inside it is shown at its end, with whatever else changed meanwhile.
@@ -326,6 +356,7 @@ impl RoomCall {
             shown: None,
             updated_at: None,
             update_queued: false,
+            forgotten: BTreeSet::new(),
         };
         std::thread::Builder::new()
             .name("room-call".into())
@@ -353,6 +384,11 @@ impl RoomCall {
             room.state = CallState::default();
             room.surface = CallSurface::default();
             room.hold(false, None);
+            // The old page's stills go with it (nothing draws them once its call has ended): the new page sends its own.
+            room.forgotten.clear();
+            if let Err(error) = clear_stills(&room.app) {
+                log::warn!("call_still: the old page's stills were not removed: {error}");
+            }
             // What the old page's interruptions held is let go first; the new page starts with none.
             room.clear_interruption();
             room.interruptions = Hold::new();
@@ -377,6 +413,7 @@ impl RoomCall {
                 let (joined, mic_enabled) = (state.joined, state.mic_enabled);
                 room.state = state;
                 room.surface = crate::surface::surface(&surface, &room.surface);
+                room.collect();
                 room.hold(joined, since);
                 room.microphone(mic_enabled, mic_disabled);
                 room.show();
@@ -401,6 +438,34 @@ impl RoomCall {
     /// Activity the app was opened with): run on the current page's call.
     pub fn surface_action(&self, action: SurfaceAction) {
         self.then(move |room| room.act(action));
+    }
+
+    /// The page `page` hands over the still `id`, a PNG of `px` × `px`: kept on the room's thread, in order with the reports
+    /// and the forgetting, and answered once its file is there (so the report that names it comes after it). A still of
+    /// a page that has been replaced is nothing.
+    pub fn save_still(&self, page: u64, id: String, png: Vec<u8>, px: u32) -> Result<(), String> {
+        let (done, kept) = mpsc::channel();
+        self.then(move |room| {
+            let result = if room.page != page {
+                Ok(())
+            } else {
+                room.forgotten.remove(&id);
+                save_still(&room.app, &id, &png, px).map_err(|error| error.to_string())
+            };
+            let _ = done.send(result);
+        });
+        kept.recv_timeout(STILL_LIMIT)
+            .unwrap_or_else(|_| Err("the room's thread did not answer".into()))
+    }
+
+    /// The page `page` shows the stills `ids` no more: their files go once no surface draws them ([`unreferenced`]).
+    pub fn forget_stills(&self, page: u64, ids: Vec<String>) {
+        self.then(move |room| {
+            if room.page == page {
+                room.forgotten.extend(ids);
+                room.collect();
+            }
+        });
     }
 
     /// Quitting: the service stops, waited for up to `limit`.
@@ -485,8 +550,25 @@ impl Room {
             Ok(()) => {
                 self.shown = Some(details);
                 self.updated_at = Some(Instant::now());
+                self.collect();
             }
             Err(error) => log::warn!("call: the system's call was not updated: {error}"),
+        }
+    }
+
+    /// Removes the files of the forgotten stills that neither the surface shown nor the one waiting to be shown draws.
+    fn collect(&mut self) {
+        let shown = self.shown.as_ref().map(|shown| &shown.surface);
+        let surfaces: Vec<&CallSurface> = shown.into_iter().chain([&self.surface]).collect();
+        let gone = unreferenced(&self.forgotten, &surfaces);
+        if gone.is_empty() {
+            return;
+        }
+        for id in &gone {
+            self.forgotten.remove(id);
+        }
+        if let Err(error) = forget_stills(&self.app, &gone) {
+            log::warn!("call_forget: {error}");
         }
     }
 
@@ -790,6 +872,39 @@ mod tests {
                 "{action:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_forgotten_still_s_file_stays_while_a_surface_draws_it() {
+        use sidevoice_mobile_plugin::{Other, Still};
+        let still = |id: &str| {
+            Some(Still {
+                id: id.into(),
+                k: 1.0,
+                file: String::new(),
+            })
+        };
+        let shown = CallSurface {
+            still: still("t1#240"),
+            others: vec![Other {
+                title: "B".into(),
+                still: still("t2#108"),
+            }],
+            ..CallSurface::default()
+        };
+        let next = CallSurface {
+            still: still("t1#240"),
+            ..CallSurface::default()
+        };
+        let forgotten: BTreeSet<String> = ["t2#108", "t3#108"].map(String::from).into();
+        // The service still shows t2's face, waiting for the next update: only t3 goes.
+        assert_eq!(unreferenced(&forgotten, &[&shown, &next]), ["t3#108"]);
+        // Once the update without it is shown, t2 goes too.
+        assert_eq!(
+            unreferenced(&forgotten, &[&next, &next]),
+            ["t2#108", "t3#108"]
+        );
+        assert!(unreferenced(&BTreeSet::new(), &[&shown]).is_empty());
     }
 
     #[test]

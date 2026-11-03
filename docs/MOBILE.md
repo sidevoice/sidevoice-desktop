@@ -273,12 +273,16 @@ research/live-activity-design-2026-11-02 (HANDOVER.md); this is how their data g
 - **The creatures, by reference.** A still is `{id, k, file}` in the snapshot: the page's id (`<threadId>#<px>`; 240 px
   for the current conversation, 108 for the others), `k` (how much of the still the body takes, 1 by default) and `file`,
   the PNG's name in the stills folder, which the app fills (the id's bytes in hex, `.png`). The page hands each PNG over
-  once per id, before any report names it (`host.callSurface.still({id, png, px})`, base64, the app's `call_still`), and
-  forgets the ones it shows no more (`host.callSurface.forget(ids)`, `call_forget`: their files go). The app keeps them
-  (a PNG of at most 512 KB, an id of at most 120 bytes) in the stills folder (`stills_dir`): `call-stills/` in the App
-  Group container `group.ai.sidevoice.mobile` on iOS, where the widget extension reads it, or the app's cache where
-  there is no shared container (Android, and iOS until the app is entitled to the group). It is emptied at the app's
-  start.
+  once per id (`host.callSurface.still({id, png, px})`, base64, the app's `call_still`) and forgets the ones it shows no
+  more (`host.callSurface.forget(ids)`, `call_forget`). The bridge sends the reports, the stills and the forgetting one
+  after the other, and a still is answered only once its file is kept, so a report never names a still the app does not
+  have yet. Both are done on the call's own thread, in order with the reports: a forgotten still's file stays until
+  neither the surface the service last showed nor the next one draws it (an update can wait up to 250 ms). The app keeps
+  a still only if it is a PNG of `px` × `px` (its `IHDR`; at most 480 px and 512 KB, an id of at most 120 bytes, at most
+  8 MB in all) in the stills folder (`stills_dir`): `call-stills/` in the App Group container `group.ai.sidevoice.mobile`
+  on iOS, where the widget extension reads it, or the app's cache where there is no shared container (Android, and iOS
+  until the app is entitled to the group). It is emptied at the app's start and when a page loads anew (its call ended
+  with it); the new page sends its own.
 - **What the person does on a surface** comes back as the service's event `{"type":"action","action":…}` (`mute`,
   `unmute`, `skip`, `cancel-send`, `hang-up`, `open-conversations`; `CallEvent::Action`), from the notification's buttons
   or the Live Activity's intents, or on iOS as the link the app is opened with (`sidevoice://conversations`, Tauri's

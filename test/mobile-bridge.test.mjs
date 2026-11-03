@@ -278,7 +278,7 @@ test("the call's surface rides in the report, its stills by id; their bytes go b
   const order = sent.slice(-3).map(([command, args]) => command === "call_still" ? args.id : command);
   assert.deepEqual(order, ["t1#240", "t2#108", "call_state"], "the stills before the report that names them");
   const still = sent.find(([command]) => command === "call_still")[1];
-  assert.equal(JSON.stringify(still), JSON.stringify({ page: 7, id: "t1#240", png: "iVBORw0KGgo=" }));
+  assert.equal(JSON.stringify(still), JSON.stringify({ page: 7, id: "t1#240", png: "iVBORw0KGgo=", px: 240 }));
   const report = sent.at(-1)[1].snapshot;
   assert.equal(report.mood, "working");
   assert.equal(JSON.stringify(report.surface), JSON.stringify(surface));
@@ -293,6 +293,8 @@ test("a still without its id or bytes is not sent", async () => {
   const { api, invoked } = install("tauri://localhost");
   api.host.callSurface.still({ id: "", png: "x", px: 1 });
   api.host.callSurface.still({ id: "a", px: 1 });
+  api.host.callSurface.still({ id: "a", png: "x" });
+  api.host.callSurface.still({ id: "a", png: "x", px: 0 });
   api.host.callSurface.still();
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(invoked.filter(([command]) => command === "call_still").length, 0);
@@ -317,4 +319,38 @@ test("the stack of conversations on the call's surfaces opens the page's list of
   assert.equal(api.run({ command: "open-conversations", page: 7 }), true);
   assert.equal(opened, 1);
   assert.equal(api.run({ command: "open-conversations", page: 6 }), false, "another page's");
+});
+
+test("a report waits until the app has kept the still before it, and a refused still holds nothing up", async () => {
+  const { api, win, invoked, intervals } = install("tauri://localhost");
+  const settled = async () => { for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0)); };
+  await settled();
+  const answers = [];
+  const invoke = win.__TAURI_INTERNALS__.invoke;
+  win.__TAURI_INTERNALS__.invoke = (command, args) => command === "call_still"
+    ? (invoked.push([command, args]), new Promise((resolve, reject) => answers.push({ resolve, reject })))
+    : invoke(command, args);
+  const view = { call: { joined: true }, mic: { enabled: true }, callCard: {}, callSurface: null };
+  const subscribers = [];
+  win.sidevoiceActions = { toggleMic: () => {} };
+  win.sidevoiceUI = { store: { getState: () => view, subscribe: (fn) => (subscribers.push(fn), () => {}) } };
+  intervals.forEach((tick) => tick());
+  await settled();
+  const reports = () => invoked.filter(([command]) => command === "call_state").length;
+  const before = reports();
+  api.host.callSurface.still({ id: "t1#240", png: "iVBORw0KGgo=", px: 240 });
+  view.callSurface = { still: { id: "t1#240", k: 1 } };
+  subscribers.forEach((fn) => fn());
+  await settled();
+  assert.equal(reports(), before, "the report names a still the app has not kept yet: it waits");
+  answers[0].resolve(null);
+  await settled();
+  assert.equal(reports(), before + 1);
+  api.host.callSurface.still({ id: "t2#108", png: "iVBORw0KGgoB", px: 108 });
+  view.callSurface = { still: { id: "t2#108", k: 1 } };
+  subscribers.forEach((fn) => fn());
+  await settled();
+  answers[1].reject(new Error("not kept"));
+  await settled();
+  assert.equal(reports(), before + 2, "a refusal does not stop the reports");
 });

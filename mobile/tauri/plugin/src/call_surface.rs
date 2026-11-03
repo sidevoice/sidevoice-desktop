@@ -176,8 +176,10 @@ pub const URL_SCHEME: &str = "sidevoice";
 pub enum StillError {
     /// The id cannot name a file ([`Still::valid_id`]).
     Id,
-    /// Not a PNG, or larger than [`STILL_LIMIT`].
+    /// Not a PNG of `px` × `px` (at most [`STILL_MAX_PX`]), or larger than [`STILL_LIMIT`].
     Image,
+    /// The stills folder holds [`STILLS_CAP`] already.
+    Full,
     Io(io::Error),
 }
 
@@ -186,6 +188,7 @@ impl std::fmt::Display for StillError {
         match self {
             StillError::Id => f.write_str("not a still's id"),
             StillError::Image => f.write_str("not a PNG of a still's size"),
+            StillError::Full => f.write_str("the stills folder is full"),
             StillError::Io(error) => write!(f, "{error}"),
         }
     }
@@ -198,6 +201,12 @@ pub const STILL_ID_LIMIT: usize = 120;
 
 /// The largest still kept: a 240 px PNG is far smaller.
 pub const STILL_LIMIT: usize = 512 * 1024;
+
+/// The largest still's side, in pixels: the largest slot is 240 px.
+pub const STILL_MAX_PX: u32 = 480;
+
+/// What the stills folder may hold in all: the page shows four at a time and forgets the rest.
+pub const STILLS_CAP: u64 = 8 * 1024 * 1024;
 
 const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
 
@@ -213,14 +222,30 @@ pub fn stills_dir<R: Runtime>(app: &AppHandle<R>) -> io::Result<PathBuf> {
 
 const STILLS: &str = "call-stills";
 
-/// Keeps the still `id`, a PNG, for the surfaces to read as [`Still::file_name`] in [`stills_dir`]. Written whole or not
-/// at all (a temporary file renamed over it), so a surface never reads half of one.
-pub fn save_still<R: Runtime>(app: &AppHandle<R>, id: &str, png: &[u8]) -> Result<(), StillError> {
-    check_still(id, png)?;
+/// Keeps the still `id`, a PNG of `px` × `px`, for the surfaces to read as [`Still::file_name`] in [`stills_dir`]. Written
+/// whole or not at all (a temporary file renamed over it), so a surface never reads half of one; refused past
+/// [`STILLS_CAP`] in all.
+pub fn save_still<R: Runtime>(
+    app: &AppHandle<R>,
+    id: &str,
+    png: &[u8],
+    px: u32,
+) -> Result<(), StillError> {
+    check_still(id, png, px)?;
     let dir = stills_dir(app).map_err(StillError::Io)?;
     fs::create_dir_all(&dir).map_err(StillError::Io)?;
     let name = Still::file_name(id);
     let file = dir.join(&name);
+    let others: u64 = fs::read_dir(&dir)
+        .map_err(StillError::Io)?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path() != file)
+        .filter_map(|entry| entry.metadata().ok())
+        .map(|metadata| metadata.len())
+        .sum();
+    if others + png.len() as u64 > STILLS_CAP {
+        return Err(StillError::Full);
+    }
     let partial = dir.join(format!(".{name}.partial"));
     fs::write(&partial, png)
         .and_then(|()| fs::rename(&partial, &file))
@@ -247,19 +272,45 @@ pub fn clear_stills<R: Runtime>(app: &AppHandle<R>) -> io::Result<()> {
     }
 }
 
-fn check_still(id: &str, png: &[u8]) -> Result<(), StillError> {
+fn check_still(id: &str, png: &[u8], px: u32) -> Result<(), StillError> {
     if !Still::valid_id(id) {
         return Err(StillError::Id);
     }
-    if png.len() > STILL_LIMIT || !png.starts_with(PNG_SIGNATURE) {
+    if png.len() > STILL_LIMIT
+        || !(1..=STILL_MAX_PX).contains(&px)
+        || png_size(png) != Some((px, px))
+    {
         return Err(StillError::Image);
     }
     Ok(())
 }
 
+/// A PNG's width and height, from its first chunk (which the format requires to be `IHDR`); none for anything else.
+fn png_size(png: &[u8]) -> Option<(u32, u32)> {
+    let header = png.strip_prefix(PNG_SIGNATURE)?.get(..16)?;
+    if &header[4..8] != b"IHDR" {
+        return None;
+    }
+    let number = |at: usize| {
+        u32::from_be_bytes([header[at], header[at + 1], header[at + 2], header[at + 3]])
+    };
+    Some((number(8), number(12)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The start of a PNG of `width` × `height`: its signature and `IHDR` chunk.
+    fn png_of(width: u32, height: u32) -> Vec<u8> {
+        let mut png = PNG_SIGNATURE.to_vec();
+        png.extend(13u32.to_be_bytes());
+        png.extend(b"IHDR");
+        png.extend(width.to_be_bytes());
+        png.extend(height.to_be_bytes());
+        png.extend([8, 6, 0, 0, 0]);
+        png
+    }
 
     #[test]
     fn a_surface_reads_with_defaults_for_what_is_missing() {
@@ -308,17 +359,33 @@ mod tests {
         assert_eq!(Still::file_name("t1#240"), "743123323430.png");
         assert_eq!(Still::file_name("../x"), "2e2e2f78.png");
         assert_ne!(Still::file_name("ab"), Still::file_name("a b"));
+    }
+
+    #[test]
+    fn a_still_is_a_png_of_its_size() {
+        let png = png_of(240, 240);
+        assert!(matches!(check_still("", &png, 240), Err(StillError::Id)));
+        assert!(check_still("t1#240", &png, 240).is_ok());
+        assert!(check_still("t2#108", &png_of(108, 108), 108).is_ok());
+        for (png, px) in [
+            (png.clone(), 108),
+            (png_of(240, 120), 240),
+            (png_of(600, 600), 600),
+            (png_of(0, 0), 0),
+            (PNG_SIGNATURE.to_vec(), 240),
+            (b"GIF89a".to_vec(), 240),
+            ([&png[..12], b"IDAT", &png[16..]].concat(), 240),
+        ] {
+            assert!(
+                matches!(check_still("a", &png, px), Err(StillError::Image)),
+                "{px}"
+            );
+        }
+        let big = [&png[..], &vec![0u8; STILL_LIMIT][..]].concat();
         assert!(matches!(
-            check_still("", PNG_SIGNATURE),
-            Err(StillError::Id)
-        ));
-        assert!(matches!(
-            check_still("a", b"GIF89a"),
+            check_still("a", &big, 240),
             Err(StillError::Image)
         ));
-        let big = [PNG_SIGNATURE, &vec![0u8; STILL_LIMIT][..]].concat();
-        assert!(matches!(check_still("a", &big), Err(StillError::Image)));
-        assert!(check_still("a", PNG_SIGNATURE).is_ok());
     }
 
     #[test]

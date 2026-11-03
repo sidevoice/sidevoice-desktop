@@ -188,36 +188,41 @@ fn call_state(
 }
 
 /// A creature's still for the call's surfaces, from the page `page` (the app's own command, capabilities/main.json;
-/// `host.callSurface.still`): a PNG in base64, kept by its `id` where the surfaces read it
-/// (`sidevoice_mobile_plugin::save_still`). The page sends each id once, before any report names it (`surface.still`,
-/// `surface.others[].still`). Off the main thread: it writes a file.
-#[tauri::command(async)]
-fn call_still(
+/// `host.callSurface.still`): a PNG of `px` × `px` in base64, kept by its `id` where the surfaces read it, on the room's
+/// thread (`call::RoomCall::save_still`). It answers once the file is there: the page sends the report that names it only
+/// after that.
+#[tauri::command]
+async fn call_still(
     app: AppHandle,
     webview: Webview,
     page: u64,
     id: String,
     png: String,
+    px: u32,
 ) -> Result<(), String> {
     use base64::Engine as _;
     the_page(&app, &webview)?;
-    if page != app.state::<AppHost>().page().0 {
-        return Ok(()); // a page that has been replaced: the new one sends its own
-    }
     if png.len() > sidevoice_mobile_plugin::STILL_LIMIT / 3 * 4 + 4 {
         return Err("call_still: larger than a still".into());
     }
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(png.as_bytes())
         .map_err(|_| "call_still: not base64".to_owned())?;
-    sidevoice_mobile_plugin::save_still(&app, &id, &bytes).map_err(|error| {
+    tauri::async_runtime::spawn_blocking(move || {
+        let room = app.state::<call::RoomCall>();
+        room.save_still(page, id, bytes, px)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| {
         log::warn!("call_still: not kept: {error}");
         format!("call_still: {error}")
     })
 }
 
-/// The stills `ids` the page `page` shows no more (the app's own command; `host.callSurface.forget`): their files go.
-#[tauri::command(async)]
+/// The stills `ids` the page `page` shows no more (the app's own command; `host.callSurface.forget`): their files go
+/// once no surface draws them (`call::RoomCall::forget_stills`).
+#[tauri::command]
 fn call_forget(
     app: AppHandle,
     webview: Webview,
@@ -225,13 +230,8 @@ fn call_forget(
     ids: Vec<String>,
 ) -> Result<(), String> {
     the_page(&app, &webview)?;
-    if page != app.state::<AppHost>().page().0 {
-        return Ok(());
-    }
-    sidevoice_mobile_plugin::forget_stills(&app, &ids).map_err(|error| {
-        log::warn!("call_forget: {error}");
-        format!("call_forget: {error}")
-    })
+    app.state::<call::RoomCall>().forget_stills(page, ids);
+    Ok(())
 }
 
 impl From<CallReport> for CallState {
