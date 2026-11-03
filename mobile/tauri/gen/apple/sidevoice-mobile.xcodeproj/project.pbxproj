@@ -84,6 +84,7 @@
 		7717DC1AC675EE5C22703A85 /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		78DA3D5C4ABD3C61CB5AAB0F /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
 		7D0D2F377196B00F1647880E /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
+		8609C7142CEC5C4009BB8B54 /* surface.rs */ = {isa = PBXFileReference; path = surface.rs; sourceTree = "<group>"; };
 		86D727D8E9CA54F3F9AF1E0A /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
 		8807C52FB04E7019B2BC1690 /* MediaPlayer.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MediaPlayer.framework; path = System/Library/Frameworks/MediaPlayer.framework; sourceTree = SDKROOT; };
 		9B99011EAA107BB9AD2AA47E /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/InfoPlist.strings; sourceTree = "<group>"; };
@@ -249,6 +250,7 @@
 				AC7B192F6F772B984C2013E8 /* lib.rs */,
 				3ED59F09A85CF8FF41D62009 /* pairings.rs */,
 				749529AE2409B9FB50B39312 /* platform.rs */,
+				8609C7142CEC5C4009BB8B54 /* surface.rs */,
 				AA1884F220662184B30B9C9B /* i18n */,
 				C8A96FD8F714BFFEBAC54283 /* platform */,
 			);
