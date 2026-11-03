@@ -3,3 +3,6 @@
 
 /* The local network permission prompt. */
 "NSLocalNetworkUsageDescription" = "Sidevoice verbindet sich über das lokale Netzwerk mit deinem gekoppelten Rechner.";
+
+/* The camera permission prompt (scanning the pairing code). */
+"NSCameraUsageDescription" = "Sidevoice verwendet die Kamera, um den Kopplungscode zu scannen, den dein Rechner anzeigt.";

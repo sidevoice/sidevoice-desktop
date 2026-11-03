@@ -651,8 +651,8 @@ mod tests {
                 .collect();
             assert_eq!(
                 keys,
-                ["NSMicrophoneUsageDescription", "NSLocalNetworkUsageDescription"],
-                "{language}: {IOS_TEXTS_FILE} is these two `\"KEY\" = \"text\";` entries and nothing else"
+                ["NSMicrophoneUsageDescription", "NSLocalNetworkUsageDescription", "NSCameraUsageDescription"],
+                "{language}: {IOS_TEXTS_FILE} is these three `\"KEY\" = \"text\";` entries and nothing else"
             );
         }
     }
@@ -662,7 +662,7 @@ mod tests {
         let plist = info_ios_plist();
         let english = fs::read_to_string(ios_dir().join("en.lproj").join(IOS_TEXTS_FILE)).unwrap();
         let strings = strings_of(&english).unwrap();
-        assert_eq!(strings.len(), 2);
+        assert_eq!(strings.len(), 3);
         for (key, value) in strings {
             let in_plist = util::re(&format!(r"<key>{key}</key>\s*<string>([^<]*)</string>"));
             let base = in_plist.captures(&plist).unwrap_or_else(|| panic!("Info.ios.plist has no {key}"));

@@ -290,6 +290,9 @@ fn run_app() {
                 .build(),
         )
         .plugin(sidevoice_mobile_plugin::init())
+        // The camera that scans the pairing code (`host.codeScanner`): the page asks for its permission and a scan through
+        // the plugin's own commands, which the window is granted one by one (capabilities/main.json).
+        .plugin(tauri_plugin_barcode_scanner::init())
         // The commands the apps share (`host.voice`, `host.engine`, `host.microphone`, `host.pairings`): who may call is
         // the app's one window, on its own page.
         .plugin(sidevoice_shared_tauri::init(the_page, pages))

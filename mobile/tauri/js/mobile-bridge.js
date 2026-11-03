@@ -5,7 +5,7 @@
 // are one script, composed by the app (mobile/tauri/src/bridge.rs, docs/BRIDGE.md -> "Parts"): this part is evaluated where
 // `transportOf` and `membersOf`, the other two, are in scope.
 //
-// The phone offers the voice call it runs itself, its engine, its microphone permission and its pairings, and owns the
+// The phone offers the voice call it runs itself, its engine, its microphone permission, its pairings and the camera that scans a pairing code, and owns the
 // call's media: the page registers no Media Session of its own (`presence.media: "app"`). Nothing of the desktop's
 // (the local host, the reset, the mute shortcut, the call controls card, the updater) is offered, and its `debug` has the
 // phone's one switch, in a nightly or a dev build:
@@ -146,6 +146,57 @@
     });
   }
 
+  /** The camera that scans the pairing code (docs/MOBILE.md -> "Scanning the pairing code"): Tauri's barcode scanner plugin
+   *  (CameraX and ML Kit on Android, AVFoundation on iOS) behind four calls. The plugin's own words (its permission states, its
+   *  rejection strings) stay here: the page gets `granted | prompt | denied` for the permission and one result of a scan, and
+   *  nothing of a scan ever rejects. The page draws the viewfinder: the scan is windowed, the camera is behind the web view and
+   *  the page shows it through (a transparent page with its own cancel), so `cancel()` is the page's. What the QR holds is the
+   *  pairing code as the machine prints it (`SV1.…`): the page reads it, as it reads a typed one. */
+  function codeScanner() {
+    const PLUGIN = "plugin:barcode-scanner|";
+    const call = (command, args) => transport.own.call(PLUGIN + command, args);
+    const stateOf = (answer) => {
+      const camera = answer && answer.camera;
+      return camera === "granted" || camera === "denied" ? camera : "prompt";
+    };
+    const permission = () => call("check_permissions").then(stateOf, () => "denied");
+    /** Asks for the camera if the person has not decided yet (the system's prompt); a decided answer is not asked again. */
+    const request = () =>
+      call("request_permissions").then(stateOf, () => "denied").then((state) => (state === "granted" ? "granted" : "denied"));
+    let pending = null;
+    const scanOnce = () =>
+      request().then((state) => {
+        if (state !== "granted") return { status: "denied" };
+        return call("scan", { windowed: true, formats: ["QR_CODE"] }).then(
+          (found) => ({ status: "scanned", text: found && typeof found.content === "string" ? found.content : "" }),
+          (error) => {
+            // The plugin rejects "cancelled" when `cancel()` ends the scan. Anything else: the camera was taken away since the
+            // answer above (denied), or there is none to scan with (a simulator, a device without a camera).
+            if (String((error && error.message) || error) === "cancelled") return { status: "cancelled" };
+            return permission().then((now) => ({ status: now === "denied" ? "denied" : "unavailable" }));
+          },
+        );
+      });
+    const scan = () => {
+      if (!pending) pending = scanOnce().finally(() => { pending = null; });
+      return pending;
+    };
+    // A page that goes away with the camera on: the camera is let go.
+    if (typeof win.addEventListener === "function") win.addEventListener("pagehide", () => { if (pending) call("cancel").catch(() => {}); });
+    return Object.freeze({
+      permission,
+      request,
+      /** One scan at a time (a second call answers the first's result). Resolves
+       *  `{status: "scanned", text} | {status: "cancelled"} | {status: "denied"} | {status: "unavailable"}`; asks for the camera
+       *  first, so a scan without `request()` is safe. */
+      scan,
+      /** Ends the scan in progress (it resolves `cancelled`); nothing when there is none. */
+      cancel: () => (pending ? call("cancel").then(() => {}, () => {}) : Promise.resolve()),
+      /** The app's page of the system's settings, where a denied camera is allowed again. */
+      openSettings: () => call("open_app_settings").then(() => {}),
+    });
+  }
+
   const api = {
     /** The contract this app speaks: the desktop's (docs/BRIDGE.md). */
     version: 2,
@@ -172,6 +223,8 @@
       ...(debugState && typeof debugState === "object" ? { debug: debug(debugState) } : {}),
       // The pairings, in the app's private storage (mobile/tauri/src/pairings.rs), not the webview's.
       pairings: members.pairings(),
+      /** The camera that scans the pairing code a machine shows (the interface choice of sidevoice-desktop#405). */
+      codeScanner: codeScanner(),
       /** The app owns the call's audio and the system's media on a phone: the page must not register Media Session
        *  handlers or play a Now Playing element of its own. The app answers the headset's buttons and the lock screen
        *  (sidevoice-shared-tauri's platform/media_controls). */

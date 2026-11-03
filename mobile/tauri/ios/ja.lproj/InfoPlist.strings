@@ -3,3 +3,6 @@
 
 /* The local network permission prompt. */
 "NSLocalNetworkUsageDescription" = "Sidevoice は、ペアリング済みのコンピュータにローカルネットワーク経由で接続します。";
+
+/* The camera permission prompt (scanning the pairing code). */
+"NSCameraUsageDescription" = "Sidevoice は、お使いのコンピュータに表示されるペアリングコードを読み取るためにカメラを使用します。";
