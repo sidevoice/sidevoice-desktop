@@ -21,6 +21,8 @@ import app.tauri.plugin.PluginManager
 class StartCallServiceArgs {
     /** The conversation the call is on (empty for none): the system shows it as the call's other party. */
     var title: String = ""
+    /** Whether the call is also a call of the system's Telecom (off: the app's own call, without Telecom). */
+    var systemCall: Boolean = false
     /** Where the service reports (`CallEvent`, in Rust). */
     lateinit var onEvent: Channel
 }
@@ -102,6 +104,7 @@ class MobilePlugin(private val activity: Activity) : Plugin(activity) {
                     .setAction(CallService.ACTION_START)
                     .putExtra(CallService.EXTRA_SESSION, session.id)
                     .putExtra(CallService.EXTRA_TITLE, args.title)
+                    .putExtra(CallService.EXTRA_SYSTEM_CALL, args.systemCall)
             )
             invoke.resolve()
         } catch (error: RuntimeException) {

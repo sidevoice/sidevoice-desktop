@@ -39,9 +39,10 @@ fn the_window_is_granted_every_shared_command_it_uses_once_and_nothing_else() {
             "allow-call-forget",
             "allow-call-page",
             "allow-call-state",
-            "allow-call-still"
+            "allow-call-still",
+            "allow-developer-options"
         ],
-        "the app's own: its page's number, its report of the call and the stills of its surfaces"
+        "the app's own: its page's number, its report of the call, the stills of its surfaces and its developer options"
     );
     let unique: BTreeSet<&String> = granted.iter().collect();
     assert_eq!(

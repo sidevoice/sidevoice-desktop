@@ -1,5 +1,6 @@
-//! iOS: the call is a CallKit call (Apple's "Making and receiving VoIP calls"). One `CXProvider` for the app, made at its
-//! start: audio only, one call at a time, not listed in the Phone app's Recents, the app's mark as its icon. The green button
+//! iOS: the call is a CallKit call (Apple's "Making and receiving VoIP calls"). One `CXProvider` for the app, made by its
+//! first call (none is made while the developer option "Treat calls as system calls" is off, so the app's own call has no
+//! CallKit object): audio only, one call at a time, not listed in the Phone app's Recents, the app's mark as its icon. The green button
 //! asks for a `CXStartCallAction` through a `CXCallController`, with the conversation as the handle; the provider reports it
 //! connecting, and connected once the system has activated its audio. The red button asks for a `CXEndCallAction`; one the
 //! app did not ask for (the system's in-call screen, the lock screen, a headset, a car kit) is the person hanging up.
@@ -55,19 +56,18 @@ impl Os for Native {
     const REPLACES_MEDIA_CONTROLS: bool = true;
 
     fn register<R: Runtime, C: DeserializeOwned>(
-        api: PluginApi<R, C>,
+        _api: PluginApi<R, C>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        api.app()
-            .run_on_main_thread(|| match MainThreadMarker::new() {
-                Some(main) => CALLKIT.with_borrow_mut(|kit| *kit = Some(CallKit::new(main))),
-                None => log::error!("call: CallKit was not set up (not on the main thread)"),
-            })?;
+        // Nothing yet: the provider is made by the first system's call (`request_start`), so an app that never makes one
+        // (the developer option is off) never has a CallKit object.
         Ok(())
     }
 
     fn start<R: Runtime>(
         app: &AppHandle<R>,
         details: &CallDetails,
+        // iOS has no call of its own to run: the common code starts only a system's call here.
+        _system: bool,
         events: CallEvents,
     ) -> Result<(), CallServiceError> {
         let id = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -290,6 +290,15 @@ fn request_start(
     done: mpsc::Sender<Result<(), CallServiceError>>,
 ) -> Result<(), CallServiceError> {
     let (controller, action) = CALLKIT.with_borrow_mut(|kit| {
+        // The provider is made by the first call (on the main thread, where this runs).
+        if kit.is_none() {
+            let main = MainThreadMarker::new().ok_or_else(|| {
+                CallServiceError::Unreachable(
+                    "CallKit is not set up (not on the main thread)".into(),
+                )
+            })?;
+            *kit = Some(CallKit::new(main));
+        }
         let kit = kit
             .as_mut()
             .ok_or_else(|| CallServiceError::Unreachable("CallKit is not set up".into()))?;
