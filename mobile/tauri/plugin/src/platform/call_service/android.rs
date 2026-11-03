@@ -10,7 +10,7 @@ use tauri::{
 
 use super::Os;
 use crate::platform::kotlin;
-use crate::{CallDetails, CallEvent, CallEvents, CallServiceError};
+use crate::{CallDetails, CallEvent, CallEvents, CallServiceError, CallSurface};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -23,6 +23,8 @@ struct StartArgs<'a> {
 struct UpdateArgs<'a> {
     title: &'a str,
     muted: bool,
+    /// What the call's notification draws (`crate::CallSurface`, in camelCase).
+    surface: &'a CallSurface,
 }
 
 pub struct Native;
@@ -71,6 +73,7 @@ impl Os for Native {
             UpdateArgs {
                 title: &details.title,
                 muted: details.muted,
+                surface: &details.surface,
             },
         )
     }

@@ -54,12 +54,29 @@
     } else if (!enabled) owned.seen = true;
     else if (owned.seen) owned = null; // unmuted by the person
   };
+  /** The call's surfaces (the Live Activity, the call's notification; docs/MOBILE.md -> "The call surface"): the room's
+   *  `callSurface` rides in every report as `surface`, its creatures' stills by id. Each still's PNG (base64, the room's
+   *  `callSurface.stills[id].png`) goes to the app once, by itself (`call_still`), and never in a report. */
+  const sentStills = new Set();
+  const surfaceOf = (view) => {
+    const surface = view && view.callSurface;
+    if (!surface || typeof surface !== "object") return {};
+    const { stills, ...shown } = surface;
+    for (const [id, still] of Object.entries(stills && typeof stills === "object" ? stills : {})) {
+      const png = still && typeof still === "object" ? still.png : null;
+      if (typeof png !== "string" || !png || sentStills.has(id)) continue;
+      sentStills.add(id);
+      // Sent again by a later report if the app did not keep it.
+      numbered().then((number) => transport.own.call("call_still", { page: number, id, png })).catch(() => sentStills.delete(id));
+    }
+    return { surface: shown };
+  };
   const reporting = members.room({
     version: 2,
     publish: (snapshot) => {
       numbered().then((number) => transport.own.send("call_state", { page: number, snapshot }), () => {});
     },
-    extend: () => ({}),
+    extend: surfaceOf,
     attached: (ui) => ui.store.subscribe(() => follow(ui)),
     commands: {
       // The system took the audio away: the call pauses as the page's own mute does (the page shows it muted). A person who
@@ -89,6 +106,14 @@
       mute: (request, state, actions) => {
         if (!state.joined || state.micDisabled || typeof request.muted !== "boolean") return false;
         if (state.micEnabled === request.muted) actions.toggleMic();
+        return true;
+      },
+      // The stack of conversations on the call's surfaces was tapped: the app is in front, and the page shows its list
+      // of conversations (the room's `openConversations`, where the page has it).
+      "open-conversations": () => {
+        const ui = win.sidevoiceUI;
+        if (!ui || typeof ui.openConversations !== "function") return false;
+        ui.openConversations();
         return true;
       },
     },
@@ -124,6 +149,9 @@
       presence: Object.freeze({ media: "app" }),
       /** The webview sends plain http to a private address; to whom, and with whose consent, is the page's policy. */
       reach: Object.freeze({ plainHttpPrivate: true }),
+      /** The app draws the call's own surfaces (iOS's Live Activity, Android's call notification) from the room's
+       *  `callSurface`: the page publishes what costs it work (the stills, the spoken page) while `active()`. */
+      callSurface: Object.freeze({ active: () => true }),
     }),
     snapshot: reporting.snapshot,
     /** Runs one command from the app (the call's notification, a headset) through the web UI's own actions:

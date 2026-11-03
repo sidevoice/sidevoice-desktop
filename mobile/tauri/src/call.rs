@@ -28,7 +28,8 @@ use crate::hold::{focus_signal, Effect, Hold, Signal, Source};
 use crate::platform::interruption::{self, Interruption};
 use sidevoice_mobile_plugin::{
     call_activates_audio, call_replaces_media_controls, request_call_focus, start_call_service,
-    stop_call_service, update_call_service, CallDetails, CallEvent, StopReason,
+    stop_call_service, update_call_service, CallDetails, CallEvent, CallSurface, StopReason,
+    SurfaceAction,
 };
 use sidevoice_shared::app::{AppHost, CallActivity};
 use sidevoice_shared::sidevoice_voice::{AudioSession, Session, SessionConfig, SessionMode};
@@ -289,8 +290,23 @@ pub struct Room {
     phone: Arc<PhoneCall>,
     /// The call as the page last reported it.
     state: CallState,
+    /// What the call's surfaces show, from the page's last report (`crate::surface`).
+    surface: CallSurface,
     /// What the system's call was last told it shows (`None`: nothing yet).
     shown: Option<CallDetails>,
+    /// When it was last told, and whether a later update is already on its way ([`UPDATE_INTERVAL`]).
+    updated_at: Option<Instant>,
+    update_queued: bool,
+}
+
+/// The least time between two updates of the call's service: Android drops a notification's updates past about five a
+/// second, and iOS budgets a Live Activity's. A change inside it is shown at its end, with whatever else changed meanwhile.
+const UPDATE_INTERVAL: Duration = Duration::from_millis(250);
+
+/// How long a change waits before it is shown, the service last updated at `last` (`None`: not yet).
+fn update_wait(last: Option<Instant>, now: Instant) -> Option<Duration> {
+    let wait = UPDATE_INTERVAL.checked_sub(now.saturating_duration_since(last?))?;
+    (!wait.is_zero()).then_some(wait)
 }
 
 impl RoomCall {
@@ -306,7 +322,10 @@ impl RoomCall {
             interruptions: Hold::new(),
             phone,
             state: CallState::default(),
+            surface: CallSurface::default(),
             shown: None,
+            updated_at: None,
+            update_queued: false,
         };
         std::thread::Builder::new()
             .name("room-call".into())
@@ -332,6 +351,7 @@ impl RoomCall {
         self.then(move |room| {
             room.page = page;
             room.state = CallState::default();
+            room.surface = CallSurface::default();
             room.hold(false, None);
             // What the old page's interruptions held is let go first; the new page starts with none.
             room.clear_interruption();
@@ -343,12 +363,20 @@ impl RoomCall {
 
     /// The page `page` reports its call: whether it is joined (the green and the red button), since when (`since`, the
     /// page's own mark of that call: a join of the same page later is another call), its conversation and its mute
-    /// (`state`), and whether the mute can be used (`mic_disabled`).
-    pub fn report(&self, page: u64, state: CallState, since: Option<f64>, mic_disabled: bool) {
+    /// (`state`), whether the mute can be used (`mic_disabled`), and what its surfaces show (`surface`).
+    pub fn report(
+        &self,
+        page: u64,
+        state: CallState,
+        since: Option<f64>,
+        mic_disabled: bool,
+        surface: crate::surface::Reported,
+    ) {
         self.then(move |room| {
             if room.page == page {
                 let (joined, mic_enabled) = (state.joined, state.mic_enabled);
                 room.state = state;
+                room.surface = crate::surface::surface(&surface, &room.surface);
                 room.hold(joined, since);
                 room.microphone(mic_enabled, mic_disabled);
                 room.show();
@@ -367,6 +395,12 @@ impl RoomCall {
             }
             run_on_page(&room.app, request);
         });
+    }
+
+    /// The person asked for `action` on one of the call's surfaces outside the service's own events (iOS: a link of the Live
+    /// Activity the app was opened with): run on the current page's call.
+    pub fn surface_action(&self, action: SurfaceAction) {
+        self.then(move |room| room.act(action));
     }
 
     /// Quitting: the service stops, waited for up to `limit`.
@@ -392,6 +426,7 @@ impl Room {
             let details = CallDetails {
                 title: self.state.title.trim().to_owned(),
                 muted: false,
+                surface: self.surface.clone(),
             };
             // A voice call's audio that opens meanwhile waits for the system to make the call's audio ready (CallKit's
             // session; Telecom's active call and its route).
@@ -428,7 +463,8 @@ impl Room {
         }
     }
 
-    /// Tells the system's call what it shows now, when that changed: the page's conversation and its mute.
+    /// Tells the call's service what it shows now, when that changed: the page's conversation, its mute and the call's
+    /// surface. At most once every [`UPDATE_INTERVAL`]: a change sooner is shown at its end.
     fn show(&mut self) {
         if self.holding.is_none() {
             return;
@@ -436,14 +472,52 @@ impl Room {
         let details = CallDetails {
             title: self.state.title.trim().to_owned(),
             muted: !self.state.mic_enabled,
+            surface: self.surface.clone(),
         };
         if self.shown.as_ref() == Some(&details) {
             return;
         }
+        if let Some(wait) = update_wait(self.updated_at, Instant::now()) {
+            self.show_later(wait);
+            return;
+        }
         match update_call_service(&self.app, &details) {
-            Ok(()) => self.shown = Some(details),
+            Ok(()) => {
+                self.shown = Some(details);
+                self.updated_at = Some(Instant::now());
+            }
             Err(error) => log::warn!("call: the system's call was not updated: {error}"),
         }
+    }
+
+    /// Shows the call again in `wait`, once, however many changes come meanwhile.
+    fn show_later(&mut self, wait: Duration) {
+        if self.update_queued {
+            return;
+        }
+        self.update_queued = true;
+        let app = self.app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(wait);
+            if let Some(room) = app.try_state::<RoomCall>() {
+                room.then(|room| {
+                    room.update_queued = false;
+                    room.show();
+                });
+            }
+        });
+    }
+
+    /// Runs what the person asked for on a surface on the page's call (its number, and the call's join mark when its
+    /// service holds it), as the page's own command.
+    fn act(&self, action: SurfaceAction) {
+        log::info!("call: {action:?} from the call's surface");
+        let mut request = surface_command(action);
+        request["page"] = self.page.into();
+        if let Some(since) = self.since {
+            request["since"] = since.into();
+        }
+        run_on_page(&self.app, request);
     }
 
     /// The media controls follow the page's call (the media controls reach the plugin's Kotlin, which runs on Android's
@@ -591,6 +665,15 @@ fn on_service_event(app: &AppHandle, start: u64, page: u64, since: Option<f64>, 
             });
             return;
         }
+        // Asked for on one of the call's surfaces (the notification, the Live Activity): run on the page's call.
+        CallEvent::Action { action } => {
+            room.then(move |room| {
+                if mine(room) {
+                    room.act(action);
+                }
+            });
+            return;
+        }
         CallEvent::Stopped { .. } => {}
     }
     if let Some(reason) = hang_up_for(&event) {
@@ -623,7 +706,23 @@ fn hang_up_for(event: &CallEvent) -> Option<StopReason> {
         CallEvent::Focus { .. }
         | CallEvent::Muted { .. }
         | CallEvent::Held { .. }
-        | CallEvent::Audio { .. } => None,
+        | CallEvent::Audio { .. }
+        | CallEvent::Action { .. } => None,
+    }
+}
+
+/// The page's command for what the person asked on a surface (mobile/tauri/js/mobile-bridge.js, sidevoice-shared-tauri's
+/// members): the mute as the person's own, set to a value rather than toggled, so that a tap on a surface that showed a
+/// stale mute does what it said.
+fn surface_command(action: SurfaceAction) -> serde_json::Value {
+    let command = |name: &str| serde_json::json!({ "command": name });
+    match action {
+        SurfaceAction::Mute => serde_json::json!({ "command": "mute", "muted": true }),
+        SurfaceAction::Unmute => serde_json::json!({ "command": "mute", "muted": false }),
+        SurfaceAction::Skip => command("skip-reply"),
+        SurfaceAction::CancelSend => command("cancel-input"),
+        SurfaceAction::HangUp => command("hang-up"),
+        SurfaceAction::OpenConversations => command("open-conversations"),
     }
 }
 
@@ -664,9 +763,48 @@ mod tests {
             CallEvent::Muted { muted: true },
             CallEvent::Held { held: true },
             CallEvent::Audio { active: false },
+            CallEvent::Action {
+                action: SurfaceAction::HangUp,
+            },
         ] {
             assert_eq!(hang_up_for(&event), None, "{event:?}");
         }
+    }
+
+    #[test]
+    fn a_surface_s_action_is_the_page_s_own_command() {
+        for (action, command) in [
+            (SurfaceAction::Mute, r#"{"command":"mute","muted":true}"#),
+            (SurfaceAction::Unmute, r#"{"command":"mute","muted":false}"#),
+            (SurfaceAction::Skip, r#"{"command":"skip-reply"}"#),
+            (SurfaceAction::CancelSend, r#"{"command":"cancel-input"}"#),
+            (SurfaceAction::HangUp, r#"{"command":"hang-up"}"#),
+            (
+                SurfaceAction::OpenConversations,
+                r#"{"command":"open-conversations"}"#,
+            ),
+        ] {
+            assert_eq!(
+                surface_command(action),
+                serde_json::from_str::<serde_json::Value>(command).unwrap(),
+                "{action:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_service_is_updated_at_most_once_an_interval() {
+        let now = Instant::now();
+        assert_eq!(
+            update_wait(None, now),
+            None,
+            "the first update goes at once"
+        );
+        assert_eq!(update_wait(Some(now), now), Some(UPDATE_INTERVAL));
+        let later = now + UPDATE_INTERVAL / 5;
+        assert_eq!(update_wait(Some(now), later), Some(UPDATE_INTERVAL * 4 / 5));
+        assert_eq!(update_wait(Some(now), now + UPDATE_INTERVAL), None);
+        assert_eq!(update_wait(Some(now), now + UPDATE_INTERVAL * 3), None);
     }
 
     #[test]

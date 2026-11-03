@@ -5091,6 +5091,7 @@ name = "sidevoice-mobile"
 version = "0.1.0"
 dependencies = [
  "atomic-write-file",
+ "base64 0.22.1",
  "block2",
  "jni 0.21.1",
  "log",

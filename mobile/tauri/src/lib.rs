@@ -16,10 +16,12 @@ mod hold;
 mod i18n;
 pub mod pairings;
 mod platform;
+mod surface;
 
 use std::{path::PathBuf, sync::Arc};
 
 pub use platform::entry::run;
+use sidevoice_mobile_plugin::SurfaceAction;
 use sidevoice_shared::app::{AlwaysAdmit, AppHost, Hooks, HostConfig, Keychain};
 use sidevoice_shared_tauri::platform::media_controls::{self, CallState, MediaCommand};
 use sidevoice_shared_tauri::platform::origin::APP_ORIGIN;
@@ -109,6 +111,30 @@ struct CallReport {
     title: String,
     /// When the call was joined, as the page marks it (ms since the epoch): a later join is another call.
     since: Option<f64>,
+    /// The room's own words for the call, which the call's surfaces read (`surface.rs`): the agent's mood, the person's
+    /// open turn, why the call is busy (strings, read leniently: anything else is none), and whether a reply can be
+    /// skipped.
+    mood: serde_json::Value,
+    turn: serde_json::Value,
+    busy_reason: serde_json::Value,
+    can_skip: bool,
+    /// The page's `callSurface`, as the bridge relays it (its stills by id; their bytes come through `call_still`). Read
+    /// apart ([`surface::SurfaceReport::read`]), so that a surface the app cannot read never stops the call.
+    surface: serde_json::Value,
+}
+
+impl CallReport {
+    /// What the call's surfaces are shown of this report.
+    fn surface(&self) -> surface::Reported {
+        let text = |value: &serde_json::Value| value.as_str().map(str::to_owned);
+        surface::Reported {
+            mood: text(&self.mood),
+            turn: text(&self.turn),
+            busy_reason: text(&self.busy_reason),
+            can_skip: self.can_skip,
+            surface: surface::SurfaceReport::read(&self.surface),
+        }
+    }
 }
 
 /// The last report, to log what changed.
@@ -145,6 +171,7 @@ fn call_state(
         snapshot.clone().into(),
         snapshot.since,
         snapshot.mic_disabled,
+        snapshot.surface(),
     );
     let previous = std::mem::replace(&mut *last.0.lock().unwrap(), snapshot.clone());
     if (previous.ready, previous.joined, previous.mic_enabled)
@@ -158,6 +185,34 @@ fn call_state(
         );
     }
     Ok(())
+}
+
+/// A creature's still for the call's surfaces, from the page `page` (the app's own command, capabilities/main.json): a PNG
+/// in base64, kept by its `id` where the surfaces read it (`sidevoice_mobile_plugin::save_still`). The page sends each id
+/// once and names it in its reports (`surface.still`, `surface.others`). Off the main thread: it writes a file.
+#[tauri::command(async)]
+fn call_still(
+    app: AppHandle,
+    webview: Webview,
+    page: u64,
+    id: String,
+    png: String,
+) -> Result<(), String> {
+    use base64::Engine as _;
+    the_page(&app, &webview)?;
+    if page != app.state::<AppHost>().page().0 {
+        return Ok(()); // a page that has been replaced: the new one sends its own
+    }
+    if png.len() > sidevoice_mobile_plugin::STILL_LIMIT / 3 * 4 + 4 {
+        return Err("call_still: larger than a still".into());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(png.as_bytes())
+        .map_err(|_| "call_still: not base64".to_owned())?;
+    sidevoice_mobile_plugin::save_still(&app, &id, &bytes).map_err(|error| {
+        log::warn!("call_still: not kept: {error}");
+        format!("call_still: {error}")
+    })
 }
 
 impl From<CallReport> for CallState {
@@ -192,7 +247,7 @@ fn run_app() {
         // the app's one window, on its own page.
         .plugin(sidevoice_shared_tauri::init(the_page, pages))
         .manage(LastReport::default())
-        .invoke_handler(tauri::generate_handler![call_page, call_state])
+        .invoke_handler(tauri::generate_handler![call_page, call_state, call_still])
         .setup(move |app| {
             let handle = app.handle().clone();
             // The headset's buttons and the lock screen's controls act on the call through the page, as the desktop's do,
@@ -215,6 +270,10 @@ fn run_app() {
             // Declared now, activated only while a call's audio is open (`call::PhoneCall`).
             if let Err(error) = call::configure() {
                 log::error!("audio session: {error}");
+            }
+            // The creatures' stills an earlier run kept for the call's surfaces: the page sends the ones it shows again.
+            if let Err(error) = sidevoice_mobile_plugin::clear_stills(&handle) {
+                log::warn!("call_still: the earlier stills were not removed: {error}");
             }
             let phone = Arc::new(call::PhoneCall::default());
             app.manage(Pairings(Arc::new(pairings::PairingFile::of_app(&handle)?)));
@@ -300,6 +359,18 @@ fn run_app() {
         .build(tauri::generate_context!())
         .expect("error while building the Sidevoice mobile app")
         .run(|app, event| {
+            // A link the app is opened with, from the call's surfaces (iOS: the Live Activity's stack,
+            // `sidevoice://conversations`): run on the page's call.
+            if let tauri::RunEvent::Opened { urls } = &event {
+                let actions = urls
+                    .iter()
+                    .filter_map(|url| SurfaceAction::from_url(url.as_str()));
+                for action in actions {
+                    if let Some(room) = app.try_state::<call::RoomCall>() {
+                        room.surface_action(action);
+                    }
+                }
+            }
             // Quitting: the calls stop and every model and audio device is let go, bounded.
             if let tauri::RunEvent::Exit = event {
                 if let Some(room) = app.try_state::<call::RoomCall>() {
