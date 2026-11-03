@@ -116,7 +116,7 @@ struct CallReport {
 #[derive(Default)]
 struct LastReport(std::sync::Mutex<CallReport>);
 
-/// `host.debug`'s one command (docs/BRIDGE.md → "The developer options"): `action` `set` with a switch's `name` and `enabled`,
+/// `host.debug`'s one command (docs/BRIDGE.md → "The developer options"): `action` `get`, or `set` with a switch's `name` and `enabled`,
 /// answering the switches' state. Refused (`bad_request`) in a release, for a switch the phone lacks or another action.
 #[tauri::command]
 fn developer_options(
@@ -130,9 +130,12 @@ fn developer_options(
     let refusal = |why: String| serde_json::json!({ "key": "bad_request", "message": why });
     the_page(&app, &webview).map_err(refusal)?;
     match (action.as_str(), name, enabled) {
+        ("get", None, None) => options
+            .state()
+            .ok_or_else(|| refusal("The developer options are not in this build.".into())),
         ("set", Some(name), Some(on)) => options.set(&name, on).map_err(refusal),
         _ => Err(refusal(
-            "developer_options takes set, a name and enabled".into(),
+            "developer_options takes get, or set with a name and enabled".into(),
         )),
     }
 }

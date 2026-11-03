@@ -11,6 +11,7 @@ import android.util.Log
 import android.content.pm.ServiceInfo
 import android.net.Uri
 import android.media.AudioAttributes
+import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.MediaMetadata
@@ -88,6 +89,11 @@ class CallService : Service() {
     private var control: CallControlScope? = null
     /** This service's call is over: a call Telecom gives after that is disconnected at once, so none is left behind. */
     private var telecomEnded = false
+    /** The own call's route (`routeCommunication`): whether the mode is taken, the mode before it, and what was set. */
+    private var communicating = false
+    private var modeBefore = AudioManager.MODE_NORMAL
+    private var routedDevice = false
+    private var routedSco = false
     /** The system's microphone mute while Telecom holds the call: the service's own mutes told from one from outside. */
     private var echoes: MuteEchoes? = null
     /** The page's mute, as last told ([ACTION_UPDATE]). */
@@ -134,6 +140,7 @@ class CallService : Service() {
     override fun onDestroy() {
         cancelAudioDeadline()
         endTelecom()
+        clearCommunication()
         closeMedia()
         abandonFocus()
         session?.let { CallSession.end(it, "system") }
@@ -172,6 +179,8 @@ class CallService : Service() {
         audioReadyFor = null
         cancelAudioDeadline()
         if (!systemCall) {
+            // Telecom is not here to put the call in the communication mode and route it: the service does it itself.
+            routeCommunication()
             audioReady(mine, "own call: no Telecom call")
             return
         }
@@ -204,6 +213,7 @@ class CallService : Service() {
     private fun finish(reason: String) {
         cancelAudioDeadline()
         endTelecom()
+        clearCommunication()
         closeMedia()
         abandonFocus()
         session?.let { CallSession.end(it, reason) }
@@ -582,6 +592,55 @@ class CallService : Service() {
         requestFocus(mine, reportGranted = true)
     }
 
+    /**
+     * The own call's audio route, which Telecom does for a system's call: the audio mode is communication, and the route a
+     * Bluetooth headset (HFP, or LE Audio) or a hearing aid, if one is connected (Android's
+     * self-managed audio guide: `AudioManager.setCommunicationDevice`). With none, the system's default stays (the earpiece or
+     * the speaker the app's own settings choose). Logged (`SidevoiceCall`): the mode and the device taken.
+     */
+    private fun routeCommunication() {
+        val audio = getSystemService(AudioManager::class.java)
+        if (!communicating) {
+            modeBefore = audio.mode
+            audio.mode = AudioManager.MODE_IN_COMMUNICATION
+            communicating = true
+        }
+        Log.i(TAG, "route: audio mode communication (was ${modeBefore})")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val device = audio.availableCommunicationDevices.firstOrNull { it.type in HEADSET_TYPES }
+            if (device == null) {
+                Log.i(TAG, "route: no headset for the call; the system's route stays")
+            } else {
+                val taken = audio.setCommunicationDevice(device)
+                Log.i(TAG, "route: communication device ${device.productName} (type ${device.type}): ${if (taken) "set" else "refused"}")
+                routedDevice = taken
+            }
+        } else if (audio.isBluetoothScoAvailableOffCall) {
+            @Suppress("DEPRECATION")
+            audio.startBluetoothSco()
+            routedSco = true
+            Log.i(TAG, "route: Bluetooth SCO started (Android before 12)")
+        }
+    }
+
+    /** Gives the communication route and mode back at the call's end, if [routeCommunication] took them. */
+    private fun clearCommunication() {
+        if (!communicating) return
+        val audio = getSystemService(AudioManager::class.java)
+        if (routedDevice) {
+            audio.clearCommunicationDevice()
+            routedDevice = false
+        }
+        if (routedSco) {
+            @Suppress("DEPRECATION")
+            audio.stopBluetoothSco()
+            routedSco = false
+        }
+        audio.mode = modeBefore
+        communicating = false
+        Log.i(TAG, "route: communication route cleared, audio mode back to ${modeBefore}")
+    }
+
     private fun abandonFocus() {
         focusRequest?.let { getSystemService(AudioManager::class.java).abandonAudioFocusRequest(it) }
         focusRequest = null
@@ -611,6 +670,13 @@ class CallService : Service() {
         const val EXTRA_MUTED = "ai.sidevoice.mobile.plugin.MUTED"
         const val EXTRA_SYSTEM_CALL = "ai.sidevoice.mobile.plugin.SYSTEM_CALL"
         private const val TAG = "SidevoiceCall"
+
+        /** The headsets a call is routed to, as Telecom does: Bluetooth (HFP, LE Audio) and hearing aids. */
+        private val HEADSET_TYPES = setOf(
+            AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+            AudioDeviceInfo.TYPE_BLE_HEADSET,
+            AudioDeviceInfo.TYPE_HEARING_AID,
+        )
         private const val NO_SESSION = -1L
         private const val CHANNEL_ID = "call"
         private const val NOTIFICATION_ID = 1

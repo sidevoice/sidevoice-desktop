@@ -971,7 +971,7 @@ change. Windows and Linux: `available` is empty (Chromium's paint flags need a r
 `systemCall`: `available` is `["systemCall"]`, and `host.debug` is absent in a release. `systemCall` ("Treat calls as system
 calls", docs/MOBILE.md → "The system's call") is off by default: the room's call is the app's own, with no CallKit provider
 on iOS and no Telecom registration on Android; on, the call is a CallKit or a Core-Telecom call. It is kept in the app's own
-files, read when each call starts, and set through the app's own command `developer_options` (same arguments and answer as
+files, read when each call starts, and read again by the page as it loads (`{action: "get"}`, so a reload shows the live state) and set through the app's own command `developer_options` (same arguments and answer as
 `debug_options`; the app's one window only, `capabilities/main.json`), refused `bad_request` in a release.
 
 The command is `debug_options` `{action: "set", name, enabled}`, answering `{available, inspectable,

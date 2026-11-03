@@ -97,8 +97,8 @@
 
   /** The developer options (nightly and dev builds): sidevoice-web's hidden "Developer options" section, onto the
    *  `developer_options` command (docs/BRIDGE.md -> "The developer options"), as the desktop's `host.debug`. The one switch
-   *  a phone has is `systemCall`: whether the call is a system's call (CallKit, Telecom). It reads live: what the app kept,
-   *  then what the last `set` took. */
+   *  a phone has is `systemCall`: whether the call is a system's call (CallKit, Telecom). It reads live: what the app kept (asked
+   *  again as each page loads, the injected snapshot being from the app's start), then what the last `set` took. */
   function debug(initial) {
     const SWITCHES = ["systemCall"];
     const available = Object.freeze(SWITCHES.filter((name) => (initial.available || []).includes(name)));
@@ -107,6 +107,9 @@
       for (const name of SWITCHES) state[name] = !!(from && from[name]) && available.includes(name);
     };
     take(initial);
+    // The script is built once, when the app starts, and a page that loads anew gets the same text: its snapshot is what the
+    // switch was then. Read the app's own state as the page loads, so that a reload shows what the next call will use.
+    if (available.length > 0) transport.own.call("developer_options", { action: "get" }).then(take, () => {});
     return Object.freeze({
       available,
       get systemCall() {
