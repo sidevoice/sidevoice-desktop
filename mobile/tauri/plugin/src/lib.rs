@@ -27,8 +27,8 @@ pub use call_service::{
     FocusState, StopReason,
 };
 pub use call_surface::{
-    clear_stills, save_still, stills_dir, CallSurface, Other, Phase, SpokenPage, Still, StillError,
-    SurfaceAction, SurfaceWords, STILL_LIMIT, URL_SCHEME,
+    clear_stills, forget_stills, save_still, stills_dir, CallSurface, Other, Phase, SpokenPage,
+    Still, StillError, SurfaceAction, SurfaceWords, STILL_ID_LIMIT, STILL_LIMIT, URL_SCHEME,
 };
 pub use screen::{keep_screen_on, ScreenError};
 

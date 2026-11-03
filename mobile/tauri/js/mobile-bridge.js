@@ -55,21 +55,15 @@
     else if (owned.seen) owned = null; // unmuted by the person
   };
   /** The call's surfaces (the Live Activity, the call's notification; docs/MOBILE.md -> "The call surface"): the room's
-   *  `callSurface` rides in every report as `surface`, its creatures' stills by id. Each still's PNG (base64, the room's
-   *  `callSurface.stills[id].png`) goes to the app once, by itself (`call_still`), and never in a report. */
-  const sentStills = new Set();
+   *  `callSurface` rides in every report as `surface`, its creatures' stills by id (`{id, k}`). Their bytes are handed over
+   *  by the page itself, once per id and before the report that names it (`host.callSurface.still`), and forgotten when
+   *  the page shows them no more (`forget`): both in order with the reports, on the page's number. */
   const surfaceOf = (view) => {
     const surface = view && view.callSurface;
-    if (!surface || typeof surface !== "object") return {};
-    const { stills, ...shown } = surface;
-    for (const [id, still] of Object.entries(stills && typeof stills === "object" ? stills : {})) {
-      const png = still && typeof still === "object" ? still.png : null;
-      if (typeof png !== "string" || !png || sentStills.has(id)) continue;
-      sentStills.add(id);
-      // Sent again by a later report if the app did not keep it.
-      numbered().then((number) => transport.own.call("call_still", { page: number, id, png })).catch(() => sentStills.delete(id));
-    }
-    return { surface: shown };
+    return surface && typeof surface === "object" ? { surface } : {};
+  };
+  const own = (command, args) => {
+    numbered().then((number) => transport.own.send(command, { page: number, ...args }), () => {});
   };
   const reporting = members.room({
     version: 2,
@@ -150,8 +144,20 @@
       /** The webview sends plain http to a private address; to whom, and with whose consent, is the page's policy. */
       reach: Object.freeze({ plainHttpPrivate: true }),
       /** The app draws the call's own surfaces (iOS's Live Activity, Android's call notification) from the room's
-       *  `callSurface`: the page publishes what costs it work (the stills, the spoken page) while `active()`. */
-      callSurface: Object.freeze({ active: () => true }),
+       *  `callSurface`: the page publishes what costs it work (the stills, the spoken page) while `active()`, and hands
+       *  the creatures' stills over here. */
+      callSurface: Object.freeze({
+        active: () => true,
+        /** A still's PNG (`png`, base64), kept by the app under `id` where the surfaces read it. */
+        still: ({ id, png } = {}) => {
+          if (typeof id === "string" && id && typeof png === "string" && png) own("call_still", { id, png });
+        },
+        /** The stills the page shows no more. */
+        forget: (ids) => {
+          const strings = Array.isArray(ids) ? ids.filter((id) => typeof id === "string" && id) : [];
+          if (strings.length) own("call_forget", { ids: strings });
+        },
+      }),
     }),
     snapshot: reporting.snapshot,
     /** Runs one command from the app (the call's notification, a headset) through the web UI's own actions:

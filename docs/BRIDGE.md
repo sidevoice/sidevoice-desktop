@@ -289,7 +289,7 @@ app's composition is always there; what is a fact of one OS or one build is obse
 | `muteShortcut`, `callControls` | always | The app's own settings, set from the page's Settings. |
 | `updater` | a release or nightly that can update itself | Below. |
 | `debug` | a nightly or a dev build | The developer options (below). |
-| `callSurface` | the mobile app | `{ active() }`: the app draws the call's own surfaces from the room's `callSurface`, relayed in its call report with the stills by id (docs/MOBILE.md → "The call surface"). |
+| `callSurface` | the mobile app | `{ active(), still({id, png, px}), forget(ids) }`: the app draws the call's own surfaces from the room's `callSurface`, relayed in its call report with the stills by id; the page hands each still's PNG over once, before the report that names it, and forgets the ones it shows no more (docs/MOBILE.md → "The call surface"). |
 
 `presence` is independent of `host.voice`: where the app does not own the media (Windows and Linux), it says nothing, and
 the page keeps its Media Session handlers and Now Playing element, with native voice too. See

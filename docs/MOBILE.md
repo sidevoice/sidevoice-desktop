@@ -263,19 +263,22 @@ research/live-activity-design-2026-11-02 (HANDOVER.md); this is how their data g
 - **What it carries** (camelCase, as Android's `updateCallService` receives it in `surface`): `phase` (`idle`,
   `listening`, `transcribing`, `said`, `working`, `speaking`, `holding`, `offline`: the page's state line's order,
   `said` while the person's words just sent show), `canSkip`, `canCancelSend`, `model` and `machine` (worded by the page),
-  `workingSince` (ms since the epoch, absent when the page does not know it: no time is made up), `still`, up to three
-  `others` (`{title, still}`), `conversationCount`, `page` (`{text, lit}`, the spoken page while speaking), `said`, and
-  `words` (`state`, `offline`, `mute`, `unmute`, `skip`, `skipName`, `cancelSend`, `hangUp`, `route` with `{route}` to
-  fill, `speaker`, `conversations`), all in the page's language. `offline` is always there: a surface the app stopped
-  updating draws the offline state with it. While the call switches conversation, the surface keeps what it showed
-  until the new conversation's report comes.
-- **The creatures, by reference.** A still is `{id, k}` in the snapshot (`k`: how much of the still the body takes, 1 by
-  default). Its PNG crosses once per id, by itself: the bridge sends each id of the room's `callSurface.stills` once
-  (`call_still`, base64; again only if the app did not keep it), and the app keeps it as `<id>.png` (an id is letters,
-  digits, `-` and `_`, at most 64; a PNG of at most 512 KB) in the stills folder (`stills_dir`): `call-stills/` in the
-  App Group container `group.ai.sidevoice.mobile` on iOS, where the widget extension reads it, or the app's cache where
+  `workingSince` (ms since the epoch, the room's busy clock, which may start a few seconds before the stage shows
+  working; absent when the page does not know it: no time is made up), `still`, up to three `others` (`{title, still}`),
+  `conversationCount` (every conversation, the current one included), `page` (`{text, lit}`, the spoken page while
+  speaking, `lit` in UTF-16 code units of `text`), `said`, and `words` (`state`, `offline`, `mute`, `unmute`, `skip`,
+  `skipName`, `cancelSend`, `hangUp`, `route` with `{route}` to fill, `speaker`, `conversations`), all in the page's
+  language. `offline` is always there: a surface the app stopped updating draws the offline state with it. While the call
+  switches conversation, the surface keeps what it showed until the new conversation's report comes.
+- **The creatures, by reference.** A still is `{id, k, file}` in the snapshot: the page's id (`<threadId>#<px>`; 240 px
+  for the current conversation, 108 for the others), `k` (how much of the still the body takes, 1 by default) and `file`,
+  the PNG's name in the stills folder, which the app fills (the id's bytes in hex, `.png`). The page hands each PNG over
+  once per id, before any report names it (`host.callSurface.still({id, png, px})`, base64, the app's `call_still`), and
+  forgets the ones it shows no more (`host.callSurface.forget(ids)`, `call_forget`: their files go). The app keeps them
+  (a PNG of at most 512 KB, an id of at most 120 bytes) in the stills folder (`stills_dir`): `call-stills/` in the App
+  Group container `group.ai.sidevoice.mobile` on iOS, where the widget extension reads it, or the app's cache where
   there is no shared container (Android, and iOS until the app is entitled to the group). It is emptied at the app's
-  start; the page sends the stills it shows again.
+  start.
 - **What the person does on a surface** comes back as the service's event `{"type":"action","action":…}` (`mute`,
   `unmute`, `skip`, `cancel-send`, `hang-up`, `open-conversations`; `CallEvent::Action`), from the notification's buttons
   or the Live Activity's intents, or on iOS as the link the app is opened with (`sidevoice://conversations`, Tauri's

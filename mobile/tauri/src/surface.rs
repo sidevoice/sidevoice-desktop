@@ -2,8 +2,8 @@
 //! the page reports of them, and how the app turns that into the plugin's [`CallSurface`].
 //!
 //! The page projects them in its room snapshot (sidevoice-web's `callSurface`, beside the `callCard` the snapshot already
-//! carries), and the bridge relays it as the snapshot's `surface`, without the stills' bytes: those cross once per still
-//! (`call_still`), and the snapshot names them by id. Every field has a default, so a page that sends less (or an older
+//! carries), and the bridge relays it as the snapshot's `surface`. The stills' bytes are not in it: the page hands each
+//! one to the host once (`host.callSurface.still`, the app's `call_still`) before any snapshot names it by id. Every field has a default, so a page that sends less (or an older
 //! page that sends nothing) shows an empty, idle call.
 use serde::Deserialize;
 use sidevoice_mobile_plugin::{CallSurface, Other, Phase, SpokenPage, Still, SurfaceWords};
@@ -19,22 +19,17 @@ pub struct SurfaceReport {
     /// The model as the page words it ("Opus 5.5"), and the machine.
     model: Option<String>,
     machine: Option<String>,
-    /// When the working phase began (ms since the epoch), when the page knows it.
+    /// When the working phase began (ms since the epoch: the room's busy clock), when the page knows it.
     working_since: Option<f64>,
+    /// How many conversations the call has, the current one included.
+    conversation_count: u32,
     /// The current conversation's still.
     still: Option<Still>,
-    others: OthersReport,
+    /// Up to three other conversations.
+    others: Vec<Other>,
     page: Option<PageReport>,
     said: Option<String>,
     words: SurfaceWords,
-}
-
-#[derive(Debug, Default, Clone, PartialEq, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-struct OthersReport {
-    /// The number the stack shows.
-    total: u32,
-    items: Vec<Other>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Deserialize)]
@@ -80,7 +75,16 @@ pub fn surface(reported: &Reported, shown: &CallSurface) -> CallSurface {
         return shown.clone();
     }
     let report = &reported.surface;
-    let still = |still: &Option<Still>| still.clone().filter(|still| Still::valid_id(&still.id));
+    // A still the snapshot names, with the file the surfaces read it from.
+    let still = |still: &Option<Still>| {
+        still
+            .clone()
+            .filter(|still| Still::valid_id(&still.id))
+            .map(|still| Still {
+                file: Still::file_name(&still.id),
+                ..still
+            })
+    };
     CallSurface {
         phase: phase(reported),
         can_skip: reported.can_skip,
@@ -91,7 +95,6 @@ pub fn surface(reported: &Reported, shown: &CallSurface) -> CallSurface {
         still: still(&report.still),
         others: report
             .others
-            .items
             .iter()
             .take(OTHERS)
             .map(|other| Other {
@@ -99,7 +102,7 @@ pub fn surface(reported: &Reported, shown: &CallSurface) -> CallSurface {
                 still: still(&other.still),
             })
             .collect(),
-        conversation_count: report.others.total,
+        conversation_count: report.conversation_count,
         page: report
             .page
             .as_ref()
@@ -194,8 +197,8 @@ mod tests {
             None,
             None,
             r#"{"pendingCancellable":true,"reach":"listening","model":"Opus 5.5","machine":"mac-studio",
-                "workingSince":1700000000000,"still":{"id":"c1","k":1.4},
-                "others":{"total":5,"items":[{"title":"A","still":{"id":"a"}},{"title":"B"},{"title":"C"},{"title":"D"}]},
+                "workingSince":1700000000000,"conversationCount":5,"still":{"id":"c1#240","k":1.4},
+                "others":[{"threadId":"a","title":"A","reach":"listening","unread":0,"still":{"id":"a#108","k":1}},{"title":"B","still":null},{"title":"C"},{"title":"D"}],
                 "page":{"text":"Hola…","lit":2,"more":true},"said":null,
                 "words":{"state":"Trabajando","offline":"Desconectada","skip":"Saltar","unknown":"ignored"},
                 "unknown":true}"#,
@@ -208,6 +211,10 @@ mod tests {
         );
         assert_eq!(surface.working_since, Some(1_700_000_000_000.0));
         assert_eq!(surface.still.as_ref().map(|still| still.k), Some(1.4));
+        assert_eq!(
+            surface.still.as_ref().map(|still| still.file.as_str()),
+            Some("633123323430.png")
+        );
         assert_eq!(surface.others.len(), 3, "the stack shows three faces");
         assert_eq!(
             surface.others[0].still.as_ref().map(|still| still.k),
@@ -222,11 +229,12 @@ mod tests {
 
     #[test]
     fn a_still_whose_id_cannot_name_a_file_is_none() {
+        let long = "a".repeat(sidevoice_mobile_plugin::STILL_ID_LIMIT + 1);
         let surface = shown(&reported(
             "idle",
             None,
             None,
-            r#"{"still":{"id":"../x"},"others":{"items":[{"still":{"id":"a/b"}}]}}"#,
+            &format!(r#"{{"still":{{"id":""}},"others":[{{"still":{{"id":"{long}"}}}}]}}"#),
         ));
         assert_eq!(surface.still, None);
         assert_eq!(surface.others[0].still, None);

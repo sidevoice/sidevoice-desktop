@@ -5,8 +5,9 @@
 //!
 //! - **The words** are the page's, already in its language: the native side never words the call's states or buttons.
 //! - **The creatures** travel by reference: the snapshot names a still (`{id, k}`), and its PNG is written once per id to
-//!   the stills folder ([`stills_dir`]), where the widget extension (iOS, the App Group container) and the notification
-//!   (Android, the app's own files) read it as `<id>.png`.
+//!   the stills folder ([`stills_dir`]) before any snapshot names it, where the widget extension (iOS, the App Group
+//!   container) and the notification (Android, the app's cache) read it by the file name the snapshot gives
+//!   ([`Still::file`]); the page forgets the ones it no longer shows ([`forget_stills`]).
 //! - **What the person does** on a surface (mute, skip, cancel send, hang up, open the conversation list) comes back as
 //!   [`CallEvent::Action`](crate::CallEvent::Action), and the app runs it on the page. The audio route is the native
 //!   side's own (the system's route, not the page's), so it is not one of them.
@@ -72,13 +73,17 @@ pub enum Phase {
     Offline,
 }
 
-/// A creature's still, by reference: its PNG is `<id>.png` in [`stills_dir`]. `k` is how much of the still the body takes
-/// (1 for a creature with no big accessory), for the slots that let an accessory stand out.
+/// A creature's still, by reference: the page's `id` (`<threadId>#<px>`), and its PNG is [`Still::file`] in
+/// [`stills_dir`]. `k` is how much of the still the body takes (1 for a creature with no big accessory), for the slots
+/// that let an accessory stand out.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Still {
     pub id: String,
     #[serde(default = "whole")]
     pub k: f64,
+    /// The PNG's file name in [`stills_dir`], filled by the app ([`Still::file_name`]); the page does not send it.
+    #[serde(default)]
+    pub file: String,
 }
 
 fn whole() -> f64 {
@@ -86,17 +91,16 @@ fn whole() -> f64 {
 }
 
 impl Still {
-    /// Whether `id` can name a still: it becomes a file name, so only letters, digits, `-` and `_`, at most 64 of them.
+    /// Whether `id` can name a still: not empty, and short enough that its file name is one ([`STILL_ID_LIMIT`]).
     pub fn valid_id(id: &str) -> bool {
-        (1..=64).contains(&id.len())
-            && id
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+        (1..=STILL_ID_LIMIT).contains(&id.len())
     }
 
-    /// The still's file name in [`stills_dir`].
-    pub fn file_name(&self) -> String {
-        format!("{}.png", self.id)
+    /// The file name of the still `id` in [`stills_dir`]: the id's bytes in hex, so that any id the page gives (its `#`,
+    /// a `/`, a `..`) is one plain file name, and two ids are never one file.
+    pub fn file_name(id: &str) -> String {
+        let hex: String = id.bytes().map(|byte| format!("{byte:02x}")).collect();
+        format!("{hex}.png")
     }
 }
 
@@ -108,8 +112,8 @@ pub struct Other {
     pub still: Option<Still>,
 }
 
-/// The page of a reply the voice is on: about 160 characters, ending in an ellipsis where more follows, and how many of
-/// its characters have been heard (never ahead of the voice).
+/// The page of a reply the voice is on: about 160 characters, ending in an ellipsis where more follows, and how much of it
+/// has been heard (`lit`, in UTF-16 code units of `text`, at a word's start: never ahead of the voice).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct SpokenPage {
@@ -189,6 +193,9 @@ impl std::fmt::Display for StillError {
 
 impl std::error::Error for StillError {}
 
+/// The longest still id: its file name (twice as long, in hex) stays well under a file system's 255 bytes.
+pub const STILL_ID_LIMIT: usize = 120;
+
 /// The largest still kept: a 240 px PNG is far smaller.
 pub const STILL_LIMIT: usize = 512 * 1024;
 
@@ -206,17 +213,30 @@ pub fn stills_dir<R: Runtime>(app: &AppHandle<R>) -> io::Result<PathBuf> {
 
 const STILLS: &str = "call-stills";
 
-/// Keeps the still `id`, a PNG, for the surfaces to read as `<id>.png` in [`stills_dir`]. Written whole or not at all
-/// (a temporary file renamed over it), so a surface never reads half of one.
+/// Keeps the still `id`, a PNG, for the surfaces to read as [`Still::file_name`] in [`stills_dir`]. Written whole or not
+/// at all (a temporary file renamed over it), so a surface never reads half of one.
 pub fn save_still<R: Runtime>(app: &AppHandle<R>, id: &str, png: &[u8]) -> Result<(), StillError> {
     check_still(id, png)?;
     let dir = stills_dir(app).map_err(StillError::Io)?;
     fs::create_dir_all(&dir).map_err(StillError::Io)?;
-    let file = dir.join(format!("{id}.png"));
-    let partial = dir.join(format!(".{id}.png.partial"));
+    let name = Still::file_name(id);
+    let file = dir.join(&name);
+    let partial = dir.join(format!(".{name}.partial"));
     fs::write(&partial, png)
         .and_then(|()| fs::rename(&partial, &file))
         .map_err(StillError::Io)
+}
+
+/// Forgets the stills `ids` (the page shows them no more); an id never kept is nothing.
+pub fn forget_stills<R: Runtime>(app: &AppHandle<R>, ids: &[String]) -> io::Result<()> {
+    let dir = stills_dir(app)?;
+    for id in ids.iter().filter(|id| Still::valid_id(id)) {
+        match fs::remove_file(dir.join(Still::file_name(id))) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// Forgets every still (at the app's start: the page sends the ones it shows again).
@@ -252,7 +272,7 @@ mod tests {
             }
         );
         let still: Still = serde_json::from_str(r#"{"id":"abc"}"#).unwrap();
-        assert_eq!(still.k, 1.0);
+        assert_eq!((still.k, still.file.as_str()), (1.0, ""));
     }
 
     #[test]
@@ -264,6 +284,7 @@ mod tests {
             still: Some(Still {
                 id: "a1".into(),
                 k: 1.3,
+                file: Still::file_name("a1"),
             }),
             ..CallSurface::default()
         };
@@ -272,19 +293,23 @@ mod tests {
         assert_eq!(json["canCancelSend"], true);
         assert_eq!(json["workingSince"], 1.5);
         assert_eq!(json["still"]["k"], 1.3);
+        assert_eq!(json["still"]["file"], "6131.png");
         assert_eq!(json["words"]["skipName"], "");
     }
 
     #[test]
-    fn a_still_s_id_is_a_plain_file_name() {
-        for id in ["a", "thread-1_x", &"a".repeat(64)] {
+    fn a_still_s_file_is_one_plain_name_whatever_its_id() {
+        for id in ["t1#240", "../x", "a/b", &"a".repeat(STILL_ID_LIMIT)] {
             assert!(Still::valid_id(id), "{id}");
         }
-        for id in ["", "../x", "a/b", "a.png", "ñ", &"a".repeat(65)] {
+        for id in ["", &"a".repeat(STILL_ID_LIMIT + 1)] {
             assert!(!Still::valid_id(id), "{id}");
         }
+        assert_eq!(Still::file_name("t1#240"), "743123323430.png");
+        assert_eq!(Still::file_name("../x"), "2e2e2f78.png");
+        assert_ne!(Still::file_name("ab"), Still::file_name("a b"));
         assert!(matches!(
-            check_still("../x", PNG_SIGNATURE),
+            check_still("", PNG_SIGNATURE),
             Err(StillError::Id)
         ));
         assert!(matches!(
