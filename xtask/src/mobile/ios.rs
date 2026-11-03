@@ -259,6 +259,13 @@ pub fn check_ipa(ipa: &Path, identifier: &str, build_number: u32) -> Result<()> 
         appex_version == build_number.to_string(),
         format!("{EXTENSION}'s build number is {appex_version}, not {build_number}"),
     )?;
+    let short = |info: &plist::Dictionary| {
+        info.get("CFBundleShortVersionString").and_then(plist::Value::as_string).unwrap_or_default().to_owned()
+    };
+    ensure(
+        short(&appex_info) == short(&bundle.info),
+        format!("{EXTENSION}'s version is {:?}, not the app's {:?}", short(&appex_info), short(&bundle.info)),
+    )?;
     for sealed in ["embedded.mobileprovision", "_CodeSignature/CodeResources"] {
         ensure(names.contains(&format!("{root}{sealed}")), format!("{}: not signed: no {sealed}", ipa.display()))?;
     }
@@ -398,6 +405,7 @@ mod tests {
             "<plist version=\"1.0\"><dict><key>CFBundleExecutable</key><string>Sidevoice</string>\
              <key>CFBundleIdentifier</key><string>{identifier}</string>\
              <key>CFBundleVersion</key><string>{version}</string>\
+             <key>CFBundleShortVersionString</key><string>0.1.0</string>\
              <key>ITSAppUsesNonExemptEncryption</key><false/>{MODES}</dict></plist>"
         );
         let manifest = "<plist version=\"1.0\"><dict><key>NSPrivacyTracking</key><false/>\
@@ -413,8 +421,11 @@ mod tests {
     }
 
     fn appex_info(version: &str) -> Vec<u8> {
-        format!("<plist version=\"1.0\"><dict><key>CFBundleVersion</key><string>{version}</string></dict></plist>")
-            .into_bytes()
+        format!(
+            "<plist version=\"1.0\"><dict><key>CFBundleVersion</key><string>{version}</string>\
+             <key>CFBundleShortVersionString</key><string>0.1.0</string></dict></plist>"
+        )
+        .into_bytes()
     }
 
     fn check(files: &[(&str, Vec<u8>)], identifier: &str, build: u32) -> Result<()> {

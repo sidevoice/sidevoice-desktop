@@ -71,26 +71,29 @@ struct Lines: View {
             at += count
         }
         guard at < whole.length, var last = lines.popLast() else { return lines }
-        // More follows: the last line keeps the whole words that fit before "…".
+        // More follows: the last line keeps the whole words that fit before "…"; a line with no space to cut at (Chinese,
+        // Japanese, a long address) is cut between characters, never inside one.
         let ellipsisWidth = measure("…", attributes)
+        let start = last.range.location
+        let spaces = CharacterSet.whitespacesAndNewlines
         var end = NSMaxRange(last.range)
-        while end > last.range.location {
-            let candidate = whole.substring(with: NSRange(location: last.range.location, length: end - last.range.location))
-            let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
-            if measure(trimmed, attributes) + ellipsisWidth <= width {
-                let cut = (candidate as NSString).range(of: trimmed).upperBound
-                last.range.length = cut
+        while end > start {
+            // Without what ends it blank (spaces, a blank line).
+            while end > start, let unit = UnicodeScalar(whole.character(at: end - 1)), spaces.contains(unit) {
+                end -= 1
+            }
+            guard end > start else { break }
+            let kept = whole.substring(with: NSRange(location: start, length: end - start))
+            if measure(kept, attributes) + ellipsisWidth <= width {
                 break
             }
-            // Back to the space before the last word.
-            let before = whole.rangeOfCharacter(
-                from: .whitespacesAndNewlines, options: .backwards,
-                range: NSRange(location: last.range.location, length: end - last.range.location - 1))
-            end = before.location == NSNotFound ? last.range.location : before.location
+            let space = whole.rangeOfCharacter(
+                from: spaces, options: .backwards, range: NSRange(location: start, length: end - start))
+            end = space.location != NSNotFound && space.location > start
+                ? space.location
+                : whole.rangeOfComposedCharacterSequence(at: end - 1).location
         }
-        if end <= last.range.location {
-            last.range.length = 0
-        }
+        last.range.length = end - start
         last.ellipsis = true
         lines.append(last)
         return lines

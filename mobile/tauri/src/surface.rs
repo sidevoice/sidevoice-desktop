@@ -51,6 +51,8 @@ pub struct Reported {
     pub turn: Option<String>,
     pub busy_reason: Option<String>,
     pub can_skip: bool,
+    /// The page's language (the snapshot's `callCard.language`).
+    pub language: Option<String>,
     pub surface: SurfaceReport,
 }
 
@@ -113,6 +115,7 @@ pub fn surface(reported: &Reported, shown: &CallSurface) -> CallSurface {
             }),
         said: report.said.clone().filter(|said| !said.trim().is_empty()),
         words: report.words.clone(),
+        language: reported.language.clone().unwrap_or_default(),
     }
 }
 
@@ -156,6 +159,7 @@ mod tests {
             turn: turn.map(Into::into),
             busy_reason: busy.map(Into::into),
             can_skip: false,
+            language: None,
             surface: SurfaceReport::read(&serde_json::from_str(json).unwrap()),
         }
     }
@@ -368,6 +372,7 @@ mod tests {
                     turn: high.turn.or(low.turn).map(Into::into),
                     busy_reason: high.busy.or(low.busy).map(Into::into),
                     can_skip: false,
+                    language: None,
                     surface: SurfaceReport::read(&serde_json::Value::Object(json)),
                 };
                 assert_eq!(
@@ -379,6 +384,14 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_page_s_language_is_carried_and_none_is_the_device_s() {
+        let mut reported = reported("idle", None, None, "{}");
+        assert_eq!(shown(&reported).language, "");
+        reported.language = Some("es".into());
+        assert_eq!(shown(&reported).language, "es");
     }
 
     #[test]

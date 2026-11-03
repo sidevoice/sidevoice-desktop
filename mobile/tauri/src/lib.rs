@@ -119,6 +119,8 @@ struct CallReport {
     turn: serde_json::Value,
     busy_reason: serde_json::Value,
     can_skip: bool,
+    /// The page's language (`callCard.language`), for what the system words on the call's surfaces.
+    language: serde_json::Value,
     /// The page's `callSurface`, as the bridge relays it (its stills by id; their bytes come through `call_still`). Read
     /// apart ([`surface::SurfaceReport::read`]), so that a surface the app cannot read never stops the call.
     surface: serde_json::Value,
@@ -133,6 +135,7 @@ impl CallReport {
             turn: text(&self.turn),
             busy_reason: text(&self.busy_reason),
             can_skip: self.can_skip,
+            language: text(&self.language).filter(|language| !language.is_empty()),
             surface: surface::SurfaceReport::read(&self.surface),
         }
     }

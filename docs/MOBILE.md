@@ -278,7 +278,8 @@ research/live-activity-design-2026-11-02 (HANDOVER.md); this is how their data g
   `conversationCount` (every conversation, the current one included), `page` (`{text, lit}`, the spoken page while
   speaking, `lit` in UTF-16 code units of `text`), `said`, and `words` (`state`, `offline`, `mute`, `unmute`, `skip`,
   `skipName`, `cancelSend`, `hangUp`, `route` with `{route}` to fill, `speaker`, `conversations`), all in the page's
-  language. `offline` is always there: a surface the app stopped updating draws the offline state with it. While the call
+  language. `language` is the page's (`callCard.language`; empty: the device's), for what the system words itself
+  on a surface (iOS: the working timer on Always-On). `offline` is always there: a surface the app stopped updating draws the offline state with it. While the call
   switches conversation, the surface keeps what it showed until the new conversation's report comes.
 - **The creatures, by reference.** A still is `{id, k, file}` in the snapshot: the page's id (`<threadId>#<px>`; 240 px
   for the current conversation, 108 for the others), `k` (how much of the still the body takes, 1 by default) and `file`,

@@ -73,6 +73,7 @@ public struct LockCard: View {
             .frame(height: 40)
         }
         .padding(14)
+        .environment(\.locale, state.locale)
     }
 
     private var subtitle: String {
@@ -123,6 +124,11 @@ public struct ExpandedBody: View {
     }
 
     public var body: some View {
+        Group { content }.environment(\.locale, state.locale)
+    }
+
+    @ViewBuilder
+    private var content: some View {
         switch state.phase {
         case .speaking:
             Reply(state: state)
@@ -339,6 +345,7 @@ public struct CompactTrailing: View {
                 StateGlyph(phase: state.phase)
             }
             .modifier(StillOnAlwaysOn(reduced: reduced))
+            .environment(\.locale, state.locale)
         }
     }
 }
@@ -361,7 +368,8 @@ public struct MinimalFace: View {
         .frame(width: 34, height: 34)
         .overlay(alignment: .bottomTrailing) {
             if state.micOff {
-                MicBadge(size: 12, glyph: 8, ring: .black, ringWidth: 1.5).offset(x: 1, y: 1)
+                // Inside the island's circle (it clips anything outside): centre at (27, 27) of the 36.67 box.
+                MicBadge(size: 12, glyph: 8, ring: .black, ringWidth: 1.5).offset(x: -2.33, y: -2.33)
             }
         }
     }

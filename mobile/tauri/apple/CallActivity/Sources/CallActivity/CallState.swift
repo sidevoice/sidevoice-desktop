@@ -75,8 +75,16 @@ public struct CallState: Codable, Hashable {
     /// Speaking: how much of `text` has been heard, in UTF-16 units (never ahead of the voice).
     public var lit = 0
     public var words = Words()
+    /// The page's language (BCP 47), for what the system words itself on the activity (the working timer on
+    /// Always-On); empty: the device's.
+    public var language = ""
 
     public init() {}
+
+    /// The locale the system's own words on the activity follow: the page's language, else the device's.
+    public var locale: Locale {
+        language.isEmpty ? .current : Locale(identifier: language)
+    }
 
     /// The state a stale activity draws (`context.isStale`: the app has stopped updating it): offline, with its word
     /// (D-LA-OFFLINE). There is no stale text of its own.

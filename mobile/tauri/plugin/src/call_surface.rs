@@ -56,6 +56,9 @@ pub struct CallSurface {
     pub said: Option<String>,
     /// The words, in the page's language.
     pub words: SurfaceWords,
+    /// The page's language (a BCP 47 tag, `es`, `zh-Hans`), for what the system words on the surface (iOS: the working
+    /// timer on Always-On); empty when the page does not say it, and the device's language is used.
+    pub language: String,
 }
 
 /// What the call is doing, as a surface draws it (HANDOVER §0: the app's own states, no new ones; "said" is the moment

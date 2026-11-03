@@ -34,6 +34,7 @@ final class RenderTests: XCTestCase {
         state.creature = .init(file: "straw-hat.png", k: 1.3)
         state.others = [.init(file: "bunny-headphones.png", k: 1.35), .init(file: "wizard-hat.png", k: 1.4)]
         state.conversationCount = 3
+        state.language = "es"
         state.route = .headphones
         state.routeName = "AirPods Pro"
         switch phase {
@@ -170,7 +171,9 @@ final class RenderTests: XCTestCase {
     func minimal(_ state: CallState) -> some View {
         MinimalFace(state: state)
             .frame(width: 36.66, height: 36.66)
-            .background(Circle().fill(Color.black))
+            .background(Color.black)
+            // The island's own shape: anything outside the circle is cut, as on the device.
+            .clipShape(Circle())
             .environment(\.colorScheme, .dark)
     }
 
@@ -245,6 +248,26 @@ final class LinesTests: XCTestCase {
         for (a, b) in zip(lines, lines.dropFirst()) {
             XCTAssertEqual(a.range.upperBound, b.range.location, "the lines follow each other")
         }
+    }
+
+    func testABlankLineBeforeMoreTextNeverBreaksTheCut() {
+        let text = "Primera línea.\n\n\n\n\nY después, mucho más texto que ya no cabe en la página."
+        let lines = Lines.lines(text, width: 344, font: DMSans.ctFont(15, 550), tracking: -0.075, max: 4)
+        XCTAssertLessThanOrEqual(lines.count, 4)
+        for line in lines {
+            XCTAssertGreaterThanOrEqual(line.range.length, 0)
+            XCTAssertLessThanOrEqual(line.range.upperBound, (text as NSString).length)
+        }
+        XCTAssertTrue(lines.last?.ellipsis ?? false)
+    }
+
+    func testTextWithoutSpacesIsCutBetweenCharacters() {
+        let text = String(repeating: "会話の続きをここに表示します", count: 12)
+        let lines = Lines.lines(text, width: 344, font: DMSans.ctFont(15, 550), tracking: 0, max: 4)
+        XCTAssertEqual(lines.count, 4)
+        let last = lines[3]
+        XCTAssertTrue(last.ellipsis)
+        XCTAssertGreaterThan(last.range.length, 0, "not collapsed to the ellipsis alone")
     }
 
     func testAShortPageIsWhole() {

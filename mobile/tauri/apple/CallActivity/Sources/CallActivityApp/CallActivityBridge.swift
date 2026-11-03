@@ -66,6 +66,7 @@ struct Report: Decodable {
         var page: Page?
         var said: String?
         var words: Words?
+        var language: String?
     }
 
     var title: String?
@@ -103,6 +104,7 @@ struct Report: Decodable {
         default:
             break
         }
+        state.language = surface.language ?? ""
         let words = surface.words ?? Words()
         state.words.state = words.state ?? ""
         state.words.offline = words.offline ?? ""
