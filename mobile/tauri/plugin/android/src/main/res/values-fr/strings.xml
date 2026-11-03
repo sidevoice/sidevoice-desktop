@@ -9,4 +9,6 @@
     <string name="call_notification_unmute">Activer le micro</string>
     <string name="call_route_speaker">Haut-parleur</string>
     <string name="call_route_earpiece">Téléphone</string>
+    <string name="output_earpiece">Écouteur</string>
+    <string name="output_built_in">Sortie intégrée</string>
 </resources>

@@ -9,4 +9,6 @@
     <!-- The audio switch's outputs, until the page says its own word (card.speaker); the earpiece has none in the page. -->
     <string name="call_route_speaker">Speaker</string>
     <string name="call_route_earpiece">Phone</string>
+    <string name="output_earpiece">Earpiece</string>
+    <string name="output_built_in">Built-in output</string>
 </resources>

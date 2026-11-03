@@ -31,7 +31,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -72,6 +72,26 @@ pub struct Hooks {
 
 pub use crate::voice::host::{CallActivity, NoCallActivity};
 pub use downloads::{DownloadActivity, NoDownloadActivity};
+
+/// How an app words the devices the system lists, where the system's own names are not what the person should read (a phone
+/// names its built-in outputs by the model number). Called with every listing, before the page sees it.
+pub trait DeviceLabels: Send + Sync + 'static {
+    /// Renames the devices in `devices` it knows better; the rest stay as the system listed them.
+    fn label(&self, devices: &mut AudioDevices);
+}
+
+/// A listing as the app words it.
+fn worded(
+    labels: &OnceLock<Arc<dyn DeviceLabels>>,
+    listing: Result<AudioDevices, String>,
+) -> Result<AudioDevices, String> {
+    listing.map(|mut devices| {
+        if let Some(labels) = labels.get() {
+            labels.label(&mut devices);
+        }
+        devices
+    })
+}
 
 /// Lets work use the app's data, or refuses it while the data is being changed.
 pub trait Admission: Send + Sync + 'static {
@@ -162,6 +182,8 @@ struct Inner<A: LaneAudio> {
     loads: Mutex<Vec<JoinHandle<()>>>,
     /// The task that tells the page when the devices change, from the first time the page asks for them.
     watcher: Mutex<Option<JoinHandle<()>>>,
+    /// The app's wording of the devices, once it gave one ([`AppHost::label_devices`]).
+    labels: Arc<OnceLock<Arc<dyn DeviceLabels>>>,
 }
 
 impl AppHost {
@@ -210,6 +232,7 @@ impl<A: LaneAudio> AppHost<A> {
             closing: AtomicBool::new(false),
             loads: Mutex::default(),
             watcher: Mutex::default(),
+            labels: Arc::default(),
         };
         AppHost { inner: Arc::new(inner) }
     }
@@ -224,6 +247,12 @@ impl<A: LaneAudio> AppHost<A> {
     /// (the page's mute is).
     pub fn pause_playback(&self, paused: bool) {
         self.inner.voice.pause_playback(paused);
+    }
+
+    /// Gives the host the app's wording of the devices: every listing the page gets, and every change it is told, goes
+    /// through it. Once; a second wording is ignored.
+    pub fn label_devices(&self, labels: Arc<dyn DeviceLabels>) {
+        let _ = self.inner.labels.set(labels);
     }
 
     /// The page that owned the calls is gone (it reloaded): a new page owns none of its previous lanes, and is the current
@@ -346,12 +375,14 @@ impl<A: LaneAudio> AppHost<A> {
             return;
         }
         let (events, devices) = (Arc::clone(&self.inner.hooks.events), state.devices.clone());
+        let labels = Arc::clone(&self.inner.labels);
         let current = Arc::clone(&self.inner.generation);
         let watcher = self.inner.runtime.spawn(async move {
             let mut last: Option<AudioDevices> = None;
             loop {
                 let listing = devices.clone();
-                let Ok(Ok(now)) = tokio::task::spawn_blocking(move || listing.list()).await else {
+                let labels_now = Arc::clone(&labels);
+                let Ok(Ok(now)) = tokio::task::spawn_blocking(move || worded(&labels_now, listing.list())).await else {
                     tokio::time::sleep(DEVICES_EVERY).await;
                     continue;
                 };

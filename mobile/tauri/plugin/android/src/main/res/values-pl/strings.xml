@@ -9,4 +9,6 @@
     <string name="call_notification_unmute">Włącz mikrofon</string>
     <string name="call_route_speaker">Głośnik</string>
     <string name="call_route_earpiece">Telefon</string>
+    <string name="output_earpiece">Głośnik rozmów</string>
+    <string name="output_built_in">Wyjście wbudowane</string>
 </resources>

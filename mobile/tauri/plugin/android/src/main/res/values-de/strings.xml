@@ -9,4 +9,6 @@
     <string name="call_notification_unmute">Mikro an</string>
     <string name="call_route_speaker">Lautsprecher</string>
     <string name="call_route_earpiece">Telefon</string>
+    <string name="output_earpiece">Hörmuschel</string>
+    <string name="output_built_in">Integrierter Ausgang</string>
 </resources>

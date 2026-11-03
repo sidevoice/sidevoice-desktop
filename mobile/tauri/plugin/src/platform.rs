@@ -5,4 +5,5 @@ pub mod call_surface;
 #[cfg(target_os = "android")]
 #[path = "platform/kotlin/android.rs"]
 mod kotlin;
+pub mod audio_outputs;
 pub mod screen;

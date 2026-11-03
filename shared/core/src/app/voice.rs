@@ -18,7 +18,7 @@ use serde::{Deserialize, Deserializer};
 use serde_json::{json, Value};
 use sidevoice_voice::AudioDevices;
 
-use super::{AppHost, PageGeneration};
+use super::{worded, AppHost, PageGeneration};
 use crate::engine::NativeEngines;
 use crate::voice::host::{failed, refusal, refused, Applied, LaneAudio, Refusal, IDLE_UNLOAD_MINUTES};
 use crate::voice::models::{EngineLoader, Halves};
@@ -247,8 +247,8 @@ impl<A: LaneAudio> AppHost<A> {
     pub async fn audio_devices(&self, page: PageGeneration) -> Result<Value, Refusal> {
         self.current(page)?;
         self.watch_devices();
-        let devices = self.inner.voice.devices.clone();
-        listed(self.inner.runtime.spawn_blocking(move || devices.list()).await)
+        let (devices, labels) = (self.inner.voice.devices.clone(), Arc::clone(&self.inner.labels));
+        listed(self.inner.runtime.spawn_blocking(move || worded(&labels, devices.list())).await)
     }
 
     /// Chooses the microphone, the speaker or both, at any time: a call that runs switches its microphone at once and
@@ -258,8 +258,13 @@ impl<A: LaneAudio> AppHost<A> {
     pub async fn set_audio_devices(&self, page: PageGeneration, choice: AudioChoice) -> Result<Value, Refusal> {
         self.current(page)?;
         self.watch_devices();
-        let devices = self.inner.voice.devices.clone();
-        listed(self.inner.runtime.spawn_blocking(move || devices.choose(choice.input, choice.output)).await)
+        let (devices, labels) = (self.inner.voice.devices.clone(), Arc::clone(&self.inner.labels));
+        listed(
+            self.inner
+                .runtime
+                .spawn_blocking(move || worded(&labels, devices.choose(choice.input, choice.output)))
+                .await,
+        )
     }
 }
 

@@ -16,6 +16,7 @@
 //!   app's own call; its views and buttons are Swift (mobile/tauri/apple), which the Rust side reaches by name.
 //! - **The screen** ([`keep_screen_on`]): kept on while a model download runs, since the system suspends the app, and
 //!   the download, soon after the screen turns off.
+mod audio_outputs;
 mod call_service;
 mod call_surface;
 mod platform;
@@ -23,6 +24,7 @@ mod screen;
 
 use tauri::{plugin::TauriPlugin, Runtime};
 
+pub use audio_outputs::{built_in_outputs, label_of, BuiltInOutput};
 pub use call_service::{
     call_activates_audio, call_replaces_media_controls, request_call_focus, start_call_service,
     stop_call_service, update_call_service, CallDetails, CallEvent, CallEvents, CallServiceError,

@@ -791,9 +791,7 @@ class CallService : Service() {
             // A headset if one is connected, otherwise the loudspeaker: never the earpiece, which the communication mode
             // would choose by itself (D-LA-ROUTE: the speaker by default, no earpiece).
             val available = audio.availableCommunicationDevices
-            val device = available.firstOrNull { it.type in HEADSET_TYPES }
-                ?: available.firstOrNull { it.type in HEADPHONES }
-                ?: available.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+            val device = CallRoute.communicationDevice(available.map { it.type })?.let { available[it] }
             if (device == null) {
                 Log.i(TAG, "route: no headset or loudspeaker for the call; the system's route stays")
             } else {
@@ -906,14 +904,7 @@ class CallService : Service() {
         /** The card's buttons the app runs (Rust `SurfaceAction`); hang up is the service's own, the stack the activity's. */
         private val SERVICE_ACTIONS = setOf("mute", "unmute", "skip")
         /** The headphones the audio switch moves the call to: wired, USB, Bluetooth (HFP, LE Audio) and hearing aids. */
-        private val HEADPHONES = setOf(
-            AudioDeviceInfo.TYPE_WIRED_HEADSET,
-            AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
-            AudioDeviceInfo.TYPE_USB_HEADSET,
-            AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
-            AudioDeviceInfo.TYPE_BLE_HEADSET,
-            AudioDeviceInfo.TYPE_HEARING_AID,
-        )
+        private val HEADPHONES = CallRoute.HEADPHONES
         /** The folder the app keeps the call's stills in, in its cache (Rust `call_surface::stills_dir`). */
         private const val STILLS_DIR = "call-stills"
         private const val REQUEST_OPEN = 0
@@ -921,12 +912,6 @@ class CallService : Service() {
         const val EXTRA_SYSTEM_CALL = "ai.sidevoice.mobile.plugin.SYSTEM_CALL"
         private const val TAG = "SidevoiceCall"
 
-        /** The headsets a call is routed to, as Telecom does: Bluetooth (HFP, LE Audio) and hearing aids. */
-        private val HEADSET_TYPES = setOf(
-            AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
-            AudioDeviceInfo.TYPE_BLE_HEADSET,
-            AudioDeviceInfo.TYPE_HEARING_AID,
-        )
         private const val NO_SESSION = -1L
         private const val CHANNEL_ID = "call-card"
         /** The call's channel before the card (IMPORTANCE_LOW): deleted. */

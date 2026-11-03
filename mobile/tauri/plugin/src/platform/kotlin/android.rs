@@ -30,3 +30,14 @@ pub fn run<R: Runtime>(
     let plugin = app.try_state::<Plugin<R>>()?;
     Some(plugin.0.run_mobile_plugin::<()>(command, args))
 }
+
+/// Runs the Kotlin plugin's `command` with `args`, and waits for its answer, which it reads as `T`. `None` when the plugin
+/// is not set up.
+pub fn ask<R: Runtime, T: DeserializeOwned>(
+    app: &AppHandle<R>,
+    command: &str,
+    args: impl Serialize,
+) -> Option<Result<T, PluginInvokeError>> {
+    let plugin = app.try_state::<Plugin<R>>()?;
+    Some(plugin.0.run_mobile_plugin::<T>(command, args))
+}

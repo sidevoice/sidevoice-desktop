@@ -15,6 +15,7 @@ mod developer_options;
 mod downloads;
 mod hold;
 mod i18n;
+mod output_names;
 pub mod pairings;
 mod platform;
 mod surface;
@@ -352,6 +353,8 @@ fn run_app() {
                     downloads: Arc::new(downloads::KeepScreenOn::new(handle.clone())),
                 },
             ));
+            // The built-in outputs are listed by type, not by the phone's model (Android).
+            app.state::<AppHost>().label_devices(Arc::new(output_names::BuiltInNames(handle.clone())));
             // The room's call holds the call's service (Android), for the host's current page.
             let page = app.state::<AppHost>().page().0;
             app.manage(call::RoomCall::new(handle.clone(), page, phone.clone()));

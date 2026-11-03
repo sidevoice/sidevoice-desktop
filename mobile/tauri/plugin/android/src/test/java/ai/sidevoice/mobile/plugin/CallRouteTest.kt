@@ -9,6 +9,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import android.media.AudioDeviceInfo
 
 class CallRouteTest {
     @Test
@@ -31,5 +32,36 @@ class CallRouteTest {
     fun anEarpieceWithNoLoudspeakerIsWhereItStays() {
         assertNull(CallRoute.preferred(TYPE_EARPIECE, listOf(TYPE_EARPIECE)))
         assertTrue(CallRoute.settled(TYPE_EARPIECE, listOf(TYPE_EARPIECE)))
+    }
+
+    // The app's own call (Telecom is not there to route it): the device its audio mode takes.
+    private val earpiece = AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
+    private val loudspeaker = AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+
+    @Test
+    fun theOwnCallDefaultsToTheLoudspeakerWithNoHeadset() {
+        val available = listOf(earpiece, loudspeaker)
+        assertEquals(1, CallRoute.communicationDevice(available))
+        assertNull("the earpiece alone is never taken", CallRoute.communicationDevice(listOf(earpiece)))
+    }
+
+    @Test
+    fun theOwnCallTakesAConnectedHeadsetOverTheLoudspeaker() {
+        val bluetooth = AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+        val wired = AudioDeviceInfo.TYPE_WIRED_HEADSET
+        val usb = AudioDeviceInfo.TYPE_USB_HEADSET
+        assertEquals(2, CallRoute.communicationDevice(listOf(earpiece, loudspeaker, wired)))
+        assertEquals(2, CallRoute.communicationDevice(listOf(earpiece, loudspeaker, usb)))
+        assertEquals(2, CallRoute.communicationDevice(listOf(earpiece, loudspeaker, bluetooth)))
+        // Bluetooth before wired, as Telecom orders them.
+        assertEquals(3, CallRoute.communicationDevice(listOf(wired, earpiece, loudspeaker, bluetooth)))
+    }
+
+    @Test
+    fun aPickMadeInTheCallIsNotUndoneByTheDefault() {
+        // The default is taken once, as the call opens, and by the earpiece only: a headset or the loudspeaker the person
+        // switched to is where the audio stays (CallRoute.preferred).
+        assertNull(CallRoute.preferred(TYPE_SPEAKER, listOf(TYPE_EARPIECE, TYPE_SPEAKER)))
+        assertNull(CallRoute.preferred(TYPE_WIRED_HEADSET, listOf(TYPE_EARPIECE, TYPE_SPEAKER, TYPE_WIRED_HEADSET)))
     }
 }

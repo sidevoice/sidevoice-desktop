@@ -520,6 +520,17 @@ While any install job runs, the screen is kept on: the host tells the app when t
 interrupts anyway (the person left the app) goes on where it stopped. Native background downloads are not here
 (sidevoice-desktop#361, option 2).
 
+## The outputs' names (Android)
+
+The voice lists the speakers by cpal's AAudio host, which names a built-in output by `AudioDeviceInfo.getProductName()`, the
+phone's model (`22101316G (Earpiece)`, `22101316G (Speaker)`, `22101316G`). The host takes the app's wording of its devices
+(`AppHost::label_devices`, `DeviceLabels`): `mobile/tauri/src/output_names.rs` asks the plugin (`MobilePlugin.builtInOutputs`) for
+the built-in outputs by id (`AudioDeviceInfo.getId()`, the number after `aaudio:`) and renames those: the earpiece, the
+loudspeaker (also `TYPE_BUILTIN_SPEAKER_SAFE`) and the other built-in ones (`TYPE_TELEPHONY`, `TYPE_BUS`: "Built-in output"),
+from `res/values*/strings.xml` in the language of the system. A headset, USB or Bluetooth device keeps the name it gives itself.
+The choice stays by id. The own call's default route is `CallRoute.communicationDevice`: a Bluetooth headset or hearing aid,
+else wired or USB headphones, else the loudspeaker, never the earpiece; a pick in the picker pins the stream to that device.
+
 ## Not here yet
 
 The release build kind (D-MOBILE-CHANNELS): every build shipped today is a nightly, and the release channel comes later.
