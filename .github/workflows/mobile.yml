@@ -85,17 +85,33 @@ jobs:
       # The Tauri CLI renders the Xcode project with XcodeGen.
       - name: XcodeGen
         run: command -v xcodegen || brew install xcodegen
+      # The call's Live Activity: every state drawn to PNG by its Swift package's tests on a simulator (Lock Screen card in
+      # light and dark, the Dynamic Island's expanded, compact and minimal views), the evidence a pull request shows beside
+      # the design's gallery. It needs only Xcode, so it runs before the app's long build.
+      - name: "The call's Live Activity, every state rendered to PNG"
+        run: cargo xtask mobile renders ios
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !cancelled() }}
+        with:
+          name: Sidevoice-ios-live-activity-renders
+          path: dist/live-activity
+          retention-days: 7
+          if-no-files-found: error
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        if: ${{ !cancelled() }}
         with:
           node-version: 22
           cache: npm
       - run: npm ci
+        if: ${{ !cancelled() }}
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        if: ${{ !cancelled() }}
         with:
           path: target/web
           key: web-${{ hashFiles('web.pin.json', 'scripts/build-web.mjs', 'scripts/web-release.mjs') }}
       - name: The committed iOS project is what the Tauri CLI writes (cargo xtask mobile generate ios)
         id: generated
+        if: ${{ !cancelled() }}
         run: cargo xtask mobile generated ios
       # What the CLI wrote, to commit when a change of an input or of the CLI meant it should have been regenerated.
       - name: The project the CLI wrote

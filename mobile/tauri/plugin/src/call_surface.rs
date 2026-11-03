@@ -16,11 +16,13 @@
 use std::fs;
 use std::io;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::platform::call_surface as platform;
+use crate::{CallDetails, CallEvent, CallEvents};
 
 /// The snapshot of the call a surface draws, besides the conversation's title and the mute ([`CallDetails`]). Every field
 /// has a default, so a page that sends less (or nothing yet) draws an empty, idle call.
@@ -54,6 +56,9 @@ pub struct CallSurface {
     pub said: Option<String>,
     /// The words, in the page's language.
     pub words: SurfaceWords,
+    /// The page's language (a BCP 47 tag, `es`, `zh-Hans`), for what the system words on the surface (iOS: the working
+    /// timer on Always-On); empty when the page does not say it, and the device's language is used.
+    pub language: String,
 }
 
 /// What the call is doing, as a surface draws it (HANDOVER §0: the app's own states, no new ones; "said" is the moment
@@ -157,6 +162,11 @@ pub enum SurfaceAction {
 }
 
 impl SurfaceAction {
+    /// The action named `name` (`skip`, `cancel-send`, …), as a surface's native side asks for it.
+    pub fn named(name: &str) -> Option<SurfaceAction> {
+        serde_json::from_value(serde_json::Value::String(name.to_owned())).ok()
+    }
+
     /// The action a URL the app is opened with asks for (iOS: the Live Activity's links, `sidevoice://conversations`);
     /// none for any other (`sidevoice://call` only brings the app to the front).
     pub fn from_url(url: &str) -> Option<SurfaceAction> {
@@ -285,31 +295,133 @@ fn check_still(id: &str, png: &[u8], px: u32) -> Result<(), StillError> {
     Ok(())
 }
 
-/// A PNG's width and height, from its first chunk (which the format requires to be `IHDR`); none for anything else.
+/// A PNG's width and height, from its `IHDR`, when the chunks are those of a PNG: each one's length inside the buffer and
+/// its CRC right, `IHDR` first, at least one `IDAT`, `IEND` last and at the very end. The pixels are not decoded.
 fn png_size(png: &[u8]) -> Option<(u32, u32)> {
-    let header = png.strip_prefix(PNG_SIGNATURE)?.get(..16)?;
-    if &header[4..8] != b"IHDR" {
-        return None;
+    let mut rest = png.strip_prefix(PNG_SIGNATURE)?;
+    let mut size = None;
+    let mut data = false;
+    loop {
+        let length = u32::from_be_bytes(rest.get(..4)?.try_into().ok()?) as usize;
+        let end = length.checked_add(12)?;
+        let chunk = rest.get(..end)?;
+        let (kind, body) = (&chunk[4..8], &chunk[8..8 + length]);
+        if crc32fast::hash(&chunk[4..8 + length]).to_be_bytes() != chunk[8 + length..] {
+            return None;
+        }
+        match (kind, size) {
+            (b"IHDR", None) if length == 13 => {
+                let number = |at: usize| u32::from_be_bytes(body[at..at + 4].try_into().unwrap());
+                size = Some((number(0), number(4)));
+            }
+            (_, None) | (b"IHDR", Some(_)) => return None,
+            (b"IDAT", _) => data = true,
+            (b"IEND", _) => return (data && length == 0 && end == rest.len()).then_some(size?),
+            _ => {}
+        }
+        rest = &rest[end..];
     }
-    let number = |at: usize| {
-        u32::from_be_bytes([header[at], header[at + 1], header[at + 2], header[at + 3]])
-    };
-    Some((number(8), number(12)))
+}
+
+/// The call's details as a surface's native side reads them (iOS: `Report` in CallActivityBridge.swift): `title`, `muted`
+/// and `surface`, in camelCase.
+fn details_json(details: &CallDetails) -> String {
+    #[derive(Serialize)]
+    struct Details<'a> {
+        title: &'a str,
+        muted: bool,
+        surface: &'a CallSurface,
+    }
+    serde_json::to_string(&Details {
+        title: &details.title,
+        muted: details.muted,
+        surface: &details.surface,
+    })
+    .unwrap_or_default()
+}
+
+/// Starts the surface the system draws apart from the call's service (iOS: the Live Activity) for the app's own call shown
+/// as `details`; what the person asks for on it is reported to `events` as [`CallEvent::Action`].
+pub(crate) fn start_surface(details: &CallDetails, events: CallEvents) {
+    platform::start(
+        &details_json(details),
+        Arc::new(move |name| match SurfaceAction::named(name) {
+            Some(action) => events(CallEvent::Action { action }),
+            None => log::warn!("call surface: no action named {name:?}"),
+        }),
+    );
+}
+
+/// Shows the call as `details` on that surface, if one is started.
+pub(crate) fn show_surface(details: &CallDetails) {
+    platform::show(&details_json(details));
+}
+
+/// Ends that surface, and any an earlier run of the app left.
+pub(crate) fn end_surface() {
+    platform::end();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// The start of a PNG of `width` × `height`: its signature and `IHDR` chunk.
+    #[test]
+    fn a_surface_s_native_side_reads_the_details_and_names_the_actions() {
+        let details = CallDetails {
+            title: "Globo".into(),
+            muted: true,
+            surface: CallSurface {
+                phase: Phase::Working,
+                ..CallSurface::default()
+            },
+        };
+        let json: serde_json::Value = serde_json::from_str(&details_json(&details)).unwrap();
+        assert_eq!(json["title"], "Globo");
+        assert_eq!(json["muted"], true);
+        assert_eq!(json["surface"]["phase"], "working");
+        assert_eq!(json["surface"]["canSkip"], false);
+        assert_eq!(
+            SurfaceAction::named("cancel-send"),
+            Some(SurfaceAction::CancelSend)
+        );
+        assert_eq!(SurfaceAction::named("hang-up"), Some(SurfaceAction::HangUp));
+        assert_eq!(SurfaceAction::named("mute"), Some(SurfaceAction::Mute));
+        assert_eq!(
+            SurfaceAction::named("route"),
+            None,
+            "the route is the native side's own"
+        );
+    }
+
+    /// A chunk of `kind` with `body`, its length and CRC.
+    fn chunk(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
+        let mut chunk = (body.len() as u32).to_be_bytes().to_vec();
+        chunk.extend(kind);
+        chunk.extend(body);
+        chunk.extend(crc32fast::hash(&chunk[4..]).to_be_bytes());
+        chunk
+    }
+
+    /// The `IHDR` body of `width` x `height`.
+    fn header(width: u32, height: u32) -> Vec<u8> {
+        [
+            &width.to_be_bytes()[..],
+            &height.to_be_bytes(),
+            &[8, 6, 0, 0, 0],
+        ]
+        .concat()
+    }
+
+    /// A well-formed PNG of `width` x `height` (its image data is not real pixels: they are not decoded).
     fn png_of(width: u32, height: u32) -> Vec<u8> {
-        let mut png = PNG_SIGNATURE.to_vec();
-        png.extend(13u32.to_be_bytes());
-        png.extend(b"IHDR");
-        png.extend(width.to_be_bytes());
-        png.extend(height.to_be_bytes());
-        png.extend([8, 6, 0, 0, 0]);
-        png
+        [
+            PNG_SIGNATURE,
+            &chunk(b"IHDR", &header(width, height)),
+            &chunk(b"IDAT", &[0, 1, 2]),
+            &chunk(b"IEND", &[]),
+        ]
+        .concat()
     }
 
     #[test]
@@ -386,6 +498,34 @@ mod tests {
             check_still("a", &big, 240),
             Err(StillError::Image)
         ));
+    }
+
+    #[test]
+    fn a_png_is_read_only_when_its_chunks_are_whole() {
+        let ihdr = chunk(b"IHDR", &header(240, 240));
+        let (idat, iend) = (chunk(b"IDAT", &[0]), chunk(b"IEND", &[]));
+        let png = |chunks: &[&[u8]]| [PNG_SIGNATURE, &chunks.concat()].concat();
+        assert_eq!(
+            png_size(&png(&[&ihdr, &idat, &idat, &iend])),
+            Some((240, 240))
+        );
+        // A forged header with nothing after it, an impossible length, a wrong CRC, no data, no end, bytes after the end.
+        let mut forged = PNG_SIGNATURE.to_vec();
+        forged.extend(13u32.to_be_bytes());
+        forged.extend(b"IHDR");
+        forged.extend(header(240, 240));
+        assert_eq!(png_size(&forged), None);
+        let mut long = ihdr.clone();
+        long[..4].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert_eq!(png_size(&png(&[&long, &idat, &iend])), None);
+        let mut crc = ihdr.clone();
+        *crc.last_mut().unwrap() ^= 1;
+        assert_eq!(png_size(&png(&[&crc, &idat, &iend])), None);
+        assert_eq!(png_size(&png(&[&ihdr, &iend])), None);
+        assert_eq!(png_size(&png(&[&ihdr, &idat])), None);
+        assert_eq!(png_size(&png(&[&ihdr, &idat, &iend, &idat])), None);
+        assert_eq!(png_size(&png(&[&idat, &ihdr, &iend])), None);
+        assert_eq!(png_size(&png(&[&ihdr, &ihdr, &idat, &iend])), None);
     }
 
     #[test]

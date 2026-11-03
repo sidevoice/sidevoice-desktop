@@ -23,6 +23,7 @@
     "copyright": "Copyright 2026 Ruben Pahino",
     "icon": ["app-icon/window.png", "app-icon/window.ico"],
     "iOS": {
+      "template": "ios-project.yml",
       "minimumSystemVersion": "15.0",
       "frameworks": ["AVFoundation", "AVFAudio", "AudioToolbox", "MediaPlayer", "Accelerate", "frameworks/sherpa-onnx.xcframework", "frameworks/onnxruntime.xcframework"]
     },

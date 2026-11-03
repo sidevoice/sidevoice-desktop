@@ -1,20 +1,48 @@
-//! Where the call's surfaces read the creatures' stills from (`crate::call_surface`): iOS shares a container with the
-//! widget extension that draws the Live Activity (the App Group's); Android's notification is drawn by the app itself, and
-//! has none. Each OS file implements `Os`; the common code is `crate::call_surface`.
+//! Where the call's surfaces read the creatures' stills from (`crate::call_surface`), and the surface the system draws
+//! apart from the call's service: iOS shares a container with the widget extension that draws the Live Activity (the App
+//! Group's) and starts, updates and ends that activity through the app's Swift (the CallActivity package); Android's
+//! notification is drawn by the call's service itself, and has neither. Each OS file implements `Os`; the common code is
+//! `crate::call_surface`.
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[cfg_attr(target_os = "android", path = "call_surface/android.rs")]
 #[cfg_attr(target_os = "ios", path = "call_surface/ios.rs")]
 mod imp;
 use imp::Native;
 
+/// Where the actions asked for on the surface go, by their names (`skip`, `hang-up`, …), from any thread.
+pub type OnAction = Arc<dyn Fn(&str) + Send + Sync>;
+
 trait Os {
     /// The folder the app shares with its extensions, where the system gives it one.
     fn shared_container() -> Option<PathBuf> {
         None
     }
+
+    /// Starts the surface for a call shown as `details` (the call's details as JSON), reporting what the person asks for
+    /// on it to `on_action`. Nothing where the call's service draws the surface itself.
+    fn start(_details: &str, _on_action: OnAction) {}
+
+    /// Shows the call as `details` now. Nothing while none is started.
+    fn show(_details: &str) {}
+
+    /// Ends it, and any an earlier run of the app left.
+    fn end() {}
 }
 
 pub fn shared_container() -> Option<PathBuf> {
     Native::shared_container()
+}
+
+pub fn start(details: &str, on_action: OnAction) {
+    Native::start(details, on_action)
+}
+
+pub fn show(details: &str) {
+    Native::show(details)
+}
+
+pub fn end() {
+    Native::end()
 }

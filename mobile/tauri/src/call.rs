@@ -330,6 +330,36 @@ fn unreferenced(forgotten: &BTreeSet<String>, surfaces: &[&CallSurface]) -> Vec<
         .collect()
 }
 
+/// Removes the files of `gone` with `remove`, and forgets the ones removed: a file that failed to go stays pending, to be
+/// tried again at the next collection (it would otherwise hold the stills' allowance until the app reloads).
+fn retire(
+    forgotten: &mut BTreeSet<String>,
+    gone: Vec<String>,
+    mut remove: impl FnMut(&str) -> std::io::Result<()>,
+) {
+    for id in gone {
+        match remove(&id) {
+            Ok(()) => {
+                forgotten.remove(&id);
+            }
+            Err(error) => log::warn!("call_forget: {error}"),
+        }
+    }
+}
+
+/// A forgetting of the still `id` that is pending is cancelled only by a still that was kept (`saved` is `Ok`): a rejected
+/// one leaves it to go.
+fn keep_if_saved<E>(
+    forgotten: &mut BTreeSet<String>,
+    id: &str,
+    saved: Result<(), E>,
+) -> Result<(), E> {
+    if saved.is_ok() {
+        forgotten.remove(id);
+    }
+    saved
+}
+
 /// How long the page's still waits for the room's thread to keep it.
 const STILL_LIMIT: Duration = Duration::from_secs(5);
 
@@ -454,8 +484,8 @@ impl RoomCall {
             let result = if room.page != page {
                 Ok(())
             } else {
-                room.forgotten.remove(&id);
-                save_still(&room.app, &id, &png, px).map_err(|error| error.to_string())
+                let saved = save_still(&room.app, &id, &png, px).map_err(|error| error.to_string());
+                keep_if_saved(&mut room.forgotten, &id, saved)
             };
             let _ = done.send(result);
         });
@@ -503,25 +533,34 @@ impl Room {
             // The room's call is the app's own, and waits for no system, unless the developer option turns the system's call on
             // (D-NO-CALLKIT-DEFAULT).
             let system = crate::developer_options::system_call(&self.app);
-            let system_audio = call_activates_audio(system);
-            self.phone.system_call(system_audio);
-            match start_call_service(&self.app, &details, system, move |event| {
-                on_service_event(&app, start, page, since, event)
-            }) {
-                Ok(()) => {
-                    self.holding = Some(start);
-                    self.system = system;
-                    self.since = since;
-                    // The system is told the page's mute and title at once (`show`), whatever it started with.
-                    self.shown = None;
-                    log::info!("call: started");
-                }
-                // The call goes on as the app's own (in front on Android: it does not outlive the screen; on iOS with the
-                // app's own audio session and media controls). Recorded by its code (`not-visible`,
-                // `microphone-permission`, `call-refused`, …).
-                Err(error) => {
-                    self.phone.system_call(false);
-                    log::error!("call: the system's call did not start: {error}");
+            // A system's call the system refuses goes on as the app's own, with what the app's own call has (its
+            // service, its Live Activity); a refusal of that too leaves the call in front only.
+            let kinds: &[bool] = if system { &[true, false] } else { &[false] };
+            for &kind in kinds {
+                self.phone.system_call(call_activates_audio(kind));
+                let app = app.clone();
+                match start_call_service(&self.app, &details, kind, move |event| {
+                    on_service_event(&app, start, page, since, event)
+                }) {
+                    Ok(()) => {
+                        self.holding = Some(start);
+                        self.system = kind;
+                        self.since = since;
+                        // The system is told the page's mute and title at once (`show`), whatever it started with.
+                        self.shown = None;
+                        log::info!("call: started{}", if kind { " (the system's)" } else { "" });
+                        break;
+                    }
+                    // The call goes on as the app's own (in front on Android: it does not outlive the screen; on iOS with
+                    // the app's own audio session and media controls). Recorded by its code (`not-visible`,
+                    // `microphone-permission`, `call-refused`, …).
+                    Err(error) => {
+                        self.phone.system_call(false);
+                        log::error!(
+                            "call: the {} call did not start: {error}",
+                            if kind { "system's" } else { "app's own" }
+                        );
+                    }
                 }
             }
         } else {
@@ -571,15 +610,10 @@ impl Room {
         let shown = self.shown.as_ref().map(|shown| &shown.surface);
         let surfaces: Vec<&CallSurface> = shown.into_iter().chain([&self.surface]).collect();
         let gone = unreferenced(&self.forgotten, &surfaces);
-        if gone.is_empty() {
-            return;
-        }
-        for id in &gone {
-            self.forgotten.remove(id);
-        }
-        if let Err(error) = forget_stills(&self.app, &gone) {
-            log::warn!("call_forget: {error}");
-        }
+        let app = self.app.clone();
+        retire(&mut self.forgotten, gone, |id| {
+            forget_stills(&app, &[id.to_owned()])
+        });
     }
 
     /// Shows the call again in `wait`, once, however many changes come meanwhile.
@@ -1005,5 +1039,30 @@ mod tests {
                 bluetooth: true
             }
         );
+    }
+
+    #[test]
+    fn a_still_whose_file_did_not_go_stays_pending() {
+        let mut forgotten: BTreeSet<String> = ["a", "b", "c"].map(String::from).into();
+        let gone = ["a", "b"].map(String::from).to_vec();
+        retire(&mut forgotten, gone.clone(), |id| match id {
+            "a" => Err(std::io::Error::other("busy")),
+            _ => Ok(()),
+        });
+        assert_eq!(forgotten, ["a", "c"].map(String::from).into());
+        retire(&mut forgotten, gone, |_| Ok(()));
+        assert_eq!(forgotten, ["c"].map(String::from).into());
+    }
+
+    #[test]
+    fn only_a_kept_still_cancels_its_pending_forgetting() {
+        let mut forgotten: BTreeSet<String> = ["a"].map(String::from).into();
+        assert_eq!(
+            keep_if_saved(&mut forgotten, "a", Err("image")),
+            Err("image")
+        );
+        assert!(forgotten.contains("a"));
+        assert_eq!(keep_if_saved::<&str>(&mut forgotten, "a", Ok(())), Ok(()));
+        assert!(forgotten.is_empty());
     }
 }

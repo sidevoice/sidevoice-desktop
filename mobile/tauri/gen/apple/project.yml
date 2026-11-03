@@ -1,9 +1,18 @@
+# The iOS project's XcodeGen spec, rendered by the Tauri CLI (`bundle > iOS > template` in tauri.conf.json) with the same
+# values as its own template: the CLI's template (tauri-cli 2.12.0, templates/mobile/ios/project.yml) plus the call's Live
+# Activity (docs/MOBILE.md → "The call's Live Activity"): its Swift package (apple/CallActivity), the app's file that
+# includes the package's App Intents (apple/App), the App Group both targets share, and the widget extension that draws it
+# (apple/Widget). When the CLI's version moves, take its template again and keep these additions (marked "Live Activity").
 name: sidevoice-mobile
 options:
   bundleIdPrefix: ai.sidevoice.mobile
   deploymentTarget:
     iOS: 15.0
 fileGroups: [../../src]
+# Live Activity: the package the app and the extension share.
+packages:
+  CallActivity:
+    path: ../../apple/CallActivity
 configs:
   debug: debug
   release: release
@@ -37,6 +46,8 @@ targets:
       - path: Externals
         excludes: ["**/*.a"]
       - path: sidevoice-mobile_iOS
+      # Live Activity: the app includes the package's App Intents (its buttons run in the app).
+      - path: ../../apple/App
       - path: assets
         buildPhase: resources
         type: folder
@@ -60,6 +71,10 @@ targets:
         CFBundleVersion: "0.1.0"
     entitlements:
       path: sidevoice-mobile_iOS/sidevoice-mobile_iOS.entitlements
+      # Live Activity: the App Group whose container holds the creatures' stills the extension draws.
+      properties:
+        com.apple.security.application-groups:
+          - group.ai.sidevoice.mobile
     scheme:
       environmentVariables:
         RUST_BACKTRACE: full
@@ -91,6 +106,12 @@ targets:
       - sdk: MediaPlayer.framework
       - sdk: Accelerate.framework
       - sdk: WebKit.framework
+      # Live Activity: the activity's start, update and end (CallActivityApp), and the extension, embedded in the app.
+      - package: CallActivity
+        product: CallActivityApp
+      - package: CallActivity
+        product: CallActivity
+      - target: SidevoiceActivity
     preBuildScripts:
       - script: |
           npm run -- tauri ios xcode-script -v --platform "${PLATFORM_DISPLAY_NAME:?}" --sdk-root "${SDKROOT:?}" --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration "${CONFIGURATION:?}" ${FORCE_COLOR} ${ARCHS:?}
@@ -99,3 +120,35 @@ targets:
         outputFiles:
           - $(SRCROOT)/Externals/x86_64/${CONFIGURATION}/libapp.a
           - $(SRCROOT)/Externals/arm64/${CONFIGURATION}/libapp.a
+  # Live Activity: the widget extension that draws the call's Live Activity (Lock Screen, Dynamic Island). Its version is
+  # the app's (App Store Connect refuses an extension whose version differs).
+  SidevoiceActivity:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "16.1"
+    sources:
+      - path: ../../apple/Widget
+    info:
+      path: SidevoiceActivity/Info.plist
+      properties:
+        CFBundleDisplayName: Sidevoice
+        CFBundleShortVersionString: 0.1.0
+        CFBundleVersion: "0.1.0"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: SidevoiceActivity/SidevoiceActivity.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.ai.sidevoice.mobile
+    settings:
+      base:
+        PRODUCT_NAME: SidevoiceActivity
+        PRODUCT_BUNDLE_IDENTIFIER: ai.sidevoice.mobile.activity
+        ENABLE_BITCODE: false
+        EXCLUDED_ARCHS[sdk=iphoneos*]: x86_64
+    dependencies:
+      - package: CallActivity
+        product: CallActivity
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework

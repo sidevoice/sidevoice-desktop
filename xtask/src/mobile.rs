@@ -530,6 +530,17 @@ pub fn screenshots(name: &str) -> Result<()> {
     )
 }
 
+/// Where the call's Live Activity package is (its views, and the tests that render them).
+const CALL_ACTIVITY: &str = "mobile/tauri/apple/CallActivity";
+
+/// `mobile renders ios`: every state of the call's Live Activity (Lock Screen card, Dynamic Island) rendered to PNG at 3×
+/// by the package's tests on an iPhone Pro Max simulator, into dist/live-activity/, the evidence a pull request shows
+/// beside the gallery's renders. Needs macOS with Xcode.
+pub fn renders(name: &str) -> Result<()> {
+    ensure(project(name)?.cli == "ios", "mobile renders: ios only")?;
+    platform::ios_simulator::renders(&repo().join(CALL_ACTIVITY), &repo().join("dist/live-activity"))
+}
+
 /// `mobile lint android|ios`: Clippy over the mobile crates for the target they exist for, warnings denied (the crates are
 /// empty on a computer, so `cargo xtask lint` does not see them: D-RULE-ROOT). Android through `cargo ndk`, which hands the
 /// NDK's compilers to the build scripts. Needs the web interface (`mobile/tauri/tauri.conf.json`'s `frontendDist`) and the

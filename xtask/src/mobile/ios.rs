@@ -212,8 +212,12 @@ pub fn check_app(app: &Path) -> Result<()> {
     check_bundle(&Bundle::from_app(app)?)
 }
 
+/// The call's Live Activity's widget extension, inside the app (mobile/tauri/ios-project.yml, target SidevoiceActivity).
+const EXTENSION: &str = "PlugIns/SidevoiceActivity.appex";
+
 /// An archive for App Store Connect (`.ipa`): its app is the bundle `identifier` at `build_number`, it is signed
-/// (a provisioning profile embedded, a code signature sealed), and the app passes [`check_bundle`].
+/// (a provisioning profile embedded, a code signature sealed), the Live Activity's extension
+/// is there at the same build number, and the app passes [`check_bundle`].
 pub fn check_ipa(ipa: &Path, identifier: &str, build_number: u32) -> Result<()> {
     let file = fs::File::open(ipa).map_err(|e| format!("{}: {e}", ipa.display()))?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("{}: {e}", ipa.display()))?;
@@ -240,6 +244,27 @@ pub fn check_ipa(ipa: &Path, identifier: &str, build_number: u32) -> Result<()> 
     ensure(
         text("CFBundleVersion") == build_number.to_string(),
         format!("the build number is {}, not {build_number}", text("CFBundleVersion")),
+    )?;
+    // The Live Activity's extension, at the app's build number (App Store Connect refuses an extension whose version
+    // differs from its app's).
+    let appex = format!("{root}{EXTENSION}/Info.plist");
+    let appex_info = {
+        let mut entry = archive.by_name(&appex).map_err(|_| format!("{}: no {EXTENSION}", ipa.display()))?;
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).map_err(|e| format!("{appex}: {e}"))?;
+        dictionary(&bytes, &appex)?
+    };
+    let appex_version = appex_info.get("CFBundleVersion").and_then(plist::Value::as_string).unwrap_or_default();
+    ensure(
+        appex_version == build_number.to_string(),
+        format!("{EXTENSION}'s build number is {appex_version}, not {build_number}"),
+    )?;
+    let short = |info: &plist::Dictionary| {
+        info.get("CFBundleShortVersionString").and_then(plist::Value::as_string).unwrap_or_default().to_owned()
+    };
+    ensure(
+        short(&appex_info) == short(&bundle.info),
+        format!("{EXTENSION}'s version is {:?}, not the app's {:?}", short(&appex_info), short(&bundle.info)),
     )?;
     for sealed in ["embedded.mobileprovision", "_CodeSignature/CodeResources"] {
         ensure(names.contains(&format!("{root}{sealed}")), format!("{}: not signed: no {sealed}", ipa.display()))?;
@@ -380,6 +405,7 @@ mod tests {
             "<plist version=\"1.0\"><dict><key>CFBundleExecutable</key><string>Sidevoice</string>\
              <key>CFBundleIdentifier</key><string>{identifier}</string>\
              <key>CFBundleVersion</key><string>{version}</string>\
+             <key>CFBundleShortVersionString</key><string>0.1.0</string>\
              <key>ITSAppUsesNonExemptEncryption</key><false/>{MODES}</dict></plist>"
         );
         let manifest = "<plist version=\"1.0\"><dict><key>NSPrivacyTracking</key><false/>\
@@ -390,7 +416,16 @@ mod tests {
             ("Sidevoice", executable(&["main", "_malloc"])),
             ("embedded.mobileprovision", b"profile".to_vec()),
             ("_CodeSignature/CodeResources", b"seal".to_vec()),
+            ("PlugIns/SidevoiceActivity.appex/Info.plist", appex_info(version)),
         ]
+    }
+
+    fn appex_info(version: &str) -> Vec<u8> {
+        format!(
+            "<plist version=\"1.0\"><dict><key>CFBundleVersion</key><string>{version}</string>\
+             <key>CFBundleShortVersionString</key><string>0.1.0</string></dict></plist>"
+        )
+        .into_bytes()
     }
 
     fn check(files: &[(&str, Vec<u8>)], identifier: &str, build: u32) -> Result<()> {
@@ -417,6 +452,13 @@ mod tests {
         let no_manifest = without(&files, MANIFEST);
         assert!(check(&no_manifest, "ai.sidevoice.mobile", 42).unwrap_err().contains("not at the root"));
         assert!(check(&[], "ai.sidevoice.mobile", 42).unwrap_err().contains("no Payload"));
+        let no_extension = without(&files, "PlugIns/SidevoiceActivity.appex/Info.plist");
+        assert!(check(&no_extension, "ai.sidevoice.mobile", 42)
+            .unwrap_err()
+            .contains("no PlugIns/SidevoiceActivity.appex"));
+        let mut stale = without(&files, "PlugIns/SidevoiceActivity.appex/Info.plist");
+        stale.push(("PlugIns/SidevoiceActivity.appex/Info.plist", appex_info("0.1.0")));
+        assert!(check(&stale, "ai.sidevoice.mobile", 42).unwrap_err().contains("build number is 0.1.0, not 42"));
     }
 
     #[test]
