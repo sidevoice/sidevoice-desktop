@@ -73,6 +73,34 @@ fn run_app(udid: &str, app: &Path, bundle: &str, out: &Path) -> Result<()> {
 }
 
 impl Os for Native {
+    fn renders(package: &Path, out: &Path) -> Result<()> {
+        mkdir(out)?;
+        let (device, runtime) = pick(
+            &simctl().args(["list", "devicetypes", "-j"]).stdout()?,
+            &simctl().args(["list", "runtimes", "available", "-j"]).stdout()?,
+        )?;
+        let udid = simctl()
+            .args(["create", "sidevoice-renders", device.as_str(), runtime.as_str()])
+            .stdout()?
+            .trim()
+            .to_owned();
+        let work = std::env::temp_dir().join(format!("sidevoice-renders-{}", std::process::id()));
+        // A package with more than one product has the scheme `<name>-Package`, which builds and tests them all. The
+        // test process gets the variables prefixed `TEST_RUNNER_`, without the prefix.
+        let tested = Cmd::new("xcodebuild")
+            .args(["test", "-scheme", "CallActivity-Package", "-destination"])
+            .arg(format!("platform=iOS Simulator,id={udid}"))
+            .arg("-derivedDataPath")
+            .arg(&work)
+            .env("TEST_RUNNER_CALL_ACTIVITY_RENDERS", out)
+            .dir(package)
+            .run();
+        let _ = simctl().args(["shutdown", udid.as_str()]).attempt()?;
+        let _ = simctl().args(["delete", udid.as_str()]).attempt()?;
+        let _ = fs::remove_dir_all(&work);
+        tested
+    }
+
     fn screenshots(zip: &Path, bundle: &str, out: &Path) -> Result<()> {
         mkdir(out)?;
         let work = std::env::temp_dir().join(format!("sidevoice-simulator-{}", std::process::id()));

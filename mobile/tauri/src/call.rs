@@ -533,25 +533,34 @@ impl Room {
             // The room's call is the app's own, and waits for no system, unless the developer option turns the system's call on
             // (D-NO-CALLKIT-DEFAULT).
             let system = crate::developer_options::system_call(&self.app);
-            let system_audio = call_activates_audio(system);
-            self.phone.system_call(system_audio);
-            match start_call_service(&self.app, &details, system, move |event| {
-                on_service_event(&app, start, page, since, event)
-            }) {
-                Ok(()) => {
-                    self.holding = Some(start);
-                    self.system = system;
-                    self.since = since;
-                    // The system is told the page's mute and title at once (`show`), whatever it started with.
-                    self.shown = None;
-                    log::info!("call: started");
-                }
-                // The call goes on as the app's own (in front on Android: it does not outlive the screen; on iOS with the
-                // app's own audio session and media controls). Recorded by its code (`not-visible`,
-                // `microphone-permission`, `call-refused`, …).
-                Err(error) => {
-                    self.phone.system_call(false);
-                    log::error!("call: the system's call did not start: {error}");
+            // A system's call the system refuses goes on as the app's own, with what the app's own call has (its
+            // service, its Live Activity); a refusal of that too leaves the call in front only.
+            let kinds: &[bool] = if system { &[true, false] } else { &[false] };
+            for &kind in kinds {
+                self.phone.system_call(call_activates_audio(kind));
+                let app = app.clone();
+                match start_call_service(&self.app, &details, kind, move |event| {
+                    on_service_event(&app, start, page, since, event)
+                }) {
+                    Ok(()) => {
+                        self.holding = Some(start);
+                        self.system = kind;
+                        self.since = since;
+                        // The system is told the page's mute and title at once (`show`), whatever it started with.
+                        self.shown = None;
+                        log::info!("call: started{}", if kind { " (the system's)" } else { "" });
+                        break;
+                    }
+                    // The call goes on as the app's own (in front on Android: it does not outlive the screen; on iOS with
+                    // the app's own audio session and media controls). Recorded by its code (`not-visible`,
+                    // `microphone-permission`, `call-refused`, …).
+                    Err(error) => {
+                        self.phone.system_call(false);
+                        log::error!(
+                            "call: the {} call did not start: {error}",
+                            if kind { "system's" } else { "app's own" }
+                        );
+                    }
                 }
             }
         } else {

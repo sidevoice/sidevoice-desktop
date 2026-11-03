@@ -11,7 +11,7 @@ them, as listed.
   (Apache-2.0) and the components listed in sidevoice-web's `THIRD_PARTY_NOTICES.md`.
 - **Tauri** and its plugins (`tauri`, `tauri-plugin-global-shortcut`, `tauri-plugin-single-instance`), MIT or
   Apache-2.0, and the Rust crates in `Cargo.lock` under their own licenses (mostly MIT or Apache-2.0).
-- **DM Sans**, the brand typeface (`brand/fonts/`, `ui/brand/`), SIL Open Font License 1.1 (`OFL.txt` beside it).
+- **DM Sans**, the brand typeface (`brand/fonts/`, `ui/brand/`, and the variable TTF in the iOS app's Live Activity, `mobile/tauri/apple/CallActivity/Sources/CallActivity/Fonts/`), SIL Open Font License 1.1 (`OFL.txt` beside it).
 
 ### The native speech engine, linked into the app binary (every platform)
 

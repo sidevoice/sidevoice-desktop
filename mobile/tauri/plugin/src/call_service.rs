@@ -17,6 +17,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 use tauri::{AppHandle, Runtime};
 
+use crate::call_surface::{end_surface, show_surface, start_surface};
 use crate::platform::call_service as platform;
 use crate::{CallSurface, SurfaceAction};
 
@@ -121,13 +122,21 @@ pub struct CallDetails {
 /// thread. `system`: as a call of the system's (CallKit, Telecom); else it is the app's own, which runs only what the OS
 /// keeps for it (Android's foreground service; nothing on iOS, where no CallKit object is made). Call it while the app is
 /// visible. A refusal says why, and nothing runs.
+///
+/// The app's own call also gets the surface the system draws apart from the service (iOS: the call's Live Activity); a
+/// system's call does not (D-NO-CALLKIT-DEFAULT: the system draws that call itself, and the two would show it twice).
 pub fn start_call_service<R: Runtime>(
     app: &AppHandle<R>,
     details: &CallDetails,
     system: bool,
     on_event: impl Fn(CallEvent) + Send + Sync + 'static,
 ) -> Result<(), CallServiceError> {
-    platform::start(app, details, system, Arc::new(on_event))
+    let events: CallEvents = Arc::new(on_event);
+    platform::start(app, details, system, events.clone())?;
+    if !system {
+        start_surface(details, events);
+    }
+    Ok(())
 }
 
 /// Shows the running call as `details` now: its title, and the mute the page has (the system's screens and a Bluetooth or
@@ -137,11 +146,13 @@ pub fn update_call_service<R: Runtime>(
     app: &AppHandle<R>,
     details: &CallDetails,
 ) -> Result<(), CallServiceError> {
+    show_surface(details);
     platform::update(app, details)
 }
 
 /// Ends the system's call, if one runs. It reports `Stopped(Requested)` to the `on_event` it started with.
 pub fn stop_call_service<R: Runtime>(app: &AppHandle<R>) -> Result<(), CallServiceError> {
+    end_surface();
     platform::stop(app)
 }
 
