@@ -89,7 +89,7 @@ final class RenderTests: XCTestCase {
         }
         try sheet(Self.sample(.working).stale, name: "stale")
         var captions = Self.sample(.speaking)
-        captions.lit = 74
+        captions.lit = (captions.text! as NSString).range(of: "ajustado").location
         try sheet(captions, name: "speaking-captions-half-heard")
         var speaker = Self.sample(.idle)
         speaker.route = .speaker
@@ -128,19 +128,16 @@ final class RenderTests: XCTestCase {
             .environment(\.colorScheme, dark ? .dark : .light)
     }
 
-    /// The expanded island: black, radius 44, the camera at the top; B's content from 40 pt down (the speaking view's
-    /// creature beside the camera at x 28, y 10; its reply from 40, not 42, and 13 from the bottom, not 14: see `Reply`), 18 pt from the sides.
+    /// The expanded island: black, radius 44, the camera at the top; B's content from 40 pt down (42 while speaking, whose
+    /// creature sits beside the camera at x 28, y 10), 18 pt from the sides.
     func expanded(_ state: CallState, width: CGFloat = 380) -> some View {
         let speaking = state.phase == .speaking
         return ZStack(alignment: .topLeading) {
             camera(x: (width - 125) / 2)
-            if speaking {
-                ExpandedCorner(state: state).offset(x: 28, y: 10)
-            }
             ExpandedBody(state: state)
                 .frame(width: width - 36)
                 .padding(.leading, 18)
-                .padding(.top, 40)
+                .padding(.top, speaking ? 42 : 40)
                 .padding(.bottom, Self.bottom(state.phase))
         }
         .frame(width: width, alignment: .topLeading)
@@ -151,7 +148,7 @@ final class RenderTests: XCTestCase {
 
     static func bottom(_ phase: CallState.Phase) -> CGFloat {
         switch phase {
-        case .speaking: 13
+        case .speaking: 14
         case .listening, .transcribing, .said: 18
         default: 10
         }
@@ -227,5 +224,33 @@ final class RenderTests: XCTestCase {
             XCTAssertLessThanOrEqual(image.size.height, 160, "\(name): \(image.size.height) pt tall")
         }
         print("render \(name): \(image.size.width) × \(image.size.height) pt")
+    }
+}
+
+/// The captions' lines: broken as CoreText breaks them, at most `lines`, and a cut page ends in "…" after a whole word.
+@available(iOS 17.0, *)
+@MainActor
+final class LinesTests: XCTestCase {
+    func testALongPageEndsAfterAWholeWord() {
+        let text = RenderTests.sample(.speaking).text! + " Y luego seguimos con el modo oscuro, que también tiene lo suyo."
+        let lines = Lines.lines(text, width: 344, font: DMSans.ctFont(15, 550), tracking: -0.075, max: 4)
+        XCTAssertEqual(lines.count, 4)
+        XCTAssertEqual(lines.filter(\.ellipsis).count, 1)
+        let last = lines[3]
+        XCTAssertTrue(last.ellipsis)
+        let whole = text as NSString
+        // The character after the cut is not a letter of the same word.
+        let next = whole.substring(with: NSRange(location: last.range.upperBound, length: 1))
+        XCTAssertTrue(next.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || ",.;:".contains(next), "cut before \(next)")
+        for (a, b) in zip(lines, lines.dropFirst()) {
+            XCTAssertEqual(a.range.upperBound, b.range.location, "the lines follow each other")
+        }
+    }
+
+    func testAShortPageIsWhole() {
+        let lines = Lines.lines("Hecho.", width: 344, font: DMSans.ctFont(15, 550), tracking: 0, max: 4)
+        XCTAssertEqual(lines.count, 1)
+        XCTAssertFalse(lines[0].ellipsis)
+        XCTAssertEqual(lines[0].range.length, 6)
     }
 }

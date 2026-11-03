@@ -30,8 +30,6 @@ struct CreatureTile: View {
     var state: CallState
     var size: CGFloat
     var palette: Palette
-    /// The colour around the badge: the card's, or the island's black.
-    var badgeRing: Color
     @Environment(\.isLuminanceReduced) private var reduced
 
     var body: some View {
@@ -56,9 +54,21 @@ struct CreatureTile: View {
                 .scaleEffect(state.creature?.k ?? 1, anchor: UnitPoint(x: 0.5, y: 0.96))
         }
         .frame(width: size, height: size)
+        // The badge's 2-pt ring is a gap cut out of the tile, so whatever is behind the card shows through it (the Lock
+        // Screen's material, the island's black), as the gallery's ring in the panel's colour reads.
+        .mask {
+            // The tile's box, and far around it for an accessory that stands out of it, less the badge's ring.
+            ZStack(alignment: .bottomTrailing) {
+                Rectangle().padding(-size)
+                if state.micOff {
+                    Circle().frame(width: 26, height: 26).offset(x: 6, y: 6).blendMode(.destinationOut)
+                }
+            }
+            .compositingGroup()
+        }
         .overlay(alignment: .bottomTrailing) {
             if state.micOff {
-                MicBadge(size: 22, glyph: 12, ring: badgeRing, ringWidth: 2).offset(x: 4, y: 4)
+                MicBadge(size: 22, glyph: 12).offset(x: 4, y: 4)
             }
         }
     }
@@ -69,8 +79,9 @@ struct CreatureTile: View {
 struct MicBadge: View {
     var size: CGFloat
     var glyph: CGFloat
-    var ring: Color
-    var ringWidth: CGFloat
+    /// Around the badge, where nothing cuts a gap for it (the minimal island: its black).
+    var ring: Color = .clear
+    var ringWidth: CGFloat = 0
 
     var body: some View {
         Circle().fill(Ink.hangUp)
@@ -155,7 +166,8 @@ struct StateLine: View {
         let words = Text(state.words.state)
         guard state.phase == .working, let since = state.workingSince else { return words }
         let time = Text("· ") + Text(since, style: .timer)
-        return words + Text("  ") + time.font(DMSans.font(size, 600)).foregroundColor(tone.ink.opacity(0.85))
+        // The gallery's 6-pt gap: an en space (7.5 pt at 15, 7 at 14), the closest a run of text has.
+        return words + Text("\u{2002}") + time.font(DMSans.font(size, 600)).foregroundColor(tone.ink.opacity(0.85))
     }
 }
 

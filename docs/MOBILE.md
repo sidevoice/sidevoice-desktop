@@ -326,13 +326,18 @@ its buttons need iOS 17 (before that it only shows the call).
   (`sidevoice://conversations`, the stack of the other conversations; `sidevoice://call`, the rest of the activity).
 - **Updates.** Every change goes out at once, except the reply's captions: a change of the spoken page alone waits until
   about 2 s after the last update (iOS throttles local updates that come too often). Each update moves the activity's
-  `staleDate` three minutes ahead; a stale activity (the app stopped updating it) draws the offline state with the page's
-  offline word (D-LA-OFFLINE).
+  `staleDate` three minutes ahead, and the activity is updated every minute while the call lasts even when nothing
+  changed, so only an activity the app stopped updating goes stale; a stale one draws the offline state with the page's
+  offline word (D-LA-OFFLINE). The updates and the end reach ActivityKit one after the other, in order. A call that
+  starts while the app is in the background (iOS lets an app request an activity only in front) gets its activity when
+  the app next comes to the front, if the call still lasts. A system's call the system refuses goes on as the app's own,
+  with its activity.
 - **Its buttons** are App Intents (`LiveActivityIntent`, run in the app's process, not offered to Shortcuts): mute (a
   toggle with the value), skip, cancel send and hang up ask the Rust side for the page's action through the class it
   defines, `SidevoiceCallSurfaceActions` (`act:`), which reports `CallEvent::Action`. The audio switch, shown only while
   headphones are connected (D-LA-ROUTE), is the system's: it overrides the output to the speaker, or back
-  (`AVAudioSession`), and the activity follows the route as it changes.
+  (`AVAudioSession`), and the activity follows the route as it changes; headphones without a microphone keep the switch
+  while the call is on the speaker, until they go.
 - **The words** are the page's (`words` in the call surface), so the activity has no catalogue of its own; the output's
   name in the audio switch's accessible name is the system's.
 - **Evidence.** `cargo xtask mobile renders ios` runs the package's tests on an iPhone Pro Max simulator: every state's

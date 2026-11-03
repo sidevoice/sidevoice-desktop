@@ -51,8 +51,6 @@ struct Palette {
     var button: Color { dark ? Color(hex: 0xffffff, alpha: 0.13) : Color(hex: 0x1b1d24, alpha: 0.08) }
     /// The creature tile's background.
     var tile: Color { dark ? Color(hex: 0x2f2741) : Color(hex: 0xece4f7) }
-    /// The card's solid colour, which rings the mic badge.
-    var solid: Color { dark ? Color(hex: 0x1e1e22) : Color(hex: 0xf2f0f6) }
 
     static let island = Palette(dark: true)
 }
@@ -79,6 +77,11 @@ public enum DMSans {
     /// DM Sans at `size` pt and the variable weight `weight` (100–1000). The optical size follows the size, as the gallery's
     /// browser does (`font-optical-sizing: auto`).
     static func font(_ size: CGFloat, _ weight: CGFloat) -> Font {
+        Font(ctFont(size, weight))
+    }
+
+    /// The same, as CoreText's font (to break lines as SwiftUI will draw them).
+    static func ctFont(_ size: CGFloat, _ weight: CGFloat) -> CTFont {
         _ = registered
         let axes: [NSNumber: NSNumber] = [
             NSNumber(value: 0x7767_6874): NSNumber(value: Double(weight)),  // 'wght'
@@ -86,7 +89,7 @@ public enum DMSans {
         ]
         let attributes: [CFString: Any] = [kCTFontNameAttribute: name, kCTFontVariationAttribute: axes]
         let descriptor = CTFontDescriptorCreateWithAttributes(attributes as CFDictionary)
-        return Font(CTFontCreateWithFontDescriptor(descriptor, size, nil))
+        return CTFontCreateWithFontDescriptor(descriptor, size, nil)
     }
 }
 

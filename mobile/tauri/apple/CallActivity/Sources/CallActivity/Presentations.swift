@@ -20,7 +20,7 @@ public struct LockCard: View {
         let palette = Palette(dark: scheme == .dark)
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
-                CreatureTile(state: state, size: 64, palette: palette, badgeRing: palette.solid)
+                CreatureTile(state: state, size: 64, palette: palette)
                 VStack(alignment: .leading, spacing: 0) {
                     Text(state.title)
                         .font(DMSans.font(17, 700)).tracking(-0.17)
@@ -126,6 +126,9 @@ public struct ExpandedBody: View {
         switch state.phase {
         case .speaking:
             Reply(state: state)
+                .overlay(alignment: .topLeading) {
+                    RoundFace(state: state, size: 30).offset(x: 10, y: -32)
+                }
         case .listening, .transcribing:
             VStack(spacing: 12) {
                 VoiceHeader(state: state)
@@ -134,11 +137,9 @@ public struct ExpandedBody: View {
         case .said:
             VStack(alignment: .leading, spacing: 12) {
                 VoiceHeader(state: state)
-                Text(state.text ?? "")
-                    .font(DMSans.font(15, 550))
-                    .foregroundStyle(Palette.island.text)
-                    .lineLimit(2)
-                    .frame(maxWidth: .infinity, minHeight: 38, alignment: .topLeading)
+                Lines(
+                    text: state.text ?? "", size: 15, weight: 550, lineHeight: 19, lines: 2,
+                    ink: Palette.island.text, rest: Palette.island.text)
             }
         case .idle, .working, .holding, .offline:
             VStack(spacing: 8) {
@@ -179,7 +180,7 @@ struct ClosedHeader: View {
     var body: some View {
         let palette = Palette.island
         HStack(alignment: .center, spacing: 12) {
-            CreatureTile(state: state, size: 56, palette: palette, badgeRing: .black)
+            CreatureTile(state: state, size: 56, palette: palette)
                 .frame(maxHeight: .infinity, alignment: .top)
                 .padding(.top, 1.2)
             VStack(alignment: .leading, spacing: 0) {
@@ -210,7 +211,7 @@ struct VoiceHeader: View {
     var body: some View {
         let palette = Palette.island
         HStack(alignment: .center, spacing: 12) {
-            CreatureTile(state: state, size: 44, palette: palette, badgeRing: .black)
+            CreatureTile(state: state, size: 44, palette: palette)
                 .frame(maxHeight: .infinity, alignment: .top)
             VStack(alignment: .leading, spacing: 1.99) {
                 Text(state.title)
@@ -252,26 +253,25 @@ struct VoiceCapsule: View {
     }
 }
 
-/// Speaking: the reply's page, 15 pt, four lines, the heard words lit and the rest at 38 %; Saltar below it, right. SwiftUI
-/// has no line height below the font's own (DM Sans: 1.302, so 19.5 pt where the gallery has 18), so the four lines take
-/// 78 pt, not 72; Saltar sits 2 pt under them (the gallery's 4), which keeps the island under 160 pt.
+/// Speaking: the creature (30 pt, beside the camera, 10 pt in from B's edge), the reply's page, 15 on 18, four lines, the
+/// heard words lit and the rest at 38 %; Saltar 4 pt below it, right. All of it in `.bottom` (variant B): the creature is
+/// drawn 32 pt above the region's top, where the camera row is.
 @available(iOS 16.1, *)
 struct Reply: View {
     var state: CallState
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: 2) {
-            caption
-                .font(DMSans.font(15, 550)).tracking(-0.075)
-                .lineLimit(4)
-                .frame(maxWidth: .infinity, minHeight: 72, alignment: .topLeading)
+        VStack(alignment: .trailing, spacing: 4) {
+            Lines(
+                text: state.text ?? "", size: 15, weight: 550, tracking: -0.075, lineHeight: 18, lines: 4,
+                lit: state.lit, ink: Palette.island.text, rest: Palette.island.text.opacity(0.38))
             if state.canSkip {
                 // Never an ellipsis on a button: the label whole, or the glyph alone.
                 ViewThatFits(in: .horizontal) {
                     ActionButton(action: .skip) {
                         HStack(spacing: 4) {
                             Image(systemName: "forward.fill")
-                                .font(.system(size: 12, weight: .semibold))
+                                .resizable().scaledToFit()
                                 .frame(width: 14, height: 14)
                             Text(state.words.skip)
                                 .font(DMSans.font(12, 650))
@@ -298,30 +298,6 @@ struct Reply: View {
         }
     }
 
-    /// The page split where the voice is (`lit`, UTF-16 units, never ahead of it).
-    private var caption: Text {
-        let text = (state.text ?? "") as NSString
-        let lit = min(max(state.lit, 0), text.length)
-        let heard = Text(text.substring(to: lit)).foregroundColor(Palette.island.text)
-        let rest = Text(text.substring(from: lit)).foregroundColor(Palette.island.text.opacity(0.38))
-        return heard + rest
-    }
-}
-
-/// The speaking view's creature, a 30-pt circle beside the camera.
-@available(iOS 16.1, *)
-public struct ExpandedCorner: View {
-    public var state: CallState
-
-    public init(state: CallState) {
-        self.state = state
-    }
-
-    public var body: some View {
-        if state.phase == .speaking {
-            RoundFace(state: state, size: 30)
-        }
-    }
 }
 
 /// Compact, leading: the face, a 26-pt circle with the whole creature.

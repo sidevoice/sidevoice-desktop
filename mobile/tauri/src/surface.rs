@@ -116,17 +116,15 @@ pub fn surface(reported: &Reported, shown: &CallSurface) -> CallSurface {
     }
 }
 
-/// What the call is doing, in the order the page's state line says it (sidevoice-web `call-surface.js`): offline (or
-/// reconnecting) over everything, then a conversation that cannot receive, then the person's open turn, then the agent's
-/// voice, then the person's words just sent, then the agent's work.
+/// What the call is doing, in the order the page's state line says it (HANDOVER §1, D-LA-HOLDING-ORDER; sidevoice-web
+/// `call-surface.js`): offline (or reconnecting) over everything, then the person's open turn, then the agent's voice,
+/// then the person's words just sent, then the agent's work, then a conversation that cannot receive, which is a standing
+/// condition and takes only idle's place: what is happening now always wins.
 fn phase(reported: &Reported) -> Phase {
     let mood = reported.mood.as_deref().unwrap_or_default();
     let said = reported.surface.said.as_deref();
     if reported.busy_reason.as_deref() == Some("reconnecting") || mood == "offline" {
         return Phase::Offline;
-    }
-    if reported.surface.reach.as_deref() == Some("holding") {
-        return Phase::Holding;
     }
     match reported.turn.as_deref() {
         Some("listening") => return Phase::Listening,
@@ -142,6 +140,7 @@ fn phase(reported: &Reported) -> Phase {
     match mood {
         "working" => Phase::Working,
         "listening" => Phase::Listening,
+        _ if reported.surface.reach.as_deref() == Some("holding") => Phase::Holding,
         _ => Phase::Idle,
     }
 }
@@ -262,7 +261,8 @@ mod tests {
                 reported("speaking", None, Some("reconnecting"), empty),
                 Phase::Offline,
             ),
-            (reported("speaking", None, None, holding), Phase::Holding),
+            (reported("speaking", None, None, holding), Phase::Speaking),
+            (reported("idle", None, None, holding), Phase::Holding),
             (
                 reported("speaking", Some("listening"), None, said),
                 Phase::Listening,
@@ -276,6 +276,108 @@ mod tests {
         ];
         for (reported, expected) in cases {
             assert_eq!(shown(&reported).phase, expected, "{reported:?}");
+        }
+    }
+
+    /// Every pair of what can be true at once: the higher in offline > the person's turn (listening, transcribing) >
+    /// speaking > said > working > holding > idle wins (D-LA-HOLDING-ORDER).
+    #[test]
+    fn of_any_two_the_higher_wins() {
+        // Each signal: what the page reports for it, in that order (highest first).
+        #[derive(Clone, Copy)]
+        struct Signal {
+            phase: Phase,
+            mood: Option<&'static str>,
+            turn: Option<&'static str>,
+            busy: Option<&'static str>,
+            said: bool,
+            holding: bool,
+        }
+        let none = Signal {
+            phase: Phase::Idle,
+            mood: None,
+            turn: None,
+            busy: None,
+            said: false,
+            holding: false,
+        };
+        let signals = [
+            Signal {
+                phase: Phase::Offline,
+                busy: Some("reconnecting"),
+                ..none
+            },
+            Signal {
+                phase: Phase::Offline,
+                mood: Some("offline"),
+                ..none
+            },
+            Signal {
+                phase: Phase::Listening,
+                turn: Some("listening"),
+                ..none
+            },
+            Signal {
+                phase: Phase::Transcribing,
+                turn: Some("transcribing"),
+                ..none
+            },
+            Signal {
+                phase: Phase::Speaking,
+                mood: Some("speaking"),
+                ..none
+            },
+            Signal {
+                phase: Phase::Said,
+                said: true,
+                ..none
+            },
+            Signal {
+                phase: Phase::Working,
+                mood: Some("working"),
+                ..none
+            },
+            Signal {
+                phase: Phase::Holding,
+                holding: true,
+                ..none
+            },
+            Signal {
+                phase: Phase::Idle,
+                mood: Some("idle"),
+                ..none
+            },
+        ];
+        for (high_at, high) in signals.iter().enumerate() {
+            for low in &signals[high_at + 1..] {
+                // Two moods, or two turns, cannot be reported at once: such a pair is no case.
+                if (high.mood.is_some() && low.mood.is_some())
+                    || (high.turn.is_some() && low.turn.is_some())
+                {
+                    continue;
+                }
+                let mut json = serde_json::Map::new();
+                if high.said || low.said {
+                    json.insert("said".into(), "Mira el test".into());
+                }
+                if high.holding || low.holding {
+                    json.insert("reach".into(), "holding".into());
+                }
+                let reported = Reported {
+                    mood: high.mood.or(low.mood).map(Into::into),
+                    turn: high.turn.or(low.turn).map(Into::into),
+                    busy_reason: high.busy.or(low.busy).map(Into::into),
+                    can_skip: false,
+                    surface: SurfaceReport::read(&serde_json::Value::Object(json)),
+                };
+                assert_eq!(
+                    shown(&reported).phase,
+                    high.phase,
+                    "{:?} over {:?}",
+                    high.phase,
+                    low.phase
+                );
+            }
         }
     }
 
