@@ -10,7 +10,7 @@ const mobile = readFileSync(new URL("../mobile/tauri/js/mobile-bridge.js", impor
 const composed = `(function (transportOf, membersOf) {\n${mobile}\n})(${transport}, ${members});`;
 const PLUGIN = "plugin:sidevoice-shared-tauri|";
 
-function install(origin, pageOrigin = origin, microphoneSettings = true, microphoneHelp = null, messageTables = null, deviceName = null, build = { channel: "dev", version: "0.1.0" }) {
+function install(origin, pageOrigin = origin, microphoneSettings = true, microphoneHelp = null, messageTables = null, deviceName = null, build = { channel: "dev", version: "0.1.0" }, debugState = null) {
   const module = { exports: {} };
   vm.runInNewContext(composed, { module, Promise, JSON, Date });
   const invoked = [];
@@ -29,7 +29,7 @@ function install(origin, pageOrigin = origin, microphoneSettings = true, microph
     clearInterval: () => {},
     setTimeout: (fn) => setTimeout(fn, 0),
   };
-  const api = module.exports(win, origin, microphoneSettings, microphoneHelp, messageTables, deviceName, build);
+  const api = module.exports(win, origin, microphoneSettings, microphoneHelp, messageTables, deviceName, build, debugState);
   return { api, win, invoked, intervals };
 }
 
@@ -249,4 +249,18 @@ test("host.build is what the app says this build is, frozen", () => {
   const { api } = install("tauri://localhost", undefined, true, null, null, null, nightly);
   assert.deepEqual({ ...api.host.build }, nightly);
   assert.equal(Object.isFrozen(api.host.build), true);
+});
+
+test("host.debug is the phone's one developer switch, only where the app offers it, and sets go to the app", async () => {
+  const none = install("tauri://localhost");
+  assert.equal("debug" in none.api.host, false, "a release has no host.debug");
+  const { api, invoked } = install("tauri://localhost", undefined, true, null, null, null, undefined, { available: ["systemCall"], systemCall: false });
+  const debug = api.host.debug;
+  assert.deepEqual([...debug.available], ["systemCall"]);
+  assert.equal(debug.systemCall, false, "off by default");
+  await assert.rejects(debug.set("inspectable", true), { key: "bad_request" });
+  await assert.rejects(debug.set("systemCall", "yes"), { key: "bad_request" });
+  assert.equal(invoked.some(([command]) => command === "developer_options"), false);
+  await debug.set("systemCall", true);
+  assert.equal(JSON.stringify(invoked.filter(([command]) => command === "developer_options")), JSON.stringify([["developer_options", { action: "set", name: "systemCall", enabled: true }]]));
 });

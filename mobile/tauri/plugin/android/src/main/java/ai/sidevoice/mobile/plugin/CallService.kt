@@ -107,7 +107,7 @@ class CallService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val id = intent?.getLongExtra(EXTRA_SESSION, NO_SESSION) ?: NO_SESSION
         when (intent?.action) {
-            ACTION_START -> begin(id, intent.getStringExtra(EXTRA_TITLE) ?: "")
+            ACTION_START -> begin(id, intent.getStringExtra(EXTRA_TITLE) ?: "", intent.getBooleanExtra(EXTRA_SYSTEM_CALL, false))
             // What the call shows now (its title) and the page's mute, for the session this instance serves.
             ACTION_UPDATE -> session?.takeIf { it.id == id }?.let {
                 update(it, intent.getStringExtra(EXTRA_TITLE) ?: "", intent.getBooleanExtra(EXTRA_MUTED, false))
@@ -141,7 +141,12 @@ class CallService : Service() {
         super.onDestroy()
     }
 
-    private fun begin(id: Long, title: String) {
+    /**
+     * Starts the service for session [id]. [systemCall]: the call is also a call of the system's Telecom (the developer
+     * option "Treat calls as system calls"); off, it is the app's own from the start: the foreground service, the focus
+     * and the media notification, with no registration with Telecom.
+     */
+    private fun begin(id: Long, title: String, systemCall: Boolean) {
         this.title = title
         // Within seconds of a startForegroundService, even when the call already ended: Android crashes the app otherwise.
         try {
@@ -166,6 +171,10 @@ class CallService : Service() {
         telecomEnded = false
         audioReadyFor = null
         cancelAudioDeadline()
+        if (!systemCall) {
+            audioReady(mine, "own call: no Telecom call")
+            return
+        }
         val deadline = Runnable {
             audioReady(mine, "fallback: Telecom did not make the call active within $AUDIO_READY_LIMIT_MS ms")
         }
@@ -600,6 +609,7 @@ class CallService : Service() {
         const val EXTRA_TITLE = "ai.sidevoice.mobile.plugin.TITLE"
         /** Whether the page has the call muted. */
         const val EXTRA_MUTED = "ai.sidevoice.mobile.plugin.MUTED"
+        const val EXTRA_SYSTEM_CALL = "ai.sidevoice.mobile.plugin.SYSTEM_CALL"
         private const val TAG = "SidevoiceCall"
         private const val NO_SESSION = -1L
         private const val CHANNEL_ID = "call"

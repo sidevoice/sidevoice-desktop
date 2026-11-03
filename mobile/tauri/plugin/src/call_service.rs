@@ -111,14 +111,17 @@ pub struct CallDetails {
     pub muted: bool,
 }
 
-/// Starts the system's call, an outgoing audio call shown as `details`, and reports what happens to it to `on_event`, from
-/// any thread. Call it while the app is visible. A refusal says why, and nothing runs.
+/// Starts the call, an outgoing audio call shown as `details`, and reports what happens to it to `on_event`, from any
+/// thread. `system`: as a call of the system's (CallKit, Telecom); else it is the app's own, which runs only what the OS
+/// keeps for it (Android's foreground service; nothing on iOS, where no CallKit object is made). Call it while the app is
+/// visible. A refusal says why, and nothing runs.
 pub fn start_call_service<R: Runtime>(
     app: &AppHandle<R>,
     details: &CallDetails,
+    system: bool,
     on_event: impl Fn(CallEvent) + Send + Sync + 'static,
 ) -> Result<(), CallServiceError> {
-    platform::start(app, details, Arc::new(on_event))
+    platform::start(app, details, system, Arc::new(on_event))
 }
 
 /// Shows the running call as `details` now: its title, and the mute the page has (the system's screens and a Bluetooth or
@@ -138,16 +141,17 @@ pub fn stop_call_service<R: Runtime>(app: &AppHandle<R>) -> Result<(), CallServi
 /// Whether the system makes its call's audio ready, and the app opens its audio only once the service says so
 /// ([`CallEvent::Audio`]). iOS: CallKit activates a CallKit call's session, and an app must leave that to it. Android:
 /// Telecom making the call active switches the audio mode and the route, which cuts off any stream open before it. False
-/// where the app opens its audio when it likes.
-pub fn call_activates_audio() -> bool {
-    platform::activates_audio()
+/// where the app opens its audio when it likes, and for the app's own call (`system` false).
+pub fn call_activates_audio(system: bool) -> bool {
+    platform::activates_audio(system)
 }
 
 /// Whether the system's call takes the place of the app's media controls while it lasts (iOS: the lock screen shows the
 /// call, and a headset's buttons act on it through CallKit, so a Now Playing card would be a second one). False where the
-/// app keeps its own (Android: Telecom leaves a self-managed call's headset buttons to the app's media session).
-pub fn call_replaces_media_controls() -> bool {
-    platform::replaces_media_controls()
+/// app keeps its own (Android: Telecom leaves a self-managed call's headset buttons to the app's media session), and for
+/// the app's own call (`system` false).
+pub fn call_replaces_media_controls(system: bool) -> bool {
+    platform::replaces_media_controls(system)
 }
 
 /// Asks the service to request the audio focus again, after it was lost for good (`FocusState::Lost`) or refused

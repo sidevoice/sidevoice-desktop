@@ -20,15 +20,21 @@ trait Os {
     /// controls.
     const REPLACES_MEDIA_CONTROLS: bool = false;
 
+    /// Whether the app's own call (not a system's call) still runs a service: Android's foreground service keeps the process
+    /// alive while the screen is off. iOS has none: the `audio` background mode does it.
+    const OWN_CALL_SERVICE: bool = false;
+
     /// What the plugin sets up when the app starts: on Android, the Kotlin plugin the service is reached through; on iOS,
-    /// the app's CallKit provider.
+    /// nothing (the CallKit provider is made by the first system's call).
     fn register<R: Runtime, C: DeserializeOwned>(
         api: PluginApi<R, C>,
     ) -> Result<(), Box<dyn std::error::Error>>;
 
+    /// Starts the call; `system`: as a system's call (Telecom, CallKit), else as the app's own.
     fn start<R: Runtime>(
         app: &AppHandle<R>,
         details: &CallDetails,
+        system: bool,
         events: CallEvents,
     ) -> Result<(), CallServiceError>;
 
@@ -49,12 +55,18 @@ pub fn register<R: Runtime, C: DeserializeOwned>(
     Native::register(api)
 }
 
+/// Starts the call. The app's own call (`system` false) runs only what the OS keeps for it ([`Os::OWN_CALL_SERVICE`]):
+/// nothing where there is none, and no CallKit or Telecom object is made.
 pub fn start<R: Runtime>(
     app: &AppHandle<R>,
     details: &CallDetails,
+    system: bool,
     events: CallEvents,
 ) -> Result<(), CallServiceError> {
-    Native::start(app, details, events)
+    if !system && !Native::OWN_CALL_SERVICE {
+        return Ok(());
+    }
+    Native::start(app, details, system, events)
 }
 
 pub fn update<R: Runtime>(
@@ -72,10 +84,10 @@ pub fn refocus<R: Runtime>(app: &AppHandle<R>) -> Result<(), CallServiceError> {
     Native::refocus(app)
 }
 
-pub fn activates_audio() -> bool {
-    Native::ACTIVATES_AUDIO
+pub fn activates_audio(system: bool) -> bool {
+    system && Native::ACTIVATES_AUDIO
 }
 
-pub fn replaces_media_controls() -> bool {
-    Native::REPLACES_MEDIA_CONTROLS
+pub fn replaces_media_controls(system: bool) -> bool {
+    system && Native::REPLACES_MEDIA_CONTROLS
 }

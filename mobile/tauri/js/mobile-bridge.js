@@ -7,12 +7,13 @@
 //
 // The phone offers the voice call it runs itself, its engine, its microphone permission and its pairings, and owns the
 // call's media: the page registers no Media Session of its own (`presence.media: "app"`). Nothing of the desktop's
-// (the local host, the reset, the mute shortcut, the call controls card, the updater, `debug`) is offered:
+// (the local host, the reset, the mute shortcut, the call controls card, the updater) is offered, and its `debug` has the
+// phone's one switch, in a nightly or a dev build:
 // a member that is not there is not offered. On any origin other than the app's own it does nothing at all.
 (function (factory) {
   if (typeof module === "object" && module.exports) module.exports = factory; // unit tests
-  else factory(window, "__SIDEVOICE_APP_ORIGIN__", "__SIDEVOICE_MICROPHONE_SETTINGS__", "__SIDEVOICE_MICROPHONE_HELP__", "__SIDEVOICE_MESSAGES__", "__SIDEVOICE_DEVICE_NAME__", "__SIDEVOICE_BUILD__");
-})(function installMobileBridge(win, appOrigin, microphoneSettingsOffered, microphoneHelp, messageTables, deviceName, build) {
+  else factory(window, "__SIDEVOICE_APP_ORIGIN__", "__SIDEVOICE_MICROPHONE_SETTINGS__", "__SIDEVOICE_MICROPHONE_HELP__", "__SIDEVOICE_MESSAGES__", "__SIDEVOICE_DEVICE_NAME__", "__SIDEVOICE_BUILD__", "__SIDEVOICE_DEBUG__");
+})(function installMobileBridge(win, appOrigin, microphoneSettingsOffered, microphoneHelp, messageTables, deviceName, build, debugState) {
   "use strict";
   // scheme://host rather than location.origin: the app's own pages (tauri://localhost) may have an opaque origin.
   if (win.location.protocol + "//" + win.location.host !== appOrigin) return null;
@@ -94,6 +95,30 @@
     },
   });
 
+  /** The developer options (nightly and dev builds): sidevoice-web's hidden "Developer options" section, onto the
+   *  `developer_options` command (docs/BRIDGE.md -> "The developer options"), as the desktop's `host.debug`. The one switch
+   *  a phone has is `systemCall`: whether the call is a system's call (CallKit, Telecom). It reads live: what the app kept,
+   *  then what the last `set` took. */
+  function debug(initial) {
+    const SWITCHES = ["systemCall"];
+    const available = Object.freeze(SWITCHES.filter((name) => (initial.available || []).includes(name)));
+    const state = {};
+    const take = (from) => {
+      for (const name of SWITCHES) state[name] = !!(from && from[name]) && available.includes(name);
+    };
+    take(initial);
+    return Object.freeze({
+      available,
+      get systemCall() {
+        return state.systemCall;
+      },
+      set: (name, on) =>
+        available.includes(name) && typeof on === "boolean"
+          ? transport.own.call("developer_options", { action: "set", name, enabled: on }).then(take)
+          : Promise.reject({ key: "bad_request", message: "set(name, on) takes an available switch and a boolean." }),
+    });
+  }
+
   const api = {
     /** The contract this app speaks: the desktop's (docs/BRIDGE.md). */
     version: 2,
@@ -116,6 +141,8 @@
       /** What this build is, decided when it was built (docs/BRIDGE.md -> "The build"): the page shows it, and unlocks the
        *  developer options by its channel (a nightly or a dev build). */
       build: Object.freeze({ ...build }),
+      // Only in a nightly or a dev build (the app tells the state in a build that offers it, `null` in a release).
+      ...(debugState && typeof debugState === "object" ? { debug: debug(debugState) } : {}),
       // The pairings, in the app's private storage (mobile/tauri/src/pairings.rs), not the webview's.
       pairings: members.pairings(),
       /** The app owns the call's audio and the system's media on a phone: the page must not register Media Session
