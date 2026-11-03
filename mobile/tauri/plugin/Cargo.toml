@@ -13,6 +13,8 @@ links = "sidevoice-mobile-plugin"
 tauri = "2.12"
 serde = { version = "1", features = ["derive"] }
 log = "0.4"
+# The CRCs of a still's PNG chunks (already in the build through `png`).
+crc32fast = "1"
 
 [target.'cfg(target_os = "ios")'.dependencies]
 # The screen kept on (src/platform/screen/ios.rs): `UIApplication.isIdleTimerDisabled`. Already in the iOS build through Tauri;

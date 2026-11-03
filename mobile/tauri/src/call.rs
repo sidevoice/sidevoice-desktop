@@ -330,6 +330,32 @@ fn unreferenced(forgotten: &BTreeSet<String>, surfaces: &[&CallSurface]) -> Vec<
         .collect()
 }
 
+/// Removes the files of `gone` with `remove`, and forgets the ones removed: a file that failed to go stays pending, to be
+/// tried again at the next collection (it would otherwise hold the stills' allowance until the app reloads).
+fn retire(
+    forgotten: &mut BTreeSet<String>,
+    gone: Vec<String>,
+    mut remove: impl FnMut(&str) -> std::io::Result<()>,
+) {
+    for id in gone {
+        match remove(&id) {
+            Ok(()) => {
+                forgotten.remove(&id);
+            }
+            Err(error) => log::warn!("call_forget: {error}"),
+        }
+    }
+}
+
+/// A forgetting of the still `id` that is pending is cancelled only by a still that was kept (`saved` is `Ok`): a rejected
+/// one leaves it to go.
+fn kept<E>(forgotten: &mut BTreeSet<String>, id: &str, saved: Result<(), E>) -> Result<(), E> {
+    if saved.is_ok() {
+        forgotten.remove(id);
+    }
+    saved
+}
+
 /// How long the page's still waits for the room's thread to keep it.
 const STILL_LIMIT: Duration = Duration::from_secs(5);
 
@@ -454,8 +480,8 @@ impl RoomCall {
             let result = if room.page != page {
                 Ok(())
             } else {
-                room.forgotten.remove(&id);
-                save_still(&room.app, &id, &png, px).map_err(|error| error.to_string())
+                let saved = save_still(&room.app, &id, &png, px).map_err(|error| error.to_string());
+                kept(&mut room.forgotten, &id, saved)
             };
             let _ = done.send(result);
         });
@@ -571,15 +597,10 @@ impl Room {
         let shown = self.shown.as_ref().map(|shown| &shown.surface);
         let surfaces: Vec<&CallSurface> = shown.into_iter().chain([&self.surface]).collect();
         let gone = unreferenced(&self.forgotten, &surfaces);
-        if gone.is_empty() {
-            return;
-        }
-        for id in &gone {
-            self.forgotten.remove(id);
-        }
-        if let Err(error) = forget_stills(&self.app, &gone) {
-            log::warn!("call_forget: {error}");
-        }
+        let app = self.app.clone();
+        retire(&mut self.forgotten, gone, |id| {
+            forget_stills(&app, &[id.to_owned()])
+        });
     }
 
     /// Shows the call again in `wait`, once, however many changes come meanwhile.
@@ -1005,5 +1026,27 @@ mod tests {
                 bluetooth: true
             }
         );
+    }
+
+    #[test]
+    fn a_still_whose_file_did_not_go_stays_pending() {
+        let mut forgotten: BTreeSet<String> = ["a", "b", "c"].map(String::from).into();
+        let gone = ["a", "b"].map(String::from).to_vec();
+        retire(&mut forgotten, gone.clone(), |id| match id {
+            "a" => Err(std::io::Error::other("busy")),
+            _ => Ok(()),
+        });
+        assert_eq!(forgotten, ["a", "c"].map(String::from).into());
+        retire(&mut forgotten, gone, |_| Ok(()));
+        assert_eq!(forgotten, ["c"].map(String::from).into());
+    }
+
+    #[test]
+    fn only_a_kept_still_cancels_its_pending_forgetting() {
+        let mut forgotten: BTreeSet<String> = ["a"].map(String::from).into();
+        assert_eq!(kept(&mut forgotten, "a", Err("image")), Err("image"));
+        assert!(forgotten.contains("a"));
+        assert_eq!(kept::<&str>(&mut forgotten, "a", Ok(())), Ok(()));
+        assert!(forgotten.is_empty());
     }
 }
