@@ -349,7 +349,11 @@ fn retire(
 
 /// A forgetting of the still `id` that is pending is cancelled only by a still that was kept (`saved` is `Ok`): a rejected
 /// one leaves it to go.
-fn kept<E>(forgotten: &mut BTreeSet<String>, id: &str, saved: Result<(), E>) -> Result<(), E> {
+fn keep_if_saved<E>(
+    forgotten: &mut BTreeSet<String>,
+    id: &str,
+    saved: Result<(), E>,
+) -> Result<(), E> {
     if saved.is_ok() {
         forgotten.remove(id);
     }
@@ -481,7 +485,7 @@ impl RoomCall {
                 Ok(())
             } else {
                 let saved = save_still(&room.app, &id, &png, px).map_err(|error| error.to_string());
-                kept(&mut room.forgotten, &id, saved)
+                keep_if_saved(&mut room.forgotten, &id, saved)
             };
             let _ = done.send(result);
         });
@@ -1044,9 +1048,12 @@ mod tests {
     #[test]
     fn only_a_kept_still_cancels_its_pending_forgetting() {
         let mut forgotten: BTreeSet<String> = ["a"].map(String::from).into();
-        assert_eq!(kept(&mut forgotten, "a", Err("image")), Err("image"));
+        assert_eq!(
+            keep_if_saved(&mut forgotten, "a", Err("image")),
+            Err("image")
+        );
         assert!(forgotten.contains("a"));
-        assert_eq!(kept::<&str>(&mut forgotten, "a", Ok(())), Ok(()));
+        assert_eq!(keep_if_saved::<&str>(&mut forgotten, "a", Ok(())), Ok(()));
         assert!(forgotten.is_empty());
     }
 }
