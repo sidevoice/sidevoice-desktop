@@ -545,7 +545,8 @@ impl<A: LaneAudio> VoiceState<A> {
 
     /// Kept for the call from the lane's creation on, and applied to it once it exists.
     pub async fn mute(&self, key: &str, muted: bool) -> Result<(), Refusal> {
-        Self::mute_lane(&self.lane(key).await?, muted).await;
+        let lane = self.lane(key).await?;
+        Self::mute_lane(&lane, muted).await;
         Ok(())
     }
 
@@ -614,7 +615,8 @@ impl<A: LaneAudio> VoiceState<A> {
 
     /// Before the call there is nothing to cancel.
     pub async fn cancel_input(&self, key: &str) -> Result<(), Refusal> {
-        Self::cancel_lane_input(&self.lane(key).await?).await;
+        let lane = self.lane(key).await?;
+        Self::cancel_lane_input(&lane).await;
         Ok(())
     }
 
