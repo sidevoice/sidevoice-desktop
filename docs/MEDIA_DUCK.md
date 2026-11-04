@@ -83,15 +83,18 @@ functions exist from 14.2, but System Audio Recording, `NSAudioCaptureUsageDescr
 
 1. **What plays**: the audio system's process objects (`kAudioHardwarePropertyProcessObjectList`) with output running
    (`kAudioProcessPropertyIsRunningOutput`), without this app's own (its pid, what it is responsible for, what descends
-   from it) and system sounds (alerts, Siri, dictation, speech, accessibility, by bundle id). Listing needs no permission.
-   Taken when the mode is taken, as everywhere.
+   from it, what shares its responsible process, a WebKit helper whose responsible process cannot be told) and system
+   sounds (alerts, Siri, dictation, speech, accessibility, by bundle id). A process that plays only on another output
+   (`kAudioProcessPropertyDevices`: AirPlay, HDMI, an audio interface) is left alone. Listing needs no permission. Taken
+   when the mode is taken, as everywhere.
 2. **Tap**: one per process, `CATapDescription` stereo mixdown of it, private, `mutedWhenTapped` (the app is silent only
    while this app reads the tap, so if this app stops or dies the app's own sound comes back), named `Sidevoice-duck-<this
-   app's pid>`.
-3. **Private aggregate device** on the default output (an aggregate output is flattened to its main sub-device), the tap
-   in its tap list, tap auto-start on, **drift compensation off on Bluetooth** (it crackles there), on otherwise; the
-   output device's own input streams turned off for the IOProc (`kAudioDevicePropertyIOProcStreamUsage`), so a headset's
-   microphone is not opened by it.
+   app's pid>`, limited to what the process sends to the default output (`deviceUID`): what it plays elsewhere stays there.
+3. **Private aggregate device** on the default output (an aggregate output, a Multi-Output Device, is flattened to its
+   active hardware sub-devices, its main one the clock, the others with drift compensation), the tap in its tap list, tap
+   auto-start on, **tap drift compensation off on Bluetooth** (it crackles there), on otherwise; the hardware's own input
+   streams turned off for the IOProc (`kAudioDevicePropertyIOProcStreamUsage`), so a headset's microphone is not opened by
+   it. If they cannot be turned off, the tap is not made.
 4. **IOProc**: the tap's samples to the output at the gain (`LOWERED_TO`, 0.25 of the volume, as on the other OSes), ramped
    over 30 ms so the dip and the restore do not click; atomics only, no lock, allocation or log.
 5. **Giving back** is destroying the tap: ramp to 1, then stop, destroy the IOProc, the aggregate and the tap, in that
@@ -99,14 +102,19 @@ functions exist from 14.2, but System Audio Recording, `NSAudioCaptureUsageDescr
 6. **Output changes**: listeners on the default output device and on the output's rate and life; after 250 ms of quiet
    (a Bluetooth headset switching to its call profile changes rate when the microphone opens) every tap is made again on
    the output as it is now, the old one silenced first and the new one ramping up from silence; one that cannot be made
-   again is given back.
+   again is given back. With no output, or System Audio Recording no longer allowed, every tap is given back instead (a
+   tap that mutes without the permission would silence its app). Taps are started outside the lock that guards them.
+   A tap that starts delivering only zeros (Apple forum 825780) is not detected yet.
 7. **Leftovers**: at start, before anything, aggregates and taps named `Sidevoice-duck-` are destroyed (private ones
    should go with their process; other tap apps clean anyway).
 8. **Permission**: System Audio Recording (TCC `kTCCServiceAudioCapture`). Its state is read with `TCCAccessPreflight`
    (private, not entitlement-gated, what AudioCap uses), `capture` in `get`. It is asked when the person chooses Lower
    outside a call, or presses "Allow": a tap that mutes nothing is read until the person answers (60 s at most), which is
-   when the system asks. **No tap that mutes is ever made without it** (the app would go silent instead of lower).
+   when the system asks; one question at a time, and `set` answers with the mode stored then. **No tap that mutes is ever made without it** (the app would go silent instead of lower).
    Settings → `openSettings()` opens Privacy & Security → Screen & System Audio Recording.
+
+Usage strings (`NSAudioCaptureUsageDescription`, `NSAppleEventsUsageDescription`) are English only for now;
+per-language `InfoPlist.strings`, as the mobile app has, are a follow-up (with the Spanish `NSMicrophoneUsageDescription`).
 
 ## What `get` answers
 

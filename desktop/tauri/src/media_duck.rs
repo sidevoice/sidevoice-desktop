@@ -213,7 +213,8 @@ pub async fn media_duck(
             if mode == Mode::Lower && !in_call(&app) && platform::capture() == Some(Access::Undetermined) {
                 let _ = tauri::async_runtime::spawn_blocking(platform::ask_capture).await;
             }
-            Ok(status(mode))
+            // What is stored now: the person may have chosen again while the system was asking.
+            Ok(status(crate::stored_media_duck(&app)))
         }
         // The person pressed "Allow": the system may ask now (never on its own in the middle of a call, never at startup).
         "allow" => {

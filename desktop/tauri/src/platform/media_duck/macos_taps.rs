@@ -9,22 +9,25 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyClass;
 use objc2::AllocAnyThread;
 use objc2_core_audio::{
-    kAudioAggregateDeviceIsPrivateKey, kAudioAggregateDeviceIsStackedKey, kAudioAggregateDeviceMainSubDeviceKey,
-    kAudioAggregateDeviceNameKey, kAudioAggregateDevicePropertyMainSubDevice, kAudioAggregateDeviceSubDeviceListKey,
-    kAudioAggregateDeviceTapAutoStartKey, kAudioAggregateDeviceTapListKey, kAudioAggregateDeviceUIDKey,
-    kAudioDevicePropertyDeviceIsAlive, kAudioDevicePropertyDeviceUID, kAudioDevicePropertyIOProcStreamUsage,
-    kAudioDevicePropertyNominalSampleRate, kAudioDevicePropertyStreams, kAudioDevicePropertyTransportType,
-    kAudioDeviceTransportTypeAggregate, kAudioDeviceTransportTypeBluetooth, kAudioDeviceTransportTypeBluetoothLE,
-    kAudioHardwarePropertyDefaultOutputDevice, kAudioHardwarePropertyDevices, kAudioHardwarePropertyProcessObjectList,
-    kAudioHardwarePropertyTapList, kAudioHardwarePropertyTranslatePIDToProcessObject,
-    kAudioHardwarePropertyTranslateUIDToDevice, kAudioObjectPropertyElementMain, kAudioObjectPropertyScopeGlobal,
-    kAudioObjectPropertyScopeInput, kAudioObjectSystemObject, kAudioProcessPropertyBundleID,
-    kAudioProcessPropertyIsRunningOutput, kAudioProcessPropertyPID, kAudioSubDeviceUIDKey,
-    kAudioSubTapDriftCompensationKey, kAudioSubTapUIDKey, kAudioTapPropertyDescription, AudioDeviceCreateIOProcID,
-    AudioDeviceDestroyIOProcID, AudioDeviceIOProcID, AudioDeviceStart, AudioDeviceStop,
-    AudioHardwareCreateAggregateDevice, AudioHardwareDestroyAggregateDevice, AudioHardwareIOProcStreamUsage,
-    AudioObjectAddPropertyListener, AudioObjectGetPropertyData, AudioObjectGetPropertyDataSize,
-    AudioObjectPropertyAddress, AudioObjectRemovePropertyListener, CATapDescription, CATapMuteBehavior,
+    kAudioAggregateDeviceClockDeviceKey, kAudioAggregateDeviceIsPrivateKey, kAudioAggregateDeviceIsStackedKey,
+    kAudioAggregateDeviceMainSubDeviceKey, kAudioAggregateDeviceNameKey,
+    kAudioAggregateDevicePropertyActiveSubDeviceList, kAudioAggregateDevicePropertyMainSubDevice,
+    kAudioAggregateDeviceSubDeviceListKey, kAudioAggregateDeviceTapAutoStartKey, kAudioAggregateDeviceTapListKey,
+    kAudioAggregateDeviceUIDKey, kAudioDevicePropertyDeviceIsAlive, kAudioDevicePropertyDeviceUID,
+    kAudioDevicePropertyIOProcStreamUsage, kAudioDevicePropertyNominalSampleRate, kAudioDevicePropertyStreams,
+    kAudioDevicePropertyTransportType, kAudioDeviceTransportTypeAggregate, kAudioDeviceTransportTypeBluetooth,
+    kAudioDeviceTransportTypeBluetoothLE, kAudioHardwarePropertyDefaultOutputDevice, kAudioHardwarePropertyDevices,
+    kAudioHardwarePropertyProcessObjectList, kAudioHardwarePropertyTapList,
+    kAudioHardwarePropertyTranslatePIDToProcessObject, kAudioHardwarePropertyTranslateUIDToDevice,
+    kAudioObjectPropertyElementMain, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyScopeInput,
+    kAudioObjectPropertyScopeOutput, kAudioObjectSystemObject, kAudioProcessPropertyBundleID,
+    kAudioProcessPropertyDevices, kAudioProcessPropertyIsRunningOutput, kAudioProcessPropertyPID,
+    kAudioSubDeviceDriftCompensationKey, kAudioSubDeviceUIDKey, kAudioSubTapDriftCompensationKey, kAudioSubTapUIDKey,
+    kAudioTapPropertyDescription, AudioDeviceCreateIOProcID, AudioDeviceDestroyIOProcID, AudioDeviceIOProcID,
+    AudioDeviceStart, AudioDeviceStop, AudioHardwareCreateAggregateDevice, AudioHardwareDestroyAggregateDevice,
+    AudioHardwareIOProcStreamUsage, AudioObjectAddPropertyListener, AudioObjectGetPropertyData,
+    AudioObjectGetPropertyDataSize, AudioObjectPropertyAddress, AudioObjectRemovePropertyListener, CATapDescription,
+    CATapMuteBehavior,
 };
 use objc2_core_audio_types::{AudioBuffer, AudioBufferList, AudioTimeStamp};
 use objc2_core_foundation::CFDictionary;
@@ -33,7 +36,7 @@ use sidevoice_desktop_core::media_duck::Access;
 use std::collections::HashMap;
 use std::ffi::{c_void, CStr};
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -232,27 +235,39 @@ pub(super) struct Playing {
     pub(super) bundle: String,
 }
 
-/// Whether `pid` is this app's own sound: this process, one it started, or one it is responsible for (its webview's
-/// WebKit helpers, whose parent is launchd).
-fn ours(pid: i32, table: &super::ours::Ours) -> bool {
+/// Whether `pid` is this app's own sound: this process, one it started, one it is responsible for or that shares what is
+/// responsible for it (its webview's WebKit helpers, whose parent is launchd), or a WebKit helper whose responsible
+/// process cannot be told (never taken for another app's).
+fn ours(pid: i32, bundle: &str, table: &super::ours::Ours) -> bool {
     let me = std::process::id() as i32;
-    pid == me || responsible(pid) == Some(me) || table.has(pid as u32)
+    let (theirs, mine) = (responsible(pid), responsible(me));
+    pid == me
+        || theirs == Some(me)
+        || (mine.is_some() && theirs == mine)
+        || (theirs.is_none() && bundle.starts_with("com.apple.WebKit."))
+        || table.has(pid as u32)
 }
 
-/// The processes with output running now, without this app's own sound or the system's. No permission is needed to list
-/// them.
+/// The processes with output running now on the default output, without this app's own sound or the system's. One that
+/// plays only on another output (AirPlay, HDMI, an audio interface) is left alone: its tap would bring it here. No
+/// permission is needed to list them.
 pub(super) fn playing() -> Vec<Playing> {
     let table = super::ours::Ours::new();
+    let default = output().map(|o| o.default);
     list(kAudioObjectSystemObject as u32, kAudioHardwarePropertyProcessObjectList, kAudioObjectPropertyScopeGlobal)
         .into_iter()
         .filter(|&process| {
             get::<u32, ()>(process, kAudioProcessPropertyIsRunningOutput, kAudioObjectPropertyScopeGlobal, None)
                 == Some(1)
         })
+        .filter(|&process| {
+            let devices = list(process, kAudioProcessPropertyDevices, kAudioObjectPropertyScopeOutput);
+            devices.is_empty() || default.is_some_and(|d| devices.contains(&d))
+        })
         .filter_map(|process| {
             let pid = get::<i32, ()>(process, kAudioProcessPropertyPID, kAudioObjectPropertyScopeGlobal, None)?;
             let bundle = string(process, kAudioProcessPropertyBundleID).unwrap_or_default();
-            (pid > 1 && !ours(pid, &table) && !SYSTEM.iter().any(|s| bundle.starts_with(s)))
+            (pid > 1 && !ours(pid, &bundle, &table) && !SYSTEM.iter().any(|s| bundle.starts_with(s)))
                 .then_some(Playing { pid, bundle })
         })
         .collect()
@@ -354,70 +369,99 @@ unsafe extern "C-unwind" fn render(
     // SAFETY: `data` is the `Gain` this IOProc was made with, which outlives it; the lists are the system's for this cycle.
     let (gain, input, output) = unsafe { (&*(data as *const Gain), input.as_ref(), output.as_ref()) };
     let Some([left, right]) = tap_channels(input) else { return 0 };
-    let Some(out) = buffers(output).iter().find(|b| !b.mData.is_null() && b.mNumberChannels > 0) else { return 0 };
-    let channels = out.mNumberChannels as usize;
-    let frames = (out.mDataByteSize as usize / (4 * channels)).min(left.frames).min(right.frames);
     let target = f32::from_bits(gain.target.load(Ordering::Relaxed));
     let step = f32::from_bits(gain.step.load(Ordering::Relaxed));
-    let mut current = f32::from_bits(gain.current.load(Ordering::Relaxed));
-    let samples = out.mData.cast::<f32>();
-    for frame in 0..frames {
-        current = if current < target { (current + step).min(target) } else { (current - step).max(target) };
-        // SAFETY: `frame` is below the frames of every channel read and of the output buffer.
-        unsafe {
-            let (l, r) = (*left.data.add(frame * left.stride), *right.data.add(frame * right.stride));
-            if channels == 1 {
-                *samples.add(frame) = (l + r) * 0.5 * current;
-            } else {
-                // Left and right to the first two channels; any others stay as the system zeroed them.
-                *samples.add(frame * channels) = l * current;
-                *samples.add(frame * channels + 1) = r * current;
+    let start = f32::from_bits(gain.current.load(Ordering::Relaxed));
+    let mut end = start;
+    // Every output buffer: a Multi-Output Device has one per device it plays through.
+    for out in buffers(output).iter().filter(|b| !b.mData.is_null() && b.mNumberChannels > 0) {
+        let channels = out.mNumberChannels as usize;
+        let frames = (out.mDataByteSize as usize / (4 * channels)).min(left.frames).min(right.frames);
+        let samples = out.mData.cast::<f32>();
+        let mut current = start;
+        for frame in 0..frames {
+            current = if current < target { (current + step).min(target) } else { (current - step).max(target) };
+            // SAFETY: `frame` is below the frames of every channel read and of the output buffer.
+            unsafe {
+                let (l, r) = (*left.data.add(frame * left.stride), *right.data.add(frame * right.stride));
+                if channels == 1 {
+                    *samples.add(frame) = (l + r) * 0.5 * current;
+                } else {
+                    // Left and right to the first two channels; any others stay as the system zeroed them.
+                    *samples.add(frame * channels) = l * current;
+                    *samples.add(frame * channels + 1) = r * current;
+                }
             }
         }
+        end = current;
     }
-    gain.current.store(current.to_bits(), Ordering::Relaxed);
+    gain.current.store(end.to_bits(), Ordering::Relaxed);
     0
 }
 
-/// The output the taps play to: the default output, or the main hardware device of an aggregate one (aggregates do not
-/// nest).
+/// The output the taps play to. Aggregates do not nest, so an aggregate default output (a Multi-Output Device) is played
+/// through its hardware sub-devices, its main one first.
 #[derive(Clone, PartialEq)]
 struct Output {
-    device: u32,
-    uid: String,
+    /// The default output as apps see it: what a tap listens to, and what a process must play on to be tapped.
+    default: u32,
+    default_uid: String,
+    /// The hardware devices it plays through, the main one (the clock) first, with their ids.
+    subs: Vec<(u32, String)>,
+    /// Whether the main one is Bluetooth.
     bluetooth: bool,
-    /// Its rate when the tap was made: an IOProc that runs on while it changes plays silence.
+    /// The main one's rate when the tap was made: an IOProc that runs on while it changes plays silence.
     rate: Option<f64>,
 }
 
+impl Output {
+    /// The main hardware device: the clock, whose rate and life are watched.
+    fn main(&self) -> u32 {
+        self.subs[0].0
+    }
+}
+
+fn device_of(uid: &str) -> Option<u32> {
+    let uid = NSString::from_str(uid);
+    let raw = Retained::as_ptr(&uid);
+    get::<u32, *const NSString>(
+        kAudioObjectSystemObject as u32,
+        kAudioHardwarePropertyTranslateUIDToDevice,
+        kAudioObjectPropertyScopeGlobal,
+        Some(&raw),
+    )
+    .filter(|d| *d != 0)
+}
+
 fn output() -> Option<Output> {
-    let mut device = get::<u32, ()>(
+    let default = get::<u32, ()>(
         kAudioObjectSystemObject as u32,
         kAudioHardwarePropertyDefaultOutputDevice,
         kAudioObjectPropertyScopeGlobal,
         None,
     )
     .filter(|d| *d != 0)?;
+    let default_uid = string(default, kAudioDevicePropertyDeviceUID)?;
     let transport =
         |d: u32| get::<u32, ()>(d, kAudioDevicePropertyTransportType, kAudioObjectPropertyScopeGlobal, None);
-    if transport(device) == Some(kAudioDeviceTransportTypeAggregate) {
-        let main = string(device, kAudioAggregateDevicePropertyMainSubDevice)?;
-        let uid = NSString::from_str(&main);
-        let raw = Retained::as_ptr(&uid);
-        device = get::<u32, *const NSString>(
-            kAudioObjectSystemObject as u32,
-            kAudioHardwarePropertyTranslateUIDToDevice,
-            kAudioObjectPropertyScopeGlobal,
-            Some(&raw),
-        )
-        .filter(|d| *d != 0)?;
-    }
-    let uid = string(device, kAudioDevicePropertyDeviceUID)?;
-    let kind = transport(device);
+    let subs: Vec<(u32, String)> = if transport(default) == Some(kAudioDeviceTransportTypeAggregate) {
+        let main = string(default, kAudioAggregateDevicePropertyMainSubDevice)?;
+        let mut subs = vec![(device_of(&main)?, main)];
+        for sub in list(default, kAudioAggregateDevicePropertyActiveSubDeviceList, kAudioObjectPropertyScopeGlobal) {
+            if let Some(uid) = string(sub, kAudioDevicePropertyDeviceUID).filter(|u| *u != subs[0].1) {
+                subs.push((sub, uid));
+            }
+        }
+        subs
+    } else {
+        vec![(default, default_uid.clone())]
+    };
+    let main = subs[0].0;
+    let kind = transport(main);
     let bluetooth =
         kind == Some(kAudioDeviceTransportTypeBluetooth) || kind == Some(kAudioDeviceTransportTypeBluetoothLE);
-    let rate = get::<f64, ()>(device, kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal, None);
-    Some(Output { device, uid, bluetooth, rate })
+    let rate = get::<f64, ()>(main, kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal, None);
+    Some(Output { default, default_uid, subs, bluetooth, rate })
 }
 
 /// One tap with its aggregate device and IOProc, playing one process (or, to ask for the permission, nothing).
@@ -496,6 +540,8 @@ impl Tap {
             description.setPrivate(true);
             description.setMuteBehavior(mute);
             description.setName(&NSString::from_str(&name));
+            // Only what goes to the default output: what the process plays elsewhere stays where it is.
+            description.setDeviceUID(Some(&NSString::from_str(&output.default_uid)));
             description
         };
         // SAFETY: reading the description's UUID.
@@ -512,17 +558,28 @@ impl Tap {
     /// The aggregate device and IOProc around a tap that exists; the tap is destroyed when this fails.
     fn build(mut self, api: &Api, tap_uid: &str) -> Option<Tap> {
         let output = self.output.clone();
+        let main = &output.subs[0].1;
+        // Every sub-device but the clock follows it with drift compensation.
+        let subs: Vec<Retained<NSDictionary<NSString, NSObject>>> = output
+            .subs
+            .iter()
+            .enumerate()
+            .map(|(i, (_, uid))| {
+                dictionary(vec![
+                    (kAudioSubDeviceUIDKey, ns_string(uid)),
+                    (kAudioSubDeviceDriftCompensationKey, ns_number(u32::from(i > 0))),
+                ])
+            })
+            .collect();
         let description = dictionary(vec![
             (kAudioAggregateDeviceUIDKey, ns_string(&format!("{PREFIX}{tap_uid}"))),
             (kAudioAggregateDeviceNameKey, ns_string(&format!("{PREFIX}{}", std::process::id()))),
             (kAudioAggregateDeviceIsPrivateKey, ns_number(1)),
             (kAudioAggregateDeviceIsStackedKey, ns_number(0)),
-            (kAudioAggregateDeviceMainSubDeviceKey, ns_string(&output.uid)),
+            (kAudioAggregateDeviceMainSubDeviceKey, ns_string(main)),
+            (kAudioAggregateDeviceClockDeviceKey, ns_string(main)),
             (kAudioAggregateDeviceTapAutoStartKey, ns_number(1)),
-            (
-                kAudioAggregateDeviceSubDeviceListKey,
-                one(dictionary(vec![(kAudioSubDeviceUIDKey, ns_string(&output.uid))])),
-            ),
+            (kAudioAggregateDeviceSubDeviceListKey, Retained::into_super(NSArray::from_retained_slice(&subs))),
             (
                 kAudioAggregateDeviceTapListKey,
                 one(dictionary(vec![
@@ -567,7 +624,11 @@ impl Tap {
             return None;
         }
         self.proc_id = proc_id;
-        self.hardware_input_off(&output);
+        // A device whose microphone this would open is not played through (it would switch a headset to its call profile).
+        if !self.hardware_input_off(&output) {
+            self.stop(api);
+            return None;
+        }
         // SAFETY: starting the IOProc just made on its device.
         if unsafe { AudioDeviceStart(aggregate, proc_id) } != 0 {
             self.stop(api);
@@ -576,13 +637,18 @@ impl Tap {
         Some(self)
     }
 
-    /// Turns off the output device's own input streams in the aggregate, so a headset's microphone is not opened by it
-    /// (that alone would switch Bluetooth to its call profile). The tap's stream comes after them.
-    fn hardware_input_off(&self, output: &Output) {
-        let Some(proc_id) = self.proc_id else { return };
-        let hardware = list(output.device, kAudioDevicePropertyStreams, kAudioObjectPropertyScopeInput).len();
+    /// Turns off the hardware's own input streams in the aggregate, so a headset's microphone is not opened by it (that
+    /// alone would switch Bluetooth to its call profile). The sub-devices' streams come first, the tap's after them. Whether
+    /// none is left on.
+    fn hardware_input_off(&self, output: &Output) -> bool {
+        let Some(proc_id) = self.proc_id else { return false };
+        let hardware: usize = output
+            .subs
+            .iter()
+            .map(|(id, _)| list(*id, kAudioDevicePropertyStreams, kAudioObjectPropertyScopeInput).len())
+            .sum();
         if hardware == 0 {
-            return;
+            return true;
         }
         let mut at = address(kAudioDevicePropertyIOProcStreamUsage, kAudioObjectPropertyScopeInput);
         let mut size = 0u32;
@@ -597,7 +663,7 @@ impl Tap {
             )
         } != 0
         {
-            return;
+            return false;
         }
         let header = std::mem::size_of::<AudioHardwareIOProcStreamUsage>();
         let mut bytes = vec![0u32; (size as usize).max(header).div_ceil(4)];
@@ -615,7 +681,7 @@ impl Tap {
                 NonNull::new_unchecked(usage).cast(),
             ) != 0
             {
-                return;
+                return false;
             }
             let streams = (*usage).mNumberStreams as usize;
             let flags = std::ptr::addr_of_mut!((*usage).mStreamIsOn).cast::<u32>();
@@ -629,7 +695,7 @@ impl Tap {
                 std::ptr::null(),
                 size,
                 NonNull::new_unchecked(usage).cast(),
-            );
+            ) == 0
         }
     }
 
@@ -654,10 +720,12 @@ impl Tap {
     }
 }
 
-/// The taps there are, by process id, and the output device whose changes are listened to.
+/// The taps there are, by process id; those being made again after an output change, with the gain each is to have; and
+/// the output device whose changes are listened to.
 #[derive(Default)]
 struct Taps {
     by_pid: HashMap<i32, Tap>,
+    remaking: HashMap<i32, f32>,
     listening: Option<u32>,
 }
 
@@ -666,29 +734,52 @@ fn taps() -> std::sync::MutexGuard<'static, Taps> {
     TAPS.get_or_init(Mutex::default).lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// The gain a process is played at, when it is tapped.
+/// The gain a process is played at, when it is tapped (or its tap is being made again).
 pub(super) fn gain(pid: i32) -> Option<f32> {
-    taps().by_pid.get(&pid).map(|t| f32::from_bits(t.gain.target.load(Ordering::Relaxed)))
+    let taps = taps();
+    taps.by_pid
+        .get(&pid)
+        .map(|t| f32::from_bits(t.gain.target.load(Ordering::Relaxed)))
+        .or_else(|| taps.remaking.get(&pid).copied())
+}
+
+/// Ramps a tap back to the app's own level and destroys it.
+fn give_back(api: &Api, mut tap: Tap) {
+    tap.gain.set(1.0);
+    std::thread::sleep(Duration::from_secs_f32(RAMP_SECS * 2.0));
+    tap.stop(api);
 }
 
 /// Plays `pid` at `gain`: a gain below 1 taps it (only with the permission), 1 gives it back by destroying its tap after the
-/// ramp. Whether that was done.
+/// ramp. Whether that was done. Taps are started outside the lock: starting can block while another app's tap holds the
+/// device.
 pub(super) fn set(pid: i32, gain: f32) -> bool {
     let Some(api) = api() else { return false };
-    let mut taps = taps();
     if gain >= 0.999 {
-        let Some(mut tap) = taps.by_pid.remove(&pid) else { return true };
-        tap.gain.set(1.0);
-        std::thread::sleep(Duration::from_secs_f32(RAMP_SECS * 2.0));
-        tap.stop(api);
-        if taps.by_pid.is_empty() {
+        let tap = {
+            let mut taps = taps();
+            taps.remaking.remove(&pid);
+            taps.by_pid.remove(&pid)
+        };
+        if let Some(tap) = tap {
+            give_back(api, tap);
+        }
+        let mut taps = taps();
+        if taps.by_pid.is_empty() && taps.remaking.is_empty() {
             unlisten(&mut taps);
         }
         return true;
     }
-    if let Some(tap) = taps.by_pid.get(&pid) {
-        tap.gain.set(gain);
-        return true;
+    {
+        let mut taps = taps();
+        if let Some(tap) = taps.by_pid.get(&pid) {
+            tap.gain.set(gain);
+            return true;
+        }
+        if let Some(target) = taps.remaking.get_mut(&pid) {
+            *target = gain;
+            return true;
+        }
     }
     // Never a tap that mutes without the permission: the app would go silent instead of quieter.
     if permission() != Access::Granted {
@@ -696,24 +787,29 @@ pub(super) fn set(pid: i32, gain: f32) -> bool {
     }
     let (Some(process), Some(output)) = (process_object(pid), output()) else { return false };
     let Some(tap) = Tap::start(api, Of::Process(process), &output, 1.0, gain) else { return false };
-    listen(&mut taps, output.device);
+    let mut taps = taps();
+    listen(&mut taps, output.main());
+    // A tap already there (it cannot be, with one caller) is let go, and so destroyed.
     taps.by_pid.insert(pid, tap);
     true
 }
 
 /// Asks the person for System Audio Recording: the system asks when a tap first reads. A tap that mutes nothing, read for
-/// as long as the person takes to answer, or [`ASKING`].
+/// as long as the person takes to answer, or [`ASKING`]. One question at a time: a second call while one is open returns.
 pub(super) fn ask() {
+    static ASKING_NOW: AtomicBool = AtomicBool::new(false);
     let (Some(api), Some(output)) = (api(), output()) else { return };
-    if permission() != Access::Undetermined {
+    if permission() != Access::Undetermined || ASKING_NOW.swap(true, Ordering::AcqRel) {
         return;
     }
-    let Some(mut tap) = Tap::start(api, Of::Nothing, &output, 0.0, 0.0) else { return };
-    let since = Instant::now();
-    while permission() == Access::Undetermined && since.elapsed() < ASKING {
-        std::thread::sleep(Duration::from_millis(250));
+    if let Some(mut tap) = Tap::start(api, Of::Nothing, &output, 0.0, 0.0) {
+        let since = Instant::now();
+        while permission() == Access::Undetermined && since.elapsed() < ASKING {
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        tap.stop(api);
     }
-    tap.stop(api);
+    ASKING_NOW.store(false, Ordering::Release);
 }
 
 /// Destroys what a run that died left: aggregate devices and taps named for this app. Private ones go with their process,
@@ -799,29 +895,49 @@ fn unlisten(taps: &mut Taps) {
     }
 }
 
-/// Makes every tap again for the output as it is now, at the gain it had: the old one silenced first, the new one ramping
-/// up from silence (a short, clean dip; a Bluetooth headset renegotiates its link anyway). A tap that cannot be made again
-/// is given back: its app plays as it did.
+/// Makes every tap again for the output as it is now, at the gain it has: the old one silenced first, the new one ramping
+/// up from silence (a short, clean dip; a Bluetooth headset renegotiates its link anyway). Every tap is given back instead
+/// when there is no output, or when System Audio Recording is no longer allowed (a tap that mutes would silence its app);
+/// so is one that cannot be made again. The taps being made are kept as `remaking`, so their gain still reads while the
+/// lock is not held.
 fn rebuild() {
     let Some(api) = api() else { return };
-    let mut taps = taps();
-    let Some(now) = output() else { return };
-    if taps.by_pid.values().all(|t| t.output == now) {
-        return;
-    }
-    for (pid, mut old) in std::mem::take(&mut taps.by_pid) {
-        let target = f32::from_bits(old.gain.target.load(Ordering::Relaxed));
+    let now = output();
+    let old: Vec<(i32, Tap)> = {
+        let mut taps = taps();
+        if taps.by_pid.is_empty() || taps.by_pid.values().all(|t| Some(&t.output) == now.as_ref()) {
+            return;
+        }
+        let old: Vec<(i32, Tap)> = taps.by_pid.drain().collect();
+        for (pid, tap) in &old {
+            taps.remaking.insert(*pid, f32::from_bits(tap.gain.target.load(Ordering::Relaxed)));
+        }
+        old
+    };
+    let allowed = permission() == Access::Granted;
+    for (pid, old) in old {
+        let Some(now) = now.as_ref().filter(|_| allowed) else {
+            taps().remaking.remove(&pid);
+            give_back(api, old);
+            continue;
+        };
         old.gain.silence();
         std::thread::sleep(Duration::from_millis(10));
-        let new = process_object(pid).and_then(|process| Tap::start(api, Of::Process(process), &now, 0.0, target));
-        old.stop(api);
-        if let Some(new) = new {
+        let target = taps().remaking.get(&pid).copied();
+        let new = target.and_then(|target| {
+            process_object(pid).and_then(|process| Tap::start(api, Of::Process(process), now, 0.0, target))
+        });
+        drop(old);
+        let mut taps = taps();
+        // Given back while it was being made: the new one goes too.
+        if let (Some(target), Some(new)) = (taps.remaking.remove(&pid), new) {
+            new.gain.set(target);
             taps.by_pid.insert(pid, new);
         }
     }
-    if taps.by_pid.is_empty() {
-        unlisten(&mut taps);
-    } else {
-        listen(&mut taps, now.device);
+    let mut taps = taps();
+    match now.filter(|_| allowed && !taps.by_pid.is_empty()) {
+        Some(now) => listen(&mut taps, now.main()),
+        None => unlisten(&mut taps),
     }
 }
