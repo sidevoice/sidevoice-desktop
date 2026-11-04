@@ -12,7 +12,8 @@ of host is a crate, never a condition (AGENTS.md → "Host kind is a crate bound
 - **The bridge** gives the page the app's members (`window.__sidevoiceHost`; "The bridge" below): the voice call the app
   runs, its engine, the microphone's permission and the pairings, through the commands every app shares.
 - **No page captures anything.** The permission handler denies every request (microphone, camera, screen): the webview
-  would grant them all if the app set none. The app owns the microphone and the speaker, as the desktop app does.
+  would grant them all if the app set none. The app owns the microphone and the speaker, as the desktop app does; the one
+  camera is the app's scanner of the pairing code ("Scanning the pairing code" below), native, never the webview's.
 - **Only the app's own pages.** A navigation anywhere else goes nowhere (`navigation_allowed`).
 - **The origin** the page presents is Tauri's own: `http://tauri.localhost` on Android, `tauri://localhost` on iOS
   (`sidevoice-shared-tauri`'s `platform/origin.rs`, the one the desktop app reads too). The node accepts both without configuration (docs/TARGETS.md). On Android the page
@@ -34,7 +35,7 @@ of host is a crate, never a condition (AGENTS.md → "Host kind is a crate bound
   `res/xml/data_extraction_rules.xml` (Android 12 and newer: cloud backup and device transfer) and `res/xml/backup_rules.xml`
   (Android 11 and older), which its manifest points to. The details are in docs/PAIRING_STORAGE.md ("On the phone" →
   Backups).
-- **Permission texts.** `NSMicrophoneUsageDescription` and `NSLocalNetworkUsageDescription` are in
+- **Permission texts.** `NSMicrophoneUsageDescription`, `NSLocalNetworkUsageDescription` and `NSCameraUsageDescription` (the pairing code's scanner, below) are in
   `mobile/tauri/Info.ios.plist` in English, the base (App Store validation looks for them there), and in the languages the web
   interface ships (de, es, fr, it, ja, pl, zh-Hans) in `mobile/tauri/ios/<language>.lproj/InfoPlist.strings`, which `generate`
   puts into the iOS project. `CFBundleLocalizations` in the plist is the list of languages iOS offers the app in. Adding
@@ -75,6 +76,7 @@ part, `mobile/tauri/js/mobile-bridge.js`, which assembles `host`:
 | `deviceName` | The name the person gave the phone (`mobile/tauri/src/platform/device_name`), read when the window is made: on Android `Settings.Global` `device_name`, else `Settings.Secure` `bluetooth_name`, else the model (`Samsung SM-A600FN`), with no permission; on iOS `UIDevice.current.name`, which since iOS 16 is the generic model ("iPhone") without the user-assigned-device-name entitlement. Without it the page would name the phone from the webview's user agent ("Chrome on Android"). |
 | `debug` | The developer options of a nightly or a dev build (docs/BRIDGE.md → "The developer options"); absent in a release. One switch, `systemCall` ("Treat calls as system calls", off by default: "The system's call" below), kept in `developer-options.json` of the app's own files and set through the app's own `developer_options` command (`mobile/tauri/src/developer_options.rs`). |
 | `build` | What this build is, in the desktop's shape (docs/BRIDGE.md → "The build"): `{channel, version, commit?, date?}`. `cargo xtask mobile build` and `testflight` tell the build script (`mobile/tauri/build.rs`) the channel: `nightly` on CI, so every build shipped today (TestFlight, the signed APK) is a nightly with its `commit` and `date`, `dev` on a laptop, `SIDEVOICE_BUILD_CHANNEL` overriding; `version` is `tauri.conf.json`'s. The page unlocks its Developer options by the channel (Settings → Advanced, the Build row tapped 10 times; nightly only). |
+| `codeScanner` | `{ permission(), request(), scan(), cancel(), openSettings() }`: the camera that scans the pairing QR code a machine shows ("Scanning the pairing code" below). |
 | `callSurface` | `{ active() }`, always `true`: the app draws the call's own surfaces (iOS's Live Activity, Android's call notification) from the room's `callSurface`, so the page publishes what costs it work (the creatures' stills, the spoken page). "The call surface" below. |
 
 Nothing of the desktop's own (`localHost`, `reset`, `muteShortcut`, `callControls`, `updater`) is
@@ -153,10 +155,37 @@ when a call starts and ends (the session is activated and deactivated with it); 
 stopping with the call, and its Hang up; the media controls (a headset's play/pause with and without headphones,
 the lock screen and Control Center on iOS, the call notification's controls on Android); that a model download and a remote provider's request
 pass the verifier on Android; that the xcframework is embedded and signed in an iOS archive; and the APK's libraries
-loading on a phone. The system's call: the CallKit call on the lock screen and in the in-call screen, its mute, end and hold, and the
+loading on a phone. The pairing code's scanner: the camera prompt and a denial on each phone (and the Settings link after a
+denial), a QR from a screen and from paper read in the page's viewfinder, Cancel and the system's back gesture during a scan, the web view
+becoming opaque again after a scan, and a scan with the app sent to the background. The system's call: the CallKit call on the lock screen and in the in-call screen, its mute, end and hold, and the
 audio starting only once CallKit activates the session; the Telecom call in a Bluetooth or car kit, its mute and
 disconnect, a phone call holding it, the loudspeaker chosen, and what Telecom's communication mode does to the call's
 audio (cpal's streams are not `VOICE_COMMUNICATION`, cpal#995).
+
+## Scanning the pairing code
+
+A phone pairs with a machine from the code the machine shows (`npx sidevoice pair-device`, or the agent's `voice_pair_device`): the
+code (`SV1.…`) and, with it, the same text as a QR (sidevoice-connector `pairing.rs`, `qr_text`). The QR holds nothing but the
+code, so scanning it is typing it: the page reads what the camera returns exactly as it reads a pasted code, and the typed path
+stays as it was (sidevoice-desktop#405).
+
+- **The scanner** is Tauri's official `tauri-plugin-barcode-scanner` (maintained by Tauri; CameraX with ML Kit's barcode model, delivered by Google Play services, on Android; AVFoundation on iOS), registered in `mobile/tauri/src/lib.rs`. Its commands are granted to the window one
+  by one in `capabilities/main.json` (scan, cancel, check/request permissions, open the app's settings; not its vibration).
+- **`host.codeScanner`** (`mobile/tauri/js/mobile-bridge.js`) is the page's one way to it: the plugin's permission states and
+  rejection strings stay there, and the page gets `permission()` / `request()` (`granted | prompt | denied`), one `scan()` that
+  never rejects (`scanned` with the text, `cancelled`, `denied`, `unavailable`: no camera, a simulator), `cancel()` and
+  `openSettings()`. Only QR codes are looked for.
+- **The viewfinder is the page's.** The scan is windowed: the camera is drawn behind the web view and the page shows it through
+  (the plugin makes the web view transparent for the length of the scan), so the page draws the frame and its Cancel.
+- **The camera permission** is the system's own, asked by the plugin when the person taps Scan (iOS: `NSCameraUsageDescription`, in
+  the eight languages like the others; Android: the runtime `CAMERA` permission the plugin's manifest merges in, with its
+  `VIBRATE`, which nothing calls). A denial is an answer the page words, with `openSettings()` where the system will not ask
+  again; typing the code is always there.
+- **No device is left out for lacking a camera.** The plugin's manifest declares `android.hardware.camera.any` (and asks for
+  `CAMERA` and `VIBRATE`); the plugin of `mobile/tauri/plugin` replaces the feature as not required, adds `camera` and
+  `camera.autofocus` as not required, and removes `VIBRATE`, which nothing calls. The plugin's scan never answers on an
+  Android phone without a camera, so `scan()` first reads the web view's video inputs and answers `unavailable` when it
+  finds none (a list it cannot read is left to the plugin; iOS refuses a missing camera itself).
 
 ## Who owns the native projects
 
@@ -448,9 +477,11 @@ the keystore file instead of `ANDROID_UPLOAD_KEYSTORE_B64`.
 
 ## TestFlight
 
-`.github/workflows/mobile-testflight.yml` signs the iOS app and uploads it to TestFlight. It is run by hand (Actions →
-mobile-testflight → Run workflow, on `main`) and runs nothing else: no pull request, no push, and every other mobile build
-stays unsigned with no secret. Its one step is `cargo xtask mobile testflight --build-number <run number>`
+`.github/workflows/mobile-testflight.yml` signs the iOS app and uploads it to TestFlight. It runs on every push to `main`
+(no path filter, like the signed Android build) and by hand (Actions → mobile-testflight → Run workflow, on `main`); never
+on a pull request, and every other mobile build stays unsigned with no secret. Uploads never overlap and a running one is
+never cancelled (`cancel-in-progress: false`); GitHub keeps only one pending run per concurrency group, so pushes that land
+during an upload collapse into the newest one. Its one step is `cargo xtask mobile testflight --build-number <run number>`
 (`xtask/src/mobile/testflight.rs`):
 
 1. The Tauri CLI archives the committed project and exports it for App Store Connect. Signing is **Xcode's automatic
@@ -484,8 +515,8 @@ stays unsigned with no secret. Its one step is `cargo xtask mobile testflight --
 - **The build number** is the run number of the workflow, which only grows, as TestFlight requires of the builds of a
   version, and it is the app's `CFBundleVersion` whole. (The CLI's own `--build-number` appends it to the version,
   `0.1.0.7`: four numbers where Apple accepts three.) The version, `CFBundleShortVersionString`, is `tauri.conf.json`'s.
-  A re-run of a run whose upload App Store Connect accepted has the same number and fails: dispatch again (a new run, a
-  new number) rather than re-running.
+  Every push to main is a new run, so a new number. A re-run of a run whose upload App Store Connect accepted has the same
+  number and fails: dispatch again (a new run, a new number) rather than re-running.
 - **Credentials.** The repository secrets `APPLE_API_KEY` (the key's id), `APPLE_API_ISSUER`, `APPLE_API_KEY_P8` (the
   .p8's contents) and `APPLE_TEAM_ID`, the same the desktop notarization uses; the key needs the **Admin** role in App
   Store Connect (the Developer role cannot create the certificate or the profile). Only the step that signs has them;
@@ -495,7 +526,7 @@ stays unsigned with no secret. Its one step is `cargo xtask mobile testflight --
 - **Main only.** The job refuses any other ref (`if`), so does the command, and the job runs in the environment
   `testflight`. The gate that a workflow file on another branch cannot lift is the environment's: its deployment
   branches are `main` only (Settings → Environments), and the key's secrets can be moved into it.
-- **Before the first dispatch**, in App Store Connect and the repository, once:
+- **Before the first upload**, in App Store Connect and the repository, once:
   1. the key's role is Admin (a new key replaces `APPLE_API_KEY`, `APPLE_API_ISSUER` and `APPLE_API_KEY_P8`; the desktop
      notarization keeps working with an Admin key);
   2. any pending agreement is accepted (App Store Connect → Business → Agreements, by the account holder);

@@ -226,6 +226,11 @@ impl<A: LaneAudio> AppHost<A> {
         self.inner.voice.pause_playback(paused);
     }
 
+    /// Stops what the calls are saying now (a surface's skip, which runs without the page: see `VoiceState::skip_playing`).
+    pub async fn skip_playing(&self) {
+        self.inner.voice.skip_playing().await;
+    }
+
     /// The page that owned the calls is gone (it reloaded): a new page owns none of its previous lanes, and is the current
     /// one from now on. The old lanes (only those: a lane the new page has made already stays) are stopped and released in
     /// the background, and keep their models for their idle minutes; nothing they still say reaches the sink, and commands

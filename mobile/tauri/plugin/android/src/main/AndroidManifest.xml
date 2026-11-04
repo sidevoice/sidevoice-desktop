@@ -4,7 +4,8 @@
      precedence over it. The template says nothing about backup (allowBackup stays at its default, true), so these two
      attributes merge in without a conflict: the pairings and the provider keys stay out of backups and transfers
      (res/xml/backup_rules.xml has why). -->
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <!-- The call's service (CallService): it listens (microphone), the agent speaks (media playback) and it is a phone
          call (Telecom's), as a foreground service with a notification. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
@@ -19,6 +20,14 @@
     <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
+    <!-- The camera only scans the pairing code (docs/MOBILE.md -> "Scanning the pairing code"), so no device is left out for
+         lacking one: the barcode scanner plugin's manifest says its camera features are required, and these replace that.
+         Its VIBRATE is not used. -->
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" tools:replace="android:required" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+    <uses-permission android:name="android.permission.VIBRATE" tools:node="remove" />
 
     <application
         android:networkSecurityConfig="@xml/network_security_config"

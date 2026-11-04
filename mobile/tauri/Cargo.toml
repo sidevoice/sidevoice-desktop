@@ -32,6 +32,9 @@ base64 = "0.22"
 # The app's log (src/lib.rs): the system's (logcat, the unified log) and a file in the app's log folder.
 tauri-plugin-log = "2"
 log = "0.4"
+# The camera that scans the pairing QR code (`host.codeScanner`, js/mobile-bridge.js): Tauri's official barcode scanner, CameraX
+# and ML Kit on Android, AVFoundation on iOS, with the camera permission it asks for itself (docs/MOBILE.md -> "Scanning the pairing code").
+tauri-plugin-barcode-scanner = "2.5.3"
 
 [target.'cfg(target_os = "ios")'.dependencies]
 # The session's interruptions (src/platform/interruption/ios.rs): the notification a phone call or an alarm makes the system post.

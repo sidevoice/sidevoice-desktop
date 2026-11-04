@@ -3,3 +3,6 @@
 
 /* The local network permission prompt. */
 "NSLocalNetworkUsageDescription" = "Sidevoice 通过本地网络连接你已配对的计算机。";
+
+/* The camera permission prompt (scanning the pairing code). */
+"NSCameraUsageDescription" = "Sidevoice 使用相机扫描你的计算机上显示的配对代码。";
