@@ -269,6 +269,7 @@ impl From<CallReport> for CallState {
             joined: report.joined,
             mic_enabled: report.mic_enabled,
             title: report.title,
+            now_playing_off: false,
         }
     }
 }

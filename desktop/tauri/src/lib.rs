@@ -272,6 +272,7 @@ fn media_state(snapshot: &CallSnapshot) -> CallState {
         joined: snapshot.joined,
         mic_enabled: snapshot.mic_enabled,
         title: snapshot.title.clone(),
+        now_playing_off: false,
     }
 }
 
