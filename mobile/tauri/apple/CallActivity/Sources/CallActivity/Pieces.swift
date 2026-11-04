@@ -166,7 +166,8 @@ struct StateLine: View {
     private func label(_ tone: Tone) -> Text {
         let words = Text(state.words.state)
         guard state.phase == .working, let since = state.workingSince else { return words }
-        let time = Text("· ") + Text(since, style: .timer)
+        // Tabular digits, so "0:42" keeps its width as it counts.
+        let time = (Text("· ") + Text(since, style: .timer)).monospacedDigit()
         // The gallery's 6-pt gap: an en space (7.5 pt at 15, 7 at 14), the closest a run of text has.
         return words + Text("\u{2002}") + time.font(DMSans.font(size, 600)).foregroundColor(tone.ink.opacity(0.85))
     }
@@ -202,15 +203,37 @@ struct StateGlyph: View {
 
     enum Entrance { case bounce, pulse, fade }
 
-    @ViewBuilder
     private func symbol(_ name: String, effect: Entrance) -> some View {
+        SymbolEntrance(name: name, effect: effect, size: size)
+    }
+}
+
+/// A symbol with its entrance: it plays once when the symbol appears (the dots bounce three times, the speaker's waves
+/// pulse, the pause and the slash fade and grow in). A `symbolEffect(value:)` on a symbol that exists only in its phase
+/// never sees the value change, so the entrance starts from the symbol's own appearance.
+@available(iOS 16.1, *)
+struct SymbolEntrance: View {
+    var name: String
+    var effect: StateGlyph.Entrance
+    var size: CGFloat
+    @State private var played = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isLuminanceReduced) private var reduced
+
+    var body: some View {
         let image = Image(systemName: name).font(.system(size: size * 0.8, weight: .bold))
             .frame(width: size, height: size)
-        if #available(iOS 17.0, *) {
+        if reduceMotion || reduced {
+            image
+        } else if #available(iOS 17.0, *) {
             switch effect {
-            case .bounce: image.symbolEffect(.bounce.byLayer, value: phase)
-            case .pulse: image.symbolEffect(.pulse.byLayer, options: .nonRepeating, value: phase)
-            case .fade: image.transition(.opacity.animation(.easeIn(duration: 0.6)))
+            case .bounce:
+                image.symbolEffect(.bounce.byLayer, options: .repeat(3), value: played).onAppear { played = true }
+            case .pulse:
+                image.symbolEffect(.pulse.byLayer, options: .repeat(1), value: played).onAppear { played = true }
+            case .fade:
+                // A transition, not a state: a snapshot that never runs `onAppear` still draws the glyph.
+                image.transition(.opacity.combined(with: .scale(scale: 0.6, anchor: .bottom)).animation(.easeOut(duration: 0.5)))
             }
         } else {
             image
@@ -218,39 +241,59 @@ struct StateGlyph: View {
     }
 }
 
-/// Your voice's bars in the compact island (five; a stand-in for the app's): still, since a Live Activity cannot follow
-/// the voice; 45 % while transcribing. They rise when listening starts.
+/// Your voice's bars in the compact island (five; a stand-in for the app's): 2.4 wide at x 2.5 / 6.6 / 10.7 / 14.8 / 18.9 of
+/// a 24 box, 7 / 12 / 16 / 11 / 7 tall, centred; still, since a Live Activity cannot follow the voice. They grow from
+/// their bottom when listening starts; 45 % and greyed while transcribing.
 @available(iOS 16.1, *)
 struct GlyphBars: View {
     var phase: CallState.Phase
-    static let bars: [(y: CGFloat, h: CGFloat)] = [(9.5, 5), (6.5, 11), (4, 16), (7.5, 9), (10, 4)]
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isLuminanceReduced) private var reduced
+    static let heights: [CGFloat] = [7, 12, 16, 11, 7]
 
     var body: some View {
         GeometryReader { box in
             let scale = box.size.width / 24
             ZStack(alignment: .topLeading) {
-                ForEach(0..<Self.bars.count, id: \.self) { index in
-                    let bar = Self.bars[index]
+                ForEach(0..<Self.heights.count, id: \.self) { index in
+                    let height = Self.heights[index]
                     Capsule()
-                        .frame(width: 2.2 * scale, height: bar.h * scale)
-                        .offset(x: (2.5 + 4.1 * CGFloat(index)) * scale, y: bar.y * scale)
-                        .transition(.scale(scale: 0.15, anchor: .center)
-                            .animation(.spring(response: 0.5, dampingFraction: 0.55).delay(0.08 * Double(index))))
+                        .frame(width: 2.4 * scale, height: height * scale)
+                        .offset(x: (2.5 + 4.1 * CGFloat(index)) * scale, y: (12 - height / 2) * scale)
+                        // The bar's own bottom, in the frame it has before the offset moves it.
+                        .transition(reduceMotion || reduced ? .identity : .modifier(
+                            active: Stretch(y: 0.25, anchor: UnitPoint(x: 0.5, y: (12 + height / 2) / height)),
+                            identity: Stretch(y: 1, anchor: .center))
+                            .animation(.spring(response: 0.5, dampingFraction: 0.6).delay(0.08 * Double(index))))
                 }
             }
         }
         .opacity(phase == .listening ? 1 : 0.45)
-        .animation(.easeInOut(duration: 0.6), value: phase)
+        .saturation(phase == .listening ? 1 : 0.4)
+        .animation(.easeOut(duration: 1), value: phase)
     }
 }
 
-/// Your voice's bars in the expanded island's capsule: 28 bars, 3 wide every 6, centred (the gallery's `BAR_HEIGHTS`),
-/// lila; 40 % while transcribing. Listening: they rise, left to right, 0.035 s apart. Transcribing: a wave of light runs
-/// through them, then 40 %.
+/// A vertical-only stretch: the bars rise, their width stays.
+@available(iOS 16.1, *)
+struct Stretch: ViewModifier {
+    var y: CGFloat
+    var anchor: UnitPoint
+
+    func body(content: Content) -> some View {
+        content.scaleEffect(x: 1, y: y, anchor: anchor)
+    }
+}
+
+/// Your voice's bars in the expanded island's capsule: 28 bars, 3 wide every 6, centred (the gallery's `BAR_HEIGHTS`, a
+/// smooth waveform with no bar under 8), lila; 40 % and greyed while transcribing. Listening: they rise (vertical only),
+/// left to right, 0.035 s apart. Transcribing: they settle to 40 % in the same order.
 @available(iOS 16.1, *)
 struct VoiceBars: View {
     var dim: Bool
-    static let heights: [CGFloat] = [5, 9, 14, 8, 18, 12, 6, 15, 20, 11, 7, 16, 10, 5, 13, 19, 9, 6, 14, 8, 17, 11, 6, 12, 7, 15, 9, 5]
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isLuminanceReduced) private var reduced
+    static let heights: [CGFloat] = [8, 10, 12, 11, 14, 17, 15, 12, 16, 20, 22, 18, 15, 17, 21, 19, 14, 12, 15, 18, 16, 13, 11, 13, 12, 10, 9, 8]
 
     var body: some View {
         HStack(spacing: 3) {
@@ -258,9 +301,11 @@ struct VoiceBars: View {
                 Capsule()
                     .fill(Color(hex: 0xc9b6ec))
                     .frame(width: 3, height: Self.heights[index])
+                    // The gallery's `opacity .4` and `grayscale(.5)`.
+                    .saturation(dim ? 0.5 : 1)
                     .opacity(dim ? 0.4 : 1)
                     .animation(.easeInOut(duration: 0.6).delay(0.035 * Double(index)), value: dim)
-                    .transition(.scale(scale: 0.15, anchor: .center)
+                    .transition(reduceMotion || reduced ? .identity : .modifier(active: Stretch(y: 0.15, anchor: .center), identity: Stretch(y: 1, anchor: .center))
                         .animation(.spring(response: 0.5, dampingFraction: 0.55).delay(0.035 * Double(index))))
             }
         }

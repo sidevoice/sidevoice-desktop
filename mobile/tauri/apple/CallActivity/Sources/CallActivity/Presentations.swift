@@ -243,19 +243,32 @@ struct VoiceCapsule: View {
             VoiceBars(dim: state.phase == .transcribing)
                 .frame(maxWidth: .infinity)
             ActionButton(action: .cancelSend, enabled: state.canCancelSend) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(Palette.island.text)
+                // The design's drawn ×: a 13-pt box, about 8 across, a 1.1-pt stroke.
+                CrossMark()
+                    .stroke(Palette.island.text, style: StrokeStyle(lineWidth: 1.1, lineCap: .round))
+                    .frame(width: 13, height: 13)
                     .frame(width: 28, height: 28)
                     .background(Circle().fill(Color.white.opacity(0.14)))
             }
-            .opacity(state.canCancelSend ? 1 : Ink.disabled)
             .accessibilityLabel(state.words.cancelSend)
         }
         .padding(.leading, 14)
         .padding(.trailing, 4)
         .frame(height: 36)
         .background(Capsule().fill(Color(hex: 0xc9b6ec, alpha: 0.14)))
+    }
+}
+
+/// The capsule's ×: two strokes inset 2.5 pt in their box.
+struct CrossMark: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let inset: CGFloat = 2.5
+        path.move(to: CGPoint(x: rect.minX + inset, y: rect.minY + inset))
+        path.addLine(to: CGPoint(x: rect.maxX - inset, y: rect.maxY - inset))
+        path.move(to: CGPoint(x: rect.maxX - inset, y: rect.minY + inset))
+        path.addLine(to: CGPoint(x: rect.minX + inset, y: rect.maxY - inset))
+        return path
     }
 }
 
