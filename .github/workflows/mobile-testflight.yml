@@ -1,8 +1,8 @@
 name: mobile-testflight
 
-# The mobile app's iOS build, signed and uploaded to TestFlight (docs/MOBILE.md → "TestFlight"). It is run by hand
-# (`workflow_dispatch`) and only from main: it never runs on a pull request or a push, and no other workflow sees what it
-# sees. Every other mobile build is unsigned and has no secret (mobile.yml).
+# The mobile app's iOS build, signed and uploaded to TestFlight (docs/MOBILE.md → "TestFlight"). It runs on every push
+# to main (no path filter, as mobile-android-signed.yml) and by hand (`workflow_dispatch`), and only from main: it never
+# runs on a pull request, and no other workflow sees what it sees. Every other mobile build is unsigned and has no secret (mobile.yml).
 # - The job's `if` is the first gate: from any other ref, no step runs and no secret is read. A workflow file on another
 #   branch carries its own `if`, so the gate that holds is the environment's: `testflight` is a protected environment
 #   (Settings → Environments) whose deployment branches are `main` only. The App Store Connect key's secrets are the
@@ -12,14 +12,19 @@ name: mobile-testflight
 #   removed when the command ends (`cargo xtask mobile testflight`, xtask/src/mobile/testflight.rs).
 # - The build number is this workflow's run number: it only grows, which TestFlight requires of a version's builds. A
 #   re-run of a run whose upload was accepted has the same number and fails: dispatch again instead of re-running.
+# - Uploads are serialized by the concurrency group below and never cancelled. GitHub keeps one pending run per group, so
+#   if several pushes land during an upload only the newest waits (older pending runs are dropped): the next build is
+#   always the latest main.
 # Every external action is pinned by its full commit SHA, with its version in a comment, as in mobile.yml.
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# An upload that is running is never cut short by the next dispatch.
+# An upload that is running is never cut short by the next push or dispatch.
 concurrency:
   group: mobile-testflight
   cancel-in-progress: false

@@ -448,9 +448,11 @@ the keystore file instead of `ANDROID_UPLOAD_KEYSTORE_B64`.
 
 ## TestFlight
 
-`.github/workflows/mobile-testflight.yml` signs the iOS app and uploads it to TestFlight. It is run by hand (Actions →
-mobile-testflight → Run workflow, on `main`) and runs nothing else: no pull request, no push, and every other mobile build
-stays unsigned with no secret. Its one step is `cargo xtask mobile testflight --build-number <run number>`
+`.github/workflows/mobile-testflight.yml` signs the iOS app and uploads it to TestFlight. It runs on every push to `main`
+(no path filter, like the signed Android build) and by hand (Actions → mobile-testflight → Run workflow, on `main`); never
+on a pull request, and every other mobile build stays unsigned with no secret. Uploads never overlap and a running one is
+never cancelled (`cancel-in-progress: false`); GitHub keeps only one pending run per concurrency group, so pushes that land
+during an upload collapse into the newest one. Its one step is `cargo xtask mobile testflight --build-number <run number>`
 (`xtask/src/mobile/testflight.rs`):
 
 1. The Tauri CLI archives the committed project and exports it for App Store Connect. Signing is **Xcode's automatic
@@ -484,8 +486,8 @@ stays unsigned with no secret. Its one step is `cargo xtask mobile testflight --
 - **The build number** is the run number of the workflow, which only grows, as TestFlight requires of the builds of a
   version, and it is the app's `CFBundleVersion` whole. (The CLI's own `--build-number` appends it to the version,
   `0.1.0.7`: four numbers where Apple accepts three.) The version, `CFBundleShortVersionString`, is `tauri.conf.json`'s.
-  A re-run of a run whose upload App Store Connect accepted has the same number and fails: dispatch again (a new run, a
-  new number) rather than re-running.
+  Every push to main is a new run, so a new number. A re-run of a run whose upload App Store Connect accepted has the same
+  number and fails: dispatch again (a new run, a new number) rather than re-running.
 - **Credentials.** The repository secrets `APPLE_API_KEY` (the key's id), `APPLE_API_ISSUER`, `APPLE_API_KEY_P8` (the
   .p8's contents) and `APPLE_TEAM_ID`, the same the desktop notarization uses; the key needs the **Admin** role in App
   Store Connect (the Developer role cannot create the certificate or the profile). Only the step that signs has them;
@@ -495,7 +497,7 @@ stays unsigned with no secret. Its one step is `cargo xtask mobile testflight --
 - **Main only.** The job refuses any other ref (`if`), so does the command, and the job runs in the environment
   `testflight`. The gate that a workflow file on another branch cannot lift is the environment's: its deployment
   branches are `main` only (Settings → Environments), and the key's secrets can be moved into it.
-- **Before the first dispatch**, in App Store Connect and the repository, once:
+- **Before the first upload**, in App Store Connect and the repository, once:
   1. the key's role is Admin (a new key replaces `APPLE_API_KEY`, `APPLE_API_ISSUER` and `APPLE_API_KEY_P8`; the desktop
      notarization keeps working with an Admin key);
   2. any pending agreement is accepted (App Store Connect → Business → Agreements, by the account holder);
