@@ -17,14 +17,25 @@
 //!   `altool`, and what they start) can see them; they get the key's id, its issuer and the file's path. Nothing here
 //!   prints one of the three.
 //!
+//! - **The symbols are kept** ([`keep_symbols`]): the archive's dSYMs and the app's executable, zipped into dist/ for the
+//!   workflow to keep, before the upload; and the archive sent carries them for App Store Connect (`Symbols/`, which
+//!   [`ios::check_ipa`] requires), so TestFlight's crash reports are symbolicated. The Rust code's names are in them:
+//!   the app links the Rust library as a static library, which the release profile's `strip` does not touch, and only
+//!   the archive's own last step strips the executable, after Xcode has written the dSYM.
+//!
 //! Reads `APPLE_API_KEY` (the key's id), `APPLE_API_ISSUER`, `APPLE_API_KEY_P8` and `APPLE_TEAM_ID`.
+//!
+//! `mobile symbols --build-number N` is the same archive unsigned and not uploaded, for its symbols alone: those of a
+//! build made before they were kept, rebuilt from the build's commit (.github/workflows/mobile.yml, `symbols-of-build`).
+//! It is made exactly as the signed one (same target, profile, build number and engine libraries), so its code is laid
+//! out the same and a crash report's offsets into the shipped executable read in it.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::{build_tauri, ios};
 use crate::platform::ios_upload;
-use crate::util::{ensure, in_ci, repo, required_env, SecretDir};
+use crate::util::{ensure, in_ci, mkdir, repo, required_env, Cmd, SecretDir};
 use crate::Result;
 
 /// The directory of the key's file (below `RUNNER_TEMP` on a runner).
@@ -35,6 +46,19 @@ const BUILD: &str = "build";
 
 /// A signed build runs from `main` only. The workflow's job says so too; this holds for the command on its own.
 const MAIN: &str = "refs/heads/main";
+
+/// The archive the Tauri CLI leaves in [`BUILD`]: the Xcode scheme's name (mobile/tauri/gen/apple/project.yml).
+const ARCHIVE: &str = "sidevoice-mobile_iOS.xcarchive";
+
+/// The app's executable inside the archive.
+const EXECUTABLE: &str = "Products/Applications/Sidevoice.app/Sidevoice";
+
+/// The app's own dSYM inside the archive, beside the extension's and the engine frameworks'.
+const APP_DSYM: &str = "dSYMs/Sidevoice.app.dSYM/Contents/Resources/DWARF/Sidevoice";
+
+/// A name the Rust library always has (the standard library's panic entry): the dSYM has the Rust code's symbols when
+/// it names it.
+const RUST_SYMBOL: &[u8] = b"rust_begin_unwind";
 
 /// The bundle identifier the archive must be (mobile/tauri/tauri.conf.json).
 pub fn identifier() -> Result<String> {
@@ -92,37 +116,72 @@ pub fn testflight(build_number_text: &str) -> Result<()> {
     let key = secrets.file(&format!("private_keys/AuthKey_{key_id}.p8"), format!("{p8}\n").as_bytes())?;
     drop(p8);
 
-    let out = repo().join("mobile/tauri/gen/apple").join(BUILD);
-    if out.exists() {
-        fs::remove_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
-    }
-    let config = serde_json::json!({ "bundle": { "iOS": { "bundleVersion": build.to_string() } } }).to_string();
-    let libs = super::AppBuildLibs::hold("ios", &["aarch64-apple-ios"])?;
-    libs.libs
-        .apply(build_tauri(&[
-            "ios",
-            "build",
-            "--target",
-            "aarch64",
-            "--export-method",
-            "app-store-connect",
-            "--config",
-            &config,
-            "--ci",
-        ])?)
-        .env("APPLE_API_KEY", &key_id)
-        .env("APPLE_API_ISSUER", &issuer)
-        .env("APPLE_API_KEY_PATH", &key)
-        .env("APPLE_DEVELOPMENT_TEAM", &team)
-        .run()?;
-    drop(libs);
+    archive(build, &["--export-method", "app-store-connect"], |cli| {
+        cli.env("APPLE_API_KEY", &key_id)
+            .env("APPLE_API_ISSUER", &issuer)
+            .env("APPLE_API_KEY_PATH", &key)
+            .env("APPLE_DEVELOPMENT_TEAM", &team)
+    })?;
+    keep_symbols(build)?;
 
+    let out = repo().join("mobile/tauri/gen/apple").join(BUILD);
     let ipas = find_ipa(&out, 3)?;
     ensure(ipas.len() == 1, format!("expected one .ipa below {}, found {}", out.display(), ipas.len()))?;
     ios::check_ipa(&ipas[0], &identifier, build)?;
     ios_upload::upload(&ipas[0], &key_id, &issuer, &secrets.path)?;
     println!("{identifier} build {build} uploaded: App Store Connect processes it, then TestFlight offers it to the internal testers");
     Ok(())
+}
+
+/// The app archived for a device as build `build`, into [`BUILD`] (emptied first): the Tauri CLI's `ios build` for
+/// `aarch64` in the release profile, with `how` (the export, or `--no-sign`) and `sign` (the signing variables, or none).
+/// The signed archive and the symbols' rebuild are this one build, so that their code is the same.
+fn archive(build: u32, how: &[&str], sign: impl FnOnce(Cmd) -> Cmd) -> Result<()> {
+    let out = repo().join("mobile/tauri/gen/apple").join(BUILD);
+    if out.exists() {
+        fs::remove_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+    }
+    let config = serde_json::json!({ "bundle": { "iOS": { "bundleVersion": build.to_string() } } }).to_string();
+    let mut args = vec!["ios", "build", "--target", "aarch64"];
+    args.extend(how);
+    args.extend(["--config", &config, "--ci"]);
+    let libs = super::AppBuildLibs::hold("ios", &["aarch64-apple-ios"])?;
+    sign(libs.libs.apply(build_tauri(&args)?)).run()?;
+    drop(libs);
+    Ok(())
+}
+
+/// What reads a crash report of build `build`, from the archive in [`BUILD`]: its dSYMs (the app's, the Live Activity
+/// extension's, the engine frameworks') and the app's executable as it ships, whose code a report's offsets point into.
+/// Zipped into dist/ as `Sidevoice-ios-<build>-symbols.zip`, which the workflows keep. The app's dSYM must name the Rust
+/// code ([`RUST_SYMBOL`]): an archive whose crashes in Rust would read as bare offsets is refused.
+pub fn keep_symbols(build: u32) -> Result<PathBuf> {
+    let archive = repo().join("mobile/tauri/gen/apple").join(BUILD).join(ARCHIVE);
+    let dsym = archive.join(APP_DSYM);
+    let bytes = fs::read(&dsym).map_err(|e| format!("{}: {e}", dsym.display()))?;
+    ensure(
+        bytes.windows(RUST_SYMBOL.len()).any(|w| w == RUST_SYMBOL),
+        format!("{}: no Rust symbols (no {})", dsym.display(), String::from_utf8_lossy(RUST_SYMBOL)),
+    )?;
+    let dist = repo().join("dist");
+    mkdir(&dist)?;
+    let zip = dist.join(format!("Sidevoice-ios-{build}-symbols.zip"));
+    if zip.exists() {
+        fs::remove_file(&zip).map_err(|e| format!("{}: {e}", zip.display()))?;
+    }
+    // A dSYM is a directory: zip keeps its tree (`-r`), and the executable goes at the root (`-j`).
+    Cmd::new("zip").args(["-qry"]).arg(&zip).arg("dSYMs").dir(&archive).run()?;
+    Cmd::new("zip").args(["-qj"]).arg(&zip).arg(archive.join(EXECUTABLE)).run()?;
+    println!("{}: the symbols of build {build}", zip.display());
+    Ok(zip)
+}
+
+/// `mobile symbols --build-number N`: the archive [`testflight`] makes for build `N`, unsigned and not uploaded, and its
+/// symbols ([`keep_symbols`]). Needs no secret: it is for reading the crash reports of a build that kept none.
+pub fn symbols(build_number_text: &str) -> Result<()> {
+    let build = build_number(build_number_text)?;
+    archive(build, &["--no-sign"], |cli| cli)?;
+    keep_symbols(build).map(drop)
 }
 
 #[cfg(test)]

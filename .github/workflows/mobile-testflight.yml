@@ -72,3 +72,13 @@ jobs:
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: cargo xtask mobile testflight --build-number ${{ github.run_number }}
+      # The build's symbols (the archive's dSYMs and the app's executable as it ships), to read its crash reports: kept as
+      # long as an artifact can be. App Store Connect has them too, inside the upload. Kept even when the upload fails
+      # (it may have been accepted); a run that failed before the archive has none.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !cancelled() }}
+        with:
+          name: Sidevoice-ios-${{ github.run_number }}-symbols
+          path: dist/Sidevoice-ios-${{ github.run_number }}-symbols.zip
+          retention-days: 90
+          if-no-files-found: ignore
