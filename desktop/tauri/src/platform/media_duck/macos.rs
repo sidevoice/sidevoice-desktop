@@ -1,83 +1,37 @@
-//! macOS has no public per-app volume or global pause. Lowering is therefore the default output device's own volume, so
-//! the app's voice is lowered with the rest, and it is done only while Music or Spotify is playing (the only players
-//! whose state can be asked without a private API); pausing reaches those two. Both ask them through Apple events (the
-//! person allows each once: Privacy & Security -> Automation). No media key is ever sent: it toggles and can start music.
-//! See docs/MEDIA_DUCK.md.
+//! macOS 14.4 and later, with System Audio Recording allowed, lowers any app that plays, one by one, through Core Audio
+//! process taps (`macos_taps.rs`): the output volume and this app's own voice are never touched. Without them (macOS 13 to
+//! 14.3, or the permission refused or not yet asked), lowering is Music's and Spotify's own `sound volume`, never the
+//! device's. Pausing is Music and Spotify, through Apple events (the person allows each once: Privacy & Security ->
+//! Automation); in Pause, any other app that plays is lowered through taps, as there is no safe way to pause it. No media
+//! key is ever sent: it toggles, and during a call it goes to this app (the Now Playing one). See docs/MEDIA_DUCK.md.
 use super::{Lowering, Mode, Os, Pausing};
-use objc2_core_audio::{
-    kAudioHardwarePropertyDefaultOutputDevice, kAudioObjectPropertyElementMain, kAudioObjectPropertyScopeOutput,
-    kAudioObjectSystemObject, AudioObjectGetPropertyData, AudioObjectPropertyAddress, AudioObjectSetPropertyData,
-};
 use objc2_core_services::{
     typeApplicationBundleID, typeWildCard, AECreateDesc, AEDesc, AEDeterminePermissionToAutomateTarget, AEDisposeDesc,
 };
 use sidevoice_desktop_core::media_duck::{Access, Player, Seen, State};
 use std::process::Command;
-use std::ptr::NonNull;
 use std::sync::Mutex;
+
+#[path = "ours.rs"]
+mod ours;
+#[path = "macos_taps.rs"]
+mod taps;
 
 pub(super) struct Native;
 
-/// The key prefix of an output device's own volume, then its id: a volume is given back to the device it was taken from.
-const SYSTEM: &str = "system:";
+/// The key prefix of a process lowered through a tap, then its pid.
+const TAP: &str = "tap:";
 /// The key prefix of an app that takes Apple events, then its name.
 const APP: &str = "app:";
-/// The apps whose playback can be asked and paused without a media key, with their bundle ids.
+/// The apps whose playback can be asked, lowered and paused through Apple events, with their bundle ids (a helper of theirs
+/// carries a bundle id that starts with it).
 const APPS: [(&str, &str); 2] = [("Music", "com.apple.Music"), ("Spotify", "com.spotify.client")];
-/// `kAudioHardwareServiceDeviceProperty_VirtualMainVolume`, the device's whole volume as the volume keys set it
-/// (AudioToolbox's AudioHardwareService.h; no generated binding carries it).
-const VIRTUAL_MAIN_VOLUME: u32 = 0x766d_7663;
 /// `errAEEventNotPermitted`: the person refused.
 const DENIED: i32 = -1743;
 /// `procNotFound`: the app is not open.
 const NOT_OPEN: i32 = -600;
 /// `errAEEventWouldRequireUserConsent`: not asked yet.
 const UNDETERMINED: i32 = -1744;
-/// The key and app of the output device's volume: its id means nothing after a restart, but the default output device is
-/// still the one to look at.
-const SYSTEM_APP: &str = "system";
-
-fn address(selector: u32, scope: u32) -> AudioObjectPropertyAddress {
-    AudioObjectPropertyAddress { mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain }
-}
-
-/// A device's volume, when it has one (some outputs, HDMI among them, have none).
-fn volume_of(device: u32) -> Option<f32> {
-    let mut volume: f32 = 0.0;
-    let mut size = std::mem::size_of::<f32>() as u32;
-    let mut at = address(VIRTUAL_MAIN_VOLUME, kAudioObjectPropertyScopeOutput);
-    // SAFETY: a Core Audio property read into a local of the size this property has.
-    let status = unsafe {
-        AudioObjectGetPropertyData(
-            device,
-            NonNull::from(&mut at),
-            0,
-            std::ptr::null(),
-            NonNull::from(&mut size),
-            NonNull::from(&mut volume).cast(),
-        )
-    };
-    (status == 0).then_some(volume)
-}
-
-/// The default output device.
-fn default_output() -> Option<u32> {
-    let mut device: u32 = 0;
-    let mut size = std::mem::size_of::<u32>() as u32;
-    let mut at = address(kAudioHardwarePropertyDefaultOutputDevice, 0);
-    // SAFETY: a Core Audio property read into a local of the size this property has.
-    let status = unsafe {
-        AudioObjectGetPropertyData(
-            kAudioObjectSystemObject as u32,
-            NonNull::from(&mut at),
-            0,
-            std::ptr::null(),
-            NonNull::from(&mut size),
-            NonNull::from(&mut device).cast(),
-        )
-    };
-    (status == 0 && device != 0).then_some(device)
-}
 
 /// What the system says of this app sending Apple events to `bundle`: 0 yes, `DENIED`, or another code (-1744: not asked
 /// yet, -600: the app is not open). Asks the person only when `ask` is set.
@@ -94,50 +48,79 @@ fn permission(bundle: &str, ask: bool) -> i32 {
     }
 }
 
-/// What the app named `app` says of its playback: `Gone` when it is not open, `Unknown` when the person has not allowed it
-/// or it does not answer (a script that asked anyway would put a dialog in the middle of a call).
-fn state(app: &str, bundle: &str) -> Result<State, Seen> {
+/// Runs an AppleScript line against `app` only if it is open (telling an app that is closed would open it): its output.
+fn script(app: &str, command: &str) -> Option<String> {
+    let script = format!("if application \"{app}\" is running then tell application \"{app}\" to {command}");
+    Command::new("/usr/bin/osascript")
+        .args(["-e", &script])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+}
+
+/// What the app named `app` says of its playback and its own volume (0 to 1): `Gone` when it is not open, `Unknown` when
+/// the person has not allowed it or it does not answer (a script that asked anyway would put a dialog in the middle of a
+/// call).
+fn app_player(app: &str, bundle: &str) -> Result<Player, Seen> {
     match permission(bundle, false) {
         0 => {}
         NOT_OPEN => return Err(Seen::Gone),
         _ => return Err(Seen::Unknown),
     }
-    // `is running` first: telling an app that is closed would open it.
-    let script = format!(
-        "if application \"{app}\" is running then tell application \"{app}\" to return (player state as string)"
-    );
-    let Some(out) =
-        Command::new("/usr/bin/osascript").args(["-e", &script]).output().ok().filter(|o| o.status.success())
-    else {
-        return Err(Seen::Unknown);
-    };
-    match String::from_utf8_lossy(&out.stdout).trim() {
-        "playing" => Ok(State::Playing),
-        "paused" => Ok(State::Paused),
-        "" => Err(Seen::Gone),
-        _ => Ok(State::Stopped),
+    let out = script(app, "return (player state as string) & \",\" & (sound volume as string)").ok_or(Seen::Unknown)?;
+    if out.is_empty() {
+        return Err(Seen::Gone);
     }
-}
-
-fn tell(app: &str, command: &str) -> bool {
-    // Only an app that is open: the same guard as `state`.
-    let script = format!("if application \"{app}\" is running then tell application \"{app}\" to {command}");
-    Command::new("/usr/bin/osascript").args(["-e", &script]).output().is_ok_and(|o| o.status.success())
-}
-
-fn app_player(app: &str, bundle: &str) -> Result<Player, Seen> {
+    let (state, volume) = out.split_once(',').unwrap_or((&out, ""));
+    let state = match state {
+        "playing" => State::Playing,
+        "paused" => State::Paused,
+        _ => State::Stopped,
+    };
     Ok(Player {
         key: format!("{APP}{app}"),
-        app: String::new(),
-        state: state(app, bundle)?,
-        volume: None,
+        // The app keeps its volume across a restart: a debt is looked for by the app's name then.
+        app: app.to_owned(),
+        state,
+        volume: volume.trim().parse::<f32>().ok().map(|v| (v / 100.0).clamp(0.0, 1.0)),
         pausable: true,
     })
 }
 
+/// Whether taps lower here: a macOS that has them, and System Audio Recording allowed.
+fn tapping() -> bool {
+    taps::supported() && taps::permission() == Access::Granted
+}
+
+/// A process that plays, as a player a tap lowers: its volume is the gain it is played at (1 untapped).
+fn tap_player(pid: i32) -> Player {
+    Player {
+        key: format!("{TAP}{pid}"),
+        // A tap goes with the process that made it: nothing of it outlives a restart.
+        app: String::new(),
+        state: State::Playing,
+        volume: Some(taps::gain(pid).unwrap_or(1.0)),
+        pausable: false,
+    }
+}
+
+/// The processes that play and are lowered by a tap, but those that belong to an app in `skip`.
+fn tapped_players(skip: &[&str]) -> Vec<Player> {
+    taps::playing()
+        .into_iter()
+        .filter(|p| !skip.iter().any(|bundle| p.bundle.starts_with(bundle)))
+        .map(|p| tap_player(p.pid))
+        .collect()
+}
+
 impl Os for Native {
     fn lowering() -> Lowering {
-        Lowering::System
+        if tapping() {
+            Lowering::PerApp
+        } else {
+            Lowering::SomeApps
+        }
     }
 
     fn pausing() -> Pausing {
@@ -171,76 +154,80 @@ impl Os for Native {
         }
     }
 
+    fn capture() -> Option<Access> {
+        taps::supported().then(taps::permission)
+    }
+
+    fn ask_capture() {
+        if taps::supported() {
+            taps::ask();
+        }
+    }
+
+    /// Privacy & Security -> Screen & System Audio Recording (verify the anchor on 14.x and 15.x).
+    const SETTINGS_URL: Option<&'static str> =
+        Some("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture");
+
+    fn clean() {
+        if taps::supported() {
+            taps::clean();
+        }
+    }
+
     fn players(mode: Mode) -> Vec<Player> {
         match mode {
-            // The system volume is lowered only while an app that can be asked is playing; for anything else playing
-            // (a browser) nothing here can tell, and nothing is lowered.
-            Mode::Lower => {
-                let playing = APPS.iter().any(|(app, bundle)| state(app, bundle) == Ok(State::Playing));
-                let Some(device) = default_output().filter(|_| playing) else { return Vec::new() };
-                volume_of(device)
-                    .map(|volume| Player {
-                        key: format!("{SYSTEM}{device}"),
-                        app: SYSTEM_APP.into(),
-                        state: State::Playing,
-                        volume: Some(volume),
-                        pausable: false,
-                    })
-                    .into_iter()
-                    .collect()
+            Mode::Lower if tapping() => tapped_players(&[]),
+            // Without taps: Music's and Spotify's own volume.
+            Mode::Lower => APPS.iter().filter_map(|(app, bundle)| app_player(app, bundle).ok()).collect(),
+            Mode::Pause => {
+                let apps: Vec<(Player, &str)> = APPS
+                    .iter()
+                    .filter_map(|(app, bundle)| app_player(app, bundle).ok().map(|p| (p, *bundle)))
+                    .collect();
+                // What else plays is lowered, there being no safe pause for it; an app that can be paused is not tapped too.
+                let others = if tapping() {
+                    let paused: Vec<&str> = apps.iter().map(|(_, bundle)| *bundle).collect();
+                    tapped_players(&paused)
+                } else {
+                    Vec::new()
+                };
+                // Paused apps carry no volume here, so a Pause never lowers them instead.
+                apps.into_iter().map(|(p, _)| Player { volume: None, ..p }).chain(others).collect()
             }
-            Mode::Pause => APPS.iter().filter_map(|(app, bundle)| app_player(app, bundle).ok()).collect(),
             Mode::Off => Vec::new(),
         }
     }
 
     fn player(key: &str, app: &str) -> Seen {
-        let system = |device: u32| {
-            volume_of(device).map(|volume| Player {
-                key: format!("{SYSTEM}{device}"),
-                app: SYSTEM_APP.into(),
-                state: State::Playing,
-                volume: Some(volume),
-                pausable: false,
-            })
-        };
-        if let Some(device) = key.strip_prefix(SYSTEM).and_then(|id| id.parse::<u32>().ok()) {
-            // That device, wherever the default has gone since.
-            return system(device).map_or(Seen::Gone, Seen::Is);
+        if let Some(pid) = key.strip_prefix(TAP).and_then(|pid| pid.parse::<i32>().ok()) {
+            return if taps::gain(pid).is_some() || taps::running(pid) {
+                Seen::Is(tap_player(pid))
+            } else {
+                // Gone: what was taken from it goes with it.
+                taps::set(pid, 1.0);
+                Seen::Gone
+            };
         }
-        if app == SYSTEM_APP {
-            // From before a restart: the ids mean nothing, the default output device is the one to look at.
-            return default_output().and_then(system).map_or(Seen::Gone, Seen::Is);
-        }
-        let Some((name, bundle)) = key.strip_prefix(APP).and_then(|app| APPS.iter().find(|(name, _)| *name == app))
-        else {
-            return Seen::Gone;
-        };
+        // Its key, or after a restart its app's name.
+        let name = key.strip_prefix(APP).filter(|n| !n.is_empty()).unwrap_or(app);
+        let Some((name, bundle)) = APPS.iter().find(|(n, _)| *n == name) else { return Seen::Gone };
         app_player(name, bundle).map_or_else(|seen| seen, Seen::Is)
     }
 
     fn set_volume(key: &str, volume: f32) -> bool {
-        let Some(device) = key.strip_prefix(SYSTEM).and_then(|id| id.parse::<u32>().ok()) else { return false };
-        let mut volume = volume;
-        let mut at = address(VIRTUAL_MAIN_VOLUME, kAudioObjectPropertyScopeOutput);
-        // SAFETY: a Core Audio property write of one f32, the size this property has.
-        unsafe {
-            AudioObjectSetPropertyData(
-                device,
-                NonNull::from(&mut at),
-                0,
-                std::ptr::null(),
-                std::mem::size_of::<f32>() as u32,
-                NonNull::from(&mut volume).cast(),
-            ) == 0
+        if let Some(pid) = key.strip_prefix(TAP).and_then(|pid| pid.parse::<i32>().ok()) {
+            return taps::set(pid, volume);
         }
+        let Some(app) = key.strip_prefix(APP) else { return false };
+        let level = (volume.clamp(0.0, 1.0) * 100.0).round() as u32;
+        script(app, &format!("set sound volume to {level}")).is_some()
     }
 
     fn pause(key: &str) -> bool {
-        key.strip_prefix(APP).is_some_and(|app| tell(app, "pause"))
+        key.strip_prefix(APP).is_some_and(|app| script(app, "pause").is_some())
     }
 
     fn play(key: &str) -> bool {
-        key.strip_prefix(APP).is_some_and(|app| tell(app, "play"))
+        key.strip_prefix(APP).is_some_and(|app| script(app, "play").is_some())
     }
 }

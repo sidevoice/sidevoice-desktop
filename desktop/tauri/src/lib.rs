@@ -36,7 +36,7 @@ use crate::platform::diagnostics;
 use crate::platform::host;
 use crate::platform::shortcut_access;
 use serde_json::{json, Value};
-use sidevoice_desktop_core::bridge::{self, CallSnapshot, Command};
+use sidevoice_desktop_core::bridge::{self, AgentState, CallSnapshot, Command};
 use sidevoice_desktop_core::build_info::BuildInfo;
 use sidevoice_desktop_core::settings::{MuteShortcut, Registration, Settings};
 use sidevoice_desktop_core::{media, settings};
@@ -181,7 +181,7 @@ fn bridge_state(
     debug_detail(|| format!("bridge_state {:?}", CallSnapshot { rest: Default::default(), ..snapshot.clone() }));
     tray::update(&app, &snapshot);
     media_controls::update(&app, &media_state(&snapshot));
-    media_duck::call(&app, snapshot.joined, snapshot.mic_enabled);
+    media_duck::call(&app, snapshot.joined, snapshot.mic_enabled, snapshot.agent == AgentState::Speaking);
     call_controls::update(&app);
     Ok(())
 }
@@ -287,7 +287,7 @@ fn reset_call_state(app: &AppHandle) {
     *app.state::<AppState>().call.lock().unwrap() = snapshot.clone();
     tray::update(app, &snapshot);
     media_controls::update(app, &media_state(&snapshot));
-    media_duck::call(app, false, false);
+    media_duck::call(app, false, false, false);
     call_controls::update(app);
     voice::page_changed(app);
 }

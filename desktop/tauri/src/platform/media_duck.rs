@@ -28,6 +28,22 @@ trait Os {
     /// Asks the person for that access, if the system does that; the system may show a dialog.
     fn ask() {}
 
+    /// Whether the system lets the app lower any app's sound on its own, where that takes a permission of its own (macOS
+    /// 14.4 and later: System Audio Recording). Never asks the person.
+    fn capture() -> Option<Access> {
+        None
+    }
+
+    /// Asks the person for that permission, if there is one; the system may show a dialog. Returns once answered, or after
+    /// a while.
+    fn ask_capture() {}
+
+    /// The system's page where the person turns those permissions back on.
+    const SETTINGS_URL: Option<&'static str> = None;
+
+    /// Undoes what a run of the app that died left in the system itself (macOS: its taps), before anything else.
+    fn clean() {}
+
     /// The players there are, other than this app's own sound and everything it started: what each does, and whether it can
     /// be lowered or paused. Only what `mode` needs is asked of the system.
     fn players(_mode: Mode) -> Vec<Player> {
@@ -66,9 +82,29 @@ pub fn access() -> Access {
     Native::access()
 }
 
-/// Asks for that access (the person picked Pause).
+/// Asks for that access (the person pressed Allow).
 pub fn ask() {
     Native::ask()
+}
+
+/// Whether the system lets the app lower any app on its own, where that is a permission of its own.
+pub fn capture() -> Option<Access> {
+    Native::capture()
+}
+
+/// Asks for that permission (the person chose Lower, or pressed Allow).
+pub fn ask_capture() {
+    Native::ask_capture()
+}
+
+/// The system's page for those permissions, if it has one.
+pub fn settings_url() -> Option<&'static str> {
+    Native::SETTINGS_URL
+}
+
+/// Undoes what a run that died left in the system.
+pub fn clean() {
+    Native::clean()
 }
 
 /// The players now.

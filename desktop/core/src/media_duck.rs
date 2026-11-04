@@ -1,5 +1,5 @@
-//! Lowering or pausing other apps' media while the person's microphone is open in a call, and giving back only what
-//! the app itself took (docs/MEDIA_DUCK.md). Pure logic: what the system can do is observed and done by the desktop's
+//! Lowering or pausing other apps' media while the person's microphone is open in a call or the agent is speaking, and
+//! giving back only what the app itself took (docs/MEDIA_DUCK.md). Pure logic: what the system can do is observed and done by the desktop's
 //! `platform::media_duck`, which hands this module what it saw as [`Player`]s and carries out the [`Step`]s it decides.
 
 use serde::{Deserialize, Serialize};
@@ -31,11 +31,10 @@ const MAX_OWED: usize = 32;
 pub enum Lowering {
     /// Not at all.
     None,
-    /// One app's volume at a time; the app's own sound is left alone.
+    /// One app's volume at a time, any app that plays; the app's own sound is left alone.
     PerApp,
-    /// The whole system's output volume, and only while an app this system can ask is playing: the app's own voice is
-    /// lowered with the rest.
-    System,
+    /// Only some named apps, each through its own volume (macOS without System Audio Recording: Music and Spotify).
+    SomeApps,
 }
 
 /// How far this system can pause, as the page is told.
@@ -54,7 +53,7 @@ pub enum Pausing {
 #[serde(rename_all = "kebab-case")]
 pub enum Access {
     Granted,
-    /// The person said no (macOS: Privacy & Security -> Automation).
+    /// The person said no (macOS: Privacy & Security -> Automation, or Screen & System Audio Recording).
     Denied,
     /// The system has not been asked yet and can be.
     Undetermined,
@@ -215,15 +214,16 @@ impl Ducker {
         }
     }
 
-    /// What `mode` does to a player that is playing, if anything.
+    /// What `mode` does to a player that is playing, if anything. Pausing a player that cannot be paused lowers it, where
+    /// the system offers its volume for that (macOS: an app with no safe pause is lowered).
     fn take(mode: Mode, p: &Player) -> Option<Step> {
         if p.state != State::Playing {
             return None;
         }
         let key = p.key.clone();
         match (mode, p.volume) {
-            (Mode::Lower, Some(from)) => Some(Step::SetVolume { key, volume: from * LOWERED_TO }),
             (Mode::Pause, _) if p.pausable => Some(Step::Pause { key }),
+            (Mode::Lower | Mode::Pause, Some(from)) => Some(Step::SetVolume { key, volume: from * LOWERED_TO }),
             _ => None,
         }
     }
@@ -282,9 +282,50 @@ impl Ducker {
     }
 }
 
-/// What the call asks of the media: the mode while the microphone is open in a call, none otherwise.
-pub fn wanted(mode: Mode, joined: bool, mic_enabled: bool) -> Option<Mode> {
-    (joined && mic_enabled && mode != Mode::Off).then_some(mode)
+/// What the call asks of the media: the mode while the microphone is open in a call or the agent is speaking in it (the
+/// microphone muted or not), none otherwise.
+pub fn wanted(mode: Mode, joined: bool, mic_enabled: bool, agent_speaking: bool) -> Option<Mode> {
+    (joined && (mic_enabled || agent_speaking) && mode != Mode::Off).then_some(mode)
+}
+
+/// How long the media stays lowered or paused once the call stops asking for it, in milliseconds: the gap between the
+/// person's turn closing and the agent's reply starting, so the music does not come back up for a moment in between.
+pub const HOLD_MS: u64 = 1200;
+
+/// What the call asks of the media once its gaps are held over: a change to a mode is followed at once, a change to none
+/// only once it has lasted [`HOLD_MS`].
+#[derive(Debug, Default)]
+pub struct Hold {
+    held: Option<Mode>,
+    /// When the media is given back, in milliseconds, if the call still asks nothing then.
+    until: Option<u64>,
+}
+
+impl Hold {
+    /// What to follow at `now` (milliseconds of a steady clock) for what the call asks, and when to ask again while a
+    /// give-back waits.
+    pub fn follow(&mut self, want: Option<Mode>, now: u64) -> (Option<Mode>, Option<u64>) {
+        match want {
+            Some(_) => {
+                self.held = want;
+                self.until = None;
+            }
+            None if self.held.is_none() => self.until = None,
+            None => {
+                let until = *self.until.get_or_insert(now + HOLD_MS);
+                if now >= until {
+                    self.held = None;
+                    self.until = None;
+                }
+            }
+        }
+        (self.held, self.until)
+    }
+
+    /// Gives back at the next follow, whatever the call asked: quitting, hanging up, or a choice to do nothing.
+    pub fn drop_now(&mut self) {
+        *self = Hold::default();
+    }
 }
 
 /// What `host.mediaDuck` answers: the choice, and how far this system can carry it out.
@@ -293,7 +334,13 @@ pub struct Status {
     pub mode: Mode,
     pub lower: Lowering,
     pub pause: Pausing,
+    /// Whether the system lets the app control the named apps it lowers or pauses (macOS Automation); `granted` where
+    /// nothing has to be allowed.
     pub access: Access,
+    /// Whether the system lets the app lower any app's sound on its own (macOS 14.4 and later: System Audio Recording);
+    /// absent where the system has no such permission.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capture: Option<Access>,
 }
 
 #[cfg(test)]
@@ -582,13 +629,70 @@ mod tests {
     }
 
     #[test]
-    fn the_call_wants_media_only_with_the_microphone_open_in_a_call() {
-        assert_eq!(wanted(Mode::Lower, true, true), Some(Mode::Lower));
-        assert_eq!(wanted(Mode::Pause, true, true), Some(Mode::Pause));
-        assert_eq!(wanted(Mode::Off, true, true), None);
-        assert_eq!(wanted(Mode::Lower, true, false), None);
-        assert_eq!(wanted(Mode::Lower, false, true), None);
+    fn the_call_wants_media_while_the_microphone_is_open_or_the_agent_speaks() {
+        assert_eq!(wanted(Mode::Lower, true, true, false), Some(Mode::Lower));
+        assert_eq!(wanted(Mode::Pause, true, true, false), Some(Mode::Pause));
+        assert_eq!(wanted(Mode::Lower, true, false, true), Some(Mode::Lower), "the agent speaks, the microphone muted");
+        assert_eq!(wanted(Mode::Lower, true, true, true), Some(Mode::Lower));
+        assert_eq!(wanted(Mode::Off, true, true, true), None);
+        assert_eq!(wanted(Mode::Lower, true, false, false), None);
+        assert_eq!(wanted(Mode::Lower, false, true, true), None);
         assert_eq!(Mode::default(), Mode::Lower);
+    }
+
+    #[test]
+    fn the_gap_between_turns_is_held_over() {
+        let mut hold = Hold::default();
+        assert_eq!(hold.follow(None, 0), (None, None), "nothing held: nothing to wait for");
+        assert_eq!(hold.follow(Some(Mode::Lower), 10), (Some(Mode::Lower), None), "taken at once");
+        // The person's turn closes: still lowered until the hold has passed.
+        assert_eq!(hold.follow(None, 100), (Some(Mode::Lower), Some(100 + HOLD_MS)));
+        assert_eq!(hold.follow(None, 500), (Some(Mode::Lower), Some(100 + HOLD_MS)), "the wait does not restart");
+        // The agent's reply starts within it: nothing moved.
+        assert_eq!(hold.follow(Some(Mode::Lower), 900), (Some(Mode::Lower), None));
+        // It ends, and nothing follows: given back once the hold has passed.
+        assert_eq!(hold.follow(None, 2000), (Some(Mode::Lower), Some(2000 + HOLD_MS)));
+        assert_eq!(hold.follow(None, 2000 + HOLD_MS), (None, None));
+        // A change of mode is not held.
+        hold.follow(Some(Mode::Lower), 5000);
+        assert_eq!(hold.follow(Some(Mode::Pause), 5001), (Some(Mode::Pause), None));
+        hold.drop_now();
+        assert_eq!(hold.follow(None, 5002), (None, None), "dropped: given back at once");
+    }
+
+    #[test]
+    fn pausing_what_cannot_be_paused_lowers_it_where_its_volume_is_offered() {
+        let world = World::new(vec![
+            player("music", State::Playing, None, true),
+            player("browser", State::Playing, Some(1.0), false),
+            player("silent", State::Playing, None, false),
+        ]);
+        let mut ducker = Ducker::default();
+        world.run(&mut ducker, Some(Mode::Pause));
+        assert_eq!(world.get("music").state, State::Paused);
+        assert!((world.get("browser").volume.unwrap() - LOWERED_TO).abs() < 1e-6);
+        assert_eq!(world.get("browser").state, State::Playing);
+        world.run(&mut ducker, None);
+        assert_eq!(world.get("music").state, State::Playing);
+        assert_eq!(world.get("browser").volume, Some(1.0));
+        assert!(ducker.owed().is_empty());
+    }
+
+    #[test]
+    fn the_capture_permission_is_said_only_where_there_is_one() {
+        let status = Status {
+            mode: Mode::Lower,
+            lower: Lowering::SomeApps,
+            pause: Pausing::None,
+            access: Access::Granted,
+            capture: None,
+        };
+        assert_eq!(
+            serde_json::to_value(status).unwrap(),
+            serde_json::json!({"mode": "lower", "lower": "some-apps", "pause": "none", "access": "granted"})
+        );
+        let status = Status { capture: Some(Access::Undetermined), ..status };
+        assert_eq!(serde_json::to_value(status).unwrap()["capture"], "undetermined");
     }
 
     #[test]

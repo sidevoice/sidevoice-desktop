@@ -1599,8 +1599,9 @@ test("host.mediaDuck gets and sets through the media_duck command, strings only"
   const status = { mode: "lower", lower: "per-app", pause: "media-controls" };
   const { win, calls } = settingsWindow({ media_duck: ({ action, mode }) => (action === "set" ? { ...status, mode } : status) });
   const { host } = install(win, ORIGIN);
-  assert.deepEqual(Object.keys(host.mediaDuck).sort(), ["allow", "get", "set"]);
+  assert.deepEqual(Object.keys(host.mediaDuck).sort(), ["allow", "get", "openSettings", "set"]);
   assert.deepEqual(await host.mediaDuck.allow(), status);
+  assert.deepEqual(await host.mediaDuck.openSettings(), status);
   assert.ok(Object.isFrozen(host.mediaDuck));
   assert.deepEqual(await host.mediaDuck.get(), status);
   assert.equal((await host.mediaDuck.set("pause")).mode, "pause");
@@ -1609,6 +1610,7 @@ test("host.mediaDuck gets and sets through the media_duck command, strings only"
   }
   assert.deepEqual(calls.filter(([cmd]) => cmd === "media_duck").map(([, args]) => args), [
     { action: "allow" },
+    { action: "settings" },
     { action: "get" },
     { action: "set", mode: "pause" },
   ], "a wrong argument asks the app nothing");

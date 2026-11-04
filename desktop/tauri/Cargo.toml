@@ -85,8 +85,11 @@ winreg = "0.55"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_Storage_FileSystem", "Win32_Graphics_Dwm", "Win32_UI_Controls", "Win32_UI_WindowsAndMessaging", "Win32_Security", "Win32_UI_Shell", "Win32_System_Com", "Win32_Globalization"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# The default output device's volume (platform/media_duck/macos.rs); already in the graph through cpal.
+# Process taps, aggregate devices and their IOProc, to lower one app at a time (platform/media_duck/macos_taps.rs); already
+# in the graph through cpal, as are the types and Core Foundation crates it uses.
 objc2-core-audio = "0.3"
+objc2-core-audio-types = "0.3"
+objc2-core-foundation = { version = "0.3", features = ["CFDictionary"] }
 # Whether the app may send Apple events to Music and Spotify, without asking mid-call (platform/media_duck/macos.rs).
 objc2-core-services = "0.3"
 # The typed Mach bindings (task_info, task_vm_info) for the process memory read (src/platform/diagnostics/macos.rs).
@@ -99,7 +102,7 @@ tauri-nspanel = "2.1"
 # The Objective-C runtime and Foundation, for the confirmation, the card, the uninstall and the diagnostics.
 objc2 = "0.6"
 block2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSString", "NSDictionary", "NSValue", "NSError", "NSObject", "NSArray", "NSRunLoop", "block2"] }
+objc2-foundation = { version = "0.3", features = ["NSString", "NSDictionary", "NSValue", "NSError", "NSObject", "NSArray", "NSRunLoop", "NSUUID", "block2"] }
 # The native confirmation acknowledges startup from AppKit's modal run-loop mode.
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication"] }
 # CoreGraphics values used by the call controls card (src/call_controls.rs).

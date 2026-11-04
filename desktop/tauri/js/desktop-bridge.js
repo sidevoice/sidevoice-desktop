@@ -274,14 +274,18 @@
     return { host: Object.freeze(host), changed: listeners.tell };
   }
 
-  /** What happens to other apps' media while the microphone is open in a call: sidevoice-web's `MediaDuckBridge`, onto the
-   *  `media_duck` command (docs/BRIDGE.md -> "The media setting"). Its answer is `{mode, lower, pause, access}`. */
+  /** What happens to other apps' media while the microphone is open or the agent speaks in a call: sidevoice-web's
+   *  `MediaDuckBridge`, onto the `media_duck` command (docs/MEDIA_DUCK.md). Its answer is `{mode, lower, pause, access,
+   *  capture?}`. */
   function mediaDuck() {
     const invalid = () => ({ key: "bad_request", message: "set(mode) takes 'lower', 'pause' or 'off'." });
     return Object.freeze({
       get: () => call("media_duck", { action: "get" }),
-      /** The person's own request to let the app control the apps it needs to see or pause (macOS Automation): when the system may ask. */
+      /** The person's own request to let the app do what the choice needs (macOS: System Audio Recording, Automation of
+       *  Music and Spotify): when the system may ask. */
       allow: () => call("media_duck", { action: "allow" }),
+      /** The system's page where the person turns System Audio Recording back on (macOS); rejects `unsupported` elsewhere. */
+      openSettings: () => call("media_duck", { action: "settings" }),
       set: (mode) => (typeof mode === "string" ? call("media_duck", { action: "set", mode }) : Promise.reject(invalid())),
     });
   }
