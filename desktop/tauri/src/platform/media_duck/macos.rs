@@ -11,7 +11,7 @@ use objc2_core_audio::{
 use objc2_core_services::{
     typeApplicationBundleID, typeWildCard, AECreateDesc, AEDesc, AEDeterminePermissionToAutomateTarget, AEDisposeDesc,
 };
-use sidevoice_desktop_core::media_duck::{Access, Player, State};
+use sidevoice_desktop_core::media_duck::{Access, Player, Seen, State};
 use std::process::Command;
 use std::ptr::NonNull;
 
@@ -28,6 +28,8 @@ const APPS: [(&str, &str); 2] = [("Music", "com.apple.Music"), ("Spotify", "com.
 const VIRTUAL_MAIN_VOLUME: u32 = 0x766d_7663;
 /// `errAEEventNotPermitted`: the person refused.
 const DENIED: i32 = -1743;
+/// `procNotFound`: the app is not open.
+const NOT_OPEN: i32 = -600;
 
 fn address(selector: u32, scope: u32) -> AudioObjectPropertyAddress {
     AudioObjectPropertyAddress { mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain }
@@ -86,25 +88,29 @@ fn permission(bundle: &str, ask: bool) -> i32 {
     }
 }
 
-/// What the app named `app` says of its playback, `None` when it is not open or the person has not allowed it (a script
-/// that asked anyway would put a dialog in the middle of a call).
-fn state(app: &str, bundle: &str) -> Option<State> {
-    if permission(bundle, false) != 0 {
-        return None;
+/// What the app named `app` says of its playback: `Gone` when it is not open, `Unknown` when the person has not allowed it
+/// or it does not answer (a script that asked anyway would put a dialog in the middle of a call).
+fn state(app: &str, bundle: &str) -> Result<State, Seen> {
+    match permission(bundle, false) {
+        0 => {}
+        NOT_OPEN => return Err(Seen::Gone),
+        _ => return Err(Seen::Unknown),
     }
     // `is running` first: telling an app that is closed would open it.
     let script = format!(
         "if application \"{app}\" is running then tell application \"{app}\" to return (player state as string)"
     );
-    let out = Command::new("/usr/bin/osascript").args(["-e", &script]).output().ok()?;
-    if !out.status.success() {
-        return None;
+    let Some(out) =
+        Command::new("/usr/bin/osascript").args(["-e", &script]).output().ok().filter(|o| o.status.success())
+    else {
+        return Err(Seen::Unknown);
+    };
+    match String::from_utf8_lossy(&out.stdout).trim() {
+        "playing" => Ok(State::Playing),
+        "paused" => Ok(State::Paused),
+        "" => Err(Seen::Gone),
+        _ => Ok(State::Stopped),
     }
-    Some(match String::from_utf8_lossy(&out.stdout).trim() {
-        "playing" => State::Playing,
-        "paused" => State::Paused,
-        _ => State::Stopped,
-    })
 }
 
 fn tell(app: &str, command: &str) -> bool {
@@ -113,13 +119,24 @@ fn tell(app: &str, command: &str) -> bool {
     Command::new("/usr/bin/osascript").args(["-e", &script]).output().is_ok_and(|o| o.status.success())
 }
 
-fn app_player(app: &str, bundle: &str) -> Option<Player> {
-    Some(Player { key: format!("{APP}{app}"), state: state(app, bundle)?, volume: None, pausable: true })
+fn app_player(app: &str, bundle: &str) -> Result<Player, Seen> {
+    Ok(Player {
+        key: format!("{APP}{app}"),
+        app: String::new(),
+        state: state(app, bundle)?,
+        volume: None,
+        pausable: true,
+    })
 }
 
 impl Os for Native {
-    const LOWERING: Lowering = Lowering::System;
-    const PAUSING: Pausing = Pausing::SomeApps;
+    fn lowering() -> Lowering {
+        Lowering::System
+    }
+
+    fn pausing() -> Pausing {
+        Pausing::SomeApps
+    }
 
     fn access() -> Access {
         let codes: Vec<i32> = APPS.iter().map(|(_, bundle)| permission(bundle, false)).collect();
@@ -144,11 +161,12 @@ impl Os for Native {
             // The system volume is lowered only while an app that can be asked is playing; for anything else playing
             // (a browser) nothing here can tell, and nothing is lowered.
             Mode::Lower => {
-                let playing = APPS.iter().any(|(app, bundle)| state(app, bundle) == Some(State::Playing));
+                let playing = APPS.iter().any(|(app, bundle)| state(app, bundle) == Ok(State::Playing));
                 let Some(device) = default_output().filter(|_| playing) else { return Vec::new() };
                 volume_of(device)
                     .map(|volume| Player {
                         key: format!("{SYSTEM}{device}"),
+                        app: String::new(),
                         state: State::Playing,
                         volume: Some(volume),
                         pausable: false,
@@ -156,23 +174,29 @@ impl Os for Native {
                     .into_iter()
                     .collect()
             }
-            Mode::Pause => APPS.iter().filter_map(|(app, bundle)| app_player(app, bundle)).collect(),
+            Mode::Pause => APPS.iter().filter_map(|(app, bundle)| app_player(app, bundle).ok()).collect(),
             Mode::Off => Vec::new(),
         }
     }
 
-    fn player(key: &str) -> Option<Player> {
+    fn player(key: &str, _app: &str) -> Seen {
         if let Some(device) = key.strip_prefix(SYSTEM).and_then(|id| id.parse::<u32>().ok()) {
             // That device, wherever the default has gone since.
-            return volume_of(device).map(|volume| Player {
-                key: key.to_owned(),
-                state: State::Playing,
-                volume: Some(volume),
-                pausable: false,
+            return volume_of(device).map_or(Seen::Gone, |volume| {
+                Seen::Is(Player {
+                    key: key.to_owned(),
+                    app: String::new(),
+                    state: State::Playing,
+                    volume: Some(volume),
+                    pausable: false,
+                })
             });
         }
-        let app = key.strip_prefix(APP)?;
-        APPS.iter().find(|(name, _)| *name == app).and_then(|(name, bundle)| app_player(name, bundle))
+        let Some((name, bundle)) = key.strip_prefix(APP).and_then(|app| APPS.iter().find(|(name, _)| *name == app))
+        else {
+            return Seen::Gone;
+        };
+        app_player(name, bundle).map_or_else(|seen| seen, Seen::Is)
     }
 
     fn set_volume(key: &str, volume: f32) -> bool {

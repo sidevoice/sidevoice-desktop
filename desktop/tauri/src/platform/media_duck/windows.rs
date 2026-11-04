@@ -1,11 +1,12 @@
 //! Windows: pause and resume through the system media transport controls (the apps that show in the volume flyout's media
 //! card: browsers, Spotify, the Media Player), lower through each app's audio session (WASAPI) on the default output
-//! device. This app's own sound and media session (its webview's helpers included) are never touched.
+//! device. This app's own sound and media session (its webview's helpers included) are never touched. The mixer keeps a
+//! volume per app, so a lowered volume is given back to the app's next session too.
 use super::{Lowering, Mode, Os, Pausing};
 #[path = "ours.rs"]
 mod ours;
 use ours::Ours;
-use sidevoice_desktop_core::media_duck::{Player, State};
+use sidevoice_desktop_core::media_duck::{Player, Seen, State};
 use windows::core::{Interface, HSTRING, PWSTR};
 use windows::Media::Control::{
     GlobalSystemMediaTransportControlsSession as Session, GlobalSystemMediaTransportControlsSessionManager as Manager,
@@ -29,6 +30,9 @@ fn com() {
 }
 
 fn text(p: PWSTR) -> String {
+    if p.is_null() {
+        return String::new();
+    }
     // SAFETY: the audio API hands over a NUL-terminated string it allocated; it is read once and freed.
     unsafe {
         let s = p.to_string().unwrap_or_default();
@@ -38,9 +42,10 @@ fn text(p: PWSTR) -> String {
 }
 
 /// An audio session of another app: its instance id (what tells two sessions of one app apart, for as long as it lives),
-/// its volume control, and whether it is making sound.
+/// its identifier (what the mixer keeps the app's volume under), its volume control, and whether it is making sound.
 struct Audio {
     id: String,
+    app: String,
     volume: ISimpleAudioVolume,
     active: bool,
 }
@@ -63,8 +68,9 @@ fn audio_on(device: &IMMDevice, ours: &Ours) -> Option<Vec<Audio>> {
             else {
                 continue;
             };
+            let app = info.GetSessionIdentifier().map(text).unwrap_or_default();
             let active = control.GetState().is_ok_and(|s| s == AudioSessionStateActive);
-            found.push(Audio { id: text(id), volume, active });
+            found.push(Audio { id: text(id), app, volume, active });
         }
         Some(found)
     }
@@ -85,19 +91,23 @@ fn audio_player(endpoint: &str, a: &Audio) -> Player {
     let volume = unsafe { a.volume.GetMasterVolume() }.ok();
     Player {
         key: audio_key(endpoint, &a.id),
+        app: a.app.clone(),
         state: if a.active { State::Playing } else { State::Stopped },
         volume,
         pausable: false,
     }
 }
 
-/// The audio session `key` names, on the device it names.
-fn audio_by_key(key: &str, ours: &Ours) -> Option<(String, Audio)> {
-    let (endpoint, id) = key.strip_prefix(AUDIO)?.split_once('|')?;
+/// The audio session `key` names, on the device it names; else, on that device, another session of `app`.
+fn audio_by_key(key: &str, app: &str, ours: &Ours) -> Result<(String, Audio), Seen> {
+    let Some((endpoint, id)) = key.strip_prefix(AUDIO).and_then(|k| k.split_once('|')) else { return Err(Seen::Gone) };
+    let Some(devices) = enumerator() else { return Err(Seen::Unknown) };
     // SAFETY: the endpoint id comes back from the system as it was given.
-    let device = unsafe { enumerator()?.GetDevice(&HSTRING::from(endpoint)).ok()? };
-    let found = audio_on(&device, ours)?.into_iter().find(|a| a.id == id)?;
-    Some((endpoint.to_owned(), found))
+    let Ok(device) = (unsafe { devices.GetDevice(&HSTRING::from(endpoint)) }) else { return Err(Seen::Gone) };
+    let Some(all) = audio_on(&device, ours) else { return Err(Seen::Unknown) };
+    let mut all = all.into_iter();
+    let found = all.by_ref().find(|a| a.id == id).or_else(|| all.find(|a| !app.is_empty() && a.app == app));
+    found.map(|a| (endpoint.to_owned(), a)).ok_or(Seen::Gone)
 }
 
 /// Whether a media session is probably this app's own page (WebView2 offers the page's Media Session to the system):
@@ -108,14 +118,23 @@ fn is_ours(aumid: &str) -> bool {
     aumid.contains("msedgewebview2") || exe.is_some_and(|exe| !exe.is_empty() && aumid.contains(&exe))
 }
 
-/// Every media session, with the app it belongs to.
-fn sessions() -> Vec<(String, Session)> {
-    let Some(manager) = Manager::RequestAsync().ok().and_then(|op| op.join().ok()) else { return Vec::new() };
-    let Ok(all) = manager.GetSessions() else { return Vec::new() };
-    all.into_iter()
-        .filter_map(|s| s.SourceAppUserModelId().ok().map(|id| (id.to_string(), s)))
-        .filter(|(id, _)| !is_ours(id))
-        .collect()
+/// Every media session of another app, in the order the system lists them: an app's sessions are told apart by their
+/// place among its own (`media:<app id>#<n>`).
+fn sessions() -> Option<Vec<(String, Session)>> {
+    let manager = Manager::RequestAsync().ok()?.join().ok()?;
+    let all = manager.GetSessions().ok()?;
+    let mut counts = std::collections::HashMap::<String, usize>::new();
+    Some(
+        all.into_iter()
+            .filter_map(|s| s.SourceAppUserModelId().ok().map(|id| (id.to_string(), s)))
+            .filter(|(id, _)| !is_ours(id))
+            .map(|(id, s)| {
+                let n = counts.entry(id.clone()).or_default();
+                *n += 1;
+                (format!("{MEDIA}{id}#{}", *n - 1), s)
+            })
+            .collect(),
+    )
 }
 
 fn status(session: &Session) -> State {
@@ -126,29 +145,20 @@ fn status(session: &Session) -> State {
     }
 }
 
-/// One app's media: playing if any of its sessions plays, paused if one is paused and none plays.
-fn media_player(aumid: &str, all: &[(String, Session)]) -> Option<Player> {
-    let mine: Vec<&Session> = all.iter().filter(|(id, _)| id == aumid).map(|(_, s)| s).collect();
-    if mine.is_empty() {
-        return None;
-    }
-    let states: Vec<State> = mine.iter().map(|s| status(s)).collect();
-    let state = if states.contains(&State::Playing) {
-        State::Playing
-    } else if states.contains(&State::Paused) {
-        State::Paused
-    } else {
-        State::Stopped
-    };
-    let pausable = mine
-        .iter()
-        .any(|s| s.GetPlaybackInfo().and_then(|i| i.Controls()).and_then(|c| c.IsPauseEnabled()).unwrap_or(false));
-    Some(Player { key: format!("{MEDIA}{aumid}"), state, volume: None, pausable })
+fn media_player(key: &str, session: &Session) -> Player {
+    let pausable =
+        session.GetPlaybackInfo().and_then(|i| i.Controls()).and_then(|c| c.IsPauseEnabled()).unwrap_or(false);
+    Player { key: key.to_owned(), app: String::new(), state: status(session), volume: None, pausable }
 }
 
 impl Os for Native {
-    const LOWERING: Lowering = Lowering::PerApp;
-    const PAUSING: Pausing = Pausing::MediaControls;
+    fn lowering() -> Lowering {
+        Lowering::PerApp
+    }
+
+    fn pausing() -> Pausing {
+        Pausing::MediaControls
+    }
 
     fn players(mode: Mode) -> Vec<Player> {
         com();
@@ -157,36 +167,43 @@ impl Os for Native {
                 let ours = Ours::new();
                 let Some(devices) = enumerator() else { return Vec::new() };
                 // SAFETY: COM calls on interfaces created here.
-                let Some(device) = (unsafe { devices.GetDefaultAudioEndpoint(eRender, eMultimedia) }).ok() else {
+                let Ok(device) = (unsafe { devices.GetDefaultAudioEndpoint(eRender, eMultimedia) }) else {
                     return Vec::new();
                 };
                 // SAFETY: the id is read once and freed.
-                let endpoint = text(unsafe { device.GetId() }.unwrap_or_default());
+                let Ok(id) = (unsafe { device.GetId() }) else { return Vec::new() };
+                let endpoint = text(id);
+                if endpoint.is_empty() {
+                    return Vec::new();
+                }
                 audio_on(&device, &ours).unwrap_or_default().iter().map(|a| audio_player(&endpoint, a)).collect()
             }
             Mode::Pause => {
-                let all = sessions();
-                let mut ids: Vec<&String> = all.iter().map(|(id, _)| id).collect();
-                ids.sort();
-                ids.dedup();
-                ids.into_iter().filter_map(|id| media_player(id, &all)).collect()
+                sessions().unwrap_or_default().iter().map(|(key, session)| media_player(key, session)).collect()
             }
             Mode::Off => Vec::new(),
         }
     }
 
-    fn player(key: &str) -> Option<Player> {
+    fn player(key: &str, app: &str) -> Seen {
         com();
-        if let Some(id) = key.strip_prefix(MEDIA) {
-            return media_player(id, &sessions());
+        if key.starts_with(MEDIA) {
+            return match sessions() {
+                None => Seen::Unknown,
+                Some(all) => {
+                    all.iter().find(|(k, _)| k == key).map_or(Seen::Gone, |(k, s)| Seen::Is(media_player(k, s)))
+                }
+            };
         }
-        let (endpoint, a) = audio_by_key(key, &Ours::new())?;
-        Some(audio_player(&endpoint, &a))
+        match audio_by_key(key, app, &Ours::new()) {
+            Ok((endpoint, a)) => Seen::Is(audio_player(&endpoint, &a)),
+            Err(seen) => seen,
+        }
     }
 
     fn set_volume(key: &str, volume: f32) -> bool {
         com();
-        let Some((_, a)) = audio_by_key(key, &Ours::new()) else { return false };
+        let Ok((_, a)) = audio_by_key(key, "", &Ours::new()) else { return false };
         // SAFETY: the volume control belongs to this call's own enumeration.
         unsafe { a.volume.SetMasterVolume(volume, std::ptr::null()) }.is_ok()
     }
@@ -200,14 +217,12 @@ impl Os for Native {
     }
 }
 
-/// Asks every session of the app that is in state `from` (a paused session is not paused again, a playing one not played).
+/// Asks the one session `key` names, if it is in state `from` (a paused session is not paused again).
 fn transport(key: &str, from: State, ask: impl Fn(&Session) -> Option<bool>) -> bool {
     com();
-    let Some(id) = key.strip_prefix(MEDIA) else { return false };
-    let asked: Vec<bool> = sessions()
+    sessions()
+        .unwrap_or_default()
         .iter()
-        .filter(|(found, s)| found == id && status(s) == from)
-        .map(|(_, s)| ask(s) == Some(true))
-        .collect();
-    !asked.is_empty() && asked.iter().all(|ok| *ok)
+        .find(|(k, s)| k == key && status(s) == from)
+        .is_some_and(|(_, s)| ask(s) == Some(true))
 }

@@ -1,6 +1,6 @@
 //! What this OS can do to other apps' media while the microphone is open (docs/MEDIA_DUCK.md): observe the players and
 //! lower, pause or resume one. What to do, and what to give back, is core's (`media_duck`).
-use sidevoice_desktop_core::media_duck::{Access, Lowering, Mode, Pausing, Player, Step};
+use sidevoice_desktop_core::media_duck::{Access, Lowering, Mode, Pausing, Player, Seen, Step};
 
 #[cfg_attr(target_os = "macos", path = "media_duck/macos.rs")]
 #[cfg_attr(target_os = "windows", path = "media_duck/windows.rs")]
@@ -10,10 +10,15 @@ use imp::Native;
 
 /// What differs per OS. Every call may block (COM, D-Bus, a script), so the caller is a worker thread, never the UI's.
 trait Os {
-    /// How this OS can lower other apps.
-    const LOWERING: Lowering = Lowering::None;
+    /// How this OS can lower other apps, as far as it can be told (a tool it needs may be missing).
+    fn lowering() -> Lowering {
+        Lowering::None
+    }
+
     /// How far it can pause them.
-    const PAUSING: Pausing = Pausing::None;
+    fn pausing() -> Pausing {
+        Pausing::None
+    }
 
     /// Whether the system lets the app control the apps it pauses. Never asks the person.
     fn access() -> Access {
@@ -29,9 +34,10 @@ trait Os {
         Vec::new()
     }
 
-    /// One player by its key, wherever it is now (on the device it was taken from, not the default's).
-    fn player(_key: &str) -> Option<Player> {
-        None
+    /// One player again, by its key (on the device it was taken from, not the default's) or, failing that, the next player of
+    /// its app, where the system remembers a volume per app.
+    fn player(_key: &str, _app: &str) -> Seen {
+        Seen::Gone
     }
 
     /// Sets one player's volume, 0 to 1; whether the system took it.
@@ -52,7 +58,7 @@ trait Os {
 
 /// How this OS lowers and pauses, for the page to say so.
 pub fn reach() -> (Lowering, Pausing) {
-    (Native::LOWERING, Native::PAUSING)
+    (Native::lowering(), Native::pausing())
 }
 
 /// Whether the system lets the app pause what it pauses.
@@ -70,9 +76,14 @@ pub fn players(mode: Mode) -> Vec<Player> {
     Native::players(mode)
 }
 
-/// One player by key.
-pub fn player(key: &str) -> Option<Player> {
-    Native::player(key)
+/// One player again.
+pub fn player(key: &str, app: &str) -> Seen {
+    Native::player(key, app)
+}
+
+/// When this machine started, in seconds since the epoch: what tells a debt of an earlier run from this one's.
+pub fn boot_time() -> u64 {
+    sysinfo::System::boot_time()
 }
 
 /// Does one step; whether it worked.

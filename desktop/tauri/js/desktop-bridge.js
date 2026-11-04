@@ -280,6 +280,8 @@
     const invalid = () => ({ key: "bad_request", message: "set(mode) takes 'lower', 'pause' or 'off'." });
     return Object.freeze({
       get: () => call("media_duck", { action: "get" }),
+      /** The person's own request to let the app control the apps it needs to see or pause (macOS Automation): when the system may ask. */
+      allow: () => call("media_duck", { action: "allow" }),
       set: (mode) => (typeof mode === "string" ? call("media_duck", { action: "set", mode }) : Promise.reject(invalid())),
     });
   }

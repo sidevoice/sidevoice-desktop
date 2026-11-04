@@ -3,6 +3,7 @@
 //! it writes that down so a crash does not leave other apps lowered or paused for good.
 
 use crate::platform::media_duck as platform;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sidevoice_desktop_core::media_duck::{wanted, Ducker, Mode, Status, Touch};
 use std::path::PathBuf;
@@ -26,20 +27,45 @@ enum Msg {
 /// The worker's mailbox, kept as the app's state.
 pub struct MediaDuck(Mutex<mpsc::Sender<Msg>>);
 
-fn read(file: &Option<PathBuf>) -> Vec<Touch> {
-    file.as_ref()
-        .and_then(|f| std::fs::read(f).ok())
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+/// What is kept: what is owed, and when and on which start of the machine it was written.
+#[derive(Serialize, Deserialize)]
+struct Kept {
+    boot: u64,
+    at: u64,
+    owed: Vec<Touch>,
 }
 
-/// Writes down what is owed, or forgets the file when nothing is.
+fn now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+/// The boot times of one start of the machine differ by a second or so between reads.
+fn same_boot(a: u64, b: u64) -> bool {
+    a.abs_diff(b) <= 5
+}
+
+/// What an earlier run left that is still worth giving back (core `Touch::outlives`).
+fn read(file: &Option<PathBuf>) -> Vec<Touch> {
+    let kept: Option<Kept> =
+        file.as_ref().and_then(|f| std::fs::read(f).ok()).and_then(|b| serde_json::from_slice(&b).ok());
+    let Some(kept) = kept else { return Vec::new() };
+    let (same, age) = (same_boot(kept.boot, platform::boot_time()), now().saturating_sub(kept.at));
+    kept.owed.into_iter().filter(|t| t.outlives(same, age)).collect()
+}
+
+/// Writes down what is owed, or forgets the file when nothing is: written whole beside it and renamed over it, so a crash
+/// in the middle leaves the old file, never half of one.
 fn write(file: &Option<PathBuf>, owed: &[Touch]) {
     let Some(file) = file else { return };
     if owed.is_empty() {
         let _ = std::fs::remove_file(file);
-    } else if let Ok(bytes) = serde_json::to_vec(owed) {
-        let _ = std::fs::write(file, bytes);
+        return;
+    }
+    let kept = Kept { boot: platform::boot_time(), at: now(), owed: owed.to_vec() };
+    let Ok(bytes) = serde_json::to_vec(&kept) else { return };
+    let temp = file.with_extension("json.tmp");
+    if std::fs::write(&temp, bytes).is_ok() && std::fs::rename(&temp, file).is_err() {
+        let _ = std::fs::remove_file(&temp);
     }
 }
 
@@ -51,6 +77,10 @@ impl MediaDuck {
         std::thread::spawn(move || {
             let (mut mode, mut joined, mut mic_enabled) = (mode, false, false);
             let mut ducker = Ducker::owing(read(&file));
+            let mut last_written = Vec::<Touch>::new();
+            // What an earlier run left is given back at once, not at the first call.
+            ducker.settle(platform::player, platform::act);
+            write(&file, ducker.owed());
             while let Ok(first) = rx.recv() {
                 // What queued up while the last look was blocked is folded into one: only the latest state matters.
                 let mut acks = Vec::new();
@@ -64,17 +94,19 @@ impl MediaDuck {
                         }
                     }
                 }
+                // A look only when the call really asks something else of the media: every report of the page comes through
+                // here, and a debt that cannot be paid is tried again at a change, not at each of them.
                 ducker.follow(wanted(mode, joined, mic_enabled), platform::players, platform::player, platform::act);
-                write(&file, ducker.owed());
+                if ducker.owed() != last_written.as_slice() {
+                    write(&file, ducker.owed());
+                    last_written = ducker.owed().to_vec();
+                }
                 for ack in acks {
                     let _ = ack.send(());
                 }
             }
         });
-        let duck = MediaDuck(Mutex::new(tx));
-        // Whatever the last run left is given back at once, not at the first call.
-        duck.send(Msg::Call { joined: false, mic_enabled: false });
-        duck
+        MediaDuck(Mutex::new(tx))
     }
 
     fn send(&self, msg: Msg) {
@@ -103,8 +135,8 @@ fn status(mode: Mode) -> Status {
     Status { mode, lower, pause, access: platform::access() }
 }
 
-/// `host.mediaDuck`'s one command: `action` `get`, or `set` with `mode` (`lower`, `pause` or `off`). Choosing `pause` is
-/// when the system may ask the person to allow it (never in the middle of a call).
+/// `host.mediaDuck`'s one command: `action` `get`, `set` with `mode` (`lower`, `pause` or `off`), or `allow`: the
+/// person's own request to let the app control the apps it needs to see or pause, which is when the system may ask.
 #[tauri::command]
 pub async fn media_duck(
     app: AppHandle,
@@ -123,11 +155,12 @@ pub async fn media_duck(
             if let Some(duck) = app.try_state::<MediaDuck>() {
                 duck.send(Msg::Mode(mode));
             }
-            if mode == Mode::Pause {
-                // May block on the person's answer: off this command's thread.
-                let _ = tauri::async_runtime::spawn_blocking(platform::ask).await;
-            }
             Ok(status(mode))
+        }
+        // The person pressed "Allow": the system may ask now (never in the middle of a call, never at startup).
+        "allow" => {
+            let _ = tauri::async_runtime::spawn_blocking(platform::ask).await;
+            Ok(status(crate::stored_media_duck(&app)))
         }
         _ => Err(refuse("bad_request", format!("not a media duck action: {action}"))),
     }
