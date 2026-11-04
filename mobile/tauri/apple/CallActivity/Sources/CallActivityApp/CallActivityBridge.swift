@@ -14,6 +14,7 @@ import UIKit
 public final class CallActivityBridge: NSObject {
     @objc public static func start(_ json: String) {
         let report = Report.read(json)
+        if #available(iOS 16.1, *) { Coming.now.set(true) }
         DispatchQueue.main.async {
             if #available(iOS 16.1, *) { Controller.shared.start(report) }
         }
@@ -27,19 +28,43 @@ public final class CallActivityBridge: NSObject {
     }
 
     @objc public static func end() {
+        Coming.now.set(false)
         DispatchQueue.main.async {
             if #available(iOS 16.1, *) { Controller.shared.end() }
         }
     }
 
-    /// Whether the call's Live Activity is on the screens now: requested and not over. False before iOS 16.1, with Live
-    /// Activities off, and while the app has not yet been in front to request it. Any thread: the media controls ask on
-    /// every report, and give way to the activity only while it runs.
+    /// Whether the call's Live Activity is on the screens now (requested and not over), or on its way: from `start` until
+    /// it is requested, also while the app is not in front to request it. False before iOS 16.1, with Live Activities off,
+    /// and once a request has failed. Any thread: the media controls ask on every report, and give way to the activity
+    /// only while this holds. "On its way" counts because the first report comes before the main queue has requested the
+    /// activity: Now Playing shown for that moment would leave the app the system's Now Playing app for the rest of the
+    /// process, an empty card above the activity (HANDOVER-live-activity R2-6).
     @objc public static func running() -> Bool {
         guard #available(iOS 16.1, *) else { return false }
-        return Activity<CallActivityAttributes>.activities.contains {
+        return Coming.now.get() || Activity<CallActivityAttributes>.activities.contains {
             $0.activityState != .ended && $0.activityState != .dismissed
         }
+    }
+}
+
+/// Whether the call's activity is on its way (`CallActivityBridge.running`): set at once by `start`, from the caller's
+/// thread, and cleared by `end` and by the controller once the activity is requested or cannot be.
+final class Coming: @unchecked Sendable {
+    static let now = Coming()
+    private let lock = NSLock()
+    private var value = false
+
+    func get() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+
+    func set(_ new: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        value = new
     }
 }
 
@@ -302,6 +327,7 @@ final class Controller {
         }
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
             NSLog("Sidevoice: Live Activities are off for the app")
+            Coming.now.set(false)
             return
         }
         let state = current()
@@ -317,9 +343,11 @@ final class Controller {
             }
         } catch {
             failedAt = Date()
+            Coming.now.set(false)
             NSLog("Sidevoice: the call's Live Activity did not start: \(error)")
             return
         }
+        Coming.now.set(false)
         NSLog("Sidevoice: Live Activity: requested %@", new.id)
         activity = new
         lifecycle.adopt(new.id)

@@ -171,15 +171,65 @@ fn gesture_api() -> bool {
     AnyClass::get(c"AVAudioApplication").is_some()
 }
 
+/// Every command of the shared command center, by name: the app registers only [`commands`], but any of them with a
+/// target, or enabled, keeps the app the Now Playing app as much (HANDOVER-live-activity R2-6), so all of them are let go.
+fn every_command() -> Vec<(Retained<MPRemoteCommand>, &'static str)> {
+    // SAFETY: as in `commands`; each subclass is a command.
+    let center = unsafe { MPRemoteCommandCenter::sharedCommandCenter() };
+    unsafe {
+        vec![
+            (center.playCommand(), "play"),
+            (center.pauseCommand(), "pause"),
+            (center.togglePlayPauseCommand(), "toggle"),
+            (center.stopCommand(), "stop"),
+            (center.nextTrackCommand(), "next"),
+            (center.previousTrackCommand(), "previous"),
+            (Retained::into_super(center.skipForwardCommand()), "skipForward"),
+            (Retained::into_super(center.skipBackwardCommand()), "skipBackward"),
+            (center.seekForwardCommand(), "seekForward"),
+            (center.seekBackwardCommand(), "seekBackward"),
+            (Retained::into_super(center.changePlaybackPositionCommand()), "changePlaybackPosition"),
+            (Retained::into_super(center.changePlaybackRateCommand()), "changePlaybackRate"),
+            (Retained::into_super(center.changeRepeatModeCommand()), "changeRepeatMode"),
+            (Retained::into_super(center.changeShuffleModeCommand()), "changeShuffleMode"),
+            (Retained::into_super(center.ratingCommand()), "rating"),
+            (Retained::into_super(center.likeCommand()), "like"),
+            (Retained::into_super(center.dislikeCommand()), "dislike"),
+            (Retained::into_super(center.bookmarkCommand()), "bookmark"),
+            (center.enableLanguageOptionCommand(), "enableLanguageOption"),
+            (center.disableLanguageOptionCommand(), "disableLanguageOption"),
+        ]
+    }
+}
+
 /// Whether the command handlers are registered now: only while Now Playing shows the call. A handler registered is what
 /// makes the system take the app for the Now Playing app (iOS keeps an empty card on the Lock Screen for it, even with no
 /// Now Playing info and every command disabled), so none is registered at launch, and they go when Now Playing does.
 /// Only touched on the main thread.
 static REGISTERED: Mutex<bool> = Mutex::new(false);
 
+/// What the last [`apply`] had: whether a call was active, and whether Now Playing showed it. None before the first.
+static LAST: Mutex<Option<(bool, bool)>> = Mutex::new(None);
+
 /// At launch: no handlers yet (see [`REGISTERED`]); they are registered when a call is shown.
 fn setup<N: Os>(_app: &AppHandle) {
-    N::end_remote_control_events();
+    release::<N>();
+}
+
+/// What Now Playing holds now, for the app log (`call: now playing …`): the commands enabled (MediaPlayer says which
+/// are, not which have targets: the app's own handlers are `handlers`), and whether there is Now Playing info. A command
+/// nothing has touched reads as enabled.
+fn census(when: &str) {
+    // SAFETY: main thread; a plain property read.
+    let enabled: Vec<&str> =
+        every_command().iter().filter(|(command, _)| unsafe { command.isEnabled() }).map(|(_, name)| *name).collect();
+    // SAFETY: as above.
+    let info = unsafe { MPNowPlayingInfoCenter::defaultCenter().nowPlayingInfo() }.is_some();
+    log::info!(
+        "call: now playing {when}: enabled=[{}] handlers={} info={info}",
+        enabled.join(","),
+        *REGISTERED.lock().unwrap()
+    );
 }
 
 /// Registers the handlers of the commands, enabled, once.
@@ -197,36 +247,53 @@ fn register(app: &AppHandle) {
     }
 }
 
-/// Removes every handler of the commands and disables them, so that the app stops being the Now Playing app.
-fn unregister<N: Os>() {
-    for (command, _) in commands() {
+/// Lets go of Now Playing (HANDOVER-live-activity R2-6): every handler of every command removed and every command
+/// disabled, no Now Playing info, and no more remote-control events, so that the app stops being the Now Playing app.
+fn release<N: Os>() {
+    for (command, _) in every_command() {
         // SAFETY: main thread; `nil` removes every target of the command.
         unsafe {
             command.removeTarget(None);
             command.setEnabled(false);
         }
     }
+    // SAFETY: main thread; plain MediaPlayer calls.
+    unsafe {
+        let center = MPNowPlayingInfoCenter::defaultCenter();
+        N::set_playback_state(&center, MPNowPlayingPlaybackState::Stopped);
+        center.setNowPlayingInfo(None);
+    }
+    *REGISTERED.lock().unwrap() = false;
     N::end_remote_control_events();
 }
 
 fn apply<N: Os>(app: &AppHandle, active: bool, now_playing: bool, in_call: bool, mic_enabled: bool, title: &str) {
-    // SAFETY: main thread (update() dispatches here); plain Foundation / MediaPlayer calls.
-    {
-        let mut registered = REGISTERED.lock().unwrap();
-        if now_playing && !*registered {
-            register(app);
-            *registered = true;
-        } else if !now_playing && *registered {
-            // SAFETY: as below, main thread.
-            unsafe { MPNowPlayingInfoCenter::defaultCenter().setNowPlayingInfo(None) };
-            unregister::<N>();
-            *registered = false;
+    // Let go of Now Playing whenever it is not to show the call and something changed: a call starting (before its audio
+    // opens: this report is the one that starts the call's service), Now Playing giving way (the Live Activity runs), and
+    // a call ending. What was there at a call's start, and what is left after, go to the app log.
+    let last = LAST.lock().unwrap().replace((active, now_playing));
+    let was_active = matches!(last, Some((true, _)));
+    if !now_playing && last != Some((active, now_playing)) {
+        if active && !was_active {
+            census("at the call's start");
+        }
+        release::<N>();
+        if active {
+            census("let go");
+        } else if was_active {
+            census("after the call");
         }
     }
-    unsafe {
+    if now_playing && !*REGISTERED.lock().unwrap() {
+        register(app);
+        *REGISTERED.lock().unwrap() = true;
         for (command, _) in commands() {
-            command.setEnabled(now_playing);
+            // SAFETY: main thread; plain property set.
+            unsafe { command.setEnabled(true) };
         }
+    }
+    // SAFETY: main thread (update() dispatches here); plain Foundation / MediaPlayer calls.
+    unsafe {
         let center = MPNowPlayingInfoCenter::defaultCenter();
         if now_playing {
             // The app's name, and the conversation the call is on when there is one (no text of the app's own: a
@@ -253,9 +320,6 @@ fn apply<N: Os>(app: &AppHandle, active: bool, now_playing: bool, in_call: bool,
                     MPNowPlayingPlaybackState::Paused
                 },
             );
-        } else {
-            N::set_playback_state(&center, MPNowPlayingPlaybackState::Stopped);
-            center.setNowPlayingInfo(None);
         }
     }
     gesture::<N>(app, active, in_call, mic_enabled);
