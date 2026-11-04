@@ -26,7 +26,7 @@ use objc2_media_player::{
 use std::ptr::NonNull;
 use std::time::{Duration, Instant};
 
-use crate::headset::{media_command_action, mute_gesture_action};
+use crate::headset::{media_command_action, mute_gesture_action, Changed};
 use crate::platform::media_controls::{CallState, CommandSink, MediaCommand};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
@@ -219,11 +219,15 @@ fn apply<N: Os>(app: &AppHandle, active: bool, in_call: bool, mic_enabled: bool,
         }
     }
     gesture::<N>(app, active, in_call, mic_enabled);
-    sidevoice_shared::debug::debug(&format!(
+    static SEEN: Changed = Changed(Mutex::new(None));
+    let line = format!(
         "headset apply active={active} in_call={in_call} mic={mic_enabled} gesture_api={} gesture_on={}",
         gesture_api(),
         *GESTURE_ON.lock().unwrap()
-    ));
+    );
+    if SEEN.is_new(&line) {
+        sidevoice_shared::debug::debug(&line);
+    }
 }
 
 /// AirPods / Beats mute gesture (macOS 14+, iOS 17+, where `AVAudioApplication` exists): heard while active, and the
