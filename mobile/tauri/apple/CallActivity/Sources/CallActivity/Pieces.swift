@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import os
 
 // The pieces the presentations share: the creature in its slots, the state's glyphs, your voice's bars, the stack.
 
@@ -10,7 +11,7 @@ struct Still: View {
     var grey = false
 
     var body: some View {
-        if let file = creature?.file, let url = CallStills.url(file), let image = UIImage(contentsOfFile: url.path) {
+        if let file = creature?.file, let image = CallStills.image(file) {
             let still = Image(uiImage: image).resizable().interpolation(.high).scaledToFit()
             if grey {
                 // Offline: the gallery's `grayscale(1) brightness(.85)` at 70 %.
@@ -283,5 +284,42 @@ struct RoundButtonFace: View {
             .foregroundStyle(reduced && fill == Ink.hangUp ? Ink.hangUp : ink)
             .frame(width: size, height: size)
             .background(Circle().fill(reduced ? Color.clear : fill))
+    }
+}
+
+// MARK: - Reading a still
+
+@available(iOS 16.1, *)
+extension CallStills {
+    private final class Once: @unchecked Sendable {
+        private let lock = NSLock()
+        private var seen = Set<String>()
+        func first(_ key: String) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return seen.insert(key).inserted
+        }
+    }
+
+    private static let once = Once()
+    private static let log = Logger(subsystem: "ai.sidevoice.mobile.activity", category: "stills")
+
+    /// Why the still `file` cannot be drawn, or nil when it can: no App Group container (the widget extension is signed
+    /// without the group), no such file (the app wrote it elsewhere, or not at all), or a file that does not decode.
+    static func problem(_ file: String) -> String? {
+        guard directory != nil else { return "no App Group container (\(appGroup))" }
+        guard let url = url(file) else { return "not a file name: \(file)" }
+        guard FileManager.default.fileExists(atPath: url.path) else { return "no file \(file) in \(url.deletingLastPathComponent().path)" }
+        return UIImage(contentsOfFile: url.path) == nil ? "\(file) does not decode as an image" : nil
+    }
+
+    /// The still `file` as an image; nil draws nothing. What stops it is logged once for each cause, so that a card with no
+    /// creature says why in the device's log (the widget extension has no other voice).
+    static func image(_ file: String) -> UIImage? {
+        if let url = url(file), let image = UIImage(contentsOfFile: url.path) { return image }
+        if let reason = problem(file) {
+            if once.first(reason) { log.error("still not drawn: \(reason, privacy: .public)") }
+        }
+        return nil
     }
 }

@@ -482,6 +482,10 @@ impl RoomCall {
         let (done, kept) = mpsc::channel();
         self.then(move |room| {
             let result = if room.page != page {
+                log::info!(
+                    "call stills: {id} is of page {page}, the room is on {}: dropped",
+                    room.page
+                );
                 Ok(())
             } else {
                 let saved = save_still(&room.app, &id, &png, px).map_err(|error| error.to_string());
