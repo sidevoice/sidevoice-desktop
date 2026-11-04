@@ -54,6 +54,7 @@ pub struct Native;
 impl Os for Native {
     const ACTIVATES_AUDIO: bool = true;
     const REPLACES_MEDIA_CONTROLS: bool = true;
+    const OWN_CALL_REPLACES_MEDIA_CONTROLS: bool = true;
 
     fn register<R: Runtime, C: DeserializeOwned>(
         _api: PluginApi<R, C>,

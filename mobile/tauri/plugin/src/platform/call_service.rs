@@ -20,6 +20,11 @@ trait Os {
     /// controls.
     const REPLACES_MEDIA_CONTROLS: bool = false;
 
+    /// Whether the app's own call, which has a surface of its own (iOS: the Live Activity), also takes the place of the
+    /// app's media controls: a second card (Now Playing) beside it would show the call twice (D2 option A). The setting
+    /// "Headset buttons" (option C) would turn this off by choice.
+    const OWN_CALL_REPLACES_MEDIA_CONTROLS: bool = false;
+
     /// Whether the app's own call (not a system's call) still runs a service: Android's foreground service keeps the process
     /// alive while the screen is off. iOS has none: the `audio` background mode does it.
     const OWN_CALL_SERVICE: bool = false;
@@ -89,5 +94,30 @@ pub fn activates_audio(system: bool) -> bool {
 }
 
 pub fn replaces_media_controls(system: bool) -> bool {
-    system && Native::REPLACES_MEDIA_CONTROLS
+    replaces(
+        system,
+        Native::REPLACES_MEDIA_CONTROLS,
+        Native::OWN_CALL_REPLACES_MEDIA_CONTROLS,
+    )
+}
+
+fn replaces(system: bool, system_call: bool, own_call: bool) -> bool {
+    if system {
+        system_call
+    } else {
+        own_call
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::replaces;
+
+    #[test]
+    fn a_call_replaces_the_media_controls_where_its_kind_says_so() {
+        assert!(replaces(true, true, false));
+        assert!(!replaces(true, false, true));
+        assert!(replaces(false, false, true));
+        assert!(!replaces(false, true, false));
+    }
 }
