@@ -125,24 +125,29 @@ public struct ExpandedBody: View {
         self.state = state
     }
 
-    /// The island's own paddings (D-LA-PADDINGS, B2; the corners' curve clipped letters and the hang-up button): top 40
-    /// (speaking 42), 18 at the sides, 18 below the voice views and 14 below speaking; the closed states keep their row
-    /// 10 pt from the bottom. Everything is inside them, so a button sits wholly inside the curve.
+    /// The island's geometry (R2-7, R2-8), made deterministic: the widget zeroes the system's margins at the sides and the
+    /// bottom (`contentMargins`, iOS 17), so these paddings are all there is there: 18 at the sides, 14 below the voice
+    /// views and the reply, 10 below the closed states' row. The top is the system's: its `.bottom` region starts below the
+    /// camera row (`cameraRow`, measured on the device: 36 pt), and `top` takes it to 40 from the island's edge. The island
+    /// is 144 pt tall on a 17 Pro, so each state's content fits in the 104 under that: the reply is three lines, and the
+    /// gaps are what gives first, never a line of text or a button.
     public var body: some View {
         Group { content }
             .environment(\.locale, state.locale)
             .padding(.horizontal, Self.side)
-            .padding(.top, state.phase == .speaking ? 42 : Self.top)
+            .padding(.top, Self.top)
             .padding(.bottom, Self.bottom(state.phase))
     }
 
     public static let side: CGFloat = 18
-    public static let top: CGFloat = 40
+    /// What the system leaves above the `.bottom` region (the camera's row), which the render tests reproduce.
+    public static let cameraRow: CGFloat = 36
+    /// The gap from the camera row to the first element: 40 pt from the island's edge in all.
+    public static let top: CGFloat = 4
 
     public static func bottom(_ phase: CallState.Phase) -> CGFloat {
         switch phase {
-        case .speaking: 14
-        case .listening, .transcribing, .said: 18
+        case .speaking, .listening, .transcribing, .said: 14
         default: 10
         }
     }
@@ -153,15 +158,15 @@ public struct ExpandedBody: View {
         case .speaking:
             Reply(state: state)
                 .overlay(alignment: .topLeading) {
-                    RoundFace(state: state, size: 30).offset(x: 10, y: -32)
+                    RoundFace(state: state, size: 30).offset(x: 10, y: -30)
                 }
         case .listening, .transcribing:
-            VStack(spacing: 12) {
+            VStack(spacing: 10) {
                 VoiceHeader(state: state)
                 VoiceCapsule(state: state)
             }
         case .said:
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 8) {
                 VoiceHeader(state: state)
                 Lines(
                     text: state.text ?? "", size: 15, weight: 550, lineHeight: 19, lines: 2,
@@ -198,7 +203,8 @@ public struct ExpandedBody: View {
     }
 }
 
-/// Idle, working, can't receive, offline: tile 56, the conversation, model · machine, the state, the stack.
+/// Idle, working, can't receive, offline: tile 48, the conversation and the state (the model and the machine stay on the
+/// Lock Screen card: the island has no room for them), the stack.
 @available(iOS 16.1, *)
 struct ClosedHeader: View {
     var state: CallState
@@ -206,29 +212,22 @@ struct ClosedHeader: View {
     var body: some View {
         let palette = Palette.island
         HStack(alignment: .center, spacing: 12) {
-            CreatureTile(state: state, size: 56, palette: palette)
-                .frame(maxHeight: .infinity, alignment: .top)
-                .padding(.top, 1.2)
+            CreatureTile(state: state, size: 48, palette: palette)
             VStack(alignment: .leading, spacing: 0) {
                 Text(state.title)
                     .font(DMSans.font(16, 700)).tracking(-0.16)
                     .foregroundStyle(palette.text)
                     .line(23.52)
-                Text([state.model, state.machine].filter { !$0.isEmpty }.joined(separator: " · "))
-                    .font(DMSans.font(12.5, 400))
-                    .foregroundStyle(palette.text2)
-                    .line(18.38)
                 StateLine(state: state, dark: true, size: 14, lineHeight: 20.58)
-                    .padding(.top, 1.99)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             OthersStack(state: state, palette: palette)
         }
-        .frame(height: 64.47)
+        .frame(height: 48)
     }
 }
 
-/// Listening, transcribing, your words: tile 44, the conversation and the state ("Escuchándote" / "Transcribiendo…"), the
+/// Listening, transcribing, your words: tile 44 (the header 44 tall), the conversation and the state ("Escuchándote" / "Transcribiendo…"), the
 /// stack.
 @available(iOS 16.1, *)
 struct VoiceHeader: View {
@@ -238,12 +237,11 @@ struct VoiceHeader: View {
         let palette = Palette.island
         HStack(alignment: .center, spacing: 12) {
             CreatureTile(state: state, size: 44, palette: palette)
-                .frame(maxHeight: .infinity, alignment: .top)
-            VStack(alignment: .leading, spacing: 1.99) {
+            VStack(alignment: .leading, spacing: 0) {
                 Text(state.title)
                     .font(DMSans.font(16, 700)).tracking(-0.16)
                     .foregroundStyle(palette.text)
-                    .line(23.52)
+                    .line(23)
                 StateLine(state: state, dark: true, size: 14, lineHeight: 20.58)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -282,7 +280,7 @@ struct VoiceCapsule: View {
 
 /// Speaking: the creature (30 pt, beside the camera, 10 pt in from B's edge), the reply's chunk, 15 on 18, four lines, all
 /// at full strength (no karaoke); Saltar 4 pt below it, right. All of it in `.bottom` (variant B): the creature is
-/// drawn 32 pt above the region's top, where the camera row is.
+/// drawn 30 pt above the reply's top (40 from the island's edge), beside the camera: 10 from the edge.
 @available(iOS 16.1, *)
 struct Reply: View {
     var state: CallState
@@ -290,7 +288,7 @@ struct Reply: View {
     var body: some View {
         VStack(alignment: .trailing, spacing: 4) {
             Lines(
-                text: state.text ?? "", size: 15, weight: 550, tracking: -0.075, lineHeight: 18, lines: 4,
+                text: state.text ?? "", size: 15, weight: 550, tracking: -0.075, lineHeight: 18, lines: TextChunker.replyLines,
                 ink: Palette.island.text)
             if state.canSkip {
                 // Never an ellipsis on a button: the label whole, or the glyph alone.

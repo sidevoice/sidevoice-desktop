@@ -45,7 +45,7 @@ final class TextChunksTests: XCTestCase {
 
     func testEveryChunkFitsAndNoneEndsInAnEllipsisOfItsOwn() {
         let text = (0..<12).map { sentence(String(UnicodeScalar(97 + $0)!), words: 7 + $0 % 5) }.joined(separator: " ")
-        for lines in [2, 4] {
+        for lines in [2, 3] {
             let chunks = chunker.chunks(text, lines: lines)
             XCTAssertGreaterThan(chunks.count, 1)
             for chunk in chunks {
@@ -59,9 +59,9 @@ final class TextChunksTests: XCTestCase {
 
     func testAWordLongerThanALineIsBrokenByCharactersAndStillFitsItsLines() {
         let text = String(repeating: "x", count: 100) + " fin."
-        let chunks = chunker.chunks(text, lines: 4)
+        let chunks = chunker.chunks(text, lines: 3)
         XCTAssertEqual(chunks.count, 1)
-        XCTAssertTrue(chunker.fitsText(chunks[0].text, 4))
+        XCTAssertTrue(chunker.fitsText(chunks[0].text, 3))
     }
 
     func testYourWordsAreTwoLineChunksAtMostThreeTheLastEndingInAnEllipsis() {
@@ -84,17 +84,17 @@ final class TextChunksTests: XCTestCase {
         XCTAssertTrue(chunker.chunks("  \n ").isEmpty)
     }
 
-    func testTheRealFontCutsTheDesignsExampleInTwoChunksOfFourLines() {
+    func testTheRealFontCutsTheDesignsExampleInChunksOfAtMostThreeLines() {
         let real = TextChunker.dmSans()
         let text = "He movido el globo encima del bicho: ya no le tapa la cara. También he ajustado la cola para que apunte a "
             + "quien habla, y en el móvil el globo baja un poco para no pisar la cabecera. He revisado el iPad en "
             + "horizontal y ahí también encaja. ¿Lo subo a TestFlight y lo pruebas en el iPhone, o prefieres que antes "
             + "repase el modo oscuro?"
         let chunks = real.chunks(text)
-        XCTAssertEqual(chunks.count, 2)
+        XCTAssertGreaterThan(chunks.count, 2)
         XCTAssertTrue(chunks[0].text.hasPrefix("He movido el globo"))
-        XCTAssertTrue(chunks[1].text.hasPrefix("He revisado el iPad"))
-        for chunk in chunks { XCTAssertTrue(real.fitsText(chunk.text, 4)) }
+        for chunk in chunks { XCTAssertTrue(real.fitsText(chunk.text, TextChunker.replyLines)) }
+        XCTAssertEqual(chunks.map(\.text).joined(separator: " "), text)
     }
 }
 

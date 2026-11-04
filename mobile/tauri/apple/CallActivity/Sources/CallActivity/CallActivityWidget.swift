@@ -15,7 +15,7 @@ public struct CallActivityWidget: Widget {
                 .activitySystemActionForegroundColor(Color(hex: 0x545766))
         } dynamicIsland: { context in
             let state = Self.shown(context)
-            return DynamicIsland {
+            let island = DynamicIsland {
                 DynamicIslandExpandedRegion(.bottom) {
                     ExpandedBody(state: state)
                 }
@@ -28,6 +28,12 @@ public struct CallActivityWidget: Widget {
             }
             .keylineTint(Tone.of(state.tonePhase, dark: true).fill)
             .widgetURL(CallLinks.call)
+            // The system's own margins sat inside ours (R2-7: the content started 36 pt too far in and down, and the
+            // controls were cut off by the island's end): at the sides and the bottom the paddings are `ExpandedBody`'s alone.
+            if #available(iOS 17.0, *) {
+                return island.contentMargins([.leading, .trailing, .bottom], 0, for: .expanded)
+            }
+            return island
         }
     }
 

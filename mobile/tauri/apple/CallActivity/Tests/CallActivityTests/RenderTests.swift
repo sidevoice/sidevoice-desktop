@@ -164,11 +164,12 @@ final class RenderTests: XCTestCase {
     }
 
     /// The expanded island: black, radius 44, the camera at the top; B's content is `ExpandedBody`, which carries its own
-    /// paddings (top 40, 42 while speaking, 18 at the sides, 18 or 14 below), as on the device.
+    /// paddings (18 at the sides, 14 or 10 below, 4 below the camera's row), as on the device.
     func expanded(_ state: CallState, width: CGFloat = 380) -> some View {
         ZStack(alignment: .topLeading) {
             camera(x: (width - 125) / 2)
-            ExpandedBody(state: state)
+            // The system's `.bottom` region starts below the camera's row; its side and bottom margins are zeroed.
+            ExpandedBody(state: state).padding(.top, ExpandedBody.cameraRow)
         }
         .frame(width: width, alignment: .topLeading)
         .background(Color.black)
@@ -244,8 +245,12 @@ final class RenderTests: XCTestCase {
         let png = try XCTUnwrap(image.pngData(), name)
         try png.write(to: Self.out.appendingPathComponent("\(name).png"))
         // The heights the HIG allows: every card and expanded island ≤ 160 pt (HANDOVER §0).
-        if name.hasPrefix("lock-") || name.hasPrefix("expanded-") {
+        if name.hasPrefix("lock-") {
             XCTAssertLessThanOrEqual(image.size.height, 160, "\(name): \(image.size.height) pt tall")
+        }
+        // The expanded island is 144 pt tall on a 17 Pro (R2-8): everything of every state fits, nothing clipped.
+        if name.hasPrefix("expanded-") {
+            XCTAssertLessThanOrEqual(image.size.height, 144.5, "\(name): \(image.size.height) pt tall")
         }
         print("render \(name): \(image.size.width) × \(image.size.height) pt")
     }
