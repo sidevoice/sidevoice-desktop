@@ -1,8 +1,9 @@
 # The iOS project's XcodeGen spec, rendered by the Tauri CLI (`bundle > iOS > template` in tauri.conf.json) with the same
 # values as its own template: the CLI's template (tauri-cli 2.12.0, templates/mobile/ios/project.yml) plus the call's Live
-# Activity (docs/MOBILE.md → "The call's Live Activity"): its Swift package (apple/CallActivity), the app's file that
-# includes the package's App Intents (apple/App), the App Group both targets share, and the widget extension that draws it
-# (apple/Widget). When the CLI's version moves, take its template again and keep these additions (marked "Live Activity").
+# Activity (docs/MOBILE.md → "The call's Live Activity"): its Swift package (apple/CallActivity), the app's file
+# (apple/App), its buttons' App Intents, compiled into the app and the extension (apple/Intents), the App Group both
+# targets share, and the widget extension that draws it (apple/Widget). When the CLI's version moves, take its template
+# again and keep these additions (marked "Live Activity").
 name: sidevoice-mobile
 options:
   bundleIdPrefix: ai.sidevoice.mobile
@@ -46,8 +47,10 @@ targets:
       - path: Externals
         excludes: ["**/*.a"]
       - path: sidevoice-mobile_iOS
-      # Live Activity: the app includes the package's App Intents (its buttons run in the app).
+      # Live Activity: the app's side of the activity, and its buttons' App Intents, compiled into the app and the extension
+      # alike so that each bundle's metadata lists them as its own (they run in the app).
       - path: ../../apple/App
+      - path: ../../apple/Intents
       - path: assets
         buildPhase: resources
         type: folder
@@ -128,6 +131,7 @@ targets:
     deploymentTarget: "16.1"
     sources:
       - path: ../../apple/Widget
+      - path: ../../apple/Intents
     info:
       path: SidevoiceActivity/Info.plist
       properties:

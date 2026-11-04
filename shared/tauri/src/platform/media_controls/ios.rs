@@ -8,8 +8,9 @@
 //! `dlsym`, so that the app does not link symbols an older iOS lacks (a missing one would stop it from launching).
 use super::{CallState, CommandSink, Os};
 use block2::RcBlock;
+use objc2::msg_send;
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, NSObjectProtocol, ProtocolObject};
+use objc2::runtime::{AnyClass, AnyObject, NSObjectProtocol, ProtocolObject};
 use objc2_foundation::{NSNotification, NSNotificationCenter, NSNumber, NSOperationQueue, NSString};
 use std::ffi::{c_void, CStr};
 use std::ptr::NonNull;
@@ -25,7 +26,7 @@ impl Os for Native {
     const NATIVE: bool = true;
 
     fn attach(app: &AppHandle, sink: CommandSink) {
-        apple::attach(app, sink)
+        apple::attach::<Native>(app, sink)
     }
 
     fn update(app: &AppHandle, call: &CallState) {
@@ -91,6 +92,20 @@ impl apple::Os for Native {
         };
         *OBSERVER.lock().unwrap() = Some(Observer(token));
         true
+    }
+
+    /// `-[UIApplication endReceivingRemoteControlEvents]`: without it the app can stay the Now Playing app (an empty card
+    /// on the Lock Screen) after its handlers are gone.
+    fn end_remote_control_events() {
+        let Some(class) = AnyClass::get(c"UIApplication") else { return };
+        // SAFETY: main thread (`apple` calls it there); `+sharedApplication` returns the app (nil before it exists), and
+        // `-endReceivingRemoteControlEvents` takes and returns nothing.
+        unsafe {
+            let application: *mut AnyObject = msg_send![class, sharedApplication];
+            if let Some(application) = application.as_ref() {
+                let _: () = msg_send![application, endReceivingRemoteControlEvents];
+            }
+        }
     }
 
     fn stop_listening_for_mute_gesture() {

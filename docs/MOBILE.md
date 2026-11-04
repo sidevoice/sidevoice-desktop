@@ -277,8 +277,8 @@ call service (`sidevoice-mobile-plugin`'s `call_service`), started and ended as 
   the call (an emergency call on, the registration failing) leaves the call the app's own: the service's focus.
   The manifest adds `MANAGE_OWN_CALLS` (granted at install), `FOREGROUND_SERVICE_PHONE_CALL` (the service is also of type
   `phoneCall`) and `MODIFY_AUDIO_SETTINGS` (below).
-- **Mute.** A mute or unmute from the system's side (CallKit's `CXSetMutedCallAction`, Telecom's `isMuted`) is set on the
-  page's own mute, as the person's (`window.__sidevoiceHost.run({command: "mute", muted, page, since})`; nothing when it is
+- **Mute.** A mute or unmute from the system's side (CallKit's `CXSetMutedCallAction`, Telecom's `isMuted`) is the voice
+  host's native mute of the call ("The call surface" below), and is set on the page's own mute, as the person's (`window.__sidevoiceHost.run({command: "mute", muted, page, since})`; nothing when it is
   so already), carrying the call it is for as the interruptions' commands do. The page's mute goes the other way when it
   changes: as a `CXSetMutedCallAction` the app asks for, and on Android as the system's microphone mute (turned off again
   when the call ends, if the service turned it on), so a car kit shows what the page shows.
@@ -332,9 +332,21 @@ research/live-activity-design-2026-11-02 (HANDOVER.md); this is how their data g
 - **What the person does on a surface** comes back as the service's event `{"type":"action","action":…}` (`mute`,
   `unmute`, `skip`, `cancel-send`, `hang-up`, `open-conversations`; `CallEvent::Action`), from the notification's buttons
   or the Live Activity's intents, or on iOS as the link the app is opened with (`sidevoice://conversations`, Tauri's
-  `RunEvent::Opened`). The app runs it on the page's call as the page's own command (`mute` with the value, `skip-reply`,
-  `cancel-input`, `hang-up`, `open-conversations`), for the current page and call. The audio route is not one of them:
-  the system's route is the native side's to switch.
+  `RunEvent::Opened`). Each call action has one native owner, the one the page's own button ends in too, and the app
+  calls it itself (`Room::act`, `mobile/tauri/src/call.rs`): with the phone locked the WebView may not run script, so
+  nothing waits for the page. **Mute** is the voice host's mute of the room's call, the lane the microphone is routed to
+  (`AppHost::mute_microphone`, the same `VoiceState` mute as the page's `voice_mute`), and the call's surfaces show it at
+  once (the toggle's value and the system's call agree); **cancel send** is its cancel of the unreported turn
+  (`AppHost::cancel_microphone_input`, as `voice_cancel_input`); **skip** its cancel of what is said
+  (`AppHost::skip_playing`, as `voice_cancel_say`); **hang up** drops what is said, stops every call of the page and
+  routes the microphone nowhere (`AppHost::stop_calls`; the audio session is given back once the last call's audio has
+  stopped), and ends the call's service and its Live Activity; the page's reports of that call joined (sent before it
+  ran the hang-up) do not start it again. The page is told too, first, as its own command for its call (`mute` with the
+  value, `skip-reply`, `cancel-input`, `hang-up`, `open-conversations`), and runs it when it runs again: it shows what was
+  done and does what only it can (the room told of the hang-up, its lanes disposed of; a stop of a stopped call still
+  answers). The stack of the other conversations is the page's alone. The audio route is not one of them: the system's
+  route is the native side's to switch. A headset's play/pause and the system's call's mute go through the same native
+  mute, and the system's call ending from outside the app hangs up natively too.
 - **Android's card** (`CallCard.kt`, `CallCardViews.kt`, `res/layout/call_card*.xml` in the plugin): the call service's
   notification is a `DecoratedCustomViewStyle` (the system draws the header, with no time) whose RemoteViews draw the
   design's Lock Screen card in dp: expanded (the tile, the title, model · machine, the state with its dot and, while
@@ -371,14 +383,15 @@ itself (D-NO-CALLKIT-DEFAULT). Nothing runs before iOS 16.1 or while the person 
 its buttons need iOS 17 (before that it only shows the call).
 
 - **Where the code is.** ActivityKit has no Objective-C API, so the activity is Swift, in one local package,
-  `mobile/tauri/apple/CallActivity`: `CallActivity` (the attributes and state, the views, the App Intents and DM Sans,
-  OFL), linked by the app and by the widget extension, and `CallActivityApp` (start, update, end; the app only). The
+  `mobile/tauri/apple/CallActivity`: `CallActivity` (the attributes and state, the views and DM Sans, OFL), linked by the
+  app and by the widget extension, and `CallActivityApp` (start, update, end; the app only). The
   Rust side (`mobile/tauri/plugin/src/platform/call_surface/ios.rs`) reaches it by name, `SidevoiceCallActivity`
   (`start:`, `show:`, `end`, each with the call's details as JSON), from the call's service functions
   (`start_call_service` for the app's own call, `update_call_service`, `stop_call_service`).
 - **The Xcode project** gets it through the Tauri CLI's own input for it, a custom XcodeGen template
-  (`mobile/tauri/ios-project.yml`, `bundle > iOS > template`): the CLI's template plus the package, the app's file that
-  lists the package's intents (`mobile/tauri/apple/App`), the App Group `group.ai.sidevoice.mobile` on the app and the
+  (`mobile/tauri/ios-project.yml`, `bundle > iOS > template`): the CLI's template plus the package, the app's file
+  (`mobile/tauri/apple/App`), the buttons' App Intents (`mobile/tauri/apple/Intents`, compiled into the app and into the
+  extension), the App Group `group.ai.sidevoice.mobile` on the app and the
   extension, and the widget extension `SidevoiceActivity` (`ai.sidevoice.mobile.activity`, `mobile/tauri/apple/Widget`),
   embedded in the app, at the app's version. When the CLI's version moves, its template is taken again and these
   additions kept. `Info.ios.plist` declares `NSSupportsLiveActivities` and the app's URL scheme, `sidevoice`
@@ -386,22 +399,28 @@ its buttons need iOS 17 (before that it only shows the call).
 - **The activity's life.** The system can end the activity (or the person can swipe it away) during a call. The app
   follows its state (`ActivityLifecycle`, `activityStateUpdates`), drops it when it is over and requests a new one with the
   next state (at once if the app is in front, else when it next is); at launch and whenever it comes to the front it ends
-  the app's activities that are not the call's (what a crash left). The buttons log `Sidevoice: intent …` when they run.
+  the app's activities that are not the call's (what a crash left). The buttons log each step to the unified log, subsystem `ai.sidevoice`, category `intent`.
 - **Updates.** Every change goes out at once. **The words** (the expanded island only: never on the Lock Screen, in the
   compact or minimal) are chunked by the app, where the updates are made (`TextChunker`, `TextPager` in the package; the
   port of research/live-activity-design-2026-11-02/src/text-chunks.js): the page's `page.text` is cut into chunks that fit
   four lines (your words: two lines, 2.5 s each, at most three, the last ending in "…"), measured with DM Sans 550 at 15 pt
   at 330 pt, whole sentences first, then a clause break, then a word; no karaoke. One update per chunk: a chunk stays at
   least 2.5 s and the next shows only once the voice (`page.lit`) has reached its first word, jumping to the chunk the voice
-  is in, never ahead of it; the controller wakes itself when the next is due. If a device ever has to cut a chunk it logs its length (never its words)
-  it (category `text`). During your words the header shows the call's real state (working, with its timer). Each update moves the activity's
+  is in, never ahead of it; the controller wakes itself when the next is due. If a device ever has to cut a chunk it logs its length, never its words (category `text`). During your words the header shows the call's real state (working, with its timer). Each update moves the activity's
+
   `staleDate` three minutes ahead, and the activity is updated every minute while the call lasts even when nothing
   changed, so only an activity the app stopped updating goes stale; a stale one draws the offline state with the page's
   offline word (D-LA-OFFLINE). The updates and the end reach ActivityKit one after the other, in order. A call that
   starts while the app is in the background (iOS lets an app request an activity only in front) gets its activity when
   the app next comes to the front, if the call still lasts. A system's call the system refuses goes on as the app's own,
   with its activity.
-- **Its buttons** are App Intents (`LiveActivityIntent`, run in the app's process, not offered to Shortcuts): mute (a
+- **Its buttons** are App Intents (`LiveActivityIntent`, run in the app's process, not offered to Shortcuts), declared in
+  the app's and the extension's own code (`mobile/tauri/apple/Intents/CallIntents.swift`, in both targets), as Apple's
+  Live Activity intents are, so that each bundle's App Intents metadata lists them as its own. Not in the package: the
+  device registers no metadata for intents of a statically linked package (`linkd`: `aggregateMetadataIsEmpty`, and every
+  tap fails with "There is no metadata for SetMicOff"; TestFlight build 26), and `cargo xtask mobile check-ios` and the
+  archive's check refuse an intent of the package or a package the metadata includes. The extension hands the package's
+  views their buttons (`CallControls`); without them (the renders) the views draw the same faces. Mute (a
   toggle with the value), skip, cancel send and hang up ask the Rust side for the page's action through the class it
   defines, `SidevoiceCallSurfaceActions` (`act:`), which reports `CallEvent::Action`. The audio switch, shown only while
   headphones are connected (D-LA-ROUTE), is the system's: it overrides the output to the speaker, or back

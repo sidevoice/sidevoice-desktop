@@ -546,11 +546,59 @@ impl<A: LaneAudio> VoiceState<A> {
     /// Kept for the call from the lane's creation on, and applied to it once it exists.
     pub async fn mute(&self, key: &str, muted: bool) -> Result<(), Refusal> {
         let lane = self.lane(key).await?;
+        Self::mute_lane(&lane, muted).await;
+        Ok(())
+    }
+
+    /// The one place a lane's microphone is muted: the page's `voice_mute` and a surface's mute ([`Self::mute_routed`])
+    /// both end here.
+    async fn mute_lane(lane: &CallLane<A::Port>, muted: bool) {
         lane.muted.store(muted, Ordering::SeqCst);
         if let Some(running) = lane.call.lock().await.as_ref() {
             running.call.mute(lane.muted.load(Ordering::SeqCst));
         }
-        Ok(())
+    }
+
+    /// The lane the microphone is routed to now: the room's call, the one a surface (the Lock Screen) acts on.
+    async fn routed(&self) -> Option<Arc<CallLane<A::Port>>> {
+        self.route.lock().await.as_ref().and_then(Weak::upgrade)
+    }
+
+    /// Mutes or unmutes the lane the microphone is routed to, from the native side: the same mute the page's `voice_mute`
+    /// makes, for a surface whose action must not wait for the page to run. Whether there was such a lane.
+    pub async fn mute_routed(&self, muted: bool) -> bool {
+        let Some(lane) = self.routed().await else { return false };
+        Self::mute_lane(&lane, muted).await;
+        true
+    }
+
+    /// Cancels what the person said and is not reported yet, on the lane the microphone is routed to, from the native
+    /// side: the same cancel the page's `voice_cancel_input` makes. Whether there was such a lane.
+    pub async fn cancel_routed_input(&self) -> bool {
+        let Some(lane) = self.routed().await else { return false };
+        Self::cancel_lane_input(&lane).await;
+        true
+    }
+
+    /// Stops every call of the current page from the native side (a surface's hang-up): no listening, no speaking, and
+    /// the microphone routed nowhere, so the devices close once the last call's audio has stopped. The lanes stay: the page
+    /// disposes of them when it runs again (a stop of a stopped call still answers with its idle state). How many calls
+    /// were stopped.
+    pub async fn stop_current_calls(&self) -> usize {
+        let page = self.page.load(Ordering::SeqCst);
+        {
+            let mut route = self.route.lock().await;
+            let _ = self.audio.route_input(None).await;
+            *route = None;
+        }
+        let lanes: Vec<_> = self.calls.lock().await.values().filter(|lane| lane.page == page).cloned().collect();
+        let mut stopped = 0;
+        for lane in lanes {
+            if lane.stop().await {
+                stopped += 1;
+            }
+        }
+        stopped
     }
 
     /// Stops what every call is saying now, from the native side: the same cancel the page's `voice_cancel_say` makes, for a
@@ -568,10 +616,16 @@ impl<A: LaneAudio> VoiceState<A> {
     /// Before the call there is nothing to cancel.
     pub async fn cancel_input(&self, key: &str) -> Result<(), Refusal> {
         let lane = self.lane(key).await?;
+        Self::cancel_lane_input(&lane).await;
+        Ok(())
+    }
+
+    /// The one place a lane's unreported input is cancelled: the page's `voice_cancel_input` and a surface's cancel
+    /// ([`Self::cancel_routed_input`]) both end here.
+    async fn cancel_lane_input(lane: &CallLane<A::Port>) {
         if let Some(running) = lane.call.lock().await.as_ref() {
             running.call.cancel_input();
         }
-        Ok(())
     }
 
     /// Closes the call's open turn now with what was captured so far; resolves once it is closed (not transcribed).

@@ -22,11 +22,13 @@
 		326C943893F189CEB5E93D25 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5110D95F2FDA8A4F485C96AA /* SwiftUI.framework */; };
 		32B21127FDFFA339B7BA0730 /* CallActivity in Frameworks */ = {isa = PBXBuildFile; productRef = 4D6578D13730D16FB786D0F3 /* CallActivity */; };
 		36C2D506005411E63AB37275 /* onnxruntime.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = E91912903FD33CC85D2985D4 /* onnxruntime.xcframework */; };
+		4157A801829040DDCB1D2B76 /* CallIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = B84A32BB39D31571CE7230E4 /* CallIntents.swift */; };
 		4881460A21EAA46E7177A20C /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = BE293A96151AB5D44D76E3EC /* libapp.a */; };
 		4FD31A2A4F20D37E980F9672 /* AVFAudio.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0C54967DE38A99011EDDA22E /* AVFAudio.framework */; };
 		5294B7DAFD44896A473565AF /* SidevoiceActivity.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 61C7ECE496BB70EEFE453E6C /* SidevoiceActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		556E439FD5DE6CE9EB256E45 /* sherpa-onnx.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 14CB5A0F01AD530B798B8BA3 /* sherpa-onnx.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		5F7C985DA86F97E397CC522E /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = DEBD9545CF90786BDDD5D639 /* main.mm */; };
+		7AB1FE8A2E6DB45D6D128206 /* CallIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = B84A32BB39D31571CE7230E4 /* CallIntents.swift */; };
 		7CD5321C54D03687539329B0 /* CallActivity in Frameworks */ = {isa = PBXBuildFile; productRef = A105F42B82FF912025B03552 /* CallActivity */; };
 		80A03190BFECEF57B6FF0F92 /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 46B600F3D87A8B86B45A62C9 /* MetalKit.framework */; };
 		8A4474978DCA719C4F11E7AE /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EF7D695C7A6ACAD12DA94258 /* UIKit.framework */; };
@@ -130,6 +132,7 @@
 		AF77655BE2E35D9CB501F610 /* android.rs */ = {isa = PBXFileReference; path = android.rs; sourceTree = "<group>"; };
 		B5E6137564CC46CBF5FDCAF7 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		B7E57CBB3A47BDAD3039528B /* ios.rs */ = {isa = PBXFileReference; path = ios.rs; sourceTree = "<group>"; };
+		B84A32BB39D31571CE7230E4 /* CallIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallIntents.swift; sourceTree = "<group>"; };
 		BCBE00F494A76306AC20E930 /* SidevoiceActivityWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidevoiceActivityWidgets.swift; sourceTree = "<group>"; };
 		BE293A96151AB5D44D76E3EC /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 		C1188ECF695A1AC9631488B1 /* tls.rs */ = {isa = PBXFileReference; path = tls.rs; sourceTree = "<group>"; };
@@ -336,6 +339,15 @@
 			path = Externals;
 			sourceTree = "<group>";
 		};
+		A4DE6BAE850EF9B695E10274 /* Intents */ = {
+			isa = PBXGroup;
+			children = (
+				B84A32BB39D31571CE7230E4 /* CallIntents.swift */,
+			);
+			name = Intents;
+			path = ../../apple/Intents;
+			sourceTree = "<group>";
+		};
 		A4F4ADFF1EE4A1E8FEA820B9 /* tls */ = {
 			isa = PBXGroup;
 			children = (
@@ -373,6 +385,7 @@
 				180609C9C60033406A6A7F17 /* LaunchScreen.storyboard */,
 				34E8CADBEC923B4BCFEDC00C /* App */,
 				988857BD3C85CA7F7B8A7871 /* Externals */,
+				A4DE6BAE850EF9B695E10274 /* Intents */,
 				518B1E383890D80DE5DB041D /* Packages */,
 				ADC921D34DE174F794860973 /* sidevoice-mobile_iOS */,
 				F010B9C6C3EF3F8A0AFA11F5 /* Sources */,
@@ -576,6 +589,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				2B002C70372690F350A68811 /* CallActivityIntents.swift in Sources */,
+				7AB1FE8A2E6DB45D6D128206 /* CallIntents.swift in Sources */,
 				5F7C985DA86F97E397CC522E /* main.mm in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -584,6 +598,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				4157A801829040DDCB1D2B76 /* CallIntents.swift in Sources */,
 				2E3D49D4719781A2C1CDA885 /* SidevoiceActivityWidgets.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

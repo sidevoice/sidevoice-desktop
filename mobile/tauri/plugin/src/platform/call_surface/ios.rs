@@ -108,7 +108,10 @@ define_class!(
         fn act(action: &NSString) {
             let on_action = ON_ACTION.lock().ok().and_then(|current| current.clone());
             match on_action {
-                Some(on_action) => on_action(&action.to_string()),
+                Some(on_action) => {
+                    log::info!("call surface: {action} asked for by the Live Activity");
+                    on_action(&action.to_string())
+                }
                 None => log::warn!("call surface: {action} asked for with no call running"),
             }
         }
