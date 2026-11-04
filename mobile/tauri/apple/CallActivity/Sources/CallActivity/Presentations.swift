@@ -116,7 +116,8 @@ struct MutePill: View {
 }
 
 /// The expanded island's content below the camera (variant B, D-LA-EXPANDED-B): the header, then the controls, your
-/// bars, your words or the reply. 344 pt wide on a 17 Pro; the island adds its edges.
+/// bars, your words or the reply. 344 pt wide in a 380-pt island; the island adds its edges. Speaking's creature is the
+/// `.leading` region's (`ExpandedLeading`).
 @available(iOS 16.1, *)
 public struct ExpandedBody: View {
     public var state: CallState
@@ -128,9 +129,9 @@ public struct ExpandedBody: View {
     /// The island's geometry (R2-7, R2-8), made deterministic: the widget zeroes the system's margins at the sides and the
     /// bottom (`contentMargins`, iOS 17), so these paddings are all there is there: 18 at the sides, 14 below the voice
     /// views and the reply, 10 below the closed states' row. The top is the system's: its `.bottom` region starts below the
-    /// camera row (`cameraRow`, measured on the device: 36 pt), and `top` takes it to 40 from the island's edge. The island
-    /// is 144 pt tall on a 17 Pro, so each state's content fits in the 104 under that: the reply is three lines, and the
-    /// gaps are what gives first, never a line of text or a button.
+    /// camera row (36.7 pt measured on a 17 Pro Max; `cameraRow` is the gallery's 36), and `top` takes it to 40 from the
+    /// island's edge. The budget is 144 pt (D-LA-144), so each state's content fits in the 104 under that: the reply is
+    /// three lines, and the gaps are what gives first, never a line of text or a button.
     public var body: some View {
         Group { content }
             .environment(\.locale, state.locale)
@@ -157,11 +158,8 @@ public struct ExpandedBody: View {
         switch state.phase {
         case .speaking:
             Reply(state: state)
-                .overlay(alignment: .topLeading) {
-                    RoundFace(state: state, size: 30).offset(x: 10, y: -30)
-                }
         case .listening, .transcribing:
-            VStack(spacing: 10) {
+            VStack(spacing: 8) {
                 VoiceHeader(state: state)
                 VoiceCapsule(state: state)
             }
@@ -169,7 +167,7 @@ public struct ExpandedBody: View {
             VStack(alignment: .leading, spacing: 8) {
                 VoiceHeader(state: state)
                 Lines(
-                    text: state.text ?? "", size: 15, weight: 550, lineHeight: 19, lines: 2,
+                    text: state.text ?? "", size: 15, weight: 550, lineHeight: 18, lines: TextChunker.saidLines,
                     ink: Palette.island.text)
             }
         case .idle, .working, .holding, .offline:
@@ -219,6 +217,7 @@ struct ClosedHeader: View {
                     .foregroundStyle(palette.text)
                     .line(23.52)
                 StateLine(state: state, dark: true, size: 14, lineHeight: 20.58)
+                    .padding(.top, 1.99)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             OthersStack(state: state, palette: palette)
@@ -227,8 +226,8 @@ struct ClosedHeader: View {
     }
 }
 
-/// Listening, transcribing, your words: tile 44 (the header 44 tall), the conversation and the state ("Escuchándote" / "Transcribiendo…"), the
-/// stack.
+/// Listening, transcribing, your words: tile 44, the conversation and the state ("Escuchándote" / "Transcribiendo…"), the
+/// stack. 46.09 tall: the title and state lines (23.52, 1.99, 20.58), the tile centred on them.
 @available(iOS 16.1, *)
 struct VoiceHeader: View {
     var state: CallState
@@ -241,13 +240,14 @@ struct VoiceHeader: View {
                 Text(state.title)
                     .font(DMSans.font(16, 700)).tracking(-0.16)
                     .foregroundStyle(palette.text)
-                    .line(23)
+                    .line(23.52)
                 StateLine(state: state, dark: true, size: 14, lineHeight: 20.58)
+                    .padding(.top, 1.99)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             OthersStack(state: state, palette: palette)
         }
-        .frame(height: 50.05)
+        .frame(height: 46.09)
     }
 }
 
@@ -278,9 +278,8 @@ struct VoiceCapsule: View {
     }
 }
 
-/// Speaking: the creature (30 pt, beside the camera, 10 pt in from B's edge), the reply's chunk, 15 on 18, four lines, all
-/// at full strength (no karaoke); Saltar 4 pt below it, right. All of it in `.bottom` (variant B): the creature is
-/// drawn 30 pt above the reply's top (40 from the island's edge), beside the camera: 10 from the edge.
+/// Speaking: the reply's chunk, 15 on 18, three lines, all at full strength (no karaoke); Saltar 4 pt below it, right.
+/// The creature beside the camera is `ExpandedLeading`'s.
 @available(iOS 16.1, *)
 struct Reply: View {
     var state: CallState
@@ -321,6 +320,28 @@ struct Reply: View {
         }
     }
 
+}
+
+/// Expanded, leading: speaking's creature, a 30-pt circle beside the camera, 28 pt from the island's edge (B's 18 and
+/// 10). It has its own region because the device clips `.bottom`'s content at that region's top, below the camera row;
+/// 30 pt stays within the row (36.7 measured), so it never pushes `.bottom` down. Empty in every other state.
+@available(iOS 16.1, *)
+public struct ExpandedLeading: View {
+    public var state: CallState
+
+    public init(state: CallState) {
+        self.state = state
+    }
+
+    public static let face: CGFloat = 30
+    public static let inset: CGFloat = ExpandedBody.side + 10
+
+    public var body: some View {
+        if state.phase == .speaking {
+            RoundFace(state: state, size: Self.face)
+                .padding(.leading, Self.inset)
+        }
+    }
 }
 
 /// Compact, leading: the face, a 26-pt circle with the whole creature.

@@ -40,7 +40,7 @@ final class RenderTests: XCTestCase {
         state.routeName = "AirPods Pro"
         switch phase {
         case .speaking:
-            // The first chunk of the reply (four measured lines), as the chunker cuts it.
+            // The first chunk of the reply (three measured lines at most), as the chunker cuts it.
             state.text = Self.reply[0]
         case .said:
             state.text = "Sí, súbelo a TestFlight, y de paso mira si el globo sigue tapando la cabecera en el iPad en "
@@ -164,12 +164,16 @@ final class RenderTests: XCTestCase {
     }
 
     /// The expanded island: black, radius 44, the camera at the top; B's content is `ExpandedBody`, which carries its own
-    /// paddings (18 at the sides, 14 or 10 below, 4 below the camera's row), as on the device.
+    /// paddings (18 at the sides, 14 or 10 below, 4 below the camera's row), as on the device; speaking's creature is
+    /// `ExpandedLeading`, beside the camera.
     func expanded(_ state: CallState, width: CGFloat = 380) -> some View {
         ZStack(alignment: .topLeading) {
             camera(x: (width - 125) / 2)
-            // The system's `.bottom` region starts below the camera's row; its side and bottom margins are zeroed.
-            ExpandedBody(state: state).padding(.top, ExpandedBody.cameraRow)
+            // The `.leading` region, beside the camera: its content centred on the camera's row.
+            ExpandedLeading(state: state).frame(height: ExpandedBody.cameraRow)
+            // The system's `.bottom` region starts below the camera's row and clips its content at its bounds, as the
+            // device does; its side and bottom margins are zeroed.
+            ExpandedBody(state: state).clipped().padding(.top, ExpandedBody.cameraRow)
         }
         .frame(width: width, alignment: .topLeading)
         .background(Color.black)
@@ -244,12 +248,12 @@ final class RenderTests: XCTestCase {
         let image = try XCTUnwrap(renderer.uiImage, name)
         let png = try XCTUnwrap(image.pngData(), name)
         try png.write(to: Self.out.appendingPathComponent("\(name).png"))
-        // The heights the HIG allows: every card and expanded island ≤ 160 pt (HANDOVER §0).
-        if name.hasPrefix("lock-") {
+        // The height the HIG allows: every card ≤ 160 pt (HANDOVER §0).
+        if name.hasPrefix("lock-") || name.hasPrefix("promax-lock-") {
             XCTAssertLessThanOrEqual(image.size.height, 160, "\(name): \(image.size.height) pt tall")
         }
-        // The expanded island is 144 pt tall on a 17 Pro (R2-8): everything of every state fits, nothing clipped.
-        if name.hasPrefix("expanded-") {
+        // The expanded island's budget is 144 pt (R2-8, D-LA-144): everything of every state fits, nothing clipped.
+        if name.hasPrefix("expanded-") || name.hasPrefix("promax-expanded-") {
             XCTAssertLessThanOrEqual(image.size.height, 144.5, "\(name): \(image.size.height) pt tall")
         }
         print("render \(name): \(image.size.width) × \(image.size.height) pt")
@@ -260,12 +264,13 @@ final class RenderTests: XCTestCase {
 @available(iOS 17.0, *)
 @MainActor
 final class LinesTests: XCTestCase {
-    func testALongPageEndsAfterAWholeWord() {
-        let text = RenderTests.sample(.speaking).text! + " Y luego seguimos con el modo oscuro, que también tiene lo suyo."
+    func testALongPageEndsAfterAWholeWord() throws {
+        // The whole reply, not a chunk: longer than four lines whatever the chunks' size.
+        let text = RenderTests.replyText + " Y luego seguimos con el modo oscuro, que también tiene lo suyo."
         let lines = Lines.lines(text, width: 344, font: DMSans.ctFont(15, 550), tracking: -0.075, max: 4)
         XCTAssertEqual(lines.count, 4)
         XCTAssertEqual(lines.filter(\.ellipsis).count, 1)
-        let last = lines[3]
+        let last = try XCTUnwrap(lines.last)
         XCTAssertTrue(last.ellipsis)
         let whole = text as NSString
         // The character after the cut is not a letter of the same word.

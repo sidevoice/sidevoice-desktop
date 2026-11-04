@@ -24,7 +24,7 @@ public struct TextChunker {
     /// The width a text's width is measured in a line of; the island's narrowest column is 344 pt (17 Pro: 380 - 2 x 18),
     /// 4 % spare for the difference between this greedy wrap and SwiftUI's line breaking.
     public static let width: CGFloat = 330
-    /// The reply: three lines, with Saltar below (the island is 144 pt tall on a 17 Pro: R2-8).
+    /// The reply: three lines, with Saltar below (the island's budget is 144 pt: R2-8, D-LA-144).
     public static let replyLines = 3
     /// Your words: two lines under the header, at most three chunks.
     public static let saidLines = 2

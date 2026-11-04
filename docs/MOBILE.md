@@ -402,10 +402,12 @@ its buttons need iOS 17 (before that it only shows the call).
   the app's activities that are not the call's (what a crash left). The buttons log each step to the unified log, subsystem `ai.sidevoice`, category `intent`.
 - **The expanded island's geometry** is deterministic: the widget zeroes the system's margins at the sides and the bottom
   (`contentMargins`, iOS 17), and `ExpandedBody` carries 18 pt at the sides, 14 below the voice views and the reply, 10 below
-  the closed states, 4 below the camera's row (the `.bottom` region starts 36 pt down on a 17 Pro, so 40 from the island's edge).
-  The island is 144 pt tall there: the reply is three lines and Saltar, listening a 44 header, a 10 gap and the capsule, your
-  words a 44 header and two lines, the closed states a 48 tile row and the 36 controls (no model and machine line in the
-  island: they stay on the card). Slack, if a device measures any, comes out of the gaps, never of a line or a button.
+  the closed states, 4 below the camera's row (the `.bottom` region starts 36.7 pt down on a 17 Pro Max, so about 40 from
+  the island's edge). The budget is 144 pt (D-LA-144): the reply is three lines and Saltar, listening a 46 header (tile 44),
+  an 8 gap and the capsule, your words the same header and two lines of 15 on 18, the closed states a 48 tile row and the
+  36 controls (no model and machine line in the island: they stay on the card). Slack, if a device measures any, comes out
+  of the gaps, never of a line or a button. Speaking's creature (30 pt) sits beside the camera in the `.leading` region
+  (`ExpandedLeading`; empty in every other state): the device clips `.bottom`'s content at that region's top.
 - **Updates.** Every change goes out at once. **The words** (the expanded island only: never on the Lock Screen, in the
   compact or minimal) are chunked by the app, where the updates are made (`TextChunker`, `TextPager` in the package; the
   port of research/live-activity-design-2026-11-02/src/text-chunks.js): the page's `page.text` is cut into chunks that fit
@@ -446,7 +448,7 @@ its buttons need iOS 17 (before that it only shows the call).
 - **Evidence.** `cargo xtask mobile renders ios` runs the package's tests on an iPhone Pro Max simulator: every state's
   views drawn to PNG at 3× (`ImageRenderer`) into dist/live-activity/, one sheet per state laid out as the gallery's
   `pieces-<state>.png`, plus the mic off, Always-On, stale, the reply's and your words' chunks, missing stills, the audio on the speaker, no headphones,
-  long texts and a Pro Max; it also fails a card taller than 160 pt or an expanded island taller than 144 pt (a 17 Pro's). CI uploads them as
+  long texts and a Pro Max; it also fails a card taller than 160 pt or an expanded island taller than 144 pt (D-LA-144), its `.bottom` content clipped at the region's top as on the device. CI uploads them as
   `Sidevoice-ios-live-activity-renders`.
 
 ## Building
