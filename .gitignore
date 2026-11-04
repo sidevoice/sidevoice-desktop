@@ -28,3 +28,7 @@ mobile/tauri/frameworks/
 # The call's Live Activity package (mobile/tauri/apple/CallActivity): what SwiftPM and Xcode leave beside it.
 mobile/tauri/apple/CallActivity/.build/
 mobile/tauri/apple/CallActivity/.swiftpm/
+# The Live Activity's Simulator harness (mobile/tauri/apple/Harness): the project XcodeGen makes of its spec, and the
+# Info.plists and entitlements it writes.
+mobile/tauri/apple/Harness/*.xcodeproj/
+mobile/tauri/apple/Harness/Generated/

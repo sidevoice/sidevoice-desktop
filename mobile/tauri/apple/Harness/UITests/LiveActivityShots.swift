@@ -1,0 +1,138 @@
+import XCTest
+
+/// Every fixture's Live Activity as the system draws it on the Simulator: the Lock Screen card, the compact island (the
+/// app in the background), the expanded island (a long press on it) and the minimal island (beside a second activity).
+/// The PNGs go to `$LA_OUT` as `<presentation>-<fixture>-<appearance>.png`, `$LA_APPEARANCE` being the Simulator's
+/// (`cargo xtask mobile live-activity ios` sets both, and the appearance); beside each expanded shot, the frames (pt) of
+/// what SpringBoard shows at the top of the screen, as JSON. `$LA_ONLY` (fixture names, comma-separated) shoots only those.
+final class LiveActivityShots: XCTestCase {
+    let environment = ProcessInfo.processInfo.environment
+    let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+
+    lazy var out: URL = {
+        let path = environment["LA_OUT"] ?? NSTemporaryDirectory() + "live-activity-sim"
+        let url = URL(fileURLWithPath: path, isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }()
+
+    lazy var appearance = environment["LA_APPEARANCE"] ?? "light"
+
+    override func setUp() {
+        continueAfterFailure = true
+    }
+
+    func testEveryFixture() throws {
+        let only = Set((environment["LA_ONLY"] ?? "").split(separator: ",").map(String.init))
+        let fixtures = Fixture.all.filter { only.isEmpty || only.contains($0.name) }
+        XCTAssertFalse(fixtures.isEmpty, "no fixture named in LA_ONLY")
+        for fixture in fixtures {
+            XCTContext.runActivity(named: fixture.name) { _ in shoot(fixture) }
+        }
+    }
+
+    /// Starts `fixture`'s activity in the harness app, then takes its shots.
+    func shoot(_ fixture: Fixture) {
+        let app = XCUIApplication()
+        app.launchEnvironment["LA_FIXTURE"] = fixture.json
+        if fixture.second { app.launchEnvironment["LA_SECOND"] = "1" }
+        app.launch()
+        let status = app.staticTexts["harness.status"]
+        let started = NSPredicate(format: "label == 'started' OR label BEGINSWITH 'failed'")
+        let waited = XCTWaiter.wait(for: [expectation(for: started, evaluatedWith: status)], timeout: 30)
+        guard waited == .completed, status.label == "started" else {
+            XCTFail("\(fixture.name): the activity did not start (\(status.exists ? status.label : "no status"))")
+            save("failed-\(fixture.name)")
+            return
+        }
+
+        if fixture.presentations.contains(.lock) {
+            // The Lock Screen: locked, then woken, with the app's activity on it; then unlocked, back to the app.
+            XCUIDevice.shared.perform(NSSelectorFromString("pressLockButton"))
+            settle(1.5)
+            XCUIDevice.shared.press(.home)
+            settle(2)
+            save(name(.lock, fixture))
+            XCUIDevice.shared.press(.home)
+            settle(1.5)
+        }
+
+        // The app in the background: the island shows the activity, compact (minimal beside a second one).
+        XCUIDevice.shared.press(.home)
+        settle(2)
+        if fixture.presentations.contains(.compact) { save(name(.compact, fixture)) }
+        if fixture.presentations.contains(.minimal) { save(name(.minimal, fixture)) }
+
+        if fixture.presentations.contains(.expanded) {
+            // A long press on the island expands it.
+            let screen = springboard.frame
+            springboard.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: screen.width / 2, dy: Self.islandCenterY))
+                .press(forDuration: 1)
+            settle(1.5)
+            let shot = name(.expanded, fixture)
+            save(shot)
+            frames(shot)
+            XCUIDevice.shared.press(.home)
+            settle(1)
+        }
+    }
+
+    /// The island's centre, from the top of the screen (pt): iPhone 17 Pro, top 11 and 36.67 tall (spec/GEOMETRY.md).
+    static let islandCenterY: CGFloat = 29
+
+    func name(_ presentation: Fixture.Presentation, _ fixture: Fixture) -> String {
+        "\(presentation.rawValue)-\(fixture.name)-\(appearance)"
+    }
+
+    func settle(_ seconds: TimeInterval) {
+        Thread.sleep(forTimeInterval: seconds)
+    }
+
+    /// The whole screen as it is now, to `<name>.png`.
+    func save(_ name: String) {
+        let png = XCUIScreen.main.screenshot().pngRepresentation
+        do {
+            try png.write(to: out.appendingPathComponent("\(name).png"))
+        } catch {
+            XCTFail("\(name).png: \(error)")
+        }
+    }
+
+    /// What SpringBoard's accessibility shows in the top 300 pt of the screen, its frames in pt, to `<name>.json`: the
+    /// island and the activity's elements in it, for the clipping checks to read.
+    func frames(_ name: String) {
+        var elements: [[String: Any]] = []
+        func walk(_ element: XCUIElementSnapshot, _ depth: Int) {
+            let frame = element.frame
+            if !frame.isEmpty, frame.minY < 300 {
+                elements.append([
+                    "depth": depth,
+                    "type": element.elementType.rawValue,
+                    "identifier": element.identifier,
+                    "label": element.label,
+                    "value": (element.value as? CustomStringConvertible)?.description ?? "",
+                    "frame": ["x": frame.minX, "y": frame.minY, "width": frame.width, "height": frame.height],
+                ])
+            }
+            for child in element.children { walk(child, depth + 1) }
+        }
+        do {
+            walk(try springboard.snapshot(), 0)
+        } catch {
+            XCTFail("\(name): no snapshot of SpringBoard: \(error)")
+        }
+        let screen = springboard.frame
+        let report: [String: Any] = [
+            "shot": "\(name).png",
+            "screen": ["width": screen.width, "height": screen.height],
+            "elements": elements,
+        ]
+        do {
+            let data = try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+            try data.write(to: out.appendingPathComponent("\(name).json"))
+        } catch {
+            XCTFail("\(name).json: \(error)")
+        }
+    }
+}

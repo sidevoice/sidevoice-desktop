@@ -1,0 +1,94 @@
+name: live-activity-sim
+
+# The call's Live Activity as the system draws it on the iOS Simulator (docs/MOBILE.md → "The Live Activity on the
+# Simulator"): the harness (mobile/tauri/apple/Harness, test only) starts it from fixtures of the call's details through the
+# app's own bridge, and its UI tests shoot the Lock Screen card and the compact, expanded and minimal island of every
+# state, light and dark, on an iPhone Pro simulator. The artifact `live-activity-sim` holds the PNGs, the expanded island's
+# frames and an INDEX.md naming the design gallery's PNG each shot is to match.
+# It runs when what the activity shows can change: its Swift, the Rust that makes its surface, and the harness itself.
+# Run by hand with `ref` (a branch, a tag, a commit or `refs/pull/N/head`), it shoots that ref's Live Activity (its
+# mobile/tauri/apple/{CallActivity,Widget,Intents,App}) with this commit's harness, so a pull request made before the
+# harness existed can be shot too. `only` (fixture names, comma-separated) shoots only those.
+# Every step is a `cargo xtask` command (xtask/src/mobile.rs); the Rust cache is written only by a push to main.
+# Every external action is pinned by its full commit SHA, with its version in a comment.
+on:
+  push:
+    branches: [main]
+    paths:
+      - mobile/tauri/apple/**
+      - mobile/tauri/src/surface.rs
+      - mobile/tauri/plugin/src/**/*call_surface*
+      - mobile/tauri/plugin/src/**/call_surface/**
+      - xtask/src/mobile.rs
+      - xtask/src/platform/ios_simulator.rs
+      - xtask/src/platform/ios_simulator/**
+      - .github/workflows/live-activity-sim.yml
+  pull_request:
+    paths:
+      - mobile/tauri/apple/**
+      - mobile/tauri/src/surface.rs
+      - mobile/tauri/plugin/src/**/*call_surface*
+      - mobile/tauri/plugin/src/**/call_surface/**
+      - xtask/src/mobile.rs
+      - xtask/src/platform/ios_simulator.rs
+      - xtask/src/platform/ios_simulator/**
+      - .github/workflows/live-activity-sim.yml
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "The ref whose Live Activity to shoot (branch, tag, commit or refs/pull/N/head); empty: this one"
+        type: string
+        default: ""
+      only:
+        description: "Only these fixtures (names, comma-separated, e.g. working,speaking-mic-off); empty: all"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-activity-sim-${{ github.ref }}-${{ inputs.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  simulator:
+    name: Live Activity on the iOS Simulator
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: The Live Activity of the ref asked for (the harness stays this commit's)
+        if: ${{ inputs.ref }}
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          git fetch --no-tags --depth 1 origin "$REF"
+          for dir in CallActivity Widget Intents App; do
+            rm -rf "mobile/tauri/apple/$dir"
+            git checkout FETCH_HEAD -- "mobile/tauri/apple/$dir"
+          done
+          echo "Live Activity of $REF at $(git rev-parse FETCH_HEAD)" | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: xtask
+          prefix-key: v1-rust-live-activity-sim
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - name: XcodeGen
+        run: command -v xcodegen || brew install xcodegen
+      - name: The Live Activity on an iPhone Pro simulator, every fixture in light and dark (cargo xtask mobile live-activity ios)
+        env:
+          LA_ONLY: ${{ inputs.only }}
+        run: cargo xtask mobile live-activity ios
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !cancelled() }}
+        with:
+          name: live-activity-sim
+          path: dist/live-activity-sim
+          retention-days: 14
+          if-no-files-found: error

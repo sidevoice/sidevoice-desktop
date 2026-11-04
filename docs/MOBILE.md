@@ -443,6 +443,30 @@ its buttons need iOS 17 (before that it only shows the call).
   long texts and a Pro Max; it also fails a card or an expanded island taller than 160 pt. CI uploads them as
   `Sidevoice-ios-live-activity-renders`.
 
+### The Live Activity on the Simulator
+
+The renders draw the views; the Simulator shows what the system makes of them: its margins, the island's real shape and
+height, the Lock Screen. `cargo xtask mobile live-activity ios` (macOS, Xcode, XcodeGen) builds a harness that is for tests
+only (`mobile/tauri/apple/Harness`: an XcodeGen spec rendered into a scratch project; `mobile/tauri/ios-project.yml`
+names none of it, so nothing of it is in the app that ships):
+
+- **A host app** whose fixture mode is compiled in Debug only. Given the call's details in `LA_FIXTURE` (the JSON the Rust
+  side hands `SidevoiceCallActivity`), it writes the creatures' stills where the app writes them (the App Group's
+  `call-stills/`, under the Rust side's file names), then calls the app's own bridge, `CallActivityBridge.start`: the
+  controller, the text pager and ActivityKit are the app's. With `LA_SECOND` it starts a second activity beside it.
+- **The widget extension**, built from the shipping extension's own sources (`apple/Widget`, `apple/Intents`).
+- **XCUITest** (`UITests/`): the fixtures (`Fixtures.swift`: every state, mic off, English, long texts in both languages,
+  stills missing, 6 and 9 conversations, the gallery's texts) and, per fixture, the Lock Screen card (locked, then woken),
+  the compact island (the app in the background), the expanded island (a long press on it, with the frames in pt of what
+  SpringBoard shows at the top of the screen, as JSON) and the minimal island (beside a second activity).
+
+It runs on the newest iPhone Pro simulator, in light and then in dark, into `dist/live-activity-sim/`
+(`<presentation>-<state>[-<variant>]-<light|dark>.png`, and `INDEX.md`, which names the design gallery's PNG each shot is
+to match). `LA_ONLY` (fixture names, comma-separated) shoots only those. CI: `.github/workflows/live-activity-sim.yml`, on
+the pull requests that touch the activity's Swift, the Rust that makes its surface or the harness, and by hand with `ref`
+(another branch or `refs/pull/N/head`, whose Live Activity it shoots with the harness of the commit it runs on); the
+artifact is `live-activity-sim`.
+
 ## Building
 
 Always one package, never the workspace: it holds the desktop app too (and the mobile crates are empty on a computer: `#![cfg(mobile)]` at their roots, so a plain `cargo` command there skips them; `cargo xtask mobile lint android|ios` runs Clippy over them for their target). The Tauri CLI is told which app is the one
@@ -477,6 +501,8 @@ installs as it is.
   wrote, the job uploads what it wrote (`mobile-gen-apple`) to commit as `mobile/tauri/gen/apple`.
 - **Live Activity renders** (macOS): `cargo xtask mobile renders ios`, every state of the call's Live Activity as PNG, as
   the artifact `Sidevoice-ios-live-activity-renders` (above, "The call's Live Activity").
+- **Live Activity on the Simulator** (macOS, `.github/workflows/live-activity-sim.yml`, its own workflow): `cargo xtask
+  mobile live-activity ios`, the artifact `live-activity-sim` (above, "The Live Activity on the Simulator").
 - The iOS build ends with `cargo xtask mobile check-ios` on the app it made: the privacy manifest is at the root of the
   bundle, the encryption and tracking declarations are there, and the manifest gives a reason for each required-reason API
   the executable calls (above).
