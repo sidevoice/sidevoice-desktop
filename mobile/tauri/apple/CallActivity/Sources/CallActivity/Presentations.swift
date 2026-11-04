@@ -47,17 +47,18 @@ public struct LockCard: View {
             HStack(spacing: 8) {
                 // A button never ends in an ellipsis: its label whole, or its glyph alone (same colours, same name).
                 ViewThatFits(in: .horizontal) {
-                    MuteToggle(micOff: state.micOff) {
-                        MutePill(state: state, palette: palette, reduced: reduced)
+                    MuteToggle(micOff: state.micOff) { off in
+                        MutePill(state: state, micOff: off, palette: palette, reduced: reduced)
+                            .accessibilityLabel(off ? state.words.unmute : state.words.mute)
                     }
-                    MuteToggle(micOff: state.micOff) {
+                    MuteToggle(micOff: state.micOff) { off in
                         RoundButtonFace(
-                            symbol: state.micOff ? "mic.slash.fill" : "mic.fill", size: 40, glyph: 17,
-                            fill: state.micOff ? Ink.mutedFill : palette.button,
-                            ink: state.micOff ? Ink.mutedInk : palette.text)
+                            symbol: off ? "mic.slash.fill" : "mic.fill", size: 40, glyph: 17,
+                            fill: off ? Ink.mutedFill : palette.button,
+                            ink: off ? Ink.mutedInk : palette.text)
+                            .accessibilityLabel(off ? state.words.unmute : state.words.mute)
                     }
                 }
-                .accessibilityLabel(state.micOff ? state.words.unmute : state.words.mute)
                 ActionButton(action: .skip, enabled: state.canSkip) {
                     RoundButtonFace(symbol: "forward.fill", size: 40, glyph: 17, fill: palette.button, ink: palette.text)
                 }
@@ -89,23 +90,24 @@ public struct LockCard: View {
 @available(iOS 16.1, *)
 struct MutePill: View {
     var state: CallState
+    var micOff: Bool
     var palette: Palette
     var reduced: Bool
 
     var body: some View {
-        let ink = state.micOff ? Ink.mutedInk : palette.text
-        let fill = state.micOff ? Ink.mutedFill : palette.button
+        let ink = micOff ? Ink.mutedInk : palette.text
+        let fill = micOff ? Ink.mutedFill : palette.button
         HStack(spacing: 6) {
-            Image(systemName: state.micOff ? "mic.slash.fill" : "mic.fill")
+            Image(systemName: micOff ? "mic.slash.fill" : "mic.fill")
                 .font(.system(size: 15, weight: .semibold))
                 .frame(width: 17, height: 17)
-            Text(state.micOff ? state.words.unmute : state.words.mute)
+            Text(micOff ? state.words.unmute : state.words.mute)
                 .font(DMSans.font(14, 650))
                 .lineLimit(1)
                 .fixedSize()
                 .frame(height: 20.58)
         }
-        .foregroundStyle(reduced && state.micOff ? Ink.mutedFill : ink)
+        .foregroundStyle(reduced && micOff ? Ink.mutedFill : ink)
         .padding(.leading, 12)
         .padding(.trailing, 15)
         .frame(height: 40)
@@ -151,13 +153,13 @@ public struct ExpandedBody: View {
             VStack(spacing: 8) {
                 ClosedHeader(state: state)
                 HStack(spacing: 8) {
-                    MuteToggle(micOff: state.micOff) {
+                    MuteToggle(micOff: state.micOff) { off in
                         RoundButtonFace(
-                            symbol: state.micOff ? "mic.slash.fill" : "mic.fill", size: 36, glyph: 18,
-                            fill: state.micOff ? Ink.mutedFill : Palette.island.button,
-                            ink: state.micOff ? Ink.mutedInk : Palette.island.text)
+                            symbol: off ? "mic.slash.fill" : "mic.fill", size: 36, glyph: 18,
+                            fill: off ? Ink.mutedFill : Palette.island.button,
+                            ink: off ? Ink.mutedInk : Palette.island.text)
+                            .accessibilityLabel(off ? state.words.unmute : state.words.mute)
                     }
-                    .accessibilityLabel(state.micOff ? state.words.unmute : state.words.mute)
                     if state.route != nil {
                         ActionButton(action: .route) {
                             RoundButtonFace(
@@ -243,19 +245,32 @@ struct VoiceCapsule: View {
             VoiceBars(dim: state.phase == .transcribing)
                 .frame(maxWidth: .infinity)
             ActionButton(action: .cancelSend, enabled: state.canCancelSend) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(Palette.island.text)
+                // The design's drawn ×: a 13-pt box, about 8 across, a 1.1-pt stroke.
+                CrossMark()
+                    .stroke(Palette.island.text, style: StrokeStyle(lineWidth: 1.1, lineCap: .round))
+                    .frame(width: 13, height: 13)
                     .frame(width: 28, height: 28)
                     .background(Circle().fill(Color.white.opacity(0.14)))
             }
-            .opacity(state.canCancelSend ? 1 : Ink.disabled)
             .accessibilityLabel(state.words.cancelSend)
         }
         .padding(.leading, 14)
         .padding(.trailing, 4)
         .frame(height: 36)
         .background(Capsule().fill(Color(hex: 0xc9b6ec, alpha: 0.14)))
+    }
+}
+
+/// The capsule's ×: two strokes inset 2.5 pt in their box.
+struct CrossMark: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let inset: CGFloat = 2.5
+        path.move(to: CGPoint(x: rect.minX + inset, y: rect.minY + inset))
+        path.addLine(to: CGPoint(x: rect.maxX - inset, y: rect.maxY - inset))
+        path.move(to: CGPoint(x: rect.maxX - inset, y: rect.minY + inset))
+        path.addLine(to: CGPoint(x: rect.minX + inset, y: rect.maxY - inset))
+        return path
     }
 }
 

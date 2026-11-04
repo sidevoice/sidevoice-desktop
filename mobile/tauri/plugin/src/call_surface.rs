@@ -223,11 +223,22 @@ const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
 /// The folder the stills are kept in, by id: in the container the app shares with its widget extension where there is one
 /// (iOS, the App Group's), else in the app's cache.
 pub fn stills_dir<R: Runtime>(app: &AppHandle<R>) -> io::Result<PathBuf> {
-    let base = match platform::shared_container() {
-        Some(shared) => shared,
+    let shared = platform::shared_container();
+    let base = match &shared {
+        Some(shared) => shared.clone(),
         None => app.path().app_cache_dir().map_err(io::Error::other)?,
     };
-    Ok(base.join(STILLS))
+    let dir = base.join(STILLS);
+    static SAID: std::sync::Once = std::sync::Once::new();
+    SAID.call_once(|| {
+        // Where the stills go is where the surfaces must read them: a widget extension cannot read the app's cache.
+        log::info!(
+            "call stills: folder {} (shared container: {})",
+            dir.display(),
+            shared.is_some()
+        );
+    });
+    Ok(dir)
 }
 
 const STILLS: &str = "call-stills";
@@ -259,7 +270,13 @@ pub fn save_still<R: Runtime>(
     let partial = dir.join(format!(".{name}.partial"));
     fs::write(&partial, png)
         .and_then(|()| fs::rename(&partial, &file))
-        .map_err(StillError::Io)
+        .map_err(StillError::Io)?;
+    log::info!(
+        "call stills: kept {} ({} bytes, {px} px)",
+        file.display(),
+        png.len()
+    );
+    Ok(())
 }
 
 /// Forgets the stills `ids` (the page shows them no more); an id never kept is nothing.

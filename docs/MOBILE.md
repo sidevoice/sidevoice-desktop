@@ -138,6 +138,12 @@ through `run` (the call's service hangs up through it).
   Tauri CLI only the `TAURI*`, `WRY*`, `CARGO_*` and `RUST_*` variables, and would otherwise link a copy of its own. Git ignores both
   (`mobile/tauri/frameworks/`, the `.so` files of `jniLibs`).
 - **The log**: `tauri-plugin-log` to the system's (logcat, the unified log) and a file in the app's log folder.
+  - **Panics** (`mobile/tauri/src/panics.rs`): a hook logs each one (its thread, place and message) and adds it to
+    `last-panic.txt` beside the log file, at most 16 KB; the next launch logs that file's panics as the last run's
+    (`the last run panicked:`) and removes it. The hook never logs itself: a panic inside a log call holds the logger's
+    lock, and logging from the hook would then deadlock (the standard hook still prints to standard error). It is
+    installed once, first thing in `run_app`; the file's place is known once the log folder is (`setup`). A panic the app cannot unwind from aborts it before anything else is
+    written, and the system's crash report has only the stack.
 
 ### Not verified
 
@@ -348,6 +354,10 @@ its buttons need iOS 17 (before that it only shows the call).
   embedded in the app, at the app's version. When the CLI's version moves, its template is taken again and these
   additions kept. `Info.ios.plist` declares `NSSupportsLiveActivities` and the app's URL scheme, `sidevoice`
   (`sidevoice://conversations`, the stack of the other conversations; `sidevoice://call`, the rest of the activity).
+- **The activity's life.** The system can end the activity (or the person can swipe it away) during a call. The app
+  follows its state (`ActivityLifecycle`, `activityStateUpdates`), drops it when it is over and requests a new one with the
+  next state (at once if the app is in front, else when it next is); at launch and whenever it comes to the front it ends
+  the app's activities that are not the call's (what a crash left). The buttons log `Sidevoice: intent …` when they run.
 - **Updates.** Every change goes out at once, except the reply's captions: a change of the spoken page alone waits until
   about 2 s after the last update (iOS throttles local updates that come too often). Each update moves the activity's
   `staleDate` three minutes ahead, and the activity is updated every minute while the call lasts even when nothing
@@ -453,6 +463,23 @@ stays unsigned with no secret. Its one step is `cargo xtask mobile testflight --
    signed, and it passes the privacy and export-compliance check (above).
 3. `xcrun altool --upload-app` uploads it. App Store Connect processes it (minutes), and TestFlight offers it to the
    internal testers.
+
+- **Symbols.** The archive's dSYMs and the app's executable as it ships are kept as the run's artifact
+  `Sidevoice-ios-<N>-symbols` for 90 days, and the upload carries the symbols for App Store Connect (`Symbols/`, checked
+  in step 2), so TestFlight's crash reports are symbolicated. The Rust code's names are in them: the Rust library is
+  linked as a static library, which the release profile's `strip` does not touch, and only the archive's last step
+  strips the executable, after Xcode has written the dSYM. A crash report from the phone (`.ips`) gives offsets into
+  the executable (`imageOffset`): `atos -o Sidevoice.app.dSYM/Contents/Resources/DWARF/Sidevoice -l 0x100000000 <0x100000000 + offset>`,
+  or `llvm-symbolizer`. A build made before they were kept has its symbols rebuilt by mobile.yml, run by hand with
+  `symbols-of-build: <N>` on a ref whose app is that build's commit (`cargo xtask mobile symbols`: the same archive,
+  unsigned and not uploaded, so its code is laid out the same). **A rebuild is not proof**: Xcode is not pinned on the
+  runner, so it may not produce the shipped binary, and symbols of another binary read as plausible, wrong names. The
+  job prints `dwarfdump --uuid` of the rebuilt executable and dSYM: compare it with the `.ips` header's `slice_uuid`
+  (dashes and case aside) before trusting anything. With the report at hand,
+  `cargo xtask mobile symbols --build-number <N> --ips <file>` does it and fails on a mismatch. The rebuild needs a branch
+  of the build's commit plus this change (`mobile symbols` and the `symbols-of-build` input). "Symbolicated" means
+  function names only: the release profile has no debug info, so no file:line (that would take
+  `CARGO_PROFILE_RELEASE_DEBUG=line-tables-only` in the TestFlight job; not set).
 
 - **The build number** is the run number of the workflow, which only grows, as TestFlight requires of the builds of a
   version, and it is the app's `CFBundleVersion` whole. (The CLI's own `--build-number` appends it to the version,

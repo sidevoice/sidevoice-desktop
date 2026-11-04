@@ -12,7 +12,8 @@
 //!   (<https://developer.apple.com/documentation/bundleresources/describing-use-of-required-reason-api>).
 //!
 //! `check_ipa` is the same check on the archive `mobile testflight` is about to upload, and what only an archive can
-//! show: that it is signed, and that it is the app and the build number it was asked to be.
+//! show: that it is signed, that it is the app and the build number it was asked to be, and that it carries the symbols
+//! App Store Connect symbolicates TestFlight's crash reports with.
 //!
 //! The calls are found in the executable's strings. A C function the app imports is a symbol (`_stat`); a Foundation
 //! API a Swift or Objective-C file uses leaves its name in a symbol or a selector (`…FileAttributeKeyV12creationDate…`,
@@ -215,9 +216,36 @@ pub fn check_app(app: &Path) -> Result<()> {
 /// The call's Live Activity's widget extension, inside the app (mobile/tauri/ios-project.yml, target SidevoiceActivity).
 const EXTENSION: &str = "PlugIns/SidevoiceActivity.appex";
 
+/// The Live Activity's buttons (`LiveActivityIntent`s of the CallActivity package, mobile/tauri/apple/CallActivity).
+const INTENTS: [&str; 5] = ["SetMicOff", "SkipReply", "CancelSend", "HangUp", "ToggleRoute"];
+
+/// The App Intents metadata the system reads to run a button (`Metadata.appintents/extract.actionsdata`, in the app and
+/// in the extension): every intent of [`INTENTS`] is listed, once. A package linked statically can leave the metadata out,
+/// or a double `AppIntentsPackage` can list an intent twice; either way a tap on the locked phone does nothing, silently.
+/// The actions are read as an object keyed by their identifier or an array of objects with an `identifier`; an
+/// identifier is the intent's name, alone or after its module (`CallActivity.SetMicOff`).
+fn check_intents(actions_data: &[u8], what: &str) -> Result<()> {
+    let json: serde_json::Value = serde_json::from_slice(actions_data).map_err(|e| format!("{what}: {e}"))?;
+    let identifiers: Vec<String> = match json.get("actions") {
+        Some(serde_json::Value::Object(map)) => map.keys().cloned().collect(),
+        Some(serde_json::Value::Array(list)) => list
+            .iter()
+            .filter_map(|a| a.get("identifier").and_then(serde_json::Value::as_str).map(str::to_owned))
+            .collect(),
+        _ => return Err(format!("{what}: no actions in the App Intents metadata")),
+    };
+    for intent in INTENTS {
+        let count = identifiers.iter().filter(|id| *id == intent || id.ends_with(&format!(".{intent}"))).count();
+        ensure(count != 0, format!("{what}: the App Intents metadata lacks {intent}: its button would do nothing"))?;
+        ensure(count == 1, format!("{what}: the App Intents metadata lists {intent} {count} times"))?;
+    }
+    Ok(())
+}
+
 /// An archive for App Store Connect (`.ipa`): its app is the bundle `identifier` at `build_number`, it is signed
 /// (a provisioning profile embedded, a code signature sealed), the Live Activity's extension
-/// is there at the same build number, and the app passes [`check_bundle`].
+/// is there at the same build number, it carries its symbols (`Symbols/*.symbols`, which the export writes from the
+/// archive's dSYMs, `uploadSymbols` being on by default), and the app passes [`check_bundle`].
 pub fn check_ipa(ipa: &Path, identifier: &str, build_number: u32) -> Result<()> {
     let file = fs::File::open(ipa).map_err(|e| format!("{}: {e}", ipa.display()))?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("{}: {e}", ipa.display()))?;
@@ -269,7 +297,19 @@ pub fn check_ipa(ipa: &Path, identifier: &str, build_number: u32) -> Result<()> 
     for sealed in ["embedded.mobileprovision", "_CodeSignature/CodeResources"] {
         ensure(names.contains(&format!("{root}{sealed}")), format!("{}: not signed: no {sealed}", ipa.display()))?;
     }
+    ensure(
+        names.iter().any(|name| name.starts_with("Symbols/") && name.ends_with(".symbols")),
+        format!("{}: no Symbols/*.symbols: TestFlight's crash reports would not be symbolicated", ipa.display()),
+    )?;
     check_bundle(&bundle)?;
+    // The buttons' App Intents metadata, in the app and in the extension.
+    for bundle_root in [root.clone(), format!("{root}{EXTENSION}/")] {
+        let path = format!("{bundle_root}Metadata.appintents/extract.actionsdata");
+        let mut entry = archive.by_name(&path).map_err(|_| format!("{}: no {path}", ipa.display()))?;
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).map_err(|e| format!("{path}: {e}"))?;
+        check_intents(&bytes, &path)?;
+    }
     println!("{}: {identifier} build {build_number}, signed", ipa.display());
     Ok(())
 }
@@ -387,13 +427,14 @@ mod tests {
         assert!(check_bundle(&app).unwrap_err().contains("no `audio`"));
     }
 
-    /// An archive with the files of an app below `Payload/Sidevoice.app/`.
+    /// An archive with the files of an app below `Payload/Sidevoice.app/`, and those whose name starts with `/` at its root.
     fn ipa(dir: &Path, files: &[(&str, Vec<u8>)]) -> std::path::PathBuf {
         use std::io::Write;
         let path = dir.join("Sidevoice.ipa");
         let mut zip = zip::ZipWriter::new(fs::File::create(&path).unwrap());
         for (name, bytes) in files {
-            zip.start_file(format!("Payload/Sidevoice.app/{name}"), zip::write::SimpleFileOptions::default()).unwrap();
+            let name = name.strip_prefix('/').map_or_else(|| format!("Payload/Sidevoice.app/{name}"), str::to_owned);
+            zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
             zip.write_all(bytes).unwrap();
         }
         zip.finish().unwrap();
@@ -417,8 +458,14 @@ mod tests {
             ("embedded.mobileprovision", b"profile".to_vec()),
             ("_CodeSignature/CodeResources", b"seal".to_vec()),
             ("PlugIns/SidevoiceActivity.appex/Info.plist", appex_info(version)),
+            ("Metadata.appintents/extract.actionsdata", actions_data(&INTENTS)),
+            ("PlugIns/SidevoiceActivity.appex/Metadata.appintents/extract.actionsdata", actions_data(&INTENTS)),
+            (SYMBOLS, b"symbols".to_vec()),
         ]
     }
+
+    /// The app's symbols for App Store Connect, at the archive's root.
+    const SYMBOLS: &str = "/Symbols/BCA28F76-4E7B-3FFD-A975-E69ECF5C4130.symbols";
 
     fn appex_info(version: &str) -> Vec<u8> {
         format!(
@@ -437,6 +484,30 @@ mod tests {
         files.iter().filter(|(n, _)| *n != name).cloned().collect()
     }
 
+    /// The App Intents metadata listing `names`, as module-qualified identifiers.
+    fn actions_data(names: &[&str]) -> Vec<u8> {
+        let actions: serde_json::Map<String, serde_json::Value> =
+            names.iter().map(|n| (format!("CallActivity.{n}"), serde_json::json!({}))).collect();
+        serde_json::json!({ "version": 1, "actions": actions }).to_string().into_bytes()
+    }
+
+    #[test]
+    fn the_buttons_intents_must_be_in_the_metadata_once() {
+        let files = app_files("ai.sidevoice.mobile", "42");
+        let lacking = actions_data(&INTENTS[1..]);
+        let mut app = without(&files, "Metadata.appintents/extract.actionsdata");
+        app.push(("Metadata.appintents/extract.actionsdata", lacking));
+        let error = check(&app, "ai.sidevoice.mobile", 42).unwrap_err();
+        assert!(error.contains("lacks SetMicOff"), "{error}");
+        let no_metadata = without(&files, "PlugIns/SidevoiceActivity.appex/Metadata.appintents/extract.actionsdata");
+        assert!(check(&no_metadata, "ai.sidevoice.mobile", 42).unwrap_err().contains("appex/Metadata.appintents"));
+        let listed: Vec<u8> = serde_json::json!({ "actions": [
+            {"identifier": "SetMicOff"}, {"identifier": "SetMicOff"}, {"identifier": "SkipReply"},
+            {"identifier": "CancelSend"}, {"identifier": "HangUp"}, {"identifier": "ToggleRoute"} ] })
+        .to_string()
+        .into_bytes();
+        assert!(check_intents(&listed, "x").unwrap_err().contains("SetMicOff 2 times"));
+    }
     #[test]
     fn a_signed_archive_of_the_app_at_the_build_passes() {
         check(&app_files("ai.sidevoice.mobile", "42"), "ai.sidevoice.mobile", 42).unwrap();
@@ -459,6 +530,8 @@ mod tests {
         let mut stale = without(&files, "PlugIns/SidevoiceActivity.appex/Info.plist");
         stale.push(("PlugIns/SidevoiceActivity.appex/Info.plist", appex_info("0.1.0")));
         assert!(check(&stale, "ai.sidevoice.mobile", 42).unwrap_err().contains("build number is 0.1.0, not 42"));
+        let no_symbols = without(&files, SYMBOLS);
+        assert!(check(&no_symbols, "ai.sidevoice.mobile", 42).unwrap_err().contains("no Symbols/*.symbols"));
     }
 
     #[test]

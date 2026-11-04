@@ -148,21 +148,27 @@ struct Report: Decodable {
 final class Controller {
     static let shared = Controller()
 
+    /// The activity updates go to, while it lives; `lifecycle` says which it is and when it is over.
     private var activity: Activity<CallActivityAttributes>?
-    /// The call lasts (started, not ended): what a refresh and a start in the foreground are for.
-    private var wanted = false
+    private var lifecycle = ActivityLifecycle()
     private var report: Report?
     private var sent: CallState?
     private var sentAt = Date.distantPast
     private var later: DispatchWorkItem?
     private var refresh: Timer?
     private var observers: [NSObjectProtocol] = []
+    /// When a request last failed: publishing does not ask again for `retryAfter` (a persistent error would otherwise be
+    /// asked for on every state), while coming to the front always does.
+    private var failedAt = Date.distantPast
+    /// Watches the current activity's state for its end.
+    private var watching: Task<Void, Never>?
     /// The last of ActivityKit's calls asked for: each waits for the one before.
     private var queue: Task<Void, Never>?
 
     static let captionInterval: TimeInterval = 2
     static let staleAfter: TimeInterval = 180
     static let refreshInterval: TimeInterval = 60
+    static let retryAfter: TimeInterval = 30
 
     init() {
         let center = NotificationCenter.default
@@ -172,6 +178,9 @@ final class Controller {
                 self?.publish()
             },
             center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.dropIfOver()
+                self?.endOrphans()
+                self?.failedAt = .distantPast
                 self?.requestIfWanted()
             },
         ]
@@ -179,7 +188,7 @@ final class Controller {
 
     func start(_ report: Report?) {
         end()
-        wanted = true
+        lifecycle.start()
         self.report = report
         requestIfWanted()
         refresh = Timer.scheduledTimer(withTimeInterval: Self.refreshInterval, repeats: true) { [weak self] _ in
@@ -188,22 +197,25 @@ final class Controller {
     }
 
     func show(_ report: Report?) {
-        guard wanted else { return }
+        guard lifecycle.wanted else { return }
         self.report = report
         publish()
     }
 
     /// Ends the call's activity, and any other of the app's (one an earlier run left), at once.
     func end() {
-        wanted = false
+        lifecycle.end()
         later?.cancel()
         later = nil
         refresh?.invalidate()
         refresh = nil
+        watching?.cancel()
+        watching = nil
         activity = nil
         sent = nil
         report = nil
         let all = Activity<CallActivityAttributes>.activities
+        NSLog("Sidevoice: Live Activity: ending %d", all.count)
         enqueue {
             for activity in all {
                 if #available(iOS 16.2, *) {
@@ -215,33 +227,115 @@ final class Controller {
         }
     }
 
-    /// Requests the activity for the call that lasts, if it has none yet and the app is in front.
+    /// Ends the app's activities that are not the call's current one: what an earlier process (a crash, a kill) left,
+    /// which nothing updates and which would show its last state for good. Also done by `end()` at launch, but ActivityKit
+    /// may not list them yet that early, so it is done again whenever the app comes to the front.
+    private func endOrphans() {
+        let orphans = Activity<CallActivityAttributes>.activities.filter { $0.id != lifecycle.current }
+        guard !orphans.isEmpty else { return }
+        NSLog("Sidevoice: Live Activity: ending %d orphan(s)", orphans.count)
+        enqueue {
+            for activity in orphans {
+                if #available(iOS 16.2, *) {
+                    await activity.end(nil, dismissalPolicy: .immediate)
+                } else {
+                    await activity.end(using: nil, dismissalPolicy: .immediate)
+                }
+            }
+        }
+    }
+
+    /// Forgets the activity if the system has ended it or the person has dismissed it, so a later `requestIfWanted` asks
+    /// for another one instead of updating one that no longer exists.
+    private func dropIfOver() {
+        guard let activity else { return }
+        drop(activity.id, Self.life(activity.activityState))
+    }
+
+    /// Drops activity `id` if it is the current one and over. The system may leave an ended activity on the Lock Screen
+    /// for hours, next to the call's new one, so it is ended for good. Returns whether it was dropped.
+    @discardableResult
+    private func drop(_ id: String, _ life: ActivityLifecycle.Life) -> Bool {
+        guard lifecycle.observed(id, life) else { return false }
+        NSLog("Sidevoice: Live Activity: %@ is over; the call has none now", id)
+        let over = activity
+        watching?.cancel()
+        watching = nil
+        activity = nil
+        sent = nil
+        if let over {
+            enqueue {
+                if #available(iOS 16.2, *) {
+                    await over.end(nil, dismissalPolicy: .immediate)
+                } else {
+                    await over.end(using: nil, dismissalPolicy: .immediate)
+                }
+            }
+        }
+        return true
+    }
+
+    private static func life(_ state: ActivityState) -> ActivityLifecycle.Life {
+        switch state {
+        case .ended, .dismissed: return .over
+        default: return .alive
+        }
+    }
+
+    /// Requests the activity for the call that lasts, if it has none and the app is in front.
     private func requestIfWanted() {
-        guard wanted, activity == nil else { return }
-        guard UIApplication.shared.applicationState == .active else {
+        dropIfOver()
+        switch lifecycle.need(inFront: UIApplication.shared.applicationState == .active) {
+        case .nothing:
+            return
+        case .wait:
             NSLog("Sidevoice: the call's Live Activity waits until the app is in front")
             return
+        case .request:
+            break
         }
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
             NSLog("Sidevoice: Live Activities are off for the app")
             return
         }
         let state = current()
+        let new: Activity<CallActivityAttributes>
         do {
             if #available(iOS 16.2, *) {
-                activity = try Activity.request(
+                new = try Activity.request(
                     attributes: CallActivityAttributes(),
                     content: ActivityContent(state: state, staleDate: Date().addingTimeInterval(Self.staleAfter)),
                     pushType: nil)
             } else {
-                activity = try Activity.request(attributes: CallActivityAttributes(), contentState: state, pushType: nil)
+                new = try Activity.request(attributes: CallActivityAttributes(), contentState: state, pushType: nil)
             }
         } catch {
+            failedAt = Date()
             NSLog("Sidevoice: the call's Live Activity did not start: \(error)")
             return
         }
+        NSLog("Sidevoice: Live Activity: requested %@", new.id)
+        activity = new
+        lifecycle.adopt(new.id)
         sent = state
         sentAt = Date()
+        watch(new)
+    }
+
+    /// Follows the activity's state, so that its end (by the system, or the person's swipe) is noticed when it happens,
+    /// and the next state of the call asks for a new one.
+    private func watch(_ activity: Activity<CallActivityAttributes>) {
+        watching?.cancel()
+        let id = activity.id
+        watching = Task { [weak self] in
+            for await state in activity.activityStateUpdates {
+                let life = Self.life(state)
+                await MainActor.run {
+                    if self?.drop(id, life) == true { self?.requestIfWanted() }
+                }
+                if life == .over { break }
+            }
+        }
     }
 
     private func current() -> CallState {
@@ -250,6 +344,8 @@ final class Controller {
 
     /// Sends the state when it changed; `refresh`: even when it did not, to move its `staleDate`.
     private func publish(refresh: Bool = false) {
+        dropIfOver()
+        if activity == nil, Date().timeIntervalSince(failedAt) > Self.retryAfter { requestIfWanted() }
         guard let activity else { return }
         let state = current()
         if state == sent && !refresh { return }

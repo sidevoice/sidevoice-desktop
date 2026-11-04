@@ -16,6 +16,7 @@ mod downloads;
 mod hold;
 mod i18n;
 pub mod pairings;
+mod panics;
 mod platform;
 mod surface;
 
@@ -276,6 +277,9 @@ impl From<CallReport> for CallState {
 
 /// The app: one window, on the bundled interface, with the members the apps share.
 fn run_app() {
+    // Before anything that may panic: every panic into a file that the next launch reads, since one the app cannot unwind
+    // from aborts it before anything else is written (`panics`).
+    panics::install();
     // Where the call's events go: over the channel the page opens (the shared plugin's `voice_events`).
     let pages = Pages::default();
     let events = pages.clone();
@@ -304,6 +308,11 @@ fn run_app() {
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
+            // Where the panics' file goes, and the last run's panics into the log (`panics`). The log's folder exists by now.
+            match handle.path().app_log_dir() {
+                Ok(dir) => panics::watch(&dir),
+                Err(error) => log::warn!("panics: no log folder: {error}"),
+            }
             // The headset's buttons and the lock screen's controls act on the call through the page, as the desktop's do,
             // and on the room's call's thread, in order with its reports and interruptions (`call::RoomCall`).
             let media_app = handle.clone();
