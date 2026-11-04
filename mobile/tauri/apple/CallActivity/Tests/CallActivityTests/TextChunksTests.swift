@@ -190,6 +190,52 @@ final class TextPagerTests: XCTestCase {
     }
 }
 
+/// Your words outlast the page's own 3 s (the page clears them then; three chunks take 7.5 s).
+final class SaidHoldTests: XCTestCase {
+    let chunker = TextChunker { CGFloat($0.count) * 8 }
+    let t0 = Date(timeIntervalSince1970: 1_000_000)
+
+    func sentence(_ letter: String) -> String {
+        (0..<8).map { _ in String(repeating: letter, count: 8) }.joined(separator: " ") + "."
+    }
+
+    var said: String { ["a", "b", "c"].map(sentence).joined(separator: " ") }
+
+    func testYourWordsStayThroughWorkingUntilTheirLastChunkHasHadItsTime() {
+        var pager = TextPager(chunker: chunker)
+        XCTAssertEqual(pager.page(kind: .said, text: said, heard: 0, now: t0).text, sentence("a"))
+        // The page cleared them after 3 s and the call is working: the second chunk is still due, then the third.
+        let second = pager.page(kind: nil, text: nil, heard: 0, holdable: true, now: t0 + 3)
+        XCTAssertEqual(second.text, sentence("b"))
+        XCTAssertTrue(second.held)
+        XCTAssertEqual(second.wake, t0 + 5)
+        let third = pager.page(kind: nil, text: nil, heard: 0, holdable: true, now: t0 + 5.1)
+        XCTAssertEqual(third.text, sentence("c"))
+        XCTAssertEqual(third.wake, t0 + 7.5, "it looks again to let go")
+        let gone = pager.page(kind: nil, text: nil, heard: 0, holdable: true, now: t0 + 7.5)
+        XCTAssertNil(gone.text)
+        XCTAssertFalse(gone.held)
+    }
+
+    func testAnythingElseTakesOverAtOnce() {
+        var pager = TextPager(chunker: chunker)
+        _ = pager.page(kind: .said, text: said, heard: 0, now: t0)
+        let other = pager.page(kind: nil, text: nil, heard: 0, holdable: false, now: t0 + 3)
+        XCTAssertNil(other.text)
+        XCTAssertFalse(other.held)
+        // And what was held does not come back.
+        XCTAssertNil(pager.page(kind: nil, text: nil, heard: 0, holdable: true, now: t0 + 3.1).text)
+    }
+
+    func testAReplyThatStartsWhileYourWordsAreHeldWins() {
+        var pager = TextPager(chunker: chunker)
+        _ = pager.page(kind: .said, text: said, heard: 0, now: t0)
+        let reply = pager.page(kind: .reply, text: sentence("x"), heard: 0, holdable: false, now: t0 + 3)
+        XCTAssertEqual(reply.text, sentence("x"))
+        XCTAssertFalse(reply.held)
+    }
+}
+
 /// Your voice's bars: 44 columns of 6 pt at least, dropped from the left in a narrow capsule.
 @available(iOS 16.1, *)
 final class VoiceBarsTests: XCTestCase {

@@ -231,10 +231,11 @@ async fn call_still(
 ) -> Result<(), String> {
     use base64::Engine as _;
     if let Err(error) = the_page(&app, &webview) {
-        log::warn!("call_still: {id} from a webview that is not the page: {error}");
+        log::warn!(target: "stills", "call_still: {id} from a webview that is not the page: {error}");
         return Err(error);
     }
     log::info!(
+        target: "stills",
         "call_still: {id} ({} base64 bytes, {px} px) from page {page}",
         png.len()
     );
@@ -251,7 +252,7 @@ async fn call_still(
     .await
     .map_err(|error| error.to_string())?
     .map_err(|error| {
-        log::warn!("call_still: not kept: {error}");
+        log::warn!(target: "stills", "call_still: not kept: {error}");
         format!("call_still: {error}")
     })
 }
@@ -349,7 +350,7 @@ fn run_app() {
             }
             // The creatures' stills an earlier run kept for the call's surfaces: the page sends the ones it shows again.
             if let Err(error) = sidevoice_mobile_plugin::clear_stills(&handle) {
-                log::warn!("call_still: the earlier stills were not removed: {error}");
+                log::warn!(target: "stills", "call_still: the earlier stills were not removed: {error}");
             }
             let phone = Arc::new(call::PhoneCall::default());
             // The developer options (nightly and dev builds): read before the first call, whose kind they decide.
@@ -468,18 +469,22 @@ fn run_app() {
 }
 
 /// The unified log as one of the app's log targets (iOS: through the Swift side's `SidevoiceLog`; nothing elsewhere, whose
-/// log already is the system's). The category is `stills` for the call's stills, `app` for the rest.
+/// log already is the system's). Lines logged with the target `stills` (the creatures' stills: ids, sizes, paths, never a
+/// conversation's words) go in public, category `stills`; every other line is the app's own and may carry what the person
+/// said, so it goes in category `app`, private.
 fn unified_log() -> tauri_plugin_log::Target {
     use tauri_plugin_log::{fern, Target, TargetKind};
     Target::new(TargetKind::Dispatch(fern::Dispatch::new().chain(
         fern::Output::call(|record| {
-            let message = record.args().to_string();
-            let category = if message.contains("still") {
+            let category = if record.target() == "stills" {
                 "stills"
             } else {
                 "app"
             };
-            sidevoice_mobile_plugin::os_log(category, &format!("[{}] {message}", record.level()));
+            sidevoice_mobile_plugin::os_log(
+                category,
+                &format!("[{}] {}", record.level(), record.args()),
+            );
         }),
     )))
 }

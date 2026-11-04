@@ -207,6 +207,9 @@ public struct TextPager {
     public struct Page: Equatable {
         public var text: String?
         public var wake: Date?
+        /// Your words are still being shown although the call's phase has moved on (the page clears them after 3 s, the
+        /// chunks take up to 7.5 s): the caller draws them as your words.
+        public var held = false
     }
 
     /// A chunk stays up at least this long, even if the voice is faster.
@@ -223,9 +226,21 @@ public struct TextPager {
         self.chunker = chunker
     }
 
-    /// The page at `now`: `heard` is how much of `text` the voice has said (UTF-16 units), for a reply.
-    public mutating func page(kind: Kind?, text: String?, heard: Int, now: Date) -> Page {
+    /// The page at `now`: `heard` is how much of `text` the voice has said (UTF-16 units), for a reply. `holdable`: the call
+    /// is in a phase that may let your words finish (working): they stay, by the pager's clock, until their last chunk has had
+    /// its 2.5 s, whatever the page said of them meanwhile (it clears them after 3 s). Anything else that comes (the voice
+    /// speaking, you listening, offline) takes over at once.
+    public mutating func page(kind: Kind?, text: String?, heard: Int, holdable: Bool = false, now: Date) -> Page {
         guard let kind, let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            if holdable, source?.kind == .said, !chunks.isEmpty {
+                let elapsed = now.timeIntervalSince(begun)
+                let end = Self.minimum * Double(chunks.count)
+                if elapsed < end {
+                    let index = min(Int(elapsed / Self.minimum), chunks.count - 1)
+                    let wake = begun.addingTimeInterval(Self.minimum * Double(index + 1))
+                    return Page(text: chunks[index].text, wake: wake, held: true)
+                }
+            }
             source = nil
             chunks = []
             return Page(text: nil, wake: nil)

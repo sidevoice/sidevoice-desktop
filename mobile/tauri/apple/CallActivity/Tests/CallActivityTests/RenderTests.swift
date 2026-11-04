@@ -110,6 +110,10 @@ final class RenderTests: XCTestCase {
             next.text = chunk
             try save(expanded(next), "expanded-said-chunk-\(index + 1)")
         }
+        // Your words before the room knows when the work began: the real header, with no timer (never a made-up time).
+        var noTimer = Self.sample(.said)
+        noTimer.workingSince = nil
+        try sheet(noTimer, name: "said-no-timer")
         // A still that has not arrived draws the Sidevoice mark, never an empty slot (D-LA-STILL-FALLBACK).
         for phase in [CallState.Phase.working, .listening] {
             var missing = Self.sample(phase)

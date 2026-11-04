@@ -5,7 +5,7 @@ import SwiftUI
 /// font's (DM Sans: 1.302 × its size), taller than the gallery's (15 on 18), and it has no line height below that, so the
 /// lines are broken here, as CoreText breaks them for the same font and width, and each is drawn in its own box. A chunk
 /// (`TextChunker`) is built to fit, so the ellipsis, after a whole word, is only a safety net: when it shows, the
-/// measurement has drifted from the device's, and the chunk is logged (subsystem ai.sidevoice, category text).
+/// measurement has drifted from the device's, and its length is logged (subsystem ai.sidevoice, category text; never its words).
 @available(iOS 16.1, *)
 struct Lines: View {
     var text: String
@@ -41,7 +41,7 @@ struct Lines: View {
     /// Logs a chunk the view had to cut: the chunker's measurement drifted from the device's.
     private static func report(_ lines: [Line], _ text: String, width: CGFloat) {
         guard lines.last?.ellipsis == true else { return }
-        CallLog.text.error("chunk cut by the view at \(Int(width)) pt: \(text, privacy: .public)")
+        CallLog.text.error("chunk of \(text.count) characters cut by the view at \(Int(width)) pt")
     }
 
     struct Line {
