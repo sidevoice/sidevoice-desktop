@@ -28,14 +28,14 @@ struct Tone {
         case .listening, .transcribing, .speaking:
             return dark ? Tone(ink: Color(hex: 0xcdbbf0), fill: Color(hex: 0xc9b6ec), soft: Color(hex: 0x2f2741))
                 : Tone(ink: Color(hex: 0x4a2f6b), fill: Color(hex: 0x4a2f6b), soft: Color(hex: 0xece4f7))
-        case .working, .said:
-            // Your words are not a state of their own (D-LA-SAID-STATE): the call is working, and says so.
+        case .working:
             return dark ? Tone(ink: Color(hex: 0x74d3a6), fill: Color(hex: 0x74d3a6), soft: Color(hex: 0x14271e))
                 : Tone(ink: Color(hex: 0x1d6b45), fill: Color(hex: 0x1d6b45), soft: Color(hex: 0xe2f3e9))
         case .holding:
             return dark ? Tone(ink: Color(hex: 0xf5a35c), fill: Color(hex: 0xf5a35c), soft: Color(hex: 0x2e1f10))
                 : Tone(ink: Color(hex: 0x9a4a00), fill: Color(hex: 0x9a4a00), soft: Color(hex: 0xfdeedd))
-        case .idle, .offline:
+        case .idle, .offline, .said:
+            // `.said` never gets here: `CallState.tonePhase` says what the call is.
             return dark ? Tone(ink: Color(hex: 0xb8b8c0), fill: Color(hex: 0x93939c), soft: Color(hex: 0x26262b))
                 : Tone(ink: Color(hex: 0x545766), fill: Color(hex: 0x686b7a), soft: Color(hex: 0xefebf4))
         }

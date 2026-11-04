@@ -351,7 +351,7 @@ public struct CompactTrailing: View {
     }
 
     public var body: some View {
-        if state.phase == .idle && !state.micOff {
+        if state.tonePhase == .idle && !state.micOff {
             EmptyView()
         } else {
             HStack(spacing: 6) {
@@ -361,7 +361,7 @@ public struct CompactTrailing: View {
                         .foregroundStyle(Ink.micOffGlyph)
                         .frame(width: 18, height: 18)
                 }
-                StateGlyph(phase: state.phase)
+                StateGlyph(phase: state.tonePhase)
             }
             .modifier(StillOnAlwaysOn(reduced: reduced))
             .environment(\.locale, state.locale)
@@ -379,7 +379,7 @@ public struct MinimalFace: View {
     }
 
     public var body: some View {
-        let tone = Tone.of(state.phase, dark: true)
+        let tone = Tone.of(state.tonePhase, dark: true)
         ZStack {
             Circle().strokeBorder(tone.fill, lineWidth: 2).frame(width: 34, height: 34)
             RoundFace(state: state, size: 24)

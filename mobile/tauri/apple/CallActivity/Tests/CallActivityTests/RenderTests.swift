@@ -114,6 +114,11 @@ final class RenderTests: XCTestCase {
         var noTimer = Self.sample(.said)
         noTimer.workingSince = nil
         try sheet(noTimer, name: "said-no-timer")
+        // Before the web pin that says working: your words with the page's own idle line and no timer, never green.
+        var prePin = Self.sample(.said)
+        prePin.workingSince = nil
+        prePin.words.state = "En reposo"
+        try sheet(prePin, name: "said-pre-pin")
         // A still that has not arrived draws the Sidevoice mark, never an empty slot (D-LA-STILL-FALLBACK).
         for phase in [CallState.Phase.working, .listening] {
             var missing = Self.sample(phase)

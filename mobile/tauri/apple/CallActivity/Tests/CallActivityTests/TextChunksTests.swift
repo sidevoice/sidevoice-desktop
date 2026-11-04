@@ -217,6 +217,30 @@ final class SaidHoldTests: XCTestCase {
         XCTAssertFalse(gone.held)
     }
 
+    /// The real sequence: the page's phase is still Idle (the stage says working only 3 s after the work began) when the
+    /// said text is cleared after 3 s, so the held words are asked for with Idle's `holds`.
+    func testYourWordsAreHeldWhenTheClearedSaidFindsThePhaseStillIdle() {
+        XCTAssertTrue(TextPager.holds(.idle))
+        XCTAssertTrue(TextPager.holds(.holding))
+        XCTAssertTrue(TextPager.holds(.working))
+        for phase in [CallState.Phase.listening, .transcribing, .speaking, .offline] {
+            XCTAssertFalse(TextPager.holds(phase), "\(phase) takes over at once")
+        }
+        var pager = TextPager(chunker: chunker)
+        _ = pager.page(kind: .said, text: said, heard: 0, scope: "a", now: t0)
+        let held = pager.page(kind: nil, text: nil, heard: 0, holdable: TextPager.holds(.idle), scope: "a", now: t0 + 3.2)
+        XCTAssertEqual(held.text, sentence("b"))
+        XCTAssertTrue(held.held)
+    }
+
+    func testAnotherConversationReleasesTheHeldWords() {
+        var pager = TextPager(chunker: chunker)
+        _ = pager.page(kind: .said, text: said, heard: 0, scope: "a", now: t0)
+        let other = pager.page(kind: nil, text: nil, heard: 0, holdable: true, scope: "b", now: t0 + 3.2)
+        XCTAssertNil(other.text)
+        XCTAssertFalse(other.held)
+    }
+
     func testAnythingElseTakesOverAtOnce() {
         var pager = TextPager(chunker: chunker)
         _ = pager.page(kind: .said, text: said, heard: 0, now: t0)
@@ -233,6 +257,38 @@ final class SaidHoldTests: XCTestCase {
         let reply = pager.page(kind: .reply, text: sentence("x"), heard: 0, holdable: false, now: t0 + 3)
         XCTAssertEqual(reply.text, sentence("x"))
         XCTAssertFalse(reply.held)
+    }
+}
+
+/// What the header wears while your words are up (D-LA-SAID-STATE).
+final class TonePhaseTests: XCTestCase {
+    func testWorkingWhenThePageSaysWorkingWithItsStart() {
+        var state = CallState()
+        state.phase = .said
+        state.workingSince = Date()
+        XCTAssertEqual(state.tonePhase, .working)
+    }
+
+    func testAPageThatSaysIdleWithNoTimerIsDrawnIdleNotGreen() {
+        var state = CallState()
+        state.phase = .said
+        XCTAssertEqual(state.tonePhase, .idle)
+    }
+
+    func testHeldWordsWearTheStateTheCallIsReallyIn() {
+        var state = CallState()
+        state.phase = .said
+        state.heldPhase = .holding
+        XCTAssertEqual(state.tonePhase, .holding)
+        state.heldPhase = .working
+        XCTAssertEqual(state.tonePhase, .working)
+    }
+
+    func testOtherPhasesAreThemselves() {
+        var state = CallState()
+        state.phase = .speaking
+        state.workingSince = Date()
+        XCTAssertEqual(state.tonePhase, .speaking)
     }
 }
 

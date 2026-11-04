@@ -81,7 +81,7 @@ struct CreatureTile: View {
     @Environment(\.isLuminanceReduced) private var reduced
 
     var body: some View {
-        let tone = Tone.of(state.phase, dark: palette.dark)
+        let tone = Tone.of(state.tonePhase, dark: palette.dark)
         let inner = size * 0.86
         ZStack {
             if !reduced {
@@ -198,7 +198,7 @@ struct StateLine: View {
     var lineHeight: CGFloat
 
     var body: some View {
-        let tone = Tone.of(state.phase, dark: dark)
+        let tone = Tone.of(state.tonePhase, dark: dark)
         HStack(spacing: 6) {
             Circle().fill(tone.fill).frame(width: 8, height: 8)
             label(tone)
@@ -210,7 +210,7 @@ struct StateLine: View {
 
     private func label(_ tone: Tone) -> Text {
         let words = Text(state.words.state)
-        guard state.phase == .working || state.phase == .said, let since = state.workingSince else { return words }
+        guard state.tonePhase == .working, let since = state.workingSince else { return words }
         // Tabular digits, so "0:42" keeps its width as it counts.
         let time = (Text("· ") + Text(since, style: .timer)).monospacedDigit()
         // The gallery's 6-pt gap: an en space (7.5 pt at 15, 7 at 14), the closest a run of text has.
@@ -229,11 +229,11 @@ struct StateGlyph: View {
         let tone = Tone.of(phase, dark: true)
         Group {
             switch phase {
-            case .idle:
+            case .idle, .said:
                 EmptyView()
             case .listening, .transcribing:
                 GlyphBars(phase: phase).frame(width: size, height: size)
-            case .working, .said:
+            case .working:
                 symbol("ellipsis", effect: .bounce)
             case .speaking:
                 symbol("speaker.wave.2.fill", effect: .pulse)

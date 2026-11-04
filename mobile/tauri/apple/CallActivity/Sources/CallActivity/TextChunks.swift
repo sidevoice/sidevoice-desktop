@@ -212,11 +212,21 @@ public struct TextPager {
         public var held = false
     }
 
+    /// Whether the call's phase lets your words finish after the page has cleared them: the stage waits 3 s before it says
+    /// working, so the page's phase is still idle (or can't-receive) when its said text ends. The voice speaking, you
+    /// listening or transcribing, and offline take over at once.
+    public static func holds(_ phase: CallState.Phase) -> Bool {
+        switch phase {
+        case .working, .idle, .holding: true
+        case .listening, .transcribing, .said, .speaking, .offline: false
+        }
+    }
+
     /// A chunk stays up at least this long, even if the voice is faster.
     public static let minimum: TimeInterval = 2.5
 
     private let chunker: TextChunker
-    private var source: (kind: Kind, text: String)?
+    private var source: (kind: Kind, text: String, scope: String)?
     private var chunks: [TextChunker.Chunk] = []
     private var shown = 0
     private var since = Date.distantPast
@@ -227,12 +237,12 @@ public struct TextPager {
     }
 
     /// The page at `now`: `heard` is how much of `text` the voice has said (UTF-16 units), for a reply. `holdable`: the call
-    /// is in a phase that may let your words finish (working): they stay, by the pager's clock, until their last chunk has had
+    /// is in a phase that may let your words finish (`holds`): they stay, by the pager's clock, until their last chunk has had
     /// its 2.5 s, whatever the page said of them meanwhile (it clears them after 3 s). Anything else that comes (the voice
-    /// speaking, you listening, offline) takes over at once.
-    public mutating func page(kind: Kind?, text: String?, heard: Int, holdable: Bool = false, now: Date) -> Page {
+    /// speaking, you listening, offline), or another conversation (`scope`), takes over at once.
+    public mutating func page(kind: Kind?, text: String?, heard: Int, holdable: Bool = false, scope: String = "", now: Date) -> Page {
         guard let kind, let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            if holdable, source?.kind == .said, !chunks.isEmpty {
+            if holdable, source?.kind == .said, source?.scope == scope, !chunks.isEmpty {
                 let elapsed = now.timeIntervalSince(begun)
                 let end = Self.minimum * Double(chunks.count)
                 if elapsed < end {
@@ -245,9 +255,9 @@ public struct TextPager {
             chunks = []
             return Page(text: nil, wake: nil)
         }
-        if source?.kind != kind || source?.text != text {
+        if source?.kind != kind || source?.text != text || source?.scope != scope {
             // A new text: the chunk the voice is in (a reply that starts mid-way), or the first of your words, at once.
-            source = (kind, text)
+            source = (kind, text, scope)
             chunks = kind == .reply ? chunker.chunks(text) : chunker.saidChunks(text)
             begun = now
             shown = kind == .reply ? target(heard) : 0

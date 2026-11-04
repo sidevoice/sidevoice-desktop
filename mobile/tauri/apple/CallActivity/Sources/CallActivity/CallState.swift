@@ -54,6 +54,9 @@ public struct CallState: Codable, Hashable {
     }
 
     public var phase: Phase = .idle
+    /// While your words are held past the page's own 3 s (`TextPager`), `phase` is `.said` (the layout) and this is the
+    /// phase the call really is in.
+    public var heldPhase: Phase?
     public var title = ""
     /// "Opus 5.5", the page's wording of the model.
     public var model = ""
@@ -79,6 +82,15 @@ public struct CallState: Codable, Hashable {
     public var language = ""
 
     public init() {}
+
+    /// The phase whose tone, glyph and timer the activity wears. Your words (`.said`) are not a state (D-LA-SAID-STATE): the
+    /// call is working on them, and the header says so, with its timer, when the page says so (the working start is there);
+    /// a page that does not (it says idle, no timer) is drawn as it says, never green "Resting".
+    public var tonePhase: Phase {
+        guard phase == .said else { return phase }
+        if let heldPhase, heldPhase != .working { return heldPhase }
+        return workingSince != nil || heldPhase == .working ? .working : .idle
+    }
 
     /// The locale the system's own words on the activity follow: the page's language, else the device's.
     public var locale: Locale {

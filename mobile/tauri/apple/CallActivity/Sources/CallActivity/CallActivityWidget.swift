@@ -26,7 +26,7 @@ public struct CallActivityWidget: Widget {
             } minimal: {
                 MinimalFace(state: state)
             }
-            .keylineTint(Tone.of(state.phase, dark: true).fill)
+            .keylineTint(Tone.of(state.tonePhase, dark: true).fill)
             .widgetURL(CallLinks.call)
         }
     }

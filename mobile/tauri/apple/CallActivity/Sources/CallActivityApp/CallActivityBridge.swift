@@ -348,10 +348,16 @@ final class Controller {
         let report = report ?? Report()
         var state = report.state(route: AudioRoute.current())
         let kind: TextPager.Kind? = state.phase == .speaking ? .reply : state.phase == .said ? .said : nil
-        let page = pager.page(kind: kind, text: state.text, heard: report.heard, holdable: state.phase == .working, now: Date())
+        // Your words are kept by conversation: another one's never show under this one's title.
+        let scope = "\(state.creature?.file ?? "")|\(state.title)"
+        let page = pager.page(
+            kind: kind, text: state.text, heard: report.heard, holdable: TextPager.holds(state.phase), scope: scope, now: Date())
         state.text = page.text
-        // Your words outlast the page's 3 s: they go on as your words, under the working header, until their chunks are shown.
-        if page.held { state.phase = .said }
+        // Your words outlast the page's 3 s: they go on as your words, under the header of the state the call is really in.
+        if page.held {
+            state.heldPhase = state.phase
+            state.phase = .said
+        }
         due = page.wake
         return state
     }
