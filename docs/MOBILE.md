@@ -334,9 +334,10 @@ research/live-activity-design-2026-11-02 (HANDOVER.md); this is how their data g
   or the Live Activity's intents, or on iOS as the link the app is opened with (`sidevoice://conversations`, Tauri's
   `RunEvent::Opened`). Each call action has one native owner, the one the page's own button ends in too, and the app
   calls it itself (`Room::act`, `mobile/tauri/src/call.rs`): with the phone locked the WebView may not run script, so
-  nothing waits for the page. **Mute** is the voice host's mute of the room's call, the lane the microphone is routed to
+  nothing waits for the page. **Mute** (the Live Activity's mute button asks `toggle-mute`: the app takes the other of the mute it knows, never the
+  value the card's toggle sends, which a locked phone has sent wrong) is the voice host's mute of the room's call, the lane the microphone is routed to
   (`AppHost::mute_microphone`, the same `VoiceState` mute as the page's `voice_mute`), and the call's surfaces show it at
-  once (the toggle's value and the system's call agree); **cancel send** is its cancel of the unreported turn
+  once, past the update interval, while the page's reports from before it (one that disagrees) are not taken (the toggle's value and the system's call agree); **cancel send** is its cancel of the unreported turn
   (`AppHost::cancel_microphone_input`, as `voice_cancel_input`); **skip** its cancel of what is said
   (`AppHost::skip_playing`, as `voice_cancel_say`); **hang up** drops what is said, stops every call of the page and
   routes the microphone nowhere (`AppHost::stop_calls`; the audio session is given back once the last call's audio has

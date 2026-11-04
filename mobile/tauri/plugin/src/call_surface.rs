@@ -154,6 +154,9 @@ pub struct SurfaceWords {
 pub enum SurfaceAction {
     Mute,
     Unmute,
+    /// The other of the call's mute as the app knows it (iOS: the Live Activity's mute button, whose value the app does not
+    /// take from the card, which may draw an old state).
+    ToggleMute,
     Skip,
     CancelSend,
     HangUp,
@@ -424,6 +427,10 @@ mod tests {
         );
         assert_eq!(SurfaceAction::named("hang-up"), Some(SurfaceAction::HangUp));
         assert_eq!(SurfaceAction::named("mute"), Some(SurfaceAction::Mute));
+        assert_eq!(
+            SurfaceAction::named("toggle-mute"),
+            Some(SurfaceAction::ToggleMute)
+        );
         assert_eq!(
             SurfaceAction::named("route"),
             None,

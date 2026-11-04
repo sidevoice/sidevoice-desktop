@@ -12,7 +12,7 @@ import CallActivity
 import Foundation
 import SwiftUI
 
-/// The call's actions, by the names `SurfaceAction` reads (`mute`, `unmute`, `skip`, `cancel-send`, `hang-up`).
+/// The call's actions, by the names `SurfaceAction` reads (`toggle-mute`, `skip`, `cancel-send`, `hang-up`).
 enum CallActions {
     /// Hands the action to the app's Rust side; the hand-over is synchronous (the call acts after it, on its own threads).
     static func send(_ action: String, from intent: String) {
@@ -42,6 +42,10 @@ enum CallActions {
     }
 }
 
+/// The mute button: a `Toggle` (the system flips its face at once). Its `value` should be the other of what the card drew
+/// when it was tapped, but on a locked phone (build 32) muting did nothing while unmuting worked: the value that reached
+/// the app was "unmute" both times (the card's `isOn` old, or the value not carried). So the value is only logged, and the
+/// app's call takes the other of the mute it knows itself (`toggle-mute`), whatever the card drew.
 @available(iOS 17.0, *)
 struct SetMicOff: SetValueIntent, LiveActivityIntent {
     static var title: LocalizedStringResource = "Mute the call"
@@ -49,7 +53,10 @@ struct SetMicOff: SetValueIntent, LiveActivityIntent {
     @Parameter(title: "Muted") var value: Bool
     init() {}
     func perform() async throws -> some IntentResult {
-        CallActions.send(value ? "mute" : "unmute", from: "SetMicOff")
+        CallLog.intent.notice(
+            "intent SetMicOff: the toggle asks micOff=\(value, privacy: .public); the call toggles the mute it knows (toggle-mute)"
+        )
+        CallActions.send("toggle-mute", from: "SetMicOff")
         return .result()
     }
 }

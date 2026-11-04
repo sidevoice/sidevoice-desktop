@@ -303,6 +303,8 @@ pub struct Room {
     hung_up: Option<Option<f64>>,
     /// The join mark of the call the page last reported.
     reported_since: Option<f64>,
+    /// The mute the app set natively (a surface's), until the page reports it ([`reported_mic`]).
+    muting: Option<bool>,
     /// What the call's surfaces show, from the page's last report (`crate::surface`).
     surface: CallSurface,
     /// What the system's call was last told it shows (`None`: nothing yet).
@@ -398,6 +400,7 @@ impl RoomCall {
             mic_disabled: false,
             hung_up: None,
             reported_since: None,
+            muting: None,
             surface: CallSurface::default(),
             shown: None,
             updated_at: None,
@@ -431,6 +434,7 @@ impl RoomCall {
             room.mic_disabled = false;
             room.hung_up = None;
             room.reported_since = None;
+            room.muting = None;
             room.surface = CallSurface::default();
             room.hold(false, None);
             // The old page's stills go with it (nothing draws them once its call has ended): the new page sends its own.
@@ -461,6 +465,12 @@ impl RoomCall {
             if room.page == page {
                 let mut state = state;
                 state.joined = after_hang_up(&mut room.hung_up, state.joined, since);
+                state.mic_enabled = reported_mic(
+                    &mut room.muting,
+                    state.mic_enabled,
+                    mic_disabled,
+                    state.joined,
+                );
                 let (joined, mic_enabled) = (state.joined, state.mic_enabled);
                 room.state = state;
                 room.mic_disabled = mic_disabled;
@@ -671,6 +681,17 @@ impl Room {
         match native {
             // The page's mute command is sent by `set_mute`, which every native mute goes through.
             NativeAction::Mute(muted) => self.set_mute(muted),
+            // The other of the mute the app knows (the page's last report, and what the app set since), not of what the
+            // card drew when it was tapped.
+            NativeAction::ToggleMute => {
+                let muted = self.state.mic_enabled;
+                log::info!(
+                    "call: toggle-mute: the microphone is {}, so {}",
+                    if muted { "on" } else { "off" },
+                    if muted { "mute" } else { "unmute" }
+                );
+                self.set_mute(muted);
+            }
             NativeAction::CancelInput => {
                 run_on_page(&self.app, request);
                 self.with_host("cancel-send", |host| async move {
@@ -721,6 +742,7 @@ impl Room {
             return;
         }
         self.state.mic_enabled = !muted;
+        self.muting = Some(muted);
         let mut request =
             serde_json::json!({ "command": "mute", "page": self.page, "muted": muted });
         if let Some(since) = self.since {
@@ -731,6 +753,8 @@ impl Room {
             if muted { "mute" } else { "unmute" },
             move |host| async move { host.mute_microphone(muted).await },
         );
+        // Shown at once, the pill, the tile's badge and the island's glyph in one update: the person is looking at it.
+        self.updated_at = None;
         self.show();
         self.media();
     }
@@ -973,6 +997,7 @@ fn surface_command(action: SurfaceAction) -> serde_json::Value {
         SurfaceAction::Skip => command("skip-reply"),
         SurfaceAction::CancelSend => command("cancel-input"),
         SurfaceAction::HangUp => command("hang-up"),
+        SurfaceAction::ToggleMute => command("toggle-mute"),
         SurfaceAction::OpenConversations => command("open-conversations"),
     }
 }
@@ -983,6 +1008,8 @@ fn surface_command(action: SurfaceAction) -> serde_json::Value {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NativeAction {
     Mute(bool),
+    /// The other of the call's mute, as the app knows it.
+    ToggleMute,
     CancelInput,
     Skip,
     HangUp,
@@ -994,10 +1021,24 @@ fn native_action(action: SurfaceAction) -> NativeAction {
     match action {
         SurfaceAction::Mute => NativeAction::Mute(true),
         SurfaceAction::Unmute => NativeAction::Mute(false),
+        SurfaceAction::ToggleMute => NativeAction::ToggleMute,
         SurfaceAction::Skip => NativeAction::Skip,
         SurfaceAction::CancelSend => NativeAction::CancelInput,
         SurfaceAction::HangUp => NativeAction::HangUp,
         SurfaceAction::OpenConversations => NativeAction::None,
+    }
+}
+
+/// The microphone a page's report says is on (`reported`), after the app set the mute natively to `muting`: a report that
+/// disagrees is one the page sent before it ran that mute (a surface's, while the page did not run), and is not taken; one
+/// that agrees, or one of a mute that cannot be used or of no call, is the page's again and ends the wait.
+fn reported_mic(muting: &mut Option<bool>, reported: bool, disabled: bool, joined: bool) -> bool {
+    match *muting {
+        Some(muted) if joined && !disabled && reported == muted => !muted,
+        _ => {
+            *muting = None;
+            reported
+        }
     }
 }
 
@@ -1064,6 +1105,7 @@ mod tests {
         for (action, command) in [
             (SurfaceAction::Mute, r#"{"command":"mute","muted":true}"#),
             (SurfaceAction::Unmute, r#"{"command":"mute","muted":false}"#),
+            (SurfaceAction::ToggleMute, r#"{"command":"toggle-mute"}"#),
             (SurfaceAction::Skip, r#"{"command":"skip-reply"}"#),
             (SurfaceAction::CancelSend, r#"{"command":"cancel-input"}"#),
             (SurfaceAction::HangUp, r#"{"command":"hang-up"}"#),
@@ -1085,12 +1127,46 @@ mod tests {
         for (action, native) in [
             (SurfaceAction::Mute, NativeAction::Mute(true)),
             (SurfaceAction::Unmute, NativeAction::Mute(false)),
+            (SurfaceAction::ToggleMute, NativeAction::ToggleMute),
             (SurfaceAction::Skip, NativeAction::Skip),
             (SurfaceAction::CancelSend, NativeAction::CancelInput),
             (SurfaceAction::HangUp, NativeAction::HangUp),
             (SurfaceAction::OpenConversations, NativeAction::None),
         ] {
             assert_eq!(native_action(action), native, "{action:?}");
+        }
+    }
+
+    #[test]
+    fn a_mute_set_natively_is_not_undone_by_the_page_s_late_reports() {
+        let mut muting = Some(true);
+        assert!(
+            !reported_mic(&mut muting, true, false, true),
+            "a report from before the mute"
+        );
+        assert_eq!(muting, Some(true), "kept until the page follows");
+        assert!(
+            !reported_mic(&mut muting, false, false, true),
+            "the page muted"
+        );
+        assert_eq!(muting, None);
+        assert!(
+            reported_mic(&mut muting, true, false, true),
+            "the person unmuted in the app"
+        );
+
+        let mut muting = Some(false);
+        assert!(
+            reported_mic(&mut muting, false, false, true),
+            "an unmute too"
+        );
+        assert!(reported_mic(&mut muting, true, false, true));
+        assert_eq!(muting, None);
+
+        for (disabled, joined) in [(true, true), (false, false)] {
+            let mut muting = Some(true);
+            assert!(reported_mic(&mut muting, true, disabled, joined));
+            assert_eq!(muting, None, "disabled {disabled}, joined {joined}");
         }
     }
 
