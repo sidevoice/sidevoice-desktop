@@ -60,7 +60,7 @@ public struct LockCard: View {
                     }
                 }
                 ActionButton(action: .skip, enabled: state.canSkip) {
-                    RoundButtonFace(symbol: "forward.fill", size: 40, glyph: 17, fill: palette.button, ink: palette.text)
+                    RoundButtonFace(symbol: SkipGlyph.symbol, size: 40, glyph: 17, fill: palette.button, ink: palette.text)
                 }
                 .opacity(state.canSkip ? 1 : Ink.disabled)
                 .accessibilityLabel(state.words.skipName)
@@ -291,9 +291,7 @@ struct Reply: View {
                 ViewThatFits(in: .horizontal) {
                     ActionButton(action: .skip) {
                         HStack(spacing: 4) {
-                            Image(systemName: "forward.fill")
-                                .resizable().scaledToFit()
-                                .frame(width: 14, height: 14)
+                            SkipGlyph(size: 14)
                             Text(state.words.skip)
                                 .font(DMSans.font(12, 650))
                                 .lineLimit(1)
@@ -308,7 +306,7 @@ struct Reply: View {
                     }
                     ActionButton(action: .skip) {
                         RoundButtonFace(
-                            symbol: "forward.fill", size: 26, glyph: 14, fill: Palette.island.button,
+                            symbol: SkipGlyph.symbol, size: 26, glyph: 14, fill: Palette.island.button,
                             ink: Palette.island.text)
                     }
                 }
