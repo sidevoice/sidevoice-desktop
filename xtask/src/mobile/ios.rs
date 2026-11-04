@@ -473,7 +473,6 @@ mod tests {
         files.iter().filter(|(n, _)| *n != name).cloned().collect()
     }
 
-
     /// The App Intents metadata listing `names`, as module-qualified identifiers.
     fn actions_data(names: &[&str]) -> Vec<u8> {
         let actions: serde_json::Map<String, serde_json::Value> =
