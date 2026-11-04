@@ -138,6 +138,10 @@ through `run` (the call's service hangs up through it).
   Tauri CLI only the `TAURI*`, `WRY*`, `CARGO_*` and `RUST_*` variables, and would otherwise link a copy of its own. Git ignores both
   (`mobile/tauri/frameworks/`, the `.so` files of `jniLibs`).
 - **The log**: `tauri-plugin-log` to the system's (logcat, the unified log) and a file in the app's log folder.
+  - **Panics** (`mobile/tauri/src/panics.rs`): a hook logs each one (its thread, place and message) and adds it to
+    `last-panic.txt` beside the log file, at most 16 KB; the next launch logs that file's panics as the last run's
+    (`the last run panicked:`) and removes it. A panic the app cannot unwind from aborts it before anything else is
+    written, and the system's crash report has only the stack.
 
 ### Not verified
 
@@ -453,6 +457,16 @@ stays unsigned with no secret. Its one step is `cargo xtask mobile testflight --
    signed, and it passes the privacy and export-compliance check (above).
 3. `xcrun altool --upload-app` uploads it. App Store Connect processes it (minutes), and TestFlight offers it to the
    internal testers.
+
+- **Symbols.** The archive's dSYMs and the app's executable as it ships are kept as the run's artifact
+  `Sidevoice-ios-<N>-symbols` for 90 days, and the upload carries the symbols for App Store Connect (`Symbols/`, checked
+  in step 2), so TestFlight's crash reports are symbolicated. The Rust code's names are in them: the Rust library is
+  linked as a static library, which the release profile's `strip` does not touch, and only the archive's last step
+  strips the executable, after Xcode has written the dSYM. A crash report from the phone (`.ips`) gives offsets into
+  the executable (`imageOffset`): `atos -o Sidevoice.app.dSYM/Contents/Resources/DWARF/Sidevoice -l 0x100000000 <0x100000000 + offset>`,
+  or `llvm-symbolizer`. A build made before they were kept has its symbols rebuilt by mobile.yml, run by hand with
+  `symbols-of-build: <N>` on a ref whose app is that build's commit (`cargo xtask mobile symbols`: the same archive,
+  unsigned and not uploaded, so its code is laid out the same).
 
 - **The build number** is the run number of the workflow, which only grows, as TestFlight requires of the builds of a
   version, and it is the app's `CFBundleVersion` whole. (The CLI's own `--build-number` appends it to the version,

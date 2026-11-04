@@ -16,6 +16,7 @@ mod downloads;
 mod hold;
 mod i18n;
 pub mod pairings;
+mod panics;
 mod platform;
 mod surface;
 
@@ -303,6 +304,12 @@ fn run_app() {
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
+            // Every panic in the app's log, and in a file beside it that the next launch reads: a panic the app cannot
+            // unwind from aborts it before anything else is written (`panics`). The log's folder exists by now.
+            match handle.path().app_log_dir() {
+                Ok(dir) => panics::watch(&dir),
+                Err(error) => log::warn!("panics: no log folder: {error}"),
+            }
             // The headset's buttons and the lock screen's controls act on the call through the page, as the desktop's do,
             // and on the room's call's thread, in order with its reports and interruptions (`call::RoomCall`).
             let media_app = handle.clone();
