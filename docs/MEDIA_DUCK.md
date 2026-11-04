@@ -129,8 +129,9 @@ per-language `InfoPlist.strings`, as the mobile app has, are a follow-up (with t
 
 - `lower`: `per-app` (any app, one by one), `some-apps` (only named apps: macOS without taps) or `none`;
 - `pause`: `media-controls`, `some-apps` or `none`;
-- `access`: macOS Automation of Music and Spotify, `granted`, `denied`, `undetermined` or `unknown` (the system answers only
-  for an app that is open: with neither open the last real answer stands, else `unknown`); absent elsewhere;
+- `access`: macOS Automation of Music and Spotify, each app allowed on its own: `undetermined` while an open one has not
+  been asked (Allow asks it), else `denied` if one was refused, else `granted` if one was allowed, else `unknown` (the system
+  answers only for an app that is open: a closed app keeps its last yes or no, never a "not asked"); absent elsewhere;
 - `capture`: macOS 14.4 and later only, System Audio Recording, `granted`, `denied`, `undetermined` or `unknown` (the
   check could not be made); absent elsewhere.
 
@@ -151,6 +152,10 @@ The per-OS checklist is in the pull request (#408). macOS items to verify on a d
 - Device switch while lowered (headphones in/out, USB DAC, HDMI): lowered on the new output, nothing silent.
 - Browsers: Chrome/YouTube, Safari/YouTube (WebKit GPU process) lowered; Sidevoice's own voice and page sounds untouched.
 - The hardware input streams are the ones turned off (the tap's stream comes after them in the aggregate).
-- The Settings anchor `Privacy_ScreenCapture` opens the right pane on 14.x and 15.x.
+- The Settings anchor `Privacy_ScreenCapture` opens the right pane on 14.x and 15.x. On 14.4 to 14.x (Sonoma) the pane is
+  called "Screen Recording": check that the anchor lands there and whether System Audio Recording (the audio-capture
+  permission) is listed in it, so the Permissions row's path and Open System Settings are right there.
+- Automation per app: Music allowed and Spotify not asked yet, then Spotify opened: the Permissions row offers Allow again,
+  and Allow asks about Spotify.
 - Another tap app (SoundSource, FineTune) running on the same device.
 - A tap that starts delivering zeros (Apple forum 825780).

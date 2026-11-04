@@ -124,23 +124,28 @@ impl Os for Native {
     }
 
     fn access() -> Option<Access> {
-        // The system answers only about an app that is open (-600 otherwise): with neither open, the last real answer stands.
-        static LAST: Mutex<Option<Access>> = Mutex::new(None);
-        let codes: Vec<i32> = APPS.iter().map(|(_, bundle)| permission(bundle, false)).collect();
-        let answer = if codes.contains(&0) {
-            Some(Access::Granted)
-        } else if codes.contains(&DENIED) {
-            Some(Access::Denied)
-        } else if codes.contains(&UNDETERMINED) {
-            Some(Access::Undetermined)
-        } else {
-            None
-        };
+        // Each app is allowed on its own, and the system answers only about one that is open (-600 otherwise): each app's
+        // last yes or no stands while it is closed. One still to be asked comes first (Allow asks it), then one refused
+        // (it is not controlled), then one allowed; none known: `unknown`.
+        static LAST: Mutex<[Option<Access>; APPS.len()]> = Mutex::new([None; APPS.len()]);
         let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
-        if answer.is_some() {
-            *last = answer;
+        for (known, (_, bundle)) in last.iter_mut().zip(APPS) {
+            match permission(bundle, false) {
+                0 => *known = Some(Access::Granted),
+                DENIED => *known = Some(Access::Denied),
+                UNDETERMINED => *known = Some(Access::Undetermined),
+                // Closed, it cannot be asked: only a yes or a no is kept for it.
+                NOT_OPEN if *known == Some(Access::Undetermined) => *known = None,
+                _ => {}
+            }
         }
-        Some(last.unwrap_or(Access::Unknown))
+        let has = |a: Access| last.contains(&Some(a));
+        Some(
+            [Access::Undetermined, Access::Denied, Access::Granted]
+                .into_iter()
+                .find(|&a| has(a))
+                .unwrap_or(Access::Unknown),
+        )
     }
 
     fn ask() {
