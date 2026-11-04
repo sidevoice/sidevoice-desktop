@@ -371,14 +371,15 @@ itself (D-NO-CALLKIT-DEFAULT). Nothing runs before iOS 16.1 or while the person 
 its buttons need iOS 17 (before that it only shows the call).
 
 - **Where the code is.** ActivityKit has no Objective-C API, so the activity is Swift, in one local package,
-  `mobile/tauri/apple/CallActivity`: `CallActivity` (the attributes and state, the views, the App Intents and DM Sans,
-  OFL), linked by the app and by the widget extension, and `CallActivityApp` (start, update, end; the app only). The
+  `mobile/tauri/apple/CallActivity`: `CallActivity` (the attributes and state, the views and DM Sans, OFL), linked by the
+  app and by the widget extension, and `CallActivityApp` (start, update, end; the app only). The
   Rust side (`mobile/tauri/plugin/src/platform/call_surface/ios.rs`) reaches it by name, `SidevoiceCallActivity`
   (`start:`, `show:`, `end`, each with the call's details as JSON), from the call's service functions
   (`start_call_service` for the app's own call, `update_call_service`, `stop_call_service`).
 - **The Xcode project** gets it through the Tauri CLI's own input for it, a custom XcodeGen template
-  (`mobile/tauri/ios-project.yml`, `bundle > iOS > template`): the CLI's template plus the package, the app's file that
-  lists the package's intents (`mobile/tauri/apple/App`), the App Group `group.ai.sidevoice.mobile` on the app and the
+  (`mobile/tauri/ios-project.yml`, `bundle > iOS > template`): the CLI's template plus the package, the app's file
+  (`mobile/tauri/apple/App`), the buttons' App Intents (`mobile/tauri/apple/Intents`, compiled into the app and into the
+  extension), the App Group `group.ai.sidevoice.mobile` on the app and the
   extension, and the widget extension `SidevoiceActivity` (`ai.sidevoice.mobile.activity`, `mobile/tauri/apple/Widget`),
   embedded in the app, at the app's version. When the CLI's version moves, its template is taken again and these
   additions kept. `Info.ios.plist` declares `NSSupportsLiveActivities` and the app's URL scheme, `sidevoice`
@@ -386,7 +387,7 @@ its buttons need iOS 17 (before that it only shows the call).
 - **The activity's life.** The system can end the activity (or the person can swipe it away) during a call. The app
   follows its state (`ActivityLifecycle`, `activityStateUpdates`), drops it when it is over and requests a new one with the
   next state (at once if the app is in front, else when it next is); at launch and whenever it comes to the front it ends
-  the app's activities that are not the call's (what a crash left). The buttons log `Sidevoice: intent …` when they run.
+  the app's activities that are not the call's (what a crash left). The buttons log each step to the unified log, subsystem `ai.sidevoice`, category `intent`.
 - **Updates.** Every change goes out at once, except the reply's captions: a change of the spoken page alone waits until
   about 2 s after the last update (iOS throttles local updates that come too often). Each update moves the activity's
   `staleDate` three minutes ahead, and the activity is updated every minute while the call lasts even when nothing
@@ -395,7 +396,13 @@ its buttons need iOS 17 (before that it only shows the call).
   starts while the app is in the background (iOS lets an app request an activity only in front) gets its activity when
   the app next comes to the front, if the call still lasts. A system's call the system refuses goes on as the app's own,
   with its activity.
-- **Its buttons** are App Intents (`LiveActivityIntent`, run in the app's process, not offered to Shortcuts): mute (a
+- **Its buttons** are App Intents (`LiveActivityIntent`, run in the app's process, not offered to Shortcuts), declared in
+  the app's and the extension's own code (`mobile/tauri/apple/Intents/CallIntents.swift`, in both targets), as Apple's
+  Live Activity intents are, so that each bundle's App Intents metadata lists them as its own. Not in the package: the
+  device registers no metadata for intents of a statically linked package (`linkd`: `aggregateMetadataIsEmpty`, and every
+  tap fails with "There is no metadata for SetMicOff"; TestFlight build 26), and `cargo xtask mobile check-ios` and the
+  archive's check refuse an intent of the package or a package the metadata includes. The extension hands the package's
+  views their buttons (`CallControls`); without them (the renders) the views draw the same faces. Mute (a
   toggle with the value), skip, cancel send and hang up ask the Rust side for the page's action through the class it
   defines, `SidevoiceCallSurfaceActions` (`act:`), which reports `CallEvent::Action`. The audio switch, shown only while
   headphones are connected (D-LA-ROUTE), is the system's: it overrides the output to the speaker, or back

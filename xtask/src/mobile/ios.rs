@@ -210,34 +210,97 @@ pub fn check_bundle(bundle: &Bundle) -> Result<()> {
 /// `mobile check-ios APP`.
 pub fn check_app(app: &Path) -> Result<()> {
     ensure(app.is_dir(), format!("{}: no such app", app.display()))?;
-    check_bundle(&Bundle::from_app(app)?)
+    check_bundle(&Bundle::from_app(app)?)?;
+    check_intent_metadata(|name| match fs::read(app.join(name)) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("{}: {e}", app.join(name).display())),
+    })
 }
 
 /// The call's Live Activity's widget extension, inside the app (mobile/tauri/ios-project.yml, target SidevoiceActivity).
 const EXTENSION: &str = "PlugIns/SidevoiceActivity.appex";
 
-/// The Live Activity's buttons (`LiveActivityIntent`s of the CallActivity package, mobile/tauri/apple/CallActivity).
+/// The Live Activity's buttons (`LiveActivityIntent`s, mobile/tauri/apple/Intents, compiled into the app and the extension).
 const INTENTS: [&str; 5] = ["SetMicOff", "SkipReply", "CancelSend", "HangUp", "ToggleRoute"];
 
+/// The module of the Live Activity's Swift package (mobile/tauri/apple/CallActivity), linked statically: no intent may be
+/// declared there.
+const PACKAGE_MODULE: &str = "CallActivity";
+
 /// The App Intents metadata the system reads to run a button (`Metadata.appintents/extract.actionsdata`, in the app and
-/// in the extension): every intent of [`INTENTS`] is listed, once. A package linked statically can leave the metadata out,
-/// or a double `AppIntentsPackage` can list an intent twice; either way a tap on the locked phone does nothing, silently.
-/// The actions are read as an object keyed by their identifier or an array of objects with an `identifier`; an
-/// identifier is the intent's name, alone or after its module (`CallActivity.SetMicOff`).
+/// in the extension): every intent of [`INTENTS`] is listed, once, and is declared in the bundle's own code. Either way it
+/// goes wrong, a tap on the locked phone does nothing, silently: an intent missing, listed twice (a double
+/// `AppIntentsPackage`), or one of a statically linked package, whose metadata Xcode copies into the bundle with an
+/// `includes` of the package in `extract.packagedata`, which the device's `linkd` cannot resolve (no framework holds the
+/// package's metadata): it registers nothing for the app (`aggregateMetadataIsEmpty`) and every tap fails with "There is
+/// no metadata for SetMicOff" (TestFlight build 26, iOS 26). The actions are read as an object keyed by their identifier or
+/// an array of objects with an `identifier`; an identifier is the intent's name, alone or after its module
+/// (`CallActivity.SetMicOff`); the module of its type is its `fullyQualifiedTypeName`'s.
 fn check_intents(actions_data: &[u8], what: &str) -> Result<()> {
     let json: serde_json::Value = serde_json::from_slice(actions_data).map_err(|e| format!("{what}: {e}"))?;
-    let identifiers: Vec<String> = match json.get("actions") {
-        Some(serde_json::Value::Object(map)) => map.keys().cloned().collect(),
-        Some(serde_json::Value::Array(list)) => list
-            .iter()
-            .filter_map(|a| a.get("identifier").and_then(serde_json::Value::as_str).map(str::to_owned))
-            .collect(),
+    let actions: Vec<(String, Option<String>)> = match json.get("actions") {
+        Some(serde_json::Value::Object(map)) => {
+            map.iter().map(|(id, action)| (id.clone(), type_name(action))).collect()
+        }
+        Some(serde_json::Value::Array(list)) => {
+            list.iter().filter_map(|a| Some((a.get("identifier")?.as_str()?.to_owned(), type_name(a)))).collect()
+        }
         _ => return Err(format!("{what}: no actions in the App Intents metadata")),
     };
     for intent in INTENTS {
-        let count = identifiers.iter().filter(|id| *id == intent || id.ends_with(&format!(".{intent}"))).count();
-        ensure(count != 0, format!("{what}: the App Intents metadata lacks {intent}: its button would do nothing"))?;
-        ensure(count == 1, format!("{what}: the App Intents metadata lists {intent} {count} times"))?;
+        let found: Vec<&(String, Option<String>)> =
+            actions.iter().filter(|(id, _)| *id == intent || id.ends_with(&format!(".{intent}"))).collect();
+        ensure(
+            !found.is_empty(),
+            format!("{what}: the App Intents metadata lacks {intent}: its button would do nothing"),
+        )?;
+        ensure(found.len() == 1, format!("{what}: the App Intents metadata lists {intent} {} times", found.len()))?;
+        let package = format!("{PACKAGE_MODULE}.");
+        let (id, type_name) = found[0];
+        ensure(
+            !id.starts_with(&package) && !type_name.as_deref().is_some_and(|t| t.starts_with(&package)),
+            format!(
+                "{what}: {intent} is declared in the statically linked {PACKAGE_MODULE} package: the device registers no \
+                 metadata for the app (linkd: aggregateMetadataIsEmpty) and its button does nothing"
+            ),
+        )?;
+    }
+    Ok(())
+}
+
+/// The type an action of the metadata names (`fullyQualifiedTypeName`, `Module.Type`).
+fn type_name(action: &serde_json::Value) -> Option<String> {
+    action.get("fullyQualifiedTypeName").and_then(serde_json::Value::as_str).map(str::to_owned)
+}
+
+/// The App Intents packages a bundle's metadata includes (`extract.packagedata`): none may be, since the one package
+/// there is linked statically and the device cannot resolve an include of it ([`check_intents`]).
+fn check_packages(package_data: &[u8], what: &str) -> Result<()> {
+    let json: serde_json::Value = serde_json::from_slice(package_data).map_err(|e| format!("{what}: {e}"))?;
+    let includes = json.get("includes").and_then(serde_json::Value::as_array).map_or(0, Vec::len);
+    ensure(
+        includes == 0,
+        format!(
+            "{what}: the App Intents metadata includes {includes} package(s) ({}): a statically linked package's metadata \
+             is not found on the device (linkd: aggregateMetadataIsEmpty), and no button runs",
+            json.get("includes").map(ToString::to_string).unwrap_or_default()
+        ),
+    )
+}
+
+/// The buttons' App Intents metadata, in the app and in the extension, as `read` gives their files by their path in
+/// the app (`None` for one that is not there).
+fn check_intent_metadata(mut read: impl FnMut(&str) -> Result<Option<Vec<u8>>>) -> Result<()> {
+    for bundle in ["", EXTENSION] {
+        let metadata =
+            if bundle.is_empty() { "Metadata.appintents".to_owned() } else { format!("{bundle}/Metadata.appintents") };
+        let actions = format!("{metadata}/extract.actionsdata");
+        check_intents(&read(&actions)?.ok_or_else(|| format!("no {actions}"))?, &actions)?;
+        let packages = format!("{metadata}/extract.packagedata");
+        if let Some(bytes) = read(&packages)? {
+            check_packages(&bytes, &packages)?;
+        }
     }
     Ok(())
 }
@@ -302,14 +365,14 @@ pub fn check_ipa(ipa: &Path, identifier: &str, build_number: u32) -> Result<()> 
         format!("{}: no Symbols/*.symbols: TestFlight's crash reports would not be symbolicated", ipa.display()),
     )?;
     check_bundle(&bundle)?;
-    // The buttons' App Intents metadata, in the app and in the extension.
-    for bundle_root in [root.clone(), format!("{root}{EXTENSION}/")] {
-        let path = format!("{bundle_root}Metadata.appintents/extract.actionsdata");
-        let mut entry = archive.by_name(&path).map_err(|_| format!("{}: no {path}", ipa.display()))?;
+    check_intent_metadata(|name| {
+        let path = format!("{root}{name}");
+        let Ok(mut entry) = archive.by_name(&path) else { return Ok(None) };
         let mut bytes = Vec::new();
         entry.read_to_end(&mut bytes).map_err(|e| format!("{path}: {e}"))?;
-        check_intents(&bytes, &path)?;
-    }
+        Ok(Some(bytes))
+    })
+    .map_err(|e| format!("{}: {e}", ipa.display()))?;
     println!("{}: {identifier} build {build_number}, signed", ipa.display());
     Ok(())
 }
@@ -484,11 +547,43 @@ mod tests {
         files.iter().filter(|(n, _)| *n != name).cloned().collect()
     }
 
-    /// The App Intents metadata listing `names`, as module-qualified identifiers.
+    /// The App Intents metadata listing `names`, as Xcode writes it for intents declared in the bundle's own module.
     fn actions_data(names: &[&str]) -> Vec<u8> {
-        let actions: serde_json::Map<String, serde_json::Value> =
-            names.iter().map(|n| (format!("CallActivity.{n}"), serde_json::json!({}))).collect();
+        actions_in("Sidevoice", names)
+    }
+
+    /// The App Intents metadata listing `names`, declared in `module`.
+    fn actions_in(module: &str, names: &[&str]) -> Vec<u8> {
+        let actions: serde_json::Map<String, serde_json::Value> = names
+            .iter()
+            .map(|n| {
+                (
+                    n.to_string(),
+                    serde_json::json!({ "identifier": n, "fullyQualifiedTypeName": format!("{module}.{n}") }),
+                )
+            })
+            .collect();
         serde_json::json!({ "version": 1, "actions": actions }).to_string().into_bytes()
+    }
+
+    #[test]
+    fn intents_of_the_statically_linked_package_are_refused() {
+        let files = app_files("ai.sidevoice.mobile", "42");
+        let mut app = without(&files, "Metadata.appintents/extract.actionsdata");
+        app.push(("Metadata.appintents/extract.actionsdata", actions_in("CallActivity", &INTENTS)));
+        let error = check(&app, "ai.sidevoice.mobile", 42).unwrap_err();
+        assert!(error.contains("statically linked CallActivity package"), "{error}");
+        // As TestFlight build 26 had it: the package included.
+        let mut included = files.clone();
+        included.push((
+            "PlugIns/SidevoiceActivity.appex/Metadata.appintents/extract.packagedata",
+            br#"{"includes":["12CallActivity0aB7IntentsV"],"version":1}"#.to_vec(),
+        ));
+        let error = check(&included, "ai.sidevoice.mobile", 42).unwrap_err();
+        assert!(error.contains("includes 1 package"), "{error}");
+        let mut none: Vec<(&str, Vec<u8>)> = files.clone();
+        none.push(("Metadata.appintents/extract.packagedata", br#"{"includes":[],"version":1}"#.to_vec()));
+        check(&none, "ai.sidevoice.mobile", 42).unwrap();
     }
 
     #[test]
