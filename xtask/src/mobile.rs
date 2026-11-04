@@ -80,15 +80,27 @@ fn build_channel() -> Result<Channel> {
     }
 }
 
-/// [`tauri`] for a build of the app: the app's build script is told what the build is (`host.build`, mobile/tauri/build.rs):
-/// the channel ([`build_channel`]) and, for a nightly, HEAD's short commit and date.
-fn build_tauri(args: &[&str]) -> Result<Cmd> {
+/// What this build is, as the app's build script reads it (`host.build`, mobile/tauri/build.rs): the variables for the
+/// channel ([`build_channel`]) and, for a nightly, HEAD's short commit and date.
+fn build_vars() -> Result<[(&'static str, String); 3]> {
     let channel = build_channel()?;
     let (commit, date) = if channel == Channel::Nightly { util::head_commit()? } else { Default::default() };
-    Ok(tauri(args)
-        .env("SIDEVOICE_BUILD_CHANNEL", channel.name())
-        .env("SIDEVOICE_BUILD_COMMIT", commit)
-        .env("SIDEVOICE_BUILD_DATE", date))
+    Ok([
+        ("SIDEVOICE_BUILD_CHANNEL", channel.name().to_owned()),
+        ("SIDEVOICE_BUILD_COMMIT", commit),
+        ("SIDEVOICE_BUILD_DATE", date),
+    ])
+}
+
+/// [`tauri`] for a build of the app: the app's build script is told what the build is ([`build_vars`]). The cargo the
+/// native project runs again (the Xcode build phase, Gradle's `rust` task) is told through the cargo config instead
+/// ([`AppBuildLibs`]): the Tauri CLI does not hand it these variables.
+fn build_tauri(args: &[&str]) -> Result<Cmd> {
+    let mut cmd = tauri(args);
+    for (key, value) in build_vars()? {
+        cmd = cmd.env(key, value);
+    }
+    Ok(cmd)
 }
 
 /// The Android `targetSdk` the app declares: 36, the plan's. The Tauri template writes its own (37 with the CLI package.json
@@ -404,7 +416,8 @@ impl EngineLibs {
 /// environment for the Tauri CLI's own cargo, and in the repository's cargo config (`.cargo/config.toml`, `[env]`) for
 /// the cargo the native project runs again from inside its build (the Xcode build phase, Gradle's `rust` task). The Tauri
 /// CLI hands those only the variables named `TAURI*`, `WRY*`, `CARGO_*` or `RUST_*`, and `PATH` and `TMPDIR`
-/// (`env_vars` in its `mobile` module), so `SHERPA_ONNX_LIB_DIR` and `ONNXRUNTIME_FRAMEWORK_DIR` would not reach them:
+/// (`env_vars` in its `mobile` module), so `SHERPA_ONNX_LIB_DIR` and `ONNXRUNTIME_FRAMEWORK_DIR` would not reach them (nor
+/// `SIDEVOICE_BUILD_CHANNEL`, `_COMMIT` and `_DATE`, [`build_vars`]: the app would say it is a `dev` build, on TestFlight too):
 /// their `sherpa-onnx-sys` would then download its own copy, unchecked, and on iOS lose the target's library (`library
 /// 'sherpa-onnx-c-api' not found`), whatever a build cache happened to keep. The config is given back as it was when this
 /// is dropped, failed build or not.
@@ -428,6 +441,11 @@ impl AppBuildLibs {
         let config = repo().join(".cargo/config.toml");
         let original = fs::read(&config).ok();
         let mut text = original.as_deref().map(String::from_utf8_lossy).unwrap_or_default().into_owned();
+        // What every cargo of the build reads from the cargo config: the build's own variables (`host.build`, [`build_vars`]),
+        // which the Tauri CLI does not hand the cargo of the native project either.
+        let mut env: Vec<(String, String)> =
+            build_vars()?.into_iter().map(|(key, value)| (key.to_owned(), value)).collect();
+        ensure(!text.contains("\n[env]"), format!("{}: has an [env] table already", config.display()))?;
         text.push_str(
             "\n# Written by `cargo xtask mobile` for one app build, and taken out after it (xtask/src/mobile.rs, AppBuildLibs).\n",
         );
@@ -441,17 +459,18 @@ impl AppBuildLibs {
                 ));
             }
         } else {
-            ensure(!text.contains("\n[env]"), format!("{}: has an [env] table already", config.display()))?;
-            text.push_str("[env]\n");
-            for (key, value) in all[0].vars() {
-                let value = serde_json::to_string(&value.to_string_lossy()).map_err(|e| e.to_string())?;
-                text.push_str(&format!("{key} = {value}\n"));
-            }
+            env.extend(
+                all[0].vars().into_iter().map(|(key, value)| (key.to_owned(), value.to_string_lossy().into_owned())),
+            );
             // The oldest iOS the app runs on, for the C and C++ the build scripts compile (whisper.cpp, aws-lc): without
             // it they target the SDK's own version, and an availability check (`@available(iOS 18, *)`) is then compiled
             // as always true, so the app calls what an older iOS lacks.
-            let minimum = serde_json::to_string(&ios_deployment_target()?).map_err(|e| e.to_string())?;
-            text.push_str(&format!("IPHONEOS_DEPLOYMENT_TARGET = {minimum}\n"));
+            env.push(("IPHONEOS_DEPLOYMENT_TARGET".to_owned(), ios_deployment_target()?));
+        }
+        text.push_str("[env]\n");
+        for (key, value) in env {
+            let value = serde_json::to_string(&value).map_err(|e| e.to_string())?;
+            text.push_str(&format!("{key} = {value}\n"));
         }
         write(&config, text)?;
         Ok(AppBuildLibs { libs: all.remove(0), config, original })
