@@ -277,8 +277,8 @@ call service (`sidevoice-mobile-plugin`'s `call_service`), started and ended as 
   the call (an emergency call on, the registration failing) leaves the call the app's own: the service's focus.
   The manifest adds `MANAGE_OWN_CALLS` (granted at install), `FOREGROUND_SERVICE_PHONE_CALL` (the service is also of type
   `phoneCall`) and `MODIFY_AUDIO_SETTINGS` (below).
-- **Mute.** A mute or unmute from the system's side (CallKit's `CXSetMutedCallAction`, Telecom's `isMuted`) is set on the
-  page's own mute, as the person's (`window.__sidevoiceHost.run({command: "mute", muted, page, since})`; nothing when it is
+- **Mute.** A mute or unmute from the system's side (CallKit's `CXSetMutedCallAction`, Telecom's `isMuted`) is the voice
+  host's native mute of the call ("The call surface" below), and is set on the page's own mute, as the person's (`window.__sidevoiceHost.run({command: "mute", muted, page, since})`; nothing when it is
   so already), carrying the call it is for as the interruptions' commands do. The page's mute goes the other way when it
   changes: as a `CXSetMutedCallAction` the app asks for, and on Android as the system's microphone mute (turned off again
   when the call ends, if the service turned it on), so a car kit shows what the page shows.
@@ -332,9 +332,21 @@ research/live-activity-design-2026-11-02 (HANDOVER.md); this is how their data g
 - **What the person does on a surface** comes back as the service's event `{"type":"action","action":…}` (`mute`,
   `unmute`, `skip`, `cancel-send`, `hang-up`, `open-conversations`; `CallEvent::Action`), from the notification's buttons
   or the Live Activity's intents, or on iOS as the link the app is opened with (`sidevoice://conversations`, Tauri's
-  `RunEvent::Opened`). The app runs it on the page's call as the page's own command (`mute` with the value, `skip-reply`,
-  `cancel-input`, `hang-up`, `open-conversations`), for the current page and call. The audio route is not one of them:
-  the system's route is the native side's to switch.
+  `RunEvent::Opened`). Each call action has one native owner, the one the page's own button ends in too, and the app
+  calls it itself (`Room::act`, `mobile/tauri/src/call.rs`): with the phone locked the WebView may not run script, so
+  nothing waits for the page. **Mute** is the voice host's mute of the room's call, the lane the microphone is routed to
+  (`AppHost::mute_microphone`, the same `VoiceState` mute as the page's `voice_mute`), and the call's surfaces show it at
+  once (the toggle's value and the system's call agree); **cancel send** is its cancel of the unreported turn
+  (`AppHost::cancel_microphone_input`, as `voice_cancel_input`); **skip** its cancel of what is said
+  (`AppHost::skip_playing`, as `voice_cancel_say`); **hang up** drops what is said, stops every call of the page and
+  routes the microphone nowhere (`AppHost::stop_calls`; the audio session is given back once the last call's audio has
+  stopped), and ends the call's service and its Live Activity; the page's reports of that call joined (sent before it
+  ran the hang-up) do not start it again. The page is told too, first, as its own command for its call (`mute` with the
+  value, `skip-reply`, `cancel-input`, `hang-up`, `open-conversations`), and runs it when it runs again: it shows what was
+  done and does what only it can (the room told of the hang-up, its lanes disposed of; a stop of a stopped call still
+  answers). The stack of the other conversations is the page's alone. The audio route is not one of them: the system's
+  route is the native side's to switch. A headset's play/pause and the system's call's mute go through the same native
+  mute, and the system's call ending from outside the app hangs up natively too.
 - **Android's card** (`CallCard.kt`, `CallCardViews.kt`, `res/layout/call_card*.xml` in the plugin): the call service's
   notification is a `DecoratedCustomViewStyle` (the system draws the header, with no time) whose RemoteViews draw the
   design's Lock Screen card in dp: expanded (the tile, the title, model · machine, the state with its dot and, while

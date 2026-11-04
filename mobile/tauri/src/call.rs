@@ -293,8 +293,16 @@ pub struct Room {
     /// Whether the call held is a system's call (CallKit, Telecom: the developer option, read when it started), else the
     /// app's own.
     system: bool,
-    /// The call as the page last reported it.
+    /// The call as the page last reported it, with what the app did natively since (a surface's mute, a hang-up).
     state: CallState,
+    /// Whether the page's mute cannot be used now (a call with no conversation): a surface's mute does nothing then.
+    mic_disabled: bool,
+    /// The call the app hung up natively (a surface's hang-up while the page may not run), by its join mark: the page's
+    /// reports of that call joined (sent before it ran the hang-up) do not start it again. Cleared by the page's first
+    /// report of no call, or of another call.
+    hung_up: Option<Option<f64>>,
+    /// The join mark of the call the page last reported.
+    reported_since: Option<f64>,
     /// What the call's surfaces show, from the page's last report (`crate::surface`).
     surface: CallSurface,
     /// What the system's call was last told it shows (`None`: nothing yet).
@@ -387,6 +395,9 @@ impl RoomCall {
             phone,
             system: false,
             state: CallState::default(),
+            mic_disabled: false,
+            hung_up: None,
+            reported_since: None,
             surface: CallSurface::default(),
             shown: None,
             updated_at: None,
@@ -417,6 +428,9 @@ impl RoomCall {
         self.then(move |room| {
             room.page = page;
             room.state = CallState::default();
+            room.mic_disabled = false;
+            room.hung_up = None;
+            room.reported_since = None;
             room.surface = CallSurface::default();
             room.hold(false, None);
             // The old page's stills go with it (nothing draws them once its call has ended): the new page sends its own.
@@ -445,8 +459,12 @@ impl RoomCall {
     ) {
         self.then(move |room| {
             if room.page == page {
+                let mut state = state;
+                state.joined = after_hang_up(&mut room.hung_up, state.joined, since);
                 let (joined, mic_enabled) = (state.joined, state.mic_enabled);
                 room.state = state;
+                room.mic_disabled = mic_disabled;
+                room.reported_since = since;
                 room.surface = crate::surface::surface(&surface, &room.surface);
                 room.collect();
                 room.hold(joined, since);
@@ -457,15 +475,12 @@ impl RoomCall {
         });
     }
 
-    /// A headset's button or the lock screen asked to mute or unmute: the page's own mute, as the interruptions use it, for
-    /// the current page's call (its number, and the call's join mark when its service holds it), in order with the rest.
+    /// A headset's button or the lock screen asked to mute or unmute: the microphone's native mute, set to the other of
+    /// what the call shows ([`Room::set_mute`]), in order with the rest.
     pub fn toggle_mute(&self) {
         self.then(|room| {
-            let mut request = serde_json::json!({ "command": "toggle-mute", "page": room.page });
-            if let Some(since) = room.since {
-                request["since"] = since.into();
-            }
-            run_on_page(&room.app, request);
+            let muted = room.state.mic_enabled;
+            room.set_mute(muted);
         });
     }
 
@@ -638,27 +653,110 @@ impl Room {
         });
     }
 
-    /// Runs what the person asked for on a surface on the page's call (its number, and the call's join mark when its
-    /// service holds it), as the page's own command.
-    fn act(&self, action: SurfaceAction) {
-        log::info!("call: {action:?} from the call's surface");
+    /// Runs what the person asked for on a surface. Each action has one native owner, the same the page's own button ends
+    /// in, and the app calls it itself: with the screen locked the WebView may not run script, so nothing waits for the
+    /// page ([`native_action`]). The page is still told, as its own command for its call (its number, and the call's join
+    /// mark when its service holds it), and runs it when it runs again: it then shows what was done (its mute, the call
+    /// ended), records it as the person's, and does what only it can (tell the room). Asked first, so that the page has it
+    /// before anything the native side makes the call tell it.
+    fn act(&mut self, action: SurfaceAction) {
+        let native = native_action(action);
+        log::info!("call: {action:?} from the call's surface; natively: {native:?}");
         let mut request = surface_command(action);
         request["page"] = self.page.into();
         if let Some(since) = self.since {
             request["since"] = since.into();
         }
-        run_on_page(&self.app, request);
-        // Skip must work with the screen locked, where the WebView may not run script: the page is asked as for the in-app
-        // button (it records the skip as the person's), and the voice host stops what it says by itself, the same cancel the
-        // page's `saying.cancel()` ends in (`voice_cancel_say`), so the skip does not depend on the page running.
-        if action == SurfaceAction::Skip {
-            let app = self.app.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Some(host) = app.try_state::<AppHost>() {
+        match native {
+            // The page's mute command is sent by `set_mute`, which every native mute goes through.
+            NativeAction::Mute(muted) => self.set_mute(muted),
+            NativeAction::CancelInput => {
+                run_on_page(&self.app, request);
+                self.with_host("cancel-send", |host| async move {
+                    host.cancel_microphone_input().await
+                });
+            }
+            NativeAction::Skip => {
+                run_on_page(&self.app, request);
+                self.with_host("skip", |host| async move {
                     host.skip_playing().await;
-                }
-            });
+                    true
+                });
+            }
+            NativeAction::HangUp => {
+                run_on_page(&self.app, request);
+                self.hang_up();
+            }
+            NativeAction::None => run_on_page(&self.app, request),
         }
+    }
+
+    /// Runs `work` on the voice host, off the room's thread, and logs whether it found a call (`what` names it).
+    fn with_host<F>(&self, what: &'static str, work: impl FnOnce(AppHost) -> F + Send + 'static)
+    where
+        F: std::future::Future<Output = bool> + Send + 'static,
+    {
+        let app = self.app.clone();
+        tauri::async_runtime::spawn(async move {
+            let Some(host) = app.try_state::<AppHost>().map(|host| host.inner().clone()) else {
+                log::warn!("call: {what}: no voice host");
+                return;
+            };
+            let found = work(host).await;
+            log::info!(
+                "call: {what} done natively{}",
+                if found { "" } else { " (no call to act on)" }
+            );
+        });
+    }
+
+    /// Mutes or unmutes the call's microphone: the voice host's own mute of the room's call (the lane the microphone is
+    /// routed to; the same mute the page's button makes through `voice_mute`), at once and without the page. The call's
+    /// surfaces show it at once (the Live Activity's toggle and the system's call agree with it), and the page is told,
+    /// to show it and keep it as the person's when it runs. Nothing while the page's mute cannot be used.
+    fn set_mute(&mut self, muted: bool) {
+        if self.mic_disabled {
+            log::info!("call: mute {muted}: the call's mute cannot be used now");
+            return;
+        }
+        self.state.mic_enabled = !muted;
+        let mut request =
+            serde_json::json!({ "command": "mute", "page": self.page, "muted": muted });
+        if let Some(since) = self.since {
+            request["since"] = since.into();
+        }
+        run_on_page(&self.app, request);
+        self.with_host(
+            if muted { "mute" } else { "unmute" },
+            move |host| async move { host.mute_microphone(muted).await },
+        );
+        self.show();
+        self.media();
+    }
+
+    /// Hangs the call up natively (a surface's hang-up, the system's call ended from outside): its audio stops (what is
+    /// said is dropped, every call of the page stops listening and speaking, the microphone is routed nowhere, so the
+    /// audio session is given back), its service and Live Activity end, and the page's reports of that call joined are
+    /// not taken for it any more ([`after_hang_up`]). The page finishes the hang-up when it runs (the room told, its
+    /// lanes disposed of).
+    fn hang_up(&mut self) {
+        if self.holding.is_none() && !self.state.joined {
+            log::info!("call: hang-up: no call");
+            return;
+        }
+        self.hung_up = Some(self.reported_since);
+        self.state.joined = false;
+        self.hold(false, None);
+        self.media();
+        self.stop_audio();
+    }
+
+    /// The voice host stops what the page's calls say and hear, without the page.
+    fn stop_audio(&self) {
+        self.with_host("hang-up", |host| async move {
+            host.skip_playing().await;
+            host.stop_calls().await > 0
+        });
     }
 
     /// The media controls follow the page's call (the media controls reach the plugin's Kotlin, which runs on Android's
@@ -783,17 +881,15 @@ fn on_service_event(app: &AppHandle, start: u64, page: u64, since: Option<f64>, 
             });
             return;
         }
-        // Muted or unmuted from the system's side: the page's mute, set to that (nothing if it is so already).
+        // Muted or unmuted from the system's side: the microphone's native mute, and the page's, set to that (nothing if it
+        // is so already). The system shows it already: it is not told back.
         CallEvent::Muted { muted } => {
             room.then(move |room| {
                 if mine(room) {
                     if let Some(shown) = room.shown.as_mut() {
                         shown.muted = muted;
                     }
-                    run_on_page(
-                        &room.app,
-                        serde_json::json!({ "command": "mute", "page": page, "since": since, "muted": muted }),
-                    );
+                    room.set_mute(muted);
                 }
             });
             return;
@@ -829,17 +925,23 @@ fn on_service_event(app: &AppHandle, start: u64, page: u64, since: Option<f64>, 
                 return; // an older service's end: the call it was for is over already
             }
             log::info!("call: hung up by the service ({reason:?})");
+            // The page first, so that it has the hang-up before what the stopped calls tell it.
+            run_on_page(
+                &room.app,
+                serde_json::json!({ "command": "hang-up", "page": page, "since": since }),
+            );
             // The service is gone: the next join starts another.
             room.holding = None;
             room.system = false;
             room.shown = None;
             room.phone.system_call(false);
             room.clear_interruption();
+            room.since = None;
+            // Hung up natively too, as a surface's hang-up is: the page may not run (the screen locked).
+            room.hung_up = Some(since);
+            room.state.joined = false;
             room.media();
-            run_on_page(
-                &room.app,
-                serde_json::json!({ "command": "hang-up", "page": page, "since": since }),
-            );
+            room.stop_audio();
         });
     }
 }
@@ -871,6 +973,43 @@ fn surface_command(action: SurfaceAction) -> serde_json::Value {
         SurfaceAction::CancelSend => command("cancel-input"),
         SurfaceAction::HangUp => command("hang-up"),
         SurfaceAction::OpenConversations => command("open-conversations"),
+    }
+}
+
+/// What the app does itself for an action asked on a surface, through the owner the page's own button ends in too: the
+/// voice host's mute of the room's call (`voice_mute`), its cancel of the unreported turn (`voice_cancel_input`), its
+/// cancel of what is said (`voice_cancel_say`), and the call's end (the room's service, and the calls' stop).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeAction {
+    Mute(bool),
+    CancelInput,
+    Skip,
+    HangUp,
+    /// Nothing native: only the page can (open its list of conversations, with the app in front).
+    None,
+}
+
+fn native_action(action: SurfaceAction) -> NativeAction {
+    match action {
+        SurfaceAction::Mute => NativeAction::Mute(true),
+        SurfaceAction::Unmute => NativeAction::Mute(false),
+        SurfaceAction::Skip => NativeAction::Skip,
+        SurfaceAction::CancelSend => NativeAction::CancelInput,
+        SurfaceAction::HangUp => NativeAction::HangUp,
+        SurfaceAction::OpenConversations => NativeAction::None,
+    }
+}
+
+/// Whether the page's report of a call `joined` at `since` holds the call, the app having hung up natively the call joined
+/// at `hung_up`: not while it reports that call joined (it has not run the hang-up yet); its report of no call, or of
+/// another call, is its own again and forgets the hang-up.
+fn after_hang_up(hung_up: &mut Option<Option<f64>>, joined: bool, since: Option<f64>) -> bool {
+    match *hung_up {
+        Some(ended) if joined && ended == since => false,
+        _ => {
+            *hung_up = None;
+            joined
+        }
     }
 }
 
@@ -938,6 +1077,52 @@ mod tests {
                 "{action:?}"
             );
         }
+    }
+
+    #[test]
+    fn every_call_action_of_a_surface_has_a_native_owner() {
+        for (action, native) in [
+            (SurfaceAction::Mute, NativeAction::Mute(true)),
+            (SurfaceAction::Unmute, NativeAction::Mute(false)),
+            (SurfaceAction::Skip, NativeAction::Skip),
+            (SurfaceAction::CancelSend, NativeAction::CancelInput),
+            (SurfaceAction::HangUp, NativeAction::HangUp),
+            (SurfaceAction::OpenConversations, NativeAction::None),
+        ] {
+            assert_eq!(native_action(action), native, "{action:?}");
+        }
+    }
+
+    #[test]
+    fn a_call_hung_up_natively_is_not_started_again_by_the_page_s_late_reports() {
+        let mut hung_up = Some(Some(1.0));
+        assert!(
+            !after_hang_up(&mut hung_up, true, Some(1.0)),
+            "that call, still joined"
+        );
+        assert_eq!(hung_up, Some(Some(1.0)), "kept until the page follows");
+        assert!(
+            !after_hang_up(&mut hung_up, false, None),
+            "the page hung up"
+        );
+        assert_eq!(hung_up, None);
+        assert!(
+            after_hang_up(&mut hung_up, true, Some(2.0)),
+            "the next call holds"
+        );
+
+        let mut hung_up = Some(Some(1.0));
+        assert!(
+            after_hang_up(&mut hung_up, true, Some(2.0)),
+            "another call holds"
+        );
+        assert_eq!(hung_up, None);
+
+        // A call the service never held (no join mark).
+        let mut hung_up = Some(None);
+        assert!(!after_hang_up(&mut hung_up, true, None));
+        let mut none = None;
+        assert!(after_hang_up(&mut none, true, Some(3.0)));
     }
 
     #[test]
