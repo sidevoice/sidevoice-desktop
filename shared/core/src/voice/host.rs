@@ -553,6 +553,18 @@ impl<A: LaneAudio> VoiceState<A> {
         Ok(())
     }
 
+    /// Stops what every call is saying now, from the native side: the same cancel the page's `voice_cancel_say` makes, for a
+    /// surface (the Lock Screen) whose action must not wait for the page to run. What is not yet heard is dropped and each
+    /// saying's outcome says `cancelled`; a call that says nothing is left alone.
+    pub async fn skip_playing(&self) {
+        let lanes: Vec<_> = self.calls.lock().await.values().cloned().collect();
+        for lane in lanes {
+            for cancel in lane.sayings.lock().unwrap().values() {
+                cancel.cancel();
+            }
+        }
+    }
+
     /// Before the call there is nothing to cancel.
     pub async fn cancel_input(&self, key: &str) -> Result<(), Refusal> {
         let lane = self.lane(key).await?;

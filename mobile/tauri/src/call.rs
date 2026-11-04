@@ -648,6 +648,17 @@ impl Room {
             request["since"] = since.into();
         }
         run_on_page(&self.app, request);
+        // Skip must work with the screen locked, where the WebView may not run script: the page is asked as for the in-app
+        // button (it records the skip as the person's), and the voice host stops what it says by itself, the same cancel the
+        // page's `saying.cancel()` ends in (`voice_cancel_say`), so the skip does not depend on the page running.
+        if action == SurfaceAction::Skip {
+            let app = self.app.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Some(host) = app.try_state::<AppHost>() {
+                    host.skip_playing().await;
+                }
+            });
+        }
     }
 
     /// The media controls follow the page's call (the media controls reach the plugin's Kotlin, which runs on Android's
