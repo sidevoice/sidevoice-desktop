@@ -49,15 +49,16 @@ public struct LockCard: View {
                 ViewThatFits(in: .horizontal) {
                     MuteToggle(micOff: state.micOff) { off in
                         MutePill(state: state, micOff: off, palette: palette, reduced: reduced)
+                            .accessibilityLabel(off ? state.words.unmute : state.words.mute)
                     }
                     MuteToggle(micOff: state.micOff) { off in
                         RoundButtonFace(
                             symbol: off ? "mic.slash.fill" : "mic.fill", size: 40, glyph: 17,
                             fill: off ? Ink.mutedFill : palette.button,
                             ink: off ? Ink.mutedInk : palette.text)
+                            .accessibilityLabel(off ? state.words.unmute : state.words.mute)
                     }
                 }
-                .accessibilityLabel(state.micOff ? state.words.unmute : state.words.mute)
                 ActionButton(action: .skip, enabled: state.canSkip) {
                     RoundButtonFace(symbol: "forward.fill", size: 40, glyph: 17, fill: palette.button, ink: palette.text)
                 }
@@ -157,8 +158,8 @@ public struct ExpandedBody: View {
                             symbol: off ? "mic.slash.fill" : "mic.fill", size: 36, glyph: 18,
                             fill: off ? Ink.mutedFill : Palette.island.button,
                             ink: off ? Ink.mutedInk : Palette.island.text)
+                            .accessibilityLabel(off ? state.words.unmute : state.words.mute)
                     }
-                    .accessibilityLabel(state.micOff ? state.words.unmute : state.words.mute)
                     if state.route != nil {
                         ActionButton(action: .route) {
                             RoundButtonFace(

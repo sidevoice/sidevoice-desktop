@@ -10,20 +10,11 @@ import SwiftUI
 
 /// The page's actions, by the names `SurfaceAction` reads (`mute`, `unmute`, `skip`, `cancel-send`, `hang-up`).
 enum CallActions {
-    /// Hands the action to the app's Rust side, and returns when it has been handed over (the page acts after that, on
-    /// the call's own threads). The app is kept running for the hand-over, whatever state the phone is in.
-    static func send(_ action: String, from intent: String) async {
+    /// Hands the action to the app's Rust side. A `LiveActivityIntent` runs in the app's process, which the system keeps
+    /// alive for `perform()`; the hand-over is synchronous (the page acts after it, on the call's own threads).
+    static func send(_ action: String, from intent: String) {
         NSLog("Sidevoice: intent %@ performing (pid %d)", intent, ProcessInfo.processInfo.processIdentifier)
-        let delivered: Bool = await withCheckedContinuation { done in
-            ProcessInfo.processInfo.performExpiringActivity(withReason: "Sidevoice: the call's \(action) button") { expired in
-                guard !expired else {
-                    done.resume(returning: false)
-                    return
-                }
-                done.resume(returning: deliver(action))
-            }
-        }
-        NSLog("Sidevoice: intent %@ %@", intent, delivered ? "handed to the call" : "found no call")
+        NSLog("Sidevoice: intent %@ %@", intent, deliver(action) ? "handed to the call" : "found no call")
     }
 
     /// The class is the app's (Rust, objc2); the extension has none and never runs an intent. Without it this process has
@@ -48,7 +39,7 @@ public struct SetMicOff: SetValueIntent, LiveActivityIntent {
     @Parameter(title: "Muted") public var value: Bool
     public init() {}
     public func perform() async throws -> some IntentResult {
-        await CallActions.send(value ? "mute" : "unmute", from: "SetMicOff")
+        CallActions.send(value ? "mute" : "unmute", from: "SetMicOff")
         return .result()
     }
 }
@@ -59,7 +50,7 @@ public struct SkipReply: LiveActivityIntent {
     public static var isDiscoverable = false
     public init() {}
     public func perform() async throws -> some IntentResult {
-        await CallActions.send("skip", from: "SkipReply")
+        CallActions.send("skip", from: "SkipReply")
         return .result()
     }
 }
@@ -70,7 +61,7 @@ public struct CancelSend: LiveActivityIntent {
     public static var isDiscoverable = false
     public init() {}
     public func perform() async throws -> some IntentResult {
-        await CallActions.send("cancel-send", from: "CancelSend")
+        CallActions.send("cancel-send", from: "CancelSend")
         return .result()
     }
 }
@@ -82,7 +73,7 @@ public struct HangUp: LiveActivityIntent {
     public static var isDiscoverable = false
     public init() {}
     public func perform() async throws -> some IntentResult {
-        await CallActions.send("hang-up", from: "HangUp")
+        CallActions.send("hang-up", from: "HangUp")
         return .result()
     }
 }
@@ -96,6 +87,7 @@ public struct ToggleRoute: LiveActivityIntent {
     public func perform() async throws -> some IntentResult {
         NSLog("Sidevoice: intent ToggleRoute performing (pid %d)", ProcessInfo.processInfo.processIdentifier)
         AudioRoute.toggle()
+        NSLog("Sidevoice: intent ToggleRoute switched the output (native; no call needed)")
         return .result()
     }
 }
