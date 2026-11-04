@@ -31,6 +31,16 @@ public final class CallActivityBridge: NSObject {
             if #available(iOS 16.1, *) { Controller.shared.end() }
         }
     }
+
+    /// Whether the call's Live Activity is on the screens now: requested and not over. False before iOS 16.1, with Live
+    /// Activities off, and while the app has not yet been in front to request it. Any thread: the media controls ask on
+    /// every report, and give way to the activity only while it runs.
+    @objc public static func running() -> Bool {
+        guard #available(iOS 16.1, *) else { return false }
+        return Activity<CallActivityAttributes>.activities.contains {
+            $0.activityState != .ended && $0.activityState != .dismissed
+        }
+    }
 }
 
 /// The call's details as the Rust side serialises them (`CallDetails`, its `surface` in camelCase), every field optional.

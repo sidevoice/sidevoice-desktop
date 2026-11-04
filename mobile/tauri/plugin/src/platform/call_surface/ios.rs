@@ -61,6 +61,15 @@ impl Os for Native {
             let _: () = msg_send![bridge, end];
         }
     }
+
+    fn running() -> bool {
+        // Not `bridge()`: this is asked on every report, and a build without the bridge has said so once.
+        let Some(bridge) = AnyClass::get(c"SidevoiceCallActivity") else {
+            return false;
+        };
+        // SAFETY: `+[SidevoiceCallActivity running]` takes nothing and returns a BOOL, from any thread.
+        unsafe { msg_send![bridge, running] }
+    }
 }
 
 /// The app's Swift side of the activity; none in a build without it (logged).

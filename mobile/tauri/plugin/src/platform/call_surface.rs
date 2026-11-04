@@ -29,6 +29,12 @@ trait Os {
 
     /// Ends it, and any an earlier run of the app left.
     fn end() {}
+
+    /// Whether the surface is on the system's screens now (iOS: a Live Activity that has been requested and is not over:
+    /// it needs iOS 16.1, the person may have it off, and it starts only while the app is in front). False where none is.
+    fn running() -> bool {
+        false
+    }
 }
 
 pub fn shared_container() -> Option<PathBuf> {
@@ -45,4 +51,8 @@ pub fn show(details: &str) {
 
 pub fn end() {
     Native::end()
+}
+
+pub fn running() -> bool {
+    Native::running()
 }

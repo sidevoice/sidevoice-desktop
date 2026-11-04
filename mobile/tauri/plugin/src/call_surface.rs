@@ -362,6 +362,11 @@ pub(crate) fn end_surface() {
     platform::end();
 }
 
+/// Whether that surface is on the system's screens now (see `platform::running`).
+pub(crate) fn surface_running() -> bool {
+    platform::running()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
