@@ -46,6 +46,10 @@ pub(super) trait Os {
 
     /// Stops hearing it.
     fn stop_listening_for_mute_gesture() {}
+
+    /// Tells the system the app no longer takes remote-control events (iOS's `UIApplication`), so that it stops being the
+    /// Now Playing app. Main thread. Nothing by default.
+    fn end_remote_control_events() {}
 }
 
 struct Headset {
@@ -111,11 +115,11 @@ pub fn heard(app: &AppHandle, muted: bool) -> bool {
     on_mute_gesture(app, muted)
 }
 
-/// Installs the command handlers, once, on the main thread.
-pub fn attach(app: &AppHandle, sink: CommandSink) {
+/// Keeps where the commands go, once; their handlers are registered while a call is shown ([`REGISTERED`]).
+pub fn attach<N: Os>(app: &AppHandle, sink: CommandSink) {
     app.manage(Headset { call: Mutex::default(), sink });
     let app2 = app.clone();
-    let _ = app.run_on_main_thread(move || setup(&app2));
+    let _ = app.run_on_main_thread(move || setup::<N>(&app2));
 }
 
 /// Follows the call: the commands enabled and the call shown while there is one, on the main thread.
@@ -167,7 +171,19 @@ fn gesture_api() -> bool {
     AnyClass::get(c"AVAudioApplication").is_some()
 }
 
-fn setup(app: &AppHandle) {
+/// Whether the command handlers are registered now: only while Now Playing shows the call. A handler registered is what
+/// makes the system take the app for the Now Playing app (iOS keeps an empty card on the Lock Screen for it, even with no
+/// Now Playing info and every command disabled), so none is registered at launch, and they go when Now Playing does.
+/// Only touched on the main thread.
+static REGISTERED: Mutex<bool> = Mutex::new(false);
+
+/// At launch: no handlers yet (see [`REGISTERED`]); they are registered when a call is shown.
+fn setup<N: Os>(_app: &AppHandle) {
+    N::end_remote_control_events();
+}
+
+/// Registers the handlers of the commands, enabled, once.
+fn register(app: &AppHandle) {
     for (command, name) in commands() {
         let app = app.clone();
         let handler = RcBlock::new(move |_event: NonNull<MPRemoteCommandEvent>| {
@@ -177,13 +193,36 @@ fn setup(app: &AppHandle) {
         // SAFETY: the target the command center returns is kept by it; the block is retained by it too.
         unsafe {
             let _target: Retained<AnyObject> = command.addTargetWithHandler(&handler);
-            command.setEnabled(false);
         }
     }
 }
 
+/// Removes every handler of the commands and disables them, so that the app stops being the Now Playing app.
+fn unregister<N: Os>() {
+    for (command, _) in commands() {
+        // SAFETY: main thread; `nil` removes every target of the command.
+        unsafe {
+            command.removeTarget(None);
+            command.setEnabled(false);
+        }
+    }
+    N::end_remote_control_events();
+}
+
 fn apply<N: Os>(app: &AppHandle, active: bool, now_playing: bool, in_call: bool, mic_enabled: bool, title: &str) {
     // SAFETY: main thread (update() dispatches here); plain Foundation / MediaPlayer calls.
+    {
+        let mut registered = REGISTERED.lock().unwrap();
+        if now_playing && !*registered {
+            register(app);
+            *registered = true;
+        } else if !now_playing && *registered {
+            // SAFETY: as below, main thread.
+            unsafe { MPNowPlayingInfoCenter::defaultCenter().setNowPlayingInfo(None) };
+            unregister::<N>();
+            *registered = false;
+        }
+    }
     unsafe {
         for (command, _) in commands() {
             command.setEnabled(now_playing);
@@ -222,7 +261,8 @@ fn apply<N: Os>(app: &AppHandle, active: bool, now_playing: bool, in_call: bool,
     gesture::<N>(app, active, in_call, mic_enabled);
     static SEEN: Changed = Changed(Mutex::new(None));
     let line = format!(
-        "headset apply active={active} now_playing={now_playing} in_call={in_call} mic={mic_enabled} gesture_api={} gesture_on={}",
+        "headset apply active={active} now_playing={now_playing} in_call={in_call} mic={mic_enabled} handlers={} gesture_api={} gesture_on={}",
+        *REGISTERED.lock().unwrap(),
         gesture_api(),
         *GESTURE_ON.lock().unwrap()
     );

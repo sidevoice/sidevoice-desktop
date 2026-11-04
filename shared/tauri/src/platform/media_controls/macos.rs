@@ -16,7 +16,7 @@ impl Os for Native {
     const NATIVE: bool = true;
 
     fn attach(app: &AppHandle, sink: CommandSink) {
-        apple::attach(app, sink)
+        apple::attach::<Native>(app, sink)
     }
 
     fn update(app: &AppHandle, call: &CallState) {
