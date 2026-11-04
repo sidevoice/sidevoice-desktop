@@ -323,9 +323,18 @@ struct RoundButtonFace: View {
     var ink: Color
     @Environment(\.isLuminanceReduced) private var reduced
 
+    /// The skip button draws the app's own glyph (`SkipGlyph.symbol`); the others an SF Symbol.
+    @ViewBuilder private var face: some View {
+        if symbol == SkipGlyph.symbol {
+            SkipGlyph(size: glyph)
+        } else {
+            Image(systemName: symbol)
+                .font(.system(size: glyph * 0.85, weight: .semibold))
+        }
+    }
+
     var body: some View {
-        Image(systemName: symbol)
-            .font(.system(size: glyph * 0.85, weight: .semibold))
+        face
             .foregroundStyle(reduced && fill == Ink.hangUp ? Ink.hangUp : ink)
             .frame(width: size, height: size)
             .background(Circle().fill(reduced ? Color.clear : fill))
@@ -366,5 +375,41 @@ extension CallStills {
             if once.first(reason) { log.error("still not drawn: \(reason, privacy: .public)") }
         }
         return nil
+    }
+}
+
+// MARK: - Skip's glyph
+
+/// The skip icon of the app's call controls (sidevoice-web, `SkipIcon`: Lucide `skip-forward`, drawn on a 24 grid with a
+/// 1.8 stroke, round caps and joins): an outlined triangle and a bar. SF Symbols has no such glyph (`forward.fill` is two
+/// filled triangles), so the Live Activity draws the same lines.
+struct SkipGlyph: View {
+    /// What `RoundButtonFace` is given as its `symbol` to draw this glyph.
+    static let symbol = "sidevoice.skip"
+    /// The box, in points (the app's button draws it at 17 in the card, on a 40-pt button).
+    var size: CGFloat
+
+    var body: some View {
+        SkipShape()
+            .stroke(style: StrokeStyle(lineWidth: 1.8 / 24 * size, lineCap: .round, lineJoin: .round))
+            .frame(width: size, height: size)
+    }
+}
+
+/// Lucide `skip-forward`: `polygon 5 4 15 12 5 20` and `line 19 5 -> 19 19`, in a 24 × 24 box.
+struct SkipShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        let unit = rect.width / 24
+        func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(x: rect.minX + x * unit, y: rect.minY + y * unit)
+        }
+        var path = Path()
+        path.move(to: point(5, 4))
+        path.addLine(to: point(15, 12))
+        path.addLine(to: point(5, 20))
+        path.closeSubpath()
+        path.move(to: point(19, 5))
+        path.addLine(to: point(19, 19))
+        return path
     }
 }
