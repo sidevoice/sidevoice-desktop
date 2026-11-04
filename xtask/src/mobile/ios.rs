@@ -12,7 +12,8 @@
 //!   (<https://developer.apple.com/documentation/bundleresources/describing-use-of-required-reason-api>).
 //!
 //! `check_ipa` is the same check on the archive `mobile testflight` is about to upload, and what only an archive can
-//! show: that it is signed, and that it is the app and the build number it was asked to be.
+//! show: that it is signed, that it is the app and the build number it was asked to be, and that it carries the symbols
+//! App Store Connect symbolicates TestFlight's crash reports with.
 //!
 //! The calls are found in the executable's strings. A C function the app imports is a symbol (`_stat`); a Foundation
 //! API a Swift or Objective-C file uses leaves its name in a symbol or a selector (`…FileAttributeKeyV12creationDate…`,
@@ -243,7 +244,8 @@ fn check_intents(actions_data: &[u8], what: &str) -> Result<()> {
 
 /// An archive for App Store Connect (`.ipa`): its app is the bundle `identifier` at `build_number`, it is signed
 /// (a provisioning profile embedded, a code signature sealed), the Live Activity's extension
-/// is there at the same build number, and the app passes [`check_bundle`].
+/// is there at the same build number, it carries its symbols (`Symbols/*.symbols`, which the export writes from the
+/// archive's dSYMs, `uploadSymbols` being on by default), and the app passes [`check_bundle`].
 pub fn check_ipa(ipa: &Path, identifier: &str, build_number: u32) -> Result<()> {
     let file = fs::File::open(ipa).map_err(|e| format!("{}: {e}", ipa.display()))?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("{}: {e}", ipa.display()))?;
@@ -295,6 +297,10 @@ pub fn check_ipa(ipa: &Path, identifier: &str, build_number: u32) -> Result<()> 
     for sealed in ["embedded.mobileprovision", "_CodeSignature/CodeResources"] {
         ensure(names.contains(&format!("{root}{sealed}")), format!("{}: not signed: no {sealed}", ipa.display()))?;
     }
+    ensure(
+        names.iter().any(|name| name.starts_with("Symbols/") && name.ends_with(".symbols")),
+        format!("{}: no Symbols/*.symbols: TestFlight's crash reports would not be symbolicated", ipa.display()),
+    )?;
     check_bundle(&bundle)?;
     // The buttons' App Intents metadata, in the app and in the extension.
     for bundle_root in [root.clone(), format!("{root}{EXTENSION}/")] {
@@ -421,13 +427,14 @@ mod tests {
         assert!(check_bundle(&app).unwrap_err().contains("no `audio`"));
     }
 
-    /// An archive with the files of an app below `Payload/Sidevoice.app/`.
+    /// An archive with the files of an app below `Payload/Sidevoice.app/`, and those whose name starts with `/` at its root.
     fn ipa(dir: &Path, files: &[(&str, Vec<u8>)]) -> std::path::PathBuf {
         use std::io::Write;
         let path = dir.join("Sidevoice.ipa");
         let mut zip = zip::ZipWriter::new(fs::File::create(&path).unwrap());
         for (name, bytes) in files {
-            zip.start_file(format!("Payload/Sidevoice.app/{name}"), zip::write::SimpleFileOptions::default()).unwrap();
+            let name = name.strip_prefix('/').map_or_else(|| format!("Payload/Sidevoice.app/{name}"), str::to_owned);
+            zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
             zip.write_all(bytes).unwrap();
         }
         zip.finish().unwrap();
@@ -453,8 +460,12 @@ mod tests {
             ("PlugIns/SidevoiceActivity.appex/Info.plist", appex_info(version)),
             ("Metadata.appintents/extract.actionsdata", actions_data(&INTENTS)),
             ("PlugIns/SidevoiceActivity.appex/Metadata.appintents/extract.actionsdata", actions_data(&INTENTS)),
+            (SYMBOLS, b"symbols".to_vec()),
         ]
     }
+
+    /// The app's symbols for App Store Connect, at the archive's root.
+    const SYMBOLS: &str = "/Symbols/BCA28F76-4E7B-3FFD-A975-E69ECF5C4130.symbols";
 
     fn appex_info(version: &str) -> Vec<u8> {
         format!(
@@ -519,6 +530,8 @@ mod tests {
         let mut stale = without(&files, "PlugIns/SidevoiceActivity.appex/Info.plist");
         stale.push(("PlugIns/SidevoiceActivity.appex/Info.plist", appex_info("0.1.0")));
         assert!(check(&stale, "ai.sidevoice.mobile", 42).unwrap_err().contains("build number is 0.1.0, not 42"));
+        let no_symbols = without(&files, SYMBOLS);
+        assert!(check(&no_symbols, "ai.sidevoice.mobile", 42).unwrap_err().contains("no Symbols/*.symbols"));
     }
 
     #[test]
