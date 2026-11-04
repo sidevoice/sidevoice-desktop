@@ -30,8 +30,8 @@ use crate::hold::{focus_signal, Effect, Hold, Signal, Source};
 use crate::platform::interruption::{self, Interruption};
 use sidevoice_mobile_plugin::{
     call_activates_audio, call_replaces_media_controls, clear_stills, forget_stills,
-    request_call_focus, save_still, start_call_service, stop_call_service, update_call_service,
-    CallDetails, CallEvent, CallSurface, StopReason, SurfaceAction,
+    refresh_call_service, request_call_focus, save_still, start_call_service, stop_call_service,
+    update_call_service, CallDetails, CallEvent, CallSurface, StopReason, SurfaceAction,
 };
 use sidevoice_shared::app::{AppHost, CallActivity};
 use sidevoice_shared::sidevoice_voice::{AudioSession, Session, SessionConfig, SessionMode};
@@ -303,8 +303,8 @@ pub struct Room {
     hung_up: Option<Option<f64>>,
     /// The join mark of the call the page last reported.
     reported_since: Option<f64>,
-    /// The mute the app set natively (a surface's), until the page reports it ([`reported_mic`]).
-    muting: Option<bool>,
+    /// The mute the app set natively (a surface's, a headset's), until the page reports it ([`reported_mic`]).
+    muting: Option<Muting>,
     /// What the call's surfaces show, from the page's last report (`crate::surface`).
     surface: CallSurface,
     /// What the system's call was last told it shows (`None`: nothing yet).
@@ -465,15 +465,11 @@ impl RoomCall {
             if room.page == page {
                 let mut state = state;
                 state.joined = after_hang_up(&mut room.hung_up, state.joined, since);
-                state.mic_enabled = reported_mic(
-                    &mut room.muting,
-                    state.mic_enabled,
-                    mic_disabled,
-                    state.joined,
-                );
-                let (joined, mic_enabled) = (state.joined, state.mic_enabled);
+                let (joined, reported) = (state.joined, state.mic_enabled);
                 room.state = state;
                 room.mic_disabled = mic_disabled;
+                room.page_mic(reported);
+                let mic_enabled = room.state.mic_enabled;
                 room.reported_since = since;
                 room.surface = crate::surface::surface(&surface, &room.surface);
                 room.collect();
@@ -485,13 +481,10 @@ impl RoomCall {
         });
     }
 
-    /// A headset's button or the lock screen asked to mute or unmute: the microphone's native mute, set to the other of
-    /// what the call shows ([`Room::set_mute`]), in order with the rest.
+    /// A headset's button or the lock screen asked to mute or unmute: the other of the app's mute (a headset shows none,
+    /// [`Room::toggle_mute`]), in order with the rest.
     pub fn toggle_mute(&self) {
-        self.then(|room| {
-            let muted = room.state.mic_enabled;
-            room.set_mute(muted);
-        });
+        self.then(|room| room.toggle_mute("headset", None));
     }
 
     /// The person asked for `action` on one of the call's surfaces outside the service's own events (iOS: a link of the Live
@@ -610,6 +603,17 @@ impl Room {
     /// Tells the call's service what it shows now, when that changed: the page's conversation, its mute and the call's
     /// surface. At most once every [`UPDATE_INTERVAL`]: a change sooner is shown at its end.
     fn show(&mut self) {
+        self.tell(false);
+    }
+
+    /// Tells the call's service what it shows now, at once and changed or not, and has its surface drawn again even where
+    /// it shows that already (iOS: the Live Activity's toggle, which flips its own face when tapped): after a tap.
+    fn refresh(&mut self) {
+        self.updated_at = None;
+        self.tell(true);
+    }
+
+    fn tell(&mut self, again: bool) {
         if self.holding.is_none() {
             return;
         }
@@ -618,14 +622,19 @@ impl Room {
             muted: !self.state.mic_enabled,
             surface: self.surface.clone(),
         };
-        if self.shown.as_ref() == Some(&details) {
+        if !again && self.shown.as_ref() == Some(&details) {
             return;
         }
         if let Some(wait) = update_wait(self.updated_at, Instant::now()) {
             self.show_later(wait);
             return;
         }
-        match update_call_service(&self.app, &details) {
+        let told = if again {
+            refresh_call_service(&self.app, &details)
+        } else {
+            update_call_service(&self.app, &details)
+        };
+        match told {
             Ok(()) => {
                 self.shown = Some(details);
                 self.updated_at = Some(Instant::now());
@@ -672,44 +681,55 @@ impl Room {
     /// before anything the native side makes the call tell it.
     fn act(&mut self, action: SurfaceAction) {
         let native = native_action(action);
-        log::info!("call: {action:?} from the call's surface; natively: {native:?}");
-        let mut request = surface_command(action);
-        request["page"] = self.page.into();
-        if let Some(since) = self.since {
-            request["since"] = since.into();
+        log::info!(target: "intent", "call: {action:?} from the call's surface; natively: {native:?}");
+        // The page's mute command is sent by `set_mute`, which every native mute goes through.
+        if let Some(mut request) = surface_command(action) {
+            request["page"] = self.page.into();
+            if let Some(since) = self.since {
+                request["since"] = since.into();
+            }
+            run_on_page(&self.app, request);
         }
         match native {
-            // The page's mute command is sent by `set_mute`, which every native mute goes through.
-            NativeAction::Mute(muted) => self.set_mute(muted),
-            // The other of the mute the app knows (the page's last report, and what the app set since), not of what the
-            // card drew when it was tapped.
-            NativeAction::ToggleMute => {
-                let muted = self.state.mic_enabled;
-                log::info!(
-                    "call: toggle-mute: the microphone is {}, so {}",
-                    if muted { "on" } else { "off" },
-                    if muted { "mute" } else { "unmute" }
-                );
+            NativeAction::Mute(muted) => {
                 self.set_mute(muted);
             }
+            NativeAction::ToggleMute => {
+                let showed = self.shown.as_ref().map(|shown| shown.muted);
+                self.toggle_mute("surface", showed);
+            }
             NativeAction::CancelInput => {
-                run_on_page(&self.app, request);
                 self.with_host("cancel-send", |host| async move {
                     host.cancel_microphone_input().await
                 });
             }
             NativeAction::Skip => {
-                run_on_page(&self.app, request);
                 self.with_host("skip", |host| async move {
                     host.skip_playing().await;
                     true
                 });
             }
-            NativeAction::HangUp => {
-                run_on_page(&self.app, request);
-                self.hang_up();
-            }
-            NativeAction::None => run_on_page(&self.app, request),
+            NativeAction::HangUp => self.hang_up(),
+            NativeAction::None => {}
+        }
+    }
+
+    /// A mute toggle was tapped (`by`: the Live Activity's, a headset's): the mute is set to the other of the one it showed
+    /// (`showed`: the mute the app last told it, its face when it was tapped), or of the app's own when it shows none
+    /// ([`toggled`]). Never from the value the toggle sends, which a locked phone has sent wrong. The call is drawn again,
+    /// changed or not: the toggle flipped its own face, and a tap that changed nothing must not leave it flipped.
+    fn toggle_mute(&mut self, by: &str, showed: Option<bool>) {
+        let has = !self.state.mic_enabled;
+        let muted = toggled(showed, has);
+        log::info!(
+            target: "intent",
+            "call: toggle-mute from the {by}: it showed muted={}, the app has muted={has}, so muted={muted}{}",
+            showed.map_or_else(|| "none".to_owned(), |showed| showed.to_string()),
+            if muted == has { ", as it is already" } else { "" }
+        );
+        // A mute set is shown at once (`set_mute`); anything else is drawn again here.
+        if muted == has || !self.set_mute(muted) {
+            self.refresh();
         }
     }
 
@@ -721,11 +741,12 @@ impl Room {
         let app = self.app.clone();
         tauri::async_runtime::spawn(async move {
             let Some(host) = app.try_state::<AppHost>().map(|host| host.inner().clone()) else {
-                log::warn!("call: {what}: no voice host");
+                log::warn!(target: "intent", "call: {what}: no voice host");
                 return;
             };
             let found = work(host).await;
             log::info!(
+                target: "intent",
                 "call: {what} done natively{}",
                 if found { "" } else { " (no call to act on)" }
             );
@@ -735,14 +756,15 @@ impl Room {
     /// Mutes or unmutes the call's microphone: the voice host's own mute of the room's call (the lane the microphone is
     /// routed to; the same mute the page's button makes through `voice_mute`), at once and without the page. The call's
     /// surfaces show it at once (the Live Activity's toggle and the system's call agree with it), and the page is told,
-    /// to show it and keep it as the person's when it runs. Nothing while the page's mute cannot be used.
-    fn set_mute(&mut self, muted: bool) {
+    /// to show it and keep it as the person's when it runs. Nothing while the page's mute cannot be used. Whether it was
+    /// set.
+    fn set_mute(&mut self, muted: bool) -> bool {
         if self.mic_disabled {
-            log::info!("call: mute {muted}: the call's mute cannot be used now");
-            return;
+            log::info!(target: "intent", "call: mute {muted}: the call's mute cannot be used now");
+            return false;
         }
         self.state.mic_enabled = !muted;
-        self.muting = Some(muted);
+        self.muting = Some(Muting { muted, held: None });
         let mut request =
             serde_json::json!({ "command": "mute", "page": self.page, "muted": muted });
         if let Some(since) = self.since {
@@ -757,6 +779,69 @@ impl Room {
         self.updated_at = None;
         self.show();
         self.media();
+        true
+    }
+
+    /// Takes the page's report of the microphone (`reported`), or not while a native mute waits for the page
+    /// ([`reported_mic`]), and says which.
+    fn page_mic(&mut self, reported: bool) {
+        let (mic, report) = reported_mic(
+            &mut self.muting,
+            reported,
+            self.mic_disabled,
+            self.state.joined,
+            Instant::now(),
+        );
+        let word = |on: bool| if on { "on" } else { "off" };
+        match report {
+            MicReport::Taken => {}
+            MicReport::Held { first } => {
+                log::info!(
+                    target: "intent",
+                    "call: the page reports the microphone {}: kept {}, a native mute waits for the page to run it",
+                    word(reported),
+                    word(mic)
+                );
+                if first {
+                    self.mute_wait_later();
+                }
+            }
+            MicReport::TimedOut => log::warn!(
+                target: "intent",
+                "call: the page still reports the microphone {} {MUTE_WAIT:?} after it reported again: taken, it did not run the native mute",
+                word(reported)
+            ),
+        }
+        self.state.mic_enabled = mic;
+    }
+
+    /// Looks again in [`MUTE_WAIT`]: a page that reports nothing more has its last report taken then, if the mute still
+    /// waits for it.
+    fn mute_wait_later(&self) {
+        let app = self.app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(MUTE_WAIT);
+            if let Some(room) = app.try_state::<RoomCall>() {
+                room.then(Room::mute_wait_over);
+            }
+        });
+    }
+
+    fn mute_wait_over(&mut self) {
+        let Some(Muting {
+            held: Some((since, reported)),
+            ..
+        }) = self.muting
+        else {
+            return;
+        };
+        if since.elapsed() < MUTE_WAIT {
+            return; // another mute's wait, which looks again itself
+        }
+        self.page_mic(reported);
+        self.microphone(self.state.mic_enabled, self.mic_disabled);
+        self.show();
+        self.media();
     }
 
     /// Hangs the call up natively (a surface's hang-up, the system's call ended from outside): its audio stops (what is
@@ -766,7 +851,7 @@ impl Room {
     /// lanes disposed of).
     fn hang_up(&mut self) {
         if self.holding.is_none() && !self.state.joined {
-            log::info!("call: hang-up: no call");
+            log::info!(target: "intent", "call: hang-up: no call");
             return;
         }
         self.hung_up = Some(self.reported_since);
@@ -938,6 +1023,14 @@ fn on_service_event(app: &AppHandle, start: u64, page: u64, since: Option<f64>, 
             room.then(move |room| {
                 if mine(room) {
                     room.act(action);
+                } else {
+                    log::info!(
+                        target: "intent",
+                        "call: {action:?} dropped: it is of start {start} on page {page}, the room holds {:?} on page {}",
+                        room.holding,
+                        room.page
+                    );
+                    room.refresh();
                 }
             });
             return;
@@ -987,17 +1080,15 @@ fn hang_up_for(event: &CallEvent) -> Option<StopReason> {
 }
 
 /// The page's command for what the person asked on a surface (mobile/tauri/js/mobile-bridge.js, sidevoice-shared-tauri's
-/// members): the mute as the person's own, set to a value rather than toggled, so that a tap on a surface that showed a
-/// stale mute does what it said.
-fn surface_command(action: SurfaceAction) -> serde_json::Value {
-    let command = |name: &str| serde_json::json!({ "command": name });
+/// members). None for the mute: [`Room::set_mute`] tells the page the mute it set, as a value (a toggle would have the
+/// page flip again what the app has set already).
+fn surface_command(action: SurfaceAction) -> Option<serde_json::Value> {
+    let command = |name: &str| Some(serde_json::json!({ "command": name }));
     match action {
-        SurfaceAction::Mute => serde_json::json!({ "command": "mute", "muted": true }),
-        SurfaceAction::Unmute => serde_json::json!({ "command": "mute", "muted": false }),
+        SurfaceAction::Mute | SurfaceAction::Unmute | SurfaceAction::ToggleMute => None,
         SurfaceAction::Skip => command("skip-reply"),
         SurfaceAction::CancelSend => command("cancel-input"),
         SurfaceAction::HangUp => command("hang-up"),
-        SurfaceAction::ToggleMute => command("toggle-mute"),
         SurfaceAction::OpenConversations => command("open-conversations"),
     }
 }
@@ -1008,7 +1099,7 @@ fn surface_command(action: SurfaceAction) -> serde_json::Value {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NativeAction {
     Mute(bool),
-    /// The other of the call's mute, as the app knows it.
+    /// The other of the mute the surface showed ([`Room::toggle_mute`]).
     ToggleMute,
     CancelInput,
     Skip,
@@ -1029,15 +1120,63 @@ fn native_action(action: SurfaceAction) -> NativeAction {
     }
 }
 
-/// The microphone a page's report says is on (`reported`), after the app set the mute natively to `muting`: a report that
-/// disagrees is one the page sent before it ran that mute (a surface's, while the page did not run), and is not taken; one
-/// that agrees, or one of a mute that cannot be used or of no call, is the page's again and ends the wait.
-fn reported_mic(muting: &mut Option<bool>, reported: bool, disabled: bool, joined: bool) -> bool {
-    match *muting {
-        Some(muted) if joined && !disabled && reported == muted => !muted,
+/// The mute a tap on a mute toggle asks for: the other of the one it showed, or of the app's (`muted`) when it shows none.
+fn toggled(showed: Option<bool>, muted: bool) -> bool {
+    !showed.unwrap_or(muted)
+}
+
+/// How long the page may go on reporting the other mute, once it reports again after a mute the app set natively, before
+/// its report is taken: a page that runs has run the mute by then, so one that still disagrees did not take it (its
+/// command refused, its toggle failed). Counted from its first such report, not from the mute: a locked phone's page may
+/// not run, nor report, for minutes.
+const MUTE_WAIT: Duration = Duration::from_secs(3);
+
+/// A mute the app set natively, waiting for the page to report it ([`reported_mic`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Muting {
+    muted: bool,
+    /// Since when the page has reported the other mute, and the microphone it last reported (`None`: not yet).
+    held: Option<(Instant, bool)>,
+}
+
+/// What became of a page's report of the microphone ([`reported_mic`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MicReport {
+    /// Taken: no native mute waits, or the report ends the wait.
+    Taken,
+    /// Not taken: the page has not run the mute yet. `first`: its first such report since the mute.
+    Held { first: bool },
+    /// Taken: the page has reported the other mute for [`MUTE_WAIT`]; the wait ends.
+    TimedOut,
+}
+
+/// The microphone a page's report says is on (`reported`, at `now`), after the app set the mute natively (`muting`): a
+/// report that disagrees is one the page sent before it ran that mute (a surface's, while the page did not run), and is
+/// not taken, for up to [`MUTE_WAIT`]; one that agrees, or one of a mute that cannot be used or of no call, is the page's
+/// again and ends the wait.
+fn reported_mic(
+    muting: &mut Option<Muting>,
+    reported: bool,
+    disabled: bool,
+    joined: bool,
+    now: Instant,
+) -> (bool, MicReport) {
+    match muting {
+        Some(wait) if joined && !disabled && reported == wait.muted => {
+            let muted = wait.muted;
+            let first = wait.held.is_none();
+            let since = wait.held.map_or(now, |(since, _)| since);
+            wait.held = Some((since, reported));
+            if now.saturating_duration_since(since) >= MUTE_WAIT {
+                *muting = None;
+                (reported, MicReport::TimedOut)
+            } else {
+                (!muted, MicReport::Held { first })
+            }
+        }
         _ => {
             *muting = None;
-            reported
+            (reported, MicReport::Taken)
         }
     }
 }
@@ -1102,10 +1241,14 @@ mod tests {
 
     #[test]
     fn a_surface_s_action_is_the_page_s_own_command() {
+        for action in [
+            SurfaceAction::Mute,
+            SurfaceAction::Unmute,
+            SurfaceAction::ToggleMute,
+        ] {
+            assert_eq!(surface_command(action), None, "{action:?}");
+        }
         for (action, command) in [
-            (SurfaceAction::Mute, r#"{"command":"mute","muted":true}"#),
-            (SurfaceAction::Unmute, r#"{"command":"mute","muted":false}"#),
-            (SurfaceAction::ToggleMute, r#"{"command":"toggle-mute"}"#),
             (SurfaceAction::Skip, r#"{"command":"skip-reply"}"#),
             (SurfaceAction::CancelSend, r#"{"command":"cancel-input"}"#),
             (SurfaceAction::HangUp, r#"{"command":"hang-up"}"#),
@@ -1116,7 +1259,7 @@ mod tests {
         ] {
             assert_eq!(
                 surface_command(action),
-                serde_json::from_str::<serde_json::Value>(command).unwrap(),
+                Some(serde_json::from_str::<serde_json::Value>(command).unwrap()),
                 "{action:?}"
             );
         }
@@ -1138,36 +1281,83 @@ mod tests {
     }
 
     #[test]
+    fn a_tap_on_a_mute_toggle_does_what_it_showed() {
+        for has in [false, true] {
+            assert!(toggled(Some(false), has), "it showed live: mute");
+            assert!(!toggled(Some(true), has), "it showed muted: unmute");
+        }
+        assert!(toggled(None, false), "a headset: the other of the app's");
+        assert!(!toggled(None, true));
+    }
+
+    #[test]
     fn a_mute_set_natively_is_not_undone_by_the_page_s_late_reports() {
-        let mut muting = Some(true);
-        assert!(
-            !reported_mic(&mut muting, true, false, true),
+        let t0 = Instant::now();
+        let wait = |muted| Some(Muting { muted, held: None });
+        let mut muting = wait(true);
+        assert_eq!(
+            reported_mic(&mut muting, true, false, true, t0),
+            (false, MicReport::Held { first: true }),
             "a report from before the mute"
         );
-        assert_eq!(muting, Some(true), "kept until the page follows");
-        assert!(
-            !reported_mic(&mut muting, false, false, true),
+        assert_eq!(
+            reported_mic(&mut muting, true, false, true, t0 + Duration::from_secs(1)),
+            (false, MicReport::Held { first: false }),
+            "kept until the page follows"
+        );
+        assert_eq!(
+            reported_mic(&mut muting, false, false, true, t0 + Duration::from_secs(2)),
+            (false, MicReport::Taken),
             "the page muted"
         );
         assert_eq!(muting, None);
-        assert!(
-            reported_mic(&mut muting, true, false, true),
+        assert_eq!(
+            reported_mic(&mut muting, true, false, true, t0),
+            (true, MicReport::Taken),
             "the person unmuted in the app"
         );
 
-        let mut muting = Some(false);
-        assert!(
-            reported_mic(&mut muting, false, false, true),
+        let mut muting = wait(false);
+        assert_eq!(
+            reported_mic(&mut muting, false, false, true, t0),
+            (true, MicReport::Held { first: true }),
             "an unmute too"
         );
-        assert!(reported_mic(&mut muting, true, false, true));
+        assert_eq!(
+            reported_mic(&mut muting, true, false, true, t0),
+            (true, MicReport::Taken)
+        );
         assert_eq!(muting, None);
 
         for (disabled, joined) in [(true, true), (false, false)] {
-            let mut muting = Some(true);
-            assert!(reported_mic(&mut muting, true, disabled, joined));
+            let mut muting = wait(true);
+            assert_eq!(
+                reported_mic(&mut muting, true, disabled, joined, t0),
+                (true, MicReport::Taken)
+            );
             assert_eq!(muting, None, "disabled {disabled}, joined {joined}");
         }
+    }
+
+    #[test]
+    fn a_page_that_does_not_follow_a_native_mute_is_taken_again_in_a_few_seconds() {
+        let t0 = Instant::now();
+        let mut muting = Some(Muting {
+            muted: true,
+            held: None,
+        });
+        // Counted from the page's first report after the mute, however long the phone was locked before it.
+        assert_eq!(
+            reported_mic(&mut muting, true, false, true, t0),
+            (false, MicReport::Held { first: true })
+        );
+        let almost = t0 + MUTE_WAIT - Duration::from_millis(1);
+        assert!(!reported_mic(&mut muting, true, false, true, almost).0);
+        assert_eq!(
+            reported_mic(&mut muting, true, false, true, t0 + MUTE_WAIT),
+            (true, MicReport::TimedOut)
+        );
+        assert_eq!(muting, None);
     }
 
     #[test]

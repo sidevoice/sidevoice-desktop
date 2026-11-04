@@ -45,7 +45,8 @@ enum CallActions {
 /// The mute button: a `Toggle` (the system flips its face at once). Its `value` should be the other of what the card drew
 /// when it was tapped, but on a locked phone (build 32) muting did nothing while unmuting worked: the value that reached
 /// the app was "unmute" both times (the card's `isOn` old, or the value not carried). So the value is only logged, and the
-/// app's call takes the other of the mute it knows itself (`toggle-mute`), whatever the card drew.
+/// app's call (`toggle-mute`) sets the other of the mute it last showed on the card, which is what the card drew, and
+/// draws the card again.
 @available(iOS 17.0, *)
 struct SetMicOff: SetValueIntent, LiveActivityIntent {
     static var title: LocalizedStringResource = "Mute the call"
@@ -54,7 +55,7 @@ struct SetMicOff: SetValueIntent, LiveActivityIntent {
     init() {}
     func perform() async throws -> some IntentResult {
         CallLog.intent.notice(
-            "intent SetMicOff: the toggle asks micOff=\(value, privacy: .public); the call toggles the mute it knows (toggle-mute)"
+            "intent SetMicOff: the toggle asks micOff=\(value, privacy: .public); the call sets the other of what the card showed (toggle-mute)"
         )
         CallActions.send("toggle-mute", from: "SetMicOff")
         return .result()

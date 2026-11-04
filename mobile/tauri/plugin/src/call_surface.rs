@@ -359,18 +359,21 @@ fn png_size(png: &[u8]) -> Option<(u32, u32)> {
 }
 
 /// The call's details as a surface's native side reads them (iOS: `Report` in CallActivityBridge.swift): `title`, `muted`
-/// and `surface`, in camelCase.
-fn details_json(details: &CallDetails) -> String {
+/// and `surface`, in camelCase, and `refresh` when the surface is to be drawn again even if it shows them already.
+fn details_json(details: &CallDetails, refresh: bool) -> String {
     #[derive(Serialize)]
     struct Details<'a> {
         title: &'a str,
         muted: bool,
         surface: &'a CallSurface,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        refresh: bool,
     }
     serde_json::to_string(&Details {
         title: &details.title,
         muted: details.muted,
         surface: &details.surface,
+        refresh,
     })
     .unwrap_or_default()
 }
@@ -379,7 +382,7 @@ fn details_json(details: &CallDetails) -> String {
 /// as `details`; what the person asks for on it is reported to `events` as [`CallEvent::Action`].
 pub(crate) fn start_surface(details: &CallDetails, events: CallEvents) {
     platform::start(
-        &details_json(details),
+        &details_json(details, false),
         Arc::new(move |name| match SurfaceAction::named(name) {
             Some(action) => events(CallEvent::Action { action }),
             None => log::warn!("call surface: no action named {name:?}"),
@@ -389,7 +392,13 @@ pub(crate) fn start_surface(details: &CallDetails, events: CallEvents) {
 
 /// Shows the call as `details` on that surface, if one is started.
 pub(crate) fn show_surface(details: &CallDetails) {
-    platform::show(&details_json(details));
+    platform::show(&details_json(details, false));
+}
+
+/// Shows the call as `details` on that surface, drawn again even where it shows that already (iOS: the Live Activity is
+/// updated with the same state, so that a toggle the system flipped on a tap is drawn from the details again).
+pub(crate) fn refresh_surface(details: &CallDetails) {
+    platform::show(&details_json(details, true));
 }
 
 /// Ends that surface, and any an earlier run of the app left.
@@ -416,7 +425,10 @@ mod tests {
                 ..CallSurface::default()
             },
         };
-        let json: serde_json::Value = serde_json::from_str(&details_json(&details)).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&details_json(&details, false)).unwrap();
+        assert_eq!(json.get("refresh"), None);
+        let again: serde_json::Value = serde_json::from_str(&details_json(&details, true)).unwrap();
+        assert_eq!(again["refresh"], true);
         assert_eq!(json["title"], "Globo");
         assert_eq!(json["muted"], true);
         assert_eq!(json["surface"]["phase"], "working");
