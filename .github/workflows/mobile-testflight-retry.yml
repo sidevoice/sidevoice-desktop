@@ -1,0 +1,86 @@
+name: mobile-testflight-retry
+
+# Re-dispatches mobile-testflight when GitHub never gave its job a macOS runner ("The job was not acquired by Runner of
+# type hosted even after multiple attempts": the run ends cancelled, its job has runner_id 0 and no steps). Without it
+# nobody notices until the next push. A dispatch, not a re-run: the build number is the run number, and a re-run of a run
+# whose upload was accepted fails (see mobile-testflight.yml).
+# It dispatches only when ALL hold, and logs which one stopped it otherwise:
+# - the completed run was cancelled, on main, at the current head of main (a newer push has its own run);
+# - none of its jobs ever started (no runner, no steps): a cancellation by a person, or of a run that may have uploaded,
+#   is left alone;
+# - no other mobile-testflight run is queued or in progress (this also covers a pending run GitHub dropped for a newer one);
+# - fewer than MAX_CANCELLED cancelled runs exist for that commit. Past the cap this job fails, which shows red on main.
+# Runs of this workflow are serialized, so two completions cannot both dispatch.
+on:
+  workflow_run:
+    workflows: [mobile-testflight]
+    types: [completed]
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: mobile-testflight-retry
+  cancel-in-progress: false
+
+env:
+  MAX_CANCELLED: 6
+  # Pause before dispatching, so a capacity shortage has a chance to clear.
+  RETRY_DELAY_SECONDS: 180
+
+jobs:
+  retry:
+    name: Retry the TestFlight upload
+    if: github.event.workflow_run.conclusion == 'cancelled' && github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Decide and dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          WORKFLOW: mobile-testflight.yml
+        run: |
+          set -euo pipefail
+
+          head=$(gh api "repos/$REPO/commits/main" --jq .sha)
+          if [ "$head" != "$RUN_SHA" ]; then
+            echo "not retrying: run $RUN_ID is for ${RUN_SHA:0:9}, main is at ${head:0:9} (the newer push has its own run)"
+            exit 0
+          fi
+
+          started=$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" --paginate \
+            --jq '.jobs[] | select((.runner_id // 0) != 0 or ((.steps // []) | length) > 0) | .id' | wc -l)
+          if [ "$started" != "0" ]; then
+            echo "not retrying: $started job(s) of run $RUN_ID had started, so this is a real cancellation"
+            exit 0
+          fi
+
+          active=0
+          for status in queued in_progress waiting pending requested; do
+            n=$(gh api "repos/$REPO/actions/workflows/$WORKFLOW/runs?status=$status&per_page=1" --jq .total_count)
+            active=$((active + n))
+          done
+          if [ "$active" != "0" ]; then
+            echo "not retrying: $active other $WORKFLOW run(s) are queued or in progress"
+            exit 0
+          fi
+
+          cancelled=$(gh api "repos/$REPO/actions/workflows/$WORKFLOW/runs?status=cancelled&head_sha=$RUN_SHA&per_page=1" --jq .total_count)
+          if [ "$cancelled" -ge "$MAX_CANCELLED" ]; then
+            echo "::error title=TestFlight upload gave up::$cancelled cancelled $WORKFLOW runs for ${RUN_SHA:0:9} (cap $MAX_CANCELLED): no macOS runner is being assigned. Dispatch it by hand once capacity is back."
+            exit 1
+          fi
+
+          echo "retrying: run $RUN_ID never started (no runner, no steps), main is at ${head:0:9}, $cancelled/$MAX_CANCELLED cancelled runs; dispatching in ${RETRY_DELAY_SECONDS}s"
+          sleep "$RETRY_DELAY_SECONDS"
+          # A push may have landed during the pause: it has its own run.
+          head=$(gh api "repos/$REPO/commits/main" --jq .sha)
+          if [ "$head" != "$RUN_SHA" ]; then
+            echo "not retrying after all: main moved to ${head:0:9}"
+            exit 0
+          fi
+          gh workflow run "$WORKFLOW" --repo "$REPO" --ref main
