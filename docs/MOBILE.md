@@ -175,8 +175,11 @@ stays as it was (sidevoice-desktop#405).
   the eight languages like the others; Android: the runtime `CAMERA` permission the plugin's manifest merges in, with its
   `VIBRATE`, which nothing calls). A denial is an answer the page words, with `openSettings()` where the system will not ask
   again; typing the code is always there.
-- **Not here yet:** the plugin's manifest also declares `android.hardware.camera.any` as required, so the Play listing drops
-  devices without a camera; to be decided with the store listing.
+- **No device is left out for lacking a camera.** The plugin's manifest declares `android.hardware.camera.any` (and asks for
+  `CAMERA` and `VIBRATE`); the plugin of `mobile/tauri/plugin` replaces the feature as not required, adds `camera` and
+  `camera.autofocus` as not required, and removes `VIBRATE`, which nothing calls. The plugin's scan never answers on an
+  Android phone without a camera, so `scan()` first reads the web view's video inputs and answers `unavailable` when it
+  finds none (a list it cannot read is left to the plugin; iOS refuses a missing camera itself).
 
 ## Who owns the native projects
 

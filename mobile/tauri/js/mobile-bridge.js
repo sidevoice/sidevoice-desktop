@@ -163,11 +163,27 @@
     /** Asks for the camera if the person has not decided yet (the system's prompt); a decided answer is not asked again. */
     const request = () =>
       call("request_permissions").then(stateOf, () => "denied").then((state) => (state === "granted" ? "granted" : "denied"));
+    /** Whether the phone has a camera to scan with. The plugin's scan never answers on an Android phone without one, so the
+     *  page is told first. Only a list that was read and holds no video input says so; anything else (no API, a refusal) is
+     *  left to the plugin, which refuses a missing camera itself on iOS. */
+    const hasCamera = () => {
+      const devices = win.navigator && win.navigator.mediaDevices;
+      if (!devices || typeof devices.enumerateDevices !== "function") return Promise.resolve(true);
+      return devices.enumerateDevices().then((list) => !Array.isArray(list) || list.some((device) => device.kind === "videoinput"), () => true);
+    };
     let pending = null;
-    const scanOnce = () =>
-      request().then((state) => {
+    // `cancel()` (or the page going away) before the camera is started: nothing is started.
+    let cancelled = false;
+    const scanOnce = () => {
+      cancelled = false;
+      return request().then((state) => {
         if (state !== "granted") return { status: "denied" };
-        return call("scan", { windowed: true, formats: ["QR_CODE"] }).then(
+        if (cancelled) return { status: "cancelled" };
+        return hasCamera().then((camera) => (cancelled ? { status: "cancelled" } : !camera ? { status: "unavailable" } : started()));
+      });
+    };
+    const started = () =>
+        call("scan", { windowed: true, formats: ["QR_CODE"] }).then(
           (found) => ({ status: "scanned", text: found && typeof found.content === "string" ? found.content : "" }),
           (error) => {
             // The plugin rejects "cancelled" when `cancel()` ends the scan. Anything else: the camera was taken away since the
@@ -176,13 +192,12 @@
             return permission().then((now) => ({ status: now === "denied" ? "denied" : "unavailable" }));
           },
         );
-      });
     const scan = () => {
       if (!pending) pending = scanOnce().finally(() => { pending = null; });
       return pending;
     };
     // A page that goes away with the camera on: the camera is let go.
-    if (typeof win.addEventListener === "function") win.addEventListener("pagehide", () => { if (pending) call("cancel").catch(() => {}); });
+    if (typeof win.addEventListener === "function") win.addEventListener("pagehide", () => { if (pending) { cancelled = true; call("cancel").catch(() => {}); } });
     return Object.freeze({
       permission,
       request,
@@ -191,8 +206,13 @@
        *  first, so a scan without `request()` is safe. */
       scan,
       /** Ends the scan in progress (it resolves `cancelled`); nothing when there is none. */
-      cancel: () => (pending ? call("cancel").then(() => {}, () => {}) : Promise.resolve()),
-      /** The app's page of the system's settings, where a denied camera is allowed again. */
+      cancel: () => {
+        if (!pending) return Promise.resolve();
+        cancelled = true;
+        return call("cancel").then(() => {}, () => {});
+      },
+      /** The app's page of the system's settings, where a denied camera is allowed again. Rejects when the system will not
+       *  open it (the page catches that). */
       openSettings: () => call("open_app_settings").then(() => {}),
     });
   }

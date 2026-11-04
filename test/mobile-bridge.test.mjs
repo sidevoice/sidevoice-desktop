@@ -10,7 +10,7 @@ const mobile = readFileSync(new URL("../mobile/tauri/js/mobile-bridge.js", impor
 const composed = `(function (transportOf, membersOf) {\n${mobile}\n})(${transport}, ${members});`;
 const PLUGIN = "plugin:sidevoice-shared-tauri|";
 
-const live = { debug: null, plugin: {} };
+const live = { debug: null, plugin: {}, navigator: undefined };
 
 function install(origin, pageOrigin = origin, microphoneSettings = true, microphoneHelp = null, messageTables = null, deviceName = null, build = { channel: "dev", version: "0.1.0" }, debugState = null) {
   const module = { exports: {} };
@@ -21,6 +21,7 @@ function install(origin, pageOrigin = origin, microphoneSettings = true, microph
   const win = {
     location: { protocol: url.protocol, host: url.host },
     performance: { timeOrigin: 1 },
+    navigator: live.navigator,
     __TAURI_INTERNALS__: {
       transformCallback: () => 1,
       unregisterCallback: () => {},
@@ -474,4 +475,28 @@ test("a camera not yet decided is reported as prompt, and a scan after a cancel 
   assert.equal(await camera.permission(), "prompt");
   assert.equal((await camera.scan()).text, CODE);
   assert.equal((await camera.scan()).text, CODE);
+});
+
+test("a phone with no video input is unavailable without asking the plugin, and a list that cannot be read is left to it", async () => {
+  live.navigator = { mediaDevices: { enumerateDevices: () => Promise.resolve([{ kind: "audioinput" }]) } };
+  const none = scanner({ [`${SCANNER}request_permissions`]: () => ({ camera: "granted" }), [`${SCANNER}scan`]: () => { throw new Error("must not scan"); } });
+  assert.deepEqual(plain(await none.scanner.scan()), { status: "unavailable" });
+  live.navigator = { mediaDevices: { enumerateDevices: () => Promise.reject(new Error("no")) } };
+  const unreadable = scanner({ [`${SCANNER}request_permissions`]: () => ({ camera: "granted" }), [`${SCANNER}scan`]: () => ({ content: CODE }) });
+  assert.equal((await unreadable.scanner.scan()).text, CODE);
+  live.navigator = undefined;
+});
+
+test("a cancel while the camera permission is asked starts no scan", async () => {
+  let answer;
+  const { scanner: camera, invoked } = scanner({
+    [`${SCANNER}request_permissions`]: () => new Promise((resolve) => { answer = resolve; }),
+    [`${SCANNER}scan`]: () => { throw new Error("must not scan"); },
+    [`${SCANNER}cancel`]: () => {},
+  });
+  const scanning = camera.scan();
+  await camera.cancel();
+  answer({ camera: "granted" });
+  assert.deepEqual(plain(await scanning), { status: "cancelled" });
+  assert.ok(!calls(invoked).includes("scan"));
 });
