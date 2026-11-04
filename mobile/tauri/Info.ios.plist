@@ -7,7 +7,9 @@
   <string>Sidevoice listens through the microphone so you can talk with your agent.</string>
   <key>NSLocalNetworkUsageDescription</key>
   <string>Sidevoice connects to your paired computer over the local network.</string>
-  <!-- The two texts above are the English base. The other languages are mobile/tauri/ios/<language>.lproj/InfoPlist.strings,
+  <key>NSCameraUsageDescription</key>
+  <string>Sidevoice uses the camera to scan the pairing code your computer shows.</string>
+  <!-- The three texts above are the English base. The other languages are mobile/tauri/ios/<language>.lproj/InfoPlist.strings,
        which `cargo xtask mobile generate ios` puts into the project; this list is the languages iOS offers the app in,
        the folders of mobile/tauri/ios (xtask tests that they agree). -->
   <key>CFBundleLocalizations</key>
