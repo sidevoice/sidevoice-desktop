@@ -1594,23 +1594,25 @@ test("host.muteShortcut gets and sets through the mute_shortcut command, refusin
   ], "a wrong argument asks the app nothing");
 });
 
-test("host.mediaDuck gets and sets through the media_duck command, strings only", async () => {
+test("host.mediaDuck gets, sets, asks and opens settings through the media_duck command, strings only", async () => {
   const install = loadFactory();
   const status = { mode: "lower", lower: "per-app", pause: "media-controls" };
   const { win, calls } = settingsWindow({ media_duck: ({ action, mode }) => (action === "set" ? { ...status, mode } : status) });
   const { host } = install(win, ORIGIN);
   assert.deepEqual(Object.keys(host.mediaDuck).sort(), ["allow", "get", "openSettings", "set"]);
-  assert.deepEqual(await host.mediaDuck.allow(), status);
-  assert.deepEqual(await host.mediaDuck.openSettings(), status);
+  assert.deepEqual(await host.mediaDuck.allow("capture"), status);
+  assert.deepEqual(await host.mediaDuck.openSettings("automation"), status);
   assert.ok(Object.isFrozen(host.mediaDuck));
   assert.deepEqual(await host.mediaDuck.get(), status);
   assert.equal((await host.mediaDuck.set("pause")).mode, "pause");
   for (const wrong of [undefined, 5, null]) {
     await assert.rejects(host.mediaDuck.set(wrong), (e) => e.key === "bad_request", String(wrong));
+    await assert.rejects(host.mediaDuck.allow(wrong), (e) => e.key === "bad_request", String(wrong));
+    await assert.rejects(host.mediaDuck.openSettings(wrong), (e) => e.key === "bad_request", String(wrong));
   }
   assert.deepEqual(calls.filter(([cmd]) => cmd === "media_duck").map(([, args]) => args), [
-    { action: "allow" },
-    { action: "settings" },
+    { action: "allow", permission: "capture" },
+    { action: "settings", permission: "automation" },
     { action: "get" },
     { action: "set", mode: "pause" },
   ], "a wrong argument asks the app nothing");

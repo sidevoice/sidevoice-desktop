@@ -1,6 +1,6 @@
 //! What this OS can do to other apps' media while the microphone is open (docs/MEDIA_DUCK.md): observe the players and
 //! lower, pause or resume one. What to do, and what to give back, is core's (`media_duck`).
-use sidevoice_desktop_core::media_duck::{Access, Lowering, Mode, Pausing, Player, Seen, Step};
+use sidevoice_desktop_core::media_duck::{Access, Lowering, Mode, Pausing, Permission, Player, Seen, Step};
 
 #[cfg_attr(target_os = "macos", path = "media_duck/macos.rs")]
 #[cfg_attr(target_os = "windows", path = "media_duck/windows.rs")]
@@ -20,9 +20,10 @@ trait Os {
         Pausing::None
     }
 
-    /// Whether the system lets the app control the apps it pauses. Never asks the person.
-    fn access() -> Access {
-        Access::Granted
+    /// Whether the system lets the app control the named apps it lowers or pauses, where that takes a permission (macOS:
+    /// Automation of Music and Spotify). Never asks the person.
+    fn access() -> Option<Access> {
+        None
     }
 
     /// Asks the person for that access, if the system does that; the system may show a dialog.
@@ -38,8 +39,11 @@ trait Os {
     /// a while.
     fn ask_capture() {}
 
-    /// The system's page where the person turns those permissions back on.
-    const SETTINGS_URL: Option<&'static str> = None;
+    /// The system's page where the person turns System Audio Recording back on.
+    const CAPTURE_SETTINGS_URL: Option<&'static str> = None;
+
+    /// The system's page where the person turns the control of the named apps back on.
+    const AUTOMATION_SETTINGS_URL: Option<&'static str> = None;
 
     /// Undoes what a run of the app that died left in the system itself (macOS: its taps), before anything else.
     fn clean() {}
@@ -77,12 +81,12 @@ pub fn reach() -> (Lowering, Pausing) {
     (Native::lowering(), Native::pausing())
 }
 
-/// Whether the system lets the app pause what it pauses.
-pub fn access() -> Access {
+/// Whether the system lets the app control the named apps it lowers or pauses, where that is a permission.
+pub fn access() -> Option<Access> {
     Native::access()
 }
 
-/// Asks for that access (the person pressed Allow).
+/// Asks for that access (the person pressed Allow in the list of permissions).
 pub fn ask() {
     Native::ask()
 }
@@ -92,14 +96,17 @@ pub fn capture() -> Option<Access> {
     Native::capture()
 }
 
-/// Asks for that permission (the person chose Lower, or pressed Allow).
+/// Asks for that permission (the person pressed Allow in the list of permissions).
 pub fn ask_capture() {
     Native::ask_capture()
 }
 
-/// The system's page for those permissions, if it has one.
-pub fn settings_url() -> Option<&'static str> {
-    Native::SETTINGS_URL
+/// The system's page for `permission`, if it has one.
+pub fn settings_url(permission: Permission) -> Option<&'static str> {
+    match permission {
+        Permission::Capture => Native::CAPTURE_SETTINGS_URL,
+        Permission::Automation => Native::AUTOMATION_SETTINGS_URL,
+    }
 }
 
 /// Undoes what a run that died left in the system.

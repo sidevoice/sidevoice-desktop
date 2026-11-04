@@ -214,8 +214,8 @@ impl Ducker {
         }
     }
 
-    /// What `mode` does to a player that is playing, if anything. Pausing a player that cannot be paused lowers it, where
-    /// the system offers its volume for that (macOS: an app with no safe pause is lowered).
+    /// What `mode` does to a player that is playing, if anything. Pause only pauses: a player that cannot be paused is left
+    /// as it is, never lowered instead (operator, 2026-11-04).
     fn take(mode: Mode, p: &Player) -> Option<Step> {
         if p.state != State::Playing {
             return None;
@@ -223,7 +223,7 @@ impl Ducker {
         let key = p.key.clone();
         match (mode, p.volume) {
             (Mode::Pause, _) if p.pausable => Some(Step::Pause { key }),
-            (Mode::Lower | Mode::Pause, Some(from)) => Some(Step::SetVolume { key, volume: from * LOWERED_TO }),
+            (Mode::Lower, Some(from)) => Some(Step::SetVolume { key, volume: from * LOWERED_TO }),
             _ => None,
         }
     }
@@ -334,13 +334,25 @@ pub struct Status {
     pub mode: Mode,
     pub lower: Lowering,
     pub pause: Pausing,
-    /// Whether the system lets the app control the named apps it lowers or pauses (macOS Automation); `granted` where
-    /// nothing has to be allowed.
-    pub access: Access,
+    /// Whether the system lets the app control the named apps it lowers or pauses (macOS Automation of Music and
+    /// Spotify); absent where nothing has to be allowed for that.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access: Option<Access>,
     /// Whether the system lets the app lower any app's sound on its own (macOS 14.4 and later: System Audio Recording);
     /// absent where the system has no such permission.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capture: Option<Access>,
+}
+
+/// One of the permissions the page lists (Settings > Permissions, the setup's permissions step), as it names it to ask
+/// for it or to open the system's page for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Permission {
+    /// Lowering any app on its own: `capture` (macOS System Audio Recording).
+    Capture,
+    /// Controlling the named apps: `access` (macOS Automation of Music and Spotify).
+    Automation,
 }
 
 #[cfg(test)]
@@ -661,38 +673,34 @@ mod tests {
     }
 
     #[test]
-    fn pausing_what_cannot_be_paused_lowers_it_where_its_volume_is_offered() {
+    fn pausing_leaves_alone_what_cannot_be_paused() {
         let world = World::new(vec![
             player("music", State::Playing, None, true),
             player("browser", State::Playing, Some(1.0), false),
-            player("silent", State::Playing, None, false),
         ]);
         let mut ducker = Ducker::default();
         world.run(&mut ducker, Some(Mode::Pause));
         assert_eq!(world.get("music").state, State::Paused);
-        assert!((world.get("browser").volume.unwrap() - LOWERED_TO).abs() < 1e-6);
+        assert_eq!(world.get("browser").volume, Some(1.0), "never lowered instead");
         assert_eq!(world.get("browser").state, State::Playing);
         world.run(&mut ducker, None);
         assert_eq!(world.get("music").state, State::Playing);
-        assert_eq!(world.get("browser").volume, Some(1.0));
         assert!(ducker.owed().is_empty());
     }
 
     #[test]
-    fn the_capture_permission_is_said_only_where_there_is_one() {
-        let status = Status {
-            mode: Mode::Lower,
-            lower: Lowering::SomeApps,
-            pause: Pausing::None,
-            access: Access::Granted,
-            capture: None,
-        };
+    fn the_permissions_are_said_only_where_there_are_some() {
+        let status =
+            Status { mode: Mode::Lower, lower: Lowering::PerApp, pause: Pausing::None, access: None, capture: None };
         assert_eq!(
             serde_json::to_value(status).unwrap(),
-            serde_json::json!({"mode": "lower", "lower": "some-apps", "pause": "none", "access": "granted"})
+            serde_json::json!({"mode": "lower", "lower": "per-app", "pause": "none"})
         );
-        let status = Status { capture: Some(Access::Undetermined), ..status };
+        let status = Status { access: Some(Access::Granted), capture: Some(Access::Undetermined), ..status };
         assert_eq!(serde_json::to_value(status).unwrap()["capture"], "undetermined");
+        assert_eq!(serde_json::to_value(status).unwrap()["access"], "granted");
+        assert_eq!(serde_json::from_str::<Permission>(r#""automation""#).unwrap(), Permission::Automation);
+        assert_eq!(serde_json::from_str::<Permission>(r#""capture""#).unwrap(), Permission::Capture);
     }
 
     #[test]

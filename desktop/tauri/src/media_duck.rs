@@ -5,7 +5,7 @@
 use crate::platform::media_duck as platform;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sidevoice_desktop_core::media_duck::{wanted, Access, Ducker, Hold, Lowering, Mode, Pausing, Status, Touch};
+use sidevoice_desktop_core::media_duck::{wanted, Access, Ducker, Hold, Mode, Permission, Status, Touch};
 use std::path::PathBuf;
 use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
@@ -164,40 +164,32 @@ fn status(mode: Mode) -> Status {
     Status { mode, lower, pause, access: platform::access(), capture: platform::capture() }
 }
 
-fn in_call(app: &AppHandle) -> bool {
-    app.state::<crate::AppState>().call.lock().unwrap().joined
-}
-
-/// What a choice needs asked of the system: the permission to lower any app (asked first: with it, lowering needs nothing
-/// else), then the permission to control the named apps, if the choice still goes through them.
-fn ask_for(mode: Mode) {
-    if mode == Mode::Off {
-        return;
-    }
-    if platform::capture() == Some(Access::Undetermined) {
-        platform::ask_capture();
-    }
-    let (lower, pause) = platform::reach();
-    let through_named = match mode {
-        Mode::Lower => lower == Lowering::SomeApps,
-        _ => pause == Pausing::SomeApps,
-    };
-    if through_named && platform::access() == Access::Undetermined {
-        platform::ask();
+/// Asks the system for `permission` if it has not been asked yet: the person pressed Allow in the list of permissions. The
+/// system may show its dialog; nothing else asks (not choosing a mode, not a call, not the start of the app).
+fn ask(permission: Permission) {
+    match permission {
+        Permission::Capture if platform::capture() == Some(Access::Undetermined) => platform::ask_capture(),
+        Permission::Automation if platform::access() == Some(Access::Undetermined) => platform::ask(),
+        _ => {}
     }
 }
 
-/// `host.mediaDuck`'s one command: `action` `get`; `set` with `mode` (`lower`, `pause` or `off`); `allow`, the person's
-/// own request to let the app do what the choice needs, which is when the system may ask; or `settings`, the system's page
-/// where the person turns back on what they once refused.
+/// `host.mediaDuck`'s one command: `action` `get`; `set` with `mode` (`lower`, `pause` or `off`); `allow` with
+/// `permission` (`capture` or `automation`), the person's own request to let the app do that, which is when the system may
+/// ask; or `settings` with `permission`, the system's page where the person turns it back on.
 #[tauri::command]
 pub async fn media_duck(
     app: AppHandle,
     webview: Webview,
     action: String,
     mode: Option<String>,
+    permission: Option<String>,
 ) -> Result<Status, Value> {
     let refuse = |key: &str, why: String| json!({ "key": key, "message": why });
+    let permission_of = |permission: Option<String>| -> Result<Permission, Value> {
+        serde_json::from_value(json!(permission))
+            .map_err(|_| refuse("bad_request", "permission is capture or automation".into()))
+    };
     crate::room_page(&app, &webview).map_err(|why| refuse("bad_request", why))?;
     match action.as_str() {
         "get" => Ok(status(crate::stored_media_duck(&app))),
@@ -208,22 +200,17 @@ pub async fn media_duck(
             if let Some(duck) = app.try_state::<MediaDuck>() {
                 duck.send(Msg::Mode(mode));
             }
-            // Choosing Lower is when the system is asked to let the app lower any app, never in the middle of a call (the
-            // row's Allow is the person's own way to ask then).
-            if mode == Mode::Lower && !in_call(&app) && platform::capture() == Some(Access::Undetermined) {
-                let _ = tauri::async_runtime::spawn_blocking(platform::ask_capture).await;
-            }
+            Ok(status(mode))
+        }
+        "allow" => {
+            let permission = permission_of(permission)?;
+            let _ = tauri::async_runtime::spawn_blocking(move || ask(permission)).await;
             // What is stored now: the person may have chosen again while the system was asking.
             Ok(status(crate::stored_media_duck(&app)))
         }
-        // The person pressed "Allow": the system may ask now (never on its own in the middle of a call, never at startup).
-        "allow" => {
-            let mode = crate::stored_media_duck(&app);
-            let _ = tauri::async_runtime::spawn_blocking(move || ask_for(mode)).await;
-            Ok(status(mode))
-        }
         "settings" => {
-            let url = platform::settings_url().ok_or_else(|| refuse("unsupported", "no settings page here".into()))?;
+            let url = platform::settings_url(permission_of(permission)?)
+                .ok_or_else(|| refuse("unsupported", "no settings page here".into()))?;
             app.opener().open_url(url, None::<&str>).map_err(|e| refuse("internal", e.to_string()))?;
             Ok(status(crate::stored_media_duck(&app)))
         }

@@ -229,12 +229,6 @@ fn responsible(pid: i32) -> Option<i32> {
     function.map(|f| unsafe { f(pid) }).filter(|p| *p > 0)
 }
 
-/// A process that is playing, as the audio system lists it.
-pub(super) struct Playing {
-    pub(super) pid: i32,
-    pub(super) bundle: String,
-}
-
 /// Whether `pid` is this app's own sound: this process, one it started, one it is responsible for or that shares what is
 /// responsible for it (its webview's WebKit helpers, whose parent is launchd), or a WebKit helper whose responsible
 /// process cannot be told (never taken for another app's).
@@ -251,7 +245,7 @@ fn ours(pid: i32, bundle: &str, table: &super::ours::Ours) -> bool {
 /// The processes with output running now on the default output, without this app's own sound or the system's. One that
 /// plays only on another output (AirPlay, HDMI, an audio interface) is left alone: its tap would bring it here. No
 /// permission is needed to list them.
-pub(super) fn playing() -> Vec<Playing> {
+pub(super) fn playing() -> Vec<i32> {
     let table = super::ours::Ours::new();
     let default = output().map(|o| o.default);
     list(kAudioObjectSystemObject as u32, kAudioHardwarePropertyProcessObjectList, kAudioObjectPropertyScopeGlobal)
@@ -267,8 +261,7 @@ pub(super) fn playing() -> Vec<Playing> {
         .filter_map(|process| {
             let pid = get::<i32, ()>(process, kAudioProcessPropertyPID, kAudioObjectPropertyScopeGlobal, None)?;
             let bundle = string(process, kAudioProcessPropertyBundleID).unwrap_or_default();
-            (pid > 1 && !ours(pid, &bundle, &table) && !SYSTEM.iter().any(|s| bundle.starts_with(s)))
-                .then_some(Playing { pid, bundle })
+            (pid > 1 && !ours(pid, &bundle, &table) && !SYSTEM.iter().any(|s| bundle.starts_with(s))).then_some(pid)
         })
         .collect()
 }

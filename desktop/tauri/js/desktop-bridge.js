@@ -279,13 +279,15 @@
    *  capture?}`. */
   function mediaDuck() {
     const invalid = () => ({ key: "bad_request", message: "set(mode) takes 'lower', 'pause' or 'off'." });
+    const unnamed = () => ({ key: "bad_request", message: "takes the permission: 'capture' or 'automation'." });
+    const named = (action, permission) => (typeof permission === "string" ? call("media_duck", { action, permission }) : Promise.reject(unnamed()));
     return Object.freeze({
       get: () => call("media_duck", { action: "get" }),
-      /** The person's own request to let the app do what the choice needs (macOS: System Audio Recording, Automation of
-       *  Music and Spotify): when the system may ask. */
-      allow: () => call("media_duck", { action: "allow" }),
-      /** The system's page where the person turns System Audio Recording back on (macOS); rejects `unsupported` elsewhere. */
-      openSettings: () => call("media_duck", { action: "settings" }),
+      /** The person's own request, from the list of permissions, to let the app do what `permission` names (macOS:
+       *  `capture`, System Audio Recording; `automation`, controlling Music and Spotify): when the system may ask. */
+      allow: (permission) => named("allow", permission),
+      /** The system's page where the person turns `permission` back on (macOS); rejects `unsupported` elsewhere. */
+      openSettings: (permission) => named("settings", permission),
       set: (mode) => (typeof mode === "string" ? call("media_duck", { action: "set", mode }) : Promise.reject(invalid())),
     });
   }

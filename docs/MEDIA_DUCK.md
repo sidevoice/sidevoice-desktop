@@ -5,6 +5,10 @@ muted) **or the agent is speaking in it** (the microphone muted or not), other a
 paused; when neither holds any more, the app gives back **only what it took**. The choice is `host.mediaDuck`
 (docs/BRIDGE.md), kept in `settings.json` as `mediaDuck`: `lower`, `pause` or `off`.
 
+"The microphone open" means the person's microphone open **in a call** (`micEnabled` of the joined call), nothing else. A
+microphone that listens all the time for a wake word (a possible future feature) must not count: it would keep other apps'
+media lowered or paused all day. Such a feature reports its listening apart from `micEnabled`, and `wanted` does not read it.
+
 ## When
 
 `wanted(mode, joined, mic_enabled, agent_speaking)` in core: the mode while `joined && (mic_enabled || agent_speaking)`,
@@ -46,8 +50,8 @@ given back its volume if it starts at the one the app set. An app that is not pl
 A player that cannot be asked now (a failure that may pass) keeps its debt too. Retries are counted per change of the call,
 not per report of the page.
 
-In Pause, a player that cannot be paused but whose volume the system offers is lowered instead (core `take`): only macOS
-offers that (below).
+Pause only pauses: a player that cannot be paused is left as it is, never lowered instead (core `take`; operator,
+2026-11-04).
 
 The app's own sound is never touched: the process table is read and every process that descends from the app (its
 webview's helpers) is skipped for audio sessions and streams, and MPRIS players are skipped by the process behind their bus
@@ -61,13 +65,14 @@ skipped when this app is responsible for it (`responsibility_get_pid_responsible
 |---|---|---|
 | Windows | Each other process's audio session on the default output device (WASAPI `ISimpleAudioVolume`), found again by endpoint id and session instance id. Per app. | System media transport controls (`GlobalSystemMediaTransportControlsSessionManager`): any app on the media card; one session at a time, told apart by its place among its app’s sessions (`media:<app id>#<n>`; a session that appears or goes in between can shift it). |
 | Linux | Each playing stream's volume through the sound server (`pactl`, PulseAudio or PipeWire's Pulse server), so browsers are reached. Needs a `pactl` that lists as JSON (16 or later), run with `LC_ALL=C` and a 2 s limit; otherwise the page is told `lower: none`. Per app. | MPRIS `Pause`/`Play` of each player that is playing and `CanPause`. |
-| macOS 14.4+, System Audio Recording allowed | **Any app that plays**, one Core Audio process tap each (below), browsers included. The output volume and the app's own voice are never touched. `lower: per-app`. | Music and Spotify through Apple events; **every other app that plays is lowered through its tap** (no safe way to pause it: adopted 2026-11-04, revisable). |
+| macOS 14.4+, System Audio Recording allowed | **Any app that plays**, one Core Audio process tap each (below), browsers included. The output volume and the app's own voice are never touched. `lower: per-app`. | **Music and Spotify only**, through Apple events (operator, 2026-11-04): YouTube, browsers and other apps are left playing, never lowered instead; the page says so. |
 | macOS 13 to 14.3, or the permission refused / not asked | Music's and Spotify's own `sound volume` through Apple events (never the device volume); nothing else. `lower: some-apps`. | Music and Spotify only. |
 | iOS, Android | Not in this change (see the PR). | Not in this change. |
 | Browser | Not possible; the page has no `host.mediaDuck` and shows nothing. | |
 
 Apple events (Music, Spotify) need Automation, which the system asks once per app, and only for an app that is open; it is
-asked when the person presses "Allow" in Settings (`allow`), never at startup or in a call. No media key is ever sent: it
+asked when the person presses "Allow" on its row in the list of permissions (`allow("automation")`), never at startup, on
+choosing a mode, or by a call. No media key is ever sent: it
 toggles, and during a call it reaches this app (the Now Playing one).
 
 Limits that apply to all: it looks at what plays when the mode is taken, not after (a player that starts later is not
@@ -108,10 +113,12 @@ functions exist from 14.2, but System Audio Recording, `NSAudioCaptureUsageDescr
 7. **Leftovers**: at start, before anything, aggregates and taps named `Sidevoice-duck-` are destroyed (private ones
    should go with their process; other tap apps clean anyway).
 8. **Permission**: System Audio Recording (TCC `kTCCServiceAudioCapture`). Its state is read with `TCCAccessPreflight`
-   (private, not entitlement-gated, what AudioCap uses), `capture` in `get`. It is asked when the person chooses Lower
-   outside a call, or presses "Allow": a tap that mutes nothing is read until the person answers (60 s at most), which is
-   when the system asks; one question at a time, and `set` answers with the mode stored then. **No tap that mutes is ever made without it** (the app would go silent instead of lower).
-   Settings → `openSettings()` opens Privacy & Security → Screen & System Audio Recording.
+   (private, not entitlement-gated, what AudioCap uses), `capture` in `get`. It is asked only when the person presses
+   "Allow" on its row in the list of permissions (`allow("capture")`: the setup's permissions step, Settings → Permissions),
+   never on choosing a mode or in a call: a tap that mutes nothing is read until the person answers (60 s at most), which is
+   when the system asks; one question at a time. **No tap that mutes is ever made without it** (the app would go silent
+   instead of lower). `openSettings("capture")` opens Privacy & Security → Screen & System Audio Recording,
+   `openSettings("automation")` Privacy & Security → Automation.
 
 Usage strings (`NSAudioCaptureUsageDescription`, `NSAppleEventsUsageDescription`) are English only for now;
 per-language `InfoPlist.strings`, as the mobile app has, are a follow-up (with the Spanish `NSMicrophoneUsageDescription`).
@@ -123,18 +130,20 @@ per-language `InfoPlist.strings`, as the mobile app has, are a follow-up (with t
 - `lower`: `per-app` (any app, one by one), `some-apps` (only named apps: macOS without taps) or `none`;
 - `pause`: `media-controls`, `some-apps` or `none`;
 - `access`: macOS Automation of Music and Spotify, `granted`, `denied`, `undetermined` or `unknown` (the system answers only
-  for an app that is open: with neither open the last real answer stands, else `unknown`); `granted` elsewhere;
+  for an app that is open: with neither open the last real answer stands, else `unknown`); absent elsewhere;
 - `capture`: macOS 14.4 and later only, System Audio Recording, `granted`, `denied`, `undetermined` or `unknown` (the
   check could not be made); absent elsewhere.
 
-How far this system can carry out the choice, for the page to say so. A mode the system cannot do is still kept; it does
+How far this system can carry out the choice, for the page to say so. `access` and `capture` are the permissions the page
+lists (Settings → Permissions and the setup's permissions step, each a row with Allow or Open System Settings); the Call
+row only says one is missing and links there. A mode the system cannot do is still kept; it does
 nothing.
 
 ## Device test checklist
 
 The per-OS checklist is in the pull request (#408). macOS items to verify on a device, from the research:
 
-- No prompt for listing processes; the System Audio Recording prompt appears on choosing Lower and on "Allow", never in a call.
+- No prompt for listing processes; the System Audio Recording prompt appears only on its "Allow" in the list of permissions.
 - Denied: nothing goes silent (no muting tap is made); Music and Spotify are lowered through Apple events instead.
 - `kill -9` while lowered on 14.x, 15.x and 26: the other apps come back at once (`mutedWhenTapped`), and the next start
   finds nothing named `Sidevoice-duck-` left.

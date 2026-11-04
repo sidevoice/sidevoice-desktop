@@ -2,7 +2,7 @@
 //! process taps (`macos_taps.rs`): the output volume and this app's own voice are never touched. Without them (macOS 13 to
 //! 14.3, or the permission refused or not yet asked), lowering is Music's and Spotify's own `sound volume`, never the
 //! device's. Pausing is Music and Spotify, through Apple events (the person allows each once: Privacy & Security ->
-//! Automation); in Pause, any other app that plays is lowered through taps, as there is no safe way to pause it. No media
+//! Automation); Pause reaches nothing else, and lowers nothing instead (operator, 2026-11-04). No media
 //! key is ever sent: it toggles, and during a call it goes to this app (the Now Playing one). See docs/MEDIA_DUCK.md.
 use super::{Lowering, Mode, Os, Pausing};
 use objc2_core_services::{
@@ -105,13 +105,9 @@ fn tap_player(pid: i32) -> Player {
     }
 }
 
-/// The processes that play and are lowered by a tap, but those that belong to an app in `skip`.
-fn tapped_players(skip: &[&str]) -> Vec<Player> {
-    taps::playing()
-        .into_iter()
-        .filter(|p| !skip.iter().any(|bundle| p.bundle.starts_with(bundle)))
-        .map(|p| tap_player(p.pid))
-        .collect()
+/// The processes that play, each lowered by a tap.
+fn tapped_players() -> Vec<Player> {
+    taps::playing().into_iter().map(tap_player).collect()
 }
 
 impl Os for Native {
@@ -127,7 +123,7 @@ impl Os for Native {
         Pausing::SomeApps
     }
 
-    fn access() -> Access {
+    fn access() -> Option<Access> {
         // The system answers only about an app that is open (-600 otherwise): with neither open, the last real answer stands.
         static LAST: Mutex<Option<Access>> = Mutex::new(None);
         let codes: Vec<i32> = APPS.iter().map(|(_, bundle)| permission(bundle, false)).collect();
@@ -144,7 +140,7 @@ impl Os for Native {
         if answer.is_some() {
             *last = answer;
         }
-        last.unwrap_or(Access::Unknown)
+        Some(last.unwrap_or(Access::Unknown))
     }
 
     fn ask() {
@@ -165,8 +161,12 @@ impl Os for Native {
     }
 
     /// Privacy & Security -> Screen & System Audio Recording (verify the anchor on 14.x and 15.x).
-    const SETTINGS_URL: Option<&'static str> =
+    const CAPTURE_SETTINGS_URL: Option<&'static str> =
         Some("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture");
+
+    /// Privacy & Security -> Automation.
+    const AUTOMATION_SETTINGS_URL: Option<&'static str> =
+        Some("x-apple.systempreferences:com.apple.preference.security?Privacy_Automation");
 
     fn clean() {
         if taps::supported() {
@@ -176,24 +176,9 @@ impl Os for Native {
 
     fn players(mode: Mode) -> Vec<Player> {
         match mode {
-            Mode::Lower if tapping() => tapped_players(&[]),
-            // Without taps: Music's and Spotify's own volume.
-            Mode::Lower => APPS.iter().filter_map(|(app, bundle)| app_player(app, bundle).ok()).collect(),
-            Mode::Pause => {
-                let apps: Vec<(Player, &str)> = APPS
-                    .iter()
-                    .filter_map(|(app, bundle)| app_player(app, bundle).ok().map(|p| (p, *bundle)))
-                    .collect();
-                // What else plays is lowered, there being no safe pause for it; an app that can be paused is not tapped too.
-                let others = if tapping() {
-                    let paused: Vec<&str> = apps.iter().map(|(_, bundle)| *bundle).collect();
-                    tapped_players(&paused)
-                } else {
-                    Vec::new()
-                };
-                // Paused apps carry no volume here, so a Pause never lowers them instead.
-                apps.into_iter().map(|(p, _)| Player { volume: None, ..p }).chain(others).collect()
-            }
+            Mode::Lower if tapping() => tapped_players(),
+            // Without taps, Music's and Spotify's own volume; in Pause, those two alone.
+            Mode::Lower | Mode::Pause => APPS.iter().filter_map(|(app, bundle)| app_player(app, bundle).ok()).collect(),
             Mode::Off => Vec::new(),
         }
     }
