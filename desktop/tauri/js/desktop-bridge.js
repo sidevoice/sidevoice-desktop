@@ -275,7 +275,7 @@
   }
 
   /** What happens to other apps' media while the microphone is open in a call: sidevoice-web's `MediaDuckBridge`, onto the
-   *  `media_duck` command (docs/BRIDGE.md -> "The media setting"). Its answer is `{mode, lower, pause}`. */
+   *  `media_duck` command (docs/BRIDGE.md -> "The media setting"). Its answer is `{mode, lower, pause, access}`. */
   function mediaDuck() {
     const invalid = () => ({ key: "bad_request", message: "set(mode) takes 'lower', 'pause' or 'off'." });
     return Object.freeze({

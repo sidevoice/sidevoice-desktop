@@ -202,6 +202,7 @@ fn cancel(app: &AppHandle) {
 fn before_exit(app: &AppHandle) -> impl Fn() + Send + Sync + 'static {
     let app = app.clone();
     move || {
+        crate::media_duck::release(&app);
         crate::local_host::shutdown(&app);
         app.cleanup_before_exit();
     }

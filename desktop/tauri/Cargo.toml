@@ -87,6 +87,8 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_
 [target.'cfg(target_os = "macos")'.dependencies]
 # The default output device's volume (platform/media_duck/macos.rs); already in the graph through cpal.
 objc2-core-audio = "0.3"
+# Whether the app may send Apple events to Music and Spotify, without asking mid-call (platform/media_duck/macos.rs).
+objc2-core-services = "0.3"
 # The typed Mach bindings (task_info, task_vm_info) for the process memory read (src/platform/diagnostics/macos.rs).
 mach2 = "0.6"
 libc = "0.2"

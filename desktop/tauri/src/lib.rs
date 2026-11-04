@@ -19,7 +19,7 @@ mod data;
 mod debug_options;
 mod legacy_identifier;
 mod local_host;
-mod media_duck;
+pub(crate) mod media_duck;
 /// A look at the process's own memory, for CI's measurements of it (#145). Never in a release.
 #[cfg(any(test, feature = "probe"))]
 mod memory;
@@ -517,7 +517,7 @@ pub fn run() {
             // First run too: the interface itself asks for a pairing code; nothing has to be set up first.
             let current = stored.unwrap_or_else(Settings::first_run);
             apply_shortcut(&handle, &current.mute_shortcut);
-            app.manage(media_duck::MediaDuck::start(current.media_duck));
+            app.manage(media_duck::MediaDuck::start(current.media_duck, data::desktop_dir(&handle).ok()));
             // Before the room opens, so its bridge offers `host.updater`.
             updater::setup(&handle);
             open_room(&handle)?;

@@ -1,6 +1,6 @@
 //! What this OS can do to other apps' media while the microphone is open (docs/MEDIA_DUCK.md): observe the players and
 //! lower, pause or resume one. What to do, and what to give back, is core's (`media_duck`).
-use sidevoice_desktop_core::media_duck::{Lowering, Mode, Pausing, Player, Step};
+use sidevoice_desktop_core::media_duck::{Access, Lowering, Mode, Pausing, Player, Step};
 
 #[cfg_attr(target_os = "macos", path = "media_duck/macos.rs")]
 #[cfg_attr(target_os = "windows", path = "media_duck/windows.rs")]
@@ -15,10 +15,23 @@ trait Os {
     /// How far it can pause them.
     const PAUSING: Pausing = Pausing::None;
 
-    /// The players there are, other than the app's own sound: what plays, and whether each can be lowered or paused. Only
-    /// what `mode` needs is asked of the system (a script that asks another app prompts the person for permission).
+    /// Whether the system lets the app control the apps it pauses. Never asks the person.
+    fn access() -> Access {
+        Access::Granted
+    }
+
+    /// Asks the person for that access, if the system does that; the system may show a dialog.
+    fn ask() {}
+
+    /// The players there are, other than this app's own sound and everything it started: what each does, and whether it can
+    /// be lowered or paused. Only what `mode` needs is asked of the system.
     fn players(_mode: Mode) -> Vec<Player> {
         Vec::new()
+    }
+
+    /// One player by its key, wherever it is now (on the device it was taken from, not the default's).
+    fn player(_key: &str) -> Option<Player> {
+        None
     }
 
     /// Sets one player's volume, 0 to 1; whether the system took it.
@@ -42,9 +55,24 @@ pub fn reach() -> (Lowering, Pausing) {
     (Native::LOWERING, Native::PAUSING)
 }
 
+/// Whether the system lets the app pause what it pauses.
+pub fn access() -> Access {
+    Native::access()
+}
+
+/// Asks for that access (the person picked Pause).
+pub fn ask() {
+    Native::ask()
+}
+
 /// The players now.
 pub fn players(mode: Mode) -> Vec<Player> {
     Native::players(mode)
+}
+
+/// One player by key.
+pub fn player(key: &str) -> Option<Player> {
+    Native::player(key)
 }
 
 /// Does one step; whether it worked.
