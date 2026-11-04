@@ -393,7 +393,7 @@ its buttons need iOS 17 (before that it only shows the call).
   four lines (your words: two lines, 2.5 s each, at most three, the last ending in "…"), measured with DM Sans 550 at 15 pt
   at 330 pt, whole sentences first, then a clause break, then a word; no karaoke. One update per chunk: a chunk stays at
   least 2.5 s and the next shows only once the voice (`page.lit`) has reached its first word, jumping to the chunk the voice
-  is in, never ahead of it; the controller wakes itself when the next is due. If a device ever has to cut a chunk it logs
+  is in, never ahead of it; the controller wakes itself when the next is due. If a device ever has to cut a chunk it logs its length (never its words)
   it (category `text`). During your words the header shows the call's real state (working, with its timer). Each update moves the activity's
   `staleDate` three minutes ahead, and the activity is updated every minute while the call lasts even when nothing
   changed, so only an activity the app stopped updating goes stale; a stale one draws the offline state with the page's
