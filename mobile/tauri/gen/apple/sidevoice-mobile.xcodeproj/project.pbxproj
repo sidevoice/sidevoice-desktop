@@ -134,6 +134,7 @@
 		BE293A96151AB5D44D76E3EC /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 		C1188ECF695A1AC9631488B1 /* tls.rs */ = {isa = PBXFileReference; path = tls.rs; sourceTree = "<group>"; };
 		C5232FA644011E76A9B33911 /* sidevoice-mobile_iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "sidevoice-mobile_iOS.entitlements"; sourceTree = "<group>"; };
+		C61912EDD5E1D2FB29D11EDB /* panics.rs */ = {isa = PBXFileReference; path = panics.rs; sourceTree = "<group>"; };
 		C9DA64017592563391BEB038 /* pl */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = pl; path = pl.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		CDF4E02D7E5B1C22C68978F8 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
 		D36FBE442FE36E95B601C9D1 /* hold.rs */ = {isa = PBXFileReference; path = hold.rs; sourceTree = "<group>"; };
@@ -318,6 +319,7 @@
 				013D7F0BABED445EF788A289 /* i18n.rs */,
 				AC7B192F6F772B984C2013E8 /* lib.rs */,
 				3ED59F09A85CF8FF41D62009 /* pairings.rs */,
+				C61912EDD5E1D2FB29D11EDB /* panics.rs */,
 				749529AE2409B9FB50B39312 /* platform.rs */,
 				8609C7142CEC5C4009BB8B54 /* surface.rs */,
 				AA1884F220662184B30B9C9B /* i18n */,
