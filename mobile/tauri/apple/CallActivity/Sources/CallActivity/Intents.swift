@@ -10,10 +10,34 @@ import SwiftUI
 
 /// The page's actions, by the names `SurfaceAction` reads (`mute`, `unmute`, `skip`, `cancel-send`, `hang-up`).
 enum CallActions {
-    static func send(_ action: String) {
-        // The class is the app's (Rust, objc2); the extension has none and never runs an intent.
-        guard let actions: AnyClass = NSClassFromString("SidevoiceCallSurfaceActions") else { return }
+    /// Hands the action to the app's Rust side, and returns when it has been handed over (the page acts after that, on
+    /// the call's own threads). The app is kept running for the hand-over, whatever state the phone is in.
+    static func send(_ action: String, from intent: String) async {
+        NSLog("Sidevoice: intent %@ performing (pid %d)", intent, ProcessInfo.processInfo.processIdentifier)
+        let delivered: Bool = await withCheckedContinuation { done in
+            ProcessInfo.processInfo.performExpiringActivity(withReason: "Sidevoice: the call's \(action) button") { expired in
+                guard !expired else {
+                    done.resume(returning: false)
+                    return
+                }
+                done.resume(returning: deliver(action))
+            }
+        }
+        NSLog("Sidevoice: intent %@ %@", intent, delivered ? "handed to the call" : "found no call")
+    }
+
+    /// The class is the app's (Rust, objc2); the extension has none and never runs an intent. Without it this process has
+    /// no call (the system started the app for the intent, after the call's process died): the card that asked is stale,
+    /// so it is ended rather than left to look alive.
+    private static func deliver(_ action: String) -> Bool {
+        guard let actions: AnyClass = NSClassFromString("SidevoiceCallSurfaceActions") else {
+            if let bridge = NSClassFromString("SidevoiceCallActivity") as AnyObject? {
+                _ = bridge.perform(NSSelectorFromString("end"))
+            }
+            return false
+        }
         _ = (actions as AnyObject).perform(NSSelectorFromString("act:"), with: action as NSString)
+        return true
     }
 }
 
@@ -24,7 +48,7 @@ public struct SetMicOff: SetValueIntent, LiveActivityIntent {
     @Parameter(title: "Muted") public var value: Bool
     public init() {}
     public func perform() async throws -> some IntentResult {
-        CallActions.send(value ? "mute" : "unmute")
+        await CallActions.send(value ? "mute" : "unmute", from: "SetMicOff")
         return .result()
     }
 }
@@ -35,7 +59,7 @@ public struct SkipReply: LiveActivityIntent {
     public static var isDiscoverable = false
     public init() {}
     public func perform() async throws -> some IntentResult {
-        CallActions.send("skip")
+        await CallActions.send("skip", from: "SkipReply")
         return .result()
     }
 }
@@ -46,7 +70,7 @@ public struct CancelSend: LiveActivityIntent {
     public static var isDiscoverable = false
     public init() {}
     public func perform() async throws -> some IntentResult {
-        CallActions.send("cancel-send")
+        await CallActions.send("cancel-send", from: "CancelSend")
         return .result()
     }
 }
@@ -58,7 +82,7 @@ public struct HangUp: LiveActivityIntent {
     public static var isDiscoverable = false
     public init() {}
     public func perform() async throws -> some IntentResult {
-        CallActions.send("hang-up")
+        await CallActions.send("hang-up", from: "HangUp")
         return .result()
     }
 }
@@ -70,6 +94,7 @@ public struct ToggleRoute: LiveActivityIntent {
     public static var isDiscoverable = false
     public init() {}
     public func perform() async throws -> some IntentResult {
+        NSLog("Sidevoice: intent ToggleRoute performing (pid %d)", ProcessInfo.processInfo.processIdentifier)
         AudioRoute.toggle()
         return .result()
     }
@@ -155,23 +180,28 @@ struct ActionButton<Label: View>: View {
     }
 }
 
-/// The mute switch (a `Toggle` on `SetMicOff`, so the system shows the new state at once) from iOS 17.
-struct MuteToggle<Label: View>: View {
+/// The mute switch (a `Toggle` on `SetMicOff`) from iOS 17. The face is drawn from the toggle's own `isOn`, which the
+/// system flips at once when the button is tapped (and puts right again from the activity's next state), not from the
+/// activity's state alone: the state changes only after the page's round trip.
+struct MuteToggle<Face: View>: View {
     var micOff: Bool
-    @ViewBuilder var label: () -> Label
+    @ViewBuilder var face: (Bool) -> Face
 
     var body: some View {
         if #available(iOS 17.0, *) {
-            Toggle(isOn: micOff, intent: SetMicOff(), label: label).toggleStyle(FaceToggle())
+            Toggle(isOn: micOff, intent: SetMicOff()) { EmptyView() }
+                .toggleStyle(FaceToggle(face: face))
         } else {
-            label()
+            face(micOff)
         }
     }
 }
 
-/// A toggle drawn as its label alone: the label draws both states.
-struct FaceToggle: ToggleStyle {
+/// A toggle drawn as its face alone: the face draws both states.
+struct FaceToggle<Face: View>: ToggleStyle {
+    var face: (Bool) -> Face
+
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
+        face(configuration.isOn)
     }
 }
