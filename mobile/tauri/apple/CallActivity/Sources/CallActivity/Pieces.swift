@@ -216,20 +216,23 @@ struct SymbolEntrance: View {
     var effect: StateGlyph.Entrance
     var size: CGFloat
     @State private var played = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isLuminanceReduced) private var reduced
 
     var body: some View {
         let image = Image(systemName: name).font(.system(size: size * 0.8, weight: .bold))
             .frame(width: size, height: size)
-        if #available(iOS 17.0, *) {
+        if reduceMotion || reduced {
+            image
+        } else if #available(iOS 17.0, *) {
             switch effect {
             case .bounce:
                 image.symbolEffect(.bounce.byLayer, options: .repeat(3), value: played).onAppear { played = true }
             case .pulse:
-                image.symbolEffect(.pulse.byLayer, options: .repeat(2), value: played).onAppear { played = true }
+                image.symbolEffect(.pulse.byLayer, options: .repeat(1), value: played).onAppear { played = true }
             case .fade:
-                image.opacity(played ? 1 : 0).scaleEffect(played ? 1 : 0.6, anchor: .bottom)
-                    .animation(.easeOut(duration: 0.5), value: played)
-                    .onAppear { played = true }
+                // A transition, not a state: a snapshot that never runs `onAppear` still draws the glyph.
+                image.transition(.opacity.combined(with: .scale(scale: 0.6, anchor: .bottom)).animation(.easeOut(duration: 0.5)))
             }
         } else {
             image
@@ -243,6 +246,8 @@ struct SymbolEntrance: View {
 @available(iOS 16.1, *)
 struct GlyphBars: View {
     var phase: CallState.Phase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isLuminanceReduced) private var reduced
     static let heights: [CGFloat] = [7, 12, 16, 11, 7]
 
     var body: some View {
@@ -254,7 +259,10 @@ struct GlyphBars: View {
                     Capsule()
                         .frame(width: 2.4 * scale, height: height * scale)
                         .offset(x: (2.5 + 4.1 * CGFloat(index)) * scale, y: (12 - height / 2) * scale)
-                        .transition(.modifier(active: Stretch(y: 0.25, anchor: .bottom), identity: Stretch(y: 1, anchor: .bottom))
+                        // The bar's own bottom, in the frame it has before the offset moves it.
+                        .transition(reduceMotion || reduced ? .identity : .modifier(
+                            active: Stretch(y: 0.25, anchor: UnitPoint(x: 0.5, y: (12 + height / 2) / height)),
+                            identity: Stretch(y: 1, anchor: .center))
                             .animation(.spring(response: 0.5, dampingFraction: 0.6).delay(0.08 * Double(index))))
                 }
             }
@@ -282,6 +290,8 @@ struct Stretch: ViewModifier {
 @available(iOS 16.1, *)
 struct VoiceBars: View {
     var dim: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isLuminanceReduced) private var reduced
     static let heights: [CGFloat] = [8, 10, 12, 11, 14, 17, 15, 12, 16, 20, 22, 18, 15, 17, 21, 19, 14, 12, 15, 18, 16, 13, 11, 13, 12, 10, 9, 8]
 
     var body: some View {
@@ -294,7 +304,7 @@ struct VoiceBars: View {
                     .saturation(dim ? 0.5 : 1)
                     .opacity(dim ? 0.4 : 1)
                     .animation(.easeInOut(duration: 0.6).delay(0.035 * Double(index)), value: dim)
-                    .transition(.modifier(active: Stretch(y: 0.15, anchor: .center), identity: Stretch(y: 1, anchor: .center))
+                    .transition(reduceMotion || reduced ? .identity : .modifier(active: Stretch(y: 0.15, anchor: .center), identity: Stretch(y: 1, anchor: .center))
                         .animation(.spring(response: 0.5, dampingFraction: 0.55).delay(0.035 * Double(index))))
             }
         }

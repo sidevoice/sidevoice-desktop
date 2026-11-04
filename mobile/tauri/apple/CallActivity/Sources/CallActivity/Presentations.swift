@@ -124,21 +124,7 @@ public struct ExpandedBody: View {
     }
 
     public var body: some View {
-        // B's edges (spec/GEOMETRY.md): 40 pt from the top (42 while speaking, whose creature sits beside the camera at
-        // x 28, y 10), 18 from the sides, and 18 / 14 / 10 below.
-        Group { content }
-            .padding(.horizontal, 18)
-            .padding(.top, state.phase == .speaking ? 42 : 40)
-            .padding(.bottom, Self.bottom(state.phase))
-            .environment(\.locale, state.locale)
-    }
-
-    static func bottom(_ phase: CallState.Phase) -> CGFloat {
-        switch phase {
-        case .speaking: 14
-        case .listening, .transcribing, .said: 18
-        default: 10
-        }
+        Group { content }.environment(\.locale, state.locale)
     }
 
     @ViewBuilder

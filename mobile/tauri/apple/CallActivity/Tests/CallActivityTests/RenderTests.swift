@@ -132,16 +132,27 @@ final class RenderTests: XCTestCase {
     /// The expanded island: black, radius 44, the camera at the top; B's content from 40 pt down (42 while speaking, whose
     /// creature sits beside the camera at x 28, y 10), 18 pt from the sides.
     func expanded(_ state: CallState, width: CGFloat = 380) -> some View {
-        ZStack(alignment: .topLeading) {
+        let speaking = state.phase == .speaking
+        return ZStack(alignment: .topLeading) {
             camera(x: (width - 125) / 2)
-            // ExpandedBody carries B's own edges.
             ExpandedBody(state: state)
-                .frame(width: width)
+                .frame(width: width - 36)
+                .padding(.leading, 18)
+                .padding(.top, speaking ? 42 : 40)
+                .padding(.bottom, Self.bottom(state.phase))
         }
         .frame(width: width, alignment: .topLeading)
         .background(Color.black)
         .clipShape(RoundedRectangle(cornerRadius: 44, style: .continuous))
         .environment(\.colorScheme, .dark)
+    }
+
+    static func bottom(_ phase: CallState.Phase) -> CGFloat {
+        switch phase {
+        case .speaking: 14
+        case .listening, .transcribing, .said: 18
+        default: 10
+        }
     }
 
     /// The compact island: the face 6 pt from the pill's edge, the camera (125 pt), the trailing glyph 4 pt after it.
