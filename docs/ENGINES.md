@@ -31,7 +31,7 @@ catalogues: `local` first, then each provider), in the shape `/engine` gives the
 
 ## What runs, where
 
-- Backends, linked statically into the app through sidevoice-engine (the release `shared/core/Cargo.toml` pins: 0.5.0),
+- Backends, linked statically into the app through sidevoice-engine (the release `shared/core/Cargo.toml` pins: 0.12.1),
   with no Cargo features to choose: **sherpa-onnx 1.13.8** (ONNX Runtime) on the CPU, **whisper.cpp** (through
   `whisper-rs`), compiled from source, on Metal on Apple Silicon Macs and on the CPU elsewhere, iOS included (not on Android), and the **remote** OpenAI and ElevenLabs backends.
   iOS refuses GPU work from an app in the background, which a call on the Lock Screen or in the Dynamic Island is, and
