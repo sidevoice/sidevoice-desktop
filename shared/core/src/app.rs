@@ -231,6 +231,25 @@ impl<A: LaneAudio> AppHost<A> {
         self.inner.voice.skip_playing().await;
     }
 
+    /// Mutes or unmutes the room's call (the lane the microphone is routed to) without the page: a surface's mute, the same
+    /// mute the page's `voice_mute` makes. Whether there was a call to mute.
+    pub async fn mute_microphone(&self, muted: bool) -> bool {
+        self.entered(self.inner.voice.mute_routed(muted)).await
+    }
+
+    /// Cancels what the person said and is not reported yet on the room's call, without the page: a surface's "cancel
+    /// sending", the same cancel the page's `voice_cancel_input` makes. Whether there was a call.
+    pub async fn cancel_microphone_input(&self) -> bool {
+        self.entered(self.inner.voice.cancel_routed_input()).await
+    }
+
+    /// Stops the current page's calls without the page (a surface's hang-up): no listening, no speaking, the microphone
+    /// routed nowhere, and the devices closed once the last call's audio has stopped. The page disposes of the lanes when it
+    /// runs again. How many calls were stopped.
+    pub async fn stop_calls(&self) -> usize {
+        self.entered(self.inner.voice.stop_current_calls()).await
+    }
+
     /// The page that owned the calls is gone (it reloaded): a new page owns none of its previous lanes, and is the current
     /// one from now on. The old lanes (only those: a lane the new page has made already stays) are stopped and released in
     /// the background, and keep their models for their idle minutes; nothing they still say reaches the sink, and commands

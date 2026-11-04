@@ -1115,3 +1115,52 @@ fn a_call_ends_for_the_app_at_the_idle_state_after_its_stop_or_when_it_is_gone_o
     ended.gone();
     assert_eq!(*told.said.lock().unwrap(), ["start", "end"], "told once");
 }
+
+/// A surface's mute (the Lock Screen, with the page not running) mutes the lane the microphone is routed to, the same
+/// mute the page's makes, and leaves another lane alone; with no route there is nothing to mute.
+#[test]
+fn a_surface_s_mute_mutes_the_routed_call_without_the_page() {
+    runtime().block_on(async {
+        let (state, audio) = host();
+        let (seen, fake) = (Seen::default(), fake());
+        assert!(!state.mute_routed(true).await, "no route, nothing to mute");
+        for key in ["a", "b"] {
+            started(&state, &fake, key, seen.page(), false).await;
+        }
+        state.route_input(Some("a".into())).await.unwrap();
+        assert!(state.mute_routed(true).await);
+        seen.until("A muted", |seen| seen.last_listening("a").as_deref() == Some("muted")).await;
+        audio.speak(TURN_FRAMES);
+        seen.until("A's tone heard out", |_| audio.tone.load(Ordering::SeqCst) == 0).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert_eq!(seen.count("a", "turn", None), 0, "a muted call hears silence");
+        assert_ne!(seen.last_listening("b").as_deref(), Some("muted"), "the other lane is not touched");
+
+        assert!(state.mute_routed(false).await);
+        audio.speak(TURN_FRAMES);
+        seen.until("A's turn once unmuted", |seen| seen.count("a", "turn", Some("finished")) == 1).await;
+        assert!(state.cancel_routed_input().await, "a cancel reaches the routed call too");
+    });
+}
+
+/// A surface's hang-up stops every call of the current page and routes the microphone nowhere, so the devices close;
+/// the lanes stay for the page, whose own stop and dispose later still answer.
+#[test]
+fn a_surface_s_hang_up_stops_the_calls_and_the_page_can_still_dispose_them() {
+    runtime().block_on(async {
+        let (state, audio) = host();
+        let (seen, fake) = (Seen::default(), fake());
+        started(&state, &fake, "a", seen.page(), false).await;
+        state.route_input(Some("a".into())).await.unwrap();
+        assert_eq!(within(state.stop_current_calls()).await, 1);
+        assert_eq!(seen.last_listening("a").as_deref(), Some("idle"));
+        audio.until("the devices closed", |d| d.running == 0).await;
+        assert_eq!(audio.count(|d| d.routed.map_or(0, |_| 1)), 0, "no route");
+        assert_eq!(audio.count(|d| d.attached), 1, "the lane stays for the page");
+        assert!(!state.mute_routed(true).await, "nothing routed after a hang-up");
+        // The page wakes and hangs up as it does: its stop and dispose answer.
+        assert!(within(state.stop("a")).await.unwrap());
+        within(state.dispose_call("a")).await.unwrap();
+        audio.until("the lane released", |d| d.attached == 0).await;
+    });
+}
