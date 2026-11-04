@@ -308,3 +308,16 @@ final class VoiceBarsTests: XCTestCase {
         XCTAssertEqual(VoiceBars.columns(in: 2), 0)
     }
 }
+
+/// The carry gap: the page's line says working (its start is there) while the stage's mood is still idle.
+final class TonePhaseGapTests: XCTestCase {
+    func testHeldIdleWordsWithAWorkingStartWearWorking() {
+        var state = CallState()
+        state.phase = .said
+        state.heldPhase = .idle
+        state.workingSince = Date()
+        XCTAssertEqual(state.tonePhase, .working)
+        state.workingSince = nil
+        XCTAssertEqual(state.tonePhase, .idle)
+    }
+}

@@ -88,7 +88,9 @@ public struct CallState: Codable, Hashable {
     /// a page that does not (it says idle, no timer) is drawn as it says, never green "Resting".
     public var tonePhase: Phase {
         guard phase == .said else { return phase }
-        if let heldPhase, heldPhase != .working { return heldPhase }
+        // A phase that is a condition of its own (can't receive, offline) is what the words wear; idle or working is
+        // decided by the page's working start, whichever of them the held phase was.
+        if let heldPhase, heldPhase != .working, heldPhase != .idle { return heldPhase }
         return workingSince != nil || heldPhase == .working ? .working : .idle
     }
 
