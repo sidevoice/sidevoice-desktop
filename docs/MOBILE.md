@@ -354,6 +354,10 @@ its buttons need iOS 17 (before that it only shows the call).
   embedded in the app, at the app's version. When the CLI's version moves, its template is taken again and these
   additions kept. `Info.ios.plist` declares `NSSupportsLiveActivities` and the app's URL scheme, `sidevoice`
   (`sidevoice://conversations`, the stack of the other conversations; `sidevoice://call`, the rest of the activity).
+- **The activity's life.** The system can end the activity (or the person can swipe it away) during a call. The app
+  follows its state (`ActivityLifecycle`, `activityStateUpdates`), drops it when it is over and requests a new one with the
+  next state (at once if the app is in front, else when it next is); at launch and whenever it comes to the front it ends
+  the app's activities that are not the call's (what a crash left). The buttons log `Sidevoice: intent …` when they run.
 - **Updates.** Every change goes out at once, except the reply's captions: a change of the spoken page alone waits until
   about 2 s after the last update (iOS throttles local updates that come too often). Each update moves the activity's
   `staleDate` three minutes ahead, and the activity is updated every minute while the call lasts even when nothing

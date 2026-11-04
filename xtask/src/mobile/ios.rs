@@ -216,6 +216,32 @@ pub fn check_app(app: &Path) -> Result<()> {
 /// The call's Live Activity's widget extension, inside the app (mobile/tauri/ios-project.yml, target SidevoiceActivity).
 const EXTENSION: &str = "PlugIns/SidevoiceActivity.appex";
 
+/// The Live Activity's buttons (`LiveActivityIntent`s of the CallActivity package, mobile/tauri/apple/CallActivity).
+const INTENTS: [&str; 5] = ["SetMicOff", "SkipReply", "CancelSend", "HangUp", "ToggleRoute"];
+
+/// The App Intents metadata the system reads to run a button (`Metadata.appintents/extract.actionsdata`, in the app and
+/// in the extension): every intent of [`INTENTS`] is listed, once. A package linked statically can leave the metadata out,
+/// or a double `AppIntentsPackage` can list an intent twice; either way a tap on the locked phone does nothing, silently.
+/// The actions are read as an object keyed by their identifier or an array of objects with an `identifier`; an
+/// identifier is the intent's name, alone or after its module (`CallActivity.SetMicOff`).
+fn check_intents(actions_data: &[u8], what: &str) -> Result<()> {
+    let json: serde_json::Value = serde_json::from_slice(actions_data).map_err(|e| format!("{what}: {e}"))?;
+    let identifiers: Vec<String> = match json.get("actions") {
+        Some(serde_json::Value::Object(map)) => map.keys().cloned().collect(),
+        Some(serde_json::Value::Array(list)) => list
+            .iter()
+            .filter_map(|a| a.get("identifier").and_then(serde_json::Value::as_str).map(str::to_owned))
+            .collect(),
+        _ => return Err(format!("{what}: no actions in the App Intents metadata")),
+    };
+    for intent in INTENTS {
+        let count = identifiers.iter().filter(|id| *id == intent || id.ends_with(&format!(".{intent}"))).count();
+        ensure(count != 0, format!("{what}: the App Intents metadata lacks {intent}: its button would do nothing"))?;
+        ensure(count == 1, format!("{what}: the App Intents metadata lists {intent} {count} times"))?;
+    }
+    Ok(())
+}
+
 /// An archive for App Store Connect (`.ipa`): its app is the bundle `identifier` at `build_number`, it is signed
 /// (a provisioning profile embedded, a code signature sealed), the Live Activity's extension
 /// is there at the same build number, it carries its symbols (`Symbols/*.symbols`, which the export writes from the
@@ -276,6 +302,14 @@ pub fn check_ipa(ipa: &Path, identifier: &str, build_number: u32) -> Result<()> 
         format!("{}: no Symbols/*.symbols: TestFlight's crash reports would not be symbolicated", ipa.display()),
     )?;
     check_bundle(&bundle)?;
+    // The buttons' App Intents metadata, in the app and in the extension.
+    for bundle_root in [root.clone(), format!("{root}{EXTENSION}/")] {
+        let path = format!("{bundle_root}Metadata.appintents/extract.actionsdata");
+        let mut entry = archive.by_name(&path).map_err(|_| format!("{}: no {path}", ipa.display()))?;
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).map_err(|e| format!("{path}: {e}"))?;
+        check_intents(&bytes, &path)?;
+    }
     println!("{}: {identifier} build {build_number}, signed", ipa.display());
     Ok(())
 }
@@ -424,6 +458,8 @@ mod tests {
             ("embedded.mobileprovision", b"profile".to_vec()),
             ("_CodeSignature/CodeResources", b"seal".to_vec()),
             ("PlugIns/SidevoiceActivity.appex/Info.plist", appex_info(version)),
+            ("Metadata.appintents/extract.actionsdata", actions_data(&INTENTS)),
+            ("PlugIns/SidevoiceActivity.appex/Metadata.appintents/extract.actionsdata", actions_data(&INTENTS)),
             (SYMBOLS, b"symbols".to_vec()),
         ]
     }
@@ -448,6 +484,30 @@ mod tests {
         files.iter().filter(|(n, _)| *n != name).cloned().collect()
     }
 
+    /// The App Intents metadata listing `names`, as module-qualified identifiers.
+    fn actions_data(names: &[&str]) -> Vec<u8> {
+        let actions: serde_json::Map<String, serde_json::Value> =
+            names.iter().map(|n| (format!("CallActivity.{n}"), serde_json::json!({}))).collect();
+        serde_json::json!({ "version": 1, "actions": actions }).to_string().into_bytes()
+    }
+
+    #[test]
+    fn the_buttons_intents_must_be_in_the_metadata_once() {
+        let files = app_files("ai.sidevoice.mobile", "42");
+        let lacking = actions_data(&INTENTS[1..]);
+        let mut app = without(&files, "Metadata.appintents/extract.actionsdata");
+        app.push(("Metadata.appintents/extract.actionsdata", lacking));
+        let error = check(&app, "ai.sidevoice.mobile", 42).unwrap_err();
+        assert!(error.contains("lacks SetMicOff"), "{error}");
+        let no_metadata = without(&files, "PlugIns/SidevoiceActivity.appex/Metadata.appintents/extract.actionsdata");
+        assert!(check(&no_metadata, "ai.sidevoice.mobile", 42).unwrap_err().contains("appex/Metadata.appintents"));
+        let listed: Vec<u8> = serde_json::json!({ "actions": [
+            {"identifier": "SetMicOff"}, {"identifier": "SetMicOff"}, {"identifier": "SkipReply"},
+            {"identifier": "CancelSend"}, {"identifier": "HangUp"}, {"identifier": "ToggleRoute"} ] })
+        .to_string()
+        .into_bytes();
+        assert!(check_intents(&listed, "x").unwrap_err().contains("SetMicOff 2 times"));
+    }
     #[test]
     fn a_signed_archive_of_the_app_at_the_build_passes() {
         check(&app_files("ai.sidevoice.mobile", "42"), "ai.sidevoice.mobile", 42).unwrap();
