@@ -33,7 +33,9 @@ catalogues: `local` first, then each provider), in the shape `/engine` gives the
 
 - Backends, linked statically into the app through sidevoice-engine (the release `shared/core/Cargo.toml` pins: 0.5.0),
   with no Cargo features to choose: **sherpa-onnx 1.13.8** (ONNX Runtime) on the CPU, **whisper.cpp** (through
-  `whisper-rs`), compiled from source, on Metal on Apple Silicon and on iOS (not on Android), and the **remote** OpenAI and ElevenLabs backends.
+  `whisper-rs`), compiled from source, on Metal on Apple Silicon Macs and on the CPU elsewhere, iOS included (not on Android), and the **remote** OpenAI and ElevenLabs backends.
+  iOS refuses GPU work from an app in the background, which a call on the Lock Screen or in the Dynamic Island is, and
+  ggml aborts the process when that happens (whisper.cpp#3531), so the engine builds whisper.cpp without Metal on iOS.
   Nothing is loaded at run time with `dlopen`, so the macOS app keeps library validation on: its only entitlement is
   the microphone.
 - Each stage of the voice call is a model of a catalogue, which picks its build when it loads it
@@ -41,8 +43,8 @@ catalogues: `local` first, then each provider), in the shape `/engine` gives the
   voice activity detector, the local catalogue's Silero, and, for `smart-turn`, its local end-of-turn model (core
   `voice.rs`).
 - The engine ranks builds that run here by accelerator class: GPU first, then neural engine, then CPU, while still
-  preferring an installed build when loading without an explicit choice. On Apple Silicon, this recommends
-  whisper.cpp on Metal for Whisper. Its GPU implementation uses flash attention. The page receives each build's
+  preferring an installed build when loading without an explicit choice. On an Apple Silicon Mac, this recommends
+  whisper.cpp on Metal for Whisper; on iOS every build runs on the CPU, so catalogue order recommends sherpa-onnx int8. Its GPU implementation uses flash attention. The page receives each build's
   optional `acceleratorClass` (`"gpu"`, `"neural-engine"`, or `"cpu"`) from the engine; the app does not infer it or
   enable Core ML. An explicit build choice still takes precedence.
 - Models are downloaded on demand into the per-user shared machine store
