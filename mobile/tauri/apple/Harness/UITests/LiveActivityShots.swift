@@ -39,7 +39,7 @@ final class LiveActivityShots: XCTestCase {
         app.launch()
         let status = app.staticTexts["harness.status"]
         let started = NSPredicate(format: "label == 'started' OR label BEGINSWITH 'failed'")
-        let waited = XCTWaiter.wait(for: [expectation(for: started, evaluatedWith: status)], timeout: 30)
+        let waited = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: started, object: status)], timeout: 30)
         guard waited == .completed, status.label == "started" else {
             XCTFail("\(fixture.name): the activity did not start (\(status.exists ? status.label : "no status"))")
             save("failed-\(fixture.name)")

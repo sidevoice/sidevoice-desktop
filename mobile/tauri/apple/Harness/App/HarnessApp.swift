@@ -56,7 +56,8 @@ final class Harness: ObservableObject {
         if environment["LA_SECOND"] != nil {
             do {
                 _ = try Activity.request(
-                    attributes: CallActivityAttributes(), content: ActivityContent(state: Self.second, staleDate: nil))
+                    attributes: CallActivityAttributes(), content: ActivityContent(state: Self.second, staleDate: nil),
+                    pushType: nil)
             } catch {
                 status = "failed: the second activity did not start: \(error)"
                 return
