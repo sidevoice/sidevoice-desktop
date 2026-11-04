@@ -26,12 +26,12 @@ again at the next change of the call, three times. Each player is found again by
 (not the default device's now). What is owed is written to `media-duck.json` in the app's data folder after every change
 and given back when the app starts, so a crash or a force quit does not leave other apps lowered or paused. The file is written
 beside itself and renamed over it. It carries the machine's start time and the time written: a pause owed from another start
-of the machine, or older than an hour, is dropped (the player is not where it was, and a person who left it paused must stay
-so); a lowered volume is kept, since the system stores it.
+of the machine, or older than an hour (each pause has its own time; one held by a long call is given back when the microphone closes, one only left over is not), is dropped (the player is not where it was, and a person who left it paused must stay
+so); a lowered volume is kept, since the system stores it, but after a restart its stream, session or device id means nothing: it is found by its app alone (on macOS, the default output device), and dropped when it has none. Debts are settled newest first.
 
 The system remembers a volume per app (the Windows mixer, PipeWire's and PulseAudio's stream restore), so a stream ending
 does not end the debt: the player is looked for again by its key and, failing that, as the app's next one (Windows: the
-session identifier; Linux: the binary or application name), and given back its volume if it starts at the one the app set.
+session identifier; Linux: the application name, else the binary), and given back its volume if it starts at the one the app set.
 An app that is not playing keeps its debt (at most 32 are kept). A player that cannot be asked now (a failure that may pass)
 keeps its debt too. Retries are counted per change of the call, not per report of the page.
 
@@ -43,7 +43,7 @@ name. On Windows a media session whose app id names this executable or the webvi
 
 | OS | Lower | Pause |
 |---|---|---|
-| Windows | Each other process's audio session on the default output device (WASAPI `ISimpleAudioVolume`), found again by endpoint id and session instance id. Per app. | System media transport controls (`GlobalSystemMediaTransportControlsSessionManager`): any app on the media card; every session of an app together. |
+| Windows | Each other process's audio session on the default output device (WASAPI `ISimpleAudioVolume`), found again by endpoint id and session instance id. Per app. | System media transport controls (`GlobalSystemMediaTransportControlsSessionManager`): any app on the media card; one session at a time, told apart by its place among its app’s sessions (`media:<app id>#<n>`; a session that appears or goes in between can shift it). |
 | Linux | Each playing stream's volume through the sound server (`pactl`, PulseAudio or PipeWire's Pulse server), so browsers are reached. Needs a `pactl` that lists as JSON (16 or later), run with `LC_ALL=C` and a 2 s limit; otherwise the page is told `lower: none`. Per app. | MPRIS `Pause`/`Play` of each player that is playing and `CanPause`. |
 | macOS | The default output device's volume (`VirtualMainVolume`), **only while Music or Spotify is playing** (asked through Apple events without opening them); for anything else playing nothing is lowered. **The app's own voice is lowered with the rest.** A device with no volume control (some HDMI outputs) is not lowered. | Music and Spotify only, through Apple events; the person allows each once (Automation). Lower needs it too (to see that they play). It is asked only when the person presses "Allow" in Settings (`allow`), never at startup or in a call; `get` reports it (`access`). No media key is ever sent. |
 | iOS, Android | Not in this change (see the PR). | Not in this change. |
@@ -55,7 +55,7 @@ reached by pausing, and lowering only reaches what the OS lists.
 
 ## What `get` answers
 
-`{mode, lower, pause, access}`, where `access` is `granted`, `denied` or `undetermined` (macOS Automation for Music and Spotify; `granted` elsewhere), `lower` is `per-app`, `system` or `none`, and `pause` is `media-controls`, `some-apps` or
+`{mode, lower, pause, access}`, where `access` is `granted`, `denied`, `undetermined` or `unknown` (macOS Automation for Music and Spotify, which the system answers only for an app that is open: with neither open the last real answer stands, else `unknown`; `granted` elsewhere), `lower` is `per-app`, `system` or `none`, and `pause` is `media-controls`, `some-apps` or
 `none`: how far this system can carry out the choice, for the page to say so. A mode the system cannot do is still kept;
 it does nothing.
 

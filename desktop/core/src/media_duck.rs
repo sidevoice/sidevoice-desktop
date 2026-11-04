@@ -56,8 +56,10 @@ pub enum Access {
     Granted,
     /// The person said no (macOS: Privacy & Security -> Automation).
     Denied,
-    /// Not asked yet, or no app to ask about is open.
+    /// The system has not been asked yet and can be.
     Undetermined,
+    /// The system can only say with one of the apps open, and none is: the last answer it gave, if it ever did, is lost.
+    Unknown,
 }
 
 /// What a player is doing.
@@ -113,19 +115,26 @@ pub enum Touch {
         from: f32,
         to: f32,
     },
+    /// `at` is when, in seconds since the epoch.
     Paused {
         key: String,
+        #[serde(default)]
+        at: u64,
     },
 }
 
 impl Touch {
-    /// Whether it is still worth giving back after a restart of the machine (`same_boot` false) or of `age_secs`: a pause
-    /// is not (the player is not where it was, and a person who left it paused must stay so); a lowered volume the system
-    /// stores is.
-    pub fn outlives(&self, same_boot: bool, age_secs: u64) -> bool {
+    /// What is still worth giving back after a start of the app, `same_boot` or not, at time `now`: a pause is not once the
+    /// machine has restarted or an hour has gone (the player is not where it was, and a person who left it paused must
+    /// stay so). A lowered volume the system stores is, but after a restart the ids of its stream, session or device mean
+    /// nothing any more: it is looked for by its app alone, and dropped when it has none.
+    pub fn after_restart(self, same_boot: bool, now: u64) -> Option<Touch> {
         match self {
-            Touch::Lowered { .. } => true,
-            Touch::Paused { .. } => same_boot && age_secs <= PAUSE_DEBT_SECS,
+            Touch::Paused { at, .. } if !same_boot || now.saturating_sub(at) > PAUSE_DEBT_SECS => None,
+            Touch::Lowered { app, from, to, .. } if !same_boot => {
+                (!app.is_empty()).then(|| Touch::Lowered { key: String::new(), app, from, to })
+            }
+            kept => Some(kept),
         }
     }
 }
@@ -136,12 +145,19 @@ pub struct Ducker {
     open: Option<Mode>,
     touched: Vec<Touch>,
     retries: u8,
+    now: u64,
 }
 
 impl Ducker {
     /// A ducker that still owes what a run before it took and did not give back.
     pub fn owing(touched: Vec<Touch>) -> Self {
-        Ducker { open: None, touched, retries: 0 }
+        Ducker { open: None, touched, retries: 0, now: 0 }
+    }
+
+    /// The time now, in seconds since the epoch, before each look: a pause owed for longer than an hour, with nothing asking
+    /// for it, is not given back.
+    pub fn tick(&mut self, now: u64) {
+        self.now = now;
     }
 
     /// What is owed now, for the desktop to keep.
@@ -176,7 +192,7 @@ impl Ducker {
                 if self
                     .touched
                     .iter()
-                    .any(|t| matches!(t, Touch::Lowered { key, .. } | Touch::Paused { key } if *key == player.key))
+                    .any(|t| matches!(t, Touch::Lowered { key, .. } | Touch::Paused { key, .. } if *key == player.key))
                 {
                     continue;
                 }
@@ -193,7 +209,7 @@ impl Ducker {
                         };
                         Touch::Lowered { key, app: player.app.clone(), from: player.volume.unwrap_or(volume), to }
                     }
-                    Step::Pause { key } | Step::Play { key } => Touch::Paused { key },
+                    Step::Pause { key } | Step::Play { key } => Touch::Paused { key, at: self.now },
                 });
             }
         }
@@ -217,7 +233,10 @@ impl Ducker {
     fn give_back(&mut self, probe: &mut impl FnMut(&str, &str) -> Seen, act: &mut impl FnMut(&Step) -> bool) {
         let mut failed = Vec::new();
         let mut kept = Vec::new();
-        for touch in std::mem::take(&mut self.touched) {
+        // With the microphone still open the pause is held on purpose, however long; one that is only left over is not.
+        let held = self.open.is_some();
+        // The newest first: what was taken last is the likeliest to still stand.
+        for touch in std::mem::take(&mut self.touched).into_iter().rev() {
             match &touch {
                 Touch::Lowered { key, app, from, to } => match probe(key, app) {
                     // The player, or the app's next one, still at the volume the app set: give it back.
@@ -232,7 +251,8 @@ impl Ducker {
                     Seen::Gone => {}
                     Seen::Unknown => kept.push(touch),
                 },
-                Touch::Paused { key } => match probe(key, "") {
+                Touch::Paused { at, .. } if !held && self.now.saturating_sub(*at) > PAUSE_DEBT_SECS => {}
+                Touch::Paused { key, .. } => match probe(key, "") {
                     Seen::Is(p) if p.state == State::Paused => {
                         if !act(&Step::Play { key: p.key }) {
                             failed.push(touch);
@@ -243,13 +263,14 @@ impl Ducker {
                 },
             }
         }
+        kept.reverse();
         if failed.is_empty() {
             self.retries = 0;
         } else {
             self.retries += 1;
             // A few tries, one per change of the call; then it is given up.
             if self.retries < RETRIES {
-                kept.extend(failed);
+                kept.extend(failed.into_iter().rev());
             } else {
                 self.retries = 0;
             }
@@ -504,12 +525,44 @@ mod tests {
 
     #[test]
     fn a_pause_does_not_outlive_a_restart_or_an_hour_but_a_stored_volume_does() {
-        let paused = Touch::Paused { key: "a".into() };
-        let lowered = Touch::Lowered { key: "a".into(), app: "x".into(), from: 1.0, to: 0.25 };
-        assert!(paused.outlives(true, 60));
-        assert!(!paused.outlives(false, 60));
-        assert!(!paused.outlives(true, PAUSE_DEBT_SECS + 1));
-        assert!(lowered.outlives(false, 7 * 24 * 3600));
+        let paused = Touch::Paused { key: "a".into(), at: 100 };
+        assert!(paused.clone().after_restart(true, 160).is_some());
+        assert!(paused.clone().after_restart(false, 160).is_none());
+        assert!(paused.after_restart(true, 100 + PAUSE_DEBT_SECS + 1).is_none());
+        let lowered = Touch::Lowered { key: "stream:7".into(), app: "x".into(), from: 1.0, to: 0.25 };
+        // After a restart its ids mean nothing: only its app finds it again; without one it is dropped.
+        assert!(
+            matches!(lowered.clone().after_restart(false, 7 * 24 * 3600), Some(Touch::Lowered { key, .. }) if key.is_empty())
+        );
+        assert!(
+            matches!(lowered.after_restart(true, 7 * 24 * 3600), Some(Touch::Lowered { key, .. }) if key == "stream:7")
+        );
+        let anonymous = Touch::Lowered { key: "stream:7".into(), app: String::new(), from: 1.0, to: 0.25 };
+        assert!(anonymous.after_restart(false, 0).is_none());
+    }
+
+    #[test]
+    fn a_pause_left_over_for_an_hour_is_not_resumed_but_one_held_by_a_long_call_is() {
+        let world = World::new(vec![player("a", State::Playing, None, true)]);
+        let mut ducker = Ducker::default();
+        ducker.tick(1000);
+        world.run(&mut ducker, Some(Mode::Pause));
+        // A call longer than an hour: the pause is held on purpose, and given back when the microphone closes.
+        ducker.tick(1000 + PAUSE_DEBT_SECS * 2);
+        world.run(&mut ducker, None);
+        assert_eq!(world.get("a").state, State::Playing);
+
+        let mut ducker = Ducker::default();
+        ducker.tick(1000);
+        world.run(&mut ducker, Some(Mode::Pause));
+        *world.refuse.borrow_mut() = true;
+        world.run(&mut ducker, None);
+        *world.refuse.borrow_mut() = false;
+        ducker.tick(1000 + PAUSE_DEBT_SECS + 1);
+        world.run(&mut ducker, Some(Mode::Off));
+        world.run(&mut ducker, None);
+        assert!(ducker.owed().is_empty());
+        assert_eq!(world.get("a").state, State::Paused, "left over for an hour: left alone");
     }
 
     #[test]

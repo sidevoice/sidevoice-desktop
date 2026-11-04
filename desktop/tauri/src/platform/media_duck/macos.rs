@@ -14,6 +14,7 @@ use objc2_core_services::{
 use sidevoice_desktop_core::media_duck::{Access, Player, Seen, State};
 use std::process::Command;
 use std::ptr::NonNull;
+use std::sync::Mutex;
 
 pub(super) struct Native;
 
@@ -30,6 +31,11 @@ const VIRTUAL_MAIN_VOLUME: u32 = 0x766d_7663;
 const DENIED: i32 = -1743;
 /// `procNotFound`: the app is not open.
 const NOT_OPEN: i32 = -600;
+/// `errAEEventWouldRequireUserConsent`: not asked yet.
+const UNDETERMINED: i32 = -1744;
+/// The key and app of the output device's volume: its id means nothing after a restart, but the default output device is
+/// still the one to look at.
+const SYSTEM_APP: &str = "system";
 
 fn address(selector: u32, scope: u32) -> AudioObjectPropertyAddress {
     AudioObjectPropertyAddress { mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain }
@@ -139,14 +145,23 @@ impl Os for Native {
     }
 
     fn access() -> Access {
+        // The system answers only about an app that is open (-600 otherwise): with neither open, the last real answer stands.
+        static LAST: Mutex<Option<Access>> = Mutex::new(None);
         let codes: Vec<i32> = APPS.iter().map(|(_, bundle)| permission(bundle, false)).collect();
-        if codes.contains(&0) {
-            Access::Granted
+        let answer = if codes.contains(&0) {
+            Some(Access::Granted)
         } else if codes.contains(&DENIED) {
-            Access::Denied
+            Some(Access::Denied)
+        } else if codes.contains(&UNDETERMINED) {
+            Some(Access::Undetermined)
         } else {
-            Access::Undetermined
+            None
+        };
+        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        if answer.is_some() {
+            *last = answer;
         }
+        last.unwrap_or(Access::Unknown)
     }
 
     fn ask() {
@@ -166,7 +181,7 @@ impl Os for Native {
                 volume_of(device)
                     .map(|volume| Player {
                         key: format!("{SYSTEM}{device}"),
-                        app: String::new(),
+                        app: SYSTEM_APP.into(),
                         state: State::Playing,
                         volume: Some(volume),
                         pausable: false,
@@ -179,18 +194,23 @@ impl Os for Native {
         }
     }
 
-    fn player(key: &str, _app: &str) -> Seen {
+    fn player(key: &str, app: &str) -> Seen {
+        let system = |device: u32| {
+            volume_of(device).map(|volume| Player {
+                key: format!("{SYSTEM}{device}"),
+                app: SYSTEM_APP.into(),
+                state: State::Playing,
+                volume: Some(volume),
+                pausable: false,
+            })
+        };
         if let Some(device) = key.strip_prefix(SYSTEM).and_then(|id| id.parse::<u32>().ok()) {
             // That device, wherever the default has gone since.
-            return volume_of(device).map_or(Seen::Gone, |volume| {
-                Seen::Is(Player {
-                    key: key.to_owned(),
-                    app: String::new(),
-                    state: State::Playing,
-                    volume: Some(volume),
-                    pausable: false,
-                })
-            });
+            return system(device).map_or(Seen::Gone, Seen::Is);
+        }
+        if app == SYSTEM_APP {
+            // From before a restart: the ids mean nothing, the default output device is the one to look at.
+            return default_output().and_then(system).map_or(Seen::Gone, Seen::Is);
         }
         let Some((name, bundle)) = key.strip_prefix(APP).and_then(|app| APPS.iter().find(|(name, _)| *name == app))
         else {

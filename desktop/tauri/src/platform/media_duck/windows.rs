@@ -100,14 +100,30 @@ fn audio_player(endpoint: &str, a: &Audio) -> Player {
 
 /// The audio session `key` names, on the device it names; else, on that device, another session of `app`.
 fn audio_by_key(key: &str, app: &str, ours: &Ours) -> Result<(String, Audio), Seen> {
-    let Some((endpoint, id)) = key.strip_prefix(AUDIO).and_then(|k| k.split_once('|')) else { return Err(Seen::Gone) };
+    let (endpoint, id) = match key.strip_prefix(AUDIO).and_then(|k| k.split_once('|')) {
+        Some(found) => found,
+        // From before a restart: the session's id means nothing, but the app is still on the default device.
+        None if key.is_empty() && !app.is_empty() => return by_app(app, ours),
+        None => return Err(Seen::Gone),
+    };
     let Some(devices) = enumerator() else { return Err(Seen::Unknown) };
     // SAFETY: the endpoint id comes back from the system as it was given.
     let Ok(device) = (unsafe { devices.GetDevice(&HSTRING::from(endpoint)) }) else { return Err(Seen::Gone) };
     let Some(all) = audio_on(&device, ours) else { return Err(Seen::Unknown) };
-    let mut all = all.into_iter();
-    let found = all.by_ref().find(|a| a.id == id).or_else(|| all.find(|a| !app.is_empty() && a.app == app));
-    found.map(|a| (endpoint.to_owned(), a)).ok_or(Seen::Gone)
+    // The session itself; else, on that device, another of the app's. (Searched twice: the first search must not use it up.)
+    let position =
+        all.iter().position(|a| a.id == id).or_else(|| all.iter().position(|a| !app.is_empty() && a.app == app));
+    position.and_then(|i| all.into_iter().nth(i)).map(|a| (endpoint.to_owned(), a)).ok_or(Seen::Gone)
+}
+
+/// The first session of `app` on the default output device.
+fn by_app(app: &str, ours: &Ours) -> Result<(String, Audio), Seen> {
+    let Some(devices) = enumerator() else { return Err(Seen::Unknown) };
+    // SAFETY: COM calls on interfaces created here; the id is read once and freed.
+    let device = unsafe { devices.GetDefaultAudioEndpoint(eRender, eMultimedia) }.map_err(|_| Seen::Gone)?;
+    let endpoint = text(unsafe { device.GetId() }.map_err(|_| Seen::Unknown)?);
+    let all = audio_on(&device, ours).ok_or(Seen::Unknown)?;
+    all.into_iter().find(|a| a.app == app).map(|a| (endpoint, a)).ok_or(Seen::Gone)
 }
 
 /// Whether a media session is probably this app's own page (WebView2 offers the page's Media Session to the system):

@@ -108,7 +108,7 @@ fn streams() -> Option<Vec<Value>> {
 
 /// The app a stream belongs to: the server remembers a volume under its name.
 fn app_of(stream: &Value) -> String {
-    ["application.process.binary", "application.name"]
+    ["application.name", "application.process.binary"]
         .iter()
         .find_map(|k| stream.pointer(&format!("/properties/{k}")).and_then(Value::as_str))
         .unwrap_or_default()
@@ -194,6 +194,11 @@ impl Os for Native {
     }
 
     fn player(key: &str, app: &str) -> Seen {
+        // From before a restart the stream's index means nothing: only its app finds it.
+        if key.is_empty() && !app.is_empty() {
+            let Some(all) = streams() else { return Seen::Unknown };
+            return all.iter().find(|s| app_of(s) == app).and_then(stream_player).map_or(Seen::Gone, Seen::Is);
+        }
         if let Some(index) = key.strip_prefix(STREAM) {
             let Some(all) = streams() else { return Seen::Unknown };
             let same_index = |s: &&Value| index_of(s).is_some_and(|i| i.to_string() == index);

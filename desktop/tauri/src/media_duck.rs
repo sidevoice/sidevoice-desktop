@@ -27,11 +27,10 @@ enum Msg {
 /// The worker's mailbox, kept as the app's state.
 pub struct MediaDuck(Mutex<mpsc::Sender<Msg>>);
 
-/// What is kept: what is owed, and when and on which start of the machine it was written.
+/// What is kept: what is owed, and on which start of the machine it was written.
 #[derive(Serialize, Deserialize)]
 struct Kept {
     boot: u64,
-    at: u64,
     owed: Vec<Touch>,
 }
 
@@ -44,13 +43,13 @@ fn same_boot(a: u64, b: u64) -> bool {
     a.abs_diff(b) <= 5
 }
 
-/// What an earlier run left that is still worth giving back (core `Touch::outlives`).
+/// What an earlier run left that is still worth giving back (core `Touch::after_restart`).
 fn read(file: &Option<PathBuf>) -> Vec<Touch> {
     let kept: Option<Kept> =
         file.as_ref().and_then(|f| std::fs::read(f).ok()).and_then(|b| serde_json::from_slice(&b).ok());
     let Some(kept) = kept else { return Vec::new() };
-    let (same, age) = (same_boot(kept.boot, platform::boot_time()), now().saturating_sub(kept.at));
-    kept.owed.into_iter().filter(|t| t.outlives(same, age)).collect()
+    let (same, now) = (same_boot(kept.boot, platform::boot_time()), now());
+    kept.owed.into_iter().filter_map(|t| t.after_restart(same, now)).collect()
 }
 
 /// Writes down what is owed, or forgets the file when nothing is: written whole beside it and renamed over it, so a crash
@@ -61,7 +60,7 @@ fn write(file: &Option<PathBuf>, owed: &[Touch]) {
         let _ = std::fs::remove_file(file);
         return;
     }
-    let kept = Kept { boot: platform::boot_time(), at: now(), owed: owed.to_vec() };
+    let kept = Kept { boot: platform::boot_time(), owed: owed.to_vec() };
     let Ok(bytes) = serde_json::to_vec(&kept) else { return };
     let temp = file.with_extension("json.tmp");
     if std::fs::write(&temp, bytes).is_ok() && std::fs::rename(&temp, file).is_err() {
@@ -79,6 +78,7 @@ impl MediaDuck {
             let mut ducker = Ducker::owing(read(&file));
             let mut last_written = Vec::<Touch>::new();
             // What an earlier run left is given back at once, not at the first call.
+            ducker.tick(now());
             ducker.settle(platform::player, platform::act);
             write(&file, ducker.owed());
             while let Ok(first) = rx.recv() {
@@ -96,6 +96,7 @@ impl MediaDuck {
                 }
                 // A look only when the call really asks something else of the media: every report of the page comes through
                 // here, and a debt that cannot be paid is tried again at a change, not at each of them.
+                ducker.tick(now());
                 ducker.follow(wanted(mode, joined, mic_enabled), platform::players, platform::player, platform::act);
                 if ducker.owed() != last_written.as_slice() {
                     write(&file, ducker.owed());
