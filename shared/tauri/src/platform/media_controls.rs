@@ -25,6 +25,9 @@ pub struct CallState {
     pub mic_enabled: bool,
     /// The conversation being looked at: Now Playing's title.
     pub title: String,
+    /// Another surface shows the call (iOS: the call's Live Activity): no Now Playing and no remote commands, so that the
+    /// system draws no second card. The AirPods mute gesture does not depend on them and follows the call all the same.
+    pub now_playing_off: bool,
 }
 
 /// What a media action asks of the call.

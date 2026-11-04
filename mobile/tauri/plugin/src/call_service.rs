@@ -166,8 +166,9 @@ pub fn call_activates_audio(system: bool) -> bool {
 
 /// Whether the system's call takes the place of the app's media controls while it lasts (iOS: the lock screen shows the
 /// call, and a headset's buttons act on it through CallKit, so a Now Playing card would be a second one). False where the
-/// app keeps its own (Android: Telecom leaves a self-managed call's headset buttons to the app's media session), and for
-/// the app's own call (`system` false).
+/// app keeps its own (Android: Telecom leaves a self-managed call's headset buttons to the app's media session). The app's
+/// own call (`system` false) does while its own surface is running (iOS: the Live Activity), so that Now Playing does not
+/// show beside it; with no activity (iOS before 16.1, Live Activities off, the app not in front) it keeps them.
 pub fn call_replaces_media_controls(system: bool) -> bool {
     platform::replaces_media_controls(system)
 }

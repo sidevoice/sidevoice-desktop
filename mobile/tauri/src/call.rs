@@ -664,10 +664,16 @@ impl Room {
     /// The media controls follow the page's call (the media controls reach the plugin's Kotlin, which runs on Android's
     /// UI thread: never from there). Where the system's call takes their place, they show none while it lasts.
     fn media(&self) {
-        let state = if self.holding.is_some() && call_replaces_media_controls(self.system) {
+        let state = if self.holding.is_some() && self.system && call_replaces_media_controls(true) {
             CallState {
                 ready: self.state.ready,
                 ..CallState::default()
+            }
+        } else if self.holding.is_some() && !self.system && call_replaces_media_controls(false) {
+            // The call's Live Activity shows it: no second card, but the AirPods gesture still follows the call.
+            CallState {
+                now_playing_off: true,
+                ..self.state.clone()
             }
         } else {
             self.state.clone()

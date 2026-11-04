@@ -222,10 +222,15 @@ pub fn probe() -> Result<()> {
     )?;
     // Headset buttons: a (simulated) call made the app the Now Playing app, and it let go after.
     ensure(text.contains("probe-headset ok"), "no probe-headset ok")?;
-    ensure(text.contains("headset apply active=true in_call=true mic=true"), "the call never took the headset")?;
+    ensure(
+        text.contains("headset apply active=true now_playing=true in_call=true mic=true"),
+        "the call never took the headset",
+    )?;
     let applied = grep(&text, "headset apply");
     ensure(
-        applied.last().is_some_and(|line| re("active=false in_call=false .* gesture_on=false").is_match(line)),
+        applied
+            .last()
+            .is_some_and(|line| re("active=false now_playing=false in_call=false .* gesture_on=false").is_match(line)),
         "the app did not let go of the headset",
     )?;
     eprintln!("{}", applied.join("\n"));

@@ -123,10 +123,11 @@ pub fn update<N: Os>(app: &AppHandle, snapshot: &CallState) {
     let Some(headset) = app.try_state::<Headset>() else { return };
     *headset.call.lock().unwrap() = snapshot.clone();
     let active = headset.active();
+    let now_playing = active && !snapshot.now_playing_off;
     let title = snapshot.title.trim().to_owned();
     let (mic, in_call) = (snapshot.mic_enabled, snapshot.ready && snapshot.joined);
     let app2 = app.clone();
-    let _ = app.run_on_main_thread(move || apply::<N>(&app2, active, in_call, mic, &title));
+    let _ = app.run_on_main_thread(move || apply::<N>(&app2, active, now_playing, in_call, mic, &title));
 }
 
 /// Whether the gesture handler is installed now (only during a call).
@@ -181,14 +182,14 @@ fn setup(app: &AppHandle) {
     }
 }
 
-fn apply<N: Os>(app: &AppHandle, active: bool, in_call: bool, mic_enabled: bool, title: &str) {
+fn apply<N: Os>(app: &AppHandle, active: bool, now_playing: bool, in_call: bool, mic_enabled: bool, title: &str) {
     // SAFETY: main thread (update() dispatches here); plain Foundation / MediaPlayer calls.
     unsafe {
         for (command, _) in commands() {
-            command.setEnabled(active);
+            command.setEnabled(now_playing);
         }
         let center = MPNowPlayingInfoCenter::defaultCenter();
-        if active {
+        if now_playing {
             // The app's name, and the conversation the call is on when there is one (no text of the app's own: a
             // conversation's title is the person's).
             let name = NSString::from_str("Sidevoice");
@@ -221,7 +222,7 @@ fn apply<N: Os>(app: &AppHandle, active: bool, in_call: bool, mic_enabled: bool,
     gesture::<N>(app, active, in_call, mic_enabled);
     static SEEN: Changed = Changed(Mutex::new(None));
     let line = format!(
-        "headset apply active={active} in_call={in_call} mic={mic_enabled} gesture_api={} gesture_on={}",
+        "headset apply active={active} now_playing={now_playing} in_call={in_call} mic={mic_enabled} gesture_api={} gesture_on={}",
         gesture_api(),
         *GESTURE_ON.lock().unwrap()
     );

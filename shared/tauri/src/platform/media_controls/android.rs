@@ -89,7 +89,8 @@ mod tests {
 
     #[test]
     fn the_session_is_active_only_in_a_call_and_plays_while_the_microphone_is_open() {
-        let call = CallState { ready: true, joined: true, mic_enabled: false, title: " Repo ".into() };
+        let call =
+            CallState { ready: true, joined: true, mic_enabled: false, title: " Repo ".into(), now_playing_off: false };
         assert_eq!(session_state(&call), json!({"active": true, "playing": false, "title": "Repo"}));
         let idle = CallState { ready: true, ..Default::default() };
         assert_eq!(session_state(&idle)["active"], false);

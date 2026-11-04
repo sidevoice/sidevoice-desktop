@@ -89,5 +89,11 @@ pub fn activates_audio(system: bool) -> bool {
 }
 
 pub fn replaces_media_controls(system: bool) -> bool {
-    system && Native::REPLACES_MEDIA_CONTROLS
+    if system {
+        Native::REPLACES_MEDIA_CONTROLS
+    } else {
+        // The app's own call: only while its own surface is on the screens (iOS: the Live Activity is running), so that
+        // a Lock Screen with no surface keeps its Now Playing and the headset's buttons.
+        crate::call_surface::surface_running()
+    }
 }
