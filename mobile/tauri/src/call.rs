@@ -436,7 +436,7 @@ impl RoomCall {
             // The old page's stills go with it (nothing draws them once its call has ended): the new page sends its own.
             room.forgotten.clear();
             if let Err(error) = clear_stills(&room.app) {
-                log::warn!("call_still: the old page's stills were not removed: {error}");
+                log::warn!(target: "stills", "call_still: the old page's stills were not removed: {error}");
             }
             // What the old page's interruptions held is let go first; the new page starts with none.
             room.clear_interruption();
@@ -498,6 +498,7 @@ impl RoomCall {
         self.then(move |room| {
             let result = if room.page != page {
                 log::info!(
+                    target: "stills",
                     "call stills: {id} is of page {page}, the room is on {}: dropped",
                     room.page
                 );

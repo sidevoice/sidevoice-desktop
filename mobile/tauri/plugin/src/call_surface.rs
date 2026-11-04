@@ -220,6 +220,12 @@ pub const STILLS_CAP: u64 = 8 * 1024 * 1024;
 
 const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
 
+/// A line for the system's log, where `log show` reads it (iOS: subsystem `ai.sidevoice`, the category given, public
+/// strings): the app's log file is not in the unified log. Nothing on other systems, whose log already is the system's.
+pub fn os_log(category: &str, message: &str) {
+    platform::os_log(category, message);
+}
+
 /// The folder the stills are kept in, by id: in the container the app shares with its widget extension where there is one
 /// (iOS, the App Group's), else in the app's cache.
 pub fn stills_dir<R: Runtime>(app: &AppHandle<R>) -> io::Result<PathBuf> {
@@ -233,6 +239,7 @@ pub fn stills_dir<R: Runtime>(app: &AppHandle<R>) -> io::Result<PathBuf> {
     SAID.call_once(|| {
         // Where the stills go is where the surfaces must read them: a widget extension cannot read the app's cache.
         log::info!(
+            target: "stills",
             "call stills: folder {} (shared container: {})",
             dir.display(),
             shared.is_some()
@@ -252,7 +259,14 @@ pub fn save_still<R: Runtime>(
     png: &[u8],
     px: u32,
 ) -> Result<(), StillError> {
-    check_still(id, png, px)?;
+    if let Err(error) = check_still(id, png, px) {
+        log::warn!(
+            target: "stills",
+            "call stills: refused {id} ({} bytes, {px} px): {error}",
+            png.len()
+        );
+        return Err(error);
+    }
     let dir = stills_dir(app).map_err(StillError::Io)?;
     fs::create_dir_all(&dir).map_err(StillError::Io)?;
     let name = Still::file_name(id);
@@ -272,6 +286,7 @@ pub fn save_still<R: Runtime>(
         .and_then(|()| fs::rename(&partial, &file))
         .map_err(StillError::Io)?;
     log::info!(
+        target: "stills",
         "call stills: kept {} ({} bytes, {px} px)",
         file.display(),
         png.len()

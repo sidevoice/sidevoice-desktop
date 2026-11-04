@@ -54,6 +54,9 @@ public struct CallState: Codable, Hashable {
     }
 
     public var phase: Phase = .idle
+    /// While your words are held past the page's own 3 s (`TextPager`), `phase` is `.said` (the layout) and this is the
+    /// phase the call really is in.
+    public var heldPhase: Phase?
     public var title = ""
     /// "Opus 5.5", the page's wording of the model.
     public var model = ""
@@ -70,16 +73,26 @@ public struct CallState: Codable, Hashable {
     public var route: Route?
     /// The connected headphones' name, as the system gives it ("AirPods Pro").
     public var routeName = ""
-    /// Speaking: the page of the reply the voice is on; said: the person's words.
+    /// Speaking: the chunk of the reply the voice is in; said: a chunk of the person's words (`TextChunker`: built to fit,
+    /// one update per chunk). No karaoke: all of it is drawn at full strength.
     public var text: String?
-    /// Speaking: how much of `text` has been heard, in UTF-16 units (never ahead of the voice).
-    public var lit = 0
     public var words = Words()
     /// The page's language (BCP 47), for what the system words itself on the activity (the working timer on
     /// Always-On); empty: the device's.
     public var language = ""
 
     public init() {}
+
+    /// The phase whose tone, glyph and timer the activity wears. Your words (`.said`) are not a state (D-LA-SAID-STATE): the
+    /// call is working on them, and the header says so, with its timer, when the page says so (the working start is there);
+    /// a page that does not (it says idle, no timer) is drawn as it says, never green "Resting".
+    public var tonePhase: Phase {
+        guard phase == .said else { return phase }
+        // A phase that is a condition of its own (can't receive, offline) is what the words wear; idle or working is
+        // decided by the page's working start, whichever of them the held phase was.
+        if let heldPhase, heldPhase != .working, heldPhase != .idle { return heldPhase }
+        return workingSince != nil || heldPhase == .working ? .working : .idle
+    }
 
     /// The locale the system's own words on the activity follow: the page's language, else the device's.
     public var locale: Locale {
@@ -103,17 +116,6 @@ public struct CallState: Codable, Hashable {
     public var routeLabel: String {
         let name = route == .speaker ? words.speaker : routeName
         return words.route.replacingOccurrences(of: "{route}", with: name)
-    }
-
-    /// The same, but for the captions: what may wait (iOS throttles local updates; one every ~2 s, HANDOVER §5).
-    public func sameButText(_ other: CallState) -> Bool {
-        var a = self
-        var b = other
-        a.text = nil
-        a.lit = 0
-        b.text = nil
-        b.lit = 0
-        return a == b
     }
 }
 

@@ -10,12 +10,7 @@
 import AppIntents
 import CallActivity
 import Foundation
-import os
 import SwiftUI
-
-/// Every step of a button's action, in the app and in the extension alike: Console.app, filtered on subsystem
-/// `ai.sidevoice` and category `intent`, shows which process ran the intent and whether the call took it.
-let intentLog = Logger(subsystem: "ai.sidevoice", category: "intent")
 
 /// The call's actions, by the names `SurfaceAction` reads (`mute`, `unmute`, `skip`, `cancel-send`, `hang-up`).
 enum CallActions {
@@ -23,11 +18,11 @@ enum CallActions {
     static func send(_ action: String, from intent: String) {
         let info = ProcessInfo.processInfo
         let process = Bundle.main.bundlePath.hasSuffix(".appex") ? "widget extension" : "app"
-        intentLog.notice(
+        CallLog.intent.notice(
             "intent \(intent, privacy: .public) performing: \(action, privacy: .public) in the \(process, privacy: .public) (\(info.processName, privacy: .public), pid \(info.processIdentifier))"
         )
         let handed = deliver(action)
-        intentLog.notice(
+        CallLog.intent.notice(
             "intent \(intent, privacy: .public): \(handed ? "handed to the call" : "found no call; the card is stale and is ended", privacy: .public)"
         )
     }
@@ -100,9 +95,9 @@ struct ToggleRoute: LiveActivityIntent {
     static var isDiscoverable = false
     init() {}
     func perform() async throws -> some IntentResult {
-        intentLog.notice("intent ToggleRoute performing (pid \(ProcessInfo.processInfo.processIdentifier))")
+        CallLog.intent.notice("intent ToggleRoute performing (pid \(ProcessInfo.processInfo.processIdentifier))")
         AudioRoute.toggle()
-        intentLog.notice("intent ToggleRoute: switched the output (native; no call needed)")
+        CallLog.intent.notice("intent ToggleRoute: switched the output (native; no call needed)")
         return .result()
     }
 }

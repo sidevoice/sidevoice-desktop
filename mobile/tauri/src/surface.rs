@@ -143,6 +143,10 @@ fn phase(reported: &Reported) -> Phase {
     match mood {
         "working" => Phase::Working,
         "listening" => Phase::Listening,
+        // The page's line says working while the stage's mood is still idle (the person's words just sent, or the gap
+        // before the stage's own 3 s wait is over): it sends the working start only while its line says working, so a start
+        // is the call working, whatever the mood (sidevoice-web `call-surface.js`, `saying`).
+        "idle" if reported.surface.working_since.is_some() => Phase::Working,
         _ if reported.surface.reach.as_deref() == Some("holding") => Phase::Holding,
         _ => Phase::Idle,
     }
@@ -277,6 +281,37 @@ mod tests {
             ),
             (reported("working", None, None, said), Phase::Said),
             (reported("speaking", None, None, said), Phase::Speaking),
+            // The page's line says working before the stage's mood does: the working start makes it Working.
+            (
+                reported("idle", None, None, r#"{"workingSince":1000}"#),
+                Phase::Working,
+            ),
+            (
+                reported(
+                    "idle",
+                    None,
+                    None,
+                    r#"{"workingSince":1000,"reach":"holding"}"#,
+                ),
+                Phase::Working,
+            ),
+            (
+                reported(
+                    "idle",
+                    None,
+                    None,
+                    r#"{"workingSince":1000,"said":"Mira el test"}"#,
+                ),
+                Phase::Said,
+            ),
+            (
+                reported("idle", Some("listening"), None, r#"{"workingSince":1000}"#),
+                Phase::Listening,
+            ),
+            (
+                reported("speaking", None, None, r#"{"workingSince":1000}"#),
+                Phase::Speaking,
+            ),
         ];
         for (reported, expected) in cases {
             assert_eq!(shown(&reported).phase, expected, "{reported:?}");

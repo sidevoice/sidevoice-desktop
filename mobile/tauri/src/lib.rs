@@ -230,7 +230,15 @@ async fn call_still(
     px: u32,
 ) -> Result<(), String> {
     use base64::Engine as _;
-    the_page(&app, &webview)?;
+    if let Err(error) = the_page(&app, &webview) {
+        log::warn!(target: "stills", "call_still: {id} from a webview that is not the page: {error}");
+        return Err(error);
+    }
+    log::info!(
+        target: "stills",
+        "call_still: {id} ({} base64 bytes, {px} px) from page {page}",
+        png.len()
+    );
     if png.len() > sidevoice_mobile_plugin::STILL_LIMIT / 3 * 4 + 4 {
         return Err("call_still: larger than a still".into());
     }
@@ -244,7 +252,7 @@ async fn call_still(
     .await
     .map_err(|error| error.to_string())?
     .map_err(|error| {
-        log::warn!("call_still: not kept: {error}");
+        log::warn!(target: "stills", "call_still: not kept: {error}");
         format!("call_still: {error}")
     })
 }
@@ -289,6 +297,9 @@ fn run_app() {
         // both while the call runs), with the window's own crates at `warn`.
         .plugin(
             tauri_plugin_log::Builder::new()
+                // On iOS the plugin's targets (stdout, the log folder) are not the unified log, which `log show` and a
+                // sysdiagnose read: every line goes there too, subsystem `ai.sidevoice`.
+                .target(unified_log())
                 .level(log::LevelFilter::Info)
                 .level_for("tao", log::LevelFilter::Warn)
                 .level_for("wry", log::LevelFilter::Warn)
@@ -339,7 +350,7 @@ fn run_app() {
             }
             // The creatures' stills an earlier run kept for the call's surfaces: the page sends the ones it shows again.
             if let Err(error) = sidevoice_mobile_plugin::clear_stills(&handle) {
-                log::warn!("call_still: the earlier stills were not removed: {error}");
+                log::warn!(target: "stills", "call_still: the earlier stills were not removed: {error}");
             }
             let phone = Arc::new(call::PhoneCall::default());
             // The developer options (nightly and dev builds): read before the first call, whose kind they decide.
@@ -455,6 +466,27 @@ fn run_app() {
                 }
             }
         });
+}
+
+/// The unified log as one of the app's log targets (iOS: through the Swift side's `SidevoiceLog`; nothing elsewhere, whose
+/// log already is the system's). Lines logged with the target `stills` (the creatures' stills: ids, sizes, paths, never a
+/// conversation's words) go in public, category `stills`; every other line is the app's own and may carry what the person
+/// said, so it goes in category `app`, private.
+fn unified_log() -> tauri_plugin_log::Target {
+    use tauri_plugin_log::{fern, Target, TargetKind};
+    Target::new(TargetKind::Dispatch(fern::Dispatch::new().chain(
+        fern::Output::call(|record| {
+            let category = if record.target() == "stills" {
+                "stills"
+            } else {
+                "app"
+            };
+            sidevoice_mobile_plugin::os_log(
+                category,
+                &format!("[{}] {}", record.level(), record.args()),
+            );
+        }),
+    )))
 }
 
 #[cfg(test)]
