@@ -93,8 +93,9 @@ pub fn replaces_media_controls(system: bool) -> bool {
         Native::REPLACES_MEDIA_CONTROLS
     } else {
         // The app's own call: only while its own surface is on the screens or on its way (iOS: the Live Activity runs, or
-        // the call's start asked for it), so that a Lock Screen with no surface keeps its Now Playing and the headset's
-        // buttons, and a call with one never shows Now Playing, not even before the activity is requested.
+        // the call's start asked for one, with Live Activities on), so that a Lock Screen with no surface to come keeps its
+        // Now Playing and the headset's buttons, and a call with one never shows Now Playing, not even before the activity
+        // is requested.
         crate::call_surface::surface_running()
     }
 }

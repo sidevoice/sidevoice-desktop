@@ -216,19 +216,22 @@ fn setup<N: Os>(_app: &AppHandle) {
     release::<N>();
 }
 
-/// What Now Playing holds now, for the app log (`call: now playing …`): the commands enabled (MediaPlayer says which
-/// are, not which have targets: the app's own handlers are `handlers`), and whether there is Now Playing info. A command
-/// nothing has touched reads as enabled.
+/// What Now Playing holds now, for the app log (`call: now playing …`): `released`, whether the app's side holds nothing
+/// of it (no command enabled, no handler, no info: what a [`release`] that worked leaves, the one at launch included),
+/// then the commands enabled (MediaPlayer says which are, not which have targets: the app's own handlers are
+/// `handlers`), and whether there is Now Playing info. A command nothing has touched reads as enabled. Whether iOS has
+/// really stopped taking the app for its Now Playing app cannot be read in the process: only mediaremoted's log says.
 fn census(when: &str) {
     // SAFETY: main thread; a plain property read.
     let enabled: Vec<&str> =
         every_command().iter().filter(|(command, _)| unsafe { command.isEnabled() }).map(|(_, name)| *name).collect();
     // SAFETY: as above.
     let info = unsafe { MPNowPlayingInfoCenter::defaultCenter().nowPlayingInfo() }.is_some();
+    let handlers = *REGISTERED.lock().unwrap();
+    let released = enabled.is_empty() && !handlers && !info;
     log::info!(
-        "call: now playing {when}: enabled=[{}] handlers={} info={info}",
-        enabled.join(","),
-        *REGISTERED.lock().unwrap()
+        "call: now playing {when}: released={released} enabled=[{}] handlers={handlers} info={info}",
+        enabled.join(",")
     );
 }
 
@@ -268,9 +271,9 @@ fn release<N: Os>() {
 }
 
 fn apply<N: Os>(app: &AppHandle, active: bool, now_playing: bool, in_call: bool, mic_enabled: bool, title: &str) {
-    // Let go of Now Playing whenever it is not to show the call and something changed: a call starting (before its audio
-    // opens: this report is the one that starts the call's service), Now Playing giving way (the Live Activity runs), and
-    // a call ending. What was there at a call's start, and what is left after, go to the app log.
+    // Let go of Now Playing whenever it is not to show the call and something changed: a call starting (the report that
+    // starts the call's service), Now Playing giving way (the Live Activity runs), and a call ending. What was there at a
+    // call's start, and what is left after, go to the app log.
     let last = LAST.lock().unwrap().replace((active, now_playing));
     let was_active = matches!(last, Some((true, _)));
     if !now_playing && last != Some((active, now_playing)) {

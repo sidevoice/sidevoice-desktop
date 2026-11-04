@@ -35,8 +35,8 @@ trait Os {
     fn os_log(_category: &str, _message: &str) {}
 
     /// Whether the surface is on the system's screens now, or on its way (iOS: a Live Activity that has been requested and
-    /// is not over, or one the call's start asked for and not yet requested: it needs iOS 16.1, the person may have it off,
-    /// and it starts only while the app is in front). False where none is.
+    /// is not over, or one the call's start asked for with Live Activities on and not yet requested: it needs iOS 16.1,
+    /// the person may have it off, and it starts only while the app is in front). False where none is.
     fn running() -> bool {
         false
     }

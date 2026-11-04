@@ -14,7 +14,7 @@ import UIKit
 public final class CallActivityBridge: NSObject {
     @objc public static func start(_ json: String) {
         let report = Report.read(json)
-        if #available(iOS 16.1, *) { Coming.now.set(true) }
+        if #available(iOS 16.1, *) { Coming.now.start(enabled: ActivityAuthorizationInfo().areActivitiesEnabled) }
         DispatchQueue.main.async {
             if #available(iOS 16.1, *) { Controller.shared.start(report) }
         }
@@ -35,36 +35,21 @@ public final class CallActivityBridge: NSObject {
     }
 
     /// Whether the call's Live Activity is on the screens now (requested and not over), or on its way: from `start` until
-    /// it is requested, also while the app is not in front to request it. False before iOS 16.1, with Live Activities off,
-    /// and once a request has failed. Any thread: the media controls ask on every report, and give way to the activity
-    /// only while this holds. "On its way" counts because the first report comes before the main queue has requested the
-    /// activity: Now Playing shown for that moment would leave the app the system's Now Playing app for the rest of the
-    /// process, an empty card above the activity (HANDOVER-live-activity R2-6).
+    /// it is requested, when one can come (`Coming`). False before iOS 16.1, with Live Activities off (from the call's
+    /// first report), and once a request has failed. Any thread: the media controls ask on every report, and give way to
+    /// the activity only while this holds. "On its way" counts because the first report comes before the main queue has
+    /// requested the activity: Now Playing shown for that moment would leave the app the system's Now Playing app for the
+    /// rest of the process, an empty card above the activity (HANDOVER-live-activity R2-6).
+    ///
+    /// It also holds while the app is not in front to request the activity, so with Live Activities on, a call that starts
+    /// in the background has no Now Playing either, and nothing on the Lock Screen until the app next comes to the front.
+    /// Deliberate (D2's scope): Now Playing shown until then would make the app the Now Playing app for good once the
+    /// activity came, the empty card again. A request that fails and later succeeds on a retry has the same trade-off.
     @objc public static func running() -> Bool {
         guard #available(iOS 16.1, *) else { return false }
         return Coming.now.get() || Activity<CallActivityAttributes>.activities.contains {
             $0.activityState != .ended && $0.activityState != .dismissed
         }
-    }
-}
-
-/// Whether the call's activity is on its way (`CallActivityBridge.running`): set at once by `start`, from the caller's
-/// thread, and cleared by `end` and by the controller once the activity is requested or cannot be.
-final class Coming: @unchecked Sendable {
-    static let now = Coming()
-    private let lock = NSLock()
-    private var value = false
-
-    func get() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return value
-    }
-
-    func set(_ new: Bool) {
-        lock.lock()
-        defer { lock.unlock() }
-        value = new
     }
 }
 
