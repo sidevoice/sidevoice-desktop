@@ -162,7 +162,7 @@ jobs:
   # machine, toolchain, caches and command, `cargo xtask mobile symbols`), unsigned and not uploaded, so that the code is
   # laid out as in the build that shipped and its crash reports' offsets read in these symbols. No secret.
   ios-symbols:
-    name: iOS symbols of TestFlight build ${{ inputs.symbols-of-build }}
+    name: iOS symbols of a TestFlight build (by hand, symbols-of-build)
     if: ${{ inputs.symbols-of-build }}
     runs-on: macos-26
     timeout-minutes: 60
