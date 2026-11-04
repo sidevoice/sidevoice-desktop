@@ -275,7 +275,8 @@ mod tests {
     fn the_uuids_are_read_from_dwarfdump_and_the_crash_report() {
         let out = "UUID: 1A2B3C4D-0000-1111-2222-333344445555 (arm64) /x/Sidevoice\n";
         assert_eq!(parse_uuids(out), ["1A2B3C4D000011112222333344445555"]);
-        let ips = "{\"app_name\":\"Sidevoice\",\"slice_uuid\":\"1a2b3c4d-0000-1111-2222-333344445555\"}\n{\"usedImages\":[]}";
+        let ips =
+            "{\"app_name\":\"Sidevoice\",\"slice_uuid\":\"1a2b3c4d-0000-1111-2222-333344445555\"}\n{\"usedImages\":[]}";
         assert_eq!(ips_slice_uuid(ips).unwrap(), "1A2B3C4D000011112222333344445555");
         assert!(ips_slice_uuid("{}\n").is_err());
     }
