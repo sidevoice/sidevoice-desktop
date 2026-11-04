@@ -20,6 +20,22 @@ pub fn mute_gesture_action(muted: bool, mic_enabled: bool) -> Option<&'static st
     }
 }
 
+/// Whether a line of the log says something new: false for the line last seen. The log goes to a file, and the call reports
+/// again on every change of anything in it, so what has not changed is not written again.
+#[derive(Default)]
+pub struct Changed(pub std::sync::Mutex<Option<String>>);
+
+impl Changed {
+    pub fn is_new(&self, line: &str) -> bool {
+        let mut last = self.0.lock().unwrap();
+        if last.as_deref() == Some(line) {
+            return false;
+        }
+        *last = Some(line.to_owned());
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -32,6 +48,15 @@ mod tests {
         assert_eq!(media_command_action("pause", false), Some("unmute"), "a click may arrive as pause while muted");
         assert_eq!(media_command_action("toggle", true), Some("mute"));
         assert_eq!(media_command_action("skip", true), None);
+    }
+
+    #[test]
+    fn a_line_is_new_until_it_repeats() {
+        let seen = Changed::default();
+        assert!(seen.is_new("a"));
+        assert!(!seen.is_new("a"));
+        assert!(seen.is_new("b"));
+        assert!(seen.is_new("a"));
     }
 
     #[test]
