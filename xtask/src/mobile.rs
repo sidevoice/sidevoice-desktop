@@ -23,7 +23,9 @@
 //!   computer: `#![cfg(mobile)]`).
 //! - `mobile sign android`: sign.rs.
 //! - `mobile test android`: the Kotlin library's JVM unit tests, in the generated project (after a build).
-//! - `mobile testflight --build-number N`: the signed iOS archive uploaded to TestFlight, by hand from main (testflight.rs).
+//! - `mobile testflight --build-number N`: the signed iOS archive uploaded to TestFlight, by hand from main, its symbols kept
+//!   (testflight.rs).
+//! - `mobile symbols --build-number N`: that archive unsigned and not uploaded, for its symbols only (testflight.rs).
 
 pub mod check;
 pub mod ios;
