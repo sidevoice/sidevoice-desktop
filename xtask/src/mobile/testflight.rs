@@ -56,6 +56,9 @@ const EXECUTABLE: &str = "Products/Applications/Sidevoice.app/Sidevoice";
 /// The app's own dSYM inside the archive, beside the extension's and the engine frameworks'.
 const APP_DSYM: &str = "dSYMs/Sidevoice.app.dSYM/Contents/Resources/DWARF/Sidevoice";
 
+/// The header of an `.ips` crash report is a JSON line; `slice_uuid` is the app executable's build UUID.
+const IPS_SLICE_UUID: &str = "slice_uuid";
+
 /// A name the Rust library always has (the standard library's panic entry): the dSYM has the Rust code's symbols when
 /// it names it.
 const RUST_SYMBOL: &[u8] = b"rust_begin_unwind";
@@ -176,11 +179,58 @@ pub fn keep_symbols(build: u32) -> Result<PathBuf> {
     Ok(zip)
 }
 
+/// The build UUIDs (upper case, no dashes) that `dwarfdump --uuid` prints for `path`: one per architecture slice.
+fn uuids(path: &Path) -> Result<Vec<String>> {
+    let text = Cmd::new("dwarfdump").arg("--uuid").arg(path).stdout()?;
+    println!("{}", text.trim_end());
+    Ok(parse_uuids(&text))
+}
+
+/// The UUIDs in `dwarfdump --uuid` output (`UUID: <uuid> (arm64) <path>`).
+fn parse_uuids(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|line| line.trim().strip_prefix("UUID:"))
+        .filter_map(|rest| rest.split_whitespace().next())
+        .map(|uuid| uuid.replace('-', "").to_ascii_uppercase())
+        .collect()
+}
+
+/// The `slice_uuid` (upper case, no dashes) in the header line of the `.ips` crash report `text`.
+fn ips_slice_uuid(text: &str) -> Result<String> {
+    let header: serde_json::Value =
+        serde_json::from_str(text.lines().next().unwrap_or_default()).map_err(|e| format!("the .ips header: {e}"))?;
+    let uuid = header.get(IPS_SLICE_UUID).and_then(|value| value.as_str());
+    uuid.map(|uuid| uuid.replace('-', "").to_ascii_uppercase())
+        .ok_or_else(|| format!("the .ips header has no {IPS_SLICE_UUID}"))
+}
+
+/// Prints the UUIDs of the rebuilt executable and app dSYM, which must be those of the build that crashed: the rebuild
+/// is not bit-identical unless Xcode and the toolchain are the original's, and symbols of another binary read as
+/// plausible, wrong names. With `ips` (a crash report of the build), fails unless they match its `slice_uuid`.
+fn check_uuids(archive: &Path, ips: Option<&Path>) -> Result<()> {
+    println!("UUIDs of the rebuilt binary and dSYM (compare with the crash report's slice_uuid before trusting the symbols):");
+    let executable = uuids(&archive.join(EXECUTABLE))?;
+    let dsym = uuids(&archive.join(APP_DSYM))?;
+    ensure(executable == dsym, format!("the executable {executable:?} and its dSYM {dsym:?} differ"))?;
+    let Some(ips) = ips else { return Ok(()) };
+    let text = fs::read_to_string(ips).map_err(|e| format!("{}: {e}", ips.display()))?;
+    let wanted = ips_slice_uuid(&text)?;
+    ensure(
+        executable.contains(&wanted),
+        format!("the crash report's slice_uuid {wanted} is not the rebuild's {executable:?}: these symbols are NOT of that build"),
+    )?;
+    println!("the rebuild matches the crash report's slice_uuid: these symbols are of that build");
+    Ok(())
+}
+
 /// `mobile symbols --build-number N`: the archive [`testflight`] makes for build `N`, unsigned and not uploaded, and its
-/// symbols ([`keep_symbols`]). Needs no secret: it is for reading the crash reports of a build that kept none.
-pub fn symbols(build_number_text: &str) -> Result<()> {
+/// symbols ([`keep_symbols`]). Needs no secret: it is for reading the crash reports of a build that kept none. Xcode is
+/// not pinned, so the rebuild may differ from the shipped binary: it prints the UUIDs of what it built ([`check_uuids`]),
+/// and checks them against `ips`, a crash report of the build, when given.
+pub fn symbols(build_number_text: &str, ips: Option<&Path>) -> Result<()> {
     let build = build_number(build_number_text)?;
     archive(build, &["--no-sign"], |cli| cli)?;
+    check_uuids(&repo().join("mobile/tauri/gen/apple").join(BUILD).join(ARCHIVE), ips)?;
     keep_symbols(build).map(drop)
 }
 
@@ -219,6 +269,15 @@ mod tests {
         fs::write(dir.path().join("arm64/ExportOptions.plist"), b"x").unwrap();
         assert_eq!(find_ipa(dir.path(), 3).unwrap(), [ipa]);
         assert!(find_ipa(dir.path(), 1).unwrap().is_empty(), "deeper than asked");
+    }
+
+    #[test]
+    fn the_uuids_are_read_from_dwarfdump_and_the_crash_report() {
+        let out = "UUID: 1A2B3C4D-0000-1111-2222-333344445555 (arm64) /x/Sidevoice\n";
+        assert_eq!(parse_uuids(out), ["1A2B3C4D000011112222333344445555"]);
+        let ips = "{\"app_name\":\"Sidevoice\",\"slice_uuid\":\"1a2b3c4d-0000-1111-2222-333344445555\"}\n{\"usedImages\":[]}";
+        assert_eq!(ips_slice_uuid(ips).unwrap(), "1A2B3C4D000011112222333344445555");
+        assert!(ips_slice_uuid("{}\n").is_err());
     }
 
     #[test]

@@ -140,7 +140,9 @@ through `run` (the call's service hangs up through it).
 - **The log**: `tauri-plugin-log` to the system's (logcat, the unified log) and a file in the app's log folder.
   - **Panics** (`mobile/tauri/src/panics.rs`): a hook logs each one (its thread, place and message) and adds it to
     `last-panic.txt` beside the log file, at most 16 KB; the next launch logs that file's panics as the last run's
-    (`the last run panicked:`) and removes it. A panic the app cannot unwind from aborts it before anything else is
+    (`the last run panicked:`) and removes it. The hook never logs itself: a panic inside a log call holds the logger's
+    lock, and logging from the hook would then deadlock (the standard hook still prints to standard error). It is
+    installed once, first thing in `run_app`; the file's place is known once the log folder is (`setup`). A panic the app cannot unwind from aborts it before anything else is
     written, and the system's crash report has only the stack.
 
 ### Not verified
@@ -466,7 +468,14 @@ stays unsigned with no secret. Its one step is `cargo xtask mobile testflight --
   the executable (`imageOffset`): `atos -o Sidevoice.app.dSYM/Contents/Resources/DWARF/Sidevoice -l 0x100000000 <0x100000000 + offset>`,
   or `llvm-symbolizer`. A build made before they were kept has its symbols rebuilt by mobile.yml, run by hand with
   `symbols-of-build: <N>` on a ref whose app is that build's commit (`cargo xtask mobile symbols`: the same archive,
-  unsigned and not uploaded, so its code is laid out the same).
+  unsigned and not uploaded, so its code is laid out the same). **A rebuild is not proof**: Xcode is not pinned on the
+  runner, so it may not produce the shipped binary, and symbols of another binary read as plausible, wrong names. The
+  job prints `dwarfdump --uuid` of the rebuilt executable and dSYM: compare it with the `.ips` header's `slice_uuid`
+  (dashes and case aside) before trusting anything. With the report at hand,
+  `cargo xtask mobile symbols --build-number <N> --ips <file>` does it and fails on a mismatch. The rebuild needs a branch
+  of the build's commit plus this change (`mobile symbols` and the `symbols-of-build` input). "Symbolicated" means
+  function names only: the release profile has no debug info, so no file:line (that would take
+  `CARGO_PROFILE_RELEASE_DEBUG=line-tables-only` in the TestFlight job; not set).
 
 - **The build number** is the run number of the workflow, which only grows, as TestFlight requires of the builds of a
   version, and it is the app's `CFBundleVersion` whole. (The CLI's own `--build-number` appends it to the version,

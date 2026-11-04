@@ -276,6 +276,9 @@ impl From<CallReport> for CallState {
 
 /// The app: one window, on the bundled interface, with the members the apps share.
 fn run_app() {
+    // Before anything that may panic: every panic into a file that the next launch reads, since one the app cannot unwind
+    // from aborts it before anything else is written (`panics`).
+    panics::install();
     // Where the call's events go: over the channel the page opens (the shared plugin's `voice_events`).
     let pages = Pages::default();
     let events = pages.clone();
@@ -304,8 +307,7 @@ fn run_app() {
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
-            // Every panic in the app's log, and in a file beside it that the next launch reads: a panic the app cannot
-            // unwind from aborts it before anything else is written (`panics`). The log's folder exists by now.
+            // Where the panics' file goes, and the last run's panics into the log (`panics`). The log's folder exists by now.
             match handle.path().app_log_dir() {
                 Ok(dir) => panics::watch(&dir),
                 Err(error) => log::warn!("panics: no log folder: {error}"),

@@ -51,7 +51,9 @@
 //!   `APPLE_TEAM_ID`. The archive's symbols (its dSYMs and the app's executable) go to dist/Sidevoice-ios-N-symbols.zip, which
 //!   the workflow keeps, and to App Store Connect inside the upload.
 //! - `mobile symbols --build-number N` (by hand: .github/workflows/mobile.yml, `symbols-of-build`): that same archive,
-//!   unsigned and not uploaded, for its symbols only, into dist/: to read the crash reports of a build that kept none.
+//!   unsigned and not uploaded, for its symbols only, into dist/: to read the crash reports of a build that kept none. Prints `dwarfdump --uuid` of the rebuilt
+//!   executable and dSYM (Xcode is not pinned: the rebuild may not be the shipped binary), and with `--ips FILE` fails unless
+//!   they match the crash report's `slice_uuid`.
 //!
 //! The Windows app, in the `windows` job after `bundle` (platform/release/windows.rs):
 //!
@@ -149,7 +151,7 @@ const USAGE: &str =
   | probe memory | probe voice-memory
   | mobile generate android | mobile generate ios | mobile generated android | mobile generated ios
   | mobile build android | mobile build ios | mobile lint android | mobile lint ios | mobile renders ios | mobile sign android | mobile check-16kb [APK] | mobile check-ios [APP] | mobile test android | mobile testflight --build-number N
-  | mobile symbols --build-number N
+  | mobile symbols --build-number N [--ips CRASH_REPORT]
   | packaging compare BEFORE_REF | packaging files DIR OUTPUT
   | publish assets release TAG | publish assets nightly | publish release TAG | publish nightly | publish apk-nightly
   | release-pr-title [BRANCH] | release-pr-checks
@@ -179,7 +181,10 @@ fn main() -> ExitCode {
         ["mobile", "check-ios", app] => mobile::ios::check_app(std::path::Path::new(app)),
         ["mobile", "screenshots", project] => mobile::screenshots(project),
         ["mobile", "testflight", "--build-number", number] => mobile::testflight::testflight(number),
-        ["mobile", "symbols", "--build-number", number] => mobile::testflight::symbols(number),
+        ["mobile", "symbols", "--build-number", number] => mobile::testflight::symbols(number, None),
+        ["mobile", "symbols", "--build-number", number, "--ips", ips] => {
+            mobile::testflight::symbols(number, Some(std::path::Path::new(ips)))
+        }
         ["platform-clippy"] => checks::clippy(true),
         ["test"] => checks::test(),
         ["test-support"] => checks::test_support(),
